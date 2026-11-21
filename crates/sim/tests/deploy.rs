@@ -100,7 +100,7 @@ fn open_with(segment_ms: i32, prepare: impl FnOnce(&mut World)) -> Runner {
         &rules(),
     )
     .expect("the playbook compiles");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SeatId::new(SEAT), plan)
         .expect("a Lull takes a seal");

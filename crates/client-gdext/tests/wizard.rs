@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
 
 //! The template wizard and the rule list, with no engine and no host (skeleton plan T19,
 //! pull request 2; `docs/design/skeleton-plan-w6-notes.md` section A4, as decisions-log

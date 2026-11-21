@@ -147,7 +147,7 @@ fn with_generators(stands: &[[Fx; 3]]) -> Runner {
             .raise_structure(seat, core, StructureKind::Generator, *at)
             .expect("room for a Generator");
     }
-    Runner::new(world)
+    Runner::new(world).unwrap_or_else(|error| panic!("{error}"))
 }
 
 #[test]
@@ -245,7 +245,10 @@ fn a_licence_held_survives_a_save_and_a_restore() {
     let saved = runner.world().clone();
     assert!(!saved.licences().is_empty(), "a licence is held");
 
-    let bytes = Snapshot::capture(&saved).to_bytes().expect("encoding");
+    let bytes = Snapshot::capture(&saved)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("encoding");
     let decoded = Snapshot::from_bytes(&bytes).expect("decoding");
     assert_eq!(decoded.licence_seat, vec![0]);
     assert_eq!(decoded.licence_kind, vec![1]);
@@ -268,7 +271,7 @@ fn a_licence_held_survives_a_save_and_a_restore() {
 fn a_restore_refuses_a_licence_no_run_writes() {
     let mut world = world(2);
     world.award_licence_directly(SeatId::new(1), Licence::ResonanceSpire, 1);
-    let good = Snapshot::capture(&world);
+    let good = Snapshot::capture(&world).expect("a world between ticks");
 
     let mut unknown = good.clone();
     unknown.licence_kind = vec![0];
@@ -330,7 +333,7 @@ fn an_eliminated_seats_licences_are_voided_on_the_tick_it_falls() {
     let mut world = world(3);
     world.award_licence_directly(SeatId::new(2), Licence::ResonanceSpire, 1);
     world.award_licence_directly(SeatId::new(0), Licence::ResonanceSpire, 1);
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().expect("the runner answers"));
     runner.clear_events();
     let core = core_of(runner.world(), SeatId::new(2));
@@ -394,7 +397,7 @@ fn an_empty_licence_table_hashes_nothing() {
 /// tick books as before.
 #[test]
 fn an_eliminated_seats_damage_books_it_no_credit() {
-    let mut runner = Runner::new(world(3));
+    let mut runner = Runner::new(world(3)).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().expect("the runner answers"));
     let core = core_of(runner.world(), SeatId::new(2));
     let target = runner

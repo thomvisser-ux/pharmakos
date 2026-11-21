@@ -3519,6 +3519,22 @@ fn estimate_route_answers_the_travel_as_the_player_reads_it() {
     assert_eq!(text_of(&leg, "travel_text"), bound(&expected));
 }
 
+/// The two-seat casual match's opening Lull, hosted once per test binary: its
+/// frozen snapshot's bytes and its world. The opening Lull is the same in
+/// every call (a seed, a config, nothing played), so [`resumed_with`] edits a
+/// decoded copy of these bytes rather than opening a second host to make them;
+/// the host it resumes is still a fresh one.
+fn opening() -> &'static (Vec<u8>, pharmakos_sim::world::World) {
+    static OPENING: std::sync::OnceLock<(Vec<u8>, pharmakos_sim::world::World)> =
+        std::sync::OnceLock::new();
+    OPENING.get_or_init(|| {
+        let first = hosted_as(SEGMENT_MS, FogPolicy::casual(), None);
+        let bytes = first.snapshot_bytes().expect("the frozen snapshot");
+        let world = first.host().expect("hosted").world().clone();
+        (bytes, world)
+    })
+}
+
 /// A two-seat casual match in its opening Lull, resumed from its own frozen
 /// snapshot as `edit` leaves it: how a test gives a beacon what only a played
 /// Push would (the target table's rows), through the save's one restore.
@@ -3526,10 +3542,13 @@ fn resumed_with(
     edit: impl FnOnce(&mut pharmakos_sim::snapshot::Snapshot, &pharmakos_sim::world::World),
 ) -> Surface {
     use pharmakos_sim::snapshot::Snapshot;
-    let first = hosted_as(SEGMENT_MS, FogPolicy::casual(), None);
-    let mut snapshot = Snapshot::from_bytes(&first.snapshot_bytes().expect("the frozen snapshot"))
-        .expect("it decodes");
-    edit(&mut snapshot, first.host().expect("hosted").world());
+    let (opening_bytes, opening_world) = opening();
+    // Each test edits its own copy of both: the world holds interior-mutable
+    // counters, so the shared one is never handed out.
+    let world = opening_world.clone();
+    let mut snapshot = Snapshot::from_bytes(opening_bytes)
+        .expect("the once-built opening Lull snapshot (`opening()`) decodes");
+    edit(&mut snapshot, &world);
     let bytes = snapshot.to_bytes().expect("it encodes");
     let mut surface = Surface::new(
         MATCH,
@@ -3855,7 +3874,8 @@ fn a_writs_settings_rows_show_what_the_sim_reads() {
                 .find(|row| world.beacons().seats().get(*row) == Some(&0))
                 .expect("seat 0's core");
             world.switch_mandate_directly(row, writ);
-            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+            *snapshot =
+                pharmakos_sim::snapshot::Snapshot::capture(&world).expect("a world between ticks");
         });
         let token = seat_token(&mut surface, 0);
         let mut left = FIRST_LULL_MS;

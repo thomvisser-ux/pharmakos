@@ -183,6 +183,11 @@ func _process(_delta: float) -> void:
 		parts.append(Strings.text("lobby_all_ready"))
 	if _forgotten:
 		parts.append(Strings.text("lobby_forgotten"))
+	# The gateway kept refusing the Lull's closing countdown at zero: the rig gave it up and
+	# ended the Lull without it, and the line says so in the gateway's words.
+	var zero_refused := String(state.get("zero_refusal", ""))
+	if zero_refused != "":
+		parts.append(Strings.text("lobby_zero_refused", {"detail": zero_refused}))
 	_status.text = "  ".join(parts)
 	_ready_help.visible = String(state.get("phase", "")) == "lull"
 	_draw_recap(String(state.get("phase", "")))

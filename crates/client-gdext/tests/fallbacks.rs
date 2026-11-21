@@ -43,11 +43,6 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "variant.rs",
-        "count.try_into().unwrap_or(i64::MAX)",
-        "Godot's `int` is an i64 and every count handed to it steps from zero by a bounded amount per call or frame, so none reaches i64::MAX in a process's life; at the bound it is shown as the largest int, a presentation rule for counts nothing decides on (`godot_int`)",
-    ),
-    (
-        "variant.rs",
         "text.unwrap_or_default()",
         "GDScript reads `\"\"` as none for every text key and byte array the bridge documents so; a refusal, an error, a file name or a sentence is never empty, and an empty playbook is the same bytes either way (`text_or_empty`)",
     ),

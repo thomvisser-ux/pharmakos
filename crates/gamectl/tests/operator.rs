@@ -1263,9 +1263,12 @@ fn open_as_scenario(
 }
 
 /// The scenario's committed playbook for seat 0, held to Easy's
-/// `instantiate_template{suggested}` answer for seat 0: that answer with the
-/// scenario files' header and one comment block in place of its first two
-/// lines. The fresh answer is written to the target directory either way.
+/// `instantiate_template{suggested}` answer for seat 0: that answer with a header
+/// and one comment block in place of its first two lines. The header is the
+/// scenario files' (deploy-and-visit's two lines) except that its licence line also
+/// carries the library's licence, because the answer reproduces a library template;
+/// the block holds comments only. The fresh answer is written to the target
+/// directory either way.
 fn committed_as_suggested(
     surface: &mut Surface,
     token: &Token,
@@ -1311,15 +1314,23 @@ fn committed_as_suggested(
          and the file is derived from it as its own header says",
         fresh.display()
     );
-    // The scenario files' header is deploy-and-visit's playbook's first two
-    // lines, read rather than written here: a licence line spelt out in this
-    // file would be one more licence expression for `reuse` to parse.
-    let scenario_header: String =
+    // The scenario files' header is deploy-and-visit's playbook's first two lines, read
+    // rather than written here (a licence line spelt out in this file would be one more
+    // licence expression for `reuse` to parse), except that this file reproduces a library
+    // template's text, so it carries the library's licence beside the game's: the second
+    // line is deploy-and-visit's with ` AND (MIT OR Apache-2.0)` after it.
+    let own: Vec<String> =
         std::fs::read_to_string(root().join("scenarios/skeleton/deploy-and-visit.playbook.jsonc"))
             .expect("the committed scenario playbook")
-            .split_inclusive('\n')
+            .lines()
             .take(2)
+            .map(str::to_owned)
             .collect();
+    let scenario_header = format!(
+        "{}\n{} AND (MIT OR Apache-2.0)\n",
+        own.first().expect("a copyright line"),
+        own.get(1).expect("a licence line")
+    );
     assert!(
         header.starts_with(&scenario_header) && header.lines().all(|line| line.starts_with("//")),
         "the scenario files' header, then comments only: {header}"

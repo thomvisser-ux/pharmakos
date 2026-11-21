@@ -16,15 +16,18 @@
 //! `replace` at the chip's pointer, a `move` of one rule onto another's place), and the
 //! patched text is `patch_plan`'s answer.
 //!
-//! Two shapes are drawn but not edited here, each a gap in the wire rather than a choice of
-//! the client's (the main session's rulings on `ed3b`'s pause report):
+//! One shape is drawn but not edited here, a gap in the wire rather than a choice of the
+//! client's (the owner's ruling of 2026-11-15, decisions-log item 160: the player is never
+//! asked for milliseconds): an integer whose unit is `ms`. The sentence shows the gateway's own rendering (`2:00`), and a number field would ask
+//! the player for raw milliseconds, which the client may not convert. It waits on a display
+//! unit from the wire ([`ReadOnly::Milliseconds`]).
 //!
-//! * an integer whose unit is `ms`: the sentence shows the gateway's own rendering (`2:00`),
-//!   and a number field would ask the player for raw milliseconds, which the client may not
-//!   convert. It waits on a typed unit hint from the wire ([`ReadOnly::Milliseconds`]);
-//! * a reference to a step label or a rule id, which is picked from the playbook and not
-//!   from the map: part 2's picker ([`ReadOnly::NotOnTheMap`]).
+//! A reference to a step label or a rule id is picked from the playbook, not from the map
+//! (part 2, [`ChipEditor::Name`]): from the labels or rule ids the player's own file holds, in
+//! file order ([`crate::vocabulary::step_labels`], [`crate::vocabulary::rule_ids`]), and the
+//! gateway's check says whether the pick is legal.
 
+use pharmakos_proto::gp::api::v1::condition_slot::{PickOp, State};
 use pharmakos_proto::gp::api::v1::reference_shape::Kind;
 use pharmakos_proto::gp::api::v1::value_shape::Shape;
 use pharmakos_proto::gp::api::v1::{Chip, RenderPlanResponse};
@@ -50,11 +53,11 @@ const MILLISECONDS: &str = "ms";
 pub enum ReadOnly {
     /// An integer in milliseconds: it waits on a typed unit hint from the wire.
     Milliseconds,
-    /// A reference picked from the playbook (a step label, a rule id), not from the map:
-    /// part 2's picker.
-    NotOnTheMap,
     /// A chip whose shape the gateway left unset, or set to a kind this build does not know.
     NoShape,
+    /// A value that does not fit the shape sent with it (an integer shape holding no integer):
+    /// drawn as it came, with the reason, and not edited.
+    Unreadable,
     /// A whole number the number field cannot hold exactly: the field is a 64-bit float with
     /// a step, which Godot 4.7.2 measured holding every `i32` exactly and not 2^52 + 1. A value
     /// outside `i32` (the wire's type for the bounds) would come back as another number, so it
@@ -68,8 +71,8 @@ impl ReadOnly {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Milliseconds => "ms",
-            Self::NotOnTheMap => "not_on_the_map",
             Self::NoShape => "no_shape",
+            Self::Unreadable => "unreadable",
             Self::NotExact => "not_exact",
         }
     }
@@ -94,6 +97,27 @@ impl PickKind {
             Self::Beacon => "beacon",
             Self::Location => "location",
             Self::Feature => "feature",
+        }
+    }
+}
+
+/// What a name chip is picked from: the playbook's own names of that kind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NameKind {
+    /// A route step's label (`ReferenceShape.Kind.STEP_LABEL`).
+    StepLabel,
+    /// A rule's id (`ReferenceShape.Kind.HANDLER_ID`).
+    RuleId,
+}
+
+impl NameKind {
+    /// The name GDScript reads, and the state key its choices are listed under
+    /// (`step_label` reads `step_labels`, `rule_id` reads `rule_ids`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::StepLabel => "step_label",
+            Self::RuleId => "rule_id",
         }
     }
 }
@@ -124,6 +148,8 @@ pub enum ChipEditor {
         /// The oneof arms legal at this pointer, as sent.
         arms: Vec<String>,
     },
+    /// A name picked from the playbook's own (a step label, a rule id), listed in file order.
+    Name(NameKind),
     /// Drawn, not edited.
     ReadOnly(ReadOnly),
 }
@@ -156,7 +182,10 @@ impl RuleChip {
                 min.is_some_and(|min| *now < i64::from(min))
                     || max.is_some_and(|max| *now > i64::from(max))
             }
-            ChipEditor::Choice { .. } | ChipEditor::Pick { .. } | ChipEditor::ReadOnly(_) => false,
+            ChipEditor::Choice { .. }
+            | ChipEditor::Pick { .. }
+            | ChipEditor::Name(_)
+            | ChipEditor::ReadOnly(_) => false,
         }
     }
 }
@@ -199,6 +228,86 @@ impl RuleRow {
     }
 }
 
+/// What a condition slot holds, as the gateway sent it (`gp.api.v1.ConditionSlot.State`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotState {
+    /// No condition there.
+    Empty,
+    /// One predicate.
+    Leaf,
+    /// `all`, `any` or `not`: its items follow as slots of their own. Not a pick target.
+    Group,
+    /// A state the gateway left unset, or one this build does not know.
+    Unknown,
+}
+
+impl SlotState {
+    /// The name GDScript reads.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Leaf => "leaf",
+            Self::Group => "group",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// The JSON Patch op a pick at a slot sends, as the gateway names it
+/// (`gp.api.v1.ConditionSlot.PickOp`): the client never chooses one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotOp {
+    /// Nothing is at the pointer: the patch inserts the member.
+    Add,
+    /// Something is at the pointer: the patch replaces it, an array item in place.
+    Replace,
+    /// No op: a group slot, or an op this build does not know. No pick goes out.
+    None,
+}
+
+impl SlotOp {
+    /// The name GDScript reads.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Replace => "replace",
+            Self::None => "none",
+        }
+    }
+}
+
+/// One condition slot of the rendering: where a condition stands or may stand, in the
+/// gateway's words, and the op a pick there sends.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RuleSlot {
+    /// Its JSON Pointer, as sent.
+    pub pointer: String,
+    /// Its name in the player's words, as sent ("when, item 1 of all").
+    pub title: String,
+    /// The line of its rule's sentence, as sent.
+    pub line: usize,
+    /// The rule it was sent under, by its index in [`RuleList::rules`].
+    pub rule: Option<usize>,
+    /// What it holds.
+    pub state: SlotState,
+    /// The predicate or group it holds, as sent; empty for an empty slot.
+    pub predicate: String,
+    /// The op a pick there sends.
+    pub op: SlotOp,
+}
+
+impl RuleSlot {
+    /// Whether the picker is offered on this slot: an empty or a leaf slot whose op the gateway
+    /// named. A group, a state or an op this build does not know is no pick target.
+    #[must_use]
+    pub const fn pickable(&self) -> bool {
+        matches!(self.state, SlotState::Empty | SlotState::Leaf)
+            && matches!(self.op, SlotOp::Add | SlotOp::Replace)
+    }
+}
+
 /// A run of one line: plain text, or the text of the chip whose index it carries.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Segment {
@@ -219,6 +328,8 @@ pub struct RuleList {
     pub rules: Vec<RuleRow>,
     /// The chips, in the order the answer lists them.
     pub chips: Vec<RuleChip>,
+    /// The condition slots, in the order the answer lists them.
+    pub slots: Vec<RuleSlot>,
 }
 
 impl RuleList {
@@ -256,7 +367,8 @@ pub fn rule_list_of(result: &Json) -> Result<RuleList, BridgeError> {
     let lines: Vec<String> = response.prose.lines().map(str::to_owned).collect();
     let mut rules = Vec::with_capacity(response.rules.len());
     let mut chips = Vec::new();
-    for rule in &response.rules {
+    let mut slots = Vec::new();
+    for (number, rule) in response.rules.iter().enumerate() {
         let line = index(rule.line, "a rule's line")?;
         let line_count = index(rule.line_count, "a rule's line count")?;
         let last = line
@@ -277,6 +389,26 @@ pub fn rule_list_of(result: &Json) -> Result<RuleList, BridgeError> {
         for chip in &rule.chips {
             chips.push(rule_chip(chip, &lines)?);
         }
+        for slot in &rule.slots {
+            slots.push(RuleSlot {
+                pointer: slot.pointer.clone(),
+                title: slot.title.clone(),
+                line: index(slot.line, "a slot's line")?,
+                rule: Some(number),
+                state: match State::try_from(slot.state) {
+                    Ok(State::Empty) => SlotState::Empty,
+                    Ok(State::Leaf) => SlotState::Leaf,
+                    Ok(State::Group) => SlotState::Group,
+                    Ok(State::Unspecified) | Err(_) => SlotState::Unknown,
+                },
+                predicate: slot.predicate.clone(),
+                op: match PickOp::try_from(slot.pick_op) {
+                    Ok(PickOp::Add) => SlotOp::Add,
+                    Ok(PickOp::Replace) => SlotOp::Replace,
+                    Ok(PickOp::Unspecified) | Err(_) => SlotOp::None,
+                },
+            });
+        }
     }
     let segments = cut(&lines, &chips)?;
     Ok(RuleList {
@@ -284,6 +416,7 @@ pub fn rule_list_of(result: &Json) -> Result<RuleList, BridgeError> {
         segments,
         rules,
         chips,
+        slots,
     })
 }
 
@@ -332,8 +465,13 @@ fn rule_chip(chip: &Chip, lines: &[String]) -> Result<RuleChip, BridgeError> {
     })
 }
 
-/// The editor a chip's shape asks for.
-fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
+/// The editor a chip's shape asks for: a rule-list chip's, and a beacon setting's, which shares
+/// the shape (`gp.api.v1.ValueShape`: "one editor per shape").
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] for an integer shape whose value is not an integer.
+pub(crate) fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
     let Some(shape) = chip.shape.as_ref().and_then(|shape| shape.shape.as_ref()) else {
         return Ok(ChipEditor::ReadOnly(ReadOnly::NoShape));
     };
@@ -361,9 +499,8 @@ fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
                 Ok(Kind::Beacon) => PickKind::Beacon,
                 Ok(Kind::Location) => PickKind::Location,
                 Ok(Kind::Feature) => PickKind::Feature,
-                Ok(Kind::StepLabel | Kind::HandlerId) => {
-                    return Ok(ChipEditor::ReadOnly(ReadOnly::NotOnTheMap));
-                }
+                Ok(Kind::StepLabel) => return Ok(ChipEditor::Name(NameKind::StepLabel)),
+                Ok(Kind::HandlerId) => return Ok(ChipEditor::Name(NameKind::RuleId)),
                 Ok(Kind::Unspecified) | Err(_) => {
                     return Ok(ChipEditor::ReadOnly(ReadOnly::NoShape));
                 }
@@ -706,6 +843,61 @@ mod tests {
             editor("-2147483649"),
             ChipEditor::ReadOnly(ReadOnly::NotExact)
         );
+    }
+
+    /// A slot takes a pick only when it is empty or a leaf with an op the gateway named: the
+    /// golden's group (`when` holding `all`) does not, its two leaves and the empty `skip_if`s do.
+    #[test]
+    fn only_an_empty_or_a_leaf_slot_with_an_op_is_pickable() {
+        let list = golden();
+        let pickable = |pointer: &str| {
+            list.slots
+                .iter()
+                .find(|slot| slot.pointer == pointer)
+                .unwrap_or_else(|| panic!("no slot {pointer}"))
+                .pickable()
+        };
+        assert!(!pickable("/declarative/handlers/0/when"));
+        assert!(pickable("/declarative/handlers/0/when/all/items/0"));
+        assert!(pickable("/declarative/route/0/skip_if"));
+        let mut leaf = list
+            .slots
+            .iter()
+            .find(|slot| slot.state == SlotState::Leaf)
+            .cloned()
+            .expect("a leaf");
+        leaf.op = SlotOp::None;
+        assert!(!leaf.pickable(), "a leaf with no op is no pick target");
+        let mut group = leaf;
+        group.state = SlotState::Group;
+        group.op = SlotOp::Replace;
+        assert!(
+            !group.pickable(),
+            "a group is no pick target whatever op it carries"
+        );
+        group.state = SlotState::Unknown;
+        assert!(!group.pickable(), "nor is a state this build does not know");
+    }
+
+    /// An op or a state STRING this build does not know (the gateway writes lower-case names;
+    /// the schema's own `ADD` is a name it knows) is the decode's own refusal of the whole
+    /// rendering, never a slot drawn with a guessed op.
+    #[test]
+    fn an_unknown_op_or_state_string_refuses_the_rendering() {
+        for (op, state) in [
+            ("insert", "leaf"),
+            ("Add", "leaf"),
+            ("add", "branch"),
+            ("PICK_OP_ADD", "STATE_LEAF"),
+        ] {
+            let text = format!(
+                r#"{{"prose":"Rules\n  r1: when x.\n","rules":[{{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"slots":[{{"pointer":"/declarative/handlers/0/when","title":"when","line":1,"state":"{state}","predicate":"cmdr_hp_pct","pick_op":"{op}"}}]}}]}}"#
+            );
+            assert!(
+                rule_list_of(&json::read(&text).expect("json")).is_err(),
+                "op {op}, state {state}"
+            );
+        }
     }
 
     #[test]

@@ -26,7 +26,10 @@
 //! a hosted match costs the host. Pathing is the sim's own (item 64: no
 //! charged substitute, and the broadphase's CSR rebuild is its own phase,
 //! counted once); the tick-minus-pathing mean is the tick's mean less the
-//! Pathing phase's (item 116 (6) (b)).
+//! Pathing phase's (item 116 (6) (b)). Since the sim settles its pathing
+//! graph in the phase that edits the terrain (lane `settle`), the Pathing
+//! phase is the repath serve alone and the cluster repair is timed in the
+//! Voxels phase, so the tick-minus-pathing mean includes the repair.
 
 use std::path::Path;
 use std::time::Instant;
@@ -227,7 +230,9 @@ pub struct SegmentReport {
     pub begin: Summary,
     /// Finish: the hash phase and the gateway's per-tick bookkeeping.
     pub finish: Summary,
-    /// The tick's mean less the Pathing phase's, in nanoseconds.
+    /// The tick's mean less the Pathing phase's, in nanoseconds: everything but
+    /// the repath serve, the cluster repair included (it runs in the Voxels
+    /// phase since lane `settle`).
     pub tick_minus_pathing_mean_ns: u128,
     /// The repath serve.
     pub repaths: Repaths,

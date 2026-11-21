@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
 //
 // against-easy.playbook.jsonc: seat 0's orders in against-easy.scenario.jsonc.
 //
@@ -9,8 +9,9 @@
 // seat 0 in the opening Lull of the scenario's own match (seed
 // 0x00000000ca5caded, two seats, one 80 000 ms segment), with seat 0 advised
 // by Easy and seat 1 played by it. The only changes are these two header
-// lines, which replace the template's own two (its permissive SPDX header) so
-// that REUSE records one licence for a scenario file, and this comment block.
+// lines, which replace the template's own two (its permissive SPDX header) with
+// the licence this file carries, the game's together with the template's, because
+// the answer reproduces the template's text; and this comment block.
 //
 // The values are Easy's for seat 0, whose core b_00 stands at (358, 24, 36)
 // on this map and whose starting lean vent is vent_324_16:

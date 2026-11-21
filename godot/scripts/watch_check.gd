@@ -4,7 +4,8 @@
 # The headless-driven run against a REAL `gamectl host` (skeleton-plan-t16a-notes.md
 # section A (4); T19's acceptance, skeleton-plan-w6-notes.md section A4 as decisions-log
 # item 112 amends it): lobby -> the editor -> the wizard -> Ready ends the Lull -> 4x ->
-# recap -> round 2 -> quit in the Lull -> a fresh client resumes it.
+# recap -> round 2 -> quit in the Lull -> a fresh client resumes it -> the lobby's own
+# Probation match.
 #
 # It drives the same scene pieces the lobby does - the host link, the vista, the editor,
 # the bridge's watch rig - with a script where the human would be, and asserts:
@@ -116,9 +117,16 @@
 #     Round 2's Lull comes back, the notebook comes back through `get_briefing`, the drafts
 #     are listed, and the carried draft is opened through `get_draft` with the bytes of
 #     round 1's sealed submission;
-#   * across both hosts: the bridge caught no panic, refused no view page, the gateway
-#     refused no call (so no burst met RATE_LIMITED), entities were drawn, and both hosts
-#     exited once the client let go of their standard input.
+#   * THE PROBATION LEG (S3's `ed3b`, decisions-log item 160 (4)): once the resumed host has
+#     exited, the scene changes again and a third host is started on the lobby's own line
+#     (`HostLink.config_line` with its defaults: the Probation seed and preset). Its Lull
+#     footer says `untimed_by_rule`, so the rig starts no countdown and sends no
+#     `remaining_ms`, which a Probation gateway refuses with INVALID_ARGUMENT: across a
+#     stretch of clock reports the gateway refuses nothing, the footer stays untimed and
+#     the bridge's `timer`, the lobby's countdown, stays empty;
+#   * across every host: the bridge caught no panic, refused no view page, the gateway
+#     refused no call (so no burst met RATE_LIMITED), entities were drawn, and every host
+#     exited once the client let go of its standard input.
 #
 # THE MATCH ID is `watch-check-<unix seconds>-<pid>`, through host_link.gd's one helper
 # (decisions-log item 113 (13)): the host keeps its save in the real per-user private match
@@ -126,7 +134,7 @@
 # leaves one match folder there that the client cannot remove (godot/README.md). The check
 # never touches the lobby's remembered line.
 #
-# The last line printed before a pass carries both hosts' process ids, so the CI step can
+# The last line printed before a pass carries the hosts' process ids, so the CI step can
 # also check from outside that no `gamectl` is left once Godot has exited. There is exactly
 # one OK line.
 #
@@ -202,12 +210,17 @@ var _gamectl := ""
 var _root := ""
 var _line := ""
 var _resumed := false
+## The Probation leg: the third scene, on the lobby's own line.
+var _probation := false
+## How long the Probation leg's Lull is watched: many clock reports' worth (four a second).
+const PROBATION_WATCH := 4.0
 
 
 func _ready() -> void:
 	_rounds_cases()
 	Engine.physics_jitter_fix = 0
 	_resumed = Engine.has_meta(CARRY)
+	_probation = _resumed and String((Engine.get_meta(CARRY) as Dictionary).get("stage", "")) == "probation"
 	vista.my_seat = HostLink.my_seat()
 	vista.configure()
 	editor.setup(vista)
@@ -217,7 +230,16 @@ func _ready() -> void:
 	_gamectl = HostLink.find_gamectl()
 	_root = HostLink.find_root()
 	var written := ""
-	if _resumed:
+	if _probation:
+		var carried: Dictionary = Engine.get_meta(CARRY)
+		_failures.assign(carried.get("failures", []))
+		_refusals.assign(carried.get("refusals", []))
+		_events = int(carried.get("events", 0))
+		# The lobby's own line: its seed, seats and preset, as New match writes it.
+		_line = HostLink.config_line(HostLink.match_id("watch-check-probation"), HostLink.LADDER)
+		written = _line
+		print("[watch-check] the Probation leg starts the lobby's own match: %s" % _line.strip_edges().replace("\t", " "))
+	elif _resumed:
 		var carried: Dictionary = Engine.get_meta(CARRY)
 		_line = String(carried["line"])
 		_failures.assign(carried.get("failures", []))
@@ -238,7 +260,9 @@ func _ready() -> void:
 		return
 	editor.begin(HostLink.my_seat())
 	print("[watch-check] host pid %d" % link.host_pid())
-	if _resumed:
+	if _probation:
+		_run_probation()
+	elif _resumed:
 		_run_resumed()
 	else:
 		_run()
@@ -447,6 +471,39 @@ func _run_resumed() -> void:
 		_failures.append("the editor's own draft is not listed after the resume: %s" % [_editor().get("drafts")])
 	await _carried(carried["sealed"], "the resumed Lull")
 	print("[watch-check] resumed into round %s's Lull: notes back, %d draft(s) listed, the carried draft opened through get_draft" % [_state().get("round"), (_editor().get("drafts", []) as Array).size()])
+	_finish()
+
+
+## The Probation leg: the lobby's own match reaches its first Lull, whose footer says it is
+## untimed by rule; across a stretch of clock reports the rig sends no countdown (the gateway
+## would refuse one), the footer stays untimed, and no countdown is shown.
+func _run_probation() -> void:
+	if not await _until(func() -> bool: return _state().get("phase", "") == "lull" and _state().get("view_settled", false), START_WAIT):
+		_failures.append("the Probation host never reached a Lull with a complete keyframe")
+		_finish()
+		return
+	var refused_before := _refusals.size()
+	var before := _state()
+	await get_tree().create_timer(PROBATION_WATCH).timeout
+	var state := _state()
+	# Asked, not merely silent: clock reports went out and were answered, none with a countdown.
+	var answered := int(state.get("clock_answers", 0)) - int(before.get("clock_answers", 0))
+	var countdowns := int(state.get("countdowns_sent", 0)) - int(before.get("countdowns_sent", 0))
+	if answered < 1:
+		_failures.append("the Probation Lull: no clock report was answered in %.0f s, so nothing was asked" % PROBATION_WATCH)
+	if countdowns != 0:
+		_failures.append("the Probation Lull: %d clock report(s) carried a countdown" % countdowns)
+	if not state.get("untimed_by_rule", false):
+		_failures.append("the Probation Lull's footer does not say untimed by rule: %s" % state)
+	if _refusals.size() != refused_before:
+		_failures.append("the Probation Lull: the gateway refused %s (a countdown report would be INVALID_ARGUMENT)" % "; ".join(_refusals.slice(refused_before)))
+	if not state.get("untimed", false):
+		_failures.append("the Probation Lull's footer stopped saying untimed: %s" % state)
+	if String(state.get("timer", "")) != "":
+		_failures.append("the Probation Lull shows a countdown: `%s`" % state.get("timer"))
+	if state.get("phase", "") != "lull":
+		_failures.append("the Probation Lull ended by itself: %s" % state)
+	print("[watch-check] Probation: %.0f s of the Lull, %d clock report(s) answered, %d countdown(s) sent, none shown, untimed by rule %s, %d refusal(s)" % [PROBATION_WATCH, answered, countdowns, state.get("untimed_by_rule"), _refusals.size() - refused_before])
 	_finish()
 
 
@@ -1380,7 +1437,7 @@ func _check_bridge(who: String) -> void:
 
 
 func _finish() -> void:
-	_check_bridge("the resumed client" if _resumed else "the first client")
+	_check_bridge("the Probation client" if _probation else ("the resumed client" if _resumed else "the first client"))
 	_ended = true
 	var pid: int = link.host_pid()
 	link.quit()
@@ -1389,12 +1446,23 @@ func _finish() -> void:
 			_failures.append("the host (pid %d) was still running after its standard input closed" % pid)
 		else:
 			print("[watch-check] the host exited once its standard input closed")
-	if _failures.is_empty() and _resumed:
-		var first := int((Engine.get_meta(CARRY) as Dictionary).get("first_pid", -1))
-		print("[watch-check] OK (host pids %d and %d)" % [first, pid])
+	if _failures.is_empty() and _probation:
+		var carried: Dictionary = Engine.get_meta(CARRY)
+		print("[watch-check] OK (host pids %d, %d and %d)" % [int(carried.get("first_pid", -1)), int(carried.get("resumed_pid", -1)), pid])
 		get_tree().quit(0)
+	elif _failures.is_empty() and _resumed:
+		# On to the Probation leg, with nothing carried but the expectations and the pids.
+		var carried: Dictionary = Engine.get_meta(CARRY)
+		carried["stage"] = "probation"
+		carried["resumed_pid"] = pid
+		carried["failures"] = _failures
+		carried["refusals"] = _refusals
+		carried["events"] = _events
+		Engine.set_meta(CARRY, carried)
+		print("[watch-check] the resumed host exited; changing scene for the Probation leg")
+		get_tree().change_scene_to_file("res://scenes/watch_check.tscn")
 	elif _failures.is_empty():
-		# A run that stops before the resume leg is not a pass.
+		# A run that stops before the resume and Probation legs is not a pass.
 		_failures.append("the check ended before its resume leg")
 		_report_failures()
 	else:

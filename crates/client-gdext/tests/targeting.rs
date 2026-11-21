@@ -31,6 +31,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use pharmakos_client_gdext::editor::Editor;
+use pharmakos_client_gdext::pacer::CLOCK_REPORT_US;
 use pharmakos_client_gdext::rig::{ADMIN, Outgoing, Phase, Rig, SEAT};
 use pharmakos_client_gdext::targeting::{
     ChipArm, FeatureKind, THIS_ROUND_LEAD, chips_of, features_of,
@@ -172,7 +173,10 @@ fn rig_in(phase: &str) -> Rig {
 fn answer_until(rig: &mut Rig, method: &str, case: &str, phase: &str) {
     for step in 1..64_u64 {
         let mut done = false;
-        for frame in rig.poll(step) {
+        // A clock report's cadence apart, so the clock's answers refill the seat's budget: the
+        // Lull's own reads (the briefing, the drafts, the map's features, the vocabulary) are
+        // more than one refill's worth.
+        for frame in rig.poll(step.saturating_mul(CLOCK_REPORT_US)) {
             let answer = if method_of(&frame) == method {
                 done = true;
                 answering(case, &frame)
@@ -240,6 +244,7 @@ fn the_briefing_golden_is_read_every_lull() {
             "list_drafts" => json::read(r#"{"drafts":[]}"#).expect("json"),
             "list_templates" => json::read(r#"{"templates":[]}"#).expect("json"),
             "get_map_summary" => result_of("map_summary"),
+            "get_vocabulary" => json::read(r#"{"families":[]}"#).expect("json"),
             other => panic!("not this test's call: {other}"),
         };
         editor.answered(Ok(&answer)).expect("the golden decodes");

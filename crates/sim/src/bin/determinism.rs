@@ -187,7 +187,7 @@ fn build_runner(cli: &Cli) -> Result<Runner, String> {
     let seed = cli.seed.unwrap_or(pharmakos_sim::DETERMINISM_MATCH_SEED);
     let world = pharmakos_sim::determinism_world_at(seed, &cli.rules_path, &cli.playbook_path)
         .map_err(|error| error.to_string())?;
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).map_err(|error| error.to_string())?;
 
     if let Some(path) = cli.resume.as_ref() {
         let bytes =

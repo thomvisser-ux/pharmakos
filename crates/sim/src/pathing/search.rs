@@ -53,9 +53,20 @@ impl Item {
 }
 
 /// A hand-written binary min-heap over [`Item::key`].
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(PartialEq, Eq, Debug, Default)]
 pub(crate) struct Heap {
     items: Vec<Item>,
+}
+
+/// A clone keeps the reservation, not only the entries: a heap is reserved
+/// once so a search never allocates, and a cloned or forked world's first
+/// search must not either (a derived clone would reserve only the length).
+impl Clone for Heap {
+    fn clone(&self) -> Heap {
+        let mut items = Vec::with_capacity(self.items.capacity());
+        items.extend_from_slice(&self.items);
+        Heap { items }
+    }
 }
 
 impl Heap {

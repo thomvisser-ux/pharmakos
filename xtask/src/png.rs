@@ -146,6 +146,8 @@ impl Image {
         let mean = sum.div_euclid(n);
         let mut total: i64 = 0;
         for value in &samples {
+            // Samples of 0 to 255 over an image's pixels: the squares and
+            // their sum stay far inside `i64`, so nothing saturates.
             let delta = value.saturating_sub(mean);
             total = total.saturating_add(delta.saturating_mul(delta));
         }
@@ -177,6 +179,9 @@ impl Diff {
     /// this ratio is truncated: at the vista's own resolution two pixels wrong
     /// by a full 255 on every channel still render as `0.000`.
     pub(crate) fn mean_thousandths(&self) -> u64 {
+        // Pixel counts and sums of 0-255 differences, scaled by at most a
+        // million: inside `u64` for any image this compares, so this and the
+        // products below never saturate.
         let denominator = self.pixels.saturating_mul(3);
         if denominator == 0 {
             return 0;
@@ -269,6 +274,8 @@ fn decimal(value: u64, places: u32) -> String {
     let scale = 10_u64.pow(places);
     let whole = value.div_euclid(scale);
     let fraction = value.rem_euclid(scale);
+    // `places` is a decimal place count (2 or 3), which every `usize` holds,
+    // so the default is never read.
     let width = usize::try_from(places).unwrap_or(0);
     format!("{whole}.{fraction:0width$}")
 }
@@ -311,6 +318,8 @@ pub(crate) fn compare(shot: &Image, golden: &Image) -> Result<Diff, String> {
                 .get(golden_base + channel)
                 .ok_or_else(|| "the golden's pixel buffer is short".to_owned())?;
             let delta = left.abs_diff(right);
+            // At most 255 a channel over an image's pixels: inside `u64`, so
+            // this and the counts below never saturate.
             total = total.saturating_add(u64::from(delta));
             pixel_worst = pixel_worst.max(delta);
         }

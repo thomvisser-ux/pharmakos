@@ -75,7 +75,7 @@ use crate::editor::Action;
 use crate::editor::{RuleEditRefusal, RuleNamed};
 use crate::editor_view::{
     instance_dictionary, meter_dictionary, name_into, recap_dictionary, rows_array,
-    rows_of_report_text, rule_list_dictionary, state_dictionary, target_of,
+    rows_of_report_text, rule_list_dictionary, state_dictionary, target_of, vocabulary_dictionary,
 };
 use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
@@ -85,7 +85,7 @@ use crate::rig::{Answer, LullLengths, Rig};
 use crate::rules::{self, MesherRules};
 use crate::surface::{ColourQuantisation, Surface, SurfaceProbe};
 use crate::upload::{DEFAULT_UPLOAD_PATH, ResidentSurface, UploadCounters, UploadPath, Uploader};
-use crate::variant::{godot_int, json_to_variant, text_or_empty};
+use crate::variant::{int_variant, json_to_variant, text_or_empty};
 use crate::view::{self, Applied, Entity, ViewModel};
 
 /// The bridge node. One per client; the scenes hold it and GDScript calls it.
@@ -175,10 +175,11 @@ impl INode3D for PharmakosBridge {
 #[allow(clippy::needless_pass_by_value, clippy::unused_self)]
 #[godot_api]
 impl PharmakosBridge {
-    /// How many panics this bridge has caught at its own boundary. CI asserts zero.
+    /// How many panics this bridge has caught at its own boundary, as an `int`. CI asserts
+    /// zero. A count past what an `int` holds is the typed refusal [`int_variant`] sends.
     #[func]
-    fn caught_panics(&self) -> i64 {
-        godot_int(self.panics.caught())
+    fn caught_panics(&self) -> Variant {
+        int_variant(self.panics.caught())
     }
 
     /// The caught-panic count and the last message, as one line for the log.
@@ -522,7 +523,9 @@ impl PharmakosBridge {
                         &surface,
                     )?;
                 }
-                uploaded = uploaded.saturating_add(1);
+                uploaded = uploaded.checked_add(1).ok_or(BridgeError::CountOverflow {
+                    what: "chunks uploaded",
+                })?;
             }
             Ok::<usize, BridgeError>(uploaded)
         });
@@ -1035,6 +1038,180 @@ impl PharmakosBridge {
         })
     }
 
+    /// The condition picker took predicate `entry` of family `family` (indices into the editor
+    /// state's `vocabulary`) for condition slot `slot` (its index and `pointer` in the rendering
+    /// `rendering` the picker opened on): one patch with the op the slot names. Returns whether
+    /// it was taken; a refusal is on the status line.
+    #[func]
+    fn editor_choose_predicate(
+        &mut self,
+        slot: i64,
+        pointer: GString,
+        rendering: i64,
+        family: i64,
+        entry: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_choose_predicate", false, || {
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(slot),
+                u64::try_from(rendering),
+                usize::try_from(family),
+                usize::try_from(entry),
+            ) {
+                (Ok(slot), Ok(rendering), Ok(family), Ok(entry)) => editor
+                    .choose_predicate(slot, rendering, &pointer, family, entry)
+                    .is_ok(),
+                (Err(_), _, _, _) => refused(editor, RuleEditRefusal::NoSuchSlot),
+                (_, Err(_), _, _) => refused(editor, RuleEditRefusal::Changed),
+                (_, _, Err(_), _) | (_, _, _, Err(_)) => {
+                    refused(editor, RuleEditRefusal::NoSuchEntry)
+                }
+            }
+        })
+    }
+
+    /// Rule-list name chip `chip` took its `which`th choice from the editor state's
+    /// `step_labels` or `rule_ids`, by its kind: one `replace`.
+    #[func]
+    fn editor_choose_name(
+        &mut self,
+        chip: i64,
+        revision: i64,
+        pointer: GString,
+        which: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_choose_name", false, || {
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(chip),
+                u64::try_from(revision),
+                usize::try_from(which),
+            ) {
+                (Ok(chip), Ok(revision), Ok(which)) => {
+                    editor.choose_name(chip, revision, &pointer, which).is_ok()
+                }
+                (Err(_), _, _) => refused(editor, RuleEditRefusal::NoSuchChip),
+                (_, Err(_), _) => refused(editor, RuleEditRefusal::Changed),
+                (_, _, Err(_)) => refused(editor, RuleEditRefusal::NoSuchValue),
+            }
+        })
+    }
+
+    /// Visit & change: beacon `beacon`'s setting `setting` (its index and pointer in the editor
+    /// state's `beacon_detail`) to the number `value`. One route step, one row.
+    #[func]
+    fn editor_change_setting_number(
+        &mut self,
+        beacon: GString,
+        setting: i64,
+        pointer: GString,
+        value: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (beacon, pointer) = (beacon.to_string(), pointer.to_string());
+        self.panics
+            .guard_or("editor_change_setting_number", false, || {
+                let editor = rig.editor_mut();
+                match usize::try_from(setting) {
+                    Ok(setting) => editor
+                        .change_setting_number(&beacon, setting, &pointer, value)
+                        .is_ok(),
+                    Err(_) => refused(editor, RuleEditRefusal::NoSuchEntry),
+                }
+            })
+    }
+
+    /// Visit & change: beacon `beacon`'s setting `setting` took its `which`th value as sent.
+    #[func]
+    fn editor_change_setting_choice(
+        &mut self,
+        beacon: GString,
+        setting: i64,
+        pointer: GString,
+        which: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (beacon, pointer) = (beacon.to_string(), pointer.to_string());
+        self.panics
+            .guard_or("editor_change_setting_choice", false, || {
+                let editor = rig.editor_mut();
+                match (usize::try_from(setting), usize::try_from(which)) {
+                    (Ok(setting), Ok(which)) => editor
+                        .change_setting_choice(&beacon, setting, &pointer, which)
+                        .is_ok(),
+                    (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchEntry),
+                    (_, Err(_)) => refused(editor, RuleEditRefusal::NoSuchValue),
+                }
+            })
+    }
+
+    /// Visit & change: one row on beacon `beacon` naming entry `which` of what `row` names:
+    /// `mandate` (switch to the vocabulary's mandate `which`), `add_target` (the next ground
+    /// click anchors the vocabulary's blueprint `which`), `remove_target` (the detail's target
+    /// `which`) or `queue` (queue the vocabulary's blueprint `which`).
+    #[func]
+    fn editor_visit_row(&mut self, beacon: GString, row: GString, which: i64) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (beacon, row) = (beacon.to_string(), row.to_string());
+        self.panics.guard_or("editor_visit_row", false, || {
+            let editor = rig.editor_mut();
+            match (usize::try_from(which), row.as_str()) {
+                (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchEntry),
+                (Ok(which), "mandate") => editor.switch_mandate(&beacon, which).is_ok(),
+                (Ok(which), "add_target") => editor.begin_build_target(&beacon, which).is_ok(),
+                (Ok(which), "remove_target") => editor.remove_build_target(&beacon, which).is_ok(),
+                (Ok(which), "queue") => editor.queue_structure(&beacon, which).is_ok(),
+                (Ok(_), _) => refused(editor, RuleEditRefusal::NotThisEditor),
+            }
+        })
+    }
+
+    /// Ask for the vocabulary once more, as the picker's "Ask again" does after a refused or
+    /// unreadable read. Returns whether it was asked: not with the door shut or a read already
+    /// on its way.
+    #[func]
+    fn editor_vocabulary_again(&mut self) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics.guard_or("editor_vocabulary_again", false, || {
+            rig.editor_mut().ask_vocabulary_again()
+        })
+    }
+
+    /// The vocabulary from one `get_vocabulary` answer's text, with no gateway behind it: what
+    /// the hostless picker scene draws, in the shape of the editor state's `vocabulary`. An
+    /// empty dictionary means the reason is in the log.
+    #[func]
+    fn editor_vocabulary_of_response(&mut self, text: GString) -> VarDictionary {
+        let text = text.to_string();
+        match self.panics.guard("editor_vocabulary_of_response", || {
+            crate::vocabulary::vocabulary_of_text(&text)
+        }) {
+            Some(Ok(words)) => vocabulary_dictionary(Some(&words), None),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] editor_vocabulary_of_response: {error}");
+                VarDictionary::new()
+            }
+            None => VarDictionary::new(),
+        }
+    }
+
     /// The features the map lists this Lull (`get_map_summary`), for the editor's vent
     /// click: `id`, `kind`, `x` and `y` as the name spells them, `covered`, `live`, and
     /// `at`, a `Vector3i` in the sim's axes standing on the ground the view holds at the
@@ -1414,6 +1591,22 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     state.set(&"round".to_variant(), &i64::from(rig.round()).to_variant());
     state.set(&"timer".to_variant(), &rig.timer_text().to_variant());
     state.set(&"untimed".to_variant(), &rig.untimed().to_variant());
+    state.set(
+        &"untimed_by_rule".to_variant(),
+        &rig.untimed_by_rule().to_variant(),
+    );
+    state.set(
+        &"clock_answers".to_variant(),
+        &int_variant(rig.clock_answers()),
+    );
+    state.set(
+        &"countdowns_sent".to_variant(),
+        &int_variant(rig.countdowns_sent()),
+    );
+    state.set(
+        &"zero_refusal".to_variant(),
+        &text_or_empty(rig.zero_refusal()).to_variant(),
+    );
     state.set(&"speed".to_variant(), &i64::from(rig.speed()).to_variant());
     state.set(&"skipping".to_variant(), &rig.skipping().to_variant());
     state.set(&"all_ready".to_variant(), &rig.all_ready().to_variant());
@@ -1521,12 +1714,12 @@ fn counters_of(renderer: &ChunkRenderer) -> VarDictionary {
 
 /// One counter as the `Variant` a dictionary holds.
 fn counter(value: u64) -> Variant {
-    godot_int(value).to_variant()
+    int_variant(value)
 }
 
 /// One size as the `Variant` a dictionary holds.
 fn count_of(value: usize) -> Variant {
-    godot_int(value).to_variant()
+    int_variant(value)
 }
 
 /// What `configure` answers when it configured nothing: `configured` and `attached` are
@@ -1754,8 +1947,21 @@ pub fn self_check() -> SelfCheck {
                 }
             };
             if pass == 2 {
-                vertices = vertices.saturating_add(surface.vertex_count() as u64);
-                indices = indices.saturating_add(surface.indices().len() as u64);
+                if let (Some(more_vertices), Some(more_indices)) = (
+                    vertices.checked_add(surface.vertex_count() as u64),
+                    indices.checked_add(surface.indices().len() as u64),
+                ) {
+                    vertices = more_vertices;
+                    indices = more_indices;
+                } else {
+                    failures.push(format!(
+                        "chunk {case}: {}",
+                        BridgeError::CountOverflow {
+                            what: "self-check vertices and indices"
+                        }
+                    ));
+                    geometry_identical = false;
+                }
             }
 
             if let Err(error) = apply(&mut path_a, resident_a.get_mut(case), case, &surface) {

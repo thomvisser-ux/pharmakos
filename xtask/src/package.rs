@@ -18,9 +18,11 @@
 //!    is asserted to have that prefix);
 //! 2. build the client library with `--profile release-client` (item 117 (4))
 //!    and `gamectl` with `--release`, both for the host triple; on Windows with
-//!    `+crt-static` through `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS`, for
-//!    these two builds only, refusing when `RUSTFLAGS` or
-//!    `CARGO_ENCODED_RUSTFLAGS` would replace it (item 117 (5));
+//!    `+crt-static` (item 117 (5)), carried by `CARGO_ENCODED_RUSTFLAGS` in
+//!    the builds' own values, which no other source of rustflags can add to,
+//!    and with no flags on Linux; refusing when a flags variable is set in the
+//!    environment; each build checked from its own `--message-format=json`:
+//!    every workspace unit with overflow checks on (`crate::resolved`);
 //! 3. on Windows, byte-scan both binaries for the C runtime's DLL names, and
 //!    fail on a hit;
 //! 4. copy `godot/` without `.godot/` and `bin/` into the stage, stage the
@@ -59,9 +61,10 @@ use std::process::{ExitStatus, Stdio};
 
 use crate::{
     CLIENT_PACKAGE, CLIENT_STAGE_DIR, Ctx, ENTRY_SYMBOL, GDEXTENSION_FILE, GODOT_PROJECT_DIR,
-    SCENARIO_BIN, child_command, contains_bytes, describe_exit, find_bytes, first_difference,
-    godot_program, import_project, metadata, render_command, run, scenario, tool_available, walk,
-    zip,
+    ProcessCargo, SCENARIO_BIN, child_command, colour, contains_bytes, describe_exit, find_bytes,
+    first_difference, godot_program, import_project, metadata, print_diagnostic,
+    refuse_codegen_variables, render_command, resolved, run, scenario, sim_graph, tool_available,
+    walk, zip,
 };
 
 /// The version string of every zip until the wk-35.5 release (item 117 (2)).
@@ -70,6 +73,9 @@ pub(crate) const VERSION: &str = "0.1.0-dev+skeleton";
 
 /// The folder the zip holds, and the zip's only top-level entry.
 const FOLDER: &str = "Pharmakos";
+
+/// The package that builds `gamectl`.
+const GAMECTL_PACKAGE: &str = "pharmakos-gamectl";
 
 /// Everything `package` writes lives under `<target>/package/`.
 const PACKAGE_DIR: &str = "package";
@@ -99,10 +105,15 @@ const GOLDEN_AREA: [&str; 3] = ["tests", "golden", "package"];
 /// and `bcryptprimitives.dll` are the operating system's and are not here.
 const CRT_NEEDLES: &[&str] = &["vcruntime", "msvcp", "ucrtbase", "api-ms-win-crt-"];
 
-/// The Windows target's rustflags variable, which carries `+crt-static` into
-/// `package`'s own two builds and nowhere else.
-const CRT_STATIC_VARIABLE: &str = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS";
+/// The one flag `package`'s two builds pass, on Windows alone: the static C
+/// runtime (item 117 (5)). It reaches rustc through
+/// `CARGO_ENCODED_RUSTFLAGS` in the build's own value
+/// ([`build_calls`]), which cargo reads before every other source of
+/// rustflags, so the two builds carry exactly this flag on Windows and none on
+/// Linux, whatever a config file says.
 const CRT_STATIC_FLAGS: &str = "-C target-feature=+crt-static";
+/// [`CRT_STATIC_FLAGS`] in cargo's encoding: one argument.
+const CRT_STATIC_ENCODED: &str = "-Ctarget-feature=+crt-static";
 
 /// The godot-rust crates: MPL-2.0, and shipping no licence file of their own.
 /// The first four are linked into the client library; the last three run at
@@ -181,24 +192,17 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     } else {
         &LINUX
     };
-    let host = host_triple(ctx)?;
+    // The two builds pin their own tools and flags, so a variable the caller
+    // set would be overridden in silence: refused by name, on every platform,
+    // before any tool runs, the host query below included.
+    refuse_codegen_variables()?;
+    let host = &crate::host()?.triple;
     if host != platform.triple {
         return Err(format!(
             "the host triple is {host}; `package` builds {} only (item 117 (2): Windows and \
              Linux x86_64)",
             platform.triple
         ));
-    }
-    if platform.name == "windows" {
-        for variable in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"] {
-            if env::var_os(variable).is_some() {
-                return Err(format!(
-                    "{variable} is set, and it would replace {CRT_STATIC_VARIABLE}, which carries \
-                     `{CRT_STATIC_FLAGS}` into this command's two builds (decisions-log item \
-                     117 (5)); unset {variable} and run it again"
-                ));
-            }
-        }
     }
 
     let godot = godot_program();
@@ -246,7 +250,7 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     summary.note(format!("{VERSION}, {}", commit.line));
 
     // 2. The two binaries.
-    let (library, gamectl) = build(ctx, platform, &target)?;
+    let (library, gamectl) = build(ctx, platform)?;
 
     // 3. The C runtime (Windows).
     if platform.name == "windows" {
@@ -593,6 +597,8 @@ fn copy_project(from: &Path, to: &Path) -> Result<(), String> {
             .components()
             .next()
             .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            // `file` was walked from under `from`, so `relative` has a first
+            // component and the empty default is never read.
             .unwrap_or_default();
         if first == ".godot" || first == CLIENT_STAGE_DIR {
             continue;
@@ -690,119 +696,112 @@ fn pck_name(platform: &Platform) -> String {
 // Building
 // ---------------------------------------------------------------------------
 
-fn host_triple(ctx: &Ctx) -> Result<String, String> {
-    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
-    let output = child_command(ctx.require_tools, &rustc, &["-vV"], &ctx.root)
+/// The pinned compiler's answer to `args`: `rustc` by its plain name, as
+/// every checked call names it (`build.rustc`), which the rustup proxy on
+/// `PATH` resolves to the pinned toolchain's. A query that fails is a
+/// failure, never an empty answer.
+fn rustc_query(ctx: &Ctx, args: &[&str]) -> Result<String, String> {
+    let rendered = format!("rustc {}", args.join(" "));
+    let output = child_command(ctx.require_tools, "rustc", args, &ctx.root)
+        .stderr(Stdio::inherit())
         .output()
-        .map_err(|error| format!("failed to run `{rustc} -vV`: {error}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .find_map(|line| line.strip_prefix("host: "))
-        .map(|host| host.trim().to_owned())
-        .ok_or_else(|| format!("`{rustc} -vV` printed no host line"))
+        .map_err(|error| format!("failed to run `{rendered}`: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`{rendered}` failed ({})",
+            describe_exit(output.status)
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("`{rendered}` printed something that is not UTF-8: {error}"))
 }
 
 fn rustc_version(ctx: &Ctx) -> Result<String, String> {
-    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
-    let output = child_command(ctx.require_tools, &rustc, &["-V"], &ctx.root)
-        .output()
-        .map_err(|error| format!("failed to run `{rustc} -V`: {error}"))?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    let text = rustc_query(ctx, &["-V"])?;
+    let version = text.trim();
+    if version.is_empty() {
+        return Err("`rustc -V` printed nothing".to_owned());
+    }
+    Ok(version.to_owned())
 }
 
-/// The environment `package`'s own builds run with: `+crt-static` for the
-/// Windows target, and nothing else.
-fn build_env(platform: &Platform) -> Vec<(String, String)> {
-    if platform.name == "windows" {
-        vec![(CRT_STATIC_VARIABLE.to_owned(), CRT_STATIC_FLAGS.to_owned())]
+/// The environment `package`'s own builds run with: their rustflags pinned to
+/// [`CRT_STATIC_FLAGS`] on Windows and to none on Linux, from every source.
+fn build_env(platform: &Platform) -> Vec<resolved::EnvChange> {
+    resolved::pinned_env(if platform.name == "windows" {
+        CRT_STATIC_ENCODED
     } else {
-        Vec::new()
-    }
+        ""
+    })
 }
 
-/// Builds the client library and `gamectl` for the host triple; returns both
-/// paths.
-fn build(ctx: &Ctx, platform: &Platform, target: &Path) -> Result<(PathBuf, PathBuf), String> {
-    let environment = build_env(platform);
-    let mut client: Vec<String> = [
-        "build",
-        "--profile",
-        "release-client",
-        "--target",
-        platform.triple,
-        "--package",
-        CLIENT_PACKAGE,
-        "--lib",
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
-    let mut host: Vec<String> = [
-        "build",
-        "--release",
-        "--target",
-        platform.triple,
-        "--package",
-        "pharmakos-gamectl",
-        "--bin",
-        SCENARIO_BIN,
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
-    if ctx.locked {
-        client.push("--locked".to_owned());
-        host.push("--locked".to_owned());
-    }
-    run_with_env(ctx, &ctx.cargo, &client, &environment)?;
-    run_with_env(ctx, &ctx.cargo, &host, &environment)?;
-    let library = target
-        .join(platform.triple)
-        .join("release-client")
-        .join(platform.library);
-    let gamectl = target
-        .join(platform.triple)
-        .join("release")
-        .join(platform.gamectl);
-    for built in [&library, &gamectl] {
-        if !built.is_file() {
-            return Err(format!(
-                "{} was not produced; cargo's target directory is {}",
-                built.display(),
-                target.display()
-            ));
+/// The two builds, as values: the client library with `release-client` and
+/// `gamectl` with `--release`, both for the host triple, both reporting
+/// themselves (`--message-format=json`) so they are checked as they are made,
+/// both with [`build_env`]'s flags and nothing else.
+fn build_calls(platform: &Platform, locked: bool, colour: bool) -> [resolved::CargoCall; 2] {
+    let call = |args: &[&str]| {
+        let mut args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        args.push(resolved::message_format(colour).to_owned());
+        if locked {
+            args.push("--locked".to_owned());
         }
-    }
-    Ok((library, gamectl))
+        resolved::CargoCall {
+            config: resolved::pinned_config(),
+            env: build_env(platform),
+            args,
+        }
+    };
+    [
+        call(&[
+            "build",
+            "--profile",
+            "release-client",
+            "--target",
+            platform.triple,
+            "--package",
+            CLIENT_PACKAGE,
+            "--lib",
+        ]),
+        call(&[
+            "build",
+            "--release",
+            "--target",
+            platform.triple,
+            "--package",
+            GAMECTL_PACKAGE,
+            "--bin",
+            SCENARIO_BIN,
+        ]),
+    ]
 }
 
-fn run_with_env(
-    ctx: &Ctx,
-    program: &str,
-    args: &[String],
-    environment: &[(String, String)],
-) -> Result<(), String> {
-    let prefix: Vec<String> = environment
-        .iter()
-        .map(|(key, value)| format!("{key}=\"{value}\" "))
-        .collect();
-    println!("   $ {}{}", prefix.concat(), render_command(program, args));
-    let mut command = child_command(ctx.require_tools, program, args, &ctx.root);
-    for (key, value) in environment {
-        command.env(key, value);
-    }
-    let status = command
-        .status()
-        .map_err(|error| format!("failed to launch `{program}`: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{}` failed ({})",
-            render_command(program, args),
-            describe_exit(status)
-        ))
-    }
+/// Builds the client library and `gamectl` for the host triple, checked as
+/// they are made: every workspace unit with overflow checks on, which both
+/// release profiles promise ([`resolved::Expect::RELEASE`]). Returns both
+/// paths as cargo's report of each build names them
+/// ([`resolved::reported_artefact`]).
+fn build(ctx: &Ctx, platform: &Platform) -> Result<(PathBuf, PathBuf), String> {
+    let graph = sim_graph(ctx)?;
+    let mut cargo = ProcessCargo::of(ctx);
+    let [client, host] = build_calls(platform, ctx.locked, colour());
+    let mut build = |call: &resolved::CargoCall, package: &str, wanted: resolved::Wanted<'_>| {
+        let built = resolved::checked(
+            &mut cargo,
+            call,
+            &graph,
+            resolved::Expect::RELEASE,
+            &mut print_diagnostic,
+        )?;
+        resolved::reported_artefact(&built, &graph, package, wanted)
+    };
+    let library = build(
+        &client,
+        CLIENT_PACKAGE,
+        resolved::Wanted::Cdylib(platform.library),
+    )?;
+    let gamectl = build(&host, GAMECTL_PACKAGE, resolved::Wanted::Bin(SCENARIO_BIN))?;
+    Ok((library, gamectl))
 }
 
 /// Runs a command with its standard output and error both written to `log`.
@@ -889,6 +888,8 @@ pub(crate) fn crt_hits(bytes: &[u8]) -> Vec<String> {
 /// About 32 bytes around `at`, printable ASCII as itself and anything else as
 /// a dot.
 fn context(bytes: &[u8], at: usize) -> String {
+    // A display window: clamped to the bytes at both ends on purpose, and
+    // `start..end` inside them by construction, so the default is never read.
     let start = at.saturating_sub(8);
     let end = (at + 24).min(bytes.len());
     bytes
@@ -1012,11 +1013,17 @@ fn judge_smoke(status: ExitStatus, log: &str) -> Result<String, String> {
             "the smoke check printed {ok} `{SMOKE_OK}` lines, not one"
         ));
     }
-    let line = log
+    let found: Vec<&str> = log
         .lines()
-        .find(|line| line.starts_with(SMOKE_OK))
-        .unwrap_or_default();
-    Ok(line.to_owned())
+        .filter(|line| line.starts_with(SMOKE_OK))
+        .collect();
+    match found.as_slice() {
+        [line] => Ok((*line).to_owned()),
+        _ => Err(format!(
+            "the smoke check printed {} `{SMOKE_OK}` lines, not one",
+            found.len()
+        )),
+    }
 }
 
 /// What the export's exit code and outputs say.
@@ -1044,6 +1051,8 @@ pub(crate) fn judge_export(exit_ok: bool, saw_savepack: bool, present: &[bool]) 
 
 fn print_tail(text: &str, count: usize) {
     let lines: Vec<&str> = text.lines().collect();
+    // The last `count` lines, for display: the start is clamped at 0 on
+    // purpose, and inside `lines`, so the default is never read.
     let start = lines.len().saturating_sub(count);
     for line in lines.get(start..).unwrap_or_default() {
         println!("      | {line}");
@@ -1085,6 +1094,8 @@ fn glibc_floor(ctx: &Ctx, files: &[PathBuf]) -> Result<String, String> {
 pub(crate) fn highest_glibc(text: &str) -> Option<Vec<u32>> {
     let mut best: Option<Vec<u32>> = None;
     for (index, _) in text.match_indices("GLIBC_") {
+        // `GLIBC_` (six ASCII bytes) was found at `index`, so `index + 6` is
+        // a boundary inside `text` and the default is never read.
         let rest = text.get(index + 6..).unwrap_or_default();
         let digits: String = rest
             .chars()
@@ -1220,6 +1231,8 @@ pub(crate) fn parse_tree(listing: &str) -> Vec<Crate> {
         let (Some(name), Some(version)) = (words.first(), words.get(1)) else {
             continue;
         };
+        // `words` has at least two items (checked above), so the default is
+        // never read.
         let mut rest: Vec<&str> = words.get(2..).unwrap_or_default().to_vec();
         let mut member = false;
         if rest.first().is_some_and(|word| word.starts_with('(')) {
@@ -1233,6 +1246,7 @@ pub(crate) fn parse_tree(listing: &str) -> Vec<Crate> {
             }
         }
         let source = if rest.last().is_some_and(|word| word.starts_with("http")) {
+            // `rest.last()` was just seen, so the default is never read.
             rest.pop().unwrap_or_default().to_owned()
         } else {
             String::new()
@@ -1385,9 +1399,12 @@ fn licence_files(registry: &Path, item: &Crate) -> Result<Vec<(String, String)>,
     let folder = format!("{}-{}", item.name, item.version);
     let mut indexes: Vec<PathBuf> = fs::read_dir(registry)
         .map_err(|error| format!("reading {}: {error}", registry.display()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .collect();
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("reading an entry of {}: {error}", registry.display()))
+        })
+        .collect::<Result<_, _>>()?;
     indexes.sort();
     let Some(source) = indexes
         .iter()
@@ -1401,8 +1418,13 @@ fn licence_files(registry: &Path, item: &Crate) -> Result<Vec<(String, String)>,
     };
     let mut files: Vec<PathBuf> = fs::read_dir(&source)
         .map_err(|error| format!("reading {}: {error}", source.display()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("reading an entry of {}: {error}", source.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .filter(|path| path.is_file())
         .collect();
     files.sort();
@@ -1685,11 +1707,14 @@ fn compare_manifest(
         );
         return Ok(());
     }
-    manifest_verdict(
-        fs::read(&golden).ok().as_deref(),
-        actual.as_bytes(),
-        &golden,
-    )
+    // Only a golden that is not there is "no committed manifest"; any other
+    // read error is a failure of its own.
+    let committed = match fs::read(&golden) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("reading {}: {error}", golden.display())),
+    };
+    manifest_verdict(committed.as_deref(), actual.as_bytes(), &golden)
 }
 
 /// The manifest's verdict. Pure, so the readable diff is unit-tested.
@@ -1781,6 +1806,8 @@ fn reuse_check(
     // Standard error shares the log, so a warning reuse prints there may sit
     // around the report: parse the one JSON object it wrote.
     let report = match (text.find('{'), text.rfind('}')) {
+        // `{` and `}` are ASCII, so both are boundaries and the default is
+        // never read.
         (Some(start), Some(end)) if start < end => text.get(start..=end).unwrap_or_default(),
         _ => text.as_str(),
     };
@@ -1834,6 +1861,47 @@ fn reuse_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two builds carry exactly the flags they pass, by name, in their
+    /// own values: `+crt-static` on Windows and nothing on Linux, through
+    /// `CARGO_ENCODED_RUSTFLAGS`, which cargo reads before every other source
+    /// of rustflags; and each reports itself, so it is checked as it is made.
+    #[test]
+    fn the_two_builds_carry_exactly_their_own_flags() {
+        for (platform, flags) in [(&WINDOWS, "-Ctarget-feature=+crt-static"), (&LINUX, "")] {
+            for colour in [false, true] {
+                let calls = build_calls(platform, true, colour);
+                for call in &calls {
+                    assert_eq!(call.env, resolved::pinned_env(flags), "{}", platform.name);
+                    assert_eq!(
+                        call.env.first(),
+                        Some(&("CARGO_ENCODED_RUSTFLAGS".to_owned(), Some(flags.to_owned())))
+                    );
+                    assert_eq!(call.config, resolved::pinned_config());
+                    assert_eq!(
+                        call.args
+                            .iter()
+                            .filter(|arg| *arg == resolved::message_format(colour))
+                            .count(),
+                        1
+                    );
+                    assert!(call.args.iter().any(|arg| arg == "--locked"));
+                    assert!(call.args.iter().any(|arg| arg == platform.triple));
+                }
+                let [client, host] = &calls;
+                assert!(
+                    client
+                        .args
+                        .windows(2)
+                        .any(|pair| pair == ["--profile", "release-client"])
+                );
+                assert!(host.args.iter().any(|arg| arg == "--release"));
+            }
+        }
+        // The encoded flag is the flag the C runtime check names, as one
+        // argument.
+        assert_eq!(CRT_STATIC_ENCODED, CRT_STATIC_FLAGS.replace(' ', ""));
+    }
 
     #[test]
     fn nothing_outside_the_package_folder_is_ever_emptied() {

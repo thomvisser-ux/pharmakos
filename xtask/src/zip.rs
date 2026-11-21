@@ -85,6 +85,7 @@ pub(crate) const fn external_attributes(kind: Kind) -> u32 {
 /// The CRC-32 lookup table (IEEE 802.3, reflected polynomial `0xEDB88320`).
 fn crc_table() -> [u32; 256] {
     std::array::from_fn(|slot| {
+        // `slot` is below 256, which a `u32` holds: the default is never read.
         let mut value = u32::try_from(slot).unwrap_or_default();
         for _ in 0..8 {
             value = if value & 1 == 1 {
@@ -103,6 +104,8 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for byte in bytes {
         let low = (crc ^ u32::from(*byte)) & 0xFF;
+        // `low` is masked to a byte, so it fits a `usize` and indexes the
+        // 256-entry table: neither default is ever read.
         let slot = usize::try_from(low).unwrap_or_default();
         let entry = table.get(slot).copied().unwrap_or_default();
         crc = (crc >> 8) ^ entry;

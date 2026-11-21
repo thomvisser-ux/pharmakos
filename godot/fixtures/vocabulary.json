@@ -1,0 +1,1233 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "families": [
+      {
+        "family": "clock",
+        "title": "Clock",
+        "predicates": [
+          {
+            "name": "segment_elapsed",
+            "title": "Time into the segment",
+            "parameters": [
+              {
+                "pointer": "/ms/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/ms/value",
+                "title": "Time",
+                "shape": {
+                  "integer": {
+                    "unit": "ms"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"ms\":{\"op\":\"GE\",\"value\":60000}}"
+          },
+          {
+            "name": "",
+            "title": "The rest of the clock",
+            "parameters": [],
+            "skeleton_json": "",
+            "locked": "from S6"
+          }
+        ]
+      },
+      {
+        "family": "commander",
+        "title": "Commander",
+        "predicates": [
+          {
+            "name": "cmdr_hp_pct",
+            "title": "Commander's HP",
+            "parameters": [
+              {
+                "pointer": "/cmp",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/pct",
+                "title": "Percent",
+                "shape": {
+                  "integer": {
+                    "min": 0,
+                    "max": 100,
+                    "unit": "%"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"cmp\":\"LE\",\"pct\":40}"
+          },
+          {
+            "name": "cmdr_took_damage_within",
+            "title": "Commander took damage recently",
+            "parameters": [
+              {
+                "pointer": "/ms",
+                "title": "Within",
+                "shape": {
+                  "integer": {
+                    "min": 0,
+                    "unit": "ms"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"ms\":3000}"
+          },
+          {
+            "name": "cmdr_deaths",
+            "title": "Commander's deaths",
+            "parameters": [
+              {
+                "pointer": "/deaths/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/deaths/value",
+                "title": "Count",
+                "shape": {
+                  "integer": {
+                    "unit": ""
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"deaths\":{\"op\":\"GE\",\"value\":1}}"
+          },
+          {
+            "name": "",
+            "title": "Commander's position",
+            "parameters": [],
+            "skeleton_json": "",
+            "locked": "from S6"
+          }
+        ]
+      },
+      {
+        "family": "own_beacon",
+        "title": "Own beacon",
+        "predicates": [
+          {
+            "name": "beacon_hp_pct",
+            "title": "A beacon's HP",
+            "parameters": [
+              {
+                "pointer": "/beacon",
+                "title": "Beacon",
+                "shape": {
+                  "reference": {
+                    "kind": "beacon",
+                    "arms": [
+                      "beacon_id",
+                      "nearest",
+                      "weakest",
+                      "most_threatened",
+                      "safest"
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/pct/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/pct/value",
+                "title": "Percent",
+                "shape": {
+                  "integer": {
+                    "min": 0,
+                    "max": 100,
+                    "unit": "%"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"beacon\":{\"safest\":{}},\"pct\":{\"op\":\"LE\",\"value\":50}}"
+          },
+          {
+            "name": "beacon_under_attack",
+            "title": "A beacon under attack",
+            "parameters": [
+              {
+                "pointer": "/beacon",
+                "title": "Beacon",
+                "shape": {
+                  "reference": {
+                    "kind": "beacon",
+                    "arms": [
+                      "beacon_id",
+                      "nearest",
+                      "weakest",
+                      "most_threatened",
+                      "safest"
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/within_ms",
+                "title": "Within",
+                "shape": {
+                  "integer": {
+                    "min": 0,
+                    "unit": "ms"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"beacon\":{\"safest\":{}},\"within_ms\":5000}"
+          },
+          {
+            "name": "beacon_powered",
+            "title": "A beacon powered or dormant",
+            "parameters": [
+              {
+                "pointer": "/beacon",
+                "title": "Beacon",
+                "shape": {
+                  "reference": {
+                    "kind": "beacon",
+                    "arms": [
+                      "beacon_id",
+                      "nearest",
+                      "weakest",
+                      "most_threatened",
+                      "safest"
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/powered",
+                "title": "Powered",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "true",
+                      "false"
+                    ]
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"beacon\":{\"safest\":{}},\"powered\":true}"
+          },
+          {
+            "name": "beacon_units_by_role",
+            "title": "A beacon's units by role",
+            "parameters": [
+              {
+                "pointer": "/beacon",
+                "title": "Beacon",
+                "shape": {
+                  "reference": {
+                    "kind": "beacon",
+                    "arms": [
+                      "beacon_id",
+                      "nearest",
+                      "weakest",
+                      "most_threatened",
+                      "safest"
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/role",
+                "title": "Role",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"BUILD_DRONE\"",
+                      "\"MINING_DRONE\"",
+                      "\"REPAIR_DRONE\"",
+                      "\"RAIDER\"",
+                      "\"SCOUT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/count/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/count/value",
+                "title": "Count",
+                "shape": {
+                  "integer": {
+                    "unit": ""
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"beacon\":{\"safest\":{}},\"role\":\"SCOUT\",\"count\":{\"op\":\"GE\",\"value\":1}}"
+          },
+          {
+            "name": "beacon_mandate",
+            "title": "A beacon's mandate",
+            "parameters": [
+              {
+                "pointer": "/beacon",
+                "title": "Beacon",
+                "shape": {
+                  "reference": {
+                    "kind": "beacon",
+                    "arms": [
+                      "beacon_id",
+                      "nearest",
+                      "weakest",
+                      "most_threatened",
+                      "safest"
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/mandate",
+                "title": "Mandate",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"BUILD\"",
+                      "\"DEFEND\"",
+                      "\"ATTACK\"",
+                      "\"SURVEY\"",
+                      "\"MINE\""
+                    ]
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"beacon\":{\"safest\":{}},\"mandate\":\"BUILD\"}"
+          },
+          {
+            "name": "beacon_has_structure",
+            "title": "A beacon's finished structure",
+            "parameters": [
+              {
+                "pointer": "/beacon",
+                "title": "Beacon",
+                "shape": {
+                  "reference": {
+                    "kind": "beacon",
+                    "arms": [
+                      "beacon_id",
+                      "nearest",
+                      "weakest",
+                      "most_threatened",
+                      "safest"
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/blueprint_id",
+                "title": "Structure",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"generator\"",
+                      "\"autocannon\"",
+                      "\"mortar\"",
+                      "\"resonance_spire\""
+                    ]
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"beacon\":{\"safest\":{}},\"blueprint_id\":\"generator\"}"
+          },
+          {
+            "name": "",
+            "title": "A beacon's reports since",
+            "parameters": [],
+            "skeleton_json": "",
+            "locked": "from S6"
+          }
+        ]
+      },
+      {
+        "family": "aggregates",
+        "title": "Aggregates",
+        "predicates": [],
+        "locked": "from S6"
+      },
+      {
+        "family": "enemy_knowledge",
+        "title": "Enemy knowledge",
+        "predicates": [
+          {
+            "name": "enemy_units_near",
+            "title": "Enemy units near",
+            "parameters": [
+              {
+                "pointer": "/near",
+                "title": "Near",
+                "shape": {
+                  "reference": {
+                    "kind": "location",
+                    "arms": [
+                      "voxel",
+                      "beacon_anchor",
+                      "safest"
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/radius_voxels",
+                "title": "Radius",
+                "shape": {
+                  "integer": {
+                    "min": 1,
+                    "unit": "voxels"
+                  }
+                }
+              },
+              {
+                "pointer": "/freshness/kind",
+                "title": "Freshness",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"VISIBLE_NOW\"",
+                      "\"KNOWN_WITHIN\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/freshness/known_within_ms",
+                "title": "Seen within",
+                "shape": {
+                  "integer": {
+                    "min": 1,
+                    "unit": "ms"
+                  }
+                }
+              },
+              {
+                "pointer": "/count/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/count/value",
+                "title": "Count",
+                "shape": {
+                  "integer": {
+                    "unit": ""
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"near\":{\"safest\":{}},\"radius_voxels\":24,\"count\":{\"op\":\"GE\",\"value\":1},\"freshness\":{\"kind\":\"KNOWN_WITHIN\",\"known_within_ms\":30000}}"
+          },
+          {
+            "name": "enemy_beacon_known",
+            "title": "An enemy beacon known",
+            "parameters": [
+              {
+                "pointer": "/freshness/kind",
+                "title": "Freshness",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"VISIBLE_NOW\"",
+                      "\"KNOWN_WITHIN\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/freshness/known_within_ms",
+                "title": "Seen within",
+                "shape": {
+                  "integer": {
+                    "min": 1,
+                    "unit": "ms"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"freshness\":{\"kind\":\"KNOWN_WITHIN\",\"known_within_ms\":30000}}"
+          },
+          {
+            "name": "enemy_structure_near",
+            "title": "An enemy structure near",
+            "parameters": [
+              {
+                "pointer": "/near",
+                "title": "Near",
+                "shape": {
+                  "reference": {
+                    "kind": "location",
+                    "arms": [
+                      "voxel",
+                      "beacon_anchor",
+                      "safest"
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/radius_voxels",
+                "title": "Radius",
+                "shape": {
+                  "integer": {
+                    "min": 1,
+                    "unit": "voxels"
+                  }
+                }
+              },
+              {
+                "pointer": "/freshness/kind",
+                "title": "Freshness",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"VISIBLE_NOW\"",
+                      "\"KNOWN_WITHIN\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/freshness/known_within_ms",
+                "title": "Seen within",
+                "shape": {
+                  "integer": {
+                    "min": 1,
+                    "unit": "ms"
+                  }
+                }
+              },
+              {
+                "pointer": "/blueprint_id",
+                "title": "Structure",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"generator\"",
+                      "\"autocannon\"",
+                      "\"mortar\"",
+                      "\"resonance_spire\""
+                    ]
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"near\":{\"safest\":{}},\"radius_voxels\":16,\"blueprint_id\":\"generator\",\"freshness\":{\"kind\":\"KNOWN_WITHIN\",\"known_within_ms\":30000}}"
+          },
+          {
+            "name": "",
+            "title": "The rest of enemy knowledge",
+            "parameters": [],
+            "skeleton_json": "",
+            "locked": "from S6"
+          }
+        ]
+      },
+      {
+        "family": "economy",
+        "title": "Economy",
+        "predicates": [
+          {
+            "name": "treasury",
+            "title": "Treasury",
+            "parameters": [
+              {
+                "pointer": "/dollars/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/dollars/value",
+                "title": "Amount",
+                "shape": {
+                  "integer": {
+                    "unit": "$"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"dollars\":{\"op\":\"GE\",\"value\":100}}"
+          },
+          {
+            "name": "kw_headroom",
+            "title": "Grid headroom",
+            "parameters": [
+              {
+                "pointer": "/kw/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/kw/value",
+                "title": "Power",
+                "shape": {
+                  "integer": {
+                    "unit": "kW"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"kw\":{\"op\":\"LT\",\"value\":5}}"
+          },
+          {
+            "name": "kw_supply",
+            "title": "Grid supply",
+            "parameters": [
+              {
+                "pointer": "/kw/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/kw/value",
+                "title": "Power",
+                "shape": {
+                  "integer": {
+                    "unit": "kW"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"kw\":{\"op\":\"GE\",\"value\":20}}"
+          },
+          {
+            "name": "kw_draw",
+            "title": "Grid draw",
+            "parameters": [
+              {
+                "pointer": "/kw/op",
+                "title": "Compared",
+                "shape": {
+                  "choice": {
+                    "values": [
+                      "\"LT\"",
+                      "\"LE\"",
+                      "\"EQ\"",
+                      "\"NE\"",
+                      "\"GE\"",
+                      "\"GT\""
+                    ]
+                  }
+                }
+              },
+              {
+                "pointer": "/kw/value",
+                "title": "Power",
+                "shape": {
+                  "integer": {
+                    "unit": "kW"
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"kw\":{\"op\":\"GE\",\"value\":20}}"
+          },
+          {
+            "name": "",
+            "title": "Income forecast",
+            "parameters": [],
+            "skeleton_json": "",
+            "locked": "from S6"
+          }
+        ]
+      },
+      {
+        "family": "capability",
+        "title": "Capability licence and structure state",
+        "predicates": [],
+        "locked": "from S4"
+      },
+      {
+        "family": "mast_coverage",
+        "title": "Mast coverage",
+        "predicates": [],
+        "locked": "from S4"
+      },
+      {
+        "family": "playbook_state",
+        "title": "Playbook state",
+        "predicates": [
+          {
+            "name": "step_reached",
+            "title": "The route reached a step",
+            "parameters": [
+              {
+                "pointer": "/label",
+                "title": "Step",
+                "shape": {
+                  "reference": {
+                    "kind": "step_label",
+                    "arms": []
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"label\":\"step_1\"}"
+          },
+          {
+            "name": "rule_fired",
+            "title": "A rule fired",
+            "parameters": [
+              {
+                "pointer": "/handler_id",
+                "title": "Rule",
+                "shape": {
+                  "reference": {
+                    "kind": "handler_id",
+                    "arms": []
+                  }
+                }
+              }
+            ],
+            "skeleton_json": "{\"handler_id\":\"rule_1\"}"
+          },
+          {
+            "name": "",
+            "title": "Posture",
+            "parameters": [],
+            "skeleton_json": "",
+            "locked": "from S6"
+          }
+        ]
+      }
+    ],
+    "mandates": [
+      {
+        "name": "build",
+        "title": "Build",
+        "parameters": [
+          {
+            "pointer": "/repair_threshold_pct",
+            "title": "Repair below",
+            "shape": {
+              "integer": {
+                "min": 0,
+                "max": 100,
+                "unit": "%"
+              }
+            }
+          },
+          {
+            "pointer": "/rebuild_destroyed",
+            "title": "Rebuild destroyed",
+            "shape": {
+              "choice": {
+                "values": [
+                  "true",
+                  "false"
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/terraform",
+            "title": "Terraform",
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"NONE\"",
+                  "\"FILL\"",
+                  "\"DIG\"",
+                  "\"BOTH\""
+                ]
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{}"
+      },
+      {
+        "name": "defend",
+        "title": "Defend",
+        "parameters": [
+          {
+            "pointer": "/engagement_radius_pct",
+            "title": "Engagement radius",
+            "shape": {
+              "integer": {
+                "min": 1,
+                "max": 100,
+                "unit": "%"
+              }
+            }
+          },
+          {
+            "pointer": "/pursue",
+            "title": "Pursue",
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"NEVER\"",
+                  "\"SPHERE_EDGE\"",
+                  "\"WHILE_IN_REACH\""
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/picket_scouts",
+            "title": "Picket scouts",
+            "shape": {
+              "integer": {
+                "min": 0,
+                "max": 255,
+                "unit": ""
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{}"
+      },
+      {
+        "name": "attack",
+        "title": "Attack",
+        "parameters": [
+          {
+            "pointer": "/target/beacon",
+            "title": "Target",
+            "shape": {
+              "reference": {
+                "kind": "beacon",
+                "arms": [
+                  "beacon_id",
+                  "nearest"
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/retarget",
+            "title": "Retarget",
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"NONE\"",
+                  "\"NEAREST_KNOWN\""
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/launch/force_size",
+            "title": "Launch at force",
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": ""
+              }
+            }
+          },
+          {
+            "pointer": "/launch/segment_ms",
+            "title": "Launch at time",
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "ms"
+              }
+            }
+          },
+          {
+            "pointer": "/retreat/force_below_pct",
+            "title": "Break off below",
+            "shape": {
+              "integer": {
+                "min": 1,
+                "max": 100,
+                "unit": "%"
+              }
+            }
+          },
+          {
+            "pointer": "/retreat/after_launch_ms",
+            "title": "Break off after",
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "ms"
+              }
+            }
+          },
+          {
+            "pointer": "/after_action",
+            "title": "After the attack",
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"REGROUP_AT_STAGING\"",
+                  "\"RETURN_HOME\""
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/breach_allowed",
+            "title": "Breach walls",
+            "shape": {
+              "choice": {
+                "values": [
+                  "true",
+                  "false"
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/waves",
+            "title": "Waves",
+            "shape": {
+              "integer": {
+                "min": 1,
+                "unit": ""
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{}"
+      },
+      {
+        "name": "survey",
+        "title": "Survey",
+        "parameters": [
+          {
+            "pointer": "/scout_count",
+            "title": "Scouts",
+            "shape": {
+              "integer": {
+                "min": 0,
+                "max": 255,
+                "unit": ""
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{}"
+      },
+      {
+        "name": "mine",
+        "title": "Mine",
+        "parameters": [
+          {
+            "pointer": "/dig_max_depth",
+            "title": "Dig depth",
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "voxels"
+              }
+            }
+          },
+          {
+            "pointer": "/flee_on_threat",
+            "title": "Flee on threat",
+            "shape": {
+              "choice": {
+                "values": [
+                  "true",
+                  "false"
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/seam_choice",
+            "title": "Seam",
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"RICHEST\"",
+                  "\"NEAREST\"",
+                  "\"SAFEST\""
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/pillar_spacing",
+            "title": "Pillar spacing",
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "voxels"
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{}"
+      }
+    ],
+    "steps": [
+      {
+        "name": "move",
+        "title": "Walk",
+        "parameters": [
+          {
+            "pointer": "/to",
+            "title": "To",
+            "shape": {
+              "reference": {
+                "kind": "location",
+                "arms": [
+                  "voxel",
+                  "beacon_anchor",
+                  "safest"
+                ]
+              }
+            }
+          },
+          {
+            "pointer": "/pace",
+            "title": "Pace",
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"DIRECT\"",
+                  "\"AVOID_KNOWN_THREATS\""
+                ]
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{\"to\":{\"safest\":{}},\"pace\":\"DIRECT\"}"
+      },
+      {
+        "name": "interface",
+        "title": "Interface with a beacon",
+        "parameters": [
+          {
+            "pointer": "/beacon",
+            "title": "Beacon",
+            "shape": {
+              "reference": {
+                "kind": "beacon",
+                "arms": [
+                  "beacon_id",
+                  "nearest",
+                  "weakest",
+                  "most_threatened",
+                  "safest"
+                ]
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{\"beacon\":{\"beacon_id\":\"b_00\"}}"
+      },
+      {
+        "name": "place_beacon",
+        "title": "Place a beacon",
+        "parameters": [
+          {
+            "pointer": "/at",
+            "title": "At",
+            "shape": {
+              "reference": {
+                "kind": "location",
+                "arms": [
+                  "voxel",
+                  "beacon_anchor",
+                  "safest",
+                  "covering",
+                  "toward"
+                ]
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{\"at\":{\"covering\":{\"vent\":{\"rank\":\"NEAREST\",\"coverage\":\"UNCOVERED\"}}}}"
+      },
+      {
+        "name": "wait_until",
+        "title": "Wait until",
+        "parameters": [],
+        "skeleton_json": "{\"condition\":{\"segment_elapsed\":{\"ms\":{\"op\":\"GE\",\"value\":60000}}}}"
+      },
+      {
+        "name": "hold",
+        "title": "Hold",
+        "parameters": [
+          {
+            "pointer": "/ms",
+            "title": "Time",
+            "shape": {
+              "integer": {
+                "min": 1,
+                "unit": "ms"
+              }
+            }
+          }
+        ],
+        "skeleton_json": "{\"ms\":5000}"
+      },
+      {
+        "name": "broadcast",
+        "title": "Broadcast",
+        "parameters": [],
+        "skeleton_json": "",
+        "locked": "from S4"
+      }
+    ],
+    "blueprints": [
+      {
+        "name": "generator",
+        "title": "Generator",
+        "parameters": [],
+        "skeleton_json": "\"generator\""
+      },
+      {
+        "name": "autocannon",
+        "title": "Autocannon",
+        "parameters": [],
+        "skeleton_json": "\"autocannon\""
+      },
+      {
+        "name": "mortar",
+        "title": "Mortar",
+        "parameters": [],
+        "skeleton_json": "\"mortar\""
+      },
+      {
+        "name": "survey_post",
+        "title": "Survey post",
+        "parameters": [],
+        "skeleton_json": "",
+        "locked": "This building cannot be made by a Build beacon in this build."
+      },
+      {
+        "name": "resonance_spire",
+        "title": "Resonance Spire",
+        "parameters": [],
+        "skeleton_json": "",
+        "locked": "needs the Resonance Spire licence, which the Ledger awards at a settlement where your Generators run on two vents"
+      },
+      {
+        "name": "wall",
+        "title": "Wall",
+        "parameters": [],
+        "skeleton_json": "\"wall\""
+      }
+    ],
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 599950,
+      "segment_length_ms": 1000,
+      "round": 1
+    }
+  }
+}

@@ -115,7 +115,7 @@ fn the_economy_reads_agree_with_the_settlement_ledgers_credit() {
             .expect("an economy block")
             .bmi_dollars,
     );
-    let mut runner = Runner::new(world());
+    let mut runner = Runner::new(world()).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     let mut credits: Vec<(u32, u8, i64)> = Vec::new();
     for round in 1..=3_u32 {

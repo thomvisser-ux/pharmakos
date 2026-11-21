@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
 
 //! The match host: the one place in this crate that steps a [`Runner`].
 //!
@@ -199,8 +199,9 @@ impl Host {
     /// [`crate::error::Code::InvalidArgument`] for a seat count
     /// [`Host::check_seats`] refuses and a lobby setting
     /// [`Host::check_settings`] refuses, and [`crate::error::Code::Internal`]
-    /// when the map generator or the search graph will not build — neither is
-    /// something a caller did.
+    /// when the map generator or the search graph will not build, or the
+    /// match will not open on the generated world (the snapshot's door,
+    /// [`Runner::new`]) — none is something a caller did.
     pub fn open(config: &WorldConfig, library: Option<PathBuf>) -> Result<Host, Error> {
         Host::check_seats(config.seats)?;
         Host::check_settings(&config.match_settings)?;
@@ -208,8 +209,13 @@ impl Host {
             Error::internal(format!("this match's map could not be generated: {error}"))
         })?;
         let routes = RouteAdapter::new(world.voxels(), world.rules())?;
+        let runner = Runner::new(world).map_err(|error| {
+            Error::internal(format!(
+                "this match could not be opened on its world: {error}"
+            ))
+        })?;
         Ok(Host {
-            runner: Runner::new(world),
+            runner,
             routes,
             library,
             safe_playbook: String::from(SAFE_PLAYBOOK),
@@ -545,8 +551,10 @@ impl Host {
     ///
     /// # Errors
     ///
-    /// As [`Host::seed_layout`], and [`crate::error::Code::InvalidArgument`]
-    /// for a settings row the world refuses.
+    /// As [`Host::seed_layout`], [`crate::error::Code::InvalidArgument`] for a
+    /// settings row the world refuses, and [`crate::error::Code::Internal`]
+    /// when the match cannot be frozen ([`LayoutRefused::Unsettled`]), which
+    /// no lobby reaches.
     pub fn seed_layout_with_settings(
         &mut self,
         layout: &Layout,
@@ -568,6 +576,9 @@ impl Host {
                 | LayoutRefused::BadSetting { .. } => {
                     Error::invalid(format!("this match would not take the layout: {refused}"))
                 }
+                LayoutRefused::Unsettled => Error::internal(format!(
+                    "this match could not be frozen after its layout: {refused}"
+                )),
             })
     }
 

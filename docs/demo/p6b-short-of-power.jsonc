@@ -1,0 +1,27 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// P6b's set-up for E0601's checkbox (docs/demo/p6-run-sheet.md, "P6b's
+// additions"): on the Probation map, one visit to seat 0's core at (188, 28)
+// adds three mortars as build targets. A mortar draws 3 kW and the core leaves
+// 6 kW of headroom at round 1's Lull, so the route adds more draw than the
+// seat supplies, and the full check raises E0601.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "P6b short of power", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "three_mortars",
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"add_build_target": {"target": {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 180, "y": 22, "z": 27}}}}},
+          {"add_build_target": {"target": {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 196, "y": 20, "z": 27}}}}},
+          {"add_build_target": {"target": {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 180, "y": 34, "z": 27}}}}}
+        ]},
+        "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  "fallback": {"shadow": {"beacon": {"safest": {}}}}
+}

@@ -2434,7 +2434,8 @@ mod tests {
                 .field_unit(seat, core, UnitKind::BuildDrone, stand)
                 .is_some()
         );
-        let mut runner = crate::runner::Runner::new(world);
+        let mut runner = crate::runner::Runner::new(world)
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
         assert_eq!(runner.begin_push(), Ok(true));
         let mut found: Vec<Option<SeatId>> = Vec::new();
         for _ in 0..2_000 {

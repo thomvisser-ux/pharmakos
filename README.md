@@ -49,7 +49,16 @@ the owner's review of its stage demo on 2026-09-29.
    `pre-push` runs `cargo xtask fmt clippy` over the whole workspace. `PHARMAKOS_SKIP_HOOKS=1` skips
    both. An unwired clone fails `cargo xtask ci`'s tests (`the_clone_runs_the_versioned_hooks`),
    except under CI (decisions-log item 132).
-2. On Windows, `scripts/setup-windows.ps1` installs the toolchain; then `cargo xtask ci`.
+2. On Windows, `scripts/setup-windows.ps1` installs the toolchain; then `cargo xtask ci`. The
+   `cargo xtask` alias builds xtask in its own profile (`target/xtask/`), and every command first
+   checks that `rustc` and `cargo` are the release `rust-toolchain.toml` pins, so
+   `cargo +other xtask` is refused. `cargo xtask` builds, lints and runs tests on Windows (MSVC),
+   Linux (x86_64) and macOS (aarch64), pins each host's linker, and refuses another host when it
+   does: on one, run plain `cargo`, or add the host's row to xtask's linker table and the
+   repository config (decisions-log item 165 (5)). A plan that runs tests is refused when xtask's
+   own path (`<target>/xtask/xtask`) holds whitespace or a quote in both its checkout-relative and
+   its absolute spelling, as it does for a `CARGO_TARGET_DIR` outside the checkout whose path holds
+   one. In this repository a user-level linker or rustc-wrapper setting does not apply.
 
 ## Repository layout
 
@@ -80,8 +89,9 @@ docs/spec/             the design specification (current: v0.6)
 docs/design/           decisions log, handoffs, investigations — see docs/README.md
 ```
 
-Workspace-wide build settings live in `Cargo.toml` (`[workspace.lints]`, `[profile.release]`),
-`.cargo/config.toml` and `rust-toolchain.toml`; dependency and licence policy lives in `deny.toml`.
+Workspace-wide build settings live in `Cargo.toml` (`[workspace.lints]`, `[profile.*]`),
+`.cargo/config.toml` (the `xtask` and `ci` aliases, the pinned linker and the wrapper keys) and
+`rust-toolchain.toml`; dependency and licence policy lives in `deny.toml`.
 
 ## Documentation
 

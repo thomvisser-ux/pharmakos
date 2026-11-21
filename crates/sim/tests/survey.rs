@@ -179,7 +179,7 @@ fn destroy(world: &mut World, beacon: BeaconId) {
 }
 
 fn pushing(world: World) -> Runner {
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner
 }
@@ -434,7 +434,7 @@ fn a_save_keeps_every_explore_tick_and_every_sighted_blueprint() {
         .expect("the snapshot encodes");
     let snapshot = pharmakos_sim::snapshot::Snapshot::from_bytes(&bytes).expect("the bytes decode");
     let before = runner.world().state_hash();
-    let mut resumed = Runner::new(world_with(600_000));
+    let mut resumed = Runner::new(world_with(600_000)).unwrap_or_else(|error| panic!("{error}"));
     resumed.restore(&snapshot).expect("the snapshot restores");
     assert_eq!(
         resumed.world().state_hash(),

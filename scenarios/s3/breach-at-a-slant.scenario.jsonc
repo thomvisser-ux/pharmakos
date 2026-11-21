@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `settle`: breach-and-raze with seat 0's raiders gathered off a corner
+// of seat 1's ring, so they come at it on a slant, on the golden seed, in one
+// eight-minute segment.
+//
+//   seat 0  seals scenarios/s3/breach-at-a-slant.playbook.jsonc: an Attack
+//           beacon by its core with `breach_allowed`, its force staged off the
+//           ring's corner, launching three raiders at the walled beacon;
+//   seat 1  seals scenarios/s2/breach-and-raze.enemy.playbook.jsonc: the
+//           walled beacon.
+//
+// From the staging point the cheapest way into the ring crosses its wall near
+// the corner. The breach search reads a diagonal step's two sides where a
+// walker stands, so it steps onto a wall column only cardinally from a column
+// a walker stands on, or diagonally where neither side is a wall: it names the
+// wall column [360, 332] and plants at [360, 331]. Before lane `settle`'s
+// second fix pass the search read a wall side at its footing and stepped onto
+// the wall diagonally: it named [361, 332] and planted at [362, 331]. This
+// scenario pins that change in a played chain.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "breach-at-a-slant",
+  "summary": "Seat 0's raiders, staged off a corner of seat 1's wall ring, breach it and destroy the beacon inside.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s3/breach-at-a-slant.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s2/breach-and-raze.enemy.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 480000, "note": "The ring, the raid on a slant, the breach and the raze." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "attack_launched", "seat": 0, "by_tick": 5902,
+      "note": "Seat 0's three raiders, gathered off the ring's corner, launch at the walled beacon." },
+    { "assert": "event_fired", "event": "charge_planted", "seat": 0, "by_tick": 6138,
+      "note": "The lead raider plants a charge at [360, 331], cardinally beside the wall column [360, 332]. Before lane `settle`'s second fix pass it planted at [362, 331], diagonally beside [361, 332], at tick 6114." },
+    { "assert": "event_fired", "event": "charge_detonated", "seat": 0, "by_tick": 6238,
+      "note": "The charge cuts the wall flat to its footing." },
+    { "assert": "event_fired", "event": "beacon_destroyed", "seat": 1, "by_tick": 6805,
+      "note": "Through the gap, the raiders destroy the beacon inside the ring." },
+    { "assert": "event_fired", "event": "attack_ended", "seat": 0, "by_tick": 6978,
+      "note": "With nothing left in reach, the attack is over." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/breach-at-a-slant/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS; pins the breach on a slant, the cut and the raze. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

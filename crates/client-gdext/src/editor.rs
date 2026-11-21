@@ -67,19 +67,20 @@ use std::collections::VecDeque;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::api::v1::{
-    GetBeaconResponse, GetBriefingResponse, GetDraftResponse, ListDraftsResponse,
-    PatchPlanResponse, SaveNotesResponse, SubmitPlanResponse, VerifyPlanResponse, VerifyReport,
+    GetBriefingResponse, GetDraftResponse, ListDraftsResponse, PatchPlanResponse,
+    SaveNotesResponse, SubmitPlanResponse, VerifyPlanResponse, VerifyReport,
 };
 use pharmakos_proto::json::{self, Json};
 
 use crate::enums;
 use crate::error::BridgeError;
 use crate::rig::proto3_text;
-use crate::rule_list::{self, ChipEditor, RuleList};
+use crate::rule_list::{self, ChipEditor, NameKind, RuleList};
 use crate::targeting::{self, Chip, Feature, FeatureKind};
 use crate::variant::proto3_integer;
 use crate::variant::text_or_empty;
 use crate::view::{Entity, EntityKind, split_footer};
+use crate::vocabulary::{self, BeaconDetail, PickError, Vocabulary};
 use crate::wizard::{self, Instance, TemplateRow, Wizard};
 
 /// The verifier codes on which Load refuses a file rather than opening it.
@@ -262,10 +263,10 @@ impl Priority {
 pub enum Action {
     /// Go here: a move step.
     Go,
-    /// Visit & change: an interface step with one row, the beacon's priority.
-    ///
-    /// PLACEHOLDER: a priority row as the menu's one change — OWNER, S3, with the pickers.
-    /// The mandate and build-target rows arrive with S3's pickers.
+    /// Visit & change's priority rows: an interface step with one row, the beacon's
+    /// Quartermaster priority. The menu's other rows (a setting, a mandate, a Build target, a
+    /// queued structure) are composed from `get_beacon`'s detail and `get_vocabulary`
+    /// ([`Editor::change_setting_number`] and its siblings), not as an `Action`.
     Visit(Priority),
     /// Recycle: an interface step with the recycle row.
     Recycle,
@@ -728,6 +729,30 @@ pub enum RuleEditRefusal {
     NotThisKind(&'static str),
     /// The gateway lists no such arm at this pointer: the arm the click would write.
     ArmNotHere(&'static str),
+    /// A number the field cannot hold exactly (outside `i32`, the wire's type for the bounds):
+    /// it would reach the file as another number, so it is not sent.
+    NotExact,
+    /// The vocabulary has not been read this Lull, or its read was refused.
+    NoVocabulary,
+    /// The condition slot is not inside the rule the picker was opened on.
+    NotInRule,
+    /// No family, predicate, mandate, blueprint, setting, target or name at that index.
+    NoSuchEntry,
+    /// The gateway locked the entry or its family: its reason is drawn beside it.
+    Locked,
+    /// No detail of that beacon is on hand: none was read, it was another beacon's, or its
+    /// read was refused.
+    NoDetail,
+    /// A setting's pointer names no field.
+    NoPointer,
+    /// The entry carries no lock and no name: the gateway's answer named no word to write.
+    Unnamed,
+    /// No condition slot at that index.
+    NoSuchSlot,
+    /// The slot is a group (`all`, `any`, `not`): its items are the pick targets, not it.
+    GroupSlot,
+    /// The slot names no op this build knows (or none at all): no pick is guessed.
+    NoPickOp,
 }
 
 impl RuleEditRefusal {
@@ -753,6 +778,17 @@ impl RuleEditRefusal {
             Self::RenderingOutOfRange => "rendering_out_of_range",
             Self::NotThisKind(_) => "not_this_kind",
             Self::ArmNotHere(_) => "arm_not_here",
+            Self::NotExact => "not_exact",
+            Self::NoVocabulary => "no_vocabulary",
+            Self::NotInRule => "not_in_rule",
+            Self::NoSuchEntry => "no_such_entry",
+            Self::Locked => "locked",
+            Self::NoDetail => "no_detail",
+            Self::NoPointer => "no_pointer",
+            Self::Unnamed => "unnamed",
+            Self::NoSuchSlot => "no_such_slot",
+            Self::GroupSlot => "group_slot",
+            Self::NoPickOp => "no_pick_op",
         }
     }
 
@@ -778,12 +814,61 @@ pub struct RuleRefusal {
     revision: u64,
 }
 
-/// The pick that is on: the chip, as the control that began it named it.
+impl From<PickError> for RuleEditRefusal {
+    fn from(error: PickError) -> Self {
+        match error {
+            PickError::NoSuchEntry => Self::NoSuchEntry,
+            PickError::Locked => Self::Locked,
+            PickError::NotJson => Self::NotJson,
+            PickError::NoPointer => Self::NoPointer,
+            PickError::Unnamed => Self::Unnamed,
+        }
+    }
+}
+
+/// The pick that is on: a rule-list chip's, as the control that began it named it, or a Build
+/// target's anchor for the beacon and blueprint the Visit & change menu named.
 #[derive(Clone, PartialEq, Eq, Debug)]
-struct PickOn {
-    chip: usize,
-    rendering: u64,
-    pointer: String,
+enum PickOn {
+    Chip {
+        chip: usize,
+        rendering: u64,
+        pointer: String,
+    },
+    Anchor {
+        beacon: String,
+        blueprint: usize,
+    },
+}
+
+/// What one of the editor's reads of the gateway's words came to, when it did not come: the
+/// vocabulary's or a beacon's detail (decisions-log item 160 (4)). Shown on its own line, and nothing
+/// waits on it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ReadFailed {
+    /// The gateway refused the read: `CODE: message`, as it came.
+    Refused(String),
+    /// The gateway answered, and this client could not read the answer: the decode's reason.
+    Unreadable(String),
+}
+
+impl ReadFailed {
+    /// The name GDScript looks the words up by.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Refused(_) => "refused",
+            Self::Unreadable(_) => "unreadable",
+        }
+    }
+
+    /// What fills the words.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::Refused(detail) | Self::Unreadable(detail) => detail,
+        }
+    }
 }
 
 /// A rule as a drag names it: its index in the rule list, the rendering the drag began on and
@@ -920,6 +1005,14 @@ enum Job {
         patch: String,
         on: bool,
     },
+    /// `get_vocabulary`: the words the pickers draw, read every Lull.
+    Vocabulary,
+    /// A Visit & change row: one route step visiting `beacon` with the one `row`, labelled
+    /// against the text the patch is applied to, as a map action is.
+    Visit {
+        beacon: String,
+        row: Json,
+    },
 }
 
 impl Job {
@@ -938,6 +1031,7 @@ impl Job {
                 | Self::RuleEdit { .. }
                 | Self::GetDraft { .. }
                 | Self::SetOption { .. }
+                | Self::Visit { .. }
         )
     }
 }
@@ -1014,6 +1108,10 @@ enum Sent {
         revision: u64,
     },
     MapSummary,
+    /// `get_vocabulary`, asked in `round`.
+    Vocabulary {
+        round: u32,
+    },
 }
 
 /// One call to send: the method and its params.
@@ -1127,6 +1225,18 @@ pub struct Editor {
     filed: Option<String>,
     /// What the verifier counted, from the last report on the text on screen (E9).
     size: Option<SizeMeter>,
+    /// The words the pickers draw, as `get_vocabulary` answered this Lull; `None` before.
+    vocabulary: Option<Vocabulary>,
+    /// Why this Lull's vocabulary did not come, when it did not.
+    vocabulary_failed: Option<ReadFailed>,
+    /// The detail of the beacon last described, as `get_beacon` answered.
+    beacon: Option<BeaconDetail>,
+    /// Why the beacon's detail did not come, when it did not.
+    beacon_failed: Option<ReadFailed>,
+    /// The route's step labels in the text on screen, read once per text.
+    step_labels: Vec<String>,
+    /// The rules' ids in the text on screen, read once per text.
+    rule_ids: Vec<String>,
 }
 
 impl Editor {
@@ -1380,6 +1490,8 @@ impl Editor {
             return;
         }
         self.beacon_prose.clear();
+        self.beacon = None;
+        self.beacon_failed = None;
         self.queue.retain(|job| !matches!(job, Job::Beacon { .. }));
         self.queue.push_back(Job::Beacon { id: id.to_owned() });
         self.touch();
@@ -1647,6 +1759,9 @@ impl Editor {
         let ChipEditor::Number { now, .. } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
+        if !held_exactly(value) {
+            return Err(RuleEditRefusal::NotExact);
+        }
         if *now == value {
             return Err(RuleEditRefusal::Unchanged);
         }
@@ -1719,7 +1834,7 @@ impl Editor {
         });
         match outcome {
             Ok(()) => {
-                self.picking = Some(PickOn {
+                self.picking = Some(PickOn::Chip {
                     chip,
                     rendering: revision,
                     pointer: pointer.to_owned(),
@@ -1741,7 +1856,17 @@ impl Editor {
     /// The chip whose pick the next map click is, if one is.
     #[must_use]
     pub fn picking(&self) -> Option<usize> {
-        self.picking.as_ref().map(|on| on.chip)
+        match self.picking.as_ref() {
+            Some(PickOn::Chip { chip, .. }) => Some(*chip),
+            Some(PickOn::Anchor { .. }) | None => None,
+        }
+    }
+
+    /// Whether the next map click is a Build target's anchor (Visit & change's "Add a build
+    /// target", decisions-log item 160 (4)).
+    #[must_use]
+    pub const fn anchoring(&self) -> bool {
+        matches!(self.picking, Some(PickOn::Anchor { .. }))
     }
 
     /// A map click on `target` while a pick is on: one `replace` of the picked chip with the
@@ -1756,6 +1881,9 @@ impl Editor {
     /// names nothing this chip takes ([`RuleEditRefusal::NotThisKind`],
     /// [`RuleEditRefusal::ArmNotHere`]).
     pub fn pick(&mut self, target: &Target) -> Result<(), RuleEditRefusal> {
+        if let Some(PickOn::Anchor { beacon, blueprint }) = self.picking.clone() {
+            return self.pick_anchor(&beacon, blueprint, target);
+        }
         let outcome = self.pick_patch(target);
         if !matches!(
             outcome,
@@ -1784,8 +1912,15 @@ impl Editor {
     }
 
     fn pick_patch(&self, target: &Target) -> Result<(String, String), RuleEditRefusal> {
-        let on = self.picking.as_ref().ok_or(RuleEditRefusal::NotPicking)?;
-        let found = self.chip_drawn(on.chip, on.rendering, &on.pointer)?;
+        let Some(PickOn::Chip {
+            chip,
+            rendering,
+            pointer,
+        }) = self.picking.as_ref()
+        else {
+            return Err(RuleEditRefusal::NotPicking);
+        };
+        let found = self.chip_drawn(*chip, *rendering, pointer)?;
         let ChipEditor::Pick { kind, arms } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
@@ -1946,6 +2081,447 @@ impl Editor {
         }
     }
 
+    // --- The condition picker and the name picks (S3's `ed3b`, part 2) -------------------
+
+    /// The condition picker took predicate `entry` of family `family`, as `get_vocabulary`
+    /// sent them, for condition slot `slot` of the rendering `rendering` (named, as a chip is, by
+    /// its index, the rendering the picker opened on and its `pointer`). One JSON Patch: the
+    /// predicate's skeleton wrapped under its name, sent with exactly the op the slot names
+    /// (`add` where nothing stands, `replace` where something does, an array item in place): the
+    /// client never chooses one. The parameters then edit as chips once the new rendering
+    /// carries them.
+    ///
+    /// # Errors
+    ///
+    /// A [`RuleEditRefusal`], said on the status line: the list takes no edit now, it was
+    /// redrawn since the picker opened, there is no such slot, the slot is a group or names no op
+    /// this build knows, it is not inside the rule it was sent under, the vocabulary was not
+    /// read this Lull, there is no such entry, or the gateway locked it or its family.
+    pub fn choose_predicate(
+        &mut self,
+        slot: usize,
+        rendering: u64,
+        pointer: &str,
+        family: usize,
+        entry: usize,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome = self.predicate_patch(slot, rendering, pointer, family, entry);
+        self.ask_rule_edit(outcome)
+    }
+
+    fn predicate_patch(
+        &self,
+        slot: usize,
+        rendering: u64,
+        pointer: &str,
+        family: usize,
+        entry: usize,
+    ) -> Result<(String, String), RuleEditRefusal> {
+        if let Some(blocked) = self.rules_blocked() {
+            return Err(blocked);
+        }
+        if self.rules_rendering != Some(rendering) {
+            return Err(RuleEditRefusal::Changed);
+        }
+        let found = self
+            .rule_list
+            .slots
+            .get(slot)
+            .ok_or(RuleEditRefusal::NoSuchSlot)?;
+        if found.pointer != pointer {
+            return Err(RuleEditRefusal::Changed);
+        }
+        let present = match (found.state, found.op) {
+            (rule_list::SlotState::Group, _) => return Err(RuleEditRefusal::GroupSlot),
+            (rule_list::SlotState::Empty | rule_list::SlotState::Leaf, rule_list::SlotOp::Add) => {
+                false
+            }
+            (
+                rule_list::SlotState::Empty | rule_list::SlotState::Leaf,
+                rule_list::SlotOp::Replace,
+            ) => true,
+            (_, rule_list::SlotOp::None) | (rule_list::SlotState::Unknown, _) => {
+                return Err(RuleEditRefusal::NoPickOp);
+            }
+        };
+        let inside = found
+            .rule
+            .and_then(|index| self.rule_list.rules.get(index))
+            .is_some_and(|rule| rule.holds(&found.pointer) && rule.pointer != found.pointer);
+        if !inside {
+            return Err(RuleEditRefusal::NotInRule);
+        }
+        let words = self
+            .vocabulary
+            .as_ref()
+            .ok_or(RuleEditRefusal::NoVocabulary)?;
+        let value = vocabulary::predicate_value(words, family, entry)?;
+        Ok((
+            vocabulary::slot_patch(&found.pointer, value, present),
+            found.pointer.clone(),
+        ))
+    }
+
+    /// Name chip `chip` took its `which`th choice, from the labels or rule ids the text on
+    /// screen holds in file order ([`Editor::name_choices`]): one `replace` writing it, on the
+    /// rendering and chip named as for [`Editor::set_number`]. Whether the name is legal there (a
+    /// later step, a rule that exists) is the gateway's check.
+    ///
+    /// # Errors
+    ///
+    /// A [`RuleEditRefusal`], said on the status line, as for [`Editor::choose`].
+    pub fn choose_name(
+        &mut self,
+        chip: usize,
+        revision: u64,
+        pointer: &str,
+        which: usize,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome = self.name_patch(chip, revision, pointer, which);
+        self.ask_rule_edit(outcome)
+    }
+
+    fn name_patch(
+        &self,
+        chip: usize,
+        revision: u64,
+        pointer: &str,
+        which: usize,
+    ) -> Result<(String, String), RuleEditRefusal> {
+        let found = self.chip_drawn(chip, revision, pointer)?;
+        let ChipEditor::Name(kind) = &found.editor else {
+            return Err(RuleEditRefusal::NotThisEditor);
+        };
+        let name = self
+            .name_choices(*kind)
+            .get(which)
+            .ok_or(RuleEditRefusal::NoSuchValue)?;
+        let value = Json::String(name.clone());
+        if json::read(&found.value_json).is_ok_and(|now| now == value) {
+            return Err(RuleEditRefusal::Unchanged);
+        }
+        Ok((
+            rule_list::replace_patch(&found.pointer, value),
+            found.pointer.clone(),
+        ))
+    }
+
+    /// The names a name chip of `kind` is picked from: the text on screen's step labels or rule
+    /// ids, in file order, each once.
+    #[must_use]
+    pub fn name_choices(&self, kind: NameKind) -> &[String] {
+        match kind {
+            NameKind::StepLabel => &self.step_labels,
+            NameKind::RuleId => &self.rule_ids,
+        }
+    }
+
+    /// Ask for the vocabulary once more (the picker's "Ask again", offered when its read was
+    /// refused or could not be read). Returns `false`, asking nothing, with the door shut or
+    /// with a read already queued or on its way: one more call within the seat's budget.
+    pub fn ask_vocabulary_again(&mut self) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
+        let waiting = self.queue.iter().any(|job| matches!(job, Job::Vocabulary))
+            || matches!(self.in_flight, Some(Sent::Vocabulary { .. }));
+        if waiting {
+            return false;
+        }
+        self.vocabulary_failed = None;
+        self.queue.push_back(Job::Vocabulary);
+        self.touch();
+        true
+    }
+
+    /// The words the pickers draw, as `get_vocabulary` answered this Lull.
+    #[must_use]
+    pub const fn vocabulary(&self) -> Option<&Vocabulary> {
+        self.vocabulary.as_ref()
+    }
+
+    /// Why this Lull's vocabulary did not come, when it did not.
+    #[must_use]
+    pub const fn vocabulary_failed(&self) -> Option<&ReadFailed> {
+        self.vocabulary_failed.as_ref()
+    }
+
+    /// The detail of the beacon last described, as `get_beacon` answered.
+    #[must_use]
+    pub const fn beacon_detail(&self) -> Option<&BeaconDetail> {
+        self.beacon.as_ref()
+    }
+
+    /// Why the beacon's detail did not come, when it did not.
+    #[must_use]
+    pub const fn beacon_failed(&self) -> Option<&ReadFailed> {
+        self.beacon_failed.as_ref()
+    }
+
+    // --- Visit & change rows (S3's `ed3b`, part 2; register row S3-01) ------------------
+
+    /// Setting `setting` of beacon `beacon`'s detail (named by its `pointer` too) to the number
+    /// `value`: one route step visiting the beacon with one `set_mandate_settings` row, nested
+    /// from the setting's pointer.
+    ///
+    /// # Errors
+    ///
+    /// A [`RuleEditRefusal`], said on the status line: the door is shut, there is no text, no
+    /// detail of that beacon is on hand, no such setting, it is not a number, the value cannot
+    /// be held exactly, or it is the value now.
+    pub fn change_setting_number(
+        &mut self,
+        beacon: &str,
+        setting: usize,
+        pointer: &str,
+        value: i64,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome = self.setting_number_row(beacon, setting, pointer, value);
+        self.ask_visit(beacon, outcome)
+    }
+
+    fn setting_number_row(
+        &self,
+        beacon: &str,
+        setting: usize,
+        pointer: &str,
+        value: i64,
+    ) -> Result<Json, RuleEditRefusal> {
+        let found = self.setting_drawn(beacon, setting, pointer)?;
+        let ChipEditor::Number { .. } = &found.editor else {
+            return Err(RuleEditRefusal::NotThisEditor);
+        };
+        // No `Unchanged` here: the detail is the beacon as the Lull sees it, and an earlier
+        // step may change it, so setting it back is a row the verifier judges.
+        if !held_exactly(value) {
+            return Err(RuleEditRefusal::NotExact);
+        }
+        let settings = vocabulary::nested_setting(&found.pointer, Json::Number(value.to_string()))?;
+        Ok(vocabulary::settings_row(settings))
+    }
+
+    /// Setting `setting` of beacon `beacon`'s detail took its `which`th value as sent: one route
+    /// step with one `set_mandate_settings` row.
+    ///
+    /// # Errors
+    ///
+    /// As [`Editor::change_setting_number`], and for a value the setting does not list or one
+    /// that is not JSON.
+    pub fn change_setting_choice(
+        &mut self,
+        beacon: &str,
+        setting: usize,
+        pointer: &str,
+        which: usize,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome = self.setting_choice_row(beacon, setting, pointer, which);
+        self.ask_visit(beacon, outcome)
+    }
+
+    fn setting_choice_row(
+        &self,
+        beacon: &str,
+        setting: usize,
+        pointer: &str,
+        which: usize,
+    ) -> Result<Json, RuleEditRefusal> {
+        let found = self.setting_drawn(beacon, setting, pointer)?;
+        let ChipEditor::Choice { values } = &found.editor else {
+            return Err(RuleEditRefusal::NotThisEditor);
+        };
+        // No `Unchanged`, as for a number: the verifier says what the row does.
+        let text = values.get(which).ok_or(RuleEditRefusal::NoSuchValue)?;
+        let value = json::read(text).map_err(|_| RuleEditRefusal::NotJson)?;
+        let settings = vocabulary::nested_setting(&found.pointer, value)?;
+        Ok(vocabulary::settings_row(settings))
+    }
+
+    /// Switch beacon `beacon` to mandate `which`, as `get_vocabulary` sent it: one route step
+    /// with one `set_mandate` row, the mandate's skeleton under its name.
+    ///
+    /// # Errors
+    ///
+    /// A [`RuleEditRefusal`], said on the status line: the door is shut, there is no text, no
+    /// detail of that beacon is on hand, the vocabulary was not read, no such mandate, or the
+    /// gateway locked it.
+    pub fn switch_mandate(&mut self, beacon: &str, which: usize) -> Result<(), RuleEditRefusal> {
+        let outcome = self.visit_gate(beacon).and_then(|()| {
+            let mandate = self
+                .words()?
+                .mandates
+                .get(which)
+                .ok_or(RuleEditRefusal::NoSuchEntry)?;
+            Ok(vocabulary::mandate_row(mandate)?)
+        });
+        self.ask_visit(beacon, outcome)
+    }
+
+    /// Add a Build target of blueprint `which` (as `get_vocabulary` sent it) at beacon
+    /// `beacon`: the next map click on ground is its anchor ([`Editor::pick`]). Offered on every
+    /// own beacon: whether the beacon carries a mandate that takes a target is the verifier's
+    /// to say.
+    ///
+    /// # Errors
+    ///
+    /// A [`RuleEditRefusal`], said on the status line: the door is shut, there is no text, no
+    /// detail of that beacon is on hand, the vocabulary was not read, no such blueprint, or the
+    /// gateway locked it.
+    pub fn begin_build_target(
+        &mut self,
+        beacon: &str,
+        which: usize,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome = self.visit_gate(beacon).and_then(|()| {
+            let blueprint = self
+                .words()?
+                .blueprints
+                .get(which)
+                .ok_or(RuleEditRefusal::NoSuchEntry)?;
+            vocabulary::usable_name(blueprint)?;
+            Ok(())
+        });
+        match outcome {
+            Ok(()) => {
+                self.picking = Some(PickOn::Anchor {
+                    beacon: beacon.to_owned(),
+                    blueprint: which,
+                });
+                self.say("anchoring", "");
+                Ok(())
+            }
+            Err(refusal) => Err(self.refuse_rule_edit(refusal)),
+        }
+    }
+
+    /// The anchor pick's click: ground gives the target's anchor as a voxel, a vent gives it
+    /// `on` the feature by its name, and either makes one route step with one
+    /// `add_build_target` row. A click on a beacon or a selector is refused with its words
+    /// (`NotThisKind("location")`) and the pick stays on, for the player to click again.
+    fn pick_anchor(
+        &mut self,
+        beacon: &str,
+        blueprint: usize,
+        target: &Target,
+    ) -> Result<(), RuleEditRefusal> {
+        let anchor = match target {
+            Target::Voxel(at) => voxel_location(*at),
+            Target::Feature(id) => vocabulary::on_feature(id),
+            Target::Beacon(_) | Target::Selector(_) | Target::NearestUncovered(_) => {
+                return Err(self.refuse_rule_edit(RuleEditRefusal::NotThisKind("location")));
+            }
+        };
+        self.picking = None;
+        let outcome = self.visit_gate(beacon).and_then(|()| {
+            let entry = self
+                .words()?
+                .blueprints
+                .get(blueprint)
+                .ok_or(RuleEditRefusal::NoSuchEntry)?;
+            Ok(vocabulary::add_target_row(entry, anchor)?)
+        });
+        self.ask_visit(beacon, outcome)
+    }
+
+    /// Remove beacon `beacon`'s Build target `which`, as its detail lists it: one route step
+    /// with one `remove_build_target` row naming the target's anchor as sent.
+    ///
+    /// # Errors
+    ///
+    /// A [`RuleEditRefusal`], said on the status line: the door is shut, there is no text, no
+    /// detail of that beacon is on hand, or it lists no such target.
+    pub fn remove_build_target(
+        &mut self,
+        beacon: &str,
+        which: usize,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome = self.visit_gate(beacon).and_then(|()| {
+            let target = self
+                .beacon
+                .as_ref()
+                .and_then(|detail| detail.targets.get(which))
+                .ok_or(RuleEditRefusal::NoSuchEntry)?;
+            Ok(vocabulary::remove_target_row(target))
+        });
+        self.ask_visit(beacon, outcome)
+    }
+
+    /// Queue blueprint `which`, as `get_vocabulary` sent it, at beacon `beacon`: one route step
+    /// with one `queue_structure` row.
+    ///
+    /// # Errors
+    ///
+    /// As [`Editor::switch_mandate`], for a blueprint.
+    pub fn queue_structure(&mut self, beacon: &str, which: usize) -> Result<(), RuleEditRefusal> {
+        let outcome = self.visit_gate(beacon).and_then(|()| {
+            let blueprint = self
+                .words()?
+                .blueprints
+                .get(which)
+                .ok_or(RuleEditRefusal::NoSuchEntry)?;
+            Ok(vocabulary::queue_row(blueprint)?)
+        });
+        self.ask_visit(beacon, outcome)
+    }
+
+    /// Whether a Visit & change row for `beacon` can be composed now: the door is open, there is
+    /// a text to append to, and the detail on hand is that beacon's.
+    fn visit_gate(&self, beacon: &str) -> Result<(), RuleEditRefusal> {
+        if self.door != Door::Open {
+            return Err(RuleEditRefusal::Shut);
+        }
+        if self.text.is_none() {
+            return Err(RuleEditRefusal::NoText);
+        }
+        match self.beacon.as_ref() {
+            Some(detail) if detail.id == beacon => Ok(()),
+            _ => Err(RuleEditRefusal::NoDetail),
+        }
+    }
+
+    /// Setting `setting` of beacon `beacon`'s detail, when it is the one a menu named.
+    fn setting_drawn(
+        &self,
+        beacon: &str,
+        setting: usize,
+        pointer: &str,
+    ) -> Result<&vocabulary::Setting, RuleEditRefusal> {
+        self.visit_gate(beacon)?;
+        let found = self
+            .beacon
+            .as_ref()
+            .and_then(|detail| detail.settings.get(setting))
+            .ok_or(RuleEditRefusal::NoSuchEntry)?;
+        if found.pointer != pointer {
+            return Err(RuleEditRefusal::Changed);
+        }
+        Ok(found)
+    }
+
+    fn words(&self) -> Result<&Vocabulary, RuleEditRefusal> {
+        self.vocabulary
+            .as_ref()
+            .ok_or(RuleEditRefusal::NoVocabulary)
+    }
+
+    /// Queues a composed Visit & change row, or says why there is none.
+    fn ask_visit(
+        &mut self,
+        beacon: &str,
+        outcome: Result<Json, RuleEditRefusal>,
+    ) -> Result<(), RuleEditRefusal> {
+        match outcome {
+            Ok(row) => {
+                self.queue.push_back(Job::Visit {
+                    beacon: beacon.to_owned(),
+                    row,
+                });
+                self.say("visit_changing", "");
+                Ok(())
+            }
+            Err(refusal) => Err(self.refuse_rule_edit(refusal)),
+        }
+    }
+
     // --- What the rig tells the editor --------------------------------------------------
 
     /// A Lull opened, in `round`. The notes and the drafts are read again, the template list
@@ -1965,6 +2541,18 @@ impl Editor {
             if self.status.key == "safe_filed" {
                 self.say("", "");
             }
+            // A licence is earned in a Push, so last Lull's words are stale, and a beacon's
+            // detail described the world before it.
+            self.vocabulary = None;
+            self.vocabulary_failed = None;
+            self.beacon = None;
+            self.beacon_failed = None;
+        }
+        // The vocabulary every Lull, never carried across one (decisions-log item 160 (4)), and again in
+        // the same Lull only when it is not on hand.
+        if self.vocabulary.is_none() {
+            self.queue.retain(|job| !matches!(job, Job::Vocabulary));
+            self.queue.push_back(Job::Vocabulary);
         }
         // The briefing every Lull, not only the first: besides the notebook it carries the
         // Lull's "this round" sentence (item 133 (3) (i)), which the new snapshot changes.
@@ -2328,6 +2916,11 @@ impl Editor {
             }
             Sent::Resolve { .. } => self.resolve_owed = true,
             Sent::MapSummary => self.queue.push_front(Job::MapSummary),
+            Sent::Vocabulary { round } => {
+                if round == self.round {
+                    self.queue.push_front(Job::Vocabulary);
+                }
+            }
         }
         if self.door != Door::Open && self.shut() {
             let key = format!("closed_{}", self.door.name());
@@ -2512,7 +3105,7 @@ impl Editor {
         let asked = self.queue.iter().any(|job| {
             !matches!(
                 job,
-                Job::Briefing | Job::Drafts | Job::Templates | Job::MapSummary
+                Job::Briefing | Job::Drafts | Job::Templates | Job::MapSummary | Job::Vocabulary
             )
         });
         let waiting_ghost = self
@@ -2663,18 +3256,17 @@ impl Editor {
                     ]),
                 )
             }
-            Job::Beacon { id } => {
-                let params = object(vec![("beacon_id", Json::String(id.clone()))]);
-                self.send(Sent::Beacon { id }, "get_beacon", params)
-            }
-            job @ (Job::Templates
+            job @ (Job::Beacon { .. }
+            | Job::Templates
             | Job::Instantiate
             | Job::UseWizard { .. }
             | Job::New { .. }
             | Job::RuleEdit { .. }
             | Job::GetDraft { .. }
             | Job::MapSummary
-            | Job::SetOption { .. }) => return self.render_pr2(job),
+            | Job::SetOption { .. }
+            | Job::Vocabulary
+            | Job::Visit { .. }) => return self.render_pr2(job),
         })
     }
 
@@ -2767,6 +3359,33 @@ impl Editor {
                     Sent::Edit {
                         base: revision,
                         retry: Box::new(Job::SetOption { patch, on }),
+                    },
+                    "patch_plan",
+                    params,
+                ))
+            }
+            Job::Beacon { id } => {
+                let params = object(vec![("beacon_id", Json::String(id.clone()))]);
+                Some(self.send(Sent::Beacon { id }, "get_beacon", params))
+            }
+            Job::Vocabulary => {
+                let round = self.round;
+                Some(self.send(
+                    Sent::Vocabulary { round },
+                    "get_vocabulary",
+                    object(Vec::new()),
+                ))
+            }
+            Job::Visit { beacon, row } => {
+                let playbook = self.text.clone()?;
+                let revision = self.revision;
+                let label = fresh_label(&playbook, Action::Visit(Priority::Normal).stem());
+                let step = vocabulary::visit_step(&beacon, row.clone(), &label);
+                let params = patch_params(&playbook, &append_patch(step));
+                Some(self.send(
+                    Sent::Edit {
+                        base: revision,
+                        retry: Box::new(Job::Visit { beacon, row }),
                     },
                     "patch_plan",
                     params,
@@ -2895,12 +3514,9 @@ impl Editor {
                 self.queue.push_back(Job::Drafts);
                 self.say("draft_saved", "");
             }
-            Sent::Beacon { .. } => {
-                let response: GetBeaconResponse =
-                    json::decode_json(&body(result, "gp.api.v1.GetBeaconResponse"))?;
-                self.beacon_prose = response.prose;
-            }
             sent @ (Sent::Render { .. }
+            | Sent::Beacon { .. }
+            | Sent::Vocabulary { .. }
             | Sent::Templates
             | Sent::Instantiate { .. }
             | Sent::GetDraft { .. }
@@ -2979,6 +3595,40 @@ impl Editor {
                 }
             }
             Sent::MapSummary => self.features = targeting::features_of(result)?,
+            Sent::Beacon { id } => {
+                // The detail beside the prose: another seat's beacon carries none, and so its
+                // detail lists nothing (decisions-log item 160 (4)).
+                // The prose first, alone, so an answer whose detail cannot be read still heads
+                // the menu with the gateway's sentence.
+                let (answer, _) = split_footer(result);
+                proto3_text(&answer, "prose")?.clone_into(&mut self.beacon_prose);
+                match vocabulary::beacon_detail_of(&id, result) {
+                    Ok((prose, detail)) => {
+                        self.beacon_prose = prose;
+                        self.beacon = Some(detail);
+                        self.beacon_failed = None;
+                    }
+                    Err(error) => {
+                        self.beacon = None;
+                        self.beacon_failed = Some(ReadFailed::Unreadable(error.to_string()));
+                        return Err(error);
+                    }
+                }
+            }
+            Sent::Vocabulary { round } => match vocabulary::vocabulary_of(result) {
+                Ok(words) => {
+                    if round == self.round {
+                        self.vocabulary = Some(words);
+                        self.vocabulary_failed = None;
+                    }
+                }
+                Err(error) => {
+                    if round == self.round {
+                        self.vocabulary_failed = Some(ReadFailed::Unreadable(error.to_string()));
+                    }
+                    return Err(error);
+                }
+            },
             other => return self.settle(other, result),
         }
         Ok(())
@@ -3130,6 +3780,8 @@ impl Editor {
         self.text = None;
         self.size = None;
         self.attack.clear();
+        self.step_labels.clear();
+        self.rule_ids.clear();
         self.revision = self.revision.wrapping_add(1);
         self.rows.clear();
         self.verdict = Verdict::None;
@@ -3164,6 +3816,8 @@ impl Editor {
     /// A new text is on screen: every check of it is owed.
     fn accept_text(&mut self, text: String) {
         self.attack = targeting::attack_targets(&text);
+        self.step_labels = vocabulary::step_labels(&text);
+        self.rule_ids = vocabulary::rule_ids(&text);
         self.rule_refusal = None;
         self.picking = None;
         self.text = Some(text);
@@ -3258,6 +3912,17 @@ impl Editor {
         {
             *self.check_refusals.slot(check) = Some((revision, Unchecked::Refused(detail.clone())));
         }
+        // A refused read of the gateway's words is said on its own line, and nothing waits on it.
+        match sent {
+            Sent::Vocabulary { round } if *round == self.round => {
+                self.vocabulary_failed = Some(ReadFailed::Refused(detail.clone()));
+            }
+            Sent::Beacon { .. } => {
+                self.beacon = None;
+                self.beacon_failed = Some(ReadFailed::Refused(detail.clone()));
+            }
+            _ => {}
+        }
         if let Sent::Edit { base, retry } = sent
             && let Job::RuleEdit { pointer, .. } = retry.as_ref()
         {
@@ -3288,6 +3953,17 @@ impl Editor {
         }
         Settled::Refused
     }
+}
+
+/// The largest whole number the editor's number field (a 64-bit float) holds exactly: 2^53.
+/// A value past it may already be another number by the time it reaches the bridge, so it is
+/// refused ([`RuleEditRefusal::NotExact`]); every other value goes to the gateway, whose bounds
+/// and wire type are its to refuse. About the control's shape, not the game.
+const FIELD_EXACT: u64 = 9_007_199_254_740_992;
+
+/// Whether the number field holds `value` exactly ([`FIELD_EXACT`]).
+const fn held_exactly(value: i64) -> bool {
+    value.unsigned_abs() <= FIELD_EXACT
 }
 
 /// The check of the text a call is, and the revision it checks; `None` for a call that checks
@@ -4010,6 +4686,7 @@ mod tests {
             };
             let answer = match call.method {
                 "get_briefing" => read(r#"{"notes":"remember the vent"}"#),
+                "get_vocabulary" => read(r#"{"families":[]}"#),
                 "get_map_summary" => read(r#"{"features":[]}"#),
                 "resolve_refs" => read(r#"{"refs":[]}"#),
                 "list_drafts" => read(drafts),
@@ -4247,6 +4924,7 @@ mod tests {
                 "estimate_route" => read(r#"{"reachable":true}"#),
                 "resolve_refs" => read(r#"{"refs":[]}"#),
                 "get_briefing" => read(r#"{"notes":""}"#),
+                "get_vocabulary" => read(r#"{"families":[]}"#),
                 "get_map_summary" => read(r#"{"features":[]}"#),
                 "list_drafts" => read(r#"{"drafts":[]}"#),
                 "list_templates" => read(r#"{"templates":[]}"#),
@@ -4830,6 +5508,7 @@ mod tests {
                 "get_briefing" => read(
                     r#"{"notes":"n","prose":"Round 1 of 3, the Lull. This round: step 1 finds no vent you can cover."}"#,
                 ),
+                "get_vocabulary" => read(r#"{"families":[]}"#),
                 "get_map_summary" => read(
                     r#"{"features":[{"feature_id":"vent_120_88","kind":"vent","grade":"rich","x":120,"y":88,"live":true},{"feature_id":"seam_3_4","kind":"seam","x":3,"y":4,"live":true,"covered":true}]}"#,
                 ),
@@ -5041,6 +5720,7 @@ mod tests {
                 }
                 "render_plan" => read(r#"{"prose":"Playbook\n"}"#),
                 "estimate_route" => read(r#"{"reachable":true}"#),
+                "get_vocabulary" => read(r#"{"families":[]}"#),
                 "get_map_summary" => read(r#"{"features":[]}"#),
                 "resolve_refs" => read(r#"{"refs":[]}"#),
                 _ => quick_report("", true),
@@ -5247,6 +5927,7 @@ mod tests {
                     briefings += 1;
                     read(r#"{"notes":"","prose":"Round 1 of 3, the Lull. You hold 1 beacon."}"#)
                 }
+                "get_vocabulary" => read(r#"{"families":[]}"#),
                 "get_map_summary" => read(r#"{"features":[]}"#),
                 "list_drafts" => read(r#"{"drafts":[]}"#),
                 "list_templates" => read(r#"{"templates":[]}"#),
@@ -5840,5 +6521,841 @@ mod tests {
         assert_eq!(settled, Settled::Refused);
         assert_eq!(editor.refusals(), 1);
         assert!(editor.route().found_nothing.is_empty());
+    }
+
+    // --- Part 2: the reads, the picker, the name picks and the Visit & change rows ---------
+
+    const VOCABULARY: &str = include_str!("../../../godot/fixtures/vocabulary.json");
+    const BEACON: &str = include_str!("../../../godot/fixtures/beacon_core.json");
+
+    fn with_words(editor: &mut Editor) {
+        editor.vocabulary = Some(vocabulary::vocabulary_of_text(VOCABULARY).expect("reads"));
+    }
+
+    fn predicate_at(editor: &Editor, family: &str, name: &str) -> (usize, usize) {
+        let words = editor.vocabulary().expect("the words");
+        let at = words
+            .families
+            .iter()
+            .position(|one| one.id == family)
+            .expect("the family");
+        let entry = words
+            .families
+            .get(at)
+            .and_then(|one| one.predicates.iter().position(|entry| entry.name == name))
+            .expect("the entry");
+        (at, entry)
+    }
+
+    fn rule_index(editor: &Editor, pointer: &str) -> usize {
+        editor
+            .rule_list()
+            .rules
+            .iter()
+            .position(|rule| rule.pointer == pointer)
+            .expect("the rule")
+    }
+
+    /// Answers the Lull's own reads plainly, the vocabulary with `vocabulary`.
+    fn lull_reads(editor: &mut Editor, vocabulary: &dyn Fn(&mut Editor)) -> u32 {
+        let mut asked = 0;
+        for _ in 0..12 {
+            let Some(call) = editor.next_call(false) else {
+                break;
+            };
+            if call.method == "get_vocabulary" {
+                asked += 1;
+                vocabulary(editor);
+                continue;
+            }
+            let answer = match call.method {
+                "get_briefing" => read(r#"{"notes":""}"#),
+                "list_drafts" => read(r#"{"drafts":[]}"#),
+                "list_templates" => read(r#"{"templates":[]}"#),
+                _ => read(r#"{"features":[]}"#),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        asked
+    }
+
+    /// **Item 1: the vocabulary is asked every Lull and never carried across one**; its answer
+    /// is held as typed data; a refused or unreadable answer is said on its own and nothing
+    /// waits on it.
+    #[test]
+    fn the_vocabulary_is_read_every_lull_and_a_failed_read_is_said() {
+        let mut editor = Editor::new("seat.0");
+        editor.lull_opened(1);
+        let answer = |editor: &mut Editor| {
+            let words = read(VOCABULARY).get("result").cloned().expect("a result");
+            editor.answered(Ok(&words)).expect("reads");
+        };
+        assert_eq!(lull_reads(&mut editor, &answer), 1);
+        assert!(
+            editor
+                .vocabulary()
+                .is_some_and(|words| !words.families.is_empty())
+        );
+        // The same Lull again (a door reopened) asks nothing more.
+        editor.lull_opened(1);
+        assert!(
+            !editor
+                .queue
+                .iter()
+                .any(|job| matches!(job, Job::Vocabulary))
+        );
+        // A new Lull drops the words and asks again; a refusal is said and nothing waits.
+        editor.lull_opened(2);
+        assert!(editor.vocabulary().is_none());
+        let refuse = |editor: &mut Editor| {
+            let settled = editor
+                .answered(Err(("PHASE_CLOSED", "not now")))
+                .expect("reads");
+            assert_eq!(settled, Settled::Refused);
+        };
+        assert_eq!(lull_reads(&mut editor, &refuse), 1);
+        assert_eq!(
+            editor.vocabulary_failed(),
+            Some(&ReadFailed::Refused("PHASE_CLOSED: not now".to_owned()))
+        );
+        assert!(
+            editor.next_call(false).is_none(),
+            "nothing is asked again by itself"
+        );
+        // An answer this client cannot read is said as such.
+        editor.lull_opened(3);
+        let garble = |editor: &mut Editor| {
+            assert!(editor.answered(Ok(&read(r#"{"families":7}"#))).is_err());
+        };
+        assert_eq!(lull_reads(&mut editor, &garble), 1);
+        assert!(matches!(
+            editor.vocabulary_failed(),
+            Some(ReadFailed::Unreadable(_))
+        ));
+        assert!(editor.vocabulary().is_none());
+    }
+
+    /// **Item 1: a beacon's detail is read beside its prose**; another seat's beacon yields no
+    /// detail rows; a refused read is said.
+    #[test]
+    fn a_beacons_detail_is_read_and_another_seats_has_none() {
+        let mut editor = loaded(EXPAND_EAST);
+        drain_checks(&mut editor);
+        editor.describe_beacon("b_00");
+        let call = editor.next_call(false).expect("get_beacon");
+        assert_eq!(call.method, "get_beacon");
+        editor
+            .answered(Ok(&read(BEACON).get("result").cloned().expect("a result")))
+            .expect("reads");
+        let detail = editor.beacon_detail().expect("the detail");
+        assert_eq!(detail.id, "b_00");
+        assert!(!detail.settings.is_empty());
+        assert!(!editor.beacon_prose().is_empty());
+        editor.describe_beacon("e_00");
+        assert!(
+            editor.beacon_detail().is_none(),
+            "the old detail goes at once"
+        );
+        let _ = editor.next_call(false).expect("get_beacon");
+        editor
+            .answered(Ok(&read(
+                r#"{"summary":{"beacon_id":"e_00"},"prose":"Theirs."}"#,
+            )))
+            .expect("reads");
+        let theirs = editor.beacon_detail().expect("an empty detail");
+        assert!(theirs.settings.is_empty() && theirs.targets.is_empty());
+        assert!(theirs.mandate.is_empty());
+        editor.describe_beacon("b_00");
+        let _ = editor.next_call(false).expect("get_beacon");
+        let _ = editor.answered(Err(("NOT_FOUND", "no such beacon")));
+        assert_eq!(
+            editor.beacon_failed(),
+            Some(&ReadFailed::Refused("NOT_FOUND: no such beacon".to_owned()))
+        );
+    }
+
+    /// A condition slot of the rule list on screen, as the picker opened on it names it: its
+    /// index, the rendering and its pointer.
+    fn slot_named(editor: &Editor, pointer: &str) -> (usize, u64, String) {
+        let index = editor
+            .rule_list()
+            .slots
+            .iter()
+            .position(|slot| slot.pointer == pointer)
+            .unwrap_or_else(|| panic!("no slot {pointer}"));
+        (
+            index,
+            editor.rules_rendering().expect("a rendering"),
+            pointer.to_owned(),
+        )
+    }
+
+    fn pick_slot(editor: &mut Editor, pointer: &str) -> Result<(), RuleEditRefusal> {
+        let (family, entry) = predicate_at(editor, "commander", "cmdr_hp_pct");
+        let (slot, rendering, at) = slot_named(editor, pointer);
+        editor.choose_predicate(slot, rendering, &at, family, entry)
+    }
+
+    /// **A pick sends the op the slot names, at its pointer** (decisions-log item 160 (4)): an
+    /// item of an `all` of two leaves is replaced in place, never inserted beside them (an
+    /// RFC 6902 `add` at a list index inserts); an empty slot takes an `add`.
+    #[test]
+    fn a_predicate_pick_sends_the_op_the_slot_names() {
+        let mut editor = rendered(EXPAND_EAST);
+        with_words(&mut editor);
+        assert_eq!(
+            pick_slot(&mut editor, "/declarative/handlers/0/when/all/items/0"),
+            Ok(())
+        );
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(call.method, "patch_plan");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"replace","path":"/declarative/handlers/0/when/all/items/0","value":{"cmdr_hp_pct":{"cmp":"LE","pct":40}}}]"#,
+            "one item replaced, so the all still holds two"
+        );
+        let mut editor = rendered(EXPAND_EAST);
+        with_words(&mut editor);
+        assert_eq!(
+            pick_slot(&mut editor, "/declarative/route/0/skip_if"),
+            Ok(())
+        );
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"add","path":"/declarative/route/0/skip_if","value":{"cmdr_hp_pct":{"cmp":"LE","pct":40}}}]"#
+        );
+    }
+
+    /// **A group slot is no pick target, and an op the client does not know is no guess**:
+    /// each refused with its words, nothing sent.
+    #[test]
+    fn a_group_slot_and_an_unknown_op_are_refused() {
+        let mut editor = rendered(EXPAND_EAST);
+        with_words(&mut editor);
+        assert_eq!(
+            pick_slot(&mut editor, "/declarative/handlers/0/when"),
+            Err(RuleEditRefusal::GroupSlot)
+        );
+        assert_eq!(editor.status().key, "rule_refused_group_slot");
+        let mut editor = loaded(EXPAND_EAST);
+        let render = read(
+            r#"{"prose":"Rules\n  r1: when x.\n","rules":[{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"slots":[{"pointer":"/declarative/handlers/0/when","title":"when","line":1,"state":"leaf","predicate":"cmdr_hp_pct","pick_op":"unspecified"},{"pointer":"/declarative/handlers/0/body/0/skip_if","title":"step 1, skip if","line":1,"state":"empty","predicate":"","pick_op":7}]}],"_status":{"phase":"lull"}}"#,
+        );
+        rerender(&mut editor, &render);
+        with_words(&mut editor);
+        for pointer in [
+            "/declarative/handlers/0/when",
+            "/declarative/handlers/0/body/0/skip_if",
+        ] {
+            assert_eq!(
+                pick_slot(&mut editor, pointer),
+                Err(RuleEditRefusal::NoPickOp)
+            );
+            assert_eq!(editor.status().key, "rule_refused_no_pick_op");
+        }
+        assert!(!editor.has_pending_jobs(), "nothing was sent");
+    }
+
+    /// **An op string the gateway never sends is the decode's refusal**: the rendering is
+    /// refused whole, so the list stays stale and a pick is refused with that reason, never sent.
+    /// (`NoPickOp` is reached only by `unspecified` on a slot that is not a group.)
+    #[test]
+    fn an_unknown_op_string_leaves_the_list_stale_and_sends_nothing() {
+        let mut editor = loaded(EXPAND_EAST);
+        let render = read(
+            r#"{"prose":"Rules\n  r1: when x.\n","rules":[{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"slots":[{"pointer":"/declarative/handlers/0/when","title":"when","line":1,"state":"leaf","predicate":"cmdr_hp_pct","pick_op":"insert"}]}],"_status":{"phase":"lull"}}"#,
+        );
+        for _ in 0..24 {
+            let Some(call) = editor.next_call(false) else {
+                break;
+            };
+            let answer = match call.method {
+                "render_plan" => render.clone(),
+                "estimate_route" => read(r#"{"reachable":true}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
+                _ => quick_report("", true),
+            };
+            let _ = editor.answered(Ok(&answer));
+        }
+        assert!(!editor.prose_current());
+        assert!(matches!(
+            editor.unchecked(Check::Prose),
+            Some(Unchecked::Unreadable(_))
+        ));
+        assert_eq!(editor.rules_blocked(), Some(RuleEditRefusal::Stale));
+        with_words(&mut editor);
+        assert_eq!(
+            editor.choose_predicate(0, 0, "/declarative/handlers/0/when", 1, 0),
+            Err(RuleEditRefusal::Stale)
+        );
+        assert!(!editor.has_pending_jobs(), "nothing was sent");
+    }
+
+    /// **What else the picker refuses**, each by its reason and never sent: no vocabulary, a
+    /// locked entry, a locked family, a slot of another rendering or another pointer, a slot
+    /// outside the rule it belongs to.
+    #[test]
+    fn the_picker_refuses_a_locked_entry_and_a_stale_rendering() {
+        let mut editor = rendered(EXPAND_EAST);
+        let (slot, rendering, at) = slot_named(&editor, "/declarative/handlers/0/when/all/items/0");
+        assert_eq!(
+            editor.choose_predicate(slot, rendering, &at, 0, 0),
+            Err(RuleEditRefusal::NoVocabulary)
+        );
+        with_words(&mut editor);
+        let words = editor.vocabulary().cloned().expect("the words");
+        let clock = words
+            .families
+            .iter()
+            .position(|family| family.id == "clock")
+            .expect("clock");
+        let locked = words
+            .families
+            .get(clock)
+            .and_then(|family| {
+                family
+                    .predicates
+                    .iter()
+                    .position(|entry| entry.locked.is_some())
+            })
+            .expect("a locked entry");
+        assert_eq!(
+            editor.choose_predicate(slot, rendering, &at, clock, locked),
+            Err(RuleEditRefusal::Locked)
+        );
+        assert_eq!(editor.status().key, "rule_refused_locked");
+        let locked_family = words
+            .families
+            .iter()
+            .position(|family| family.locked.is_some())
+            .expect("a locked family");
+        assert_eq!(
+            editor.choose_predicate(slot, rendering, &at, locked_family, 0),
+            Err(RuleEditRefusal::Locked)
+        );
+        assert_eq!(
+            editor.choose_predicate(slot, rendering.wrapping_add(1), &at, clock, 0),
+            Err(RuleEditRefusal::Changed)
+        );
+        assert_eq!(
+            editor.choose_predicate(slot, rendering, "/declarative/handlers/1/when", clock, 0),
+            Err(RuleEditRefusal::Changed)
+        );
+        assert_eq!(
+            editor.choose_predicate(usize::MAX, rendering, &at, clock, 0),
+            Err(RuleEditRefusal::NoSuchSlot)
+        );
+        if let Some(found) = editor.rule_list.slots.get_mut(slot) {
+            found.rule = Some(0);
+        }
+        assert_eq!(
+            editor.choose_predicate(slot, rendering, &at, clock, 0),
+            Err(RuleEditRefusal::NotInRule)
+        );
+        assert!(!editor.has_pending_jobs(), "nothing was sent");
+    }
+
+    fn beacon_detail() -> BeaconDetail {
+        vocabulary::beacon_detail_of(
+            "b_00",
+            &read(BEACON).get("result").cloned().expect("a result"),
+        )
+        .expect("reads")
+        .1
+    }
+
+    fn setting_named(editor: &Editor, pointer: &str) -> (usize, String) {
+        let at = editor
+            .beacon_detail()
+            .and_then(|detail| {
+                detail
+                    .settings
+                    .iter()
+                    .position(|setting| setting.pointer == pointer)
+            })
+            .expect("the setting");
+        (at, pointer.to_owned())
+    }
+
+    fn visit_editor() -> Editor {
+        let mut editor = rendered(EXPAND_EAST);
+        with_words(&mut editor);
+        editor.beacon = Some(beacon_detail());
+        editor
+    }
+
+    /// **Items 2, 3 and 6: the door gates every new control**, with the shut door's own line:
+    /// the picker, a name pick, each Visit & change row and the anchor pick.
+    #[test]
+    fn the_door_gates_every_part_2_control() {
+        let mut editor = visit_editor();
+        let rule = rule_named(&editor, rule_index(&editor, "/declarative/handlers/0"));
+        let setting = setting_named(&editor, "/build/rebuild_destroyed");
+        let number = setting_named(&editor, "/retreat_hp_pct");
+        assert_eq!(editor.begin_build_target("b_00", 0), Ok(()));
+        // The anchor pick's click goes through the door as well, and ends the pick.
+        editor.door = Door::Push;
+        assert_eq!(
+            editor.pick(&Target::Voxel([1, 2, 3])),
+            Err(RuleEditRefusal::Shut)
+        );
+        assert!(!editor.anchoring());
+        for door in [Door::Push, Door::Ready, Door::Recap, Door::Ended] {
+            // Set as the rig sets it in the Lull's last moment, with no `shut()` between: each
+            // control goes through the door itself.
+            editor.door = door;
+            for got in [
+                editor.choose_predicate(0, rule.rendering, "/declarative/route/0/skip_if", 1, 0),
+                editor.choose_name(0, rule.rendering, "/x", 0),
+                editor.change_setting_choice("b_00", setting.0, &setting.1, 0),
+                editor.change_setting_number("b_00", number.0, &number.1, 30),
+                editor.switch_mandate("b_00", 0),
+                editor.begin_build_target("b_00", 0),
+                editor.remove_build_target("b_00", 0),
+                editor.queue_structure("b_00", 0),
+            ] {
+                assert_eq!(got, Err(RuleEditRefusal::Shut), "{door:?}");
+                assert_eq!(editor.status().key, format!("closed_{}", door.name()));
+            }
+            assert!(!editor.has_pending_jobs(), "{door:?}: nothing was sent");
+        }
+        // Shutting the door the usual way ends an anchor pick, as it ends a chip's.
+        let mut editor = visit_editor();
+        assert_eq!(editor.begin_build_target("b_00", 0), Ok(()));
+        assert!(editor.anchoring());
+        editor.set_door(Door::Push);
+        assert!(!editor.anchoring());
+    }
+
+    /// A text with labelled steps (one label twice, one step with none) and two rules, rendered
+    /// with one step-label chip and one rule-id chip.
+    fn named_editor() -> Editor {
+        let text = r#"{"declarative":{"route":[{"label":"go_1","hold_ms":1},{"hold_ms":2},{"label":"go_2","hold_ms":3},{"label":"go_1","hold_ms":4}],"handlers":[{"id":"r1","when":{"step_reached":{"label":"go_1"}}},{"id":"r2"}]}}"#;
+        let mut editor = loaded(text);
+        let render = read(
+            r#"{"prose":"Rules\n  r1: when step go_1 is reached.\n","rules":[{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"chips":[{"pointer":"/declarative/handlers/0/when/step_reached/label","line":1,"start":16,"end":20,"shape":{"reference":{"kind":"step_label"}},"value_json":"\"go_1\""},{"pointer":"/declarative/handlers/0/id","line":1,"start":2,"end":4,"shape":{"reference":{"kind":"handler_id"}},"value_json":"\"r1\""}]}],"_status":{"phase":"lull"}}"#,
+        );
+        rerender(&mut editor, &render);
+        assert!(editor.prose_current());
+        editor
+    }
+
+    /// **Item 3: a step label or a rule id is picked from the file's own**, listed in file
+    /// order once each, and the pick is one exact `replace`; legality is the gateway's.
+    #[test]
+    fn a_name_chip_is_picked_from_the_files_own_names() {
+        let mut editor = named_editor();
+        assert_eq!(editor.name_choices(NameKind::StepLabel), ["go_1", "go_2"]);
+        assert_eq!(editor.name_choices(NameKind::RuleId), ["r1", "r2"]);
+        let (label, revision, at) = drawn(&editor, "/step_reached/label");
+        assert_eq!(
+            editor
+                .rule_list()
+                .chips
+                .get(label)
+                .map(|chip| chip.editor.clone()),
+            Some(ChipEditor::Name(NameKind::StepLabel))
+        );
+        assert_eq!(
+            editor.choose_name(label, revision, &at, 0),
+            Err(RuleEditRefusal::Unchanged)
+        );
+        assert_eq!(
+            editor.choose_name(label, revision, &at, 2),
+            Err(RuleEditRefusal::NoSuchValue)
+        );
+        assert_eq!(
+            editor.set_number(label, revision, &at, 1),
+            Err(RuleEditRefusal::NotThisEditor)
+        );
+        assert_eq!(editor.choose_name(label, revision, &at, 1), Ok(()));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"replace","path":"/declarative/handlers/0/when/step_reached/label","value":"go_2"}]"#
+        );
+        // The client judges nothing: an id another rule holds is composed, and the gateway's
+        // check is what answers it.
+        let mut editor = named_editor();
+        let (id, revision, at) = drawn(&editor, "/handlers/0/id");
+        assert_eq!(editor.choose_name(id, revision, &at, 1), Ok(()));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"replace","path":"/declarative/handlers/0/id","value":"r2"}]"#
+        );
+    }
+
+    /// **The number field refuses a value it cannot hold exactly** (carried from part 1's
+    /// review): past 2^53, never sent, for a chip and for a setting alike.
+    #[test]
+    fn a_number_past_two_to_the_53_is_refused_not_sent() {
+        let mut editor = rendered(EXPAND_EAST);
+        let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+        assert_eq!(
+            editor.set_number(pct, revision, &at, 9_007_199_254_740_993),
+            Err(RuleEditRefusal::NotExact)
+        );
+        assert_eq!(editor.status().key, "rule_refused_not_exact");
+        assert!(!editor.has_pending_jobs());
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
+        assert_eq!(
+            editor.change_setting_number("b_00", at, &pointer, 9_007_199_254_740_993),
+            Err(RuleEditRefusal::NotExact)
+        );
+    }
+
+    /// The patch a Visit & change row became, after the editor's next call.
+    fn visit_patch(editor: &mut Editor) -> String {
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(call.method, "patch_plan");
+        patch_of_call(&call)
+    }
+
+    fn entry_named(entries: &[vocabulary::Entry], name: &str) -> usize {
+        entries
+            .iter()
+            .position(|entry| entry.name == name)
+            .expect("the entry")
+    }
+
+    /// One route step visiting `b_00` with `row`, as the first visit's patch.
+    fn visit_step_patch(row: &str) -> String {
+        format!(
+            r#"[{{"op":"add","path":"/declarative/route/-","value":{{"label":"visit_1","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{row}]}}}}}}]"#
+        )
+    }
+
+    /// **Item 6: each Visit & change row is one route step with one row**, each exact.
+    #[test]
+    fn each_visit_and_change_row_is_one_exact_step() {
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/build/rebuild_destroyed");
+        assert_eq!(
+            editor.change_setting_choice("b_00", at, &pointer, 0),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(r#"{"set_mandate_settings":{"build":{"rebuild_destroyed":true}}}"#)
+        );
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
+        assert_eq!(
+            editor.change_setting_number("b_00", at, &pointer, 30),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(r#"{"set_mandate_settings":{"retreat_hp_pct":30}}"#)
+        );
+        let mut editor = visit_editor();
+        let mandates = editor
+            .vocabulary()
+            .map(|words| words.mandates.clone())
+            .expect("words");
+        let defend = entry_named(&mandates, "defend");
+        let skeleton = mandates
+            .get(defend)
+            .map(|entry| compact(&read(&entry.skeleton_json)))
+            .expect("one");
+        assert_eq!(editor.switch_mandate("b_00", defend), Ok(()));
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(&format!(r#"{{"set_mandate":{{"defend":{skeleton}}}}}"#))
+        );
+        let mut editor = visit_editor();
+        let blueprints = editor
+            .vocabulary()
+            .map(|words| words.blueprints.clone())
+            .expect("words");
+        let generator = entry_named(&blueprints, "generator");
+        assert_eq!(editor.begin_build_target("b_00", generator), Ok(()));
+        assert!(editor.anchoring());
+        assert_eq!(editor.picking(), None, "an anchor pick is no chip's");
+        assert_eq!(
+            editor.pick(&Target::Beacon("b_01".to_owned())),
+            Err(RuleEditRefusal::NotThisKind("location"))
+        );
+        assert!(
+            editor.anchoring(),
+            "a click on something else keeps the pick on"
+        );
+        assert_eq!(editor.pick(&Target::Voxel([360, 30, 36])), Ok(()));
+        assert!(!editor.anchoring());
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(
+                r#"{"add_build_target":{"target":{"blueprint_id":"generator","anchor":{"voxel":{"x":360,"y":30,"z":36}}}}}"#
+            )
+        );
+        let mut editor = visit_editor();
+        if let Some(detail) = editor.beacon.as_mut() {
+            detail.targets.push(vocabulary::HeldTarget {
+                blueprint_id: "generator".to_owned(),
+                anchor: read(r#"{"on":{"feature_id":"vent_120_88"}}"#),
+                anchor_text: String::new(),
+            });
+        }
+        assert_eq!(editor.remove_build_target("b_00", 0), Ok(()));
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(
+                r#"{"remove_build_target":{"anchor":{"on":{"feature_id":"vent_120_88"}}}}"#
+            )
+        );
+        let mut editor = visit_editor();
+        let usable = blueprints
+            .iter()
+            .position(|entry| entry.locked.is_none() && !entry.name.is_empty())
+            .expect("a usable blueprint");
+        let name = blueprints
+            .get(usable)
+            .map(|entry| entry.name.clone())
+            .expect("a name");
+        assert_eq!(editor.queue_structure("b_00", usable), Ok(()));
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(&format!(
+                r#"{{"queue_structure":{{"blueprint_id":"{name}"}}}}"#
+            ))
+        );
+    }
+
+    /// **Item 6: what a Visit & change row refuses**: a locked blueprint, another beacon's
+    /// detail, no detail, a setting named by a stale pointer; and a gateway refusal of the patch is said in
+    /// the gateway's words.
+    #[test]
+    fn a_visit_and_change_row_refuses_by_its_reason() {
+        let mut editor = visit_editor();
+        let blueprints = editor
+            .vocabulary()
+            .map(|words| words.blueprints.clone())
+            .expect("words");
+        let locked = blueprints
+            .iter()
+            .position(|entry| entry.locked.is_some())
+            .expect("a locked blueprint");
+        assert_eq!(
+            editor.queue_structure("b_00", locked),
+            Err(RuleEditRefusal::Locked)
+        );
+        assert_eq!(
+            editor.begin_build_target("b_00", locked),
+            Err(RuleEditRefusal::Locked)
+        );
+        assert_eq!(
+            editor.switch_mandate("b_01", 0),
+            Err(RuleEditRefusal::NoDetail)
+        );
+        let (at, pointer) = setting_named(&editor, "/build/rebuild_destroyed");
+        assert_eq!(
+            editor.change_setting_choice("b_00", at, "/roe", 0),
+            Err(RuleEditRefusal::Changed)
+        );
+        assert_eq!(
+            editor.change_setting_number("b_00", at, &pointer, 1),
+            Err(RuleEditRefusal::NotThisEditor)
+        );
+        assert!(!editor.has_pending_jobs(), "nothing was sent");
+        editor.beacon = None;
+        assert_eq!(
+            editor.switch_mandate("b_00", 0),
+            Err(RuleEditRefusal::NoDetail)
+        );
+        let mut editor = visit_editor();
+        assert_eq!(editor.switch_mandate("b_00", 0), Ok(()));
+        let _ = editor.next_call(false).expect("the patch");
+        let settled = editor
+            .answered(Err(("INVALID_ARGUMENT", "the patch does not apply")))
+            .expect("reads");
+        assert_eq!(settled, Settled::Refused);
+        assert_eq!(editor.status().key, "gateway_refused");
+        assert_eq!(
+            editor.status().detail,
+            "INVALID_ARGUMENT: the patch does not apply"
+        );
+    }
+
+    // --- The review of the pull request ---------------------------------------------
+
+    /// **a Visit row may set a setting to the value the Lull sees**: an earlier step may
+    /// have changed it, so the client composes the row and the verifier says what it does.
+    #[test]
+    fn a_visit_row_may_set_the_value_the_lull_sees() {
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/build/rebuild_destroyed");
+        assert_eq!(
+            editor.change_setting_choice("b_00", at, &pointer, 1),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(r#"{"set_mandate_settings":{"build":{"rebuild_destroyed":false}}}"#)
+        );
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
+        assert_eq!(
+            editor.change_setting_number("b_00", at, &pointer, 0),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(r#"{"set_mandate_settings":{"retreat_hp_pct":0}}"#)
+        );
+    }
+
+    /// **an entry the answer names no word for is refused as such**, not as the gateway's
+    /// lock.
+    #[test]
+    fn a_nameless_entry_with_no_lock_is_refused_as_unnamed() {
+        let mut editor = visit_editor();
+        if let Some(words) = editor.vocabulary.as_mut() {
+            words.blueprints.push(vocabulary::Entry {
+                name: String::new(),
+                title: "Nameless".to_owned(),
+                parameters: Vec::new(),
+                skeleton_json: String::new(),
+                locked: None,
+            });
+        }
+        let nameless = editor
+            .vocabulary()
+            .map(|words| words.blueprints.len().saturating_sub(1))
+            .expect("words");
+        assert_eq!(
+            editor.begin_build_target("b_00", nameless),
+            Err(RuleEditRefusal::Unnamed)
+        );
+        assert_eq!(editor.status().key, "rule_refused_unnamed");
+        assert_eq!(
+            editor.queue_structure("b_00", nameless),
+            Err(RuleEditRefusal::Unnamed)
+        );
+    }
+
+    /// **a Build target anchors on a feature as well as on ground**: a vent click names
+    /// the feature under `on`.
+    #[test]
+    fn a_build_target_anchors_on_a_feature() {
+        let mut editor = visit_editor();
+        let blueprints = editor
+            .vocabulary()
+            .map(|words| words.blueprints.clone())
+            .expect("words");
+        let generator = entry_named(&blueprints, "generator");
+        assert_eq!(editor.begin_build_target("b_00", generator), Ok(()));
+        assert_eq!(
+            editor.pick(&Target::Feature("vent_120_88".to_owned())),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(
+                r#"{"add_build_target":{"target":{"blueprint_id":"generator","anchor":{"on":{"feature_id":"vent_120_88"}}}}}"#
+            )
+        );
+    }
+
+    /// **only a number the field cannot hold exactly is refused**: past 2^53. A number
+    /// outside `i32` goes to the gateway, whose bounds are its to refuse.
+    #[test]
+    fn only_a_number_past_two_to_the_53_is_refused() {
+        let mut editor = rendered(EXPAND_EAST);
+        let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+        assert_eq!(editor.set_number(pct, revision, &at, 2_147_483_648), Ok(()));
+        let mut editor = rendered(EXPAND_EAST);
+        assert_eq!(
+            editor.set_number(pct, revision, &at, 9_007_199_254_740_993),
+            Err(RuleEditRefusal::NotExact)
+        );
+        assert_eq!(
+            editor.set_number(pct, revision, &at, -9_007_199_254_740_993),
+            Err(RuleEditRefusal::NotExact)
+        );
+        assert_eq!(
+            editor.set_number(pct, revision, &at, -9_007_199_254_740_992),
+            Ok(())
+        );
+    }
+
+    /// **a setting this client cannot read keeps the rest**: the prose and the other
+    /// settings are drawn, and that setting is a read-only row with its reason.
+    #[test]
+    fn an_unreadable_setting_keeps_the_prose_and_the_rest() {
+        let mut editor = loaded(EXPAND_EAST);
+        drain_checks(&mut editor);
+        editor.describe_beacon("b_00");
+        let _ = editor.next_call(false).expect("get_beacon");
+        let answer = read(
+            r#"{"prose":"Yours.","mandate":"build","settings":[{"pointer":"/retreat_hp_pct","title":"Retreat below HP","value_json":"\"many\"","shape":{"integer":{"min":0,"max":100,"unit":"%"}}},{"pointer":"/roe","title":"Rules of engagement","value_json":"\"RETURN_FIRE\"","shape":{"choice":{"values":["\"HOLD_FIRE\"","\"RETURN_FIRE\""]}}}]}"#,
+        );
+        editor.answered(Ok(&answer)).expect("reads");
+        assert_eq!(editor.beacon_prose(), "Yours.");
+        let detail = editor.beacon_detail().expect("the detail");
+        assert_eq!(
+            detail
+                .settings
+                .first()
+                .map(|setting| setting.editor.clone()),
+            Some(ChipEditor::ReadOnly(rule_list::ReadOnly::Unreadable))
+        );
+        assert!(matches!(
+            detail.settings.get(1).map(|setting| &setting.editor),
+            Some(ChipEditor::Choice { .. })
+        ));
+        // The cause is kept, in the decode's words, for the row to say.
+        let why = detail
+            .settings
+            .first()
+            .and_then(|setting| setting.unreadable.clone())
+            .expect("the cause");
+        assert!(
+            why.contains("/retreat_hp_pct") && why.contains("many"),
+            "{why}"
+        );
+        assert_eq!(
+            detail
+                .settings
+                .get(1)
+                .and_then(|setting| setting.unreadable.clone()),
+            None
+        );
+    }
+
+    /// **a refused vocabulary can be asked again**, once more, within the seat's budget.
+    #[test]
+    fn a_refused_vocabulary_can_be_asked_again() {
+        let mut editor = Editor::new("seat.0");
+        editor.lull_opened(1);
+        let refuse = |editor: &mut Editor| {
+            let _ = editor.answered(Err(("RATE_LIMITED", "slow down")));
+        };
+        assert_eq!(lull_reads(&mut editor, &refuse), 1);
+        assert!(editor.vocabulary_failed().is_some());
+        assert!(editor.ask_vocabulary_again());
+        assert!(
+            !editor.ask_vocabulary_again(),
+            "one ask on its way is enough"
+        );
+        assert!(
+            editor.vocabulary_failed().is_none(),
+            "the line says it is asked"
+        );
+        let answer = |editor: &mut Editor| {
+            let words = read(VOCABULARY).get("result").cloned().expect("a result");
+            editor.answered(Ok(&words)).expect("reads");
+        };
+        assert_eq!(lull_reads(&mut editor, &answer), 1);
+        assert!(editor.vocabulary().is_some());
+    }
+
+    /// **The Quartermaster priority's value now is the detail's**, as `get_beacon`'s summary
+    /// sends it.
+    #[test]
+    fn the_detail_carries_the_priority_as_sent() {
+        assert_eq!(beacon_detail().priority, "normal");
     }
 }

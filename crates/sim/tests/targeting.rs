@@ -104,7 +104,7 @@ fn compile(route: &str) -> Result<Plan, PlanError> {
 /// A runner on `world` with seat 0's `route` sealed, its first Push open.
 fn open(world: World, route: &str) -> Runner {
     let plan = compile(route).unwrap_or_else(|error| panic!("the route compiles: {error}"));
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SeatId::new(SEAT), plan)
         .expect("a Lull takes a seal");
@@ -356,7 +356,7 @@ fn a_seats_core_is_b_00_and_ids_are_per_seat() {
 
     // A `b_NN` resolves among the seat's own beacons only, over the frozen
     // snapshot exactly as in the live world.
-    let snapshot = Snapshot::capture(&world);
+    let snapshot = Snapshot::capture(&world).expect("a world between ticks");
     assert_eq!(
         resolve_beacon_in(
             &snapshot,
@@ -491,7 +491,7 @@ fn a_seats_structure_share_counts_its_live_structures_not_its_ruins() {
                 .is_ok()
         );
     }
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     let events = play_all(&mut runner, 200);
     assert_eq!(
@@ -537,7 +537,7 @@ fn one_structure_per_voxel_holds_across_seats() {
     let cost = world.structure_cost(StructureKind::Generator).raw();
     let purse = |world: &World| world.seats().treasuries().get(1).expect("seat 1").raw();
     let before = purse(&world);
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     let events = play_all(&mut runner, 200);
     assert_eq!(
@@ -825,7 +825,10 @@ fn a_restarted_step_resumes_at_the_beacon_it_placed() {
 /// as `world` was), and assert the two hash the same now and after one more
 /// tick. Returns the decoded snapshot, for the caller to see what it carried.
 fn assert_round_trips(world: &World, fresh: &World, enc: &mut Enc) -> Snapshot {
-    let bytes = Snapshot::capture(world).to_bytes().expect("encodes");
+    let bytes = Snapshot::capture(world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("encodes");
     let decoded = Snapshot::from_bytes(&bytes).expect("decodes");
     let mut restored = fresh.clone();
     decoded.restore_into(&mut restored).expect("restores");
@@ -1018,7 +1021,7 @@ fn the_feature_table_is_regenerated_identically_on_restore() {
     // another seed that restores this snapshot ends up with this seed's
     // features, exactly.
     let world = world_at(SEED, 2, &[180_000]);
-    let saved = Snapshot::capture(&world);
+    let saved = Snapshot::capture(&world).expect("a world between ticks");
     let mut other = world_at(pharmakos_sim::DETERMINISM_MATCH_SEED, 2, &[180_000]);
     assert_ne!(other.features(), world.features());
     saved.restore_into(&mut other).expect("the save restores");
@@ -1059,7 +1062,8 @@ fn the_decision_tick_counts_its_evaluation_units() {
         book.declarative.as_mut().unwrap().handlers =
             vec![json::decode(handler).expect("a handler")];
         let plan = Plan::compile(&book, &rules()).expect("compiles");
-        let mut runner = Runner::new(world_at(SEED, 2, &[180_000]));
+        let mut runner =
+            Runner::new(world_at(SEED, 2, &[180_000])).unwrap_or_else(|error| panic!("{error}"));
         runner.seal_playbook(SeatId::new(SEAT), plan).unwrap();
         assert!(runner.begin_push().unwrap());
         let _ = play(&mut runner, 6, |_, _| {});
