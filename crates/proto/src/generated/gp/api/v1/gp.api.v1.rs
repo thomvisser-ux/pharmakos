@@ -1646,8 +1646,11 @@ pub struct PatchSuggestion {
     /// What the button says.
     #[prost(string, tag="1")]
     pub title: ::prost::alloc::string::String,
-    /// RFC 6902 JSON Patch, as text, so it round-trips through the same JSONC
-    /// layer the playbook does.
+    /// A JSON Patch in this gateway's dialect, as text, so it round-trips
+    /// through the same JSONC layer the playbook does. The dialect is RFC 6902's
+    /// six operations, read more strictly than the RFC: a member an operation
+    /// does not have is refused, and so is a `~` in a pointer that is not
+    /// followed by `0` or `1`.
     #[prost(string, tag="2")]
     pub json_patch: ::prost::alloc::string::String,
     #[prost(enumeration="patch_suggestion::Applicability", tag="3")]
@@ -1930,7 +1933,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Chip".into() }fn t
 pub struct PatchPlanRequest {
     #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
-    /// RFC 6902 JSON Patch.
+    /// A JSON Patch, as text: either a forward patch in this gateway's dialect
+    /// (RFC 6902's six operations, read more strictly than the RFC: a member an
+    /// operation does not have is refused, array indices are RFC 6901's, and
+    /// the patch is bounded in operations, size and depth), or the
+    /// `inverse_json_patch` an earlier answer handed back, sent unchanged. A
+    /// patch is all forward operations or all undo operations, never both.
     #[prost(string, tag="2")]
     pub json_patch: ::prost::alloc::string::String,
 }
@@ -1943,7 +1951,12 @@ pub struct PatchPlanResponse {
     /// The patched file, comments and formatting preserved.
     #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
-    /// The patch that undoes this one, for the editor's undo stack.
+    /// The patch that undoes this one, for the editor's undo stack, as text.
+    /// Each of its operations is the forward operation plus an `undo` member
+    /// that carries exactly what was written, so applying it gives back the
+    /// bytes of the file this answer was made from: comments, the member's slot
+    /// and its key's spelling included. It is valid only against the text this
+    /// answer's `playbook_jsonc` holds, and is sent back as it was received.
     #[prost(string, tag="2")]
     pub inverse_json_patch: ::prost::alloc::string::String,
 }
