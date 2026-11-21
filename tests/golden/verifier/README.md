@@ -426,3 +426,9 @@ each shape the structure stage now refuses because the sim's compile requires it
 `e0111_a_build_target_anchor_naming_no_place` and
 `e0111_a_removal_anchor_naming_no_place`. Each pins its code and its pointer. No
 existing report moved.
+
+**S3's `vfyq2`, fix pass 3b.** One case is new, on the plain fixture:
+`e0114_more_route_steps_than_this_build_compiles`, 257 route steps, one past the sim's
+`MAX_ROUTE_STEPS`, which `E0114` (new, at the end of the E01xx family) refuses at the
+257th step; the committed table's size budget refuses it as `E0110` too. No existing
+report moved.

@@ -549,6 +549,17 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),
     },
+    // S3's `vfyq2`, fix pass 3b: more route steps than the sim compiles
+    // (`PlanError::TooManySteps`), the ceiling read from the sim's own
+    // `MAX_ROUTE_STEPS`, as E0113 reads `MAX_HANDLERS`. The size budget
+    // (E0110) is a rules value, and a table with a budget past the ceiling
+    // let a route the sim refuses qualify.
+    Entry {
+        code: "E0114",
+        family: Family::LimitsAndRequiredBlocks,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
     // --- E02xx: conditions ---------------------------------------------------
     Entry {
         code: "E0201",

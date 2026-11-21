@@ -309,6 +309,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "A playbook can carry only so many rules, however small each one is. Take \
                    some out.",
     },
+    Text {
+        code: "E0114",
+        message: "the route has {found} steps; this build compiles at most {max}.",
+        beginner: "A route can hold only so many steps, however small each one is. Take some \
+                   out.",
+    },
     // --- E02xx: conditions ---------------------------------------------------
     Text {
         code: "E0201",

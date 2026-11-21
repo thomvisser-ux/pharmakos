@@ -126,6 +126,7 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
         if declarative.route.is_empty() {
             out.emit(Diag::new("E0102", "/declarative/route"));
         }
+        route_ceiling(declarative.route.len(), out);
         for (index, entry) in declarative.route.iter().enumerate() {
             walk_route_entry(entry, &pointer::at("/declarative/route", index), out);
         }
@@ -316,6 +317,26 @@ fn handler_ceiling(found: usize, out: &mut Builder) {
     }
     out.emit(
         Diag::new("E0113", pointer::at("/declarative/handlers", max))
+            .arg("found", found)
+            .arg("max", max),
+    );
+}
+
+/// `E0114`: more route steps than the sim compiles (S3's `vfyq2`, fix pass
+/// 3b).
+///
+/// The ceiling is the sim's own `MAX_ROUTE_STEPS`, read here and never
+/// written a second time, as [`handler_ceiling`] reads `MAX_HANDLERS`. The
+/// size budget (E0110) is a rules value, so a table whose budget passes the
+/// ceiling would let a route the sim refuses qualify. The diagnostic points
+/// at the first step past it.
+fn route_ceiling(found: usize, out: &mut Builder) {
+    let max = pharmakos_sim::interpreter::MAX_ROUTE_STEPS;
+    if found <= max {
+        return;
+    }
+    out.emit(
+        Diag::new("E0114", pointer::at("/declarative/route", max))
             .arg("found", found)
             .arg("max", max),
     );

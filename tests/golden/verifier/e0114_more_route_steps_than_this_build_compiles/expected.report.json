@@ -1,0 +1,32 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0110",
+      "severity": "ERROR",
+      "path": "/declarative",
+      "message": "the playbook is 257 size units; the budget is 128.",
+      "beginner": "This playbook is larger than the seal allows. Take something out of it."
+    },
+    {
+      "code": "E0114",
+      "severity": "ERROR",
+      "path": "/declarative/route/256",
+      "message": "the route has 257 steps; this build compiles at most 256.",
+      "beginner": "A route can hold only so many steps, however small each one is. Take some out."
+    },
+    {
+      "code": "I0007",
+      "severity": "INFO",
+      "message": "omitted settings not noted one by one: 257. Each reads as its default; a report notes at most the first few, and none past the size budget.",
+      "beginner": "Many settings here are left to their defaults. The first few are noted; the rest work the same way."
+    }
+  ],
+  "report_hash": "GrPOqNuUGW0=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "kj/2EqKkUIQ=",
+  "verifier_version": "0.1.0-s3.5",
+  "size_units": 257,
+  "size_budget": 128
+}
+
