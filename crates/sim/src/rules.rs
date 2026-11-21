@@ -1091,43 +1091,40 @@ impl RulesTable {
     }
 }
 
-/// The step costs' bound by what the arithmetic needs (lane `p3fix`, fix
-/// pass 4): a path's cost is an `i32`, and a simple path on the map takes at
-/// most `columns − 1` steps, each costing at most the dearest step, a diagonal
-/// with a climb. So the rules must hold
-///
-/// `(step_cost_diagonal + climb_surcharge) × (size_x × size_y − 1) ≤ i32::MAX`
-///
-/// and the grid optimum's bucket ring, `2 × max step + 1` buckets
-/// ([`crate::pathing::reach`]), is small by consequence: on the committed
-/// 384-by-384 map at most 29 127 buckets.
-///
-/// # Errors
-///
-/// [`RulesError::OutOfRange`] naming `locomotion.climb_surcharge` when the
-/// dearest step times the map's steps passes `i32::MAX` (or
-/// `locomotion.step_cost_diagonal` when the diagonal alone does).
 /// Refuses a table under which the longest row a playbook within the size
 /// budget can write would take longer than the sim's `i32` of milliseconds
 /// ([`crate::interpreter::InterfaceTimes::longest_row_ms`], the sum
 /// [`crate::interpreter::Row::duration_ms`] takes), so that no such playbook
 /// compiles to `PlanError::RowTooLong` on a loaded table (S3's `p3fix`, from
-/// `vfyq2`'s reviews). The verifier refuses the same tables
-/// (`RulesGap::RowPastTheSim`); this bound is the sim's own sum, not a copy of
-/// the verifier's.
+/// `vfyq2`'s reviews). This loader is the one door for that bound: every
+/// `RulesTable` is built here, so the verifier, which once refused the same
+/// tables with its own `RulesGap::RowPastTheSim` (retired by `p3fix`), is
+/// only ever handed a table this check took.
 ///
-/// A table with no `interface_times` or `verifier` block, or a negative rate,
-/// has no row to bound: the compile refuses every playbook on it with its own
-/// reason (`PlanError::MissingBlock`, `PlanError::NegativeRate`), and so does
-/// the verifier, so this check leaves those tables to them.
+/// # Why a table with no rate card passes this check
+///
+/// A table with no `interface_times` or `verifier` block, or with a negative
+/// rate, has no row to bound, and this check is not where it is refused: the
+/// compile refuses every playbook on such a table with its own reason
+/// (`PlanError::MissingBlock`, `PlanError::NegativeRate`), and the verifier
+/// refuses the table (`RulesGap::MissingBlock`, `RulesGap::Negative`), so no
+/// playbook qualifies or compiles under it. The loader takes it because the
+/// sim's own tests load such tables to reach those refusals
+/// (`tests/build.rs`). `Ok` here is "no row to bound", never "the row fits".
+///
+/// # Errors
+///
+/// [`RulesError::RowPastTheSim`], naming the three rates and the budget.
 fn longest_row_fits(table: &RulesTable) -> Result<(), RulesError> {
     let (Some(rates), Some(verifier)) = (
         table.message.interface_times.as_ref(),
         table.message.verifier.as_ref(),
     ) else {
+        // No rate card or no budget: no row to bound (the docs above).
         return Ok(());
     };
     let Ok(times) = crate::interpreter::InterfaceTimes::from_rules(table) else {
+        // A negative rate: no row to bound (the docs above).
         return Ok(());
     };
     let budget = verifier.size_budget_units;
@@ -1142,20 +1139,50 @@ fn longest_row_fits(table: &RulesTable) -> Result<(), RulesError> {
     }
 }
 
+/// The step costs' bound by what the arithmetic needs (lane `p3fix`, fix
+/// pass 4): a path's cost is an `i32`, and a simple path on the map takes at
+/// most `columns − 1` steps, each costing at most the dearest step, a diagonal
+/// with a climb. So the rules must hold
+///
+/// `(step_cost_diagonal + climb_surcharge) × (size_x × size_y − 1) ≤ i32::MAX`
+///
+/// and the grid optimum's bucket ring, `2 × max step + 1` buckets
+/// ([`crate::pathing::reach`]), is small by consequence: on the committed
+/// 384-by-384 map at most 29 127 buckets.
+///
+/// Exact in `u128`: the columns are a `u32` times a `u32` (under 2^64) and the
+/// dearest step a `u32` plus a `u32` (under 2^33), so no product here can pass
+/// it, and nothing saturates.
+///
+/// # Errors
+///
+/// [`RulesError::OutOfRange`] naming `locomotion.climb_surcharge` when the
+/// dearest step times the map's steps passes `i32::MAX` (or
+/// `locomotion.step_cost_diagonal` when the diagonal alone does), and naming
+/// the map axis that is nought, a map with no column.
 fn path_cost_fits(
     locomotion: &gp::v1::rules_table::Locomotion,
     map: &gp::v1::rules_table::Map,
 ) -> Result<(), RulesError> {
-    let steps = u64::from(map.size_x)
-        .saturating_mul(u64::from(map.size_y))
-        .saturating_sub(1);
-    let diagonal = u64::from(locomotion.step_cost_diagonal);
-    let dearest = diagonal.saturating_add(u64::from(locomotion.climb_surcharge));
-    let most = u64::from(i32::MAX.unsigned_abs());
-    if dearest.saturating_mul(steps) <= most {
+    let columns = u128::from(map.size_x) * u128::from(map.size_y);
+    let Some(steps) = columns.checked_sub(1) else {
+        let field = if map.size_x == 0 {
+            "map.size_x"
+        } else {
+            "map.size_y"
+        };
+        return Err(RulesError::OutOfRange {
+            field: field.to_owned(),
+            value: "0; a map axis holds at least one voxel".to_owned(),
+        });
+    };
+    let diagonal = u128::from(locomotion.step_cost_diagonal);
+    let dearest = diagonal + u128::from(locomotion.climb_surcharge);
+    let most = u128::from(i32::MAX.unsigned_abs());
+    if dearest * steps <= most {
         return Ok(());
     }
-    let field = if diagonal.saturating_mul(steps) > most {
+    let field = if diagonal * steps > most {
         "locomotion.step_cost_diagonal"
     } else {
         "locomotion.climb_surcharge"

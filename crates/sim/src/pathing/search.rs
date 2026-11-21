@@ -209,6 +209,7 @@ pub struct Scratch {
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
     pub(crate) untimed: Tally,
+    pub(crate) reach_faults: Tally,
 }
 
 /// A diagnostic count that never reads wrong: it counts up by a checked add,
@@ -318,6 +319,7 @@ impl Scratch {
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
             untimed: Tally::ZERO,
+            reach_faults: Tally::ZERO,
         }
     }
 
@@ -460,6 +462,18 @@ impl Scratch {
         self.untimed.read()
     }
 
+    /// Grid-optimum searches that met a [`crate::pathing::reach::ReachError`]
+    /// since the last reset: a `toward` with no stone for it, counted here so
+    /// the miss is read, never silent. Nothing hands the search a column it
+    /// has no room for; `tests/nearest.rs` holds the count at zero.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn reach_faults(&self) -> Result<u64, TallyOverflow> {
+        self.reach_faults.read()
+    }
+
     /// Zero the counters.
     pub const fn reset_counters(&mut self) {
         self.expansions = Tally::ZERO;
@@ -469,6 +483,7 @@ impl Scratch {
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
         self.untimed = Tally::ZERO;
+        self.reach_faults = Tally::ZERO;
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the

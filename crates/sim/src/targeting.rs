@@ -919,15 +919,26 @@ fn stone_site(
         return Sited::Unreached(weighed);
     };
     match closest_site(scratch, ground.surface, goal) {
-        Some(site) => Sited::Stone(site, weighed),
+        Ok(Some(site)) => Sited::Stone(site, weighed),
         // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out
-        None => Sited::Unreached(weighed),
+        Ok(None) => Sited::Unreached(weighed),
+        // A search handed a column it has no room for: no stone, counted
+        // under its own reason (`Scratch::reach_faults`), never silent; the
+        // step's event vocabulary has no kind for it (AGENTS.md section 5).
+        Err(_) => {
+            scratch.reach_faults.bump();
+            Sited::Unreached(weighed)
+        }
     }
 }
 
 /// **The stone's rule, its one home**: of the sites marked in the scratch's
 /// search, the one closest to `goal` over the terrain, ties to the lowest
-/// `(y, x)`; `None` when the search reaches none.
+/// `(y, x)`; `Ok(None)` when the search reaches none.
+///
+/// # Errors
+///
+/// The search's own [`crate::pathing::reach::ReachError`].
 ///
 /// The grid optimum from the goal outward, directed at the spheres added
 /// ([`crate::pathing::reach`], "Directed"): every column settles at its least
@@ -940,14 +951,14 @@ pub(crate) fn closest_site(
     scratch: &mut Scratch,
     surface: &Surface,
     goal: Node,
-) -> Option<[i32; 2]> {
-    scratch.reach.begin_toward(surface, goal);
+) -> Result<Option<[i32; 2]>, crate::pathing::reach::ReachError> {
+    scratch.reach.begin_toward(surface, goal)?;
     let mut best: Option<(i64, i32, i32)> = None;
-    while let Some((node, cost)) = scratch.reach.next(surface, &mut scratch.expansions) {
+    while let Some((node, cost)) = scratch.reach.next(surface, &mut scratch.expansions)? {
         if let Some((least, y, x)) = best
             && scratch.reach.reached() > least
         {
-            return Some([x, y]);
+            return Ok(Some([x, y]));
         }
         if scratch.reach.is_site(node) {
             let (x, y) = surface.coord_of(node);
@@ -956,7 +967,7 @@ pub(crate) fn closest_site(
             }
         }
     }
-    best.map(|(_, y, x)| [x, y])
+    Ok(best.map(|(_, y, x)| [x, y]))
 }
 
 /// Every legal site of a `toward` for `seat`'s commander at `commander`
@@ -1029,9 +1040,11 @@ fn legal_sites(
                 reach = reach.max(i64::from(costs.octile(dx, dy)));
             }
         }
-        // A sphere that listed no site heads the directed search nowhere.
-        if listed {
-            scratch.reach.add_sphere([bx, by], reach);
+        // A sphere that listed no site heads the directed search nowhere. A
+        // sphere past the list's room (one a beacon row) is counted
+        // (`Scratch::reach_faults`), never dropped silently.
+        if listed && scratch.reach.add_sphere([bx, by], reach).is_err() {
+            scratch.reach_faults.bump();
         }
     }
     Some((start, weighed))
@@ -1624,12 +1637,23 @@ mod tests {
                 map.scratch.reach.clear_sites();
                 map.scratch.reach.mark_site(node_a);
                 map.scratch.reach.mark_site(node_b);
-                map.scratch.reach.add_sphere(centre, reach);
+                map.scratch
+                    .reach
+                    .add_sphere(centre, reach)
+                    .unwrap_or_else(|error| panic!("room for a sphere: {error:?}"));
                 // Which the queue settles first.
-                map.scratch.reach.begin_toward(&map.surface, goal);
+                map.scratch
+                    .reach
+                    .begin_toward(&map.surface, goal)
+                    .unwrap_or_else(|error| panic!("the goal is on the map: {error:?}"));
                 let mut tally = Tally::ZERO;
                 let mut first = None;
-                while let Some((node, _)) = map.scratch.reach.next(&map.surface, &mut tally) {
+                while let Some((node, _)) = map
+                    .scratch
+                    .reach
+                    .next(&map.surface, &mut tally)
+                    .unwrap_or_else(|error| panic!("a queued column is on the map: {error:?}"))
+                {
                     if map.scratch.reach.is_site(node) {
                         first = Some(map.surface.coord_of(node));
                         break;
@@ -1637,7 +1661,7 @@ mod tests {
                 }
                 let lower = if (a[1], a[0]) < (b[1], b[0]) { *a } else { *b };
                 let stone = super::closest_site(&mut map.scratch, &map.surface, goal);
-                assert_eq!(stone, Some(lower), "sites {a:?} and {b:?} at {cost_a}");
+                assert_eq!(stone, Ok(Some(lower)), "sites {a:?} and {b:?} at {cost_a}");
                 cases += 1;
                 if first.map(|(x, y)| [x, y]) != Some(lower) {
                     first_wrong += 1;

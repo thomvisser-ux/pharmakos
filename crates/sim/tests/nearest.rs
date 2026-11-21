@@ -254,6 +254,7 @@ fn origin(world: &World, rng: &mut Rng) -> ([i32; 2], Node) {
 fn nearest_is_the_least_served_walk() {
     let (mut ranks, mut wrong, mut over) = (0_u32, Vec::new(), Vec::new());
     let mut stalled = 0_u64;
+    let mut untimed = 0_u64;
     for (seed, scarred) in [(SEED, false), (7, false), (SEED, true), (0x5eed_0003, true)] {
         let mut world = world_of(seed, 2);
         if scarred {
@@ -291,6 +292,7 @@ fn nearest_is_the_least_served_walk() {
                 }
             }
             stalled += scratch.stalled().unwrap();
+            untimed += scratch.untimed().unwrap();
             scratch.reset_counters();
             let extra = ranker
                 .next(&ground, &mut scratch)
@@ -302,6 +304,7 @@ fn nearest_is_the_least_served_walk() {
     }
     assert!(ranks >= 2_000, "the test ranks enough: {ranks}");
     assert_eq!(stalled, 0, "no candidate's chain of partial routes stalled");
+    assert_eq!(untimed, 0, "every candidate's walk had a travel time");
     assert!(
         over.is_empty(),
         "{} octile bounds above a walk; first {:?}",
@@ -415,11 +418,11 @@ fn the_grid_optimum_settles_in_cost_then_column_order() {
             let (_, from) = origin(&world, &mut rng);
             let least = least_costs(&world, from);
             let reachable = least.iter().filter(|cost| cost.is_some()).count();
-            reach.begin(from);
+            reach.begin(from).expect("the start is on the map");
             let mut tally = Tally::ZERO;
             let mut previous: Option<(i64, Node)> = None;
             let mut settled = 0_usize;
-            while let Some((node, cost)) = reach.next(surface, &mut tally) {
+            while let Some((node, cost)) = reach.next(surface, &mut tally).expect("on the map") {
                 assert_eq!(
                     Some(cost),
                     least[usize::try_from(node).unwrap()],
@@ -499,6 +502,11 @@ fn a_toward_is_the_closest_site_over_the_terrain() {
                 },
             );
             assert_eq!(scratch.walks().unwrap(), 0, "a stone prices no walk");
+            assert_eq!(
+                scratch.reach_faults().unwrap(),
+                0,
+                "no search met a column it has no room for"
+            );
             let Some(goal) = measured_to(&world, index, from) else {
                 assert!(
                     found.is_err(),
@@ -777,15 +785,23 @@ fn a_directed_flood_computes_one_h_a_column() {
             let from = surface.node_of(core[0] + 2, core[1] + 2).expect("a column");
             reach.clear_sites();
             for k in 0..spheres {
-                reach.add_sphere([5 + (k % 8) * 40, 5 + k.div_euclid(8) * 60], 240);
+                reach
+                    .add_sphere([5 + (k % 8) * 40, 5 + k.div_euclid(8) * 60], 240)
+                    .expect("room for a sphere");
             }
             let mut tally = Tally::ZERO;
             if spheres == 0 {
-                reach.begin(from);
+                reach.begin(from).expect("the start is on the map");
             } else {
-                reach.begin_toward(surface, from);
+                reach
+                    .begin_toward(surface, from)
+                    .expect("the start is on the map");
             }
-            while reach.next(surface, &mut tally).is_some() {}
+            while reach
+                .next(surface, &mut tally)
+                .expect("on the map")
+                .is_some()
+            {}
             pops += tally.read().unwrap();
             evaluations += reach.evaluations().unwrap();
         }

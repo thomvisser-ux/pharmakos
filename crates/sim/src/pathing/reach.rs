@@ -126,6 +126,27 @@ const _: () = assert!(
     "the sphere list holds every beacon row"
 );
 
+/// Why a [`Reach`] search cannot go on: each a column or a sphere the search
+/// was handed that it has no room for. Typed rather than read as "no more
+/// columns" or "no direction": a caller that meets one counts it (the
+/// targeting module's `Scratch::reach_faults`) and its tests hold the count
+/// at zero.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReachError {
+    /// A column that is not one of the map's the search was sized for: a
+    /// start, or a column the queue holds.
+    OffMap {
+        /// The column.
+        node: Node,
+    },
+    /// A sphere past the room the list was reserved for, one a beacon row
+    /// ([`crate::ids::ROOM_LIMIT`]).
+    SpheresFull {
+        /// The room.
+        room: usize,
+    },
+}
+
 /// The grid optimum's search, its bucket queue (the module docs), the
 /// site marks a `toward` search reads beside it, and the spheres a directed
 /// search heads for.
@@ -160,10 +181,10 @@ pub struct Reach {
     /// The spheres a directed search heads for: each one's centre column and
     /// the most octile cost from it to any column of the sphere.
     spheres: Vec<([i32; 2], i64)>,
-    /// Each column's `h` in this search, computed once when the search first
-    /// reaches it; valid while `heur_stamp` holds the search's epoch.
-    heur: Vec<i64>,
-    heur_stamp: Vec<u32>,
+    /// Each column's `h` in this search with the epoch it was computed in,
+    /// computed once when the search first reaches the column; valid while
+    /// the stamp is the search's epoch.
+    heur: Vec<(u32, i64)>,
     /// How many `h` this search computed: one a column reached, each costing
     /// one octile a sphere. Counted work, never hashed.
     evaluations: Tally,
@@ -200,8 +221,7 @@ impl Reach {
             site_epoch: 0,
             sites: vec![0; n],
             spheres: Vec::with_capacity(SPHERE_ROOM),
-            heur: vec![0; n],
-            heur_stamp: vec![0; n],
+            heur: vec![(0, 0); n],
             evaluations: Tally::ZERO,
             directed: false,
         }
@@ -252,11 +272,19 @@ impl Reach {
     /// reach, the most octile cost from the centre to any site the sphere
     /// listed. Every listed site must lie within the reach of a sphere added,
     /// or the heuristic is not admissible (the module docs, "Directed").
-    pub fn add_sphere(&mut self, centre: [i32; 2], reach: i64) {
-        // E7: cannot miss: one sphere a beacon row, and no table holds more than `SPHERE_ROOM` rows (the assertion above), the room reserved
-        if self.spheres.len() < SPHERE_ROOM {
-            self.spheres.push((centre, reach));
+    ///
+    /// # Errors
+    ///
+    /// [`ReachError::SpheresFull`] past the room reserved, one a beacon row:
+    /// a sphere dropped would leave its sites outside every reach, so the
+    /// search would not be admissible, and the caller is told rather than
+    /// handed a search that is wrong.
+    pub fn add_sphere(&mut self, centre: [i32; 2], reach: i64) -> Result<(), ReachError> {
+        if self.spheres.len() >= SPHERE_ROOM {
+            return Err(ReachError::SpheresFull { room: SPHERE_ROOM });
         }
+        self.spheres.push((centre, reach));
+        Ok(())
     }
 
     /// The spheres a directed search heads for: each one's centre column and
@@ -278,34 +306,42 @@ impl Reach {
 
     /// Start a search from `from`, undirected: columns settle in ascending
     /// `(cost, column)`.
-    pub fn begin(&mut self, from: Node) {
+    ///
+    /// # Errors
+    ///
+    /// [`ReachError::OffMap`] for a start that is not a column of the map.
+    pub fn begin(&mut self, from: Node) -> Result<(), ReachError> {
         self.directed = false;
-        self.start(from, 0);
+        self.start(from, 0)
     }
 
     /// Start a search from `from` directed at the spheres added since
     /// [`Reach::clear_sites`]: keys are `cost + h`, `h` the octile cost to the
     /// nearest sphere's centre less that sphere's reach, floored at zero (the
     /// module docs, "Directed").
-    pub fn begin_toward(&mut self, surface: &Surface, from: Node) {
+    ///
+    /// # Errors
+    ///
+    /// [`ReachError::OffMap`] for a start that is not a column of the map.
+    pub fn begin_toward(&mut self, surface: &Surface, from: Node) -> Result<(), ReachError> {
         self.directed = !self.spheres.is_empty();
-        self.start(from, 0);
-        let first = self.cached_heuristic(surface, from);
+        self.start(from, 0)?;
+        let first = self.cached_heuristic(surface, from)?;
         self.at = first;
-        if let Some(slot) = usize::try_from(from)
-            .ok()
-            .and_then(|index| self.key.get_mut(index))
-        {
-            *slot = first;
-        }
+        let slot = self
+            .key
+            .get_mut(crate::math::index::row(from))
+            .ok_or(ReachError::OffMap { node: from })?;
+        *slot = first;
+        Ok(())
     }
 
-    fn start(&mut self, from: Node, key: i64) {
+    fn start(&mut self, from: Node, key: i64) -> Result<(), ReachError> {
         if self.epoch == u32::MAX {
             self.stamp.fill(0);
             self.settled.fill(0);
             self.listed.fill(0);
-            self.heur_stamp.fill(0);
+            self.heur.fill((0, 0));
             self.epoch = 0;
         }
         self.epoch += 1;
@@ -315,22 +351,13 @@ impl Reach {
         self.cursor = 0;
         self.at = key;
         self.waiting = 0;
-        let Some(index) = usize::try_from(from)
-            .ok()
-            .filter(|index| *index < self.cost.len())
-        else {
-            return;
-        };
-        if let Some(slot) = self.cost.get_mut(index) {
-            *slot = 0;
-        }
-        if let Some(slot) = self.key.get_mut(index) {
-            *slot = key;
-        }
-        if let Some(slot) = self.stamp.get_mut(index) {
-            *slot = self.epoch;
-        }
+        let index = crate::math::index::row(from);
+        let off = ReachError::OffMap { node: from };
+        *self.cost.get_mut(index).ok_or(off)? = 0;
+        *self.key.get_mut(index).ok_or(off)? = key;
+        *self.stamp.get_mut(index).ok_or(off)? = self.epoch;
         self.sorted.push(from);
+        Ok(())
     }
 
     /// The key the search has reached: the last column settled was settled
@@ -352,23 +379,23 @@ impl Reach {
 
     /// `h` of `node` in this search, computed the first time the search
     /// reaches the column and read from then on.
-    fn cached_heuristic(&mut self, surface: &Surface, node: Node) -> i64 {
-        let Ok(index) = usize::try_from(node) else {
-            return 0;
-        };
-        if self.heur_stamp.get(index).copied() == Some(self.epoch) {
-            // E7: cannot miss: a stamped column holds its `h`
-            return self.heur.get(index).copied().unwrap_or(0);
+    fn cached_heuristic(&mut self, surface: &Surface, node: Node) -> Result<i64, ReachError> {
+        let epoch = self.epoch;
+        let held = *self
+            .heur
+            .get(crate::math::index::row(node))
+            .ok_or(ReachError::OffMap { node })?;
+        if held.0 == epoch {
+            return Ok(held.1);
         }
         let h = self.heuristic(surface, node);
         self.evaluations.bump();
-        if let Some(slot) = self.heur.get_mut(index) {
-            *slot = h;
-        }
-        if let Some(slot) = self.heur_stamp.get_mut(index) {
-            *slot = self.epoch;
-        }
-        h
+        let slot = self
+            .heur
+            .get_mut(crate::math::index::row(node))
+            .ok_or(ReachError::OffMap { node })?;
+        *slot = (epoch, h);
+        Ok(h)
     }
 
     /// The directed search's lower bound on the cost from `node` to any
@@ -376,19 +403,23 @@ impl Reach {
     /// search.
     #[must_use]
     pub fn heuristic(&self, surface: &Surface, node: Node) -> i64 {
-        if !self.directed {
+        // An undirected search, and a search with no sphere to head for
+        // (which `begin_toward` makes undirected), has no `h`: zero by the
+        // module docs' definition, not a default.
+        if !self.directed || self.spheres.is_empty() {
             return 0;
         }
         let (x, y) = surface.coord_of(node);
         let costs = surface.costs();
+        // Exact: a column's and a centre's coordinates are a map's, inside
+        // an `i16` each (the rules refuse a longer axis), so their difference
+        // fits an `i32`; an octile cost and a reach are an `i32`'s, so their
+        // difference fits an `i64`. The list is not empty (above), so the
+        // fold's start is replaced by its first sphere.
         self.spheres
             .iter()
-            .map(|([cx, cy], reach)| {
-                let octile = i64::from(costs.octile(x.saturating_sub(*cx), y.saturating_sub(*cy)));
-                octile.saturating_sub(*reach).max(0)
-            })
-            .min()
-            .unwrap_or(0)
+            .map(|([cx, cy], reach)| (i64::from(costs.octile(x - cx, y - cy)) - reach).max(0))
+            .fold(i64::MAX, i64::min)
     }
 
     /// Settle the next column and lower its neighbours' costs, computing each
@@ -396,22 +427,32 @@ impl Reach {
     /// popped is counted in `popped`. Undirected, columns settle in ascending
     /// `(cost, column)`; directed, in ascending key, in no promised order
     /// within a key (the module docs, "The queue, and its order").
-    pub fn next(&mut self, surface: &Surface, popped: &mut Tally) -> Option<(Node, i64)> {
+    ///
+    /// `Ok(None)` when no column is left to settle.
+    ///
+    /// # Errors
+    ///
+    /// [`ReachError::OffMap`] for a queued column that is not one of the
+    /// map's, never read as "no more columns".
+    pub fn next(
+        &mut self,
+        surface: &Surface,
+        popped: &mut Tally,
+    ) -> Result<Option<(Node, i64)>, ReachError> {
         let node = loop {
             if let Some(node) = self.sorted.get(self.cursor).copied() {
                 self.cursor += 1;
                 break node;
             }
             if self.waiting == 0 {
-                return None;
+                return Ok(None);
             }
             self.advance();
         };
-        let index = usize::try_from(node).ok()?;
-        if let Some(mark) = self.settled.get_mut(index) {
-            *mark = self.epoch;
-        }
-        let here = self.cost.get(index).copied()?;
+        let index = crate::math::index::row(node);
+        let off = ReachError::OffMap { node };
+        *self.settled.get_mut(index).ok_or(off)? = self.epoch;
+        let here = self.cost.get(index).copied().ok_or(off)?;
         popped.bump();
         for k in 0..NEIGHBOURS.len() {
             let Some((other, step)) = surface.neighbour(node, k) else {
@@ -425,13 +466,13 @@ impl Reach {
             // `i32::MAX` each stays below `i64::MAX`.
             let cost = here + i64::from(step);
             let key = if self.directed {
-                cost + self.cached_heuristic(surface, other)
+                cost + self.cached_heuristic(surface, other)?
             } else {
                 cost
             };
             self.lower(other, cost, key);
         }
-        Some((node, here))
+        Ok(Some((node, here)))
     }
 
     /// The bucket a key waits in.
