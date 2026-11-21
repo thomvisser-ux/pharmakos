@@ -625,10 +625,11 @@ const PLAN_WORDS_BANNED: &[&str] = &[
     "fmt::",
 ];
 
-/// Every sim function that refuses with a `PlanError`, as a caller spells
-/// its call: `Type::name(` for an associated function, `.name(` for a method,
-/// `name(` for a free function. Read from the sim's sources, so a new one is
-/// held without this test changing.
+/// Every sim function that refuses with a `PlanError`, as the identifier a
+/// caller must write to reach it (S3's `vfyq2`, fix pass 6, item 5): its
+/// own name, or, for a name the sim gives many functions (`from_rules`,
+/// `new`), its owner's. Read from the sim's sources, so a new one is held
+/// without this test changing. An alias (`use … as X`) still names it once.
 fn plan_error_producers() -> Vec<String> {
     let files = sources_of("sim");
     let mut found = Vec::new();
@@ -674,11 +675,10 @@ fn plan_error_producers() -> Vec<String> {
             if !signature.contains("PlanError>") {
                 continue;
             }
-            let method = signature.contains("self");
-            found.push(match (&owner, method) {
-                (_, true) => format!(".{name}("),
-                (Some(owner), false) => format!("{owner}::{name}("),
-                (None, false) => format!("{name}("),
+            let shared = matches!(name.as_str(), "from_rules" | "new" | "default");
+            found.push(match (&owner, shared) {
+                (Some(owner), true) => owner.clone(),
+                _ => name,
             });
         }
     }
@@ -687,44 +687,98 @@ fn plan_error_producers() -> Vec<String> {
     found
 }
 
+/// The one line outside [`PLAN_WORDS`] that may name a producer: the sim's
+/// own door, `compile_decoded`'s compile in `src/surface/planning.rs`, whose
+/// refusal goes straight to `plan_refusal`.
+const COMPILE_SITE: (&str, &str) = (
+    "src/surface/planning.rs",
+    "Plan::compile(playbook, rules).map_err(|error| super::plan_words::plan_refusal(&error))",
+);
+
+/// A file's code, line by line: its string literals' contents (a string
+/// that runs over several lines included) and its `//` comments dropped, so
+/// a word in a message or a comment is not taken for code.
+fn code_of(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for line in text.lines() {
+        let mut out = String::with_capacity(line.len());
+        let mut previous = ' ';
+        for character in line.chars() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == '"' {
+                    in_string = false;
+                    out.push('"');
+                }
+            } else if character == '"' && previous != '\'' {
+                in_string = true;
+                out.push('"');
+            } else if character == '/' && previous == '/' {
+                out.pop();
+                break;
+            } else {
+                out.push(character);
+            }
+            previous = character;
+        }
+        // A `\` at a line's end continues the string onto the next.
+        escaped = false;
+        lines.push(out);
+    }
+    lines
+}
+
+/// The identifiers on a line of code.
+fn identifiers_of(code: &str) -> Vec<&str> {
+    code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
 /// A `PlanError` reaches a seat only through the gateway's own sentence for
 /// it (S3's `vfyq2`, fix pass 3, item M2 (a)), held file by file (fix pass 5,
-/// item L3): the sim's `Display` for it writes ids and labels raw, so the
-/// type is named in [`PLAN_WORDS`] alone, which says it with `said!` and
-/// nothing that formats a value, and every call of a sim function that
-/// refuses with one hands its error straight to `plan_refusal` in the same
-/// statement, or drops it unseen (`.ok()`). A function of any form (`pub(in …)`, `const`, `async`,
-/// `unsafe`, `extern`) that names the type anywhere else is found, because
-/// the rule is the file, not the function.
+/// item L3) and token by token (fix pass 6, item 5). The sim's `Display` for
+/// it writes ids and labels raw. So the type, and the identifier of every
+/// sim function that refuses with one, is named in [`PLAN_WORDS`] alone, and
+/// at [`COMPILE_SITE`]. A call, a function value (`let f = Plan::compile`),
+/// an alias, a function of any form and a statement that also says `.ok()`
+/// or `plan_refusal(` are all found, because the rule is the token in the
+/// file, not the statement. [`PLAN_WORDS`] says the type with `said!` and
+/// nothing that formats a value. Every line is read, a unit test's included.
 #[test]
 fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
-    let producers = plan_error_producers();
+    let mut tokens = plan_error_producers();
     assert!(
-        producers.iter().any(|needle| needle == "Plan::compile("),
-        "the producers are read from the sim: {producers:?}"
+        tokens.iter().any(|token| token == "compile"),
+        "the producers are read from the sim: {tokens:?}"
     );
+    tokens.push(String::from("PlanError"));
     let mut stray: Vec<String> = Vec::new();
     let mut named_in_words = false;
+    let mut compile_sites = 0_usize;
     for path in sources() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
         let words = path.ends_with(PLAN_WORDS);
-        // Every line, a unit test's included: code after a `#[cfg(test)]`
-        // module is still shipped, and a test has no reason to name the type
-        // either.
-        let lines: Vec<(usize, String)> = text
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| !line.trim_start().starts_with("//"))
-            .map(|(number, line)| (number.saturating_add(1), line.to_owned()))
-            .collect();
-        for (position, (number, line)) in lines.iter().enumerate() {
-            let names = uses(line, "PlanError");
+        let site = path.ends_with(COMPILE_SITE.0);
+        let codes = code_of(&text);
+        for (index, (line, code)) in text.lines().zip(&codes).enumerate() {
+            let number = index.saturating_add(1);
+            let identifiers = identifiers_of(code);
+            let named: Vec<&String> = tokens
+                .iter()
+                .filter(|token| identifiers.contains(&token.as_str()))
+                .collect();
             if words {
-                named_in_words |= names;
+                named_in_words |= identifiers.contains(&"PlanError");
                 for banned in PLAN_WORDS_BANNED {
-                    if line.contains(banned) {
+                    if code.contains(banned) {
                         stray.push(format!(
                             "{}:{number}: `{banned}` in the PlanError words: {}",
                             path.display(),
@@ -732,42 +786,27 @@ fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
                         ));
                     }
                 }
-            } else if names {
-                stray.push(format!(
-                    "{}:{number}: names PlanError outside {PLAN_WORDS}: {}",
-                    path.display(),
-                    line.trim()
-                ));
+                continue;
             }
-            for producer in &producers {
-                if !line.contains(producer.as_str()) {
-                    continue;
-                }
-                let statement: String = lines
-                    .iter()
-                    .skip(position)
-                    .take(6)
-                    .map(|(_, line)| line.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let statement = statement.split(';').next().unwrap_or_default();
-                // Said through the gateway's sentence, or dropped unseen
-                // (`.ok()`: a preview that resolves nothing says nothing).
-                if !statement.contains("plan_refusal(") && !statement.contains(".ok()") {
-                    stray.push(format!(
-                        "{}:{number}: `{producer}` whose refusal does not go straight to \
-                         plan_refusal: {}",
-                        path.display(),
-                        line.trim()
-                    ));
-                }
+            if named.is_empty() {
+                continue;
             }
+            if site && line.trim() == COMPILE_SITE.1 {
+                compile_sites = compile_sites.saturating_add(1);
+                continue;
+            }
+            stray.push(format!(
+                "{}:{number}: names {named:?} outside {PLAN_WORDS}: {}",
+                path.display(),
+                line.trim()
+            ));
         }
     }
     assert!(
         named_in_words,
         "{PLAN_WORDS} names PlanError and says every one"
     );
+    assert_eq!(compile_sites, 1, "the one compile site, as written");
     assert!(
         stray.is_empty(),
         "a PlanError is said only by {PLAN_WORDS}:\n{}",

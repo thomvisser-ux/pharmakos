@@ -1220,30 +1220,30 @@ impl Said {
 /// labels and ids raw) does not implement it, and is said through a
 /// sentence composed from its fields.
 ///
-/// It is sealed by [`door::Sealed`] (S3's `vfyq2`, fix pass 5, item L4). The
+/// It is sealed by [`door::EngineSeal`] (S3's `vfyq2`, fix pass 5, item L4). The
 /// seal has to be nameable by the other crates behind the door (plan-core,
 /// the verifier, the gateway), so the type system cannot keep a downstream
 /// crate from naming it too: `crates/plan-core/tests/door.rs` holds every
 /// implementation of either trait to a crate behind the door's `src`.
-pub trait EngineWords: fmt::Display + door::Sealed {}
+pub trait EngineWords: fmt::Display + door::EngineSeal {}
 
 /// [`EngineWords`]'s seal (S3's `vfyq2`, fix pass 5, item L4).
 #[doc(hidden)]
 pub mod door {
     /// Implemented beside each [`super::EngineWords`] declaration, behind the
     /// door alone.
-    pub trait Sealed {}
+    pub trait EngineSeal {}
 }
 
 /// An I/O error's words are the operating system's: a file the host could
 /// not read, never the file's contents.
 impl EngineWords for std::io::Error {}
-impl door::Sealed for std::io::Error {}
+impl door::EngineSeal for std::io::Error {}
 
 /// prost's decode error says which wire fault it met, in prost's words; the
 /// bytes it read are this workspace's own encoding.
 impl EngineWords for prost::DecodeError {}
-impl door::Sealed for prost::DecodeError {}
+impl door::EngineSeal for prost::DecodeError {}
 
 /// [`crate::said`]'s compile-time check of a template's `{}` count, one per
 /// piece; it writes nothing and is never shown.
@@ -1354,7 +1354,7 @@ mod engine_cap {
     }
 
     impl EngineWords for Long {}
-    impl super::door::Sealed for Long {}
+    impl super::door::EngineSeal for Long {}
 
     /// `Said::engine_error` is capped like `quoted` (S3's `vfyq2`, fix pass
     /// 5, item L4): a declared type's words are shown at most to the cap,

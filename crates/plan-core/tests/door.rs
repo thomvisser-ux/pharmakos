@@ -17,7 +17,7 @@
 //!   `forget` in a crate behind the door (proto, plan-core, verifier,
 //!   gateway), and every `static` there is on a reviewed list, so no text is
 //!   kept for ever and handed out as `'static`;
-//! * `EngineWords` (and its seal, `door::Sealed`) is implemented only in a
+//! * `EngineWords` (and its seal, `door::EngineSeal`) is implemented only in a
 //!   crate behind the door's `src`, never in a test, a bench or another
 //!   crate: a trait a downstream crate can name cannot be sealed by the type
 //!   system across crates;
@@ -246,10 +246,17 @@ fn every_static_behind_the_door_is_reviewed() {
             let Some(at) = words.iter().position(|word| *word == "static") else {
                 continue;
             };
-            // `'static` is a lifetime, not an item.
-            let item = code
-                .split_whitespace()
-                .any(|token| token == "static" || token.ends_with("(static"));
+            // `'static` is a lifetime, not an item: an item is the keyword
+            // with no `'` before it, whatever stands before that
+            // (`pub(crate)static` included: fix pass 6, the review's g3b).
+            let item = code.match_indices("static").any(|(at, _)| {
+                let before = code.get(..at).and_then(|head| head.chars().next_back());
+                let after = code
+                    .get(at.saturating_add(6)..)
+                    .and_then(|tail| tail.chars().next());
+                let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+                before.is_none_or(|c| c != '\'' && !word(c)) && after.is_none_or(|c| !word(c))
+            });
             if !item {
                 continue;
             }
@@ -277,70 +284,73 @@ fn every_static_behind_the_door_is_reviewed() {
     }
 }
 
-/// `EngineWords` and its seal are implemented only behind the door, in `src`
-/// (fix pass 5, item L4): an implementation in a test, a bench, the client,
-/// the operator, `gamectl` or `xtask` is refused.
+/// `EngineWords` and its seal are named only behind the door, in `src`
+/// (fix pass 5, item L4, and fix pass 6, item 5): the identifiers
+/// `EngineWords` and `EngineSeal`, anywhere in a test, a bench, the client, the
+/// operator, `gamectl` or `xtask`, are refused. An alias (`use … as Words`)
+/// still writes the name once, so it is refused too, and so is an
+/// implementation however it is spelt.
 #[test]
-fn engine_words_are_declared_only_behind_the_door() {
+fn engine_words_are_named_only_behind_the_door() {
     let mut found = Vec::new();
-    let mut declared = 0_u32;
+    let mut named = 0_u32;
     for file in everywhere() {
         let path = relative(&file);
         let behind = BEHIND_THE_DOOR
             .iter()
             .any(|name| path.starts_with(&format!("{name}/src/")));
         let text = std::fs::read_to_string(&file).expect("a source file");
-        let lines: Vec<&str> = text.lines().collect();
-        for (number, line) in lines.iter().enumerate() {
-            // An `impl` may break its line before `for`.
-            let joined = format!(
-                "{} {}",
-                code(line),
-                lines
-                    .get(number.saturating_add(1))
-                    .map_or_else(String::new, |next| code(next))
-            );
-            let words = identifiers(&joined);
-            let implements = words.first() == Some(&"impl")
-                && words.windows(2).any(|pair| {
-                    matches!(pair, [trait_name, "for"] if *trait_name == "EngineWords" || *trait_name == "Sealed")
-                });
-            if !implements {
+        for (number, line) in text.lines().enumerate() {
+            let code = code(line);
+            let words = identifiers(&code);
+            if !words
+                .iter()
+                .any(|word| *word == "EngineWords" || *word == "EngineSeal")
+            {
                 continue;
             }
-            declared = declared.saturating_add(1);
+            named = named.saturating_add(1);
             if !behind {
                 found.push(format!("{path}:{}: {}", number + 1, line.trim()));
             }
         }
     }
-    assert!(declared > 20, "the scan sees the declarations: {declared}");
+    assert!(named > 20, "the scan sees the declarations: {named}");
     assert!(
         found.is_empty(),
-        "EngineWords declared outside the door:\n{}",
+        "EngineWords named outside the door:\n{}",
         found.join("\n")
     );
 }
 
-/// `Said::compose` is called by `said!` alone (fix pass 5, item L4).
+/// `said!`'s door, `compose_checked`, is named in `json/grammar.rs` alone,
+/// where the macro is written (fix pass 5, item L4, and fix pass 6, item 5):
+/// the identifier, called through any path or alias, anywhere else is
+/// refused. A macro's expansion writes it where the macro is used, which no
+/// source shows, so the scan reads the sources as written.
 #[test]
-fn said_compose_is_called_by_the_macro_alone() {
+fn said_compose_is_named_by_the_macro_alone() {
     let mut found = Vec::new();
+    let mut seen = false;
     for file in everywhere() {
         let path = relative(&file);
+        let the_door = path == "proto/src/json/grammar.rs";
         let text = std::fs::read_to_string(&file).expect("a source file");
         for (number, line) in text.lines().enumerate() {
             let code = code(line);
-            let calls = code.contains("Said::compose(") || code.contains("Said::compose_checked(");
-            let the_door = path == "proto/src/json/grammar.rs";
-            if calls && !the_door {
+            if !identifiers(&code).contains(&"compose_checked") {
+                continue;
+            }
+            seen |= the_door;
+            if !the_door {
                 found.push(format!("{path}:{}: {}", number + 1, line.trim()));
             }
         }
     }
+    assert!(seen, "the scan sees the macro's door");
     assert!(
         found.is_empty(),
-        "a template composed outside said!:\n{}",
+        "said!'s door named outside the macro:\n{}",
         found.join("\n")
     );
 }
