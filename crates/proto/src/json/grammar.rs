@@ -1309,3 +1309,34 @@ macro_rules! said {
         )
     };
 }
+
+#[cfg(test)]
+mod engine_cap {
+    use super::{EngineWords, MAX_QUOTED_CHARS, Said};
+
+    /// A declared type whose words run long: the review's probe, from inside
+    /// the door, where a declaration is allowed.
+    struct Long(usize);
+
+    impl core::fmt::Display for Long {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            formatter.write_str(&"x".repeat(self.0))
+        }
+    }
+
+    impl EngineWords for Long {}
+
+    /// `Said::engine_error` is capped like `quoted` (S3's `vfyq2`, fix pass
+    /// 5, item L4): a declared type's words are shown at most to the cap,
+    /// the rest as `…`.
+    #[test]
+    fn an_engine_error_is_capped_like_a_quote() {
+        let said = Said::engine_error(&Long(100_000));
+        let shown = said.as_str().chars().count();
+        assert!(
+            shown < 100_000 && shown > MAX_QUOTED_CHARS,
+            "shown {shown} characters"
+        );
+        assert!(said.as_str().ends_with('…'));
+    }
+}
