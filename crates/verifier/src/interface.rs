@@ -222,9 +222,9 @@ impl Rates {
     ///
     /// # Errors
     ///
-    /// [`RulesGap::RowPastTheSim`] naming the rate that carries the row past
-    /// it: the build-target rate when the targets alone pass it, else the
-    /// switch.
+    /// [`RulesGap::RowPastTheSim`], naming the row as the sim sums it: the
+    /// three rates with their values, the budget and the sum (fix pass 5,
+    /// item L6).
     pub fn check_rows(&self, budget: u32) -> Result<(), RulesGap> {
         let room = WideMs(i128::from(i32::MAX));
         let targets = WideMs::times(self.build_target, u64::from(budget));
@@ -234,15 +234,12 @@ impl Rates {
         if worst <= room {
             return Ok(());
         }
-        let field = if targets > room {
-            "interface_times.build_target_ms"
-        } else {
-            "interface_times.switch_mandate_ms"
-        };
         Err(RulesGap::RowPastTheSim {
-            field,
-            worst_ms: worst.raw(),
+            switch_ms: self.switch_mandate.raw(),
+            edit_max_ms: self.edit_settings_max.raw(),
+            build_target_ms: self.build_target.raw(),
             budget,
+            worst_ms: worst.raw(),
         })
     }
 

@@ -83,12 +83,17 @@ pub enum RulesGap {
     /// write take longer than the sim's `i32` of milliseconds, which its
     /// compile refuses (S3's `vfyq2`, fix pass 4, item 1).
     RowPastTheSim {
-        /// The rate that carries the worst row past it.
-        field: &'static str,
-        /// The worst row, in milliseconds.
-        worst_ms: i128,
+        /// `interface_times.switch_mandate_ms`.
+        switch_ms: i32,
+        /// `interface_times.edit_settings_max_ms`.
+        edit_max_ms: i32,
+        /// `interface_times.build_target_ms`, paid once per size unit.
+        build_target_ms: i32,
         /// The size budget it was priced at.
         budget: u32,
+        /// The worst row, in milliseconds: the switch, the edit at its cap
+        /// and a Build target per unit of the budget.
+        worst_ms: i128,
     },
 }
 
@@ -121,13 +126,18 @@ impl fmt::Display for RulesGap {
                  above zero"
             ),
             RulesGap::RowPastTheSim {
-                field,
-                worst_ms,
+                switch_ms,
+                edit_max_ms,
+                build_target_ms,
                 budget,
+                worst_ms,
             } => write!(
                 formatter,
-                "the rules table's `{field}` lets one interface row a playbook of {budget} size \
-                 units can write take {worst_ms} ms, past the {} ms the sim compiles a row in",
+                "the rules table lets one interface row a playbook of {budget} size units can \
+                 write take `interface_times.switch_mandate_ms` ({switch_ms} ms) + \
+                 `interface_times.edit_settings_max_ms` ({edit_max_ms} ms) + \
+                 `interface_times.build_target_ms` ({build_target_ms} ms) x {budget} = \
+                 {worst_ms} ms, past the {} ms the sim compiles a row in",
                 i32::MAX
             ),
         }
