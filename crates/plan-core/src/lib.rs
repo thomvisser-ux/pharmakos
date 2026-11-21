@@ -11,7 +11,7 @@
 //! |---|---|
 //! | [`jsonc`] | The lossless JSONC reader and writer: comments and formatting survive byte for byte |
 //! | [`canonical`] | The canonical form, **authoritative for the file format** |
-//! | [`patch`] | RFC 6902 JSON Patch with inverse-patch undo |
+//! | [`patch`] | JSON Patch: RFC 6902's six operations read more strictly (unknown members refused), and an undo of `add`, `remove` and `replace` operations each with an `undo` member |
 //! | [`render`] | `render_plan`'s deterministic English prose |
 //! | [`interface`] | Interface-time arithmetic at spec section 5's rates, re-exported from the verifier |
 //! | [`projection`] | The `$` and `kW` projection the Quartermaster's rules imply, the verifier's arithmetic against this crate's [`PlanContext`] |
