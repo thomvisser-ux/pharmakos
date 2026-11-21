@@ -515,16 +515,46 @@ impl Node {
         })
     }
 
-    /// Puts a member into an object at `at`, or at the end when `at` is past
-    /// it.
+    /// Whether this is an empty container with trivia inside it: what the
+    /// first put into it carries into the member or element it puts (S3's
+    /// `vfyq2`, fix pass 3, item M1), so a patch that puts into it changes
+    /// its bytes in a way only a swap of the whole container undoes.
+    #[must_use]
+    pub fn holds_inside_trivia(&self) -> bool {
+        match &self.value {
+            Value::Object(members, inner) => members.is_empty() && !inner.is_empty(),
+            Value::Array(items, inner) => items.is_empty() && !inner.is_empty(),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::Str { .. } => false,
+        }
+    }
+
+    /// Puts a member into an object at slot `at`, which may be one past its
+    /// last member.
+    ///
+    /// The first member put into an empty object takes the object's inside
+    /// trivia in front of it (S3's `vfyq2`, fix pass 3, item M1): the
+    /// comment in `{ /* keep */ }` survives, as the member's leading trivia,
+    /// which is exactly what the reader makes of the text written, so a
+    /// re-read gives the same anchors.
     ///
     /// # Errors
     ///
-    /// When this node is not an object, or the key is already there.
+    /// When this node is not an object, the key is already there, or `at` is
+    /// past the end (S3's `vfyq2`, fix pass 3, item L10: it was clamped).
     pub fn put_member(&mut self, key: &str, fragment: Fragment, at: usize) -> Result<(), Error> {
-        let Value::Object(members, _) = &mut self.value else {
+        let Value::Object(members, inner) = &mut self.value else {
             return Err(Error::at("", "not an object"));
         };
+        if at > members.len() {
+            return Err(Error::at(
+                "",
+                pharmakos_proto::said!(
+                    "slot {} is past the {} members there are",
+                    at,
+                    members.len()
+                ),
+            ));
+        }
         if members.iter().any(|member| member.key == key) {
             return Err(Error::at(
                 "",
@@ -534,7 +564,7 @@ impl Node {
                 ),
             ));
         }
-        let (before, spelled, pre_colon, post_colon, after) = match fragment.trivia {
+        let (mut before, spelled, pre_colon, post_colon, after) = match fragment.trivia {
             Trivia::Member {
                 before,
                 key_raw,
@@ -557,6 +587,10 @@ impl Node {
         let key_raw = spelled
             .filter(|raw| unescaped(raw).as_deref() == Some(key))
             .unwrap_or_else(|| escape(key));
+        if members.is_empty() && !inner.is_empty() {
+            before.insert_str(0, inner);
+            inner.clear();
+        }
         let member = Member {
             before,
             key_raw,
@@ -566,7 +600,6 @@ impl Node {
             node: fragment.node,
             after,
         };
-        let at = at.min(members.len());
         members.insert(at, member);
         Ok(())
     }
@@ -594,14 +627,17 @@ impl Node {
     /// # Errors
     ///
     /// When this node is not an array, or the index is past its end.
+    ///
+    /// The first element put into an empty array takes the array's inside
+    /// trivia in front of it, as [`Node::put_member`] does.
     pub fn put_item(&mut self, index: usize, fragment: Fragment) -> Result<(), Error> {
-        let Value::Array(items, _) = &mut self.value else {
+        let Value::Array(items, inner) = &mut self.value else {
             return Err(Error::at("", "not an array"));
         };
         if index > items.len() {
             return Err(Error::at("", "that index is past the end of the array"));
         }
-        let (before, after) = match fragment.trivia {
+        let (mut before, after) = match fragment.trivia {
             Trivia::Item { before, after }
             | Trivia::Member {
                 before,
@@ -612,6 +648,10 @@ impl Node {
             } => (before, after),
             Trivia::None => (String::new(), String::new()),
         };
+        if items.is_empty() && !inner.is_empty() {
+            before.insert_str(0, inner);
+            inner.clear();
+        }
         items.insert(
             index,
             Item {

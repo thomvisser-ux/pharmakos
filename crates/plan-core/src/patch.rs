@@ -991,6 +991,7 @@ fn exact(document: &mut Document, undo: &Undo) -> Result<Undo, Error> {
                     ),
                 ));
             }
+            let whole = container_undo(document, parent)?;
             let container = resolve_mut(document, parent)?;
             if is_array {
                 let fragment = Fragment::item_from_written(written)
@@ -998,20 +999,14 @@ fn exact(document: &mut Document, undo: &Undo) -> Result<Undo, Error> {
                 container
                     .put_item(*at, fragment)
                     .map_err(|error| at_operation(error, &path))?;
-                Ok(Undo {
-                    path: push_pointer(parent, &at.to_string()),
-                    step: UndoStep::Take,
-                })
+                Ok(put_undo(whole, push_pointer(parent, &at.to_string())))
             } else {
                 let fragment = Fragment::member_from_written(written, &last)
                     .map_err(|error| at_operation(error, &path))?;
                 container
                     .put_member(&last, fragment, *at)
                     .map_err(|error| at_operation(error, &path))?;
-                Ok(Undo {
-                    path,
-                    step: UndoStep::Take,
-                })
+                Ok(put_undo(whole, path))
             }
         }
     }
@@ -1089,14 +1084,19 @@ fn take(document: &mut Document, pointer: &str) -> Result<(Fragment, usize), Err
 fn add(document: &mut Document, pointer: &str, fragment: Fragment) -> Result<Vec<Undo>, Error> {
     let (parent, last) = parent_of(pointer)?;
     let (is_array, len) = shape(document, parent)?;
+    // The first put into an empty container with trivia inside carries that
+    // trivia into what it puts (`Node::put_member`), so taking it out again
+    // would not give the bytes back: the undo swaps the whole container back,
+    // as it was written (S3's `vfyq2`, fix pass 3, item M1).
+    let whole = container_undo(document, parent)?;
     if is_array {
         let index = array_index(&last, len, true).map_err(|message| Error::at(pointer, message))?;
         let container = resolve_mut(document, parent)?;
         container.put_item(index, fragment)?;
-        return Ok(vec![Undo {
-            path: push_pointer(parent, &index.to_string()),
-            step: UndoStep::Take,
-        }]);
+        return Ok(vec![put_undo(
+            whole,
+            push_pointer(parent, &index.to_string()),
+        )]);
     }
     if resolve(document, parent)?.position_of(&last).is_some() {
         // RFC 6902 section 4.1 makes `add` over an existing member a replace,
@@ -1116,10 +1116,34 @@ fn add(document: &mut Document, pointer: &str, fragment: Fragment) -> Result<Vec
     }
     let container = resolve_mut(document, parent)?;
     container.put_member(&last, fragment, len)?;
-    Ok(vec![Undo {
-        path: pointer.to_owned(),
-        step: UndoStep::Take,
-    }])
+    Ok(vec![put_undo(whole, pointer.to_owned())])
+}
+
+/// The undo of one put: the container swapped back whole when
+/// [`container_undo`] found one, else the put member or element at `path`
+/// taken out again.
+fn put_undo(whole: Option<Undo>, path: String) -> Undo {
+    match whole {
+        Some(undo) => undo,
+        None => Undo {
+            path,
+            step: UndoStep::Take,
+        },
+    }
+}
+
+/// The undo of a put into the container at `parent`, when the put changes
+/// more than the slot it fills: an empty container with trivia inside, whose
+/// trivia the put carries along, is swapped back whole, as it was written.
+/// `None` when taking the put member or element out again is exact.
+fn container_undo(document: &Document, parent: &str) -> Result<Option<Undo>, Error> {
+    let container = resolve(document, parent)?;
+    Ok(container.holds_inside_trivia().then(|| Undo {
+        path: parent.to_owned(),
+        step: UndoStep::Swap {
+            written: container.written(),
+        },
+    }))
 }
 
 /// An RFC 6902 array index. `-` means "one past the end", and only `add`

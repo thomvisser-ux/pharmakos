@@ -411,12 +411,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "`index_of` answers whether a token is an RFC 6901 array index; a token that is not one is `None`, its documented answer",
     ),
     (
-        "jsonc.rs",
-        "let at = at.min(members.len());",
-        1,
-        "`put_member`'s documented contract: a position past the end puts the member at the end, as `patch.rs`' caller asks",
-    ),
-    (
         "render.rs",
         "let parsed = (x.parse::<i32>().ok()?, y.parse::<i32>().ok()?);",
         1,
