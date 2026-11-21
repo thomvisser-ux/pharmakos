@@ -879,11 +879,13 @@ impl Default for Snapshot {
 pub(crate) struct Closed<'w>(&'w World);
 
 /// A world that passed [`Snapshot::door`] (between ticks, its graph settled),
-/// held mutably for one thing: a lobby layout. Placing one writes beacon, unit
-/// and Attack rows ([`World::seed_layout`]: `place_beacon`, `set_attack`,
-/// `fabricate`) and opens no tick and edits no voxel, so the world it hands
-/// back is the closed world the door passed, with no second door after the
-/// placement. `a_layout_leaves_the_world_the_door_passed` holds it to that.
+/// held mutably for one thing: a lobby layout. The placement
+/// ([`crate::layout::place`]) is handed only a [`crate::layout::Placement`],
+/// a view whose world is a private field of its own module, exposing the
+/// reads and the constructors placement uses (`place_beacon`, `set_attack`,
+/// `fabricate`), none of which writes the open phase or the repairer. So the
+/// placement cannot unsettle what the door checked, by type, and the world it
+/// hands back is the closed world the door passed, with no second door.
 #[derive(Debug)]
 #[must_use = "a world closed for a layout is laid out with `ClosedForLayout::seed_layout`"]
 pub(crate) struct ClosedForLayout<'w>(&'w mut World);
@@ -901,7 +903,7 @@ impl<'w> ClosedForLayout<'w> {
         settings: &[crate::runner::LayoutSettings],
     ) -> Result<Closed<'w>, crate::runner::LayoutRefused> {
         let world = self.0;
-        world.seed_layout(layout, settings)?;
+        crate::layout::place(crate::layout::Placement::new(&mut *world), layout, settings)?;
         Ok(Closed(world))
     }
 }
