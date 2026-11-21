@@ -950,7 +950,7 @@ mod tests {
                 &format!("\"format_version\": {other}"),
             );
             let error = Save::parse(&text).expect_err("another version");
-            assert_eq!(error.code, Code::InvalidArgument);
+            assert_eq!(error.code(), Code::InvalidArgument);
             assert!(
                 error.message().contains(&format!("format version {other}"))
                     && error.message().contains("reads version 3")
@@ -989,7 +989,7 @@ mod tests {
             seat.handles = table(most.saturating_add(1));
         }
         let error = Save::parse(&written.render()).expect_err("past the bound");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert!(error.message().contains("handles"), "{}", error.message());
     }
 
@@ -1005,7 +1005,7 @@ mod tests {
         let error = elsewhere
             .check(&config(), hash)
             .expect_err("seat 1 is no one's");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert!(error.message().contains("seat 1"), "{}", error.message());
 
         let mut custom = save();
@@ -1017,7 +1017,7 @@ mod tests {
         let error = custom
             .check(&asked, hash)
             .expect_err("a custom match issues none");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert!(error.message().contains("custom"), "{}", error.message());
 
         let mut quiet = save();
@@ -1061,7 +1061,7 @@ mod tests {
         ] {
             assert_ne!(damaged, text, "{what}: the fixture holds what is damaged");
             let error = Save::parse(&damaged).expect_err(what);
-            assert_eq!(error.code, Code::InvalidArgument, "{what}");
+            assert_eq!(error.code(), Code::InvalidArgument, "{what}");
         }
     }
 
@@ -1071,7 +1071,7 @@ mod tests {
             .render()
             .replace("\"format_version\": 3", "\"format_version\": 1");
         let error = Save::parse(&text).expect_err("a pre-S1 save");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert!(
             error.message().contains("format version 1")
                 && error.message().contains("per seat")
@@ -1085,7 +1085,7 @@ mod tests {
     fn text_that_is_not_a_save_is_refused_as_an_argument() {
         for text in ["", "{}", "[]", "{\"format\": \"something else\"}"] {
             let error = Save::parse(text).expect_err("not a save");
-            assert_eq!(error.code, Code::InvalidArgument, "{text}");
+            assert_eq!(error.code(), Code::InvalidArgument, "{text}");
         }
     }
 
@@ -1146,7 +1146,7 @@ mod tests {
         ];
         for (field, asked) in variants {
             let error = saved.check(&asked, 0x0123_4567_89ab_cdef).expect_err(field);
-            assert_eq!(error.code, Code::InvalidArgument, "{field}");
+            assert_eq!(error.code(), Code::InvalidArgument, "{field}");
             assert!(
                 error.message().contains(field),
                 "{field}: {}",

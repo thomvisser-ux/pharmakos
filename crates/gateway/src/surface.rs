@@ -4341,7 +4341,7 @@ mod tests {
         );
         let unexplained = settlement(&[(0, 95)], 0);
         match unexplained.band(&rules(), SeatId::new(0)) {
-            Err(super::BandError::Gateway(error)) => assert_eq!(error.code, Code::Internal),
+            Err(super::BandError::Gateway(error)) => assert_eq!(error.code(), Code::Internal),
             other => panic!("a missing credit with no loss is INTERNAL, and it was {other:?}"),
         }
         // A seat whose own credit is missing was not settled: no band.
@@ -4689,7 +4689,7 @@ mod tests {
         let other = surface
             .seat_state(Subject::Seat(SeatId::new(1)), SeatId::new(0))
             .expect_err("not its own");
-        assert_eq!(other.code, Code::ForbiddenScope);
+        assert_eq!(other.code(), Code::ForbiddenScope);
     }
 
     #[test]
@@ -4698,7 +4698,7 @@ mod tests {
         let error = surface
             .seat_state(Subject::Seat(SeatId::new(7)), SeatId::new(7))
             .expect_err("no such seat");
-        assert_eq!(error.code, Code::NotFound);
+        assert_eq!(error.code(), Code::NotFound);
     }
 
     #[test]
@@ -4711,7 +4711,7 @@ mod tests {
             &[SeatId::new(0)],
         )
         .expect_err("refused");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
     }
 
     fn sim_event(
@@ -4796,7 +4796,7 @@ mod tests {
         use pharmakos_sim::events::EventKind;
         let error = Surface::audience_of(&sim_event(EventKind::StepStarted, None))
             .expect_err("nobody to show it to");
-        assert_eq!(error.code, Code::Internal);
+        assert_eq!(error.code(), Code::Internal);
     }
 
     /// A two-seat match on the golden seed, hosted and in its opening Lull.
@@ -4868,7 +4868,7 @@ mod tests {
         let error = hosted()
             .resume(host(), &saved, continuation)
             .expect_err("already hosting");
-        assert_eq!(error.code, Code::Internal);
+        assert_eq!(error.code(), Code::Internal);
         assert!(error.message().contains("once"), "{}", error.message());
 
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -4890,7 +4890,7 @@ mod tests {
         .expect("a surface")
         .resume(host(), &saved, continuation)
         .expect_err("another rules table");
-        assert_eq!(error.code, Code::Internal);
+        assert_eq!(error.code(), Code::Internal);
         assert_eq!(
             error.message(),
             "this surface was made with a rules table other than the one the save's host \
@@ -5461,7 +5461,7 @@ mod tests {
         let mut event = sim_event(pharmakos_sim::events::EventKind::BeaconDestroyed, Some(1));
         event.at = None;
         let refused = Surface::audience_of(&event).expect_err("refused");
-        assert_eq!(refused.code, Code::Internal);
+        assert_eq!(refused.code(), Code::Internal);
         assert!(
             refused.message().contains("no place"),
             "{}",
@@ -5927,7 +5927,7 @@ mod tests {
         assert!(crate::serve::Announce::parse("9500\tm-0001\tadmin-token\t-\n").is_ok());
         let refused =
             crate::serve::Announce::parse("9500\tm-0001\tadmin-token\n").expect_err("refused");
-        assert_eq!(refused.code, Code::InvalidArgument);
+        assert_eq!(refused.code(), Code::InvalidArgument);
     }
 
     /// R1 on #128's reviews: a seat's `e_NN` names, and every report that
@@ -6602,7 +6602,7 @@ mod tests {
                 &request("resolve_refs", "{}"),
             )
             .expect_err("a preview of the frozen world in a Push");
-        assert_eq!(error.code, Code::PhaseClosed);
+        assert_eq!(error.code(), Code::PhaseClosed);
         assert!(
             error.message().contains("reads the frozen world"),
             "the handler's own refusal: {}",

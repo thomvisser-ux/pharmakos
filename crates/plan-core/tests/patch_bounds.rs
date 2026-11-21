@@ -39,7 +39,7 @@ const MINIMAL: &str = concat!(
 fn bound_of(text: &str, patch: &str) -> Option<Bound> {
     match patch_text(text, patch) {
         Ok(_) => None,
-        Err(error) => error.bound,
+        Err(error) => error.bound(),
     }
 }
 
@@ -212,7 +212,7 @@ fn no_seeded_patch_grows_a_document_past_the_cap() {
                     assert!(inverse.chars().count() <= 2 * MAX_PLAYBOOK_CHARS);
                 }
                 Err(error) => {
-                    if error.bound == Some(Bound::Size) {
+                    if error.bound() == Some(Bound::Size) {
                         refused_by_size += 1;
                     }
                 }
@@ -345,7 +345,7 @@ fn the_reviews_legal_patches_apply_and_the_cap_is_on_the_work() {
     // carry the value thirty-two times, past what an inverse may hold.
     let refused = patch_text(document, &churn).expect_err("32 add/remove pairs");
     assert_eq!(
-        refused.bound,
+        refused.bound(),
         Some(pharmakos_plan_core::error::Bound::Inverse)
     );
 
@@ -365,12 +365,12 @@ fn a_refusal_names_the_limit_it_met() {
     let document = "{\"meta\":{\"title\":\"t\"}}";
     let past = format!("[{}]", " ".repeat(MAX_PATCH_TEXT_CHARS));
     let refused = patch_text(document, &past).expect_err("past the work bound");
-    assert_eq!(refused.bound, Some(Bound::PatchText));
+    assert_eq!(refused.bound(), Some(Bound::PatchText));
     assert!(refused.message().contains("work"), "{}", refused.message());
     let tests: Vec<&str> = (0..=MAX_PATCH_OPERATIONS)
         .map(|_| r#"{"op":"test","path":"/meta/title","value":"t"}"#)
         .collect();
     let many = format!("[{}]", tests.join(","));
     let refused = patch_text(document, &many).expect_err("past the operation count");
-    assert_eq!(refused.bound, Some(Bound::Operations));
+    assert_eq!(refused.bound(), Some(Bound::Operations));
 }

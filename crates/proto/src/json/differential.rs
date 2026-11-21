@@ -999,9 +999,9 @@ fn a_field_under_both_names_and_padding_alone_are_refused() {
         &read(r#"{"on_death":{},"onDeath":{}}"#).unwrap(),
     )
     .unwrap_err();
-    assert_eq!(error.pointer, "/onDeath");
+    assert_eq!(error.pointer(), "/onDeath");
     assert_eq!(
-        error.message,
+        error.message(),
         "`on_death` and `onDeath` both name the field `on_death`. A field is written once, \
          under one of its names."
     );

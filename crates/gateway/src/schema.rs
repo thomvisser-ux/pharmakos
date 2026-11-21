@@ -454,12 +454,12 @@ mod tests {
         let whole = defs(&document("").expect("a document")).len();
         assert!(defs(&slice).len() < whole, "a slice is smaller");
         assert_eq!(
-            document("STEP").expect_err("refused").code,
+            document("STEP").expect_err("refused").code(),
             Code::InvalidArgument,
             "a part is lower case"
         );
         assert_eq!(
-            document("no_such_message").expect_err("refused").code,
+            document("no_such_message").expect_err("refused").code(),
             Code::NotFound
         );
     }

@@ -730,7 +730,7 @@ mod tests {
     fn a_missing_variable_is_an_error_and_never_a_fallback() {
         for os in [Os::Windows, Os::Linux, Os::Macos] {
             let error = data_root(env(&[]), os).expect_err("no variable");
-            assert_eq!(error.code, Code::Internal);
+            assert_eq!(error.code(), Code::Internal);
             assert!(
                 error.message().contains("beside its own executable"),
                 "{}",
@@ -762,7 +762,7 @@ mod tests {
     fn a_folder_with_a_save_is_reopened_and_never_opened_new() {
         let root = scratch("reopen");
         let error = MatchCache::reopen(&root, "m-0004").expect_err("nothing saved yet");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
 
         let cache = MatchCache::open(&root, "m-0004", &header(4)).expect("opened");
         assert!(!cache.has_save());
@@ -777,7 +777,7 @@ mod tests {
             std::fs::read_to_string(cache.directory().join("match.json")).expect("header");
 
         let error = MatchCache::open(&root, "m-0004", &header(4)).expect_err("saved");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert!(error.message().contains("resume"), "{}", error.message());
 
         let again = MatchCache::reopen(&root, "m-0004").expect("reopened");
@@ -850,7 +850,7 @@ mod tests {
         ] {
             assert!(!MatchCache::valid_match_id(id), "`{id}` should be refused");
             let error = MatchCache::open(&root, id, &header(0)).expect_err("refused");
-            assert_eq!(error.code, Code::InvalidArgument, "`{id}`");
+            assert_eq!(error.code(), Code::InvalidArgument, "`{id}`");
         }
         assert!(MatchCache::valid_match_id("m-0001"));
         assert!(!MatchCache::valid_match_id(&"m".repeat(65)));
@@ -923,7 +923,7 @@ mod tests {
         text.push_str("not a record\n");
         std::fs::write(&path, text).expect("damaged");
         let refused = cache.continuation().expect_err("refused");
-        assert_eq!(refused.code, crate::error::Code::Internal);
+        assert_eq!(refused.code(), crate::error::Code::Internal);
         assert!(
             refused.message().contains("line 3"),
             "{}",

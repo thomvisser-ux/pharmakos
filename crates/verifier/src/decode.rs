@@ -292,21 +292,21 @@ fn named_reserved(value: &Json, out: &mut Builder) -> bool {
 /// token is the document itself, which no unknown field can be: that error is
 /// `E0001`'s.
 fn refuse(error: &json::Error, out: &mut Builder) {
-    let unknown = (error.kind == json::ErrorKind::UnknownField)
-        .then(|| pointer::last_token(&error.pointer))
+    let unknown = (error.kind() == json::ErrorKind::UnknownField)
+        .then(|| pointer::last_token(error.pointer()))
         .flatten();
     if let Some(name) = unknown {
         out.emit(
-            Diag::new("E0002", error.pointer.clone())
+            Diag::new("E0002", error.pointer().to_owned())
                 .arg_text("field", &name)
                 .fix(
                     pharmakos_proto::said!("Delete `{}`", quoted(&name)),
-                    patch_remove(&error.pointer),
+                    patch_remove(error.pointer()),
                     Applicability::MaybeIncorrect,
                 ),
         );
     } else {
-        out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", error.said()));
+        out.emit(Diag::new("E0001", error.pointer().to_owned()).arg("detail", error.said()));
     }
 }
 
@@ -545,15 +545,15 @@ mod tests {
         // Its kind is still `Value`, and only `UnknownField` is `E0002`.
         let unknown = json::decode::<pharmakos_proto::gp::v1::Meta>(r#"{"wombat":1}"#)
             .expect_err("an unknown field is refused");
-        assert_eq!(unknown.kind, ErrorKind::UnknownField);
+        assert_eq!(unknown.kind(), ErrorKind::UnknownField);
         let quoted =
             json::decode::<pharmakos_proto::gp::v1::Meta>(r#"{"author_kind":"is not a field"}"#)
                 .expect_err("an unknown enum value is refused");
-        assert_eq!(quoted.kind, ErrorKind::Value);
+        assert_eq!(quoted.kind(), ErrorKind::Value);
         assert!(
-            quoted.message.contains("is not a field"),
+            quoted.message().contains("is not a field"),
             "{}",
-            quoted.message
+            quoted.message()
         );
     }
 }

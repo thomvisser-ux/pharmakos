@@ -494,7 +494,7 @@ fn undoing_a_remove_beside_the_other_spelling_restores_it() {
 fn a_tilde_not_followed_by_zero_or_one_is_refused() {
     for pointer in ["/a~2", "/a~", "/~x/b"] {
         assert_eq!(
-            split_pointer(pointer).map_err(|error| error.malformed),
+            split_pointer(pointer).map_err(|error| error.malformation()),
             Err(Some(pharmakos_plan_core::error::Malformed::PointerEscape)),
             "{pointer}"
         );
@@ -509,7 +509,7 @@ fn a_tilde_not_followed_by_zero_or_one_is_refused() {
                 .and_then(|patch| apply(&document, &patch).map(|_| ()))
                 .expect_err("an escape RFC 6901 does not have");
             assert_eq!(
-                refused.malformed,
+                refused.malformation(),
                 Some(pharmakos_plan_core::error::Malformed::PointerEscape),
                 "{patch}: {refused:?}"
             );

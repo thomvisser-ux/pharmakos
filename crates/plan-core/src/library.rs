@@ -654,7 +654,7 @@ mod tests {
             }],
         )
         .expect_err("there is no ninth step");
-        assert!(!error.pointer.is_empty());
+        assert!(!error.pointer().is_empty());
     }
 
     #[test]
@@ -715,7 +715,7 @@ mod tests {
     fn a_declaration_that_points_at_nothing_is_refused() {
         let broken = DECLARING.replace("/fallback/hold/at", "/fallback/shadow");
         let error = super::declared(&broken).expect_err("points at nothing");
-        assert_eq!(error.pointer, "/meta/parameters/1/pointer");
+        assert_eq!(error.pointer(), "/meta/parameters/1/pointer");
     }
 
     #[test]

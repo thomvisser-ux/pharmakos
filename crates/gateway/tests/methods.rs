@@ -805,7 +805,7 @@ fn a_second_seats_token_sees_neither_playbook_nor_draft_nor_notebook_nor_replay(
         let refused = surface
             .seat_state(subject, SeatId::new(0))
             .expect_err("refused");
-        assert_eq!(refused.code, Code::ForbiddenScope, "{who}");
+        assert_eq!(refused.code(), Code::ForbiddenScope, "{who}");
     }
 
     // The sealed playbook -- the private replay's other half -- is the same
@@ -814,11 +814,11 @@ fn a_second_seats_token_sees_neither_playbook_nor_draft_nor_notebook_nor_replay(
     let error = surface
         .sealed_plan(Subject::Seat(SeatId::new(1)), SeatId::new(0))
         .expect_err("refused");
-    assert_eq!(error.code, Code::ForbiddenScope);
+    assert_eq!(error.code(), Code::ForbiddenScope);
     let error = surface
         .sealed_plan(Subject::Seat(SeatId::new(1)), SeatId::new(1))
         .expect_err("nothing sealed");
-    assert_eq!(error.code, Code::NoQualifyingPlan);
+    assert_eq!(error.code(), Code::NoQualifyingPlan);
 }
 
 // ---------------------------------------------------------------------------

@@ -163,18 +163,20 @@ fn an_overlong_integer_is_out_of_range() {
         ),
     ] {
         let error = json::decode::<SurveySettings>(text).expect_err(kind);
-        assert_eq!(error.kind, json::ErrorKind::Integer, "{kind}");
+        assert_eq!(error.kind(), json::ErrorKind::Integer, "{kind}");
         assert!(
-            error.message.contains("out of range"),
+            error.message().contains("out of range"),
             "{kind}: {}",
-            error.message
+            error.message()
         );
     }
     let negative = json::decode::<SurveySettings>(r#"{"scout_count":-1}"#).expect_err("-1");
     assert!(
-        negative.message.contains("not a non-negative whole number"),
+        negative
+            .message()
+            .contains("not a non-negative whole number"),
         "{}",
-        negative.message
+        negative.message()
     );
 }
 

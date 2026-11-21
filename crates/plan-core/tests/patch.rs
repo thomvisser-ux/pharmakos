@@ -464,7 +464,7 @@ fn a_field_written_twice_is_told_by_field_and_count_not_by_pointer() {
         "{}",
         error.message()
     );
-    assert_eq!(error.pointer, "/declarative/handlers/1");
+    assert_eq!(error.pointer(), "/declarative/handlers/1");
 
     // A file that already writes both spellings is edited as written: the
     // pointer's own spelling is the member it addresses.

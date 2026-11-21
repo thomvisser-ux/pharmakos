@@ -59,7 +59,7 @@ fn reference_hand_over(text: &str) -> Handed {
         Err(refused) => {
             let blanked = blank_comments(text).expect("blanked");
             let at = refused
-                .pointer
+                .pointer()
                 .strip_prefix("/byte/")
                 .map(|offset| offset.parse::<usize>().expect("a byte offset"));
             Handed::Blanked(match at {
@@ -96,10 +96,10 @@ fn lean_hand_over(text: &str) -> Handed {
 fn readers_agree(what: &str, text: &str) {
     let jsonc = Document::parse(text)
         .map(|_| ())
-        .map_err(|error| (error.pointer.clone(), error.message().to_owned()));
+        .map_err(|error| (error.pointer().to_owned(), error.message().to_owned()));
     let codec = json::read(&blank_comments(text).expect("blanked"))
         .map(|_| ())
-        .map_err(|error| (error.pointer, error.message));
+        .map_err(|error| (error.pointer().to_owned(), error.message().to_owned()));
     if jsonc != codec {
         let shown: String = text.chars().take(400).collect();
         panic!(
@@ -156,7 +156,7 @@ fn decode_agrees(what: &str, text: &str) {
     let lean = super::decode_jsonc(text);
     if pharmakos_verifier::is_too_long(text) {
         assert_eq!(
-            lean.map_err(|error| error.bound),
+            lean.map_err(|error| error.bound()),
             Err(Some(crate::error::Bound::Size)),
             "{what}: past the cap"
         );
@@ -173,8 +173,8 @@ fn decode_agrees(what: &str, text: &str) {
             );
         }
         (Err(lean), Err(chain)) => assert_eq!(
-            (&lean.pointer, lean.message()),
-            (&chain.pointer, chain.message()),
+            (lean.pointer(), lean.message()),
+            (chain.pointer(), chain.message()),
             "{what}: the refusal"
         ),
         _ => panic!("{what}: decode_jsonc answers {lean:?}, the JSONC chain {chain:?}"),
@@ -1021,7 +1021,7 @@ fn an_unclosed_block_comment_is_refused_where_it_opens() {
         let pointer = format!("/byte/{open}");
         let refused = Document::parse(&text).expect_err(what);
         assert_eq!(
-            (refused.pointer.as_str(), refused.message()),
+            (refused.pointer(), refused.message()),
             (pointer.as_str(), message),
             "{what}"
         );
@@ -1073,7 +1073,7 @@ fn a_leading_zero_is_refused_by_both() {
     let at = MINIMAL.find("\"ms\":1000").expect("a hold") + "\"ms\":0".len();
     let refused = Document::parse(&text).expect_err("a leading zero");
     assert_eq!(
-        (refused.pointer.clone(), refused.message().to_owned()),
+        (refused.pointer().to_owned(), refused.message().to_owned()),
         (
             format!("/byte/{at}"),
             "a number with a leading zero".to_owned()

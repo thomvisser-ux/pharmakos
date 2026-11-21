@@ -452,17 +452,17 @@ fn a_value_with_presence_survives_canonicalisation() {
 fn an_unknown_field_is_rejected_not_ignored() {
     let text = r#"{"schema_version":{"major":1,"minor":0},"pace_of_advance":"BRISK"}"#;
     let error = json::decode::<Playbook>(text).expect_err("an unknown field must be rejected");
-    assert_eq!(error.pointer, "/pace_of_advance");
+    assert_eq!(error.pointer(), "/pace_of_advance");
     assert!(
-        error.message.contains("not a field"),
+        error.message().contains("not a field"),
         "the message should say what is wrong: {}",
-        error.message
+        error.message()
     );
 
     // And nested, with a pointer that names the place.
     let nested = r#"{"declarative":{"route":[{"label":"a","dash":{}}]}}"#;
     let error = json::decode::<Playbook>(nested).expect_err("rejected");
-    assert_eq!(error.pointer, "/declarative/route/0/dash");
+    assert_eq!(error.pointer(), "/declarative/route/0/dash");
 }
 
 #[test]
@@ -470,9 +470,9 @@ fn two_members_of_one_oneof_are_rejected() {
     let text = r#"{"declarative":{"route":[{"label":"a","hold":{"ms":1},"move":{}}]}}"#;
     let error = json::decode::<Playbook>(text).expect_err("a double-set oneof must be rejected");
     assert!(
-        error.message.contains("oneof"),
+        error.message().contains("oneof"),
         "the message should say so: {}",
-        error.message
+        error.message()
     );
 }
 
@@ -480,7 +480,7 @@ fn two_members_of_one_oneof_are_rejected() {
 fn an_unknown_enum_value_is_rejected() {
     let text = r#"{"meta":{"author_kind":"ROBOT"}}"#;
     let error = json::decode::<Playbook>(text).expect_err("an unknown enum value is rejected");
-    assert_eq!(error.pointer, "/meta/author_kind");
+    assert_eq!(error.pointer(), "/meta/author_kind");
 }
 
 #[test]
@@ -489,7 +489,7 @@ fn a_fractional_number_is_rejected() {
     // fractional literal could mean.
     let text = r#"{"declarative":{"route":[{"label":"a","timeout_ms":1.5}]}}"#;
     let error = json::decode::<Playbook>(text).expect_err("a fractional duration is rejected");
-    assert_eq!(error.pointer, "/declarative/route/0/timeout_ms");
+    assert_eq!(error.pointer(), "/declarative/route/0/timeout_ms");
 }
 
 // ---------------------------------------------------------------------------

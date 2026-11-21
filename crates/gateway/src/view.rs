@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(hp_wire(Hp::new(250)).expect("fits"), 250);
         assert_eq!(hp_wire(Hp::ZERO).expect("fits"), 0);
         let below = hp_wire(Hp::new(-1)).expect_err("refused");
-        assert_eq!(below.code, Code::Internal);
+        assert_eq!(below.code(), Code::Internal);
         assert!(
             below.message().contains("-1 hit points"),
             "{}",
@@ -282,7 +282,7 @@ mod tests {
         );
         let past = dollars_wire(Money::new(i64::from(i32::MAX) + 1), "value destroyed")
             .expect_err("refused");
-        assert_eq!(past.code, Code::Internal);
+        assert_eq!(past.code(), Code::Internal);
         assert!(
             past.message()
                 .starts_with("value destroyed is $ 2147483648"),
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(mandate_from_id(4).ok(), Some(MandateKind::Mine));
         assert_eq!(mandate_from_id(0).ok(), Some(MandateKind::None));
         assert_eq!(
-            mandate_from_id(200).map_err(|error| error.code),
+            mandate_from_id(200).map_err(|error| error.code()),
             Err(crate::error::Code::Internal)
         );
         assert_eq!(mandate_name(MandateKind::Build), "Build");

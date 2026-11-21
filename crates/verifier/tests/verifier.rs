@@ -1131,7 +1131,7 @@ fn report_hash_moves_when_the_rules_table_moves() {
         Depth::Full,
     );
 
-    let mut message = rules.message().clone();
+    let mut message = rules.message().to_owned();
     message.note.push_str(" (moved for a test)");
     let other_rules = RulesTable::from_message(&message).expect("a rules table");
     assert_ne!(rules.rules_hash(), other_rules.rules_hash());
@@ -1386,12 +1386,12 @@ fn the_codec_still_says_what_this_crate_reads() {
     let error = json::decode::<pharmakos_proto::gp::v1::Playbook>("{\"nonsense\":1}")
         .expect_err("an unknown field is rejected");
     assert_eq!(
-        error.kind,
+        error.kind(),
         json::ErrorKind::UnknownField,
         "{}",
-        error.message
+        error.message()
     );
-    assert_eq!(error.pointer, "/nonsense");
+    assert_eq!(error.pointer(), "/nonsense");
 
     let report = report_for("e0002_unknown_field", Depth::Full);
     let first = report.diagnostics.first().expect("one diagnostic");
@@ -1564,7 +1564,7 @@ fn the_snapshot_fixture_is_a_snapshot() {
 #[test]
 fn a_missing_rules_block_is_refused_rather_than_defaulted() {
     let rules = rules();
-    let mut message = rules.message().clone();
+    let mut message = rules.message().to_owned();
     message.interface_times = None;
     let gapped = RulesTable::from_message(&message).expect("the sim's own view still builds");
     let scope = fixture_scope();
@@ -1733,7 +1733,7 @@ fn a_wall_box_is_an_area_and_belongs_to_a_wall() {
 fn which_missing_blocks_the_sim_refuses_first_is_measured() {
     use pharmakos_proto::gp::v1::RulesTable as Message;
     type Clear = fn(&mut Message);
-    let committed = rules().message().clone();
+    let committed = rules().message().to_owned();
     let cases: &[(&str, Clear)] = &[
         ("verifier", |m| m.verifier = None),
         ("map", |m| m.map = None),

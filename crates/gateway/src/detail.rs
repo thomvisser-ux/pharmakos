@@ -192,12 +192,12 @@ mod tests {
         assert_eq!(
             of(&request(r#"{"detail":"verbose"}"#))
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::InvalidArgument,
             "a budget the gateway ignored would be read as a complete answer"
         );
         assert_eq!(
-            of(&request(r#"{"detail":3}"#)).expect_err("refused").code,
+            of(&request(r#"{"detail":3}"#)).expect_err("refused").code(),
             Code::InvalidArgument
         );
     }

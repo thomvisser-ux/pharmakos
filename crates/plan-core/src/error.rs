@@ -21,15 +21,17 @@ use pharmakos_proto::json::grammar::Said;
 pub struct Error {
     /// Where the problem is, as an RFC 6901 JSON Pointer — `""` for the root,
     /// `/declarative/route/0/move` for a step's move, `/byte/412` for a syntax
-    /// error that has no place in the tree.
-    pub pointer: String,
+    /// error that has no place in the tree. Every field is private (S3's
+    /// `vfyq2`, fix pass 4b, item L-b): a public one could be written after
+    /// the constructor, so a caller reads through the getters.
+    pub(crate) pointer: String,
 
     /// The bound that refused it, when one did: a caller tells a refusal by
     /// its bound, never by reading the message.
-    pub bound: Option<Bound>,
+    pub(crate) bound: Option<Bound>,
     /// What was malformed in a patch or a pointer, when that is why: a caller
     /// tells it by this, never by reading the message.
-    pub malformed: Option<Malformed>,
+    pub(crate) malformed: Option<Malformed>,
     /// The message as it was said: only this crate's constructors, which
     /// take a [`Said`], make an `Error` (the field is the crate's, so no other
     /// crate can write one), so [`Error::said`] is never a caller's raw text
@@ -142,6 +144,26 @@ impl Error {
     #[must_use]
     pub fn message(&self) -> &str {
         self.said.as_str()
+    }
+
+    /// Where the problem is, as an RFC 6901 JSON Pointer: `""` for the root,
+    /// `/byte/NNN` for a syntax error.
+    #[must_use]
+    pub fn pointer(&self) -> &str {
+        &self.pointer
+    }
+
+    /// The bound that refused it, when one did: a caller tells a refusal by
+    /// this, never by reading the message.
+    #[must_use]
+    pub const fn bound(&self) -> Option<Bound> {
+        self.bound
+    }
+
+    /// What was malformed in a patch or a pointer, when that is why.
+    #[must_use]
+    pub const fn malformation(&self) -> Option<Malformed> {
+        self.malformed
     }
 
     /// The message, as text a person is shown.
@@ -279,10 +301,10 @@ impl From<pharmakos_proto::json::Error> for Error {
     fn from(error: pharmakos_proto::json::Error) -> Self {
         // A nesting refusal keeps its kind as a bound (S3's `vfyq2`, fix pass
         // 4, item L-e), so a caller tells it by the bound.
-        if error.kind == pharmakos_proto::json::ErrorKind::Depth {
-            return Self::bounded(Bound::Depth, error.pointer.clone(), error.said());
+        if error.kind() == pharmakos_proto::json::ErrorKind::Depth {
+            return Self::bounded(Bound::Depth, error.pointer().to_owned(), error.said());
         }
-        Self::at(error.pointer.clone(), error.said())
+        Self::at(error.pointer().to_owned(), error.said())
     }
 }
 
@@ -449,8 +471,8 @@ mod tests {
             pharmakos_proto::json::decode::<pharmakos_proto::gp::v1::Playbook>("{\"a/b~c\":1}")
                 .map(|_decoded| ())
                 .expect_err("`a/b~c` is not a field of gp.v1.Playbook");
-        assert_eq!(error.pointer, push_pointer("", "a/b~c"));
-        assert_eq!(error.pointer, "/a~1b~0c");
+        assert_eq!(error.pointer(), push_pointer("", "a/b~c"));
+        assert_eq!(error.pointer(), "/a~1b~0c");
     }
 
     /// Decisions-log item 145 (5): every `Input::new` error used to read "the

@@ -608,7 +608,7 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
             for (index, undo) in undos.iter().enumerate() {
                 let operation = format!("/{index}");
                 let mut next = vec![exact(&mut working, undo).map_err(|error| {
-                    let coded = if error.malformed.is_none() && error.bound.is_none() {
+                    let coded = if error.malformation().is_none() && error.bound().is_none() {
                         Error::malformed(Malformed::UndoTarget, "", error.said())
                     } else {
                         error
@@ -1320,7 +1320,7 @@ mod tests {
         let document = Document::parse(FILE).expect("a document");
         let patch = Patch::from_text(r#"[{"op":"test","path":"/a","value":2}]"#).expect("a patch");
         let error = apply(&document, &patch).expect_err("the test does not hold");
-        assert_eq!(error.pointer, "/a");
+        assert_eq!(error.pointer(), "/a");
     }
 
     #[test]

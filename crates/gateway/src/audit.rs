@@ -230,7 +230,13 @@ impl AuditLog {
         action: impl Into<String>,
         error: &Error,
     ) -> u64 {
-        self.record(tick, subject, handle, action, Outcome::Refused(error.code))
+        self.record(
+            tick,
+            subject,
+            handle,
+            action,
+            Outcome::Refused(error.code()),
+        )
     }
 
     /// Everything retained, oldest first.

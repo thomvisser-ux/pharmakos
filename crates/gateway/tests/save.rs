@@ -549,7 +549,7 @@ fn a_handle_table_naming_the_seats_own_beacon_is_refused() {
         seat.handles = vec![(core.raw(), String::from("e_01"))];
     }
     let error = resume(MATCH_ID, &damaged).expect_err("its own beacon");
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert!(
         error.message().contains("its own beacon"),
         "{}",
@@ -590,7 +590,7 @@ fn a_damaged_seal_in_a_save_is_refused() {
     assert_ne!(text, seal.playbook_jsonc, "the text was damaged");
     seal.playbook_jsonc = text;
     let error = resume(MATCH_ID, &damaged).expect_err("a damaged seal");
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert!(
         error.message().contains("fingerprint"),
         "{}",
@@ -606,7 +606,7 @@ fn a_damaged_seal_in_a_save_is_refused() {
         .expect("seat 1 sealed");
     seal.plan_fingerprint ^= 1;
     let error = resume(MATCH_ID, &damaged).expect_err("a damaged fingerprint");
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert!(error.message().contains("seat 1"), "{}", error.message());
 
     // And a planning snapshot that is not the saved one does not resume.
@@ -615,7 +615,7 @@ fn a_damaged_seal_in_a_save_is_refused() {
         *byte ^= 0xff;
     }
     let error = resume(MATCH_ID, &damaged).expect_err("a damaged snapshot");
-    assert_eq!(error.code, Code::InvalidArgument, "{}", error.message());
+    assert_eq!(error.code(), Code::InvalidArgument, "{}", error.message());
 }
 
 /// A restored seal is decoded once (S3's `vfyq2`, fix pass 2, item F), and
@@ -648,7 +648,7 @@ fn every_refusal_of_a_restored_seal_keeps_its_code_and_words() {
 
     // No canonical form: the decode's own words, inside the save's.
     let error = with_seat_zero("{\"meta\": ", None);
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     let decoded = pharmakos_plan_core::decode_jsonc("{\"meta\": ")
         .expect_err("no canonical form")
         .message()
@@ -671,7 +671,7 @@ fn every_refusal_of_a_restored_seal_keeps_its_code_and_words() {
     let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
         .expect("a fingerprint");
     let error = with_seat_zero(&text, Some(fingerprint ^ 1));
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert_eq!(
         error.message(),
         format!(
@@ -686,7 +686,7 @@ fn every_refusal_of_a_restored_seal_keeps_its_code_and_words() {
     // A text whose fingerprint matches and which will not compile: a
     // condition on a step label the route does not have.
     let error = with_seat_zero(&text, Some(fingerprint));
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     let compiled =
         pharmakos_sim::interpreter::Plan::compile(canonical.decoded().message(), &support::rules())
             .expect_err("an unknown label");
@@ -734,7 +734,7 @@ fn a_restored_seals_compile_refusal_quotes_the_label() {
     seal.playbook_jsonc = text;
     seal.plan_fingerprint = fingerprint;
     let error = resume(MATCH_ID, &damaged).expect_err("refused");
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     for raw in ['\u{1b}', '\u{7}', '\u{202e}'] {
         assert!(!error.message().contains(raw), "{:?}", error.message());
     }
@@ -800,7 +800,7 @@ fn a_fourth_seat_is_refused() {
     for seats in [0_u32, 4, 99] {
         let line = format!("m-t17-seats\t0x1\t{seats}\t-\t-\t2\tcustom\n");
         let error = Config::parse(&line).expect_err("refused");
-        assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
+        assert_eq!(error.code(), Code::InvalidArgument, "{seats} seats");
         let error = Host::open_from(
             &rules_json(),
             SEED,
@@ -812,7 +812,7 @@ fn a_fourth_seat_is_refused() {
             None,
         )
         .expect_err("refused");
-        assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
+        assert_eq!(error.code(), Code::InvalidArgument, "{seats} seats");
         assert!(
             error.message().contains("between 1 and 3"),
             "{}",
@@ -830,7 +830,7 @@ fn a_fourth_seat_is_refused() {
             },
         };
         let error = Host::open(&world, None).expect_err("refused by Host::open too");
-        assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
+        assert_eq!(error.code(), Code::InvalidArgument, "{seats} seats");
         assert!(
             error.message().contains("between 1 and 3"),
             "{}",

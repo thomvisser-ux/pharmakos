@@ -208,7 +208,7 @@ mod tests {
         }
         for other in ["", "Probation", "casual", "resume", "-"] {
             let error = Preset::parse(other).expect_err("not a preset");
-            assert_eq!(error.code, Code::InvalidArgument, "{other}");
+            assert_eq!(error.code(), Code::InvalidArgument, "{other}");
             assert!(error.message().contains("probation"), "{}", error.message());
         }
         assert!(Preset::Probation.untimed_lulls());
@@ -231,7 +231,7 @@ mod tests {
         );
         for other in ["", "FIRST_LICENCE", "first_licences", "licence"] {
             assert_eq!(
-                Memo::parse(other).expect_err("not a memo").code,
+                Memo::parse(other).expect_err("not a memo").code(),
                 Code::InvalidArgument,
                 "{other}"
             );

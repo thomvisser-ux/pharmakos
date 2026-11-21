@@ -992,7 +992,7 @@ mod tests {
             ),
         ] {
             let error = Host::check_settings(&settings).expect_err("refused");
-            assert_eq!(error.code, Code::InvalidArgument);
+            assert_eq!(error.code(), Code::InvalidArgument);
             assert!(error.message().contains(expected), "{}", error.message());
         }
     }
@@ -1071,7 +1071,7 @@ mod tests {
             .seal_plans(vec![(SeatId::new(0), plan.clone())])
             .expect_err("a Push does not");
         assert_eq!(
-            error.code,
+            error.code(),
             Code::Internal,
             "a host that seals late is a bug"
         );
@@ -1105,7 +1105,7 @@ mod tests {
                 (SeatId::new(2), plan),
             ])
             .expect_err("a seat this match has not got");
-        assert_eq!(error.code, Code::Internal);
+        assert_eq!(error.code(), Code::Internal);
         assert!(error.message().contains("no seat 2"), "{}", error.message());
         assert!(
             host.world().interpreter().plan(0).is_none(),
@@ -1243,7 +1243,7 @@ mod seams {
         }
         assert!(host.runner().tick_is_open());
         assert_eq!(
-            host.step().map_err(|error| error.code),
+            host.step().map_err(|error| error.code()),
             Err(Code::Internal),
             "no whole-tick step over an open tick"
         );
@@ -1252,7 +1252,7 @@ mod seams {
             "no capture of half a tick"
         );
         assert_eq!(
-            host.check_savable().map_err(|error| error.code),
+            host.check_savable().map_err(|error| error.code()),
             Err(Code::Internal),
             "no save of half a tick"
         );
@@ -1273,7 +1273,7 @@ mod seams {
         assert!(host.check_savable().is_ok(), "a quiet Lull saves");
         assert!(host.file_damage(hit()).is_ok());
         assert_eq!(
-            host.check_savable().map_err(|error| error.code),
+            host.check_savable().map_err(|error| error.code()),
             Err(Code::Internal),
             "a save would lose the order the host filed"
         );
@@ -1292,7 +1292,7 @@ mod seams {
             round_limit: 1,
         };
         assert_eq!(
-            Host::check_settings(&settings).map_err(|error| error.code),
+            Host::check_settings(&settings).map_err(|error| error.code()),
             Err(Code::InvalidArgument)
         );
     }
@@ -1311,7 +1311,7 @@ mod seams {
         let beacons = lobby.world().beacons().len();
         let units = lobby.world().units().len();
         assert_eq!(
-            lobby.seed_layout(&layout(7)).map_err(|error| error.code),
+            lobby.seed_layout(&layout(7)).map_err(|error| error.code()),
             Err(Code::InvalidArgument),
             "a seat the match has not got"
         );
@@ -1322,7 +1322,7 @@ mod seams {
         assert_eq!(lobby.world().beacons().len(), beacons + 1);
         assert_eq!(lobby.world().units().len(), units + 2);
         assert_eq!(
-            lobby.seed_layout(&layout(0)).map_err(|error| error.code),
+            lobby.seed_layout(&layout(0)).map_err(|error| error.code()),
             Err(Code::PhaseClosed),
             "once"
         );
@@ -1330,7 +1330,9 @@ mod seams {
         assert!(playing.begin_push().expect("the host answers"));
         assert!(playing.step().expect("a tick").is_some());
         assert_eq!(
-            playing.seed_layout(&layout(0)).map_err(|error| error.code),
+            playing
+                .seed_layout(&layout(0))
+                .map_err(|error| error.code()),
             Err(Code::PhaseClosed),
             "and never once the match has moved"
         );
@@ -1367,7 +1369,7 @@ mod seams {
         assert_eq!(
             lobby
                 .seed_layout_with_settings(&layout, &[raid(Some(0))])
-                .map_err(|error| error.code),
+                .map_err(|error| error.code()),
             Err(Code::InvalidArgument),
             "a percentage of nothing"
         );
@@ -1385,7 +1387,7 @@ mod seams {
         assert_eq!(
             lobby
                 .seed_layout_with_settings(&layout, &[raid(None)])
-                .map_err(|error| error.code),
+                .map_err(|error| error.code()),
             Err(Code::PhaseClosed),
             "once"
         );

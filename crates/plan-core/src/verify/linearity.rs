@@ -220,7 +220,7 @@ fn holds(path: &str, call: &dyn Fn(&str), refused_unread: &dyn Fn(&str) -> bool)
                 .err()
                 .and_then(|refused| {
                     refused
-                        .pointer
+                        .pointer()
                         .strip_prefix("/byte/")
                         .and_then(|at| at.parse::<u64>().ok())
                 })

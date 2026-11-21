@@ -352,7 +352,10 @@ fn a_copy_past_the_cap_is_refused_before_it_copies() {
     let before = bytes();
     let refused = apply(&document, &patch).expect_err("past the cap");
     let asked = bytes().saturating_sub(before);
-    assert_eq!(refused.bound, Some(pharmakos_plan_core::error::Bound::Size));
+    assert_eq!(
+        refused.bound(),
+        Some(pharmakos_plan_core::error::Bound::Size)
+    );
     // Copying `/meta` would ask for its title again, raw and unescaped: about
     // twice the text's length more than the baseline.
     let slack = u64::try_from(text.len() >> 2).expect("a length");
@@ -378,7 +381,7 @@ fn a_patch_text_past_its_cap_is_refused_unread() {
     let refused = pharmakos_plan_core::patch::patch_text("{\"a\":1}", &patch).expect_err("past");
     let asked = bytes().saturating_sub(before);
     assert_eq!(
-        refused.bound,
+        refused.bound(),
         Some(pharmakos_plan_core::error::Bound::PatchText)
     );
     assert!(
@@ -440,7 +443,10 @@ fn a_chain_of_copies_asks_for_at_most_a_constant_times_the_cap() {
     let before = bytes();
     let refused = pharmakos_plan_core::patch::patch_text(&text, &patch).expect_err("past the cap");
     let asked = bytes().saturating_sub(before);
-    assert_eq!(refused.bound, Some(pharmakos_plan_core::error::Bound::Size));
+    assert_eq!(
+        refused.bound(),
+        Some(pharmakos_plan_core::error::Bound::Size)
+    );
     let most = u64::try_from(cap).expect("a length") * TIMES_THE_CAP;
     assert!(
         asked <= most,

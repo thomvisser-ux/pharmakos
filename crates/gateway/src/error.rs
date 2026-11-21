@@ -53,8 +53,9 @@ pub type Code = gateway_error::Code;
 /// make an `Error` around one.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Error {
-    /// Which of the closed set this is.
-    pub code: Code,
+    /// Which of the closed set this is. Private, as every field is (S3's
+    /// `vfyq2`, fix pass 4b, item L-b): read through [`Error::code`].
+    code: Code,
     /// The message as it was said: English, precise, and safe to show
     /// whoever is at the keyboard. Private (S3's `vfyq2`, fix pass 4, item
     /// L-b): read through [`Error::message`] or [`Error::said`], and the wire
@@ -72,16 +73,23 @@ impl Error {
         }
     }
 
+    /// Which of the closed set this is: every client branches on it.
+    #[must_use]
+    pub const fn code(&self) -> Code {
+        self.code
+    }
+
     /// The message, as text.
     #[must_use]
     pub fn message(&self) -> &str {
         self.said.as_str()
     }
 
-    /// The message, as text, taken out of the error.
+    /// The message as it was said, taken out of the error: what a caller
+    /// that owns the error composes another sentence from.
     #[must_use]
-    pub fn into_message(self) -> String {
-        self.said.into_string()
+    pub fn into_said(self) -> Said {
+        self.said
     }
 
     /// The message, as it was said: what another refusal that carries this
@@ -325,7 +333,7 @@ mod tests {
             format!("{}: {}", error.name(), said.as_str())
         );
         assert!(!said.as_str().contains('\u{202E}'), "{}", said.as_str());
-        assert_eq!(error.clone().into_message(), said.as_str());
+        assert_eq!(error.clone().into_said().as_str(), said.as_str());
     }
 
     #[test]

@@ -28,7 +28,11 @@ fn a_member_an_operation_does_not_have_is_refused() {
         r#"[{"op":"remove","path":"/a","undo":{"at":0}}]"#,
     ] {
         let refused = Patch::from_text(patch).expect_err(patch);
-        assert_eq!(refused.malformed, Some(Malformed::UnknownMember), "{patch}");
+        assert_eq!(
+            refused.malformation(),
+            Some(Malformed::UnknownMember),
+            "{patch}"
+        );
     }
 }
 
@@ -38,7 +42,7 @@ fn a_member_an_operation_does_not_have_is_refused() {
 fn forward_and_undo_operations_in_one_patch_are_refused() {
     let patch = r#"[{"op":"remove","path":"/a","undo":{}},{"op":"remove","path":"/b"}]"#;
     let refused = Patch::from_text(patch).expect_err("mixed");
-    assert_eq!(refused.malformed, Some(Malformed::MixedUndo));
+    assert_eq!(refused.malformation(), Some(Malformed::MixedUndo));
 }
 
 /// No document holds a value under more than `MAX_DEPTH` containers, so a
@@ -52,12 +56,12 @@ fn a_pointer_of_more_tokens_than_any_document_holds_is_refused() {
     assert!(
         read.as_ref()
             .err()
-            .is_none_or(|error| error.bound != Some(Bound::PointerTokens)),
+            .is_none_or(|error| error.bound() != Some(Bound::PointerTokens)),
         "{MAX_POINTER_TOKENS} tokens are a pointer"
     );
     let past = format!(r#"[{{"op":"remove","path":"{longest}/a"}}]"#);
     let refused = Patch::from_text(&past).expect_err("one token past");
-    assert_eq!(refused.bound, Some(Bound::PointerTokens));
+    assert_eq!(refused.bound(), Some(Bound::PointerTokens));
 }
 
 /// Each template parameter becomes at most one operation of one patch, so a
@@ -72,9 +76,9 @@ fn more_parameters_than_a_patch_may_carry_are_refused() {
         })
         .collect();
     let refused = instantiate(template, &parameters, &[]).expect_err("too many");
-    assert_eq!(refused.bound, Some(Bound::Operations));
+    assert_eq!(refused.bound(), Some(Bound::Operations));
     let refused = instantiate(template, &[], &parameters).expect_err("too many suggested");
-    assert_eq!(refused.bound, Some(Bound::Operations));
+    assert_eq!(refused.bound(), Some(Bound::Operations));
 }
 
 /// RFC 6902 section 4.4: a `move` whose `from` is its `path` changes nothing.
@@ -108,7 +112,11 @@ fn an_undo_whose_text_runs_past_its_member_is_refused() {
         r#"[{"op":"add","path":"/meta/x","undo":{"at":0,"jsonc":"\"x\":1} /* tail */"}}]"#,
         r#"[{"op":"add","path":"/b/0","undo":{"at":0,"jsonc":"9] // tail"}}]"#,
     ] {
-        assert_eq!(forged(undo).malformed, Some(Malformed::UndoText), "{undo}");
+        assert_eq!(
+            forged(undo).malformation(),
+            Some(Malformed::UndoText),
+            "{undo}"
+        );
     }
 }
 
@@ -117,7 +125,7 @@ fn an_undo_whose_text_runs_past_its_member_is_refused() {
 #[test]
 fn an_array_undo_whose_path_and_slot_disagree_is_refused() {
     let undo = r#"[{"op":"add","path":"/b/0","undo":{"at":1,"jsonc":"9"}}]"#;
-    assert_eq!(forged(undo).malformed, Some(Malformed::UndoSlot));
+    assert_eq!(forged(undo).malformation(), Some(Malformed::UndoSlot));
 }
 
 /// Every undo refusal carries a `Malformed` code and points at its operation
@@ -149,12 +157,12 @@ fn every_undo_refusal_is_coded_and_points_at_its_operation() {
     ] {
         let refused = forged(undo);
         assert_eq!(
-            refused.malformed,
+            refused.malformation(),
             Some(code),
             "{undo}: {}",
             refused.message()
         );
-        assert_eq!(refused.pointer, "/0", "{undo}: {}", refused.message());
+        assert_eq!(refused.pointer(), "/0", "{undo}: {}", refused.message());
         assert!(
             !refused.message().contains("it has ``")
                 && !refused.message().trim_end().ends_with("it has"),
@@ -176,7 +184,7 @@ fn an_undo_past_the_cap_is_refused() {
         r#"[{{"op":"add","path":"/meta/x","undo":{{"at":0,"jsonc":{}}}}}]"#,
         pharmakos_proto::json::write(&pharmakos_proto::json::Json::String(huge))
     );
-    assert_eq!(forged(&undo).bound, Some(Bound::Size));
+    assert_eq!(forged(&undo).bound(), Some(Bound::Size));
 }
 
 /// A member put at a slot past the end of its object is refused, never put at
@@ -199,14 +207,14 @@ fn an_array_index_is_spelled_as_rfc_6901_spells_one() {
         let patch = format!(r#"[{{"op":"remove","path":"/b/{token}"}}]"#);
         let refused = forged(&patch);
         assert_eq!(
-            refused.malformed,
+            refused.malformation(),
             Some(Malformed::PointerIndex),
             "{token}: {}",
             refused.message()
         );
     }
     let undo = r#"[{"op":"add","path":"/b/+1","undo":{"at":1,"jsonc":"9"}}]"#;
-    assert_eq!(forged(undo).malformed, Some(Malformed::PointerIndex));
+    assert_eq!(forged(undo).malformation(), Some(Malformed::PointerIndex));
 }
 
 /// An undo's text past the nesting limit is refused as a depth refusal, not
@@ -219,5 +227,5 @@ fn an_undo_too_deep_is_a_depth_refusal() {
         pharmakos_proto::json::write(&pharmakos_proto::json::Json::String(deep))
     );
     let refused = forged(&undo);
-    assert_eq!(refused.bound, Some(Bound::Depth), "{}", refused.message());
+    assert_eq!(refused.bound(), Some(Bound::Depth), "{}", refused.message());
 }

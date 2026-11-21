@@ -436,14 +436,14 @@ fn the_two_lines_are_read_exactly_as_they_were_written() {
     for seventh in ["again", "RESUME", "resume please"] {
         let line = format!("{}\t{seventh}\n", plain.render().trim_end());
         let error = ConfigLine::parse(&line).expect_err("not an eighth field");
-        assert_eq!(error.code, Code::InvalidArgument, "`{seventh}`");
+        assert_eq!(error.code(), Code::InvalidArgument, "`{seventh}`");
     }
     // And nothing after the eighth: a ninth field is refused, not ignored,
     // whether the eighth asks for a resume or not.
     for tail in ["resume\tgarbage", "-\tgarbage", "\t"] {
         let line = format!("{}\t{tail}\n", plain.render().trim_end());
         let error = ConfigLine::parse(&line).expect_err("a ninth field");
-        assert_eq!(error.code, Code::InvalidArgument, "`{tail}`");
+        assert_eq!(error.code(), Code::InvalidArgument, "`{tail}`");
         assert!(error.message().contains("at most"), "{}", error.message());
     }
 
@@ -1118,7 +1118,7 @@ fn a_new_match_cannot_overwrite_a_saved_one() {
     let header = std::fs::read(folder.join("match.json")).expect("a header");
 
     let error = host_and_quit(&root, &line).expect_err("a second new match under the same id");
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert!(error.message().contains("resume"), "{}", error.message());
     assert_eq!(
         std::fs::read(folder.join("save.json")).expect("a save"),
@@ -1221,7 +1221,7 @@ fn a_resume_line_that_disagrees_with_the_save_is_refused() {
     for (field, asked) in variants {
         let error = host_and_quit(&root, &resume_line(asked)).expect_err(field);
         assert_eq!(
-            error.code,
+            error.code(),
             Code::InvalidArgument,
             "{field}: {}",
             error.message()
@@ -1262,7 +1262,7 @@ fn a_save_from_a_different_rules_table_or_verifier_is_refused() {
     assert_ne!(other_rules, original, "the rules hash was changed");
     std::fs::write(folder.join("save.json"), &other_rules).expect("rewritten");
     let error = host_and_quit(&root, &resume_line(line.clone())).expect_err("another rules table");
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert!(
         error.message().contains("rules table"),
         "{}",
@@ -1276,7 +1276,7 @@ fn a_save_from_a_different_rules_table_or_verifier_is_refused() {
     assert_ne!(other_verifier, original, "the verifier version was changed");
     std::fs::write(folder.join("save.json"), &other_verifier).expect("rewritten");
     let error = host_and_quit(&root, &resume_line(line.clone())).expect_err("another verifier");
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert!(error.message().contains("verifier"), "{}", error.message());
 
     std::fs::write(folder.join("save.json"), &original).expect("put back");

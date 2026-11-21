@@ -1028,7 +1028,7 @@ mod tests {
             "beacon.placed",
         ] {
             assert_eq!(
-                Kind::new(bad).expect_err("refused").code,
+                Kind::new(bad).expect_err("refused").code(),
                 Code::InvalidArgument,
                 "`{bad}` should not be a kind"
             );
@@ -1043,10 +1043,10 @@ mod tests {
         put(&mut feed, event(2_000, "beacon_placed", Audience::Public)).expect("later");
         let error = put(&mut feed, event(1_500, "beacon_placed", Audience::Public))
             .expect_err("out of order");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         let error =
             put(&mut feed, event(-1, "beacon_placed", Audience::Public)).expect_err("negative");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert_eq!(feed.len(), 2);
         assert!(!feed.is_empty());
     }
@@ -1266,7 +1266,7 @@ mod tests {
                 8,
             )
             .expect_err("refused");
-        assert_eq!(error.code, Code::StaleSnapshot);
+        assert_eq!(error.code(), Code::StaleSnapshot);
     }
 
     #[test]
@@ -1275,11 +1275,11 @@ mod tests {
         let mut text = Cursor::start(current).render();
         text.replace_range(20..21, "f");
         let error = Cursor::parse(&text, current, Listing::Feed).expect_err("refused");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert_eq!(
             Cursor::parse("nonsense", current, Listing::Feed)
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
         // A spelling this gateway never issues is not a cursor this gateway
@@ -1288,7 +1288,7 @@ mod tests {
         assert_eq!(
             Cursor::parse(&issued.to_uppercase(), current, Listing::Feed)
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::InvalidArgument,
             "upper-case hex is not the rendering"
         );
@@ -1310,13 +1310,13 @@ mod tests {
         assert_eq!(
             Cursor::parse(&feed, current, Listing::Beacons)
                 .expect_err("an event index is not a beacon offset")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
         assert_eq!(
             Cursor::parse(&beacons, current, Listing::Feed)
                 .expect_err("and not the other way round either")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
         assert_eq!(
@@ -1380,24 +1380,28 @@ mod tests {
         };
         let text = cursor.render();
         assert_eq!(
-            ViewCursor::parse(&text, 10).expect_err("another view").code,
+            ViewCursor::parse(&text, 10)
+                .expect_err("another view")
+                .code(),
             Code::StaleSnapshot,
             "a restore mints a new view and the client asks for a keyframe"
         );
         let mut damaged = text.clone();
         damaged.replace_range(20..21, "f");
         assert_eq!(
-            ViewCursor::parse(&damaged, 9).expect_err("refused").code,
+            ViewCursor::parse(&damaged, 9).expect_err("refused").code(),
             Code::InvalidArgument
         );
         assert_eq!(
-            ViewCursor::parse("nonsense", 9).expect_err("refused").code,
+            ViewCursor::parse("nonsense", 9)
+                .expect_err("refused")
+                .code(),
             Code::InvalidArgument
         );
         assert_eq!(
             ViewCursor::parse(&text.to_uppercase(), 9)
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::InvalidArgument,
             "upper-case hex is not the rendering"
         );
@@ -1412,7 +1416,7 @@ mod tests {
         assert_eq!(
             ViewCursor::parse(&feed, snapshot.raw())
                 .expect_err("an event index is not a place in a view")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
         let view = ViewCursor {
@@ -1425,7 +1429,7 @@ mod tests {
         assert_eq!(
             Cursor::parse(&view, snapshot, Listing::Feed)
                 .expect_err("and not the other way round")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
     }
@@ -1576,7 +1580,7 @@ mod tests {
                 64,
             )
             .expect_err("seat 1's fog has not lifted");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
     }
 
     /// The sweep's oracle for one sequence: `given` is `(bus index, at_ms,

@@ -962,7 +962,7 @@ pub(crate) fn rfc6901_index(token: &str) -> Option<usize> {
 /// nesting past the limit is a depth refusal, fix pass 4, item L-e), else
 /// `not_one`'s.
 fn keep_bound(error: Error, not_one: impl Fn() -> Error) -> Error {
-    if error.bound.is_some() {
+    if error.bound().is_some() {
         error
     } else {
         not_one()
@@ -1295,7 +1295,7 @@ mod tests {
     #[test]
     fn a_duplicate_key_is_refused_at_its_own_byte() {
         let error = Document::parse("{\"a\":1,\"a\":2}").expect_err("a duplicate key");
-        assert_eq!(error.pointer, "/byte/7");
+        assert_eq!(error.pointer(), "/byte/7");
     }
 
     #[test]
@@ -1314,8 +1314,8 @@ mod tests {
         let refused = Document::parse(&deeper).expect_err("65 containers");
         let codec = pharmakos_proto::json::read(&deeper).expect_err("65 containers");
         assert_eq!(
-            (refused.pointer.clone(), refused.message().to_owned()),
-            (codec.pointer, codec.message)
+            (refused.pointer().to_owned(), refused.message().to_owned()),
+            (codec.pointer().to_owned(), codec.message().to_owned())
         );
     }
 
@@ -1326,10 +1326,10 @@ mod tests {
         let text = "{\"a\":012}";
         let refused = Document::parse(text).expect_err("a leading zero");
         let codec = pharmakos_proto::json::read(text).expect_err("a leading zero");
-        assert_eq!(refused.pointer, "/byte/6");
+        assert_eq!(refused.pointer(), "/byte/6");
         assert_eq!(
-            (refused.pointer.clone(), refused.message().to_owned()),
-            (codec.pointer, codec.message)
+            (refused.pointer().to_owned(), refused.message().to_owned()),
+            (codec.pointer().to_owned(), codec.message().to_owned())
         );
     }
 
@@ -1380,7 +1380,7 @@ mod tests {
             let error = Document::parse(source)
                 .map(|document| document.to_text())
                 .expect_err(source);
-            assert!(error.is_syntax(), "{source}: {}", error.pointer);
+            assert!(error.is_syntax(), "{source}: {}", error.pointer());
         }
         // The well-formed spellings next to them still parse, so the rule is
         // the grammar's and not a blanket refusal of exponents.

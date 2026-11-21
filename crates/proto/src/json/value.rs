@@ -104,23 +104,19 @@ pub enum ErrorKind {
 /// can be reported at the place in the file that caused it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Error {
+    // Every field is private (S3's `vfyq2`, fix pass 4b, item L-b): only
+    // this crate makes an error, from a [`super::grammar::Said`], and a
+    // public field could be written afterwards, so a caller reads through
+    // [`Error::kind`], [`Error::pointer`], [`Error::message`] and
+    // [`Error::said`], and [`Error::said`] is the codec's own words.
     /// What kind of thing it is.
-    pub kind: ErrorKind,
+    kind: ErrorKind,
     /// Where in the document the problem is, as an RFC 6901 JSON Pointer. A
     /// syntax error, which has no place in the tree yet, reports `/byte/NNN`.
-    pub pointer: String,
+    pointer: String,
     /// English, precise, and safe to show a player beside the pointer.
-    pub message: String,
-    /// Only this crate makes an error, from a [`super::grammar::Said`]
-    /// (S3's `vfyq2`, fix pass 3, item M2 (d)): the fields are read
-    /// anywhere, and none of them can be written from outside, so
-    /// [`Error::said`] is the codec's own words.
-    sealed: Sealed,
+    message: String,
 }
-
-/// [`Error`]'s seal: a field no other crate can name.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct Sealed;
 
 impl Error {
     pub(crate) fn at(
@@ -132,7 +128,6 @@ impl Error {
             kind,
             pointer: pointer.to_owned(),
             message: message.into().into_string(),
-            sealed: Sealed,
         }
     }
 
@@ -145,7 +140,6 @@ impl Error {
             kind,
             pointer,
             message,
-            sealed: Sealed,
         }
     }
 
@@ -156,6 +150,27 @@ impl Error {
     #[must_use]
     pub fn said(&self) -> super::grammar::Said {
         super::grammar::Said::made_here(self.message.clone())
+    }
+
+    /// What kind of thing it is: a caller branches on this, never on the
+    /// message.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
+    /// Where in the document the problem is, as an RFC 6901 JSON Pointer;
+    /// `/byte/NNN` for a syntax error.
+    #[must_use]
+    pub fn pointer(&self) -> &str {
+        &self.pointer
+    }
+
+    /// The message, as text: English, precise, and safe to show a player
+    /// beside the pointer.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 

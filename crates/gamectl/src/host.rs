@@ -227,7 +227,7 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     };
     serve::run(setup, std::io::stdin().lock(), std::io::stdout().lock()).map_err(|error| {
         let message = strings::host_refused(&error.to_string());
-        if error.code == Code::InvalidArgument {
+        if error.code() == Code::InvalidArgument {
             Failure::input(message)
         } else {
             Failure::internal(message)

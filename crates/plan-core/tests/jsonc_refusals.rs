@@ -269,7 +269,7 @@ fn every_refusal_is_the_grammars_in_its_words_and_at_its_byte() {
     for row in ROWS {
         let answer = Document::parse(row.text).map(|_| ());
         let expected = Err((row.pointer.to_owned(), row.message.to_owned()));
-        let got = answer.map_err(|error| (error.pointer.clone(), error.message().to_owned()));
+        let got = answer.map_err(|error| (error.pointer().to_owned(), error.message().to_owned()));
         if got != expected {
             wrong.push(format!(
                 "{:?}: {got:?}, expected {:?} {:?} (main: {} {:?})",
@@ -288,7 +288,7 @@ fn a_file_with_a_leading_zero_is_refused_by_patch_and_canonicalise() {
     let patched = patch_text(text, r#"[{"op":"replace","path":"/b","value":3}]"#);
     let error = patched.expect_err("a leading zero is not JSON");
     assert_eq!(
-        (error.pointer.as_str(), error.message()),
+        (error.pointer(), error.message()),
         ("/byte/7", grammar::LEADING_ZERO)
     );
     let error = canonicalise_text(text).expect_err("a leading zero is not JSON");

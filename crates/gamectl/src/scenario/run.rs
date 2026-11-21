@@ -961,13 +961,17 @@ fn whole_lull(surface: &Surface) -> Result<Ms, Failure> {
 fn internal(error: pharmakos_gateway::Error) -> Failure {
     // The gateway's own sentence, with this runner's frame around it: a host
     // that drove its own surface wrongly is not something a scenario author
-    // did, and the message has to say whose mistake it is.
+    // did, and the message has to say whose mistake it is. Composed through
+    // `said!` from a literal and the gateway's `Said` (fix pass 4b): every
+    // gateway refusal is made from a `Said`, so player text in it is already
+    // quoted, and nothing else reaches this sentence.
     Failure::new(
         Exit::Internal,
-        format!(
+        pharmakos_proto::said!(
             "the gateway refused a host's own call: {}",
-            error.into_message()
-        ),
+            error.into_said()
+        )
+        .into_string(),
     )
 }
 

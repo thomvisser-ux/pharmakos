@@ -312,7 +312,7 @@ pub fn load(root: &Path, source: &Path) -> Result<Scenario, Failure> {
             Failure::input(strings::scenario_invalid(
                 &display,
                 &[(
-                    error.pointer.clone(),
+                    error.pointer().to_owned(),
                     format!("not valid JSONC: {}", error.message()),
                 )],
             ))

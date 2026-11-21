@@ -560,7 +560,7 @@ mod tests {
         let error = store
             .authenticate(&token, "m0000000000000002", Tick::ZERO)
             .expect_err("refused");
-        assert_eq!(error.code, Code::Unauthenticated);
+        assert_eq!(error.code(), Code::Unauthenticated);
     }
 
     #[test]
@@ -573,7 +573,7 @@ mod tests {
         let error = store
             .authenticate(&token, MATCH, Tick::ZERO)
             .expect_err("refused");
-        assert_eq!(error.code, Code::Unauthenticated);
+        assert_eq!(error.code(), Code::Unauthenticated);
         assert!(store.grant(handle).is_some(), "the log can still name it");
         assert!(!store.revoke(Handle(9_999)), "no such handle");
     }
@@ -596,7 +596,7 @@ mod tests {
         let error = store
             .authenticate(&token, MATCH, Tick::new(expires.raw().saturating_add(1)))
             .expect_err("refused");
-        assert_eq!(error.code, Code::Unauthenticated);
+        assert_eq!(error.code(), Code::Unauthenticated);
     }
 
     #[test]
@@ -614,7 +614,7 @@ mod tests {
             store
                 .authenticate(&unknown, MATCH, Tick::ZERO)
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::Unauthenticated
         );
     }
@@ -633,7 +633,7 @@ mod tests {
                 Tick::ZERO,
             )
             .expect_err("refused");
-        assert_eq!(error.code, Code::ForbiddenScope);
+        assert_eq!(error.code(), Code::ForbiddenScope);
         assert!(store.is_empty(), "a refused mint stores nothing");
     }
 
@@ -656,7 +656,7 @@ mod tests {
                 Tick::ZERO,
             )
             .expect_err("refused");
-        assert_eq!(error.code, Code::ForbiddenScope);
+        assert_eq!(error.code(), Code::ForbiddenScope);
     }
 
     /// `admin` is lobby and match control, and it gates no method today -- which
@@ -673,7 +673,7 @@ mod tests {
                     Tick::ZERO,
                 )
                 .expect_err("refused");
-            assert_eq!(error.code, Code::ForbiddenScope, "{subject:?}");
+            assert_eq!(error.code(), Code::ForbiddenScope, "{subject:?}");
         }
         store
             .mint(
@@ -693,7 +693,7 @@ mod tests {
                 let error = store
                     .mint(subject, MATCH, ScopeSet::of(&[scope]), Tick::ZERO)
                     .expect_err("refused");
-                assert_eq!(error.code, Code::ForbiddenScope, "{subject:?} {scope:?}");
+                assert_eq!(error.code(), Code::ForbiddenScope, "{subject:?} {scope:?}");
             }
         }
         assert_eq!(store.len(), 0);
