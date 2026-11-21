@@ -484,9 +484,9 @@ impl Router {
 
     /// Serve up to `cap` waiting units, round-robin from the cursor.
     ///
-    /// Every route is computed against the graph as it stands *now*: the repair
-    /// has already run this tick, so no route is planned over terrain that has
-    /// moved.
+    /// Every route is computed against the graph as it stands *now*: the graph
+    /// was settled in the Voxels phase of the tick that last edited the
+    /// terrain, so no route is planned over terrain that has moved.
     pub fn serve(
         &mut self,
         surface: &Surface,

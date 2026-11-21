@@ -630,6 +630,7 @@ impl Clusters {
         if written != before_len {
             changed = true;
         }
+        Clusters::clear_tail(&mut self.vborder, base, written, before_len);
         if let Ok(len) = u16::try_from(written)
             && let Some(slot) = self.vborder_len.get_mut(index)
         {
@@ -694,6 +695,7 @@ impl Clusters {
         if written != before_len {
             changed = true;
         }
+        Clusters::clear_tail(&mut self.hborder, base, written, before_len);
         if let Ok(len) = u16::try_from(written)
             && let Some(slot) = self.hborder_len.get_mut(index)
         {
@@ -793,8 +795,10 @@ impl Clusters {
         if let Ok(len) = u16::try_from(written)
             && let Some(slot) = self.trans_len.get_mut(cluster)
         {
-            *slot = len;
+            let before = core::mem::replace(slot, len);
+            Clusters::clear_tail(&mut self.trans_cell, base, written, usize::from(before));
         }
+        gather.clear();
         self.gather = gather;
     }
 
@@ -895,19 +899,56 @@ impl Clusters {
             }
             from_slot = from_slot.saturating_add(1);
         }
+        // The block's last row holds its total; the write that replaces it
+        // hands back the total an earlier build left, up to which its edges
+        // are cleared.
+        let mut before_total = None;
         let mut tail = count;
         while tail <= self.max_trans {
-            self.set_intra_row(row_base.saturating_add(tail), written);
+            before_total = self.set_intra_row(row_base.saturating_add(tail), written);
             tail = tail.saturating_add(1);
+        }
+        if let Some(before) = before_total {
+            Clusters::clear_edges(
+                (&mut self.intra_to, &mut self.intra_cost),
+                edge_base,
+                written,
+                usize::from(before),
+            );
         }
     }
 
-    fn set_intra_row(&mut self, at: usize, value: usize) {
-        if let Ok(value) = u16::try_from(value)
-            && let Some(slot) = self.intra_row.get_mut(at)
+    /// Reset `values[base + from .. base + to]` to the default a fresh build
+    /// leaves there: what a rebuild wrote no further than `from` that an
+    /// earlier build had written up to `to`. A repaired decomposition is
+    /// then the one a fresh build makes, field for field, and not only
+    /// through the length-bounded readers (lane `settle`). No allocation.
+    fn clear_tail<T: Copy + Default>(values: &mut [T], base: usize, from: usize, to: usize) {
+        if let Some(stale) = values
+            .get_mut(base..)
+            .and_then(|block| block.get_mut(from..to))
         {
-            *slot = value;
+            stale.fill(T::default());
         }
+    }
+
+    /// [`Clusters::clear_tail`] over an edge table's two parallel arrays.
+    fn clear_edges<T: Copy + Default>(
+        (to, cost): (&mut [T], &mut [i32]),
+        base: usize,
+        from: usize,
+        upto: usize,
+    ) {
+        Clusters::clear_tail(to, base, from, upto);
+        Clusters::clear_tail(cost, base, from, upto);
+    }
+
+    /// Write one intra row, handing back the value it replaced.
+    fn set_intra_row(&mut self, at: usize, value: usize) -> Option<u16> {
+        let value = u16::try_from(value).ok()?;
+        self.intra_row
+            .get_mut(at)
+            .map(|slot| core::mem::replace(slot, value))
     }
 
     /// One transition slot's intra edges, as `(slot, cost)` pairs.
@@ -954,6 +995,43 @@ impl Clusters {
         let count = self.trans_cells(cluster).len();
         let row_base = cluster.saturating_mul(self.max_trans.saturating_add(1));
         let edge_base = cluster.saturating_mul(self.max_trans);
+        // The four borders, in a fixed order: east, west, north, south; each
+        // as (border index, whether this cluster is the border's `a` side,
+        // the vertical table or the horizontal one, the cluster beyond).
+        let borders = [
+            self.vborder_index(cx, cy).map(|index| {
+                (
+                    index,
+                    true,
+                    true,
+                    self.cluster_index(cx.saturating_add(1), cy),
+                )
+            }),
+            self.vborder_index(cx.saturating_sub(1), cy).map(|index| {
+                (
+                    index,
+                    false,
+                    true,
+                    self.cluster_index(cx.saturating_sub(1), cy),
+                )
+            }),
+            self.hborder_index(cx, cy).map(|index| {
+                (
+                    index,
+                    true,
+                    false,
+                    self.cluster_index(cx, cy.saturating_add(1)),
+                )
+            }),
+            self.hborder_index(cx, cy.saturating_sub(1)).map(|index| {
+                (
+                    index,
+                    false,
+                    false,
+                    self.cluster_index(cx, cy.saturating_sub(1)),
+                )
+            }),
+        ];
         let mut written: usize = 0;
         let mut slot = 0;
         while slot < count {
@@ -964,67 +1042,16 @@ impl Clusters {
             }
             let cell = self.trans_cells(cluster).get(slot).copied();
             if let Some(cell) = cell {
-                // The four borders, in a fixed order: east, west, north, south.
-                let east = self
-                    .vborder_index(cx, cy)
-                    .map(|index| (index, true, self.cluster_index(cx.saturating_add(1), cy)));
-                let west = self
-                    .vborder_index(cx.saturating_sub(1), cy)
-                    .map(|index| (index, false, self.cluster_index(cx.saturating_sub(1), cy)));
-                for entry in [east, west].into_iter().flatten() {
-                    let (index, near_is_a, far) = entry;
+                for (index, near_is_a, vertical, far) in borders.into_iter().flatten() {
                     let Some(far) = far else {
                         continue;
                     };
-                    let mut found: Option<(Node, i32)> = None;
-                    for trans in self.vborder(index) {
-                        let (near, other) = if near_is_a {
-                            (trans.a, trans.b)
-                        } else {
-                            (trans.b, trans.a)
-                        };
-                        if near == cell {
-                            found = Some((other, trans.cost));
-                        }
-                    }
-                    if let Some((other, cost)) = found
-                        && let Some(target) = self.abstract_of(far, other)
-                        && written < self.max_trans
-                    {
-                        let at = edge_base.saturating_add(written);
-                        if let Some(slot) = self.inter_to.get_mut(at) {
-                            *slot = target;
-                        }
-                        if let Some(slot) = self.inter_cost.get_mut(at) {
-                            *slot = cost;
-                        }
-                        written = written.saturating_add(1);
-                    }
-                }
-                let north = self
-                    .hborder_index(cx, cy)
-                    .map(|index| (index, true, self.cluster_index(cx, cy.saturating_add(1))));
-                let south = self
-                    .hborder_index(cx, cy.saturating_sub(1))
-                    .map(|index| (index, false, self.cluster_index(cx, cy.saturating_sub(1))));
-                for entry in [north, south].into_iter().flatten() {
-                    let (index, near_is_a, far) = entry;
-                    let Some(far) = far else {
-                        continue;
+                    let border = if vertical {
+                        self.vborder(index)
+                    } else {
+                        self.hborder(index)
                     };
-                    let mut found: Option<(Node, i32)> = None;
-                    for trans in self.hborder(index) {
-                        let (near, other) = if near_is_a {
-                            (trans.a, trans.b)
-                        } else {
-                            (trans.b, trans.a)
-                        };
-                        if near == cell {
-                            found = Some((other, trans.cost));
-                        }
-                    }
-                    if let Some((other, cost)) = found
-                        && let Some(target) = self.abstract_of(far, other)
+                    if let Some((target, cost)) = self.border_edge(border, cell, near_is_a, far)
                         && written < self.max_trans
                     {
                         let at = edge_base.saturating_add(written);
@@ -1040,15 +1067,52 @@ impl Clusters {
             }
             slot = slot.saturating_add(1);
         }
+        // As in `rebuild_intra`: the write of the block's total hands back
+        // the one an earlier build left.
+        let mut before_total = None;
         let mut tail = count;
         while tail <= self.max_trans {
-            if let Some(at) = self.inter_row.get_mut(row_base.saturating_add(tail))
-                && let Ok(value) = u16::try_from(written)
-            {
-                *at = value;
-            }
+            before_total = u16::try_from(written).ok().and_then(|value| {
+                self.inter_row
+                    .get_mut(row_base.saturating_add(tail))
+                    .map(|at| core::mem::replace(at, value))
+            });
             tail = tail.saturating_add(1);
         }
+        if let Some(before) = before_total {
+            Clusters::clear_edges(
+                (&mut self.inter_to, &mut self.inter_cost),
+                edge_base,
+                written,
+                usize::from(before),
+            );
+        }
+    }
+
+    /// The border edge out of `cell` across one border: the abstract node of
+    /// the transition's far cell in cluster `far`, and the step's cost. The
+    /// last transition on the border that starts at `cell` wins, as it always
+    /// has.
+    fn border_edge(
+        &self,
+        border: &[Trans],
+        cell: Node,
+        near_is_a: bool,
+        far: usize,
+    ) -> Option<(u32, i32)> {
+        let mut found: Option<(Node, i32)> = None;
+        for trans in border {
+            let (near, other) = if near_is_a {
+                (trans.a, trans.b)
+            } else {
+                (trans.b, trans.a)
+            };
+            if near == cell {
+                found = Some((other, trans.cost));
+            }
+        }
+        let (other, cost) = found?;
+        Some((self.abstract_of(far, other)?, cost))
     }
 
     /// One transition slot's border edges, as `(abstract node, cost)`.
@@ -1105,9 +1169,12 @@ impl Clusters {
             total = total.saturating_add(u32::from(self.comp_count.get(c).copied().unwrap_or(0)));
             c = c.saturating_add(1);
         }
-        if let Some(slot) = self.comp_offset.get_mut(clusters) {
-            *slot = total;
-        }
+        // The offset past the last cluster holds the total; its write hands
+        // back the total an earlier build left.
+        let before_total = self
+            .comp_offset
+            .get_mut(clusters)
+            .map(|slot| crate::math::index::row(core::mem::replace(slot, total)));
         let count = crate::math::index::row(total);
         let mut index = 0;
         while index < count {
@@ -1158,6 +1225,10 @@ impl Clusters {
                 *slot = root;
             }
             index = index.saturating_add(1);
+        }
+        if let Some(before) = before_total {
+            Clusters::clear_tail(&mut self.comp_label, 0, count, before);
+            Clusters::clear_tail(&mut self.union_find, 0, count, before);
         }
     }
 

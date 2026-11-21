@@ -107,7 +107,10 @@ fn play(
         during: "building the fourth seat's world",
         reason: error.to_string(),
     })?;
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).map_err(|error| Error::Sim {
+        during: "opening the fourth seat's match",
+        reason: error.to_string(),
+    })?;
     for seat in seat_ids(seats)? {
         let plan = Plan::compile(playbook, rules).map_err(|error| Error::Sim {
             during: "compiling the budget playbook",

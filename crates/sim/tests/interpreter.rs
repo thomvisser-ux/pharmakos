@@ -170,7 +170,7 @@ fn transcript(case: &str) -> String {
     let plan = compile(&decode(&text))
         .unwrap_or_else(|error| panic!("compiling {case}'s playbook: {error}"));
 
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     assert!(
         runner
             .world_mut()
@@ -534,7 +534,7 @@ fn a_jump_only_goes_forward() {
         }];
     }
     let plan = compile(&forward).expect("a forward-resolved label compiles");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -847,7 +847,7 @@ fn rows_of_the_visit_case(damage: &[(u32, i32)]) -> Vec<u32> {
     let text = std::fs::read_to_string(case_dir("visit").join("playbook.json"))
         .expect("the visit case is committed");
     let plan = compile(&decode(&text)).expect("it compiles");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -932,7 +932,7 @@ fn a_move_to_a_voxel_arrives_on_the_ground_under_it() {
             ..gp::v1::Step::default()
         });
     let plan = compile(&playbook).expect("a voxel inside the map compiles");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -958,21 +958,16 @@ fn a_move_to_a_voxel_arrives_on_the_ground_under_it() {
     );
 }
 
-#[test]
-fn a_move_a_commander_cannot_walk_fails_with_no_path() {
-    // The interpreter's half of "blocked by walls, craters and trenches": the
-    // router parks a walled-in walker (item 60, "park and report"), and a
-    // `move` step that finds its walker parked fails with `no_path` so that
-    // `on_fail` decides. Without this, such a step would run until its timeout
-    // with nothing in the feed to say why.
+/// The minimal playbook with one more step: a `move` across the map to
+/// (200, 200, 20), skipped on failure.
+fn far_move() -> gp::v1::Playbook {
     let mut playbook = minimal();
-    {
-        let route = &mut playbook
-            .declarative
-            .as_mut()
-            .expect("the minimal playbook has a body")
-            .route;
-        route.push(gp::v1::Step {
+    playbook
+        .declarative
+        .as_mut()
+        .expect("the minimal playbook has a body")
+        .route
+        .push(gp::v1::Step {
             label: "far".to_owned(),
             timeout_ms: 600_000,
             on_fail: Some(gp::v1::OnFail {
@@ -991,9 +986,18 @@ fn a_move_a_commander_cannot_walk_fails_with_no_path() {
             })),
             ..gp::v1::Step::default()
         });
-    }
-    let plan = compile(&playbook).expect("a move to a voxel inside the map compiles");
-    let mut runner = Runner::new(fresh_world());
+    playbook
+}
+
+#[test]
+fn a_move_a_commander_cannot_walk_fails_with_no_path() {
+    // The interpreter's half of "blocked by walls, craters and trenches": the
+    // router parks a walled-in walker (item 60, "park and report"), and a
+    // `move` step that finds its walker parked fails with `no_path` so that
+    // `on_fail` decides. Without this, such a step would run until its timeout
+    // with nothing in the feed to say why.
+    let plan = compile(&far_move()).expect("a move to a voxel inside the map compiles");
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     // Seal first, then wall the commander in, so the step is already running
     // when the graph says there is nowhere to go.
     runner
@@ -1069,7 +1073,7 @@ fn a_predicate_reads_only_its_own_seats_knowledge() {
     );
     let plan = compile(&decode(&text)).expect("the rules compile");
     let run = |carry: bool| -> (String, u32) {
-        let mut runner = Runner::new(fresh_world());
+        let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
         assert!(
             runner
                 .world_mut()
@@ -1211,7 +1215,7 @@ fn a_playbook_reads_only_its_own_seats_beacons() {
         ));
     }
     let plan = compile(&playbook).expect("the reference compiles; it is a run-time refusal");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -1327,7 +1331,7 @@ fn a_seat_with_no_playbook_leaves_its_commander_where_it_stands() {
     // The harness's destination draw does not reach a commander any more
     // (T11), so a seat that sealed nothing is a seat whose commander is still
     // exactly where the generator put it.
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     let commander = runner
         .world()
         .commander_of(SeatId::new(1))
@@ -1366,7 +1370,7 @@ fn the_interpreters_state_survives_a_save_and_a_restore() {
             .expect("the visit case is committed"),
     ))
     .expect("it compiles");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan.clone());
@@ -1387,7 +1391,7 @@ fn the_interpreters_state_survives_a_save_and_a_restore() {
     let snapshot = runner.capture().unwrap();
     let before = runner.world().state_hash();
 
-    let mut resumed = Runner::new(fresh_world());
+    let mut resumed = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     resumed
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -1446,7 +1450,7 @@ fn every_playbook_halts() {
         let decisions = steps.saturating_mul(MAX_MS_DECISIONS).saturating_add(8);
         let ticks = u32::try_from(decisions.saturating_mul(5)).unwrap_or(u32::MAX);
 
-        let mut runner = Runner::new(fresh_world());
+        let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
         runner
             .world_mut()
             .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -2311,5 +2315,125 @@ fn the_reverse_refusal_scan_finds_a_planted_refusal() {
     assert!(
         stray_refusals(tabled).is_empty(),
         "a construction from the table is not a stray"
+    );
+}
+
+/// Whether the tick after `world`'s last one is a decision tick: a copy steps
+/// it and asks.
+fn next_tick_decides(world: &World) -> bool {
+    let mut probe = world.clone();
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let _ = probe.step(&mut enc).expect("the copy steps");
+    probe.is_decision_tick()
+}
+
+/// The commander's walk state.
+fn commander_walk(world: &World) -> pharmakos_sim::pathing::router::WalkState {
+    let commander = world
+        .commander_of(SeatId::new(CASE_SEAT))
+        .expect("an occupied seat has a commander");
+    let row = world.units().row_of(commander).expect("a commander's row");
+    world.router().state(row.raw())
+}
+
+/// The interpreter's read of a freed commander (lane `settle`): a commander
+/// sealed in on a `move`, whose wall comes down in the tick before a decision
+/// tick, keeps walking. The repair that frees it and the re-arm run in the
+/// Voxels phase of the tick that took the wall down, so that decision's
+/// `sealed_in` (`interpreter/exec.rs`, the read `move`, a visit's walk in and a
+/// deploy's walk in share) finds it `Waiting`, as a world resumed from a save
+/// of that tick does. Before the lane the re-arm waited for the next tick's
+/// Pathing phase, after its Decision phase, and the step failed with
+/// `no_path` on a commander whose way was already open.
+#[test]
+fn a_commander_freed_in_the_tick_before_a_decision_walks_on() {
+    let plan = compile(&far_move()).expect("a move to a voxel inside the map compiles");
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
+    runner
+        .world_mut()
+        .seal_playbook(SeatId::new(CASE_SEAT), plan);
+    assert!(runner.begin_push().unwrap());
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(CASE_SEAT))
+        .expect("an occupied seat has a commander");
+    let index = usize::try_from(commander.raw()).expect("a unit index");
+    let at = runner.world().units().positions()[index];
+    let (x, y) = (at[0].floor_voxels(), at[1].floor_voxels());
+    wall_in_the_commander(runner.world_mut());
+    let mut body = String::new();
+    let step = |runner: &mut Runner, body: &mut String| {
+        assert!(
+            runner.step().unwrap().is_some(),
+            "the Push outlasts the run"
+        );
+        for event in runner.events() {
+            body.push_str(&line(event));
+        }
+        runner.clear_events();
+    };
+    // Until the router parks the commander, and then until the tick after
+    // next is a decision tick.
+    let mut ticks = 0;
+    while commander_walk(runner.world()) != pharmakos_sim::pathing::router::WalkState::Sealed {
+        step(&mut runner, &mut body);
+        ticks += 1;
+        assert!(
+            ticks < 40,
+            "the wall never sealed the commander in:\n{body}"
+        );
+    }
+    assert!(
+        !next_tick_decides(runner.world()),
+        "the commander was sealed on the tick before a decision; the case needs a tick between"
+    );
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    loop {
+        let mut probe = runner.world().clone();
+        let _ = probe.step(&mut enc).expect("the copy steps");
+        if next_tick_decides(&probe) {
+            break;
+        }
+        step(&mut runner, &mut body);
+    }
+    // The next tick takes the wall down; the one after it decides.
+    for dy in -1..=1_i32 {
+        for dx in -1..=1_i32 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let top = runner
+                .world()
+                .voxels()
+                .top_solid_z(x + dx, y + dy)
+                .expect("a column with a floor");
+            for z in (top - 4)..=top {
+                assert!(
+                    runner
+                        .world_mut()
+                        .request_voxel_edit(VoxelEdit::Set {
+                            at: [x + dx, y + dy, z],
+                            material: Material::AIR,
+                            by: None,
+                        })
+                        .is_ok()
+                );
+            }
+        }
+    }
+    step(&mut runner, &mut body);
+    assert!(next_tick_decides(runner.world()), "the next tick decides");
+    for _ in 0..20 {
+        step(&mut runner, &mut body);
+    }
+    let failures = values_of(&body, EventKind::StepFailed);
+    assert!(
+        !failures.contains(&i64::from(StepFailure::NoPath.id())),
+        "a commander freed in the tick before the decision failed its move with `no_path`:\n{body}"
+    );
+    assert_eq!(
+        commander_walk(runner.world()),
+        pharmakos_sim::pathing::router::WalkState::Walking,
+        "the freed commander walks"
     );
 }

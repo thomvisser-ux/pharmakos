@@ -3874,7 +3874,8 @@ fn a_writs_settings_rows_show_what_the_sim_reads() {
                 .find(|row| world.beacons().seats().get(*row) == Some(&0))
                 .expect("seat 0's core");
             world.switch_mandate_directly(row, writ);
-            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+            *snapshot =
+                pharmakos_sim::snapshot::Snapshot::capture(&world).expect("a world between ticks");
         });
         let token = seat_token(&mut surface, 0);
         let mut left = FIRST_LULL_MS;

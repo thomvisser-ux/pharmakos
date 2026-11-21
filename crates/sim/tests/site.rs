@@ -148,7 +148,7 @@ fn idle() -> String {
 /// Open a Push with `route` sealed for seat 0.
 fn push(world: World, route: &str) -> Runner {
     let plan = Plan::compile(&playbook(route), &rules()).expect("compiles");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
@@ -1014,7 +1014,7 @@ fn a_dropped_target_recycles_what_stands_for_it() {
     );
     assert!(recycled.first().expect("one").value > 0, "for a refund");
     let world = runner.world();
-    let snapshot = Snapshot::capture(world);
+    let snapshot = Snapshot::capture(world).expect("a world between ticks");
     let mut restored = self::world();
     snapshot.restore_into(&mut restored).expect("restores");
     assert_eq!(restored.state_hash(), world.state_hash());
@@ -1041,7 +1041,7 @@ fn the_site_is_hashed_and_quiet_when_unused() {
         reset.state_hash(),
         "defaults write nothing"
     );
-    let snapshot = Snapshot::capture(&plain);
+    let snapshot = Snapshot::capture(&plain).expect("a world between ticks");
     assert!(
         snapshot
             .beacon_terraform
@@ -1291,7 +1291,7 @@ fn the_footings_are_derived_from_hashed_tables() {
     let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
     let _ = standing_structure(&mut world, StructureKind::Autocannon, [5, 3]);
     let [x, y] = open_column(&world, [5, 3]);
-    let snapshot = Snapshot::capture(&world);
+    let snapshot = Snapshot::capture(&world).expect("a world between ticks");
     let mut restored = self::world();
     snapshot.restore_into(&mut restored).expect("restores");
     assert_eq!(restored.state_hash(), world.state_hash());
@@ -1471,7 +1471,7 @@ fn duel(seat0: BuildSettings) -> Runner {
             .field_unit(SEAT, ours, UnitKind::BuildDrone, at)
             .expect("room for a drone");
     }
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     for seat in [SEAT, other] {
         let plan = Plan::compile(&playbook(&idle()), &rules()).expect("compiles");
         runner
@@ -1502,7 +1502,7 @@ fn duel_chain(seat0: BuildSettings, restore: bool) -> (Vec<u64>, Vec<pharmakos_s
         events.extend_from_slice(runner.events());
         runner.clear_events();
         if restore && tick == DUEL_RESTORE {
-            let saved = Snapshot::capture(runner.world());
+            let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
             let mut fresh = world();
             saved.restore_into(&mut fresh).expect("restores");
             assert_eq!(fresh.state_hash(), runner.world().state_hash());
@@ -1958,7 +1958,7 @@ fn a_walls_done_flag_round_trips_through_a_snapshot() {
     let mut runner = push(staged, &idle());
     run(&mut runner, 1_200, &[]);
     assert!(runner.world().targets().walls_done().contains(&true));
-    let saved = Snapshot::capture(runner.world());
+    let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
     let mut fresh = world();
     saved.restore_into(&mut fresh).expect("restores");
     assert_eq!(

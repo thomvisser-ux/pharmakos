@@ -1,0 +1,32 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `settle`: breach-and-raze's Attack beacon, its force gathered at a
+// staging point off a corner of seat 1's walled ring (x 372, y 322), so the
+// raiders come at the ring on a slant. See breach-at-a-slant.scenario.jsonc.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Breach at a slant", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "post", "timeout_ms": 60000,
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 44, "z": 36}},
+          "initial": {"priority": "NORMAL", "mandate": {"attack": {
+            "target": {"voxel": {"x": 357, "y": 336, "z": 29}},
+            "retarget": "NONE",
+            "staging": {"x": 372, "y": 322, "z": 30},
+            "launch": {"force_size": 3},
+            "after_action": "REGROUP_AT_STAGING",
+            "breach_allowed": true,
+            "waves": 1}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+      {"label": "stand", "timeout_ms": 470000,
+        "wait_until": {"condition": {"segment_elapsed": {"ms": {"op": "GE", "value": 470000}}}},
+        "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

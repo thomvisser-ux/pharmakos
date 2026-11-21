@@ -327,9 +327,13 @@ pub enum EventKind {
     /// breach column just above the footing, and `value` the cut's radius in
     /// whole voxels.
     ChargeDetonated,
-    /// A breach's carrier was killed before it planted: its charge never
-    /// fires (S2's `atk`; decision 9). `seat` is its owner, `subject` the
-    /// Attack beacon, `at` the plant point the carrier was walking to.
+    /// A breach's demolition charge, bought and carried, was lost before it
+    /// was planted: it never fires, and is not refunded (S2's `atk`; decision
+    /// 9). Its carrier was killed, or (lane `settle`) the breach it was
+    /// carried for was let go: the attack ended, the way opened, the force
+    /// retargeted, or a re-plan found no breach. The event does not say
+    /// which. `seat` is its owner, `subject` the Attack beacon, `at` the plant
+    /// point it was carried to.
     ChargeLost,
     /// A seat earned a Ledger licence at the settlement (S3's `lic`; spec
     /// section 8, decision 6). `seat` is the seat, `value` the licence's

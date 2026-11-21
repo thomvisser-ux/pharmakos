@@ -95,7 +95,7 @@ fn world_on(rules: RulesTable, seats: u32, lengths: &[i32]) -> World {
 
 /// A runner in its opening Lull.
 fn runner(seats: u32, lengths: &[i32]) -> Runner {
-    Runner::new(world(seats, lengths))
+    Runner::new(world(seats, lengths)).unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// Step `ticks` ticks, stopping early if the Push closes.
@@ -337,7 +337,7 @@ fn the_coming_segments_length_comes_from_the_snapshot_not_a_constant() {
             block.segment_lengths_ms = vec![1_000];
         }
     });
-    let mut second = Runner::new(world_on(other, 2, &[]));
+    let mut second = Runner::new(world_on(other, 2, &[])).unwrap_or_else(|error| panic!("{error}"));
     second
         .restore(&carried)
         .expect("the frozen snapshot restores");
@@ -372,7 +372,7 @@ fn a_restored_match_keeps_its_phase_round_and_ladder() {
     let saved = first.capture().unwrap();
     let hash = first.world().state_hash();
 
-    let mut second = Runner::new(world(3, &[]));
+    let mut second = Runner::new(world(3, &[])).unwrap_or_else(|error| panic!("{error}"));
     second.restore(&saved).expect("the snapshot restores");
 
     assert_eq!(second.world().state_hash(), hash, "a restore is lossless");
@@ -527,7 +527,8 @@ fn an_unplaced_seat_is_neither_eliminated_nor_counted() {
             },
         })
         .expect("four seats on the committed table"),
-    );
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     assert!(
         !runner.world().beacons().seats().contains(&3),
         "the committed table carries three spawn zones, so seat 3 is unplaced"
@@ -559,7 +560,7 @@ fn the_round_limit_is_decided_at_the_last_rounds_final_tick() {
     })
     .expect("a two-round match");
 
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     for round in 1..=2_u32 {
         assert_eq!(runner.round(), round);
         assert!(runner.begin_push().unwrap());
@@ -816,7 +817,7 @@ fn the_event_bus_is_not_in_the_state_encoding() {
 
     // And it is not in the file either.
     let saved = runner.capture().unwrap();
-    let mut other = Runner::new(world(2, &[SHORT_MS]));
+    let mut other = Runner::new(world(2, &[SHORT_MS])).unwrap_or_else(|error| panic!("{error}"));
     other.restore(&saved).expect("the snapshot restores");
     assert!(
         other.events().is_empty(),
@@ -838,8 +839,10 @@ fn a_restore_re_anchors_the_feed_so_two_resumes_agree() {
     assert_eq!(play(&mut source, SHORT_TICKS), SHORT_TICKS);
     let saved = source.capture().unwrap();
 
-    let mut fresh = Runner::new(world(2, &[SHORT_MS, 15_000]));
-    let mut used = Runner::new(world(2, &[SHORT_MS, 15_000]));
+    let mut fresh =
+        Runner::new(world(2, &[SHORT_MS, 15_000])).unwrap_or_else(|error| panic!("{error}"));
+    let mut used =
+        Runner::new(world(2, &[SHORT_MS, 15_000])).unwrap_or_else(|error| panic!("{error}"));
     assert!(used.begin_push().unwrap());
     assert_eq!(play(&mut used, SHORT_TICKS), SHORT_TICKS);
     used.clear_events();
@@ -925,7 +928,7 @@ fn a_host_that_drains_never_meets_a_full_bus() {
     world
         .field_movers_directly(50)
         .expect("fifty raiders fit every seat's share");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     // The fixture's fabrications are not a tick's lines: drain them first.
     runner.clear_events();
     let capacity = runner.world().event_bus().capacity();
@@ -1067,7 +1070,8 @@ fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
             },
         })
         .expect("a one-round match"),
-    );
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     assert!(last.begin_push().unwrap());
     while let Some(report) = last.step().unwrap() {
         if report.segment_ended {
@@ -1148,6 +1152,8 @@ fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
     for _ in 1..SHORT_TICKS {
         assert!(runner.step().unwrap().is_some());
     }
+    // A save of the closed world, which no restore may take over the open tick.
+    let saved = runner.capture().expect("a world between ticks");
     {
         let mut tick = runner
             .phased_tick()
@@ -1180,7 +1186,11 @@ fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
         runner.seal_playbook(SeatId::new(0), a_plan()),
         Err(pharmakos_sim::runner::SealRefused::MidTick)
     );
-    let saved = Snapshot::capture(runner.world());
+    assert_eq!(
+        Snapshot::capture(runner.world()).map(|_| ()),
+        Err(SnapshotError::MidTick),
+        "no snapshot is taken over an open tick"
+    );
     assert_eq!(runner.restore(&saved), Err(SnapshotError::MidTick));
     assert!(runner.capture().is_err());
     // Finishing the tick lets the match move on.
