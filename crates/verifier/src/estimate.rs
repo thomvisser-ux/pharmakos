@@ -338,10 +338,10 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
     // Where the commander is known to stand, and how far short of that point
     // it may have stopped. The view's commander position, when it carries
     // one, is where the route starts.
-    let mut here: Option<(Voxel, i64)> = scope.commander().map(|at| (at, 0));
-    // Wide sums (fix pass 4, item 1): `interface`'s module doc bounds every
-    // sum of the playbook's rows, and a walked leg or a hold is one `i32`
-    // per route step, so these never wrap.
+    let mut here: Option<(Voxel, u32)> = scope.commander().map(|at| (at, 0));
+    // Wide sums (fix pass 4, item 1, and fix pass 5, item L5): see
+    // the const assertion above `Segment` for the bound by which these
+    // never wrap.
     let mut walking = WideMs::ZERO;
     let mut elapsed = WideMs::ZERO;
     let mut first_late: Option<String> = None;
@@ -411,6 +411,25 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
         out.emit(Diag::new("I0001", ROUTE).arg("found", walking.raw()));
     }
 }
+
+/// The route's sums never wrap (S3's `vfyq2`, fix pass 5, item L5: the
+/// proof that stood here was false, counting a walked leg as one `i32`).
+/// Each route step adds at most a walked leg, under 2^`LEG_MS_BITS`
+/// (`walking`), and its time on site, a row under 2^`ROW_MS_BITS`
+/// (`interface`'s module doc), or a hold, an `i32`. A route of the playbook
+/// `Input` holds has fewer steps than the playbook has bytes, at most
+/// `MAX_CANONICAL_BYTES` (`Input` refuses more: `InputError::Oversize`), so
+/// both sums are under 2^(max(`LEG_MS_BITS`, `ROW_MS_BITS`) + 1 + the bytes'
+/// bits), which this asserts is inside `i128`.
+const _: () = {
+    let step_bits = usize::BITS - crate::MAX_CANONICAL_BYTES.leading_zeros();
+    let per_step = if crate::walking::LEG_MS_BITS > crate::interface::ROW_MS_BITS {
+        crate::walking::LEG_MS_BITS
+    } else {
+        crate::interface::ROW_MS_BITS
+    };
+    assert!(per_step + 1 + step_bits < i128::BITS - 1);
+};
 
 /// What the snapshot says about the coming segment (see the module doc).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

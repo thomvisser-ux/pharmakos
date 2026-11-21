@@ -53,7 +53,7 @@
 //! reduced by the radius at the far end, and by the radius the commander may
 //! have stopped short of the near end by, before the octile sum.
 
-use core::num::{NonZeroU64, NonZeroU128};
+use core::num::{NonZeroU32, NonZeroU128};
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::math::quantity::{Ms, TICK_HZ};
@@ -66,14 +66,27 @@ use crate::limits::RulesGap;
 /// The rows the walking bound reads, out of the rules table once.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Walk {
-    cardinal: i64,
-    diagonal: i64,
+    // The rules table's own widths (S3's `vfyq2`, fix pass 5, item L5): a
+    // step cost is a non-negative `i32`, so a `u32`; a speed a positive one;
+    // a radius a `u32`. [`LEG_MS_BITS`] is derived from these types.
+    cardinal: u32,
+    diagonal: u32,
     /// Positive by construction, so the bound divides by it without a case
     /// for zero.
-    cost_per_second: NonZeroU64,
-    arrive_radius: i64,
-    interface_range: i64,
+    cost_per_second: NonZeroU32,
+    arrive_radius: u32,
+    interface_range: u32,
 }
+
+/// Every leg [`Walk::leg`] answers is under 2^`LEG_MS_BITS` milliseconds,
+/// by the types (S3's `vfyq2`, fix pass 5, item L5): an axis is two `i32`s
+/// apart, under 2^32 voxels; a step of either kind is charged at most the
+/// dearer step cost, a non-negative `i32`, under 2^31; so the cost is under
+/// 2^31 * 2^32 = 2^63, times `TICK_HZ` (20, under 2^5) under 2^68 ticks at
+/// the slowest speed (1), and a tick is 50 ms (under 2^6): under 2^74. The
+/// reach (two `u32`s) only takes voxels off. `a_leg_at_every_extreme_is_under_its_bound`
+/// pins it at the extremes.
+pub const LEG_MS_BITS: u32 = 74;
 
 impl Walk {
     /// Reads the rows.
@@ -91,47 +104,41 @@ impl Walk {
             .commander
             .as_ref()
             .ok_or(RulesGap::MissingBlock("commander"))?;
-        let non_negative = |field: &'static str, value: i32| -> Result<i64, RulesGap> {
-            if value < 0 {
-                Err(RulesGap::Negative {
-                    field,
-                    value: i64::from(value),
-                })
-            } else {
-                Ok(i64::from(value))
-            }
+        let non_negative = |field: &'static str, value: i32| -> Result<u32, RulesGap> {
+            u32::try_from(value).map_err(|_| RulesGap::Negative {
+                field,
+                value: i64::from(value),
+            })
         };
         let cardinal = non_negative("locomotion.step_cost_cardinal", rules.step_cardinal())?;
         let diagonal = non_negative("locomotion.step_cost_diagonal", rules.step_diagonal())?;
         non_negative("locomotion.climb_surcharge", rules.climb_surcharge())?;
-        let speed = i64::from(rules.commander_cost_per_second());
-        let cost_per_second =
-            u64::try_from(speed)
-                .ok()
-                .and_then(NonZeroU64::new)
-                .ok_or(RulesGap::NotPositive {
-                    field: "commander.cost_per_second",
-                    value: speed,
-                })?;
+        let speed = rules.commander_cost_per_second();
+        let not_positive = || RulesGap::NotPositive {
+            field: "commander.cost_per_second",
+            value: i64::from(speed),
+        };
+        let cost_per_second = NonZeroU32::new(u32::try_from(speed).map_err(|_| not_positive())?)
+            .ok_or_else(not_positive)?;
         Ok(Walk {
             cardinal,
             diagonal,
             cost_per_second,
-            arrive_radius: i64::from(commander.arrive_radius_voxels),
-            interface_range: i64::from(commander.interface_range_voxels),
+            arrive_radius: commander.arrive_radius_voxels,
+            interface_range: commander.interface_range_voxels,
         })
     }
 
     /// How close a move stops: `commander.arrive_radius_voxels`.
     #[must_use]
-    pub const fn arrive_radius(&self) -> i64 {
+    pub const fn arrive_radius(&self) -> u32 {
         self.arrive_radius
     }
 
     /// How close a visit or a deploy walks in to:
     /// `commander.interface_range_voxels`.
     #[must_use]
-    pub const fn interface_range(&self) -> i64 {
+    pub const fn interface_range(&self) -> u32 {
         self.interface_range
     }
 
@@ -140,20 +147,15 @@ impl Walk {
     /// of `to`.
     ///
     /// In `u128`, exact by the types (S3's `vfyq2`, fix pass 4, item 1: it
-    /// saturated, and lowered a leg past `u32::MAX` ticks to it). `slack` and
-    /// `radius` are `i64`s, so `reach` is under 2^64; an axis is two `i32`s
-    /// apart, under 2^33; a step cost is an `i64`, its double under 2^64; so
-    /// the cost is under 2^98, times `TICK_HZ` under 2^103, and the leg in
-    /// milliseconds under 2^110. Nothing wraps.
+    /// saturated, and lowered a leg past `u32::MAX` ticks to it), and under
+    /// 2^[`LEG_MS_BITS`] (fix pass 5, item L5). Nothing wraps.
     #[must_use]
-    pub fn leg(&self, from: Voxel, slack: i64, to: Voxel, radius: i64) -> WideMs {
-        let reach = i128::from(slack).wrapping_add(i128::from(radius)).max(0);
+    pub fn leg(&self, from: Voxel, slack: u32, to: Voxel, radius: u32) -> WideMs {
+        let reach = u128::from(slack).wrapping_add(u128::from(radius));
         let axis = |a: i32, b: i32| -> u128 {
             let apart = i128::from(b).wrapping_sub(i128::from(a)).unsigned_abs();
             // What is left past the reach, floored at none: the leg ends
-            // anywhere within it. `reach` is at least zero, so its magnitude
-            // is itself.
-            let reach = reach.unsigned_abs();
+            // anywhere within it.
             if apart > reach {
                 apart.wrapping_sub(reach)
             } else {
@@ -167,8 +169,7 @@ impl Walk {
         // cheaper step, so the sum stays a bound for any table that passes
         // `from_rules` (which refuses a negative step cost). With the
         // committed rows (10 and 14) it is the octile distance exactly.
-        let cardinal = self.cardinal.unsigned_abs();
-        let diagonal = self.diagonal.unsigned_abs();
+        let (cardinal, diagonal) = (self.cardinal, self.diagonal);
         let per_diagonal = u128::from(diagonal).min(u128::from(cardinal).wrapping_mul(2));
         let per_straight = u128::from(cardinal.min(diagonal));
         let cost = per_diagonal
@@ -208,6 +209,37 @@ mod tests {
 
     fn voxel(x: i32, y: i32) -> Voxel {
         Voxel { x, y, z: 50 }
+    }
+
+    /// The stated bound holds at every extreme the types allow: the far
+    /// corner, the dearest steps, the slowest speed, no reach (fix pass 5,
+    /// item L5).
+    #[test]
+    fn a_leg_at_every_extreme_is_under_its_bound() {
+        let mut message = rules().message().clone();
+        if let Some(commander) = message.commander.as_mut() {
+            commander.cost_per_second = 1;
+        }
+        if let Some(locomotion) = message.locomotion.as_mut() {
+            locomotion.step_cost_cardinal = i32::MAX.unsigned_abs();
+            locomotion.step_cost_diagonal = i32::MAX.unsigned_abs();
+        }
+        let table = RulesTable::from_message(&message).expect("the sim's view builds");
+        let walk = Walk::from_rules(&table).expect("a positive speed walks");
+        let bound = 1_i128 << super::LEG_MS_BITS;
+        for (slack, radius) in [(0, 0), (1, 0), (0, 1)] {
+            let far = walk.leg(
+                voxel(i32::MIN, i32::MIN),
+                slack,
+                voxel(i32::MAX, i32::MAX),
+                radius,
+            );
+            assert!(far.raw() < bound, "{far:?}");
+            assert!(
+                far.raw() > bound >> 2,
+                "the bound is near the extreme: {far:?}"
+            );
+        }
     }
 
     /// Ten cost units a cardinal voxel at ten a second: a voxel a second.

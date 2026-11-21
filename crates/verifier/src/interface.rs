@@ -74,7 +74,8 @@
 //!   is a distinct element of one decoded playbook, of which memory holds
 //!   fewer than 2^64. So any sum here is under 2^64 * 2^33 + 2^31 * 2^64 <
 //!   2^98, far inside `i128`, and [`WideMs::plus`] adds with `wrapping_add`,
-//!   which by that bound never wraps: nothing here saturates.
+//!   which by that bound never wraps: nothing here saturates. A row is under
+//!   2^[`ROW_MS_BITS`].
 
 use pharmakos_proto::gp::v1::{
     AttackLaunch, AttackRetreat, AttackSettings, BuildSettings, DefendSettings, InitialSettings,
@@ -96,6 +97,10 @@ const _: () = assert!(
 /// playbook can write (the module doc, "Sums are wide").
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct WideMs(i128);
+
+/// Every row sum this module makes is under 2^`ROW_MS_BITS` milliseconds
+/// (the module doc, "Sums are wide": under 2^64 * 2^33 + 2^31 * 2^64).
+pub const ROW_MS_BITS: u32 = 98;
 
 impl WideMs {
     /// No time at all.
