@@ -538,3 +538,78 @@ fn a_put_into_an_empty_container_keeps_its_inside_and_undoes_exactly() {
         assert_eq!(back, text, "{patch}: inverse {inverse}");
     }
 }
+
+/// The rule for a file that writes a field under both its names (fix pass 3b,
+/// item L3, ruled by the main session): such a file is invalid, and the player
+/// must be able to edit it and undo the edit exactly as written, so an undo is
+/// never refused for writing both names. Both halves:
+///
+/// 1. the undo of an edit to a both-names file restores it byte for byte,
+///    through the text;
+/// 2. a forged undo that writes both names into a clean file applies, and
+///    the result is refused at decode, `E0001`, before anything could seal it.
+#[test]
+fn an_undo_may_write_both_names_and_decode_refuses_the_result() {
+    use pharmakos_plan_core::patch::patch_text;
+    let both = std::fs::read_to_string(
+        workspace_root()
+            .join("crates")
+            .join("verifier")
+            .join("tests")
+            .join("cases")
+            .join("e0208_unknown_step_label.json"),
+    )
+    .expect("a committed case")
+    .replace("\r\n", "\n")
+    .replace(
+        "\"author_kind\": \"HUMAN\"",
+        "\"author_kind\": \"HUMAN\",\n    \"authorKind\": \"AI\"",
+    );
+    assert!(both.contains("authorKind"), "the file writes both names");
+    for edit in [
+        r#"[{"op":"replace","path":"/meta/title","value":"edited"}]"#,
+        r#"[{"op":"remove","path":"/meta/authorKind"}]"#,
+        r#"[{"op":"remove","path":"/meta/author_kind"}]"#,
+    ] {
+        let (patched, inverse) = patch_text(&both, edit).expect("a both-names file is edited");
+        let (back, _) = patch_text(&patched, &inverse).expect("and its edit undone");
+        assert_eq!(
+            back, both,
+            "{edit}: the undo restores the file byte for byte"
+        );
+    }
+
+    let clean = both.replace(",\n    \"authorKind\": \"AI\"", "");
+    let forged = r#"[{"op":"add","path":"/meta/authorKind","undo":{"at":2,"jsonc":"\n    \"authorKind\": \"AI\""}}]"#;
+    let (written, _) = patch_text(&clean, forged).expect("a forged undo applies");
+    assert!(written.contains("authorKind") && written.contains("author_kind"));
+    let rules = pharmakos_sim::rules::RulesTable::load(
+        &workspace_root().join("rules").join("rules.v1.json"),
+    )
+    .expect("the committed rules table");
+    let scope = pharmakos_verifier::Scope::new(
+        pharmakos_sim::tables::SeatId::new(0),
+        pharmakos_sim::knowledge::SeatEconomy::default(),
+    );
+    let report = pharmakos_plan_core::verify::verify_jsonc(
+        &written,
+        &[],
+        &scope,
+        &rules,
+        pharmakos_proto::gp::api::v1::verify_plan::Depth::Quick,
+    )
+    .expect("a report");
+    assert!(!report.qualifies);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0001"),
+        "the forged result is refused at decode: {:?}",
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>()
+    );
+}
