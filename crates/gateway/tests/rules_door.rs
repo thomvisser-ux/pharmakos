@@ -62,3 +62,70 @@ fn a_rules_table_the_verifier_refuses_hosts_no_match() {
     // The shipped table hosts.
     assert!(Host::open_from(&support::rules_json(), support::SEED, 2, &settings, None).is_ok());
 }
+
+/// A refused start writes nothing (S3's `vfyq2`, fix pass 6, item 3): the
+/// rules check comes before the private match cache is opened, so no match
+/// folder, `match.json` or `README.txt` is left behind for a match that
+/// never started.
+#[test]
+fn a_refused_start_writes_nothing() {
+    use pharmakos_gateway::serve::{Config, ConfigLine, NoOperators, Setup};
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rules-door-empty");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("a data root");
+    let line = ConfigLine {
+        config: Config {
+            match_id: "m-rules-door".to_owned(),
+            seed: support::SEED,
+            seats: 2,
+            human_seat: None,
+            segment_lengths_ms: vec![1_000],
+            round_limit: 2,
+            preset: pharmakos_gateway::probation::Preset::Custom,
+        },
+        resume: false,
+    };
+    let setup = Setup {
+        rules_json: gapped().canonical_json().to_owned(),
+        library: None,
+        operators: Box::new(NoOperators),
+    };
+    let control = std::io::Cursor::new(format!("{}\n", line.render()).into_bytes());
+    let mut announce: Vec<u8> = Vec::new();
+    let refused = pharmakos_gateway::serve::run_in(setup, &root, control, &mut announce)
+        .expect_err("the host refuses the table");
+    assert!(
+        refused
+            .message()
+            .contains("interface_times.build_target_ms"),
+        "{}",
+        refused.message()
+    );
+    assert!(announce.is_empty(), "nothing was announced");
+    let left: Vec<std::path::PathBuf> = walk(&root);
+    assert!(left.is_empty(), "a refused start left {left:?}");
+}
+
+/// Every file under `root`, sorted.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "clippy.toml sanctions read_dir when the listing is collected and sorted before use, which is what happens here"
+)]
+fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(folder) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path.clone());
+            }
+            found.push(path);
+        }
+    }
+    found.sort();
+    found
+}
