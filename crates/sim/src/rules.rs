@@ -1158,24 +1158,18 @@ fn longest_row_fits(table: &RulesTable) -> Result<(), RulesError> {
 ///
 /// [`RulesError::OutOfRange`] naming `locomotion.climb_surcharge` when the
 /// dearest step times the map's steps passes `i32::MAX` (or
-/// `locomotion.step_cost_diagonal` when the diagonal alone does), and naming
-/// the map axis that is nought, a map with no column.
+/// `locomotion.step_cost_diagonal` when the diagonal alone does); a map axis
+/// of no voxel is refused first, in the words the axis check has always used
+/// ([`last_voxel`]).
 fn path_cost_fits(
     locomotion: &gp::v1::rules_table::Locomotion,
     map: &gp::v1::rules_table::Map,
 ) -> Result<(), RulesError> {
-    let columns = u128::from(map.size_x) * u128::from(map.size_y);
-    let Some(steps) = columns.checked_sub(1) else {
-        let field = if map.size_x == 0 {
-            "map.size_x"
-        } else {
-            "map.size_y"
-        };
-        return Err(RulesError::OutOfRange {
-            field: field.to_owned(),
-            value: "0; a map axis holds at least one voxel".to_owned(),
-        });
-    };
+    // Each axis holds at least one voxel (the axis check's own refusal,
+    // answered first), so the map has at least one column and `- 1` holds.
+    last_voxel("map.size_x", map.size_x)?;
+    last_voxel("map.size_y", map.size_y)?;
+    let steps = u128::from(map.size_x) * u128::from(map.size_y) - 1;
     let diagonal = u128::from(locomotion.step_cost_diagonal);
     let dearest = diagonal + u128::from(locomotion.climb_surcharge);
     let most = u128::from(i32::MAX.unsigned_abs());
