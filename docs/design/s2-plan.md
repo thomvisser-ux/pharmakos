@@ -110,7 +110,7 @@ presses Ready to end a Lull rather than waiting it out.
    is on; the mortar never chooses a landing point whose splash holds an own asset.
 5. **Round 4.** The owner's Attack beacon, `breach_allowed`, gathers raiders at its staging point
    and launches on force size. Easy's wall blocks the route, so the breach asks the owner's mortars
-   in range to shell the first wall column (wall voxels crack on the first blast and break on the
+   in range to shell the first wall crossed by a least-cost way (wall voxels crack on the first blast and break on the
    next) and sends a raider carrying a demolition charge to the wall's footing; the fuse runs out
    and the charge cuts the wall and the ground under it flat down to the wall's footing, so the
    raiders walk through the gap (decision 40). Nothing falls: a wall is filled down to the ground,
@@ -395,7 +395,7 @@ and names the decision that puts that reading to the owner.
   handler reaches) file between ticks and land at the next Combat and Voxels; `Snapshot::capture`
   returns a `Result` (`SnapshotError::MidTick` for a world with a tick open, `SnapshotError::Unsettled`
   for one with a cluster waiting for its repair; every snapshot passes the one door, `Snapshot::door`,
-  and `Runner::new` returns a `Result` too; item 166), and the
+  and `Runner::new` returns a `Result` too; item 166). The
   host's save path refuses, with a typed error, while either queue holds an order the host filed,
   rather than saving a pending order. `base` builds that refusal in its named place in `host.rs`.
 - **E3. Damage and repair are types that cannot hold a wrong sign.** `Hp::damaged_by` heals on a
@@ -653,8 +653,8 @@ and names the decision that puts that reading to the owner.
   the scenario's map, and `balance.rs`' `expand_east` column keeps reporting that.
 - **E23. Pathing under destruction stays 2.5D.** The search graph has one node per column
   (`pathing.rs`), so a crater lowers a column and a cave under an unchanged top is invisible to it;
-  a step is legal only when the two tops differ by one voxel at most (`pathing/surface.rs` ~298,
-  ~313), which is why a wall must be two voxels high and how a charge's cut reopens a route
+  a step is legal only when the two tops differ by one voxel at most (`Surface::neighbour` and
+  `Surface::step_over`), which is why a wall must be two voxels high and how a charge's cut reopens a route
   (decision 40). Breach is a second cost mode over that graph (section 3, `atk`): a column whose top
   is wall material is passable at a demolition cost for the breach query only. As built (item 166),
   the search runs over (column, crossed): before a crossing its moves are exactly a walker's
@@ -665,8 +665,7 @@ and names the decision that puts that reading to the owner.
   costing the demolition cost more. The goal is taken only crossed, and the search is handed only a
   way the oracle called sealed (`SealedWay`). It refuses with `Exhausted` (its budget ran out) or
   `NoWay` (it finished and no way crosses a wall to the goal); a refusal ends the attack `Sealed`.
-  Tunnels are not
-  modelled, which Mine's "never undermines" (item 144 (3)) and the absence of tunnelling in v1 make
+  Tunnels are not modelled, which Mine's "never undermines" (item 144 (3)) and the absence of tunnelling in v1 make
   safe.
 - **E24. The S2 `get_view` entity fields and any new message shapes are the smallest that serve
   their consumers,** as `con2`'s were (item 130), and the two reviews read them as a contract
@@ -2082,7 +2081,7 @@ questions go to the owner at S2's demo (item 151 (5)).
     weapon range, from the threat model and the rules row.
   - **Breach** (E23, decisions 9, 40 and 41): with `breach_allowed`, an Attack whose route is sealed
     by walls queries the pathfinder's breach mode for the cheapest way through, asks the seat's
-    mortars in range of the first wall column on that route to shell it (enemy wall voxels are
+    mortars in range of the first wall crossed by a least-cost way to shell it (enemy wall voxels are
     targets only for a breach, decision 41), and sends a raider carrying a demolition charge
     (decision 9) to that column, resuming once the gap opens; the charge is bought at
     `demolition_charge_cost_dollars` when it is loaded, planted on arrival, and detonates when its
@@ -2092,7 +2091,8 @@ questions go to the owner at S2's demo (item 151 (5)).
     gap is walkable; the cut stops above bedrock and the bore (E14). Because a wall is filled down
     to the ground (`site`), the flat cut leaves nothing above it unsupported, so a breach never
     causes a collapse (decision 39). Intercepting the carrier is the counter: a carrier killed
-    before it plants drops a charge that never fires (decision 9).
+    before it plants drops a charge that never fires (decision 9); a carried charge is also lost, and
+    announced with the same `charge_lost` event, when its breach is let go any other way (item 166).
   - **Attack's state** (the pinned target, the staging and launch state, the wave count, a charge's
     carrier and fuse) in a hashed table of its own with a row per Attack beacon, hashing nothing
     while empty (E29).
@@ -2750,7 +2750,7 @@ carrying one is roadmap (§4). **Ruled:** the recommended option, put to the own
 (item 144 (11)).
 - **(Recommended) A raider of an Attack beacon with `breach_allowed`, loaded at `$` 15 when the
   breach needs it, planting at the breach point; a carrier killed before it plants drops a charge
-  that never fires.** *Downside:* the raider's role widens; a charge cannot be placed by Build.
+  that never fires (item 166 extends the loss to every way a carried charge is let go).** *Downside:* the raider's role widens; a charge cannot be placed by Build.
 - *A build drone of the Attack beacon:* *Downside:* Attack beacons field drones only for this.
 - *A new unit kind:* *Downside:* a sixth unit kind, which `rules/README.md` says does not exist, and
   its rows.
@@ -3056,7 +3056,7 @@ structures are unstated. **Ruled:** the recommended option, put to the owner in 
   or beacon; the mortar: the enemy asset in range with the most enemy assets within its splash
   radius (a clump), ties nearest then lowest id, never a landing point whose splash holds an own
   asset; enemy wall voxels are targets only for a breach: an Attack beacon with `breach_allowed`
-  asks the seat's mortars in range to shell the first wall column on its route, and sends its
+  asks the seat's mortars in range to shell the first wall crossed by a least-cost way, and sends its
   charge.** Demo step 4 shells a clump and step 5 the wall. *Downside:* a mortar never shells a wall
   on its own, so a seat with no Attack beacon cannot breach.
   **Amended by item 148 (2):** "nearest" and "in range" mean among the enemy assets the seat sees
