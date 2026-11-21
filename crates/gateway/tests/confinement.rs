@@ -601,63 +601,168 @@ fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
     );
 }
 
+/// The one file of the gateway that names the sim's `PlanError` (S3's
+/// `vfyq2`, fix pass 5, item L3).
+const PLAN_WORDS: &str = "src/surface/plan_words.rs";
+
+/// What [`PLAN_WORDS`] may not write: every way to say a value through its
+/// `Display` or `Debug` rather than through `said!`.
+const PLAN_WORDS_BANNED: &[&str] = &[
+    "format!(",
+    "format_args!(",
+    "write!(",
+    "writeln!(",
+    "print!(",
+    "println!(",
+    "eprint!(",
+    "eprintln!(",
+    "to_string(",
+    "{:?}",
+    "{error}",
+    "{self}",
+    "Debug",
+    "Display",
+    "fmt::",
+];
+
+/// Every sim function that refuses with a `PlanError`, as a caller spells
+/// its call: `Type::name(` for an associated function, `.name(` for a method,
+/// `name(` for a free function. Read from the sim's sources, so a new one is
+/// held without this test changing.
+fn plan_error_producers() -> Vec<String> {
+    let files = sources_of("sim");
+    let mut found = Vec::new();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let mut owner: Option<String> = None;
+        let lines: Vec<&str> = text.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("impl ")
+                && !line.starts_with(' ')
+            {
+                let name = rest.split(" for ").last().unwrap_or(rest);
+                owner = name
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .find(|word| !word.is_empty())
+                    .map(str::to_owned);
+            } else if !line.starts_with(' ')
+                && !trimmed.is_empty()
+                && !trimmed.starts_with('}')
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with('#')
+            {
+                owner = None;
+            }
+            let Some(after) = trimmed.strip_prefix("pub fn ") else {
+                continue;
+            };
+            let name: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let signature: String = lines
+                .iter()
+                .skip(index)
+                .take(8)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let signature = signature.split('{').next().unwrap_or_default();
+            if !signature.contains("PlanError>") {
+                continue;
+            }
+            let method = signature.contains("self");
+            found.push(match (&owner, method) {
+                (_, true) => format!(".{name}("),
+                (Some(owner), false) => format!("{owner}::{name}("),
+                (None, false) => format!("{name}("),
+            });
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// A `PlanError` reaches a seat only through the gateway's own sentence for
-/// it, composed from the variant's fields with every field that is player
-/// text quoted (S3's `vfyq2`, fix pass 3, item M2 (a)). The sim's `Display`
-/// for it writes ids and labels raw, so no source here names the type
-/// outside `compile_decoded` and `plan_refusal` in `src/surface/planning.rs`,
-/// and `plan_refusal` composes with `said!` alone: no `format!`, no
-/// `to_string`, no `{error}`.
+/// it (S3's `vfyq2`, fix pass 3, item M2 (a)), held file by file (fix pass 5,
+/// item L3): the sim's `Display` for it writes ids and labels raw, so the
+/// type is named in [`PLAN_WORDS`] alone, which says it with `said!` and
+/// nothing that formats a value, and every call of a sim function that
+/// refuses with one hands its error straight to `plan_refusal` in the same
+/// statement, or drops it unseen (`.ok()`). A function of any form (`pub(in …)`, `const`, `async`,
+/// `unsafe`, `extern`) that names the type anywhere else is found, because
+/// the rule is the file, not the function.
 #[test]
 fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
+    let producers = plan_error_producers();
+    assert!(
+        producers.iter().any(|needle| needle == "Plan::compile("),
+        "the producers are read from the sim: {producers:?}"
+    );
     let mut stray: Vec<String> = Vec::new();
-    let mut in_planning = 0_usize;
+    let mut named_in_words = false;
     for path in sources() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let planning = path.ends_with("src/surface/planning.rs");
-        let mut function = String::new();
-        for (number, line) in code_lines(&text) {
-            if let Some(name) = line
-                .trim_start()
-                .strip_prefix("fn ")
-                .or_else(|| line.trim_start().strip_prefix("pub(crate) fn "))
-                .or_else(|| line.trim_start().strip_prefix("pub(super) fn "))
-                .or_else(|| line.trim_start().strip_prefix("pub fn "))
-            {
-                function = name
-                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned();
-            }
-            let names = uses(&line, "PlanError");
-            if names && !(planning && (function == "compile_decoded" || function == "plan_refusal"))
-            {
-                stray.push(format!("{}:{number}: {}", path.display(), line.trim()));
-            }
-            if planning && function == "plan_refusal" {
-                in_planning = in_planning.saturating_add(usize::from(names));
-                for display in ["format!(", "to_string(", "{error}", "{self}"] {
-                    if line.contains(display) {
+        let words = path.ends_with(PLAN_WORDS);
+        let lines = code_lines(&text);
+        for (position, (number, line)) in lines.iter().enumerate() {
+            let names = uses(line, "PlanError");
+            if words {
+                named_in_words |= names;
+                for banned in PLAN_WORDS_BANNED {
+                    if line.contains(banned) {
                         stray.push(format!(
-                            "{}:{number}: `{display}` in plan_refusal: {}",
+                            "{}:{number}: `{banned}` in the PlanError words: {}",
                             path.display(),
                             line.trim()
                         ));
                     }
                 }
+            } else if names {
+                stray.push(format!(
+                    "{}:{number}: names PlanError outside {PLAN_WORDS}: {}",
+                    path.display(),
+                    line.trim()
+                ));
+            }
+            for producer in &producers {
+                if !line.contains(producer.as_str()) {
+                    continue;
+                }
+                let statement: String = lines
+                    .iter()
+                    .skip(position)
+                    .take(6)
+                    .map(|(_, line)| line.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let statement = statement.split(';').next().unwrap_or_default();
+                // Said through the gateway's sentence, or dropped unseen
+                // (`.ok()`: a preview that resolves nothing says nothing).
+                if !statement.contains("plan_refusal(") && !statement.contains(".ok()") {
+                    stray.push(format!(
+                        "{}:{number}: `{producer}` whose refusal does not go straight to \
+                         plan_refusal: {}",
+                        path.display(),
+                        line.trim()
+                    ));
+                }
             }
         }
     }
     assert!(
-        in_planning > 0,
-        "plan_refusal in src/surface/planning.rs maps every PlanError"
+        named_in_words,
+        "{PLAN_WORDS} names PlanError and says every one"
     );
     assert!(
         stray.is_empty(),
-        "a PlanError is said only by plan_refusal:\n{}",
+        "a PlanError is said only by {PLAN_WORDS}:\n{}",
         stray.join("\n")
     );
 }
