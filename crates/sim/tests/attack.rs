@@ -2973,3 +2973,62 @@ fn a_charge_carried_when_the_target_is_gone_is_announced_lost() {
         "and the breach is gone"
     );
 }
+
+/// `Exhausted` and `NoWay` are two facts. A way sealed by the seat's own
+/// walls (inside a sphere of its own beacon, so not the seat's to demolish),
+/// from a start in the
+/// open field, has a walkers' component larger than the search's budget: the
+/// search runs out before it can tell, and says so (`Exhausted`). A start in a
+/// small pocket of stone (no wall at all) has a component the search finishes:
+/// it found no way across a wall (`NoWay`).
+#[test]
+fn a_search_out_of_budget_is_exhausted_and_one_that_finishes_is_no_way() {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let inside = ground(&fixture, here, 24, 0);
+    wall_columns(&mut fixture, inside, &ring(4), 3, seat(0));
+    // A wall is its builder's inside a sphere of one of its beacons.
+    let _own = beacon(
+        &mut fixture,
+        seat(0),
+        inside,
+        MandateKind::Defend,
+        FREE_FIRE,
+    );
+    fixture.step(&mut Enc::default()).expect("the walls settle");
+    assert_eq!(
+        search_between(&fixture, column(here), column(inside)).map(|breach| breach.wall),
+        Err(pharmakos_sim::attack::BreachRefused::Exhausted),
+        "the seat's own ring, from the open field"
+    );
+    let mut fixture = world();
+    let here = field(&fixture);
+    let inside = ground(&fixture, here, 24, 0);
+    wall_columns(&mut fixture, inside, &ring(4), 3, seat(1));
+    let [hx, hy] = column(here);
+    for dy in -2..=2_i32 {
+        for dx in -2..=2_i32 {
+            if dx.abs().max(dy.abs()) != 2 {
+                continue;
+            }
+            let top = fixture.standing_point([hx + dx, hy + dy, 0])[2].floor_voxels();
+            for z in top..top + 5 {
+                fixture
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: [hx + dx, hy + dy, z],
+                        material: Material::STONE,
+                        by: None,
+                    })
+                    .expect("a stone voxel is filed");
+            }
+        }
+    }
+    fixture
+        .step(&mut Enc::default())
+        .expect("the stone settles");
+    assert_eq!(
+        search_between(&fixture, column(here), column(inside)).map(|breach| breach.wall),
+        Err(pharmakos_sim::attack::BreachRefused::NoWay),
+        "a pocket of stone, with no wall to cross"
+    );
+}

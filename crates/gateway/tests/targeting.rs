@@ -1417,6 +1417,24 @@ fn wall_round_the_commander(surface: &Surface) -> Vec<[i32; 3]> {
     wall
 }
 
+/// Whether seat 0's commander is sealed in: the router holds it parked, with
+/// no way to its destination, and counts it in `sealed_units`.
+fn commander_sealed(surface: &Surface) -> bool {
+    use pharmakos_sim::pathing::router::WalkState;
+    let world = surface.host().expect("hosted").world();
+    let commander = world
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
+    let row = world
+        .units()
+        .ids()
+        .iter()
+        .position(|id| *id == commander.raw())
+        .and_then(|row| u32::try_from(row).ok())
+        .expect("the commander is in the unit table");
+    world.router().state(row) == WalkState::Sealed && world.sealed_units() >= 1
+}
+
 /// File one `Set` of `material` per voxel of `wall` through the host.
 fn file_wall(surface: &mut Surface, wall: &[[i32; 3]], material: pharmakos_sim::voxels::Material) {
     use pharmakos_sim::voxels::VoxelEdit;
@@ -1451,6 +1469,12 @@ fn push_cratered_on_its_last_tick(
     let mut chain = Vec::new();
     for tick in 1..=ticks {
         if tick == ticks {
+            // The wall's precondition: the commander it holds is sealed in
+            // until the last tick takes the wall down.
+            assert!(
+                wall.is_empty() || commander_sealed(surface),
+                "the wall holds seat 0's commander sealed in before its last tick"
+            );
             for &centre in craters {
                 surface
                     .host_mut()
