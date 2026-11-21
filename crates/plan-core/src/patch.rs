@@ -503,6 +503,9 @@ fn at_operation(error: Error, at: &str) -> Error {
 /// operation is applied ([`crate::error::Bound::Operations`]).
 pub const MAX_PATCH_OPERATIONS: usize = 64;
 
+/// The most undo operations one undo patch may carry (fix pass 5, MEDIUM 1).
+pub const MAX_UNDO_OPERATIONS: usize = MAX_PATCH_OPERATIONS;
+
 /// The longest patch text `patch_text` reads, in characters, refused before
 /// it is parsed: **a bound on the work one call does** (S3's `vfyq2`, fix
 /// pass 3, item L4, and fix pass 4, item 3).

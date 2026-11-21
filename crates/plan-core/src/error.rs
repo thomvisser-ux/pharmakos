@@ -89,6 +89,9 @@ pub enum Bound {
     Depth,
     /// An inverse patch longer than the playbook's cap.
     Inverse,
+    /// More undo operations in one patch than
+    /// [`crate::patch::MAX_UNDO_OPERATIONS`] (S3's `vfyq2`, fix pass 5).
+    UndoOperations,
 }
 
 impl Error {
