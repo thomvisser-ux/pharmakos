@@ -3416,9 +3416,10 @@ fn chained_walk(folds: i32) -> (u32, i32, i32) {
 /// voxels high, leave gaps at alternate ends, so two columns of one cluster
 /// eight cells apart are joined only by a serpentine of about 1 500 cells.
 ///
-/// What this does not cover, and the docs say ("A chained walk arrives later
-/// than its cost says"): each further ask waits for its own serving tick,
-/// which no estimate counts.
+/// The ticks are the walk's cost rounded once and the allowance per extra
+/// route (`estimate`'s module docs, "A chained walk is priced at its
+/// re-asks' bound"); `a_chained_walk_arrives_no_later_than_promised` walks it
+/// with real commanders.
 #[test]
 fn a_partial_near_route_is_answered_at_its_walk() {
     let mut fixture = Fixture::build(SEED, CLUSTER);

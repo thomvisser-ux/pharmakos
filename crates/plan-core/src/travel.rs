@@ -13,10 +13,14 @@
 //! > connectivity oracle before any search … The estimator is the abstract
 //! > search alone: it never refines, never steps, never forks.
 //!
-//! Lane `p3fix` amended the last sentence for a near pair (start and goal in
-//! the same or touching clusters): it is priced at the route the router would
-//! serve, which refines but still never steps and never forks. The signature
-//! is unchanged.
+//! Lane `p3fix` amended the last sentence, and the owner approved it on
+//! 2026-11-21: a clear query, near pair or far, is priced at the walk the
+//! router would serve, plus an allowance per extra route the walk needs,
+//! which refines but still never steps and never forks; a query under a fog
+//! mask keeps the abstract search. The sim's function now answers
+//! `Result<Option<Estimate>, EstimateError>` (a walk it could not price is
+//! an error, never "no route"); this seam is unchanged, and the gateway's
+//! adapter raises such an error as a fault.
 //!
 //! `world`, `clusters`, `scratch` and `fog` are the estimator's own state, so
 //! what crosses into this crate is [`TravelEstimator`]: the frozen function

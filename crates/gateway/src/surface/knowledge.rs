@@ -84,8 +84,8 @@ pub const fn beacon_budget(detail: Detail) -> usize {
 
 /// The most waypoints one `estimate_route` may name.
 ///
-/// A route costs one estimate per leg (an abstract search, or a route the
-/// router would serve for a near pair) and there is no estimate cache
+/// A route costs one estimate per leg (the walk the router would serve, its
+/// partial routes chained, near pair or far) and there is no estimate cache
 /// (decisions-log item 61), so the count is the caller's multiplier on the
 /// gateway's whole single-threaded turn: measured on the shipped 384x384x64
 /// map, 2 000 waypoints between two far corners is a 64 KiB request -- well

@@ -36,9 +36,11 @@
 //! is legal at **every** step and costs no more than the sub-path it replaces.
 //! So the smoother can neither introduce an illegal step nor make a route
 //! worse; the only thing it can do is fail to find a shortcut. That is what
-//! makes a far pair's estimate never optimistic (item 61): it prices the
-//! unsmoothed refinement, and the walker walks the smoothed one. A near
-//! pair's estimate prices the smoothed route itself (`route_and_abstract`).
+//! makes a fogged estimate never optimistic (item 61): it prices the
+//! unsmoothed refinement, and the walker walks the smoothed one. A clear
+//! estimate, near pair or far, prices the smoothed route itself, the walk the
+//! router serves (`route_and_abstract`, through
+//! `pathing::estimate::walk_cost`).
 
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;

@@ -225,9 +225,11 @@ pub fn feature_reads(world: &World, seat: Option<SeatId>) -> Vec<FeatureRead> {
     reads
 }
 
-/// Every candidate `keep` admits, nearest first by the sim's [`Ranker`], with
-/// the estimator's cost of each: `(feature index, cost)`. An unreachable
-/// candidate is not listed (targeting.md, "Nearest").
+/// Every candidate `keep` admits, nearest first by the sim's [`Ranker`] (by
+/// the commander's travel time, then the walk's cost), with the walk the
+/// router serves each: `(feature index, walk)`, which [`travel_ms`] turns into
+/// the time shown. An unreachable candidate is not listed (targeting.md,
+/// "Nearest").
 pub fn ranked<F>(
     ground: &Ground<'_>,
     scratch: &mut Scratch,

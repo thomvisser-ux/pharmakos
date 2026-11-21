@@ -59,29 +59,39 @@
 //!
 //! Within ±15 % at p90 of walked time on static terrain (G2 measured 2.6 %),
 //! and **never optimistic** — the editor's rounding depends on that, so it is
-//! part of the contract rather than an implementation detail (item 61).
-//! "Walked" counts from the tick that serves the route, as `tests/pathing.rs`'s
-//! P3 gate reads it. Three things make it hold here rather than by luck:
+//! part of the contract rather than an implementation detail (item 61). The
+//! promise, with its conditions (the owner approved the contract on
+//! 2026-11-21): on static terrain, for a walk under no surcharge, counted
+//! **from the tick that serves the route** (the owner's reading of item 57:
+//! the first ask's wait in the repath queue is not in the promise), with every
+//! later re-ask's wait priced, a walker is never later than `ticks`. Four
+//! things make it hold here rather than by luck:
 //!
 //! * a clear query's cost **is** the served walk's cost, by construction;
 //! * `ticks` rounds up ([`ticks_for_cost`]), and the walker's own accumulator
 //!   arrives on `ceil(cost * 20 / cost_per_second)` exactly (item 90), so the
 //!   two computations of "when does it get there" agree at the tick, for a
 //!   walk the router serves in one route;
+//! * a walk served in more than one route is priced with the allowance per
+//!   extra route, [`Speed::link_ticks`] ([`link_ticks`]): one tick of
+//!   rounding, as the walker banks nothing from one route into the next, and
+//!   the repath queue's longest wait in the world, which has a bound however
+//!   loaded the queue is;
 //! * a fogged query's abstract cost is the cost of the unsmoothed refinement
 //!   exactly, because every intra edge is an exact bounded search cost and
 //!   every inter edge is one grid step; the smoother only ever removes cost,
 //!   and fog only adds it.
 //!
-//! **A chained walk arrives later than its cost says.** A walker at the end of
+//! **A chained walk is priced at its re-asks' bound.** A walker at the end of
 //! a partial route banks nothing into the next one and waits for the repath
-//! queue to serve its next ask (`crate::pathing::router`), so a walk of more
-//! than [`crate::pathing::MAX_ROUTE_NODES`] columns takes up to a tick more per
-//! ask than `ticks`, plus the queue's wait, which depends on every other
-//! walker's asks: pricing it would be modelling the match, which no estimate
-//! may do (AGENTS.md section 3 rule 2). Before the gateway step the abstract
-//! cost's slack over the walk covered that; it was never counted either.
-//! `tests/pathing.rs`'s serpentine builds such a walk.
+//! queue to serve its next ask (`crate::pathing::router`). The wait has a
+//! bound by the queue's own rule and the world's unit ceiling, not by
+//! modelling the match ([`link_ticks`]), so [`walk_ticks`] adds it per extra
+//! route and the promise holds by construction, slightly pessimistic on a
+//! long walk (20 ticks a re-ask at the committed cap, against a walk of at
+//! least 20 460 ticks). `tests/pathing.rs`'s
+//! `a_chained_walk_arrives_no_later_than_promised` walks real commanders
+//! through serpentines of two to five routes.
 //!
 //! `tests/pathing.rs`'s `the_estimate_is_never_optimistic_at_any_percentile`
 //! asserts the **signed** error, not `|error|`: an estimate that came in under
@@ -90,9 +100,9 @@
 //!
 //! What the estimate does not price: the route surcharge the router applies to
 //! a unit under an Attack beacon's avoid areas or on an `AVOID_KNOWN_THREATS`
-//! step ([`crate::pathing::route::Surcharge`]). Such a walk can be later than
-//! any estimate here; that predates the near pairs and is owed to the next
-//! pathing lane.
+//! step ([`crate::pathing::route::Surcharge`]). The promise is for a walk
+//! under no surcharge, which every ranked choice is (`targeting`'s "Two
+//! measures"); a surcharged walk can be later than its estimate.
 //!
 //! # Fog
 //!
@@ -117,10 +127,11 @@
 //! terrain under the unseen columns (the 17 above), which section 11's
 //! "last-known state" does not allow. Nothing reachable has the gap today: no
 //! production caller sets a mask (the gateway's `RouteAdapter` holds an empty
-//! one, so every query runs `Fog::Clear`). Before a stage wires the mask, the
-//! fogged estimate needs a design of its own and the owner's fog ruling.
+//! one, so every query runs `Fog::Clear`). The owner has ruled
+//! (decisions-log item 168 (10)): at S4 a route is priced over the seat's
+//! knowledge, and until then the rough estimate under a mask stands.
 //!
-//! PLACEHOLDER: the fogged estimate's own design (last-known state) and the owner's fog ruling, before the mask is wired — owner, at S4, with the knowledge store's mask (S3's plan, decision 2: S3-05 moved to S4).
+//! PLACEHOLDER: the fogged estimate priced over the seat's knowledge, last-known state (decisions-log item 168 (10)) — the S4 knowledge-store lane, at S4 with the knowledge store's mask (S3's plan, decision 2: S3-05 moved to S4).
 //!
 //! The cap item 61 sets, "+50 % over the clear estimate", was written when the
 //! clear estimate was the abstract one; it reads as the markup's own bound, at
@@ -294,10 +305,12 @@ pub fn fog_price(cost: i32, numerator: i32, denominator: i32) -> i32 {
 /// Everything else item 61 fixes is unchanged: no route from the oracle before
 /// any search, `legs` as the abstract-edge count, fog at ×3/2 per abstract edge
 /// as integer `cost * 3 / 2`, and no cache. Two sentences of item 61 are
-/// amended: a clear query is priced at the walk the router serves rather than
-/// by the abstract search (the module docs' "A clear query"), and "never
-/// optimistic" holds for a walk served in one route (the module docs' "A
-/// chained walk arrives later than its cost says").
+/// amended, with the owner's approval of 2026-11-21: a clear query is priced
+/// at the walk the router serves, plus the allowance per extra route, rather
+/// than by the abstract search (the module docs' "A clear query" and "A
+/// chained walk is priced at its re-asks' bound"); and "never optimistic"
+/// counts from the tick that serves the route (the module docs' "The error
+/// contract").
 ///
 /// `fog_numerator` and `fog_denominator` come from the rules table, so the
 /// multiplier is data rather than a constant here (AGENTS.md §12).

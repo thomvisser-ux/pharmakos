@@ -19,9 +19,10 @@
 //! decisions-log item 156 (1) records it, and the preset plays 20. Under the
 //! stone's corrected measure (clause 3, lane `p3fix`) the criterion is also
 //! met by 13, an earlier seed: the passing seeds from 0 through 20 are 13 and
-//! 20 (`the_passing_seeds_through_twenty_are_thirteen_and_twenty`). Whether
-//! the preset moves to 13 is the owner's question, and open; nothing is built
-//! for it.
+//! 20 (`the_passing_seeds_through_twenty_are_thirteen_and_twenty`). The
+//! owner answered whether the preset moves to 13: "Keep 20" (decisions-log
+//! item 168 (4)). The preset plays 20; that 13 passes is recorded here and
+//! built nowhere.
 //!
 //! # The criterion
 //!
