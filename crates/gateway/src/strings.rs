@@ -211,7 +211,9 @@ pub fn event_text(event: &Event) -> String {
         EventKind::ChargePlanted => format!("A raider of {seat} planted a demolition charge."),
         EventKind::ChargeDetonated => format!("A demolition charge of {seat} cut a breach."),
         EventKind::ChargeLost => {
-            format!("A carrier of {seat} was killed before it planted; its charge will never fire.")
+            format!(
+                "A demolition charge of {seat} was lost before it was planted; it will never fire."
+            )
         }
         // S3's `lic`: the Ledger's licences. `value` is the licence's
         // `gp.v1.Licence` wire value.
@@ -1116,7 +1118,7 @@ mod tests {
         );
         assert_eq!(
             event_text(&event(EventKind::ChargeLost, Some(2), 0)),
-            "A carrier of seat 2 was killed before it planted; its charge will never fire."
+            "A demolition charge of seat 2 was lost before it was planted; it will never fire."
         );
     }
 

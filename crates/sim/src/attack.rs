@@ -68,13 +68,21 @@
 //! # Breach (E23, decisions 9, 40 and 41)
 //!
 //! A launched force whose way to its target is sealed -- the connectivity
-//! oracle says the lead raider's column and the target's are apart -- stops,
-//! unless the beacon's `breach_allowed` is set. With it, the beacon asks the
-//! **breach search** ([`breach_search`], the pathfinder's second cost mode
-//! over the same 2.5D graph) for the cheapest way through, on which a column
-//! whose top is another seat's or a neutral wall is passable at
-//! [`BREACH_COLUMN_COST`]; the search's first wall column is the breach point
-//! and the column before it the plant point. Then:
+//! oracle says the lead raider's column and the target's are apart
+//! ([`SealedWay`]) -- ends its attack sealed, unless the beacon's
+//! `breach_allowed` is set. With it, the beacon asks the **breach search**
+//! ([`breach_search`], over the same 2.5D graph, in two layers) for the
+//! least-cost way through. Before any wall is crossed its moves are a
+//! walker's ([`crate::pathing::surface::Surface::neighbour`]); the **crossing** is one
+//! step, by the surface's own step rule, from a column a walker stands on that
+//! is no breachable wall onto a column whose top is another seat's or a
+//! neutral wall, read at its footing, at [`BREACH_COLUMN_COST`] more; after it
+//! the moves go over footings and tops, each breachable column entered
+//! costing that much more. The first wall that least-cost way crosses is the
+//! breach ([`Breach::wall`]) and the column it is crossed from, a column a
+//! walker from the lead reaches, the plant point. A lead with no walker way to
+//! a column it could plant from has no breach, and the attack ends sealed with
+//! the refusal counted. Then:
 //!
 //! * the seat's mortars in range of the breach point, under `FREE_FIRE`,
 //!   shell its top wall voxel ([`breach_aim`]; decision 41: an enemy wall is a
@@ -87,6 +95,13 @@
 //!   the force walks on as far as the seal lets it. A carrier killed before
 //!   it plants drops a charge that never fires (decision 9), and the beacon
 //!   buys another;
+//! * a breach is **planned again** at once, its carried charge and carrier
+//!   kept, when its wall falls while the way is still sealed, or when its
+//!   plant stops being a column the lead reaches (walled in or cratered away);
+//! * a carried charge whose breach is let go any other way -- the attack
+//!   ending, the way opening, a retarget, a re-plan that finds no breach -- is
+//!   lost with it, announced once (`charge_lost`, the event decision 9's
+//!   killed carrier announces), and not refunded;
 //! * the charge **cuts flat**: every voxel inside `combat.charge_radius_voxels`
 //!   of the breach column, above the wall's footing, wall or terrain, cracked
 //!   or whole, stone included, is removed (decisions 10 and 40;
@@ -100,8 +115,9 @@
 //!   filed like a shell's splash for the tick's combat phase (decisions-log
 //!   item 151 (2) (c) (3); S3's `lic`).
 //!
-//! The breach is over once the breach column's top is no wall any more, or
-//! the oracle joins the lead raider to the target again; the force walks on.
+//! The breach is over once the oracle joins the lead raider to the target
+//! again, and the force walks on; or once the breach column's top is no wall
+//! any more while the way is still sealed, and the breach is planned again.
 //!
 //! # State, and its hash
 //!
@@ -138,9 +154,10 @@ pub const NO_CARRIER: u32 = u32::MAX;
 /// PLACEHOLDER: the breach search's demolition cost per wall column, ten cardinal steps — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run.
 pub const BREACH_COLUMN_COST: i32 = 100;
 
-/// How many columns one breach search may close before it gives up, counted
-/// under [`AttackCounts::breach_exhausted`]: the bound that keeps a search
-/// inside a tick's budget (E5's rule for every bounded queue).
+/// How many states (a column, before a wall is crossed or after) one breach
+/// search may close before it gives up, counted under
+/// [`AttackCounts::breach_exhausted`]: the bound that keeps a search inside a
+/// tick's budget (E5's rule for every bounded queue).
 ///
 /// PLACEHOLDER: the breach search's budget, sixteen clusters' worth of columns — owner, at S3, with the pathing certification.
 pub const BREACH_EXPANSIONS: u32 = 16_384;
