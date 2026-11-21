@@ -8858,4 +8858,41 @@ mod ids_tests {
             "the committed table's rules hash is the one every golden names"
         );
     }
+
+    /// Lane `p3fix`, fix pass 4: the step costs are refused at load past
+    /// what a path's `i32` cost holds, `(diagonal + climb) × (size_x × size_y
+    /// − 1) ≤ i32::MAX`, naming the row; at the bound the table loads, and
+    /// the grid optimum's ring is then at its largest for the map: twice
+    /// 14 563, plus one, is 29 127 buckets on the committed 384-by-384 map. Validation moves
+    /// no valid table's rules hash (the test above).
+    #[test]
+    fn a_step_cost_no_path_cost_can_hold_is_refused_at_load() {
+        let committed = rules();
+        let map = committed.message().map.unwrap_or_default();
+        let steps = u64::from(map.size_x) * u64::from(map.size_y) - 1;
+        let most = u64::from(i32::MAX.unsigned_abs()).div_euclid(steps);
+        assert_eq!(most, 14_563, "the committed map's bound");
+        let diagonal = committed
+            .message()
+            .locomotion
+            .as_ref()
+            .map_or(0, |locomotion| locomotion.step_cost_diagonal);
+        for (climb, loads) in [
+            (u32::try_from(most).unwrap_or(0) - diagonal, true),
+            (u32::try_from(most).unwrap_or(0) - diagonal + 1, false),
+        ] {
+            let mut message = committed.message().clone();
+            if let Some(locomotion) = message.locomotion.as_mut() {
+                locomotion.climb_surcharge = climb;
+            }
+            match RulesTable::from_message(&message) {
+                Ok(_) => assert!(loads, "a climb of {climb} loaded"),
+                Err(crate::rules::RulesError::OutOfRange { field, .. }) => {
+                    assert!(!loads, "a climb of {climb} was refused");
+                    assert_eq!(field, "locomotion.climb_surcharge");
+                }
+                Err(other) => panic!("a climb of {climb}: {other:?}"),
+            }
+        }
+    }
 }
