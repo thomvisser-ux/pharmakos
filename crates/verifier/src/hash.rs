@@ -315,6 +315,7 @@ pub enum HashError {
 /// A hash refusal names what it hashed and a length: engine words (S3's
 /// `vfyq2`, fix pass 3, item M2 (d)).
 impl pharmakos_proto::json::grammar::EngineWords for HashError {}
+impl pharmakos_proto::json::grammar::door::Sealed for HashError {}
 
 impl core::fmt::Display for HashError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

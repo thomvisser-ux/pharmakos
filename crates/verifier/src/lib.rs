@@ -406,6 +406,7 @@ pub enum InputError {
 /// view's refusal, each engine words (S3's `vfyq2`, fix pass 3, item M2
 /// (d)); none reads the playbook's text.
 impl pharmakos_proto::json::grammar::EngineWords for InputError {}
+impl pharmakos_proto::json::grammar::door::Sealed for InputError {}
 
 impl core::fmt::Display for InputError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

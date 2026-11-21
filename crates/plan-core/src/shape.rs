@@ -108,6 +108,7 @@ pub struct UnknownEnum(pub &'static str);
 /// The enum's name is the schema's, a `&'static str` (S3's `vfyq2`, fix pass
 /// 3, item M2 (d)).
 impl pharmakos_proto::json::grammar::EngineWords for UnknownEnum {}
+impl pharmakos_proto::json::grammar::door::Sealed for UnknownEnum {}
 
 impl core::fmt::Display for UnknownEnum {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

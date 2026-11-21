@@ -920,6 +920,15 @@ const fn utf8_width(lead: u8) -> Option<usize> {
 /// lexeme, and never the whole of a 200 KB one.
 pub const MAX_QUOTED_CHARS: usize = 64;
 
+/// The most characters an engine error is shown with, the rest shown as `…`
+/// (S3's `vfyq2`, fix pass 5, item L4: [`Said::engine_error`] is capped like
+/// [`quoted`]). Room for the longest words a declared type writes: a codec
+/// refusal's pointer, at most [`MAX_DEPTH`] + 1 tokens, each [`quoted`]
+/// (at most [`MAX_QUOTED_CHARS`] characters, each escaped in at most twelve,
+/// and a `…` and a `/`), and a sentence of up to 1,024 characters around it
+/// (a host path, a field, a value).
+pub const MAX_ENGINE_CHARS: usize = (MAX_DEPTH + 1) * (MAX_QUOTED_CHARS * 12 + 2) + 1024;
+
 /// The Unicode version [`HIDDEN`]'s general categories were taken from.
 pub const HIDDEN_UNICODE_VERSION: &str = "16.0.0";
 
@@ -1135,7 +1144,9 @@ impl Said {
         // L-a): a declared type's words are the engine's, but some carry a
         // `String` (a rules file's path, a codec's message), and no character
         // of `HIDDEN` reaches a person through any of them.
-        Said(Cow::Owned(escaped(&error.to_string()).0))
+        Said(Cow::Owned(
+            shown(&error.to_string(), Some(MAX_ENGINE_CHARS)).0,
+        ))
     }
 
     /// [`crate::said`]'s substitution: `template`'s `{}` in turn, each
@@ -1146,8 +1157,10 @@ impl Said {
     /// holds exactly one `{}` per piece; a template written by hand that
     /// holds fewer leaves the rest of the pieces out, and one that holds more
     /// writes the extra `{}` as it stands.
+    // Private (fix pass 5, item L4): only `compose_checked`, which `said!`
+    // calls, reaches it.
     #[must_use]
-    pub fn compose(template: &'static str, pieces: &[Said]) -> Said {
+    fn compose(template: &'static str, pieces: &[Said]) -> Said {
         let extra: usize = pieces.iter().map(|piece| piece.0.len()).sum();
         let mut out = String::with_capacity(template.len().saturating_add(extra));
         let mut next = pieces.iter();
@@ -1206,15 +1219,31 @@ impl Said {
 /// whose words do carry player text (the sim's `PlanError`, which writes
 /// labels and ids raw) does not implement it, and is said through a
 /// sentence composed from its fields.
-pub trait EngineWords: fmt::Display {}
+///
+/// It is sealed by [`door::Sealed`] (S3's `vfyq2`, fix pass 5, item L4). The
+/// seal has to be nameable by the other crates behind the door (plan-core,
+/// the verifier, the gateway), so the type system cannot keep a downstream
+/// crate from naming it too: `crates/plan-core/tests/door.rs` holds every
+/// implementation of either trait to a crate behind the door's `src`.
+pub trait EngineWords: fmt::Display + door::Sealed {}
+
+/// [`EngineWords`]'s seal (S3's `vfyq2`, fix pass 5, item L4).
+#[doc(hidden)]
+pub mod door {
+    /// Implemented beside each [`super::EngineWords`] declaration, behind the
+    /// door alone.
+    pub trait Sealed {}
+}
 
 /// An I/O error's words are the operating system's: a file the host could
 /// not read, never the file's contents.
 impl EngineWords for std::io::Error {}
+impl door::Sealed for std::io::Error {}
 
 /// prost's decode error says which wire fault it met, in prost's words; the
 /// bytes it read are this workspace's own encoding.
 impl EngineWords for prost::DecodeError {}
+impl door::Sealed for prost::DecodeError {}
 
 /// [`crate::said`]'s compile-time check of a template's `{}` count, one per
 /// piece; it writes nothing and is never shown.
@@ -1325,6 +1354,7 @@ mod engine_cap {
     }
 
     impl EngineWords for Long {}
+    impl super::door::Sealed for Long {}
 
     /// `Said::engine_error` is capped like `quoted` (S3's `vfyq2`, fix pass
     /// 5, item L4): a declared type's words are shown at most to the cap,

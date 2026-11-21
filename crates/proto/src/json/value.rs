@@ -177,6 +177,7 @@ impl Error {
 /// A codec error's words are its message, which [`Error::at`] took as a
 /// [`super::grammar::Said`].
 impl super::grammar::EngineWords for Error {}
+impl super::grammar::door::Sealed for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

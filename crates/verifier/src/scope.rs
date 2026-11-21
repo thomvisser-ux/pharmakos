@@ -316,6 +316,7 @@ pub enum ScopeError {
 /// from the world (`b_NN`, `e_NN`), and numbers (S3's `vfyq2`, fix pass 3,
 /// item M2 (d)); nothing in it is read from a playbook.
 impl pharmakos_proto::json::grammar::EngineWords for ScopeError {}
+impl pharmakos_proto::json::grammar::door::Sealed for ScopeError {}
 
 impl core::fmt::Display for ScopeError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

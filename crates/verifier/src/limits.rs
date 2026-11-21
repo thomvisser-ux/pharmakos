@@ -95,6 +95,7 @@ pub enum RulesGap {
 /// A rules gap names a rules-table field and its value: the shipped table's
 /// words, not a player's (S3's `vfyq2`, fix pass 3, item M2 (d)).
 impl pharmakos_proto::json::grammar::EngineWords for RulesGap {}
+impl pharmakos_proto::json::grammar::door::Sealed for RulesGap {}
 
 impl fmt::Display for RulesGap {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

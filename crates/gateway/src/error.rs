@@ -244,6 +244,11 @@ where
 /// [`engine`]'s declaration of an error type whose words are the engine's.
 pub(crate) struct Engine<'a, T>(&'a T);
 
+/// The seal on every [`Engine`]: which of them carries the engine's words is
+/// the [`pharmakos_proto::json::grammar::EngineWords`] declarations below,
+/// one by one.
+impl<T> pharmakos_proto::json::grammar::door::Sealed for Engine<'_, T> {}
+
 impl<T: std::fmt::Display> std::fmt::Display for Engine<'_, T> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(formatter)
