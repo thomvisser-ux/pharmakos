@@ -397,7 +397,7 @@ pub struct ServedWalk {
 /// The tick a walker arrives on, at the latest, walking `walk` at `speed`:
 /// the walk's cost rounded up to the tick once ([`ticks_for_cost`]), and
 /// [`Speed::link_ticks`] for each partial route, the most a re-ask can cost it
-/// under any load ([`crate::rules::RulesTable::link_ticks`]). **Never
+/// under any load ([`link_ticks`]). **Never
 /// optimistic** (decisions-log items 57 and 61): a walk served in one route
 /// arrives on exactly this tick; a chained walk on this tick at the latest,
 /// and earlier by its rounding and the queue's wait as they fall. The one
@@ -755,9 +755,55 @@ pub struct Speed {
     /// `locomotion.fog_cost_denominator` (item 61: 2).
     pub fog_denominator: i32,
     /// The most ticks a re-ask at the end of a partial route can cost the
-    /// walker ([`crate::rules::RulesTable::link_ticks`]), which
-    /// [`walk_ticks`] adds per partial route.
-    pub link_ticks: i32,
+    /// walker ([`link_ticks`]), which [`walk_ticks`] adds per partial route:
+    /// the hosted world's own bound from [`Speed::commander_of`], or, for a
+    /// caller that holds only a rules table, the bound every world keeps
+    /// ([`ROOM_ROWS`]).
+    pub link_ticks: u32,
+}
+
+/// The most rows any world's router holds: [`crate::ids::ROOM_LIMIT`], which
+/// a world's unit ceiling never passes (`World::new` refuses it), as the
+/// non-zero count [`link_ticks`] takes. The bound for a caller that holds a
+/// rules table and no world.
+pub const ROOM_ROWS: core::num::NonZeroU32 =
+    match core::num::NonZeroU32::new(crate::ids::ROOM_LIMIT) {
+        Some(rows) => rows,
+        // Evaluated at compile time: `ROOM_LIMIT` is a positive constant, so a
+        // build in which it is not fails here rather than at run time.
+        None => panic!("ROOM_LIMIT names at least one row"),
+    };
+
+/// The most ticks a walker at the end of a partial route can lose before it
+/// walks the next one, in a world whose router holds at most `rows` rows and
+/// is served `cap` repaths a tick. Two parts:
+///
+/// * **One tick of rounding.** The walker banks nothing from one route into
+///   the next (`crate::pathing::router`), so each route's walk rounds up to its
+///   own tick: a chain of routes takes at most one tick a route more than its
+///   summed cost rounded once.
+/// * **The queue's wait.** The walker asks again in the Movement phase and is
+///   served by the same tick's Pathing phase or a later one. The queue is
+///   served round-robin from a cursor that only moves forward, up to `cap` a
+///   tick: a tick that serves fewer than the cap has scanned every row, the
+///   walker's included, and one that serves the cap has moved the cursor at
+///   least the cap's rows towards it; the rows between the cursor and the
+///   walker, rows appended during the wait included, are at most `rows - 1`.
+///   So the walker is served within `(rows - 1) / cap` ticks after the one it
+///   asked in, **however loaded the queue is**.
+///
+/// A world's router holds a row per unit and never more than the world's unit
+/// ceiling (`World::unit_limit`: placement refuses past it, and a restore
+/// keeps it and refuses a file that holds more), so the world's bound is
+/// `link_ticks(unit_limit, cap)` (`World::link_ticks`), stable across a save
+/// and resume. On the committed rules a world's ceiling is 308 rows at two
+/// seats and 312 at three: 20 ticks a re-ask at the cap of 16.
+///
+/// Exact by type: `rows` is at least one, so `rows - 1` holds; the quotient is
+/// at most `rows - 1`, below `u32::MAX`, so `+ 1` holds; `cap` is non-zero.
+#[must_use]
+pub const fn link_ticks(rows: core::num::NonZeroU32, cap: core::num::NonZeroU32) -> u32 {
+    (rows.get() - 1).div_euclid(cap.get()) + 1
 }
 
 impl Speed {
@@ -770,7 +816,19 @@ impl Speed {
             cost_per_second: rules.cost_per_second(kind),
             fog_numerator: rules.fog_cost_numerator(),
             fog_denominator: rules.fog_cost_denominator(),
-            link_ticks: rules.link_ticks(),
+            link_ticks: link_ticks(ROOM_ROWS, rules.repath_cap()),
+        }
+    }
+
+    /// The commander's speed in `world`, with the world's own re-ask bound
+    /// ([`World::link_ticks`](crate::world::World::link_ticks)): what every
+    /// reader of a hosted match prices a walk at (the gateway's
+    /// `estimate_route`, `get_map_summary` and `resolve_refs`).
+    #[must_use]
+    pub fn commander_of(world: &crate::world::World) -> Speed {
+        Speed {
+            link_ticks: world.link_ticks(),
+            ..Speed::commander(world.rules())
         }
     }
 
@@ -782,7 +840,7 @@ impl Speed {
             cost_per_second: rules.commander_cost_per_second(),
             fog_numerator: rules.fog_cost_numerator(),
             fog_denominator: rules.fog_cost_denominator(),
-            link_ticks: rules.link_ticks(),
+            link_ticks: link_ticks(ROOM_ROWS, rules.repath_cap()),
         }
     }
 }

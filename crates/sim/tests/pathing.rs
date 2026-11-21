@@ -3173,7 +3173,7 @@ fn serpentine_in(
 /// `MAX_ROUTE_NODES`, so the router serves it a partial route, it walks it,
 /// asks again where it stops and walks the rest. The estimate is
 /// `walk_ticks` of that served walk: its cost rounded up once, and
-/// `RulesTable::link_ticks` for each partial route, the most a re-ask can
+/// `World::link_ticks` for each partial route, the most a re-ask can
 /// cost under any load (one tick of rounding, as the walker banks nothing
 /// from one route into the next, and the repath queue's longest wait). The
 /// walker arrives no later than that, on static terrain with an idle repath
@@ -3182,7 +3182,7 @@ fn serpentine_in(
 /// Under a loaded queue the walker waits longer for its re-ask, but never
 /// past `link_ticks`: the queue is served round-robin from a cursor that only
 /// moves forward, at most the cap a tick, over at most `ids::ROOM_LIMIT` rows
-/// (`RulesTable::link_ticks`' docs). So the promise holds under load too, by
+/// (`pathing::estimate::link_ticks`' docs). So the promise holds under load too, by
 /// that bound; `the_repath_cap_is_served_round_robin_and_never_exceeded`
 /// holds the serving rule it rests on.
 ///
@@ -3211,29 +3211,86 @@ fn a_chained_walk_arrives_no_later_than_promised() {
     );
 }
 
-/// The re-ask's bound, as the estimate prices it (`RulesTable::link_ticks`):
-/// one tick of rounding and the repath queue's longest wait,
-/// `(ids::ROOM_LIMIT - 1) / cap` ticks, 256 at the committed cap of 16; a
-/// cap of nought, under which the wait has no bound, is refused at load; and
-/// `walk_ticks` adds it once per partial route, to the walk's cost rounded
-/// once. At the committed rates a route's walk is a whole number of ticks
-/// and an idle queue serves a re-ask in the tick it is made, so
-/// [`a_chained_walk_arrives_no_later_than_promised`] cannot tell the bound
-/// from nothing: this pins it.
+/// The re-ask's bound, as the estimate prices it
+/// (`pathing::estimate::link_ticks`): one tick of rounding and the repath
+/// queue's longest wait in the world, `(unit_limit - 1) / cap` ticks over the
+/// world's own unit ceiling (`World::link_ticks`, which `Speed::commander_of`
+/// carries), and over `ids::ROOM_LIMIT` rows for a caller holding only a
+/// rules table (`Speed::commander`); a world restored from a save keeps its
+/// bound; a cap of nought, under which the wait has no bound, is refused at
+/// load; and `walk_ticks` adds the bound once per partial route, to the
+/// walk's cost rounded once. At the committed rates a route's walk is a whole
+/// number of ticks and an idle queue serves a re-ask in the tick it is made,
+/// so [`a_chained_walk_arrives_no_later_than_promised`] cannot tell the bound
+/// from nothing: this pins it. The table it prints is the coupling with the
+/// repath cap: the bound at caps 16, 8, 4, 2 and 1, in ticks and as a share
+/// of the shortest walk that can need a second route.
 #[test]
 fn a_re_ask_is_priced_at_the_queues_longest_wait() {
-    use pharmakos_sim::pathing::estimate::{ServedWalk, walk_ticks};
+    use core::num::NonZeroU32;
+    use pharmakos_sim::pathing::estimate::{ROOM_ROWS, ServedWalk, link_ticks, walk_ticks};
     let rules = rules();
-    let cap = rules.repath_cap_per_tick();
-    let wait = (pharmakos_sim::ids::ROOM_LIMIT - 1).div_euclid(cap);
-    assert_eq!(
-        rules.link_ticks(),
-        i32::try_from(wait + 1).expect("fits"),
-        "one tick of rounding and the queue's longest wait at a cap of {cap}"
-    );
-    assert_eq!(rules.link_ticks(), 256, "the committed cap of 16");
+    let cap = rules.repath_cap();
+    assert_eq!(cap.get(), 16, "the committed cap");
+    for seats in [2_u32, 3] {
+        let world = World::new(&WorldConfig {
+            match_seed: SEED,
+            seats,
+            rules: rules.clone(),
+            match_settings: MatchSettings::default(),
+        })
+        .expect("a world");
+        let rows = NonZeroU32::new(world.unit_limit()).expect("a unit ceiling");
+        assert_eq!(
+            world.link_ticks(),
+            (world.unit_limit() - 1).div_euclid(cap.get()) + 1,
+            "{seats} seats: one tick of rounding and the queue's longest wait"
+        );
+        assert_eq!(Speed::commander_of(&world).link_ticks, world.link_ticks());
+        let restored = {
+            let mut again = World::new(&WorldConfig {
+                match_seed: SEED,
+                seats,
+                rules: rules.clone(),
+                match_settings: MatchSettings::default(),
+            })
+            .expect("a world");
+            pharmakos_sim::snapshot::Snapshot::capture(&world)
+                .expect("a snapshot")
+                .restore_into(&mut again)
+                .expect("the snapshot restores");
+            again
+        };
+        assert_eq!(
+            restored.link_ticks(),
+            world.link_ticks(),
+            "{seats} seats: a restore keeps the bound"
+        );
+        // The shortest walk that can need a second route: `MAX_ROUTE_NODES - 1`
+        // cardinal steps at the commander's speed.
+        let shortest = ticks_for_cost(
+            i32::try_from(MAX_ROUTE_NODES - 1).expect("fits") * rules.step_cardinal(),
+            rules.commander_cost_per_second(),
+        )
+        .expect("a speed");
+        let mut table = String::new();
+        for at in [16_u32, 8, 4, 2, 1] {
+            let bound = link_ticks(rows, NonZeroU32::new(at).expect("non-zero"));
+            let per_mille = (i64::from(bound) * 1_000).div_euclid(i64::from(shortest));
+            let _ = write!(table, " cap {at}: {bound} ticks, {per_mille} per mille;");
+        }
+        println!(
+            "::notice::{seats} seats: unit ceiling {} rows; the re-ask bound against the \
+             shortest chained walk ({shortest} ticks):{table}",
+            world.unit_limit()
+        );
+    }
     let speed = Speed::commander(&rules);
-    assert_eq!(speed.link_ticks, rules.link_ticks());
+    assert_eq!(
+        speed.link_ticks,
+        link_ticks(ROOM_ROWS, cap),
+        "a caller with no world prices the bound every world keeps"
+    );
     for partials in [0_u32, 1, 3] {
         let walk = ServedWalk {
             cost: 10_235,
@@ -3243,7 +3300,7 @@ fn a_re_ask_is_priced_at_the_queues_longest_wait() {
         assert_eq!(
             walk_ticks(walk, speed),
             Ok(Some(
-                once + i32::try_from(partials).expect("fits") * rules.link_ticks()
+                once + i32::try_from(partials * speed.link_ticks).expect("fits")
             )),
             "{partials} partial routes"
         );
@@ -3285,7 +3342,7 @@ fn chained_walk(folds: i32) -> (u32, i32, i32) {
     let _ = world.step(&mut enc).unwrap();
     let start = world.surface().node_of(sx, sy).expect("on the map");
     let goal = world.surface().node_of(gx, gy).expect("on the map");
-    let speed = Speed::commander(world.rules());
+    let speed = Speed::commander_of(&world);
     let mut scratch =
         Scratch::for_map(world.surface(), world.clusters().size()).expect("a scratch");
     let walk: ServedWalk = walk_cost(
@@ -3418,12 +3475,13 @@ fn a_partial_near_route_is_answered_at_its_walk() {
         "the partial near route's answer is not the walk its asks cost"
     );
     // The ticks are the cost's, rounded once, and a re-ask's bound for each
-    // partial route (`walk_ticks`; `RulesTable::link_ticks`).
+    // partial route (`walk_ticks`; `pathing::estimate::link_ticks`).
     let partials = asks - 1;
     assert_eq!(
         Some(estimated.ticks),
-        ticks_for_cost(estimated.cost, speed.cost_per_second)
-            .map(|ticks| ticks + partials * speed.link_ticks),
+        ticks_for_cost(estimated.cost, speed.cost_per_second).map(|ticks| {
+            ticks + partials * i32::try_from(speed.link_ticks).expect("a bound fits")
+        }),
         "ticks are the answered walk's, its re-asks' bound included"
     );
     println!(

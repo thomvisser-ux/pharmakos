@@ -149,7 +149,7 @@ impl<'a> RouteAdapter<'a> {
             surface: world.surface(),
             clusters: world.clusters(),
             scratch: RefCell::new(None),
-            speed: Speed::commander(world.rules()),
+            speed: Speed::commander_of(world),
             cluster_voxels: world.rules().hpa_cluster_voxels(),
             unknown: &[],
             fault: Cell::new(None),

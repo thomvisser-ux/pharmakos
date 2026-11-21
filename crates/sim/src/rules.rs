@@ -185,11 +185,9 @@ pub struct RulesTable {
     /// PLACEHOLDER: the repath cap — owner, at S3's demo (items 152 (1) 1 and 2), once the burst frequency is a measurement (item 69).
     ///
     /// Non-zero by type: at a cap of nought no waiting walker is ever served,
-    /// so the queue's wait would have no bound ([`RulesTable::link_ticks`]).
+    /// so the queue's wait would have no bound
+    /// ([`crate::pathing::estimate::link_ticks`]).
     repath_cap_per_tick: core::num::NonZeroU32,
-    /// The most ticks one re-ask can cost a walker that reached the end of a
-    /// partial route ([`RulesTable::link_ticks`]), derived at load.
-    link_ticks: i32,
     /// The broadphase's cell edge, in whole voxels. From
     /// `broadphase.cell_size_voxels`.
     ///
@@ -595,32 +593,11 @@ impl RulesTable {
         self.repath_cap_per_tick.get()
     }
 
-    /// The most ticks a walker that reached the end of a partial route can
-    /// lose before it walks the next one: what a travel estimate adds per
-    /// partial route so that it is never optimistic
-    /// ([`crate::pathing::estimate::walk_ticks`]; decisions-log items 57 and
-    /// 61). Two parts, derived at load from the cap and the router's own rule:
-    ///
-    /// * **One tick of rounding.** The walker banks nothing from one route
-    ///   into the next (`crate::pathing::router`), so each route's walk
-    ///   rounds up to its own tick: a chain of routes takes at most one tick
-    ///   a route more than its summed cost rounded once.
-    /// * **The queue's wait.** The walker asks again in the Movement phase and
-    ///   is served by the same tick's Pathing phase or a later one. The queue
-    ///   is served round-robin from a cursor that only moves forward, up to the
-    ///   cap a tick: a tick that serves fewer than the cap has scanned every
-    ///   row, the walker's included, and one that serves the cap has moved the
-    ///   cursor at least the cap's rows towards it. The router holds at most
-    ///   [`crate::ids::ROOM_LIMIT`] rows (the world refuses a unit ceiling past
-    ///   it), so the walker is served within `(ROOM_LIMIT - 1) / cap` ticks
-    ///   after the one it asked in, **however loaded the queue is**.
-    ///
-    /// 256 ticks (12.8 s) at the committed cap of 16. A walk that needs a
-    /// second route is more than `MAX_ROUTE_NODES - 1` steps, at least 20 460
-    /// ticks at the commander's speed, so the bound adds at most 1.3 % a link.
+    /// Repaths served per tick, as the non-zero count the queue's bound
+    /// divides by ([`crate::pathing::estimate::link_ticks`]).
     #[must_use]
-    pub const fn link_ticks(&self) -> i32 {
-        self.link_ticks
+    pub const fn repath_cap(&self) -> core::num::NonZeroU32 {
+        self.repath_cap_per_tick
     }
 
     /// The broadphase's cell edge in voxels (`broadphase.cell_size_voxels`).
@@ -1022,7 +999,6 @@ impl RulesTable {
                 field: "locomotion.repath_cap_per_tick".to_owned(),
                 value: "0; at a cap of nought no waiting walker is ever served a route".to_owned(),
             })?;
-        let link_ticks = link_ticks_of(repath_cap_per_tick)?;
         let canonical = pharmakos_proto::json::encode(message).map_err(RulesError::Json)?;
 
         let table = RulesTable {
@@ -1053,7 +1029,6 @@ impl RulesTable {
                 locomotion.move_cost_per_tick,
             )?,
             repath_cap_per_tick,
-            link_ticks,
             csr_cell_size_voxels: signed(
                 "broadphase.cell_size_voxels",
                 broadphase.cell_size_voxels,
@@ -1165,21 +1140,6 @@ fn longest_row_fits(table: &RulesTable) -> Result<(), RulesError> {
             budget,
         }),
     }
-}
-
-/// [`RulesTable::link_ticks`]: one tick of rounding, and the most ticks the
-/// repath queue can keep a walker waiting at `cap` a tick.
-fn link_ticks_of(cap: core::num::NonZeroU32) -> Result<i32, RulesError> {
-    // `ROOM_LIMIT` is at least one, and the division is by a non-zero cap.
-    let wait = crate::ids::ROOM_LIMIT
-        .saturating_sub(1)
-        .div_euclid(cap.get());
-    wait.checked_add(1)
-        .and_then(|ticks| i32::try_from(ticks).ok())
-        .ok_or_else(|| RulesError::OutOfRange {
-            field: "locomotion.repath_cap_per_tick".to_owned(),
-            value: format!("{cap}: a re-ask's bound passes a signed 32-bit tick count"),
-        })
 }
 
 fn path_cost_fits(

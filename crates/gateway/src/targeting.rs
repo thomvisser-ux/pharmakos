@@ -259,7 +259,7 @@ where
 /// tick count below zero: the sim hands out none, so one is the two
 /// disagreeing, and it is said rather than read as "no route".
 pub fn travel_ms(world: &World, walk: ServedWalk) -> Result<Option<Ms>, Error> {
-    let speed = Speed::commander(world.rules());
+    let speed = Speed::commander_of(world);
     let ticks = walk_ticks(walk, speed).map_err(|error| {
         Error::internal(said!(
             "a walk has no travel time: {}",

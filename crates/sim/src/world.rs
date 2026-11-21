@@ -615,6 +615,12 @@ pub struct World {
     /// How many unit rows the table may ever hold. Derived and not hashed, and
     /// not merely an allocation size — see [`World::unit_limit`].
     unit_limit: u32,
+    /// The most ticks a re-ask at the end of a partial route can cost a
+    /// walker in this world (`pathing::estimate::link_ticks` of
+    /// [`World::unit_limit`] and the repath cap), derived at construction
+    /// and kept by a restore, as `unit_limit` is; read by
+    /// [`World::link_ticks`].
+    link_ticks: u32,
     /// How many unit rows the world was built with: the starting force.
     /// Derived from the match configuration and kept by a
     /// restore, as `unit_limit` is; read by [`World::is_laid_out`].
@@ -1188,6 +1194,14 @@ impl World {
         let unit_count = u32::try_from(unit_count).map_err(|_| too_large("unit", unit_count))?;
         let unit_ceiling =
             u32::try_from(unit_ceiling).map_err(|_| too_large("unit", unit_ceiling))?;
+        // The re-ask's bound in this world (`pathing::estimate::link_ticks`):
+        // the router holds a row per unit, and never more than the ceiling.
+        let link_ticks = crate::pathing::estimate::link_ticks(
+            core::num::NonZeroU32::new(unit_ceiling).ok_or(MapError::Unindexable {
+                units: unit_ceiling,
+            })?,
+            config.rules.repath_cap(),
+        );
 
         // One row per seat, from the generator's per-seat columns, which it
         // fills for every seat (an unplaced one with zeroes): the four walk
@@ -1405,6 +1419,7 @@ impl World {
             commanders,
             beacon_alive,
             unit_limit: unit_ceiling,
+            link_ticks,
             unit_start: unit_count,
             unit_start_of,
             beacon_start,
@@ -2643,6 +2658,16 @@ impl World {
     #[must_use]
     pub const fn unit_limit(&self) -> u32 {
         self.unit_limit
+    }
+
+    /// The most ticks a walker that reached the end of a partial route can
+    /// lose before it walks the next one in this world, however loaded the
+    /// repath queue ([`crate::pathing::estimate::link_ticks`] of
+    /// [`World::unit_limit`] and the repath cap): what a travel estimate adds
+    /// per partial route so it is never optimistic.
+    #[must_use]
+    pub const fn link_ticks(&self) -> u32 {
+        self.link_ticks
     }
 
     /// Put the structure a Build target names into the ground at one hit point.
