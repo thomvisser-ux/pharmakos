@@ -298,10 +298,12 @@ pub enum ProjectionError {
 impl core::fmt::Display for ProjectionError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            // The id is the playbook's (S3's `vfyq2`, fix pass 5, item L9).
             ProjectionError::UnknownBlueprint(id) => {
                 write!(
                     formatter,
-                    "`{id}` is not a blueprint the rules table prices"
+                    "`{}` is not a blueprint the rules table prices",
+                    pharmakos_proto::json::grammar::quoted(id)
                 )
             }
             ProjectionError::Overflow => {

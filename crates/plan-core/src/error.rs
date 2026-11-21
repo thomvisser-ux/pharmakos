@@ -207,7 +207,14 @@ impl fmt::Display for Error {
         if self.pointer.is_empty() {
             write!(formatter, "{}", self.said)
         } else {
-            write!(formatter, "{}: {}", self.pointer, self.said)
+            // The pointer token by token (S3's `vfyq2`, fix pass 5, item L9):
+            // a token can be the player's key.
+            write!(
+                formatter,
+                "{}: {}",
+                pharmakos_proto::json::grammar::quoted_pointer(&self.pointer),
+                self.said
+            )
         }
     }
 }
