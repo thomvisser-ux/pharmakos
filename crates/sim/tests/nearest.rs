@@ -28,19 +28,15 @@ use pharmakos_proto::json;
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::Plan;
-use pharmakos_sim::math::fixed::{Fx, Sq};
-use pharmakos_sim::pathing::estimate::{MAX_PARTIALS, Speed, ticks_for_cost, walk_cost};
+use pharmakos_sim::interpreter::state::{StepFailed, StepFailure};
+use pharmakos_sim::pathing::estimate::{Speed, max_partials, ticks_for_cost, walk_cost};
 use pharmakos_sim::pathing::reach::Reach;
-use pharmakos_sim::pathing::route::{Surcharge, Zone, route_with};
+use pharmakos_sim::pathing::route::{Surcharge, route_with};
 use pharmakos_sim::pathing::search::{Scratch, Tally};
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::runner::{MatchSettings, Runner};
-use pharmakos_sim::seams::MandateKind;
-use pharmakos_sim::tables::{Common, PRIORITY_NORMAL, SeatId, UnitKind};
-use pharmakos_sim::interpreter::state::{StepFailed, StepFailure};
-use pharmakos_sim::targeting::{
-    FeatureSpec, Ground, Ranker, StoneCandidate, column_of, toward_counted,
-};
+use pharmakos_sim::tables::{BeaconId, SeatId};
+use pharmakos_sim::targeting::{FeatureSpec, Ranker, StoneCandidate, column_of, toward_counted};
 use pharmakos_sim::voxels::{Material, VoxelEdit};
 use pharmakos_sim::{RulesTable, World, WorldConfig};
 
@@ -182,24 +178,19 @@ fn ring(world: &mut World, centre: [i32; 2], radius: i32, away: [i32; 2]) {
 
 /// **The oracle**: the cost of the walk the router serves from `start` to
 /// `goal` under `surcharge`, asked as a walker asks it, or `None` when the
-/// router serves no route. A chain that does not end within `MAX_PARTIALS`
-/// asks fails the test.
-fn walked(
-    world: &World,
-    scratch: &mut Scratch,
-    (start, goal): (Node, Node),
-    surcharge: Surcharge<'_>,
-) -> Option<i64> {
+/// router serves no route. A chain that does not end within the map's
+/// `max_partials` asks fails the test.
+fn walked(world: &World, scratch: &mut Scratch, (start, goal): (Node, Node)) -> Option<i64> {
     let mut buffer = Vec::with_capacity(4096);
     let mut from = start;
     let mut total = 0_i64;
-    for _ in 0..=MAX_PARTIALS {
+    for _ in 0..=max_partials(world.surface()) {
         let served = route_with(
             world.surface(),
             world.clusters(),
             scratch,
             (from, goal),
-            surcharge,
+            Surcharge::NONE,
             &mut buffer,
         )
         .ok()?;
@@ -277,12 +268,9 @@ fn nearest_is_the_least_served_walk() {
                 let Some(goal) = measured_to(&world, index, from) else {
                     continue;
                 };
-                let cost = walked(&world, &mut truth_scratch, (from, goal), Surcharge::NONE)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "seed {seed:#x}: the oracle cannot price feature {index} from {ox},{oy}"
-                        )
-                    });
+                let cost = walked(&world, &mut truth_scratch, (from, goal)).unwrap_or_else(|| {
+                    panic!("seed {seed:#x}: the oracle cannot price feature {index} from {ox},{oy}")
+                });
                 let bound = i64::from(world.surface().heuristic(from, goal));
                 if bound > cost {
                     over.push((seed, [ox, oy], index, bound, cost));
@@ -445,11 +433,20 @@ fn the_grid_optimum_settles_in_cost_then_column_order() {
 /// cratered terrain: for every live vent of each seed, named from seat 0's
 /// commander, the stone is the legal site (every one the search listed) with
 /// the least walking cost to the vent over the terrain, ties to the lowest
-/// `(y, x)`, by the test's own Dijkstra; and no walk is priced.
+/// `(y, x)`, by the test's own Dijkstra; and no walk is priced. Cases whose
+/// least cost several sites share are counted, and some must occur, so the
+/// tie-break is held to the definition and not only the cost.
 #[test]
 fn a_toward_is_the_closest_site_over_the_terrain() {
-    let (mut cases, mut sites_seen) = (0_u32, 0_u64);
-    for (seed, scarred) in [(PROBATION, false), (PROBATION, true), (SEED, true)] {
+    let (mut cases, mut sites_seen, mut ties) = (0_u32, 0_u64, 0_u32);
+    for (seed, scarred) in [
+        (PROBATION, false),
+        (PROBATION, true),
+        (SEED, false),
+        (SEED, true),
+        (7, true),
+        (13, false),
+    ] {
         let mut world = world_of(seed, 2);
         if scarred {
             scar(&mut world, seed);
@@ -472,7 +469,6 @@ fn a_toward_is_the_closest_site_over_the_terrain() {
                 feature.kind == FeatureKind::Vent && world.feature_is_live(*index)
             })
             .map(|(index, feature)| (index, feature.anchor))
-            .take(4)
             .collect();
         let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
         for (index, anchor) in vents {
@@ -499,14 +495,23 @@ fn a_toward_is_the_closest_site_over_the_terrain() {
             cases += 1;
             let least = least_costs(&world, goal);
             let mut best: Option<(i64, i32, i32)> = None;
+            let mut at_best = 0_u32;
             for stone in &stones {
                 sites_seen += 1;
                 let [x, y] = stone.column();
                 let cost = least[usize::try_from(stone.node()).unwrap()]
                     .expect("every legal site reaches the vent");
+                match best {
+                    Some((held, _, _)) if cost == held => at_best += 1,
+                    Some((held, _, _)) if cost > held => {}
+                    _ => at_best = 1,
+                }
                 if best.is_none_or(|held| (cost, y, x) < held) {
                     best = Some((cost, y, x));
                 }
+            }
+            if at_best > 1 {
+                ties += 1;
             }
             assert_eq!(
                 found.ok().map(|stone| stone.site),
@@ -515,8 +520,10 @@ fn a_toward_is_the_closest_site_over_the_terrain() {
             );
         }
     }
-    assert!(cases >= 8, "the test weighs enough vents: {cases}");
-    assert!(sites_seen > 10_000, "and enough sites: {sites_seen}");
+    assert!(cases >= 30, "the test weighs enough vents: {cases}");
+    assert!(sites_seen > 50_000, "and enough sites: {sites_seen}");
+    println!("{cases} vents, {sites_seen} sites, {ties} with a tie at the least cost");
+    assert!(ties >= 3, "the cases hold ties at the least cost: {ties}");
 }
 
 /// One `toward` resolve's counted work on the probation seed: toward its
@@ -638,77 +645,6 @@ const PINNED_RESOLVES: [(&str, [i32; 2], u64); 7] = [
     ("farthest, Spire, ring 26", [179, 62], 27_240),
 ];
 
-/// "Nearest" under the walker's surcharge: with a threat's reach round the
-/// way to the first vent, the order is the oracle's order of the routes the
-/// walker is served under that surcharge, which is not the order without it.
-#[test]
-fn nearest_ranks_the_walk_under_the_walkers_surcharge() {
-    let world = world_of(SEED, 2);
-    let multiplier = world.rules().attack().step_multiplier;
-    let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
-    let mut truth_scratch = scratch.clone();
-    let mut rng = Rng(0x5A5A_0001);
-    let mut reordered = 0_u32;
-    let mut origins = 0_u32;
-    while origins < 40 {
-        let ([ox, oy], from) = origin(&world, &mut rng);
-        let plain = {
-            let ground = world.ground();
-            let mut ranker = Ranker::new(&ground, [ox, oy], |_| true);
-            let first = ranker.next(&ground, &mut scratch);
-            let second = ranker.next(&ground, &mut scratch);
-            (first, second)
-        };
-        let (Some((first, _)), Some(_)) = plain else {
-            continue;
-        };
-        origins += 1;
-        // A threat on the first feature's anchor, reaching a third of the way
-        // to the origin.
-        let goal = measured_to(&world, first, from).expect("the first is reachable");
-        let (gx, gy) = world.surface().coord_of(goal);
-        let reach = ((gx - ox).abs().max((gy - oy).abs())).div_euclid(3).max(4);
-        let zones = [Zone::Disc {
-            centre: [
-                Fx::from_voxels(i16::try_from(gx).unwrap()),
-                Fx::from_voxels(i16::try_from(gy).unwrap()),
-                Fx::from_raw(0),
-            ],
-            limit: Sq::of_radius(Fx::from_voxels(i16::try_from(reach).unwrap())),
-        }];
-        let surcharge = Surcharge::new(&zones, multiplier);
-        let mut truth: Vec<(i64, i32, i32, usize)> = Vec::new();
-        for (index, feature) in world.features().features().iter().enumerate() {
-            let Some(goal) = measured_to(&world, index, from) else {
-                continue;
-            };
-            let cost = walked(&world, &mut truth_scratch, (from, goal), surcharge)
-                .expect("the oracle prices every reachable feature");
-            truth.push((cost, feature.anchor[1], feature.anchor[0], index));
-        }
-        truth.sort_unstable();
-        let ground = Ground {
-            surcharge,
-            ..world.ground()
-        };
-        let mut ranker = Ranker::new(&ground, [ox, oy], |_| true);
-        for expected in &truth {
-            assert_eq!(
-                ranker.next(&ground, &mut scratch),
-                Some((expected.3, expected.0)),
-                "from {ox},{oy} under a threat at {gx},{gy}"
-            );
-        }
-        if truth.first().map(|t| t.3) != Some(first) {
-            reordered += 1;
-        }
-    }
-    assert!(
-        reordered > 0,
-        "a threat never moved the first pick: the test shows nothing"
-    );
-}
-
 /// A commander sent along far pairs on scarred terrain arrives on the tick
 /// the served walk's cost promises, counted from the tick that serves the
 /// route (review probe C, committed): `walk_cost` is the walk, not an
@@ -744,13 +680,7 @@ fn a_far_walk_costs_what_the_walker_walks() {
         {
             continue;
         }
-        let Ok(cost) = walk_cost(
-            world.surface(),
-            world.clusters(),
-            &mut scratch,
-            (a, b),
-            Surcharge::NONE,
-        ) else {
+        let Ok(cost) = walk_cost(world.surface(), world.clusters(), &mut scratch, (a, b)) else {
             continue;
         };
         let promised =
@@ -783,160 +713,168 @@ fn a_far_walk_costs_what_the_walker_walks() {
     assert!(differ.is_empty(), "walked ticks against priced: {differ:?}");
 }
 
-/// A whole playbook around `route`, compiled.
-fn plan(route: &str) -> Plan {
-    let text = format!(
-        concat!(
-            "{{\"schema_version\":{{\"major\":1}},",
-            "\"meta\":{{\"title\":\"nearest\",\"author_kind\":\"HUMAN\"}},",
-            "\"declarative\":{{\"route\":[{route}]}},",
-            "\"on_death\":{{\"on_respawn\":\"CONTINUE\",\"max_deaths_before_fallback\":3}},",
-            "\"fallback\":{{\"hold\":{{\"at\":{{\"safest\":{{}}}}}}}},",
-            "\"kind\":\"PLAYBOOK\"}}"
-        ),
-        route = route
-    );
-    let playbook: gp::v1::Playbook = json::decode(&text).expect("the playbook decodes");
-    Plan::compile(&playbook, &rules()).expect("the playbook compiles")
-}
-
-/// The same with threats: seat 0's commander walks a `move` at
-/// `AVOID_KNOWN_THREATS` past an armed raider of seat 1 it can see, standing
-/// on the direct route, and the route the pathing phase serves it costs
-/// exactly the walk `walk_cost` prices under the zones
-/// `World::commander_threat_zones` gives (the function a commander's
-/// "nearest" is ranked under, and the pathing phase's own). Ticks are not
-/// compared here: a `move` completes within its arrive radius, short of the
-/// route's end, and the walker's speed never reads a surcharge, so
-/// `a_far_walk_costs_what_the_walker_walks` already ties cost to ticks.
-#[test]
-fn a_walk_round_a_threat_is_priced_as_served() {
-    let mut exercised = 0;
-    for (threat_out, goal) in [
-        (12, [-60, 0]),
-        (14, [0, 60]),
-        (12, [-50, 40]),
-        (10, [40, 40]),
-    ] {
-        if let Some((served, priced)) = served_round_a_threat(threat_out, goal) {
-            assert_eq!(
-                served, priced,
-                "the served route's cost against the priced walk"
-            );
-            exercised += 1;
-        }
-    }
-    assert!(exercised > 0, "no layout put the threat in the way");
-}
-
-/// Seat 0's commander sent to `goal` columns off its own at
-/// `AVOID_KNOWN_THREATS` past seat 1's raider, standing on the direct route
-/// `threat_out` columns out: the cost of the route the pathing phase served
-/// it, and `walk_cost`'s under the seat's threat zones; `None` when the threat
-/// is not in the way (the seat does not see it when the route is served, or
-/// the surcharged route is the direct one).
-fn served_round_a_threat(threat_out: i32, goal: [i32; 2]) -> Option<(i64, i64)> {
-    let mut world = world_of(SEED, 2);
+/// Seat 0's legal `toward` sites from its commander, as a resolve toward
+/// `anchor` lists them.
+fn sites_toward(world: &World, scratch: &mut Scratch, anchor: [i32; 2]) -> Vec<StoneCandidate> {
     let seat = SeatId::new(0);
-    let commander = world.commander_of(seat).unwrap();
-    let unit = world.units().row_of(commander).unwrap().raw();
-    let row = world.units().row_of(commander).unwrap();
-    let here = pharmakos_sim::targeting::column_of(world.units().positions()[row.index()]);
-    let goal = [here[0] + goal[0], here[1] + goal[1]];
-    let threat = {
-        let surface = world.surface();
-        let from = surface.node_of(here[0], here[1])?;
-        let to = surface.node_of(goal[0], goal[1])?;
-        let mut scratch = Scratch::for_map(surface, world.clusters().size()).unwrap();
-        let mut direct = Vec::new();
-        route_with(
-            surface,
-            world.clusters(),
-            &mut scratch,
-            (from, to),
-            Surcharge::NONE,
-            &mut direct,
-        )
-        .ok()?;
-        let on = direct.iter().copied().find(|node| {
-            let (x, y) = surface.coord_of(*node);
-            (x - here[0]).abs().max((y - here[1]).abs()) >= threat_out
-        })?;
-        let (x, y) = surface.coord_of(on);
-        world.standing_point([x, y, 0])
-    };
-    let enemy = SeatId::new(1);
-    let home = world
-        .place_beacon_directly(enemy, threat, MandateKind::Build, PRIORITY_NORMAL)
-        .expect("room for the enemy's beacon");
-    world.set_common(
-        home,
-        Common {
-            roe: 1,
-            retreat_hp_pct: 0,
+    let commander = world.commander_of(seat).expect("a commander");
+    let row = world.units().row_of(commander).expect("a live commander");
+    let start = world.units().positions()[row.index()];
+    let mut stones: Vec<StoneCandidate> = Vec::new();
+    let _ = toward_counted(
+        &world.ground(),
+        scratch,
+        &mut stones,
+        seat,
+        start,
+        FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor,
         },
     );
-    world
-        .field_unit(enemy, home, UnitKind::Raider, threat)
-        .expect("room for the raider");
-    let z = world.voxels().top_solid_z(goal[0], goal[1]).unwrap() + 1;
-    let route = format!(
-        "{{\"label\":\"go\",\"move\":{{\"to\":{{\"voxel\":{{\"x\":{},\"y\":{},\"z\":{z}}}}},\"pace\":\"AVOID_KNOWN_THREATS\"}},\"timeout_ms\":120000}}",
-        goal[0], goal[1]
-    );
-    let mut runner = Runner::new(world).unwrap();
-    runner
-        .seal_playbook(seat, plan(&route))
-        .expect("a Lull takes a seal");
-    assert!(runner.begin_push().unwrap());
-    let multiplier = runner.world().rules().attack().step_multiplier;
-    for _ in 0..20 {
-        runner
-            .step()
-            .unwrap()
-            .expect("the segment outlasts the walk");
-        let world = runner.world();
-        let served = world.router().route(unit);
-        if served.len() < 2 {
+    stones
+}
+
+/// The least cost from every column to the nearest of `sites`, by the test's
+/// own multi-source Dijkstra (steps read backwards through
+/// `step_cost_between`).
+fn least_to_any(world: &World, sites: &[Node]) -> Vec<Option<i64>> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    let surface = world.surface();
+    let n = usize::try_from(surface.node_count()).unwrap();
+    let mut cost: Vec<Option<i64>> = vec![None; n];
+    let mut heap = BinaryHeap::new();
+    for site in sites {
+        cost[usize::try_from(*site).unwrap()] = Some(0);
+        heap.push(Reverse((0_i64, *site)));
+    }
+    while let Some(Reverse((here, node))) = heap.pop() {
+        if cost[usize::try_from(node).unwrap()] != Some(here) {
             continue;
         }
-        // The tick that served the route: price it as the pathing phase
-        // served it, from where the commander stood.
-        let mut zones = Vec::new();
-        world.commander_threat_zones(0, &mut zones);
-        if zones.is_empty() {
-            return None;
+        let (x, y) = surface.coord_of(node);
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let Some(other) = surface.node_of(x + dx, y + dy) else {
+                    continue;
+                };
+                let Some(step) = surface.step_cost_between(other, node) else {
+                    continue;
+                };
+                if other == node {
+                    continue;
+                }
+                let next = here + i64::from(step);
+                let slot = &mut cost[usize::try_from(other).unwrap()];
+                if slot.is_none_or(|held| next < held) {
+                    *slot = Some(next);
+                    heap.push(Reverse((next, other)));
+                }
+            }
         }
-        let from = served[0];
-        let to = *served.last().unwrap();
-        let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
-        let surcharge = Surcharge::new(&zones, multiplier);
-        let mut straight = Vec::new();
-        route_with(
-            world.surface(),
-            world.clusters(),
-            &mut scratch,
-            (from, to),
-            Surcharge::NONE,
-            &mut straight,
-        )
-        .unwrap();
-        if straight == served {
-            return None;
-        }
-        let priced = walk_cost(
-            world.surface(),
-            world.clusters(),
-            &mut scratch,
-            (from, to),
-            surcharge,
-        )
-        .unwrap();
-        let cost = pharmakos_sim::pathing::search::route_cost(world.surface(), served)
-            .expect("a served route prices");
-        return Some((i64::from(cost), priced));
     }
-    panic!("the commander was never served a route")
+    cost
+}
+
+/// The directed search's heuristic (`pathing::reach`, "Directed") is
+/// admissible and consistent on generated and scarred terrain: for every
+/// column, never above the true least cost to the nearest legal site (by the
+/// test's own multi-source Dijkstra), and across every legal step never
+/// falling by more than that step's cost.
+#[test]
+fn the_directed_search_heuristic_is_admissible_and_consistent() {
+    let mut checked = 0_u64;
+    for (seed, scarred, spire) in [
+        (PROBATION, false, false),
+        (PROBATION, true, true),
+        (SEED, true, false),
+    ] {
+        let mut world = world_of(seed, 2);
+        let seat = SeatId::new(0);
+        if spire {
+            let core_row = world
+                .beacons()
+                .seats()
+                .iter()
+                .position(|owner| *owner == seat.raw())
+                .expect("a core");
+            let core = column_of(world.beacons().positions()[core_row]);
+            let id = BeaconId::new(world.beacons().ids()[core_row]);
+            let beside = world
+                .ground()
+                .standing(core[0] + 3, core[1])
+                .expect("a column beside the core");
+            world
+                .raise_structure(
+                    seat,
+                    id,
+                    pharmakos_sim::tables::StructureKind::ResonanceSpire,
+                    beside,
+                )
+                .expect("room for a Spire");
+        }
+        if scarred {
+            scar(&mut world, seed);
+        }
+        let surface = world.surface();
+        let mut scratch = Scratch::for_map(surface, world.clusters().size()).unwrap();
+        let vent = world
+            .features()
+            .features()
+            .iter()
+            .enumerate()
+            .find(|(index, feature)| {
+                feature.kind == FeatureKind::Vent && world.feature_is_live(*index)
+            })
+            .map(|(_, feature)| feature.anchor)
+            .expect("a live vent");
+        let stones = sites_toward(&world, &mut scratch, vent);
+        assert!(!stones.is_empty(), "seed {seed:#x}: the seat has sites");
+        let sites: Vec<Node> = stones.iter().map(StoneCandidate::node).collect();
+        let truth = least_to_any(&world, &sites);
+        // The heuristic as the resolve builds it: every living own sphere.
+        let mut reach = Reach::new(surface.node_count(), surface.costs().max_step());
+        reach.clear_sites();
+        let beacons = world.beacons();
+        for (((owner, hp), centre), id) in beacons
+            .seats()
+            .iter()
+            .zip(beacons.hit_points())
+            .zip(beacons.positions())
+            .zip(beacons.ids())
+        {
+            if *owner == seat.raw() && hp.is_alive() {
+                let radius = world
+                    .ground()
+                    .radius_of(Some(BeaconId::new(*id)))
+                    .floor_voxels();
+                reach.add_sphere(surface.costs(), column_of(*centre), radius);
+            }
+        }
+        reach.begin_toward(surface, sites[0]);
+        for node in 0..surface.node_count() {
+            let h = reach.heuristic(surface, node);
+            assert!(h >= 0);
+            if let Some(cost) = truth[usize::try_from(node).unwrap()] {
+                assert!(
+                    h <= cost,
+                    "seed {seed:#x}: h {h} above the true cost {cost} at {node}"
+                );
+                checked += 1;
+            }
+            for k in 0..pharmakos_sim::pathing::search::neighbour_count() {
+                if let Some((other, step)) = surface.neighbour(node, k) {
+                    let across = reach.heuristic(surface, other);
+                    assert!(
+                        h <= i64::from(step) + across,
+                        "seed {seed:#x}: h falls {h} to {across} across a step of {step}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(checked > 300_000, "the columns checked: {checked}");
 }
 
 /// A `toward` with no legal site searches nothing (fix pass 3): seat 0's
@@ -1026,4 +964,71 @@ fn a_toward_that_finds_no_stone_searches_nothing() {
         0,
         "the unreachable target: no node popped"
     );
+}
+
+/// The premise "nearest" prices its walks without a surcharge on (`targeting`,
+/// "Two measures"): no walker of a ranked choice is served one. A commander's
+/// route is surcharged only while a `move` walks at `AVOID_KNOWN_THREATS`, and
+/// the compile refuses `covering` and `toward` in a `move`, so a ranked site
+/// is walked to by a `place_beacon`, under which the seat avoids nothing.
+/// Whoever lets a `move` take a description meets this test, and the ranker's
+/// measure with it.
+#[test]
+fn ranked_choices_are_walked_without_a_surcharge() {
+    for to in [
+        r#"{"covering":{"vent":{"rank":"NEAREST","coverage":"ANY"}}}"#,
+        r#"{"toward":{"feature":{"feature_id":"vent_232_96"}}}"#,
+    ] {
+        let route = format!(
+            r#"{{"label":"go","move":{{"to":{to},"pace":"AVOID_KNOWN_THREATS"}},"timeout_ms":60000}}"#
+        );
+        assert!(compile(&route).is_err(), "a move to {to} compiles");
+    }
+    // In play: a `place_beacon` walking in to its ranked site avoids nothing.
+    let world = world_of(PROBATION, 2);
+    let seat = SeatId::new(0);
+    let unit = world
+        .units()
+        .row_of(world.commander_of(seat).expect("a commander"))
+        .expect("a live commander")
+        .raw();
+    let route = r#"{"label":"cover","place_beacon":{"at":{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}},"timeout_ms":120000}"#;
+    let mut runner = Runner::new(world).unwrap();
+    runner
+        .seal_playbook(seat, compile(route).expect("the route compiles"))
+        .expect("a Lull takes a seal");
+    assert!(runner.begin_push().unwrap());
+    let mut walking = 0;
+    for _ in 0..200 {
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
+        let world = runner.world();
+        if world.router().route(unit).len() > 1 {
+            walking += 1;
+            assert!(
+                !world.interpreter().avoids_threats(usize::from(seat.raw())),
+                "a walk-in to a ranked site is served avoiding threats"
+            );
+        }
+    }
+    assert!(walking > 0, "the commander walked in to its site");
+}
+
+/// A whole playbook around `route`, compiled.
+fn compile(route: &str) -> Result<Plan, pharmakos_sim::interpreter::PlanError> {
+    let text = format!(
+        concat!(
+            "{{\"schema_version\":{{\"major\":1}},",
+            "\"meta\":{{\"title\":\"nearest\",\"author_kind\":\"HUMAN\"}},",
+            "\"declarative\":{{\"route\":[{route}]}},",
+            "\"on_death\":{{\"on_respawn\":\"CONTINUE\",\"max_deaths_before_fallback\":3}},",
+            "\"fallback\":{{\"hold\":{{\"at\":{{\"safest\":{{}}}}}}}},",
+            "\"kind\":\"PLAYBOOK\"}}"
+        ),
+        route = route
+    );
+    let playbook: gp::v1::Playbook = json::decode(&text).expect("the playbook decodes");
+    Plan::compile(&playbook, &rules())
 }

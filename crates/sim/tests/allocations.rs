@@ -506,13 +506,7 @@ fn near_estimates_allocate_nothing(world: &mut World) {
         assert!(found.is_some(), "a connected near pair has an estimate");
     }
     for (a, b) in pairs.iter().chain(&far) {
-        let walked = walk_cost(
-            &surface,
-            &clusters,
-            scratch,
-            (*a, *b),
-            pharmakos_sim::pathing::route::Surcharge::NONE,
-        );
+        let walked = walk_cost(&surface, &clusters, scratch, (*a, *b));
         assert!(walked.is_ok(), "a connected pair has a served walk");
     }
     let during = allocations() - before;

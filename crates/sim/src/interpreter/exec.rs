@@ -642,7 +642,7 @@ fn start_step(
                 let site = match at {
                     Place::Covering(spec) => {
                         let found = {
-                            let (ground, scratch) = world.walker_ground_and_scratch(seat);
+                            let (ground, scratch) = world.ground_and_scratch();
                             crate::targeting::cover_counted(
                                 &ground, scratch, seat, commander, *spec,
                             )?
@@ -667,7 +667,7 @@ fn start_step(
                     Place::Toward(spec) => {
                         let mut candidates = world.take_stone_scratch();
                         let found = {
-                            let (ground, scratch) = world.walker_ground_and_scratch(seat);
+                            let (ground, scratch) = world.ground_and_scratch();
                             crate::targeting::toward_counted(
                                 &ground,
                                 scratch,

@@ -2955,6 +2955,138 @@ fn fog_boxes(fixture: &Fixture) -> (Vec<FogBox>, Vec<bool>) {
     (chosen, unknown)
 }
 
+/// A serpentine of stone walls three high across the map, `folds` times
+/// four walls in a strip from `3 * CLUSTER`, their gaps alternating between
+/// the strip's far and near ends, on ground levelled to the strip's highest
+/// top: the start column two in from the strip's west edge and the goal two
+/// in from its east edge, mid-map. One fold's walk is about four times the
+/// map's depth, past [`MAX_ROUTE_NODES`].
+fn serpentine(fixture: &mut Fixture, folds: i32) -> (Node, Node) {
+    let size = fixture.surface.size();
+    let (x0, x1) = (3 * CLUSTER, 3 * CLUSTER + 2 + 8 * folds + 5);
+    let mut level = 0;
+    for x in x0..=x1 {
+        for y in 0..size[1] {
+            level = level.max(fixture.store.top_solid_z(x, y).unwrap_or(0));
+        }
+    }
+    level += 1;
+    // The walls stand at x0 + 4, + 6, + 8 and + 10; the gaps alternate
+    // between the strip's far end and its near end.
+    let wall_top = |x: i32, y: i32| -> Option<i32> {
+        let far_gap = y >= size[1] - 4;
+        let near_gap = y < 4;
+        let offset = x - x0;
+        if offset < 4 || offset > 2 + 8 * folds || offset % 2 != 0 {
+            return None;
+        }
+        // Walls at x0 + 4, + 6, ...: those at 4, 8, 12, ... open at the far
+        // end, those at 6, 10, 14, ... at the near end.
+        match (offset - 4) % 4 {
+            0 if !far_gap => Some(level + 3),
+            2 if !near_gap => Some(level + 3),
+            _ => None,
+        }
+    };
+    for x in x0..=x1 {
+        for y in 0..size[1] {
+            let target = wall_top(x, y).unwrap_or(level);
+            let mut z = fixture.store.top_solid_z(x, y).unwrap_or(-1) + 1;
+            while z <= target {
+                fixture.store.set([x, y, z], Material::STONE);
+                z += 1;
+            }
+        }
+    }
+    fixture.settle_and_mark();
+    fixture.repair();
+    let mid = size[1].div_euclid(2);
+    let start = fixture.surface.node_of(x0 + 2, mid).expect("on the map");
+    let goal = fixture
+        .surface
+        .node_of(x0 + 2 + 8 * folds + 2, mid)
+        .expect("on the map");
+    (start, goal)
+}
+
+/// The chain of partial routes a walk is served spends its abstract cost
+/// (`pathing::estimate::walk_cost`, "The chain ends"): through serpentines of
+/// one to three folds, each partial route's next query prices the rest at
+/// least `PARTIAL_PROGRESS` cardinal steps below the last, the chain holds
+/// partial routes at all and no more than the map's `max_partials`, and
+/// `walk_cost` is the chain's summed cost.
+#[test]
+fn a_partial_route_chain_spends_its_abstract_cost() {
+    use pharmakos_sim::pathing::estimate::{PARTIAL_PROGRESS, max_partials, walk_cost};
+    let mut most = 0_u64;
+    for folds in 1..=3 {
+        let mut fixture = Fixture::build(SEED, CLUSTER);
+        let (start, goal) = serpentine(&mut fixture, folds);
+        let speed = fixture.commander_speed();
+        let fall = i64::from(PARTIAL_PROGRESS) * i64::from(fixture.surface.costs().cardinal());
+        let mut buffer: Vec<Node> = Vec::with_capacity(4096);
+        let mut from = start;
+        let mut total = 0_i64;
+        let mut partials = 0_u64;
+        let mut left: Option<i64> = None;
+        loop {
+            let priced = abstract_search(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                from,
+                goal,
+                Fog::Clear,
+                speed,
+            )
+            .expect("the serpentine joins the pair");
+            let now = i64::from(priced.cost);
+            if let Some(last) = left {
+                assert!(
+                    now <= last - fall,
+                    "{folds} folds: the abstract cost fell from {last} to {now}, under {fall}"
+                );
+            }
+            left = Some(now);
+            let served = route(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                from,
+                goal,
+                &mut buffer,
+            )
+            .expect("each ask has a route");
+            total += i64::from(served.cost);
+            let Some(end) = served.rest else {
+                break;
+            };
+            partials += 1;
+            from = end;
+        }
+        assert!(
+            partials > 0,
+            "{folds} folds: the walk chains partial routes"
+        );
+        assert!(
+            partials <= max_partials(&fixture.surface),
+            "{folds} folds: {partials} partials, past the bound"
+        );
+        assert_eq!(
+            walk_cost(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                (start, goal)
+            ),
+            Ok(total),
+            "{folds} folds: walk_cost is the chain"
+        );
+        most = most.max(partials);
+    }
+    assert!(most >= 2, "a chain of several partial routes: {most}");
+}
+
 /// A near pair whose route does not fit `MAX_ROUTE_NODES` is answered at the
 /// abstract cost (`estimate`'s module docs, "Near pairs"), and that answer is
 /// not below what the walker then walks: the partial route, then each route
@@ -2973,41 +3105,8 @@ fn fog_boxes(fixture: &Fixture) -> (Vec<FogBox>, Vec<bool>) {
 fn a_partial_near_route_is_answered_at_no_less_than_its_walk() {
     let mut fixture = Fixture::build(SEED, CLUSTER);
     let speed = fixture.commander_speed();
-    let size = fixture.surface.size();
-    let (x0, x1) = (3 * CLUSTER, 3 * CLUSTER + 15);
-    let mut level = 0;
-    for x in x0..=x1 {
-        for y in 0..size[1] {
-            level = level.max(fixture.store.top_solid_z(x, y).unwrap_or(0));
-        }
-    }
-    level += 1;
-    // The walls stand at x0 + 4, + 6, + 8 and + 10; the gaps alternate
-    // between the strip's far end and its near end.
-    let wall_top = |x: i32, y: i32| -> Option<i32> {
-        let far_gap = y >= size[1] - 4;
-        let near_gap = y < 4;
-        match x - x0 {
-            4 | 8 if !far_gap => Some(level + 3),
-            6 | 10 if !near_gap => Some(level + 3),
-            _ => None,
-        }
-    };
-    for x in x0..=x1 {
-        for y in 0..size[1] {
-            let target = wall_top(x, y).unwrap_or(level);
-            let mut z = fixture.store.top_solid_z(x, y).unwrap_or(-1) + 1;
-            while z <= target {
-                fixture.store.set([x, y, z], Material::STONE);
-                z += 1;
-            }
-        }
-    }
-    fixture.settle_and_mark();
-    fixture.repair();
-    let mid = size[1].div_euclid(2);
-    let start = fixture.surface.node_of(x0 + 2, mid).expect("on the map");
-    let goal = fixture.surface.node_of(x0 + 12, mid).expect("on the map");
+    let (start, goal) = serpentine(&mut fixture, 1);
+
     assert!(
         fixture.clusters.touch(start, goal) == Ok(true),
         "the pair is a near pair"

@@ -13,13 +13,15 @@
 //!
 //! # The seed
 //!
-//! The preset plays seed 20 by the owner's ruling (decisions-log item 154
-//! (1)), made when 20 was the first seed the search passed under the stone's
-//! measure of the time. Under the stone's corrected measure (clause 3, lane
-//! `p3fix`) seed 13 passes too, and the passing seeds from 0 through 20 are
-//! 13 and 20 (`the_passing_seeds_through_twenty_are_thirteen_and_twenty`).
-//! Any seed that passes every clause serves the preset; which one it plays is
-//! the owner's, and it is unchanged.
+//! The owner's answer (decisions-log item 154 (1)) is the method: a map seed
+//! of its own, found by `sim3a`'s deterministic search over this file's
+//! criterion. The number 20 is that search's finding when it was run, as
+//! decisions-log item 156 (1) records it, and the preset plays 20. Under the
+//! stone's corrected measure (clause 3, lane `p3fix`) the criterion is also
+//! met by 13, an earlier seed: the passing seeds from 0 through 20 are 13 and
+//! 20 (`the_passing_seeds_through_twenty_are_thirteen_and_twenty`). Whether
+//! the preset moves to 13 is the owner's question, and open; nothing is built
+//! for it.
 //!
 //! # The criterion
 //!
@@ -71,7 +73,6 @@ use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::StepFailure;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::pathing::estimate::{Speed, ticks_for_cost, walk_cost};
-use pharmakos_sim::pathing::route::Surcharge;
 use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::seams::MandateKind;
@@ -82,8 +83,9 @@ use pharmakos_sim::targeting::{
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig, default_rules_path, mapgen};
 use std::path::PathBuf;
 
-/// The seed the preset plays, by the owner's ruling (decisions-log item 154
-/// (1)). The lobby's line spells it `0x0000000000000014`, as `host_link.gd`
+/// The seed the preset plays: `sim3a`'s search's finding when it was run
+/// (decisions-log items 154 (1) and 156 (1); "The seed"). The lobby's line
+/// spells it `0x0000000000000014`, as `host_link.gd`
 /// spells a seed.
 const PROBATION_SEED: u64 = 20;
 
@@ -252,16 +254,9 @@ fn world_of(seed: u64, rules: &RulesTable) -> World {
 }
 
 /// The cost and ticks of the walk the router serves a commander between two
-/// nodes: the measure clause 3 ranks the stones by.
+/// nodes: one leg of clause 4's walk.
 fn walk(ground: &Ground<'_>, scratch: &mut Scratch, from: Node, to: Node) -> Option<(i64, i32)> {
-    let cost = walk_cost(
-        ground.surface,
-        ground.clusters,
-        scratch,
-        (from, to),
-        Surcharge::NONE,
-    )
-    .ok()?;
+    let cost = walk_cost(ground.surface, ground.clusters, scratch, (from, to)).ok()?;
     let ticks = ticks_for_cost(
         i32::try_from(cost).expect("a leg's walk fits an i32"),
         Speed::commander(ground.rules).cost_per_second,

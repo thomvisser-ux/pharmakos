@@ -27,8 +27,14 @@
 //!
 //! - **A choice a unit then walks to** -- `cover`, `on_vent`, a Mine
 //!   beacon's seam, any "nearest" from an origin a walker leaves -- ranks by
-//!   **the walk the router will serve** that walker, under the surcharge its
-//!   route will carry ([`Ground::surcharge`]): [`Ranker`], below.
+//!   **the walk the router will serve** that walker: [`Ranker`], below. It is
+//!   priced under no surcharge because no walker of a ranked choice is served
+//!   one: a commander's route is surcharged only while a `move` walks at
+//!   `AVOID_KNOWN_THREATS`, and the compile refuses `covering` and `toward`
+//!   in a `move`, so a ranked site is walked to by a `place_beacon`; the
+//!   drones walk to a seam or a target with no surcharge at all.
+//!   `tests/nearest.rs`'s `ranked_choices_are_walked_without_a_surcharge`
+//!   pins that premise, and whoever widens the vocabulary meets it there.
 //! - **A choice of closeness that no unit walks** -- `toward`'s stepping
 //!   stone, the legal site closest to the feature it steps toward -- ranks by
 //!   **the least cost of any walk over the terrain**, the grid optimum
@@ -102,8 +108,7 @@ use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
 use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::estimate::walk_cost;
-use crate::pathing::route::{NoPath, Surcharge};
+use crate::pathing::estimate::{WalkError, walk_cost};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
@@ -194,12 +199,6 @@ pub struct Ground<'a> {
     /// Where the work a resolution does is counted: P1's evaluation units
     /// (S1's plan, section 5). Not hashed.
     pub work: &'a crate::seams::UnitTally,
-    /// The route surcharge the walker whose "nearest" this is will be served
-    /// with ([`crate::world::World::walker_ground_and_scratch`], from the
-    /// function the pathing phase builds its own from), so a walk is ranked
-    /// on the route it will take. [`Surcharge::NONE`] for every reader that
-    /// names no walker.
-    pub surcharge: Surcharge<'a>,
 }
 
 impl Ground<'_> {
@@ -414,17 +413,11 @@ impl Ground<'_> {
     }
 
     /// The integer cost of the walk the router serves from `from` to `to`
-    /// under [`Ground::surcharge`] ([`walk_cost`]): what a choice a unit then
-    /// walks to ranks by ([`Ranker`]; the module docs' "Two measures").
-    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<i64, NoPath> {
+    /// ([`walk_cost`]): what a choice a unit then walks to ranks by
+    /// ([`Ranker`]; the module docs' "Two measures").
+    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<i64, WalkError> {
         self.charge(1);
-        walk_cost(
-            self.surface,
-            self.clusters,
-            scratch,
-            (from, to),
-            self.surcharge,
-        )
+        walk_cost(self.surface, self.clusters, scratch, (from, to))
     }
 }
 
@@ -521,6 +514,13 @@ impl Ranker {
         ranker
     }
 
+    /// Whether no candidate is reachable: nothing for [`Ranker::next`] to
+    /// emit.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// How many features `keep` admitted, reachable or not: the count a
     /// `step_failed` carries and `resolve_refs` calls `matched`.
     #[must_use]
@@ -567,8 +567,12 @@ impl Ranker {
                         }
                         // The router serves no walk to it: no candidate
                         // (targeting.md, "Nearest": unreachable candidates
-                        // are skipped).
-                        Err(_) => entry.state = 2,
+                        // are skipped). A chain whose queries stop falling is
+                        // a walk the walker never finishes either (the router
+                        // serves it the same chain), so it is no candidate;
+                        // the chain's own argument says no router does this
+                        // (`walk_cost`, "The chain ends").
+                        Err(WalkError::NoPath(_) | WalkError::Stalled { .. }) => entry.state = 2,
                     }
                 }
                 // Nothing priced is waiting and nothing is left to price (a
@@ -827,21 +831,67 @@ pub struct Stone {
 /// lands at S4 (S3's plan, decision 2; decisions-log item 156 (3)), as every
 /// other read of targeting's does (decisions-log item 108 (1)).
 ///
-/// Returns the site, if any, and how many legal sites it weighed.
+/// Answers the stone and how many legal sites it weighed; or that there is
+/// no legal site, before any search; or that the feature is out of the
+/// commander's reach, before any search ([`Sited`]).
 fn stone_site(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    (start, weighed): (Node, u32),
+    feature: usize,
+) -> Sited {
+    // Every site is connected to the commander's column, so all of them
+    // measure to the one column the commander would: the feature's anchor
+    // column, or its first footprint column a walker reaches. A feature the
+    // commander cannot reach is no target, and nothing is searched.
+    let Some(goal) = ground.measure_to(feature, start) else {
+        return Sited::Unreached(weighed);
+    };
+    // The grid optimum from the feature outward, directed at the seat's
+    // spheres ([`crate::pathing::reach`], "Directed"): every column settles
+    // at its least cost, in ascending key `cost + h`, and a site's key is its
+    // cost. So the first site settled is at the least cost `c`, and every
+    // site at `c` settles before a key past `c`: once the search passes `c`,
+    // the lowest `(y, x)` among them is the stone.
+    scratch.reach.begin_toward(ground.surface, goal);
+    let mut best: Option<(i64, i32, i32)> = None;
+    while let Some((node, cost)) = scratch.reach.next(ground.surface, &mut scratch.expansions) {
+        if let Some((least, y, x)) = best
+            && scratch.reach.reached() > least
+        {
+            return Sited::Stone([x, y], weighed);
+        }
+        if scratch.reach.is_site(node) {
+            let (x, y) = ground.surface.coord_of(node);
+            if best.is_none_or(|held| (cost, y, x) < held) {
+                best = Some((cost, y, x));
+            }
+        }
+    }
+    match best {
+        Some((_, y, x)) => Sited::Stone([x, y], weighed),
+        // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out
+        None => Sited::Unreached(weighed),
+    }
+}
+
+/// Every legal site of a `toward` for `seat`'s commander at `commander`
+/// (the columns [`stone_site`] weighs), each marked once in the scratch and
+/// listed in `candidates`, and each own sphere added for the directed
+/// search: the commander's node and how many sites there are, or `None`
+/// when the commander stands on no column. The set is the same for every
+/// feature, so a resolve makes it once, before any search.
+fn legal_sites(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
     candidates: &mut Vec<StoneCandidate>,
     seat: SeatId,
     commander: [Fx; 3],
-    feature: usize,
-) -> (Option<[i32; 2]>, u32) {
+) -> Option<(Node, u32)> {
     candidates.clear();
     scratch.reach.clear_sites();
     let [cx, cy] = column_of(commander);
-    let Some(start) = ground.surface.node_of(cx, cy) else {
-        return (None, 0);
-    };
+    let start = ground.surface.node_of(cx, cy)?;
     // Every legal site, once: a column two spheres hold is one site. Each is
     // a distinct column of the map, whose count is a `u32`, so the count
     // cannot pass it.
@@ -860,6 +910,9 @@ fn stone_site(
         let radius = ground.radius_of(Some(BeaconId::new(*id))).floor_voxels();
         let limit = i64::from(radius) * i64::from(radius);
         let [bx, by] = column_of(*centre);
+        scratch
+            .reach
+            .add_sphere(ground.surface.costs(), [bx, by], radius);
         for dy in -radius..=radius {
             for dx in -radius..=radius {
                 if i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy) > limit {
@@ -889,29 +942,17 @@ fn stone_site(
             }
         }
     }
-    // Every site is connected to the commander's column, so all of them
-    // measure to the one column the commander would: the feature's anchor
-    // column, or its first footprint column a walker reaches.
-    let Some(goal) = ground.measure_to(feature, start) else {
-        return (None, weighed);
-    };
-    // The grid optimum from the feature outward ([`crate::pathing::reach`]):
-    // columns settle in ascending `(cost, column)`, and a column's id is
-    // `y * width + x`, so that order is `(cost, y, x)`. Every column at a
-    // cost is in the frontier before the first of them settles (a step costs
-    // at least one unit, so each one's last step leaves a column already
-    // settled), so the first legal site settled is the least cost's lowest
-    // `(y, x)`: the answer, with nothing left to weigh.
-    scratch.reach.begin(goal);
-    while let Some((node, _)) = scratch.reach.next(ground.surface, &mut scratch.expansions) {
-        if scratch.reach.is_site(node) {
-            let (x, y) = ground.surface.coord_of(node);
-            return (Some([x, y]), weighed);
-        }
-    }
-    // Every site is connected to the goal, so the search settles one before
-    // it runs out.
-    (None, weighed)
+    Some((start, weighed))
+}
+
+/// What [`stone_site`] found, given legal sites to weigh.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Sited {
+    /// The stone's column, and the legal sites weighed.
+    Stone([i32; 2], u32),
+    /// Legal sites, weighed, but the feature is not one the commander can
+    /// reach. A `nearest` never ranks such a feature.
+    Unreached(u32),
 }
 
 /// Resolve a `toward` site for `seat` (S3's plan, E23; task `pred`): the
@@ -943,19 +984,38 @@ pub fn toward_counted(
                 .index_of(kind, anchor)
                 .filter(|index| ground.is_live(*index))
                 .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
-            match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                (Some(site), weighed) => Ok(Stone {
+            // No legal site: refused before any search.
+            let sites = legal_sites(ground, scratch, candidates, seat, commander)
+                .filter(|(_, weighed)| *weighed > 0)
+                .ok_or(StepFailed::counted(StepFailure::IllegalSite, 0))?;
+            match stone_site(ground, scratch, sites, feature) {
+                Sited::Stone(site, weighed) => Ok(Stone {
                     feature,
                     site,
                     weighed,
                 }),
-                (None, weighed) => Err(StepFailed::counted(StepFailure::IllegalSite, weighed)),
+                Sited::Unreached(weighed) => {
+                    Err(StepFailed::counted(StepFailure::IllegalSite, weighed))
+                }
             }
         }
         FeatureSpec::Nearest { kind, uncovered } => {
             let mut ranker = Ranker::new(ground, column_of(commander), |index| {
                 matches_pick(ground, seat, index, kind, uncovered)
             });
+            // No legal site is no site for any feature: refused before the
+            // ranker prices a walk or the stone's search starts, as
+            // `illegal_site` when a feature is in reach and `no_target` when
+            // none is.
+            let Some(sites) = legal_sites(ground, scratch, candidates, seat, commander)
+                .filter(|(_, weighed)| *weighed > 0)
+            else {
+                return Err(if ranker.is_empty() {
+                    StepFailed::counted(StepFailure::NoTarget, ranker.matched())
+                } else {
+                    StepFailed::counted(StepFailure::IllegalSite, 0)
+                });
+            };
             let mut reached = false;
             // The sites weighed for every feature are the same legal sites:
             // the candidate set is built from the seat's spheres and the
@@ -965,15 +1025,18 @@ pub fn toward_counted(
             let mut weighed: u32 = 0;
             while let Some((feature, _)) = ranker.next(ground, scratch) {
                 reached = true;
-                match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                    (Some(site), count) => {
+                match stone_site(ground, scratch, sites, feature) {
+                    Sited::Stone(site, count) => {
                         return Ok(Stone {
                             feature,
                             site,
                             weighed: count,
                         });
                     }
-                    (None, count) => weighed = count,
+                    // The ranker emits only features the commander reaches,
+                    // from the same column the sites are reached from, so
+                    // none is unreached; were one, the next is tried.
+                    Sited::Unreached(count) => weighed = count,
                 }
             }
             if reached {
@@ -1332,7 +1395,6 @@ mod tests {
             rules: &rules,
             spiral: &spiral,
             work: &work,
-            surcharge: crate::pathing::route::Surcharge::NONE,
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
         let mut out: Vec<(String, i64)> = Vec::new();

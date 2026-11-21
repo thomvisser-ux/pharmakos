@@ -52,6 +52,33 @@
 //! `the_grid_optimum_settles_in_cost_then_column_order` holds the order to a
 //! Dijkstra of its own.
 //!
+//! # Directed
+//!
+//! A `toward` search knows where the sites are: inside the seat's own
+//! spheres. So it can run best-first, keyed `cost + h`, where `h` is a lower
+//! bound on the cost from a column to the nearest site: over the seat's
+//! spheres, the octile cost from the column to the sphere's centre less the
+//! sphere's reach, the most octile cost from its centre to any of its
+//! columns ([`sphere_reach`]), floored at zero, and the least over spheres.
+//!
+//! - **Admissible.** The octile cost is a metric, and every step costs at
+//!   least its octile length (a climb only adds), so a walk from `n` to a
+//!   site `s` in sphere `b` costs at least `octile(n, s) ≥ octile(n, b) −
+//!   octile(s, b) ≥ octile(n, b) − reach(b)`.
+//! - **Consistent.** Each term changes across one step by at most that
+//!   step's octile length, so `h(n) ≤ step(n, m) + h(m)`, and a key never
+//!   falls along a step: a column settles at its least cost, once.
+//!
+//! A key rises by at most twice the dearest step across one step (its cost,
+//! and the heuristic's rise), so the ring has `2 · max step + 1` buckets, and
+//! a step that keeps the key puts its column in the bucket being settled,
+//! which the queue reads again before it moves on. Every site settles at
+//! `cost + 0` (a site lies in a sphere, where `h` is zero), so the first site
+//! settled is at the least cost; `targeting`'s `stone_site` then settles every
+//! column whose key is no higher, and takes the lowest `(y, x)` among the
+//! sites at that cost. `tests/nearest.rs` holds `h` to the true cost to the
+//! nearest site on generated and scarred maps, and the stone to brute force.
+//!
 //! # No allocation
 //!
 //! Every buffer is one entry per column, or one per bucket, reserved where the
@@ -59,28 +86,43 @@
 //! entry per column.
 
 use crate::pathing::search::Tally;
-use crate::pathing::surface::{NEIGHBOURS, Node, Surface};
+use crate::pathing::surface::{NEIGHBOURS, Node, StepCosts, Surface};
 
 /// No column: an empty link.
 const NONE: u32 = u32::MAX;
 
-/// The grid optimum's search, its bucket queue (the module docs), and the
-/// site marks a `toward` search reads beside it.
+/// The most beacon rows any table holds ([`crate::ids::ROOM_LIMIT`]): the
+/// room the directed search's sphere list is reserved for.
+const SPHERE_ROOM: usize = 4_095;
+const _: () = assert!(
+    crate::math::index::row(crate::ids::ROOM_LIMIT) <= SPHERE_ROOM,
+    "the sphere list holds every beacon row"
+);
+
+/// The grid optimum's search, its bucket queue (the module docs), the
+/// site marks a `toward` search reads beside it, and the spheres a directed
+/// search heads for.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Reach {
+    /// The search's generation: a column's cost is this search's when its
+    /// stamp equals it.
     epoch: u32,
     stamp: Vec<u32>,
     settled: Vec<u32>,
+    /// Each column's cost from the start, `g`.
     cost: Vec<i64>,
+    /// Each column's key, `g + h`, the bucket it waits in.
+    key: Vec<i64>,
     /// The epoch a column was linked into a bucket in; 0 once unlinked.
     listed: Vec<u32>,
     next: Vec<u32>,
     prev: Vec<u32>,
+    /// The ring of buckets, by key modulo its length.
     heads: Vec<u32>,
     /// The bucket being settled, sorted by column, and where in it.
     sorted: Vec<Node>,
     cursor: usize,
-    /// The cost the search has reached.
+    /// The key the search has reached.
     at: i64,
     /// Columns linked into a bucket.
     waiting: usize,
@@ -88,6 +130,11 @@ pub struct Reach {
     /// marked before the search starts.
     site_epoch: u32,
     sites: Vec<u32>,
+    /// The spheres a directed search heads for: each one's centre column and
+    /// the most octile cost from it to any column of the sphere.
+    spheres: Vec<([i32; 2], i64)>,
+    /// Whether the search in progress is directed by [`Reach::spheres`].
+    directed: bool,
 }
 
 impl Reach {
@@ -96,13 +143,18 @@ impl Reach {
     #[must_use]
     pub fn new(nodes: u32, max_step: i32) -> Reach {
         let n = crate::math::index::row(nodes);
-        // E7: rule: a step costs at least one unit (the rules refuse a free one), so a ring of two holds unit steps
-        let buckets = usize::try_from(max_step.max(1)).map_or(2, |step| step.saturating_add(1));
+        // A step raises a key by at most twice the dearest step (its cost,
+        // and the heuristic's rise across it), so this many buckets hold every
+        // key the frontier holds at once.
+        // E7: rule: a step costs at least one unit (the rules refuse a free one), so a ring of three holds unit steps
+        let buckets = usize::try_from(max_step.max(1))
+            .map_or(3, |step| step.saturating_mul(2).saturating_add(1));
         Reach {
             epoch: 0,
             stamp: vec![0; n],
             settled: vec![0; n],
             cost: vec![0; n],
+            key: vec![0; n],
             listed: vec![0; n],
             next: vec![NONE; n],
             prev: vec![NONE; n],
@@ -113,16 +165,19 @@ impl Reach {
             waiting: 0,
             site_epoch: 0,
             sites: vec![0; n],
+            spheres: Vec::with_capacity(SPHERE_ROOM),
+            directed: false,
         }
     }
 
-    /// Forget every mark.
+    /// Forget every mark and every sphere.
     pub fn clear_sites(&mut self) {
         if self.site_epoch == u32::MAX {
             self.sites.fill(0);
             self.site_epoch = 0;
         }
         self.site_epoch += 1;
+        self.spheres.clear();
     }
 
     /// Mark `node` a site; `true` when it was not marked yet. A column off
@@ -150,8 +205,34 @@ impl Reach {
             .is_some_and(|mark| *mark == self.site_epoch)
     }
 
-    /// Start a search from `from`.
+    /// Add a sphere every site lies in, for a directed search: its centre
+    /// column and its radius in whole columns (a site's column within
+    /// `radius` of `centre`, squared).
+    pub fn add_sphere(&mut self, costs: StepCosts, centre: [i32; 2], radius: i32) {
+        // E7: cannot miss: one sphere a beacon row, and no table holds more than `SPHERE_ROOM` rows (the assertion above), the room reserved
+        if self.spheres.len() < SPHERE_ROOM {
+            self.spheres.push((centre, sphere_reach(costs, radius)));
+        }
+    }
+
+    /// Start a search from `from`, undirected: columns settle in ascending
+    /// `(cost, column)`.
     pub fn begin(&mut self, from: Node) {
+        self.directed = false;
+        self.start(from, 0);
+    }
+
+    /// Start a search from `from` directed at the spheres added since
+    /// [`Reach::clear_sites`]: keys are `cost + h`, `h` the octile cost to the
+    /// nearest sphere's centre less that sphere's reach, floored at zero (the
+    /// module docs, "Directed").
+    pub fn begin_toward(&mut self, surface: &Surface, from: Node) {
+        self.directed = !self.spheres.is_empty();
+        let first = self.heuristic(surface, from);
+        self.start(from, first);
+    }
+
+    fn start(&mut self, from: Node, key: i64) {
         if self.epoch == u32::MAX {
             self.stamp.fill(0);
             self.settled.fill(0);
@@ -162,9 +243,31 @@ impl Reach {
         self.heads.fill(NONE);
         self.sorted.clear();
         self.cursor = 0;
-        self.at = 0;
+        self.at = key;
         self.waiting = 0;
-        self.lower(from, 0);
+        let Some(index) = usize::try_from(from)
+            .ok()
+            .filter(|index| *index < self.cost.len())
+        else {
+            return;
+        };
+        if let Some(slot) = self.cost.get_mut(index) {
+            *slot = 0;
+        }
+        if let Some(slot) = self.key.get_mut(index) {
+            *slot = key;
+        }
+        if let Some(slot) = self.stamp.get_mut(index) {
+            *slot = self.epoch;
+        }
+        self.sorted.push(from);
+    }
+
+    /// The key the search has reached: the last column settled was settled
+    /// at it, and every column still to settle has a key no lower.
+    #[must_use]
+    pub const fn reached(&self) -> i64 {
+        self.at
     }
 
     /// The least cost of any walk from `node` to the search's start, once the
@@ -177,8 +280,28 @@ impl Reach {
             .flatten()
     }
 
-    /// Settle the next column, in ascending `(cost, column)`, and lower its
-    /// neighbours' costs; each column popped is counted in `popped`.
+    /// The directed search's lower bound on the cost from `node` to any
+    /// site: zero for an undirected search.
+    #[must_use]
+    pub fn heuristic(&self, surface: &Surface, node: Node) -> i64 {
+        if !self.directed {
+            return 0;
+        }
+        let (x, y) = surface.coord_of(node);
+        let costs = surface.costs();
+        self.spheres
+            .iter()
+            .map(|([cx, cy], reach)| {
+                let octile = i64::from(costs.octile(x.saturating_sub(*cx), y.saturating_sub(*cy)));
+                octile.saturating_sub(*reach).max(0)
+            })
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Settle the next column, in ascending `(key, column)` (the key is the
+    /// cost when undirected), and lower its neighbours' costs; each column
+    /// popped is counted in `popped`.
     pub fn next(&mut self, surface: &Surface, popped: &mut Tally) -> Option<(Node, i64)> {
         let node = loop {
             if let Some(node) = self.sorted.get(self.cursor).copied() {
@@ -194,7 +317,7 @@ impl Reach {
         if let Some(mark) = self.settled.get_mut(index) {
             *mark = self.epoch;
         }
-        let here = self.at;
+        let here = self.cost.get(index).copied()?;
         popped.bump();
         for k in 0..NEIGHBOURS.len() {
             let Some((other, step)) = surface.neighbour(node, k) else {
@@ -206,22 +329,33 @@ impl Reach {
             // A walk holds at most one step per column, and a column count
             // is a `u32`, so a cost of `u32::MAX` steps of at most
             // `i32::MAX` each stays below `i64::MAX`.
-            self.lower(other, here + i64::from(step));
+            let cost = here + i64::from(step);
+            let key = cost + self.heuristic(surface, other);
+            self.lower(other, cost, key);
         }
         Some((node, here))
     }
 
-    /// Move to the next cost a bucket holds, and sort its columns. Every
-    /// waiting cost lies within the ring's length above the cost reached, so
-    /// one turn of the ring finds it.
+    /// The bucket a key waits in.
+    fn slot(&self, key: i64) -> usize {
+        // E7: cannot miss: the ring's length is twice a step cost plus one, far inside `i64`
+        let ring = i64::try_from(self.heads.len()).unwrap_or(i64::MAX);
+        // E7: cannot miss: a remainder by the ring's length is below it
+        usize::try_from(key.rem_euclid(ring)).unwrap_or(0)
+    }
+
+    /// Move to the next key a bucket holds, and sort its columns: the key
+    /// reached first, which a directed search's step can add to (a step that
+    /// keeps the key), then each key above it. Every waiting key lies within
+    /// the ring's length above the key reached, so one turn finds it.
     fn advance(&mut self) {
         self.sorted.clear();
         self.cursor = 0;
-        // E7: cannot miss: the ring's length is a step cost plus one, far inside `i64`
-        let ring = i64::try_from(self.heads.len()).unwrap_or(i64::MAX);
-        for _ in 0..self.heads.len() {
-            self.at += 1;
-            let slot = usize::try_from(self.at.rem_euclid(ring)).unwrap_or(0); // E7: cannot miss: a remainder by the ring's length is below it
+        for turn in 0..=self.heads.len() {
+            if turn > 0 {
+                self.at += 1;
+            }
+            let slot = self.slot(self.at);
             // E7: cannot miss: a slot is a remainder by the ring's length
             let mut node = self.heads.get(slot).copied().unwrap_or(NONE);
             if node == NONE {
@@ -245,7 +379,9 @@ impl Reach {
         }
     }
 
-    fn lower(&mut self, node: Node, cost: i64) {
+    /// Lower `node`'s cost to `cost` (its key to `key`) if that is lower,
+    /// moving it to the bucket of its new key.
+    fn lower(&mut self, node: Node, cost: i64, key: i64) {
         let Ok(index) = usize::try_from(node) else {
             return;
         };
@@ -259,19 +395,14 @@ impl Reach {
         if let Some(slot) = self.cost.get_mut(index) {
             *slot = cost;
         }
+        if let Some(slot) = self.key.get_mut(index) {
+            *slot = key;
+        }
         if let Some(slot) = self.stamp.get_mut(index) {
             *slot = self.epoch;
         }
-        if !reached && cost == 0 {
-            // The start, at the cost reached: settled from the current bucket
-            // at once rather than a turn of the ring later.
-            self.sorted.push(node);
-            return;
-        }
-        // E7: cannot miss: the ring's length is a step cost plus one, far inside `i64`
-        let ring = i64::try_from(self.heads.len()).unwrap_or(i64::MAX);
-        let slot = usize::try_from(cost.rem_euclid(ring)).unwrap_or(0); // E7: cannot miss: a remainder by the ring's length is below it
-        // E7: cannot miss: as above
+        let slot = self.slot(key);
+        // E7: cannot miss: a slot is a remainder by the ring's length
         let head = self.heads.get(slot).copied().unwrap_or(NONE);
         if let Some(link) = self.next.get_mut(index) {
             *link = head;
@@ -293,19 +424,18 @@ impl Reach {
         self.waiting += 1;
     }
 
+    /// Take `node` out of its bucket.
     fn unlink(&mut self, node: Node) {
         let index = crate::math::index::row(node);
-        let (Some(before), Some(after), Some(cost)) = (
+        let (Some(before), Some(after), Some(key)) = (
             self.prev.get(index).copied(),
             self.next.get(index).copied(),
-            self.cost.get(index).copied(),
+            self.key.get(index).copied(),
         ) else {
             return;
         };
         if before == NONE {
-            // E7: cannot miss: the ring's length is a step cost plus one, far inside `i64`
-            let ring = i64::try_from(self.heads.len()).unwrap_or(i64::MAX);
-            let slot = usize::try_from(cost.rem_euclid(ring)).unwrap_or(0); // E7: cannot miss: a remainder by the ring's length is below it
+            let slot = self.slot(key);
             if let Some(head) = self.heads.get_mut(slot) {
                 *head = after;
             }
@@ -322,4 +452,22 @@ impl Reach {
         }
         self.waiting -= 1;
     }
+}
+
+/// The most octile cost from a sphere's centre to any column within
+/// `radius` of it (the column's offset `(dx, dy)` with `dx² + dy² ≤
+/// radius²`): `c·max + (d − c)·min ≤ sqrt(c² + (d − c)²)·radius` by
+/// Cauchy-Schwarz, since the rules hold `c ≤ d` (`c` and `d` a cardinal and
+/// a diagonal step), rounded up in integers.
+#[must_use]
+pub fn sphere_reach(costs: StepCosts, radius: i32) -> i64 {
+    let c = u128::from(costs.cardinal().unsigned_abs());
+    let d = u128::from(costs.diagonal().unsigned_abs());
+    let r = u128::from(radius.unsigned_abs());
+    let rise = d.saturating_sub(c);
+    let square = (c * c + rise * rise) * r * r;
+    let root = square.isqrt();
+    let up = if root * root < square { root + 1 } else { root };
+    // E7: rule: a reach past `i64` is past every cost a walk on a map can have, so it heads for nothing
+    i64::try_from(up).unwrap_or(i64::MAX)
 }

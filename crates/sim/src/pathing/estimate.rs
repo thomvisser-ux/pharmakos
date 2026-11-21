@@ -152,7 +152,9 @@
 use crate::math::quantity::TICK_HZ;
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
-use crate::pathing::route::{NoPath, Surcharge, abstract_search, route_and_abstract};
+use crate::pathing::route::{
+    AbstractResult, NoPath, RouteOutcome, Surcharge, abstract_search, route_and_abstract,
+};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 
@@ -357,15 +359,15 @@ fn near(
     })
 }
 
-/// **The cost of the walk the router serves** from `start` to `goal` under
-/// `surcharge`, near or far: [`route_and_abstract`], the router's own
-/// function, written into the scratch's own buffer, and when the route stops
-/// short at [`MAX_ROUTE_NODES`] the rest asked for from its end, as the
-/// walker asks when it gets there. It is what every "nearest" ranks by (lane
-/// `p3fix`): the walk itself, with no estimate standing in for it. The cost is
-/// the walk's step costs ([`crate::pathing::search::route_cost`]); a surcharge
-/// chooses the route and never prices its steps, as it never slows the walker.
-/// It steps nothing; like a near pair's estimate it is a pure function of the
+/// **The cost of the walk the router serves** from `start` to `goal`, near or
+/// far, under no surcharge (no ranked choice is walked under one: `targeting`'s
+/// "Two measures"): [`route_and_abstract`], the router's own function, written
+/// into the scratch's own buffer, and when the route stops short at
+/// [`MAX_ROUTE_NODES`] the rest asked for from its end, as the walker asks
+/// when it gets there. It is what every "nearest" a unit walks to ranks by
+/// (lane `p3fix`): the walk itself, with no estimate standing in for it. The
+/// cost is the walk's step costs ([`crate::pathing::search::route_cost`]). It
+/// steps nothing; like a near pair's estimate it is a pure function of the
 /// graph.
 ///
 /// # The chain ends
@@ -376,86 +378,171 @@ fn near(
 /// last column the rest of that refinement is still a path the abstract
 /// search can price: to the next transition node inside the column's own
 /// cluster, which the endpoint sweep finds at no more than the refinement's
-/// cost, then the same abstract edges. So the next query's abstract cost is at
-/// most the last one less the [`PARTIAL_PROGRESS`] steps just walked, each of
-/// at least one cost unit (the rules refuse a cheaper step). The abstract cost
-/// is an `i32`, so a chain holds at most [`MAX_PARTIALS`] partial routes, and
-/// `tests/pathing.rs`'s `a_partial_route_chain_spends_its_abstract_cost`
-/// holds a chain to the fall.
+/// cost, then the same abstract edges. So the next query's abstract cost is
+/// at most the last one less the [`PARTIAL_PROGRESS`] steps just walked,
+/// each costing at least a cardinal step (the rules hold a diagonal no
+/// cheaper). The chain carries that falling cost and holds every query to the
+/// fall, so it holds at most [`max_partials`] partial routes on its map,
+/// `max_path_cost / (PARTIAL_PROGRESS × cardinal)` (259 on the shipped map);
+/// a query that does not fall is [`WalkError::Stalled`], never a missing
+/// route. `tests/pathing.rs`'s `a_partial_route_chain_spends_its_abstract_cost`
+/// holds real chains to the fall, and this module's tests reach `Stalled`
+/// with a router that does not progress.
 ///
 /// # Errors
 ///
-/// The router's [`NoPath`] when it serves no route from where the walk
-/// stands.
+/// [`WalkError::NoPath`], the router's reason, when it serves no route from
+/// where the walk stands; [`WalkError::Stalled`] when a partial route's next
+/// query does not fall as the argument above says it must.
 pub fn walk_cost(
     world: &Surface,
     clusters: &Clusters,
     scratch: &mut Scratch,
     (start, goal): (Node, Node),
-    surcharge: Surcharge<'_>,
-) -> Result<i64, NoPath> {
+) -> Result<i64, WalkError> {
     scratch.walks.bump();
     let mut served = core::mem::take(&mut scratch.served);
-    let walked = walk_into(
-        world,
-        clusters,
-        scratch,
-        (start, goal),
-        surcharge,
-        &mut served,
-    );
+    let cheapest = i64::from(world.costs().cardinal());
+    let walked = walk_chain((start, goal), cheapest, &mut served, |pair, out| {
+        route_and_abstract(world, clusters, scratch, pair, Surcharge::NONE, out)
+    });
     scratch.served = served;
     walked
+}
+
+/// Why [`walk_cost`] priced no walk.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WalkError {
+    /// The router serves no route from where the walk stands: its reason.
+    NoPath(NoPath),
+    /// A partial route's next query did not fall by [`PARTIAL_PROGRESS`]
+    /// cardinal steps (`walk_cost`'s "The chain ends"): a router that broke
+    /// the argument the chain's end rests on. `partials` is how many partial
+    /// routes the walk had chained.
+    Stalled {
+        /// The partial routes chained before the query that did not fall.
+        partials: u32,
+    },
+}
+
+impl From<NoPath> for WalkError {
+    fn from(reason: NoPath) -> WalkError {
+        WalkError::NoPath(reason)
+    }
 }
 
 /// The new columns a partial route adds to a walk: all of its
 /// [`MAX_ROUTE_NODES`] but the one it starts on.
 pub const PARTIAL_PROGRESS: u32 = MAX_ROUTE_NODES - 1;
-
-/// The most partial routes one walk chains ([`walk_cost`]'s "The chain
-/// ends"): an abstract cost of at most `i32::MAX`, spent at least
-/// [`PARTIAL_PROGRESS`] units a partial route.
-pub const MAX_PARTIALS: u32 = match i32::MAX.unsigned_abs().checked_div(PARTIAL_PROGRESS) {
-    // Rounded down: a chain spends at least this much a partial route.
-    Some(partials) => partials,
-    None => 0,
-};
-
 const _: () = assert!(PARTIAL_PROGRESS > 0, "a partial route makes progress");
-const _: () = assert!(
-    MAX_PARTIALS > 0,
-    "the bound is the quotient, not the empty arm"
-);
-// The walk's cost is summed in an `i64`: every route of the chain, the whole
-// one included, costs at most `i32::MAX` (below 2^31), and fewer than 2^22 of
-// them make less than 2^53.
-const _: () = assert!(MAX_PARTIALS < 1 << 22, "a chain's summed cost fits an i64");
 
-/// [`walk_cost`]'s chain, with the served buffer taken out of the scratch so
-/// that every return hands it back.
-fn walk_into(
-    world: &Surface,
-    clusters: &Clusters,
-    scratch: &mut Scratch,
+/// The most partial routes one walk chains on `surface` ([`walk_cost`]'s "The
+/// chain ends"): its largest path cost, spent at least [`PARTIAL_PROGRESS`]
+/// cardinal steps a partial route.
+#[must_use]
+pub fn max_partials(surface: &Surface) -> u64 {
+    let fall = i64::from(PARTIAL_PROGRESS).saturating_mul(i64::from(surface.costs().cardinal()));
+    // E7: cannot miss: a cardinal step costs at least one unit (the rules refuse a free one), so the fall is positive, and a path cost is never negative
+    u64::try_from(surface.max_path_cost().checked_div(fall).unwrap_or(0)).unwrap_or(0)
+}
+
+/// [`walk_cost`]'s chain over `route` (the router, or a test's double), with
+/// the served buffer the caller took out of the scratch. The loop carries the
+/// last query's abstract cost and refuses a query that does not fall below it
+/// by [`PARTIAL_PROGRESS`] × `cheapest`, so it cannot run past that cost's
+/// fall: an `i32` cost, at least `PARTIAL_PROGRESS` units a partial route.
+pub(crate) fn walk_chain<R>(
     (start, goal): (Node, Node),
-    surcharge: Surcharge<'_>,
+    cheapest: i64,
     served: &mut Vec<Node>,
-) -> Result<i64, NoPath> {
-    let mut from = start;
-    let mut total = 0_i64;
-    for _ in 0..=MAX_PARTIALS {
-        let (_, outcome) =
-            route_and_abstract(world, clusters, scratch, (from, goal), surcharge, served)?;
-        // At most `MAX_PARTIALS + 1` routes of at most `i32::MAX` each: the
-        // assertion above.
-        total += i64::from(outcome.cost);
-        match outcome.rest {
-            None => return Ok(total),
-            Some(end) => from = end,
+    mut route: R,
+) -> Result<i64, WalkError>
+where
+    R: FnMut((Node, Node), &mut Vec<Node>) -> Result<(AbstractResult, RouteOutcome), NoPath>,
+{
+    let fall = i64::from(PARTIAL_PROGRESS).saturating_mul(cheapest.max(1));
+    let (first, mut outcome) = route((start, goal), served)?;
+    let mut left = i64::from(first.cost);
+    let mut total = i64::from(outcome.cost);
+    let mut partials: u32 = 0;
+    while let Some(end) = outcome.rest {
+        let (next, then) = route((end, goal), served)?;
+        let now = i64::from(next.cost);
+        // The cost carried falls by at least `fall` a turn and starts at no
+        // more than `i32::MAX`, so this loop turns fewer than `i32::MAX /
+        // PARTIAL_PROGRESS` times, a `u32` count; the walk's summed cost,
+        // that many routes of at most `i32::MAX` each, fits an `i64`.
+        if now < 0 || now > left.saturating_sub(fall) {
+            return Err(WalkError::Stalled { partials });
         }
+        partials += 1;
+        left = now;
+        total += i64::from(then.cost);
+        outcome = then;
     }
-    // E7: cannot miss: the abstract cost falls by at least `PARTIAL_PROGRESS` a partial route ("The chain ends"), so the loop above returns before it runs out
-    Err(NoPath::Unreachable)
+    Ok(total)
+}
+
+#[cfg(test)]
+mod walk_tests {
+    use super::{AbstractResult, RouteOutcome, WalkError, walk_chain};
+    use crate::pathing::route::NoPath;
+
+    fn answer(abstract_cost: i32, cost: i32, rest: Option<u32>) -> (AbstractResult, RouteOutcome) {
+        (
+            AbstractResult {
+                cost: abstract_cost,
+                legs: 1,
+                fogged: false,
+            },
+            RouteOutcome {
+                cost,
+                legs: 1,
+                rest,
+            },
+        )
+    }
+
+    /// A router double that serves partial routes whose next query never
+    /// falls: the chain refuses it as stalled, after the partials it had, and
+    /// never as a missing route.
+    #[test]
+    fn a_router_that_does_not_progress_is_stalled_not_unreachable() {
+        let mut served = Vec::new();
+        let mut asked = 0_u32;
+        let answer_of = walk_chain((0, 9), 10, &mut served, |_, _| {
+            asked += 1;
+            Ok(answer(50_000, 10_230, Some(5)))
+        });
+        assert_eq!(answer_of, Err(WalkError::Stalled { partials: 0 }));
+        assert_eq!(asked, 2, "the first query, then the one that did not fall");
+        // One that falls once, then stops falling.
+        let mut costs = [60_000, 49_000, 48_999].into_iter();
+        let falls_once = walk_chain((0, 9), 10, &mut served, |_, _| {
+            Ok(answer(costs.next().unwrap_or(0), 10_230, Some(5)))
+        });
+        assert_eq!(falls_once, Err(WalkError::Stalled { partials: 1 }));
+    }
+
+    /// A router double whose partial routes fall as the argument says: the
+    /// chain sums every route and ends at the whole one.
+    #[test]
+    fn a_chain_that_falls_sums_its_routes() {
+        let mut served = Vec::new();
+        let mut turns = [
+            (30_000, 10_230, Some(5)),
+            (19_770, 10_230, Some(6)),
+            (9_540, 9_540, None),
+        ]
+        .into_iter();
+        let walked = walk_chain((0, 9), 10, &mut served, |_, _| {
+            let (a, c, rest) = turns.next().unwrap_or((0, 0, None));
+            Ok(answer(a, c, rest))
+        });
+        assert_eq!(walked, Ok(30_000));
+        let none = walk_chain((0, 9), 10, &mut served, |_, _| Err(NoPath::Unreachable));
+        assert_eq!(none, Err(WalkError::NoPath(NoPath::Unreachable)));
+    }
 }
 
 /// The walker's speed and the fog multiplier, which are the two rules-table

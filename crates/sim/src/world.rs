@@ -514,11 +514,6 @@ pub struct World {
     /// between uses and reserved for every column of the map, the most one
     /// search lists (each site is one column, once).
     stone_scratch: Vec<crate::targeting::StoneCandidate>,
-    /// The threat zones a commander's "nearest" is ranked under
-    /// ([`World::walker_ground_and_scratch`]): the zones its walker will be
-    /// served with, from [`World::commander_threat_zones`], the pathing
-    /// phase's own. Reserved for every armed row, the most one seat knows.
-    rank_zones: Vec<crate::pathing::route::Zone>,
     /// Scratch for the breach search (S2's `atk`), reserved for the whole
     /// graph so a search allocates nothing.
     breach_scratch: crate::attack::BreachScratch,
@@ -1368,7 +1363,6 @@ impl World {
             attackers: Vec::with_capacity(armed_rows),
             threat_scratch: Vec::with_capacity(armed_rows),
             stone_scratch: Vec::with_capacity(crate::math::index::row(breach_nodes)),
-            rank_zones: Vec::with_capacity(armed_rows),
             breach_scratch: crate::attack::BreachScratch::new(breach_nodes),
             charge_scratch: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             attack_counts: crate::attack::AttackCounts::default(),
@@ -1701,7 +1695,6 @@ impl World {
             rules: &self.rules,
             spiral: &self.spiral,
             work: &self.decision_units,
-            surcharge: crate::pathing::route::Surcharge::NONE,
         }
     }
 
@@ -1720,35 +1713,6 @@ impl World {
                 rules: &self.rules,
                 spiral: &self.spiral,
                 work: &self.decision_units,
-                surcharge: crate::pathing::route::Surcharge::NONE,
-            },
-            &mut self.scratch,
-        )
-    }
-
-    /// [`World::ground_and_scratch`] for a "nearest" `seat`'s commander will
-    /// walk to: the ground carries the route surcharge the pathing phase
-    /// will serve that walk with, built by [`World::commander_threat_zones`],
-    /// the one function both read, so the rank and the route cannot drift.
-    pub(crate) fn walker_ground_and_scratch(&mut self, seat: SeatId) -> (Ground<'_>, &mut Scratch) {
-        let mut zones = core::mem::take(&mut self.rank_zones);
-        zones.clear();
-        self.commander_threat_zones(seat.raw(), &mut zones);
-        self.rank_zones = zones;
-        let multiplier = self.rules.attack().step_multiplier;
-        (
-            Ground {
-                surface: &self.surface,
-                clusters: &self.clusters,
-                voxels: &self.voxels,
-                features: &self.features,
-                beacons: &self.beacons,
-                structures: &self.structures,
-                targets: &self.targets,
-                rules: &self.rules,
-                spiral: &self.spiral,
-                work: &self.decision_units,
-                surcharge: crate::pathing::route::Surcharge::new(&self.rank_zones, multiplier),
             },
             &mut self.scratch,
         )
@@ -4996,12 +4960,9 @@ impl World {
 
     /// The zones `seat`'s commander's route is surcharged in: the reach of
     /// each threat the seat knows, while the step in progress walks at
-    /// `AVOID_KNOWN_THREATS`, and none otherwise. The pathing phase serves the
-    /// commander's route under them ([`World::route_span_of`]) and a
-    /// "nearest" the commander walks to is ranked under them
-    /// ([`World::walker_ground_and_scratch`]): one function, so the two read
-    /// the same zones.
-    pub fn commander_threat_zones(&self, seat: u8, zones: &mut Vec<crate::pathing::route::Zone>) {
+    /// `AVOID_KNOWN_THREATS`, and none otherwise: the zones the pathing phase
+    /// serves the commander's route under ([`World::route_span_of`]).
+    fn commander_threat_zones(&self, seat: u8, zones: &mut Vec<crate::pathing::route::Zone>) {
         if !self.interpreter.avoids_threats(usize::from(seat)) {
             return;
         }
