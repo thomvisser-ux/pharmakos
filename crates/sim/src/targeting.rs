@@ -108,7 +108,9 @@ use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
 use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::estimate::{ServedWalk, WalkError, walk_cost};
+use crate::pathing::estimate::{
+    ServedWalk, Speed, WalkError, ticks_for_cost, walk_cost, walk_ticks,
+};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
@@ -199,9 +201,25 @@ pub struct Ground<'a> {
     /// Where the work a resolution does is counted: P1's evaluation units
     /// (S1's plan, section 5). Not hashed.
     pub work: &'a crate::seams::UnitTally,
+    /// The world's re-ask bound (`World::link_ticks`): what a walk's travel
+    /// time adds per partial route, so the ranker orders by the time it
+    /// shows ([`Ground::commander_speed`]).
+    pub link_ticks: u32,
 }
 
 impl Ground<'_> {
+    /// The commander's speed with this world's re-ask bound: the figure every
+    /// "nearest" is shown at (the gateway's `travel_ms`, `resolve_refs`'
+    /// candidates and `estimate_route`, through `Speed::commander_of`, which
+    /// equals it) and the one [`Ranker`] orders by.
+    #[must_use]
+    pub fn commander_speed(&self) -> Speed {
+        Speed {
+            link_ticks: self.link_ticks,
+            ..Speed::commander(self.rules)
+        }
+    }
+
     /// Count `units` of evaluation work.
     fn charge(&self, units: u32) {
         self.work.add(units);
@@ -454,11 +472,23 @@ struct Entry {
     cost: i64,
     /// Its served walk's partial routes, once priced.
     partials: u32,
+    /// Its served walk's travel time at the commander's speed
+    /// ([`walk_ticks`]), once priced; `None` for a commander with no speed,
+    /// who walks nowhere, for every candidate alike.
+    ticks: Option<i32>,
+    /// The time the octile bound would take ([`ticks_for_cost`]): a lower
+    /// bound on `ticks`, as `bound` is on `cost`.
+    bound_ticks: Option<i32>,
     /// 0 unpriced, 1 priced, 2 emitted or unreachable.
     state: u8,
 }
 
-/// "Nearest", one candidate at a time, in `(cost, anchor y, anchor x)` order.
+/// "Nearest", one candidate at a time, in `(travel time, cost, anchor y,
+/// anchor x)` order: the time is the commander's walk as every reader shows it
+/// ([`Ground::commander_speed`], [`walk_ticks`]), so the shown time never
+/// falls down the ranking, and the cost orders within a tick. Where no walk
+/// chains a partial route the time is the cost rounded up, monotone in it, so
+/// the order is the cost's (S3's `p3fix`, fix pass 5).
 ///
 /// Each candidate costs at most one priced walk, and only when the bounds of
 /// the others cannot already place it (the module docs).
@@ -488,6 +518,7 @@ impl Ranker {
     {
         let [ox, oy] = origin;
         let start = ground.surface.node_of(ox, oy);
+        let speed = ground.commander_speed();
         let mut ranker = Ranker {
             entries: [Entry::default(); MAX_FEATURES],
             len: 0,
@@ -513,6 +544,11 @@ impl Ranker {
                     bound: i64::from(ground.surface.heuristic(start, goal)),
                     cost: 0,
                     partials: 0,
+                    ticks: None,
+                    bound_ticks: ticks_for_cost(
+                        ground.surface.heuristic(start, goal),
+                        speed.cost_per_second,
+                    ),
                     state: 0,
                 };
                 ranker.len += 1;
@@ -553,15 +589,15 @@ impl Ranker {
                 .enumerate()
                 .filter(|(_, entry)| entry.state == 1)
                 // item 62: `(y, x)` is a unique anchor.
-                .min_by_key(|(_, entry)| (entry.cost, entry.y, entry.x))
-                .map(|(at, entry)| (at, (entry.cost, entry.y, entry.x)));
+                .min_by_key(|(_, entry)| (entry.ticks, entry.cost, entry.y, entry.x))
+                .map(|(at, entry)| (at, (entry.ticks, entry.cost, entry.y, entry.x)));
             let best_bound = live
                 .iter()
                 .enumerate()
                 .filter(|(_, entry)| entry.state == 0)
                 // item 62: `(y, x)` is a unique anchor.
-                .min_by_key(|(_, entry)| (entry.bound, entry.y, entry.x))
-                .map(|(at, entry)| (at, (entry.bound, entry.y, entry.x)));
+                .min_by_key(|(_, entry)| (entry.bound_ticks, entry.bound, entry.y, entry.x))
+                .map(|(at, entry)| (at, (entry.bound_ticks, entry.bound, entry.y, entry.x)));
             match (best_priced, best_bound) {
                 // The best priced candidate is ahead of every bound still
                 // unpriced, so its place in the order is final.
@@ -578,9 +614,19 @@ impl Ranker {
                     let entry = self.entries.get_mut(at)?;
                     match ground.travel(scratch, origin, entry.goal) {
                         Ok(walk) => {
-                            entry.cost = walk.cost;
-                            entry.partials = walk.partials;
-                            entry.state = 1;
+                            if let Ok(ticks) = walk_ticks(walk, ground.commander_speed()) {
+                                entry.cost = walk.cost;
+                                entry.partials = walk.partials;
+                                entry.ticks = ticks;
+                                entry.state = 1;
+                            } else {
+                                // A time past a signed 32-bit tick count: no
+                                // candidate, counted under its own reason
+                                // (`Scratch::untimed`), never ranked by a
+                                // figure nobody is shown.
+                                entry.state = 2;
+                                scratch.untimed.bump();
+                            }
                         }
                         // The router serves no walk to it: no candidate
                         // (targeting.md, "Nearest": unreachable candidates
@@ -1442,6 +1488,10 @@ mod tests {
             rules: &rules,
             spiral: &spiral,
             work: &work,
+            link_ticks: crate::pathing::estimate::link_ticks(
+                crate::pathing::estimate::ROOM_ROWS,
+                rules.repath_cap(),
+            ),
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
         let mut out: Vec<(String, i64)> = Vec::new();

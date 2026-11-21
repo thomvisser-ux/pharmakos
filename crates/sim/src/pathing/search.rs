@@ -208,6 +208,7 @@ pub struct Scratch {
     pub(crate) served_estimates: Tally,
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
+    pub(crate) untimed: Tally,
 }
 
 /// A diagnostic count that never reads wrong: it counts up by a checked add,
@@ -316,6 +317,7 @@ impl Scratch {
             served_estimates: Tally::ZERO,
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
+            untimed: Tally::ZERO,
         }
     }
 
@@ -446,7 +448,19 @@ impl Scratch {
         self.stalled.read()
     }
 
-    /// Zero the six counters.
+    /// Served walks the ranker could not turn into a travel time since the
+    /// last reset (`pathing::estimate::walk_ticks` refused them: a time past a
+    /// signed 32-bit tick count), each dropped as no candidate and counted
+    /// here rather than ranked by a figure nobody is shown.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn untimed(&self) -> Result<u64, TallyOverflow> {
+        self.untimed.read()
+    }
+
+    /// Zero the counters.
     pub const fn reset_counters(&mut self) {
         self.expansions = Tally::ZERO;
         self.endpoint_expansions = Tally::ZERO;
@@ -454,6 +468,7 @@ impl Scratch {
         self.served_estimates = Tally::ZERO;
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
+        self.untimed = Tally::ZERO;
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the
