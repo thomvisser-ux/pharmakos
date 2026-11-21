@@ -81,9 +81,18 @@ const PROBATION_SEED: u64 = 20;
 /// and their exact prices picked the second and third stones `[207, 69]` and
 /// `[223, 86]` where the abstract prices had picked `[203, 72]` and
 /// `[222, 86]` (and 1 620 ticks). The seed still passes, so the answer stands.
+///
+/// Re-pinned again by the same lane's second part, when `toward` came to weigh
+/// its sites by the served walk, as every "nearest" in the sim does, rather
+/// than by the item-61 estimate: the stones `[192, 51]`, `[207, 69]` and
+/// `[223, 86]` (1 640 ticks) became `[202, 46]`, `[208, 69]` and `[223, 87]`,
+/// and the walk 1 696 ticks. Each stone is the exact nearest to the vent; the
+/// chain of them walks 56 ticks longer, since nothing makes the nearest stone
+/// the one that shortens the whole walk. Seed 20 still passes and no earlier
+/// seed does, so the answer stands (decisions-log item 154 (1)).
 const PINNED_VENT: [i32; 2] = [232, 96];
-const PINNED_SITES: [[i32; 2]; 3] = [[192, 51], [207, 69], [223, 86]];
-const PINNED_WALK_TICKS: i32 = 1_640;
+const PINNED_SITES: [[i32; 2]; 3] = [[202, 46], [208, 69], [223, 87]];
+const PINNED_WALK_TICKS: i32 = 1_696;
 
 /// The golden seed, every other test's fixture: its second vent is about nine
 /// stones out (S3's plan, section 1.1), which is why Probation has a seed of
