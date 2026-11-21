@@ -828,11 +828,20 @@ fn a_toward_tick_behind_a_ring_allocates_nothing() {
         runner.clear_events();
         runner.world().encode(&mut enc);
     }
-    let walks_before = runner
-        .world_mut()
-        .scratch_mut()
-        .walks()
-        .expect("the count fits a u64");
+    let commander = runner
+        .world()
+        .commander_of(pharmakos_sim::tables::SeatId::new(0))
+        .expect("a commander");
+    let unit = runner
+        .world()
+        .units()
+        .row_of(commander)
+        .expect("a live commander")
+        .raw();
+    assert!(
+        runner.world().router().route(unit).len() < 2,
+        "the commander holds through the warm-up"
+    );
     let before = allocations();
     for _ in 0..30 {
         runner
@@ -843,19 +852,13 @@ fn a_toward_tick_behind_a_ring_allocates_nothing() {
         runner.world().encode(&mut enc);
     }
     let during = allocations() - before;
-    let walks = runner
-        .world_mut()
-        .scratch_mut()
-        .walks()
-        .expect("the count fits a u64")
-        - walks_before;
     assert!(
-        walks > 0,
-        "the toward step resolved inside the counted ticks"
+        runner.world().router().route(unit).len() > 1,
+        "the toward step resolved inside the counted ticks: the commander walks to its stone"
     );
     assert_eq!(
         during, 0,
-        "the ticks round a toward resolve behind a ring allocated {during} times ({walks} walks priced)"
+        "the ticks round a toward resolve behind a ring allocated {during} times"
     );
 }
 

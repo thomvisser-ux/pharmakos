@@ -20,6 +20,25 @@
 //!
 //! # Nearest
 //!
+//! # Two measures
+//!
+//! Every closeness the resolver ranks is a cost over the walkers' step rule,
+//! exact for what it means (lane `p3fix`):
+//!
+//! - **A choice a unit then walks to** -- `cover`, `on_vent`, a Mine
+//!   beacon's seam, any "nearest" from an origin a walker leaves -- ranks by
+//!   **the walk the router will serve** that walker, under the surcharge its
+//!   route will carry ([`Ground::surcharge`]): [`Ranker`], below.
+//! - **A choice of closeness that no unit walks** -- `toward`'s stepping
+//!   stone, the legal site closest to the feature it steps toward -- ranks by
+//!   **the least cost of any walk over the terrain**, the grid optimum
+//!   ([`crate::pathing::reach`]). Nobody walks from the stone to the feature
+//!   when the stone is chosen (the commander walks to the stone), so no
+//!   served walk is the measure; the grid optimum is exactly "closest over
+//!   the ground", with no HPA\* artefact in it.
+//!
+//! # Nearest
+//!
 //! **The least travel from the origin to the feature. Unreachable candidates
 //! are skipped. Ties go to the lowest anchor y, then x.** The metric is the
 //! integer cost of the walk the router serves
@@ -395,9 +414,8 @@ impl Ground<'_> {
     }
 
     /// The integer cost of the walk the router serves from `from` to `to`
-    /// under [`Ground::surcharge`] ([`walk_cost`]): what every "nearest"
-    /// ranks by, a feature's ([`Ranker`]) and a stepping-stone site's
-    /// ([`stone_site`]) alike.
+    /// under [`Ground::surcharge`] ([`walk_cost`]): what a choice a unit then
+    /// walks to ranks by ([`Ranker`]; the module docs' "Two measures").
     fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<i64, NoPath> {
         self.charge(1);
         walk_cost(
@@ -786,24 +804,23 @@ pub struct Stone {
 /// The stepping-stone site toward `feature` (S3's plan, E23; S1's plan,
 /// decision 3; task `pred`): **the legal site, inside `seat`'s spheres,
 /// nearest the feature**, where "nearest" is targeting's (the module docs):
-/// the least served walk's integer cost ([`walk_cost`]) **from the
-/// candidate site to the feature's anchor column** ([`Ground::measure_to`]),
-/// as every "nearest" in the sim is (lane `p3fix`); a candidate from
-/// which the feature cannot be reached is skipped; ties go to the lowest
-/// site y, then x. Straight-line distance is not used.
+/// the **least walking cost over the terrain** from the candidate site to the
+/// feature's anchor column ([`Ground::measure_to`]): the grid optimum over
+/// the walkers' own step rule at the rules' step costs, not a served walk
+/// (the module docs' "Two measures": nobody walks from the stone to the
+/// feature when it is chosen). A candidate from which the feature cannot be
+/// reached is skipped; ties go to the lowest site y, then x. Straight-line
+/// distance is not used.
 ///
 /// A candidate is a column within the sphere of one of `seat`'s own living
 /// beacons (its own radius, grown by a finished Spire), that is a **legal
 /// site** (inside one of the seat's own spheres, not on the column of one of
 /// its own live beacons), standable, walkable, outside every feature's
 /// footprint and connected to the commander's column, exactly as
-/// [`covering_site`] admits a column. Candidates are priced in the order of
-/// the **grid optimum** from the feature ([`crate::pathing::reach`]): one
-/// search over the walkers' own step rule gives every site the least cost of
-/// any walk from it, which a served walk never undercuts, and walls cannot
-/// fool it as the octile bound was fooled. The search stops as soon as its
-/// frontier's cost passes the best walk priced, so a resolve prices the few
-/// sites that could still win, behind walls as on open ground.
+/// [`covering_site`] admits a column. One search outward from the feature
+/// ([`crate::pathing::reach`]) settles columns cheapest first, and the first
+/// legal site it settles is the answer, so a resolve pops only the columns
+/// cheaper than the stone, and at most the map's.
 ///
 /// **The terrain is the live world's, unfogged** (`Fog::Clear`): E23's "the
 /// terrain the seat knows" reads every column until S3-05's terrain mask
@@ -879,34 +896,22 @@ fn stone_site(
         return (None, weighed);
     };
     // The grid optimum from the feature outward ([`crate::pathing::reach`]):
-    // every site settles at the least cost of any walk from it, in ascending
-    // order, and a served walk never costs less. So once the frontier's cost
-    // passes the best walk priced, no site left can beat it.
+    // columns settle in ascending `(cost, column)`, and a column's id is
+    // `y * width + x`, so that order is `(cost, y, x)`. Every column at a
+    // cost is in the frontier before the first of them settles (a step costs
+    // at least one unit, so each one's last step leaves a column already
+    // settled), so the first legal site settled is the least cost's lowest
+    // `(y, x)`: the answer, with nothing left to weigh.
     scratch.reach.begin(goal);
-    let mut best: Option<(i64, i32, i32)> = None;
-    let mut left = weighed;
-    while left > 0 {
-        if let (Some(frontier), Some((cost, _, _))) = (scratch.reach.frontier(), best)
-            && frontier > cost
-        {
-            break;
-        }
-        let Some((node, _)) = scratch.reach.next(ground.surface, &mut scratch.expansions) else {
-            break;
-        };
-        if !scratch.reach.is_site(node) {
-            continue;
-        }
-        left -= 1;
-        let (x, y) = ground.surface.coord_of(node);
-        // A site the router serves no walk from is no candidate.
-        if let Ok(cost) = ground.travel(scratch, node, goal)
-            && best.is_none_or(|held| (cost, y, x) < held)
-        {
-            best = Some((cost, y, x));
+    while let Some((node, _)) = scratch.reach.next(ground.surface, &mut scratch.expansions) {
+        if scratch.reach.is_site(node) {
+            let (x, y) = ground.surface.coord_of(node);
+            return (Some([x, y]), weighed);
         }
     }
-    (best.map(|(_, y, x)| [x, y]), weighed)
+    // Every site is connected to the goal, so the search settles one before
+    // it runs out.
+    (None, weighed)
 }
 
 /// Resolve a `toward` site for `seat` (S3's plan, E23; task `pred`): the

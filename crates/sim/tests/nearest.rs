@@ -11,10 +11,10 @@
 //! commander sent along a far pair and stepped until it arrives, its ticks set
 //! against the priced walk's, with and without the threats its route avoids.
 //!
-//! The `toward` search's bound is held here too: the grid optimum
-//! (`pathing::reach`) never above a served walk for any site, the chosen
-//! stone equal to brute force over every site, and the counted work of one
-//! resolve behind a ring of wall pinned.
+//! `toward`'s stone is the other measure (`targeting`'s "Two measures"): the
+//! legal site closest to the feature over the terrain. It is held here to its
+//! definition by brute force, with a Dijkstra of the test's own, and the
+//! counted work of one resolve is pinned, behind rings of wall included.
 
 #![allow(
     clippy::expect_used,
@@ -35,7 +35,7 @@ use pharmakos_sim::pathing::route::{Surcharge, Zone, route_with};
 use pharmakos_sim::pathing::search::{Scratch, Tally};
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::runner::{MatchSettings, Runner};
-use pharmakos_sim::seams::{MandateKind, UnitTally};
+use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{Common, PRIORITY_NORMAL, SeatId, UnitKind};
 use pharmakos_sim::targeting::{FeatureSpec, Ground, Ranker, StoneCandidate, toward_counted};
 use pharmakos_sim::voxels::{Material, VoxelEdit};
@@ -346,26 +346,111 @@ fn the_step_rule_is_symmetric() {
     }
 }
 
-/// Run the grid optimum from `goal` to the end and read every node's bound.
-fn bounds_from(world: &World, goal: Node) -> Reach {
-    let mut reach = Reach::new(world.surface().node_count());
-    reach.begin(goal);
-    let mut tally = Tally::ZERO;
-    while reach.next(world.surface(), &mut tally).is_some() {}
-    reach
+/// **The definition's oracle**: the least cost of any walk from every column
+/// to `goal` over the walkers' step rule, by a plain Dijkstra on the
+/// standard library's heap, reading each step backwards through
+/// `step_cost_between` (so it relies on no symmetry). Not `pathing::reach`'s
+/// code.
+fn least_costs(world: &World, goal: Node) -> Vec<Option<i64>> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    let surface = world.surface();
+    let n = usize::try_from(surface.node_count()).unwrap();
+    let mut cost: Vec<Option<i64>> = vec![None; n];
+    let mut heap = BinaryHeap::new();
+    cost[usize::try_from(goal).unwrap()] = Some(0);
+    heap.push(Reverse((0_i64, goal)));
+    while let Some(Reverse((here, node))) = heap.pop() {
+        if cost[usize::try_from(node).unwrap()] != Some(here) {
+            continue;
+        }
+        let (x, y) = surface.coord_of(node);
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let Some(other) = surface.node_of(x + dx, y + dy) else {
+                    continue;
+                };
+                if other == node {
+                    continue;
+                }
+                // A walk from `other` steps onto `node`.
+                let Some(step) = surface.step_cost_between(other, node) else {
+                    continue;
+                };
+                let next = here + i64::from(step);
+                let slot = &mut cost[usize::try_from(other).unwrap()];
+                if slot.is_none_or(|held| next < held) {
+                    *slot = Some(next);
+                    heap.push(Reverse((next, other)));
+                }
+            }
+        }
+    }
+    cost
 }
 
-/// `toward` against brute force, on walled and cratered terrain: for every
-/// live vent of each seed, named from seat 0's commander, the stone chosen is
-/// the least walk (cost, then `(y, x)`) over **every** legal site the search
-/// listed, priced by the oracle; and the grid optimum the search opens sites
-/// by is never above any site's walk.
+/// The grid optimum's bucket queue settles every column it reaches exactly
+/// once, at the least cost the test's own Dijkstra finds, in strictly
+/// ascending `(cost, column)`: the total order a binary heap over that key
+/// gives, which `toward`'s tie-break rests on (`pathing::reach`, "The queue,
+/// and its order"). Full floods from seeded columns of generated and scarred
+/// maps.
 #[test]
-fn a_toward_is_the_least_served_walk_over_every_site() {
-    let (mut cases, mut sites_seen, mut priced) = (0_u32, 0_u64, 0_u64);
-    for seed in [PROBATION, SEED] {
+fn the_grid_optimum_settles_in_cost_then_column_order() {
+    let mut floods = 0;
+    for (seed, scarred) in [(SEED, false), (SEED, true), (PROBATION, true)] {
         let mut world = world_of(seed, 2);
-        scar(&mut world, seed);
+        if scarred {
+            scar(&mut world, seed);
+        }
+        let surface = world.surface();
+        let mut reach = Reach::new(surface.node_count(), surface.costs().max_step());
+        let mut rng = Rng(seed ^ 0x0077);
+        for _ in 0..3 {
+            let (_, from) = origin(&world, &mut rng);
+            let least = least_costs(&world, from);
+            let reachable = least.iter().filter(|cost| cost.is_some()).count();
+            reach.begin(from);
+            let mut tally = Tally::ZERO;
+            let mut previous: Option<(i64, Node)> = None;
+            let mut settled = 0_usize;
+            while let Some((node, cost)) = reach.next(surface, &mut tally) {
+                assert_eq!(
+                    Some(cost),
+                    least[usize::try_from(node).unwrap()],
+                    "seed {seed:#x}: column {node} settled at a cost not its least"
+                );
+                assert!(
+                    previous.is_none_or(|held| held < (cost, node)),
+                    "seed {seed:#x}: {previous:?} then {:?}",
+                    (cost, node)
+                );
+                previous = Some((cost, node));
+                settled += 1;
+            }
+            assert_eq!(
+                settled, reachable,
+                "seed {seed:#x}: every reachable column, once"
+            );
+            floods += 1;
+        }
+    }
+    assert_eq!(floods, 9);
+}
+
+/// `toward` against its definition by brute force, on generated, walled and
+/// cratered terrain: for every live vent of each seed, named from seat 0's
+/// commander, the stone is the legal site (every one the search listed) with
+/// the least walking cost to the vent over the terrain, ties to the lowest
+/// `(y, x)`, by the test's own Dijkstra; and no walk is priced.
+#[test]
+fn a_toward_is_the_closest_site_over_the_terrain() {
+    let (mut cases, mut sites_seen) = (0_u32, 0_u64);
+    for (seed, scarred) in [(PROBATION, false), (PROBATION, true), (SEED, true)] {
+        let mut world = world_of(seed, 2);
+        if scarred {
+            scar(&mut world, seed);
+        }
         let seat = SeatId::new(0);
         let commander = world.commander_of(seat).expect("a commander");
         let row = world.units().row_of(commander).expect("a live commander");
@@ -387,10 +472,8 @@ fn a_toward_is_the_least_served_walk_over_every_site() {
             .take(4)
             .collect();
         let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
-        let mut truth_scratch = scratch.clone();
         for (index, anchor) in vents {
             let mut stones: Vec<StoneCandidate> = Vec::new();
-            let walks_before = scratch.walks().unwrap();
             let found = toward_counted(
                 &world.ground(),
                 &mut scratch,
@@ -402,7 +485,7 @@ fn a_toward_is_the_least_served_walk_over_every_site() {
                     anchor,
                 },
             );
-            priced += scratch.walks().unwrap() - walks_before;
+            assert_eq!(scratch.walks().unwrap(), 0, "a stone prices no walk");
             let Some(goal) = measured_to(&world, index, from) else {
                 assert!(
                     found.is_err(),
@@ -411,26 +494,13 @@ fn a_toward_is_the_least_served_walk_over_every_site() {
                 continue;
             };
             cases += 1;
-            let bounds = bounds_from(&world, goal);
+            let least = least_costs(&world, goal);
             let mut best: Option<(i64, i32, i32)> = None;
             for stone in &stones {
                 sites_seen += 1;
                 let [x, y] = stone.column();
-                let Some(cost) = walked(
-                    &world,
-                    &mut truth_scratch,
-                    (stone.node(), goal),
-                    Surcharge::NONE,
-                ) else {
-                    continue;
-                };
-                let bound = bounds
-                    .cost_at(stone.node())
-                    .expect("a site reaches the vent");
-                assert!(
-                    bound <= cost,
-                    "seed {seed:#x}, vent {anchor:?}: site {x},{y}'s bound {bound} is above its walk {cost}"
-                );
+                let cost = least[usize::try_from(stone.node()).unwrap()]
+                    .expect("every legal site reaches the vent");
                 if best.is_none_or(|held| (cost, y, x) < held) {
                     best = Some((cost, y, x));
                 }
@@ -438,37 +508,34 @@ fn a_toward_is_the_least_served_walk_over_every_site() {
             assert_eq!(
                 found.ok().map(|stone| stone.site),
                 best.map(|(_, y, x)| [x, y]),
-                "seed {seed:#x}, vent {anchor:?}: toward is not the least walk over every site"
+                "seed {seed:#x}, vent {anchor:?}: toward is not the closest site over the terrain"
             );
         }
     }
-    assert!(cases >= 6, "the test weighs enough vents: {cases}");
-    println!(
-        "toward against brute force: {cases} vents, {sites_seen} sites, {priced} walks priced"
-    );
-    assert!(
-        priced * 10 < sites_seen,
-        "the bound prunes: {priced} walks for {sites_seen} sites"
-    );
+    assert!(cases >= 8, "the test weighs enough vents: {cases}");
+    assert!(sites_seen > 10_000, "and enough sites: {sites_seen}");
 }
 
-/// One `toward` resolve's counted work on the probation seed, toward its
-/// pinned vent from seat 0's commander: open ground, and the vent ringed by
-/// stone three high at radius 10, 18 and 26 with the ring's gap facing away
-/// from the core, where the octile bound pruned nothing (review probe B:
-/// every one of 1 753 sites priced, 4.5 M nodes popped). Pinned: walks priced
-/// and nodes popped, each a count the search makes, the same on every
-/// platform. A change that moves one says why.
+/// One `toward` resolve's counted work on the probation seed: toward its
+/// pinned vent on open ground and behind a ring of stone three high at
+/// radius 10, 18 and 26 with the ring's gap facing away from the core (review
+/// probe B); and item 161's three cases, the pinned vent, the live vent
+/// farthest from the core and the pinned vent with a Resonance Spire grown
+/// at the core. Pinned: the stone, and the nodes the search popped, a count
+/// that is the same on every platform; no walk is priced. A change that
+/// moves one says why.
 #[test]
-fn a_toward_behind_a_ring_prices_few_walks() {
-    const PINNED: [(&str, i32, u64, u64); 4] = [
-        ("open", 0, OPEN_WALKS, OPEN_POPPED),
-        ("ring 10", 10, RING10_WALKS, RING10_POPPED),
-        ("ring 18", 18, RING18_WALKS, RING18_POPPED),
-        ("ring 26", 26, RING26_WALKS, RING26_POPPED),
-    ];
+fn a_toward_resolve_pops_only_what_is_closer_than_the_stone() {
     let mut measured = Vec::new();
-    for (label, radius, _, _) in PINNED {
+    for (label, spire, far, radius) in [
+        ("open", false, false, 0),
+        ("ring 10", false, false, 10),
+        ("ring 18", false, false, 18),
+        ("ring 26", false, false, 26),
+        ("farthest", false, true, 0),
+        ("pinned, Spire", true, false, 0),
+        ("farthest, Spire, ring 26", true, true, 26),
+    ] {
         let mut world = world_of(PROBATION, 2);
         let seat = SeatId::new(0);
         let core_row = world
@@ -478,60 +545,93 @@ fn a_toward_behind_a_ring_prices_few_walks() {
             .position(|owner| *owner == seat.raw())
             .expect("a core");
         let core = pharmakos_sim::targeting::column_of(world.beacons().positions()[core_row]);
+        let vent = if far {
+            world
+                .features()
+                .features()
+                .iter()
+                .filter(|feature| feature.kind == FeatureKind::Vent)
+                .map(|feature| feature.anchor)
+                .max_by_key(|a| {
+                    let (dx, dy) = (i64::from(a[0] - core[0]), i64::from(a[1] - core[1]));
+                    (dx * dx + dy * dy, a[1], a[0])
+                })
+                .expect("a vent")
+        } else {
+            PROBATION_VENT
+        };
+        if spire {
+            let id = pharmakos_sim::tables::BeaconId::new(world.beacons().ids()[core_row]);
+            let beside = world
+                .ground()
+                .standing(core[0] + 3, core[1])
+                .expect("a column beside the core");
+            world
+                .raise_structure(
+                    seat,
+                    id,
+                    pharmakos_sim::tables::StructureKind::ResonanceSpire,
+                    beside,
+                )
+                .expect("room for a Spire");
+        }
         if radius > 0 {
-            let away = [PROBATION_VENT[0] - core[0], PROBATION_VENT[1] - core[1]];
-            ring(&mut world, PROBATION_VENT, radius, away);
+            ring(
+                &mut world,
+                vent,
+                radius,
+                [vent[0] - core[0], vent[1] - core[1]],
+            );
         }
         let commander = world.commander_of(seat).expect("a commander");
         let row = world.units().row_of(commander).expect("a live commander");
         let start = world.units().positions()[row.index()];
-        let tally = UnitTally::new();
-        let ground = Ground {
-            work: &tally,
-            ..world.ground()
-        };
-        let mut scratch =
-            Scratch::for_map(ground.surface, ground.rules.hpa_cluster_voxels()).unwrap();
+        let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
         let mut stones: Vec<StoneCandidate> = Vec::new();
         let found = toward_counted(
-            &ground,
+            &world.ground(),
             &mut scratch,
             &mut stones,
             seat,
             start,
             FeatureSpec::Name {
                 kind: FeatureKind::Vent,
-                anchor: PROBATION_VENT,
+                anchor: vent,
             },
+        )
+        .expect("a stone");
+        assert_eq!(
+            scratch.walks().unwrap(),
+            0,
+            "{label}: a stone prices no walk"
         );
-        let walks = scratch.walks().unwrap();
         let pops = popped(&scratch);
         println!(
-            "{label}: {:?}, {} sites, {walks} walks priced, {pops} nodes popped, {} decision units",
-            found.map(|stone| stone.site),
-            stones.len(),
-            tally.get()
+            "{label}: vent {vent:?}, stone {:?}, {} sites, {pops} nodes popped",
+            found.site,
+            stones.len()
         );
-        measured.push((label, walks, pops));
+        measured.push((label, found.site, pops));
     }
-    let pinned: Vec<(&str, u64, u64)> = PINNED
-        .iter()
-        .map(|(label, _, walks, pops)| (*label, *walks, *pops))
-        .collect();
-    assert_eq!(measured, pinned);
+    assert_eq!(measured, PINNED_RESOLVES.to_vec());
 }
 
-// Measured at this lane's fix pass 2. Before it (the octile bound), probe B
-// priced 140 walks and popped 306 k nodes on open ground and priced every one
-// of the 1 753 sites behind each ring (4.5 M nodes popped at radius 26).
-const OPEN_WALKS: u64 = 82;
-const OPEN_POPPED: u64 = 191_142;
-const RING10_WALKS: u64 = 11;
-const RING10_POPPED: u64 = 44_989;
-const RING18_WALKS: u64 = 45;
-const RING18_POPPED: u64 = 141_727;
-const RING26_WALKS: u64 = 9;
-const RING26_POPPED: u64 = 56_342;
+/// [`a_toward_resolve_pops_only_what_is_closer_than_the_stone`]'s pins,
+/// measured at this lane's fix pass 2, where the stone came to be the closest
+/// site over the terrain. While the stone was the least served walk, the same
+/// search bounding the walks priced 82, 11, 45 and 9 walks on probe B's four
+/// terrains and 814 (2.9 M nodes) on the farthest vent with a Spire and a
+/// ring; with the octile bound before that, probe B priced 140, 1 261, 1 753 and
+/// 1 753 walks and popped 0.3 M, 3.1 M, 4.5 M and 4.5 M nodes.
+const PINNED_RESOLVES: [(&str, [i32; 2], u64); 7] = [
+    ("open", [197, 50], 10_020),
+    ("ring 10", [201, 48], 16_699),
+    ("ring 18", [208, 41], 23_054),
+    ("ring 26", [208, 41], 32_401),
+    ("farthest", [179, 50], 106_531),
+    ("pinned, Spire", [202, 61], 6_026),
+    ("farthest, Spire, ring 26", [179, 62], 105_410),
+];
 
 /// "Nearest" under the walker's surcharge: with a threat's reach round the
 /// way to the first vent, the order is the oracle's order of the routes the

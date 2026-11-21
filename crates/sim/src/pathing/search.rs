@@ -265,9 +265,11 @@ impl Scratch {
     ///
     /// `cluster_cells` sizes the heaps: every search a tick runs is bounded to
     /// one cluster, and a bounded search pushes at most one entry per examined
-    /// directed edge, which is eight per cell.
+    /// directed edge, which is eight per cell. `max_step`, the dearest step
+    /// a walker takes, sizes the grid optimum's bucket ring
+    /// ([`crate::pathing::reach`]).
     #[must_use]
-    pub fn new(nodes: u32, abstract_nodes: u32, cluster_cells: u32) -> Scratch {
+    pub fn new(nodes: u32, abstract_nodes: u32, cluster_cells: u32, max_step: i32) -> Scratch {
         let n = crate::math::index::row(nodes);
         let a = crate::math::index::row(abstract_nodes).saturating_add(2);
         let low_heap = crate::math::index::row(cluster_cells.saturating_mul(8));
@@ -305,7 +307,7 @@ impl Scratch {
             // stretch it replaces), and the raw walk stops at
             // `MAX_ROUTE_NODES`: the same bound as `raw`.
             served: Vec::with_capacity(crate::math::index::row(crate::pathing::MAX_ROUTE_NODES)),
-            reach: crate::pathing::reach::Reach::new(nodes),
+            reach: crate::pathing::reach::Reach::new(nodes, max_step),
             expansions: Tally::ZERO,
             endpoint_expansions: Tally::ZERO,
             abstract_expansions: Tally::ZERO,
@@ -329,7 +331,12 @@ impl Scratch {
     pub fn for_map(surface: &Surface, cluster_voxels: i32) -> Option<Scratch> {
         let capacity = Scratch::abstract_capacity_for(surface, cluster_voxels)?;
         let cells = u32::try_from(cluster_voxels.checked_mul(cluster_voxels)?).ok()?;
-        Some(Scratch::new(surface.node_count(), capacity, cells))
+        Some(Scratch::new(
+            surface.node_count(),
+            capacity,
+            cells,
+            surface.costs().max_step(),
+        ))
     }
 
     /// How many abstract node slots a decomposition of `surface` at this
@@ -741,7 +748,7 @@ mod tests {
     #[test]
     fn the_served_buffer_holds_the_longest_route_from_the_start() {
         for (nodes, abstract_nodes, cells) in [(1, 1, 1), (64, 16, 16), (65_536, 8_192, 1_024)] {
-            let scratch = Scratch::new(nodes, abstract_nodes, cells);
+            let scratch = Scratch::new(nodes, abstract_nodes, cells, 18);
             assert!(
                 scratch.served.capacity() >= row(MAX_ROUTE_NODES),
                 "a scratch for {nodes} columns reserves {} served nodes, under {MAX_ROUTE_NODES}",

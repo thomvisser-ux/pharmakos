@@ -402,6 +402,18 @@ The ranker's exact pricing (lane `p3fix`'s second part: "nearest" ranks by
 the served walk, `walk_cost`) moved no chain, and the determinism chain did
 not move.
 
+**S3's `p3fix`, fix pass 2, moved `toward-stepping-stone` alone, from line
+3601**, round 2's first tick, where its `toward` step chooses the stone. The
+rule: `toward`'s stone is the legal site closest to its feature **over the
+terrain**, the least cost of any walk over the walkers' step rule (the grid
+optimum, `crates/sim/src/pathing/reach.rs`), where it had been the site with
+the least estimated (then served) walk to the feature
+(`crates/sim/src/targeting.rs`, "Two measures"). From the commander at
+(188, 28), among 2 784 legal sites, the stone moved from (196, 66) to
+(199, 63); the event assertions all hold, the licence at tick 9600 included.
+No other chain moved: `resonance-spire` and `spire-lost` place no stone by
+`toward`, and the determinism chain places none either.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own
