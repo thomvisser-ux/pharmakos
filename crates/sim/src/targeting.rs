@@ -83,7 +83,7 @@ use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
 use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::estimate::{Fog, NoWalk, Speed, estimate, walk_cost};
+use crate::pathing::estimate::{NoWalk, walk_cost};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
@@ -387,25 +387,9 @@ impl Ground<'_> {
             .find_map(|column| reachable(column.x, column.y))
     }
 
-    /// The item-61 estimate's integer cost from `from` to `to`, or `None` when
-    /// no route exists: what a stepping-stone site is weighed by
-    /// ([`stone_site`]).
-    fn estimated(&self, scratch: &mut Scratch, from: Node, to: Node) -> Option<i64> {
-        self.charge(1);
-        estimate(
-            self.surface,
-            self.clusters,
-            scratch,
-            from,
-            to,
-            Fog::Clear,
-            Speed::commander(self.rules),
-        )
-        .map(|found| i64::from(found.cost))
-    }
-
     /// The integer cost of the walk the router serves from `from` to `to`
-    /// ([`walk_cost`]): what "nearest" ranks by.
+    /// ([`walk_cost`]): what every "nearest" ranks by, a feature's
+    /// ([`Ranker`]) and a stepping-stone site's ([`stone_site`]) alike.
     fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<i64, NoWalk> {
         self.charge(1);
         walk_cost(self.surface, self.clusters, scratch, from, to)
@@ -791,13 +775,17 @@ pub struct Stone {
     /// How many legal sites the search weighed for it: what a miss would
     /// count, kept on a hit for the measurement of the search's cost.
     pub weighed: u32,
+    /// How many legal sites were dropped because the router's chained
+    /// partial routes from them overran the map ([`NoWalk::Overrun`]).
+    pub overruns: u32,
 }
 
 /// The stepping-stone site toward `feature` (S3's plan, E23; S1's plan,
 /// decision 3; task `pred`): **the legal site, inside `seat`'s spheres,
 /// nearest the feature**, where "nearest" is targeting's (the module docs):
-/// the least item-61 estimate's integer cost **from the candidate site to
-/// the feature's anchor column** ([`Ground::measure_to`]); a candidate from
+/// the least served walk's integer cost ([`walk_cost`]) **from the
+/// candidate site to the feature's anchor column** ([`Ground::measure_to`]),
+/// as every "nearest" in the sim is (lane `p3fix`); a candidate from
 /// which the feature cannot be reached is skipped; ties go to the lowest
 /// site y, then x. Straight-line distance is not used.
 ///
@@ -806,9 +794,9 @@ pub struct Stone {
 /// site** (inside one of the seat's own spheres, not on the column of one of
 /// its own live beacons), standable, walkable, outside every feature's
 /// footprint and connected to the commander's column, exactly as
-/// [`covering_site`] admits a column. Candidates are estimated in the order
-/// of the estimator's own lower bound, so the search stops as soon as no
-/// unestimated candidate can beat the best one found.
+/// [`covering_site`] admits a column. Candidates are priced in the order of
+/// the octile lower bound, which is never above a served walk's cost, so the
+/// search stops as soon as no unpriced candidate can beat the best one found.
 ///
 /// **The terrain is the live world's, unfogged** (`Fog::Clear`): E23's "the
 /// terrain the seat knows" reads every column until S3-05's terrain mask
@@ -823,11 +811,11 @@ fn stone_site(
     seat: SeatId,
     commander: [Fx; 3],
     feature: usize,
-) -> (Option<[i32; 2]>, u32) {
+) -> (Option<[i32; 2]>, u32, u32) {
     candidates.clear();
     let [cx, cy] = column_of(commander);
     let Some(start) = ground.surface.node_of(cx, cy) else {
-        return (None, 0);
+        return (None, 0, 0);
     };
     let beacons = ground.beacons;
     for (((owner, hp), centre), id) in beacons
@@ -899,6 +887,7 @@ fn stone_site(
     // item 62: as above.
     candidates.sort_unstable_by_key(|entry| (entry.bound, entry.y, entry.x));
     let mut best: Option<(i64, i32, i32)> = None;
+    let mut overruns: usize = 0;
     for entry in candidates.iter() {
         if entry.bound == i64::MAX {
             break;
@@ -906,14 +895,26 @@ fn stone_site(
         if best.is_some_and(|(cost, _, _)| entry.bound > cost) {
             break;
         }
-        let Some(cost) = ground.estimated(scratch, entry.node, entry.goal) else {
-            continue;
+        let cost = match ground.travel(scratch, entry.node, entry.goal) {
+            Ok(cost) => cost,
+            // A site the router serves no walk from is no candidate.
+            Err(NoWalk::NoPath(_)) => continue,
+            // A walk whose chained partial routes overran the map is no
+            // candidate either, and is counted on the stone so the drop is
+            // never silent; `tests/probation_seed.rs` pins the count at zero.
+            // At most one per entry, so it never passes `candidates.len()`.
+            Err(NoWalk::Overrun) => {
+                overruns += 1;
+                continue;
+            }
         };
         if best.is_none_or(|held| (cost, entry.y, entry.x) < held) {
             best = Some((cost, entry.y, entry.x));
         }
     }
-    (best.map(|(_, y, x)| [x, y]), weighed)
+    // E7: rule: as `weighed`, a count past `u32` reads as the most
+    let overruns = u32::try_from(overruns).unwrap_or(u32::MAX);
+    (best.map(|(_, y, x)| [x, y]), weighed, overruns)
 }
 
 /// Resolve a `toward` site for `seat` (S3's plan, E23; task `pred`): the
@@ -946,12 +947,13 @@ pub fn toward_counted(
                 .filter(|index| ground.is_live(*index))
                 .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
             match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                (Some(site), weighed) => Ok(Stone {
+                (Some(site), weighed, overruns) => Ok(Stone {
                     feature,
                     site,
                     weighed,
+                    overruns,
                 }),
-                (None, weighed) => Err(StepFailed::counted(StepFailure::IllegalSite, weighed)),
+                (None, weighed, _) => Err(StepFailed::counted(StepFailure::IllegalSite, weighed)),
             }
         }
         FeatureSpec::Nearest { kind, uncovered } => {
@@ -968,14 +970,15 @@ pub fn toward_counted(
             while let Some((feature, _)) = ranker.next(ground, scratch) {
                 reached = true;
                 match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                    (Some(site), count) => {
+                    (Some(site), count, overruns) => {
                         return Ok(Stone {
                             feature,
                             site,
                             weighed: count,
+                            overruns,
                         });
                     }
-                    (None, count) => weighed = count,
+                    (None, count, _) => weighed = count,
                 }
             }
             if reached {

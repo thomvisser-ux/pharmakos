@@ -27,7 +27,9 @@
 //!    seat that expands, not given").
 //! 3. **At most [`MOST_PLACEMENTS`] beacons reach it.** Each stone is the sim's
 //!    own `toward` (S3's plan, E23): the legal site inside the seat's spheres
-//!    nearest the vent by the item-61 estimator, ties to the lowest `(y, x)`.
+//!    nearest the vent by the walk the router serves from it (`walk_cost`,
+//!    as every "nearest" in the sim is since lane `p3fix`), ties to the lowest
+//!    `(y, x)`.
 //!    Its terrain is the live world's, unfogged, until S3-05's mask at S4
 //!    (decisions-log item 156 (3)). The placement that covers the vent is the sim's own
 //!    [`covering_site`], and it counts: "three stepping stones" is three
@@ -278,9 +280,13 @@ fn probe(seed: u64, rules: &RulesTable) -> Result<Chain, Miss> {
                     kind: FeatureKind::Vent,
                     anchor: vent,
                 };
-                toward_counted(&ground, &mut scratch, &mut stones, seat, at, spec)
-                    .map_err(|_| Miss::NoStone)?
-                    .site
+                let stone = toward_counted(&ground, &mut scratch, &mut stones, seat, at, spec)
+                    .map_err(|_| Miss::NoStone)?;
+                assert_eq!(
+                    stone.overruns, 0,
+                    "seed {seed}: a site's chained partial routes overran the map"
+                );
+                stone.site
             }
         };
         let [ax, ay] = column_of(at);
