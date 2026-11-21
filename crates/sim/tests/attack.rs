@@ -2616,14 +2616,14 @@ fn the_breach_search_holds_over_generated_walls() {
 fn a_breach_whose_plant_is_walled_off_is_planned_again() {
     let (mut runner, post, raider, inside) = walled(3);
     let mut log = Vec::new();
-    let breaching = play_until(&mut runner, 200, &mut log, |world, _| {
-        world
-            .attack()
-            .row_of(post)
-            .is_some_and(|row| row.breach.is_some())
-    });
-    assert!(breaching, "the sealed way finds a breach");
+    assert!(
+        play_until(&mut runner, 2_000, &mut log, |world, _| {
+            charge_of(world, post) == Some(ChargeState::Loaded)
+        }),
+        "the breach's charge is bought and carried"
+    );
     let first = row(runner.world(), post).breach.expect("a breach");
+    let paid = treasury(runner.world());
     assert_eq!(
         fired(&log, EventKind::ChargePlanted),
         0,
@@ -2653,6 +2653,21 @@ fn a_breach_whose_plant_is_walled_off_is_planned_again() {
             }
         }
     }
+    play(&mut runner, 3, &mut log);
+    let second = row(runner.world(), post)
+        .breach
+        .expect("a breach planned again");
+    assert_ne!(
+        second.plant, first.plant,
+        "the new plant is not the walled-off one"
+    );
+    assert_eq!(
+        (second.charge, second.carrier),
+        (ChargeState::Loaded, first.carrier),
+        "the carried charge and its carrier are kept for the new breach"
+    );
+    assert_eq!(treasury(runner.world()), paid, "no second charge is bought");
+    assert_eq!(fired(&log, EventKind::ChargeLost), 0, "no charge is lost");
     let through = play_until(&mut runner, 6_000, &mut log, |world, _| {
         within(unit_at(world, raider), inside, 2)
     });
@@ -2671,5 +2686,290 @@ fn a_breach_whose_plant_is_walled_off_is_planned_again() {
     assert!(
         planted.is_some(),
         "a charge is planted, at a plant other than the walled-off one"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A charge in hand (lane `settle`, fix pass 4): kept on every re-plan, and
+// never gone unannounced.
+// ---------------------------------------------------------------------------
+
+/// Seat 0's money.
+fn treasury(world: &World) -> i64 {
+    world.seats().treasuries()[0].raw()
+}
+
+/// The charge of the breach `post` holds, if it holds one.
+fn charge_of(world: &World, post: BeaconId) -> Option<ChargeState> {
+    world
+        .attack()
+        .row_of(post)
+        .and_then(|row| row.breach)
+        .map(|breach| breach.charge)
+}
+
+/// A raid with `breach` allowed from the field on a point inside a ring of
+/// seat 1's wall four columns out, three high, with `raiders` raiders and
+/// `settings` over the raid's own: played until its charge is carried.
+fn carrying(
+    raiders: u32,
+    settings: impl FnOnce(AttackSettings, &mut World, [Fx; 3]) -> AttackSettings,
+) -> (Runner, BeaconId, Vec<UnitId>, [Fx; 3], Vec<Event>) {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let inside = ground(&fixture, here, 24, 0);
+    wall_ring(&mut fixture, inside, 4, 3, seat(1));
+    let base = AttackSettings {
+        breach: true,
+        ..raid(Aim::Voxel(voxel(inside)), raiders)
+    };
+    let settings = settings(base, &mut fixture, inside);
+    let post = attack(&mut fixture, seat(0), here, FREE_FIRE, settings);
+    let force = (0..raiders)
+        .map(|_| unit(&mut fixture, seat(0), post, UnitKind::Raider, here))
+        .collect();
+    let mut runner = Runner::new(fixture).expect("a world from `World::new`");
+    runner
+        .world_mut()
+        .step(&mut Enc::default())
+        .expect("the walls settle");
+    assert_eq!(runner.begin_push(), Ok(true));
+    let mut log = Vec::new();
+    assert!(
+        play_until(&mut runner, 2_000, &mut log, |world, _| {
+            charge_of(world, post) == Some(ChargeState::Loaded)
+        }),
+        "the breach's charge is bought and carried"
+    );
+    (runner, post, force, inside, log)
+}
+
+/// The value of the first `attack_ended` in `log`, if one fired.
+fn ended_with(log: &[Event]) -> Option<i64> {
+    log.iter()
+        .find(|event| event.kind == EventKind::AttackEnded)
+        .map(|event| event.value)
+}
+
+/// R4-LOADED-WALL: the breach wall's top voxel knocked off while the charge is
+/// carried, the ring still sealing at two high. The charge is kept for the
+/// breach planned again: no second charge is bought, none is lost, and it is
+/// planted and fires.
+#[test]
+fn a_carried_charge_survives_the_breach_walls_fall() {
+    let (mut runner, post, _, inside, mut log) = carrying(1, |settings, _, _| settings);
+    let paid = treasury(runner.world());
+    let first = row(runner.world(), post).breach.expect("a breach");
+    runner
+        .world_mut()
+        .request_voxel_edit(VoxelEdit::Set {
+            at: first.wall,
+            material: Material::AIR,
+            by: None,
+        })
+        .expect("the voxel is filed");
+    play(&mut runner, 3, &mut log);
+    let second = row(runner.world(), post)
+        .breach
+        .expect("a breach planned again");
+    assert_eq!(
+        (second.charge, second.carrier),
+        (ChargeState::Loaded, first.carrier),
+        "the carried charge and its carrier are kept"
+    );
+    let _ = play_until(&mut runner, 6_000, &mut log, |_, log| {
+        fired(log, EventKind::ChargeDetonated) > 0
+    });
+    assert_eq!(treasury(runner.world()), paid, "no second charge is bought");
+    assert_eq!(fired(&log, EventKind::ChargeLost), 0, "no charge is lost");
+    assert_eq!(
+        fired(&log, EventKind::ChargePlanted),
+        1,
+        "the kept charge is planted"
+    );
+    assert!(
+        fired(&log, EventKind::ChargeDetonated) > 0,
+        "and fires (inside {:?})",
+        column(inside)
+    );
+}
+
+/// The beacon's `roe` changed while the charge is carried: the attack ends
+/// `StoodDown`, and the charge is announced lost, once.
+#[test]
+fn a_charge_carried_when_the_attack_stands_down_is_announced_lost() {
+    let (mut runner, post, _, _, mut log) = carrying(1, |settings, _, _| settings);
+    runner.world_mut().set_common(
+        post,
+        Common {
+            roe: 1,
+            retreat_hp_pct: 0,
+        },
+    );
+    let ended = play_until(&mut runner, 200, &mut log, |_, log| {
+        fired(log, EventKind::AttackEnded) > 0
+    });
+    assert!(ended, "the attack ends");
+    assert_eq!(ended_with(&log), Some(6), "it ends `StoodDown`");
+    assert_eq!(
+        fired(&log, EventKind::ChargeLost),
+        1,
+        "the charge is announced lost, once"
+    );
+    assert_eq!(
+        charge_of(runner.world(), post),
+        None,
+        "and the breach is gone"
+    );
+}
+
+/// The ring taken down while the charge is carried: the way is open, the
+/// breach goes, and the charge with it, announced lost, once.
+#[test]
+fn a_charge_carried_when_the_way_opens_is_announced_lost() {
+    let (mut runner, post, _, inside, mut log) = carrying(1, |settings, _, _| settings);
+    let [cx, cy] = column(inside);
+    for dy in -4..=4_i32 {
+        for dx in -4..=4_i32 {
+            if dx.abs() != 4 && dy.abs() != 4 {
+                continue;
+            }
+            let (x, y) = (cx + dx, cy + dy);
+            let Some(top) = runner.world().voxels().top_solid_z(x, y) else {
+                continue;
+            };
+            for z in top - 2..=top {
+                runner
+                    .world_mut()
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: [x, y, z],
+                        material: Material::AIR,
+                        by: None,
+                    })
+                    .expect("the voxel is filed");
+            }
+        }
+    }
+    play(&mut runner, 3, &mut log);
+    assert_eq!(charge_of(runner.world(), post), None, "the breach is gone");
+    assert_eq!(
+        fired(&log, EventKind::ChargeLost),
+        1,
+        "the charge is announced lost, once"
+    );
+}
+
+/// The lead walled in by stone while the charge is carried: no breach is left
+/// to plan, the attack ends `Sealed` with the refusal counted, and the
+/// charge is announced lost, once.
+#[test]
+fn a_charge_carried_when_a_replan_finds_no_breach_is_announced_lost() {
+    let (mut runner, _, force, _, mut log) = carrying(1, |settings, _, _| settings);
+    let [x, y] = column(unit_at(runner.world(), force[0]));
+    for dy in -1..=1_i32 {
+        for dx in -1..=1_i32 {
+            if (dx, dy) == (0, 0) {
+                continue;
+            }
+            let Some(top) = runner.world().voxels().top_solid_z(x + dx, y + dy) else {
+                continue;
+            };
+            for z in top + 1..=top + 5 {
+                runner
+                    .world_mut()
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: [x + dx, y + dy, z],
+                        material: Material::STONE,
+                        by: None,
+                    })
+                    .expect("the voxel is filed");
+            }
+        }
+    }
+    let ended = play_until(&mut runner, 200, &mut log, |_, log| {
+        fired(log, EventKind::AttackEnded) > 0
+    });
+    assert!(ended, "the attack ends");
+    assert_eq!(ended_with(&log), Some(4), "it ends `Sealed`");
+    assert_eq!(
+        runner.world().attack_counts().breach_no_way,
+        1,
+        "the refusal is counted"
+    );
+    assert_eq!(
+        fired(&log, EventKind::ChargeLost),
+        1,
+        "the charge is announced lost, once"
+    );
+}
+
+/// Two raiders, a retreat below 60 % of the force: the raider that is not the
+/// carrier killed while the charge is carried. The attack ends `Retreat`, and
+/// the charge is announced lost, once.
+#[test]
+fn a_charge_carried_when_the_force_retreats_is_announced_lost() {
+    let (mut runner, post, force, _, mut log) = carrying(2, |settings, _, _| AttackSettings {
+        retreat_pct: Some(60),
+        ..settings
+    });
+    let carrier = row(runner.world(), post).breach.expect("a breach").carrier;
+    let other = force
+        .iter()
+        .copied()
+        .find(|raider| raider.raw() != carrier)
+        .expect("a raider that is not the carrier");
+    hit(
+        runner.world_mut(),
+        DamageTarget::Unit(other),
+        1_000_000,
+        seat(1),
+    );
+    let ended = play_until(&mut runner, 20, &mut log, |_, log| {
+        fired(log, EventKind::AttackEnded) > 0
+    });
+    assert!(ended, "the attack ends");
+    assert_eq!(ended_with(&log), Some(2), "it ends `Retreat`");
+    assert_eq!(
+        fired(&log, EventKind::ChargeLost),
+        1,
+        "the charge is announced lost, once"
+    );
+}
+
+/// A raid on a beacon inside the ring, the beacon destroyed while the charge
+/// is carried and no retarget allowed: the attack ends `TargetGone`, and the
+/// charge is announced lost, once.
+#[test]
+fn a_charge_carried_when_the_target_is_gone_is_announced_lost() {
+    let mut target = None;
+    let (mut runner, post, _, _, mut log) = carrying(1, |settings, world, inside| {
+        let id = beacon(world, seat(1), inside, MandateKind::Build, FREE_FIRE);
+        target = Some(id);
+        AttackSettings {
+            aim: Aim::Beacon(id),
+            ..settings
+        }
+    });
+    let target = target.expect("the target beacon");
+    hit(
+        runner.world_mut(),
+        DamageTarget::Beacon(target),
+        1_000_000,
+        seat(0),
+    );
+    let ended = play_until(&mut runner, 20, &mut log, |_, log| {
+        fired(log, EventKind::AttackEnded) > 0
+    });
+    assert!(ended, "the attack ends");
+    assert_eq!(ended_with(&log), Some(1), "it ends `TargetGone`");
+    assert_eq!(
+        fired(&log, EventKind::ChargeLost),
+        1,
+        "the charge is announced lost, once"
+    );
+    assert_eq!(
+        charge_of(runner.world(), post),
+        None,
+        "and the breach is gone"
     );
 }
