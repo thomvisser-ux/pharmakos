@@ -503,20 +503,28 @@ fn at_operation(error: Error, at: &str) -> Error {
 /// operation is applied ([`crate::error::Bound::Operations`]).
 pub const MAX_PATCH_OPERATIONS: usize = 64;
 
-/// The longest patch text `patch_text` reads (S3's `vfyq2`, fix pass 3, item
-/// L4), in characters, refused before it is parsed.
+/// The longest patch text `patch_text` reads, in characters, refused before
+/// it is parsed: **a bound on the work one call does** (S3's `vfyq2`, fix
+/// pass 3, item L4, and fix pass 4, item 3).
 ///
-/// The largest patch that can act on a file at the size cap is the inverse
-/// of one: its paths and written text are held to the playbook's
-/// [`MAX_PLAYBOOK_CHARS`] characters ([`Bound::Inverse`]), and as JSON text a
-/// character is at most six (`\uXXXX`), so six times the cap, and a sentence
-/// of syntax for each of [`MAX_PATCH_OPERATIONS`] operations, holds every
-/// patch that can act on a playbook. A forward patch past it would write more
-/// than any playbook holds.
+/// It is not a bound on what a legal patch can be: a patch may repeat a
+/// value (sixty-four `test`s of one long member, or `add`s and `remove`s of
+/// it), and those are refused by this bound or by [`MAX_PATCH_OPERATIONS`],
+/// each its own `Bound`, so a refusal says which limit it met. It is sized so
+/// that one operation whose value and path each fit the playbook's
+/// [`MAX_PLAYBOOK_CHARS`] characters is never refused for its escapes, at
+/// the worst escape there is: an astral character written as a surrogate
+/// pair, `\uD83D\uDE00`, twelve characters for one. So twelve characters a
+/// character for the value, twelve for the path, and the syntax of every
+/// operation a patch may carry.
 pub const MAX_PATCH_TEXT_CHARS: usize =
-    MAX_PLAYBOOK_CHARS * 6 + MAX_PATCH_OPERATIONS * PATCH_SYNTAX_CHARS;
+    MAX_PLAYBOOK_CHARS * WORST_ESCAPE * 2 + MAX_PATCH_OPERATIONS * PATCH_SYNTAX_CHARS;
 
-/// The syntax one operation of an inverse writes around its path and text:
+/// The most characters JSON text writes for one character: a surrogate
+/// pair's two `\uXXXX` escapes.
+const WORST_ESCAPE: usize = 12;
+
+/// The syntax one operation writes around its path and value:
 /// `{"op":"replace","path":"","undo":{"at":,"jsonc":""}},` and an index.
 const PATCH_SYNTAX_CHARS: usize = 64;
 
@@ -826,9 +834,11 @@ pub fn patch_text(playbook_jsonc: &str, json_patch: &str) -> Result<(String, Str
             Bound::PatchText,
             "",
             pharmakos_proto::said!(
-                "a patch is at most {} characters, which holds every patch that can act on a \
-                 playbook",
-                MAX_PATCH_TEXT_CHARS
+                "a patch is at most {} characters: a bound on the work one call does, with room \
+                 for one operation whose value and path each fit a playbook's {} characters at \
+                 the worst escape",
+                MAX_PATCH_TEXT_CHARS,
+                MAX_PLAYBOOK_CHARS
             ),
         ));
     }

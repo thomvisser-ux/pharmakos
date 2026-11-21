@@ -305,7 +305,9 @@ fn every_growing_operation_past_the_cap_is_refused() {
 ///    applies;
 /// 2. 64 `test` operations, each of a 100,000-character member: applies (the
 ///    work is the cap's, and the operation count is its own bound);
-/// 3. 32 `add` / `remove` pairs of a 100,000-character value: applies.
+/// 3. 32 `add` / `remove` pairs of a 100,000-character value: refused, by
+///    the inverse's own bound (`Bound::Inverse`): its undo would hold the
+///    value thirty-two times. The text cap does not refuse it.
 #[test]
 fn the_reviews_legal_patches_apply_and_the_cap_is_on_the_work() {
     use pharmakos_plan_core::patch::{MAX_PATCH_TEXT_CHARS, patch_text};
@@ -315,6 +317,7 @@ fn the_reviews_legal_patches_apply_and_the_cap_is_on_the_work() {
     let one = format!(r#"[{{"op":"replace","path":"/meta/note","value":"{astral}"}}]"#);
     assert!(one.chars().count() > 3_600_000);
     let (patched, _) = patch_text(document, &one).expect("one astral value applies");
+    // Six times the playbook's cap would have refused it for its escapes.
     assert_eq!(
         patched.chars().count(),
         document.chars().count() + 300_000 - 1
@@ -338,8 +341,13 @@ fn the_reviews_legal_patches_apply_and_the_cap_is_on_the_work() {
         })
         .collect();
     let churn = format!("[{}]", pairs.join(","));
-    let (after, _) = patch_text(document, &churn).expect("32 add/remove pairs apply");
-    assert_eq!(after, document);
+    // Refused, by a named bound of its own: the undo of these pairs would
+    // carry the value thirty-two times, past what an inverse may hold.
+    let refused = patch_text(document, &churn).expect_err("32 add/remove pairs");
+    assert_eq!(
+        refused.bound,
+        Some(pharmakos_plan_core::error::Bound::Inverse)
+    );
 
     assert!(
         one.chars().count() <= MAX_PATCH_TEXT_CHARS
