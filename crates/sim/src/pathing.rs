@@ -73,6 +73,7 @@
 
 pub mod clusters;
 pub mod estimate;
+pub mod reach;
 pub mod repair;
 pub mod route;
 pub mod router;

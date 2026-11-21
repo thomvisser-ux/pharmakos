@@ -83,7 +83,8 @@ use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
 use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::estimate::{NoWalk, walk_cost};
+use crate::pathing::estimate::walk_cost;
+use crate::pathing::route::{NoPath, Surcharge};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
@@ -174,6 +175,12 @@ pub struct Ground<'a> {
     /// Where the work a resolution does is counted: P1's evaluation units
     /// (S1's plan, section 5). Not hashed.
     pub work: &'a crate::seams::UnitTally,
+    /// The route surcharge the walker whose "nearest" this is will be served
+    /// with ([`crate::world::World::walker_ground_and_scratch`], from the
+    /// function the pathing phase builds its own from), so a walk is ranked
+    /// on the route it will take. [`Surcharge::NONE`] for every reader that
+    /// names no walker.
+    pub surcharge: Surcharge<'a>,
 }
 
 impl Ground<'_> {
@@ -388,11 +395,18 @@ impl Ground<'_> {
     }
 
     /// The integer cost of the walk the router serves from `from` to `to`
-    /// ([`walk_cost`]): what every "nearest" ranks by, a feature's
-    /// ([`Ranker`]) and a stepping-stone site's ([`stone_site`]) alike.
-    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<i64, NoWalk> {
+    /// under [`Ground::surcharge`] ([`walk_cost`]): what every "nearest"
+    /// ranks by, a feature's ([`Ranker`]) and a stepping-stone site's
+    /// ([`stone_site`]) alike.
+    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<i64, NoPath> {
         self.charge(1);
-        walk_cost(self.surface, self.clusters, scratch, from, to)
+        walk_cost(
+            self.surface,
+            self.clusters,
+            scratch,
+            (from, to),
+            self.surcharge,
+        )
     }
 }
 
@@ -440,16 +454,7 @@ pub struct Ranker {
     origin: Option<Node>,
     /// How many features `keep` admitted, before reachability was asked.
     matched: u32,
-    /// How many candidates the router's chained partial routes overran
-    /// ([`NoWalk::Overrun`]): dropped as unreachable, and counted so the drop
-    /// is never silent. At most [`MAX_FEATURES`].
-    overruns: u8,
 }
-
-const _: () = assert!(
-    MAX_FEATURES <= 255,
-    "a ranker's overrun count, a u8, holds every candidate"
-);
 
 impl Ranker {
     /// The candidates `keep` admits, ranked from the column `origin`.
@@ -471,7 +476,6 @@ impl Ranker {
             len: 0,
             origin: start,
             matched: 0,
-            overruns: 0,
         };
         for (index, feature) in ground.features.features().iter().enumerate() {
             ground.charge(1);
@@ -504,14 +508,6 @@ impl Ranker {
     #[must_use]
     pub const fn matched(&self) -> u32 {
         self.matched
-    }
-
-    /// How many candidates were dropped because the router's chained partial
-    /// routes overran the map ([`NoWalk::Overrun`]). `tests/targeting.rs`
-    /// pins it at zero on generated maps.
-    #[must_use]
-    pub const fn overruns(&self) -> u8 {
-        self.overruns
     }
 
     /// The next candidate, nearest first, with its served walk's cost; `None`
@@ -551,12 +547,10 @@ impl Ranker {
                             entry.cost = cost;
                             entry.state = 1;
                         }
-                        Err(NoWalk::NoPath(_)) => entry.state = 2,
-                        Err(NoWalk::Overrun) => {
-                            entry.state = 2;
-                            // E7: cannot miss: one per candidate, at most `MAX_FEATURES`, which the assertion above holds under `u8::MAX`
-                            self.overruns = self.overruns.checked_add(1)?;
-                        }
+                        // The router serves no walk to it: no candidate
+                        // (targeting.md, "Nearest": unreachable candidates
+                        // are skipped).
+                        Err(_) => entry.state = 2,
                     }
                 }
                 // Nothing priced is waiting and nothing is left to price (a
@@ -751,17 +745,29 @@ pub fn cover_counted(
     }
 }
 
-/// One candidate site of a `toward` search: a legal site column, the node it
-/// stands on, the column of the feature it is measured to, and the octile
-/// lower bound on that cost. Kept in a buffer the caller owns, so a decision
-/// that searches allocates nothing once the buffer has grown.
+/// One legal site of a `toward` search: its column and the node it stands
+/// on, each column once. Kept in a buffer the caller owns; the world's own is
+/// reserved for every column of the map, the most a search can list, so a
+/// decision that searches allocates nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct StoneCandidate {
-    bound: i64,
     y: i32,
     x: i32,
     node: Node,
-    goal: Node,
+}
+
+impl StoneCandidate {
+    /// The site's column, `[x, y]`.
+    #[must_use]
+    pub const fn column(&self) -> [i32; 2] {
+        [self.x, self.y]
+    }
+
+    /// The node the site stands on.
+    #[must_use]
+    pub const fn node(&self) -> Node {
+        self.node
+    }
 }
 
 /// What `toward` resolved to: the feature it steps toward and the site
@@ -775,9 +781,6 @@ pub struct Stone {
     /// How many legal sites the search weighed for it: what a miss would
     /// count, kept on a hit for the measurement of the search's cost.
     pub weighed: u32,
-    /// How many legal sites were dropped because the router's chained
-    /// partial routes from them overran the map ([`NoWalk::Overrun`]).
-    pub overruns: u32,
 }
 
 /// The stepping-stone site toward `feature` (S3's plan, E23; S1's plan,
@@ -795,8 +798,12 @@ pub struct Stone {
 /// its own live beacons), standable, walkable, outside every feature's
 /// footprint and connected to the commander's column, exactly as
 /// [`covering_site`] admits a column. Candidates are priced in the order of
-/// the octile lower bound, which is never above a served walk's cost, so the
-/// search stops as soon as no unpriced candidate can beat the best one found.
+/// the **grid optimum** from the feature ([`crate::pathing::reach`]): one
+/// search over the walkers' own step rule gives every site the least cost of
+/// any walk from it, which a served walk never undercuts, and walls cannot
+/// fool it as the octile bound was fooled. The search stops as soon as its
+/// frontier's cost passes the best walk priced, so a resolve prices the few
+/// sites that could still win, behind walls as on open ground.
 ///
 /// **The terrain is the live world's, unfogged** (`Fog::Clear`): E23's "the
 /// terrain the seat knows" reads every column until S3-05's terrain mask
@@ -811,12 +818,17 @@ fn stone_site(
     seat: SeatId,
     commander: [Fx; 3],
     feature: usize,
-) -> (Option<[i32; 2]>, u32, u32) {
+) -> (Option<[i32; 2]>, u32) {
     candidates.clear();
+    scratch.reach.clear_sites();
     let [cx, cy] = column_of(commander);
     let Some(start) = ground.surface.node_of(cx, cy) else {
-        return (None, 0, 0);
+        return (None, 0);
     };
+    // Every legal site, once: a column two spheres hold is one site. Each is
+    // a distinct column of the map, whose count is a `u32`, so the count
+    // cannot pass it.
+    let mut weighed: u32 = 0;
     let beacons = ground.beacons;
     for (((owner, hp), centre), id) in beacons
         .seats()
@@ -851,70 +863,50 @@ fn stone_site(
                     || !ground.inside_own_sphere(seat, site)
                     || ground.stacks_on_own(seat, x, y)
                     || !ground.clusters.connected(ground.surface, start, node)
+                    || !scratch.reach.mark_site(node)
                 {
                     continue;
                 }
-                let Some(goal) = ground.measure_to(feature, node) else {
-                    // The feature cannot be reached from here, which makes the
-                    // column no candidate; a deduplicated count below still
-                    // weighs it.
-                    candidates.push(StoneCandidate {
-                        bound: i64::MAX,
-                        y,
-                        x,
-                        node,
-                        goal: node,
-                    });
-                    continue;
-                };
-                candidates.push(StoneCandidate {
-                    bound: i64::from(ground.surface.heuristic(node, goal)),
-                    y,
-                    x,
-                    node,
-                    goal,
-                });
+                candidates.push(StoneCandidate { y, x, node });
+                weighed += 1;
             }
         }
     }
-    // A column two spheres hold is one candidate: deduplicated by `(y, x)`,
-    // keeping its one bound (the bound is a function of the column alone).
-    // item 62: the key ends in `(y, x)`, unique per column, so it is total.
-    candidates.sort_unstable_by_key(|entry| (entry.y, entry.x));
-    candidates.dedup_by_key(|entry| (entry.y, entry.x));
-    // E7: rule: a count past `u32` is a count no step_failed value can carry; it reads as the most
-    let weighed = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
-    // item 62: as above.
-    candidates.sort_unstable_by_key(|entry| (entry.bound, entry.y, entry.x));
+    // Every site is connected to the commander's column, so all of them
+    // measure to the one column the commander would: the feature's anchor
+    // column, or its first footprint column a walker reaches.
+    let Some(goal) = ground.measure_to(feature, start) else {
+        return (None, weighed);
+    };
+    // The grid optimum from the feature outward ([`crate::pathing::reach`]):
+    // every site settles at the least cost of any walk from it, in ascending
+    // order, and a served walk never costs less. So once the frontier's cost
+    // passes the best walk priced, no site left can beat it.
+    scratch.reach.begin(goal);
     let mut best: Option<(i64, i32, i32)> = None;
-    let mut overruns: usize = 0;
-    for entry in candidates.iter() {
-        if entry.bound == i64::MAX {
+    let mut left = weighed;
+    while left > 0 {
+        if let (Some(frontier), Some((cost, _, _))) = (scratch.reach.frontier(), best)
+            && frontier > cost
+        {
             break;
         }
-        if best.is_some_and(|(cost, _, _)| entry.bound > cost) {
+        let Some((node, _)) = scratch.reach.next(ground.surface, &mut scratch.expansions) else {
             break;
-        }
-        let cost = match ground.travel(scratch, entry.node, entry.goal) {
-            Ok(cost) => cost,
-            // A site the router serves no walk from is no candidate.
-            Err(NoWalk::NoPath(_)) => continue,
-            // A walk whose chained partial routes overran the map is no
-            // candidate either, and is counted on the stone so the drop is
-            // never silent; `tests/probation_seed.rs` pins the count at zero.
-            // At most one per entry, so it never passes `candidates.len()`.
-            Err(NoWalk::Overrun) => {
-                overruns += 1;
-                continue;
-            }
         };
-        if best.is_none_or(|held| (cost, entry.y, entry.x) < held) {
-            best = Some((cost, entry.y, entry.x));
+        if !scratch.reach.is_site(node) {
+            continue;
+        }
+        left -= 1;
+        let (x, y) = ground.surface.coord_of(node);
+        // A site the router serves no walk from is no candidate.
+        if let Ok(cost) = ground.travel(scratch, node, goal)
+            && best.is_none_or(|held| (cost, y, x) < held)
+        {
+            best = Some((cost, y, x));
         }
     }
-    // E7: rule: as `weighed`, a count past `u32` reads as the most
-    let overruns = u32::try_from(overruns).unwrap_or(u32::MAX);
-    (best.map(|(_, y, x)| [x, y]), weighed, overruns)
+    (best.map(|(_, y, x)| [x, y]), weighed)
 }
 
 /// Resolve a `toward` site for `seat` (S3's plan, E23; task `pred`): the
@@ -947,13 +939,12 @@ pub fn toward_counted(
                 .filter(|index| ground.is_live(*index))
                 .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
             match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                (Some(site), weighed, overruns) => Ok(Stone {
+                (Some(site), weighed) => Ok(Stone {
                     feature,
                     site,
                     weighed,
-                    overruns,
                 }),
-                (None, weighed, _) => Err(StepFailed::counted(StepFailure::IllegalSite, weighed)),
+                (None, weighed) => Err(StepFailed::counted(StepFailure::IllegalSite, weighed)),
             }
         }
         FeatureSpec::Nearest { kind, uncovered } => {
@@ -970,15 +961,14 @@ pub fn toward_counted(
             while let Some((feature, _)) = ranker.next(ground, scratch) {
                 reached = true;
                 match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                    (Some(site), count, overruns) => {
+                    (Some(site), count) => {
                         return Ok(Stone {
                             feature,
                             site,
                             weighed: count,
-                            overruns,
                         });
                     }
-                    (None, count, _) => weighed = count,
+                    (None, count) => weighed = count,
                 }
             }
             if reached {
@@ -1337,6 +1327,7 @@ mod tests {
             rules: &rules,
             spiral: &spiral,
             work: &work,
+            surcharge: crate::pathing::route::Surcharge::NONE,
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
         let mut out: Vec<(String, i64)> = Vec::new();

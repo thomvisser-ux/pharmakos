@@ -36,9 +36,10 @@
 //!    beacons, the third of them covering the vent. A beacon stands inside
 //!    another's 24-voxel sphere and covers 24 more, so three reach 96 voxels at
 //!    best, on flat ground.
-//! 4. **The walk fits round 1.** The commander's estimated walk from its start
-//!    through every placement is at most the ladder's first Push, so the chain
-//!    asks an expanding seat for no more time than it has.
+//! 4. **The walk fits round 1.** The commander's walk from its start through
+//!    every placement, each leg the walk the router serves (`walk_cost`, the
+//!    measure clause 3 ranks by), is at most the ladder's first Push, so the
+//!    chain asks an expanding seat for no more time than it has.
 //!
 //! The answer is the first seed, counting up from zero, that passes.
 //!
@@ -59,7 +60,8 @@
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::StepFailure;
 use pharmakos_sim::math::quantity::Ms;
-use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
+use pharmakos_sim::pathing::estimate::{Speed, ticks_for_cost, walk_cost};
+use pharmakos_sim::pathing::route::Surcharge;
 use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::seams::MandateKind;
@@ -231,18 +233,22 @@ fn world_of(seed: u64, rules: &RulesTable) -> World {
     .expect("the committed rules table describes a world")
 }
 
-/// The estimated cost and ticks of a commander's walk between two nodes.
+/// The cost and ticks of the walk the router serves a commander between two
+/// nodes: the measure clause 3 ranks the stones by.
 fn walk(ground: &Ground<'_>, scratch: &mut Scratch, from: Node, to: Node) -> Option<(i64, i32)> {
-    estimate(
+    let cost = walk_cost(
         ground.surface,
         ground.clusters,
         scratch,
-        from,
-        to,
-        Fog::Clear,
-        Speed::commander(ground.rules),
+        (from, to),
+        Surcharge::NONE,
     )
-    .map(|found| (i64::from(found.cost), found.ticks))
+    .ok()?;
+    let ticks = ticks_for_cost(
+        i32::try_from(cost).expect("a leg's walk fits an i32"),
+        Speed::commander(ground.rules).cost_per_second,
+    )?;
+    Some((cost, ticks))
 }
 
 /// The criterion, for one seed.
@@ -280,13 +286,9 @@ fn probe(seed: u64, rules: &RulesTable) -> Result<Chain, Miss> {
                     kind: FeatureKind::Vent,
                     anchor: vent,
                 };
-                let stone = toward_counted(&ground, &mut scratch, &mut stones, seat, at, spec)
-                    .map_err(|_| Miss::NoStone)?;
-                assert_eq!(
-                    stone.overruns, 0,
-                    "seed {seed}: a site's chained partial routes overran the map"
-                );
-                stone.site
+                toward_counted(&ground, &mut scratch, &mut stones, seat, at, spec)
+                    .map_err(|_| Miss::NoStone)?
+                    .site
             }
         };
         let [ax, ay] = column_of(at);

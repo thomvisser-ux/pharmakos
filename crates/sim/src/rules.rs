@@ -1072,7 +1072,9 @@ impl RulesTable {
 /// # Errors
 ///
 /// [`RulesError::OutOfRange`] for a step that costs nothing, which would let a
-/// walker cross the map in a tick, and for a pad past a voxel coordinate.
+/// walker cross the map in a tick; for a diagonal step cheaper than a cardinal
+/// one or dearer than two, which no lower bound the searches use can price;
+/// and for a pad past a voxel coordinate.
 fn query_pad_of(
     locomotion: &gp::v1::rules_table::Locomotion,
     kinds: &KindRows,
@@ -1095,6 +1097,20 @@ fn query_pad_of(
             format!(
                 "{cardinal} cardinal, {diagonal} diagonal; a step that costs nothing lets a walker \
                  cross the map in a tick"
+            ),
+        ));
+    }
+    // The octile bound and every search's admissibility rest on this shape:
+    // a diagonal never cheaper than a cardinal step (or a zigzag of diagonals
+    // beats the straight line the bound prices) and never dearer than two (or
+    // two cardinal steps beat the diagonal it prices). The climb surcharge is
+    // a `uint32`, never negative, so it only adds.
+    if diagonal < cardinal || diagonal > cardinal.saturating_mul(2) {
+        return Err(refused(
+            "locomotion.step_cost_diagonal",
+            format!(
+                "{diagonal}, against a cardinal step of {cardinal}; a diagonal step costs at \
+                 least one cardinal step and at most two"
             ),
         ));
     }

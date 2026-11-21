@@ -243,6 +243,10 @@ pub struct Clusters {
     gather: Vec<Node>,
 }
 
+/// A column that is not one of the graph's ([`Clusters::touch`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OffGraph(pub Node);
+
 impl Clusters {
     /// Build the decomposition over `surface` at a cluster edge of `size`.
     ///
@@ -454,21 +458,23 @@ impl Clusters {
     /// that share a border or a corner (at most one cluster apart on each
     /// axis). The estimator's test for a near pair
     /// ([`crate::pathing::estimate`]): two columns at most one cluster edge
-    /// apart on both axes always pass it. `false` when either column is off
-    /// the map.
-    #[must_use]
-    pub fn touch(&self, a: Node, b: Node) -> bool {
+    /// apart on both axes always pass it.
+    ///
+    /// # Errors
+    ///
+    /// [`OffGraph`] when either column is not one of the graph's: neither
+    /// near nor far, since no search can start or end there.
+    pub fn touch(&self, a: Node, b: Node) -> Result<bool, OffGraph> {
         let tag = |node: Node| {
             usize::try_from(node)
                 .ok()
                 .and_then(|index| self.of_node.get(index).copied())
+                .ok_or(OffGraph(node))
         };
-        let (Some(ta), Some(tb)) = (tag(a), tag(b)) else {
-            return false;
-        };
+        let (ta, tb) = (tag(a)?, tag(b)?);
         let (ax, ay) = self.cluster_coord(usize::from(ta));
         let (bx, by) = self.cluster_coord(usize::from(tb));
-        ax.abs_diff(bx) <= 1 && ay.abs_diff(by) <= 1
+        Ok(ax.abs_diff(bx) <= 1 && ay.abs_diff(by) <= 1)
     }
 
     /// The per-column cluster map, for a bounded search.

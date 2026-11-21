@@ -692,7 +692,7 @@ fn the_estimate_is_never_optimistic_at_any_percentile() {
         )
         .expect("a connected pair has a route");
         assert!(
-            !walked.partial,
+            !walked.partial(),
             "the fixture's routes must fit the route buffer, or the comparison is against half a \
              journey"
         );
@@ -802,7 +802,7 @@ fn fog_never_makes_a_route_look_cheaper() {
             &mut buffer,
         )
         .expect("a route");
-        if fixture.clusters.touch(*start, *goal) {
+        if fixture.clusters.touch(*start, *goal) == Ok(true) {
             near += 1;
             assert_eq!(
                 clear.cost, served.cost,
@@ -2688,7 +2688,7 @@ fn a_near_pair_is_priced_at_the_route_the_router_serves() {
             let label = format!("seed {index}, pair {pair}");
             let (sx, sy) = fixture.surface.coord_of(start);
             let (gx, gy) = fixture.surface.coord_of(goal);
-            let touching = fixture.clusters.touch(start, goal);
+            let touching = fixture.clusters.touch(start, goal) == Ok(true);
             if (sx - gx).abs() <= CLUSTER && (sy - gy).abs() <= CLUSTER {
                 assert!(touching, "{label}: one cluster edge apart, yet not near");
             }
@@ -2721,7 +2721,7 @@ fn a_near_pair_is_priced_at_the_route_the_router_serves() {
                 &mut buffer,
             )
             .unwrap_or_else(|_| panic!("{label}: a connected pair has a route"));
-            assert!(!served.partial, "{label}: the route fits the buffer");
+            assert!(!served.partial(), "{label}: the route fits the buffer");
             let walked = walked_ticks(&fixture.surface, &buffer, speed.cost_per_second)
                 .unwrap_or_else(|| panic!("{label}: the route is walkable"));
             assert_eq!(estimated.legs, abstract_answer.legs, "{label}: legs");
@@ -2932,7 +2932,7 @@ fn fog_boxes(fixture: &Fixture) -> (Vec<FogBox>, Vec<bool>) {
                 || bounds[3] + 8 < other[1]
                 || other[3] + 8 < bounds[1]
         });
-        if apart && fixture.clusters.touch(start, goal) {
+        if apart && fixture.clusters.touch(start, goal) == Ok(true) {
             chosen.push((start, goal, bounds));
         }
     }
@@ -3009,7 +3009,7 @@ fn a_partial_near_route_is_answered_at_no_less_than_its_walk() {
     let start = fixture.surface.node_of(x0 + 2, mid).expect("on the map");
     let goal = fixture.surface.node_of(x0 + 12, mid).expect("on the map");
     assert!(
-        fixture.clusters.touch(start, goal),
+        fixture.clusters.touch(start, goal) == Ok(true),
         "the pair is a near pair"
     );
     assert!(
@@ -3043,7 +3043,7 @@ fn a_partial_near_route_is_answered_at_no_less_than_its_walk() {
         .expect("each ask has a route");
         asks += 1;
         walked += served.cost;
-        if !served.partial {
+        if !served.partial() {
             break;
         }
         from = *buffer.last().expect("a partial route has an end");
@@ -3577,7 +3577,7 @@ fn a_mask_that_hides_nothing_is_a_clear_query() {
     let nothing_unknown = vec![false; nodes];
     let mut near = 0;
     for (start, goal) in &set {
-        if fixture.clusters.touch(*start, *goal) {
+        if fixture.clusters.touch(*start, *goal) == Ok(true) {
             near += 1;
         }
         let mut ask = |fog: Fog<'_>| {

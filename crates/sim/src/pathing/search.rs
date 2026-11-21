@@ -196,6 +196,9 @@ pub struct Scratch {
     /// written here rather than into a caller's buffer so that an estimate,
     /// inside a tick or out of one, allocates nothing.
     pub(crate) served: Vec<u32>,
+    /// The grid optimum's search ([`crate::pathing::reach`]): what a `toward`
+    /// step's sites are bounded by.
+    pub(crate) reach: crate::pathing::reach::Reach,
 
     // --- counters, diagnostic only ---
     pub(crate) expansions: Tally,
@@ -302,6 +305,7 @@ impl Scratch {
             // stretch it replaces), and the raw walk stops at
             // `MAX_ROUTE_NODES`: the same bound as `raw`.
             served: Vec::with_capacity(crate::math::index::row(crate::pathing::MAX_ROUTE_NODES)),
+            reach: crate::pathing::reach::Reach::new(nodes),
             expansions: Tally::ZERO,
             endpoint_expansions: Tally::ZERO,
             abstract_expansions: Tally::ZERO,

@@ -304,7 +304,9 @@ pub fn estimate(
     fog: Fog<'_>,
     speed: Speed,
 ) -> Option<Estimate> {
-    if clusters.touch(start, goal) && fog.is_clear() {
+    // A column off the graph has no route at all, as the router says
+    // (`NoPath::Unplaced`): no estimate, near or far.
+    if clusters.touch(start, goal).ok()? && fog.is_clear() {
         return near(world, clusters, scratch, (start, goal), speed);
     }
     let result = abstract_search(world, clusters, scratch, start, goal, fog, speed)?;
@@ -341,7 +343,7 @@ fn near(
     let (abstract_result, outcome) = routed.ok()?;
     // A partial route is priced at the abstract cost, which bounds the walk
     // of a partial route and its later asks (the module docs).
-    let cost = if outcome.partial {
+    let cost = if outcome.rest.is_some() {
         abstract_result.cost
     } else {
         outcome.cost
@@ -355,51 +357,79 @@ fn near(
     })
 }
 
-/// Why [`walk_cost`] priced no walk.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NoWalk {
-    /// The router serves no route from where the walk stands: its typed
-    /// reason.
-    NoPath(NoPath),
-    /// The router's partial routes, chained, walked more columns than the map
-    /// holds without arriving. Each partial route is [`MAX_ROUTE_NODES`]
-    /// columns of a refined walk, so a walk that arrives in a simple path
-    /// never needs more of them than the map's columns divided by that; a
-    /// chain past it revisits columns, which no route the router refines
-    /// does. `tests/targeting.rs` pins it unreached on generated maps.
-    Overrun,
-}
-
-/// **The cost of the walk the router serves** from `start` to `goal`, near or
-/// far: [`route_and_abstract`] under no surcharge, the router's own function,
-/// written into the scratch's own buffer, and when the route stops short at
-/// [`MAX_ROUTE_NODES`] the rest asked for from its end, as the walker asks
-/// when it gets there. It is what a "nearest" ranks by (lane `p3fix`): exact,
-/// with no estimate standing in for the walk. It steps nothing; like a near
-/// pair's estimate it is a pure function of the graph.
+/// **The cost of the walk the router serves** from `start` to `goal` under
+/// `surcharge`, near or far: [`route_and_abstract`], the router's own
+/// function, written into the scratch's own buffer, and when the route stops
+/// short at [`MAX_ROUTE_NODES`] the rest asked for from its end, as the
+/// walker asks when it gets there. It is what every "nearest" ranks by (lane
+/// `p3fix`): the walk itself, with no estimate standing in for it. The cost is
+/// the walk's step costs ([`crate::pathing::search::route_cost`]); a surcharge
+/// chooses the route and never prices its steps, as it never slows the walker.
+/// It steps nothing; like a near pair's estimate it is a pure function of the
+/// graph.
+///
+/// # The chain ends
+///
+/// A partial route is the first [`MAX_ROUTE_NODES`] columns of the
+/// refinement of the abstract graph's best path, and the abstract cost is
+/// that refinement's cost exactly (the module docs). From the partial route's
+/// last column the rest of that refinement is still a path the abstract
+/// search can price: to the next transition node inside the column's own
+/// cluster, which the endpoint sweep finds at no more than the refinement's
+/// cost, then the same abstract edges. So the next query's abstract cost is at
+/// most the last one less the [`PARTIAL_PROGRESS`] steps just walked, each of
+/// at least one cost unit (the rules refuse a cheaper step). The abstract cost
+/// is an `i32`, so a chain holds at most [`MAX_PARTIALS`] partial routes, and
+/// `tests/pathing.rs`'s `a_partial_route_chain_spends_its_abstract_cost`
+/// holds a chain to the fall.
 ///
 /// # Errors
 ///
-/// [`NoWalk::NoPath`] when the router serves no route, and
-/// [`NoWalk::Overrun`] when chained partial routes pass the map's columns.
+/// The router's [`NoPath`] when it serves no route from where the walk
+/// stands.
 pub fn walk_cost(
     world: &Surface,
     clusters: &Clusters,
     scratch: &mut Scratch,
-    start: Node,
-    goal: Node,
-) -> Result<i64, NoWalk> {
+    (start, goal): (Node, Node),
+    surcharge: Surcharge<'_>,
+) -> Result<i64, NoPath> {
     scratch.walks.bump();
     let mut served = core::mem::take(&mut scratch.served);
-    let walked = walk_into(world, clusters, scratch, (start, goal), &mut served);
+    let walked = walk_into(
+        world,
+        clusters,
+        scratch,
+        (start, goal),
+        surcharge,
+        &mut served,
+    );
     scratch.served = served;
     walked
 }
 
 /// The new columns a partial route adds to a walk: all of its
 /// [`MAX_ROUTE_NODES`] but the one it starts on.
-const PARTIAL_PROGRESS: u32 = MAX_ROUTE_NODES - 1;
+pub const PARTIAL_PROGRESS: u32 = MAX_ROUTE_NODES - 1;
+
+/// The most partial routes one walk chains ([`walk_cost`]'s "The chain
+/// ends"): an abstract cost of at most `i32::MAX`, spent at least
+/// [`PARTIAL_PROGRESS`] units a partial route.
+pub const MAX_PARTIALS: u32 = match i32::MAX.unsigned_abs().checked_div(PARTIAL_PROGRESS) {
+    // Rounded down: a chain spends at least this much a partial route.
+    Some(partials) => partials,
+    None => 0,
+};
+
 const _: () = assert!(PARTIAL_PROGRESS > 0, "a partial route makes progress");
+const _: () = assert!(
+    MAX_PARTIALS > 0,
+    "the bound is the quotient, not the empty arm"
+);
+// The walk's cost is summed in an `i64`: every route of the chain, the whole
+// one included, costs at most `i32::MAX` (below 2^31), and fewer than 2^22 of
+// them make less than 2^53.
+const _: () = assert!(MAX_PARTIALS < 1 << 22, "a chain's summed cost fits an i64");
 
 /// [`walk_cost`]'s chain, with the served buffer taken out of the scratch so
 /// that every return hands it back.
@@ -408,38 +438,24 @@ fn walk_into(
     clusters: &Clusters,
     scratch: &mut Scratch,
     (start, goal): (Node, Node),
+    surcharge: Surcharge<'_>,
     served: &mut Vec<Node>,
-) -> Result<i64, NoWalk> {
-    // A partial route adds `MAX_ROUTE_NODES - 1` new columns to the walk, so a
-    // walk over at most every column of the map takes at most this many
-    // partial routes before the whole one.
-    let partials = world.node_count().div_ceil(PARTIAL_PROGRESS);
+) -> Result<i64, NoPath> {
     let mut from = start;
     let mut total = 0_i64;
-    let mut asked = 0_u32;
-    loop {
-        let (_, outcome) = route_and_abstract(
-            world,
-            clusters,
-            scratch,
-            (from, goal),
-            Surcharge::NONE,
-            served,
-        )
-        .map_err(NoWalk::NoPath)?;
-        total = total
-            .checked_add(i64::from(outcome.cost))
-            .ok_or(NoWalk::Overrun)?;
-        if !outcome.partial {
-            return Ok(total);
+    for _ in 0..=MAX_PARTIALS {
+        let (_, outcome) =
+            route_and_abstract(world, clusters, scratch, (from, goal), surcharge, served)?;
+        // At most `MAX_PARTIALS + 1` routes of at most `i32::MAX` each: the
+        // assertion above.
+        total += i64::from(outcome.cost);
+        match outcome.rest {
+            None => return Ok(total),
+            Some(end) => from = end,
         }
-        if asked >= partials {
-            return Err(NoWalk::Overrun);
-        }
-        asked += 1;
-        // E7: cannot miss: a partial route holds `MAX_ROUTE_NODES` columns
-        from = served.last().copied().ok_or(NoWalk::Overrun)?;
     }
+    // E7: cannot miss: the abstract cost falls by at least `PARTIAL_PROGRESS` a partial route ("The chain ends"), so the loop above returns before it runs out
+    Err(NoPath::Unreachable)
 }
 
 /// The walker's speed and the fog multiplier, which are the two rules-table

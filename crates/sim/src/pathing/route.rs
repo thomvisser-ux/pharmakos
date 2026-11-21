@@ -150,9 +150,19 @@ pub struct RouteOutcome {
     pub cost: i32,
     /// Abstract edges the route was assembled from.
     pub legs: u32,
-    /// Whether the route stops short of the goal because it reached
-    /// [`MAX_ROUTE_NODES`]. The walker asks for the rest when it gets there.
-    pub partial: bool,
+    /// Where the route stops short of the goal because it reached
+    /// [`MAX_ROUTE_NODES`], the column the walker asks for the rest from when
+    /// it gets there; `None` when it reaches the goal. A short route ends on a
+    /// column by construction, so no caller reads an empty buffer for it.
+    pub rest: Option<Node>,
+}
+
+impl RouteOutcome {
+    /// Whether the route stops short of the goal ([`RouteOutcome::rest`]).
+    #[must_use]
+    pub const fn partial(&self) -> bool {
+        self.rest.is_some()
+    }
 }
 
 /// Search the abstract graph from `start` to `goal`.
@@ -239,7 +249,6 @@ fn abstract_search_with(
     };
 
     abstract_begin(scratch);
-    scratch.abstract_expansions = crate::pathing::search::Tally::ZERO;
     let h0 = surface.heuristic(start, goal);
     abstract_reach(scratch, temp_start, 0, temp_start);
     scratch.abstract_heap.push(Item {
@@ -615,7 +624,7 @@ pub(crate) fn route_and_abstract(
             RouteOutcome {
                 cost: 0,
                 legs: 0,
-                partial: false,
+                rest: None,
             },
         ));
     }
@@ -703,12 +712,14 @@ pub(crate) fn route_and_abstract(
     scratch.line = line;
     scratch.prefix = prefix;
     let cost = crate::pathing::search::route_cost(surface, out).ok_or(NoPath::Unpriced)?;
+    // A route that prices has a column: an empty smoothed walk is no walk.
+    let end = out.last().copied().ok_or(NoPath::Unpriced)?;
     Ok((
         result,
         RouteOutcome {
             cost,
             legs: result.legs,
-            partial,
+            rest: partial.then_some(end),
         },
     ))
 }
