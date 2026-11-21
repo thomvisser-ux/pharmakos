@@ -294,3 +294,75 @@ fn every_growing_operation_past_the_cap_is_refused() {
         assert_eq!(bound_of(&text, &patch), Some(Bound::Size), "{patch}");
     }
 }
+
+/// The patch-text cap is a bound on the work one call does, sized so one
+/// operation whose value fits the playbook's cap is never refused for its
+/// escapes (fix pass 4, item 3). The review's three counterexamples, each with
+/// its outcome:
+///
+/// 1. one `replace` whose value is 300,000 astral characters, each written as
+///    a twelve-character surrogate pair escape (3.6 M characters of text):
+///    applies;
+/// 2. 64 `test` operations, each of a 100,000-character member: applies (the
+///    work is the cap's, and the operation count is its own bound);
+/// 3. 32 `add` / `remove` pairs of a 100,000-character value: applies.
+#[test]
+fn the_reviews_legal_patches_apply_and_the_cap_is_on_the_work() {
+    use pharmakos_plan_core::patch::{MAX_PATCH_TEXT_CHARS, patch_text};
+    let document = "{\"meta\":{\"title\":\"t\",\"note\":\"n\"}}";
+
+    let astral = "\\uD83D\\uDE00".repeat(300_000);
+    let one = format!(r#"[{{"op":"replace","path":"/meta/note","value":"{astral}"}}]"#);
+    assert!(one.chars().count() > 3_600_000);
+    let (patched, _) = patch_text(document, &one).expect("one astral value applies");
+    assert_eq!(
+        patched.chars().count(),
+        document.chars().count() + 300_000 - 1
+    );
+
+    let long = "v".repeat(100_000);
+    let member = format!("{{\"meta\":{{\"title\":\"t\",\"note\":\"{long}\"}}}}");
+    let tests: Vec<String> = (0..64)
+        .map(|_| format!(r#"{{"op":"test","path":"/meta/note","value":"{long}"}}"#))
+        .collect();
+    let repeated = format!("[{}]", tests.join(","));
+    let (same, _) = patch_text(&member, &repeated).expect("64 tests of one member apply");
+    assert_eq!(same, member);
+
+    let pairs: Vec<String> = (0..32)
+        .flat_map(|_| {
+            [
+                format!(r#"{{"op":"add","path":"/meta/extra","value":"{long}"}}"#),
+                r#"{"op":"remove","path":"/meta/extra"}"#.to_owned(),
+            ]
+        })
+        .collect();
+    let churn = format!("[{}]", pairs.join(","));
+    let (after, _) = patch_text(document, &churn).expect("32 add/remove pairs apply");
+    assert_eq!(after, document);
+
+    assert!(
+        one.chars().count() <= MAX_PATCH_TEXT_CHARS
+            && repeated.chars().count() <= MAX_PATCH_TEXT_CHARS
+            && churn.chars().count() <= MAX_PATCH_TEXT_CHARS
+    );
+}
+
+/// A refusal says which limit was met (fix pass 4, item 3): the work bound on
+/// the text, or the operation count, each its own `Bound`.
+#[test]
+fn a_refusal_names_the_limit_it_met() {
+    use pharmakos_plan_core::error::Bound;
+    use pharmakos_plan_core::patch::{MAX_PATCH_OPERATIONS, MAX_PATCH_TEXT_CHARS, patch_text};
+    let document = "{\"meta\":{\"title\":\"t\"}}";
+    let past = format!("[{}]", " ".repeat(MAX_PATCH_TEXT_CHARS));
+    let refused = patch_text(document, &past).expect_err("past the work bound");
+    assert_eq!(refused.bound, Some(Bound::PatchText));
+    assert!(refused.message.contains("work"), "{}", refused.message);
+    let tests: Vec<&str> = (0..=MAX_PATCH_OPERATIONS)
+        .map(|_| r#"{"op":"test","path":"/meta/title","value":"t"}"#)
+        .collect();
+    let many = format!("[{}]", tests.join(","));
+    let refused = patch_text(document, &many).expect_err("past the operation count");
+    assert_eq!(refused.bound, Some(Bound::Operations));
+}
