@@ -49,6 +49,39 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The refusals a person is shown keep their words private (S3's `vfyq2`,
+/// fix pass 4, item L-b): a caller reads them through `message()` or
+/// `said()`, and no crate writes one after it is made. `json::Error`'s field
+/// is the one still public, because `client-gdext`, which this lane may not
+/// edit, reads it; it is built only by its crate's constructors, which take a
+/// `Said`.
+#[test]
+fn the_refusals_words_are_read_through_a_getter() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the crates folder")
+        .to_path_buf();
+    for (file, item) in [
+        ("plan-core/src/error.rs", "pub struct Error {"),
+        ("gateway/src/error.rs", "pub struct Error {"),
+    ] {
+        let text = std::fs::read_to_string(crates.join(file)).expect("a source file");
+        let start = text.find(item).expect("the error type");
+        let body = text
+            .get(start..)
+            .and_then(|rest| rest.find("\n}").and_then(|end| rest.get(..end)))
+            .expect("the struct's body");
+        assert!(
+            !body.contains("pub message") && !body.contains("pub said"),
+            "{file}: the words are a public field:\n{body}"
+        );
+        assert!(
+            text.contains("pub fn message(&self) -> &str"),
+            "{file}: no message() getter"
+        );
+    }
+}
+
 #[test]
 fn no_crate_behind_the_door_makes_a_static_str_from_a_string() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
