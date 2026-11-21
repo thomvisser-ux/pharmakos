@@ -66,6 +66,9 @@ pub enum Malformed {
     /// a sign, a leading zero, anything but digits (S3's `vfyq2`, fix pass 4,
     /// item L-d).
     PointerIndex,
+    /// `-`, the end of an array, where only an `add` (or a `move` or `copy`'s
+    /// destination) may name it (S3's `vfyq2`, fix pass 6, item 4).
+    EndOfArray,
 }
 
 /// A bound on the work one call may do (S3's `vfyq2`, fix pass 1): what a

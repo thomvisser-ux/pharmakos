@@ -285,3 +285,37 @@ fn an_undo_too_deep_is_a_depth_refusal() {
     let refused = forged(&undo);
     assert_eq!(refused.bound(), Some(Bound::Depth), "{}", refused.message());
 }
+
+/// `-` names the end of an array, and only `add` (and a `move` or `copy`'s
+/// destination) may use it: every other operation, and every undo, is
+/// refused one way, with one code and one sentence (S3's `vfyq2`, fix pass
+/// 6, item 4).
+#[test]
+fn the_end_of_an_array_has_one_refusal() {
+    let shapes = [
+        r#"[{"op":"replace","path":"/b/-","value":9}]"#,
+        r#"[{"op":"test","path":"/b/-","value":1}]"#,
+        r#"[{"op":"remove","path":"/b/-"}]"#,
+        r#"[{"op":"move","from":"/b/-","path":"/meta/x"}]"#,
+        r#"[{"op":"copy","from":"/b/-","path":"/meta/x"}]"#,
+        r#"[{"op":"remove","path":"/b/-","undo":{}}]"#,
+        r#"[{"op":"replace","path":"/b/-","undo":{"jsonc":"9"}}]"#,
+        r#"[{"op":"add","path":"/b/-","undo":{"at":2,"jsonc":"9"}}]"#,
+    ];
+    let mut sentences = Vec::new();
+    for shape in shapes {
+        let refused = forged(shape);
+        assert_eq!(
+            refused.malformation(),
+            Some(Malformed::EndOfArray),
+            "{shape}: {}",
+            refused.message()
+        );
+        sentences.push(refused.message().to_owned());
+    }
+    sentences.dedup();
+    assert_eq!(sentences.len(), 1, "one sentence: {sentences:?}");
+    // `add` may name it.
+    pharmakos_plan_core::patch::patch_text(FORGE_BASE, r#"[{"op":"add","path":"/b/-","value":3}]"#)
+        .expect("add appends");
+}
