@@ -1952,11 +1952,12 @@ pub struct PatchPlanResponse {
     #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
     /// The patch that undoes this one, for the editor's undo stack, as text.
-    /// Each of its operations is the forward operation plus an `undo` member
-    /// that carries exactly what was written, so applying it gives back the
-    /// bytes of the file this answer was made from: comments, the member's slot
-    /// and its key's spelling included. It is valid only against the text this
-    /// answer's `playbook_jsonc` holds, and is sent back as it was received.
+    /// Each of its operations is an `add`, `remove` or `replace` (the one that
+    /// puts back, takes out or swaps) plus an `undo` member that carries exactly
+    /// what was written, so applying it gives back the bytes of the file the
+    /// forward patch was applied to: comments, the member's slot and its key's
+    /// spelling included. It is valid only against the text this answer's
+    /// `playbook_jsonc` holds, and is sent back as it was received.
     #[prost(string, tag="2")]
     pub inverse_json_patch: ::prost::alloc::string::String,
 }
