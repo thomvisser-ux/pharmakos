@@ -2009,6 +2009,17 @@ fn two_node_edits(cases: u32) -> TwoNode {
             bases.push((tree, padded));
         }
     }
+    // The PlanError table's texts, one per reachable variant (fix pass 3,
+    // item M5): a probe seeded only with qualifying playbooks reached 16 of
+    // the 38. Each is refused as it stands; an edit of it is a near miss of
+    // that shape, which is where a gap between the verifier and the compile
+    // would be.
+    for (name, text) in plan_error_table::texts() {
+        bases.push((
+            json::read(&text).unwrap_or_else(|error| panic!("{name}: {error}")),
+            false,
+        ));
+    }
     let mut rng = StreamRng::new(FUZZ_SEED, Stream::Map, u32::MAX, 2, 2);
     let mut checked = 0_u32;
     let mut refused: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
