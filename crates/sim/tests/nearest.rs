@@ -37,7 +37,10 @@ use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::runner::{MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{Common, PRIORITY_NORMAL, SeatId, UnitKind};
-use pharmakos_sim::targeting::{FeatureSpec, Ground, Ranker, StoneCandidate, toward_counted};
+use pharmakos_sim::interpreter::state::{StepFailed, StepFailure};
+use pharmakos_sim::targeting::{
+    FeatureSpec, Ground, Ranker, StoneCandidate, column_of, toward_counted,
+};
 use pharmakos_sim::voxels::{Material, VoxelEdit};
 use pharmakos_sim::{RulesTable, World, WorldConfig};
 
@@ -617,20 +620,22 @@ fn a_toward_resolve_pops_only_what_is_closer_than_the_stone() {
 }
 
 /// [`a_toward_resolve_pops_only_what_is_closer_than_the_stone`]'s pins,
-/// measured at this lane's fix pass 2, where the stone came to be the closest
-/// site over the terrain. While the stone was the least served walk, the same
+/// measured at this lane's fix pass 3, where the search came to be directed
+/// at the seat's spheres; undirected (fix pass 2) the same stones cost
+/// 10 020, 16 699, 23 054, 32 401, 106 531, 6 026 and 105 410 nodes. While the
+/// stone was the least served walk, the same
 /// search bounding the walks priced 82, 11, 45 and 9 walks on probe B's four
 /// terrains and 814 (2.9 M nodes) on the farthest vent with a Spire and a
 /// ring; with the octile bound before that, probe B priced 140, 1 261, 1 753 and
 /// 1 753 walks and popped 0.3 M, 3.1 M, 4.5 M and 4.5 M nodes.
 const PINNED_RESOLVES: [(&str, [i32; 2], u64); 7] = [
-    ("open", [197, 50], 10_020),
-    ("ring 10", [201, 48], 16_699),
-    ("ring 18", [208, 41], 23_054),
-    ("ring 26", [208, 41], 32_401),
-    ("farthest", [179, 50], 106_531),
-    ("pinned, Spire", [202, 61], 6_026),
-    ("farthest, Spire, ring 26", [179, 62], 105_410),
+    ("open", [197, 50], 968),
+    ("ring 10", [201, 48], 1_142),
+    ("ring 18", [208, 41], 1_906),
+    ("ring 26", [208, 41], 4_540),
+    ("farthest", [179, 50], 24_778),
+    ("pinned, Spire", [202, 61], 568),
+    ("farthest, Spire, ring 26", [179, 62], 27_240),
 ];
 
 /// "Nearest" under the walker's surcharge: with a threat's reach round the
@@ -932,4 +937,93 @@ fn served_round_a_threat(threat_out: i32, goal: [i32; 2]) -> Option<(i64, i64)> 
         return Some((i64::from(cost), priced));
     }
     panic!("the commander was never served a route")
+}
+
+/// A `toward` with no legal site searches nothing (fix pass 3): seat 0's
+/// whole sphere ringed shut by stone three high and the commander outside
+/// it, so no site is walkable to; named or `nearest`, the step is refused
+/// `illegal_site` counting no site, with no node popped and no walk priced.
+/// And a `toward` whose sites exist but whose named target the commander
+/// cannot reach (the vent ringed shut) is refused counting its sites,
+/// searching nothing either.
+#[test]
+fn a_toward_that_finds_no_stone_searches_nothing() {
+    let seat = SeatId::new(0);
+    let world_shut = {
+        let mut world = world_of(PROBATION, 2);
+        let core_row = world
+            .beacons()
+            .seats()
+            .iter()
+            .position(|owner| *owner == seat.raw())
+            .expect("a core");
+        let core = column_of(world.beacons().positions()[core_row]);
+        let radius = i32::from(world.rules().sphere_radius_voxels()) + 3;
+        ring(&mut world, core, radius, [0, 0]);
+        let outside = world
+            .ground()
+            .standing(core[0] - radius - 6, core[1])
+            .or_else(|| world.ground().standing(core[0] + radius + 6, core[1]))
+            .expect("a column outside the ring");
+        (world, outside)
+    };
+    let (world, outside) = &world_shut;
+    for spec in [
+        FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor: PROBATION_VENT,
+        },
+        FeatureSpec::Nearest {
+            kind: FeatureKind::Vent,
+            uncovered: false,
+        },
+    ] {
+        let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
+        let mut stones: Vec<StoneCandidate> = Vec::new();
+        let found = toward_counted(
+            &world.ground(),
+            &mut scratch,
+            &mut stones,
+            seat,
+            *outside,
+            spec,
+        );
+        assert_eq!(
+            found,
+            Err(StepFailed::counted(StepFailure::IllegalSite, 0)),
+            "{spec:?}"
+        );
+        assert_eq!(popped(&scratch), 0, "{spec:?}: no node popped");
+        assert_eq!(scratch.walks().unwrap(), 0, "{spec:?}: no walk priced");
+    }
+    // The vent ringed shut, the seat's sphere open.
+    let mut world = world_of(PROBATION, 2);
+    ring(&mut world, PROBATION_VENT, 3, [0, 0]);
+    let commander = world.commander_of(seat).expect("a commander");
+    let row = world.units().row_of(commander).expect("a live commander");
+    let start = world.units().positions()[row.index()];
+    let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
+    let mut stones: Vec<StoneCandidate> = Vec::new();
+    let found = toward_counted(
+        &world.ground(),
+        &mut scratch,
+        &mut stones,
+        seat,
+        start,
+        FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor: PROBATION_VENT,
+        },
+    );
+    let weighed = u32::try_from(stones.len()).unwrap();
+    assert!(weighed > 0, "the seat has sites");
+    assert_eq!(
+        found,
+        Err(StepFailed::counted(StepFailure::IllegalSite, weighed))
+    );
+    assert_eq!(
+        popped(&scratch),
+        0,
+        "the unreachable target: no node popped"
+    );
 }
