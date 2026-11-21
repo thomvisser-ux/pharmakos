@@ -86,6 +86,7 @@
 
 use crate::audit::Entry;
 use crate::error::Error;
+use pharmakos_proto::said;
 use pharmakos_sim::tables::SeatId;
 use std::fs;
 use std::io::Write as _;
@@ -189,11 +190,12 @@ pub const fn host_os() -> Os {
 /// is no fallback: item 98 says a missing variable is an error the lobby shows.
 pub fn data_root(get: impl Fn(&str) -> Option<String>, os: Os) -> Result<PathBuf, Error> {
     let missing = |name: &str| {
-        Error::internal(format!(
-            "the environment variable {name} is not set, so there is nowhere standard to keep \
+        Error::internal(said!(
+            "the environment variable {} is not set, so there is nowhere standard to keep \
              this match's private cache. Pharmakos will not write beside its own executable: on \
              a read-only install path that fails, and on a shared one it puts one player's \
-             orders in another's reach."
+             orders in another's reach.",
+            pharmakos_proto::json::grammar::quoted(name)
         ))
     };
     match os {
@@ -273,9 +275,10 @@ impl MatchCache {
     pub fn open(data_root: &Path, match_id: &str, header: &Header) -> Result<MatchCache, Error> {
         let cache = MatchCache::at(data_root, match_id)?;
         if cache.has_save() {
-            return Err(Error::invalid(format!(
-                "match `{match_id}` has a save in the private match cache, and a new match does \
-                 not overwrite a saved one: resume it, or start a match with another id"
+            return Err(Error::invalid(said!(
+                "match `{}` has a save in the private match cache, and a new match does \
+                 not overwrite a saved one: resume it, or start a match with another id",
+                pharmakos_proto::json::grammar::quoted(match_id)
             )));
         }
 
@@ -285,7 +288,11 @@ impl MatchCache {
             cache.directory.join("replay"),
         ] {
             fs::create_dir_all(&path).map_err(|error| {
-                Error::internal(format!("creating {}: {error}", path.display()))
+                Error::internal(said!(
+                    "creating {}: {}",
+                    crate::error::shown_path(&path),
+                    crate::error::engine(&error)
+                ))
             })?;
         }
 
@@ -327,8 +334,9 @@ impl MatchCache {
     pub fn reopen(data_root: &Path, match_id: &str) -> Result<MatchCache, Error> {
         let cache = MatchCache::at(data_root, match_id)?;
         if !cache.has_save() {
-            return Err(Error::invalid(format!(
-                "there is no saved match `{match_id}` to resume"
+            return Err(Error::invalid(said!(
+                "there is no saved match `{}` to resume",
+                pharmakos_proto::json::grammar::quoted(match_id)
             )));
         }
         Ok(cache)
@@ -337,9 +345,11 @@ impl MatchCache {
     /// The cache for a match id, validated, without touching the disk.
     fn at(data_root: &Path, match_id: &str) -> Result<MatchCache, Error> {
         if !MatchCache::valid_match_id(match_id) {
-            return Err(Error::invalid(format!(
-                "`{match_id}` is not a match id: lower-case letters, digits and hyphens only, \
-                 at most {MAX_MATCH_ID} characters"
+            return Err(Error::invalid(said!(
+                "`{}` is not a match id: lower-case letters, digits and hyphens only, \
+                 at most {} characters",
+                pharmakos_proto::json::grammar::quoted(match_id),
+                MAX_MATCH_ID
             )));
         }
         Ok(MatchCache {
@@ -366,13 +376,18 @@ impl MatchCache {
         let temporary = self.directory.join(SAVE_TEMPORARY);
         let path = self.directory.join(SAVE_FILE);
         fs::write(&temporary, text.as_bytes()).map_err(|error| {
-            Error::internal(format!("writing {}: {error}", temporary.display()))
+            Error::internal(said!(
+                "writing {}: {}",
+                crate::error::shown_path(&temporary),
+                crate::error::engine(&error)
+            ))
         })?;
         fs::rename(&temporary, &path).map_err(|error| {
-            Error::internal(format!(
-                "moving {} into place as {}: {error}",
-                temporary.display(),
-                path.display()
+            Error::internal(said!(
+                "moving {} into place as {}: {}",
+                crate::error::shown_path(&temporary),
+                crate::error::shown_path(&path),
+                crate::error::engine(&error)
             ))
         })
     }
@@ -386,9 +401,10 @@ impl MatchCache {
     pub fn read_save(&self) -> Result<String, Error> {
         let path = self.directory.join(SAVE_FILE);
         fs::read_to_string(&path).map_err(|error| {
-            Error::invalid(format!(
-                "match `{}` has no save this host can read: {error}",
-                self.match_id
+            Error::invalid(said!(
+                "match `{}` has no save this host can read: {}",
+                pharmakos_proto::json::grammar::quoted(&self.match_id),
+                crate::error::engine(&error)
             ))
         })
     }
@@ -410,8 +426,13 @@ impl MatchCache {
             .seat_directory(seat)?
             .join("sealed")
             .join(format!("{round}.jsonc"));
-        fs::write(&path, playbook_jsonc.as_bytes())
-            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))
+        fs::write(&path, playbook_jsonc.as_bytes()).map_err(|error| {
+            Error::internal(said!(
+                "writing {}: {}",
+                crate::error::shown_path(&path),
+                crate::error::engine(&error)
+            ))
+        })
     }
 
     /// One segment's per-tick hash chain, into `replay/<round>.hashes.txt`.
@@ -421,11 +442,21 @@ impl MatchCache {
     /// [`crate::error::Code::Internal`] for anything the filesystem refuses.
     pub fn write_replay(&self, round: u32, hashes: &str) -> Result<(), Error> {
         let folder = self.directory.join("replay");
-        fs::create_dir_all(&folder)
-            .map_err(|error| Error::internal(format!("creating {}: {error}", folder.display())))?;
+        fs::create_dir_all(&folder).map_err(|error| {
+            Error::internal(said!(
+                "creating {}: {}",
+                crate::error::shown_path(&folder),
+                crate::error::engine(&error)
+            ))
+        })?;
         let path = folder.join(format!("{round}.hashes.txt"));
-        fs::write(&path, hashes.as_bytes())
-            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))
+        fs::write(&path, hashes.as_bytes()).map_err(|error| {
+            Error::internal(said!(
+                "writing {}: {}",
+                crate::error::shown_path(&path),
+                crate::error::engine(&error)
+            ))
+        })
     }
 
     /// The sequence number of the last line `audit.log` holds, or zero when
@@ -464,9 +495,10 @@ impl MatchCache {
                 return Ok(crate::save::Continuation::default());
             }
             Err(error) => {
-                return Err(Error::internal(format!(
-                    "reading {}: {error}",
-                    path.display()
+                return Err(Error::internal(said!(
+                    "reading {}: {}",
+                    crate::error::shown_path(&path),
+                    crate::error::engine(&error)
                 )));
             }
         };
@@ -479,10 +511,10 @@ impl MatchCache {
             let seq = fields.next().and_then(|field| field.parse::<u64>().ok());
             let tick = fields.next().and_then(|field| field.parse::<u32>().ok());
             let (Some(seq), Some(tick)) = (seq, tick) else {
-                return Err(Error::internal(format!(
+                return Err(Error::internal(said!(
                     "{} line {} is not a record this gateway writes: it starts with no sequence \
                      number and tick",
-                    path.display(),
+                    crate::error::shown_path(&path),
                     number.saturating_add(1)
                 )));
             };
@@ -520,7 +552,11 @@ impl MatchCache {
             directory.join("sealed"),
         ] {
             fs::create_dir_all(&path).map_err(|error| {
-                Error::internal(format!("creating {}: {error}", path.display()))
+                Error::internal(said!(
+                    "creating {}: {}",
+                    crate::error::shown_path(&path),
+                    crate::error::engine(&error)
+                ))
             })?;
         }
         Ok(directory)
@@ -554,9 +590,20 @@ impl MatchCache {
             .create(true)
             .append(true)
             .open(&path)
-            .map_err(|error| Error::internal(format!("opening {}: {error}", path.display())))?;
-        file.write_all(text.as_bytes())
-            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))?;
+            .map_err(|error| {
+                Error::internal(said!(
+                    "opening {}: {}",
+                    crate::error::shown_path(&path),
+                    crate::error::engine(&error)
+                ))
+            })?;
+        file.write_all(text.as_bytes()).map_err(|error| {
+            Error::internal(said!(
+                "writing {}: {}",
+                crate::error::shown_path(&path),
+                crate::error::engine(&error)
+            ))
+        })?;
         Ok(())
     }
 
@@ -567,16 +614,26 @@ impl MatchCache {
     /// [`crate::error::Code::NotFound`] when no log has been written yet.
     pub fn audit_text(&self) -> Result<String, Error> {
         let path = self.directory.join("audit.log");
-        fs::read_to_string(&path)
-            .map_err(|error| Error::not_found(format!("reading {}: {error}", path.display())))
+        fs::read_to_string(&path).map_err(|error| {
+            Error::not_found(said!(
+                "reading {}: {}",
+                crate::error::shown_path(&path),
+                crate::error::engine(&error)
+            ))
+        })
     }
 
     /// Write one file inside the match folder. `name` is a fixed literal at
     /// every call site; nothing caller-supplied reaches it.
     fn write(&self, name: &Path, bytes: &[u8]) -> Result<(), Error> {
         let path = self.directory.join(name);
-        fs::write(&path, bytes)
-            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))
+        fs::write(&path, bytes).map_err(|error| {
+            Error::internal(said!(
+                "writing {}: {}",
+                crate::error::shown_path(&path),
+                crate::error::engine(&error)
+            ))
+        })
     }
 }
 

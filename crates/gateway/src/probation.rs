@@ -26,6 +26,7 @@
 //! nothing above.
 
 use pharmakos_proto::json::Json;
+use pharmakos_proto::said;
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::tables::SeatId;
 
@@ -61,8 +62,9 @@ impl Preset {
         match text {
             "probation" => Ok(Preset::Probation),
             "custom" => Ok(Preset::Custom),
-            other => Err(Error::invalid(format!(
-                "`{other}` is not a preset: a match is `probation` or `custom`"
+            other => Err(Error::invalid(said!(
+                "`{}` is not a preset: a match is `probation` or `custom`",
+                pharmakos_proto::json::grammar::quoted(other)
             ))),
         }
     }
@@ -125,7 +127,12 @@ impl Memo {
         Memo::ALL
             .into_iter()
             .find(|memo| memo.name() == text)
-            .ok_or_else(|| Error::invalid(format!("`{text}` is not a memo this build issues")))
+            .ok_or_else(|| {
+                Error::invalid(said!(
+                    "`{}` is not a memo this build issues",
+                    pharmakos_proto::json::grammar::quoted(text)
+                ))
+            })
     }
 
     /// The memo's text, from the one string table; the first licence's

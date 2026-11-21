@@ -33,6 +33,7 @@
 
 use crate::error::Error;
 use pharmakos_proto::json::{Json, read, write};
+use pharmakos_proto::said;
 
 /// The version string every request and response carries.
 pub const VERSION: &str = "2.0";
@@ -71,8 +72,9 @@ impl Request {
         match self.param(name) {
             None => Ok(None),
             Some(Json::String(text)) => Ok(Some(text.as_str())),
-            Some(other) => Err(Error::invalid(format!(
-                "`{name}` is a string, and this is {}",
+            Some(other) => Err(Error::invalid(said!(
+                "`{}` is a string, and this is {}",
+                pharmakos_proto::json::grammar::quoted(name),
                 other.kind()
             ))),
         }
@@ -88,8 +90,9 @@ impl Request {
         match self.param(name) {
             None => Ok(None),
             Some(Json::Bool(value)) => Ok(Some(*value)),
-            Some(other) => Err(Error::invalid(format!(
-                "`{name}` is a boolean, and this is {}",
+            Some(other) => Err(Error::invalid(said!(
+                "`{}` is a boolean, and this is {}",
+                pharmakos_proto::json::grammar::quoted(name),
                 other.kind()
             ))),
         }
@@ -107,10 +110,15 @@ impl Request {
         match self.param(name) {
             None => Ok(None),
             Some(Json::Number(lexeme)) => lexeme.parse::<i64>().map(Some).map_err(|_| {
-                Error::invalid(format!("`{name}` is a whole number, and `{lexeme}` is not"))
+                Error::invalid(said!(
+                    "`{}` is a whole number, and `{}` is not",
+                    pharmakos_proto::json::grammar::quoted(name),
+                    pharmakos_proto::json::grammar::quoted(lexeme)
+                ))
             }),
-            Some(other) => Err(Error::invalid(format!(
-                "`{name}` is a whole number, and this is {}",
+            Some(other) => Err(Error::invalid(said!(
+                "`{}` is a whole number, and this is {}",
+                pharmakos_proto::json::grammar::quoted(name),
                 other.kind()
             ))),
         }

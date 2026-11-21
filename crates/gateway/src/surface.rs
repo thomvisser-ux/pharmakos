@@ -159,6 +159,7 @@ use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::api::v1::{Method, VerifyReport};
 use pharmakos_proto::json::Json;
+use pharmakos_proto::said;
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::math::quantity::{Kw, Money, Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
@@ -612,7 +613,7 @@ impl RecapFacts {
                             .find(|(settled, _)| settled == held)
                             .map(|(_, credit)| *credit)
                             .ok_or_else(|| match self.dropped {
-                                0 => BandError::Gateway(Error::internal(format!(
+                                0 => BandError::Gateway(Error::internal(said!(
                                     "seat {} is in the match and the Ledger credited it nothing",
                                     held.raw()
                                 ))),
@@ -636,7 +637,7 @@ impl RecapFacts {
             .iter()
             .position(|(held, _)| *held == seat)
             .ok_or_else(|| {
-                Error::internal(format!(
+                Error::internal(said!(
                     "the Ledger settled seat {}, which the seat table does not hold",
                     seat.raw()
                 ))
@@ -648,8 +649,9 @@ impl RecapFacts {
             .ok_or_else(|| Error::internal("a ladder place does not count from 1"))?;
         let percent = pharmakos_sim::economy::band_percent(rules, place.rank, place.living)
             .map_err(|refused| {
-                Error::internal(format!(
-                    "the sim's band read refused a settlement: {refused}"
+                Error::internal(said!(
+                    "the sim's band read refused a settlement: {}",
+                    crate::error::engine(&refused)
                 ))
             })?;
         Ok(Some(Band { rank, percent }))
@@ -668,8 +670,9 @@ pub(crate) fn ladder_place(
     index: usize,
 ) -> Result<pharmakos_sim::economy::LadderPlace, Error> {
     pharmakos_sim::economy::ladder_place(ladder, index).map_err(|refused| {
-        Error::internal(format!(
-            "the sim's ladder read refused a seat in the match: {refused}"
+        Error::internal(said!(
+            "the sim's ladder read refused a seat in the match: {}",
+            crate::error::engine(&refused)
         ))
     })
 }
@@ -692,12 +695,13 @@ impl Surface {
         seats: &[SeatId],
     ) -> Result<Surface, Error> {
         if !crate::cache::MatchCache::valid_match_id(match_id) {
-            return Err(Error::invalid(format!(
-                "`{match_id}` is not a match id this gateway will host"
+            return Err(Error::invalid(said!(
+                "`{}` is not a match id this gateway will host",
+                pharmakos_proto::json::grammar::quoted(match_id)
             )));
         }
-        let lulls =
-            LullLengths::from_rules(&rules).map_err(|why| Error::invalid(why.to_string()))?;
+        let lulls = LullLengths::from_rules(&rules)
+            .map_err(|why| Error::invalid(crate::error::engine(&why)))?;
         let mut slots: Vec<SeatState> = seats.iter().copied().map(SeatState::new).collect();
         slots.sort_by_key(|slot| slot.seat.raw());
         slots.dedup_by_key(|slot| slot.seat.raw());
@@ -846,10 +850,11 @@ impl Surface {
         surface.host_mut()?.resume(&saved.snapshot)?;
         let round = surface.host()?.runner().round();
         if saved.round != round {
-            return Err(Error::invalid(format!(
-                "this save says it is round {} and its planning snapshot is round {round}: the \
+            return Err(Error::invalid(said!(
+                "this save says it is round {} and its planning snapshot is round {}: the \
                  file is damaged",
-                saved.round
+                saved.round,
+                round
             )));
         }
 
@@ -909,9 +914,11 @@ impl Surface {
         let ours: Vec<u8> = self.seats.iter().map(|slot| slot.seat.raw()).collect();
         let theirs: Vec<u8> = saved.seats.iter().map(|seat| seat.seat).collect();
         if ours != theirs {
-            return Err(Error::invalid(format!(
-                "this save holds seats {theirs:?} and the match it resumes has seats {ours:?}: \
-                 the file is damaged"
+            return Err(Error::invalid(said!(
+                "this save holds seats {} and the match it resumes has seats {}: the file is \
+                 damaged",
+                pharmakos_proto::json::grammar::escaped(&format!("{theirs:?}")),
+                pharmakos_proto::json::grammar::escaped(&format!("{ours:?}"))
             )));
         }
         let rules = self.host()?.rules().clone();
@@ -929,7 +936,7 @@ impl Surface {
             let characters = u32::try_from(held.notebook.chars().count()).unwrap_or(u32::MAX);
             if characters > notebook_max || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
             {
-                return Err(Error::invalid(format!(
+                return Err(Error::invalid(said!(
                     "seat {}'s notebook or drafts in this save are over the bounds a seat may \
                      hold: the file is damaged",
                     held.seat
@@ -951,10 +958,11 @@ impl Surface {
                     .map_err(|unpriced| match unpriced {
                         crate::surface::knowledge::Unpriced::Gateway(error) => error,
                         crate::surface::knowledge::Unpriced::Playbook(why) => {
-                            Error::invalid(format!(
-                                "seat {}'s sealed playbook in this save does not price: {why}: \
+                            Error::invalid(said!(
+                                "seat {}'s sealed playbook in this save does not price: {}: \
                                  the file is damaged",
-                                held.seat
+                                held.seat,
+                                why
                             ))
                         }
                     })?;
@@ -980,10 +988,12 @@ impl Surface {
                 })
             });
             if let Some((id, name)) = own {
-                return Err(Error::invalid(format!(
-                    "seat {}'s handle table in this save names its own beacon {id} as {name}: \
+                return Err(Error::invalid(said!(
+                    "seat {}'s handle table in this save names its own beacon {} as {}: \
                      the file is damaged",
-                    held.seat
+                    held.seat,
+                    id,
+                    pharmakos_proto::json::grammar::quoted(name)
                 )));
             }
             // The seat's `e_NN` names, as they were minted, before this
@@ -991,10 +1001,11 @@ impl Surface {
             self.views
                 .restore_foreign_beacon_names(Viewer::Seat(SeatId::new(held.seat)), &held.handles)
                 .map_err(|error| {
-                    Error::invalid(format!(
+                    Error::invalid(said!(
                         "seat {}'s handle table in this save does not restore: {}: the file is \
                          damaged",
-                        held.seat, error.message
+                        held.seat,
+                        error.said()
                     ))
                 })?;
         }
@@ -1232,10 +1243,11 @@ impl Surface {
             .iter()
             .find(|slot| u32::from(slot.seat.raw()) >= in_world)
         {
-            return Err(Error::invalid(format!(
-                "this surface was built for seat {} and the match it is being given has {in_world} \
+            return Err(Error::invalid(said!(
+                "this surface was built for seat {} and the match it is being given has {} \
                  seats: a seat the world has not got can be sealed for, and nothing would play it",
-                beyond.seat.raw()
+                beyond.seat.raw(),
+                in_world
             )));
         }
         let round = host.runner().round();
@@ -1327,7 +1339,7 @@ impl Surface {
     /// rule does not rest on which hosts set a preset.
     pub fn set_phase_remaining_ms(&mut self, remaining: Ms) -> Result<(), Error> {
         if self.preset.untimed_lulls() {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "this is a `{}` match, whose Lulls are untimed: no countdown is set on one, and \
                  this sets {} ms",
                 self.preset.name(),
@@ -1405,7 +1417,7 @@ impl Surface {
         }
         let last = self.reported_elapsed_ms.unwrap_or(Ms::ZERO);
         if elapsed < last {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "this phase's clock was last reported at {} ms and this report is {} ms: time \
                  already spent in a phase is not un-spent, and a backwards clock is refused \
                  rather than clamped",
@@ -1415,10 +1427,11 @@ impl Surface {
         }
         let step = elapsed.raw().saturating_sub(last.raw());
         if step > crate::surface::control::MAX_CLOCK_STEP_MS {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "one report may carry this phase's clock at most {} ms further on and this \
-                 carries it {step} ms; after a long stall, report in steps",
-                crate::surface::control::MAX_CLOCK_STEP_MS
+                 carries it {} ms; after a long stall, report in steps",
+                crate::surface::control::MAX_CLOCK_STEP_MS,
+                step
             )));
         }
         // E7: a Probation match's Lulls are untimed, so a report that puts a
@@ -1428,7 +1441,7 @@ impl Surface {
             && self.time.phase == Phase::Lull
             && let Some(remaining) = remaining
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "this is a `{}` match, whose Lulls are untimed: a report carries no \
                  `remaining_ms` in its Lull, and this one carries {} ms",
                 self.preset.name(),
@@ -1439,7 +1452,7 @@ impl Surface {
         if let Some(remaining) = remaining
             && remaining > lull
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "`remaining_ms` is what is left of a Lull and this round's Lull is {} ms long; \
                  this reports {} ms left, which is refused rather than clamped",
                 lull.raw(),
@@ -1572,8 +1585,9 @@ impl Surface {
     /// one the log should show rather than only the caller.
     fn refuse_mid_tick(&mut self, action: &str, what: &str) -> Result<(), Error> {
         if self.host()?.runner().tick_is_open() {
-            let error = Error::internal(format!(
-                "this match would not {what}: a tick is open between two of its phases"
+            let error = Error::internal(said!(
+                "this match would not {}: a tick is open between two of its phases",
+                pharmakos_proto::json::grammar::quoted(what)
             ));
             let tick = self.time.tick;
             self.audit.refused(tick, None, None, action, &error);
@@ -1935,7 +1949,10 @@ impl Surface {
             .snapshot()
             .to_bytes()
             .map_err(|error| {
-                Error::internal(format!("the frozen snapshot would not encode: {error}"))
+                Error::internal(said!(
+                    "the frozen snapshot would not encode: {}",
+                    crate::error::engine(&error)
+                ))
             })
     }
 
@@ -1954,7 +1971,7 @@ impl Surface {
             .ok_or_else(|| {
                 Error::new(
                     crate::error::Code::NoQualifyingPlan,
-                    format!("seat {} has sealed nothing this round", seat.raw()),
+                    said!("seat {} has sealed nothing this round", seat.raw()),
                 )
             })
     }
@@ -2170,10 +2187,10 @@ impl Surface {
         for (event, stamp) in drained.into_iter().zip(witnesses) {
             self.note_for_the_recap(&event)?;
             let kind = Kind::new(event.kind.name()).map_err(|error| {
-                Error::internal(format!(
+                Error::internal(said!(
                     "the sim emitted `{}`, which this feed will not carry: {}",
                     event.kind.name(),
-                    error.message
+                    error.said()
                 ))
             })?;
             let audience = Self::audience_of(&event)?;
@@ -2260,7 +2277,7 @@ impl Surface {
             .iter_mut()
             .find(|slot| slot.seat == seat)
             .ok_or_else(|| {
-                Error::internal(format!(
+                Error::internal(said!(
                     "the human seat {} is not one of this match's seats",
                     seat.raw()
                 ))
@@ -2304,7 +2321,7 @@ impl Surface {
         match event.kind {
             EventKind::SegmentEnded => {
                 let ticks = u32::try_from(event.value).map_err(|_| {
-                    Error::internal(format!(
+                    Error::internal(said!(
                         "the sim ended a segment after {} ticks, which is not a tick count",
                         event.value
                     ))
@@ -2479,11 +2496,8 @@ impl Surface {
                 // the origin, where a seat that sees the origin would be told
                 // of it: refused, never placed at (0, 0, 0).
                 at: event.at.map(crate::view::voxel_of_position).ok_or_else(|| {
-                    Error::internal(format!(
-                        "the sim emitted `{}` with no place, and a world event is fogged by \
-                         its place",
-                        event.kind.name()
-                    ))
+                    Error::internal(said!("the sim emitted `{}` with no place, and a world event is fogged by \
+                         its place", event.kind.name()))
                 })?,
             }),
             EventKind::PlanSealed
@@ -2559,10 +2573,7 @@ impl Surface {
             // is the Spire itself, when one is built.
             | EventKind::LicenceAwarded
             | EventKind::LicenceVoided => event.seat.map(Audience::Private).ok_or_else(|| {
-                Error::internal(format!(
-                    "the sim emitted `{}` for no seat, and a seat's orders have no other audience",
-                    event.kind.name()
-                ))
+                Error::internal(said!("the sim emitted `{}` for no seat, and a seat's orders have no other audience", event.kind.name()))
             }),
         }
     }
@@ -2616,9 +2627,9 @@ impl Surface {
             let safe = host.safe_playbook().to_owned();
             let plan = crate::surface::planning::compile_playbook(&safe, host.rules()).map_err(
                 |error| {
-                    Error::internal(format!(
+                    Error::internal(said!(
                         "the safe playbook this gateway files will not compile: {}",
-                        error.message
+                        error.said()
                     ))
                 },
             )?;
@@ -2686,7 +2697,7 @@ impl Surface {
             ));
         }
         if !self.seats.iter().any(|slot| slot.seat == seat) {
-            return Err(Error::not_found(format!(
+            return Err(Error::not_found(said!(
                 "this match has no seat {}",
                 seat.raw()
             )));
@@ -2791,8 +2802,9 @@ impl Surface {
         // The refusal names the template and never the path, as
         // `instantiate_template`'s does.
         let text = pharmakos_plan_core::library::read(folder, template_id).map_err(|_| {
-            Error::not_found(format!(
-                "no template `{template_id}` in this gateway's library"
+            Error::not_found(said!(
+                "no template `{}` in this gateway's library",
+                pharmakos_proto::json::grammar::quoted(template_id)
             ))
         })?;
         let offered: Vec<pharmakos_plan_core::library::Parameter> = suggestion
@@ -2805,7 +2817,7 @@ impl Surface {
             .collect();
         pharmakos_plan_core::instantiate(&text, &[], &offered)
             .map(|_| ())
-            .map_err(|error| Error::invalid(error.message))
+            .map_err(|error| Error::invalid(error.shown()))
     }
 
     /// An advised safe playbook, verified FULL and compiled, or the reason it
@@ -2822,7 +2834,7 @@ impl Surface {
         round: u32,
     ) -> Result<Sealed, Error> {
         if pharmakos_verifier::is_too_long(playbook_jsonc) {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "an advised safe playbook is at most {} characters, like any other",
                 pharmakos_verifier::MAX_PLAYBOOK_CHARS
             )));
@@ -2836,7 +2848,7 @@ impl Surface {
             refused => {
                 return Err(Error::new(
                     crate::error::Code::NoQualifyingPlan,
-                    format!(
+                    said!(
                         "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \
                          gateway's fallback is filed instead",
                         seat.raw(),
@@ -2964,9 +2976,9 @@ impl Surface {
             depth,
         )
         .map_err(|error| {
-            Error::internal(format!(
+            Error::internal(said!(
                 "this build cannot verify a playbook: {}",
-                error.message
+                error.said()
             ))
         })
     }
@@ -3032,7 +3044,7 @@ impl Surface {
             .seats()
             .iter()
             .position(|held| *held == seat.raw())
-            .ok_or_else(|| Error::not_found(format!("this match has no seat {}", seat.raw())))?;
+            .ok_or_else(|| Error::not_found(said!("this match has no seat {}", seat.raw())))?;
         let economy = self.seat_economy(seat)?;
         let mut scope = VerifierScope::new(seat, economy);
 
@@ -3119,7 +3131,7 @@ impl Surface {
         self.seats
             .iter()
             .find(|slot| slot.seat == seat)
-            .ok_or_else(|| Error::not_found(format!("this match has no seat {}", seat.raw())))
+            .ok_or_else(|| Error::not_found(said!("this match has no seat {}", seat.raw())))
     }
 
     /// One seat's private state, to change, if `subject` is that seat.
@@ -3136,7 +3148,7 @@ impl Surface {
         self.seats
             .iter_mut()
             .find(|slot| slot.seat == seat)
-            .ok_or_else(|| Error::not_found(format!("this match has no seat {}", seat.raw())))
+            .ok_or_else(|| Error::not_found(said!("this match has no seat {}", seat.raw())))
     }
 
     /// The one secrecy gate.
@@ -3144,10 +3156,10 @@ impl Surface {
         if subject.seat() == Some(seat) {
             return Ok(());
         }
-        Err(Error::forbidden(format!(
+        Err(Error::forbidden(said!(
             "{} may not read or write seat {}'s playbooks, drafts, notebook or knowledge: they \
              never leave the gateway for anybody but that seat (spec section 12)",
-            subject.render(),
+            pharmakos_proto::json::grammar::quoted(&subject.render()),
             seat.raw()
         )))
     }
@@ -3290,25 +3302,25 @@ impl Surface {
         let method = scopes::method_from_wire(&request.method)
             .ok_or_else(|| crate::error::unknown_method(&request.method))?;
         let needed = scopes::required(method).ok_or_else(|| {
-            Error::internal(format!(
+            Error::internal(said!(
                 "`{}` carries no required_scope annotation, so this build cannot say who may \
                  call it",
-                request.method
+                pharmakos_proto::json::grammar::quoted(&request.method)
             ))
         })?;
         if !held.holds(needed) {
-            return Err(Error::forbidden(format!(
+            return Err(Error::forbidden(said!(
                 "`{}` needs the `{}` scope, and this token holds `{}`",
-                request.method,
-                scopes::scope_wire_name(needed),
-                held.render()
+                pharmakos_proto::json::grammar::quoted(&request.method),
+                pharmakos_proto::json::grammar::quoted(&scopes::scope_wire_name(needed)),
+                pharmakos_proto::json::grammar::quoted(&held.render())
             )));
         }
         if planning(needed) && !self.time.planning_open() {
-            return Err(Error::phase_closed(format!(
+            return Err(Error::phase_closed(said!(
                 "`{}` is a planning method, and planning is closed during the Push and the \
                  recap",
-                request.method
+                pharmakos_proto::json::grammar::quoted(&request.method)
             )));
         }
 
@@ -3397,11 +3409,11 @@ impl Surface {
             // `get_capabilities`), plus `METHOD_UNSPECIFIED`, which
             // `method_from_wire` already refuses before a handler is reached.
             // Every method with a pair has an arm above.
-            other => Err(Error::internal(format!(
+            other => Err(Error::internal(said!(
                 "`{}` is in the schema and this build does not serve it: `gateway.proto` gives it \
                  no request/response pair, because no client calls it yet and the stage that \
                  introduces what it reports on is the stage that will know what it takes",
-                scopes::method_wire_name(other)
+                pharmakos_proto::json::grammar::quoted(&scopes::method_wire_name(other))
             ))),
         }
     }
@@ -3445,9 +3457,11 @@ impl Surface {
                 ));
             }
             if timeout > i64::from(MAX_WAIT_MS) {
-                return Err(Error::invalid(format!(
-                    "`timeout_ms` is at most {MAX_WAIT_MS} game milliseconds and this \
-                     is {timeout}"
+                return Err(Error::invalid(said!(
+                    "`timeout_ms` is at most {} game milliseconds and this \
+                     is {}",
+                    MAX_WAIT_MS,
+                    timeout
                 )));
             }
         }
@@ -3470,8 +3484,9 @@ impl Surface {
                 (!page.events.is_empty(), page.next_cursor.render())
             }
             other => {
-                return Err(Error::invalid(format!(
-                    "`trigger` is `phase_change` or `feed_digest`, and this is `{other}`"
+                return Err(Error::invalid(said!(
+                    "`trigger` is `phase_change` or `feed_digest`, and this is `{}`",
+                    pharmakos_proto::json::grammar::quoted(other)
                 )));
             }
         };
@@ -3507,9 +3522,12 @@ impl Surface {
     /// neither has a briefing, a draft or a plan, and `admin` "can never read
     /// another seat's playbooks, drafts or knowledge" (spec section 12).
     pub(crate) fn seat_of(subject: Subject, what: &str) -> Result<SeatId, Error> {
-        subject
-            .seat()
-            .ok_or_else(|| Error::forbidden(format!("only a seat has {what}")))
+        subject.seat().ok_or_else(|| {
+            Error::forbidden(said!(
+                "only a seat has {}",
+                pharmakos_proto::json::grammar::quoted(what)
+            ))
+        })
     }
 
     /// `save_notes`: the private seat notebook, at the rules table's size.
@@ -3535,9 +3553,11 @@ impl Surface {
             })?;
         let characters = u32::try_from(notes.chars().count()).unwrap_or(u32::MAX);
         if characters > maximum {
-            return Err(Error::invalid(format!(
-                "the notebook holds {maximum} characters and this is {characters}; it is never \
-                 silently truncated"
+            return Err(Error::invalid(said!(
+                "the notebook holds {} characters and this is {}; it is never \
+                 silently truncated",
+                maximum,
+                characters
             )));
         }
         let state = self.seat_state_mut(subject, seat)?;
@@ -3660,7 +3680,11 @@ impl Surface {
 fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, Error> {
     let beacons = world.beacons();
     let column = |name: &str, row: usize| {
-        Error::internal(format!("the beacon table has no {name} for row {row}"))
+        Error::internal(said!(
+            "the beacon table has no {} for row {}",
+            pharmakos_proto::json::grammar::quoted(name),
+            row
+        ))
     };
     let mut found: Vec<(u8, u32)> = Vec::new();
     for row in 0..beacons.ids().len() {
@@ -3700,9 +3724,10 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, E
             let shed = pharmakos_sim::power::dark_load(world, seat)
                 .and_then(pharmakos_sim::power::DarkLoad::shed)
                 .map_err(|refused| {
-                    Error::internal(format!(
-                        "the grid's shed read refused seat {}: {refused}",
-                        seat.raw()
+                    Error::internal(said!(
+                        "the grid's shed read refused seat {}: {}",
+                        seat.raw(),
+                        crate::error::engine(&refused)
                     ))
                 })?;
             // The brownout order sheds a beacon only when that relieves the
@@ -3710,7 +3735,7 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, E
             // of nothing or less is the sim and this crate disagreeing about
             // the grid, and is never told as a shortfall.
             if shed.raw() <= 0 {
-                return Err(Error::internal(format!(
+                return Err(Error::internal(said!(
                     "seat {} has a dark beacon and the grid's read says its brownout shed {} kW",
                     seat.raw(),
                     shed.raw()
@@ -3744,16 +3769,18 @@ fn push_enemy_beacons(
             .beacon_sighting(handle)
             .map(|sighting| sighting.at)
             .ok_or_else(|| {
-                Error::internal(format!(
-                    "the verifier scope holds no sighting of `{handle}`, which was just pushed"
+                Error::internal(said!(
+                    "the verifier scope holds no sighting of `{}`, which was just pushed",
+                    pharmakos_proto::json::grammar::quoted(handle)
                 ))
             })?;
         if scope
             .beacon(handle)
             .is_some_and(|known| known.side == pharmakos_verifier::Ownership::Own)
         {
-            return Err(Error::internal(format!(
-                "`{handle}` names a sighted enemy beacon and one of the seat's own"
+            return Err(Error::internal(said!(
+                "`{}` names a sighted enemy beacon and one of the seat's own",
+                pharmakos_proto::json::grammar::quoted(handle)
             )));
         }
         scope.push_beacon(pharmakos_verifier::KnownBeacon {
@@ -3792,8 +3819,9 @@ fn push_own_licence_facts(
     scope: &mut VerifierScope,
 ) -> Result<(), Error> {
     let refused = |error: pharmakos_verifier::ScopeError| {
-        Error::internal(format!(
-            "the verifier scope refused the sim's licence facts: {error:?}"
+        Error::internal(said!(
+            "the verifier scope refused the sim's licence facts: {}",
+            pharmakos_proto::json::grammar::Said::engine_error(&error)
         ))
     };
     for licence in world.licences().held_by(seat) {
@@ -3811,8 +3839,9 @@ fn push_own_licence_facts(
             beacons.ids().get(index).copied(),
             beacons.ordinals().get(index).copied(),
         ) else {
-            return Err(Error::internal(format!(
-                "the beacon table has no id or ordinal in row {index}"
+            return Err(Error::internal(said!(
+                "the beacon table has no id or ordinal in row {}",
+                index
             )));
         };
         let beacon = pharmakos_sim::tables::BeaconId::new(id);
@@ -3823,8 +3852,10 @@ fn push_own_licence_facts(
                 .ok()
                 .and_then(core::num::NonZeroU32::new)
                 .ok_or_else(|| {
-                    Error::internal(format!(
-                        "the sim sized {name}'s sphere at {radius} voxels, which is no radius"
+                    Error::internal(said!(
+                        "the sim sized {}'s sphere at {} voxels, which is no radius",
+                        pharmakos_proto::json::grammar::quoted(&name),
+                        radius
                     ))
                 })?;
             scope.set_sphere_radius(&name, grown).map_err(refused)?;
@@ -3852,7 +3883,11 @@ fn push_own_beacons(
     let seats = world.seats();
     let beacons = world.beacons();
     let column = |name: &str, index: usize| {
-        Error::internal(format!("the beacon table has no {name} in row {index}"))
+        Error::internal(said!(
+            "the beacon table has no {} in row {}",
+            pharmakos_proto::json::grammar::quoted(name),
+            index
+        ))
     };
     // A freed row is nobody's (S2's plan, E1), so the seat filter leaves it
     // out with no test of its own. By per-seat ordinal, which is what the
@@ -3913,7 +3948,7 @@ fn push_own_beacons(
     // anywhere, and that site's sphere is in the scope already, so no
     // sphere test answers differently for it.
     let placed = seats.placed().get(row).copied().ok_or_else(|| {
-        Error::internal(format!(
+        Error::internal(said!(
             "seat {} has no placement counter beside its seat row",
             seat.raw()
         ))
@@ -3948,10 +3983,13 @@ fn push_own_beacons(
 
 /// One column's entry for a beacon row, or the typed refusal naming it.
 fn column_of<T: Copy>(column: &[T], index: usize, name: &str) -> Result<T, Error> {
-    column
-        .get(index)
-        .copied()
-        .ok_or_else(|| Error::internal(format!("the beacon table has no {name} in row {index}")))
+    column.get(index).copied().ok_or_else(|| {
+        Error::internal(said!(
+            "the beacon table has no {} in row {}",
+            pharmakos_proto::json::grammar::quoted(name),
+            index
+        ))
+    })
 }
 
 /// Every seat's tally in `world`, ascending by seat ([`RecapFacts::tallies`]).
@@ -3975,7 +4013,7 @@ fn tallies_of(
         .into_iter()
         .map(|seat| {
             let tally = world.tally(seat).ok_or_else(|| {
-                Error::internal(format!(
+                Error::internal(said!(
                     "the seat table holds no tally for seat {}",
                     seat.raw()
                 ))
@@ -3994,7 +4032,7 @@ fn tallies_of(
 /// `u32` counts, which the verifier's own caps keep far below; never clamped.
 fn diagnostic_count(report: &VerifyReport) -> Result<u32, Error> {
     u32::try_from(report.diagnostics.len()).map_err(|_| {
-        Error::internal(format!(
+        Error::internal(said!(
             "a report carries {} diagnostics, past a uint32",
             report.diagnostics.len()
         ))
@@ -4032,9 +4070,9 @@ fn sealed_canonical(
     playbook_jsonc: &str,
 ) -> Result<pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>, Error> {
     pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
-        Error::internal(format!(
+        Error::internal(said!(
             "a sealed playbook has no canonical form: {}",
-            error.message
+            error.said()
         ))
     })
 }
@@ -4044,8 +4082,9 @@ fn fingerprint_of(
     canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
 ) -> Result<u64, Error> {
     pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message()).map_err(|error| {
-        Error::internal(format!(
-            "a sealed playbook's canonical form will not encode for its fingerprint: {error}"
+        Error::internal(said!(
+            "a sealed playbook's canonical form will not encode for its fingerprint: {}",
+            crate::error::engine(&error)
         ))
     })
 }
@@ -4060,28 +4099,30 @@ fn fingerprint_of(
 /// is compiled. The refusals keep their codes and their words.
 fn restore_seal(held: &SavedSeat, seal: &SavedSeal, rules: &RulesTable) -> Result<Sealed, Error> {
     let damaged = |error: Error| {
-        Error::invalid(format!(
+        Error::invalid(said!(
             "seat {}'s sealed playbook in this save has no canonical form ({}): the file is \
              damaged",
-            held.seat, error.message
+            held.seat,
+            error.said()
         ))
     };
     let canonical = sealed_canonical(&seal.playbook_jsonc).map_err(damaged)?;
     let fingerprint = fingerprint_of(&canonical).map_err(damaged)?;
     if fingerprint != seal.plan_fingerprint {
-        return Err(Error::invalid(format!(
+        return Err(Error::invalid(said!(
             "seat {}'s sealed playbook in this save does not match the plan fingerprint saved \
              beside it ({} against {}): the file is damaged, or this build writes a different \
              canonical form than the one that saved it",
             held.seat,
-            pharmakos_sim::hex(fingerprint),
-            pharmakos_sim::hex(seal.plan_fingerprint)
+            pharmakos_proto::json::grammar::quoted(&pharmakos_sim::hex(fingerprint)),
+            pharmakos_proto::json::grammar::quoted(&pharmakos_sim::hex(seal.plan_fingerprint))
         )));
     }
     let plan = crate::surface::planning::compile_canonical(&canonical, rules).map_err(|error| {
-        Error::invalid(format!(
+        Error::invalid(said!(
             "seat {}'s sealed playbook in this save will not compile in this build: {}",
-            held.seat, error.message
+            held.seat,
+            error.said()
         ))
     })?;
     Ok(Sealed {
@@ -4140,8 +4181,12 @@ impl SurfaceTick<'_> {
         let Some(mut tick) = self.surface.host_mut()?.phased_tick()? else {
             return Err(Error::internal("no tick is open to run a phase of"));
         };
-        tick.run_next_phase()
-            .map_err(|refused| Error::internal(format!("the phase would not run: {refused}")))
+        tick.run_next_phase().map_err(|refused| {
+            Error::internal(said!(
+                "the phase would not run: {}",
+                crate::error::engine(&refused)
+            ))
+        })
     }
 
     /// Run whatever phases are left and close the tick, with the bookkeeping
@@ -4155,8 +4200,12 @@ impl SurfaceTick<'_> {
             let Some(tick) = self.surface.host_mut()?.phased_tick()? else {
                 return Err(Error::internal("no tick is open to finish"));
             };
-            tick.finish()
-                .map_err(|refused| Error::internal(format!("the tick would not end: {refused}")))?
+            tick.finish().map_err(|refused| {
+                Error::internal(said!(
+                    "the tick would not end: {}",
+                    crate::error::engine(&refused)
+                ))
+            })?
         };
         self.surface.after_tick(Some(report))
     }
@@ -6325,7 +6374,7 @@ mod tests {
         ] {
             match surface.seal_commitment(SeatId::new(0), &many_scouts(scouts)) {
                 Err(super::knowledge::Unpriced::Playbook(why)) => {
-                    assert!(why.contains(says), "{scouts} scouts: {why}");
+                    assert!(why.as_str().contains(says), "{scouts} scouts: {why}");
                 }
                 Err(super::knowledge::Unpriced::Gateway(error)) => {
                     panic!("{scouts} scouts: the door blamed itself: {error:?}")

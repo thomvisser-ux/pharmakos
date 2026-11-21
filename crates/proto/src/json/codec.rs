@@ -95,13 +95,13 @@ use crate::wire::{
 // Deeper than any message in either package, and shallow enough that a
 // hostile document cannot exhaust the stack: the grammar's one limit
 // ([`super::grammar::MAX_DEPTH`]), a message nesting counted as a value does.
-use super::grammar::{may_nest, quoted};
+use super::grammar::{Said, may_nest, quoted};
 
 fn unknown_message(full_name: &str) -> Error {
     Error::at(
         ErrorKind::Schema,
         "",
-        format!("`{full_name}` is not a message in the schema"),
+        crate::said!("`{}` is not a message in the schema", quoted(full_name)),
     )
 }
 
@@ -252,10 +252,11 @@ fn check_omit(index: &Index, at: usize, full_name: &str, omit: &[&str]) -> Resul
         Error::at(
             ErrorKind::Schema,
             "",
-            format!(
-                "`{}` is not a path of singular fields of `{full_name}` by their `.proto` names, \
-                 so there is no field to leave out",
-                omit.join(".")
+            crate::said!(
+                "`{}` is not a path of singular fields of `{}` by their `.proto` names, so there \
+                 is no field to leave out",
+                quoted(&omit.join(".")),
+                quoted(full_name)
             ),
         )
     };
@@ -322,9 +323,10 @@ impl<'b> Decoder<'b> {
                 Error::at(
                     ErrorKind::Wire,
                     &path.render(),
-                    format!(
-                        "`{}` is not a valid encoding: {error:?}",
-                        message.message.full_name
+                    crate::said!(
+                        "`{}` is not a valid encoding: {}",
+                        message.message.full_name.as_str(),
+                        error.name()
                     ),
                 )
             })?;
@@ -597,9 +599,10 @@ fn declared<'m>(
         Error::at(
             ErrorKind::Wire,
             &path.render(),
-            format!(
-                "field number {number} is not declared on `{}`",
-                message.message.full_name
+            crate::said!(
+                "field number {} is not declared on `{}`",
+                number,
+                message.message.full_name.as_str()
             ),
         )
     })
@@ -644,11 +647,11 @@ fn unpack<'b>(
     };
     let mut reader = Reader::new(payload);
     while !reader.is_done() {
-        let fail = |error| {
+        let fail = |error: crate::wire::WireError| {
             Error::at(
                 ErrorKind::Wire,
                 &path.render(),
-                format!("a packed repeated field: {error:?}"),
+                crate::said!("a packed repeated field: {}", error.name()),
             )
         };
         let element = match kind {
@@ -691,28 +694,40 @@ fn scalar_of<'b>(
     value: Value<'b>,
     path: &Path<'_>,
 ) -> Result<Scalar<'b>, Error> {
-    let at = |kind: ErrorKind, message: &str| Error::at(kind, &path.render(), message);
+    let at = |kind: ErrorKind, message: Said| Error::at(kind, &path.render(), message);
     match field.field.kind {
         ScalarKind::Double | ScalarKind::Float => Err(at(
             ErrorKind::Value,
-            "a floating-point field: the sim is integer-only and this codec refuses one",
+            "a floating-point field: the sim is integer-only and this codec refuses one".into(),
         )),
         ScalarKind::Bool => Ok(Scalar::Bool(varint(value, path)? != 0)),
         ScalarKind::Int32 => {
             let wide = u64_bits_to_i64(varint(value, path)?);
-            let narrow = i32::try_from(wide)
-                .map_err(|_| at(ErrorKind::Wire, "an int32 field carrying a wider value"))?;
+            let narrow = i32::try_from(wide).map_err(|_| {
+                at(
+                    ErrorKind::Wire,
+                    "an int32 field carrying a wider value".into(),
+                )
+            })?;
             Ok(Scalar::Signed(i64::from(narrow)))
         }
         ScalarKind::Sint32 => {
             let wide = zigzag_decode(varint(value, path)?);
-            let narrow = i32::try_from(wide)
-                .map_err(|_| at(ErrorKind::Wire, "an sint32 field carrying a wider value"))?;
+            let narrow = i32::try_from(wide).map_err(|_| {
+                at(
+                    ErrorKind::Wire,
+                    "an sint32 field carrying a wider value".into(),
+                )
+            })?;
             Ok(Scalar::Signed(i64::from(narrow)))
         }
         ScalarKind::Uint32 => {
-            let narrow = u32::try_from(varint(value, path)?)
-                .map_err(|_| at(ErrorKind::Wire, "a uint32 field carrying a wider value"))?;
+            let narrow = u32::try_from(varint(value, path)?).map_err(|_| {
+                at(
+                    ErrorKind::Wire,
+                    "a uint32 field carrying a wider value".into(),
+                )
+            })?;
             Ok(Scalar::Signed(i64::from(narrow)))
         }
         ScalarKind::Fixed32 => Ok(Scalar::Unsigned(u64::from(fixed32(value, path)?))),
@@ -734,18 +749,22 @@ fn scalar_of<'b>(
         }
         ScalarKind::String => {
             let payload = delimited(value, path)?;
-            let text = std::str::from_utf8(payload)
-                .map_err(|_| at(ErrorKind::Wire, "a string field that is not valid UTF-8"))?;
+            let text = std::str::from_utf8(payload).map_err(|_| {
+                at(
+                    ErrorKind::Wire,
+                    "a string field that is not valid UTF-8".into(),
+                )
+            })?;
             Ok(Scalar::Text(text))
         }
         ScalarKind::Bytes => Ok(Scalar::Bytes(delimited(value, path)?)),
         ScalarKind::Enum => {
             let number = i32::try_from(u64_bits_to_i64(varint(value, path)?))
-                .map_err(|_| at(ErrorKind::Wire, "an enum value out of range"))?;
+                .map_err(|_| at(ErrorKind::Wire, "an enum value out of range".into()))?;
             let declared = field.enumeration.ok_or_else(|| {
                 at(
                     ErrorKind::Schema,
-                    &format!("`{}` is not in the schema", field.field.type_name),
+                    crate::said!("`{}` is not in the schema", field.field.type_name.as_str()),
                 )
             })?;
             Ok(declared.value_by_number(number).map_or_else(
@@ -760,7 +779,7 @@ fn scalar_of<'b>(
             let nested = field.nested.ok_or_else(|| {
                 at(
                     ErrorKind::Schema,
-                    &format!("`{}` is not in the schema", field.field.type_name),
+                    crate::said!("`{}` is not in the schema", field.field.type_name.as_str()),
                 )
             })?;
             Ok(Scalar::Message(nested, delimited(value, path)?))
@@ -850,12 +869,12 @@ impl<'j> Encoder<'j> {
             return Err(Error::at(
                 ErrorKind::BothNames,
                 &Path::Key(path, key).render(),
-                format!(
+                crate::said!(
                     "`{}` and `{}` both name the field `{}`. A field is written once, \
                      under one of its names.",
                     quoted(first),
                     quoted(key),
-                    field.field.name
+                    field.field.name.as_str()
                 ),
             ));
         }
@@ -888,9 +907,9 @@ impl<'j> Encoder<'j> {
             return Err(Error::at(
                 ErrorKind::Value,
                 &path.render(),
-                format!(
+                crate::said!(
                     "expected an object for `{}`, found {}",
-                    message.message.full_name,
+                    message.message.full_name.as_str(),
                     value.kind()
                 ),
             ));
@@ -907,11 +926,11 @@ impl<'j> Encoder<'j> {
                 Error::at(
                     ErrorKind::UnknownField,
                     &Path::Key(path, key).render(),
-                    format!(
+                    crate::said!(
                         "`{}` is not a field of `{}`. Unknown fields are rejected, never \
                          stripped.",
                         quoted(key),
-                        message.message.full_name
+                        message.message.full_name.as_str()
                     ),
                 )
             })?;
@@ -932,7 +951,7 @@ impl<'j> Encoder<'j> {
                     return Err(Error::at(
                         ErrorKind::OneofArms,
                         &Path::Key(path, key).render(),
-                        format!(
+                        crate::said!(
                             "`{}` and `{}` are both set, but only one member of a \
                              oneof may be",
                             quoted(key),
@@ -971,7 +990,7 @@ impl<'j> Encoder<'j> {
                     return Err(Error::at(
                         ErrorKind::Value,
                         &field_path.render(),
-                        format!("expected an array, found {}", item.kind()),
+                        crate::said!("expected an array, found {}", item.kind()),
                     ));
                 };
                 for (index, element) in items.iter().enumerate() {
@@ -1021,7 +1040,7 @@ impl<'j> Encoder<'j> {
             return Err(Error::at(
                 ErrorKind::Schema,
                 &path.render(),
-                format!("`{}` is not in the schema", field.field.type_name),
+                crate::said!("`{}` is not in the schema", field.field.type_name.as_str()),
             ));
         };
         let payload = self.json_to_message(nested, value, path, depth.saturating_add(1))?;
@@ -1050,47 +1069,62 @@ impl<'j> Encoder<'j> {
         depth: usize,
         writer: &mut Writer,
     ) -> Result<(), Error> {
-        let at = |kind: ErrorKind, message: &str| Error::at(kind, &path.render(), message);
+        let at = |kind: ErrorKind, message: Said| Error::at(kind, &path.render(), message);
         let number = field.field.number;
         match field.field.kind {
             ScalarKind::Double | ScalarKind::Float => {
                 return Err(at(
                     ErrorKind::Value,
-                    "a floating-point field: the sim is integer-only and this codec refuses one",
+                    "a floating-point field: the sim is integer-only and this codec refuses one"
+                        .into(),
                 ));
             }
             ScalarKind::Bool => {
                 let Json::Bool(flag) = value else {
                     return Err(at(
                         ErrorKind::Value,
-                        &format!("expected true or false, found {}", value.kind()),
+                        crate::said!("expected true or false, found {}", value.kind()),
                     ));
                 };
                 writer.varint_field(number, u64::from(*flag));
             }
             ScalarKind::Int32 => {
-                let narrow = i32::try_from(integer(value, path)?)
-                    .map_err(|_| at(ErrorKind::Integer, "out of range for an int32 field"))?;
+                let narrow = i32::try_from(integer(value, path)?).map_err(|_| {
+                    at(ErrorKind::Integer, "out of range for an int32 field".into())
+                })?;
                 writer.varint_field(number, i64_bits_to_u64(i64::from(narrow)));
             }
             ScalarKind::Sint32 => {
-                let narrow = i32::try_from(integer(value, path)?)
-                    .map_err(|_| at(ErrorKind::Integer, "out of range for an sint32 field"))?;
+                let narrow = i32::try_from(integer(value, path)?).map_err(|_| {
+                    at(
+                        ErrorKind::Integer,
+                        "out of range for an sint32 field".into(),
+                    )
+                })?;
                 writer.varint_field(number, zigzag_encode(i64::from(narrow)));
             }
             ScalarKind::Uint32 => {
-                let narrow = u32::try_from(unsigned(value, path)?)
-                    .map_err(|_| at(ErrorKind::Integer, "out of range for a uint32 field"))?;
+                let narrow = u32::try_from(unsigned(value, path)?).map_err(|_| {
+                    at(ErrorKind::Integer, "out of range for a uint32 field".into())
+                })?;
                 writer.varint_field(number, u64::from(narrow));
             }
             ScalarKind::Fixed32 => {
-                let narrow = u32::try_from(unsigned(value, path)?)
-                    .map_err(|_| at(ErrorKind::Integer, "out of range for a fixed32 field"))?;
+                let narrow = u32::try_from(unsigned(value, path)?).map_err(|_| {
+                    at(
+                        ErrorKind::Integer,
+                        "out of range for a fixed32 field".into(),
+                    )
+                })?;
                 writer.fixed32_field(number, narrow);
             }
             ScalarKind::Sfixed32 => {
-                let narrow = i32::try_from(integer(value, path)?)
-                    .map_err(|_| at(ErrorKind::Integer, "out of range for an sfixed32 field"))?;
+                let narrow = i32::try_from(integer(value, path)?).map_err(|_| {
+                    at(
+                        ErrorKind::Integer,
+                        "out of range for an sfixed32 field".into(),
+                    )
+                })?;
                 writer.fixed32_field(number, u32::from_ne_bytes(narrow.to_ne_bytes()));
             }
             ScalarKind::Int64 => {
@@ -1117,31 +1151,39 @@ impl<'j> Encoder<'j> {
                 let Json::String(text) = value else {
                     return Err(at(
                         ErrorKind::Value,
-                        &format!("expected a string, found {}", value.kind()),
+                        crate::said!("expected a string, found {}", value.kind()),
                     ));
                 };
                 writer
                     .delimited_field(number, text.as_bytes())
-                    .map_err(|_| at(ErrorKind::Value, "a string too long for its length prefix"))?;
+                    .map_err(|_| {
+                        at(
+                            ErrorKind::Value,
+                            "a string too long for its length prefix".into(),
+                        )
+                    })?;
             }
             ScalarKind::Bytes => {
                 let Json::String(text) = value else {
                     return Err(at(
                         ErrorKind::Value,
-                        &format!("expected base64 in a string, found {}", value.kind()),
+                        crate::said!("expected base64 in a string, found {}", value.kind()),
                     ));
                 };
                 let bytes = base64::decode(text)
-                    .ok_or_else(|| at(ErrorKind::Base64, "not valid base64"))?;
-                writer
-                    .delimited_field(number, &bytes)
-                    .map_err(|_| at(ErrorKind::Value, "bytes too long for their length prefix"))?;
+                    .ok_or_else(|| at(ErrorKind::Base64, "not valid base64".into()))?;
+                writer.delimited_field(number, &bytes).map_err(|_| {
+                    at(
+                        ErrorKind::Value,
+                        "bytes too long for their length prefix".into(),
+                    )
+                })?;
             }
             ScalarKind::Enum => {
                 let declared = field.enumeration.ok_or_else(|| {
                     at(
                         ErrorKind::Schema,
-                        &format!("`{}` is not in the schema", field.field.type_name),
+                        crate::said!("`{}` is not in the schema", field.field.type_name.as_str()),
                     )
                 })?;
                 let found = match value {
@@ -1151,21 +1193,21 @@ impl<'j> Encoder<'j> {
                             .ok_or_else(|| {
                                 at(
                                     ErrorKind::Value,
-                                    &format!(
+                                    crate::said!(
                                         "`{}` is not a value of `{}`",
                                         quoted(name),
-                                        field.field.type_name
+                                        field.field.type_name.as_str()
                                     ),
                                 )
                             })?
                             .number
                     }
                     Json::Number(_) => i32::try_from(integer(value, path)?)
-                        .map_err(|_| at(ErrorKind::Integer, "an enum value out of range"))?,
+                        .map_err(|_| at(ErrorKind::Integer, "an enum value out of range".into()))?,
                     other => {
                         return Err(at(
                             ErrorKind::Value,
-                            &format!("expected an enum value name, found {}", other.kind()),
+                            crate::said!("expected an enum value name, found {}", other.kind()),
                         ));
                     }
                 };
@@ -1286,9 +1328,9 @@ fn is_zero(lexeme: &str) -> bool {
 
 /// Why `lexeme` is not the integer a field asked for: digits RFC 8259 does
 /// not write as an integer, or `otherwise`.
-fn integer_refusal(lexeme: &str, otherwise: &str, signed: bool) -> String {
+fn integer_refusal(lexeme: &str, otherwise: &'static str, signed: bool) -> Said {
     if is_misspelt_integer(lexeme) {
-        format!(
+        crate::said!(
             "`{}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
              leading zero",
             quoted(lexeme)
@@ -1296,9 +1338,9 @@ fn integer_refusal(lexeme: &str, otherwise: &str, signed: bool) -> String {
     } else if is_integer_lexeme(lexeme) && (signed || !lexeme.starts_with('-')) {
         // A whole number too large for the field's 64 bits (the review of
         // PR #179): out of range, not a fraction.
-        format!("`{}` is out of range for a 64-bit integer", quoted(lexeme))
+        crate::said!("`{}` is out of range for a 64-bit integer", quoted(lexeme))
     } else {
-        format!("`{}` {otherwise}", quoted(lexeme))
+        crate::said!("`{}` {}", quoted(lexeme), otherwise)
     }
 }
 
@@ -1312,7 +1354,7 @@ fn integer(value: &Json, path: &Path<'_>) -> Result<i64, Error> {
             return Err(Error::at(
                 ErrorKind::Integer,
                 &path.render(),
-                format!("expected an integer, found {}", other.kind()),
+                crate::said!("expected an integer, found {}", other.kind()),
             ));
         }
     };
@@ -1340,7 +1382,7 @@ fn unsigned(value: &Json, path: &Path<'_>) -> Result<u64, Error> {
             return Err(Error::at(
                 ErrorKind::Integer,
                 &path.render(),
-                format!("expected a non-negative integer, found {}", other.kind()),
+                crate::said!("expected a non-negative integer, found {}", other.kind()),
             ));
         }
     };

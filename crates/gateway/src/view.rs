@@ -21,6 +21,7 @@
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind as WireMandate;
+use pharmakos_proto::said;
 use pharmakos_sim::knowledge::Position;
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::{Hp, Money};
@@ -60,9 +61,10 @@ pub fn voxel_of(at: [Fx; 3]) -> Voxel {
 pub fn hp_wire(hp: Hp) -> Result<u32, Error> {
     let raw = hp.raw();
     u32::try_from(raw).map_err(|_| {
-        Error::internal(format!(
-            "the sim holds {raw} hit points, below the zero it clamps at, so the wire's whole HP \
-             cannot carry them"
+        Error::internal(said!(
+            "the sim holds {} hit points, below the zero it clamps at, so the wire's whole HP \
+             cannot carry them",
+            raw
         ))
     })
 }
@@ -78,8 +80,10 @@ pub fn hp_wire(hp: Hp) -> Result<u32, Error> {
 pub fn dollars_wire(money: Money, what: &str) -> Result<i32, Error> {
     let raw = money.raw();
     i32::try_from(raw).map_err(|_| {
-        Error::internal(format!(
-            "{what} is $ {raw}, which does not fit the wire's int32 dollars"
+        Error::internal(said!(
+            "{} is $ {}, which does not fit the wire's int32 dollars",
+            pharmakos_proto::json::grammar::quoted(what),
+            raw
         ))
     })
 }
@@ -137,8 +141,9 @@ pub const fn mandate_name(mandate: MandateKind) -> &'static str {
 /// silent default (E22).
 pub fn mandate_from_id(id: u8) -> Result<MandateKind, Error> {
     MandateKind::from_id(id).ok_or_else(|| {
-        Error::internal(format!(
-            "a beacon's mandate column holds {id}, which the sim does not define"
+        Error::internal(said!(
+            "a beacon's mandate column holds {}, which the sim does not define",
+            id
         ))
     })
 }

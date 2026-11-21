@@ -48,6 +48,8 @@
 //! of what it can see.
 
 use core::num::{NonZeroU32, NonZeroUsize};
+use pharmakos_proto::json::grammar::Said;
+use pharmakos_proto::said;
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
@@ -289,7 +291,7 @@ impl Surface {
         let _ = detail::of(request)?;
         let host = self.host()?;
         if let Some(lost) = self.recap_loss() {
-            return Err(Error::internal(format!(
+            return Err(Error::internal(said!(
                 "the sim's event bus dropped {} events at the last segment end, its \
                  `segment_ended` among them, so there is no record of that round to recap",
                 lost.dropped
@@ -428,8 +430,9 @@ impl Surface {
                     crate::feed::Cursor::parse(text, snapshot, crate::feed::Listing::Beacons)?
                         .index();
                 usize::try_from(index).map_err(|_| {
-                    Error::invalid(format!(
-                        "this cursor points at beacon {index}, past any listing"
+                    Error::invalid(said!(
+                        "this cursor points at beacon {}, past any listing",
+                        index
                     ))
                 })?
             }
@@ -450,7 +453,7 @@ impl Surface {
             String::new()
         } else {
             let at = u32::try_from(index).map_err(|_| {
-                Error::internal(format!("a beacon listing of {index} does not fit a cursor"))
+                Error::internal(said!("a beacon listing of {} does not fit a cursor", index))
             })?;
             crate::feed::Cursor::at(snapshot, crate::feed::Listing::Beacons, at).render()
         };
@@ -496,14 +499,22 @@ impl Surface {
             .string_param("beacon_id")?
             .ok_or_else(|| Error::invalid("`beacon_id` names a beacon, as in `b_04`"))?;
         let Some(name) = pharmakos_sim::tables::parse_beacon_name(wanted) else {
-            return Err(Error::not_found(format!("`{wanted}` is not a beacon id")));
+            return Err(Error::not_found(said!(
+                "`{}` is not a beacon id",
+                pharmakos_proto::json::grammar::quoted(wanted)
+            )));
         };
         let viewer = self.viewer_of(subject, held);
         // NOT_FOUND, deliberately, and the same refusal for every way a name
         // can name nothing: "a named beacon does not exist, or is not yours"
         // is one answer in the closed set, and two answers would let a seat
         // map the enemy's beacons by asking for every id.
-        let absent = || Error::not_found(format!("no beacon `{wanted}` here"));
+        let absent = || {
+            Error::not_found(said!(
+                "no beacon `{}` here",
+                pharmakos_proto::json::grammar::quoted(wanted)
+            ))
+        };
         let id = match name {
             pharmakos_sim::tables::BeaconName::Own(_) => {
                 let world = self.host()?.world();
@@ -512,7 +523,7 @@ impl Surface {
                     .beacon_row(viewer, world, wanted)
                     .ok_or_else(absent)?;
                 world.beacons().ids().get(row).copied().ok_or_else(|| {
-                    Error::internal(format!("the beacon table has no id in row {row}"))
+                    Error::internal(said!("the beacon table has no id in row {}", row))
                 })?
             }
             // By the handle's canonical spelling, so `e_7` and `e_07` name
@@ -535,7 +546,7 @@ impl Surface {
                         .get(row)
                         .copied()
                         .ok_or_else(|| {
-                            Error::internal(format!("the beacon table has no mandate in row {row}"))
+                            Error::internal(said!("the beacon table has no mandate in row {}", row))
                         })?,
                 )?;
                 detail = beacon_detail(world, row, mandate)?;
@@ -766,8 +777,9 @@ impl Surface {
         let host = self.host()?;
         if let Some(Json::Array(what_ifs)) = request.param("what_ifs") {
             if what_ifs.len() > budget {
-                return Err(Error::invalid(format!(
-                    "this detail budget answers {budget} what-ifs and {} were asked",
+                return Err(Error::invalid(said!(
+                    "this detail budget answers {} what-ifs and {} were asked",
+                    budget,
                     what_ifs.len()
                 )));
             }
@@ -775,9 +787,10 @@ impl Surface {
                 match what_if {
                     Json::Object(entries) if entries.is_empty() => {}
                     _ => {
-                        return Err(Error::invalid(format!(
-                            "what-if {index} names something: the what-if vocabulary is \
-                             `gp.api.v1.WhatIf`, which has no fields in this build"
+                        return Err(Error::invalid(said!(
+                            "what-if {} names something: the what-if vocabulary is \
+                             `gp.api.v1.WhatIf`, which has no fields in this build",
+                            index
                         )));
                     }
                 }
@@ -866,8 +879,9 @@ impl Surface {
         self.seal_commitment(seat, &sealed.playbook_jsonc)
             .map_err(|unpriced| match unpriced {
                 Unpriced::Gateway(error) => error,
-                Unpriced::Playbook(why) => Error::internal(format!(
-                    "a sealed playbook will not price, which its seal should have refused: {why}"
+                Unpriced::Playbook(why) => Error::internal(said!(
+                    "a sealed playbook will not price, which its seal should have refused: {}",
+                    why
                 )),
             })
     }
@@ -890,8 +904,13 @@ impl Surface {
             .seats()
             .iter()
             .position(|held| *held == seat.raw())
-            .ok_or_else(|| Error::not_found(format!("this match has no seat {}", seat.raw())))?;
-        let column = |name: &str| Error::internal(format!("the seat table has no {name} row"));
+            .ok_or_else(|| Error::not_found(said!("this match has no seat {}", seat.raw())))?;
+        let column = |name: &str| {
+            Error::internal(said!(
+                "the seat table has no {} row",
+                pharmakos_proto::json::grammar::quoted(name)
+            ))
+        };
         Ok(pharmakos_sim::knowledge::SeatEconomy {
             treasury: seats
                 .treasuries()
@@ -940,9 +959,9 @@ impl Surface {
         playbook_jsonc: &str,
     ) -> Result<i32, Unpriced> {
         let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
-            Unpriced::Gateway(Error::internal(format!(
+            Unpriced::Gateway(Error::internal(said!(
                 "a playbook the verifier read has no canonical form: {}",
-                error.message
+                error.said()
             )))
         })?;
         self.seal_commitment_of(seat, canonical.decoded().message())
@@ -963,17 +982,18 @@ impl Surface {
         let economy = self.seat_economy(seat).map_err(Unpriced::Gateway)?;
         let rules = self.host().map_err(Unpriced::Gateway)?.rules();
         let prices = pharmakos_verifier::projection::Prices::from_rules(rules).map_err(|gap| {
-            Unpriced::Gateway(Error::internal(format!(
-                "the rules table does not price: {gap}"
+            Unpriced::Gateway(Error::internal(said!(
+                "the rules table does not price: {}",
+                pharmakos_proto::json::grammar::Said::engine_error(&gap)
             )))
         })?;
         let projection = pharmakos_verifier::projection::project(playbook, economy, &prices)
-            .map_err(|why| Unpriced::Playbook(why.to_string()))?;
+            .map_err(|why| Unpriced::Playbook(pharmakos_plan_core::Error::from(why).said()))?;
         let spend = projection.spend.raw();
         i32::try_from(spend).map_err(|_| {
-            Unpriced::Playbook(format!(
-                "it orders up to $ {spend}, past the `int32` the forecast's `committed_dollars` \
-                 carries"
+            Unpriced::Playbook(said!(
+                "it orders up to $ {}, past the `int32` the forecast's `committed_dollars` carries",
+                spend
             ))
         })
     }
@@ -1009,15 +1029,16 @@ impl Surface {
             ));
         };
         if waypoints.len() < 2 {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "a route has two or more waypoints and this has {}",
                 waypoints.len()
             )));
         }
         // Before a single search runs: see [`MAX_WAYPOINTS`].
         if waypoints.len() > MAX_WAYPOINTS {
-            return Err(Error::invalid(format!(
-                "a route names at most {MAX_WAYPOINTS} waypoints and this names {}",
+            return Err(Error::invalid(said!(
+                "a route names at most {} waypoints and this names {}",
+                MAX_WAYPOINTS,
                 waypoints.len()
             )));
         }
@@ -1036,7 +1057,10 @@ impl Surface {
         // (`crate::routes`, "A fault is raised").
         routes.take_fault()?;
         let refused = |error: pharmakos_plan_core::travel::TravelError| {
-            Error::internal(format!("the route's travel has no rendering: {error}"))
+            Error::internal(said!(
+                "the route's travel has no rendering: {}",
+                pharmakos_proto::json::grammar::Said::engine_error(&error)
+            ))
         };
         let legs: Vec<Json> = route
             .legs
@@ -1124,18 +1148,26 @@ impl Surface {
         let spec = if let Some(reference) = waypoint.get("beacon_anchor") {
             let reference: pharmakos_proto::gp::v1::BeaconRef =
                 pharmakos_proto::json::decode_json(reference).map_err(|error| {
-                    Error::invalid(format!(
-                        "{at}: `beacon_anchor` is a `gp.v1.BeaconRef`: {error}"
+                    Error::invalid(said!(
+                        "{}: `beacon_anchor` is a `gp.v1.BeaconRef`: {}",
+                        pharmakos_proto::json::grammar::quoted_pointer(&at),
+                        error.said()
                     ))
                 })?;
-            beacon_spec_of(&reference, host.rules())
-                .map_err(|error| Error::invalid(format!("{at}: {error}")))?
+            beacon_spec_of(&reference, host.rules()).map_err(|error| {
+                Error::invalid(said!(
+                    "{}: {}",
+                    pharmakos_proto::json::grammar::quoted_pointer(&at),
+                    crate::surface::planning::plan_refusal(&error)
+                ))
+            })?
         } else if waypoint.get("safest").is_some() {
             BeaconSpec::Safest
         } else {
-            return Err(Error::invalid(format!(
-                "{at} names no place: a waypoint is a `voxel`, a `beacon_anchor`, `safest` or \
-                 `covering`"
+            return Err(Error::invalid(said!(
+                "{} names no place: a waypoint is a `voxel`, a `beacon_anchor`, `safest` or \
+                 `covering`",
+                pharmakos_proto::json::grammar::quoted_pointer(&at)
             )));
         };
         let snapshot = host.runner().frozen().snapshot();
@@ -1144,16 +1176,26 @@ impl Surface {
             None => None,
         };
         let Some(beacon) = resolve_beacon_in(snapshot, host.rules(), seat, spec, origin) else {
+            let shown = pharmakos_proto::json::grammar::quoted_pointer(&at);
             return Err(Error::not_found(match spec {
-                BeaconSpec::Own(ordinal) => format!(
-                    "{at} names `{}`, which this seat has not",
-                    pharmakos_sim::tables::own_beacon_name(ordinal)
+                BeaconSpec::Own(ordinal) => said!(
+                    "{} names `{}`, which this seat has not",
+                    shown,
+                    pharmakos_proto::json::grammar::quoted(
+                        &pharmakos_sim::tables::own_beacon_name(ordinal)
+                    )
                 ),
-                BeaconSpec::Foreign(handle) => format!(
-                    "{at} names `{}`, which is not this seat's to walk to by name",
-                    pharmakos_sim::tables::foreign_beacon_name(handle)
+                BeaconSpec::Foreign(handle) => said!(
+                    "{} names `{}`, which is not this seat's to walk to by name",
+                    shown,
+                    pharmakos_proto::json::grammar::quoted(
+                        &pharmakos_sim::tables::foreign_beacon_name(handle)
+                    )
                 ),
-                _ => format!("{at} is a beacon of this seat's, and none answers its selector"),
+                _ => said!(
+                    "{} is a beacon of this seat's, and none answers its selector",
+                    shown
+                ),
             }));
         };
         // The resolved beacon's row, read through its id (S2's plan, E1): the
@@ -1167,7 +1209,12 @@ impl Surface {
                 snapshot.beacon_id.get(*row) == Some(&beacon.raw())
                     && snapshot.beacon_free.get(*row) == Some(&0)
             })
-            .ok_or_else(|| Error::internal(format!("{at}: the resolved beacon has no row")))?;
+            .ok_or_else(|| {
+                Error::internal(said!(
+                    "{}: the resolved beacon has no row",
+                    pharmakos_proto::json::grammar::quoted_pointer(&at)
+                ))
+            })?;
         let axis = |offset: usize| {
             row.checked_mul(3)
                 .and_then(|base| base.checked_add(offset))
@@ -1176,8 +1223,9 @@ impl Surface {
         };
         match (axis(0), axis(1), axis(2)) {
             (Some(x), Some(y), Some(z)) => Ok(view::voxel_of([x, y, z])),
-            _ => Err(Error::internal(format!(
-                "{at}: the resolved beacon has no anchor"
+            _ => Err(Error::internal(said!(
+                "{}: the resolved beacon has no anchor",
+                pharmakos_proto::json::grammar::quoted_pointer(&at)
             ))),
         }
     }
@@ -1202,23 +1250,34 @@ impl Surface {
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
         if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
-            return Err(Error::phase_closed(format!(
-                "{at} is a `covering`, which is read off the frozen world, and in a Push the \
-                 world has moved on from it: ask outside a Push"
+            return Err(Error::phase_closed(said!(
+                "{} is a `covering`, which is read off the frozen world, and in a Push the \
+                 world has moved on from it: ask outside a Push",
+                pharmakos_proto::json::grammar::quoted_pointer(at)
             )));
         }
         let reference: pharmakos_proto::gp::v1::FeatureRef =
             pharmakos_proto::json::decode_json(reference).map_err(|error| {
-                Error::invalid(format!("{at}: `covering` is a `gp.v1.FeatureRef`: {error}"))
+                Error::invalid(said!(
+                    "{}: `covering` is a `gp.v1.FeatureRef`: {}",
+                    pharmakos_proto::json::grammar::quoted_pointer(at),
+                    error.said()
+                ))
             })?;
-        let spec = crate::targeting::spec_of(&reference, Site::Covering)
-            .map_err(|why| Error::invalid(format!("{at}: {why}")))?;
+        let spec = crate::targeting::spec_of(&reference, Site::Covering).map_err(|why| {
+            Error::invalid(said!(
+                "{}: {}",
+                pharmakos_proto::json::grammar::quoted_pointer(at),
+                why
+            ))
+        })?;
         let world = self.host()?.world();
         let origin = match from {
             Some(voxel) => fx_point(voxel, at)?,
             None => crate::targeting::commander_point(world, seat).ok_or_else(|| {
-                Error::not_found(format!(
-                    "{at} covers from where the commander stands, and it is standing nowhere"
+                Error::not_found(said!(
+                    "{} covers from where the commander stands, and it is standing nowhere",
+                    pharmakos_proto::json::grammar::quoted_pointer(at)
                 ))
             })?,
         };
@@ -1230,16 +1289,20 @@ impl Surface {
         };
         let found = pharmakos_sim::targeting::cover(&ground, scratch, seat, origin, spec).map_err(
             |failure| {
-                Error::not_found(format!(
-                    "{at} covers nothing: its step would fail `{}`",
-                    failure.name()
+                Error::not_found(said!(
+                    "{} covers nothing: its step would fail `{}`",
+                    pharmakos_proto::json::grammar::quoted_pointer(at),
+                    pharmakos_proto::json::grammar::quoted(failure.name())
                 ))
             },
         )?;
         let [x, y] = found.site;
-        let point = ground
-            .standing(x, y)
-            .ok_or_else(|| Error::internal(format!("{at}: the sim chose a site off the map")))?;
+        let point = ground.standing(x, y).ok_or_else(|| {
+            Error::internal(said!(
+                "{}: the sim chose a site off the map",
+                pharmakos_proto::json::grammar::quoted_pointer(at)
+            ))
+        })?;
         Ok(view::voxel_of(point))
     }
 
@@ -1258,27 +1321,40 @@ impl Surface {
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
         if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
-            return Err(Error::phase_closed(format!(
-                "{at} is a `toward`, which is read off the frozen world, and in a Push the \
-                 world has moved on from it: ask outside a Push"
+            return Err(Error::phase_closed(said!(
+                "{} is a `toward`, which is read off the frozen world, and in a Push the \
+                 world has moved on from it: ask outside a Push",
+                pharmakos_proto::json::grammar::quoted_pointer(at)
             )));
         }
         let toward: pharmakos_proto::gp::v1::Toward = pharmakos_proto::json::decode_json(toward)
             .map_err(|error| {
-                Error::invalid(format!("{at}: `toward` is a `gp.v1.Toward`: {error}"))
+                Error::invalid(said!(
+                    "{}: `toward` is a `gp.v1.Toward`: {}",
+                    pharmakos_proto::json::grammar::quoted_pointer(at),
+                    error.said()
+                ))
             })?;
-        let reference = toward
-            .feature
-            .as_ref()
-            .ok_or_else(|| Error::invalid(format!("{at}: `toward` names its `feature`")))?;
-        let spec = crate::targeting::spec_of(reference, Site::Toward)
-            .map_err(|why| Error::invalid(format!("{at}: {why}")))?;
+        let reference = toward.feature.as_ref().ok_or_else(|| {
+            Error::invalid(said!(
+                "{}: `toward` names its `feature`",
+                pharmakos_proto::json::grammar::quoted_pointer(at)
+            ))
+        })?;
+        let spec = crate::targeting::spec_of(reference, Site::Toward).map_err(|why| {
+            Error::invalid(said!(
+                "{}: {}",
+                pharmakos_proto::json::grammar::quoted_pointer(at),
+                why
+            ))
+        })?;
         let world = self.host()?.world();
         let origin = match from {
             Some(voxel) => fx_point(voxel, at)?,
             None => crate::targeting::commander_point(world, seat).ok_or_else(|| {
-                Error::not_found(format!(
-                    "{at} steps from where the commander stands, and it is standing nowhere"
+                Error::not_found(said!(
+                    "{} steps from where the commander stands, and it is standing nowhere",
+                    pharmakos_proto::json::grammar::quoted_pointer(at)
                 ))
             })?,
         };
@@ -1298,15 +1374,19 @@ impl Surface {
             spec,
         )
         .map_err(|failed| {
-            Error::not_found(format!(
-                "{at} finds no stepping stone: its step would fail `{}`",
-                failed.reason.name()
+            Error::not_found(said!(
+                "{} finds no stepping stone: its step would fail `{}`",
+                pharmakos_proto::json::grammar::quoted_pointer(at),
+                pharmakos_proto::json::grammar::quoted(failed.reason.name())
             ))
         })?;
         let [x, y] = found.site;
-        let point = ground
-            .standing(x, y)
-            .ok_or_else(|| Error::internal(format!("{at}: the sim chose a site off the map")))?;
+        let point = ground.standing(x, y).ok_or_else(|| {
+            Error::internal(said!(
+                "{}: the sim chose a site off the map",
+                pharmakos_proto::json::grammar::quoted_pointer(at)
+            ))
+        })?;
         Ok(view::voxel_of(point))
     }
 
@@ -1392,9 +1472,10 @@ impl Surface {
         let vision = crate::host::LiveVision::of(world);
         let handle = |id: u32| {
             self.views.foreign_beacon_handle(viewer, id).ok_or_else(|| {
-                Error::internal(format!(
-                    "seat {} sights beacon {id} and holds no handle for it",
-                    seat.raw()
+                Error::internal(said!(
+                    "seat {} sights beacon {} and holds no handle for it",
+                    seat.raw(),
+                    id
                 ))
             })
         };
@@ -1461,8 +1542,13 @@ impl Surface {
         let filter = FogFilter::new(&self.fog, vision);
         let units = world.units();
         for row in 0..units.ids().len() {
-            let missing =
-                |name: &str| Error::internal(format!("the unit table has no {name} in row {row}"));
+            let missing = |name: &str| {
+                Error::internal(said!(
+                    "the unit table has no {} in row {}",
+                    pharmakos_proto::json::grammar::quoted(name),
+                    row
+                ))
+            };
             if units
                 .frees()
                 .get(row)
@@ -1574,7 +1660,11 @@ impl Surface {
                 let world = self.host()?.world();
                 let beacons = world.beacons();
                 let missing = |name: &str| {
-                    Error::internal(format!("the beacon table has no {name} in row {row}"))
+                    Error::internal(said!(
+                        "the beacon table has no {} in row {}",
+                        pharmakos_proto::json::grammar::quoted(name),
+                        row
+                    ))
                 };
                 let core = core_beacon_of(world, known.owner) == Some(known.id);
                 let priority = beacons
@@ -1601,9 +1691,10 @@ impl Surface {
                 let radius =
                     world.sphere_radius_voxels_of(pharmakos_sim::tables::BeaconId::new(known.id));
                 let radius = u32::try_from(radius).map_err(|_| {
-                    Error::internal(format!(
-                        "the sim sized {}'s sphere at {radius} voxels, which is no radius",
-                        known.name
+                    Error::internal(said!(
+                        "the sim sized {}'s sphere at {} voxels, which is no radius",
+                        pharmakos_proto::json::grammar::quoted(&known.name),
+                        radius
                     ))
                 })?;
                 entries.push((
@@ -1620,8 +1711,9 @@ impl Surface {
             }
             Seen::Remembered { age_ms } => {
                 let age = i32::try_from(age_ms).map_err(|_| {
-                    Error::internal(format!(
-                        "a sighting {age_ms} ms old does not fit the wire's int32 age"
+                    Error::internal(said!(
+                        "a sighting {} ms old does not fit the wire's int32 age",
+                        age_ms
                     ))
                 })?;
                 entries.push((
@@ -1648,7 +1740,7 @@ impl Surface {
             .get(row)
             .copied()
             .ok_or_else(|| {
-                Error::internal(format!("the beacon table has no hit points in row {row}"))
+                Error::internal(said!("the beacon table has no hit points in row {}", row))
             })?;
         let max = world.beacon_max_hp(pharmakos_sim::tables::BeaconId::new(id));
         Ok((view::hp_wire(hp)?, view::hp_wire(max)?))
@@ -1737,8 +1829,9 @@ impl Surface {
                 | pharmakos_sim::tables::BeaconName::Foreign(number),
             ) = pharmakos_sim::tables::parse_beacon_name(&name)
             else {
-                return Err(Error::internal(format!(
-                    "the view feed minted `{name}`, which is no beacon name"
+                return Err(Error::internal(said!(
+                    "the view feed minted `{}`, which is no beacon name",
+                    pharmakos_proto::json::grammar::quoted(&name)
                 )));
             };
             named.push((
@@ -1842,8 +1935,13 @@ impl Surface {
         let beacons = self.host()?.world().beacons();
         // A freed row is no beacon at all (S2's plan, E1): listed, it would
         // be a phantom beacon of the no-seat value's.
-        let missing =
-            |name: &str| Error::internal(format!("the beacon table has no {name} in row {row}"));
+        let missing = |name: &str| {
+            Error::internal(said!(
+                "the beacon table has no {} in row {}",
+                pharmakos_proto::json::grammar::quoted(name),
+                row
+            ))
+        };
         if beacons
             .frees()
             .get(row)
@@ -1942,7 +2040,13 @@ fn row_key(id: u32) -> Result<usize, Error> {
     pharmakos_sim::tables::BeaconId::new(id)
         .row()
         .map(pharmakos_sim::ids::Row::index)
-        .map_err(|error| Error::internal(format!("a sighted beacon's id {id} has no row: {error}")))
+        .map_err(|error| {
+            Error::internal(said!(
+                "a sighted beacon's id {} has no row: {}",
+                id,
+                crate::error::engine(&error)
+            ))
+        })
 }
 
 /// The hosted match, borrowed through the field alone, so the view feed can be
@@ -1989,7 +2093,7 @@ pub(crate) fn remembered_beacons(
 /// together, so they disagreeing is the sim and the gateway disagreeing.
 pub(crate) fn beacon_of(sighting: &Remembered) -> Result<u32, Error> {
     if sighting.asset.tag() != pharmakos_sim::knowledge::AssetId::TAG_BEACON {
-        return Err(Error::internal(format!(
+        return Err(Error::internal(said!(
             "a sighting of a beacon names asset {}, which is tagged as another kind's",
             sighting.asset.raw()
         )));
@@ -2032,8 +2136,10 @@ pub(crate) fn sightings_of(
     let now = world.tick().raw();
     let rows = table.seats().len();
     let short = |name: &str| {
-        Error::internal(format!(
-            "the sighting table holds {rows} seats and fewer {name}"
+        Error::internal(said!(
+            "the sighting table holds {} seats and fewer {}",
+            rows,
+            pharmakos_proto::json::grammar::quoted(name)
         ))
     };
     let mut out: Vec<Remembered> = Vec::new();
@@ -2052,8 +2158,9 @@ pub(crate) fn sightings_of(
             .copied()
             .ok_or_else(|| short("kinds"))?;
         let kind = pharmakos_sim::knowledge::AssetKind::from_id(raw_kind).ok_or_else(|| {
-            Error::internal(format!(
-                "a sighting holds kind {raw_kind}, which this build does not name"
+            Error::internal(said!(
+                "a sighting holds kind {}, which this build does not name",
+                raw_kind
             ))
         })?;
         let owner = table
@@ -2092,15 +2199,18 @@ pub(crate) fn sightings_of(
 /// no match of this project's lengths reaches; neither is clamped.
 pub(crate) fn age_ms(now: u32, seen_at: u32) -> Result<u32, Error> {
     let ticks = now.checked_sub(seen_at).ok_or_else(|| {
-        Error::internal(format!(
-            "a sighting was taken at tick {seen_at}, after the world's tick {now}"
+        Error::internal(said!(
+            "a sighting was taken at tick {}, after the world's tick {}",
+            seen_at,
+            now
         ))
     })?;
     let per_tick = u32::try_from(pharmakos_sim::math::quantity::MS_PER_TICK)
         .map_err(|_| Error::internal("the sim's tick is no whole number of milliseconds"))?;
     ticks.checked_mul(per_tick).ok_or_else(|| {
-        Error::internal(format!(
-            "a sighting {ticks} ticks old does not fit a u32 of milliseconds"
+        Error::internal(said!(
+            "a sighting {} ticks old does not fit a u32 of milliseconds",
+            ticks
         ))
     })
 }
@@ -2117,7 +2227,7 @@ pub(crate) fn limit_param(request: &Request, budget: usize) -> Result<usize, Err
         None => Ok(budget),
         Some(asked) => usize::try_from(asked)
             .map(|asked| asked.min(budget))
-            .map_err(|_| Error::invalid(format!("`limit` is a count, and {asked} is not one"))),
+            .map_err(|_| Error::invalid(said!("`limit` is a count, and {} is not one", asked))),
     }
 }
 /// The recap's settlement for `seat`, the seat's own, and its sentence pushed
@@ -2224,7 +2334,7 @@ fn own_tally(
         .find(|(held, _)| *held == seat)
         .map(|(_, tally)| *tally)
         .ok_or_else(|| {
-            Error::internal(format!("the recap holds no tally for seat {}", seat.raw()))
+            Error::internal(said!("the recap holds no tally for seat {}", seat.raw()))
         })?;
     let (json, destroyed) = tally_json(tally)?;
     prose.push(' ');
@@ -2279,8 +2389,13 @@ fn beacon_detail(
 ) -> Result<Vec<(String, Json)>, Error> {
     use pharmakos_sim::seams::MandateKind;
     let beacons = world.beacons();
-    let missing =
-        |name: &str| Error::internal(format!("the beacon table has no {name} in row {row}"));
+    let missing = |name: &str| {
+        Error::internal(said!(
+            "the beacon table has no {} in row {}",
+            pharmakos_proto::json::grammar::quoted(name),
+            row
+        ))
+    };
     let id = pharmakos_sim::tables::BeaconId::new(
         beacons
             .ids()
@@ -2295,7 +2410,7 @@ fn beacon_detail(
         .copied()
         .ok_or_else(|| missing("common settings"))?;
     let roe = pharmakos_sim::world::Roe::of_setting(common.roe, mandate).ok_or_else(|| {
-        Error::internal(format!(
+        Error::internal(said!(
             "the beacon table holds rules of engagement {}, which the sim does not name",
             common.roe
         ))
@@ -2355,8 +2470,12 @@ fn build_rows(
     row: usize,
     settings: &mut Settings,
 ) -> Result<(), Error> {
-    let missing =
-        |what: &str| Error::internal(format!("the beacon detail has no {what} for its beacon"));
+    let missing = |what: &str| {
+        Error::internal(said!(
+            "the beacon detail has no {} for its beacon",
+            pharmakos_proto::json::grammar::quoted(what)
+        ))
+    };
     let site = beacons
         .sites()
         .get(row)
@@ -2390,8 +2509,12 @@ fn defend_rows(
     id: pharmakos_sim::tables::BeaconId,
     settings: &mut Settings,
 ) -> Result<(), Error> {
-    let missing =
-        |what: &str| Error::internal(format!("the beacon detail has no {what} for its beacon"));
+    let missing = |what: &str| {
+        Error::internal(said!(
+            "the beacon detail has no {} for its beacon",
+            pharmakos_proto::json::grammar::quoted(what)
+        ))
+    };
     let defend = world
         .defend()
         .row_of(id)
@@ -2422,8 +2545,12 @@ fn attack_rows(
     id: pharmakos_sim::tables::BeaconId,
     settings: &mut Settings,
 ) -> Result<(), Error> {
-    let missing =
-        |what: &str| Error::internal(format!("the beacon detail has no {what} for its beacon"));
+    let missing = |what: &str| {
+        Error::internal(said!(
+            "the beacon detail has no {} for its beacon",
+            pharmakos_proto::json::grammar::quoted(what)
+        ))
+    };
     let attack = world
         .attack()
         .row_of(id)
@@ -2486,8 +2613,12 @@ fn mine_rows(
     row: usize,
     settings: &mut Settings,
 ) -> Result<(), Error> {
-    let missing =
-        |what: &str| Error::internal(format!("the beacon detail has no {what} for its beacon"));
+    let missing = |what: &str| {
+        Error::internal(said!(
+            "the beacon detail has no {} for its beacon",
+            pharmakos_proto::json::grammar::quoted(what)
+        ))
+    };
     let mine = beacons
         .mine_settings(row)
         .ok_or_else(|| missing("Mine settings"))?;
@@ -2518,8 +2649,12 @@ struct Settings {
 impl Settings {
     fn new() -> Result<Settings, Error> {
         Ok(Settings {
-            vocabulary: pharmakos_plan_core::vocabulary::vocabulary(&[])
-                .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?,
+            vocabulary: pharmakos_plan_core::vocabulary::vocabulary(&[]).map_err(|error| {
+                Error::internal(said!(
+                    "the vocabulary: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&error)
+                ))
+            })?,
             rows: Vec::new(),
         })
     }
@@ -2529,7 +2664,12 @@ impl Settings {
     fn push(&mut self, arm: &str, field: &str, value_json: String) -> Result<(), Error> {
         let parameter = if arm.is_empty() {
             pharmakos_plan_core::vocabulary::common_parameters()
-                .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?
+                .map_err(|error| {
+                    Error::internal(said!(
+                        "the vocabulary: {}",
+                        pharmakos_proto::json::grammar::Said::engine_error(&error)
+                    ))
+                })?
                 .into_iter()
                 .find(|parameter| parameter.pointer == field)
         } else {
@@ -2546,8 +2686,10 @@ impl Settings {
                 })
         }
         .ok_or_else(|| {
-            Error::internal(format!(
-                "the vocabulary has no setting `{field}` for the {arm} writ"
+            Error::internal(said!(
+                "the vocabulary has no setting `{}` for the {} writ",
+                pharmakos_proto::json::grammar::quoted(field),
+                pharmakos_proto::json::grammar::quoted(arm)
             ))
         })?;
         let pointer = if arm.is_empty() {
@@ -2581,7 +2723,11 @@ impl Settings {
             .enumeration(full_name)
             .and_then(|declared| declared.value_by_name(name))
             .ok_or_else(|| {
-                Error::internal(format!("the schema's `{full_name}` names no `{name}`"))
+                Error::internal(said!(
+                    "the schema's `{}` names no `{}`",
+                    pharmakos_proto::json::grammar::quoted(full_name),
+                    pharmakos_proto::json::grammar::quoted(name)
+                ))
             })?;
         self.push(arm, field, format!("\"{name}\""))
     }
@@ -2594,8 +2740,10 @@ impl Settings {
             .filter(|declared| declared.number != 0)
             .map(|declared| declared.name.clone())
             .ok_or_else(|| {
-                Error::internal(format!(
-                    "the schema's `{full_name}` names no value {number}"
+                Error::internal(said!(
+                    "the schema's `{}` names no value {}",
+                    pharmakos_proto::json::grammar::quoted(full_name),
+                    number
                 ))
             })?;
         self.push(arm, field, format!("\"{name}\""))
@@ -2616,7 +2764,11 @@ fn build_targets(
 ) -> Result<Vec<Json>, Error> {
     let table = world.targets();
     let missing = |name: &str, row: usize| {
-        Error::internal(format!("the target table has no {name} in row {row}"))
+        Error::internal(said!(
+            "the target table has no {} in row {}",
+            pharmakos_proto::json::grammar::quoted(name),
+            row
+        ))
     };
     let features = crate::targeting::feature_reads(world, None);
     let mut found: Vec<(u32, usize, Json)> = Vec::new();
@@ -2643,8 +2795,9 @@ fn build_targets(
             .into_iter()
             .find(|kind| kind.id() == blueprint_id)
             .ok_or_else(|| {
-                Error::internal(format!(
-                    "the target table names blueprint {blueprint_id}, which the sim does not define"
+                Error::internal(said!(
+                    "the target table names blueprint {}, which the sim does not define",
+                    blueprint_id
                 ))
             })?;
         let order = table
@@ -2708,8 +2861,13 @@ const MAP_FLOOR_Z: i32 = 0;
 /// [`crate::error::Code::Internal`] when the row holds no box or no top, or
 /// holds the no-wall top on a wall's row.
 fn wall_box(table: &pharmakos_sim::tables::TargetTable, row: usize) -> Result<Json, Error> {
-    let missing =
-        |name: &str| Error::internal(format!("the target table has no wall {name} in row {row}"));
+    let missing = |name: &str| {
+        Error::internal(said!(
+            "the target table has no wall {} in row {}",
+            pharmakos_proto::json::grammar::quoted(name),
+            row
+        ))
+    };
     let columns = table
         .areas()
         .get(row)
@@ -2755,7 +2913,11 @@ fn target_anchor(
     features: &[crate::targeting::FeatureRead],
 ) -> Result<Json, Error> {
     let missing = |name: &str, row: usize| {
-        Error::internal(format!("the target table has no {name} in row {row}"))
+        Error::internal(said!(
+            "the target table has no {} in row {}",
+            pharmakos_proto::json::grammar::quoted(name),
+            row
+        ))
     };
     Ok(match description {
         pharmakos_sim::targeting::DESCRIPTION_VOXEL => {
@@ -2786,9 +2948,10 @@ fn target_anchor(
                 .and_then(|index| features.iter().find(|read| read.index == index))
                 .map(|read| read.name.clone())
                 .ok_or_else(|| {
-                    Error::internal(format!(
-                        "a target written by name is bound to feature {index}, which the map \
-                         does not hold"
+                    Error::internal(said!(
+                        "a target written by name is bound to feature {}, which the map \
+                         does not hold",
+                        index
                     ))
                 })?;
             Json::Object(vec![(
@@ -2812,8 +2975,9 @@ fn target_anchor(
             )]),
         )]),
         other => {
-            return Err(Error::internal(format!(
-                "the target table holds description {other}, which the sim does not write"
+            return Err(Error::internal(said!(
+                "the target table holds description {}, which the sim does not write",
+                other
             )));
         }
     })
@@ -2826,7 +2990,10 @@ fn target_anchor(
 /// [`crate::error::Code::Internal`] for a travel time the rendering refuses.
 fn leg_json(leg: &pharmakos_plan_core::travel::Leg) -> Result<Json, Error> {
     let refused = |error: pharmakos_plan_core::travel::TravelError| {
-        Error::internal(format!("the route's travel has no rendering: {error}"))
+        Error::internal(said!(
+            "the route's travel has no rendering: {}",
+            pharmakos_proto::json::grammar::Said::engine_error(&error)
+        ))
     };
     let mut entries = vec![
         // `gp.api.v1.Leg.to` is a `gp.v1.Location`, so the voxel
@@ -2888,10 +3055,11 @@ fn licence_rows(world: &pharmakos_sim::world::World) -> Result<Vec<LicenceHeld>,
         .iter()
         .map(|row| {
             let licence = pharmakos_sim::licence::licence_of(row.licence).ok_or_else(|| {
-                Error::internal(format!(
+                Error::internal(said!(
                     "the licence table holds licence {} for seat {}, which this build does not \
                      define",
-                    row.licence, row.seat
+                    row.licence,
+                    row.seat
                 ))
             })?;
             Ok(LicenceHeld {
@@ -2937,7 +3105,7 @@ fn licence_line(
         .filter(|row| this_settlement(row))
         .map(|row| {
             strings::licence_title(row.licence).ok_or_else(|| {
-                Error::internal(format!(
+                Error::internal(said!(
                     "the string table names no licence {}",
                     row.licence.as_str_name()
                 ))
@@ -3029,7 +3197,7 @@ fn tally_json(tally: pharmakos_sim::tables::Tally) -> Result<(Json, i32), Error>
 pub(super) enum Unpriced {
     /// The playbook orders more than the projection or the wire can carry:
     /// something a seat sent, which the door refuses as `INVALID_ARGUMENT`.
-    Playbook(String),
+    Playbook(Said),
     /// The gateway disagreeing with itself or with the sim: the error as it
     /// is, `INTERNAL` or `NOT_FOUND`.
     Gateway(Error),
@@ -3052,7 +3220,7 @@ fn bmi_next(world: &pharmakos_sim::world::World, seat: SeatId) -> Result<Option<
     let index = held
         .iter()
         .position(|(held, _)| *held == seat)
-        .ok_or_else(|| Error::internal(format!("the seat table has no seat {}", seat.raw())))?;
+        .ok_or_else(|| Error::internal(said!("the seat table has no seat {}", seat.raw())))?;
     if held.get(index).is_none_or(|(_, value)| value.is_none()) {
         return Ok(None);
     }
@@ -3061,9 +3229,10 @@ fn bmi_next(world: &pharmakos_sim::world::World, seat: SeatId) -> Result<Option<
     pharmakos_sim::economy::bmi_for(world.rules(), place.rank, place.living)
         .map(Some)
         .map_err(|refused| {
-            Error::internal(format!(
-                "the sim's BMI read refused seat {}: {refused}",
-                seat.raw()
+            Error::internal(said!(
+                "the sim's BMI read refused seat {}: {}",
+                seat.raw(),
+                crate::error::engine(&refused)
             ))
         })
 }
@@ -3077,7 +3246,12 @@ fn bmi_next(world: &pharmakos_sim::world::World, seat: SeatId) -> Result<Option<
 fn wire_number(value: i64, what: &str) -> Result<Json, Error> {
     i32::try_from(value)
         .map(|value| Json::Number(value.to_string()))
-        .map_err(|_| Error::internal(format!("this seat's {what} does not fit the wire's int32")))
+        .map_err(|_| {
+            Error::internal(said!(
+                "this seat's {} does not fit the wire's int32",
+                pharmakos_proto::json::grammar::quoted(what)
+            ))
+        })
 }
 
 /// How many rows of a seat column belong to one seat.
@@ -3140,9 +3314,12 @@ pub(crate) fn displayed_place(
         .map_err(|_| Error::internal("a seat's audit score does not fit the wire's int32"))?;
     let of = u32::try_from(audit.lines.len())
         .map_err(|_| Error::internal("more audited seats than a seat id can number"))?;
-    let rank = audit
-        .rank_of(seat)
-        .map_err(|refused| Error::internal(format!("the audit's rank refused: {refused}")))?;
+    let rank = audit.rank_of(seat).map_err(|refused| {
+        Error::internal(said!(
+            "the audit's rank refused: {}",
+            crate::error::engine(&refused)
+        ))
+    })?;
     Ok(Place { rank, of, score })
 }
 
@@ -3231,9 +3408,10 @@ pub(crate) const fn grade_proto(
 fn priority_wire_name(value: u8) -> Result<String, Error> {
     use pharmakos_proto::gp::v1::interface_row::QuartermasterPriority;
     let named = QuartermasterPriority::try_from(i32::from(value)).map_err(|_| {
-        Error::internal(format!(
-            "a beacon's Quartermaster priority column holds {value}, which the schema does not \
-             name"
+        Error::internal(said!(
+            "a beacon's Quartermaster priority column holds {}, which the schema does not \
+             name",
+            value
         ))
     })?;
     Ok(pharmakos_proto::scope::wire_name(
@@ -3248,7 +3426,12 @@ fn fx_point(voxel: Voxel, at: &str) -> Result<[pharmakos_sim::math::fixed::Fx; 3
     let axis = |value: i32| {
         i16::try_from(value)
             .map(pharmakos_sim::math::fixed::Fx::from_voxels)
-            .map_err(|_| Error::invalid(format!("{at}: the waypoint before it is off the map")))
+            .map_err(|_| {
+                Error::invalid(said!(
+                    "{}: the waypoint before it is off the map",
+                    pharmakos_proto::json::grammar::quoted_pointer(at)
+                ))
+            })
     };
     Ok([axis(voxel.x)?, axis(voxel.y)?, axis(voxel.z)?])
 }
@@ -3258,11 +3441,17 @@ fn read_voxel(value: &Json, at: &str) -> Result<Voxel, Error> {
     let axis = |name: &str| -> Result<i32, Error> {
         match value.get(name) {
             None => Ok(0),
-            Some(Json::Number(lexeme)) => lexeme
-                .parse::<i32>()
-                .map_err(|_| Error::invalid(format!("{at}: `{name}` is a whole number of voxels"))),
-            Some(other) => Err(Error::invalid(format!(
-                "{at}: `{name}` is a whole number of voxels, and this is {}",
+            Some(Json::Number(lexeme)) => lexeme.parse::<i32>().map_err(|_| {
+                Error::invalid(said!(
+                    "{}: `{}` is a whole number of voxels",
+                    pharmakos_proto::json::grammar::quoted_pointer(at),
+                    pharmakos_proto::json::grammar::quoted(name)
+                ))
+            }),
+            Some(other) => Err(Error::invalid(said!(
+                "{}: `{}` is a whole number of voxels, and this is {}",
+                pharmakos_proto::json::grammar::quoted_pointer(at),
+                pharmakos_proto::json::grammar::quoted(name),
                 other.kind()
             ))),
         }

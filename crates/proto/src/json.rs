@@ -215,7 +215,11 @@ pub fn decode_json_encoded<M: Message + Name + Default>(value: &Json) -> Result<
         Error::at(
             ErrorKind::Wire,
             "",
-            format!("`{full_name}` did not decode from its own encoding: {error}"),
+            crate::said!(
+                "`{}` did not decode from its own encoding: {}",
+                grammar::quoted(&full_name),
+                grammar::Said::engine_error(&error)
+            ),
         )
     })?;
     Ok(Decoded { message, encoded })

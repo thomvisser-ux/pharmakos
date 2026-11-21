@@ -209,12 +209,14 @@ pub struct Refusal {
     pub kind: ErrorKind,
     /// The byte the refusal is at.
     pub at: usize,
-    /// English, and safe to show a player beside the offset.
-    pub message: Cow<'static, str>,
+    /// English, and safe to show a player beside the offset: [`Said`], so
+    /// only words and quoted text make one (S3's `vfyq2`, fix pass 3, item
+    /// M2 (d)).
+    pub message: Said,
 }
 
 impl Refusal {
-    fn grammar(at: usize, message: impl Into<Cow<'static, str>>) -> Refusal {
+    fn grammar(at: usize, message: impl Into<Said>) -> Refusal {
         Refusal {
             kind: ErrorKind::Grammar,
             at,
@@ -225,11 +227,11 @@ impl Refusal {
 
 impl From<Refusal> for Error {
     fn from(refusal: Refusal) -> Error {
-        Error {
-            kind: refusal.kind,
-            pointer: format!("/byte/{}", refusal.at),
-            message: refusal.message.into_owned(),
-        }
+        Error::at(
+            refusal.kind,
+            &format!("/byte/{}", refusal.at),
+            refusal.message,
+        )
     }
 }
 
@@ -243,7 +245,7 @@ pub fn literal(scan: &Scan<'_>, at: usize, word: &'static str) -> Result<usize, 
     let mut pos = at;
     for expected in word.bytes() {
         if scan.get(pos) != Some(expected) {
-            return Err(Refusal::grammar(pos, format!("expected `{word}`")));
+            return Err(Refusal::grammar(pos, crate::said!("expected `{}`", word)));
         }
         pos = pos.saturating_add(1);
     }
@@ -438,7 +440,7 @@ fn escape(scan: &Scan<'_>, backslash: usize, out: Option<&mut String>) -> Result
             };
             return Err(Refusal::grammar(
                 backslash,
-                format!(
+                crate::said!(
                     "unknown escape `\\{}`",
                     quoted(other.encode_utf8(&mut [0; 4]))
                 ),
@@ -682,7 +684,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
         Refusal {
             kind: ErrorKind::Depth,
             at: self.pos,
-            message: Cow::Owned(format!("JSON nested deeper than {MAX_DEPTH} levels")),
+            message: crate::said!("JSON nested deeper than {} levels", MAX_DEPTH),
         }
     }
 
@@ -812,7 +814,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
             return Err(Refusal {
                 kind: ErrorKind::DuplicateField,
                 at: key_at,
-                message: Cow::Owned(format!("duplicate key `{}`", quoted(&key))),
+                message: crate::said!("duplicate key `{}`", quoted(&key)),
             });
         }
         Ok((key_raw, key))
@@ -1031,9 +1033,26 @@ impl fmt::Display for Quoted {
 /// and plan-core's refusals goes through here, so there is one rule.
 #[must_use]
 pub fn quoted(text: &str) -> Quoted {
-    let mut out = String::with_capacity(text.len().min(MAX_QUOTED_CHARS.saturating_mul(6)));
+    shown(text, Some(MAX_QUOTED_CHARS))
+}
+
+/// A player's text as prose reads it back (S3's `vfyq2`, fix pass 3, item M2
+/// (c)): [`quoted`]'s escaping, with no cap. The prose is the player's own
+/// playbook read back to them, a title, a label, a note, so it is shown
+/// whole; every character of [`HIDDEN`] is still escaped, so nothing in it
+/// can break a line, reorder the text around it or hide.
+#[must_use]
+pub fn escaped(text: &str) -> Quoted {
+    shown(text, None)
+}
+
+/// [`quoted`] and [`escaped`]: every character of [`HIDDEN`] as `\uXXXX`,
+/// and at most `cap` characters, the rest shown as `…`.
+fn shown(text: &str, cap: Option<usize>) -> Quoted {
+    let budget = cap.map_or(text.len(), |cap| text.len().min(cap.saturating_mul(6)));
+    let mut out = String::with_capacity(budget);
     for (index, character) in text.chars().enumerate() {
-        if index == MAX_QUOTED_CHARS {
+        if Some(index) == cap {
             out.push('…');
             break;
         }
@@ -1095,21 +1114,101 @@ impl Said {
         self.0.into_owned()
     }
 
-    /// An engine error's own words: for the error types of this workspace
-    /// whose `Display` composes static words and numbers (a rules table's
-    /// gap, an input the verifier cannot hash, a file the host cannot read),
-    /// never for text read from a player's file, which [`quoted`] carries.
+    /// An engine error's own words, for a type that has declared them
+    /// [`EngineWords`]: its `Display` composes static words, numbers and text
+    /// this workspace made, never text read from a player's file.
     #[must_use]
-    pub fn engine_error(error: &impl std::error::Error) -> Said {
+    pub fn engine_error(error: &impl EngineWords) -> Said {
         Said(Cow::Owned(error.to_string()))
     }
 
-    /// [`crate::said`]'s own constructor, over text it formatted from pieces
-    /// that are each a [`Said`]. Not for any other caller.
+    /// [`crate::said`]'s substitution: `template`'s `{}` in turn, each
+    /// replaced by the next of `pieces` (`{{` and `}}` are a brace). Every
+    /// input is a `&'static str` or a [`Said`], so the result is one too
+    /// (S3's `vfyq2`, fix pass 3, item M2 (d): this replaced a constructor
+    /// over any `String`). `said!` checks at compile time that the template
+    /// holds exactly one `{}` per piece; a template written by hand that
+    /// holds fewer leaves the rest of the pieces out, and one that holds more
+    /// writes the extra `{}` as it stands.
+    #[must_use]
+    pub fn compose(template: &'static str, pieces: &[Said]) -> Said {
+        let extra: usize = pieces.iter().map(|piece| piece.0.len()).sum();
+        let mut out = String::with_capacity(template.len().saturating_add(extra));
+        let mut next = pieces.iter();
+        let mut rest = template;
+        while let Some(at) = rest.find(['{', '}']) {
+            let (before, from) = rest.split_at(at);
+            out.push_str(before);
+            if let Some(after) = from.strip_prefix("{{") {
+                out.push('{');
+                rest = after;
+            } else if let Some(after) = from.strip_prefix("}}") {
+                out.push('}');
+                rest = after;
+            } else if let Some(after) = from.strip_prefix("{}") {
+                match next.next() {
+                    Some(piece) => out.push_str(&piece.0),
+                    None => out.push_str("{}"),
+                }
+                rest = after;
+            } else {
+                let (brace, after) = from.split_at(1);
+                out.push_str(brace);
+                rest = after;
+            }
+        }
+        out.push_str(rest);
+        Said(Cow::Owned(out))
+    }
+
+    /// [`crate::said`]'s door: [`Said::compose`], after the compiler has
+    /// checked the template against the pieces (`checked`, which writes
+    /// nothing and is dropped).
     #[doc(hidden)]
     #[must_use]
-    pub const fn composed_by_said(text: String) -> Said {
+    pub fn compose_checked(
+        checked: fmt::Arguments<'_>,
+        template: &'static str,
+        pieces: &[Said],
+    ) -> Said {
+        let _ = checked;
+        Said::compose(template, pieces)
+    }
+
+    /// Text this crate composed from words and quoted pieces itself: a
+    /// codec message ([`super::Error::said`]), never a caller's `String`.
+    pub(crate) const fn made_here(text: String) -> Said {
         Said(Cow::Owned(text))
+    }
+}
+
+/// An error type whose `Display` is the engine's own words: static text,
+/// numbers, and text this workspace made, never text read from a player's
+/// file (S3's `vfyq2`, fix pass 3, item M2 (d)). Implementing it is a
+/// declaration that the type's words carry no player text, reviewed where
+/// it is written; [`Said::engine_error`] takes only such a type. A type
+/// whose words do carry player text (the sim's `PlanError`, which writes
+/// labels and ids raw) does not implement it, and is said through a
+/// sentence composed from its fields.
+pub trait EngineWords: fmt::Display {}
+
+/// An I/O error's words are the operating system's: a file the host could
+/// not read, never the file's contents.
+impl EngineWords for std::io::Error {}
+
+/// prost's decode error says which wire fault it met, in prost's words; the
+/// bytes it read are this workspace's own encoding.
+impl EngineWords for prost::DecodeError {}
+
+/// [`crate::said`]'s compile-time check of a template's `{}` count, one per
+/// piece; it writes nothing and is never shown.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct Placeholder;
+
+impl fmt::Display for Placeholder {
+    fn fmt(&self, _formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
     }
 }
 
@@ -1137,6 +1236,12 @@ impl From<&Quoted> for Said {
     }
 }
 
+impl From<&Said> for Said {
+    fn from(text: &Said) -> Said {
+        text.clone()
+    }
+}
+
 impl From<char> for Said {
     fn from(character: char) -> Said {
         Said(Cow::Owned(quoted(character.encode_utf8(&mut [0; 4])).0))
@@ -1148,6 +1253,12 @@ macro_rules! said_from_numbers {
         $(
             impl From<$number> for Said {
                 fn from(number: $number) -> Said {
+                    Said(Cow::Owned(number.to_string()))
+                }
+            }
+
+            impl From<&$number> for Said {
+                fn from(number: &$number) -> Said {
                     Said(Cow::Owned(number.to_string()))
                 }
             }
@@ -1170,9 +1281,15 @@ said_from_numbers!(
 #[macro_export]
 macro_rules! said {
     ($format:literal $(, $piece:expr)* $(,)?) => {
-        $crate::json::grammar::Said::composed_by_said(::std::format!(
-            ::std::concat!($format)
-            $(, $crate::json::grammar::Said::from($piece))*
-        ))
+        $crate::json::grammar::Said::compose_checked(
+            // The template holds exactly one `{}` per piece, and no other
+            // placeholder: checked by the compiler, with nothing evaluated.
+            ::std::format_args!(
+                ::std::concat!($format)
+                $(, { let _ = ::std::stringify!($piece); $crate::json::grammar::Placeholder })*
+            ),
+            ::std::concat!($format),
+            &[$($crate::json::grammar::Said::from($piece)),*],
+        )
     };
 }

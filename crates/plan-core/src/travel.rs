@@ -67,6 +67,10 @@ pub enum TravelError {
     Negative(Ms),
 }
 
+/// Its words are figures and the schema's own names (S3's `vfyq2`, fix pass
+/// 3, item M2 (d)).
+impl pharmakos_proto::json::grammar::EngineWords for TravelError {}
+
 impl core::fmt::Display for TravelError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

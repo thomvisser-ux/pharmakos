@@ -50,6 +50,8 @@ use pharmakos_proto::gp::v1::{
     BeaconRef, FeatureRef, InterfaceRow, InterfaceStep, MandateSettings, PlaceBeaconStep, Playbook,
     Step, Voxel,
 };
+use pharmakos_proto::json::grammar::Said;
+use pharmakos_proto::said;
 use pharmakos_sim::features::{Feature, FeatureKind};
 use pharmakos_sim::interpreter::{
     Action, BeaconSpec, Place as PlanPlace, Plan, StepFailed, StepFailure, beacon_spec_of,
@@ -252,15 +254,16 @@ where
 pub fn travel_ms(world: &World, cost: i64) -> Result<Option<Ms>, Error> {
     let speed = Speed::commander(world.rules());
     let cost = i32::try_from(cost).map_err(|_| {
-        Error::internal(format!(
-            "an estimate costs {cost}, past the estimator's i32"
+        Error::internal(said!(
+            "an estimate costs {}, past the estimator's i32",
+            cost
         ))
     })?;
     let Some(ticks) = ticks_for_cost(cost, speed.cost_per_second) else {
         return Ok(None);
     };
     let ticks = u32::try_from(ticks)
-        .map_err(|_| Error::internal(format!("an estimate takes {ticks} ticks, below zero")))?;
+        .map_err(|_| Error::internal(said!("an estimate takes {} ticks, below zero", ticks)))?;
     Ok(Some(Ms::from_ticks(ticks)))
 }
 
@@ -354,23 +357,23 @@ pub struct Resolved {
 /// # Errors
 ///
 /// A sentence naming what is wrong with the reference.
-pub fn spec_of(reference: &FeatureRef, site: Site) -> Result<FeatureSpec, String> {
+pub fn spec_of(reference: &FeatureRef, site: Site) -> Result<FeatureSpec, Said> {
     use pharmakos_proto::gp::v1::feature_ref::{Coverage, Rank, Ref};
-    let pick = |kind: FeatureKind, rank: i32, coverage: i32| -> Result<FeatureSpec, String> {
+    let pick = |kind: FeatureKind, rank: i32, coverage: i32| -> Result<FeatureSpec, Said> {
         match Rank::try_from(rank) {
             Ok(Rank::Nearest) => {}
             Ok(Rank::Unspecified) => {
-                return Err(String::from(
+                return Err(Said::from(
                     "a pick's `rank` is required, and S1's is `NEAREST`",
                 ));
             }
-            Err(_) => return Err(format!("`rank` {rank} is not a rank this build knows")),
+            Err(_) => return Err(said!("`rank` {} is not a rank this build knows", rank)),
         }
         let coverage = Coverage::try_from(coverage)
-            .map_err(|_| format!("`coverage` {coverage} is not a coverage this build knows"))?;
+            .map_err(|_| said!("`coverage` {} is not a coverage this build knows", coverage))?;
         match site {
             Site::Covering | Site::Toward => match coverage {
-                Coverage::Unspecified => Err(String::from(
+                Coverage::Unspecified => Err(Said::from(
                     "under `covering` or `toward` a pick's `coverage` is required: `ANY` or \
                      `UNCOVERED`",
                 )),
@@ -385,13 +388,13 @@ pub fn spec_of(reference: &FeatureRef, site: Site) -> Result<FeatureSpec, String
             },
             Site::On { .. } => {
                 if coverage != Coverage::Unspecified {
-                    return Err(String::from(
+                    return Err(Said::from(
                         "`on` takes no `coverage`: it ranks the free vents inside the beacon's \
                          sphere",
                     ));
                 }
                 if kind != FeatureKind::Vent {
-                    return Err(String::from(
+                    return Err(Said::from(
                         "`on` ranks only vents: a Generator stands on a vent",
                     ));
                 }
@@ -400,7 +403,7 @@ pub fn spec_of(reference: &FeatureRef, site: Site) -> Result<FeatureSpec, String
                     uncovered: false,
                 })
             }
-            Site::Removal => Err(String::from(
+            Site::Removal => Err(Said::from(
                 "a `remove_build_target` names its target `on {feature_id}`, never by a \
                  description",
             )),
@@ -410,7 +413,10 @@ pub fn spec_of(reference: &FeatureRef, site: Site) -> Result<FeatureSpec, String
         Some(Ref::FeatureId(id)) => {
             let (kind, anchor) =
                 pharmakos_sim::features::parse_feature_name(id).ok_or_else(|| {
-                    format!("`{id}` is not a feature name: `vent_<x>_<y>` or `seam_<x>_<y>`")
+                    said!(
+                        "`{}` is not a feature name: `vent_<x>_<y>` or `seam_<x>_<y>`",
+                        pharmakos_proto::json::grammar::quoted(id)
+                    )
                 })?;
             Ok(FeatureSpec::Name { kind, anchor })
         }
@@ -419,13 +425,13 @@ pub fn spec_of(reference: &FeatureRef, site: Site) -> Result<FeatureSpec, String
         Some(Ref::Covered(_)) => match site {
             Site::On { covering: true } => Ok(FeatureSpec::Covered),
             Site::On { covering: false } | Site::Covering | Site::Removal | Site::Toward => {
-                Err(String::from(
+                Err(Said::from(
                     "`covered {}` is legal only under `on`, in the initial settings of a \
                      `place_beacon` whose `at` is a `covering` arm",
                 ))
             }
         },
-        None => Err(String::from(
+        None => Err(Said::from(
             "a `FeatureRef` names a feature or describes one",
         )),
     }
@@ -928,10 +934,14 @@ pub fn resolve_playbook(
     let listed_coverings = listed(|site| site == Site::Covering);
     let listed_anchors = listed(|site| matches!(site, Site::On { .. }));
     if (listed_coverings, listed_anchors) != (coverings, anchors) {
-        return Err(Error::internal(format!(
-            "the gateway reads {listed_coverings} `covering` sites and {listed_anchors} `on` \
-             anchors in this playbook, and the sim's compile binds {coverings} and {anchors}: \
-             the two readings have drifted apart"
+        return Err(Error::internal(said!(
+            "the gateway reads {} `covering` sites and {} `on` \
+             anchors in this playbook, and the sim's compile binds {} and {}: \
+             the two readings have drifted apart",
+            listed_coverings,
+            listed_anchors,
+            coverings,
+            anchors
         )));
     }
     Ok(out)
@@ -1047,7 +1057,13 @@ fn row_anchors<'a>(row: &'a InterfaceRow, at: &str) -> Vec<(String, &'a FeatureR
 
 /// One reference compiled for its site, or a refusal naming its pointer.
 fn compiled(reference: &FeatureRef, site: Site, pointer: &str) -> Result<FeatureSpec, Error> {
-    spec_of(reference, site).map_err(|why| Error::invalid(format!("{pointer}: {why}")))
+    spec_of(reference, site).map_err(|why| {
+        Error::invalid(said!(
+            "{}: {}",
+            pharmakos_proto::json::grammar::quoted_pointer(pointer),
+            why
+        ))
+    })
 }
 
 /// One step's references.
@@ -1124,15 +1140,17 @@ fn read_placement(
         // made-up `no_target` would hide the day that stops being true: `on`
         // is a misplaced site and an absent `at` a missing block, for good.
         Some(Place::On(_)) => {
-            return Err(Error::internal(format!(
-                "{base}/at/on reached the gateway's placement reader, and the compile refuses \
-                 `on` in a placement's `at`"
+            return Err(Error::internal(said!(
+                "{}/at/on reached the gateway's placement reader, and the compile refuses \
+                 `on` in a placement's `at`",
+                pharmakos_proto::json::grammar::quoted_pointer(&base)
             )));
         }
         None => {
-            return Err(Error::internal(format!(
-                "{base}/at reached the gateway's placement reader with no place, and the \
-                 compile refuses a placement without one"
+            return Err(Error::internal(said!(
+                "{}/at reached the gateway's placement reader with no place, and the \
+                 compile refuses a placement without one",
+                pharmakos_proto::json::grammar::quoted_pointer(&base)
             )));
         }
     };
@@ -1201,9 +1219,10 @@ fn read_toward(
 ) -> Result<PlacedSite, Error> {
     let pointer = format!("{base}/at/toward/feature");
     let reference = toward.feature.as_ref().ok_or_else(|| {
-        Error::internal(format!(
-            "{pointer} reached the gateway's placement reader with no feature, and the compile \
-             refuses a `toward` without one"
+        Error::internal(said!(
+            "{} reached the gateway's placement reader with no feature, and the compile \
+             refuses a `toward` without one",
+            pharmakos_proto::json::grammar::quoted_pointer(&pointer)
         ))
     })?;
     let spec = compiled(reference, Site::Toward, &pointer)?;

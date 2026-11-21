@@ -37,6 +37,7 @@
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::{Json, base64};
+use pharmakos_proto::said;
 use pharmakos_sim::sight::SensorKind;
 use pharmakos_sim::tables::{BeaconId, NOT_RUINED, SeatId, StructureKind, UnitKind};
 use pharmakos_sim::world::World;
@@ -316,8 +317,9 @@ fn visible_units<V: Vision>(
         let id = column(units.ids().get(row), "unit", "id")?;
         let raw_kind = column(units.kinds().get(row), "unit", "kind")?;
         let kind = UnitKind::from_id(raw_kind).ok_or_else(|| {
-            Error::internal(format!(
-                "a unit row holds kind {raw_kind}, which this build does not name"
+            Error::internal(said!(
+                "a unit row holds kind {}, which this build does not name",
+                raw_kind
             ))
         })?;
         let heading = column(units.headings().get(row), "unit", "heading")?;
@@ -374,8 +376,9 @@ fn visible_structures<V: Vision>(
         let id = column(structures.ids().get(row), "structure", "id")?;
         let raw_kind = column(structures.kinds().get(row), "structure", "kind")?;
         let kind = StructureKind::from_id(raw_kind).ok_or_else(|| {
-            Error::internal(format!(
-                "a structure row holds kind {raw_kind}, which this build does not name"
+            Error::internal(said!(
+                "a structure row holds kind {}, which this build does not name",
+                raw_kind
             ))
         })?;
         let hp = match world.structure_max_hp(kind) {
@@ -392,14 +395,15 @@ fn visible_structures<V: Vision>(
         let ruined =
             column(structures.ruined_at().get(row), "structure", "ruined-at")? != NOT_RUINED;
         if ruined == owner.is_some() {
-            return Err(Error::internal(format!(
-                "structure row {row} is {} by its ruined-at tick and {} by its seat",
+            return Err(Error::internal(said!(
+                "structure row {} is {} by its ruined-at tick and {} by its seat",
+                row,
                 if ruined { "a ruin" } else { "standing" },
                 if owner.is_some() {
                     "a seat's"
                 } else {
                     "nobody's"
-                },
+                }
             )));
         }
         let listed = if ruined { "RUIN" } else { "STRUCTURE" };
@@ -482,8 +486,9 @@ fn visible_shells<V: Vision>(
     for row in 0..shells.len() {
         let raw_owner = column(shells.seats().get(row), "shell", "seat")?;
         if !SeatId::new(raw_owner).is_some() {
-            return Err(Error::internal(format!(
-                "shell row {row} was fired by the no-seat value, and a shell is always a seat's"
+            return Err(Error::internal(said!(
+                "shell row {} was fired by the no-seat value, and a shell is always a seat's",
+                row
             )));
         }
         let firer = column(shells.firers().get(row), "shell", "firer")?;
@@ -503,14 +508,16 @@ fn visible_shells<V: Vision>(
             // The words name no row and no landing tick: the check runs
             // before the fog filter, so they may be about a shell this
             // viewer is never shown.
-            return Err(Error::internal(format!(
-                "a shell is held at tick {tick} past its landing tick"
+            return Err(Error::internal(said!(
+                "a shell is held at tick {} past its landing tick",
+                tick
             )));
         }
         live.push(key);
         let now = shells.position_at(row, tick).ok_or_else(|| {
-            Error::internal(format!(
-                "a shell is held and in flight, and the sim gives it no position at tick {tick}"
+            Error::internal(said!(
+                "a shell is held and in flight, and the sim gives it no position at tick {}",
+                tick
             ))
         })?;
         let at = view::voxel_of(now);
@@ -539,9 +546,13 @@ fn visible_shells<V: Vision>(
 /// [`crate::error::Code::Internal`]: the tables give every row every column,
 /// so a missing one is the sim and the gateway disagreeing.
 fn column<T: Copy>(value: Option<&T>, table: &str, name: &str) -> Result<T, Error> {
-    value
-        .copied()
-        .ok_or_else(|| Error::internal(format!("a {table} row has no {name} column")))
+    value.copied().ok_or_else(|| {
+        Error::internal(said!(
+            "a {} row has no {} column",
+            pharmakos_proto::json::grammar::quoted(table),
+            pharmakos_proto::json::grammar::quoted(name)
+        ))
+    })
 }
 
 /// One row's audience: a thing of `owner`'s, standing at `at`.

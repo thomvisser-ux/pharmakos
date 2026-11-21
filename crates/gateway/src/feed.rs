@@ -56,6 +56,7 @@
 
 use crate::error::Error;
 use crate::fog::{Audience, FogFilter, FogPolicy, Viewer, Vision};
+use pharmakos_proto::said;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::tables::SeatId;
 use std::collections::BTreeMap;
@@ -96,8 +97,9 @@ impl Kind {
             return Err(Error::invalid("an event kind cannot be empty"));
         }
         if name.chars().count() > MAX_KIND_CHARS {
-            return Err(Error::invalid(format!(
-                "an event kind is at most {MAX_KIND_CHARS} characters"
+            return Err(Error::invalid(said!(
+                "an event kind is at most {} characters",
+                MAX_KIND_CHARS
             )));
         }
         let first_is_letter = name
@@ -105,16 +107,18 @@ impl Kind {
             .next()
             .is_some_and(|character| character.is_ascii_lowercase());
         if !first_is_letter {
-            return Err(Error::invalid(format!(
-                "`{name}` does not start with a lower-case ASCII letter, so a scenario file \
-                 could not name it"
+            return Err(Error::invalid(said!(
+                "`{}` does not start with a lower-case ASCII letter, so a scenario file \
+                 could not name it",
+                pharmakos_proto::json::grammar::quoted(name)
             )));
         }
         if !name.chars().all(|character| {
             character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
         }) {
-            return Err(Error::invalid(format!(
-                "`{name}` is not lower_snake_case, so a scenario file could not name it"
+            return Err(Error::invalid(said!(
+                "`{}` is not lower_snake_case, so a scenario file could not name it",
+                pharmakos_proto::json::grammar::quoted(name)
             )));
         }
         Ok(Kind(name.to_owned()))
@@ -192,7 +196,7 @@ impl Witnesses {
         for seat in seats {
             if *owner != Some(seat) && vision.sees(seat, at) {
                 bits |= Witnesses::bit(seat).ok_or_else(|| {
-                    Error::internal(format!(
+                    Error::internal(said!(
                         "seat {} is past the eight seats a feed's witness set holds",
                         seat.raw()
                     ))
@@ -428,7 +432,7 @@ impl Cursor {
             // A cursor of the other listing fails here, which is the point of
             // the tag: it is a place in something else, and resuming a beacon
             // page at an event count is a place nobody meant.
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "that is not a cursor {} issued",
                 listing.name()
             )));
@@ -791,7 +795,7 @@ impl SegmentFeed {
             ));
         }
         let shown = usize::try_from(from.index()).map_err(|_| {
-            Error::invalid(format!(
+            Error::invalid(said!(
                 "this cursor points at event {}, past any listing",
                 from.index()
             ))
@@ -838,7 +842,7 @@ impl SegmentFeed {
             snapshot: self.snapshot,
             listing: Listing::Feed,
             index: u32::try_from(index).map_err(|_| {
-                Error::internal(format!("a feed listing of {index} does not fit a cursor"))
+                Error::internal(said!("a feed listing of {} does not fit a cursor", index))
             })?,
             lifted,
         };

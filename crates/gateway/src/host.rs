@@ -57,6 +57,7 @@
 //! [`crate::error::Code::InvalidArgument`] before a world is built, naming the
 //! setting the lobby typed.
 
+use pharmakos_proto::said;
 use std::path::{Path, PathBuf};
 
 use pharmakos_proto::gp::v1::Voxel;
@@ -205,7 +206,10 @@ impl Host {
         Host::check_seats(config.seats)?;
         Host::check_settings(&config.match_settings)?;
         let world = World::new(config).map_err(|error| {
-            Error::internal(format!("this match's map could not be generated: {error}"))
+            Error::internal(said!(
+                "this match's map could not be generated: {}",
+                crate::error::engine(&error)
+            ))
         })?;
         let routes = RouteAdapter::new(world.voxels(), world.rules())?;
         Ok(Host {
@@ -240,8 +244,9 @@ impl Host {
     ) -> Result<Host, Error> {
         Host::check_seats(seats)?;
         let rules = RulesTable::from_canonical_json(rules_json).map_err(|error| {
-            Error::invalid(format!(
-                "this is not a rules table this build reads: {error}"
+            Error::invalid(said!(
+                "this is not a rules table this build reads: {}",
+                crate::error::engine(&error)
             ))
         })?;
         let config = WorldConfig {
@@ -266,8 +271,10 @@ impl Host {
         if (1..=MAX_SEATS).contains(&seats) {
             return Ok(());
         }
-        Err(Error::invalid(format!(
-            "a match has between 1 and {MAX_SEATS} seats, and this asks for {seats}"
+        Err(Error::invalid(said!(
+            "a match has between 1 and {} seats, and this asks for {}",
+            MAX_SEATS,
+            seats
         )))
     }
 
@@ -295,7 +302,7 @@ impl Host {
             ));
         }
         if settings.segment_lengths_ms.len() > pharmakos_sim::rules::MAX_SEGMENT_LENGTHS {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "the segment ladder has {} entries, past the {} a match carries",
                 settings.segment_lengths_ms.len(),
                 pharmakos_sim::rules::MAX_SEGMENT_LENGTHS
@@ -303,15 +310,20 @@ impl Host {
         }
         for (index, length) in settings.segment_lengths_ms.iter().enumerate() {
             if *length <= 0 {
-                return Err(Error::invalid(format!(
-                    "segment length {index} is {length} ms: a Push runs for a positive length of \
-                     game time"
+                return Err(Error::invalid(said!(
+                    "segment length {} is {} ms: a Push runs for a positive length of \
+                     game time",
+                    index,
+                    length
                 )));
             }
             if *length < MS_PER_TICK {
-                return Err(Error::invalid(format!(
-                    "segment length {index} is {length} ms and a tick is {MS_PER_TICK} ms: a \
-                     segment shorter than one tick is a segment nothing happens in"
+                return Err(Error::invalid(said!(
+                    "segment length {} is {} ms and a tick is {} ms: a \
+                     segment shorter than one tick is a segment nothing happens in",
+                    index,
+                    length,
+                    MS_PER_TICK
                 )));
             }
         }
@@ -426,7 +438,7 @@ impl Host {
     pub fn seal_plans(&mut self, plans: Vec<(SeatId, Plan)>) -> Result<(), Error> {
         let phase = self.runner.phase();
         if phase != MatchPhase::Lull && !plans.is_empty() {
-            return Err(Error::internal(format!(
+            return Err(Error::internal(said!(
                 "this match would take no sealed playbook: a playbook is sealed during a Lull and \
                  this match is in its {}",
                 phase.name()
@@ -435,7 +447,7 @@ impl Host {
         let in_world = self.runner.world().seats().len();
         for (seat, _) in &plans {
             if u32::from(seat.raw()) >= in_world {
-                return Err(Error::internal(format!(
+                return Err(Error::internal(said!(
                     "this match would not take seat {}'s sealed playbook: this match has no seat \
                      {}",
                     seat.raw(),
@@ -445,9 +457,10 @@ impl Host {
         }
         for (seat, plan) in plans {
             self.runner.seal_playbook(seat, plan).map_err(|refused| {
-                Error::internal(format!(
-                    "this match would not take seat {}'s sealed playbook: {refused}",
-                    seat.raw()
+                Error::internal(said!(
+                    "this match would not take seat {}'s sealed playbook: {}",
+                    seat.raw(),
+                    crate::error::engine(&refused)
                 ))
             })?;
         }
@@ -466,7 +479,10 @@ impl Host {
     /// have avoided.
     pub fn begin_push(&mut self) -> Result<bool, Error> {
         self.runner.begin_push().map_err(|refused| {
-            Error::internal(format!("this match would not open its Push: {refused}"))
+            Error::internal(said!(
+                "this match would not open its Push: {}",
+                crate::error::engine(&refused)
+            ))
         })
     }
 
@@ -481,7 +497,10 @@ impl Host {
     /// has no tick after this one: both are the host's to have avoided.
     pub fn step(&mut self) -> Result<Option<TickReport>, Error> {
         self.runner.step().map_err(|refused| {
-            Error::internal(format!("this match would not step a whole tick: {refused}"))
+            Error::internal(said!(
+                "this match would not step a whole tick: {}",
+                crate::error::engine(&refused)
+            ))
         })
     }
 
@@ -507,7 +526,10 @@ impl Host {
     /// one.
     pub fn phased_tick(&mut self) -> Result<Option<PhasedTick<'_>>, Error> {
         self.runner.phased_tick().map_err(|refused| {
-            Error::internal(format!("this match would not open a tick: {refused}"))
+            Error::internal(said!(
+                "this match would not open a tick: {}",
+                crate::error::engine(&refused)
+            ))
         })
     }
 
@@ -555,9 +577,12 @@ impl Host {
         self.runner
             .seed_layout_with_settings(layout, settings)
             .map_err(|refused| match refused {
-                LayoutRefused::NotInTheLobby | LayoutRefused::AfterASeal => Error::phase_closed(format!(
-                    "a layout is placed in the lobby, before the first Lull is planned: {refused}"
-                )),
+                LayoutRefused::NotInTheLobby | LayoutRefused::AfterASeal => {
+                    Error::phase_closed(said!(
+                        "a layout is placed in the lobby, before the first Lull is planned: {}",
+                        crate::error::engine(&refused)
+                    ))
+                }
                 LayoutRefused::Commander
                 | LayoutRefused::NoSuchSeat { .. }
                 | LayoutRefused::OffTheMap { .. }
@@ -565,9 +590,10 @@ impl Host {
                 | LayoutRefused::NoSuchLayoutBeacon { .. }
                 | LayoutRefused::WrongWrit { .. }
                 | LayoutRefused::SettingsTwice { .. }
-                | LayoutRefused::BadSetting { .. } => {
-                    Error::invalid(format!("this match would not take the layout: {refused}"))
-                }
+                | LayoutRefused::BadSetting { .. } => Error::invalid(said!(
+                    "this match would not take the layout: {}",
+                    crate::error::engine(&refused)
+                )),
             })
     }
 
@@ -591,9 +617,10 @@ impl Host {
         }
         let pending = world.pending_orders();
         if pending > 0 {
-            return Err(Error::internal(format!(
-                "a save holds no queued order, and {pending} the host filed are still waiting for \
-                 the next tick"
+            return Err(Error::internal(said!(
+                "a save holds no queued order, and {} the host filed are still waiting for \
+                 the next tick",
+                pending
             )));
         }
         Ok(())
@@ -609,7 +636,10 @@ impl Host {
     /// As [`Host::begin_push`], while a phased tick is open.
     pub fn end_recap(&mut self) -> Result<bool, Error> {
         self.runner.end_recap().map_err(|refused| {
-            Error::internal(format!("this match would not close its recap: {refused}"))
+            Error::internal(said!(
+                "this match would not close its recap: {}",
+                crate::error::engine(&refused)
+            ))
         })
     }
 
@@ -676,23 +706,28 @@ impl Host {
             ));
         }
         let snapshot = Snapshot::from_bytes(snapshot_bytes).map_err(|error| {
-            Error::invalid(format!(
-                "this save's planning snapshot will not decode: {error}"
+            Error::invalid(said!(
+                "this save's planning snapshot will not decode: {}",
+                crate::error::engine(&error)
             ))
         })?;
         self.runner.restore(&snapshot).map_err(|error| {
-            Error::invalid(format!(
+            Error::invalid(said!(
                 "this save's planning snapshot will not restore into the match its config line \
-                 describes: {error}"
+                 describes: {}",
+                crate::error::engine(&error)
             ))
         })?;
         if self.runner.phase() == MatchPhase::Recap {
             self.runner.end_recap().map_err(|refused| {
-                Error::internal(format!("this save's recap would not close: {refused}"))
+                Error::internal(said!(
+                    "this save's recap would not close: {}",
+                    crate::error::engine(&refused)
+                ))
             })?;
         }
         if self.runner.phase() != MatchPhase::Lull {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "a save is made in a Lull, and this one's planning snapshot lands in the match's \
                  {}",
                 self.runner.phase().name()
@@ -704,8 +739,9 @@ impl Host {
             .snapshot()
             .to_bytes()
             .map_err(|error| {
-                Error::internal(format!(
-                    "the restored planning snapshot would not encode: {error}"
+                Error::internal(said!(
+                    "the restored planning snapshot would not encode: {}",
+                    crate::error::engine(&error)
                 ))
             })?;
         if again != snapshot_bytes {

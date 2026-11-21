@@ -114,6 +114,7 @@ use pharmakos_proto::gp::v1::{
     freshness, handler, int_compare, interface_row, location, mandate_settings, meta, near_place,
     on_death, on_fail, playbook, protected_asset, step,
 };
+use pharmakos_proto::json::grammar::escaped;
 
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::rules::RulesTable;
@@ -375,7 +376,7 @@ fn blueprint_chip(id: &str, pointer: String, slot: Slot) -> Text {
         return Text::default();
     }
     chip(
-        shown_text(id).as_ref(),
+        escaped(id).as_str(),
         pointer,
         Spec::Blueprint(slot),
         Value::text(id),
@@ -526,32 +527,6 @@ fn chip(shown: &str, pointer: String, spec: Spec, value: Value) -> Text {
         }],
         fault: None,
     }
-}
-
-/// A string the player wrote (a label, a rule id, a tag, a title, a name),
-/// as the prose shows it: each control character escaped (`\n`, `\r`, `\t`,
-/// and `\u{..}` for every other), so a newline or a carriage return in a
-/// label can never break a line of the prose, move a chip off the line it
-/// stands on, or write a line the player did not (S3's `gwr` review, item 6).
-/// Text with no control character is shown as written.
-#[must_use]
-pub fn shown_text(raw: &str) -> std::borrow::Cow<'_, str> {
-    if !raw.chars().any(char::is_control) {
-        return std::borrow::Cow::Borrowed(raw);
-    }
-    let mut out = String::with_capacity(raw.len());
-    for character in raw.chars() {
-        match character {
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other if other.is_control() => {
-                out.push_str(&other.escape_unicode().to_string());
-            }
-            other => out.push(other),
-        }
-    }
-    std::borrow::Cow::Owned(out)
 }
 
 /// A child of a pointer: a field name, or an index.
@@ -800,7 +775,7 @@ fn envelope(book: &Playbook, out: &mut Out) {
         .map(|meta| meta.title.trim())
         .filter(|title| !title.is_empty())
         .unwrap_or(s::UNTITLED);
-    line(0, cat!(shown_text(title).as_ref()), out);
+    line(0, cat!(escaped(title).as_str()), out);
     line(
         0,
         cat!(match meta.map(pharmakos_proto::gp::v1::Meta::author_kind) {
@@ -823,7 +798,7 @@ fn envelope(book: &Playbook, out: &mut Out) {
         // A note's own line breaks are its lines; any other control
         // character in it is shown escaped.
         for sentence in note.lines() {
-            line(0, cat!(shown_text(sentence.trim()).as_ref()), out);
+            line(0, cat!(escaped(sentence.trim()).as_str()), out);
         }
     }
 }
@@ -865,7 +840,7 @@ fn step_sentence(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
     if label.is_empty() {
         cat!(body, ".")
     } else {
-        cat!(shown_text(label).as_ref(), ": ", body, ".")
+        cat!(escaped(label).as_str(), ": ", body, ".")
     }
 }
 
@@ -927,7 +902,7 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
                 let tags: Vec<Text> = place
                     .tags
                     .iter()
-                    .map(|tag| cat!("\"", shown_text(tag).as_ref(), "\""))
+                    .map(|tag| cat!("\"", escaped(tag).as_str(), "\""))
                     .collect();
                 sentence.push(cat!(", ", s::TAGGED, " ", join(tags)));
             }
@@ -1026,7 +1001,7 @@ fn guards(entry: &Step, here: &str) -> Vec<Text> {
 
 /// A label or a rule id the file names, quoted, as a chip when it is written.
 fn label_chip(label: &str, pointer: String, kind: ReferenceKind) -> Text {
-    let shown = format!("\"{}\"", shown_text(label));
+    let shown = format!("\"{}\"", escaped(label));
     if label.is_empty() {
         return cat!(shown);
     }
@@ -1551,7 +1526,7 @@ fn feature_name(id: &str) -> String {
     if let Some((x, y)) = parse("seam_") {
         return format!("{} ({x}, {y})", s::SEAM_NAME);
     }
-    format!("{} \"{}\"", s::FEATURE_NOUN, shown_text(id))
+    format!("{} \"{}\"", s::FEATURE_NOUN, escaped(id))
 }
 
 /// A pick, with the chip's reminder of when and how it reads.
@@ -1601,7 +1576,7 @@ fn beacon_noted(reference: Option<&BeaconRef>, note: &str) -> String {
     match reference.and_then(|reference| reference.r#ref.as_ref()) {
         None => s::BEACON_NONE.to_owned(),
         Some(beacon_ref::Ref::BeaconId(id)) => {
-            format!("{} \"{}\"", s::BEACON_NOUN, shown_text(id))
+            format!("{} \"{}\"", s::BEACON_NOUN, escaped(id))
         }
         Some(beacon_ref::Ref::Safest(_)) => s::BEACON_SAFEST.to_owned(),
         Some(beacon_ref::Ref::Nearest(pick)) => {
@@ -1638,7 +1613,7 @@ fn selector(superlative: &str, filter: Option<&BeaconFilter>, note: &str) -> Str
     {
         let quoted: Vec<String> = tags
             .iter()
-            .map(|tag| format!("\"{}\"", shown_text(tag)))
+            .map(|tag| format!("\"{}\"", escaped(tag)))
             .collect();
         sentence.push(' ');
         sentence.push_str(s::TAGGED);
@@ -2112,7 +2087,7 @@ fn rules_section(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> 
             cat!(
                 number.to_string(),
                 ". \"",
-                shown_text(&rule.id).as_ref(),
+                escaped(&rule.id).as_str(),
                 "\", when ",
                 condition(rule.when.as_ref(), &at(&here, "when")),
                 ":"
@@ -2140,7 +2115,7 @@ fn rules_section(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> 
         line(2, firing(rule, &here, ctx.limits), out);
         let note = rule.note.trim();
         if !note.is_empty() {
-            line(2, cat!(shown_text(note).as_ref()), out);
+            line(2, cat!(escaped(note).as_str()), out);
         }
         pending.push(open.close(from, out));
     }

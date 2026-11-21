@@ -44,6 +44,7 @@
 
 use crate::error::Error;
 use crate::scopes::{NEVER_ON_A_SEAT, Scope, ScopeSet};
+use pharmakos_proto::said;
 use pharmakos_sim::math::quantity::Tick;
 use pharmakos_sim::tables::SeatId;
 
@@ -140,8 +141,9 @@ impl Token {
     pub fn mint() -> Result<Token, Error> {
         let mut bytes = [0_u8; TOKEN_BYTES];
         getrandom::fill(&mut bytes).map_err(|error| {
-            Error::internal(format!(
-                "the operating system would not provide entropy for a seat token: {error}"
+            Error::internal(said!(
+                "the operating system would not provide entropy for a seat token: {}",
+                crate::error::engine(&error)
             ))
         })?;
         Ok(Token(bytes))
@@ -437,10 +439,12 @@ fn check_scopes(subject: Subject, scopes: ScopeSet) -> Result<(), Error> {
     if subject.seat().is_some() {
         for banned in NEVER_ON_A_SEAT {
             if scopes.holds(*banned) {
-                return Err(Error::forbidden(format!(
+                return Err(Error::forbidden(said!(
                     "a seat token can never hold `{}` (spec section 12); only a separate \
                      spectator token can",
-                    crate::scopes::scope_wire_name(*banned)
+                    pharmakos_proto::json::grammar::quoted(&crate::scopes::scope_wire_name(
+                        *banned
+                    ))
                 )));
             }
         }

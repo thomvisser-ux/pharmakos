@@ -111,26 +111,57 @@ pub struct Error {
     pub pointer: String,
     /// English, precise, and safe to show a player beside the pointer.
     pub message: String,
+    /// Only this crate makes an error, from a [`super::grammar::Said`]
+    /// (S3's `vfyq2`, fix pass 3, item M2 (d)): the fields are read
+    /// anywhere, and none of them can be written from outside, so
+    /// [`Error::said`] is the codec's own words.
+    sealed: Sealed,
 }
 
+/// [`Error`]'s seal: a field no other crate can name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Sealed;
+
 impl Error {
-    pub(crate) fn at(kind: ErrorKind, pointer: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn at(
+        kind: ErrorKind,
+        pointer: &str,
+        message: impl Into<super::grammar::Said>,
+    ) -> Self {
         Self {
             kind,
             pointer: pointer.to_owned(),
-            message: message.into(),
+            message: message.into().into_string(),
+            sealed: Sealed,
+        }
+    }
+
+    /// The reference reader's error (test-only: the old codec, kept to hold
+    /// the fast one to it): its words are its own `String`s, and nothing
+    /// shipped reads them.
+    #[cfg(test)]
+    pub(crate) fn from_reference(kind: ErrorKind, pointer: String, message: String) -> Self {
+        Self {
+            kind,
+            pointer,
+            message,
+            sealed: Sealed,
         }
     }
 
     /// The message, as text a player is shown (S3's `vfyq2`, fix pass 2,
-    /// item B): the codec composes every message from its own words and
-    /// player text it has put through [`super::grammar::quoted`], so the
-    /// message is already in the shown form.
+    /// item B): every message is made by [`Error::at`] from a
+    /// [`super::grammar::Said`], and no other crate can make an `Error`, so
+    /// the message is already in the shown form.
     #[must_use]
     pub fn said(&self) -> super::grammar::Said {
-        super::grammar::Said::composed_by_said(self.message.clone())
+        super::grammar::Said::made_here(self.message.clone())
     }
 }
+
+/// A codec error's words are its message, which [`Error::at`] took as a
+/// [`super::grammar::Said`].
+impl super::grammar::EngineWords for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -64,6 +64,7 @@
 //! ([`RouteAdapter::take_fault`]) and its caller raises it as a typed error
 //! after the call, rather than drawing an unreachable leg over a bug.
 
+use pharmakos_proto::said;
 use std::cell::{Cell, RefCell};
 
 use pharmakos_plan_core::travel::{Estimate, TravelEstimator};
@@ -190,8 +191,9 @@ impl RouteAdapter {
             Error::internal("this map has more columns than this host's usize counts")
         })?;
         if !unknown.is_empty() && unknown.len() != nodes {
-            return Err(Error::internal(format!(
-                "a fog mask is one entry per column: this map has {nodes} and the mask has {}",
+            return Err(Error::internal(said!(
+                "a fog mask is one entry per column: this map has {} and the mask has {}",
+                nodes,
                 unknown.len()
             )));
         }
@@ -280,7 +282,7 @@ impl TravelEstimator for RouteAdapter {
         // (AGENTS.md section 4.3), so a negative is a fault the caller raises
         // rather than a number nobody meant or a route that is not there.
         let Ok(ticks) = u32::try_from(found.ticks) else {
-            self.fault(Error::internal(format!(
+            self.fault(Error::internal(said!(
                 "the estimator priced a leg at {} ticks, below zero",
                 found.ticks
             )));

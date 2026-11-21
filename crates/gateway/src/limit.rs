@@ -40,6 +40,7 @@
 //! hardening, with the numbers.
 
 use crate::error::Error;
+use pharmakos_proto::said;
 use pharmakos_sim::math::quantity::Tick;
 
 /// Calls one token may make in a single tick.
@@ -167,15 +168,16 @@ impl RateLimiter {
         }
 
         if self.in_tick >= self.limits.per_tick {
-            return Err(Error::rate_limited(format!(
+            return Err(Error::rate_limited(said!(
                 "over {} calls in one tick",
                 self.limits.per_tick
             )));
         }
         if self.in_window >= self.limits.per_window {
-            return Err(Error::rate_limited(format!(
+            return Err(Error::rate_limited(said!(
                 "over {} calls in {} ticks",
-                self.limits.per_window, self.limits.window_ticks
+                self.limits.per_window,
+                self.limits.window_ticks
             )));
         }
 

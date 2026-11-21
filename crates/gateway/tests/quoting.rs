@@ -155,8 +155,8 @@ fn a_patch_refusal_carries_its_pointer_whole() {
     );
     let token = support::seat_token(&mut surface, 0);
     let mut left = FIRST_LULL_MS;
-    let path =
-        "/declarative/route/0/move/to/beacon_anchor/nowhere_at_all/and_further/still_further";
+    // A member the anchor does not have: the refusal is at this very path.
+    let path = "/declarative/route/0/move/to/beacon_anchor/a_member_with_a_rather_long_name_indeed";
     assert!(path.chars().count() > 64);
     let json_patch = format!(r#"[{{"op":"remove","path":"{path}"}}]"#);
     let answer = call_in_lull(

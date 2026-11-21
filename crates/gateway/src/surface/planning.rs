@@ -72,6 +72,8 @@
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::json::Json;
+use pharmakos_proto::json::grammar::{Said, quoted};
+use pharmakos_proto::said;
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::rules::RulesTable;
 
@@ -144,18 +146,23 @@ impl Surface {
                 .filter(|row| row.seat == seat.raw())
                 .map(|row| {
                     pharmakos_sim::licence::licence_of(row.licence).ok_or_else(|| {
-                        Error::internal(format!(
+                        Error::internal(said!(
                             "the licence table holds licence {} for seat {}, which this build \
                              does not define",
-                            row.licence, row.seat
+                            row.licence,
+                            row.seat
                         ))
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?,
             None => Vec::new(),
         };
-        let words = pharmakos_plan_core::vocabulary::vocabulary(&held)
-            .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?;
+        let words = pharmakos_plan_core::vocabulary::vocabulary(&held).map_err(|error| {
+            Error::internal(said!(
+                "the vocabulary: {}",
+                pharmakos_proto::json::grammar::Said::engine_error(&error)
+            ))
+        })?;
         let entries = |entries: &[pharmakos_plan_core::vocabulary::Entry]| {
             Json::Array(entries.iter().map(vocabulary_entry).collect())
         };
@@ -213,9 +220,9 @@ impl Surface {
             ]));
         };
         let found = pharmakos_plan_core::library::list(folder).map_err(|error| {
-            Error::internal(format!(
+            Error::internal(said!(
                 "the template folder could not be read: {}",
-                error.message
+                error.said()
             ))
         })?;
         let templates: Vec<Json> = found
@@ -347,8 +354,9 @@ impl Surface {
         // out an absolute directory would hand every seat the layout of the
         // machine it is playing on for the price of one bad id.
         let text = pharmakos_plan_core::library::read(folder, template_id).map_err(|_| {
-            Error::not_found(format!(
-                "no template `{template_id}` in this gateway's library"
+            Error::not_found(said!(
+                "no template `{}` in this gateway's library",
+                pharmakos_proto::json::grammar::quoted(template_id)
             ))
         })?;
 
@@ -361,13 +369,13 @@ impl Surface {
                 let name = match item.get("name") {
                     Some(Json::String(name)) => name.clone(),
                     _ => {
-                        return Err(Error::invalid(format!("parameter {index} has no `name`")));
+                        return Err(Error::invalid(said!("parameter {} has no `name`", index)));
                     }
                 };
                 let value = match item.get("value") {
                     Some(Json::String(value)) => value.clone(),
                     _ => {
-                        return Err(Error::invalid(format!("parameter {index} has no `value`")));
+                        return Err(Error::invalid(said!("parameter {} has no `value`", index)));
                     }
                 };
                 parameters.push(pharmakos_plan_core::library::Parameter { name, value });
@@ -398,7 +406,7 @@ impl Surface {
         let why = suggestion.map_or_else(String::new, |suggestion| suggestion.why.clone());
 
         let made = pharmakos_plan_core::instantiate(&text, &parameters, &offered)
-            .map_err(|error| Error::invalid(error.message))?;
+            .map_err(|error| Error::invalid(error.shown()))?;
         let filled: Vec<Json> = made
             .parameters
             .iter()
@@ -472,7 +480,7 @@ impl Surface {
             host.runner().frozen().snapshot(),
             seat.raw(),
         )
-        .map_err(|error| Error::internal(error.message))?;
+        .map_err(|error| Error::internal(error.shown()))?;
 
         // A file with no canonical form has no rendering. That is not an error
         // -- the editor asks for a rendering on every keystroke and a half-typed
@@ -492,7 +500,7 @@ impl Surface {
             },
             Ok(canonical) => {
                 pharmakos_plan_core::render(canonical.decoded().message(), &context, host.rules())
-                    .map_err(|error| Error::internal(error.message))?
+                    .map_err(|error| Error::internal(error.shown()))?
             }
         };
         let mut entries = vec![(String::from("prose"), Json::String(rendering.prose))];
@@ -518,7 +526,7 @@ impl Surface {
             .string_param("json_patch")?
             .ok_or_else(|| Error::invalid("`json_patch` is an RFC 6902 patch, as text"))?;
         let (patched, inverse) = pharmakos_plan_core::patch_text(playbook, patch)
-            .map_err(|error| Error::invalid(error.message))?;
+            .map_err(|error| Error::invalid(error.shown()))?;
         Ok(Json::Object(vec![
             (String::from("playbook_jsonc"), Json::String(patched)),
             (String::from("inverse_json_patch"), Json::String(inverse)),
@@ -543,8 +551,9 @@ impl Surface {
             None => String::new(),
         };
         if label.chars().count() > MAX_DRAFT_LABEL_CHARS {
-            return Err(Error::invalid(format!(
-                "a draft's label is at most {MAX_DRAFT_LABEL_CHARS} characters"
+            return Err(Error::invalid(said!(
+                "a draft's label is at most {} characters",
+                MAX_DRAFT_LABEL_CHARS
             )));
         }
         let round = self.host()?.runner().round();
@@ -554,18 +563,20 @@ impl Surface {
             None => format!("d{round}-{}", self.next_draft_number(seat, round)?),
         };
         if !is_draft_id(&draft_id) {
-            return Err(Error::invalid(format!(
-                "`{draft_id}` is not a draft id: lower-case ASCII letters, digits, `-` and `_`, \
-                 starting with a letter"
+            return Err(Error::invalid(said!(
+                "`{}` is not a draft id: lower-case ASCII letters, digits, `-` and `_`, \
+                 starting with a letter",
+                pharmakos_proto::json::grammar::quoted(&draft_id)
             )));
         }
 
         let state = self.seat_state_mut(subject, seat)?;
         let replacing = state.draft(&draft_id).is_some();
         if !replacing && state.drafts.len() >= MAX_DRAFTS {
-            return Err(Error::invalid(format!(
-                "this seat holds {MAX_DRAFTS} drafts, which is as many as it may; delete one by \
-                 saving over it"
+            return Err(Error::invalid(said!(
+                "this seat holds {} drafts, which is as many as it may; delete one by \
+                 saving over it",
+                MAX_DRAFTS
             )));
         }
         state.drafts.retain(|draft| draft.draft_id != draft_id);
@@ -729,15 +740,16 @@ impl Surface {
         }
         let playbook = playbook_param(request)?;
         let canonical = pharmakos_plan_core::decode_jsonc(playbook).map_err(|error| {
-            Error::invalid(format!(
+            Error::invalid(said!(
                 "this file has no canonical form yet, so it names nothing to resolve: {}",
-                error.message
+                error.said()
             ))
         })?;
         let playbook = canonical.decoded().message();
-        let plan = compile_decoded(playbook, host.rules()).map_err(|error| {
-            Error::invalid(format!(
-                "this build cannot execute this playbook, so none of it reads anything: {error}"
+        let plan = compile_decoded(playbook, host.rules()).map_err(|why| {
+            Error::invalid(said!(
+                "this build cannot execute this playbook, so none of it reads anything: {}",
+                why
             ))
         })?;
         let resolved = crate::targeting::resolve_playbook(
@@ -804,9 +816,9 @@ impl Surface {
         };
         let canonical =
             pharmakos_plan_core::decode_jsonc(&sealed.playbook_jsonc).map_err(|error| {
-                Error::internal(format!(
+                Error::internal(said!(
                     "a playbook this seat sealed has no canonical form: {}",
-                    error.message
+                    error.said()
                 ))
             })?;
         let reads = crate::targeting::resolve_playbook(
@@ -933,9 +945,10 @@ impl Surface {
             self.seal_commitment_of(seat, canonical.decoded().message())
                 .map_err(|unpriced| match unpriced {
                     super::knowledge::Unpriced::Gateway(error) => error,
-                    super::knowledge::Unpriced::Playbook(why) => Error::invalid(format!(
-                        "this playbook qualifies and the Ledger cannot price its seal: {why}. \
-                         Order less in one step"
+                    super::knowledge::Unpriced::Playbook(why) => Error::invalid(said!(
+                        "this playbook qualifies and the Ledger cannot price its seal: {}. \
+                         Order less in one step",
+                        why
                     )),
                 })?;
             let sealed = Sealed {
@@ -979,9 +992,11 @@ impl Surface {
         (1..=MAX_DRAFTS.saturating_add(1))
             .find(|number| state.draft(&format!("d{round}-{number}")).is_none())
             .ok_or_else(|| {
-                Error::internal(format!(
-                    "seat {} holds more than {MAX_DRAFTS} drafts of round {round}",
-                    seat.raw()
+                Error::internal(said!(
+                    "seat {} holds more than {} drafts of round {}",
+                    seat.raw(),
+                    MAX_DRAFTS,
+                    round
                 ))
             })
     }
@@ -1036,9 +1051,9 @@ impl Surface {
 /// drifted apart.
 pub(crate) fn compile_playbook(playbook_jsonc: &str, rules: &RulesTable) -> Result<Plan, Error> {
     let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
-        Error::internal(format!(
+        Error::internal(said!(
             "a playbook the verifier read has no canonical form: {}",
-            error.message
+            error.said()
         ))
     })?;
     compile_canonical(&canonical, rules)
@@ -1057,9 +1072,10 @@ pub(crate) fn compile_canonical(
     canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
     rules: &RulesTable,
 ) -> Result<Plan, Error> {
-    compile_decoded(canonical.decoded().message(), rules).map_err(|error| {
-        Error::invalid(format!(
-            "this playbook qualifies and this build cannot execute it: {error}"
+    compile_decoded(canonical.decoded().message(), rules).map_err(|why| {
+        Error::invalid(said!(
+            "this playbook qualifies and this build cannot execute it: {}",
+            why
         ))
     })
 }
@@ -1067,12 +1083,178 @@ pub(crate) fn compile_canonical(
 /// The sim's own door, over a playbook already decoded: the **one** call of
 /// `Plan::compile` in the handler modules (`tests/confinement.rs`), which
 /// [`compile_playbook`] and `resolve_refs` both go through, so the playbook
-/// `resolve_refs` reads is the one a submission would seal.
+/// `resolve_refs` reads is the one a submission would seal. A refusal comes
+/// back as the gateway's own sentence for it ([`plan_refusal`]), never as
+/// the sim's error, so no handler can say a `PlanError` any other way.
 fn compile_decoded(
     playbook: &pharmakos_proto::gp::v1::Playbook,
     rules: &RulesTable,
-) -> Result<Plan, pharmakos_sim::interpreter::PlanError> {
-    Plan::compile(playbook, rules)
+) -> Result<Plan, Said> {
+    Plan::compile(playbook, rules).map_err(|error| plan_refusal(&error))
+}
+
+/// A `PlanError` as a seat reads it (S3's `vfyq2`, fix pass 3, item M2 (a)):
+/// one sentence per variant, matched with no wildcard, so a variant the sim
+/// adds does not compile here until it has one. The words are the sim's own
+/// (its `Display`), but composed from the variant's fields with `said!`, and
+/// every field that is the player's text (a blueprint id, a label, a handler
+/// id, a beacon id, a feature id) is [`quoted`]: the sim's `Display` writes
+/// them raw, and the sim is not this lane's to change. The `&'static str`
+/// fields are the sim's own words.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per PlanError variant, each the sentence a seat reads; split, the \
+              sentences would be spelled in two places"
+)]
+pub(crate) fn plan_refusal(error: &pharmakos_sim::interpreter::PlanError) -> Said {
+    use pharmakos_sim::interpreter::PlanError as E;
+    match error {
+        E::MissingBlock(name) => said!(
+            "the `{}` block is missing; the interpreter reads it and will not substitute a \
+             default",
+            *name
+        ),
+        E::UnsetEnum(name) => said!("`{}` is unset, and an unset enum is an error", *name),
+        E::UnknownEnum { field, value } => said!(
+            "`{}` carries {}, which this build does not name; a value it cannot read is refused \
+             rather than defaulted",
+            *field,
+            *value
+        ),
+        E::StepWithoutAction => "a step names no action".into(),
+        E::UnknownBlueprint(id) => said!("`{}` names no blueprint this build knows", quoted(id)),
+        E::BlueprintNeverStands(id) => said!(
+            "`{}` never stands as a structure, so a predicate asking about one could never be \
+             true",
+            quoted(id)
+        ),
+        E::NoRadius(name) => said!(
+            "`{}` is 0, which is no radius; an enemy predicate's radius is required",
+            *name
+        ),
+        E::WindowUnderVisibleNow { found } => said!(
+            "`known_within_ms` is {} ms, and a freshness of VISIBLE_NOW reads no window",
+            *found
+        ),
+        E::NegativeDuration(name) => {
+            said!("`{}` is negative; durations are game milliseconds", *name)
+        }
+        E::WaitWithoutTimeout => "a `wait_until` carries no timeout; every wait has one, which \
+                                  is half of why every playbook halts"
+            .into(),
+        E::BackwardJump { from, to } => said!(
+            "a jump from route step {} names step {}; a jump only ever goes forward",
+            *from,
+            *to
+        ),
+        E::VoxelOutOfMap { axis, value, limit } => said!(
+            "a voxel's {} of {} is outside the map, which runs 0 to {}",
+            *axis,
+            *value,
+            limit.saturating_sub(1)
+        ),
+        E::VoxelOutOfRange { axis, value } => said!(
+            "a voxel's {} of {} is past the sim's voxel coordinates",
+            *axis,
+            *value
+        ),
+        E::NegativeRate(field) => said!(
+            "the rules table's `{}` is negative; an interface time is a duration",
+            *field
+        ),
+        E::RowTooLong => {
+            "a row would take longer to commit than a signed 32-bit count of milliseconds".into()
+        }
+        E::ScoutsOutOfRange { found, most } => said!(
+            "a `scout_count` or `picket_scouts` of {} is past the {} a beacon holds",
+            *found,
+            *most
+        ),
+        E::AttackTargetNotEnemy => "an Attack target names no enemy beacon: it is an enemy \
+                                    beacon's `e_NN`, a voxel, the enemy commander or the nearest \
+                                    known enemy beacon"
+            .into(),
+        E::CommanderSeatOutOfRange { found } => said!(
+            "an `enemy_commander.seat` of {} is past any seat a match holds",
+            *found
+        ),
+        E::ForceBelowOutOfRange { found } => said!(
+            "a `force_below_pct` of {} is outside 1 to 100 percent of the launch force",
+            *found
+        ),
+        E::EngagementOutOfRange { found } => said!(
+            "an `engagement_radius_pct` of {} is past 100; it is a percentage of the sphere \
+             radius, 1 to 100",
+            *found
+        ),
+        E::RetreatOutOfRange { found } => said!(
+            "a `retreat_hp_pct` of {} is past 100 percent of a unit's hit points",
+            *found
+        ),
+        E::RotationOutOfRange { found } => said!(
+            "a `rotation_quarter_turns` of {} is past three quarter turns",
+            *found
+        ),
+        E::WallBoxOffAWall { blueprint } => said!(
+            "a `{}` target carries a `wall_box`; only a `wall` target fills a box",
+            quoted(blueprint)
+        ),
+        E::AreaInsideOut => "an area's `min` exceeds its `max` in x or y".into(),
+        E::RepairThresholdOutOfRange { found } => said!(
+            "a `repair_threshold_pct` of {} is past 100 percent of a structure's hit points",
+            *found
+        ),
+        E::WallWithoutBox => "a `wall` target carries no `wall_box`".into(),
+        E::WallBoxInsideOut => "a `wall_box`'s `min.z` exceeds its `max.z`".into(),
+        E::WallTurned { found } => said!(
+            "a `wall` target is turned {} quarter turns; a wall's box is not turned",
+            *found
+        ),
+        E::WallAnchorOutsideBox => {
+            "a `wall` target's anchor is no voxel inside its `wall_box`".into()
+        }
+        E::UnknownLabel(label) => {
+            said!("`{}` names no step in this playbook's route", quoted(label))
+        }
+        E::UnknownHandler(id) => said!("`{}` names no handler in this playbook", quoted(id)),
+        E::UnknownFeature(id) => said!(
+            "`{}` is not a feature name of the `vent_<x>_<y>` or `seam_<x>_<y>` form",
+            quoted(id)
+        ),
+        E::MisplacedTarget(why) => (*why).into(),
+        E::UnknownBeacon(id) => said!(
+            "`{}` is not a beacon reference of the `b_NN` or `e_NN` form",
+            quoted(id)
+        ),
+        E::CooldownTooShort { found, least } => said!(
+            "a handler's cooldown of {} ms is below the {} ms the rules table sets",
+            *found,
+            *least
+        ),
+        E::FiresOutOfRange { found, most } => said!(
+            "a handler's `max_fires` of {} is outside 1 to {}",
+            *found,
+            *most
+        ),
+        E::ConditionTooDeep { limit } => said!("a condition tree nests deeper than {}", *limit),
+        E::ConditionTooBig { limit } => said!("a condition tree holds more than {} nodes", *limit),
+        E::TooManySteps { found, limit } => said!(
+            "the route holds {} steps; the ceiling is {}",
+            *found,
+            *limit
+        ),
+        E::TooManyHandlers { found, limit } => said!(
+            "the playbook holds {} handlers; the ceiling is {}",
+            *found,
+            *limit
+        ),
+        E::NotAtThisStage { construct, stage } => said!(
+            "{} is in the v1 vocabulary but has no effect until {}; it is refused rather than \
+             silently ignored",
+            *construct,
+            *stage
+        ),
+    }
 }
 
 /// The `playbook_jsonc` parameter, bounded.
@@ -1081,8 +1263,9 @@ fn playbook_param(request: &Request) -> Result<&str, Error> {
         .string_param("playbook_jsonc")?
         .ok_or_else(|| Error::invalid("`playbook_jsonc` is the playbook, as JSONC text"))?;
     if pharmakos_verifier::is_too_long(text) {
-        return Err(Error::invalid(format!(
-            "a playbook is at most {MAX_PLAYBOOK_CHARS} characters and this is {}",
+        return Err(Error::invalid(said!(
+            "a playbook is at most {} characters and this is {}",
+            MAX_PLAYBOOK_CHARS,
             text.chars().count()
         )));
     }
@@ -1098,8 +1281,9 @@ fn depth_of(request: &Request) -> Result<Depth, Error> {
         // gets the report a submit would produce.
         None | Some("full") => Ok(Depth::Full),
         Some("quick") => Ok(Depth::Quick),
-        Some(other) => Err(Error::invalid(format!(
-            "`depth` is `quick` or `full`, and this is `{other}`"
+        Some(other) => Err(Error::invalid(said!(
+            "`depth` is `quick` or `full`, and this is `{}`",
+            pharmakos_proto::json::grammar::quoted(other)
         ))),
     }
 }

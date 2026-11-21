@@ -52,6 +52,10 @@ impl From<UnknownEnum> for VocabularyError {
     }
 }
 
+/// Its words are figures and the schema's own names (S3's `vfyq2`, fix pass
+/// 3, item M2 (d)).
+impl pharmakos_proto::json::grammar::EngineWords for VocabularyError {}
+
 impl core::fmt::Display for VocabularyError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

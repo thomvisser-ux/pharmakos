@@ -32,6 +32,7 @@
 //! publishes.
 
 use crate::error::Error;
+use pharmakos_proto::said;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -95,9 +96,11 @@ impl Listener {
         }
 
         if sockets.is_empty() {
-            return Err(Error::internal(format!(
-                "neither 127.0.0.1:{port} nor [::1]:{port} could be bound. The Seat Gateway \
-                 binds loopback only and has no other address to try."
+            return Err(Error::internal(said!(
+                "neither 127.0.0.1:{} nor [::1]:{} could be bound. The Seat Gateway \
+                 binds loopback only and has no other address to try.",
+                port,
+                port
             )));
         }
         Ok(Listener {
@@ -155,7 +158,12 @@ impl Listener {
                 .spawn(move || {
                     accept_loop(&socket, &sender);
                 })
-                .map_err(|error| Error::internal(format!("starting an accept thread: {error}")))?;
+                .map_err(|error| {
+                    Error::internal(said!(
+                        "starting an accept thread: {}",
+                        crate::error::engine(&error)
+                    ))
+                })?;
             threads.push(thread);
         }
         drop(sender);
@@ -176,7 +184,10 @@ fn bound_port(socket: &TcpListener) -> Result<u16, Error> {
         .local_addr()
         .map(|address| address.port())
         .map_err(|error| {
-            Error::internal(format!("a bound loopback socket has no address: {error}"))
+            Error::internal(said!(
+                "a bound loopback socket has no address: {}",
+                crate::error::engine(&error)
+            ))
         })
 }
 

@@ -137,6 +137,8 @@
 //! *does* keep a new client out for as long as it keeps them open.
 //! [`MAX_CONNECTIONS`] carries that sentence and the two ways out of it.
 
+use pharmakos_proto::json::grammar::Said;
+use pharmakos_proto::said;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -387,9 +389,11 @@ impl Config {
                 .get(index)
                 .map(|text| (*text).to_owned())
                 .ok_or_else(|| {
-                    Error::invalid(format!(
-                        "the config line has no field {index} (`{name}`); it is seven \
-                         tab-separated fields"
+                    Error::invalid(said!(
+                        "the config line has no field {} (`{}`); it is seven \
+                         tab-separated fields",
+                        index,
+                        pharmakos_proto::json::grammar::quoted(name)
                     ))
                 })
         };
@@ -400,8 +404,9 @@ impl Config {
             .and_then(|digits| u64::from_str_radix(digits, 16).ok())
             .or_else(|| seed_text.parse::<u64>().ok())
             .ok_or_else(|| {
-                Error::invalid(format!(
-                    "`{seed_text}` is not a match seed: `0x…` or decimal"
+                Error::invalid(said!(
+                    "`{}` is not a match seed: `0x…` or decimal",
+                    pharmakos_proto::json::grammar::quoted(&seed_text)
                 ))
             })?;
         let seats = field(2, "seats")?
@@ -424,8 +429,9 @@ impl Config {
             let mut found: Vec<i32> = Vec::new();
             for piece in lengths.split(',') {
                 found.push(piece.parse::<i32>().map_err(|_| {
-                    Error::invalid(format!(
-                        "`{piece}` is not a segment length in game milliseconds"
+                    Error::invalid(said!(
+                        "`{}` is not a segment length in game milliseconds",
+                        pharmakos_proto::json::grammar::quoted(piece)
                     ))
                 })?);
             }
@@ -450,8 +456,10 @@ impl Config {
         if let Some(seat) = human_seat
             && u32::from(seat) >= seats
         {
-            return Err(Error::invalid(format!(
-                "this match has {seats} seats and the human is seat {seat}"
+            return Err(Error::invalid(said!(
+                "this match has {} seats and the human is seat {}",
+                seats,
+                seat
             )));
         }
         Ok(Config {
@@ -519,9 +527,10 @@ impl ConfigLine {
         let trimmed = line.trim_end_matches(['\r', '\n']);
         let fields = trimmed.split('\t').count();
         if fields > 8 {
-            return Err(Error::invalid(format!(
-                "the config line has {fields} tab-separated fields and this host reads at most \
-                 eight: the match's seven, and `resume`"
+            return Err(Error::invalid(said!(
+                "the config line has {} tab-separated fields and this host reads at most \
+                 eight: the match's seven, and `resume`",
+                fields
             )));
         }
         let eighth = trimmed.split('\t').nth(7).unwrap_or("");
@@ -529,9 +538,10 @@ impl ConfigLine {
             "" | "-" => false,
             "resume" => true,
             other => {
-                return Err(Error::invalid(format!(
-                    "`{other}` is not an eighth config field this host reads: it is `resume`, or \
-                     nothing for a new match"
+                return Err(Error::invalid(said!(
+                    "`{}` is not an eighth config field this host reads: it is `resume`, or \
+                     nothing for a new match",
+                    pharmakos_proto::json::grammar::quoted(other)
                 )));
             }
         };
@@ -616,7 +626,7 @@ enum Job {
         reply: Sender<String>,
     },
     /// Record a refused upgrade.
-    Refused { reason: String, status: u16 },
+    Refused { reason: Said, status: u16 },
     /// The control pipe reached end of file: put the match down.
     ///
     /// The channel closing would not do it. A reader thread and the accept
@@ -680,7 +690,7 @@ impl Door for RemoteDoor {
     fn refused(&mut self, refusal: &crate::handshake::Refusal) {
         let error = session::refusal_error(refusal);
         let _ = self.jobs.send(Job::Refused {
-            reason: error.message,
+            reason: error.said(),
             status: refusal.status(),
         });
     }
@@ -807,12 +817,22 @@ pub fn run_in<C: Read, A: Write>(
         .spawn(move || {
             serve_surface(&mut surface, &writer, &mut in_process, &work);
         })
-        .map_err(|error| Error::internal(format!("starting the surface thread: {error}")))?;
+        .map_err(|error| {
+            Error::internal(said!(
+                "starting the surface thread: {}",
+                crate::error::engine(&error)
+            ))
+        })?;
     let dispatcher = spawn_dispatcher(listener.accept()?, policy, jobs.clone())?;
     announce
         .write_all(written.as_bytes())
         .and_then(|()| announce.flush())
-        .map_err(|error| Error::internal(format!("writing the announce line: {error}")))?;
+        .map_err(|error| {
+            Error::internal(said!(
+                "writing the announce line: {}",
+                crate::error::engine(&error)
+            ))
+        })?;
 
     // The parent holds this pipe open for the life of the match. Reading it to
     // end of file is the whole of the shutdown protocol -- no heartbeat, no
@@ -838,8 +858,9 @@ impl RulesHash {
         pharmakos_sim::rules::RulesTable::from_canonical_json(rules_json)
             .map(|table| RulesHash(table.rules_hash()))
             .map_err(|error| {
-                Error::invalid(format!(
-                    "this is not a rules table this build reads: {error}"
+                Error::invalid(said!(
+                    "this is not a rules table this build reads: {}",
+                    crate::error::engine(&error)
                 ))
             })
     }
@@ -848,9 +869,12 @@ impl RulesHash {
 /// Read the one config line the parent writes.
 fn read_config<C: Read>(lines: &mut BufReader<C>) -> Result<ConfigLine, Error> {
     let mut first = String::new();
-    lines
-        .read_line(&mut first)
-        .map_err(|error| Error::internal(format!("reading the config line: {error}")))?;
+    lines.read_line(&mut first).map_err(|error| {
+        Error::internal(said!(
+            "reading the config line: {}",
+            crate::error::engine(&error)
+        ))
+    })?;
     if first.trim().is_empty() {
         return Err(Error::invalid(
             "this host is started by one config line on its standard input, and the line was empty",
@@ -1185,13 +1209,14 @@ fn advisor_call(
     let method = crate::scopes::method_from_wire(&request.method);
     let allowed = method.is_some_and(|method| ADVISOR_METHODS.contains(&method));
     if !allowed {
-        let error = Error::forbidden(format!(
-            "the built-in operator advising seat {seat} may not call `{}`: an advisor reads and \
+        let error = Error::forbidden(said!(
+            "the built-in operator advising seat {} may not call `{}`: an advisor reads and \
              never writes, and a seat's notebook, drafts, submission and readiness are its own",
-            method.map_or_else(
+            seat,
+            pharmakos_proto::json::grammar::quoted(&method.map_or_else(
                 || String::from("<unknown>"),
                 crate::scopes::method_wire_name
-            )
+            ))
         ));
         let tick = surface.time().tick;
         surface.audit().refused(
@@ -1244,8 +1269,9 @@ fn spawn_dispatcher(
                     // the queue is full, and a full queue is itself a fact the
                     // log shows as a gap.
                     let _ = jobs.try_send(Job::Refused {
-                        reason: format!(
-                            "this host serves at most {MAX_CONNECTIONS} connections at once"
+                        reason: said!(
+                            "this host serves at most {} connections at once",
+                            MAX_CONNECTIONS
                         ),
                         status: 503,
                     });
@@ -1268,13 +1294,21 @@ fn spawn_dispatcher(
                     // same reason).
                     live.fetch_sub(1, Ordering::SeqCst);
                     let _ = refusals.try_send(Job::Refused {
-                        reason: format!("this host could not start a connection thread: {error}"),
+                        reason: said!(
+                            "this host could not start a connection thread: {}",
+                            crate::error::engine(&error)
+                        ),
                         status: 503,
                     });
                 }
             }
         })
-        .map_err(|error| Error::internal(format!("starting the connection dispatcher: {error}")))
+        .map_err(|error| {
+            Error::internal(said!(
+                "starting the connection dispatcher: {}",
+                crate::error::engine(&error)
+            ))
+        })
 }
 
 /// What the surface thread writes into the private match cache, and with.

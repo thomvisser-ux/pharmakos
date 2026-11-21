@@ -312,6 +312,11 @@ pub enum ScopeError {
     },
 }
 
+/// A scope refusal names a beacon of the seat's view, which the host built
+/// from the world (`b_NN`, `e_NN`), and numbers (S3's `vfyq2`, fix pass 3,
+/// item M2 (d)); nothing in it is read from a playbook.
+impl pharmakos_proto::json::grammar::EngineWords for ScopeError {}
+
 impl core::fmt::Display for ScopeError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

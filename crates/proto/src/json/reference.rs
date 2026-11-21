@@ -72,11 +72,7 @@ impl JsonReader<'_> {
         } else {
             ErrorKind::Grammar
         };
-        Error {
-            kind,
-            pointer: format!("/byte/{}", self.pos),
-            message,
-        }
+        Error::from_reference(kind, format!("/byte/{}", self.pos), message)
     }
 
     fn peek(&self) -> Option<u8> {
@@ -1207,5 +1203,5 @@ fn classified(pointer: &str, message: impl Into<String>) -> Error {
         .iter()
         .find(|(words, _)| message.contains(words))
         .map_or(ErrorKind::Wire, |(_, kind)| *kind);
-    Error::at(kind, pointer, message)
+    Error::from_reference(kind, pointer.to_owned(), message)
 }

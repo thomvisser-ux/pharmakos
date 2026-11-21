@@ -31,6 +31,11 @@ pub struct Error {
     /// What was malformed in a patch or a pointer, when that is why: a caller
     /// tells it by this, never by reading the message.
     pub malformed: Option<Malformed>,
+    /// The message as it was said: only this crate's constructors, which
+    /// take a [`Said`], make an `Error` (the field is the crate's, so no other
+    /// crate can write one), so [`Error::said`] is never a caller's raw text
+    /// (S3's `vfyq2`, fix pass 3, item M2 (d)).
+    pub(crate) said: Said,
 }
 
 /// Something a patch or a pointer wrote that its grammar does not have
@@ -75,11 +80,13 @@ impl Error {
     /// An error at a pointer.
     #[must_use]
     pub fn at(pointer: impl Into<String>, message: impl Into<Said>) -> Self {
+        let said = message.into();
         Self {
             pointer: pointer.into(),
-            message: message.into().into_string(),
+            message: said.as_str().to_owned(),
             bound: None,
             malformed: None,
+            said,
         }
     }
 
@@ -90,22 +97,26 @@ impl Error {
         pointer: impl Into<String>,
         message: impl Into<Said>,
     ) -> Self {
+        let said = message.into();
         Self {
             pointer: pointer.into(),
-            message: message.into().into_string(),
+            message: said.as_str().to_owned(),
             bound: None,
             malformed: Some(malformed),
+            said,
         }
     }
 
     /// A refusal by a bound on the work one call may do.
     #[must_use]
     pub fn bounded(bound: Bound, pointer: impl Into<String>, message: impl Into<Said>) -> Self {
+        let said = message.into();
         Self {
             pointer: pointer.into(),
-            message: message.into().into_string(),
+            message: said.as_str().to_owned(),
             bound: Some(bound),
             malformed: None,
+            said,
         }
     }
 
@@ -113,6 +124,29 @@ impl Error {
     #[must_use]
     pub fn at_byte(offset: usize, message: impl Into<Said>) -> Self {
         Self::at(format!("/byte/{offset}"), message)
+    }
+
+    /// The message, as text a person is shown.
+    #[must_use]
+    pub fn said(&self) -> Said {
+        self.said.clone()
+    }
+
+    /// The refusal as a person reads it: the pointer, shown token by token
+    /// ([`pharmakos_proto::json::grammar::quoted_pointer`], so one of the
+    /// schema's names comes back whole), then the message; the message alone
+    /// when the error is at the root.
+    #[must_use]
+    pub fn shown(&self) -> Said {
+        if self.pointer.is_empty() {
+            self.said()
+        } else {
+            pharmakos_proto::said!(
+                "at {}: {}",
+                pharmakos_proto::json::grammar::quoted_pointer(&self.pointer),
+                self.said()
+            )
+        }
     }
 
     /// True when this error points at a byte offset rather than at a node.
@@ -198,22 +232,31 @@ impl From<pharmakos_verifier::InputError> for Error {
 }
 
 impl From<pharmakos_verifier::ProjectionError> for Error {
+    /// The projection's refusal, said here from its fields (S3's `vfyq2`,
+    /// fix pass 3, item M2 (d)): `UnknownBlueprint` carries the blueprint id
+    /// the playbook wrote, so it is quoted, and the type does not declare
+    /// its `Display` engine words.
     fn from(error: pharmakos_verifier::ProjectionError) -> Self {
-        Self::at(
-            "",
-            pharmakos_proto::json::grammar::Said::engine_error(&error),
-        )
+        use pharmakos_verifier::ProjectionError;
+        let said = match &error {
+            ProjectionError::UnknownBlueprint(id) => pharmakos_proto::said!(
+                "`{}` is not a blueprint the rules table prices",
+                pharmakos_proto::json::grammar::quoted(id)
+            ),
+            ProjectionError::Overflow => {
+                "the projection does not fit in a `$` or `kW` figure".into()
+            }
+            ProjectionError::UnpricedWall => "a `wall` target with no whole box (none, a corner \
+                                              missing, or inside out) has no voxels to price"
+                .into(),
+        };
+        Self::at("", said)
     }
 }
 
 impl From<pharmakos_proto::json::Error> for Error {
     fn from(error: pharmakos_proto::json::Error) -> Self {
-        Self {
-            pointer: error.pointer,
-            message: error.message,
-            bound: None,
-            malformed: None,
-        }
+        Self::at(error.pointer.clone(), error.said())
     }
 }
 
