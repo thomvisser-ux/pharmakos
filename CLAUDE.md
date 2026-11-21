@@ -94,6 +94,9 @@ stage demo the delegation returns to the owner, who says then whether it runs on
   open a PR and stop; for them the contract-file rule is held by the lane's brief, the two adversarial
   reviews and the main session's reading of every PR before it merges, rather than by prompts. The
   ban above stays in force for any session or agent that touches a real seat.
+- The merge delegation never reaches a point the decisions log reserves to the owner, or a change to
+  something the owner ruled: the main session holds that piece for the owner, merges nothing of it
+  on its own word, and brings the question in a batched interview (decisions-log item 168).
 
 ## Commands
 

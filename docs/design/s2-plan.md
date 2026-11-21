@@ -2092,7 +2092,7 @@ questions go to the owner at S2's demo (item 151 (5)).
     to the ground (`site`), the flat cut leaves nothing above it unsupported, so a breach never
     causes a collapse (decision 39). Intercepting the carrier is the counter: a carrier killed
     before it plants drops a charge that never fires (decision 9); a carried charge is also lost, and
-    announced with the same `charge_lost` event, when its breach is let go any other way (item 166).
+    announced with the same `charge_lost` event, when its breach is let go any other way (items 166 and 168 (6)).
   - **Attack's state** (the pinned target, the staging and launch state, the wave count, a charge's
     carrier and fuse) in a hashed table of its own with a row per Attack beacon, hashing nothing
     while empty (E29).
