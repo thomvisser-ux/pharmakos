@@ -601,6 +601,66 @@ fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
     );
 }
 
+/// A `PlanError` reaches a seat only through the gateway's own sentence for
+/// it, composed from the variant's fields with every field that is player
+/// text quoted (S3's `vfyq2`, fix pass 3, item M2 (a)). The sim's `Display`
+/// for it writes ids and labels raw, so no source here names the type
+/// outside `compile_decoded` and `plan_refusal` in `src/surface/planning.rs`,
+/// and `plan_refusal` composes with `said!` alone: no `format!`, no
+/// `to_string`, no `{error}`.
+#[test]
+fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
+    let mut stray: Vec<String> = Vec::new();
+    let mut in_planning = 0_usize;
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let planning = path.ends_with("src/surface/planning.rs");
+        let mut function = String::new();
+        for (number, line) in code_lines(&text) {
+            if let Some(name) = line
+                .trim_start()
+                .strip_prefix("fn ")
+                .or_else(|| line.trim_start().strip_prefix("pub(crate) fn "))
+                .or_else(|| line.trim_start().strip_prefix("pub(super) fn "))
+            {
+                function = name
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+            }
+            let names = uses(&line, "PlanError");
+            if names && !(planning && (function == "compile_decoded" || function == "plan_refusal"))
+            {
+                stray.push(format!("{}:{number}: {}", path.display(), line.trim()));
+            }
+            if planning && function == "plan_refusal" {
+                in_planning = in_planning.saturating_add(usize::from(names));
+                for display in ["format!(", "to_string(", "{error}", "{self}"] {
+                    if line.contains(display) {
+                        stray.push(format!(
+                            "{}:{number}: `{display}` in plan_refusal: {}",
+                            path.display(),
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        in_planning > 0,
+        "plan_refusal in src/surface/planning.rs maps every PlanError"
+    );
+    assert!(
+        stray.is_empty(),
+        "a PlanError is said only by plan_refusal:\n{}",
+        stray.join("\n")
+    );
+}
+
 #[test]
 fn the_gateway_never_dials_out() {
     let findings = scan(NO_OUTBOUND);

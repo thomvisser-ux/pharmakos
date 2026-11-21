@@ -694,6 +694,48 @@ fn every_refusal_of_a_restored_seal_keeps_its_code_and_words() {
     );
 }
 
+/// A restored seal's compile refusal names the label the text wrote quoted
+/// (S3's `vfyq2`, fix pass 3, item M2 (a)): ESC, BEL and a right-to-left
+/// override in a label come back escaped, never raw.
+#[test]
+fn a_restored_seals_compile_refusal_quotes_the_label() {
+    const MATCH_ID: &str = "m-vfyq2-seal-quoted";
+    let mut surface = new_match(MATCH_ID);
+    plan_round(&mut surface);
+    assert!(surface.begin_push().expect("the Push begins"));
+    let saved = surface
+        .take_persistence()
+        .save
+        .expect("a Push's beginning is saved");
+    let label = "\u{1b}]0;owned\u{7}\u{202e}zz";
+    let text = std::fs::read_to_string(
+        support::workspace_root().join("crates/verifier/tests/cases/e0208_unknown_step_label.json"),
+    )
+    .expect("the committed case")
+    .replace("\r\n", "\n")
+    .replace(
+        "\"nowhere\"",
+        &pharmakos_proto::json::write(&Json::String(label.to_owned())),
+    );
+    let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
+    let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
+        .expect("a fingerprint");
+    let mut damaged = saved;
+    let seal = damaged
+        .seats
+        .first_mut()
+        .and_then(|seat| seat.seal.as_mut())
+        .expect("seat 0 sealed");
+    seal.playbook_jsonc = text;
+    seal.plan_fingerprint = fingerprint;
+    let error = resume(MATCH_ID, &damaged).expect_err("refused");
+    assert_eq!(error.code, Code::InvalidArgument);
+    for raw in ['\u{1b}', '\u{7}', '\u{202e}'] {
+        assert!(!error.message.contains(raw), "{:?}", error.message);
+    }
+    assert!(error.message.contains("\\u001b"), "{:?}", error.message);
+}
+
 /// The notes' A2 classifies `views` as derived, with "every cursor and handle
 /// from the dead process stale". A resumed process builds a fresh feed and
 /// attaches it once, over the same match id, seed and map as the dead

@@ -102,3 +102,53 @@ fn every_planning_refusal_quotes_the_player_text_it_carries() {
     .expect_err("a parameter that is not JSON");
     holds("a parameter's value", &refused.message);
 }
+
+/// The prose shows a player's text through the grammar's one rule (S3's
+/// `vfyq2`, fix pass 3, item M2 (c)): a title, a label and a tag holding a
+/// right-to-left override, a soft hyphen, a tag character or a line separator
+/// come back escaped, not raw, and are not cut, because prose is the player's
+/// own text read back in full.
+#[test]
+fn the_prose_escapes_every_hidden_character_and_cuts_nothing() {
+    use pharmakos_plan_core::context::PlanContext;
+    use pharmakos_plan_core::render::render_plan;
+    use pharmakos_proto::json::grammar::HIDDEN;
+    let hidden = "a\u{202e}b\u{ad}c\u{e0041}d\u{2028}e";
+    let long = "z".repeat(300);
+    let text = MINIMAL
+        .replace(
+            "\"title\":\"t\"",
+            &format!("\"title\":{}", as_json(&format!("{hidden}{long}"))),
+        )
+        .replace("\"label\":\"a\"", &format!("\"label\":{}", as_json(hidden)));
+    let canonical = canonicalise_text(&text).expect("a canonical form");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("the workspace root")
+        .to_path_buf();
+    let rules = pharmakos_sim::rules::RulesTable::load(&root.join("rules").join("rules.v1.json"))
+        .expect("the committed rules table");
+    let snapshot = pharmakos_sim::snapshot::Snapshot {
+        seat_id: vec![0],
+        seat_treasury: vec![200],
+        seat_supply: vec![10],
+        seat_draw: vec![2],
+        ..pharmakos_sim::snapshot::Snapshot::default()
+    };
+    let context = PlanContext::from_snapshot(&snapshot, 0).expect("seat 0 is in the snapshot");
+    let prose = render_plan(&canonical.playbook, &context, &rules).expect("prose");
+    let raw: Vec<String> = prose
+        .chars()
+        .filter(|character| *character != '\n')
+        .filter(|character| {
+            HIDDEN
+                .iter()
+                .any(|(low, high)| *low <= *character && *character <= *high)
+        })
+        .map(|character| format!("U+{:04X}", u32::from(character)))
+        .collect();
+    assert!(raw.is_empty(), "raw {raw:?} in the prose:\n{prose}");
+    assert!(prose.contains(&long), "the title is not cut:\n{prose}");
+    assert!(prose.contains("\\u202e"), "{prose}");
+}
