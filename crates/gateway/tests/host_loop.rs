@@ -720,6 +720,8 @@ fn a_flood_of_silent_connections_cannot_disturb_a_live_session() {
     let _ = result(&live.call("get_status", "{}"), "get_status");
 
     // Twice the cap, and not a byte from any of them.
+    let counted_before =
+        pharmakos_gateway::serve::dropped(pharmakos_gateway::serve::DropReason::OverCapacity);
     let mut silent: Vec<TcpStream> = Vec::new();
     let mut refused = 0_u32;
     for _ in 0..MAX_CONNECTIONS.saturating_mul(2) {
@@ -740,6 +742,15 @@ fn a_flood_of_silent_connections_cannot_disturb_a_live_session() {
         refused > 0,
         "past the connection cap the host answers an audited 503 rather than growing a \
          thread for every socket"
+    );
+    // Every refusal is counted under its reason, whether or not the audit
+    // queue had room for its line (fix pass 3, item L6).
+    let counted =
+        pharmakos_gateway::serve::dropped(pharmakos_gateway::serve::DropReason::OverCapacity)
+            .saturating_sub(counted_before);
+    assert!(
+        counted >= u64::from(refused),
+        "{refused} refused and {counted} counted under OverCapacity"
     );
 
     // And the session that authenticated before the flood is untouched.

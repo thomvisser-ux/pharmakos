@@ -362,3 +362,88 @@ fn a_copy_past_the_cap_is_refused_before_it_copies() {
          copied before it refused"
     );
 }
+
+/// A patch's text is capped before it is read (fix pass 3, item L4): one
+/// past `MAX_PATCH_TEXT_CHARS` is refused by its bound, and the refusal asks
+/// for no more than a sentence's bytes, because no tree was built.
+#[test]
+fn a_patch_text_past_its_cap_is_refused_unread() {
+    use pharmakos_plan_core::patch::MAX_PATCH_TEXT_CHARS;
+    let patch = format!("[{}]", " ".repeat(MAX_PATCH_TEXT_CHARS.saturating_sub(1)));
+    assert_eq!(
+        patch.chars().count(),
+        MAX_PATCH_TEXT_CHARS.saturating_add(1)
+    );
+    let before = bytes();
+    let refused = pharmakos_plan_core::patch::patch_text("{\"a\":1}", &patch).expect_err("past");
+    let asked = bytes().saturating_sub(before);
+    assert_eq!(
+        refused.bound,
+        Some(pharmakos_plan_core::error::Bound::PatchText)
+    );
+    assert!(
+        asked <= 4096,
+        "the refusal asked for {asked} bytes: it read the patch"
+    );
+}
+
+/// The bytes `patch_text` asks for are linear in its patch's bytes, at the
+/// largest patches that act on a file (fix pass 3, item L4): sixty-four
+/// operations, each replacing a value with a long string, at two sizes
+/// sixteen times apart.
+#[test]
+fn a_patch_asks_for_bytes_linear_in_its_text() {
+    const BOUND: u64 = 48;
+    let document = "{\"meta\":{\"title\":\"t\",\"note\":\"n\"}}";
+    for length in [256, 4_096] {
+        let value = "v".repeat(length);
+        let operations: Vec<String> = (0..64)
+            .map(|index| {
+                let path = if index % 2 == 0 {
+                    "/meta/title"
+                } else {
+                    "/meta/note"
+                };
+                format!(r#"{{"op":"replace","path":"{path}","value":"{value}"}}"#)
+            })
+            .collect();
+        let patch = format!("[{}]", operations.join(","));
+        let per = bytes_per_byte(patch.len(), || {
+            let _ = pharmakos_plan_core::patch::patch_text(document, &patch);
+        });
+        assert!(
+            per <= BOUND,
+            "a {}-byte patch asked for {per} bytes per byte, past {BOUND}",
+            patch.len()
+        );
+    }
+}
+
+/// A chain of copies, each refused before it copies once the next would pass
+/// the cap, asks for at most a constant times the cap however long the chain
+/// (fix pass 3, item L4): sixty-four `copy`s of a quarter-cap subtree.
+#[test]
+fn a_chain_of_copies_asks_for_at_most_a_constant_times_the_cap() {
+    // The bound: `apply` copies the document once to work on (the cap), each
+    // copy that lands copies its subtree (a quarter of the cap, at most three
+    // land), the inverse holds what each copy put, and the text written back
+    // is the cap once more; twenty times the cap is room for all of it with
+    // the allocator's growth.
+    const TIMES_THE_CAP: u64 = 20;
+    let cap = pharmakos_verifier::MAX_PLAYBOOK_CHARS;
+    let title = "x".repeat(cap >> 2);
+    let text = format!(r#"{{"meta":{{"title":"{title}"}}}}"#);
+    let operations: Vec<String> = (0..64)
+        .map(|index| format!(r#"{{"op":"copy","from":"/meta","path":"/copy{index}"}}"#))
+        .collect();
+    let patch = format!("[{}]", operations.join(","));
+    let before = bytes();
+    let refused = pharmakos_plan_core::patch::patch_text(&text, &patch).expect_err("past the cap");
+    let asked = bytes().saturating_sub(before);
+    assert_eq!(refused.bound, Some(pharmakos_plan_core::error::Bound::Size));
+    let most = u64::try_from(cap).expect("a length") * TIMES_THE_CAP;
+    assert!(
+        asked <= most,
+        "a chain of copies asked for {asked} bytes, past {TIMES_THE_CAP} times the cap"
+    );
+}

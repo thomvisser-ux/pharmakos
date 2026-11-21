@@ -54,6 +54,13 @@ pub enum Malformed {
     /// An undo operation whose written member, item or value is not exactly
     /// one of them, as the JSONC reader reads it.
     UndoText,
+    /// An undo whose slot is past the end of what it puts into, or, in an
+    /// array, is not the index its path ends in (S3's `vfyq2`, fix pass 3,
+    /// items L2 and L5).
+    UndoSlot,
+    /// An undo that names what the document does not hold, or puts back a
+    /// member already there (S3's `vfyq2`, fix pass 3, item L5).
+    UndoTarget,
 }
 
 /// A bound on the work one call may do (S3's `vfyq2`, fix pass 1): what a
@@ -62,6 +69,9 @@ pub enum Malformed {
 pub enum Bound {
     /// More operations in one patch than [`crate::patch::MAX_PATCH_OPERATIONS`].
     Operations,
+    /// A patch's text longer than [`crate::patch::MAX_PATCH_TEXT_CHARS`],
+    /// refused before it is read (S3's `vfyq2`, fix pass 3, item L4).
+    PatchText,
     /// A JSON Pointer with more tokens than any node of a playbook can have:
     /// `pharmakos_proto::json::grammar::MAX_DEPTH` containers, and one token
     /// past the last of them ([`MAX_POINTER_TOKENS`]).

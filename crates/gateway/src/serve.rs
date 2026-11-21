@@ -187,6 +187,23 @@ use crate::token::{Handle, Subject, Token};
 /// rate limits.
 pub const MAX_CONNECTIONS: usize = 8;
 
+/// Why the host hung up on a connection before serving it (S3's `vfyq2`,
+/// fix pass 3, item L6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DropReason {
+    /// [`MAX_CONNECTIONS`] were already being served.
+    OverCapacity,
+    /// The operating system would not make the connection's thread.
+    NoConnectionThread,
+}
+
+/// How many connections this process has dropped for `reason`.
+#[must_use]
+pub fn dropped(reason: DropReason) -> u64 {
+    let _ = reason;
+    0
+}
+
 /// How many requests may wait in front of the surface thread.
 ///
 /// One per connection plus one, so a connection can always hand its single

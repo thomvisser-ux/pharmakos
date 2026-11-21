@@ -495,6 +495,10 @@ fn at_operation(error: Error, at: &str) -> Error {
 /// operation is applied ([`crate::error::Bound::Operations`]).
 pub const MAX_PATCH_OPERATIONS: usize = 64;
 
+/// The longest patch text `patch_text` reads (S3's `vfyq2`, fix pass 3, item
+/// L4), in characters.
+pub const MAX_PATCH_TEXT_CHARS: usize = usize::MAX;
+
 fn too_many(found: usize) -> Error {
     Error::bounded(
         Bound::Operations,

@@ -89,3 +89,98 @@ fn a_move_onto_itself_changes_nothing() {
     let (back, _) = apply(&moved, &inverse).expect("its inverse applies");
     assert_eq!(back.to_text(), text);
 }
+
+/// The one document the forged undos below are applied to.
+const FORGE_BASE: &str = "{\"meta\":{\"author_kind\":\"HUMAN\"},\"b\":[1,2]}";
+
+/// A forged undo's refusal: its `Malformed` code, its pointer and its words.
+fn forged(undo: &str) -> pharmakos_plan_core::Error {
+    pharmakos_plan_core::patch::patch_text(FORGE_BASE, undo).expect_err(undo)
+}
+
+/// An undo's `jsonc` is exactly one member or element: a line comment that
+/// would swallow the wrapper's closing bracket is refused, not read as an
+/// epilogue (fix pass 3, item L1).
+#[test]
+fn an_undo_whose_text_runs_past_its_member_is_refused() {
+    for undo in [
+        r#"[{"op":"add","path":"/meta/x","undo":{"at":0,"jsonc":"\"x\":1} // tail"}}]"#,
+        r#"[{"op":"add","path":"/meta/x","undo":{"at":0,"jsonc":"\"x\":1} /* tail */"}}]"#,
+        r#"[{"op":"add","path":"/b/0","undo":{"at":0,"jsonc":"9] // tail"}}]"#,
+    ] {
+        assert_eq!(forged(undo).malformed, Some(Malformed::UndoText), "{undo}");
+    }
+}
+
+/// An array undo puts its element back at the slot its path names: a path
+/// and an `at` that disagree are refused (fix pass 3, item L2).
+#[test]
+fn an_array_undo_whose_path_and_slot_disagree_is_refused() {
+    let undo = r#"[{"op":"add","path":"/b/0","undo":{"at":1,"jsonc":"9"}}]"#;
+    assert_eq!(forged(undo).malformed, Some(Malformed::UndoSlot));
+}
+
+/// Every undo refusal carries a `Malformed` code and points at its operation
+/// in the patch, `/<index>`, the space the forward patch's own refusals use;
+/// no sentence ends with an empty list (fix pass 3, item L5).
+#[test]
+fn every_undo_refusal_is_coded_and_points_at_its_operation() {
+    for (undo, code) in [
+        (
+            r#"[{"op":"remove","path":"/meta","undo":{"x":1}}]"#,
+            Malformed::UnknownMember,
+        ),
+        (
+            r#"[{"op":"remove","path":"/meta/nothing","undo":{}}]"#,
+            Malformed::UndoTarget,
+        ),
+        (
+            r#"[{"op":"replace","path":"/nowhere/x","undo":{"jsonc":"1"}}]"#,
+            Malformed::UndoTarget,
+        ),
+        (
+            r#"[{"op":"add","path":"/meta/author_kind","undo":{"at":0,"jsonc":"\"author_kind\":\"AI\""}}]"#,
+            Malformed::UndoTarget,
+        ),
+        (
+            r#"[{"op":"add","path":"/meta/x","undo":{"at":7,"jsonc":"\"x\":1"}}]"#,
+            Malformed::UndoSlot,
+        ),
+    ] {
+        let refused = forged(undo);
+        assert_eq!(refused.malformed, Some(code), "{undo}: {}", refused.message);
+        assert_eq!(refused.pointer, "/0", "{undo}: {}", refused.message);
+        assert!(
+            !refused.message.contains("it has ``")
+                && !refused.message.trim_end().ends_with("it has"),
+            "{undo}: {}",
+            refused.message
+        );
+    }
+}
+
+/// An undo that would take the document past the cap is refused, as a
+/// forward patch is (fix pass 3, item L11: the review's `undo_unbudgeted`).
+#[test]
+fn an_undo_past_the_cap_is_refused() {
+    let huge = format!(
+        "\"x\":\"{}\"",
+        "y".repeat(pharmakos_verifier::MAX_PLAYBOOK_CHARS)
+    );
+    let undo = format!(
+        r#"[{{"op":"add","path":"/meta/x","undo":{{"at":0,"jsonc":{}}}}}]"#,
+        pharmakos_proto::json::write(&pharmakos_proto::json::Json::String(huge))
+    );
+    assert_eq!(forged(&undo).bound, Some(Bound::Size));
+}
+
+/// A member put at a slot past the end of its object is refused, never put at
+/// the end (fix pass 3, item L10: it was clamped).
+#[test]
+fn a_member_put_past_the_end_is_refused() {
+    use pharmakos_plan_core::jsonc::{Document, Fragment};
+    let mut document = Document::parse("{\"a\":1}").expect("a document");
+    let fragment = Fragment::member_from_written("\"b\":2", "b").expect("a member");
+    assert!(document.root_mut().put_member("b", fragment, 2).is_err());
+    assert_eq!(document.to_text(), "{\"a\":1}");
+}
