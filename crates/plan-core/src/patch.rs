@@ -635,10 +635,21 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
             ),
         )
     })?;
-    // The same tree writes the same bytes, so the text is compared only
-    // when the trees differ (trivia can sit on either side of a node and
-    // write the same bytes).
-    if undone.0 != *document && undone.0.to_text() != document.to_text() {
+    restores(document, &undone.0)?;
+    Ok((patched, inverse))
+}
+
+/// Whether applying an inverse gave `document` back exactly, refused
+/// otherwise (S3's `vfyq2`, fix pass 5, MEDIUM 1, and fix pass 6, item 6:
+/// a function of its own, so the refusal is tested directly). The same tree
+/// writes the same bytes, so the text is compared only when the trees
+/// differ (trivia can sit on either side of a node and write the same
+/// bytes). No accepted patch is known to reach the refusal: the undo
+/// property and the closure property hold over every case they generate.
+/// It is the guarantee that an inverse handed back gives the file back,
+/// whatever a later change to the undo code does.
+fn restores(document: &Document, undone: &Document) -> Result<(), Error> {
+    if *undone != *document && undone.to_text() != document.to_text() {
         return Err(Error::bounded(
             Bound::Inverse,
             "",
@@ -646,7 +657,7 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
              back as it was",
         ));
     }
-    Ok((patched, inverse))
+    Ok(())
 }
 
 /// [`apply`]'s one pass: the patch applied and its inverse made, under every
@@ -1450,6 +1461,21 @@ fn array_index(token: &str, len: usize, appending: bool, pointer: &str) -> Resul
 mod tests {
     use super::{Patch, apply, patch_text};
     use crate::jsonc::Document;
+
+    /// The exact-restoration refusal, forced (fix pass 6, item 6): an
+    /// inverse that gives other bytes back is refused as `Bound::Inverse`;
+    /// the same bytes pass.
+    #[test]
+    fn an_inverse_that_gives_other_bytes_back_is_refused() {
+        use super::restores;
+        use crate::error::Bound;
+        let document = Document::parse("{\"a\": 1}").expect("a document");
+        let other = Document::parse("{\"a\": 2}").expect("a document");
+        let refused = restores(&document, &other).expect_err("other bytes");
+        assert_eq!(refused.bound(), Some(Bound::Inverse));
+        assert!(refused.message().contains("does not give the file back"));
+        assert!(restores(&document, &document.clone()).is_ok());
+    }
 
     /// The two constants the inverse's text bound is built from hold for
     /// the writer and the undo form as they are (fix pass 5, MEDIUM 1).
