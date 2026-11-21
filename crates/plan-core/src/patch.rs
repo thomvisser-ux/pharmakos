@@ -1058,7 +1058,14 @@ fn exact(document: &mut Document, undo: &Undo) -> Result<Undo, Error> {
             // An array undo's path ends in the index it puts back at (fix
             // pass 3, item L2): a path and a slot that disagree are not an
             // inverse anything wrote.
-            if is_array && !matches!(last.parse::<usize>(), Ok(index) if index == *at) {
+            if is_array && crate::jsonc::rfc6901_index(&last).is_none() {
+                return Err(Error::malformed(
+                    Malformed::PointerIndex,
+                    &path,
+                    "an array index is `0` or digits with no leading zero and no sign (RFC 6901)",
+                ));
+            }
+            if is_array && crate::jsonc::rfc6901_index(&last) != Some(*at) {
                 return Err(Error::malformed(
                     Malformed::UndoSlot,
                     &path,
@@ -1144,8 +1151,7 @@ fn take(document: &mut Document, pointer: &str) -> Result<(Fragment, usize), Err
     let nothing = || Error::at(pointer, "there is nothing at that path");
     let container = resolve_mut(document, parent)?;
     if is_array {
-        let index =
-            array_index(&last, len, false).map_err(|message| Error::at(pointer, message))?;
+        let index = array_index(&last, len, false, pointer)?;
         Ok((container.take_item(index).ok_or_else(nothing)?, index))
     } else {
         let at = container.position_of(&last).ok_or_else(nothing)?;
@@ -1168,7 +1174,7 @@ fn add(document: &mut Document, pointer: &str, fragment: Fragment) -> Result<Vec
     // as it was written (S3's `vfyq2`, fix pass 3, item M1).
     let whole = container_undo(document, parent)?;
     if is_array {
-        let index = array_index(&last, len, true).map_err(|message| Error::at(pointer, message))?;
+        let index = array_index(&last, len, true, pointer)?;
         let container = resolve_mut(document, parent)?;
         container.put_item(index, fragment)?;
         return Ok(vec![put_undo(
@@ -1226,27 +1232,31 @@ fn container_undo(document: &Document, parent: &str) -> Result<Option<Undo>, Err
 
 /// An RFC 6902 array index. `-` means "one past the end", and only `add`
 /// accepts it.
-fn array_index(token: &str, len: usize, appending: bool) -> Result<usize, &'static str> {
+fn array_index(token: &str, len: usize, appending: bool, pointer: &str) -> Result<usize, Error> {
     if token == "-" {
         return if appending {
             Ok(len)
         } else {
-            Err("`-` names the end of an array and only `add` may use it")
+            Err(Error::at(
+                pointer,
+                "`-` names the end of an array and only `add` may use it",
+            ))
         };
     }
-    if token != "0" && token.starts_with('0') {
-        return Err("an array index has no leading zero");
-    }
-    let index: usize = token
-        .parse()
-        .map_err(|_ignored| "that is neither a member name nor an array index")?;
-    let limit = if appending {
-        len
-    } else {
-        len.saturating_sub(1)
-    };
-    if index > limit {
-        return Err("that index is past the end of the array");
+    // RFC 6901's spelling and nothing else (fix pass 4, item L-d).
+    let index = crate::jsonc::rfc6901_index(token).ok_or_else(|| {
+        Error::malformed(
+            Malformed::PointerIndex,
+            pointer,
+            "an array index is `0` or digits with no leading zero and no sign (RFC 6901)",
+        )
+    })?;
+    let past = if appending { index > len } else { index >= len };
+    if past {
+        return Err(Error::at(
+            pointer,
+            "that index is past the end of the array",
+        ));
     }
     Ok(index)
 }

@@ -297,7 +297,7 @@ impl Fragment {
         wrapped.push('{');
         wrapped.push_str(written);
         wrapped.push('}');
-        let mut document = Document::parse(&wrapped).map_err(|_| not_one())?;
+        let mut document = Document::parse(&wrapped).map_err(|error| keep_bound(error, not_one))?;
         // The wrapper's bracket closes the document: a `jsonc` that ran past
         // its member (a line comment that would swallow the bracket, text
         // after it) leaves an epilogue, and is refused (fix pass 3, L1).
@@ -329,7 +329,7 @@ impl Fragment {
         wrapped.push('[');
         wrapped.push_str(written);
         wrapped.push(']');
-        let mut document = Document::parse(&wrapped).map_err(|_| not_one())?;
+        let mut document = Document::parse(&wrapped).map_err(|error| keep_bound(error, not_one))?;
         if document.root.len() != Some(1)
             || !document.prologue.is_empty()
             || !document.epilogue.is_empty()
@@ -702,7 +702,7 @@ impl Node {
                  nothing around it",
             )
         };
-        let document = Document::parse(written).map_err(|_| not_one())?;
+        let document = Document::parse(written).map_err(|error| keep_bound(error, not_one))?;
         if !document.prologue.is_empty() || !document.epilogue.is_empty() {
             return Err(not_one());
         }
@@ -944,10 +944,29 @@ fn first_line_break(trivia: &str) -> Option<usize> {
 /// An array index token: RFC 6901 spells one as decimal digits with no leading
 /// zero (except `0` itself).
 fn index_of(token: &str) -> Option<usize> {
-    if token != "0" && token.starts_with('0') {
+    rfc6901_index(token)
+}
+
+/// An array index as RFC 6901 spells one, `0|[1-9][0-9]*`, and nothing else
+/// (S3's `vfyq2`, fix pass 4, item L-d): `str::parse` also takes a `+` sign,
+/// so the digits are checked first.
+pub(crate) fn rfc6901_index(token: &str) -> Option<usize> {
+    let digits = !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_digit());
+    if !digits || (token.len() > 1 && token.starts_with('0')) {
         return None;
     }
     token.parse::<usize>().ok()
+}
+
+/// A refusal reading an undo's text: the reader's own when it is a bound (a
+/// nesting past the limit is a depth refusal, fix pass 4, item L-e), else
+/// `not_one`'s.
+fn keep_bound(error: Error, not_one: impl Fn() -> Error) -> Error {
+    if error.bound.is_some() {
+        error
+    } else {
+        not_one()
+    }
 }
 
 // ---------------------------------------------------------------------------

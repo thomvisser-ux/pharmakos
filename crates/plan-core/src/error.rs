@@ -273,6 +273,11 @@ impl From<pharmakos_verifier::ProjectionError> for Error {
 
 impl From<pharmakos_proto::json::Error> for Error {
     fn from(error: pharmakos_proto::json::Error) -> Self {
+        // A nesting refusal keeps its kind as a bound (S3's `vfyq2`, fix pass
+        // 4, item L-e), so a caller tells it by the bound.
+        if error.kind == pharmakos_proto::json::ErrorKind::Depth {
+            return Self::bounded(Bound::Depth, error.pointer.clone(), error.said());
+        }
         Self::at(error.pointer.clone(), error.said())
     }
 }
