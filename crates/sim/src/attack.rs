@@ -145,10 +145,20 @@ pub const BREACH_COLUMN_COST: i32 = 100;
 /// PLACEHOLDER: the breach search's budget, sixteen clusters' worth of columns — owner, at S3, with the pathing certification.
 pub const BREACH_EXPANSIONS: u32 = 16_384;
 
-/// The breach search's heap: sixteen pushes a closed state (a walker's step
-/// and a crossing to each of eight neighbours), the most a search of
-/// [`BREACH_EXPANSIONS`] states can push, so the heap never grows.
-const BREACH_HEAP: usize = 16_384 * 16;
+/// The moves out of one closed state of the breach search, a slot each: a
+/// walker's step and a crossing to each of the eight neighbours.
+type Moves = [[Option<(u32, i32)>; 2]; 8];
+
+/// The most entries one closed state pushes: every slot of [`Moves`].
+const MOVES_PER_STATE: usize = 16;
+
+/// The breach search's heap: [`MOVES_PER_STATE`] pushes a closed state, the
+/// most a search of [`BREACH_EXPANSIONS`] states can push (each expansion
+/// also pops one), so the heap never grows and its full check never fires.
+/// `tests::the_breach_heap_holds_its_worst_case` pins the bound; no search a
+/// map poses comes near it (the densest field of enemy stubs measured peaks
+/// at under two thousand entries), so it is a proof, not a measured margin.
+const BREACH_HEAP: usize = 16_384 * MOVES_PER_STATE;
 
 /// What an Attack beacon attacks, as its row holds it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -2242,7 +2252,7 @@ pub fn breach_search(
         };
         let (node, crossed) = column_of(item.n);
         // Each move out of this state: the next state, and what it costs.
-        let mut moves: [[Option<(u32, i32)>; 2]; 8] = [[None; 2]; 8];
+        let mut moves: Moves = [[None; 2]; 8];
         for (k, slot) in moves.iter_mut().enumerate() {
             let pair = if crossed {
                 [
@@ -2773,5 +2783,35 @@ impl AttackColumns {
             });
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BREACH_EXPANSIONS, BREACH_HEAP, MOVES_PER_STATE, Moves};
+    use crate::pathing::surface::NEIGHBOURS;
+
+    /// The breach heap's reservation is its worst case: every move slot of
+    /// every expanded state pushed, plus the start. Halved, this fails.
+    #[test]
+    fn the_breach_heap_holds_its_worst_case() {
+        let moves: Moves = [[None; 2]; 8];
+        let slots = moves.iter().map(|slot| slot.len()).sum::<usize>();
+        assert_eq!(slots, MOVES_PER_STATE, "a state's move slots");
+        assert_eq!(
+            moves.len(),
+            NEIGHBOURS.len(),
+            "a walk and a crossing to each neighbour"
+        );
+        let expansions =
+            usize::try_from(BREACH_EXPANSIONS).unwrap_or_else(|error| panic!("{error}"));
+        let worst = expansions
+            .checked_mul(MOVES_PER_STATE)
+            .and_then(|pushes| pushes.checked_add(1))
+            .unwrap_or_else(|| panic!("the worst case is a usize"));
+        assert!(
+            BREACH_HEAP.saturating_add(expansions) >= worst,
+            "the heap holds {BREACH_HEAP} entries; a search of {expansions} expansions can hold {worst} less the {expansions} it pops"
+        );
     }
 }

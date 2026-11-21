@@ -2505,6 +2505,37 @@ fn held_to_the_readings(
     }
 }
 
+/// FNV-1a's offset basis and prime, for the answers' digest.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// `digest` with one sealed case's answer folded in: its index, and the
+/// breach's wall and plant, or that there was none.
+fn fold_answer(digest: u64, case: u32, breach: Option<&pharmakos_sim::attack::Breach>) -> u64 {
+    let mut words = vec![i64::from(case)];
+    match breach {
+        Some(breach) => words.extend(
+            breach
+                .wall
+                .iter()
+                .chain(&breach.plant)
+                .map(|v| i64::from(*v)),
+        ),
+        None => words.push(-1),
+    }
+    words
+        .into_iter()
+        .flat_map(i64::to_le_bytes)
+        .fold(digest, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+        })
+}
+
+/// The digest of every sealed case's answer under [`LAYOUT_SEED`]: the search
+/// is pinned answer for answer, its tie-break included (the review's mutant
+/// M7, `h` left out of the order, moves five of them).
+const LAYOUT_ANSWERS: u64 = 0x686f_5d3d_a849_e8be;
+
 /// The property test's seed and its count of generated layouts.
 const LAYOUT_SEED: u64 = 0x5E77_1E3E_0000_0003;
 const LAYOUT_CASES: u32 = 240;
@@ -2549,6 +2580,7 @@ fn the_breach_search_holds_over_generated_walls() {
     let size = [sx, sy];
     let mut rng = LayoutRng(LAYOUT_SEED);
     let (mut cases, mut sealed_cases, mut breaches, mut no_ways) = (0, 0, 0, 0);
+    let mut answers = FNV_OFFSET;
     for case in 0..LAYOUT_CASES {
         let edge = rng.below(4) == 0;
         let centre = layout_centre(&mut rng, edge, column(inside), size);
@@ -2591,6 +2623,7 @@ fn the_breach_search_holds_over_generated_walls() {
             found, again,
             "case {case}: the search is a function of the world"
         );
+        answers = fold_answer(answers, case, found.as_ref().ok());
         match held_to_the_readings(&world, case, start, goal, &walker, found) {
             Ok(()) => breaches += 1,
             Err(pharmakos_sim::attack::BreachRefused::NoWay) => no_ways += 1,
@@ -2600,6 +2633,10 @@ fn the_breach_search_holds_over_generated_walls() {
     eprintln!(
         "generated layouts: seed {LAYOUT_SEED:#x}, {cases} cases, {sealed_cases} sealed, {breaches} breaches, {no_ways} without a way, on a map of {} columns",
         base.surface().node_count()
+    );
+    assert_eq!(
+        answers, LAYOUT_ANSWERS,
+        "the search's answers on the generated layouts moved (digest {answers:#018x}): a change to its order, its tie-break `(f, h, state)` among them, chooses other breaches"
     );
     assert!(
         cases * 2 >= LAYOUT_CASES && sealed_cases >= 40 && breaches >= 20 && no_ways >= 5,
