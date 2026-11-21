@@ -58,12 +58,12 @@ pub(crate) fn classify(error: &PlanError) -> (&'static str, Row) {
         PlanError::RowTooLong => (
             "RowTooLong",
             Row::Unreachable(
-                "the verifier's `Input::new` refuses a rules table under which a row a \
-                 playbook within the size budget can write passes the sim's i32 \
-                 (RulesGap::RowPastTheSim, fix pass 4): under every table it takes, every row \
-                 fits, so a qualifying playbook never raises it (fuzz.rs's \
-                 a_table_whose_rows_could_pass_the_sims_i32_is_refused and the extremes \
-                 probe show it)",
+                "the sim's loader refuses a rules table under which a row a playbook within \
+                 the size budget can write passes the sim's i32 (RulesError::RowPastTheSim, \
+                 S3's p3fix; fix pass 4 put the door in the verifier first): under every table \
+                 the verifier is handed, every row fits, so a qualifying playbook never raises \
+                 it (fuzz.rs's a_table_whose_rows_could_pass_the_sims_i32_is_refused and the \
+                 extremes probe show it)",
             ),
         ),
         PlanError::AttackTargetNotEnemy => {
@@ -366,7 +366,7 @@ pub(crate) fn rules_of(error: &PlanError) -> Rules {
         PlanError::VoxelOutOfMap { .. } => Rules::SameValue("map.size_x, size_y, size_z"),
         PlanError::NegativeRate(_) => Rules::SameValue("the interface rates"),
         PlanError::RowTooLong => Rules::SameValue(
-            "the interface rates against the size budget (RulesGap::RowPastTheSim)",
+            "the interface rates against the size budget (RulesError::RowPastTheSim)",
         ),
         PlanError::CooldownTooShort { .. } => Rules::SameValue("verifier.handler_cooldown_min_ms"),
         PlanError::FiresOutOfRange { .. } => Rules::SameValue("verifier.max_fires_max"),

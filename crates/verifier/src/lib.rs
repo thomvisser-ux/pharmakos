@@ -199,11 +199,12 @@ pub use hash::{HashError, REPORT_HASH_DOMAIN, TOO_LONG_REPORT_DOMAIN, too_long_r
 pub use interface::Rates;
 
 /// A rules table, read and checked by every rules check the verifier makes
-/// (S3's `vfyq2`, fix pass 5, item L8): its limits, its interface rates
-/// (checked against the size budget: [`RulesGap::RowPastTheSim`]), its
-/// prices and its walking rows. [`Input`] reads its table through
-/// [`read_rules`], and a host checks its table with the same call when it
-/// starts, so a table the verifier refuses hosts no match.
+/// (S3's `vfyq2`, fix pass 5, item L8): its limits, its interface rates, its
+/// prices and its walking rows. The rates' bound against the size budget is
+/// the sim loader's (`RulesError::RowPastTheSim`), which built the table.
+/// [`Input`] reads its table through [`read_rules`], and a host checks its
+/// table with the same call when it starts, so a table the verifier refuses
+/// hosts no match.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RulesRead {
     limits: Limits,
@@ -219,10 +220,9 @@ pub struct RulesRead {
 /// The first [`RulesGap`] the table has.
 pub fn read_rules(rules: &RulesTable) -> Result<RulesRead, RulesGap> {
     let limits = Limits::from_rules(rules)?;
-    // The table is the door (fix pass 4, item 1): one whose rows could pass
-    // the sim's `i32` is refused here, so nothing qualifies under it.
+    // A table whose rows could pass the sim's `i32` never gets here: the
+    // sim's loader, which built `rules`, refuses it (S3's `p3fix`).
     let rates = Rates::from_rules(rules)?;
-    rates.check_rows(limits.size_budget_units())?;
     Ok(RulesRead {
         limits,
         rates,
@@ -377,10 +377,21 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// `E0001` where it opens, a value inside exactly 64 containers is read as
 /// the codec reads it, and a key written twice is refused at its own
 /// opening quote; its reports are not comparable with `0.1.0-s3.4`'s. The
-/// same unreleased bump carries the rest of the lane's fix passes: `E0114`, a
-/// route past the sim's own step ceiling (fix pass 3b), and the rules table's
-/// door, `RulesGap::RowPastTheSim`, which refuses a table whose interface
-/// rates let a row run past the sim's `i32` (fix pass 4); one bump per lane.
+/// same unreleased bump carries the rest of the lane's fix passes, one bump
+/// per lane: the structure stage refuses, at QUICK, the blocks the sim's
+/// compile requires and which once qualified at FULL and then failed to
+/// compile (`E0101` for a fallback `patrol` with no waypoint, an
+/// `add_build_target` row with no `target`, and a Build target or a
+/// `remove_build_target` row with no `anchor`; `E0111` for an anchor naming
+/// no place); a number written with a leading zero is refused where it is
+/// written, as the codec refuses it; every piece of a player's text a report
+/// shows is quoted, with the characters that reorder or hide text escaped
+/// (`json::grammar::quoted`); and `E0114`, a route past the sim's own step
+/// ceiling (fix pass 3b). The bound on the interface rates is not the
+/// verifier's: the sim's loader refuses a table whose rates let a row run
+/// past the sim's `i32` (`RulesError::RowPastTheSim`, S3's `p3fix`, which
+/// retired the verifier's own `RulesGap::RowPastTheSim`), and the verifier
+/// is only ever handed a table the loader took.
 pub const VERIFIER_VERSION: &str = "0.1.0-s3.5";
 
 /// Everything one verification is a function of, apart from the depth.

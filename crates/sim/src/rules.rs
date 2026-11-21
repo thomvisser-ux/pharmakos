@@ -183,7 +183,13 @@ pub struct RulesTable {
     /// (item 69). From `locomotion.repath_cap_per_tick`.
     ///
     /// PLACEHOLDER: the repath cap — owner, at S3's demo (items 152 (1) 1 and 2), once the burst frequency is a measurement (item 69).
-    repath_cap_per_tick: u32,
+    ///
+    /// Non-zero by type: at a cap of nought no waiting walker is ever served,
+    /// so the queue's wait would have no bound ([`RulesTable::link_ticks`]).
+    repath_cap_per_tick: core::num::NonZeroU32,
+    /// The most ticks one re-ask can cost a walker that reached the end of a
+    /// partial route ([`RulesTable::link_ticks`]), derived at load.
+    link_ticks: i32,
     /// The broadphase's cell edge, in whole voxels. From
     /// `broadphase.cell_size_voxels`.
     ///
@@ -582,10 +588,39 @@ impl RulesTable {
         self.move_cost_per_tick
     }
 
-    /// Repaths served per tick (`locomotion.repath_cap_per_tick`).
+    /// Repaths served per tick (`locomotion.repath_cap_per_tick`), never
+    /// nought.
     #[must_use]
     pub const fn repath_cap_per_tick(&self) -> u32 {
-        self.repath_cap_per_tick
+        self.repath_cap_per_tick.get()
+    }
+
+    /// The most ticks a walker that reached the end of a partial route can
+    /// lose before it walks the next one: what a travel estimate adds per
+    /// partial route so that it is never optimistic
+    /// ([`crate::pathing::estimate::walk_ticks`]; decisions-log items 57 and
+    /// 61). Two parts, derived at load from the cap and the router's own rule:
+    ///
+    /// * **One tick of rounding.** The walker banks nothing from one route
+    ///   into the next (`crate::pathing::router`), so each route's walk
+    ///   rounds up to its own tick: a chain of routes takes at most one tick
+    ///   a route more than its summed cost rounded once.
+    /// * **The queue's wait.** The walker asks again in the Movement phase and
+    ///   is served by the same tick's Pathing phase or a later one. The queue
+    ///   is served round-robin from a cursor that only moves forward, up to the
+    ///   cap a tick: a tick that serves fewer than the cap has scanned every
+    ///   row, the walker's included, and one that serves the cap has moved the
+    ///   cursor at least the cap's rows towards it. The router holds at most
+    ///   [`crate::ids::ROOM_LIMIT`] rows (the world refuses a unit ceiling past
+    ///   it), so the walker is served within `(ROOM_LIMIT - 1) / cap` ticks
+    ///   after the one it asked in, **however loaded the queue is**.
+    ///
+    /// 256 ticks (12.8 s) at the committed cap of 16. A walk that needs a
+    /// second route is more than `MAX_ROUTE_NODES - 1` steps, at least 20 460
+    /// ticks at the commander's speed, so the bound adds at most 1.3 % a link.
+    #[must_use]
+    pub const fn link_ticks(&self) -> i32 {
+        self.link_ticks
     }
 
     /// The broadphase's cell edge in voxels (`broadphase.cell_size_voxels`).
@@ -982,9 +1017,15 @@ impl RulesTable {
 
         let query_pad_voxels = query_pad_of(locomotion, &kinds)?;
         path_cost_fits(locomotion, map)?;
+        let repath_cap_per_tick = core::num::NonZeroU32::new(locomotion.repath_cap_per_tick)
+            .ok_or_else(|| RulesError::OutOfRange {
+                field: "locomotion.repath_cap_per_tick".to_owned(),
+                value: "0; at a cap of nought no waiting walker is ever served a route".to_owned(),
+            })?;
+        let link_ticks = link_ticks_of(repath_cap_per_tick)?;
         let canonical = pharmakos_proto::json::encode(message).map_err(RulesError::Json)?;
 
-        Ok(RulesTable {
+        let table = RulesTable {
             message: message.clone(),
             economy: *economy,
             ore_yield_per_voxel,
@@ -1011,7 +1052,8 @@ impl RulesTable {
                 "locomotion.move_cost_per_tick",
                 locomotion.move_cost_per_tick,
             )?,
-            repath_cap_per_tick: locomotion.repath_cap_per_tick,
+            repath_cap_per_tick,
+            link_ticks,
             csr_cell_size_voxels: signed(
                 "broadphase.cell_size_voxels",
                 broadphase.cell_size_voxels,
@@ -1054,7 +1096,9 @@ impl RulesTable {
             resonance_vents,
             grown_sphere_radius_voxels,
             cluster_shape,
-        })
+        };
+        longest_row_fits(&table)?;
+        Ok(table)
     }
 
     /// Read the rules table from a file.
@@ -1088,6 +1132,56 @@ impl RulesTable {
 /// [`RulesError::OutOfRange`] naming `locomotion.climb_surcharge` when the
 /// dearest step times the map's steps passes `i32::MAX` (or
 /// `locomotion.step_cost_diagonal` when the diagonal alone does).
+/// Refuses a table under which the longest row a playbook within the size
+/// budget can write would take longer than the sim's `i32` of milliseconds
+/// ([`crate::interpreter::InterfaceTimes::longest_row_ms`], the sum
+/// [`crate::interpreter::Row::duration_ms`] takes), so that no such playbook
+/// compiles to `PlanError::RowTooLong` on a loaded table (S3's `p3fix`, from
+/// `vfyq2`'s reviews). The verifier refuses the same tables
+/// (`RulesGap::RowPastTheSim`); this bound is the sim's own sum, not a copy of
+/// the verifier's.
+///
+/// A table with no `interface_times` or `verifier` block, or a negative rate,
+/// has no row to bound: the compile refuses every playbook on it with its own
+/// reason (`PlanError::MissingBlock`, `PlanError::NegativeRate`), and so does
+/// the verifier, so this check leaves those tables to them.
+fn longest_row_fits(table: &RulesTable) -> Result<(), RulesError> {
+    let (Some(rates), Some(verifier)) = (
+        table.message.interface_times.as_ref(),
+        table.message.verifier.as_ref(),
+    ) else {
+        return Ok(());
+    };
+    let Ok(times) = crate::interpreter::InterfaceTimes::from_rules(table) else {
+        return Ok(());
+    };
+    let budget = verifier.size_budget_units;
+    match times.longest_row_ms(budget) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(RulesError::RowPastTheSim {
+            switch_ms: rates.switch_mandate_ms,
+            edit_max_ms: rates.edit_settings_max_ms,
+            build_target_ms: rates.build_target_ms,
+            budget,
+        }),
+    }
+}
+
+/// [`RulesTable::link_ticks`]: one tick of rounding, and the most ticks the
+/// repath queue can keep a walker waiting at `cap` a tick.
+fn link_ticks_of(cap: core::num::NonZeroU32) -> Result<i32, RulesError> {
+    // `ROOM_LIMIT` is at least one, and the division is by a non-zero cap.
+    let wait = crate::ids::ROOM_LIMIT
+        .saturating_sub(1)
+        .div_euclid(cap.get());
+    wait.checked_add(1)
+        .and_then(|ticks| i32::try_from(ticks).ok())
+        .ok_or_else(|| RulesError::OutOfRange {
+            field: "locomotion.repath_cap_per_tick".to_owned(),
+            value: format!("{cap}: a re-ask's bound passes a signed 32-bit tick count"),
+        })
+}
+
 fn path_cost_fits(
     locomotion: &gp::v1::rules_table::Locomotion,
     map: &gp::v1::rules_table::Map,
@@ -1480,6 +1574,21 @@ pub enum RulesError {
     /// is missing or out of range, or the rows would let a seat's supply or
     /// draw leave a signed 32-bit `kW`.
     Power(PowerRulesError),
+    /// The longest row a playbook within the size budget can write -- a
+    /// `set_mandate` row that switches, edits settings at the cap and adds a
+    /// Build target per size unit -- would take longer than the sim's `i32`
+    /// of milliseconds, which its compile refuses
+    /// ([`crate::interpreter::InterfaceTimes::longest_row_ms`]).
+    RowPastTheSim {
+        /// `interface_times.switch_mandate_ms`.
+        switch_ms: i32,
+        /// `interface_times.edit_settings_max_ms`.
+        edit_max_ms: i32,
+        /// `interface_times.build_target_ms`.
+        build_target_ms: i32,
+        /// `verifier.size_budget_units`.
+        budget: u32,
+    },
 }
 
 impl fmt::Display for RulesError {
@@ -1496,6 +1605,27 @@ impl fmt::Display for RulesError {
                 write!(f, "field `{field}`: `{value}` is out of range")
             }
             RulesError::Power(error) => write!(f, "{error}"),
+            RulesError::RowPastTheSim {
+                switch_ms,
+                edit_max_ms,
+                build_target_ms,
+                budget,
+            } => {
+                // In `i128`: a `u32` budget times an `i32` rate, plus two
+                // `i32`s, cannot pass it.
+                let worst = i128::from(*switch_ms)
+                    + i128::from(*edit_max_ms)
+                    + i128::from(*build_target_ms) * i128::from(*budget);
+                write!(
+                    f,
+                    "a `set_mandate` row a playbook within the {budget}-unit size budget can \
+                     write takes up to {worst} ms (`interface_times.switch_mandate_ms` \
+                     {switch_ms}, `interface_times.edit_settings_max_ms` {edit_max_ms} and \
+                     {budget} Build targets at `interface_times.build_target_ms` \
+                     {build_target_ms}), past {} ms, the most the sim's compile takes",
+                    i32::MAX
+                )
+            }
         }
     }
 }

@@ -432,6 +432,51 @@ impl InterfaceTimes {
             + i64::from(self.edit_settings_per_field) * i64::from(extra);
         uncapped.min(i64::from(self.edit_settings_max))
     }
+
+    /// A settings edit's milliseconds: `targets` Build targets at
+    /// `interface_times.build_target_ms` each, outside the edit's cap, and
+    /// `fields` fields under it ([`InterfaceTimes::edit_settings_ms`]).
+    /// [`Row::duration_ms`]'s sum for a [`Row::Settings`], and
+    /// [`InterfaceTimes::longest_row_ms`]'s, so the bound the rules loader
+    /// holds a table to is the sum the compile takes. `None` past an `i64`.
+    fn settings_ms(&self, fields: u32, targets: u64) -> Option<i64> {
+        let count = i64::try_from(targets).ok()?;
+        i64::from(self.build_target)
+            .checked_mul(count)?
+            .checked_add(self.edit_settings_ms(fields))
+    }
+
+    /// A [`Row::Mandate`]'s milliseconds: the switch, then the settings edit
+    /// it carries, `edit_ms` ([`Row::duration_ms`]'s sum, and
+    /// [`InterfaceTimes::longest_row_ms`]'s). `None` past an `i64`.
+    fn mandate_ms(&self, edit_ms: i64) -> Option<i64> {
+        i64::from(self.switch_mandate).checked_add(edit_ms)
+    }
+
+    /// The longest row a playbook within `budget` size units can write, in
+    /// milliseconds, by [`Row::duration_ms`]'s own sums: a `set_mandate` row
+    /// that switches, edits settings at the edit's cap (or as near it as any
+    /// count of fields brings it) and adds a Build target per size unit (a
+    /// target is one unit). Every other row is one rate, an `i32` already,
+    /// or a settings edit with no switch, which this row bounds.
+    ///
+    /// The rules loader refuses a table under which this passes the sim's
+    /// `i32` ([`crate::rules::RulesError::RowPastTheSim`]), so no playbook
+    /// within the budget compiles to [`PlanError::RowTooLong`] on a loaded
+    /// table. The compile keeps the refusal: it takes a playbook of any size,
+    /// and the budget is the verifier's door, not the compile's.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanError::RowTooLong`] when that row would take longer than a
+    /// signed 32-bit count of milliseconds.
+    pub fn longest_row_ms(&self, budget: u32) -> Result<i32, PlanError> {
+        let ms = self
+            .settings_ms(u32::MAX, u64::from(budget))
+            .and_then(|edit| self.mandate_ms(edit))
+            .ok_or(PlanError::RowTooLong)?;
+        i32::try_from(ms).map_err(|_| PlanError::RowTooLong)
+    }
 }
 
 /// One on-site change (spec section 5's change list).
@@ -585,7 +630,7 @@ impl Row {
                     Some(edit) => i64::from(edit.duration_ms(times)?),
                     None => 0,
                 };
-                i64::from(times.switch_mandate) + edit
+                times.mandate_ms(edit).ok_or(PlanError::RowTooLong)?
             }
             Row::Priority { .. } => i64::from(times.set_priority),
             Row::Recycle => i64::from(times.recycle),
@@ -594,10 +639,9 @@ impl Row {
             Row::Settings {
                 fields, targets, ..
             } => {
-                let count = i64::try_from(targets.len()).map_err(|_| PlanError::RowTooLong)?;
-                i64::from(times.build_target)
-                    .checked_mul(count)
-                    .and_then(|each| each.checked_add(times.edit_settings_ms(*fields)))
+                let count = u64::try_from(targets.len()).map_err(|_| PlanError::RowTooLong)?;
+                times
+                    .settings_ms(*fields, count)
                     .ok_or(PlanError::RowTooLong)?
             }
         };

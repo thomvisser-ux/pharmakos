@@ -60,13 +60,15 @@
 //! under a rules table with extreme rates a playbook qualified and then did
 //! not compile. Now two things hold.
 //!
-//! * **The table is the door.** [`Rates::check_rows`], which `Input::new`
-//!   calls, refuses a rules table under which a row a playbook within the size
-//!   budget can write passes the sim's `i32` of milliseconds: the worst row is
+//! * **The sim's loader is the door.** `RulesTable::from_message`, the only
+//!   way a rules table is built, refuses one under which a row a playbook
+//!   within the size budget can write passes the sim's `i32` of milliseconds
+//!   (`RulesError::RowPastTheSim`, from the sim's own `Row::duration_ms` sums:
 //!   the switch, the edit at its cap and one Build target per unit of the
-//!   budget (a target is one size unit, `crate::size`), exactly the sum the
-//!   sim's `Row::duration_ms` makes. Under every table that passes, no row the
-//!   verifier qualifies is a row the compile refuses.
+//!   budget, a target being one size unit, `crate::size`). The verifier is
+//!   only ever handed a table that door took, so no row it qualifies is a row
+//!   the compile refuses (S3's `p3fix`, which moved the door here from the
+//!   verifier's own `Rates::check_rows`).
 //! * **The arithmetic is [`WideMs`]**, an `i128` of milliseconds. A rate is
 //!   an `i32` and a count a `u64` (`usize::BITS <= 64`, asserted below). A
 //!   row is its fixed rates (under 2^33) plus the build-target rate times its
@@ -207,39 +209,6 @@ impl Rates {
                 "interface_times.place_beacon_deploy_ms",
                 times.place_beacon_deploy_ms,
             )?,
-        })
-    }
-
-    /// Refuses a rules table under which a row a playbook within `budget`
-    /// size units can write would take longer than the sim's `i32` of
-    /// milliseconds (S3's `vfyq2`, fix pass 4, item 1): the sim's compile
-    /// refuses such a row (`PlanError::RowTooLong`), so with the table
-    /// refused nothing qualifies that the compile would refuse.
-    ///
-    /// The worst row is a `set_mandate` row: the switch, the settings edit at
-    /// its cap, and a Build target per size unit of the budget (each target
-    /// is one unit). Every other row is one rate, an `i32` already.
-    ///
-    /// # Errors
-    ///
-    /// [`RulesGap::RowPastTheSim`], naming the row as the sim sums it: the
-    /// three rates with their values, the budget and the sum (fix pass 5,
-    /// item L6).
-    pub fn check_rows(&self, budget: u32) -> Result<(), RulesGap> {
-        let room = WideMs(i128::from(i32::MAX));
-        let targets = WideMs::times(self.build_target, u64::from(budget));
-        let worst = WideMs::of(self.switch_mandate)
-            .plus(WideMs::of(self.edit_settings_max))
-            .plus(targets);
-        if worst <= room {
-            return Ok(());
-        }
-        Err(RulesGap::RowPastTheSim {
-            switch_ms: self.switch_mandate.raw(),
-            edit_max_ms: self.edit_settings_max.raw(),
-            build_target_ms: self.build_target.raw(),
-            budget,
-            worst_ms: worst.raw(),
         })
     }
 

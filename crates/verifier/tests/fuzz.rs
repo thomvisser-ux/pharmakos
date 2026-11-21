@@ -2194,7 +2194,6 @@ fn generated_rules_tables() -> Vec<RulesTable> {
         (1_024, 5_000, 10),
         (4_096, 60_000, 100),
         (65_536, 1, 1_000),
-        (u32::MAX, 0, u32::MAX),
     ] {
         let mut message = committed.message().clone();
         let verifier = message
@@ -2218,6 +2217,7 @@ fn generated_rules_tables() -> Vec<RulesTable> {
     let mut extremes: Vec<pharmakos_proto::gp::v1::RulesTable> = Vec::new();
     for (budget, cooldown, fires) in [
         (0_u32, 0_i32, 0_u32),
+        (u32::MAX, 0, u32::MAX),
         (u32::MAX, i32::MAX, u32::MAX),
         (128, i32::MIN, 8),
     ] {
@@ -2249,11 +2249,12 @@ fn generated_rules_tables() -> Vec<RulesTable> {
         (map.size_x, map.size_y, map.size_z) = size;
         extremes.push(message);
     }
-    // At the door's bound (fix pass 5, item L7): every rate the same, so the
-    // worst row is (2 + budget) times it; at the largest rate the door
-    // takes, one below it and one above it at a budget of 128, and at it for
-    // budgets of 400 and 1, so the implication is tried where it is tightest
-    // on tables that are accepted.
+    // At the loader's bound (fix pass 5, item L7; S3's `p3fix`): every rate
+    // the same, so the worst row is (2 + budget) times it; at the largest
+    // rate the loader takes, one below it and one above it (which it
+    // refuses, so it is left out) at a budget of 128, and at it for budgets
+    // of 400 and 1, so the implication is tried where it is tightest on
+    // tables that are accepted.
     let at_the_bound = |budget: u32| -> i32 {
         let rows = i64::from(budget).saturating_add(2);
         i32::try_from(i64::from(i32::MAX).checked_div(rows).unwrap_or(0)).unwrap_or(i32::MAX)
@@ -2501,10 +2502,13 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     );
 }
 
-/// The verifier is the door that holds (fix pass 4, item 1): a rules table
-/// under which a row a playbook within the size budget can write would pass
-/// the sim's `i32` of milliseconds is refused by `Input::new`, naming the rate,
-/// so nothing qualifies under it; the committed table is not refused.
+/// The sim's loader is the door that holds (fix pass 4, item 1; S3's `p3fix`
+/// moved it from the verifier's `Input::new` to `RulesTable::from_message`,
+/// the only way a table is built): a rules table under which a row a
+/// playbook within the size budget can write would pass the sim's `i32` of
+/// milliseconds is never built, so the verifier is never handed one and
+/// nothing qualifies under it; the committed table loads and the verifier
+/// takes it.
 #[test]
 fn a_table_whose_rows_could_pass_the_sims_i32_is_refused() {
     let committed = rules();
@@ -2514,10 +2518,16 @@ fn a_table_whose_rows_could_pass_the_sims_i32_is_refused() {
         .as_mut()
         .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
     times.build_target_ms = i32::MAX;
-    let table = RulesTable::from_message(&message).unwrap_or_else(|error| panic!("{error}"));
-    let refused = Input::new(b"{}", &snapshot(), &scope(), &table)
+    let refused = RulesTable::from_message(&message)
         .err()
-        .unwrap_or_else(|| panic!("the table is refused"));
+        .unwrap_or_else(|| panic!("the loader refuses the table"));
+    assert!(
+        matches!(
+            refused,
+            pharmakos_sim::rules::RulesError::RowPastTheSim { .. }
+        ),
+        "the refusal is the row bound's: {refused}"
+    );
     assert!(
         refused
             .to_string()
@@ -2527,7 +2537,7 @@ fn a_table_whose_rows_could_pass_the_sims_i32_is_refused() {
     assert!(Input::new(b"{}", &snapshot(), &scope(), &committed).is_ok());
 }
 
-/// The table's refusal names the row as the sim sums it (fix pass 5, item
+/// The loader's refusal names the row as the sim sums it (fix pass 5, item
 /// L6): all three rates with their values, the budget, and the sum.
 #[test]
 fn a_table_refusal_names_the_row_as_the_sim_sums_it() {
@@ -2545,10 +2555,9 @@ fn a_table_refusal_names_the_row_as_the_sim_sums_it() {
         .as_mut()
         .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
     verifier.size_budget_units = 128;
-    let table = RulesTable::from_message(&message).unwrap_or_else(|error| panic!("{error}"));
-    let refused = Input::new(b"{}", &snapshot(), &scope(), &table)
+    let refused = RulesTable::from_message(&message)
         .err()
-        .unwrap_or_else(|| panic!("the table is refused"))
+        .unwrap_or_else(|| panic!("the loader refuses the table"))
         .to_string();
     let worst = 7_000_i64 + 9_000 + 20_000_000 * 128;
     for part in [
