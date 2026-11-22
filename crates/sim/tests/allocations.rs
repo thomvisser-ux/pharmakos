@@ -126,10 +126,6 @@ static ALLOCATOR: Counting = Counting;
 /// `cargo test` runs it against the optimised sim the dev profile builds, and
 /// there it counts only the allocations the optimiser kept.
 #[test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "the measurement probe's lines; removed with the probe by a later commit"
-)]
 fn a_tick_allocates_nothing() {
     let rules = RulesTable::load(
         &std::path::Path::new("..")
@@ -160,7 +156,6 @@ fn a_tick_allocates_nothing() {
         },
     })
     .expect("the rules table describes a map and a broadphase grid");
-    probe("tick: world built", &world);
     // Driven through the `Runner`, and **in a Push**, because `World::phase_match`
     // returns at its first gate outside one: a world stepped by hand stays in
     // its opening Lull, and everything T10 put in that phase — the beacon
@@ -187,7 +182,6 @@ fn a_tick_allocates_nothing() {
         .expect("the harness playbook compiles");
     assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
     assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
-    probe("tick: sealed, push begun", runner.world());
     let mut enc = Enc::with_capacity(64 * 1024);
 
     // Warm up: the first tick may still grow the encoder's buffer, and a
@@ -218,7 +212,6 @@ fn a_tick_allocates_nothing() {
     // loop below because the encoding legitimately *grows* when a row lands —
     // which is exactly what the fixed-stride assertion further down would
     // otherwise read as a bug.
-    probe("tick: warm-up done", runner.world());
     let before_growth = allocations();
     let beacons_before = runner.world().beacons().len();
     let structures_before = runner.world().structures().len();
@@ -249,7 +242,6 @@ fn a_tick_allocates_nothing() {
          there is"
     );
 
-    probe("tick: growth done", runner.world());
     let capacity_after_warmup = enc.encoded_len();
 
     let regions_before = runner.world().collapse_counts().regions;
@@ -292,11 +284,8 @@ fn a_tick_allocates_nothing() {
          fixed-stride after all"
     );
 
-    probe("tick: steady done", runner.world());
     crowd_allocates_nothing(&mut runner, &mut enc);
-    probe("tick: crowd done", runner.world());
     near_estimates_allocate_nothing(runner.world_mut());
-    probe("tick: near done", runner.world());
 }
 
 /// The attacking crowds' half of [`a_tick_allocates_nothing`].
@@ -319,7 +308,6 @@ fn crowd_allocates_nothing(runner: &mut Runner, enc: &mut Enc) {
         runner.clear_events();
         runner.world().encode(enc);
     }
-    probe("crowd: laid out and warmed", runner.world());
     let before_crowd = allocations();
     let shots_before = runner.world().combat_counts().shots();
     for _ in 0..CROWD_TICKS {
@@ -929,23 +917,4 @@ fn ring_round(world: &mut World, vent: [i32; 2], radius: i32) {
             }
         }
     }
-}
-
-/// MEASUREMENT PROBE, removed by the next commit (citime part 2): one line per
-/// phase on stderr, written past libtest's capture so the CI log's timestamps
-/// time the phases, with the phase's counted work. Called only between
-/// counted windows.
-fn probe(label: &str, world: &World) {
-    use std::io::Write as _;
-    let collapse = world.collapse_counts();
-    let line = format!(
-        "[alloc-probe] {label}: tick {:?}, regions {}, voxels fallen {}, shots {}\n",
-        world.tick(),
-        collapse.regions,
-        collapse.voxels,
-        world.combat_counts().shots(),
-    );
-    std::io::stderr()
-        .write_all(line.as_bytes())
-        .expect("the probe line is written");
 }
