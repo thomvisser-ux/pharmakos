@@ -184,7 +184,8 @@ const TEXT := {
 	"menu_remove_target": "Remove a build target",
 	"menu_target_row": "{blueprint} at {anchor}",
 	"menu_queue": "Queue a structure",
-	"menu_entry_locked": "{title} (locked: {locked})",
+	# Under a locked entry in the entry list, the gateway's sentence as it came.
+	"menu_entry_locked": "Locked: {locked}",
 	"menu_detail_waiting": "Reading this beacon...",
 	"menu_detail_refused": "This beacon's detail: {detail}",
 	"menu_detail_unreadable": "This beacon's detail could not be read: {detail}",

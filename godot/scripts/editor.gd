@@ -193,6 +193,14 @@ const ITEM_HIGH := 13
 const ITEM_THIS := 19
 const ITEM_SELECTOR := 20
 const SELECTORS := ["nearest", "weakest", "safest", "most_threatened"]
+## Visit & change's rows that open an entry list (`_open_entry_list`): Switch mandate, Add a build
+## target, Queue a structure, each the bridge's row of that name on the entry picked.
+const ITEM_LIST_MANDATE := 31
+const ITEM_LIST_ADD_TARGET := 32
+const ITEM_LIST_QUEUE := 33
+const ENTRY_LISTS := {ITEM_LIST_MANDATE: ["mandate", "mandates", "menu_mandate"], ITEM_LIST_ADD_TARGET: ["add_target", "blueprints", "menu_add_target"], ITEM_LIST_QUEUE: ["queue", "blueprints", "menu_queue"]}
+## A locked entry's sentence colour. PLACEHOLDER: the entry list's look — OWNER, at S6.
+const LOCKED_COLOUR := Color(0.65, 0.65, 0.65)
 ## The user argument (after `--`) that turns on the click logging.
 const LOG_INPUT_ARG := "--log-input"
 ## What New puts on screen: the empty playbook the client ships, one data file (the P6a
@@ -300,6 +308,15 @@ var _rule_slots: Array = []
 var _visit_beacon := ""
 var _visit_drawn := ""
 var _visit_submenus: Array[PopupMenu] = []
+## The entry list (S3's `fixp`, P6b finding 5): the vocabulary's mandates or blueprints, as the
+## Visit & change row that opened it lists them, for the beacon the menu was open for.
+var _entry_popup: PopupPanel
+var _entry_box: VBoxContainer
+var _entry_beacon := ""
+## The entries the open list draws, and the bridge's row name a pick makes.
+var _entry_row := ""
+## Emitted with the row name and the entry's index when an entry is picked (a check listens).
+signal entry_picked(row: String, which: int)
 var _number_setting := {}
 ## The voxel whose ghost the ground menu's first line was filled from, or null: the menu closes
 ## when that ghost goes, and not for a ghost that was never asked (fix pass 2, item 1).
@@ -832,7 +849,12 @@ func _on_menu(id: int) -> void:
 			_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), SELECTORS[index] == _selector)
 		return
 	# Every other entry is an action: it closes the map menus, whichever level it was picked in.
+	var beside := Rect2(Vector2(_visit_menu.position), Vector2(_visit_menu.size))
 	close_menu()
+	if ENTRY_LISTS.has(id):
+		var vocabulary: Dictionary = bridge.editor_state().get("vocabulary", {})
+		open_entry_list(id, vocabulary.get(String(ENTRY_LISTS[id][1]), []), beside)
+		return
 	var target := _menu_target.duplicate()
 	if _selector != "":
 		target = {"selector": _selector}
@@ -1282,17 +1304,17 @@ func _fill_visit_menu(state: Dictionary) -> void:
 	var rows: Array = detail.get("settings", [])
 	for which in rows.size():
 		_setting_row(settings, which, rows[which])
-	var mandates := _visit_submenu(Strings.text("menu_mandate"))
-	_entry_rows(mandates, vocabulary.get("mandates", []), "mandate")
-	var add := _visit_submenu(Strings.text("menu_add_target"))
-	_entry_rows(add, vocabulary.get("blueprints", []), "add_target")
+	# The vocabulary's lists open as the editor's own entry list, which wraps a lock's sentence
+	# under its entry and stays inside the window: a PopupMenu does not wrap, so a submenu with
+	# the gateway's long sentences ran wider than the window (P6b finding 5).
+	_visit_menu.add_item(Strings.text("menu_mandate"), ITEM_LIST_MANDATE)
+	_visit_menu.add_item(Strings.text("menu_add_target"), ITEM_LIST_ADD_TARGET)
 	var remove := _visit_submenu(Strings.text("menu_remove_target"))
 	var targets: Array = detail.get("targets", [])
 	for which in targets.size():
 		remove.add_item(Strings.text("menu_target_row", {"blueprint": targets[which].get("blueprint_id", ""), "anchor": targets[which].get("anchor", "")}), which)
 	remove.id_pressed.connect(func(which: int) -> void: _on_visit_row("remove_target", which))
-	var queue := _visit_submenu(Strings.text("menu_queue"))
-	_entry_rows(queue, vocabulary.get("blueprints", []), "queue")
+	_visit_menu.add_item(Strings.text("menu_queue"), ITEM_LIST_QUEUE)
 
 
 ## A submenu of the Visit & change menu, titled `title`.
@@ -1357,18 +1379,88 @@ func _on_setting(which: int) -> void:
 	_open_number({}, rows[which])
 
 
-## A vocabulary list's rows (mandates or blueprints) as sent, a locked one greyed with its
-## reason; a pick is the bridge's row `row` on entry `which`.
-func _entry_rows(menu: PopupMenu, entries: Array, row: String) -> void:
+## Opens the entry list for Visit & change's row `item` (one of ENTRY_LISTS) on the beacon the
+## menu is open for: the vocabulary's entries as sent, beside `beside` (the menu it was picked
+## from, in the window's pixels) and inside the window, PANEL_WIDTH wide. Each entry is a row
+## with its title; a locked one is greyed, takes no click, and has the gateway's sentence wrapped
+## under it (the reason beside the entry, S3's `ed3b` part 2). A pick is the bridge's row.
+func open_entry_list(item: int, entries: Array, beside: Rect2) -> void:
+	var list: Array = ENTRY_LISTS.get(item, [])
+	if list.is_empty():
+		return
+	_entry_beacon = _visit_beacon
+	_entry_row = String(list[0])
+	for child in _entry_box.get_children():
+		_entry_box.remove_child(child)
+		child.queue_free()
+	var heading := Label.new()
+	heading.text = Strings.text(String(list[2]))
+	_entry_box.add_child(heading)
 	for which in entries.size():
-		var entry: Dictionary = entries[which]
-		var locked := String(entry.get("locked", ""))
-		if locked != "":
-			menu.add_item(Strings.text("menu_entry_locked", {"title": entry.get("title", ""), "locked": locked}), which)
-			menu.set_item_disabled(menu.item_count - 1, true)
-		else:
-			menu.add_item(String(entry.get("title", "")), which)
-	menu.id_pressed.connect(func(which: int) -> void: _on_visit_row(row, which))
+		_entry_box.add_child(_entry(entries[which], which))
+	_entry_popup.size = Vector2i(int(PANEL_WIDTH), 0)
+	_entry_popup.reset_size()
+	_entry_popup.size.x = int(PANEL_WIDTH)
+	_entry_popup.popup(Rect2i(_inside_window(Vector2(beside.end.x, beside.position.y), Vector2(_entry_popup.size)), _entry_popup.size))
+
+
+## One entry's row: a flat button with its title, or, locked, a greyed button that takes no click
+## and the gateway's sentence wrapped under it.
+func _entry(entry: Dictionary, which: int) -> Control:
+	var row := VBoxContainer.new()
+	row.set_meta("entry", which)
+	var pick := Button.new()
+	pick.flat = true
+	pick.focus_mode = Control.FOCUS_NONE
+	pick.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	pick.text = String(entry.get("title", ""))
+	pick.accessibility_name = pick.text
+	pick.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	pick.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
+	row.add_child(pick)
+	var locked := String(entry.get("locked", ""))
+	if locked != "":
+		pick.disabled = true
+		var why := Label.new()
+		why.text = Strings.text("menu_entry_locked", {"locked": locked})
+		why.accessibility_name = why.text
+		why.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		why.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
+		why.add_theme_color_override("font_color", LOCKED_COLOUR)
+		row.add_child(why)
+		row.set_meta("locked", why.text)
+	else:
+		pick.pressed.connect(func() -> void: _on_entry(which))
+	return row
+
+
+## Entry `which` of the open list was picked: the list closes, and the bridge composes the row.
+func _on_entry(which: int) -> void:
+	_entry_popup.hide()
+	entry_picked.emit(_entry_row, which)
+	bridge.editor_visit_row(_entry_beacon, _entry_row, which)
+
+
+## The entry list's rows as drawn, for a check: each a VBoxContainer with the meta `entry`, and
+## `locked` (its sentence as drawn) on a locked one.
+func entry_rows() -> Array[Control]:
+	var out: Array[Control] = []
+	for child in _entry_box.get_children():
+		if child.has_meta("entry"):
+			out.append(child)
+	return out
+
+
+## Where a popup of `size` goes so that it stands at `want` if it can, and otherwise as near it as
+## the window allows, wholly inside it. Pixels of the window, a layout rule of the view.
+func _inside_window(want: Vector2, size: Vector2) -> Vector2i:
+	var window := get_viewport().get_visible_rect()
+	var at := want
+	if at.x + size.x > window.end.x:
+		at.x = window.end.x - size.x
+	if at.y + size.y > window.end.y:
+		at.y = window.end.y - size.y
+	return Vector2i(maxf(at.x, window.position.x), maxf(at.y, window.position.y))
 
 
 ## The value field for the chip `named` (or, with `named` empty, the Visit & change setting
@@ -1741,6 +1833,10 @@ func _build_menus() -> void:
 	_name_menu.id_pressed.connect(_on_name)
 	add_child(_name_menu)
 	_build_picker()
+	_entry_popup = PopupPanel.new()
+	_entry_box = VBoxContainer.new()
+	_entry_popup.add_child(_entry_box)
+	add_child(_entry_popup)
 	_number_popup = PopupPanel.new()
 	var box := VBoxContainer.new()
 	_number_popup.add_child(box)

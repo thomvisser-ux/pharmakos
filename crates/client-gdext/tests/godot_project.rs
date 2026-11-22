@@ -2668,9 +2668,37 @@ fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
         .iter()
         .position(|line| *line == "return")
         .expect("the target choice returns");
+    let closed = on_menu
+        .iter()
+        .position(|line| *line == "close_menu()")
+        .expect("the menus close");
+    let first_action = on_menu
+        .iter()
+        .position(|line| line.starts_with("act(") || line.starts_with("open_entry_list("))
+        .expect("an action");
     assert!(
-        on_menu.get(target_return.saturating_add(1)).copied() == Some("close_menu()"),
-        "every action pick but a target choice closes the map menus: {on_menu:?}"
+        target_return < closed && closed < first_action,
+        "every action pick but a target choice closes the map menus first: {on_menu:?}"
+    );
+    // The vocabulary's lists open as the editor's own entry list (P6b finding 5), a locked entry
+    // greyed with the gateway's sentence wrapped under it; client_check.gd measures it.
+    let entry = gd_code(&editor, "_entry");
+    for wanted in [
+        "pick.disabled = true",
+        "why.text = Strings.text(\"menu_entry_locked\", {\"locked\": locked})",
+        "why.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART",
+    ] {
+        assert!(entry.contains(&wanted), "{wanted}: {entry:?}");
+    }
+    assert!(
+        gd_code(&editor, "_on_entry")
+            .contains(&"bridge.editor_visit_row(_entry_beacon, _entry_row, which)"),
+        "an entry is the bridge's row"
+    );
+    assert!(
+        read("scripts/client_check.gd")
+            .contains("await _check_the_entry_list(stage, editor, failures)"),
+        "the client check measures the entry list"
     );
     assert!(
         read("scripts/client_check.gd")

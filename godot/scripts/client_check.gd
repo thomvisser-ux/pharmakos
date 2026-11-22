@@ -311,6 +311,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	_check_the_box(editor, failures)
 	_check_escape(editor, failures)
 	await _check_an_action_pick_closes_the_menus(stage, editor, failures)
+	await _check_the_entry_list(stage, editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
@@ -794,6 +795,52 @@ func _submenu_row(menu: PopupMenu, submenu: PopupMenu) -> int:
 		if menu.get_item_submenu_node(index) == submenu:
 			return index
 	return -1
+
+
+## **Lists of entries are drawn in a list that fits** (S3's `fixp`, P6b finding 5): the
+## vocabulary's blueprints, from the gateway's committed answer, open beside the menu they were
+## picked from, at most PANEL_WIDTH wide and inside the window, with the locked Resonance Spire's
+## sentence under it; a click on that row (pushed into the stage) picks nothing, and a click on an
+## open row picks it. At P6b a PopupMenu, which does not wrap, ran wider than the window.
+func _check_the_entry_list(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var words: Dictionary = editor.bridge.editor_vocabulary_of_response(FileAccess.get_file_as_string("res://fixtures/vocabulary.json"))
+	var blueprints: Array = words.get("blueprints", [])
+	if blueprints.is_empty():
+		failures.append("the vocabulary fixture listed no blueprint")
+		return
+	var picked: Array = []
+	var listen := func(row: String, which: int) -> void: picked.append([row, which])
+	editor.entry_picked.connect(listen)
+	# Beside a menu near the window's right edge, where the old submenu ran off it.
+	editor.open_entry_list(EditorPanel.ITEM_LIST_ADD_TARGET, blueprints, Rect2(Vector2(OWNERS_WINDOW.x - 200, 200), Vector2(180, 300)))
+	await _settle()
+	var popup: PopupPanel = editor._entry_popup
+	var rect := Rect2(Vector2(popup.position), Vector2(popup.size))
+	print("[client-check] the entry list: %s, %d rows" % [rect, editor.entry_rows().size()])
+	if rect.size.x > EditorPanel.PANEL_WIDTH or not Rect2(Vector2.ZERO, Vector2(OWNERS_WINDOW)).encloses(rect):
+		failures.append("the entry list %s is wider than %d or outside the window" % [rect, EditorPanel.PANEL_WIDTH])
+	var spire: Control = null
+	var open_row: Control = null
+	for row in editor.entry_rows():
+		var entry: Dictionary = blueprints[int(row.get_meta("entry"))]
+		if String(entry.get("name", "")) == "resonance_spire":
+			spire = row
+		elif String(entry.get("locked", "")) == "" and open_row == null:
+			open_row = row
+	if spire == null or not spire.has_meta("locked") or not String(spire.get_meta("locked")).contains(String(blueprints[int(spire.get_meta("entry"))].get("locked", "?"))):
+		failures.append("the locked Resonance Spire's row does not show its sentence")
+	else:
+		_click(stage, rect.position + (spire.get_child(0) as Control).get_global_rect().get_center())
+		await get_tree().process_frame
+		if not picked.is_empty():
+			failures.append("a click on the locked Spire picked %s" % [picked])
+	if open_row != null:
+		_click(stage, rect.position + (open_row.get_child(0) as Control).get_global_rect().get_center())
+		await get_tree().process_frame
+		if picked != [["add_target", int(open_row.get_meta("entry"))]]:
+			failures.append("a click on an open entry picked %s" % [picked])
+	editor.entry_picked.disconnect(listen)
+	popup.hide()
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4
