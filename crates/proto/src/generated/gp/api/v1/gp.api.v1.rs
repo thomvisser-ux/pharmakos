@@ -911,13 +911,14 @@ pub struct GetMapSummaryResponse {
     pub match_seed: ::prost::alloc::string::String,
     /// Every vent and seam on the map (the register's S1-48), in feature id
     /// order. Each feature's id, kind, grade and anchor are a pure function of
-    /// the seed, the rules and the occupied seats. Its `live`, `covered`,
-    /// `travel_ms` and `reachable` read the world as it stands (the frozen
-    /// snapshot in a Lull or a recap, the live world in a Push), unfogged in S1
-    /// as targeting.md's ranking already is, so a seam another seat has mined
-    /// out shows here as not live. The list is fog-filtered from S4, with real
-    /// terrain fog (S3's plan, decision 2, register S3-05; docs/design/targeting.md,
-    /// "Descriptions (S1)" and "Surfaces").
+    /// the seed, the rules and the occupied seats. Its `live` and `covered` read
+    /// the world as it stands (the frozen world in a Lull or a recap, the live
+    /// world in a Push), unfogged as targeting.md's ranking already is, so a
+    /// seam another seat has mined out shows here as not live. Its `travel_ms`
+    /// and `reachable` are told only in a Lull, over the frozen planning world,
+    /// and withheld in every other phase (MapFeature). The list is fog-filtered
+    /// from S4, with real terrain fog (S3's plan, decision 2, register S3-05;
+    /// docs/design/targeting.md, "Descriptions (S1)" and "Surfaces").
     #[prost(message, repeated, tag="5")]
     pub features: ::prost::alloc::vec::Vec<MapFeature>,
 }
@@ -951,14 +952,30 @@ pub struct MapFeature {
     /// living beacons, awake or dormant: the opposite of a pick's UNCOVERED.
     #[prost(bool, tag="7")]
     pub covered: bool,
-    /// Travel from the commander, game milliseconds, by the estimator "nearest"
-    /// ranks with (targeting.md, "Nearest").
-    #[prost(int32, tag="8")]
-    pub travel_ms: i32,
-    /// False when no route reaches the feature; `travel_ms` is then 0 and
-    /// means nothing.
-    #[prost(bool, tag="9")]
-    pub reachable: bool,
+    /// `travel_ms` and `reachable` together say one of three things, and no
+    /// other combination is ever written:
+    ///
+    /// * reached: `reachable` is true and `travel_ms` is set;
+    /// * unreachable: `reachable` is false and `travel_ms` is absent;
+    /// * withheld: both are absent. That is every feature outside a Lull (a
+    ///    Push, a recap, the lobby, an ended match), and every feature for a
+    ///    caller that is no seat. In a Push the hosted world is the live one,
+    ///    unfogged, and a recap's is the Push's end state, so a time there
+    ///    would tell the seat about terrain it cannot see (the owner's ruling
+    ///    of 2026-11-21, "Omit them in a Push"; S3's `mapw`).
+    ///
+    /// Both are `optional` (proto3 explicit presence) so that "not told" is its
+    /// own state on the wire and never a 0 or a false.
+    ///
+    /// Travel from the commander, game milliseconds: the walk the router
+    /// serves it over the frozen planning world, priced by the estimator
+    /// "nearest" ranks with (targeting.md, "Nearest"; S3's `p3fix`).
+    #[prost(int32, optional, tag="8")]
+    pub travel_ms: ::core::option::Option<i32>,
+    /// Whether a route reaches the feature from the commander, over the same
+    /// world. A commander that is not standing anywhere reaches nothing.
+    #[prost(bool, optional, tag="9")]
+    pub reachable: ::core::option::Option<bool>,
 }
 /// Nested message and enum types in `MapFeature`.
 pub mod map_feature {
