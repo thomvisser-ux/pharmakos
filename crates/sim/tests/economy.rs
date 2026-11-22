@@ -3004,12 +3004,13 @@ fn the_tick_bench_reports_counted_work() {
     );
 }
 
+/// The workspace root: this crate is `<root>/crates/sim`.
 fn repo_root() -> PathBuf {
-    let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    here.parent()
-        .and_then(std::path::Path::parent)
-        .map(PathBuf::from)
-        .unwrap_or(here)
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap_or_else(|| panic!("crates/sim sits two levels below the workspace root"))
+        .to_path_buf()
 }
 
 fn write_actual(name: &str, body: &str) {
@@ -3021,15 +3022,16 @@ fn write_actual(name: &str, body: &str) {
         .unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
 }
 
-/// Cargo's target directory, the way every other producer in this crate finds
-/// it: `CARGO_TARGET_DIR` when it is set, and `<repo>/target` otherwise.
+/// Cargo's target directory: the parent of `CARGO_TARGET_TMPDIR`, which cargo
+/// sets, absolute, to `<target>/tmp`. Unlike a raw read of `CARGO_TARGET_DIR`
+/// it is right for a relative value (which cargo resolves against its own
+/// working folder, not this test's) and for a user-level `build.target-dir`
+/// with the variable unset.
 fn target_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR")
-        && !dir.is_empty()
-    {
-        return PathBuf::from(dir);
-    }
-    repo_root().join("target")
+    std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .parent()
+        .unwrap_or_else(|| panic!("CARGO_TARGET_TMPDIR always has a parent"))
+        .to_path_buf()
 }
 
 /// One whole tick of a Push, or `None` outside one; a refused tick is this
@@ -3043,4 +3045,20 @@ impl PlayTick for Runner {
         self.step()
             .unwrap_or_else(|error| panic!("the tick runs: {error}"))
     }
+}
+
+/// The folder the producers above write into is the target directory cargo
+/// names: absolute, and the parent of `CARGO_TARGET_TMPDIR`, whatever spelling
+/// `CARGO_TARGET_DIR` had and whether or not it was set (decisions-log item 165
+/// (13)). A relative value read raw names a folder under this crate instead,
+/// and the `golden` step never reads what was written there.
+#[test]
+fn the_target_dir_is_the_one_cargo_names() {
+    let named = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .parent()
+        .unwrap_or_else(|| panic!("CARGO_TARGET_TMPDIR always has a parent"))
+        .to_path_buf();
+    let found = target_dir();
+    assert!(found.is_absolute(), "{} is not absolute", found.display());
+    assert_eq!(found, named);
 }
