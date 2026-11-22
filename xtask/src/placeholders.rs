@@ -185,10 +185,11 @@ pub(crate) fn stage_of(when: &str) -> String {
     }
 }
 
-/// One line of `git grep -n` output: `<path>:<line>:<text>`.
+/// One line of `git grep -z -n` output: `<path>NUL<line>NUL<text>`. NUL
+/// cannot occur in a path, so a path holding a colon is read whole.
 pub(crate) fn split_grep_line(line: &str) -> Option<(&str, usize, &str)> {
-    let (path, rest) = line.split_once(':')?;
-    let (number, text) = rest.split_once(':')?;
+    let (path, rest) = line.split_once('\0')?;
+    let (number, text) = rest.split_once('\0')?;
     Some((path, number.parse().ok()?, text))
 }
 
@@ -212,8 +213,8 @@ impl Register {
         for line in output.lines() {
             let Some((path, number, text)) = split_grep_line(line) else {
                 return Err(format!(
-                    "`git grep -n` printed a line that is not `<path>:<line>:<text>`, so a \
-                     marker on it could not be placed: {line}"
+                    "`git grep -z -n` printed a line that is not `<path>NUL<line>NUL<text>`, \
+                     so a marker on it could not be placed: {line:?}"
                 ));
             };
             let place = format!("{path}:{number}");
@@ -298,6 +299,7 @@ pub(crate) fn collect(root: &Path, require_tools: bool) -> Result<Register, Stri
     let mut args: Vec<&str> = vec![
         "grep",
         "--no-color",
+        "-z",
         "-n",
         "-I",
         "-w",
@@ -419,12 +421,12 @@ mod tests {
     #[test]
     fn git_grep_output_becomes_a_register() {
         let output = "\
-Cargo.toml:25:rust-version = \"1.98\"\n\
-clippy.toml:40:# PLACEHOLDER: the held-back list \u{2014} owner, S1.\n\
-proto/a.proto:3:// PLACEHOLDER: tuning \u{2014} owner, S2.\n\
-proto/a.proto:9:// PLACEHOLDER STUB - the payload.\n\
-proto/a.proto:12:// a PLACEHOLDER, referred to\n\
-proto/b.proto:1:// PLACEHOLDER: tuning \u{2014} owner, S1\n";
+Cargo.toml\u{0}25\u{0}rust-version = \"1.98\"\n\
+clippy.toml\u{0}40\u{0}# PLACEHOLDER: the held-back list \u{2014} owner, S1.\n\
+proto/a.proto\u{0}3\u{0}// PLACEHOLDER: tuning \u{2014} owner, S2.\n\
+proto/a.proto\u{0}9\u{0}// PLACEHOLDER STUB - the payload.\n\
+proto/a.proto\u{0}12\u{0}// a PLACEHOLDER, referred to\n\
+proto/b.proto\u{0}1\u{0}// PLACEHOLDER: tuning \u{2014} owner, S1\n";
         let register = Register::from_grep(output).expect("every line parses");
         assert_eq!(register.in_grammar(), 3);
         assert_eq!(
@@ -467,20 +469,39 @@ proto/b.proto:1:// PLACEHOLDER: tuning \u{2014} owner, S1\n";
     }
 
     #[test]
-    fn a_grep_line_splits_at_its_first_two_colons() {
+    fn a_grep_line_splits_at_its_two_nuls() {
         assert_eq!(
-            split_grep_line("a/b.rs:12:// PLACEHOLDER: x \u{2014} owner, S1: soon"),
+            split_grep_line("a/b.rs\u{0}12\u{0}// PLACEHOLDER: x \u{2014} owner, S1: soon"),
             Some(("a/b.rs", 12, "// PLACEHOLDER: x \u{2014} owner, S1: soon"))
         );
         assert_eq!(split_grep_line("no line number"), None);
     }
 
-    /// A `git grep -n` line the reader cannot place fails the register. Before,
-    /// it was skipped, so a marker on a path holding a colon was never listed
-    /// and `--check` could pass over a marker off the grammar.
+    /// `git grep -z -n` ends the path and the line number with NUL, so a path
+    /// holding a colon is read whole. Split at the colons, `a:3:b.rs` was read
+    /// as the file `a` at line 3.
+    #[test]
+    fn a_path_holding_a_colon_is_read_whole() {
+        assert_eq!(
+            split_grep_line("a:3:b.rs\u{0}7\u{0}// PLACEHOLDER: x \u{2014} owner, S1"),
+            Some(("a:3:b.rs", 7, "// PLACEHOLDER: x \u{2014} owner, S1"))
+        );
+        let register =
+            Register::from_grep("a:3:b.rs\u{0}7\u{0}// PLACEHOLDER: x \u{2014} owner, S1\n")
+                .expect("the line parses");
+        let filed = register
+            .filed
+            .get(&("S1".to_owned(), "owner".to_owned()))
+            .expect("the S1 group");
+        assert_eq!(filed, &vec![("a:3:b.rs:7".to_owned(), "x".to_owned())]);
+    }
+
+    /// A line the reader cannot place (here one without the two NULs `-z`
+    /// writes) fails the register rather than being skipped, so `--check` can
+    /// never pass over a marker it did not read.
     #[test]
     fn a_grep_line_that_does_not_parse_fails_the_register() {
-        let output = "a/b.rs:3:// PLACEHOLDER: x \u{2014} owner, S1\n\
+        let output = "a/b.rs\u{0}3\u{0}// PLACEHOLDER: x \u{2014} owner, S1\n\
                       odd:name.rs:// PLACEHOLDER STUB - off the grammar\n";
         let refused = Register::from_grep(output);
         assert!(
