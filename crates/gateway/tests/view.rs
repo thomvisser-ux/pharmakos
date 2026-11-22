@@ -1988,12 +1988,70 @@ fn wall_done(surface: &Surface) -> bool {
     })
 }
 
+/// The second half of `a_wall_is_listed_while_a_voxel_of_it_stands`, on seat
+/// 0's filled wall: seat 1, a map away, is shown it only through a vision
+/// that sees one of its voxels, and then as that voxel alone.
+fn another_seats_wall_is_drawn_as_far_as_it_is_seen(surface: &mut Surface, own: &mut Watcher) {
+    // Seat 1, a map away: absent through its live vision and through a
+    // vision that sees none of it, listed through one that sees one voxel.
+    let mut theirs = Watcher::new(seat_token(surface, 1));
+    assert_eq!(find(&theirs.live(surface), "wall", "seat.0"), None);
+    let mut blind = pharmakos_gateway::fog::KnownVoxels::new();
+    blind.see(SeatId::new(1), &Voxel { x: 0, y: 0, z: 0 });
+    assert_eq!(
+        find(&theirs.entities(surface, &blind), "wall", "seat.0"),
+        None
+    );
+    let voxel = *wall_voxels(surface).last().expect("a voxel");
+    let mut one = pharmakos_gateway::fog::KnownVoxels::new();
+    one.see(
+        SeatId::new(1),
+        &Voxel {
+            x: voxel[0],
+            y: voxel[1],
+            z: voxel[2],
+        },
+    );
+    let before = surface.host().expect("a match").world().state_hash();
+    let entities = theirs.entities(surface, &one);
+    assert_eq!(
+        surface.host().expect("a match").world().state_hash(),
+        before,
+        "reading a wall writes nothing"
+    );
+    let seen = find(&entities, "wall", "seat.0").expect("one voxel in sight lists it");
+    // Drawn as far as seat 1 sees it and no further: neither the box nor the
+    // top seat 0's settings give it, which would be its build progress.
+    let at = seen.get("at").expect("a place");
+    assert_eq!(
+        [number(at, "x"), number(at, "y"), number(at, "z")],
+        voxel,
+        "the one voxel in sight"
+    );
+    let look = seen.get("look").expect("a look");
+    assert_eq!(text_of(look, "shape"), "slab");
+    assert_eq!(
+        [number(look, "x"), number(look, "y"), number(look, "z")],
+        [1, 1, 1]
+    );
+    let ours = find(&own.live(surface), "wall", "seat.0")
+        .cloned()
+        .expect("ours");
+    assert_ne!(
+        seen.get("look"),
+        ours.get("look"),
+        "seat 0's own look is its whole box"
+    );
+    assert_eq!(text_of(seen, "id"), "l_1", "seat 1's own count of walls");
+}
+
 /// S3's `probw`, item 5: a wall is listed as a `structure`/`wall` entity from
 /// its first standing voxel, under one handle on every page, at its box's
 /// lowest corner and lowest standing voxel, with a slab look its box's size
 /// and no hit points; another seat's wall only while one of its voxels is in
-/// that seat's vision; a no-fog spectator sees it; reading it moves no hashed
-/// state; and it goes when its last voxel does.
+/// that seat's vision, and then only as far as it sees; a no-fog spectator
+/// sees it; reading it moves no hashed state; and it goes when its last voxel
+/// does.
 #[test]
 fn a_wall_is_listed_while_a_voxel_of_it_stands() {
     let mut surface = base_kit(FogPolicy::fogged(), false);
@@ -2049,44 +2107,7 @@ fn a_wall_is_listed_while_a_voxel_of_it_stands() {
     assert!(handle.is_some(), "the wall was listed");
     assert!(find(&nofog.live(&mut surface), "wall", "seat.0").is_some());
 
-    // Seat 1, a map away: absent through its live vision and through a
-    // vision that sees none of it, listed through one that sees one voxel.
-    let mut theirs = Watcher::new(seat_token(&mut surface, 1));
-    assert_eq!(find(&theirs.live(&mut surface), "wall", "seat.0"), None);
-    let mut blind = pharmakos_gateway::fog::KnownVoxels::new();
-    blind.see(SeatId::new(1), &Voxel { x: 0, y: 0, z: 0 });
-    assert_eq!(
-        find(&theirs.entities(&mut surface, &blind), "wall", "seat.0"),
-        None
-    );
-    let voxel = *wall_voxels(&surface).last().expect("a voxel");
-    let mut one = pharmakos_gateway::fog::KnownVoxels::new();
-    one.see(
-        SeatId::new(1),
-        &Voxel {
-            x: voxel[0],
-            y: voxel[1],
-            z: voxel[2],
-        },
-    );
-    let before = surface.host().expect("a match").world().state_hash();
-    let entities = theirs.entities(&mut surface, &one);
-    assert_eq!(
-        surface.host().expect("a match").world().state_hash(),
-        before,
-        "reading a wall writes nothing"
-    );
-    let seen = find(&entities, "wall", "seat.0").expect("one voxel in sight lists it");
-    let ours = find(&own.live(&mut surface), "wall", "seat.0")
-        .cloned()
-        .expect("ours");
-    assert_eq!(
-        seen.get("at"),
-        ours.get("at"),
-        "its place is not what of it is seen"
-    );
-    assert_eq!(seen.get("look"), ours.get("look"));
-    assert_eq!(text_of(seen, "id"), "l_1", "seat 1's own count of walls");
+    another_seats_wall_is_drawn_as_far_as_it_is_seen(&mut surface, &mut own);
 
     // Its last voxel goes: so does the wall.
     for at in wall_voxels(&surface) {

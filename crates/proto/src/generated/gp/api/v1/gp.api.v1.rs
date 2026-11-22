@@ -2536,7 +2536,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ViewChunk".into() 
 /// has built, while at least one of its voxels stands (S3's `probw`). It has no
 /// hit points of its own. Another seat's wall is listed only while one of its
 /// standing voxels is in the viewer's live vision, as another seat's
-/// structure is.
+/// structure is, and is then drawn only as far as the voxels of it the viewer
+/// sees: its box and its top are that seat's Build settings, and how far it
+/// has risen is its build progress.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ViewEntity {
     /// OPAQUE, and scoped to the viewer this answer was built for. A seat's own
@@ -2568,7 +2570,7 @@ pub struct ViewEntity {
     pub owner: ::prost::alloc::string::String,
     /// Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
     /// positions are a recording's concern and are held at 10 to 15. A wall
-    /// stands at its box's lowest corner, at its lowest standing voxel.
+    /// stands at its look's lowest corner (`Look`).
     ///
     /// PLACEHOLDER: whole-voxel positions — owner, S7, with the recording
     /// format. Whole voxels are enough for a camera and are not enough for a
@@ -2642,8 +2644,10 @@ pub mod view_entity {
         /// Its size in whole voxels, x east, y north, z up, measured from `at`. A
         /// structure stands on one column (spec section 5; the sim's footings and
         /// its one-structure-per-voxel rule) and is given no height by the sim, so
-        /// it is 1 by 1 by 1, the voxel it stands in. A wall is its box: its
-        /// columns across, and from its lowest standing voxel up to its top.
+        /// it is 1 by 1 by 1, the voxel it stands in. The viewer's own wall (any
+        /// wall, for a no-fog spectator) is its box: its columns across, and from
+        /// its lowest standing voxel up to the top it is filled to. Another seat's
+        /// wall is the box around the voxels of it the viewer sees.
         #[prost(uint32, tag="2")]
         pub x: u32,
         #[prost(uint32, tag="3")]

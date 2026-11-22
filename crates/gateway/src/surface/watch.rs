@@ -554,11 +554,14 @@ fn visible_structures<V: Vision>(
 /// in its box, read column by column from the box's top down through wall and
 /// air voxels to the ground, as the sim reads a wall's ground (a column's
 /// first solid voxel that is no wall's). Listed as a `structure`, subtype
-/// `wall`, at the box's lowest corner at its lowest standing voxel, with a
-/// `SLAB` look its box's size from there to its top and no hit points. The
-/// viewer's own walls always; another seat's only while one of its standing
-/// voxels passes the fog filter, as another seat's structure does; a no-fog
-/// spectator all. Read-only: nothing here writes the world.
+/// `wall`, with no hit points. The viewer's own walls always, at the box's
+/// lowest corner at its lowest standing voxel, with a `SLAB` look its box's
+/// size from there to its top; a no-fog spectator's likewise, every seat's.
+/// Another seat's only while one of its standing voxels passes the fog
+/// filter, as another seat's structure does, and then drawn as the box around
+/// the voxels of it the viewer sees and no further: its box and top are that
+/// seat's Build settings, and how far it has risen its build progress.
+/// Read-only: nothing here writes the world.
 ///
 /// # Errors
 ///
@@ -596,11 +599,9 @@ fn visible_walls<V: Vision>(
             "beacon",
             "seat",
         )?;
-        let Some(lowest) = wall_standing(world, filter, viewer, seat, area, top) else {
+        let Some(standing) = wall_standing(world, filter, viewer, seat, area, top) else {
             continue;
         };
-        let [lx, ly] = area.min_column();
-        let [hx, hy] = area.max_column();
         let span = |low: i32, high: i32| {
             high.checked_sub(low)
                 .and_then(|span| span.checked_add(1))
@@ -614,11 +615,27 @@ fn visible_walls<V: Vision>(
                     ))
                 })
         };
-        let size = [
-            span(i32::from(lx), i32::from(hx))?,
-            span(i32::from(ly), i32::from(hy))?,
-            span(lowest, i32::from(top))?,
-        ];
+        // The viewer's own wall (or any, for a no-fog spectator) is drawn as
+        // its box, from its lowest standing voxel to the top it is filled to;
+        // another seat's only as far as the voxels of it the viewer sees,
+        // because its box and its top are the seat's Build settings and how
+        // far it has risen is its build progress (S2's plan's decision 5; the
+        // owner's "Own seat only", decisions-log item 168 (11)).
+        let (low, high) = if private_to(viewer, Some(seat)) {
+            let [lx, ly] = area.min_column();
+            let [hx, hy] = area.max_column();
+            (
+                [i32::from(lx), i32::from(ly), standing.lowest],
+                [i32::from(hx), i32::from(hy), i32::from(top)],
+            )
+        } else {
+            (standing.seen_low, standing.seen_high)
+        };
+        let [x0, y0, z0] = low;
+        let [x1, y1, z1] = high;
+        let size = [span(x0, x1)?, span(y0, y1)?, span(z0, z1)?];
+        let [lx, ly] = area.min_column();
+        let [hx, hy] = area.max_column();
         let handle = views.wall_handle(
             viewer,
             WallKey {
@@ -629,9 +646,9 @@ fn visible_walls<V: Vision>(
             },
         )?;
         let at = Voxel {
-            x: i32::from(lx),
-            y: i32::from(ly),
-            z: lowest,
+            x: x0,
+            y: y0,
+            z: z0,
         };
         let condition = Condition {
             look: Some(Look {
@@ -652,10 +669,20 @@ fn visible_walls<V: Vision>(
     Ok(())
 }
 
+/// What [`wall_standing`] read of one wall.
+struct WallStanding {
+    /// The lowest standing voxel of the wall, seen or not.
+    lowest: i32,
+    /// The lowest corner of the box around the voxels this viewer sees.
+    seen_low: [i32; 3],
+    /// The highest corner of that box.
+    seen_high: [i32; 3],
+}
+
 /// The wall voxels of `seat` standing in the box `area` up to `top`, as this
 /// viewer may be shown them: `None` when none stands, or none passes the fog
-/// filter; otherwise the lowest of all that stand (shown or not, so a wall's
-/// place and size do not depend on what of it the viewer sees).
+/// filter; otherwise the lowest of all that stand and the box around the ones
+/// that pass it.
 ///
 /// Each column is read from `top` down through wall and air voxels and stops
 /// at the first solid voxel that is no wall's -- the ground the wall was
@@ -667,12 +694,12 @@ fn wall_standing<V: Vision>(
     seat: u8,
     area: pharmakos_sim::tables::ColumnBox,
     top: i16,
-) -> Option<i32> {
+) -> Option<WallStanding> {
     let voxels = world.voxels();
     let [lx, ly] = area.min_column();
     let [hx, hy] = area.max_column();
     let mut lowest: Option<i32> = None;
-    let mut seen = false;
+    let mut seen: Option<([i32; 3], [i32; 3])> = None;
     for y in i32::from(ly)..=i32::from(hy) {
         for x in i32::from(lx)..=i32::from(hx) {
             let mut z = i32::from(top);
@@ -686,8 +713,15 @@ fn wall_standing<V: Vision>(
                             Some(held) if held <= z => held,
                             _ => z,
                         });
-                        if !seen {
-                            seen = filter.visible(viewer, &world_at(Some(seat), Voxel { x, y, z }));
+                        if filter.visible(viewer, &world_at(Some(seat), Voxel { x, y, z })) {
+                            let here = [x, y, z];
+                            seen = Some(match seen {
+                                None => (here, here),
+                                Some(([ax, ay, az], [bx, by, bz])) => (
+                                    [ax.min(x), ay.min(y), az.min(z)],
+                                    [bx.max(x), by.max(y), bz.max(z)],
+                                ),
+                            });
                         }
                     }
                     Some(_) => {}
@@ -701,8 +735,12 @@ fn wall_standing<V: Vision>(
             }
         }
     }
-    let lowest = lowest?;
-    seen.then_some(lowest)
+    let (seen_low, seen_high) = seen?;
+    Some(WallStanding {
+        lowest: lowest?,
+        seen_low,
+        seen_high,
+    })
 }
 
 /// The wrecks of [`visible_entities`], in table order: nobody's, with no hit
