@@ -4698,10 +4698,13 @@ mod tests {
             text
         };
         assert!(lax_document(&deep(1_000_000)).is_none());
-        let bound = json::grammar::MAX_DEPTH;
-        assert!(lax_document(&deep(bound.saturating_add(2))).is_none());
-        let at_bound = deep(bound);
-        assert!(lax_document(&at_bound).is_some());
+        // A value may stand inside at most MAX_DEPTH (64) containers: 65 nested arrays put the
+        // innermost inside 64, which reads; 66 put it inside 65, which is refused.
+        assert_eq!(json::grammar::MAX_DEPTH, 64);
+        assert!(lax_document(&deep(64)).is_some());
+        assert!(lax_document(&deep(65)).is_some());
+        assert!(lax_document(&deep(66)).is_none());
+        let at_bound = deep(65);
         assert!(targeting::attack_targets(&at_bound).is_empty());
         assert!(targeting::build_targets(&deep(1_000_000)).is_empty());
     }
