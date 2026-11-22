@@ -996,11 +996,12 @@ message MapFeature {
   // * reached: `reachable` is true and `travel_ms` is set;
   // * unreachable: `reachable` is false and `travel_ms` is absent;
   // * withheld: both are absent. That is every feature outside a Lull (a
-  //   Push, a recap, the lobby, an ended match), and every feature for a
-  //   caller that is no seat. In a Push the hosted world is the live one,
-  //   unfogged, and a recap's is the Push's end state, so a time there
-  //   would tell the seat about terrain it cannot see (the owner's ruling
-  //   of 2026-11-21, "Omit them in a Push"; S3's `mapw`).
+  //   Push, a recap, an ended match), and every feature for a caller that is
+  //   no seat. In a Push the hosted world is the live one, unfogged, and a
+  //   recap's is the Push's end state, so a time there would tell the seat
+  //   about terrain it cannot see (the owner's ruling of 2026-11-21, "Omit
+  //   them in a Push"; S3's `mapw`). In the lobby no match is hosted and the
+  //   call itself refuses, so no feature is listed to withhold anything from.
   //
   // Both are `optional` (proto3 explicit presence) so that "not told" is its
   // own state on the wire and never a 0 or a false.
