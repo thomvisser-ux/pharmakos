@@ -661,6 +661,18 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 		failures.append("a second open, keys and Enter sent %s, not a second \"30\"" % [heard])
 	if field.field.text != "30":
 		failures.append("the field shows `%s` after typing over \"40\"" % field.field.text)
+	# Tab's focus, keys, then a click to move the caret, then a key: the click places the caret
+	# and selects nothing, so the typed text is kept (fix pass 1, item 2).
+	field.open("40", "%")
+	await _settle()
+	field.field.grab_focus()
+	await get_tree().process_frame
+	for character in "12":
+		_key(stage, OS.find_keycode_from_string(character), character.unicode_at(0))
+	await _type_into(stage, field.field, "3")
+	_key(stage, KEY_ENTER, 0)
+	if heard.back() != "123":
+		failures.append("Tab, \"12\", a click and \"3\" sent `%s`, not \"123\"" % heard.back())
 	if field.unit.text != "%" or not field.unit.visible:
 		failures.append("the unit is not drawn beside the field as sent: `%s`" % field.unit.text)
 	holder.queue_free()

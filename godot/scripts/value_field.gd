@@ -85,7 +85,7 @@ func open(text: String, unit_text: String, name_text: String = "") -> void:
 
 
 ## The focus came: the whole text is selected, and the next press, if one brought the focus,
-## keeps it so.
+## keeps it so, unless a key was typed first.
 func _on_focus() -> void:
 	_fresh = true
 	field.select_all()
@@ -96,6 +96,11 @@ func _on_focus() -> void:
 ## handling of either cannot put the caret back off the selection (measured on Godot 4.7.2: the
 ## release alone clears a selection the press made).
 func _on_field_input(event: InputEvent) -> void:
+	# A key typed into the field makes it the player's text: a click after it places the caret, and
+	# never selects the text again (fix pass 1: Tab, "12", a click, "3" sent "3").
+	if event is InputEventKey and event.pressed:
+		_fresh = false
+		return
 	if not (event is InputEventMouseButton) or event.button_index != MOUSE_BUTTON_LEFT:
 		return
 	if event.pressed and _fresh:
