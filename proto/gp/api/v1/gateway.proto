@@ -2117,13 +2117,18 @@ message ViewChunk {
 // `spectate.nofog` is shown them on every asset.
 //
 // A WALL is voxels, not a row of the sim's: it is listed here as a `structure`
-// whose subtype is `wall`, one entity per wall a Build beacon is building or
-// has built, while at least one of its voxels stands (S3's `probw`). It has no
-// hit points of its own. Another seat's wall is listed only while one of its
-// standing voxels is in the viewer's live vision, as another seat's
-// structure is, and is then drawn only as far as the voxels of it the viewer
-// sees: its box and its top are that seat's Build settings, and how far it
-// has risen is its build progress.
+// whose subtype is `wall`, with no hit points of its own (S3's `probw`). The
+// viewer's OWN walls (and every wall, for a `spectate.nofog` spectator) are one
+// entity per wall Build target with a voxel standing in its box, drawn as its
+// box, plus one per group of standing wall voxels no target's box holds (a wall
+// whose target was dropped still stands). ANOTHER seat's walls are derived
+// from the wall voxels this viewer sees and nothing else: the seen voxels of
+// each seat, grouped by face contact, one entity per group, each drawn as the
+// box around its voxels. Nothing of that seat's Build settings (its targets,
+// boxes and tops) or build progress reaches the answer, so it does not change
+// when that seat's settings do and the voxels seen do not; what a viewer can
+// still infer is what it sees: a wall crumble, grow or split, and how many
+// separate walls it sees.
 message ViewEntity {
   // OPAQUE, and scoped to the viewer this answer was built for. A seat's own
   // beacon is `b_NN`, which is already public through list_beacons and is what
@@ -2133,7 +2138,10 @@ message ViewEntity {
   // structure `s_N` (which a ruin keeps when the structure turns into one), a
   // wall `l_N`, a wreck `w_N` and a shell `p_N`: each a handle this viewer was
   // given in the order it first saw the thing, because a dense table row id
-  // would be a count of everything the match has ever made.
+  // would be a count of everything the match has ever made. A wall grouped
+  // from the voxels a viewer sees keeps its `l_N` while the viewer keeps
+  // seeing any of it from one answer to the next. Ids are unique within an
+  // answer.
   //
   // It is stable for one viewer for as long as the match is attached, and it
   // means nothing to any other viewer or to any other method — except a `b_NN`
@@ -2230,10 +2238,10 @@ message ViewEntity {
     // Its size in whole voxels, x east, y north, z up, measured from `at`. A
     // structure stands on one column (spec section 5; the sim's footings and
     // its one-structure-per-voxel rule) and is given no height by the sim, so
-    // it is 1 by 1 by 1, the voxel it stands in. The viewer's own wall (any
-    // wall, for a no-fog spectator) is its box: its columns across, and from
-    // its lowest standing voxel up to the top it is filled to. Another seat's
-    // wall is the box around the voxels of it the viewer sees.
+    // it is 1 by 1 by 1, the voxel it stands in. The viewer's own wall target
+    // (any, for a no-fog spectator) is its box: its columns across, and from
+    // its lowest standing voxel up to the top it is filled to. A wall grouped
+    // from voxels is the box around its voxels.
     uint32 x = 2;
     uint32 y = 3;
     uint32 z = 4;

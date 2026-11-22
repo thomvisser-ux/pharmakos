@@ -2324,3 +2324,291 @@ fn the_view_built_golden() {
     }
     check("view_built", "keyframe.jsonl", &out);
 }
+
+// ---------------------------------------------------------------------------
+// S3's `probw`, fix pass 1: another seat's wall is what that seat sees of it
+// ---------------------------------------------------------------------------
+
+/// Seat 0's wall target as round 1 of [`BASE_KIT`] writes it.
+const ROUND1_WALL: &str = r#"{"blueprint_id": "wall", "anchor": {"voxel": {"x": 358, "y": 32, "z": 36}},
+                "wall_box": {"min": {"x": 357, "y": 32, "z": 35}, "max": {"x": 360, "y": 32, "z": 37}},
+                "order": 1}"#;
+
+/// Every wall entity of `entities`.
+fn walls_in(entities: Vec<Json>) -> Vec<Json> {
+    entities
+        .into_iter()
+        .filter(|entity| text_of(entity, "subtype") == "wall")
+        .collect()
+}
+
+/// A vision in which seat 1 sees exactly `voxels`.
+fn seeing(voxels: &[[i32; 3]]) -> pharmakos_gateway::fog::KnownVoxels {
+    let mut seen = pharmakos_gateway::fog::KnownVoxels::new();
+    for [x, y, z] in voxels {
+        seen.see(
+            SeatId::new(1),
+            &Voxel {
+                x: *x,
+                y: *y,
+                z: *z,
+            },
+        );
+    }
+    seen
+}
+
+/// Round 1 of [`BASE_KIT`] fills seat 0's wall, and round 2's Lull opens.
+fn walled_lull() -> (Surface, Token) {
+    let mut surface = built_world();
+    let token = seat_token(&mut surface, 0);
+    let scenario =
+        fs::read_to_string(workspace_root().join(BASE_KIT)).expect("the scenario playbook");
+    seal_and_push(&mut surface, &token, FIRST_LULL_MS, &scenario);
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(!wall_voxels(&surface).is_empty(), "round 1 filled the wall");
+    assert!(surface.end_recap().expect("the recap ends"));
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(support::LULL_MS))
+        .expect("a countdown");
+    surface.open_lull().expect("round 2's Lull");
+    (surface, token)
+}
+
+/// Round 2 seals `edit(BASE_KIT)` and steps until seat 0's wall targets
+/// differ from round 1's. Returns what seat 1, seeing exactly round 1's wall
+/// voxels, was shown of seat 0's walls before and after, with the voxels
+/// before and after.
+fn after_a_settings_change(edit: &dyn Fn(&str) -> String) -> [(Vec<Json>, Vec<[i32; 3]>); 2] {
+    let (mut surface, token) = walled_lull();
+    let voxels = wall_voxels(&surface);
+    let seen = seeing(&voxels);
+    let before_box = wall_box(&surface);
+    let mut theirs = Watcher::new(seat_token(&mut surface, 1));
+    let scenario =
+        fs::read_to_string(workspace_root().join(BASE_KIT)).expect("the scenario playbook");
+    let text = edit(&scenario);
+    assert_ne!(text, scenario, "the edit applies");
+    seal_and_push(&mut surface, &token, support::LULL_MS, &text);
+    let before = walls_in(theirs.entities(&mut surface, &seen));
+    let mut changed = false;
+    for _ in 0..2_400 {
+        step(&mut surface, 1);
+        if wall_box(&surface) != before_box {
+            changed = true;
+            break;
+        }
+    }
+    assert!(changed, "seat 0's commander re-wrote its Build list");
+    let after = walls_in(theirs.entities(&mut surface, &seen));
+    let standing: Vec<[i32; 3]> = wall_voxels_anywhere(&surface)
+        .into_iter()
+        .filter(|at| voxels.contains(at))
+        .collect();
+    [(before, voxels), (after, standing)]
+}
+
+/// A rewrite of a playbook's text.
+type Edit = dyn Fn(&str) -> String;
+
+/// The review's probes, regression tests now: seat 0 dropping its wall target
+/// or widening its box changes nothing seat 1 is shown of the wall voxels it
+/// sees, which still stand -- before fix pass 1 the wall vanished from seat
+/// 1's view, or was re-minted as `l_2`. (The probe that lowered the top wrote
+/// a box the verifier refuses, `E0512`, so it sealed nothing and is not here.)
+#[test]
+fn another_seats_wall_never_moves_with_its_owners_settings() {
+    let edits: [(&str, &Edit); 2] = [
+        ("dropped", &|text: &str| {
+            text.replace(&format!(",\n              {ROUND1_WALL}"), "")
+        }),
+        ("box widened", &|text: &str| {
+            text.replace(
+                r#""max": {"x": 360, "y": 32, "z": 37}}"#,
+                r#""max": {"x": 361, "y": 32, "z": 37}}"#,
+            )
+        }),
+    ];
+    for (what, edit) in edits {
+        let [(before, voxels), (after, standing)] = after_a_settings_change(edit);
+        assert_eq!(standing, voxels, "{what}: every voxel still stands");
+        assert_eq!(before.len(), 1, "{what}: one wall: {before:?}");
+        assert_eq!(after, before, "{what}: byte for byte the same answer");
+    }
+}
+
+/// Two wall targets of seat 0 with one box are one set of voxels: seat 1 is
+/// shown one wall, and seat 0 one, never two entities with one id.
+#[test]
+fn one_set_of_wall_voxels_is_one_wall_whatever_the_targets() {
+    let mut surface = built_world();
+    let token = seat_token(&mut surface, 0);
+    let scenario =
+        fs::read_to_string(workspace_root().join(BASE_KIT)).expect("the scenario playbook");
+    let second = ROUND1_WALL
+        .replace(
+            r#""x": 358, "y": 32, "z": 36"#,
+            r#""x": 359, "y": 32, "z": 36"#,
+        )
+        .replace(r#""order": 1"#, r#""order": 2"#);
+    let text = scenario.replace(ROUND1_WALL, &format!("{ROUND1_WALL},\n {second}"));
+    assert_ne!(text, scenario);
+    seal_and_push(&mut surface, &token, FIRST_LULL_MS, &text);
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    let voxels = wall_voxels(&surface);
+    assert!(!voxels.is_empty());
+    let seen = seeing(&voxels);
+    let mut theirs = Watcher::new(seat_token(&mut surface, 1));
+    let walls = walls_in(theirs.entities(&mut surface, &seen));
+    assert_eq!(walls.len(), 1, "one set of voxels, one wall: {walls:?}");
+    let mut own = Watcher::new(token);
+    let ours = walls_in(own.live(&mut surface));
+    assert_eq!(
+        ours.len(),
+        1,
+        "two targets with one box, one wall: {ours:?}"
+    );
+    for answer in [own.live(&mut surface), theirs.entities(&mut surface, &seen)] {
+        let mut ids: Vec<String> = answer.iter().map(|entity| text_of(entity, "id")).collect();
+        let listed = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), listed, "ids are unique within an answer");
+    }
+}
+
+/// Another seat's wall entities are a pure function of the wall voxels that
+/// seat sees: a resumed match shows seat 1 the same walls the live one does,
+/// for the same voxels seen; and a seat that sees part of a wall is shown that
+/// part's box, each seen voxel in exactly one wall.
+#[test]
+fn another_seats_walls_are_a_function_of_the_voxels_it_sees() {
+    let (surface, _) = walled_lull();
+    let voxels = wall_voxels(&surface);
+    let saved = surface.lull_save().expect("a Lull saves");
+    let mut live = surface;
+    let mut resumed = resumed_from(&saved);
+    assert_eq!(wall_voxels(&resumed), voxels, "the save holds the wall");
+    // Every voxel, and then the two ends only: two separate walls.
+    let ends: Vec<[i32; 3]> = [voxels.first(), voxels.last()]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect();
+    for sight in [voxels.clone(), ends.clone()] {
+        let seen = seeing(&sight);
+        let shown = walls_in(Watcher::new(seat_token(&mut live, 1)).entities(&mut live, &seen));
+        let again =
+            walls_in(Watcher::new(seat_token(&mut resumed, 1)).entities(&mut resumed, &seen));
+        assert_eq!(shown, again, "live and resumed, the same voxels seen");
+        let mut covered: Vec<[i32; 3]> = Vec::new();
+        for wall in &shown {
+            let at = wall.get("at").expect("a place");
+            let look = wall.get("look").expect("a look");
+            let low = [number(at, "x"), number(at, "y"), number(at, "z")];
+            let size = [number(look, "x"), number(look, "y"), number(look, "z")];
+            for voxel in &sight {
+                if voxel
+                    .iter()
+                    .zip(low)
+                    .zip(size)
+                    .all(|((at, from), span)| *at >= from && *at < from + span)
+                {
+                    covered.push(*voxel);
+                }
+            }
+        }
+        covered.sort_unstable();
+        let mut expected = sight.clone();
+        expected.sort_unstable();
+        assert_eq!(covered, expected, "each seen voxel in exactly one wall");
+    }
+}
+
+/// A wall whose target its own seat dropped still stands, and its own seat
+/// still sees it as a wall (the voxels stand), now as the box of its voxels.
+#[test]
+fn an_own_wall_with_no_target_is_still_a_wall() {
+    let (mut surface, token) = walled_lull();
+    let scenario =
+        fs::read_to_string(workspace_root().join(BASE_KIT)).expect("the scenario playbook");
+    let text = scenario.replace(&format!(",\n              {ROUND1_WALL}"), "");
+    assert_ne!(text, scenario);
+    let voxels = wall_voxels(&surface);
+    seal_and_push(&mut surface, &token, support::LULL_MS, &text);
+    let before = wall_box(&surface);
+    for _ in 0..2_400 {
+        step(&mut surface, 1);
+        if wall_box(&surface) != before {
+            break;
+        }
+    }
+    assert_eq!(wall_box(&surface), None, "the target is gone");
+    assert_eq!(wall_voxels_anywhere(&surface), voxels, "the voxels stand");
+    let mut own = Watcher::new(token);
+    let walls = walls_in(own.live(&mut surface));
+    assert_eq!(walls.len(), 1, "{walls:?}");
+}
+
+/// Seat 0's wall voxels wherever they stand (its target may be gone), in the
+/// order [`wall_voxels`] lists them.
+fn wall_voxels_anywhere(surface: &Surface) -> Vec<[i32; 3]> {
+    let voxels = surface.host().expect("a match").world().voxels();
+    let mut out = Vec::new();
+    for y in 31..=33 {
+        for x in 355..=362 {
+            for z in 0..=40 {
+                if voxels
+                    .get([x, y, z])
+                    .and_then(Material::wall_of)
+                    .is_some_and(|(seat, _)| seat == SeatId::new(0))
+                {
+                    out.push([x, y, z]);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A Lull save of [`walled_lull`]'s match, resumed in a fresh host.
+fn resumed_from(saved: &pharmakos_gateway::save::SavedMatch) -> Surface {
+    use pharmakos_gateway::host::{Host, Settings};
+    let host = Host::open_from(
+        &support::rules_json(),
+        SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: vec![KIT_SEGMENT_MS],
+            round_limit: 2,
+        },
+        Some(support::library_folder()),
+    )
+    .expect("a match");
+    let rules = host.rules().clone();
+    Surface::new(
+        MATCH,
+        SEED,
+        rules,
+        FogPolicy::fogged(),
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a surface")
+    .resume(
+        host,
+        saved,
+        pharmakos_gateway::save::Continuation {
+            generation: 1,
+            last_tick: 0,
+        },
+    )
+    .expect("a Lull resumes")
+}

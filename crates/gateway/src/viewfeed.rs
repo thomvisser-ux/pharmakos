@@ -73,6 +73,7 @@ use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::said;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelStore;
+use std::collections::BTreeSet;
 
 use crate::error::Error;
 use crate::feed::ViewCursor;
@@ -151,8 +152,15 @@ struct ViewerState {
     structures: Vec<(u64, String)>,
     /// The wrecks this viewer has been shown, by wreck id.
     wrecks: Vec<(u64, String)>,
-    /// The walls this viewer has been shown, by their key (S3's `probw`).
+    /// The walls this viewer has been shown by an own wall target's key
+    /// (S3's `probw`): the viewer's own walls, or any for a no-fog spectator.
     walls: Vec<(WallKey, String)>,
+    /// The walls this viewer was last shown as groups of wall voxels, each
+    /// with the voxels it was shown with ([`ViewFeed::wall_group_handles`]).
+    wall_groups: Vec<(String, BTreeSet<[i32; 3]>)>,
+    /// How many wall handles this viewer has been given, of both kinds, so no
+    /// number is minted twice.
+    walls_minted: u64,
     /// The shells in flight this viewer has been shown, by their key; a shell
     /// that has landed is forgotten ([`ViewFeed::forget_landed_shells`]).
     shells: Vec<(ShellKey, String)>,
@@ -181,6 +189,8 @@ impl ViewerState {
             structures: Vec::new(),
             wrecks: Vec::new(),
             walls: Vec::new(),
+            wall_groups: Vec::new(),
+            walls_minted: 0,
             shells: Vec::new(),
             shells_minted: 0,
             beacons: Vec::new(),
@@ -681,10 +691,11 @@ impl ViewFeed {
         }
     }
 
-    /// This viewer's opaque handle for a wall, `l_N`, minted on first sight
-    /// (S3's `probw`). A wall is voxels and has no id in any table, so it is
-    /// keyed by what makes it one wall ([`WallKey`]), and the number counts the
-    /// walls this viewer has been shown, as [`ViewFeed::unit_handle`]'s does.
+    /// This viewer's opaque handle for one of its own wall targets (or any,
+    /// for a no-fog spectator), `l_N`, minted on first sight (S3's `probw`).
+    /// A wall is voxels and has no id in any table, so it is keyed by what
+    /// makes the target one wall ([`WallKey`]), which only its own seat is
+    /// told; the number counts the walls this viewer has been shown.
     ///
     /// # Errors
     ///
@@ -697,12 +708,58 @@ impl ViewFeed {
         if let Some((_, handle)) = state.walls.iter().find(|(held, _)| *held == key) {
             return Ok(handle.clone());
         }
-        let number = state.walls.len().checked_add(1).ok_or_else(|| {
-            Error::internal("this viewer holds more wall handles than usize counts")
-        })?;
-        let handle = format!("l_{number}");
+        let handle = mint_wall(state)?;
         state.walls.push((key, handle.clone()));
         Ok(handle)
+    }
+
+    /// This viewer's handles for `groups`, walls it is shown as groups of the
+    /// wall voxels it sees, in order (S3's `probw`, its review's fix pass 1).
+    ///
+    /// Keyed by what **this viewer** has seen and nothing of the owner's: a
+    /// group takes the handle of the first group this viewer was last shown
+    /// that shares a voxel with it and that no earlier group of this answer
+    /// took; otherwise it is given a new `l_N`. So a wall keeps its handle for
+    /// as long as the viewer keeps seeing any of it from one answer to the
+    /// next, two walls that join keep the older handle, a wall that splits
+    /// keeps it on its first part, and no handle is given twice in an answer.
+    /// The groups are then what this viewer was last shown.
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn wall_group_handles(
+        &mut self,
+        viewer: Viewer,
+        groups: &[BTreeSet<[i32; 3]>],
+    ) -> Result<Vec<String>, Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        let mut last: Vec<Option<(String, BTreeSet<[i32; 3]>)>> =
+            core::mem::take(&mut state.wall_groups)
+                .into_iter()
+                .map(Some)
+                .collect();
+        let mut handles: Vec<String> = Vec::with_capacity(groups.len());
+        let mut shown: Vec<(String, BTreeSet<[i32; 3]>)> = Vec::with_capacity(groups.len());
+        for group in groups {
+            let carried = last.iter_mut().find_map(|slot| {
+                let shares = slot
+                    .as_ref()
+                    .is_some_and(|(_, held)| !held.is_disjoint(group));
+                if shares { slot.take() } else { None }
+            });
+            let handle = match carried {
+                Some((handle, _)) => handle,
+                None => mint_wall(state)?,
+            };
+            handles.push(handle.clone());
+            shown.push((handle, group.clone()));
+        }
+        state.wall_groups = shown;
+        Ok(handles)
     }
 
     /// This viewer's opaque handle for a structure. As [`ViewFeed::unit_handle`].
@@ -1032,6 +1089,20 @@ pub struct WallKey {
     pub max: [i16; 2],
     /// The highest voxel the box fills.
     pub top: i16,
+}
+
+/// A new wall handle for this viewer, `l_N`, counting every wall handle it
+/// has been given of either kind, so none is minted twice.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] past `u64`'s count.
+fn mint_wall(state: &mut ViewerState) -> Result<String, Error> {
+    let number = state.walls_minted.checked_add(1).ok_or_else(|| {
+        Error::internal("this viewer has been given more wall handles than u64 counts")
+    })?;
+    state.walls_minted = number;
+    Ok(format!("l_{number}"))
 }
 
 /// This viewer's slot, made on first sight of it.

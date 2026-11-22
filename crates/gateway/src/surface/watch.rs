@@ -39,6 +39,8 @@
 //! spectator; the owner's "Own seat only", decisions-log item 168 (11)). Walls,
 //! which are voxels, are listed as structures ([`visible_walls`]).
 
+use std::collections::BTreeSet;
+
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::{Json, base64};
 use pharmakos_proto::said;
@@ -557,24 +559,35 @@ fn visible_structures<V: Vision>(
     Ok(())
 }
 
-/// The walls of [`visible_entities`], in the target table's order (S3's
-/// `probw`, item 5).
+/// The walls of [`visible_entities`] (S3's `probw`, item 5, as its review's
+/// fix pass 1 redesigned it).
 ///
-/// A wall is voxels, not a row: a Build target with a wall top
-/// ([`pharmakos_sim::tables::TargetTable::wall_tops`]) whose box of columns
-/// ([`pharmakos_sim::tables::TargetTable::areas`]) its seat's drones fill from
-/// the ground up. It is listed while at least one wall voxel of its seat stands
-/// in its box, read column by column from the box's top down through wall and
-/// air voxels to the ground, as the sim reads a wall's ground (a column's
-/// first solid voxel that is no wall's). Listed as a `structure`, subtype
-/// `wall`, with no hit points. The viewer's own walls always, at the box's
-/// lowest corner at its lowest standing voxel, with a `SLAB` look its box's
-/// size from there to its top; a no-fog spectator's likewise, every seat's.
-/// Another seat's only while one of its standing voxels passes the fog
-/// filter, as another seat's structure does, and then drawn as the box around
-/// the voxels of it the viewer sees and no further: its box and top are that
-/// seat's Build settings, and how far it has risen its build progress.
-/// Read-only: nothing here writes the world.
+/// A wall is voxels, not a row: the material of a wall voxel names the seat
+/// that built it. Two readings, by who is asking:
+///
+/// * **Its own seat, and a no-fog spectator** ([`private_to`]): each wall
+///   Build target with a voxel of its seat standing in its box is one entity,
+///   at the box's lowest corner at its lowest standing voxel, a `SLAB` its
+///   box's size up to its top; and every standing wall voxel of the seat that
+///   no listed target's box holds -- a wall whose target was dropped, or whose
+///   beacon is gone, still stands -- is grouped as below. Two targets with one
+///   box and one top are one wall.
+/// * **Any other viewer**: a wall is derived from the wall voxels **this
+///   viewer sees** and nothing else -- never the owner's targets, boxes, tops
+///   or beacons, which are its Build settings and its build progress (S2's
+///   plan's decision 5; the owner's "Own seat only", decisions-log item 168
+///   (11)). The seen voxels of each seat are grouped by face contact into
+///   walls ([`wall_groups`]), each listed once, as the box around its voxels,
+///   its handle carried over from the group this viewer was last shown that
+///   shares a voxel with it ([`ViewFeed::wall_group_handles`]). So nothing in
+///   the answer changes when the owner changes its settings and the voxels
+///   the viewer sees do not. What the viewer can still infer is what its eyes
+///   give it: a wall it sees crumble, grow or split, and how many separate
+///   walls it sees.
+///
+/// Listed as `structure`, subtype `wall`, with no hit points, in seat order,
+/// each seat's targets before its groups. Read-only: nothing here writes the
+/// world.
 ///
 /// # Errors
 ///
@@ -589,9 +602,187 @@ fn visible_walls<V: Vision>(
     titles: &Titles,
     out: &mut Vec<Json>,
 ) -> Result<(), Error> {
-    let targets = world.targets();
     let title = titles.structure(StructureKind::Wall)?;
+    let standing = standing_wall_voxels(world)?;
+    let mut targets_of: Vec<(u8, Vec<WallTarget>)> = Vec::new();
+    let mut groups: Vec<(u8, BTreeSet<[i32; 3]>)> = Vec::new();
+    for seat in seats_of(&standing) {
+        let theirs = standing
+            .iter()
+            .filter(|(owner, _)| *owner == seat)
+            .map(|(_, at)| *at);
+        if private_to(viewer, Some(seat)) {
+            let boxes = wall_targets(world, seat)?;
+            let mut held: Vec<WallTarget> = Vec::new();
+            let mut covered: BTreeSet<[i32; 3]> = BTreeSet::new();
+            for (key, low, high) in boxes {
+                let inside: Vec<[i32; 3]> = theirs
+                    .clone()
+                    .filter(|[x, y, z]| {
+                        let ([lx, ly, _], [hx, hy, top]) = (low, high);
+                        (lx..=hx).contains(x) && (ly..=hy).contains(y) && *z <= top
+                    })
+                    .collect();
+                covered.extend(inside.iter().copied());
+                let Some(lowest) = inside.iter().map(|[_, _, z]| *z).min() else {
+                    continue;
+                };
+                if held.iter().any(|(listed, _, _)| *listed == key) {
+                    continue;
+                }
+                let [lx, ly, _] = low;
+                held.push((key, [lx, ly, lowest], high));
+            }
+            let orphans: BTreeSet<[i32; 3]> = theirs.filter(|at| !covered.contains(at)).collect();
+            targets_of.push((seat, held));
+            groups.extend(wall_groups(&orphans).into_iter().map(|group| (seat, group)));
+        } else {
+            let seen: BTreeSet<[i32; 3]> = theirs
+                .filter(|[x, y, z]| {
+                    filter.visible(
+                        viewer,
+                        &world_at(
+                            Some(seat),
+                            Voxel {
+                                x: *x,
+                                y: *y,
+                                z: *z,
+                            },
+                        ),
+                    )
+                })
+                .collect();
+            groups.extend(wall_groups(&seen).into_iter().map(|group| (seat, group)));
+        }
+    }
+    let sets: Vec<BTreeSet<[i32; 3]>> = groups.iter().map(|(_, group)| group.clone()).collect();
+    let mut group_handles = views.wall_group_handles(viewer, &sets)?.into_iter();
+    let mut pending = groups.into_iter().peekable();
+    for seat in seats_of(&standing) {
+        if let Some((_, held)) = targets_of.iter().find(|(owner, _)| *owner == seat) {
+            for (key, low, high) in held {
+                let handle = views.wall_handle(viewer, *key)?;
+                out.push(wall_entity(&handle, title, seat, *low, *high)?);
+            }
+        }
+        while let Some((_, group)) = pending.next_if(|(owner, _)| *owner == seat) {
+            let handle = group_handles.next().ok_or_else(|| {
+                Error::internal("the view feed named fewer walls than it was given")
+            })?;
+            let (low, high) =
+                bounds(&group).ok_or_else(|| Error::internal("a wall group holds no voxel"))?;
+            out.push(wall_entity(&handle, title, seat, low, high)?);
+        }
+    }
+    Ok(())
+}
+
+/// One wall's `gp.api.v1.ViewEntity`: a `SLAB` from `low` to `high`, both
+/// included, standing at `low`.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a span no `uint32` holds.
+fn wall_entity(
+    handle: &str,
+    title: &str,
+    seat: u8,
+    low: [i32; 3],
+    high: [i32; 3],
+) -> Result<Json, Error> {
+    let span = |low: i32, high: i32| {
+        high.checked_sub(low)
+            .and_then(|span| span.checked_add(1))
+            .and_then(|span| u32::try_from(span).ok())
+            .ok_or_else(|| {
+                Error::internal(said!(
+                    "a wall spans {} to {}, which no size holds",
+                    low,
+                    high
+                ))
+            })
+    };
+    let [x0, y0, z0] = low;
+    let [x1, y1, z1] = high;
+    let condition = Condition {
+        look: Some(Look {
+            shape: view::structure_shape(StructureKind::Wall),
+            size: [span(x0, x1)?, span(y0, y1)?, span(z0, z1)?],
+        }),
+        ..Condition::default()
+    };
+    Ok(entity(
+        handle,
+        "STRUCTURE",
+        (view::structure_subtype(StructureKind::Wall), title),
+        Some(seat),
+        Voxel {
+            x: x0,
+            y: y0,
+            z: z0,
+        },
+        condition,
+    ))
+}
+
+/// Every standing wall voxel of the world, `(builder seat, voxel)`, ascending
+/// by seat and then voxel. Only a chunk written since generation can hold one
+/// (the generator lays no wall), so only the modified chunks are read.
+fn standing_wall_voxels(world: &World) -> Result<Vec<(u8, [i32; 3])>, Error> {
+    let voxels = world.voxels();
+    let edge = pharmakos_sim::voxels::CHUNK_EDGE_I32;
+    let off_the_map =
+        || Error::internal("a modified chunk's voxel lies past the map's coordinates");
+    let mut out: Vec<(u8, [i32; 3])> = Vec::new();
+    for chunk in voxels.modified_indices() {
+        let (Some([ox, oy, oz]), Some(bytes)) =
+            (voxels.chunk_origin(chunk), voxels.chunk_bytes(chunk))
+        else {
+            return Err(Error::internal(said!(
+                "the voxel store lists chunk {} as modified and holds no such chunk",
+                chunk
+            )));
+        };
+        for (index, byte) in (0_i32..).zip(bytes.iter()) {
+            let Some((seat, _)) = pharmakos_sim::voxels::Material::from_raw(*byte).wall_of() else {
+                continue;
+            };
+            let (x, rest) = (index.rem_euclid(edge), index.div_euclid(edge));
+            let (y, z) = (rest.rem_euclid(edge), rest.div_euclid(edge));
+            let at = [
+                ox.checked_add(x).ok_or_else(off_the_map)?,
+                oy.checked_add(y).ok_or_else(off_the_map)?,
+                oz.checked_add(z).ok_or_else(off_the_map)?,
+            ];
+            out.push((seat.raw(), at));
+        }
+    }
+    out.sort_unstable();
+    Ok(out)
+}
+
+/// The seats `standing` holds a voxel of, ascending, each once.
+fn seats_of(standing: &[(u8, [i32; 3])]) -> Vec<u8> {
+    let mut seats: Vec<u8> = standing.iter().map(|(seat, _)| *seat).collect();
+    seats.dedup();
+    seats
+}
+
+/// One wall target as the view reads it: its key, its lowest corner and its
+/// highest corner.
+type WallTarget = (WallKey, [i32; 3], [i32; 3]);
+
+/// `seat`'s wall Build targets, in table order: each one's key, its box's
+/// lowest corner (z unset, 0) and its highest corner at its top.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a wall target whose beacon names no
+/// live row, or a table row short of a column.
+fn wall_targets(world: &World, seat: u8) -> Result<Vec<WallTarget>, Error> {
+    let targets = world.targets();
     let build = pharmakos_sim::tables::TargetKind::Build.id();
+    let mut out = Vec::new();
     for row in 0..targets.row_count() {
         let top = column(targets.wall_tops().get(row), "target", "wall top")?;
         if column(targets.kinds().get(row), "target", "kind")? != build
@@ -600,160 +791,87 @@ fn visible_walls<V: Vision>(
             continue;
         }
         let beacon = column(targets.beacons().get(row), "target", "beacon")?;
-        let area = column(targets.areas().get(row), "target", "area")?;
         let at_row = world.beacons().row_of(beacon).map_err(|_| {
             Error::internal(said!(
                 "wall target row {} belongs to a beacon the table does not hold",
                 row
             ))
         })?;
-        let seat = column(
+        if column(
             world.beacons().seats().get(at_row.index()),
             "beacon",
             "seat",
-        )?;
-        let Some(standing) = wall_standing(world, filter, viewer, seat, area, top) else {
+        )? != seat
+        {
             continue;
-        };
-        let span = |low: i32, high: i32| {
-            high.checked_sub(low)
-                .and_then(|span| span.checked_add(1))
-                .and_then(|span| u32::try_from(span).ok())
-                .ok_or_else(|| {
-                    Error::internal(said!(
-                        "wall target row {} spans {} to {}, which no size holds",
-                        row,
-                        low,
-                        high
-                    ))
-                })
-        };
-        // The viewer's own wall (or any, for a no-fog spectator) is drawn as
-        // its box, from its lowest standing voxel to the top it is filled to;
-        // another seat's only as far as the voxels of it the viewer sees,
-        // because its box and its top are the seat's Build settings and how
-        // far it has risen is its build progress (S2's plan's decision 5; the
-        // owner's "Own seat only", decisions-log item 168 (11)).
-        let (low, high) = if private_to(viewer, Some(seat)) {
-            let [lx, ly] = area.min_column();
-            let [hx, hy] = area.max_column();
-            (
-                [i32::from(lx), i32::from(ly), standing.lowest],
-                [i32::from(hx), i32::from(hy), i32::from(top)],
-            )
-        } else {
-            (standing.seen_low, standing.seen_high)
-        };
-        let [x0, y0, z0] = low;
-        let [x1, y1, z1] = high;
-        let size = [span(x0, x1)?, span(y0, y1)?, span(z0, z1)?];
+        }
+        let area = column(targets.areas().get(row), "target", "area")?;
         let [lx, ly] = area.min_column();
         let [hx, hy] = area.max_column();
-        let handle = views.wall_handle(
-            viewer,
+        out.push((
             WallKey {
                 beacon: beacon.raw(),
                 min: [lx, ly],
                 max: [hx, hy],
                 top,
             },
-        )?;
-        let at = Voxel {
-            x: x0,
-            y: y0,
-            z: z0,
-        };
-        let condition = Condition {
-            look: Some(Look {
-                shape: view::structure_shape(StructureKind::Wall),
-                size,
-            }),
-            ..Condition::default()
-        };
-        out.push(entity(
-            &handle,
-            "STRUCTURE",
-            (view::structure_subtype(StructureKind::Wall), title),
-            Some(seat),
-            at,
-            condition,
+            [i32::from(lx), i32::from(ly), 0],
+            [i32::from(hx), i32::from(hy), i32::from(top)],
         ));
     }
-    Ok(())
+    Ok(out)
 }
 
-/// What [`wall_standing`] read of one wall.
-struct WallStanding {
-    /// The lowest standing voxel of the wall, seen or not.
-    lowest: i32,
-    /// The lowest corner of the box around the voxels this viewer sees.
-    seen_low: [i32; 3],
-    /// The highest corner of that box.
-    seen_high: [i32; 3],
-}
-
-/// The wall voxels of `seat` standing in the box `area` up to `top`, as this
-/// viewer may be shown them: `None` when none stands, or none passes the fog
-/// filter; otherwise the lowest of all that stand and the box around the ones
-/// that pass it.
-///
-/// Each column is read from `top` down through wall and air voxels and stops
-/// at the first solid voxel that is no wall's -- the ground the wall was
-/// filled on -- or the map's floor, so a column costs its wall's height.
-fn wall_standing<V: Vision>(
-    world: &World,
-    filter: &FogFilter<'_, V>,
-    viewer: Viewer,
-    seat: u8,
-    area: pharmakos_sim::tables::ColumnBox,
-    top: i16,
-) -> Option<WallStanding> {
-    let voxels = world.voxels();
-    let [lx, ly] = area.min_column();
-    let [hx, hy] = area.max_column();
-    let mut lowest: Option<i32> = None;
-    let mut seen: Option<([i32; 3], [i32; 3])> = None;
-    for y in i32::from(ly)..=i32::from(hy) {
-        for x in i32::from(lx)..=i32::from(hx) {
-            let mut z = i32::from(top);
-            while z >= 0 {
-                let Some(material) = voxels.get([x, y, z]) else {
-                    break;
-                };
-                match material.wall_of() {
-                    Some((builder, _)) if builder.raw() == seat => {
-                        lowest = Some(match lowest {
-                            Some(held) if held <= z => held,
-                            _ => z,
-                        });
-                        if filter.visible(viewer, &world_at(Some(seat), Voxel { x, y, z })) {
-                            let here = [x, y, z];
-                            seen = Some(match seen {
-                                None => (here, here),
-                                Some(([ax, ay, az], [bx, by, bz])) => (
-                                    [ax.min(x), ay.min(y), az.min(z)],
-                                    [bx.max(x), by.max(y), bz.max(z)],
-                                ),
-                            });
-                        }
-                    }
-                    Some(_) => {}
-                    None if material.is_air() => {}
-                    None => break,
-                }
-                match z.checked_sub(1) {
-                    Some(below) => z = below,
-                    None => break,
+/// `voxels` grouped into walls by face contact (two voxels sharing a face are
+/// one wall), each group in the order of its least voxel, so the grouping is a
+/// pure function of the set.
+fn wall_groups(voxels: &BTreeSet<[i32; 3]>) -> Vec<BTreeSet<[i32; 3]>> {
+    let mut left: BTreeSet<[i32; 3]> = voxels.clone();
+    let mut groups: Vec<BTreeSet<[i32; 3]>> = Vec::new();
+    while let Some(start) = left.pop_first() {
+        let mut group: BTreeSet<[i32; 3]> = BTreeSet::new();
+        let mut frontier: Vec<[i32; 3]> = vec![start];
+        while let Some(at) = frontier.pop() {
+            for next in face_neighbours(at) {
+                if left.remove(&next) {
+                    frontier.push(next);
                 }
             }
+            group.insert(at);
         }
+        groups.push(group);
     }
-    let (seen_low, seen_high) = seen?;
-    Some(WallStanding {
-        lowest: lowest?,
-        seen_low,
-        seen_high,
-    })
+    groups
+}
+
+/// The six voxels sharing a face with `at` (fewer only past `i32`'s range,
+/// where no voxel of a map lies).
+fn face_neighbours([x, y, z]: [i32; 3]) -> impl Iterator<Item = [i32; 3]> {
+    [
+        x.checked_sub(1).map(|x| [x, y, z]),
+        x.checked_add(1).map(|x| [x, y, z]),
+        y.checked_sub(1).map(|y| [x, y, z]),
+        y.checked_add(1).map(|y| [x, y, z]),
+        z.checked_sub(1).map(|z| [x, y, z]),
+        z.checked_add(1).map(|z| [x, y, z]),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+/// The box around `voxels`: its lowest and highest corner, or `None` for an
+/// empty set.
+fn bounds(voxels: &BTreeSet<[i32; 3]>) -> Option<([i32; 3], [i32; 3])> {
+    let mut iter = voxels.iter();
+    let first = *iter.next()?;
+    Some(
+        iter.fold((first, first), |([ax, ay, az], [bx, by, bz]), [x, y, z]| {
+            (
+                [ax.min(*x), ay.min(*y), az.min(*z)],
+                [bx.max(*x), by.max(*y), bz.max(*z)],
+            )
+        }),
+    )
 }
 
 /// The wrecks of [`visible_entities`], in table order: nobody's, with no hit
