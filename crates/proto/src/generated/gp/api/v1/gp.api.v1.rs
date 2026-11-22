@@ -2394,8 +2394,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetViewRequest".in
 /// total, no count of what was withheld and no "hidden" marker anywhere in this
 /// message, because a count of what a seat cannot see is a fog leak by
 /// arithmetic (decisions-log item 26). Nothing here carries a destination, a
-/// route, a step or rule index, a mandate, a treasury, a score, a hit point or
-/// a power state.
+/// route, a step or rule index, a mandate, a treasury, a score or a power state.
+/// What an entity does carry, and to whom, is ViewEntity's: from S2 its hit
+/// points and heading in live vision, and from S3 its name and look, and a
+/// beacon's sphere and a structure going up on the viewer's own assets only.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetViewResponse {
     /// Game milliseconds since the start of the current segment — the same epoch
