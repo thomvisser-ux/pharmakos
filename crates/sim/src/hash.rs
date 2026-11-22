@@ -14,8 +14,10 @@
 //! `fingerprint` module owns the **rule** -- the domain separator, the byte
 //! order and what is hashed ([`canonical_input`]) -- and this module owns the
 //! **arithmetic**, beside the state hash it shares a function and a seed with:
-//! [`digest`] is xxh3-64 at [`crate::encoding::STATE_HASH_SEED`], and there is
-//! no second hash function in the project (AGENTS.md section 5).
+//! [`StreamingDigest`] is xxh3-64 at [`crate::encoding::STATE_HASH_SEED`], fed
+//! in pieces, which answers what [`crate::encoding::digest`] answers for the
+//! pieces joined, and there is no second hash function in the project
+//! (AGENTS.md section 5).
 //!
 //! It is determinism code (AGENTS.md section 5): a fingerprint is stamped into
 //! every report and every save, so moving this function's value would refuse
@@ -23,19 +25,27 @@
 //! `hash` module in S1's `build` lane **with its value unmoved**, and
 //! `the_plan_fingerprint_is_unmoved` (this crate's `tests/vectors.rs`) holds it
 //! to the value the committed verifier goldens carry. The verifier and the
-//! gateway call this function; the verifier's `hash::plan_fingerprint` is now a
-//! thin reader of it.
+//! gateway call this module; the verifier's `hash::plan_fingerprint` is a thin
+//! reader of it.
 //!
-//! [`plan_fingerprint_of`] computes the same value for a playbook decoded from
-//! JSON without encoding it again (S3's `vfyq`, decisions-log item 158): the
-//! canonical bytes are written straight from the wire bytes the playbook was
-//! decoded from, with `meta.fingerprint` left out, which is
-//! [`canonical_input`]'s clearing. `crates/proto`'s differential tests hold the
-//! two texts equal on generated playbooks, and
-//! `crates/verifier/tests/fingerprint.rs` holds the two functions equal on
-//! every committed playbook and on the shapes P1 is measured at.
+//! [`plan_fingerprint_of`] computes the value for a playbook decoded from JSON
+//! without encoding it again (S3's `vfyq`, decisions-log item 158), and
+//! without holding its text (S3's `fpstream`): the canonical bytes are written
+//! straight from the wire bytes the playbook was decoded from, with
+//! `meta.fingerprint` left out, which is [`canonical_input`]'s clearing, and
+//! each piece of them is hashed as it is written
+//! ([`json::write_wire_into`]), so the fingerprint takes a fixed amount of
+//! memory whatever the playbook's size. [`plan_fingerprint`] is the same value
+//! for a caller that holds only a message: it writes the canonical bytes
+//! whole, because the message must be encoded to reach them, and hashes them
+//! through the same digest. `crates/proto`'s differential tests hold the text
+//! written in pieces to the text written whole on generated playbooks;
+//! `crates/verifier/tests/fingerprint.rs` and
+//! `crates/plan-core/tests/fingerprint.rs` hold both functions to a one-shot
+//! digest of [`canonical_input`]'s bytes on every committed playbook and on
+//! the shapes P1 is measured at.
 
-use crate::encoding::digest;
+use crate::encoding::StreamingDigest;
 use pharmakos_proto::fingerprint::{FINGERPRINT_FIELD, PLAN_FINGERPRINT_DOMAIN, canonical_input};
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json::{self, Decoded};
@@ -63,7 +73,34 @@ impl core::fmt::Display for FingerprintError {
 
 impl std::error::Error for FingerprintError {}
 
-/// The plan fingerprint of a decoded playbook (decisions-log item 77).
+/// The fingerprint's digest, begun with [`PLAN_FINGERPRINT_DOMAIN`]: a sink for
+/// the canonical text, each piece hashed as it is handed over.
+#[derive(Debug)]
+struct Fingerprint {
+    digest: StreamingDigest,
+}
+
+impl Fingerprint {
+    fn new() -> Fingerprint {
+        let mut digest = StreamingDigest::new();
+        digest.update(PLAN_FINGERPRINT_DOMAIN);
+        Fingerprint { digest }
+    }
+
+    fn finish(&self) -> u64 {
+        self.digest.finish()
+    }
+}
+
+impl<'t> Extend<&'t str> for Fingerprint {
+    fn extend<I: IntoIterator<Item = &'t str>>(&mut self, pieces: I) {
+        for piece in pieces {
+            self.digest.update(piece.as_bytes());
+        }
+    }
+}
+
+/// The plan fingerprint of a playbook message (decisions-log item 77).
 ///
 /// `xxh3-64( PLAN_FINGERPRINT_DOMAIN || canonical_json_bytes )` under the
 /// project's one seed. Clearing `meta.fingerprint` before hashing is
@@ -71,127 +108,49 @@ impl std::error::Error for FingerprintError {}
 /// recomputing over the file as it stands would hash the old fingerprint into
 /// the new one.
 ///
+/// A caller that decoded the playbook from JSON holds its wire bytes and asks
+/// [`plan_fingerprint_of`] instead, which neither clones nor encodes it nor
+/// holds its text; this function does all three, because a message alone has
+/// no other way to its canonical bytes.
+///
 /// # Errors
 ///
 /// [`FingerprintError::Canonical`] when the playbook cannot be written as
 /// canonical JSON.
 pub fn plan_fingerprint(playbook: &Playbook) -> Result<u64, FingerprintError> {
     let canonical = canonical_input(playbook).map_err(FingerprintError::Canonical)?;
-    let mut bytes = PLAN_FINGERPRINT_DOMAIN.to_vec();
-    bytes.extend_from_slice(&canonical);
-    Ok(digest(&bytes))
-}
-
-/// [`PLAN_FINGERPRINT_DOMAIN`] as text. It is ASCII, and the compiler checks
-/// that it is UTF-8, so the canonical text can be written after it in one
-/// buffer.
-const DOMAIN_TEXT: &str = match core::str::from_utf8(PLAN_FINGERPRINT_DOMAIN) {
-    Ok(text) => text,
-    Err(_) => panic!("PLAN_FINGERPRINT_DOMAIN is not UTF-8"),
-};
-
-/// How many bytes of canonical text a byte of a playbook's wire bytes makes,
-/// about, where the text is structure: it is indented a level for every
-/// message it nests, and a condition nests deep. The size budget's shapes
-/// measure 23 and 24 (431,573 bytes of text from 18,758 of wire, and 848,909
-/// from 35,977).
-const TEXT_PER_WIRE_BYTE: usize = 24;
-
-/// The most a fingerprint's text reserves up front: 4 MiB, above both size
-/// budget shapes' text, so neither grows, and far below what
-/// [`TEXT_PER_WIRE_BYTE`] would reserve for a playbook that is mostly one long
-/// string, whose text is about as long as its wire bytes (PR #177's review:
-/// 24 times a 2 MB string is 48 MB). Past it the text grows as it is written.
-///
-/// Revisited when the size cap landed (S3's `vfy6`, follow-up D) and kept:
-/// the cap, `pharmakos_verifier::MAX_PLAYBOOK_CHARS`, bounds the player's
-/// text at 512 KiB of characters, so a playbook that is mostly one string has
-/// at most 2 MiB of wire bytes and about as much text, under this hint; and a
-/// structured one has the canonical text of a capped file, which the size
-/// budget's shapes show runs to about 5.7 times its compact text, near 3 MiB
-/// at the cap, under this hint too.
-///
-/// **The worst case is past it, and only costs copies.** The deepest chain the
-/// codec reads (a condition's `not` within `not` to the 64-level nesting
-/// limit, each level indented two spaces more) grows 14.52 times, measured,
-/// against an inferred 13, so a capped file of nothing else is about 7.4 MiB
-/// of text. The text then grows past the hint as it is written. The verifier
-/// holds the bytes it takes to `pharmakos_verifier::MAX_CANONICAL_BYTES`
-/// (the cap times a growth of 16), a typed refusal, so that is the bound.
-/// The cap is not this function's to enforce: the fingerprint is taken of
-/// whatever the codec accepted.
-const MAX_TEXT_HINT: usize = 4 << 20;
-
-/// The capacity a fingerprint's text is given: a hint, so the text of a
-/// playbook at the size budget is written without being copied as it grows,
-/// and bounded, so a long string reserves no more than [`MAX_TEXT_HINT`]. A
-/// hint too small costs a copy and never a different text.
-fn text_capacity(wire_bytes: usize) -> usize {
-    DOMAIN_TEXT.len().saturating_add(
-        wire_bytes
-            .saturating_mul(TEXT_PER_WIRE_BYTE)
-            .min(MAX_TEXT_HINT),
-    )
+    let mut fingerprint = Fingerprint::new();
+    fingerprint.digest.update(&canonical);
+    Ok(fingerprint.finish())
 }
 
 /// The plan fingerprint of a playbook decoded from JSON, from the wire bytes it
 /// was decoded from: the value [`plan_fingerprint`] gives the playbook, without
-/// encoding it again.
+/// encoding it again and without holding its text.
 ///
 /// The canonical bytes are [`json::write_wire_into`]'s over those bytes with
 /// `meta.fingerprint` ([`FINGERPRINT_FIELD`]) left out, which is the text
 /// [`canonical_input`] writes for the playbook: the codec's bytes hold every
 /// singular field once and nothing at a default prost would drop
-/// ([`json::Encoded`]). Until S3's `vfy6` a file that wrote a field under both
-/// its names, or empty bytes as `"===="`, decoded to bytes that did not, and
-/// this function answered those by [`plan_fingerprint`]; the codec refuses
-/// both now, so there is no second path. `crates/proto`'s differential tests
-/// hold the text written from the bytes to the text of the playbook encoded
-/// again for every generated playbook the codec accepts.
+/// ([`json::Encoded`]). They reach the digest in the codec's pieces, each
+/// hashed as it comes, so what this function holds is the codec's one
+/// gathering buffer and the digest's fixed state, never the text, which at
+/// the size budget is near a megabyte. `crates/proto`'s differential tests
+/// hold the text written in pieces to the text of the playbook encoded again
+/// for every generated playbook the codec accepts.
 ///
 /// # Errors
 ///
 /// [`FingerprintError::Canonical`] when the bytes cannot be written as
 /// canonical JSON, as [`plan_fingerprint`].
 pub fn plan_fingerprint_of(decoded: &Decoded<Playbook>) -> Result<u64, FingerprintError> {
-    let encoded = decoded.encoded();
-    let mut text = String::with_capacity(text_capacity(encoded.bytes().len()));
-    text.push_str(DOMAIN_TEXT);
+    let mut fingerprint = Fingerprint::new();
     json::write_wire_into(
         "gp.v1.Playbook",
-        encoded.bytes(),
+        decoded.encoded().bytes(),
         FINGERPRINT_FIELD,
-        &mut text,
+        &mut fingerprint,
     )
     .map_err(FingerprintError::Canonical)?;
-    Ok(digest(text.as_bytes()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{DOMAIN_TEXT, MAX_TEXT_HINT, TEXT_PER_WIRE_BYTE, text_capacity};
-
-    #[test]
-    fn the_text_capacity_hint_is_bounded() {
-        // At the size budget's shapes the hint is the measured ratio's, so
-        // neither text grows as it is written.
-        for (wire, text) in [(18_758_usize, 431_573_usize), (35_977, 848_909)] {
-            assert!(text_capacity(wire) >= DOMAIN_TEXT.len().saturating_add(text));
-        }
-        // A playbook that is one 2 MB string reserves at most the cap.
-        assert_eq!(
-            text_capacity(2_100_000),
-            DOMAIN_TEXT.len().saturating_add(MAX_TEXT_HINT)
-        );
-        assert_eq!(
-            text_capacity(usize::MAX),
-            DOMAIN_TEXT.len().saturating_add(MAX_TEXT_HINT)
-        );
-        assert_eq!(
-            text_capacity(100),
-            DOMAIN_TEXT
-                .len()
-                .saturating_add(100_usize.saturating_mul(TEXT_PER_WIRE_BYTE))
-        );
-    }
+    Ok(fingerprint.finish())
 }
