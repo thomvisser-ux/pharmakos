@@ -206,6 +206,8 @@ const ITEM_LIST_QUEUE := 33
 const ENTRY_LISTS := {ITEM_LIST_MANDATE: ["mandate", "mandates", "menu_mandate"], ITEM_LIST_ADD_TARGET: ["add_target", "blueprints", "menu_add_target"], ITEM_LIST_QUEUE: ["queue", "blueprints", "menu_queue"]}
 ## A locked entry's sentence colour. PLACEHOLDER: the entry list's look — OWNER, at S6.
 const LOCKED_COLOUR := Color(0.65, 0.65, 0.65)
+## How much of the window's height the entry list leaves free, in pixels: its panel's margins.
+const ENTRY_MARGIN := 24.0
 ## Every popup the editor owns draws this panel (S3's `fixp`, P6b finding 6): opaque. Measured on
 ## Godot 4.7.2, the default theme's popup panel is a StyleBoxFlat drawing its centre at
 ## Color(0.1, 0.1, 0.1, 0.6), so the map showed through the value field's popup and the picker.
@@ -329,6 +331,7 @@ var _visit_submenus: Array[PopupMenu] = []
 ## Visit & change row that opened it lists them, for the beacon the menu was open for.
 var _entry_popup: PopupPanel
 var _entry_box: VBoxContainer
+var _entry_scroll: ScrollContainer
 var _entry_beacon := ""
 ## The entries the open list draws, and the bridge's row name a pick makes.
 var _entry_row := ""
@@ -1505,10 +1508,17 @@ func open_entry_list(item: int, entries: Array, beside: Rect2) -> void:
 	_entry_box.add_child(heading)
 	for which in entries.size():
 		_entry_box.add_child(_entry(entries[which], which))
+	# Taller than the window, the list scrolls inside a frame the window's height (fix pass 1):
+	# the frame is as tall as the entries, and never taller than the window allows.
+	var window := get_viewport().get_visible_rect()
+	var content := _entry_box.get_combined_minimum_size()
+	_entry_scroll.custom_minimum_size = Vector2(PANEL_WIDTH - 12.0, minf(content.y, window.size.y - ENTRY_MARGIN))
 	_entry_popup.size = Vector2i(int(PANEL_WIDTH), 0)
 	_entry_popup.reset_size()
 	_entry_popup.size.x = int(PANEL_WIDTH)
-	_entry_popup.popup(Rect2i(_inside_window(Vector2(beside.end.x, beside.position.y), Vector2(_entry_popup.size)), _entry_popup.size))
+	# Placed beside the menu it was picked from; Godot's Popup keeps itself inside the window
+	# (measured: placed past the window's right edge, it came back inside), so no clamp here.
+	_entry_popup.popup(Rect2i(Vector2i(int(beside.end.x), int(beside.position.y)), _entry_popup.size))
 
 
 ## One entry's row: a flat button with its title, or, locked, a greyed button that takes no click
@@ -1556,18 +1566,6 @@ func entry_rows() -> Array[Control]:
 		if child.has_meta("entry"):
 			out.append(child)
 	return out
-
-
-## Where a popup of `size` goes so that it stands at `want` if it can, and otherwise as near it as
-## the window allows, wholly inside it. Pixels of the window, a layout rule of the view.
-func _inside_window(want: Vector2, size: Vector2) -> Vector2i:
-	var window := get_viewport().get_visible_rect()
-	var at := want
-	if at.x + size.x > window.end.x:
-		at.x = window.end.x - size.x
-	if at.y + size.y > window.end.y:
-		at.y = window.end.y - size.y
-	return Vector2i(maxf(at.x, window.position.x), maxf(at.y, window.position.y))
 
 
 ## The value field for the chip `named` (or, with `named` empty, the Visit & change setting
@@ -2016,8 +2014,12 @@ func _build_menus() -> void:
 	_build_picker()
 	_entry_popup = PopupPanel.new()
 	opaque(_entry_popup)
+	_entry_scroll = ScrollContainer.new()
+	_entry_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_entry_popup.add_child(_entry_scroll)
 	_entry_box = VBoxContainer.new()
-	_entry_popup.add_child(_entry_box)
+	_entry_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_entry_scroll.add_child(_entry_box)
 	add_child(_entry_popup)
 	_number_popup = PopupPanel.new()
 	opaque(_number_popup)

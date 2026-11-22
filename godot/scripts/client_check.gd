@@ -320,6 +320,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_dormant_box(stage, editor, failures)
 	_check_the_load_folder(editor, failures)
 	_check_the_unreadable_counts(editor, failures)
+	await _check_the_tall_entry_list(stage, editor, failures)
 	await _check_the_rig_backed_panel(stage, editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
@@ -1152,6 +1153,29 @@ func _check_load_through_its_button(stage: SubViewport, editor: CanvasLayer, bri
 	if editor._load_dialog.current_dir.trim_suffix("/") != path.get_base_dir().trim_suffix("/"):
 		failures.append("Load, pressed, opens in `%s`, not the text's file's folder" % editor._load_dialog.current_dir)
 	editor._load_dialog.hide()
+
+
+## **The entry list scrolls when it is taller than the window** (fix pass 1, item 6): 40 entries
+## in a window 600 pixels tall stay inside it, in a frame that scrolls.
+func _check_the_tall_entry_list(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var kept := stage.size
+	stage.size = Vector2i(OWNERS_WINDOW.x, 600)
+	await _settle()
+	var entries: Array = []
+	for index in 40:
+		entries.append({"name": "e%d" % index, "title": "Entry %d" % index, "locked": ""})
+	editor.open_entry_list(EditorPanel.ITEM_LIST_QUEUE, entries, Rect2(Vector2(200, 300), Vector2(180, 200)))
+	await _settle()
+	var popup: PopupPanel = editor._entry_popup
+	var rect := Rect2(Vector2(popup.position), Vector2(popup.size))
+	print("[client-check] 40 entries in a 600 px window: %s" % rect)
+	if not Rect2(Vector2.ZERO, Vector2(stage.size)).encloses(rect):
+		failures.append("40 entries in a 600 px window run outside it: %s" % rect)
+	if editor._entry_scroll.get_v_scroll_bar().max_value <= editor._entry_scroll.size.y:
+		failures.append("40 entries in a 600 px window do not scroll")
+	popup.hide()
+	stage.size = kept
+	await _settle()
 
 
 ## --- The rig-backed checks (fix pass 1, item 5) ---------------------------------------------
