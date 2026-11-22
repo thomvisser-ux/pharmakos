@@ -274,7 +274,22 @@ fn save_and_restore_round_trips_hash_identically() {
     // Fifty round-trips at fifty different points in the run, each one
     // asserting that the restored world hashes to exactly what the saved one
     // did and then continues to the same next hash.
+    //
+    // The restore target is a fresh world each round. Round 0 restores into
+    // one `world_with` builds, as every round once did; the later rounds
+    // restore into a clone of one built here, untouched. A clone is a value
+    // copy (the same tables, rows and derived state, only a different heap
+    // capacity, which nothing hashes or snapshots), so it is the same target:
+    // round 0 holds the world built once to a second fresh one, snapshot for
+    // snapshot, and every later round holds its clone to both the hash and
+    // the snapshot of the world built once. Built once rather than fifty times
+    // (decisions-log item 165 (13)).
     let mut world = world_with(rules());
+    let pristine = world_with(rules());
+    let pristine_bytes = Snapshot::capture(&pristine)
+        .expect("a fresh world is between ticks")
+        .to_bytes()
+        .expect("encoding a snapshot");
     let mut enc = Enc::with_capacity(64 * 1024);
     for round in 0..50 {
         for _ in 0..10 {
@@ -287,7 +302,34 @@ fn save_and_restore_round_trips_hash_identically() {
             .expect("encoding a snapshot");
         let decoded = Snapshot::from_bytes(&bytes).expect("decoding a snapshot");
 
-        let mut restored = world_with(rules());
+        let mut restored = if round == 0 {
+            let fresh = world_with(rules());
+            assert_eq!(
+                Snapshot::capture(&fresh)
+                    .expect("a fresh world is between ticks")
+                    .to_bytes()
+                    .expect("encoding a snapshot"),
+                pristine_bytes,
+                "two fresh worlds snapshot alike, so the one built once stands for each"
+            );
+            fresh
+        } else {
+            let target = pristine.clone();
+            assert_eq!(
+                target.state_hash(),
+                pristine.state_hash(),
+                "round {round}: the clone of the fresh world hashes as it does"
+            );
+            assert_eq!(
+                Snapshot::capture(&target)
+                    .expect("a clone of a fresh world is between ticks")
+                    .to_bytes()
+                    .expect("encoding a snapshot"),
+                pristine_bytes,
+                "round {round}: the clone of the fresh world snapshots as it does"
+            );
+            target
+        };
         decoded
             .restore_into(&mut restored)
             .expect("restoring a snapshot");
