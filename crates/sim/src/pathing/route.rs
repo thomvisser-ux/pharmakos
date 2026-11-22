@@ -581,8 +581,8 @@ pub fn route_with(
 }
 
 /// [`route_with`], and the abstract search's answer the route was refined
-/// from: the one function both the router ([`route_with`]) and a near pair's
-/// estimate ([`crate::pathing::estimate`]) run, so that what the estimate
+/// from: the one function both the router ([`route_with`]) and a clear
+/// estimate ([`crate::pathing::estimate::walk_cost`]) run, so that what the estimate
 /// prices is what the router serves by construction rather than by agreement.
 ///
 /// # Errors

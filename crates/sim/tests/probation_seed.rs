@@ -94,11 +94,11 @@ const PROBATION_SEED: u64 = 20;
 /// placements that reach it, and the commander's walk through them, served
 /// leg by leg, 92 s of a 180 s Push.
 ///
-/// Re-pinned by lane `p3fix` (near pairs are priced at the served route):
-/// `toward` ranks its stepping stones by estimate, the stones are near pairs,
-/// and their exact prices picked the second and third stones `[207, 69]` and
-/// `[223, 86]` where the abstract prices had picked `[203, 72]` and
-/// `[222, 86]` (and 1 620 ticks). The seed still passes, so the answer stands.
+/// Re-pinned first by lane `p3fix`'s part 1, which priced near pairs at the
+/// served route while `toward` still ranked its stones by the estimate: the
+/// exact prices picked the second and third stones `[207, 69]` and `[223, 86]`
+/// where the abstract prices had picked `[203, 72]` and `[222, 86]` (and
+/// 1 620 ticks). The seed still passed, so the answer stood.
 ///
 /// Re-pinned again by the same lane's second part, when `toward` came to weigh
 /// its sites by the served walk, as every "nearest" in the sim does, rather

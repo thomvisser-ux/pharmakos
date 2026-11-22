@@ -63,7 +63,8 @@
 //! candidate the octile lower bound has not already ruled out: a candidate is
 //! emitted once its key `(cost, y, x)` is below every unpriced candidate's
 //! `(bound, y, x)`, and because the octile bound never exceeds a served walk's
-//! cost (`tests/targeting.rs` pins it), that is the candidate's true place in
+//! cost (`tests/nearest.rs`'s `nearest_is_the_least_served_walk` pins it),
+//! that is the candidate's true place in
 //! the order. Candidates are opened in octile order, which opens exactly the
 //! candidates whose bound is under the emitted cost: no order that prunes by
 //! the octile bound alone opens fewer. Nothing is capped; what bounds the work

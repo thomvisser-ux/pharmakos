@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The travel estimate (decisions log item 61, amended by item 90 and by lane
-//! `p3fix`'s near pairs).
+//! `p3fix`: a clear query is the walk the router serves).
 //!
 //! # The contract, and what it forbids
 //!
@@ -200,9 +200,9 @@ impl Fog<'_> {
     }
 
     /// Whether nothing at all is hidden: [`Fog::Clear`], or a mask with no
-    /// unknown column. Such a query prices nothing at ×3/2, and a near pair
-    /// under it is priced at the served route like any clear query (lane
-    /// `p3fix`): a mask that hides nothing is a clear query, whoever built it.
+    /// unknown column. Such a query prices nothing at ×3/2, and a pair under
+    /// it is priced at the served walk like any clear query (lane `p3fix`): a
+    /// mask that hides nothing is a clear query, whoever built it.
     #[must_use]
     pub fn is_clear(self) -> bool {
         match self {

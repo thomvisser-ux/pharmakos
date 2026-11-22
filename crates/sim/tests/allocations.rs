@@ -448,8 +448,9 @@ fn collapse_at(world: &mut World, step: u32) {
     }
 }
 
-/// The served walk "nearest" ranks by, and the estimator's near pairs (lane
-/// `p3fix`): both price the route the router serves, built in the scratch's
+/// The served walk "nearest" ranks by, and the estimator's clear queries
+/// (lane `p3fix`), drawn here on near pairs: both price the route the router
+/// serves, built in the scratch's
 /// own buffer, so neither allocates, inside a tick or out of one.
 ///
 /// The tick reaches the served walk: the harness playbook's `covering`

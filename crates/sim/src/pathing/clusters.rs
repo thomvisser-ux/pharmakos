@@ -60,9 +60,9 @@
 //! a single border crossing whose transition lies off the straight line carried
 //! 90 % to 99 % of it. The corner entrance would have changed the abstract
 //! graph, and so every served route, for under 1 % of the error. What fixed
-//! the error is the estimator's near pairs, which are priced at the served
-//! route ([`crate::pathing::estimate`]), so the corner costs a near pair
-//! nothing, and a far pair's corners are inside the gate's figure.
+//! the error is pricing a clear query at the walk the router serves, near or
+//! far ([`crate::pathing::estimate`]): the walker's smoothed route already
+//! cuts the corner, so the corner costs the estimate nothing.
 //!
 //! What the corner entrance would be, should a later measurement want it: four
 //! extra transitions a cluster, where the diagonal across the corner is legal,
@@ -456,9 +456,11 @@ impl Clusters {
 
     /// Whether the clusters of `a` and `b` touch: the same cluster, or two
     /// that share a border or a corner (at most one cluster apart on each
-    /// axis). The estimator's test for a near pair
-    /// ([`crate::pathing::estimate`]): two columns at most one cluster edge
-    /// apart on both axes always pass it.
+    /// axis): two columns at most one cluster edge apart on both axes always
+    /// pass it. The estimator reads only its refusal, a column off the graph
+    /// ([`crate::pathing::estimate`]); since lane `p3fix` prices every clear
+    /// query at the served walk, it no longer splits near pairs from far, and
+    /// the tests draw near pairs by it.
     ///
     /// # Errors
     ///
