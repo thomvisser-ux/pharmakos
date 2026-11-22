@@ -139,6 +139,19 @@ pub enum ReachError {
         /// The column.
         node: Node,
     },
+    /// A dearest step the bucket ring cannot be sized for: not positive, or
+    /// so dear that `2 × step + 1` buckets pass a `u32` (the rules' path-cost
+    /// bound keeps every loaded table far inside both).
+    Ring {
+        /// The dearest step.
+        max_step: i32,
+    },
+    /// A key whose bucket is not in the ring: a negative key, which no cost
+    /// or `h` makes.
+    Slot {
+        /// The key.
+        key: i64,
+    },
 }
 
 /// The grid optimum's search, its bucket queue (the module docs), the
@@ -161,6 +174,8 @@ pub struct Reach {
     prev: Vec<u32>,
     /// The ring of buckets, by key modulo its length.
     heads: Vec<u32>,
+    /// The ring's length, `2 × max step + 1`: what a key is taken modulo.
+    ring: core::num::NonZeroU32,
     /// The bucket being settled, sorted by column, and where in it.
     sorted: Vec<Node>,
     cursor: usize,
@@ -189,16 +204,28 @@ pub struct Reach {
 impl Reach {
     /// Room for a map of `nodes` columns whose dearest step costs
     /// `max_step` ([`crate::pathing::surface::StepCosts::max_step`]).
-    #[must_use]
-    pub fn new(nodes: u32, max_step: i32) -> Reach {
+    ///
+    /// # Errors
+    ///
+    /// [`ReachError::Ring`] for a dearest step that is not positive or whose
+    /// ring of `2 × step + 1` buckets passes a `u32`. Neither comes from a
+    /// loaded rules table: its cardinal step is non-zero by type and its
+    /// dearest step is bounded by the map's path cost (`RulesTable`'s
+    /// `path_cost_fits`), and a positive `i32` doubled plus one fits a `u32`.
+    pub fn new(nodes: u32, max_step: i32) -> Result<Reach, ReachError> {
         let n = crate::math::index::row(nodes);
         // A step raises a key by at most twice the dearest step (its cost,
         // and the heuristic's rise across it), so this many buckets hold every
         // key the frontier holds at once.
-        // E7: rule: a step costs at least one unit (the rules refuse a free one), so a ring of three holds unit steps
-        let buckets = usize::try_from(max_step.max(1))
-            .map_or(3, |step| step.saturating_mul(2).saturating_add(1));
-        Reach {
+        let ring = u32::try_from(max_step)
+            .ok()
+            .filter(|step| *step > 0)
+            .and_then(|step| step.checked_mul(2))
+            .and_then(|double| double.checked_add(1))
+            .and_then(core::num::NonZeroU32::new)
+            .ok_or(ReachError::Ring { max_step })?;
+        let buckets = crate::math::index::row(ring.get());
+        Ok(Reach {
             epoch: 0,
             stamp: vec![0; n],
             settled: vec![0; n],
@@ -208,6 +235,7 @@ impl Reach {
             next: vec![NONE; n],
             prev: vec![NONE; n],
             heads: vec![NONE; buckets],
+            ring,
             sorted: Vec::with_capacity(n),
             cursor: 0,
             at: 0,
@@ -218,7 +246,7 @@ impl Reach {
             heur: vec![(0, 0); n],
             evaluations: Tally::ZERO,
             directed: false,
-        }
+        })
     }
 
     /// The ring's length: `2 × max step + 1` buckets (the module docs).
@@ -438,7 +466,7 @@ impl Reach {
             if self.waiting == 0 {
                 return Ok(None);
             }
-            self.advance();
+            self.advance()?;
         };
         let index = crate::math::index::row(node);
         let off = ReachError::OffMap { node };
@@ -461,47 +489,59 @@ impl Reach {
             } else {
                 cost
             };
-            self.lower(other, cost, key);
+            self.lower(other, cost, key)?;
         }
         Ok(Some((node, here)))
     }
 
-    /// The bucket a key waits in.
-    fn slot(&self, key: i64) -> usize {
-        // E7: cannot miss: the ring's length is twice a step cost plus one, far inside `i64`
-        let ring = i64::try_from(self.heads.len()).unwrap_or(i64::MAX);
-        // E7: cannot miss: a remainder by the ring's length is below it
-        usize::try_from(key.rem_euclid(ring)).unwrap_or(0)
+    /// The bucket a key waits in: the key modulo the ring's length.
+    ///
+    /// # Errors
+    ///
+    /// [`ReachError::Slot`] for a negative key, which no cost or `h` makes:
+    /// a remainder by the ring's length is below it, a `u32`.
+    fn slot(&self, key: i64) -> Result<usize, ReachError> {
+        let at = key.rem_euclid(i64::from(self.ring.get()));
+        u32::try_from(at)
+            .map(crate::math::index::row)
+            .map_err(|_| ReachError::Slot { key })
+    }
+
+    /// The head of the bucket `slot`, typed: a slot is a remainder by the
+    /// ring's length, which is the list of heads' own.
+    fn head(&self, slot: usize, key: i64) -> Result<u32, ReachError> {
+        self.heads
+            .get(slot)
+            .copied()
+            .ok_or(ReachError::Slot { key })
     }
 
     /// Move to the next key a bucket holds, and sort its columns: the key
     /// reached first, which a directed search's step can add to (a step that
     /// keeps the key), then each key above it. Every waiting key lies within
-    /// the ring's length above the key reached, so one turn finds it.
-    fn advance(&mut self) {
+    /// the ring's length above the key reached, so one turn finds it. A
+    /// bucket's columns are linked through `next`, ending at `NONE`, the
+    /// empty link.
+    fn advance(&mut self) -> Result<(), ReachError> {
         self.sorted.clear();
         self.cursor = 0;
         for turn in 0..=self.heads.len() {
             if turn > 0 {
                 self.at += 1;
             }
-            let slot = self.slot(self.at);
-            // E7: cannot miss: a slot is a remainder by the ring's length
-            let mut node = self.heads.get(slot).copied().unwrap_or(NONE);
+            let key = self.at;
+            let slot = self.slot(key)?;
+            let mut node = self.head(slot, key)?;
             if node == NONE {
                 continue;
             }
-            if let Some(head) = self.heads.get_mut(slot) {
-                *head = NONE;
-            }
+            *self.heads.get_mut(slot).ok_or(ReachError::Slot { key })? = NONE;
             while node != NONE {
                 let index = crate::math::index::row(node);
+                let off = ReachError::OffMap { node };
                 self.sorted.push(node);
-                if let Some(mark) = self.listed.get_mut(index) {
-                    *mark = 0;
-                }
-                // E7: cannot miss: a linked column is a column of the map
-                node = self.next.get(index).copied().unwrap_or(NONE);
+                *self.listed.get_mut(index).ok_or(off)? = 0;
+                node = self.next.get(index).copied().ok_or(off)?;
             }
             self.waiting -= self.sorted.len();
             // The undirected API's order: `(cost, column)`, which its callers
@@ -512,81 +552,66 @@ impl Reach {
             if !self.directed {
                 self.sorted.sort_unstable();
             }
-            return;
+            return Ok(());
         }
+        Ok(())
     }
 
     /// Lower `node`'s cost to `cost` (its key to `key`) if that is lower,
     /// moving it to the bucket of its new key.
-    fn lower(&mut self, node: Node, cost: i64, key: i64) {
-        let Ok(index) = usize::try_from(node) else {
-            return;
-        };
-        let reached = self.stamp.get(index).copied() == Some(self.epoch);
-        if reached && self.cost.get(index).is_some_and(|held| *held <= cost) {
-            return;
+    fn lower(&mut self, node: Node, cost: i64, key: i64) -> Result<(), ReachError> {
+        let index = crate::math::index::row(node);
+        let off = ReachError::OffMap { node };
+        let reached = *self.stamp.get(index).ok_or(off)? == self.epoch;
+        if reached && *self.cost.get(index).ok_or(off)? <= cost {
+            return Ok(());
         }
-        if self.listed.get(index).copied() == Some(self.epoch) {
-            self.unlink(node);
+        if *self.listed.get(index).ok_or(off)? == self.epoch {
+            self.unlink(node)?;
         }
-        if let Some(slot) = self.cost.get_mut(index) {
-            *slot = cost;
+        *self.cost.get_mut(index).ok_or(off)? = cost;
+        *self.key.get_mut(index).ok_or(off)? = key;
+        *self.stamp.get_mut(index).ok_or(off)? = self.epoch;
+        let slot = self.slot(key)?;
+        let head = self.head(slot, key)?;
+        *self.next.get_mut(index).ok_or(off)? = head;
+        *self.prev.get_mut(index).ok_or(off)? = NONE;
+        if head != NONE {
+            *self
+                .prev
+                .get_mut(crate::math::index::row(head))
+                .ok_or(ReachError::OffMap { node: head })? = node;
         }
-        if let Some(slot) = self.key.get_mut(index) {
-            *slot = key;
-        }
-        if let Some(slot) = self.stamp.get_mut(index) {
-            *slot = self.epoch;
-        }
-        let slot = self.slot(key);
-        // E7: cannot miss: a slot is a remainder by the ring's length
-        let head = self.heads.get(slot).copied().unwrap_or(NONE);
-        if let Some(link) = self.next.get_mut(index) {
-            *link = head;
-        }
-        if let Some(link) = self.prev.get_mut(index) {
-            *link = NONE;
-        }
-        if head != NONE
-            && let Some(link) = self.prev.get_mut(crate::math::index::row(head))
-        {
-            *link = node;
-        }
-        if let Some(first) = self.heads.get_mut(slot) {
-            *first = node;
-        }
-        if let Some(mark) = self.listed.get_mut(index) {
-            *mark = self.epoch;
-        }
+        *self.heads.get_mut(slot).ok_or(ReachError::Slot { key })? = node;
+        *self.listed.get_mut(index).ok_or(off)? = self.epoch;
         self.waiting += 1;
+        Ok(())
     }
 
     /// Take `node` out of its bucket.
-    fn unlink(&mut self, node: Node) {
+    fn unlink(&mut self, node: Node) -> Result<(), ReachError> {
         let index = crate::math::index::row(node);
-        let (Some(before), Some(after), Some(key)) = (
-            self.prev.get(index).copied(),
-            self.next.get(index).copied(),
-            self.key.get(index).copied(),
-        ) else {
-            return;
-        };
+        let off = ReachError::OffMap { node };
+        let before = *self.prev.get(index).ok_or(off)?;
+        let after = *self.next.get(index).ok_or(off)?;
+        let key = *self.key.get(index).ok_or(off)?;
         if before == NONE {
-            let slot = self.slot(key);
-            if let Some(head) = self.heads.get_mut(slot) {
-                *head = after;
-            }
-        } else if let Some(link) = self.next.get_mut(crate::math::index::row(before)) {
-            *link = after;
+            let slot = self.slot(key)?;
+            *self.heads.get_mut(slot).ok_or(ReachError::Slot { key })? = after;
+        } else {
+            *self
+                .next
+                .get_mut(crate::math::index::row(before))
+                .ok_or(ReachError::OffMap { node: before })? = after;
         }
-        if after != NONE
-            && let Some(link) = self.prev.get_mut(crate::math::index::row(after))
-        {
-            *link = before;
+        if after != NONE {
+            *self
+                .prev
+                .get_mut(crate::math::index::row(after))
+                .ok_or(ReachError::OffMap { node: after })? = before;
         }
-        if let Some(mark) = self.listed.get_mut(index) {
-            *mark = 0;
-        }
+        *self.listed.get_mut(index).ok_or(off)? = 0;
         self.waiting -= 1;
+        Ok(())
     }
 }
