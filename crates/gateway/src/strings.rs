@@ -265,6 +265,32 @@ pub fn licences_awarded(titles: &[&str]) -> Option<String> {
     }
 }
 
+/// The final recap's sentence naming every licence award that stands at the
+/// match's end, each with its seat and the round it was awarded in, as the
+/// recap's other sentences name a seat ("seat 0"): "The licences that stand at
+/// the match's end: seat 0's Resonance Spire, from round 2; seat 1's Resonance
+/// Spire, from round 3." (S3's `probw`, item 6; the gateway's final words,
+/// read by the owner at S3's demo with every other string). `awards` is
+/// `(seat, title, round)` in the order the recap lists them. `None` when no
+/// award stands: the recap says nothing then.
+#[must_use]
+pub fn licences_standing(awards: &[(u8, &str, u32)]) -> Option<String> {
+    let named: Vec<String> = awards
+        .iter()
+        .map(|(seat, title, round)| format!("seat {seat}'s {title}, from round {round}"))
+        .collect();
+    match named.as_slice() {
+        [] => None,
+        [one] => Some(format!(
+            "The licence that stands at the match's end: {one}."
+        )),
+        many => Some(format!(
+            "The licences that stand at the match's end: {}.",
+            many.join("; ")
+        )),
+    }
+}
+
 /// `attack_ended`'s reason, in words: the sim's `attack::Ended` id. An id
 /// this build does not name is written as the number it is.
 fn attack_ended_reason(value: i64) -> String {
@@ -1175,6 +1201,27 @@ mod tests {
         assert_eq!(
             super::licence_title(pharmakos_proto::gp::v1::Licence::Unspecified),
             None
+        );
+    }
+
+    /// S3's `probw`, item 6: the final recap's sentence of the awards that
+    /// stand, for none, one and two.
+    #[test]
+    fn the_match_ends_sentence_names_every_award_that_stands() {
+        assert_eq!(super::licences_standing(&[]), None);
+        assert_eq!(
+            super::licences_standing(&[(0, "Resonance Spire", 2)]).as_deref(),
+            Some(
+                "The licence that stands at the match's end: seat 0's Resonance Spire, from round 2."
+            )
+        );
+        assert_eq!(
+            super::licences_standing(&[(0, "Resonance Spire", 2), (1, "Resonance Spire", 3)])
+                .as_deref(),
+            Some(
+                "The licences that stand at the match's end: seat 0's Resonance Spire, from \
+                 round 2; seat 1's Resonance Spire, from round 3."
+            )
         );
     }
 

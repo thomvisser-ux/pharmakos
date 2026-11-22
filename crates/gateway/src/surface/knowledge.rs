@@ -3153,7 +3153,9 @@ fn licence_wire(licence: pharmakos_proto::gp::v1::Licence) -> String {
 /// voided ones gone with it. Each row names its seat, as `seat.0`. `None` when
 /// there is nothing to announce. The prose names `seat`'s own awards at this
 /// settlement, "Licence awarded: Resonance Spire.", whichever rows the wire
-/// carries.
+/// carries, and, once the match has ended, every award that stands with its
+/// seat and round ([`strings::licences_standing`]; S3's `probw`), so a client
+/// draws no licence rows of its own.
 ///
 /// # Errors
 ///
@@ -3168,21 +3170,35 @@ fn licence_line(
 ) -> Result<Option<Json>, Error> {
     let rows = licence_rows(world)?;
     let this_settlement = |row: &LicenceHeld| row.seat == seat && row.round == facts.round;
+    let title_of = |row: &LicenceHeld| {
+        strings::licence_title(row.licence).ok_or_else(|| {
+            Error::internal(said!(
+                "the string table names no licence {}",
+                row.licence.as_str_name()
+            ))
+        })
+    };
     let titles = rows
         .iter()
         .filter(|row| this_settlement(row))
-        .map(|row| {
-            strings::licence_title(row.licence).ok_or_else(|| {
-                Error::internal(said!(
-                    "the string table names no licence {}",
-                    row.licence.as_str_name()
-                ))
-            })
-        })
+        .map(title_of)
         .collect::<Result<Vec<&str>, Error>>()?;
     if let Some(line) = strings::licences_awarded(&titles) {
         prose.push(' ');
         prose.push_str(&line);
+    }
+    // Once the match has ended, every award that still stands, in words too,
+    // after the seat's own line (S3's `probw`, item 6): the rows the wire
+    // carries then, each with its seat and round.
+    if ended {
+        let standing = rows
+            .iter()
+            .map(|row| Ok((row.seat.raw(), title_of(row)?, row.round)))
+            .collect::<Result<Vec<(u8, &str, u32)>, Error>>()?;
+        if let Some(line) = strings::licences_standing(&standing) {
+            prose.push(' ');
+            prose.push_str(&line);
+        }
     }
     let told: Vec<Json> = rows
         .iter()
@@ -3677,9 +3693,19 @@ mod tests {
             line(1, true),
             (
                 Some(Json::Array(vec![row("seat.0", 2), row("seat.1", 1)])),
-                String::new()
+                String::from(
+                    " The licences that stand at the match's end: seat 0's Resonance Spire, \
+                     from round 2; seat 1's Resonance Spire, from round 1."
+                )
             ),
-            "at the match's end the fog lifts on every standing award"
+            "at the match's end the fog lifts on every standing award, in words too (probw, \
+             item 6)"
+        );
+        assert_eq!(
+            line(0, true).1,
+            " Licence awarded: Resonance Spire. The licences that stand at the match's end: \
+             seat 0's Resonance Spire, from round 2; seat 1's Resonance Spire, from round 1.",
+            "the seat's own line first, then every award that stands"
         );
     }
 }

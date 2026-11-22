@@ -1368,6 +1368,44 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
         None,
         "the Spire unlocks with the licence"
     );
+    the_match_end_names_the_award_that_stands(&mut surface);
+}
+
+/// S3's `probw`, item 6, played on from round 2's Lull of the licence test
+/// above: between rounds no recap names the awards that stand; at the match's
+/// end (round 3 of 3) every recap does, in words, with the seat and the round
+/// -- seat 1's names seat 0's award, and seat 0's names its own earlier one.
+fn the_match_end_names_the_award_that_stands(surface: &mut Surface) {
+    const STANDING: &str =
+        "The licence that stands at the match's end: seat 0's Resonance Spire, from round 1.";
+    play_push(surface);
+    for seat in [0, 1] {
+        let token = seat_token(surface, seat);
+        let recap = result(&call(surface, &token, "get_recap", "{}"), "get_recap");
+        assert!(
+            !text_of(&recap, "prose").contains("at the match's end"),
+            "seat {seat}, between rounds: {recap:?}"
+        );
+    }
+    next_lull(surface);
+    play_push(surface);
+    for seat in [0, 1] {
+        let token = seat_token(surface, seat);
+        let recap = result(&call(surface, &token, "get_recap", "{}"), "get_recap");
+        let prose = text_of(&recap, "prose");
+        assert!(prose.contains(STANDING), "seat {seat}, at the end: {prose}");
+        assert_eq!(
+            prose.matches("at the match's end").count(),
+            1,
+            "one sentence: {prose}"
+        );
+        assert!(
+            !prose.contains("Licence awarded:"),
+            "nothing was awarded at this settlement: {prose}"
+        );
+        let rows = array_of(&recap, "licences_awarded");
+        assert_eq!(rows.len(), 1, "the row the sentence names: {recap:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------
