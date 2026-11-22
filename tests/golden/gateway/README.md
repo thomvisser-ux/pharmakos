@@ -485,7 +485,10 @@ column (`pharmakos_sim::pathing::estimate::walk_cost`), ranked by the sim's own
 `Ranker` and turned into game milliseconds the way `estimate_route`'s legs are. The pick in `resolve_refs` is the sim's own
 `cover` and `on_vent`, and `targeting.rs`'s
 `resolve_refs_answers_as_the_sim_would_at_step_start` holds it to what the sim
-then binds when the step starts.
+then binds when the step starts. The travel members are a Lull's answer only:
+outside a Lull `get_map_summary` withholds `travel_ms` and `reachable`
+(decisions-log item 170), so these goldens, taken in the opening Lull, show the
+only phase in which they are told.
 
 What a diff means:
 

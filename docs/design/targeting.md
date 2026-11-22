@@ -280,7 +280,9 @@ range narrows to 12–49.
   - `Scope` gains the features (id, kind, grade, a live bit) and the commander's position.
   - A verifier that one day ranks carries the gateway's precomputed costs in `Scope`, hashed.
 - **`get_map_summary.features`** (S1-48) lists every feature with its id, kind, grade, coverage by
-  the seat and travel.
+  the seat and travel. Travel (`travel_ms`, `reachable`) is told in a Lull only; in every other
+  phase both members are absent, so "not told" is its own state on the wire (decisions-log item
+  170).
 - **`estimate_route`** accepts `covering` and returns the site, so Easy needs one call per candidate
   and keeps no second site algorithm. The operator derives no ids itself.
 - **The chip:** "now: Heat vent (120, 88) · 14 s · next (150, 20) · 16 s — nearest by travel from
