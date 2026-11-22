@@ -1326,8 +1326,8 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
     );
 
     play_push(&mut surface);
-    let token = seat_token(&mut surface, 0);
-    let recap = result(&call(&mut surface, &token, "get_recap", "{}"), "get_recap");
+    let recap = golden_answer(&mut surface, 0, "get_recap", "recap_probation_round");
+    assert!(recap.get("ledger_memos").is_some(), "{recap:?}");
     let awarded = array_of(&recap, "licences_awarded");
     assert_eq!(awarded.len(), 1, "{recap:?}");
     let award = awarded.first().expect("the award");
@@ -1349,6 +1349,7 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
         vec![String::from(Memo::FirstLicence.name())],
         "the person's first licence issues its memo"
     );
+    memo_page_golden(&mut surface, 0);
 
     next_lull(&mut surface);
     let token = seat_token(&mut surface, 0);
@@ -1390,8 +1391,12 @@ fn the_match_end_names_the_award_that_stands(surface: &mut Surface) {
     next_lull(surface);
     play_push(surface);
     for seat in [0, 1] {
-        let token = seat_token(surface, seat);
-        let recap = result(&call(surface, &token, "get_recap", "{}"), "get_recap");
+        let recap = if seat == 1 {
+            golden_answer(surface, seat, "get_recap", "recap_probation_ended")
+        } else {
+            let token = seat_token(surface, seat);
+            result(&call(surface, &token, "get_recap", "{}"), "get_recap")
+        };
         let prose = text_of(&recap, "prose");
         assert!(prose.contains(STANDING), "seat {seat}, at the end: {prose}");
         assert_eq!(
@@ -1537,4 +1542,89 @@ fn get_status_with_no_match_hosted_tells_no_preset() {
         pharmakos_proto::gp::api::v1::Preset::Unspecified
     );
     assert_eq!(answer.get("sealed_this_round"), None);
+}
+
+// ---------------------------------------------------------------------------
+// S3's `probw`, item 8: Probation's goldens
+// ---------------------------------------------------------------------------
+
+/// `seat`'s answer to `method` with no parameters, written as the golden
+/// `case` (`support::write_golden`: the whole JSON-RPC answer, its footer
+/// included), and its `result`.
+fn golden_answer(surface: &mut Surface, seat: u8, method: &str, case: &str) -> Json {
+    let token = seat_token(surface, seat);
+    let response = call(surface, &token, method, "{}");
+    let answer = result(&response, method);
+    support::write_golden(case, &pharmakos_gateway::rpc::render(&response));
+    answer
+}
+
+/// The first page of `seat`'s segment feed that carries a `ledger_memo` line,
+/// written as the golden `feed_ledger_memo`: the line and its typed payload,
+/// as a client reads them (S3's plan, E5).
+fn memo_page_golden(surface: &mut Surface, seat: u8) {
+    let token = seat_token(surface, seat);
+    let mut cursor = String::new();
+    loop {
+        let response = call(
+            surface,
+            &token,
+            "get_segment_feed",
+            &format!("{{\"cursor\":{}}}", quote(&cursor)),
+        );
+        let page = result(&response, "get_segment_feed");
+        let events = array_of(&page, "events");
+        assert!(!events.is_empty(), "the feed holds a memo's line");
+        if events.iter().any(|event| {
+            text_of(event, "kind") == "ledger_memo" && event.get("ledger_memo").is_some()
+        }) {
+            support::write_golden(
+                "feed_ledger_memo",
+                &pharmakos_gateway::rpc::render(&response),
+            );
+            return;
+        }
+        cursor = text_of(&page, "next_cursor");
+    }
+}
+
+/// The golden `list_templates_guided`: the human seat's template list in a
+/// Probation match's first Lull, its advisor's start marked with its reason
+/// (the setup of `the_first_lull_marks_the_advisors_start_with_its_reason`).
+#[test]
+fn the_guided_template_list_answers_its_golden() {
+    let mut surface = hosted_under("m-guided", Preset::Probation, Some(0), 1_000, 2);
+    surface
+        .file_advice(
+            SeatId::new(0),
+            advice(
+                Some("hold_and_build"),
+                &["expand_and_mine", "hold_and_build"],
+            ),
+        )
+        .expect("filed");
+    let list = golden_answer(&mut surface, 0, "list_templates", "list_templates_guided");
+    assert!(
+        array_of(&list, "templates")
+            .iter()
+            .any(|template| template.get("guided_pick") == Some(&Json::Bool(true))),
+        "{list:?}"
+    );
+}
+
+/// The golden `get_status_probation`: a seat's `get_status` in a Probation
+/// Lull it has sealed: the footer untimed by rule, the preset and the seal.
+#[test]
+fn a_sealed_probation_status_answers_its_golden() {
+    let mut surface = hosted_under("m-status-golden", Preset::Probation, Some(0), 1_000, 2);
+    let admin = admin_token(&mut surface);
+    let mut elapsed = 0_i32;
+    let route = walk_east(&surface, 0, 2, 0);
+    submit(&mut surface, &admin, &mut elapsed, 0, &route);
+    let status = golden_answer(&mut surface, 0, "get_status", "get_status_probation");
+    assert_eq!(status.get("sealed_this_round"), Some(&Json::Bool(true)));
+    assert_eq!(
+        status.get("preset"),
+        Some(&Json::String(String::from("probation")))
+    );
 }

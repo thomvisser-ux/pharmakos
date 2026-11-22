@@ -1678,6 +1678,16 @@ fn number(value: &Json, key: &str) -> i32 {
 /// Seat 0's live autocannon's `building` column, or `None` before it is
 /// placed.
 fn autocannon_building(surface: &Surface) -> Option<bool> {
+    building(surface, pharmakos_sim::tables::StructureKind::Autocannon)
+}
+
+/// Where `the_view_built_golden` queues seat 0's mortar: a column inside its
+/// core's sphere, clear of the scenario's autocannon and wall.
+const MORTAR_SITE: [i32; 2] = [365, 30];
+
+/// The `building` column of seat 0's first live structure of `kind`, or `None`
+/// before one is placed.
+fn building(surface: &Surface, of: pharmakos_sim::tables::StructureKind) -> Option<bool> {
     let world = surface.host().expect("a match").world();
     let structures = world.structures();
     (0..structures.ids().len()).find_map(|row| {
@@ -1685,7 +1695,7 @@ fn autocannon_building(surface: &Surface) -> Option<bool> {
         let free = *structures.frees().get(row)?;
         let ours = *structures.seats().get(row)? == 0;
         let kind = *structures.kinds().get(row)?;
-        if alive && !free && ours && kind == pharmakos_sim::tables::StructureKind::Autocannon.id() {
+        if alive && !free && ours && kind == of.id() {
             structures.building().get(row).copied()
         } else {
             None
@@ -2085,4 +2095,211 @@ fn a_wall_is_listed_while_a_voxel_of_it_stands() {
     step(&mut surface, 2);
     assert!(wall_voxels(&surface).is_empty(), "nothing rebuilds it");
     assert_eq!(find(&own.live(&mut surface), "wall", "seat.0"), None);
+}
+
+/// The standing point of the column `(x, y)`: one voxel above its top solid
+/// voxel, where the sim stands a structure.
+fn standing_point(
+    world: &pharmakos_sim::world::World,
+    x: i32,
+    y: i32,
+) -> [pharmakos_sim::math::fixed::Fx; 3] {
+    use pharmakos_sim::math::fixed::Fx;
+    let z = world.voxels().top_solid_z(x, y).expect("solid ground");
+    let voxel = |value: i32| Fx::from_voxels(i16::try_from(value).expect("on the map"));
+    [voxel(x), voxel(y), voxel(z + 1)]
+}
+
+/// Seat 0 seals `text` in the current Lull, and the Push begins.
+fn seal_and_push(surface: &mut Surface, token: &Token, remaining: i32, text: &str) {
+    let mut remaining = remaining;
+    let answer = result(
+        &call_in_lull(
+            surface,
+            token,
+            &mut remaining,
+            "submit_plan",
+            &format!("{{\"playbook_jsonc\":{}}}", support::quote(text)),
+        ),
+        "submit_plan",
+    );
+    assert_eq!(
+        answer.get("accepted"),
+        Some(&Json::Bool(true)),
+        "{answer:?}"
+    );
+    assert!(surface.begin_push().expect("a hosted match"), "the Push");
+}
+
+/// The world of [`built_scene`] in its opening Lull: a finished Resonance
+/// Spire beside seat 0's core and a Survey post of seat 1's inside seat 0's
+/// sphere.
+fn built_world() -> Surface {
+    use pharmakos_gateway::host::Host;
+    let config = pharmakos_sim::world::WorldConfig {
+        match_seed: SEED,
+        seats: 2,
+        rules: support::rules(),
+        match_settings: pharmakos_sim::runner::MatchSettings {
+            segment_lengths_ms: vec![KIT_SEGMENT_MS],
+            round_limit: 2,
+        },
+    };
+    let mut world = pharmakos_sim::world::World::new(&config).expect("the world generates");
+    let core_of = |world: &pharmakos_sim::world::World, seat: u8| {
+        let row = (0..world.beacons().ids().len())
+            .find(|row| world.beacons().seats().get(*row) == Some(&seat))
+            .expect("a core");
+        let id = pharmakos_sim::tables::BeaconId::new(
+            world.beacons().ids().get(row).copied().expect("an id"),
+        );
+        let at = world
+            .beacons()
+            .positions()
+            .get(row)
+            .copied()
+            .expect("a place");
+        (id, at[0].floor_voxels(), at[1].floor_voxels())
+    };
+    let (ours, x, y) = core_of(&world, 0);
+    let (theirs, _, _) = core_of(&world, 1);
+    let spire_at = standing_point(&world, x + 1, y);
+    world
+        .raise_structure(
+            SeatId::new(0),
+            ours,
+            pharmakos_sim::tables::StructureKind::ResonanceSpire,
+            spire_at,
+        )
+        .expect("room for a Spire");
+    let post_at = standing_point(&world, x - 4, y);
+    world
+        .raise_structure(
+            SeatId::new(1),
+            theirs,
+            pharmakos_sim::tables::StructureKind::SurveyPost,
+            post_at,
+        )
+        .expect("room for a Survey post");
+    let bytes = pharmakos_sim::snapshot::Snapshot::capture(&world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("it encodes");
+    let mut host = Host::open(&config, Some(support::library_folder())).expect("a match");
+    host.resume(&bytes).expect("the world resumes");
+    let mut surface = Surface::new(
+        MATCH,
+        SEED,
+        support::rules(),
+        FogPolicy::fogged(),
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a match id");
+    surface.attach(host).expect("attached");
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(FIRST_LULL_MS))
+        .expect("a countdown");
+    surface.open_lull().expect("the opening Lull");
+
+    surface
+}
+
+/// The scene of `the_view_built_golden`, in round 2's Push, and seat 0's
+/// token.
+///
+/// The world opens with a finished Resonance Spire beside seat 0's core (its
+/// ring grown) and a Survey post of seat 1's inside seat 0's sphere. Round 1
+/// plays `scenarios/s2/base-kit-at-the-core`: the autocannon is raised, then
+/// the wall filled (a Build beacon raises its structures before it fills a
+/// wall). Round 2 seals the same settings with a mortar added, so the mortar
+/// goes up beside the wall that stands.
+fn built_scene() -> (Surface, Token) {
+    let mut surface = built_world();
+    let token = seat_token(&mut surface, 0);
+    let scenario =
+        fs::read_to_string(workspace_root().join(BASE_KIT)).expect("the scenario playbook");
+    seal_and_push(&mut surface, &token, FIRST_LULL_MS, &scenario);
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(!wall_voxels(&surface).is_empty(), "round 1 filled the wall");
+    assert!(surface.end_recap().expect("the recap ends"));
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(support::LULL_MS))
+        .expect("a countdown");
+    surface.open_lull().expect("round 2's Lull");
+
+    let ground = surface
+        .host()
+        .expect("a match")
+        .world()
+        .voxels()
+        .standing_z(MORTAR_SITE[0], MORTAR_SITE[1]);
+    let cannon =
+        r#"{"blueprint_id": "autocannon", "anchor": {"voxel": {"x": 362, "y": 30, "z": 36}}},"#;
+    let mortar = format!(
+        r#"{{"blueprint_id": "mortar", "anchor": {{"voxel": {{"x": {}, "y": {}, "z": {ground}}}}}, "order": 2}},"#,
+        MORTAR_SITE[0], MORTAR_SITE[1]
+    );
+    let text = scenario.replace(
+        cannon,
+        &format!(
+            "{cannon}
+              {mortar}"
+        ),
+    );
+    assert_ne!(text, scenario, "the scenario names its autocannon");
+    seal_and_push(&mut surface, &token, support::LULL_MS, &text);
+    for _ in 0..1_200 {
+        step(&mut surface, 1);
+        if building(&surface, pharmakos_sim::tables::StructureKind::Mortar) == Some(true) {
+            assert!(!wall_voxels(&surface).is_empty(), "the wall still stands");
+            return (surface, token);
+        }
+    }
+    panic!("the mortar never went up");
+}
+
+/// S3's `probw`, item 8's `view_built`: seat 0's keyframe, one served
+/// `GetViewResponse` per line as `view_keyframe` is, on [`built_scene`]: a
+/// grown ring, a standing Resonance Spire and autocannon, a mortar going up,
+/// an own wall with voxels standing, and a Survey post of seat 1's in seat 0's
+/// live vision. Every field `probw` added, on the scene `prob` and `fixq`
+/// draw from.
+#[test]
+fn the_view_built_golden() {
+    let (mut surface, token) = built_scene();
+    let pages = view_pages(&mut surface, &token, "");
+    let last = pages.last().expect("a page");
+    let entities = array_of(last, "entities");
+    let core = entities
+        .iter()
+        .find(|entity| text_of(entity, "id") == "b_00")
+        .expect("the core");
+    assert_eq!(
+        core.get("sphere_radius_voxels"),
+        Some(&Json::Number(
+            support::rules().grown_sphere_radius_voxels().to_string()
+        )),
+        "the grown ring"
+    );
+    for (subtype, owner, title) in [
+        ("resonance_spire", "seat.0", "Resonance Spire"),
+        ("autocannon", "seat.0", "Autocannon"),
+        ("mortar", "seat.0", "Mortar, going up"),
+        ("wall", "seat.0", "Wall"),
+        ("survey_post", "seat.1", "Survey post"),
+    ] {
+        let entity = find(&entities, subtype, owner)
+            .unwrap_or_else(|| panic!("{owner}'s {subtype} is in the view"));
+        assert_eq!(text_of(entity, "title"), title);
+    }
+    let mut out = String::new();
+    for page in &pages {
+        decodes(page);
+        row(&mut out, &one_line(page));
+    }
+    check("view_built", "keyframe.jsonl", &out);
 }
