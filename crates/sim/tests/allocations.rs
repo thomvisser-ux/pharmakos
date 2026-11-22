@@ -275,6 +275,7 @@ fn a_tick_allocates_nothing() {
     );
 
     crowd_allocates_nothing(&mut runner, &mut enc);
+    near_estimates_allocate_nothing(runner.world_mut());
 }
 
 /// The attacking crowds' half of [`a_tick_allocates_nothing`].
@@ -447,6 +448,87 @@ fn collapse_at(world: &mut World, step: u32) {
     }
 }
 
+/// The served walk "nearest" ranks by, and the estimator's clear queries
+/// (lane `p3fix`), drawn here on near pairs: both price the route the router
+/// serves, built in the scratch's
+/// own buffer, so neither allocates, inside a tick or out of one.
+///
+/// The tick reaches the served walk: the harness playbook's `covering`
+/// resolver ranks "nearest" by it. It does so in the opening ticks, before the
+/// counted windows above (the first decision of each seat), so this half
+/// asserts the zero per call instead, on **the world's own scratch**, the
+/// buffer those ticks use, after checking that they did price walks; near
+/// pairs and far ones both, since the ranker prices either.
+fn near_estimates_allocate_nothing(world: &mut World) {
+    use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate, walk_cost};
+    let in_ticks = world.scratch_mut().walks().expect("the count fits a u64");
+    assert!(
+        in_ticks > 0,
+        "no served walk was priced inside a tick, so nothing here shows the tick ranks by it"
+    );
+    // The graph, copied out before counting so that the world's scratch can
+    // be borrowed beside it; the copy is the only allocation and it is not
+    // counted.
+    let surface = world.surface().clone();
+    let clusters = world.clusters().clone();
+    let speed = Speed::commander(world.rules());
+    // The pairs, drawn before counting: a column every 37 cells along the
+    // diagonal, each paired with the column 20 cells east and 9 north.
+    let [sx, sy, _] = surface.size();
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
+    let mut far: Vec<(u32, u32)> = Vec::new();
+    let mut x = 5;
+    while x + 20 < sx && x + 9 < sy {
+        if let (Some(a), Some(b)) = (surface.node_of(x, x), surface.node_of(x + 20, x + 9))
+            && clusters.touch(a, b) == Ok(true)
+            && clusters.connected(&surface, a, b)
+        {
+            pairs.push((a, b));
+        }
+        if let (Some(a), Some(b)) = (surface.node_of(x, x), surface.node_of(sx - 1 - x, x))
+            && clusters.touch(a, b) == Ok(false)
+            && clusters.connected(&surface, a, b)
+        {
+            far.push((a, b));
+        }
+        x += 37;
+    }
+    assert!(far.len() >= 3, "too few far pairs drawn: {}", far.len());
+    assert!(
+        pairs.len() >= 3,
+        "too few near pairs drawn: {}",
+        pairs.len()
+    );
+    let scratch = world.scratch_mut();
+    scratch.reset_counters();
+    let before = allocations();
+    for (a, b) in &pairs {
+        let found = estimate(&surface, &clusters, scratch, *a, *b, Fog::Clear, speed);
+        assert!(
+            matches!(found, Ok(Some(_))),
+            "a connected near pair has an estimate"
+        );
+    }
+    for (a, b) in pairs.iter().chain(&far) {
+        let walked = walk_cost(&surface, &clusters, scratch, (*a, *b));
+        assert!(walked.is_ok(), "a connected pair has a served walk");
+    }
+    let during = allocations() - before;
+    assert_eq!(
+        during,
+        0,
+        "{} near estimates and {} served walks allocated {during} times; the route they price \
+         is built in the scratch's own buffer so that none does",
+        pairs.len(),
+        pairs.len() + far.len()
+    );
+    assert_eq!(
+        scratch.served_estimates().expect("the count fits a u64"),
+        u64::try_from(pairs.len()).expect("fits"),
+        "every pair drawn was priced at its served walk"
+    );
+}
+
 /// File one `Set` of `material` at `at`, stepping the world to drain the edit
 /// queue when it is full. Outside any counted window.
 fn file_or_flush(world: &mut World, at: [i32; 3], material: pharmakos_sim::voxels::Material) {
@@ -558,4 +640,265 @@ fn a_breach_search_allocates_nothing_at_its_most_work_or_from_a_clone() {
         from_clone, 0,
         "the first search on a cloned scratch allocated {from_clone} times"
     );
+}
+
+/// A near estimate allocates nothing from a fresh world's scratch, on a route
+/// longer than any buffer an opening tick could have grown, and after a near
+/// query the router refuses (lane `p3fix`). The served route is built in the
+/// scratch's own buffer, reserved at `Scratch::for_map` for
+/// `MAX_ROUTE_NODES`, and the buffer is handed back on every path, the
+/// refusal's included: a buffer left behind on the error path would be grown
+/// again by the next query.
+#[test]
+fn a_near_estimate_allocates_nothing_from_a_fresh_scratch_or_after_a_refusal() {
+    use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
+    let rules = RulesTable::load(
+        &std::path::Path::new("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json"),
+    )
+    .expect("the committed rules table loads");
+    let mut world = World::new(&WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: pharmakos_sim::DETERMINISM_SEATS,
+        rules,
+        match_settings: MatchSettings::default(),
+    })
+    .expect("the rules table describes a map and a broadphase grid");
+    // A near pair whose served route is long, and a near pair the router
+    // refuses: a column six east of the long pair's start, walled in by stone
+    // five high, settled.
+    let (a, b) = long_near_pair(&world);
+    let (ax, ay) = world.surface().coord_of(a);
+    let (cx, cy) = (ax + 6, ay);
+    wall_in(&mut world, cx, cy);
+    let surface = world.surface().clone();
+    let clusters = world.clusters().clone();
+    let speed = Speed::commander(world.rules());
+    let (c, d) = (a, surface.node_of(cx, cy).expect("the walled column"));
+    assert!(
+        clusters.touch(c, d) == Ok(true) && !clusters.connected(&surface, c, d),
+        "the walled column is a near pair no walker reaches"
+    );
+    let scratch = world.scratch_mut();
+    let before = allocations();
+    let first = estimate(&surface, &clusters, scratch, a, b, Fog::Clear, speed);
+    let after_first = allocations() - before;
+    assert!(
+        matches!(first, Ok(Some(_))),
+        "the long near pair has an estimate"
+    );
+    assert_eq!(
+        after_first, 0,
+        "a near estimate on a fresh scratch allocated {after_first} times: the served route's \
+         buffer is not reserved for MAX_ROUTE_NODES where the scratch is made"
+    );
+    let before = allocations();
+    let none = estimate(&surface, &clusters, scratch, c, d, Fog::Clear, speed);
+    let again = estimate(&surface, &clusters, scratch, a, b, Fog::Clear, speed);
+    let after_refusal = allocations() - before;
+    assert_eq!(none, Ok(None), "the router refuses the pair");
+    assert_eq!(again, first, "the long pair answers as before");
+    assert_eq!(
+        after_refusal, 0,
+        "a refused near estimate and the next one allocated {after_refusal} times: the served \
+         route's buffer was not handed back on the refusal's path"
+    );
+}
+
+/// A near pair on `world` whose served route is whole and longer than 16
+/// columns.
+fn long_near_pair(world: &World) -> (u32, u32) {
+    use pharmakos_sim::pathing::route::route;
+    let surface = world.surface();
+    let clusters = world.clusters();
+    let [sx, sy, _] = surface.size();
+    let mut buffer = Vec::with_capacity(4096);
+    let mut scratch = pharmakos_sim::pathing::search::Scratch::for_map(surface, clusters.size())
+        .expect("a scratch");
+    for y in (8..sy - 8).step_by(11) {
+        for x in (8..sx - 8).step_by(13) {
+            let Some(a) = surface.node_of(x, y) else {
+                continue;
+            };
+            for (dx, dy) in [(28, 3), (3, 28), (20, 20)] {
+                let Some(b) = surface.node_of(x + dx, y + dy) else {
+                    continue;
+                };
+                if clusters.touch(a, b) == Ok(true)
+                    && clusters.connected(surface, a, b)
+                    && route(surface, clusters, &mut scratch, a, b, &mut buffer)
+                        .is_ok_and(|served| !served.partial())
+                    && buffer.len() > 16
+                {
+                    return (a, b);
+                }
+            }
+        }
+    }
+    panic!("no long near pair on the determinism map");
+}
+
+/// Walls the column `(cx, cy)` in with stone five high on its eight
+/// neighbours, and steps `world` once so the graph settles over it.
+fn wall_in(world: &mut World, cx: i32, cy: i32) {
+    for dy in -1..=1_i32 {
+        for dx in -1..=1_i32 {
+            if (dx, dy) == (0, 0) {
+                continue;
+            }
+            let top = world
+                .voxels()
+                .top_solid_z(cx + dx, cy + dy)
+                .expect("a column");
+            for z in top + 1..=top + 5 {
+                world
+                    .request_voxel_edit(pharmakos_sim::voxels::VoxelEdit::Set {
+                        at: [cx + dx, cy + dy, z],
+                        material: pharmakos_sim::voxels::Material::STONE,
+                        by: None,
+                    })
+                    .expect("the edit is filed");
+            }
+        }
+    }
+    world
+        .step(&mut pharmakos_sim::encoding::Enc::with_capacity(64 * 1024))
+        .expect("the wall settles");
+}
+
+/// A `toward` resolve allocates nothing at its walled worst case (lane
+/// `p3fix`, fix pass 2): the probation seed's second vent ringed by stone
+/// three high at radius 26, its gap facing away from seat 0's core, where
+/// the octile bound once priced every site. Seat 0 holds, then steps
+/// `toward` the vent; the ticks round the step's start are counted, after a
+/// warm-up that pays for everything else a tick grows. The grid optimum's
+/// buffers are the scratch's, each one entry per column, and the site list is
+/// the world's, reserved for every column.
+#[test]
+fn a_toward_tick_behind_a_ring_allocates_nothing() {
+    let rules = RulesTable::load(
+        &std::path::Path::new("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json"),
+    )
+    .expect("the committed rules table loads");
+    let mut world = World::new(&WorldConfig {
+        match_seed: 20,
+        seats: 2,
+        rules: rules.clone(),
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![600_000],
+            round_limit: DEFAULT_ROUND_LIMIT,
+        },
+    })
+    .expect("the rules table describes a map");
+    let vent = [232_i32, 96_i32];
+    ring_round(&mut world, vent, 26);
+    let mut enc = Enc::with_capacity(64 * 1024);
+    for _ in 0..3 {
+        world.step(&mut enc).expect("the ring settles");
+    }
+    let text = concat!(
+        "{\"schema_version\":{\"major\":1},",
+        "\"meta\":{\"title\":\"toward\",\"author_kind\":\"HUMAN\"},",
+        "\"declarative\":{\"route\":[",
+        "{\"label\":\"wait\",\"hold\":{\"ms\":2000}},",
+        "{\"label\":\"stone\",\"place_beacon\":{\"at\":{\"toward\":{\"feature\":{\"feature_id\":\"vent_232_96\"}}}},",
+        "\"timeout_ms\":120000,\"on_fail\":{\"action\":\"SKIP\"}}]},",
+        "\"on_death\":{\"on_respawn\":\"CONTINUE\",\"max_deaths_before_fallback\":3},",
+        "\"fallback\":{\"hold\":{\"at\":{\"safest\":{}}}},",
+        "\"kind\":\"PLAYBOOK\"}"
+    );
+    let playbook: pharmakos_proto::gp::v1::Playbook =
+        pharmakos_proto::json::decode(text).expect("the playbook decodes");
+    let plan = pharmakos_sim::interpreter::Plan::compile(&playbook, &rules).expect("it compiles");
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    runner
+        .seal_playbook(pharmakos_sim::tables::SeatId::new(0), plan)
+        .expect("a Lull takes a seal");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
+    // The hold is 40 ticks: warm up for 30 of them.
+    for _ in 0..30 {
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
+        runner.clear_events();
+        runner.world().encode(&mut enc);
+    }
+    let commander = runner
+        .world()
+        .commander_of(pharmakos_sim::tables::SeatId::new(0))
+        .expect("a commander");
+    let unit = runner
+        .world()
+        .units()
+        .row_of(commander)
+        .expect("a live commander")
+        .raw();
+    assert!(
+        runner.world().router().route(unit).len() < 2,
+        "the commander holds through the warm-up"
+    );
+    let before = allocations();
+    for _ in 0..30 {
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
+        runner.clear_events();
+        runner.world().encode(&mut enc);
+    }
+    let during = allocations() - before;
+    assert!(
+        runner.world().router().route(unit).len() > 1,
+        "the toward step resolved inside the counted ticks: the commander walks to its stone"
+    );
+    assert_eq!(
+        during, 0,
+        "the ticks round a toward resolve behind a ring allocated {during} times"
+    );
+}
+
+/// Stone three high in a ring of `radius` round `vent`, its gap on the side
+/// away from seat 0's core (the cells within about 5.7 degrees of that
+/// direction, compared squared in integers), filed but not yet settled.
+fn ring_round(world: &mut World, vent: [i32; 2], radius: i32) {
+    let core_row = world
+        .beacons()
+        .seats()
+        .iter()
+        .position(|owner| *owner == 0)
+        .expect("seat 0's core");
+    let core = pharmakos_sim::targeting::column_of(
+        *world
+            .beacons()
+            .positions()
+            .get(core_row)
+            .expect("the core's row"),
+    );
+    let away = [vent[0] - core[0], vent[1] - core[1]];
+    let norm = i128::from(away[0]).pow(2) + i128::from(away[1]).pow(2);
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let d2 = dx * dx + dy * dy;
+            if d2 < (radius - 1) * (radius - 1) || d2 > radius * radius {
+                continue;
+            }
+            let dot = i128::from(dx) * i128::from(away[0]) + i128::from(dy) * i128::from(away[1]);
+            if dot > 0 && dot * dot * 1_000_000 > 990_025 * i128::from(d2) * norm {
+                continue;
+            }
+            let (x, y) = (vent[0] + dx, vent[1] + dy);
+            let Some(top) = world.voxels().top_solid_z(x, y) else {
+                continue;
+            };
+            for z in top + 1..=top + 3 {
+                file_or_flush(world, [x, y, z], pharmakos_sim::voxels::Material::STONE);
+            }
+        }
+    }
 }

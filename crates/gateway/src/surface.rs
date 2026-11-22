@@ -1511,7 +1511,6 @@ impl Surface {
     /// frozen snapshot will not encode.
     pub fn open_lull(&mut self) -> Result<(), Error> {
         self.absorb_events()?;
-        self.host_mut()?.refresh_routes()?;
         self.sync_time();
         let round = self.host()?.runner().round();
         // Before anything is verified against this Lull's snapshot: the
@@ -4550,6 +4549,36 @@ mod tests {
             // Reading is open in every phase.
             let response = surface.call(Some(&token), &request("get_status", "{}"), &Blind);
             assert!(response.get("result").is_some(), "{phase:?}");
+        }
+    }
+
+    /// `estimate_route` answers in a Lull only (the owner's answer of
+    /// 2026-11-21, "Refuse in a Push"): a Push, a recap, the lobby and an
+    /// ended match are `PHASE_CLOSED`, for a route of plain voxel legs as for
+    /// any other, and before the waypoints are read (a request with none is
+    /// refused for its phase, not for its shape); the Lull answers.
+    #[test]
+    fn estimate_route_answers_in_a_lull_only() {
+        let mut surface = hosted();
+        let token = seat_token(&mut surface, 0);
+        let route =
+            r#"{"waypoints":[{"voxel":{"x":20,"y":20,"z":0}},{"voxel":{"x":24,"y":20,"z":0}}]}"#;
+        let response = surface.call(Some(&token), &request("estimate_route", route), &Blind);
+        assert!(
+            response.get("result").is_some(),
+            "the Lull answers: {response:?}"
+        );
+        for phase in [Phase::Push, Phase::Recap, Phase::Lobby, Phase::Ended] {
+            let mut time = surface.time();
+            time.phase = phase;
+            surface.set_time(time);
+            // A fresh token a phase, so the rate limit is not what answers.
+            let token = seat_token(&mut surface, 0);
+            for params in [route, "{}"] {
+                let response =
+                    surface.call(Some(&token), &request("estimate_route", params), &Blind);
+                assert_eq!(code(&response), "PHASE_CLOSED", "{phase:?}, {params}");
+            }
         }
     }
 

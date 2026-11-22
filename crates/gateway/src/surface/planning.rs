@@ -513,7 +513,10 @@ impl Surface {
         Ok(Json::Object(entries))
     }
 
-    /// `patch_plan`: apply an RFC 6902 patch, comments and formatting intact.
+    /// `patch_plan`: apply a JSON Patch, comments and formatting intact: RFC
+    /// 6902's six operations read more strictly (a member an operation does
+    /// not have is refused), or an undo this method returned (`add`, `remove`
+    /// and `replace`, each with its `undo` member; `pharmakos_plan_core::patch`).
     ///
     /// Returns the inverse patch as well, which is the editor's undo stack
     /// (spec section 13, "Edits are JSON Patches with inverse-patch undo").
@@ -522,9 +525,12 @@ impl Surface {
     /// already carries.
     pub(super) fn patch_plan(request: &Request) -> Result<Json, Error> {
         let playbook = playbook_param(request)?;
-        let patch = request
-            .string_param("json_patch")?
-            .ok_or_else(|| Error::invalid("`json_patch` is an RFC 6902 patch, as text"))?;
+        let patch = request.string_param("json_patch")?.ok_or_else(|| {
+            Error::invalid(said!(
+                "`json_patch` is a JSON Patch, as text: RFC 6902's operations with no member \
+                     an operation does not have, or an undo `patch_plan` returned"
+            ))
+        })?;
         let (patched, inverse) = pharmakos_plan_core::patch_text(playbook, patch)
             .map_err(|error| Error::invalid(error.shown()))?;
         undo_travels(&patched, &inverse)?;

@@ -12,10 +12,11 @@
 //           running Generator, which it reads as the seat's supply above the
 //           core's 10 kW) and the beacon covering the start vent lands with a
 //           Generator on it; round 2, the stone is placed
-//           `toward` the second vent, `vent_232_96`, at the legal site whose
-//           estimated travel to the vent's anchor is least (the sim's own
-//           search, over clear terrain until S3-05's mask at S4), and the
-//           beacon covering the second vent from it;
+//           `toward` the second vent, `vent_232_96`, at the legal site
+//           closest to the vent's anchor over the terrain (the least cost of
+//           any walk over the walkers' step rule; the sim's own search, over
+//           clear terrain until S3-05's mask at S4), and the beacon covering
+//           the second vent from it;
 //   seat 1  seals nothing, so the gateway files the safe playbook for it.
 {
   "format": "pharmakos.scenario.v1",

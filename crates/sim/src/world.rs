@@ -511,7 +511,8 @@ pub struct World {
     /// that can fire.
     threat_scratch: Vec<([Fx; 3], Sq)>,
     /// Scratch for a `toward` step's candidate sites (S3's `pred`), empty
-    /// between uses and grown to the largest search the match has made.
+    /// between uses and reserved for every column of the map, the most one
+    /// search lists (each site is one column, once).
     stone_scratch: Vec<crate::targeting::StoneCandidate>,
     /// Scratch for the breach search (S2's `atk`), reserved for the whole
     /// graph so a search allocates nothing.
@@ -614,6 +615,12 @@ pub struct World {
     /// How many unit rows the table may ever hold. Derived and not hashed, and
     /// not merely an allocation size — see [`World::unit_limit`].
     unit_limit: u32,
+    /// The most ticks a re-ask at the end of a partial route can cost a
+    /// walker in this world (`pathing::estimate::link_ticks` of
+    /// [`World::unit_limit`] and the repath cap), derived at construction
+    /// and kept by a restore, as `unit_limit` is; read by
+    /// [`World::link_ticks`].
+    link_ticks: u32,
     /// How many unit rows the world was built with: the starting force.
     /// Derived from the match configuration and kept by a
     /// restore, as `unit_limit` is; read by [`World::is_laid_out`].
@@ -1187,6 +1194,14 @@ impl World {
         let unit_count = u32::try_from(unit_count).map_err(|_| too_large("unit", unit_count))?;
         let unit_ceiling =
             u32::try_from(unit_ceiling).map_err(|_| too_large("unit", unit_ceiling))?;
+        // The re-ask's bound in this world (`pathing::estimate::link_ticks`):
+        // the router holds a row per unit, and never more than the ceiling.
+        let link_ticks = crate::pathing::estimate::link_ticks(
+            core::num::NonZeroU32::new(unit_ceiling).ok_or(MapError::Unindexable {
+                units: unit_ceiling,
+            })?,
+            config.rules.repath_cap(),
+        );
 
         // One row per seat, from the generator's per-seat columns, which it
         // fills for every seat (an unplaced one with zeroes): the four walk
@@ -1361,7 +1376,7 @@ impl World {
             fire_order: Vec::with_capacity(armed_rows),
             attackers: Vec::with_capacity(armed_rows),
             threat_scratch: Vec::with_capacity(armed_rows),
-            stone_scratch: Vec::new(),
+            stone_scratch: Vec::with_capacity(crate::math::index::row(breach_nodes)),
             breach_scratch: crate::attack::BreachScratch::new(breach_nodes),
             charge_scratch: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             attack_counts: crate::attack::AttackCounts::default(),
@@ -1404,6 +1419,7 @@ impl World {
             commanders,
             beacon_alive,
             unit_limit: unit_ceiling,
+            link_ticks,
             unit_start: unit_count,
             unit_start_of,
             beacon_start,
@@ -2642,6 +2658,16 @@ impl World {
     #[must_use]
     pub const fn unit_limit(&self) -> u32 {
         self.unit_limit
+    }
+
+    /// The most ticks a walker that reached the end of a partial route can
+    /// lose before it walks the next one in this world, however loaded the
+    /// repath queue ([`crate::pathing::estimate::link_ticks`] of
+    /// [`World::unit_limit`] and the repath cap): what a travel estimate adds
+    /// per partial route so it is never optimistic.
+    #[must_use]
+    pub const fn link_ticks(&self) -> u32 {
+        self.link_ticks
     }
 
     /// Put the structure a Build target names into the ground at one hit point.
@@ -4957,6 +4983,23 @@ impl World {
         self.route_zones = zones;
     }
 
+    /// The zones `seat`'s commander's route is surcharged in: the reach of
+    /// each threat the seat knows, while the step in progress walks at
+    /// `AVOID_KNOWN_THREATS`, and none otherwise: the zones the pathing phase
+    /// serves the commander's route under ([`World::route_span_of`]).
+    fn commander_threat_zones(&self, seat: u8, zones: &mut Vec<crate::pathing::route::Zone>) {
+        if !self.interpreter.avoids_threats(usize::from(seat)) {
+            return;
+        }
+        crate::defend::for_each_known_threat(self, SeatId::new(seat), |known| {
+            let [x, y, _] = known.at;
+            zones.push(crate::pathing::route::Zone::Disc {
+                centre: [x, y, Fx::from_raw(0)],
+                limit: Sq::of_radius(known.weapon.range()),
+            });
+        });
+    }
+
     /// One unit's span of the route zones, appending its seat's threats for
     /// a commander that avoids them.
     fn route_span_of(&self, unit: u32, zones: &mut Vec<crate::pathing::route::Zone>) -> (u32, u32) {
@@ -4974,17 +5017,8 @@ impl World {
         // E7: cannot miss: the zone list is far shorter than `u32::MAX`
         let at = |len: usize| u32::try_from(len).unwrap_or(u32::MAX);
         if kind == UnitKind::Commander.id() {
-            if !self.interpreter.avoids_threats(usize::from(seat)) {
-                return (0, 0);
-            }
             let start = at(zones.len());
-            crate::defend::for_each_known_threat(self, SeatId::new(seat), |known| {
-                let [x, y, _] = known.at;
-                zones.push(crate::pathing::route::Zone::Disc {
-                    centre: [x, y, Fx::from_raw(0)],
-                    limit: Sq::of_radius(known.weapon.range()),
-                });
-            });
+            self.commander_threat_zones(seat, zones);
             return (start, at(zones.len()));
         }
         if kind == UnitKind::Raider.id() && self.attack.row_of(home).is_some() {
@@ -8810,5 +8844,86 @@ mod ids_tests {
             RulesTable::from_message(&message),
             Err(crate::rules::RulesError::OutOfRange { .. })
         ));
+    }
+
+    /// Lane `p3fix`: the step costs' shape the octile bound and the searches'
+    /// admissibility rest on is refused at load, at each edge, naming the
+    /// diagonal's row; a table inside it loads, and validation moves no valid
+    /// table's rules hash.
+    #[test]
+    fn a_step_cost_shape_no_bound_can_price_is_refused_at_load() {
+        let committed = rules();
+        for (cardinal, diagonal, loads) in [
+            (10, 9, false),
+            (10, 10, true),
+            (10, 14, true),
+            (10, 20, true),
+            (10, 21, false),
+        ] {
+            let mut message = committed.message().clone();
+            if let Some(locomotion) = message.locomotion.as_mut() {
+                locomotion.step_cost_cardinal = cardinal;
+                locomotion.step_cost_diagonal = diagonal;
+            }
+            match RulesTable::from_message(&message) {
+                Ok(_) => assert!(loads, "{cardinal} and {diagonal} loaded"),
+                Err(crate::rules::RulesError::OutOfRange { field, .. }) => {
+                    assert!(!loads, "{cardinal} and {diagonal} were refused");
+                    assert_eq!(field, "locomotion.step_cost_diagonal");
+                }
+                Err(other) => panic!("{cardinal} and {diagonal}: {other:?}"),
+            }
+        }
+        let reloaded = RulesTable::from_message(committed.message())
+            .unwrap_or_else(|error| panic!("the committed table: {error:?}"));
+        assert_eq!(reloaded.rules_hash(), committed.rules_hash());
+        assert_eq!(
+            format!("{:016x}", committed.rules_hash()),
+            "1b26c525068bff61",
+            "the committed table's rules hash is the one every golden names"
+        );
+    }
+
+    /// Lane `p3fix`, fix pass 4: the step costs are refused at load past
+    /// what a path's `i32` cost holds, `(diagonal + climb) × (size_x × size_y
+    /// − 1) ≤ i32::MAX`, naming the row; at the bound the table loads, and
+    /// the grid optimum's ring is then at its largest for the map: twice
+    /// 14 563, plus one, is 29 127 buckets on the committed 384-by-384 map. Validation moves
+    /// no valid table's rules hash (the test above).
+    #[test]
+    fn a_step_cost_no_path_cost_can_hold_is_refused_at_load() {
+        let committed = rules();
+        let map = committed.message().map.unwrap_or_default();
+        let steps = u64::from(map.size_x) * u64::from(map.size_y) - 1;
+        let most = u64::from(i32::MAX.unsigned_abs()).div_euclid(steps);
+        assert_eq!(most, 14_563, "the committed map's bound");
+        let diagonal = committed
+            .message()
+            .locomotion
+            .as_ref()
+            .map_or(0, |locomotion| locomotion.step_cost_diagonal);
+        for (climb, loads) in [
+            (u32::try_from(most).unwrap_or(0) - diagonal, true),
+            (u32::try_from(most).unwrap_or(0) - diagonal + 1, false),
+        ] {
+            let mut message = committed.message().clone();
+            if let Some(locomotion) = message.locomotion.as_mut() {
+                locomotion.climb_surcharge = climb;
+            }
+            match RulesTable::from_message(&message) {
+                Ok(table) => {
+                    assert!(loads, "a climb of {climb} loaded");
+                    let surface_steps = table.step_diagonal() + table.climb_surcharge();
+                    let ring = crate::pathing::reach::Reach::new(1, surface_steps)
+                        .unwrap_or_else(|error| panic!("a ring: {error:?}"));
+                    assert_eq!(ring.ring_len(), 29_127, "the ring at the bound");
+                }
+                Err(crate::rules::RulesError::OutOfRange { field, .. }) => {
+                    assert!(!loads, "a climb of {climb} was refused");
+                    assert_eq!(field, "locomotion.climb_surcharge");
+                }
+                Err(other) => panic!("a climb of {climb}: {other:?}"),
+            }
+        }
     }
 }

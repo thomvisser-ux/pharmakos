@@ -4,14 +4,20 @@
 //! The host checks its rules table once, when it starts (S3's `vfyq2`, fix
 //! pass 5, item L8).
 //!
-//! The verifier refuses a rules table whose interface rates let a row run
-//! past the sim's `i32` (`RulesGap::RowPastTheSim`), so under such a table
-//! every `verify_plan` would answer a refusal. A host that opened a match on
-//! one would host a match nobody can plan. So the host reads its table
-//! through the verifier's own rules checks, the same call `Input` makes,
-//! before anything is generated or announced. `gamectl host` (through
-//! `serve::run` and `Host::open_from`), `scenario run` and `seat doctor`
-//! (through `Host::open`) all meet it.
+//! The verifier refuses a rules table it cannot read a rate card from (a
+//! negative rate, a missing block), so under such a table every
+//! `verify_plan` would answer a refusal. A host that opened a match on one
+//! would host a match nobody can plan. So the host reads its table through
+//! the verifier's own rules checks, the same call `Input` makes, before
+//! anything is generated or announced. `gamectl host` (through `serve::run`
+//! and `Host::open_from`), `scenario run` and `seat doctor` (through
+//! `Host::open`) all meet it.
+//!
+//! A table whose interface rates let a row run past the sim's `i32` is never
+//! built: the sim's own loader refuses it (S3's `p3fix`:
+//! `RulesError::RowPastTheSim`), at the bound the verifier's retired
+//! `RulesGap::RowPastTheSim` stated (`the_loader_holds_the_row_bound`), so the
+//! host's load refuses it before the verifier is asked.
 
 #![allow(
     clippy::expect_used,
@@ -25,14 +31,120 @@ use pharmakos_gateway::Code;
 use pharmakos_gateway::host::{Host, Settings};
 use pharmakos_sim::rules::RulesTable;
 
-/// The shipped table with the build-target rate at `i32::MAX`: one row a
-/// playbook within the size budget can write passes the sim's `i32`.
+/// The shipped table with a negative build-target rate: the sim's loader
+/// takes it (its compile refuses every playbook on it, `NegativeRate`), and
+/// the verifier reads no rate card from it.
 fn gapped() -> RulesTable {
     let mut message = support::rules().message().clone();
     if let Some(times) = message.interface_times.as_mut() {
-        times.build_target_ms = i32::MAX;
+        times.build_target_ms = -1;
     }
     RulesTable::from_message(&message).expect("the sim's loader takes it")
+}
+
+/// The shipped table with the rates and budget that put the longest row a
+/// playbook within the budget can write at exactly `i32::MAX` ms, moved by
+/// `past` ms on the switch: 21 647 + 6 000 + 16 777 000 x 128 = 2^31 - 1.
+fn at_the_row_bound(past: i32) -> pharmakos_proto::gp::v1::RulesTable {
+    let mut message = support::rules().message().clone();
+    let times = message.interface_times.as_mut().expect("the shipped rates");
+    times.switch_mandate_ms = 21_647 + past;
+    times.edit_settings_max_ms = 6_000;
+    times.build_target_ms = 16_777_000;
+    message
+        .verifier
+        .as_mut()
+        .expect("the verifier block")
+        .size_budget_units = 128;
+    message
+}
+
+/// The sim's loader holds a table to one bound on the longest row a playbook
+/// within its size budget can write (S3's `p3fix`, from `vfyq2`'s reviews):
+/// its own, derived from `Row::duration_ms`'s sums
+/// (`InterfaceTimes::longest_row_ms`), which is the bound the verifier's
+/// retired `RulesGap::RowPastTheSim` stated, `switch_mandate +
+/// edit_settings_max + build_target x size_budget_units <= i32::MAX`. On a
+/// table at the bound, one below it and one above it, the loader takes, takes
+/// and refuses (`RulesError::RowPastTheSim`, naming the three rates, the
+/// budget and the sum), and the verifier takes the two it is handed; and the
+/// sim's sum, asked of the at-bound table's rates one size unit below, at and
+/// above its budget, agrees with the stated formula each time, at exactly
+/// `i32::MAX` on the budget. So `PlanError::RowTooLong` cannot be reached
+/// from a loaded table by a playbook within its budget; the compile keeps it
+/// for a playbook past the budget, which the compile does not count.
+#[test]
+fn the_loader_holds_the_row_bound() {
+    use pharmakos_sim::interpreter::InterfaceTimes;
+    use pharmakos_sim::rules::RulesError;
+    for past in [-1, 0] {
+        let table = RulesTable::from_message(&at_the_row_bound(past))
+            .unwrap_or_else(|error| panic!("{past} ms past the bound: {error}"));
+        assert!(
+            pharmakos_verifier::read_rules(&table).is_ok(),
+            "{past} ms past the bound: the verifier refuses what the sim loads"
+        );
+    }
+    let above = RulesTable::from_message(&at_the_row_bound(1));
+    assert_eq!(
+        above.as_ref().err(),
+        Some(&RulesError::RowPastTheSim {
+            switch_ms: 21_648,
+            edit_max_ms: 6_000,
+            build_target_ms: 16_777_000,
+            budget: 128,
+        }),
+        "one ms past the bound, the sim's loader refuses the table"
+    );
+    let said = above
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default();
+    for part in [
+        "interface_times.switch_mandate_ms",
+        "21648",
+        "interface_times.edit_settings_max_ms",
+        "6000",
+        "interface_times.build_target_ms",
+        "16777000",
+        "128",
+        "2147483648",
+    ] {
+        assert!(said.contains(part), "the refusal names {part}: {said}");
+    }
+
+    let at = RulesTable::from_message(&at_the_row_bound(0)).expect("the bound loads");
+    let sim = InterfaceTimes::from_rules(&at).expect("the rate card");
+    for budget in [127_u32, 128, 129] {
+        let stated = 21_647_i128 + 6_000 + 16_777_000 * i128::from(budget);
+        assert_eq!(
+            sim.longest_row_ms(budget).is_ok(),
+            stated <= i128::from(i32::MAX),
+            "budget {budget}: the sim's bound and the stated one disagree ({stated} ms)"
+        );
+    }
+    assert_eq!(sim.longest_row_ms(128), Ok(i32::MAX), "the bound is exact");
+}
+
+/// A table past the row bound hosts no match: the host's own load of it
+/// refuses, before the verifier is asked, naming the rates.
+#[test]
+fn a_rules_table_past_the_row_bound_hosts_no_match() {
+    let settings = Settings {
+        segment_lengths_ms: vec![3_000],
+        round_limit: 3,
+    };
+    let json = pharmakos_proto::json::encode(&at_the_row_bound(1)).expect("the table encodes");
+    let Err(refused) = Host::open_from(&json, support::SEED, 2, &settings, None) else {
+        panic!("the host refuses the table");
+    };
+    assert!(
+        refused
+            .message()
+            .contains("interface_times.build_target_ms"),
+        "the refusal names the row: {}",
+        refused.message()
+    );
 }
 
 #[test]

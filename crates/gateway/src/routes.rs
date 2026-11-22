@@ -15,22 +15,41 @@
 //! > speed and implements it lives in the gateway, T13's, **because plan-core
 //! > has no world**.
 //!
-//! # It owns its search structures, and that is the point
+//! # One graph, the hosted world's
 //!
-//! [`RouteAdapter`] builds its **own** [`Surface`], [`Clusters`] and
-//! [`Scratch`] from the world's voxel store, and never borrows the runner's.
-//! That costs a second copy of the abstract graph (item 100 (3) accepted the
-//! 14 MB at cluster 32), and it buys the one property this crate has to be
-//! able to state plainly: **`estimate_route` cannot reach the sim's stepping
-//! API, because it never has a `World` in its hand at all** (AGENTS.md section
-//! 3 rule 2, "no dry runs"). A structural answer rather than a rule somebody
-//! has to keep remembering.
+//! [`RouteAdapter`] borrows the hosted world's own [`Surface`] and
+//! [`Clusters`] ([`RouteAdapter::over`]) and holds a [`Scratch`] of its own
+//! for its searches. It used to build a second copy of the graph from the
+//! voxel store and rebuild it at every Lull; that copy is gone (S3's `p3fix`,
+//! the gateway step), for three reasons:
 //!
-//! The structures are rebuilt from the world when the host says the terrain
-//! moved ([`RouteAdapter::refresh`]), which at the skeleton is once per segment
-//! boundary. Nothing here is a cache of *estimates*: item 61 says there is no
-//! estimate, route or per-unit path cache, and there is none. What is held is
-//! the graph the query runs over, which is the estimator's input.
+//! * **One measure.** `estimate_route` prices a leg at the walk the router
+//!   serves ([`pharmakos_sim::pathing::estimate()`], which for a clear query is
+//!   [`pharmakos_sim::pathing::estimate::walk_cost`]'s walk), and so do
+//!   `get_map_summary`'s `travel_ms` and `resolve_refs`' candidates, through
+//!   the sim's [`pharmakos_sim::targeting::Ranker`], over the world's graph
+//!   ([`crate::targeting`]). Over one graph the four readers -- a chip, a
+//!   binding, a route and the Push -- agree by construction, not because a
+//!   rebuild was remembered: `crates/gateway/tests/targeting.rs`'s
+//!   `every_lull_reads_and_plays_on_as_its_save_does` holds them equal at
+//!   every Lull of a three-round match, live and resumed.
+//! * **The graph is already settled.** The sim settles its graph in the
+//!   phase that edits the terrain (lane `settle`), and nothing steps the
+//!   world in a Lull, so the world's graph *is* the terrain a Lull plans on.
+//!   A copy could only be that graph or a stale one.
+//! * **What the copy bought holds without it.** The copy's case was that
+//!   `estimate_route` should never hold a `World`, so it cannot reach the
+//!   sim's stepping API (AGENTS.md section 3 rule 2, "no dry runs"). The
+//!   adapter holds a [`Surface`] and a [`Clusters`] by shared reference and
+//!   no `World`: a surface answers "is this step legal and what does it
+//!   cost", the clusters "is there a route at all", and neither can step
+//!   anything. The structural answer stands, without 14 MB of second graph
+//!   (item 100 (3)) and a rebuild per Lull.
+//!
+//! Nothing here is a cache of *estimates*: item 61 says there is no estimate,
+//! route or per-unit path cache, and there is none. The scratch is made at the
+//! adapter's first query and dropped with it, as [`crate::targeting`]'s is
+//! for a read.
 //!
 //! # Fog
 //!
@@ -42,64 +61,65 @@
 //! The sim does compute per-seat vision, through its one sensor interface
 //! (S2's plan, E10), but it keeps no record of which **columns** a seat has
 //! seen: the knowledge store holds sightings of assets, not explored terrain,
-//! and the terrain mask is S3's, with the knowledge store (the view feed's
-//! own marker says the same). So there is no mask to hand the estimator yet,
-//! and every query runs [`Fog::Clear`]: a route is priced over the ground as
-//! it stands, voxel edits a seat has not seen included -- accepted until S3's
-//! mask (the main session's ruling R4 on the reviews of #128). That is stated
-//! rather than hidden: [`RouteAdapter::set_unknown_columns`] is where a mask
-//! arrives when one exists, `is_fogged` answers `false` without a search while
-//! the mask is empty, and the editor therefore draws no dashed leg yet. A mask
-//! of "the seat has seen nothing" would be the opposite mistake -- every leg a
-//! bound, every route priced at 3/2, and an editor full of caveats the world
-//! does not justify.
+//! and the terrain mask is the knowledge store's (the view feed's own marker
+//! says the same). So there is no mask to hand the estimator yet, and every
+//! query runs [`Fog::Clear`]: a route is priced over the ground as it stands,
+//! voxel edits a seat has not seen included -- accepted until the mask (the
+//! main session's ruling R4 on the reviews of #128). That is stated rather
+//! than hidden: [`RouteAdapter::with_unknown_columns`] is where a mask arrives
+//! when one exists, `is_fogged` answers `false` without a search while there
+//! is none, and the editor therefore draws no dashed leg yet. A mask of "the
+//! seat has seen nothing" would be the opposite mistake -- every leg a bound,
+//! every route priced at 3/2, and an editor full of caveats the world does not
+//! justify.
 //!
 //! # A fault is raised, not read as "no route"
 //!
 //! plan-core's [`TravelEstimator`] answers `Option`: `None` is the
 //! connectivity oracle's "no route", a normal answer. A fault in the query
-//! itself -- the scratch already borrowed, a negative tick count from the sim
-//! -- is not "no route", and the trait has no way to say so; changing it is
-//! plan-core's (carried). So the adapter keeps the first fault it meets
-//! ([`RouteAdapter::take_fault`]) and its caller raises it as a typed error
-//! after the call, rather than drawing an unreachable leg over a bug.
+//! itself -- no scratch for the map, the scratch already borrowed, a walk the
+//! sim could not price ([`pharmakos_sim::pathing::estimate::EstimateError`]),
+//! a negative tick count -- is not "no route", and the trait has no way to say
+//! so; changing it is plan-core's (carried). So the adapter keeps the first
+//! fault it meets ([`RouteAdapter::take_fault`]) and its caller raises it as a
+//! typed error after the call, rather than drawing an unreachable leg over a
+//! bug.
 
 use pharmakos_proto::said;
 use std::cell::{Cell, RefCell};
 
 use pharmakos_plan_core::travel::{Estimate, TravelEstimator};
 use pharmakos_proto::gp::v1::Voxel;
-use pharmakos_sim::pathing::surface::StepCosts;
 use pharmakos_sim::pathing::{Clusters, Fog, Node, Scratch, Speed, Surface, estimate};
-use pharmakos_sim::rules::RulesTable;
-use pharmakos_sim::voxels::VoxelStore;
+use pharmakos_sim::world::World;
 
 use crate::error::Error;
 
-/// The sim's travel estimator, with its graph, its scratch and its speed bound.
+/// The sim's travel estimator over the hosted world's graph, with a scratch of
+/// its own and the commander's speed.
 ///
 /// `Debug` by hand: [`Scratch`] is a dense arena and printing it would be
 /// megabytes of nothing (`missing_debug_implementations` is denied
 /// workspace-wide, so the impl has to exist).
-pub struct RouteAdapter {
-    surface: Surface,
-    clusters: Clusters,
+pub struct RouteAdapter<'a> {
+    surface: &'a Surface,
+    clusters: &'a Clusters,
     /// `RefCell` because [`TravelEstimator::estimate`] takes `&self` and the
-    /// search needs `&mut Scratch`. Single-threaded, never held across a call,
-    /// and `borrow_mut` failing would be a bug in this file rather than a
-    /// state a caller can reach.
-    scratch: RefCell<Scratch>,
+    /// search needs `&mut Scratch`; `Option` because the scratch is made at
+    /// the first query ([`RouteAdapter::query`]), so that building an adapter
+    /// cannot fail. Single-threaded, never held across a call.
+    scratch: RefCell<Option<Scratch>>,
     speed: Speed,
     cluster_voxels: i32,
     /// One entry per column, `true` where the asking seat has never seen it.
     /// Empty means [`Fog::Clear`] -- see the module docs.
-    unknown: Vec<bool>,
+    unknown: &'a [bool],
     /// The first fault a query met since the last [`RouteAdapter::take_fault`]
     /// (the module docs, "A fault is raised").
     fault: Cell<Option<Error>>,
 }
 
-impl std::fmt::Debug for RouteAdapter {
+impl std::fmt::Debug for RouteAdapter<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("RouteAdapter")
@@ -108,75 +128,36 @@ impl std::fmt::Debug for RouteAdapter {
             .field("speed", &self.speed)
             .field(
                 "fogged_columns",
-                &self.unknown.iter().fold(0_usize, |sum, hidden| {
-                    if *hidden { sum.saturating_add(1) } else { sum }
-                }),
+                &self.unknown.iter().filter(|hidden| **hidden).count(),
             )
-            // The three search structures are dense arenas: printing one would
-            // be megabytes of nothing.
+            // The scratch is a dense arena: printing it would be megabytes of
+            // nothing.
             .finish_non_exhaustive()
     }
 }
 
-impl RouteAdapter {
-    /// Build the adapter's own graph over a world's voxel store.
+impl<'a> RouteAdapter<'a> {
+    /// The estimator over `world`'s own graph, at the commander's speed, under
+    /// no fog mask (the module docs, "Fog").
     ///
     /// `speed` is the walker the editor renders a route at, which is the
-    /// commander until a playbook names another (item 57).
-    ///
-    /// # Errors
-    ///
-    /// [`crate::error::Code::Internal`] when the store or the rules table will
-    /// not produce a graph -- a map with no walkable column, or a cluster edge
-    /// the extent cannot be divided by. Neither is something a caller did.
-    pub fn new(voxels: &VoxelStore, rules: &RulesTable) -> Result<RouteAdapter, Error> {
-        let cluster_voxels = rules.hpa_cluster_voxels();
-        let surface = Surface::new(voxels, StepCosts::from_rules(rules)).ok_or_else(|| {
-            Error::internal("this map has no walkable surface to estimate a route over")
-        })?;
-        // The sim's own builder, so the adapter's decomposition is the world's
-        // and its scratch is checked against it, as the world's is.
-        let (clusters, scratch) =
-            pharmakos_sim::pathing::graph_for(&surface, rules.cluster_shape()).ok_or_else(
-                || {
-                    Error::internal(
-                        "this map and cluster edge do not decompose into clusters and a search \
-                     scratch sized for them",
-                    )
-                },
-            )?;
-        Ok(RouteAdapter {
-            surface,
-            clusters,
-            scratch: RefCell::new(scratch),
-            speed: Speed::commander(rules),
-            cluster_voxels,
-            unknown: Vec::new(),
+    /// commander until a playbook names another (item 57). The adapter keeps
+    /// the world's surface and clusters and none of the rest of it.
+    #[must_use]
+    pub fn over(world: &'a World) -> RouteAdapter<'a> {
+        RouteAdapter {
+            surface: world.surface(),
+            clusters: world.clusters(),
+            scratch: RefCell::new(None),
+            speed: Speed::commander_of(world),
+            cluster_voxels: world.rules().hpa_cluster_voxels(),
+            unknown: &[],
             fault: Cell::new(None),
-        })
+        }
     }
 
-    /// Rebuild the graph, because the terrain moved.
-    ///
-    /// The whole graph rather than the dirtied clusters: the sim's own eager
-    /// repair (item 60) runs inside the tick on the world's copy, and this
-    /// copy is read once per Lull, so a rebuild at the segment boundary is
-    /// both simpler and impossible to get subtly wrong. A Push that craters
-    /// half the map costs one rebuild here, off the tick.
-    ///
-    /// # Errors
-    ///
-    /// As [`RouteAdapter::new`].
-    pub fn refresh(&mut self, voxels: &VoxelStore, rules: &RulesTable) -> Result<(), Error> {
-        let rebuilt = RouteAdapter::new(voxels, rules)?;
-        let unknown = std::mem::take(&mut self.unknown);
-        *self = rebuilt;
-        self.unknown = unknown;
-        Ok(())
-    }
-
-    /// Hand the adapter the asking seat's fog mask: one entry per column,
-    /// `true` where that seat has never seen it.
+    /// The same estimator under the asking seat's fog mask: one entry per
+    /// column, `true` where that seat has never seen it.
     ///
     /// An empty slice is [`Fog::Clear`]. A slice of the wrong length is
     /// refused rather than padded, because a short mask would silently price
@@ -186,9 +167,11 @@ impl RouteAdapter {
     ///
     /// [`crate::error::Code::Internal`] when the mask is neither empty nor one
     /// entry per column.
-    pub fn set_unknown_columns(&mut self, unknown: &[bool]) -> Result<(), Error> {
+    pub fn with_unknown_columns(self, unknown: &'a [bool]) -> Result<RouteAdapter<'a>, Error> {
         let nodes = usize::try_from(self.surface.node_count()).map_err(|_| {
-            Error::internal("this map has more columns than this host's usize counts")
+            Error::internal(said!(
+                "this map has more columns than this host's usize counts"
+            ))
         })?;
         if !unknown.is_empty() && unknown.len() != nodes {
             return Err(Error::internal(said!(
@@ -197,8 +180,7 @@ impl RouteAdapter {
                 unknown.len()
             )));
         }
-        self.unknown = unknown.to_vec();
-        Ok(())
+        Ok(RouteAdapter { unknown, ..self })
     }
 
     /// How many columns the graph has. For a host sizing a fog mask.
@@ -223,7 +205,7 @@ impl RouteAdapter {
         if self.unknown.is_empty() {
             Fog::Clear
         } else {
-            Fog::Unknown(&self.unknown)
+            Fog::Unknown(self.unknown)
         }
     }
 
@@ -251,30 +233,49 @@ impl RouteAdapter {
     }
 
     /// One query, straight through to item 61's function. A voxel off the map
-    /// has no route, which is an answer; a scratch already borrowed is a fault
+    /// has no route, which is an answer; no scratch for the map, a scratch
+    /// already borrowed and a walk the sim could not price are faults
     /// ([`RouteAdapter::take_fault`]).
     fn query(&self, start: Voxel, goal: Voxel) -> Option<pharmakos_sim::pathing::Estimate> {
         let start = self.node_of(start)?;
         let goal = self.node_of(goal)?;
-        let Ok(mut scratch) = self.scratch.try_borrow_mut() else {
-            self.fault(Error::internal(
-                "a route query found its search scratch already in use",
-            ));
+        let Ok(mut held) = self.scratch.try_borrow_mut() else {
+            self.fault(Error::internal(said!(
+                "a route query found its search scratch already in use"
+            )));
             return None;
         };
-        estimate(
-            &self.surface,
-            &self.clusters,
-            &mut scratch,
+        if held.is_none() {
+            *held = Scratch::for_map(self.surface, self.cluster_voxels);
+        }
+        let Some(scratch) = held.as_mut() else {
+            self.fault(Error::internal(said!(
+                "this map and cluster edge do not size a search scratch"
+            )));
+            return None;
+        };
+        match estimate(
+            self.surface,
+            self.clusters,
+            scratch,
             start,
             goal,
             self.fog(),
             self.speed,
-        )
+        ) {
+            Ok(found) => found,
+            Err(error) => {
+                self.fault(Error::internal(said!(
+                    "the sim priced no walk for a route's leg: {}",
+                    crate::error::engine(&error)
+                )));
+                None
+            }
+        }
     }
 }
 
-impl TravelEstimator for RouteAdapter {
+impl TravelEstimator for RouteAdapter<'_> {
     fn estimate(&self, start: Voxel, goal: Voxel) -> Option<Estimate> {
         let found = self.query(start, goal)?;
         // The sim counts ticks as `i32` and plan-core as `u32`; the estimator
@@ -336,7 +337,7 @@ mod tests {
     #[test]
     fn a_route_over_the_generated_map_is_estimated_and_is_not_fogged() {
         let world = world();
-        let adapter = RouteAdapter::new(world.voxels(), world.rules()).expect("a graph");
+        let adapter = RouteAdapter::over(&world);
         assert!(adapter.columns() > 0);
         assert_eq!(adapter.cluster_voxels(), world.rules().hpa_cluster_voxels());
 
@@ -381,29 +382,39 @@ mod tests {
             !adapter.is_fogged(start, goal),
             "no vision, no mask, no dashed leg"
         );
+        assert!(adapter.take_fault().is_ok(), "no query faulted");
     }
 
     #[test]
     fn a_voxel_off_the_map_has_no_route_rather_than_a_panic() {
         let world = world();
-        let adapter = RouteAdapter::new(world.voxels(), world.rules()).expect("a graph");
+        let adapter = RouteAdapter::over(&world);
         let off = Voxel { x: -1, y: -1, z: 0 };
         let on = Voxel { x: 0, y: 0, z: 0 };
         assert_eq!(adapter.estimate(off, on), None);
         assert_eq!(adapter.estimate(on, off), None);
         assert!(!adapter.is_fogged(off, on));
+        assert!(adapter.take_fault().is_ok(), "off the map is an answer");
     }
 
     #[test]
     fn a_fog_mask_of_the_wrong_length_is_refused_rather_than_padded() {
         let world = world();
-        let mut adapter = RouteAdapter::new(world.voxels(), world.rules()).expect("a graph");
-        assert!(adapter.set_unknown_columns(&[]).is_ok(), "empty is Clear");
         assert!(
-            adapter.set_unknown_columns(&[true, false]).is_err(),
+            RouteAdapter::over(&world).with_unknown_columns(&[]).is_ok(),
+            "empty is Clear"
+        );
+        assert!(
+            RouteAdapter::over(&world)
+                .with_unknown_columns(&[true, false])
+                .is_err(),
             "a short mask would price the tail of the map as seen"
         );
-        let all = vec![false; usize::try_from(adapter.columns()).expect("fits")];
-        assert!(adapter.set_unknown_columns(&all).is_ok());
+        let all = vec![false; usize::try_from(RouteAdapter::over(&world).columns()).expect("fits")];
+        assert!(
+            RouteAdapter::over(&world)
+                .with_unknown_columns(&all)
+                .is_ok()
+        );
     }
 }

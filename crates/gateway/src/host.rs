@@ -182,18 +182,16 @@ pub struct Settings {
     pub round_limit: u32,
 }
 
-/// The match, its search graph and the folder the templates are read from.
+/// The match and the folder the templates are read from.
 #[derive(Debug)]
 pub struct Host {
     runner: Runner,
-    routes: RouteAdapter,
     library: Option<PathBuf>,
     safe_playbook: String,
 }
 
 impl Host {
-    /// Open a match: check what the lobby chose, build the world, and build the
-    /// estimator's own graph over it.
+    /// Open a match: check what the lobby chose and build the world.
     ///
     /// # Errors
     ///
@@ -201,8 +199,7 @@ impl Host {
     /// [`Host::check_seats`] refuses, a lobby setting
     /// [`Host::check_settings`] refuses and a rules table the verifier refuses
     /// ([`pharmakos_verifier::read_rules`]), and [`crate::error::Code::Internal`]
-    /// when the map generator or the search graph will not build, or the
-    /// match will not open on the generated world (the snapshot's door,
+    /// when the map generator will not build, or the match will not open on the generated world (the snapshot's door,
     /// [`Runner::new`]) — none is something a caller did.
     pub fn open(config: &WorldConfig, library: Option<PathBuf>) -> Result<Host, Error> {
         Host::check_seats(config.seats)?;
@@ -214,7 +211,6 @@ impl Host {
                 crate::error::engine(&error)
             ))
         })?;
-        let routes = RouteAdapter::new(world.voxels(), world.rules())?;
         let runner = Runner::new(world).map_err(|error| {
             Error::internal(said!(
                 "this match could not be opened on its world: {}",
@@ -223,7 +219,6 @@ impl Host {
         })?;
         Ok(Host {
             runner,
-            routes,
             library,
             safe_playbook: String::from(SAFE_PLAYBOOK),
         })
@@ -395,10 +390,11 @@ impl Host {
         self.runner.world().rules()
     }
 
-    /// The travel estimator's adapter (item 100 (1)).
+    /// The travel estimator's adapter (item 100 (1)), over the hosted world's
+    /// own graph ([`RouteAdapter::over`]; `crate::routes`, "One graph").
     #[must_use]
-    pub const fn routes(&self) -> &RouteAdapter {
-        &self.routes
+    pub fn routes(&self) -> RouteAdapter<'_> {
+        RouteAdapter::over(self.runner.world())
     }
 
     /// The template folder, when the host was given one.
@@ -426,20 +422,6 @@ impl Host {
     /// decisions-log item 111), per seat and per round.
     pub fn set_safe_playbook(&mut self, playbook_jsonc: &str) {
         playbook_jsonc.clone_into(&mut self.safe_playbook);
-    }
-
-    /// Rebuild the estimator's graph from the world, because a Push moved the
-    /// terrain.
-    ///
-    /// # Errors
-    ///
-    /// As [`RouteAdapter::refresh`].
-    pub fn refresh_routes(&mut self) -> Result<(), Error> {
-        let (voxels, rules) = {
-            let world = self.runner.world();
-            (world.voxels().clone(), world.rules().clone())
-        };
-        self.routes.refresh(&voxels, &rules)
     }
 
     /// Seal each seat's compiled plan into the match, in the order given.
@@ -806,7 +788,7 @@ impl Host {
         // A resumed match's feed starts empty (the wave-6 notes, A2): the
         // restore's own events are the host's business, not a seat's.
         self.runner.clear_events();
-        self.refresh_routes()
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -1186,7 +1168,6 @@ mod tests {
         assert!(host.end_recap().expect("the host answers"));
         assert_eq!(host.runner().phase(), MatchPhase::Lull);
         assert_eq!(host.runner().round(), 2);
-        host.refresh_routes().expect("the graph rebuilds");
     }
 }
 

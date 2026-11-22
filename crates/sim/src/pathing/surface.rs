@@ -59,7 +59,7 @@ pub const DEFAULT_ORDER: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 /// (item 59; S2's plan, E26).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct StepCosts {
-    cardinal: i32,
+    cardinal: core::num::NonZeroI32,
     diagonal: i32,
     climb: i32,
     headroom: i32,
@@ -69,7 +69,12 @@ impl StepCosts {
     /// Take the four rows the surface reads: the three step costs and the
     /// headroom a walker needs above its column.
     #[must_use]
-    pub const fn new(cardinal: i32, diagonal: i32, climb: i32, headroom: i32) -> StepCosts {
+    pub const fn new(
+        cardinal: core::num::NonZeroI32,
+        diagonal: i32,
+        climb: i32,
+        headroom: i32,
+    ) -> StepCosts {
         StepCosts {
             cardinal,
             diagonal,
@@ -82,7 +87,7 @@ impl StepCosts {
     #[must_use]
     pub const fn from_rules(rules: &crate::rules::RulesTable) -> StepCosts {
         StepCosts::new(
-            rules.step_cardinal(),
+            rules.step_cardinal_nonzero(),
             rules.step_diagonal(),
             rules.climb_surcharge(),
             rules.headroom_voxels(),
@@ -99,6 +104,12 @@ impl StepCosts {
     /// Cost of a cardinal step on level ground.
     #[must_use]
     pub const fn cardinal(self) -> i32 {
+        self.cardinal.get()
+    }
+
+    /// The cheapest step, a cardinal one, never zero by type.
+    #[must_use]
+    pub const fn cheapest(self) -> core::num::NonZeroI32 {
         self.cardinal
     }
 
@@ -134,7 +145,7 @@ impl StepCosts {
         let (lo, hi) = if ax < ay { (ax, ay) } else { (ay, ax) };
         self.diagonal
             .saturating_mul(lo)
-            .saturating_add(self.cardinal.saturating_mul(hi.saturating_sub(lo)))
+            .saturating_add(self.cardinal.get().saturating_mul(hi.saturating_sub(lo)))
     }
 }
 

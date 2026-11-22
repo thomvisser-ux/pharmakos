@@ -10,8 +10,9 @@
 //! 1.84 ms, the estimate p99 0.82 ms and the error p90 2.6 %, the only size
 //! that passes all three. A cluster equals a chunk, so a crater's dirty chunk
 //! list *is* its dirty cluster list with no translation. One abstract level,
-//! because endpoint insertion was 91 % of a median query's expansions and is
-//! cluster-local by construction, so a second level could save at most 9 %.
+//! because endpoint insertion was 91 % of a median query's expansions in the
+//! spike (nearly all of it on the sim's own map, [`crate::pathing::estimate`])
+//! and is cluster-local by construction, so a second level could save little.
 //!
 //! # Runs are defined so that they are internally connected
 //!
@@ -43,24 +44,31 @@
 //! its transition node on each side — so the chain of unions exists.) The
 //! lookup is two array reads and a comparison.
 //!
-//! # No corner entrance, recorded and deliberately not built
+//! # No corner entrance, measured and not built
 //!
 //! Entrances are scanned on vertical and horizontal borders only, so a legal
 //! diagonal step across a cluster *corner* carries no abstract edge.
 //! Connectivity is unaffected — [`Surface::neighbour`]'s companion rule makes a
-//! diagonal legal only where both cardinal crossings are legal too — but the
-//! **estimate** pays: a corner costs it two cardinal crossings where the walker,
-//! after smoothing, cuts it for one diagonal. That is most of the ≤32-cell
-//! band's error, and G2 carried the fix to S3 rather than building it
-//! (skeleton plan §2.1).
+//! diagonal legal only where both cardinal crossings are legal too — and the
+//! abstract cost pays two cardinal crossings where the walker, after smoothing,
+//! cuts the corner for one diagonal.
 //!
-//! PLACEHOLDER: the corner entrance, unbuilt — owner, at S3.
+//! Spike G2 expected that to be most of the short routes' error. Lane
+//! `p3fix` measured it on the sim's map (1 080 commanders walked over three
+//! seeds, S3's P3 gate): a cluster corner carried under 1 % of the estimate's
+//! excess on every band of 32 cells and under (12 % on the 32-to-64 band), and
+//! a single border crossing whose transition lies off the straight line carried
+//! 90 % to 99 % of it. The corner entrance would have changed the abstract
+//! graph, and so every served route, for under 1 % of the error. What fixed
+//! the error is pricing a clear query at the walk the router serves, near or
+//! far ([`crate::pathing::estimate`]): the walker's smoothed route already
+//! cuts the corner, so the corner costs the estimate nothing.
 //!
-//! Four extra transitions a cluster, where the diagonal across the corner is
-//! legal, repairable from the same dirty set because a corner's legality
-//! depends only on the four columns around it. It is recorded here and
-//! deliberately not built, so that S3 inherits the fix rather than
-//! rediscovering it.
+//! What the corner entrance would be, should a later measurement want it: four
+//! extra transitions a cluster, where the diagonal across the corner is legal,
+//! repairable from the same dirty set because a corner's legality depends only
+//! on the four columns around it. It changes the abstract graph, so it moves
+//! every route the router serves and every chain that walks one.
 //!
 //! # Every buffer is sized at construction, at a bound rather than a guess
 //!
@@ -234,6 +242,10 @@ pub struct Clusters {
     stack: Vec<Node>,
     gather: Vec<Node>,
 }
+
+/// A column that is not one of the graph's ([`Clusters::touch`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OffGraph(pub Node);
 
 impl Clusters {
     /// Build the decomposition over `surface` at a cluster edge of `size`.
@@ -440,6 +452,31 @@ impl Clusters {
             .and_then(|index| self.of_node.get(index).copied())
             // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             .unwrap_or(0)
+    }
+
+    /// Whether the clusters of `a` and `b` touch: the same cluster, or two
+    /// that share a border or a corner (at most one cluster apart on each
+    /// axis): two columns at most one cluster edge apart on both axes always
+    /// pass it. The estimator reads only its refusal, a column off the graph
+    /// ([`crate::pathing::estimate`]); since lane `p3fix` prices every clear
+    /// query at the served walk, it no longer splits near pairs from far, and
+    /// the tests draw near pairs by it.
+    ///
+    /// # Errors
+    ///
+    /// [`OffGraph`] when either column is not one of the graph's: neither
+    /// near nor far, since no search can start or end there.
+    pub fn touch(&self, a: Node, b: Node) -> Result<bool, OffGraph> {
+        let tag = |node: Node| {
+            usize::try_from(node)
+                .ok()
+                .and_then(|index| self.of_node.get(index).copied())
+                .ok_or(OffGraph(node))
+        };
+        let (ta, tb) = (tag(a)?, tag(b)?);
+        let (ax, ay) = self.cluster_coord(usize::from(ta));
+        let (bx, by) = self.cluster_coord(usize::from(tb));
+        Ok(ax.abs_diff(bx) <= 1 && ay.abs_diff(by) <= 1)
     }
 
     /// The per-column cluster map, for a bounded search.

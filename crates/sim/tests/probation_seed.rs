@@ -2,14 +2,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Probation's own map seed (S3's plan, decision 13; decisions-log item 154
-//! (1)): the deterministic search, its criterion, and the answer it pins.
+//! (1)): the criterion a seed must pass, the seed the preset plays, and the
+//! seeds that pass.
 //!
 //! Spec §8's licence asks for Generators on two vents, and on every seed the
 //! plan's section 1.1 read the next vent lay beyond a three-round match. So the
-//! Probation preset plays a seed of its own, the first of a search for a
-//! two-seat map whose second vent lies within three stepping stones of seat
-//! 0's core; `gwp` writes it into the lobby's line, and the golden seed stays
-//! every other test's fixture.
+//! Probation preset plays a seed of its own, a two-seat map whose second vent
+//! lies within three stepping stones of seat 0's core; `gwp` writes it into
+//! the lobby's line, and the golden seed stays every other test's fixture.
+//!
+//! # The seed
+//!
+//! The owner's answer (decisions-log item 154 (1)) is the method: a map seed
+//! of its own, found by `sim3a`'s deterministic search over this file's
+//! criterion. The number 20 is that search's finding when it was run, as
+//! decisions-log item 156 (1) records it, and the preset plays 20. Under the
+//! stone's corrected measure (clause 3, lane `p3fix`) the criterion is also
+//! met by 13, an earlier seed: the passing seeds from 0 through 20 are 13 and
+//! 20 (`the_passing_seeds_through_twenty_are_thirteen_and_twenty`). The
+//! owner answered whether the preset moves to 13: "Keep 20" (decisions-log
+//! item 168 (4)). The preset plays 20; that 13 passes is recorded here and
+//! built nowhere.
 //!
 //! # The criterion
 //!
@@ -27,25 +40,28 @@
 //!    seat that expands, not given").
 //! 3. **At most [`MOST_PLACEMENTS`] beacons reach it.** Each stone is the sim's
 //!    own `toward` (S3's plan, E23): the legal site inside the seat's spheres
-//!    nearest the vent by the item-61 estimator, ties to the lowest `(y, x)`.
+//!    closest to the vent over the terrain, the least cost of any walk over
+//!    the walkers' step rule (the grid optimum; `targeting`'s "Two
+//!    measures": nobody walks from the stone to the vent when it is chosen),
+//!    ties to the lowest `(y, x)`.
 //!    Its terrain is the live world's, unfogged, until S3-05's mask at S4
 //!    (decisions-log item 156 (3)). The placement that covers the vent is the sim's own
 //!    [`covering_site`], and it counts: "three stepping stones" is three
 //!    beacons, the third of them covering the vent. A beacon stands inside
 //!    another's 24-voxel sphere and covers 24 more, so three reach 96 voxels at
 //!    best, on flat ground.
-//! 4. **The walk fits round 1.** The commander's estimated walk from its start
-//!    through every placement is at most the ladder's first Push, so the chain
-//!    asks an expanding seat for no more time than it has.
-//!
-//! The answer is the first seed, counting up from zero, that passes.
+//! 4. **The walk fits round 1.** The commander's walk from its start through
+//!    every placement, each leg the walk the router serves (`walk_cost`, the
+//!    measure clause 3 ranks by), is at most the ladder's first Push, so the
+//!    chain asks an expanding seat for no more time than it has.
 //!
 //! # Re-running it
 //!
 //! A pin below fails if the generator, the rules' map rows or the resolver move
-//! under it. The answer is then stale: `every_passing_seed_is_listed` (run by
-//! hand with `--ignored --nocapture`) prints the seeds that pass now, and the
-//! change that moved it re-pins here and in the lobby's line, naming the cause.
+//! under it. `every_passing_seed_is_listed` (run by hand with `--ignored
+//! --nocapture`) prints the seeds that pass now; the change that moved a pin
+//! re-pins here, naming the cause, and a seed 20 that stops passing is the
+//! owner's to rule on, since the lobby's line names it.
 
 #![allow(
     clippy::expect_used,
@@ -57,7 +73,7 @@
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::StepFailure;
 use pharmakos_sim::math::quantity::Ms;
-use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
+use pharmakos_sim::pathing::estimate::{Speed, walk_cost};
 use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::seams::MandateKind;
@@ -68,16 +84,40 @@ use pharmakos_sim::targeting::{
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig, default_rules_path, mapgen};
 use std::path::PathBuf;
 
-/// The answer: the first seed that passes. The lobby's line spells it
-/// `0x0000000000000014`, as `host_link.gd` spells a seed.
+/// The seed the preset plays: `sim3a`'s search's finding when it was run
+/// (decisions-log items 154 (1) and 156 (1); "The seed"). The lobby's line
+/// spells it `0x0000000000000014`, as `host_link.gd`
+/// spells a seed.
 const PROBATION_SEED: u64 = 20;
 
-/// What it finds: its second vent, the columns of the three placements that
-/// reach it, and the commander's estimated walk through them, 81 s of a 180 s
-/// Push.
+/// What seed 20's chain is: its second vent, the columns of the three
+/// placements that reach it, and the commander's walk through them, served
+/// leg by leg, 92 s of a 180 s Push.
+///
+/// Re-pinned first by lane `p3fix`'s part 1, which priced near pairs at the
+/// served route while `toward` still ranked its stones by the estimate: the
+/// exact prices picked the second and third stones `[207, 69]` and `[223, 86]`
+/// where the abstract prices had picked `[203, 72]` and `[222, 86]` (and
+/// 1 620 ticks). The seed still passed, so the answer stood.
+///
+/// Re-pinned again by the same lane's second part, when `toward` came to weigh
+/// its sites by the served walk, as every "nearest" in the sim does, rather
+/// than by the item-61 estimate: the stones `[192, 51]`, `[207, 69]` and
+/// `[223, 86]` (1 640 ticks) became `[202, 46]`, `[208, 69]` and `[223, 87]`,
+/// and the walk 1 696 ticks. Each stone is the exact nearest to the vent; the
+/// chain of them walks 56 ticks longer, since nothing makes the nearest stone
+/// the one that shortens the whole walk. Seed 20 still passed and no earlier
+/// seed did.
+///
+/// Re-pinned a third time by the same lane's fix pass 2, when the stone came
+/// to be the legal site closest to the vent over the terrain, the grid optimum
+/// (clause 3; `targeting`'s "Two measures"), and clause 4's walk came to be
+/// served leg by leg: `[202, 46]`, `[208, 69]` and `[223, 87]` (1 696 ticks)
+/// became `[197, 50]`, `[208, 71]` and `[224, 88]`, and 1 840 ticks. Seed 20
+/// still passes every clause; seed 13 now passes too ("The seed").
 const PINNED_VENT: [i32; 2] = [232, 96];
-const PINNED_SITES: [[i32; 2]; 3] = [[192, 51], [203, 72], [222, 86]];
-const PINNED_WALK_TICKS: i32 = 1_620;
+const PINNED_SITES: [[i32; 2]; 3] = [[197, 50], [208, 71], [224, 88]];
+const PINNED_WALK_TICKS: i32 = 1_840;
 
 /// The golden seed, every other test's fixture: its second vent is about nine
 /// stones out (S3's plan, section 1.1), which is why Probation has a seed of
@@ -214,18 +254,13 @@ fn world_of(seed: u64, rules: &RulesTable) -> World {
     .expect("the committed rules table describes a world")
 }
 
-/// The estimated cost and ticks of a commander's walk between two nodes.
+/// The cost and ticks of the walk the router serves a commander between two
+/// nodes: one leg of clause 4's walk.
 fn walk(ground: &Ground<'_>, scratch: &mut Scratch, from: Node, to: Node) -> Option<(i64, i32)> {
-    estimate(
-        ground.surface,
-        ground.clusters,
-        scratch,
-        from,
-        to,
-        Fog::Clear,
-        Speed::commander(ground.rules),
-    )
-    .map(|found| (i64::from(found.cost), found.ticks))
+    let walk = walk_cost(ground.surface, ground.clusters, scratch, (from, to)).ok()?;
+    let ticks = pharmakos_sim::pathing::estimate::walk_ticks(walk, Speed::commander(ground.rules))
+        .expect("a leg's walk converts")?;
+    Some((walk.cost, ticks))
 }
 
 /// The criterion, for one seed.
@@ -299,8 +334,8 @@ fn probe(seed: u64, rules: &RulesTable) -> Result<Chain, Miss> {
     })
 }
 
-/// The pin: the answer passes, with exactly the chain recorded in `sim3a`'s
-/// pull request, so the generator or the resolver cannot drift under it.
+/// The pin: seed 20 passes, with exactly the chain above, so the generator or
+/// the resolver cannot drift under it.
 #[test]
 fn the_probation_seed_reaches_its_second_vent_in_three_placements() {
     assert_eq!(
@@ -313,16 +348,16 @@ fn the_probation_seed_reaches_its_second_vent_in_three_placements() {
     );
 }
 
-/// The search: no seed below the answer passes, so the answer is the search's
-/// and nobody's pick. Each of them generates a map, so this is the file's slow
-/// test, at about a second and a half a seed in a debug build.
+/// The truth as found: of the seeds 0 through 20, exactly 13 and 20 pass
+/// every clause ("The seed"). Each seed generates a map, so this is the
+/// file's slow test, as the search it replaces was.
 #[test]
-fn no_earlier_seed_passes() {
+fn the_passing_seeds_through_twenty_are_thirteen_and_twenty() {
     let rules = rules();
-    for seed in 0..PROBATION_SEED {
-        let found = probe(seed, &rules);
-        assert!(found.is_err(), "seed {seed} passes first: {found:?}");
-    }
+    let passing: Vec<u64> = (0..=PROBATION_SEED)
+        .filter(|seed| probe(*seed, &rules).is_ok())
+        .collect();
+    assert_eq!(passing, [13, PROBATION_SEED]);
 }
 
 /// The criterion tells maps apart: the golden seed, the fixture the plan's
@@ -446,8 +481,9 @@ fn a_toward_says_why_it_found_no_site() {
 /// live vent farthest from the core, whose walk the octile bound prunes
 /// least; and toward the pinned vent again with a Resonance Spire finished at
 /// the core, its sphere grown. Each prints the legal sites weighed, the
-/// columns of the spheres scanned, the path searches run (the units charged
-/// less the columns scanned) and the decision units charged.
+/// columns of the spheres scanned, the decision units charged (one a column
+/// scanned; the search prices no walk since fix pass 2 of lane `p3fix`) and
+/// the nodes the search popped, which no unit charges.
 #[test]
 #[ignore = "a measurement, run by hand: `cargo test --test probation_seed -- --ignored --nocapture toward_costs`"]
 fn toward_costs() {
@@ -489,11 +525,10 @@ fn toward_costs() {
         let units = tally.get();
         match found {
             Ok(stone) => println!(
-                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {} path \
-                 searches, {units} decision units",
+                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {units}                  decision units, {} nodes popped",
                 stone.site,
                 stone.weighed,
-                units.saturating_sub(columns)
+                scratch.expansions().expect("the count fits a u64")
             ),
             Err(failed) => println!("{label}: no site, {failed:?}, {units} decision units"),
         }

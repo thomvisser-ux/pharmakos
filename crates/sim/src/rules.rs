@@ -153,7 +153,7 @@ pub struct RulesTable {
     mesher_drain_bytes: u32,
     /// Cost of a cardinal step. `10` (item 59). From
     /// `locomotion.step_cost_cardinal`.
-    step_cardinal: i32,
+    step_cardinal: core::num::NonZeroI32,
     /// Cost of a diagonal step. `14` (item 59). From
     /// `locomotion.step_cost_diagonal`.
     step_diagonal: i32,
@@ -183,7 +183,11 @@ pub struct RulesTable {
     /// (item 69). From `locomotion.repath_cap_per_tick`.
     ///
     /// PLACEHOLDER: the repath cap — owner, at S3's demo (items 152 (1) 1 and 2), once the burst frequency is a measurement (item 69).
-    repath_cap_per_tick: u32,
+    ///
+    /// Non-zero by type: at a cap of nought no waiting walker is ever served,
+    /// so the queue's wait would have no bound
+    /// ([`crate::pathing::estimate::link_ticks`]).
+    repath_cap_per_tick: core::num::NonZeroU32,
     /// The broadphase's cell edge, in whole voxels. From
     /// `broadphase.cell_size_voxels`.
     ///
@@ -533,6 +537,14 @@ impl RulesTable {
     /// Cost of a cardinal step (`locomotion.step_cost_cardinal`).
     #[must_use]
     pub const fn step_cardinal(&self) -> i32 {
+        self.step_cardinal.get()
+    }
+
+    /// The cardinal step's cost, never zero: the rules refuse a free step at
+    /// load, and this carries it by type for the arithmetic that divides by
+    /// it.
+    #[must_use]
+    pub const fn step_cardinal_nonzero(&self) -> core::num::NonZeroI32 {
         self.step_cardinal
     }
 
@@ -574,9 +586,17 @@ impl RulesTable {
         self.move_cost_per_tick
     }
 
-    /// Repaths served per tick (`locomotion.repath_cap_per_tick`).
+    /// Repaths served per tick (`locomotion.repath_cap_per_tick`), never
+    /// nought.
     #[must_use]
     pub const fn repath_cap_per_tick(&self) -> u32 {
+        self.repath_cap_per_tick.get()
+    }
+
+    /// Repaths served per tick, as the non-zero count the queue's bound
+    /// divides by ([`crate::pathing::estimate::link_ticks`]).
+    #[must_use]
+    pub const fn repath_cap(&self) -> core::num::NonZeroU32 {
         self.repath_cap_per_tick
     }
 
@@ -973,19 +993,30 @@ impl RulesTable {
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
         let query_pad_voxels = query_pad_of(locomotion, &kinds)?;
+        path_cost_fits(locomotion, map)?;
+        let repath_cap_per_tick = core::num::NonZeroU32::new(locomotion.repath_cap_per_tick)
+            .ok_or_else(|| RulesError::OutOfRange {
+                field: "locomotion.repath_cap_per_tick".to_owned(),
+                value: "0; at a cap of nought no waiting walker is ever served a route".to_owned(),
+            })?;
         let canonical = pharmakos_proto::json::encode(message).map_err(RulesError::Json)?;
 
-        Ok(RulesTable {
+        let table = RulesTable {
             message: message.clone(),
             economy: *economy,
             ore_yield_per_voxel,
             canonical,
             mesher_drain_surfaces: mesher.surfaces_per_frame,
             mesher_drain_bytes: mesher.bytes_per_frame,
-            step_cardinal: signed(
+            step_cardinal: core::num::NonZeroI32::new(signed(
                 "locomotion.step_cost_cardinal",
                 locomotion.step_cost_cardinal,
-            )?,
+            )?)
+            .ok_or_else(|| RulesError::OutOfRange {
+                field: "locomotion.step_cost_cardinal".to_owned(),
+                value: "0; a step that costs nothing lets a walker cross the map in a tick"
+                    .to_owned(),
+            })?,
             step_diagonal: signed(
                 "locomotion.step_cost_diagonal",
                 locomotion.step_cost_diagonal,
@@ -997,7 +1028,7 @@ impl RulesTable {
                 "locomotion.move_cost_per_tick",
                 locomotion.move_cost_per_tick,
             )?,
-            repath_cap_per_tick: locomotion.repath_cap_per_tick,
+            repath_cap_per_tick,
             csr_cell_size_voxels: signed(
                 "broadphase.cell_size_voxels",
                 broadphase.cell_size_voxels,
@@ -1040,7 +1071,9 @@ impl RulesTable {
             resonance_vents,
             grown_sphere_radius_voxels,
             cluster_shape,
-        })
+        };
+        longest_row_fits(&table)?;
+        Ok(table)
     }
 
     /// Read the rules table from a file.
@@ -1058,6 +1091,105 @@ impl RulesTable {
     }
 }
 
+/// Refuses a table under which the longest row a playbook within the size
+/// budget can write would take longer than the sim's `i32` of milliseconds
+/// ([`crate::interpreter::InterfaceTimes::longest_row_ms`], the sum
+/// [`crate::interpreter::Row::duration_ms`] takes), so that no such playbook
+/// compiles to `PlanError::RowTooLong` on a loaded table (S3's `p3fix`, from
+/// `vfyq2`'s reviews). This loader is the one door for that bound: every
+/// `RulesTable` is built here, so the verifier, which once refused the same
+/// tables with its own `RulesGap::RowPastTheSim` (retired by `p3fix`), is
+/// only ever handed a table this check took.
+///
+/// # Why a table with no rate card passes this check
+///
+/// A table with no `interface_times` or `verifier` block, or with a negative
+/// rate, has no row to bound, and this check is not where it is refused: the
+/// compile refuses every playbook on such a table with its own reason
+/// (`PlanError::MissingBlock`, `PlanError::NegativeRate`), and the verifier
+/// refuses the table (`RulesGap::MissingBlock`, `RulesGap::Negative`), so no
+/// playbook qualifies or compiles under it. The loader takes it because the
+/// sim's own tests load such tables to reach those refusals
+/// (`tests/build.rs`). `Ok` here is "no row to bound", never "the row fits".
+///
+/// # Errors
+///
+/// [`RulesError::RowPastTheSim`], naming the three rates and the budget.
+fn longest_row_fits(table: &RulesTable) -> Result<(), RulesError> {
+    let (Some(rates), Some(verifier)) = (
+        table.message.interface_times.as_ref(),
+        table.message.verifier.as_ref(),
+    ) else {
+        // No rate card or no budget: no row to bound (the docs above).
+        return Ok(());
+    };
+    let Ok(times) = crate::interpreter::InterfaceTimes::from_rules(table) else {
+        // A negative rate: no row to bound (the docs above).
+        return Ok(());
+    };
+    let budget = verifier.size_budget_units;
+    match times.longest_row_ms(budget) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(RulesError::RowPastTheSim {
+            switch_ms: rates.switch_mandate_ms,
+            edit_max_ms: rates.edit_settings_max_ms,
+            build_target_ms: rates.build_target_ms,
+            budget,
+        }),
+    }
+}
+
+/// The step costs' bound by what the arithmetic needs (lane `p3fix`, fix
+/// pass 4): a path's cost is an `i32`, and a simple path on the map takes at
+/// most `columns − 1` steps, each costing at most the dearest step, a diagonal
+/// with a climb. So the rules must hold
+///
+/// `(step_cost_diagonal + climb_surcharge) × (size_x × size_y − 1) ≤ i32::MAX`
+///
+/// and the grid optimum's bucket ring, `2 × max step + 1` buckets
+/// ([`crate::pathing::reach`]), is small by consequence: on the committed
+/// 384-by-384 map at most 29 127 buckets.
+///
+/// Exact in `u128`: the columns are a `u32` times a `u32` (under 2^64) and the
+/// dearest step a `u32` plus a `u32` (under 2^33), so no product here can pass
+/// it, and nothing saturates.
+///
+/// # Errors
+///
+/// [`RulesError::OutOfRange`] naming `locomotion.climb_surcharge` when the
+/// dearest step times the map's steps passes `i32::MAX` (or
+/// `locomotion.step_cost_diagonal` when the diagonal alone does); a map axis
+/// of no voxel is refused first, in the words the axis check has always used
+/// ([`last_voxel`]).
+fn path_cost_fits(
+    locomotion: &gp::v1::rules_table::Locomotion,
+    map: &gp::v1::rules_table::Map,
+) -> Result<(), RulesError> {
+    // Each axis holds at least one voxel (the axis check's own refusal,
+    // answered first), so the map has at least one column and `- 1` holds.
+    last_voxel("map.size_x", map.size_x)?;
+    last_voxel("map.size_y", map.size_y)?;
+    let steps = u128::from(map.size_x) * u128::from(map.size_y) - 1;
+    let diagonal = u128::from(locomotion.step_cost_diagonal);
+    let dearest = diagonal + u128::from(locomotion.climb_surcharge);
+    let most = u128::from(i32::MAX.unsigned_abs());
+    if dearest * steps <= most {
+        return Ok(());
+    }
+    let field = if diagonal * steps > most {
+        "locomotion.step_cost_diagonal"
+    } else {
+        "locomotion.climb_surcharge"
+    };
+    Err(RulesError::OutOfRange {
+        field: field.to_owned(),
+        value: format!(
+            "a dearest step of {dearest} over the {steps} steps a path can take on the map passes \
+             i32::MAX, the most a path's cost holds"
+        ),
+    })
+}
+
 /// The broadphase pad (S2's plan, E11): the most any unit can move in one
 /// tick, in whole voxels.
 ///
@@ -1072,7 +1204,9 @@ impl RulesTable {
 /// # Errors
 ///
 /// [`RulesError::OutOfRange`] for a step that costs nothing, which would let a
-/// walker cross the map in a tick, and for a pad past a voxel coordinate.
+/// walker cross the map in a tick; for a diagonal step cheaper than a cardinal
+/// one or dearer than two, which no lower bound the searches use can price;
+/// and for a pad past a voxel coordinate.
 fn query_pad_of(
     locomotion: &gp::v1::rules_table::Locomotion,
     kinds: &KindRows,
@@ -1095,6 +1229,20 @@ fn query_pad_of(
             format!(
                 "{cardinal} cardinal, {diagonal} diagonal; a step that costs nothing lets a walker \
                  cross the map in a tick"
+            ),
+        ));
+    }
+    // The octile bound and every search's admissibility rest on this shape:
+    // a diagonal never cheaper than a cardinal step (or a zigzag of diagonals
+    // beats the straight line the bound prices) and never dearer than two (or
+    // two cardinal steps beat the diagonal it prices). The climb surcharge is
+    // a `uint32`, never negative, so it only adds.
+    if diagonal < cardinal || diagonal > cardinal.saturating_mul(2) {
+        return Err(refused(
+            "locomotion.step_cost_diagonal",
+            format!(
+                "{diagonal}, against a cardinal step of {cardinal}; a diagonal step costs at \
+                 least one cardinal step and at most two"
             ),
         ));
     }
@@ -1407,6 +1555,21 @@ pub enum RulesError {
     /// is missing or out of range, or the rows would let a seat's supply or
     /// draw leave a signed 32-bit `kW`.
     Power(PowerRulesError),
+    /// The longest row a playbook within the size budget can write -- a
+    /// `set_mandate` row that switches, edits settings at the cap and adds a
+    /// Build target per size unit -- would take longer than the sim's `i32`
+    /// of milliseconds, which its compile refuses
+    /// ([`crate::interpreter::InterfaceTimes::longest_row_ms`]).
+    RowPastTheSim {
+        /// `interface_times.switch_mandate_ms`.
+        switch_ms: i32,
+        /// `interface_times.edit_settings_max_ms`.
+        edit_max_ms: i32,
+        /// `interface_times.build_target_ms`.
+        build_target_ms: i32,
+        /// `verifier.size_budget_units`.
+        budget: u32,
+    },
 }
 
 impl fmt::Display for RulesError {
@@ -1423,6 +1586,27 @@ impl fmt::Display for RulesError {
                 write!(f, "field `{field}`: `{value}` is out of range")
             }
             RulesError::Power(error) => write!(f, "{error}"),
+            RulesError::RowPastTheSim {
+                switch_ms,
+                edit_max_ms,
+                build_target_ms,
+                budget,
+            } => {
+                // In `i128`: a `u32` budget times an `i32` rate, plus two
+                // `i32`s, cannot pass it.
+                let worst = i128::from(*switch_ms)
+                    + i128::from(*edit_max_ms)
+                    + i128::from(*build_target_ms) * i128::from(*budget);
+                write!(
+                    f,
+                    "a `set_mandate` row a playbook within the {budget}-unit size budget can \
+                     write takes up to {worst} ms (`interface_times.switch_mandate_ms` \
+                     {switch_ms}, `interface_times.edit_settings_max_ms` {edit_max_ms} and \
+                     {budget} Build targets at `interface_times.build_target_ms` \
+                     {build_target_ms}), past {} ms, the most the sim's compile takes",
+                    i32::MAX
+                )
+            }
         }
     }
 }

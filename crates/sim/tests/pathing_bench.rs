@@ -49,13 +49,29 @@ use std::path::PathBuf;
 use pharmakos_sim::chunks::ChunkDigests;
 use pharmakos_sim::pathing::MAX_ROUTE_NODES;
 use pharmakos_sim::pathing::clusters::Clusters;
-use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
+use pharmakos_sim::pathing::estimate::{Fog, Speed};
 use pharmakos_sim::pathing::repair::{Repairer, repair};
 use pharmakos_sim::pathing::route::route;
 use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::pathing::surface::{Node, StepCosts, Surface};
 use pharmakos_sim::voxels::VoxelStore;
 use pharmakos_sim::{RulesTable, mapgen};
+
+/// The sim's [`pharmakos_sim::pathing::estimate::estimate`], its error a test
+/// failure: every walk this file prices chains to its goal, so an
+/// `EstimateError` is the sim breaking its own chain argument.
+fn estimate(
+    surface: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    start: Node,
+    goal: Node,
+    fog: Fog<'_>,
+    speed: Speed,
+) -> Option<pharmakos_sim::pathing::estimate::Estimate> {
+    pharmakos_sim::pathing::estimate::estimate(surface, clusters, scratch, start, goal, fog, speed)
+        .unwrap_or_else(|error| panic!("the sim priced no walk: {error}"))
+}
 
 /// The seed the bench runs on: the determinism harness's own.
 const SEED: u64 = pharmakos_sim::DETERMINISM_MATCH_SEED;
@@ -204,9 +220,25 @@ fn bench_estimates(bench: &mut Bench) -> u64 {
         ) else {
             continue;
         };
-        totals.push(bench.scratch.expansions() + bench.scratch.abstract_expansions());
-        endpoints.push(bench.scratch.endpoint_expansions());
-        abstracts.push(bench.scratch.abstract_expansions());
+        totals.push(
+            bench.scratch.expansions().expect("the count fits a u64")
+                + bench
+                    .scratch
+                    .abstract_expansions()
+                    .expect("the count fits a u64"),
+        );
+        endpoints.push(
+            bench
+                .scratch
+                .endpoint_expansions()
+                .expect("the count fits a u64"),
+        );
+        abstracts.push(
+            bench
+                .scratch
+                .abstract_expansions()
+                .expect("the count fits a u64"),
+        );
         legs.push(u64::from(answer.legs));
         taken += 1;
     }
@@ -264,7 +296,13 @@ fn bench_repaths(bench: &mut Bench) {
         {
             continue;
         }
-        repaths.push(bench.scratch.expansions() + bench.scratch.abstract_expansions());
+        repaths.push(
+            bench.scratch.expansions().expect("the count fits a u64")
+                + bench
+                    .scratch
+                    .abstract_expansions()
+                    .expect("the count fits a u64"),
+        );
         nodes.push(u64::try_from(buffer.len()).expect("fits"));
         taken += 1;
     }
@@ -312,7 +350,7 @@ fn bench_repairs(bench: &mut Bench) {
             &mut bench.scratch,
             &mut bench.repairer,
         );
-        repairs.push(bench.scratch.expansions());
+        repairs.push(bench.scratch.expansions().expect("the count fits a u64"));
         dirty_total += u64::from(report.dirty);
         n += 1;
     }

@@ -10,13 +10,17 @@
 //! exception the design takes on purpose: `get_map_summary`'s features are
 //! unfogged in S1, as targeting's ranking is (decisions-log item 130 (3) (a)),
 //! and each seat-relative field in them is the asking seat's own -- and not
-//! one of them steps anything: `estimate_route` estimates its legs through
-//! [`crate::routes::RouteAdapter`], which owns its own search graph and has no
-//! `World` in its hand at all; a `covering` waypoint (answered only while the
-//! hosted world is the frozen one, outside a Push) and `get_map_summary`'s
-//! features read the hosted world through the sim's own resolver, borrowed
-//! read-only ([`crate::targeting`]), and rank by estimate rather than by
-//! running anything; and `get_economy_forecast` reads the calling seat's own
+//! one of them steps anything: `estimate_route` prices its legs through
+//! [`crate::routes::RouteAdapter`], which borrows the hosted world's surface
+//! and clusters and has no `World` in its hand, and it answers only in a Lull
+//! (the owner's "Refuse in a Push", 2026-11-21), its `covering` and `toward`
+//! waypoints included; `get_map_summary`'s features read the hosted world
+//! through the sim's own resolver, borrowed read-only ([`crate::targeting`]),
+//! and rank by the cost of the walk the router serves, priced without running
+//! anything, in every phase: their travel times are still given in a Push,
+//! over the live world, until the owner's "Omit them in a Push" is built
+//! (it needs the wire to say "no time" apart from "no route"); and
+//! `get_economy_forecast` reads the calling seat's own
 //! row of the hosted world -- the frozen planning world in a Lull or a recap,
 //! the live one in a Push -- and, in a Lull, prices the seat's own seal by the
 //! verifier's `$` projection, which is arithmetic over the file and runs
@@ -84,7 +88,8 @@ pub const fn beacon_budget(detail: Detail) -> usize {
 
 /// The most waypoints one `estimate_route` may name.
 ///
-/// A route costs one abstract search per leg and there is no estimate cache
+/// A route costs one estimate per leg (the walk the router would serve, its
+/// partial routes chained, near pair or far) and there is no estimate cache
 /// (decisions-log item 61), so the count is the caller's multiplier on the
 /// gateway's whole single-threaded turn: measured on the shipped 384x384x64
 /// map, 2 000 waypoints between two far corners is a 64 KiB request -- well
@@ -636,17 +641,20 @@ impl Surface {
     ///
     /// For a seat, `covered` is whether one of its own living beacons' spheres
     /// holds the feature (the opposite of a pick's `UNCOVERED`), and
-    /// `travel_ms` and `reachable` are the estimate "nearest" ranks with, from
-    /// where its commander stands, ranked by the sim's own
-    /// [`pharmakos_sim::targeting::Ranker`] ([`crate::targeting`]). A commander
-    /// that is not standing anywhere (dead, mid-Push) reaches nothing, and the
-    /// answer says so. Nothing is stepped.
+    /// `travel_ms` and `reachable` are the walk the router serves its
+    /// commander from where it stands to the column "nearest" measures to,
+    /// priced by the sim's own [`pharmakos_sim::targeting::Ranker`]
+    /// ([`pharmakos_sim::pathing::estimate::walk_cost`]; [`crate::targeting`]):
+    /// the one measure `resolve_refs` binds by, `estimate_route` answers in
+    /// and the Push walks (S3's `p3fix`). A commander that is not standing
+    /// anywhere (dead, mid-Push) reaches nothing, and the answer says so.
+    /// Nothing is stepped.
     fn map_features(&self, seat: Option<SeatId>) -> Result<Vec<Json>, Error> {
         let host = self.host()?;
         let world = host.world();
         let reads = crate::targeting::feature_reads(world, seat);
         let commander = seat.and_then(|seat| crate::targeting::commander_point(world, seat));
-        let travel: Vec<(usize, i64)> = match commander {
+        let travel: Vec<(usize, pharmakos_sim::pathing::estimate::ServedWalk)> = match commander {
             Some(commander) => {
                 let tally = pharmakos_sim::seams::UnitTally::new();
                 let ground = crate::targeting::lend(world, &tally);
@@ -678,7 +686,7 @@ impl Surface {
                     let reached = match travel.iter().find(|(index, _)| *index == read.index) {
                         // A commander with no speed walks nowhere, so the
                         // feature is not reached.
-                        Some((_, cost)) => crate::targeting::travel_ms(world, *cost)?,
+                        Some((_, walk)) => crate::targeting::travel_ms(world, *walk)?,
                         None => None,
                     };
                     entries.push((
@@ -1000,10 +1008,23 @@ impl Surface {
 
     /// `estimate_route`: item 61's travel estimate, exposed.
     ///
-    /// Abstract search alone -- it never refines, never steps, never forks --
-    /// through the adapter item 100 (1) puts in this crate. Never optimistic,
-    /// and a fogged leg comes back flagged so the editor draws it dashed and
-    /// labels it a bound rather than an ETA (item 57).
+    /// Each leg is the walk the router serves, near or far, with the
+    /// allowance per extra route (lane `p3fix`;
+    /// [`pharmakos_sim::pathing::estimate::walk_ticks`]) -- it never steps,
+    /// never forks -- through the adapter item 100 (1) puts in this crate,
+    /// over the hosted world's own graph. Never optimistic from the tick the
+    /// route is served (the owner's reading of item 57, 2026-11-21), and a
+    /// fogged leg comes back flagged so the editor draws it dashed and labels
+    /// it a bound rather than an ETA (item 57).
+    ///
+    /// **Only in a Lull** (the owner's answer of 2026-11-21: "Refuse in a
+    /// Push"): every other phase -- a Push, a recap, the lobby, an ended
+    /// match -- answers `PHASE_CLOSED` before anything is parsed, as the
+    /// planning door closes the `plan`-scoped methods. The method stays
+    /// `observe`-scoped; the gate is its own. In a Push the hosted world is
+    /// the live one and the snapshot its beacon legs read is the frozen one,
+    /// so an answer would mix two worlds; outside the Lull there is nothing
+    /// to plan.
     ///
     /// From S3 each leg that reaches, and the whole route when every leg
     /// does, carries `travel_text`, the figure as the player reads it (the
@@ -1022,6 +1043,12 @@ impl Surface {
         subject: crate::token::Subject,
         request: &Request,
     ) -> Result<Json, Error> {
+        if !self.time.planning_open() {
+            return Err(Error::phase_closed(said!(
+                "`estimate_route` prices a route over the frozen planning world, which is open \
+                 only in a Lull: ask in a Lull"
+            )));
+        }
         let seat = Surface::seat_of(subject, "a route to estimate")?;
         let Some(Json::Array(waypoints)) = request.param("waypoints") else {
             return Err(Error::invalid(
@@ -1051,8 +1078,9 @@ impl Surface {
             places.push(self.place_of(seat, waypoint, index, from, &mut scratch)?);
         }
 
-        let routes = self.host()?.routes();
-        let route = pharmakos_plan_core::travel::Route::estimate(&places, routes);
+        let host = self.host()?;
+        let routes = host.routes();
+        let route = pharmakos_plan_core::travel::Route::estimate(&places, &routes);
         // A fault in a query is raised, never drawn as an unreachable leg
         // (`crate::routes`, "A fault is raised").
         routes.take_fault()?;
@@ -1235,13 +1263,11 @@ impl Surface {
     /// A `covering` waypoint's site: where the beacon would stand, as the sim
     /// chooses it ([`Surface::place_of`] says why this is here).
     ///
-    /// **Outside a Push only.** The site is read off the hosted world, the
-    /// beacons' spheres and the commander included, and the route's beacon
-    /// and `safest` legs are read off the frozen snapshot; the two are the
-    /// same world in a Lull, a recap and an ended match, and not in a Push,
-    /// where one answer would mix two worlds. So a `covering` waypoint in a
-    /// Push is `PHASE_CLOSED`, as a planning method is -- it is a planning
-    /// question, asked in the phase that plans.
+    /// The site is read off the hosted world, the beacons' spheres and the
+    /// commander included, and the route's beacon and `safest` legs are read
+    /// off the frozen snapshot; the two are the same world in a Lull, which
+    /// is the only phase [`Surface::estimate_route`] answers in, so no
+    /// answer mixes two worlds.
     fn covering_site(
         &self,
         seat: SeatId,
@@ -1251,13 +1277,6 @@ impl Surface {
         scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
-        if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
-            return Err(Error::phase_closed(said!(
-                "{} is a `covering`, which is read off the frozen world, and in a Push the \
-                 world has moved on from it: ask outside a Push",
-                pharmakos_proto::json::grammar::quoted_pointer(at)
-            )));
-        }
         let reference: pharmakos_proto::gp::v1::FeatureRef =
             pharmakos_proto::json::decode_json(reference).map_err(|error| {
                 Error::invalid(said!(
@@ -1310,9 +1329,9 @@ impl Surface {
 
     /// A `toward` waypoint's site: where the stepping stone would stand, as the
     /// sim chooses it (S3's `pred`, E23), ranked from `from` (or from the
-    /// commander, for the first waypoint) as `covering`'s is. **Outside a Push
-    /// only**, for [`Surface::covering_site`]'s reason. A `toward` that finds
-    /// no site is `NOT_FOUND` naming the step failure it would be.
+    /// commander, for the first waypoint) as `covering`'s is, in the Lull
+    /// [`Surface::estimate_route`] answers in. A `toward` that finds no site
+    /// is `NOT_FOUND` naming the step failure it would be.
     fn toward_site(
         &self,
         seat: SeatId,
@@ -1322,13 +1341,6 @@ impl Surface {
         scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
-        if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
-            return Err(Error::phase_closed(said!(
-                "{} is a `toward`, which is read off the frozen world, and in a Push the \
-                 world has moved on from it: ask outside a Push",
-                pharmakos_proto::json::grammar::quoted_pointer(at)
-            )));
-        }
         let toward: pharmakos_proto::gp::v1::Toward = pharmakos_proto::json::decode_json(toward)
             .map_err(|error| {
                 Error::invalid(said!(

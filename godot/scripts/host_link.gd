@@ -62,8 +62,9 @@ const RECONNECTS := 5
 ##
 ## PLACEHOLDER: the match the lobby hosts — OWNER, S6, with the settings screen.
 ## Probation's own map seed (S3's decision 13; decisions-log items 154 (1) and 156 (1)):
-## `sim3a`'s pin, PROBATION_SEED in crates/sim/tests/probation_seed.rs, 20, the first seed
-## whose second vent three placements reach, so the licence is earnable. The golden seed
+## `sim3a`'s pin, PROBATION_SEED in crates/sim/tests/probation_seed.rs, 20, a seed whose second
+## vent three placements reach, so the licence is earnable; the owner kept 20 when 13 also came to
+## qualify (decisions-log item 168 (4)). The golden seed
 ## stays every test's fixture, the headless watch check's included (watch_check.gd's
 ## CHECK_SEED), and godot_project.rs holds MATCH_SEED to the pin. Two seats with the human
 ## at seat 0 and the other played by the built-in operator (Easy, since T18: it plans,

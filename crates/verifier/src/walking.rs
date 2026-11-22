@@ -213,19 +213,20 @@ mod tests {
 
     /// The stated bound holds at every extreme the types allow: the far
     /// corner, the dearest steps, the slowest speed, no reach (fix pass 5,
-    /// item L5).
+    /// item L5). The walk is built at its own fields' extremes rather than
+    /// through a rules table, because [`LEG_MS_BITS`](super::LEG_MS_BITS) is
+    /// derived from those fields' types: the sim's loader refuses a table
+    /// whose dearest step times the map's longest path passes `i32::MAX`
+    /// (S3's `p3fix`), so no loaded table reaches this corner, and the bound
+    /// must hold without leaning on that.
     #[test]
     fn a_leg_at_every_extreme_is_under_its_bound() {
-        let mut message = rules().message().clone();
-        if let Some(commander) = message.commander.as_mut() {
-            commander.cost_per_second = 1;
-        }
-        if let Some(locomotion) = message.locomotion.as_mut() {
-            locomotion.step_cost_cardinal = i32::MAX.unsigned_abs();
-            locomotion.step_cost_diagonal = i32::MAX.unsigned_abs();
-        }
-        let table = RulesTable::from_message(&message).expect("the sim's view builds");
-        let walk = Walk::from_rules(&table).expect("a positive speed walks");
+        let walk = Walk {
+            cardinal: i32::MAX.unsigned_abs(),
+            diagonal: i32::MAX.unsigned_abs(),
+            cost_per_second: core::num::NonZeroU32::MIN,
+            ..walk()
+        };
         let bound = 1_i128 << super::LEG_MS_BITS;
         for (slack, radius) in [(0, 0), (1, 0), (0, 1)] {
             let far = walk.leg(

@@ -63,7 +63,7 @@
 //! PLACEHOLDER: real terrain fog in the view — owner, at S4, with the knowledge store's mask (S3's plan, decision 2: S3-05 moved to S4).
 //! With the knowledge store, real terrain
 //! fog (never seen, last known, the x1.5 cost bound) arrives as **one** mask
-//! that feeds both this view and `RouteAdapter::set_unknown_columns`, so the
+//! that feeds both this view and `RouteAdapter::with_unknown_columns`, so the
 //! camera and the editor's dashed legs cannot disagree. The wire is ready for
 //! it: `ViewChunk`'s comment says a decoder draws nothing for a material value
 //! it does not know.

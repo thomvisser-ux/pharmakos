@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! RFC 6902 JSON Patch over a playbook file, with the inverse patch that
-//! undoes it.
+//! JSON Patch over a playbook file: RFC 6902's six operations, read more
+//! strictly (a member an operation does not have is refused), with the inverse
+//! patch that undoes it, which is not RFC 6902 but `add`, `remove` and
+//! `replace` operations each carrying an `undo` member.
 //!
 //! Spec section 13: "Edits are JSON Patches with inverse-patch undo, and
 //! comments survive a load-and-save unchanged." So this module has two jobs at

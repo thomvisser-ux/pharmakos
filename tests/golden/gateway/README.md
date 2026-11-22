@@ -480,9 +480,9 @@ S1's targeting surfaces (`docs/design/targeting.md`, "Surfaces"; S1's plan, task
 two-seat match with a 60-second segment. Every number in them is the sim's: the
 features are the map generator's table, a feature's liveness is the sim's
 footprint scan, its coverage is the seat's own living beacons' spheres, and every
-travel time is the item-61 estimator's cost from the commander's column, ranked
-by the sim's own `Ranker` and turned into game milliseconds the way
-`estimate_route`'s legs are. The pick in `resolve_refs` is the sim's own
+travel time is the cost of the walk the router serves from the commander's
+column (`pharmakos_sim::pathing::estimate::walk_cost`), ranked by the sim's own
+`Ranker` and turned into game milliseconds the way `estimate_route`'s legs are. The pick in `resolve_refs` is the sim's own
 `cover` and `on_vent`, and `targeting.rs`'s
 `resolve_refs_answers_as_the_sim_would_at_step_start` holds it to what the sim
 then binds when the step starts.
@@ -512,6 +512,13 @@ first Lull's 600 000 ms left; `resolve_refs`' its first, 599 950), with the
 test's 60-second segment; a first-Lull re-tune moves it. S1's `econ` moved both
 by 300 000 ms when the tests began counting round 1 down from
 `match.first_lull_ms` rather than `match.lull_ms`.
+
+S3's `p3fix` moved every far feature's `travel_ms` in both, down by 0.6 to
+3.6 s, and nothing else: no candidate reordered and no pick changed. The rule:
+"nearest" ranks by the served walk, near or far, where a far pair was ranked
+at the abstract estimate, which charges the refinement before it is smoothed
+(`crates/sim/src/targeting.rs`, "Nearest"). The near ones (`vent_324_16`,
+`seam_348_31`) were priced at the served route already and did not move.
 
 ### `briefing/`, `economy_forecast/` and `recap/`
 

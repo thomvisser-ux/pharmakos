@@ -13,6 +13,15 @@
 //! > connectivity oracle before any search … The estimator is the abstract
 //! > search alone: it never refines, never steps, never forks.
 //!
+//! Lane `p3fix` amended the last sentence, and the owner approved it on
+//! 2026-11-21: a clear query, near pair or far, is priced at the walk the
+//! router would serve, plus an allowance per extra route the walk needs,
+//! which refines but still never steps and never forks; a query under a fog
+//! mask keeps the abstract search. The sim's function now answers
+//! `Result<Option<Estimate>, EstimateError>` (a walk it could not price is
+//! an error, never "no route"); this seam is unchanged, and the gateway's
+//! adapter raises such an error as a fault.
+//!
 //! `world`, `clusters`, `scratch` and `fog` are the estimator's own state, so
 //! what crosses into this crate is [`TravelEstimator`]: the frozen function
 //! with its first four arguments bound, plus the one question the *seat's fog*
@@ -33,16 +42,19 @@
 //!
 //! 1. **A fogged leg is drawn as the upper bound it is, never as an ETA.** Fog
 //!    is priced `cost * 3 / 2` per abstract edge, measured at 48.6 % p90 error
-//!    and capped at +50 % over the clear estimate. So the leg is labelled "at
-//!    most", the route total says how much of it is a bound, and the editor
-//!    draws it dashed (spec section 13).
+//!    and capped at +50 % over the abstract clear estimate. So the leg is
+//!    labelled "at most", the route total says how much of it is a bound, and
+//!    the editor draws it dashed (spec section 13).
 //! 2. **A time shown to the player is rounded generously, in whole seconds.**
 //!    The estimator is *never optimistic* on static terrain — that is part of
 //!    item 61's contract rather than an implementation detail — and the
 //!    rounding depends on it: rounding **up** to the next whole second can only
-//!    ever make the promise safer. The short-route band (≤ 32 cells) has p90
-//!    9.2 % and max 66.6 %, "one second on a two-second route", which is
-//!    exactly the error a whole second absorbs.
+//!    ever make the promise safer. Spike G2 measured the short-route band
+//!    (≤ 32 cells) at p90 9.2 % and max 66.6 %, "one second on a two-second
+//!    route", the error a whole second absorbs; since lane `p3fix` the sim
+//!    prices every clear query, near or far, at the walk the router serves
+//!    plus the allowance per extra route, so a route served in one piece is
+//!    exact on static terrain, counted from the tick that serves it.
 //!
 //! Recorded honestly, because item 57 records it: the promise is made on static
 //! terrain and a Push is not static. Under 20 craters/s the same estimate is

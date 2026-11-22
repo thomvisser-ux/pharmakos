@@ -191,25 +191,100 @@ pub struct Scratch {
     pub(crate) leg: Vec<u32>,
     pub(crate) line: Vec<u32>,
     pub(crate) prefix: Vec<i32>,
+    /// The route a served walk prices, for a clear estimate and for every
+    /// "nearest" ([`crate::pathing::estimate`]'s "A clear query"): the
+    /// router's own route,
+    /// written here rather than into a caller's buffer so that an estimate,
+    /// inside a tick or out of one, allocates nothing.
+    pub(crate) served: Vec<u32>,
+    /// The grid optimum's search ([`crate::pathing::reach`]): what a `toward`
+    /// step's sites are bounded by.
+    pub(crate) reach: crate::pathing::reach::Reach,
 
     // --- counters, diagnostic only ---
-    pub(crate) expansions: u64,
-    pub(crate) endpoint_expansions: u64,
-    pub(crate) abstract_expansions: u64,
+    pub(crate) expansions: Tally,
+    pub(crate) endpoint_expansions: Tally,
+    pub(crate) abstract_expansions: Tally,
+    pub(crate) served_estimates: Tally,
+    pub(crate) walks: Tally,
+    pub(crate) stalled: Tally,
+    pub(crate) reach_faults: Tally,
 }
+
+/// A diagnostic count that never reads wrong: it counts up by a checked add,
+/// and a count that would pass `u64::MAX` becomes [`Tally::Overflowed`], which
+/// its reader is told as [`TallyOverflow`] rather than as a number. Neither
+/// wraps nor saturates (lane `p3fix`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tally {
+    /// The events counted since the last reset.
+    Count(u64),
+    /// More than `u64::MAX` events since the last reset.
+    Overflowed,
+}
+
+impl Tally {
+    /// A count of nothing.
+    pub const ZERO: Tally = Tally::Count(0);
+
+    /// Count one more event.
+    pub const fn bump(&mut self) {
+        *self = match *self {
+            Tally::Count(count) => match count.checked_add(1) {
+                Some(next) => Tally::Count(next),
+                None => Tally::Overflowed,
+            },
+            Tally::Overflowed => Tally::Overflowed,
+        };
+    }
+
+    /// The count, or that it overflowed.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once more than `u64::MAX` events were counted.
+    pub const fn read(self) -> Result<u64, TallyOverflow> {
+        match self {
+            Tally::Count(count) => Ok(count),
+            Tally::Overflowed => Err(TallyOverflow),
+        }
+    }
+}
+
+/// A diagnostic count passed `u64::MAX` since its last reset.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TallyOverflow;
+
+impl core::fmt::Display for TallyOverflow {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("a diagnostic count passed u64::MAX since its last reset")
+    }
+}
+
+impl std::error::Error for TallyOverflow {}
 
 impl Scratch {
     /// Room for a graph of `nodes` columns and `abstract_nodes` abstract nodes.
     ///
     /// `cluster_cells` sizes the heaps: every search a tick runs is bounded to
     /// one cluster, and a bounded search pushes at most one entry per examined
-    /// directed edge, which is eight per cell.
+    /// directed edge, which is eight per cell. `max_step`, the dearest step
+    /// a walker takes, sizes the grid optimum's bucket ring
+    /// ([`crate::pathing::reach`]). `None` when the ring cannot be sized for
+    /// that step ([`crate::pathing::reach::ReachError::Ring`]), which no
+    /// loaded rules table's dearest step makes.
     #[must_use]
-    pub fn new(nodes: u32, abstract_nodes: u32, cluster_cells: u32) -> Scratch {
+    pub fn new(
+        nodes: u32,
+        abstract_nodes: u32,
+        cluster_cells: u32,
+        max_step: i32,
+    ) -> Option<Scratch> {
+        let reach = crate::pathing::reach::Reach::new(nodes, max_step).ok()?;
         let n = crate::math::index::row(nodes);
         let a = crate::math::index::row(abstract_nodes).saturating_add(2);
         let low_heap = crate::math::index::row(cluster_cells.saturating_mul(8));
-        Scratch {
+        Some(Scratch {
             epoch: 0,
             stamp: vec![0; n],
             closed: vec![0; n],
@@ -238,10 +313,20 @@ impl Scratch {
             prefix: Vec::with_capacity(
                 crate::math::index::row(crate::pathing::MAX_ROUTE_NODES).saturating_add(1),
             ),
-            expansions: 0,
-            endpoint_expansions: 0,
-            abstract_expansions: 0,
-        }
+            // A smoothed route holds no more nodes than the raw walk it
+            // smooths (each shortcut is a straight walk no longer than the
+            // stretch it replaces), and the raw walk stops at
+            // `MAX_ROUTE_NODES`: the same bound as `raw`.
+            served: Vec::with_capacity(crate::math::index::row(crate::pathing::MAX_ROUTE_NODES)),
+            reach,
+            expansions: Tally::ZERO,
+            endpoint_expansions: Tally::ZERO,
+            abstract_expansions: Tally::ZERO,
+            served_estimates: Tally::ZERO,
+            walks: Tally::ZERO,
+            stalled: Tally::ZERO,
+            reach_faults: Tally::ZERO,
+        })
     }
 
     /// The scratch a decomposition of `surface` at a cluster edge of
@@ -252,14 +337,21 @@ impl Scratch {
     /// has to, because building the decomposition's intra edges is itself a
     /// search and needs this scratch. [`Clusters::new`] is checked against it.
     ///
-    /// `None` when the cluster edge cannot decompose the map.
+    /// `None` when the cluster edge cannot decompose the map, or the
+    /// grid optimum's ring cannot be sized for the map's dearest step
+    /// ([`Scratch::new`]).
     ///
     /// [`Clusters::new`]: crate::pathing::clusters::Clusters::new
     #[must_use]
     pub fn for_map(surface: &Surface, cluster_voxels: i32) -> Option<Scratch> {
         let capacity = Scratch::abstract_capacity_for(surface, cluster_voxels)?;
         let cells = u32::try_from(cluster_voxels.checked_mul(cluster_voxels)?).ok()?;
-        Some(Scratch::new(surface.node_count(), capacity, cells))
+        Scratch::new(
+            surface.node_count(),
+            capacity,
+            cells,
+            surface.costs().max_step(),
+        )
     }
 
     /// How many abstract node slots a decomposition of `surface` at this
@@ -292,33 +384,101 @@ impl Scratch {
     }
 
     /// Nodes popped by the low-level searches since the last reset.
-    #[must_use]
-    pub const fn expansions(&self) -> u64 {
-        self.expansions
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn expansions(&self) -> Result<u64, TallyOverflow> {
+        self.expansions.read()
     }
 
     /// Nodes popped by the endpoint-insertion sweeps since the last reset.
     ///
-    /// The number spike G2 §9.11 says S3 needs and nobody else produces: at
-    /// cluster 32 the insertion sweeps were 91 % of a median query, which is
-    /// why the lever on the estimate budget is the sweep and not a second
-    /// abstract level (item 58).
-    #[must_use]
-    pub const fn endpoint_expansions(&self) -> u64 {
-        self.endpoint_expansions
+    /// The number spike G2 §9.11 says S3 needs and nobody else produces: in the
+    /// spike, at cluster 32, the insertion sweeps were 91 % of a median query,
+    /// which is why the lever on the estimate budget is the sweep and not a
+    /// second abstract level (item 58).
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn endpoint_expansions(&self) -> Result<u64, TallyOverflow> {
+        self.endpoint_expansions.read()
     }
 
     /// Abstract nodes popped since the last reset.
-    #[must_use]
-    pub const fn abstract_expansions(&self) -> u64 {
-        self.abstract_expansions
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn abstract_expansions(&self) -> Result<u64, TallyOverflow> {
+        self.abstract_expansions.read()
     }
 
-    /// Zero the three counters.
+    /// Estimates priced at the served walk since the last reset (every clear
+    /// query, [`crate::pathing::estimate()`]). Diagnostic: it is how a test
+    /// knows a query took the served walk and not the fogged abstract answer.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn served_estimates(&self) -> Result<u64, TallyOverflow> {
+        self.served_estimates.read()
+    }
+
+    /// The grid optimum's search as the last `toward` resolve left it: its
+    /// spheres and their reach, and its counted `h` evaluations
+    /// ([`crate::pathing::reach`]).
+    #[must_use]
+    pub const fn reach(&self) -> &crate::pathing::reach::Reach {
+        &self.reach
+    }
+
+    /// Walks priced at the router's served routes since the last reset
+    /// ([`crate::pathing::estimate::walk_cost`], what "nearest" ranks by).
+    /// Diagnostic: it is how a test knows a tick ranked by the served walk.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn walks(&self) -> Result<u64, TallyOverflow> {
+        self.walks.read()
+    }
+
+    /// Walks a ranker met whose chain of partial routes stalled
+    /// ([`crate::pathing::estimate::WalkError::Stalled`]) since the last
+    /// reset: candidates dropped as walks no walker finishes, counted here so
+    /// the drop is read, never silent. The chain's own argument says none
+    /// occurs; `tests/nearest.rs` holds it at zero.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn stalled(&self) -> Result<u64, TallyOverflow> {
+        self.stalled.read()
+    }
+
+    /// Grid-optimum searches that met a [`crate::pathing::reach::ReachError`]
+    /// since the last reset: a `toward` with no stone for it, counted here so
+    /// the miss is read, never silent. Nothing hands the search a column it
+    /// has no room for; `tests/nearest.rs` holds the count at zero.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn reach_faults(&self) -> Result<u64, TallyOverflow> {
+        self.reach_faults.read()
+    }
+
+    /// Zero the counters.
     pub const fn reset_counters(&mut self) {
-        self.expansions = 0;
-        self.endpoint_expansions = 0;
-        self.abstract_expansions = 0;
+        self.expansions = Tally::ZERO;
+        self.endpoint_expansions = Tally::ZERO;
+        self.abstract_expansions = Tally::ZERO;
+        self.served_estimates = Tally::ZERO;
+        self.walks = Tally::ZERO;
+        self.stalled = Tally::ZERO;
+        self.reach_faults = Tally::ZERO;
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the
@@ -505,7 +665,7 @@ fn astar_inner(
             continue;
         }
         scratch.close(item.n);
-        scratch.expansions = scratch.expansions.saturating_add(1);
+        scratch.expansions.bump();
         if item.n == goal {
             let cost = scratch.cost_at(goal);
             scratch.reconstruct(start, goal, out);
@@ -578,9 +738,9 @@ pub fn dijkstra_bounded(
             continue;
         }
         scratch.close(item.n);
-        scratch.expansions = scratch.expansions.saturating_add(1);
+        scratch.expansions.bump();
         if endpoint {
-            scratch.endpoint_expansions = scratch.endpoint_expansions.saturating_add(1);
+            scratch.endpoint_expansions.bump();
         }
         let here = scratch.cost_at(item.n);
         for k in DEFAULT_ORDER {
@@ -624,4 +784,48 @@ pub fn route_cost(surface: &Surface, route: &[Node]) -> Option<i32> {
 #[must_use]
 pub const fn neighbour_count() -> usize {
     NEIGHBOURS.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Scratch, Tally, TallyOverflow};
+    use crate::math::index::row;
+    use crate::pathing::MAX_ROUTE_NODES;
+
+    /// The served route's buffer is reserved where the scratch is made, for
+    /// the longest route the router writes, whatever the map: a near
+    /// estimate never grows it (lane `p3fix`).
+    #[test]
+    fn the_served_buffer_holds_the_longest_route_from_the_start() {
+        for (nodes, abstract_nodes, cells) in [(1, 1, 1), (64, 16, 16), (65_536, 8_192, 1_024)] {
+            let scratch = Scratch::new(nodes, abstract_nodes, cells, 18)
+                .unwrap_or_else(|| panic!("a ring for 18"));
+            assert!(
+                scratch.served.capacity() >= row(MAX_ROUTE_NODES),
+                "a scratch for {nodes} columns reserves {} served nodes, under {MAX_ROUTE_NODES}",
+                scratch.served.capacity()
+            );
+        }
+    }
+
+    /// A tally counts by one, and past `u64::MAX` it says it overflowed
+    /// rather than wrap or stick at the top.
+    #[test]
+    fn a_tally_counts_and_reports_its_overflow() {
+        let mut tally = Tally::ZERO;
+        tally.bump();
+        tally.bump();
+        assert_eq!(tally.read(), Ok(2));
+        let mut top = Tally::Count(u64::MAX - 1);
+        top.bump();
+        assert_eq!(top.read(), Ok(u64::MAX));
+        top.bump();
+        assert_eq!(top.read(), Err(TallyOverflow));
+        top.bump();
+        assert_eq!(
+            top.read(),
+            Err(TallyOverflow),
+            "an overflowed tally stays overflowed"
+        );
+    }
 }

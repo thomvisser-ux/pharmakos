@@ -103,8 +103,8 @@
 //!   four calls, and nowhere else. No method handler may: `verify_plan`, `estimate_route`,
 //!   `render_plan`, `patch_plan`, `get_economy_forecast` and `instantiate_template` all
 //!   answer from the frozen snapshot and the rules table, and `estimate_route` goes through
-//!   [`routes::RouteAdapter`], which owns its own search graph and never has a `World` in
-//!   its hand at all. `submit_plan` **compiles** a playbook, which is a pure function of
+//!   [`routes::RouteAdapter`], which borrows the hosted world's surface and clusters and
+//!   never has a `World` in its hand, and answers only in a Lull. `submit_plan` **compiles** a playbook, which is a pure function of
 //!   the playbook and the rules table and steps nothing; sealing the result into the match
 //!   is the host's call and not a handler's.
 //! * **No clock.** The gateway is not a walled crate (AGENTS.md section 4.5), so it reads

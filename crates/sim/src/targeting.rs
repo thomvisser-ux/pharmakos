@@ -18,22 +18,57 @@
 //! (j) and 134 (2) (b)). Nothing here steps, forks or runs a mandate (AGENTS.md
 //! section 3 rule 2).
 //!
+//! # Two measures
+//!
+//! Every closeness the resolver ranks is a cost over the walkers' step rule,
+//! exact for what it means (lane `p3fix`):
+//!
+//! - **A choice a unit then walks to** -- `cover`, `on_vent`, a Mine
+//!   beacon's seam, any "nearest" from an origin a walker leaves -- ranks by
+//!   **the walk the router will serve** that walker: [`Ranker`], below. It is
+//!   priced under no surcharge because no walker of a ranked choice is served
+//!   one: a commander's route is surcharged only while a `move` walks at
+//!   `AVOID_KNOWN_THREATS`, and the compile refuses `covering` and `toward`
+//!   in a `move`, so a ranked site is walked to by a `place_beacon`; the
+//!   drones walk to a seam or a target with no surcharge at all.
+//!   `tests/nearest.rs`'s `ranked_choices_are_walked_without_a_surcharge`
+//!   pins that premise, and whoever widens the vocabulary meets it there.
+//! - **A choice of closeness that no unit walks** -- `toward`'s stepping
+//!   stone, the legal site closest to the feature it steps toward -- ranks by
+//!   **the least cost of any walk over the terrain**, the grid optimum
+//!   ([`crate::pathing::reach`]). Nobody walks from the stone to the feature
+//!   when the stone is chosen (the commander walks to the stone), so no
+//!   served walk is the measure; the grid optimum is exactly "closest over
+//!   the ground", with no HPA\* artefact in it.
+//!
 //! # Nearest
 //!
-//! **The least estimated travel from the origin to the feature. Unreachable
-//! candidates are skipped. Ties go to the lowest anchor y, then x.** The metric
-//! is the item-61 estimator's integer `cost` ([`crate::pathing::estimate`]),
-//! from which the editor's ETA is derived, so what a chip says and what the sim
-//! picks agree. It measures to the feature's anchor column, or, when that
-//! column cannot be stood on or is not connected to the origin, to the first
-//! standable connected footprint column in `(y, x)` order.
+//! **The least cost of the walk the router serves from the origin to the
+//! feature. Unreachable candidates are skipped. Ties go to the lowest anchor
+//! y, then x.** The key is `(cost, y, x)`, the cost the integer cost of that
+//! walk ([`crate::pathing::estimate::walk_cost`]), near or far: the walk
+//! itself, not an estimate of it (lane `p3fix`, as the owner ruled in
+//! decisions-log item 168 (9); before the lane a far pair was ranked at the
+//! abstract estimate, which charges the unsmoothed refinement, and the order
+//! stepped where the near and far pricing met). The time a reader is shown
+//! adds the allowance per extra route the walk needs
+//! ([`crate::pathing::estimate::walk_ticks`]), so it is not guaranteed
+//! monotone with the rank where candidates differ in the routes they need.
+//! It measures to
+//! the feature's anchor column, or, when that column cannot be stood on or is
+//! not connected to the origin, to the first standable connected footprint
+//! column in `(y, x)` order.
 //!
-//! [`Ranker`] runs at most **one estimate per candidate**, and only for a
+//! [`Ranker`] prices **at most one walk per candidate**, and only for a
 //! candidate the octile lower bound has not already ruled out: a candidate is
-//! emitted once its key `(cost, y, x)` is below every unestimated candidate's
-//! `(bound, y, x)`, and because a bound never exceeds its cost, that is the
-//! candidate's true place in the order. Six or fewer candidates per kind on an
-//! S1 map, so the budget S1 measures is small.
+//! emitted once its key `(cost, y, x)` is below every unpriced candidate's
+//! `(bound, y, x)`, and because the octile bound never exceeds a served walk's
+//! cost (`tests/nearest.rs`'s `nearest_is_the_least_served_walk` pins it),
+//! that is the candidate's true place in
+//! the order. Candidates are opened in octile order, which opens exactly the
+//! candidates whose bound is under the emitted cost: no order that prunes by
+//! the octile bound alone opens fewer. Nothing is capped; what bounds the work
+//! is the candidate count ([`MAX_FEATURES`]) and the router's own search.
 //!
 //! In S1 liveness and reachability read the **live** world, unfogged, as the
 //! adopted design accepts for this stage (targeting.md, "Descriptions";
@@ -76,7 +111,7 @@ use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
 use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::estimate::{Fog, Speed, estimate};
+use crate::pathing::estimate::{ServedWalk, WalkError, walk_cost};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
@@ -362,7 +397,11 @@ impl Ground<'_> {
     /// it can be stood on and is connected to the origin, otherwise the first
     /// standable connected footprint column in `(y, x)` order. `None` when no
     /// footprint column is reachable, which makes the feature no candidate.
-    fn measure_to(&self, index: usize, origin: Node) -> Option<Node> {
+    /// Public so that a reader pricing the same walk another way (the
+    /// gateway's `estimate_route`, in its agreement test) names the column
+    /// this rule names rather than restating it.
+    #[must_use]
+    pub fn measure_to(&self, index: usize, origin: Node) -> Option<Node> {
         let feature = self.features.get(index)?;
         let reachable = |x: i32, y: i32| -> Option<Node> {
             let node = self.surface.node_of(x, y)?;
@@ -380,20 +419,12 @@ impl Ground<'_> {
             .find_map(|column| reachable(column.x, column.y))
     }
 
-    /// The item-61 estimate's integer cost from `from` to `to`, or `None` when
-    /// no route exists.
-    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Option<i64> {
+    /// The integer cost of the walk the router serves from `from` to `to`
+    /// ([`walk_cost`]): what a choice a unit then walks to ranks by
+    /// ([`Ranker`]; the module docs' "Two measures").
+    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<ServedWalk, WalkError> {
         self.charge(1);
-        estimate(
-            self.surface,
-            self.clusters,
-            scratch,
-            from,
-            to,
-            Fog::Clear,
-            Speed::commander(self.rules),
-        )
-        .map(|found| i64::from(found.cost))
+        walk_cost(self.surface, self.clusters, scratch, (from, to))
     }
 }
 
@@ -422,16 +453,18 @@ struct Entry {
     goal: Node,
     /// The octile lower bound on its cost.
     bound: i64,
-    /// Its estimated cost, once estimated.
+    /// Its served walk's cost, once priced.
     cost: i64,
-    /// 0 unestimated, 1 estimated, 2 emitted or unreachable.
+    /// Its served walk's partial routes, once priced.
+    partials: u32,
+    /// 0 unpriced, 1 priced, 2 emitted or unreachable.
     state: u8,
 }
 
 /// "Nearest", one candidate at a time, in `(cost, anchor y, anchor x)` order.
 ///
-/// Each candidate costs at most one estimate, and only when the bounds of the
-/// others cannot already place it (the module docs).
+/// Each candidate costs at most one priced walk, and only when the bounds of
+/// the others cannot already place it (the module docs).
 #[derive(Clone, Debug)]
 pub struct Ranker {
     entries: [Entry; MAX_FEATURES],
@@ -482,12 +515,20 @@ impl Ranker {
                     goal,
                     bound: i64::from(ground.surface.heuristic(start, goal)),
                     cost: 0,
+                    partials: 0,
                     state: 0,
                 };
                 ranker.len += 1;
             }
         }
         ranker
+    }
+
+    /// Whether no candidate is reachable: nothing for [`Ranker::next`] to
+    /// emit.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     /// How many features `keep` admitted, reachable or not: the count a
@@ -497,15 +538,20 @@ impl Ranker {
         self.matched
     }
 
-    /// The next candidate, nearest first, with its estimated cost; `None` when
-    /// every candidate has been emitted or found unreachable.
-    pub fn next(&mut self, ground: &Ground<'_>, scratch: &mut Scratch) -> Option<(usize, i64)> {
+    /// The next candidate, nearest first, with its served walk (ranked by its
+    /// cost); `None` when every candidate has been emitted or found
+    /// unreachable.
+    pub fn next(
+        &mut self,
+        ground: &Ground<'_>,
+        scratch: &mut Scratch,
+    ) -> Option<(usize, ServedWalk)> {
         let origin = self.origin?;
         loop {
             let live = self.entries.get(..self.len)?;
             // item 62: anchors are unique per feature, so both keys below end
             // in a unique `(y, x)`.
-            let best_estimated = live
+            let best_priced = live
                 .iter()
                 .enumerate()
                 .filter(|(_, entry)| entry.state == 1)
@@ -519,27 +565,44 @@ impl Ranker {
                 // item 62: `(y, x)` is a unique anchor.
                 .min_by_key(|(_, entry)| (entry.bound, entry.y, entry.x))
                 .map(|(at, entry)| (at, (entry.bound, entry.y, entry.x)));
-            match (best_estimated, best_bound) {
-                // The best estimated candidate is ahead of every bound still
-                // unestimated, so its place in the order is final.
+            match (best_priced, best_bound) {
+                // The best priced candidate is ahead of every bound still
+                // unpriced, so its place in the order is final.
                 (Some((at, key)), bound) if bound.is_none_or(|(_, other)| key < other) => {
                     let entry = self.entries.get_mut(at)?;
                     entry.state = 2;
-                    return Some((entry.feature, entry.cost));
+                    let walk = ServedWalk {
+                        cost: entry.cost,
+                        partials: entry.partials,
+                    };
+                    return Some((entry.feature, walk));
                 }
                 (_, Some((at, _))) => {
                     let entry = self.entries.get_mut(at)?;
                     match ground.travel(scratch, origin, entry.goal) {
-                        Some(cost) => {
-                            entry.cost = cost;
+                        Ok(walk) => {
+                            entry.cost = walk.cost;
+                            entry.partials = walk.partials;
                             entry.state = 1;
                         }
-                        None => entry.state = 2,
+                        // The router serves no walk to it: no candidate
+                        // (targeting.md, "Nearest": unreachable candidates
+                        // are skipped).
+                        Err(WalkError::NoPath(_)) => entry.state = 2,
+                        // A chain whose queries stop falling is a walk no
+                        // walker finishes: no candidate, and counted under
+                        // its own reason (`Scratch::stalled`), never read as
+                        // unreachable. The chain's argument says none occurs
+                        // (`walk_cost`, "The chain ends").
+                        Err(WalkError::Stalled { .. }) => {
+                            entry.state = 2;
+                            scratch.stalled.bump();
+                        }
                     }
                 }
-                // Nothing estimated is waiting and nothing is left to
-                // estimate (an estimated candidate with no bound left is
-                // emitted by the first arm).
+                // Nothing priced is waiting and nothing is left to price (a
+                // priced candidate with no bound left is emitted by the first
+                // arm).
                 (_, None) => return None,
             }
         }
@@ -729,17 +792,29 @@ pub fn cover_counted(
     }
 }
 
-/// One candidate site of a `toward` search: a legal site column, the node it
-/// stands on, the column of the feature it is measured to, and the octile
-/// lower bound on that cost. Kept in a buffer the caller owns, so a decision
-/// that searches allocates nothing once the buffer has grown.
+/// One legal site of a `toward` search: its column and the node it stands
+/// on, each column once. Kept in a buffer the caller owns; the world's own is
+/// reserved for every column of the map, the most a search can list, so a
+/// decision that searches allocates nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct StoneCandidate {
-    bound: i64,
     y: i32,
     x: i32,
     node: Node,
-    goal: Node,
+}
+
+impl StoneCandidate {
+    /// The site's column, `[x, y]`.
+    #[must_use]
+    pub const fn column(&self) -> [i32; 2] {
+        [self.x, self.y]
+    }
+
+    /// The node the site stands on.
+    #[must_use]
+    pub const fn node(&self) -> Node {
+        self.node
+    }
 }
 
 /// What `toward` resolved to: the feature it steps toward and the site
@@ -758,39 +833,121 @@ pub struct Stone {
 /// The stepping-stone site toward `feature` (S3's plan, E23; S1's plan,
 /// decision 3; task `pred`): **the legal site, inside `seat`'s spheres,
 /// nearest the feature**, where "nearest" is targeting's (the module docs):
-/// the least item-61 estimate's integer cost **from the candidate site to
-/// the feature's anchor column** ([`Ground::measure_to`]); a candidate from
-/// which the feature cannot be reached is skipped; ties go to the lowest
-/// site y, then x. Straight-line distance is not used.
+/// the **least walking cost over the terrain** from the candidate site to the
+/// feature's anchor column ([`Ground::measure_to`]): the grid optimum over
+/// the walkers' own step rule at the rules' step costs, not a served walk
+/// (the module docs' "Two measures": nobody walks from the stone to the
+/// feature when it is chosen). A candidate from which the feature cannot be
+/// reached is skipped; ties go to the lowest site y, then x. Straight-line
+/// distance is not used.
 ///
 /// A candidate is a column within the sphere of one of `seat`'s own living
 /// beacons (its own radius, grown by a finished Spire), that is a **legal
 /// site** (inside one of the seat's own spheres, not on the column of one of
 /// its own live beacons), standable, walkable, outside every feature's
 /// footprint and connected to the commander's column, exactly as
-/// [`covering_site`] admits a column. Candidates are estimated in the order
-/// of the estimator's own lower bound, so the search stops as soon as no
-/// unestimated candidate can beat the best one found.
+/// [`covering_site`] admits a column. One search outward from the feature,
+/// directed at the spheres that listed a site ([`crate::pathing::reach`],
+/// "Directed"), settles columns in ascending `cost + h`, and
+/// [`closest_site`] takes the least `(cost, y, x)` among the sites settled
+/// until the key passes the least cost: a resolve pops only the columns whose
+/// key is under the stone's cost, at most the map's, and computes one `h` a
+/// column it reaches, each costing one octile a sphere that listed a site.
 ///
 /// **The terrain is the live world's, unfogged** (`Fog::Clear`): E23's "the
 /// terrain the seat knows" reads every column until S3-05's terrain mask
 /// lands at S4 (S3's plan, decision 2; decisions-log item 156 (3)), as every
 /// other read of targeting's does (decisions-log item 108 (1)).
 ///
-/// Returns the site, if any, and how many legal sites it weighed.
+/// Answers the stone and how many legal sites it weighed; or that there is
+/// no legal site, before any search; or that the feature is out of the
+/// commander's reach, before any search ([`Sited`]).
 fn stone_site(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    (start, weighed): (Node, u32),
+    feature: usize,
+) -> Sited {
+    // Every site is connected to the commander's column, so all of them
+    // measure to the one column the commander would: the feature's anchor
+    // column, or its first footprint column a walker reaches. A feature the
+    // commander cannot reach is no target, and nothing is searched.
+    let Some(goal) = ground.measure_to(feature, start) else {
+        return Sited::Unreached(weighed);
+    };
+    match closest_site(scratch, ground.surface, goal) {
+        Ok(Some(site)) => Sited::Stone(site, weighed),
+        // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out
+        Ok(None) => Sited::Unreached(weighed),
+        // A search handed a column it has no room for: no stone, counted
+        // under its own reason (`Scratch::reach_faults`), never silent; the
+        // step's event vocabulary has no kind for it (AGENTS.md section 5).
+        Err(_) => {
+            scratch.reach_faults.bump();
+            Sited::Unreached(weighed)
+        }
+    }
+}
+
+/// **The stone's rule, its one home**: of the sites marked in the scratch's
+/// search, the one closest to `goal` over the terrain, ties to the lowest
+/// `(y, x)`; `Ok(None)` when the search reaches none.
+///
+/// # Errors
+///
+/// The search's own [`crate::pathing::reach::ReachError`].
+///
+/// The grid optimum from the goal outward, directed at the spheres added
+/// ([`crate::pathing::reach`], "Directed"): every column settles at its least
+/// cost, in ascending key `cost + h`, and a site's key is its cost. So the
+/// first site settled is at the least cost `c`, and every site at `c` settles
+/// before a key past `c`; the search promises no order among equal keys, so
+/// the least `(cost, y, x)` is taken here, over every site settled until the
+/// key passes `c`.
+pub(crate) fn closest_site(
+    scratch: &mut Scratch,
+    surface: &Surface,
+    goal: Node,
+) -> Result<Option<[i32; 2]>, crate::pathing::reach::ReachError> {
+    scratch.reach.begin_toward(surface, goal)?;
+    let mut best: Option<(i64, i32, i32)> = None;
+    while let Some((node, cost)) = scratch.reach.next(surface, &mut scratch.expansions)? {
+        if let Some((least, y, x)) = best
+            && scratch.reach.reached() > least
+        {
+            return Ok(Some([x, y]));
+        }
+        if scratch.reach.is_site(node) {
+            let (x, y) = surface.coord_of(node);
+            if best.is_none_or(|held| (cost, y, x) < held) {
+                best = Some((cost, y, x));
+            }
+        }
+    }
+    Ok(best.map(|(_, y, x)| [x, y]))
+}
+
+/// Every legal site of a `toward` for `seat`'s commander at `commander`
+/// (the columns [`stone_site`] weighs), each marked once in the scratch and
+/// listed in `candidates`, and each own sphere added for the directed
+/// search: the commander's node and how many sites there are, or `None`
+/// when the commander stands on no column. The set is the same for every
+/// feature, so a resolve makes it once, before any search.
+fn legal_sites(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
     candidates: &mut Vec<StoneCandidate>,
     seat: SeatId,
     commander: [Fx; 3],
-    feature: usize,
-) -> (Option<[i32; 2]>, u32) {
+) -> Option<(Node, u32)> {
     candidates.clear();
+    scratch.reach.clear_sites();
     let [cx, cy] = column_of(commander);
-    let Some(start) = ground.surface.node_of(cx, cy) else {
-        return (None, 0);
-    };
+    let start = ground.surface.node_of(cx, cy)?;
+    // Every legal site, once: a column two spheres hold is one site. Each is
+    // a distinct column of the map, whose count is a `u32`, so the count
+    // cannot pass it.
+    let mut weighed: u32 = 0;
     let beacons = ground.beacons;
     for (((owner, hp), centre), id) in beacons
         .seats()
@@ -805,6 +962,11 @@ fn stone_site(
         let radius = ground.radius_of(Some(BeaconId::new(*id))).floor_voxels();
         let limit = i64::from(radius) * i64::from(radius);
         let [bx, by] = column_of(*centre);
+        // This sphere's own sites: how many, and the most octile cost from
+        // its centre to any of them, its reach for the directed search.
+        let mut listed = false;
+        let mut reach: i64 = 0;
+        let costs = ground.surface.costs();
         for dy in -radius..=radius {
             for dx in -radius..=radius {
                 if i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy) > limit {
@@ -825,57 +987,32 @@ fn stone_site(
                     || !ground.inside_own_sphere(seat, site)
                     || ground.stacks_on_own(seat, x, y)
                     || !ground.clusters.connected(ground.surface, start, node)
+                    || !scratch.reach.mark_site(node)
                 {
                     continue;
                 }
-                let Some(goal) = ground.measure_to(feature, node) else {
-                    // The feature cannot be reached from here, which makes the
-                    // column no candidate; a deduplicated count below still
-                    // weighs it.
-                    candidates.push(StoneCandidate {
-                        bound: i64::MAX,
-                        y,
-                        x,
-                        node,
-                        goal: node,
-                    });
-                    continue;
-                };
-                candidates.push(StoneCandidate {
-                    bound: i64::from(ground.surface.heuristic(node, goal)),
-                    y,
-                    x,
-                    node,
-                    goal,
-                });
+                candidates.push(StoneCandidate { y, x, node });
+                weighed += 1;
+                listed = true;
+                reach = reach.max(i64::from(costs.octile(dx, dy)));
             }
         }
-    }
-    // A column two spheres hold is one candidate: deduplicated by `(y, x)`,
-    // keeping its one bound (the bound is a function of the column alone).
-    // item 62: the key ends in `(y, x)`, unique per column, so it is total.
-    candidates.sort_unstable_by_key(|entry| (entry.y, entry.x));
-    candidates.dedup_by_key(|entry| (entry.y, entry.x));
-    // E7: rule: a count past `u32` is a count no step_failed value can carry; it reads as the most
-    let weighed = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
-    // item 62: as above.
-    candidates.sort_unstable_by_key(|entry| (entry.bound, entry.y, entry.x));
-    let mut best: Option<(i64, i32, i32)> = None;
-    for entry in candidates.iter() {
-        if entry.bound == i64::MAX {
-            break;
-        }
-        if best.is_some_and(|(cost, _, _)| entry.bound > cost) {
-            break;
-        }
-        let Some(cost) = ground.travel(scratch, entry.node, entry.goal) else {
-            continue;
-        };
-        if best.is_none_or(|held| (cost, entry.y, entry.x) < held) {
-            best = Some((cost, entry.y, entry.x));
+        // A sphere that listed no site heads the directed search nowhere.
+        if listed {
+            scratch.reach.add_sphere([bx, by], reach);
         }
     }
-    (best.map(|(_, y, x)| [x, y]), weighed)
+    Some((start, weighed))
+}
+
+/// What [`stone_site`] found, given legal sites to weigh.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Sited {
+    /// The stone's column, and the legal sites weighed.
+    Stone([i32; 2], u32),
+    /// Legal sites, weighed, but the feature is not one the commander can
+    /// reach. A `nearest` never ranks such a feature.
+    Unreached(u32),
 }
 
 /// Resolve a `toward` site for `seat` (S3's plan, E23; task `pred`): the
@@ -907,19 +1044,38 @@ pub fn toward_counted(
                 .index_of(kind, anchor)
                 .filter(|index| ground.is_live(*index))
                 .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
-            match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                (Some(site), weighed) => Ok(Stone {
+            // No legal site: refused before any search.
+            let sites = legal_sites(ground, scratch, candidates, seat, commander)
+                .filter(|(_, weighed)| *weighed > 0)
+                .ok_or(StepFailed::counted(StepFailure::IllegalSite, 0))?;
+            match stone_site(ground, scratch, sites, feature) {
+                Sited::Stone(site, weighed) => Ok(Stone {
                     feature,
                     site,
                     weighed,
                 }),
-                (None, weighed) => Err(StepFailed::counted(StepFailure::IllegalSite, weighed)),
+                Sited::Unreached(weighed) => {
+                    Err(StepFailed::counted(StepFailure::IllegalSite, weighed))
+                }
             }
         }
         FeatureSpec::Nearest { kind, uncovered } => {
             let mut ranker = Ranker::new(ground, column_of(commander), |index| {
                 matches_pick(ground, seat, index, kind, uncovered)
             });
+            // No legal site is no site for any feature: refused before the
+            // ranker prices a walk or the stone's search starts, as
+            // `illegal_site` when a feature is in reach and `no_target` when
+            // none is.
+            let Some(sites) = legal_sites(ground, scratch, candidates, seat, commander)
+                .filter(|(_, weighed)| *weighed > 0)
+            else {
+                return Err(if ranker.is_empty() {
+                    StepFailed::counted(StepFailure::NoTarget, ranker.matched())
+                } else {
+                    StepFailed::counted(StepFailure::IllegalSite, 0)
+                });
+            };
             let mut reached = false;
             // The sites weighed for every feature are the same legal sites:
             // the candidate set is built from the seat's spheres and the
@@ -929,15 +1085,18 @@ pub fn toward_counted(
             let mut weighed: u32 = 0;
             while let Some((feature, _)) = ranker.next(ground, scratch) {
                 reached = true;
-                match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                    (Some(site), count) => {
+                match stone_site(ground, scratch, sites, feature) {
+                    Sited::Stone(site, count) => {
                         return Ok(Stone {
                             feature,
                             site,
                             weighed: count,
                         });
                     }
-                    (None, count) => weighed = count,
+                    // The ranker emits only features the commander reaches,
+                    // from the same column the sites are reached from, so
+                    // none is unreached; were one, the next is tried.
+                    Sited::Unreached(count) => weighed = count,
                 }
             }
             if reached {
@@ -1235,7 +1394,8 @@ mod tests {
                 footprint,
             ));
         }
-        let surface = Surface::new(&voxels, StepCosts::new(10, 14, 4, 2))
+        let ten = core::num::NonZeroI32::new(10).unwrap_or_else(|| panic!("ten"));
+        let surface = Surface::new(&voxels, StepCosts::new(ten, 14, 4, 2))
             .unwrap_or_else(|| panic!("a surface"));
         let mut scratch = Scratch::for_map(&surface, 32).unwrap_or_else(|| panic!("a scratch"));
         let clusters = Clusters::new(
@@ -1299,7 +1459,8 @@ mod tests {
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
         let mut out: Vec<(String, i64)> = Vec::new();
-        while let Some((feature, cost)) = ranker.next(&ground, &mut map.scratch) {
+        while let Some((feature, walk)) = ranker.next(&ground, &mut map.scratch) {
+            let cost = walk.cost;
             let name = map
                 .features
                 .get(feature)
@@ -1375,6 +1536,91 @@ mod tests {
         // "1 matched, none reachable" a `no_target` carries.
         let mut map = synthetic(walled_in, &[[22, 22]]);
         assert_eq!(ranked_all(&mut map, [5, 5]), (Vec::new(), 1));
+    }
+
+    /// The stone's tie-break lives in [`super::closest_site`] alone: on
+    /// flat ground, two sites at one least cost where the directed queue
+    /// settles the one with the higher `(y, x)` first (a column can join the
+    /// bucket being settled, and buckets keep no order within a key), the
+    /// stone is still the lower. The pair is found by search over the map's
+    /// columns, and some pair must exist, so the case is real.
+    #[test]
+    fn the_stone_tie_goes_to_the_lowest_site_whatever_the_queue_settles_first() {
+        use crate::pathing::search::Tally;
+        let mut map = synthetic(|_, _| false, &[]);
+        let surface = &map.surface;
+        let costs = surface.costs();
+        let goal = surface
+            .node_of(40, 40)
+            .unwrap_or_else(|| panic!("the goal"));
+        let centre = [20, 20];
+        let radius = 9;
+        let mut cases = 0;
+        let mut first_wrong = 0;
+        // Every pair of columns of the sphere at one least cost from the goal.
+        let mut disk: Vec<(i64, [i32; 2])> = Vec::new();
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx * dx + dy * dy > radius * radius {
+                    continue;
+                }
+                let (x, y) = (centre[0] + dx, centre[1] + dy);
+                let cost = i64::from(costs.octile(40 - x, 40 - y));
+                disk.push((cost, [x, y]));
+            }
+        }
+        for (i, (cost_a, a)) in disk.iter().enumerate() {
+            for (cost_b, b) in disk.iter().skip(i + 1) {
+                if cost_a != cost_b {
+                    continue;
+                }
+                let (node_a, node_b) = (
+                    map.surface
+                        .node_of(a[0], a[1])
+                        .unwrap_or_else(|| panic!("a")),
+                    map.surface
+                        .node_of(b[0], b[1])
+                        .unwrap_or_else(|| panic!("b")),
+                );
+                // Only these two are sites; the sphere reaches both.
+                let reach = i64::from(costs.octile(a[0] - centre[0], a[1] - centre[1]))
+                    .max(i64::from(costs.octile(b[0] - centre[0], b[1] - centre[1])));
+                map.scratch.reach.clear_sites();
+                map.scratch.reach.mark_site(node_a);
+                map.scratch.reach.mark_site(node_b);
+                map.scratch.reach.add_sphere(centre, reach);
+                // Which the queue settles first.
+                map.scratch
+                    .reach
+                    .begin_toward(&map.surface, goal)
+                    .unwrap_or_else(|error| panic!("the goal is on the map: {error:?}"));
+                let mut tally = Tally::ZERO;
+                let mut first = None;
+                while let Some((node, _)) = map
+                    .scratch
+                    .reach
+                    .next(&map.surface, &mut tally)
+                    .unwrap_or_else(|error| panic!("a queued column is on the map: {error:?}"))
+                {
+                    if map.scratch.reach.is_site(node) {
+                        first = Some(map.surface.coord_of(node));
+                        break;
+                    }
+                }
+                let lower = if (a[1], a[0]) < (b[1], b[0]) { *a } else { *b };
+                let stone = super::closest_site(&mut map.scratch, &map.surface, goal);
+                assert_eq!(stone, Ok(Some(lower)), "sites {a:?} and {b:?} at {cost_a}");
+                cases += 1;
+                if first.map(|(x, y)| [x, y]) != Some(lower) {
+                    first_wrong += 1;
+                }
+            }
+        }
+        assert!(cases > 10, "pairs at one cost: {cases}");
+        assert!(
+            first_wrong > 0,
+            "no pair where the queue settles the higher site first: the case is not built"
+        );
     }
 
     #[test]
