@@ -317,9 +317,6 @@ pub(crate) struct Situation {
     /// The match seed, as `get_map_summary` spells it: empty for a seat's
     /// token, which is told none from S3 (S3's plan, E18).
     pub(crate) match_seed: String,
-    /// The map's extent in voxels on each axis, `get_map_summary.size`: what
-    /// a Survey post's one probe area spans ([`crate::compose`]).
-    pub(crate) map_size: [i32; 3],
     /// Every beacon the seat is shown, ascending by id.
     pub(crate) beacons: Vec<Beacon>,
     /// The seat's own economy.
@@ -402,7 +399,6 @@ impl Situation {
         let match_seed = text_of(&map, "match_seed")
             .map_err(at("get_map_summary"))?
             .to_owned();
-        let map_size = map_size_of(&map)?;
         let features = array_of(&map, "features")
             .map_err(at("get_map_summary"))?
             .iter()
@@ -418,7 +414,6 @@ impl Situation {
             round,
             segment_ms,
             match_seed,
-            map_size,
             beacons,
             economy,
             features,
@@ -431,26 +426,6 @@ impl Situation {
             own_spire_seen: seen.own_spire,
         })
     }
-}
-
-/// The map's extent, `get_map_summary.size`.
-///
-/// # Errors
-///
-/// `MALFORMED` for a size that does not read or has an axis of no voxels: a
-/// map with no extent is not one the operator can lay a probe area over.
-fn map_size_of(map: &Json) -> Result<[i32; 3], Refused> {
-    let size = map
-        .get("size")
-        .ok_or_else(|| malformed("get_map_summary", "the answer carries no map size"))?;
-    let size = voxel(size).map_err(|misread| misread.refused("get_map_summary"))?;
-    if size.iter().any(|axis| *axis <= 0) {
-        return Err(malformed(
-            "get_map_summary",
-            "a map size with an axis of no voxels",
-        ));
-    }
-    Ok(size)
 }
 
 /// One `gp.api.v1.MapFeature`, read.

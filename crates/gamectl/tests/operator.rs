@@ -750,15 +750,14 @@ fn easy_passes_the_verifier_on_every_snapshot_of_the_corpus() {
         assert!(row.advisor_calls <= EASY_ADVISOR_CALL_BUDGET, "{row:#?}");
     }
     // What it chose, said so a reader of a red build can see it: on the
-    // determinism seed no seat holds a sighting in round one, so each seals
-    // a Survey post beside its core, weighed before the goals (spec section
-    // 14's trigger; S3's `opr3`, fix pass 1), by the starting seam's name.
+    // determinism seed each seat's round one reaches past its first sphere
+    // with a stepping stone toward a rich seam, by name (S5-04).
     assert!(
         rows.iter()
             .filter(|row| row.snapshot == "three-rounds/round-1")
             .all(|row| row
                 .note
-                .contains("A Survey beacon beside the core, covering the scrap seam seam_")),
+                .contains("A stepping-stone beacon toward the rich scrap seam seam_")),
         "{rows:#?}"
     );
 }
@@ -921,7 +920,7 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 
 /// The corpus rows on the committed rules whose seat's supply shows a
 /// Generator. None since S3's `opr3` fix pass 1: Easy spends the corpus's
-/// rounds on the Survey post and on stepping stones toward rich seams beyond
+/// rounds on stepping stones toward rich seams beyond
 /// its first sphere, which its Balanced terms value above a Generator (a rich
 /// seam's Mine about 1 180 points, a lean vent's Generator 140), so no seat
 /// builds one in three rounds. The scenario's own Generator is
@@ -1206,12 +1205,12 @@ fn easy_fits_the_in_process_limits() {
         assert!(EASY_ADVISOR_CALL_BUDGET <= IN_PROCESS_LIMITS.per_tick);
         assert!(EASY_CALL_BUDGET <= IN_PROCESS_LIMITS.per_window);
         // The derivation's sums, pinned (`crates/operator/src/easy.rs`' table):
-        // 20 fixed reads, 2 tap probe, 1 guard probe, 1 raid probe, 1 Survey
-        // probe, 30 candidates, 30 stepping stones, 5 templates, 1
-        // composition, 9 verifies, 6 for the safe playbook and 3 to commit;
-        // the advisor's the same less the Survey probe, the stones, the
-        // composition, the verifies and the commit.
-        assert!(EASY_CALL_BUDGET == 109);
+        // 20 fixed reads, 2 tap probe, 1 guard probe, 1 raid probe, 30
+        // candidates, 30 stepping stones, 5 templates, 1 composition, 9
+        // verifies, 6 for the safe playbook and 3 to commit; the advisor's
+        // the same less the stones, the composition, the verifies and the
+        // commit.
+        assert!(EASY_CALL_BUDGET == 108);
         assert!(EASY_ADVISOR_CALL_BUDGET == 65);
     }
 }
@@ -1578,18 +1577,17 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
         eprintln!("{} seat {}: {}", row.snapshot, row.seat, row.note);
     }
     eprintln!("Probation's seed, the stones (round, seat, toward): {stones:?}");
-    // A named expectation, each round of each seat's stone chain. Seat 0
-    // walks toward `seam_190_124` in rounds 1 and 2 and in round 3 places the
-    // Mine beacon covering it, the goal its stones served. Seat 1 starts
-    // toward `seam_163_202`, turns toward `seam_191_215` once its first stone
-    // stands, because from the new sphere that seam ranks first by the
-    // scoring (both are rich seams; the turn is the nearer), and turns back in
-    // round 3; its chain reaches no seam within the three rounds.
+    // A named expectation, each round of each seat's stone chain (cut 3: no
+    // Survey post). Seat 0 walks toward `seam_190_124` in every round; seat
+    // 1 starts toward `seam_163_202`, turns toward `seam_191_215` once its
+    // first stone stands and turns back in round 3. Neither chain reaches its
+    // seam within the three rounds.
     let wanted: Vec<(String, u8, String)> = [
         ("probation/round-1", 0, "seam_190_124"),
         ("probation/round-1", 1, "seam_163_202"),
         ("probation/round-2", 0, "seam_190_124"),
         ("probation/round-2", 1, "seam_191_215"),
+        ("probation/round-3", 0, "seam_190_124"),
         ("probation/round-3", 1, "seam_163_202"),
     ]
     .into_iter()
@@ -1597,152 +1595,8 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
     .collect();
     assert_eq!(stones, wanted, "{rows:#?}");
     assert!(
-        rows.iter().any(|row| row.snapshot == "probation/round-3"
-            && row.seat == 0
-            && row
-                .note
-                .contains("A Mine beacon covering the rich scrap seam seam_190_124")),
-        "seat 0's stones are followed by the goal they served: {rows:#?}"
-    );
-    assert!(
         rows.iter().all(|row| row.seal != Seal::NotEasy),
         "every seal is Easy's own, the verifier's accepted: {rows:#?}"
-    );
-}
-
-/// One hosted match on the committed seeds for the Survey post's tests:
-/// every seat Easy, the rules table's own ladder, `rounds` rounds. Per seat,
-/// the rounds whose seal places a Survey post, the round of its first
-/// `enemy_beacon_found`.
-struct Surveyed {
-    posts: Vec<(u32, u8)>,
-    first_found: Vec<(u8, u32)>,
-}
-
-fn survey_match(seed: u64, seats: u32, rounds: u32) -> Surveyed {
-    use pharmakos_gateway::fog::Audience;
-    let rules = rules_json();
-    let host = Host::open_from(
-        &rules,
-        seed,
-        seats,
-        &Settings {
-            segment_lengths_ms: Vec::new(),
-            round_limit: rounds,
-        },
-        Some(root().join(LIBRARY_PATH)),
-    )
-    .expect("a match");
-    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
-    let mut surface = Surface::new(
-        &match_id(&format!("survey-{seed:x}-{seats}-{rounds}")),
-        seed,
-        table,
-        FogPolicy::fogged(),
-        &seat_ids(seats),
-    )
-    .expect("a surface");
-    surface.attach(host).expect("attached");
-    surface.open_lull().expect("the opening Lull");
-    let mut easy = all_built_in(&mut surface, seats, &rules);
-    let mut out = Surveyed {
-        posts: Vec::new(),
-        first_found: Vec::new(),
-    };
-    for round in 1..=rounds {
-        for row in visit(
-            &format!("survey-{seed:x}/round-{round}"),
-            &mut surface,
-            seats,
-            &rules,
-            &mut easy,
-        ) {
-            if row.seal == Seal::Own && row.note.contains("A Survey beacon beside the core") {
-                out.posts.push((round, row.seat));
-            }
-        }
-        assert!(surface.begin_push().expect("the Push opens"));
-        let mut read = 0_usize;
-        while let Some(report) = surface.step().expect("a tick") {
-            let events = surface.feed().events();
-            if events.len() < read {
-                read = 0;
-            }
-            for event in events.get(read..).unwrap_or_default() {
-                if event.kind.to_string() != "enemy_beacon_found" {
-                    continue;
-                }
-                let owner = match event.audience {
-                    Audience::Private(seat) => Some(seat),
-                    Audience::World { owner, .. } => owner,
-                    Audience::Public => None,
-                };
-                if let Some(seat) = owner
-                    && !out.first_found.iter().any(|(held, _)| *held == seat.raw())
-                {
-                    out.first_found.push((seat.raw(), round));
-                }
-            }
-            read = events.len();
-            if report.segment_ended {
-                break;
-            }
-        }
-        surface.end_recap().expect("the recap closes");
-        if round < rounds {
-            surface.open_lull().expect("the next Lull");
-        }
-    }
-    out
-}
-
-/// The committed seeds the Survey post is measured on, as `(seed, seats)`.
-const SURVEY_MATCHES: [(u64, u32); 5] = [
-    (PROBATION_SEED, 2),
-    (SEED, 2),
-    (SEED, 3),
-    (SCENARIO_SEED, 2),
-    (SCENARIO_SEED, 3),
-];
-
-/// `(round-1 Survey posts, of them finding an enemy beacon by the end of
-/// round 2's Push)` on [`SURVEY_MATCHES`].
-const SURVEY_ROUND_ONE: (usize, usize) = (12, 7);
-
-/// Spec section 14's Survey post through the real gateway (S3's plan,
-/// decision 3; fix pass 1, item 7), weighed before the goals and looking over
-/// the half of the ground away from the seat's core. On the committed seeds,
-/// every seat Easy, over two rounds: how many seats seal a post in round 1,
-/// and how many of those have their scouts find an enemy beacon by the end
-/// of round 2's Push. A named expectation with its counts; a change says
-/// which seat and seed moved.
-///
-/// The owner's reading of the spec's "refresh those sightings before the next
-/// Lull" (2026-11-22, "Refresh only (Recommended)"): it covers sightings
-/// already held, and a first discovery may take longer, so this test pins
-/// what a first discovery takes and does not require it inside one Push.
-#[test]
-fn survey_posts_go_up_in_round_one_and_find_the_enemy_by_round_two() {
-    let mut posted = 0_usize;
-    let mut found = 0_usize;
-    for (seed, seats) in SURVEY_MATCHES {
-        let surveyed = survey_match(seed, seats, 2);
-        eprintln!(
-            "seed {seed:#x}/{seats}: posts {:?}; first enemy found (seat, round) {:?}",
-            surveyed.posts, surveyed.first_found
-        );
-        for &(_, seat) in surveyed.posts.iter().filter(|(round, _)| *round == 1) {
-            posted = posted.checked_add(1).expect("a count");
-            if surveyed.first_found.iter().any(|&(held, _)| held == seat) {
-                found = found.checked_add(1).expect("a count");
-            }
-        }
-    }
-    eprintln!("round-1 Survey posts {posted}, finding the enemy by round 2: {found}");
-    assert_eq!(
-        (posted, found),
-        SURVEY_ROUND_ONE,
-        "the named expectation moved"
     );
 }
 

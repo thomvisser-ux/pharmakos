@@ -31,7 +31,6 @@ use std::path::PathBuf;
 use pharmakos_operator::easy::{
     CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, EASY_CANDIDATES, PAGES_MAX,
     RAID_FORCE_SIZE, RAID_TARGETS_MAX, SAFE_MAX_RAISED, STONE_CALLS, STONE_TARGETS_MAX,
-    SURVEY_PROBE_CALLS,
 };
 use pharmakos_operator::{Easy, Submitted};
 use pharmakos_proto::json::{Json, read, write};
@@ -1693,11 +1692,8 @@ fn easy_never_exceeds_its_derived_call_budget() {
     // spends every term but one `submit_plan` (its own plan never qualified,
     // so only the safe one was submitted) and the stepping stones, since every
     // placement here has a site (`the_worst_stone_round_spends_every_term`
-    // spends those) and the Survey probe, since a fresh sighting is held.
-    assert_eq!(
-        played.calls,
-        EASY_CALL_BUDGET - 1 - STONE_CALLS - SURVEY_PROBE_CALLS
-    );
+    // spends those).
+    assert_eq!(played.calls, EASY_CALL_BUDGET - 1 - STONE_CALLS);
 
     // The other worst branch: its own plan qualifies and is refused at submit.
     let mut refused = worst.clone();
@@ -2417,8 +2413,8 @@ fn a_post_already_beside_the_core_is_not_placed_again() {
             .iter()
             .filter(|line| line.starts_with("estimate_route") && line.contains("seam_36_34"))
             .count(),
-        1,
-        "no guard site is estimated: the seam's one estimate is the Survey post's"
+        0,
+        "no guard site is estimated"
     );
     assert!(
         !script
@@ -3071,9 +3067,7 @@ fn a_refused_toward_drops_the_stone() {
         "{:#?}",
         script.transcript
     );
-    // What else the round has is its Survey post: no enemy sighting is held.
-    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
-    assert!(played.why.contains("A Survey beacon"), "{}", played.why);
+    assert_eq!(played.submitted, Submitted::Safe);
 }
 
 /// Every refused placement is weighed again once, and never twice; two
@@ -3157,127 +3151,6 @@ fn the_worst_stone_round_spends_every_term() {
         u32::try_from(script.transcript.len()).unwrap()
     );
     assert_eq!(played.calls, EASY_CALL_BUDGET - 1);
-}
-
-// ---------------------------------------------------------------------------
-// The Survey post (S3's `opr3`; spec section 14; S3's plan, decision 3)
-// ---------------------------------------------------------------------------
-
-/// The `estimate_route` lines that probe for the nearest own Survey beacon.
-fn survey_probes(transcript: &[String]) -> usize {
-    transcript
-        .iter()
-        .filter(|line| {
-            line.starts_with("estimate_route") && line.contains(r#""mandate": "SURVEY""#)
-        })
-        .count()
-}
-
-/// The `survey_post` step of the composing patch, if it carries one.
-fn survey_step(transcript: &[String]) -> Option<Json> {
-    composing_ops(transcript)
-        .into_iter()
-        .filter_map(|op| op.get("value").cloned())
-        .flat_map(|value| match value {
-            Json::Array(steps) => steps,
-            other => vec![other],
-        })
-        .find(|step| step.get("label").and_then(text) == Some("survey_post"))
-}
-
-/// Spec section 14's trigger as written: with no enemy beacon sighted inside
-/// the reach window, Easy probes once for a Survey post beside its core, and,
-/// none standing, places one covering the post seam, its mandate Survey's
-/// with one probe area over the whole map (`get_map_summary.size`, here 64 x
-/// 64 x 32) and two scouts, beside the round's goals.
-#[test]
-fn with_no_fresh_sighting_easy_places_a_survey_post_beside_its_core() {
-    let (script, played) = play(Script::busy(0));
-    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
-    assert_eq!(survey_probes(&script.transcript), 1);
-    let step = compact(&survey_step(&script.transcript).expect("a Survey post"));
-    for wanted in [
-        r#""covering": { "feature_id": "seam_36_34" }"#,
-        r#""tags": [ "survey" ]"#,
-        // The core b_00 stands at (32, 32) of a 64-voxel map: one voxel past
-        // the middle (31) on both axes, so `x` decides, and the far half is
-        // the low one.
-        r#""probe_areas": [ { "min": { "x": 0, "y": 0, "z": 0 }, "max": { "x": 31, "y": 63, "z": 31 } } ]"#,
-        r#""scout_count": 2"#,
-        r#""on_fail": { "action": "SKIP" }"#,
-    ] {
-        assert!(step.contains(wanted), "{wanted} in {step}");
-    }
-    assert!(
-        !step.contains("defend"),
-        "the Defend settings are replaced: {step}"
-    );
-    assert!(played.why.contains("A Survey beacon"), "{}", played.why);
-}
-
-/// A fresh sighting of an enemy beacon is what the raid needs, so no probe is
-/// made and no post placed; a sighting older than the reach window is stale,
-/// and the post goes up; at the window's edge it is still fresh.
-#[test]
-fn a_fresh_sighting_places_no_survey_post_and_a_stale_one_does() {
-    let with_age = |age: i64| {
-        let mut world = Script::busy(0);
-        world.beacons.push(Beacon {
-            id: String::from("e_01"),
-            at: [60, 60, GROUND],
-            owner: 1,
-            core: false,
-            powered: false,
-            priority: "",
-        });
-        world.sighting_ages.insert(String::from("e_01"), age);
-        world
-    };
-    for (age, surveys) in [(0, false), (180_000, false), (180_001, true)] {
-        let (script, _) = play(with_age(age));
-        assert_eq!(
-            survey_probes(&script.transcript) == 1,
-            surveys,
-            "age {age}: {:#?}",
-            script.transcript
-        );
-        assert_eq!(
-            survey_step(&script.transcript).is_some(),
-            surveys,
-            "age {age}"
-        );
-    }
-}
-
-/// One Survey post at a time: one standing beside the core is not placed
-/// again; a guard post added for a death takes the seam it would cover, so
-/// that round places none; and a treasury below its beacon and two scouts
-/// places none.
-#[test]
-fn a_survey_post_never_stacks_contends_with_the_guard_or_overspends() {
-    let mut standing = Script::busy(0);
-    standing.survey_post = Some([34, 34, GROUND]);
-    let mut died = Script::busy(0);
-    died.round = 2;
-    died.feed_deaths = vec![0];
-    let mut poor = Script::busy(0);
-    poor.treasury = 79;
-    for (what, world) in [("standing", standing), ("died", died), ("poor", poor)] {
-        let (script, _) = play(world);
-        let placed = script
-            .transcript
-            .iter()
-            .filter(|line| line.starts_with("patch_plan"))
-            .any(|line| line.contains("survey_post"));
-        assert!(!placed, "{what}: {:#?}", script.transcript);
-    }
-}
-
-/// The advisor offers no Survey post, so it never probes for one.
-#[test]
-fn the_advisor_never_probes_for_a_survey_post() {
-    let (script, _) = advise(Script::busy(0));
-    assert_eq!(survey_probes(&script.transcript), 0);
 }
 
 // ---------------------------------------------------------------------------

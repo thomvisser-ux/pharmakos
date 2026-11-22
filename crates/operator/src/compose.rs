@@ -53,9 +53,7 @@
 use pharmakos_proto::json::Json;
 
 use crate::candidates::{Candidate, Goal, NoVent, RaidTarget, core_threat, route_index, tap_step};
-use crate::easy::{
-    CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT, SAFE_PLAYBOOK, SURVEY_SCOUT_COUNT,
-};
+use crate::easy::{CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT, SAFE_PLAYBOOK};
 use crate::playbook::{Declared, op, pointer_get, with_member, with_pointer};
 use crate::situation::{Kind, LastPush, Situation};
 use crate::tuning::Tuning;
@@ -78,8 +76,6 @@ pub(crate) struct Composed {
     pub(crate) removals: Vec<Vec<Json>>,
     /// The Resonance Spire queued at the core this round, if one is.
     pub(crate) spire: Option<Spire>,
-    /// The Survey post added beside the goals, if one is.
-    pub(crate) survey: Option<Candidate>,
     /// Why, in the sentences the playbook's note carries after its seed line.
     pub(crate) why: String,
 }
@@ -269,7 +265,6 @@ pub(crate) fn compose(
     tuning: &Tuning,
     top: &[Candidate],
     guard: Option<&Candidate>,
-    survey: Option<&Candidate>,
     spire: Option<&Spire>,
     declared: &[Declared],
 ) -> Option<Composed> {
@@ -278,7 +273,7 @@ pub(crate) fn compose(
     let defend = declared
         .iter()
         .find(|held| held.template_id == DEFEND_THE_CORE);
-    let opening_of = opening(top, guard, survey, defend.is_some());
+    let opening_of = opening(top, guard, defend.is_some());
     if opening_of.lead.is_none() && spire.is_none() {
         return None;
     }
@@ -287,7 +282,6 @@ pub(crate) fn compose(
             guard,
             guard_ms,
             spire,
-            survey,
             held_back,
             ..
         },
@@ -301,22 +295,18 @@ pub(crate) fn compose(
         core.as_deref(),
         fill,
     )?;
-    let mut posts = post_steps(situation, defend, guard, survey)?;
+    let mut posts = post_steps(defend, guard)?;
     // The core's step goes in at route 0 as the patch's last operation, the
-    // Spire's just before it, the guard's before that and the Survey post's
-    // before that, so every pointer above them is the template's; the
-    // removals are applied to the patched text, where each step stands one
-    // further on for each of them.
+    // Spire's just before it and the guard's before that, so every pointer
+    // above them is the template's; the removals are applied to the patched
+    // text, where each step stands one further on for each of them.
     let core_shift = usize::from(core.is_some()).checked_add(usize::from(spire.is_some()))?;
-    let front = usize::from(posts.survey.is_some());
     let (template, goals, patch_parts) = match (goals.first(), guard) {
         (Some(first), _) => {
             let template = declared
                 .iter()
                 .find(|held| held.template_id == first.goal.template())?;
-            let shift = core_shift
-                .checked_add(usize::from(posts.guard.is_some()))?
-                .checked_add(front)?;
+            let shift = core_shift.checked_add(usize::from(posts.guard.is_some()))?;
             let parts = place_patch(
                 template,
                 &goals,
@@ -329,33 +319,19 @@ pub(crate) fn compose(
         (None, Some(guard)) => {
             let template = defend?;
             let goals = vec![guard.clone()];
-            let parts = place_patch(
-                template,
-                &goals,
-                fill,
-                held_back?,
-                core_shift.checked_add(front)?,
-            )?;
+            let parts = place_patch(template, &goals, fill, held_back?, core_shift)?;
             // Alone, the guard fills the Defend template itself.
             posts.guard = None;
             (template, goals, parts)
         }
         (None, None) => {
-            return additions_alone(
-                situation,
-                tuning,
-                spire,
-                posts.survey,
-                core.as_deref()?,
-                declared,
-            );
+            return spire_alone(situation, tuning, spire, core.as_deref()?, declared);
         }
     };
     let (mut patch, mut removals) = patch_parts;
     let template_id = goals.first()?.goal.template();
     let why = round_why(situation, tuning, &goals, &posts, spire, fill)?;
     patch.push(note_op(template, &with_seed(situation, &why)));
-    let survey = posts.survey.as_ref().map(|(survey, _)| (*survey).clone());
     let guard = front_steps(
         &mut patch,
         &mut removals,
@@ -371,28 +347,24 @@ pub(crate) fn compose(
         patch,
         removals,
         spire: spire.cloned(),
-        survey,
         why,
     })
 }
 
 /// The steps in front of the template's, put in at route 0 one after another
-/// so each lands ahead of the last: the Survey post's, the guard's (with the
+/// so each lands ahead of the last: the guard's (with the
 /// removal that takes it out, last of all: the repair of last resort removes
 /// the goals inserted after the first before the guard), the Spire's and the
 /// core's. Answers the guard placed.
 fn front_steps(
     patch: &mut Vec<Json>,
     removals: &mut Vec<Vec<Json>>,
-    posts: PostSteps<'_>,
+    posts: PostSteps,
     spire: Option<&Spire>,
     core: Option<&str>,
     core_shift: usize,
 ) -> Option<Candidate> {
     let mut front = |step: Json| patch.push(op("add", "/declarative/route/0", Some(step)));
-    if let Some((_, step)) = posts.survey {
-        front(step);
-    }
     let guard = posts.guard.map(|(guard, step)| {
         front(step);
         removals.insert(
@@ -414,104 +386,21 @@ fn front_steps(
     guard
 }
 
-/// The Survey post's step: the Defend the Core template's own place step
-/// covering the post seam by name, its label, tags and initial settings made
-/// a Survey post's -- the Survey mandate with one probe area, the half of the
-/// ground away from the seat's core ([`far_half`]), and [`SURVEY_SCOUT_COUNT`]
-/// scouts -- so its walk, timeout and `on_fail` are the library's.
-fn survey_copy(situation: &Situation, defend: &Declared, seam: &str) -> Option<Json> {
-    let step = guard_copy(defend, seam)?;
-    let step = with_member(&step, "label", string("survey_post"));
-    let place = step.get("place_beacon")?;
-    let place = with_member(place, "tags", Json::Array(vec![string("survey")]));
-    let (min, max) = far_half(situation)?;
-    let initial = object(vec![
-        ("priority", string("NORMAL")),
-        (
-            "mandate",
-            object(vec![(
-                "survey",
-                object(vec![
-                    (
-                        "probe_areas",
-                        Json::Array(vec![object(vec![
-                            ("min", voxel_json(min)),
-                            ("max", voxel_json(max)),
-                        ])]),
-                    ),
-                    ("scout_count", number(i64::from(SURVEY_SCOUT_COUNT))),
-                ]),
-            )]),
-        ),
-    ]);
-    let place = with_member(&place, "initial", initial);
-    Some(with_member(&step, "place_beacon", place))
-}
-
-/// The half of the ground away from the seat's own core, as `(min, max)`
-/// voxels, all heights: the map is split at its middle across the axis on
-/// which the core stands further from the middle (`x` on a tie), and the half
-/// the core is not in is the box. Every other seat's core stands somewhere in
-/// the ground, and the scouts scan unexplored cells nearest first, so a box
-/// that starts across the middle reaches the enemy sooner than one that
-/// starts at home (measured on the committed seeds: 3 of 12 posts find an
-/// enemy beacon in their own Push, against 1 of 12 for the whole map).
-/// `None` for a map size or a core position that does not fit the
-/// arithmetic, which no map does.
-fn far_half(situation: &Situation) -> Option<([i32; 3], [i32; 3])> {
-    let [cx, cy, _] = situation.core()?.at;
-    let [x, y, z] = situation.map_size;
-    let max = [x.checked_sub(1)?, y.checked_sub(1)?, z.checked_sub(1)?];
-    let [mx, my] = [max[0].checked_div(2)?, max[1].checked_div(2)?];
-    let off = |at: i32, mid: i32| i64::from(at).checked_sub(i64::from(mid)).map(i64::abs);
-    Some(if off(cx, mx)? >= off(cy, my)? {
-        if cx <= mx {
-            ([mx, 0, 0], max)
-        } else {
-            ([0, 0, 0], [mx, max[1], max[2]])
-        }
-    } else if cy <= my {
-        ([0, my, 0], max)
-    } else {
-        ([0, 0, 0], [max[0], my, max[2]])
-    })
-}
-
-/// Why the Survey post is placed: spec section 14's trigger, as Easy read it.
-///
-/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
-fn survey_why(survey: &Candidate, tuning: &Tuning, fill: i64) -> String {
-    let seam = survey.goal.feature();
-    format!(
-        "A Survey beacon beside the core, covering the scrap seam {seam}, at {} as its site \
-         reads now, whose {SURVEY_SCOUT_COUNT} scouts look over the far half of the map, because you hold \
-         no sighting of an enemy beacon from the last {}: {} of route (Easy fills {} of the \
-         segment).",
-        place(survey.place),
-        seconds(tuning.reach_memory_ms),
-        seconds(survey.time_ms),
-        seconds(fill)
-    )
-}
-
-/// A round whose only additions are the Spire and the Survey post, with no
-/// goal and no guard: the Safe Playbook template, its route filled with the
-/// template's own walk to safety, the core's dig depth, the Spire's step and
-/// the Survey post's, and its note Easy's. The safe playbook itself never
-/// adds either (spec section 14: it "leaves configurations untouched", never
-/// places, and a person's timeout must not spend their $), so this is Easy's
-/// own plan on that template's frame, submitted and reported as its own.
-fn additions_alone(
+/// A round whose one addition is the Spire, with no goal and no guard: the
+/// Safe Playbook template, its route filled with the template's own walk to
+/// safety, the core's dig depth and the Spire's step, and its note Easy's.
+/// The safe playbook itself never queues a Spire (spec section 14: it "leaves
+/// configurations untouched", and a person's timeout must not spend their $),
+/// so this is Easy's own plan on that template's frame, submitted and
+/// reported as its own.
+fn spire_alone(
     situation: &Situation,
     tuning: &Tuning,
     spire: Option<&Spire>,
-    survey: Option<(&Candidate, Json)>,
     core: &str,
     declared: &[Declared],
 ) -> Option<Composed> {
-    if spire.is_none() && survey.is_none() {
-        return None;
-    }
+    let spire = spire?;
     let template = declared
         .iter()
         .find(|held| held.template_id == SAFE_PLAYBOOK)?;
@@ -519,18 +408,12 @@ fn additions_alone(
     let Json::Array(own) = template.own_value(pointer)? else {
         return None;
     };
-    let fill = fill_ms(situation)?;
-    let mut route = vec![own.first()?.clone(), deepen_core(core)];
-    let mut why: Vec<String> = Vec::new();
-    if let Some(spire) = spire {
-        route.push(spire_step(&spire.core));
-        why.push(spire_why(spire, tuning, true));
-    }
-    if let Some((survey, step)) = &survey {
-        route.push(step.clone());
-        why.push(survey_why(survey, tuning, fill));
-    }
-    let why = why.join(" ");
+    let route = vec![
+        own.first()?.clone(),
+        deepen_core(core),
+        spire_step(&spire.core),
+    ];
+    let why = spire_why(spire, tuning, true);
     Some(Composed {
         template_id: SAFE_PLAYBOOK,
         goals: Vec::new(),
@@ -540,8 +423,7 @@ fn additions_alone(
             note_op(template, &with_seed(situation, &why)),
         ],
         removals: Vec::new(),
-        spire: spire.cloned(),
-        survey: survey.map(|(survey, _)| survey.clone()),
+        spire: Some(spire.clone()),
         why,
     })
 }
@@ -566,10 +448,9 @@ fn weigh_and_insert<'a>(
             lead: opening.lead,
             guard: opening.guard,
             spire,
-            survey: opening.survey,
         },
     )?;
-    let top = beside_the_posts(top, weighed.guard, weighed.survey);
+    let top = beside_the_posts(top, weighed.guard);
     let goals = greedy(&top, weighed.share, weighed.treasury);
     Some((weighed, goals))
 }
@@ -578,7 +459,6 @@ fn weigh_and_insert<'a>(
 #[derive(Clone, Copy)]
 struct Opening<'a> {
     guard: Option<&'a Candidate>,
-    survey: Option<&'a Candidate>,
     /// The walk to the core: one estimate's first leg, the same for every
     /// candidate, the largest taken so no reading of it is under-held; `None`
     /// with no candidate, a round composed only for the Spire, whose step
@@ -586,33 +466,16 @@ struct Opening<'a> {
     lead: Option<i64>,
 }
 
-/// The guard's step and the Survey post's (its mandate made Survey's) are the
-/// Defend the Core template's place step, so without it there is neither. The
-/// Survey post yields to a raid worth placing (a commander in sight, whose
-/// raid post would stand on the post seam): a target already in view is what
-/// the post is for. It yields to the guard in [`added`].
-fn opening<'a>(
-    top: &[Candidate],
-    guard: Option<&'a Candidate>,
-    survey: Option<&'a Candidate>,
-    defend: bool,
-) -> Opening<'a> {
+/// The guard's step is the Defend the Core template's place step, so without
+/// it there is none.
+fn opening<'a>(top: &[Candidate], guard: Option<&'a Candidate>, defend: bool) -> Opening<'a> {
     let guard = guard.filter(|_| defend);
-    let raid = top
-        .iter()
-        .any(|candidate| matches!(candidate.goal, Goal::Raid { .. }));
-    let survey = survey.filter(|_| defend && !raid);
     let lead = top
         .iter()
         .chain(guard)
-        .chain(survey)
         .map(|candidate| candidate.lead_ms)
         .max();
-    Opening {
-        guard,
-        survey,
-        lead,
-    }
+    Opening { guard, lead }
 }
 
 /// What the additions beside the goals leave the greedy insertion.
@@ -623,15 +486,13 @@ struct Added<'a> {
     guard_ms: i64,
     /// The Spire that is queued, if one is.
     spire: Option<&'a Spire>,
-    /// The Survey post that is placed, if one is.
-    survey: Option<&'a Candidate>,
     /// The share left for the goals.
     share: i64,
     /// The treasury left for the goals.
     treasury: i64,
     /// What the hold gives up for what stands in front of the template's
-    /// steps, the guard's aside: the core's step, the Spire's and the Survey
-    /// post's, and the walk to the core; `None` only when there is no
+    /// steps, the guard's aside: the core's step, the Spire's, and the walk
+    /// to the core; `None` only when there is no
     /// candidate, a round composed for the Spire alone, which has no hold to
     /// take it from.
     held_back: Option<i64>,
@@ -645,7 +506,6 @@ struct Weighed<'a, 'c> {
     lead: Option<i64>,
     guard: Option<&'a Candidate>,
     spire: Option<&'a Spire>,
-    survey: Option<&'a Candidate>,
 }
 
 /// What the additions spend, in the order they claim it.
@@ -679,15 +539,15 @@ impl Purse {
     }
 }
 
-/// The guard post, the Spire and the Survey post, weighed before the goals,
+/// The guard post and the Spire, weighed before the goals,
 /// in that order, against **one** budget: the share, the treasury and the kW
 /// headroom (the forecast's supply less its draw). Each takes its time, price
 /// and new draw from what the one before left, or is not added: the guard's
-/// picket scout, the Spire's own draw and the Survey post's scouts, each from
+/// picket scout and the Spire's own draw, each from
 /// its rules rows, so the round never fields more draw than the grid carries
 /// (a unit fielded past the supply is the verifier's E0601). The Spire's time
-/// comes out of the hold, as the core's step does, rather than the share; the
-/// Survey post yields its seam to the guard. Its step is at the core the route
+/// comes out of the hold, as the core's step does, rather than the share. Its
+/// step is at the core the route
 /// opens at, so a seat shown no core queues no Spire. `None` when a figure
 /// does not fit.
 fn added<'a>(
@@ -701,7 +561,6 @@ fn added<'a>(
         lead,
         guard,
         spire,
-        survey,
     } = weighed;
     let mut purse = Purse {
         share: fill,
@@ -717,9 +576,6 @@ fn added<'a>(
     let spire = spire
         .filter(|spire| core == Some(spire.core.as_str()))
         .filter(|spire| purse.spend(0, spire.cost_dollars, spire.draw_kw));
-    let survey = survey
-        .filter(|survey| guard.is_none_or(|guard| guard.goal.feature() != survey.goal.feature()))
-        .filter(|survey| purse.spend(survey.time_ms, survey.cost_dollars, tuning.survey_draw_kw));
     let held_back = match (core, lead) {
         (None, _) => Some(0),
         (Some(core), Some(lead)) => {
@@ -728,11 +584,7 @@ fn added<'a>(
                 Some(spire) => spire.time_ms,
                 None => 0,
             };
-            let survey_ms = time_of(survey);
-            deepen
-                .checked_add(lead)?
-                .checked_add(spire_ms)?
-                .checked_add(survey_ms)
+            deepen.checked_add(lead)?.checked_add(spire_ms)
         }
         (Some(_), None) => None,
     };
@@ -740,7 +592,6 @@ fn added<'a>(
         guard,
         guard_ms,
         spire,
-        survey,
         share: purse.share,
         treasury: purse.treasury,
         held_back,
@@ -755,50 +606,31 @@ const fn time_of(post: Option<&Candidate>) -> i64 {
     }
 }
 
-/// The guard post's and the Survey post's steps, each copied from the Defend
-/// the Core template's place step. A guard's step is used only beside another
+/// The guard post's step, copied from the Defend the Core template's place
+/// step. A guard's step is used only beside another
 /// template's goals (alone, it fills the Defend template itself).
-struct PostSteps<'c> {
+struct PostSteps {
     guard: Option<(Candidate, Json)>,
-    survey: Option<(&'c Candidate, Json)>,
 }
 
 /// The posts' steps; `None` when a copy does not build.
-fn post_steps<'c>(
-    situation: &Situation,
-    defend: Option<&Declared>,
-    guard: Option<&Candidate>,
-    survey: Option<&'c Candidate>,
-) -> Option<PostSteps<'c>> {
+fn post_steps(defend: Option<&Declared>, guard: Option<&Candidate>) -> Option<PostSteps> {
     let guard = match (guard, defend) {
         (Some(guard), Some(defend)) => {
             Some((guard.clone(), guard_copy(defend, guard.goal.feature())?))
         }
         _ => None,
     };
-    let survey = match (survey, defend) {
-        (Some(survey), Some(defend)) => Some((
-            survey,
-            survey_copy(situation, defend, survey.goal.feature())?,
-        )),
-        _ => None,
-    };
-    Some(PostSteps { guard, survey })
+    Some(PostSteps { guard })
 }
 
 /// The step a goal is composed as, for pricing it ([`crate::price`]): the
 /// declared template's place step naming the goal's feature (a Mine beacon,
 /// a Generator's Build beacon, the guard post), the Raid template's with its
-/// target, its staging at `place` and no retarget, the Survey post's copy,
-/// a tap's `interface` step, or a stone's `toward` placement with Hold &
+/// target, its staging at `place` and no retarget, a tap's `interface` step, or a stone's `toward` placement with Hold &
 /// Build's own timeout. `None` when the template it comes from is not
 /// declared.
-pub(crate) fn step_for(
-    goal: &Goal,
-    place: [i32; 3],
-    situation: &Situation,
-    declared: &[Declared],
-) -> Option<Json> {
+pub(crate) fn step_for(goal: &Goal, place: [i32; 3], declared: &[Declared]) -> Option<Json> {
     let template = |id: &str| declared.iter().find(|held| held.template_id == id);
     let place_step = |id: &str| -> Option<(Json, String, String)> {
         let template = template(id)?;
@@ -818,7 +650,6 @@ pub(crate) fn step_for(
                 step.get("timeout_ms")?.clone(),
             ))
         }
-        Goal::Survey { seam } => survey_copy(situation, template(DEFEND_THE_CORE)?, seam),
         Goal::Guard { seam } => guard_copy(template(DEFEND_THE_CORE)?, seam),
         Goal::Mine { seam: name, .. } | Goal::Generator { vent: name, .. } => {
             let (step, below, _) = place_step(goal.template())?;
@@ -849,12 +680,11 @@ fn round_why(
     situation: &Situation,
     tuning: &Tuning,
     goals: &[Candidate],
-    posts: &PostSteps<'_>,
+    posts: &PostSteps,
     spire: Option<&Spire>,
     fill: i64,
 ) -> Option<String> {
     let guard = posts.guard.as_ref().map(|(guard, _)| guard);
-    let survey = posts.survey.as_ref().map(|(survey, _)| *survey);
     let first = goals.first()?;
     let mut why = why_for(first, goals.len(), fill);
     if let Some(guard) = guard {
@@ -865,9 +695,6 @@ fn round_why(
     }
     if let Some(spire) = spire {
         why = format!("{why} {}", spire_why(spire, tuning, false));
-    }
-    if let Some(survey) = survey {
-        why = format!("{why} {}", survey_why(survey, tuning, fill));
     }
     Some(why)
 }
@@ -883,20 +710,13 @@ fn note_op(template: &Declared, note: &str) -> Json {
     op(kind, "/meta/note", Some(string(note)))
 }
 
-/// The top-k less any goal on the guard's seam or the Survey post's: a raid
-/// post covers the seam the posts do, beside the core, so with a post placed
-/// the two would contend for one site, and the round makes no raid.
-fn beside_the_posts(
-    top: &[Candidate],
-    guard: Option<&Candidate>,
-    survey: Option<&Candidate>,
-) -> Vec<Candidate> {
+/// The top-k less any goal on the guard's seam: a raid post covers the seam
+/// the guard post does, beside the core, so with a guard placed the two would
+/// contend for one site, and the round makes no raid.
+fn beside_the_posts(top: &[Candidate], guard: Option<&Candidate>) -> Vec<Candidate> {
     top.iter()
         .filter(|candidate| {
-            guard
-                .into_iter()
-                .chain(survey)
-                .all(|post| post.goal.feature() != candidate.goal.feature())
+            guard.is_none_or(|guard| guard.goal.feature() != candidate.goal.feature())
         })
         .cloned()
         .collect()
@@ -986,11 +806,6 @@ fn place_patch(
                 }
                 place_copy(&place_step, &below, name, n)?
             }
-            // A Survey post is added beside the goals by its own step
-            // (`survey_copy`) and is never ranked among them (`top_k`), so no
-            // template is filled with one: a goal list holding one is not
-            // composed.
-            Goal::Survey { .. } => return None,
             Goal::Raid { seam, target } => {
                 // The post's seam, its target, and its staging at the site
                 // the estimate answered, so the raiders gather at home.
@@ -1200,11 +1015,6 @@ pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String 
              reads now, whose raiders gather there and raid {}{more}{tail}",
             place(candidate.place),
             raid_words(target),
-        ),
-        Goal::Survey { seam } => format!(
-            "A Survey beacon beside the core, covering the scrap seam {seam}, at {} as its site \
-             reads now, whose scouts look over the far half of the map{more}{tail}",
-            place(candidate.place),
         ),
         Goal::Stone {
             feature,

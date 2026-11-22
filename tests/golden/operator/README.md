@@ -47,14 +47,10 @@ out; the visit goals keep the whole share. Since S3's `opr3` a feature no
 site of the seat's spheres covers is weighed once more as a **stepping
 stone**, a beacon placed `toward` it by name (the register's S5-04),
 worth the goal it serves. Beside the
-goals Easy may add a **Survey post** (a Survey beacon by the core whose scouts
-look over the half of the ground away from the core, when it holds no fresh sighting of an enemy beacon)
-and, once its seat holds the licence, a **Resonance Spire** queued at the
-core; a round with nothing else fills the Safe Playbook template's route with
-them and is still Easy's own seal. Since S3's `opr3` fix pass 1 every case
-here is that: in round 1 no seat holds a sighting, the Survey post is
-weighed before the goals, and what it leaves of the treasury carries no
-placement. A seat with nothing
+goals Easy may add, once its seat holds the licence, a **Resonance Spire**
+queued at the core; a round with nothing else fills the Safe Playbook
+template's route with it and is still Easy's own seal (cut 3: no Survey
+post). A seat with nothing
 inside its route share seals its own **safe playbook** instead: the Safe
 Playbook template instantiated with its route -- the walk to safety, any
 priority raise, and the same `deepen_core`, last -- whose `meta.note` is the

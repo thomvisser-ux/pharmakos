@@ -9,7 +9,7 @@
 //! (`pharmakos_verifier::interface`). This crate links both, so here every
 //! step kind Easy can compose goes through both and the two are held equal:
 //! the steps of every seal Easy makes in hosted matches on the committed
-//! seeds (Hold & Build's and Expand & Mine's placements, stones, Survey posts,
+//! seeds (Hold & Build's and Expand & Mine's placements, stones,
 //! the core's dig depth and the safe playbook's raises), each library
 //! template's own place step (the guard post's, the raid post's), and the
 //! operator's own step builders (a tap, the Spire, a stone).
@@ -194,7 +194,6 @@ fn easy_prices_every_step_it_composes_as_the_verifier_does() {
         "deepen_core",
         "queue_spire",
         "stone",
-        "survey_post",
         "place_power",
         "place_mine",
         "place_guard",
