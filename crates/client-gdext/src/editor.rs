@@ -758,8 +758,9 @@ pub enum RuleEditRefusal {
     NotThisKind(&'static str),
     /// The gateway lists no such arm at this pointer: the arm the click would write.
     ArmNotHere(&'static str),
-    /// The text typed into a value field is not a whole number: an optional sign and digits,
-    /// nothing else (no space, no point, no expression), within an `i64`. Nothing is sent.
+    /// The text typed into a value field is not a whole number: an optional `+` or `-` and
+    /// digits, nothing else (no space, no point, no expression). Nothing is sent. Its size is
+    /// never refused here: that is the gateway's to say.
     NotAnInteger,
     /// The vocabulary has not been read this Lull, or its read was refused.
     NoVocabulary,
@@ -967,24 +968,36 @@ impl FieldAsk {
     }
 }
 
-/// A value field's text as the whole number it names: an optional `-` or `+`, then one or more
-/// ASCII digits, and nothing else, within an `i64`. A decoding of what the player typed, not a
-/// rule: whether the number is legal there is the gateway's (S3's `fixp`).
+/// A value field's text as the whole number it names, written as JSON writes a number: an
+/// optional `-` or `+`, then one or more ASCII digits, and nothing else, of any size. A decoding
+/// of what the player typed, not a rule: the client applies no bound the gateway did not send,
+/// so a number past an `i64` goes to the gateway as its digits, and whether it is legal there,
+/// or fits the field, is the gateway's to say in its own words (S3's `fixp`; fix pass 1,
+/// item 3). The digits come back in JSON's own form: no `+`, no leading zero, and no `-0`.
 ///
 /// # Errors
 ///
-/// [`RuleEditRefusal::NotAnInteger`] for anything else: an empty text, a space, a point, an
-/// expression, or a number past an `i64`.
-pub fn typed_integer(text: &str) -> Result<i64, RuleEditRefusal> {
-    let digits = match text.as_bytes() {
-        [b'-' | b'+', rest @ ..] => rest,
-        all => all,
+/// [`RuleEditRefusal::NotAnInteger`] for anything else: an empty text, a sign alone, a space, a
+/// point, a separator, an expression, or a digit that is not ASCII.
+pub fn typed_integer(text: &str) -> Result<String, RuleEditRefusal> {
+    let (negative, digits) = match text.as_bytes() {
+        [b'-', rest @ ..] => (true, rest),
+        [b'+', rest @ ..] => (false, rest),
+        all => (false, all),
     };
     if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
         return Err(RuleEditRefusal::NotAnInteger);
     }
-    text.parse::<i64>()
-        .map_err(|_| RuleEditRefusal::NotAnInteger)
+    let first = digits.iter().position(|digit| *digit != b'0');
+    let magnitude = match first.and_then(|at| digits.get(at..)) {
+        Some(rest) => String::from_utf8_lossy(rest).into_owned(),
+        None => return Ok("0".to_owned()),
+    };
+    Ok(if negative {
+        format!("-{magnitude}")
+    } else {
+        magnitude
+    })
 }
 
 /// What the last `submit_plan` said.
@@ -1898,7 +1911,7 @@ impl Editor {
         pointer: &str,
         value: i64,
     ) -> Result<(), RuleEditRefusal> {
-        let outcome = self.number_patch(chip, revision, pointer, value);
+        let outcome = self.number_patch(chip, revision, pointer, &value.to_string());
         self.ask_rule_edit(outcome, pointer, None)
     }
 
@@ -1918,8 +1931,8 @@ impl Editor {
         pointer: &str,
         text: &str,
     ) -> Result<(), RuleEditRefusal> {
-        let outcome =
-            typed_integer(text).and_then(|value| self.number_patch(chip, revision, pointer, value));
+        let outcome = typed_integer(text)
+            .and_then(|digits| self.number_patch(chip, revision, pointer, &digits));
         let asked = self.ask_rule_edit(outcome, pointer, Some(self.field_token));
         self.field_heard(asked)
     }
@@ -1963,22 +1976,23 @@ impl Editor {
         asked
     }
 
+    /// The `replace` writing `digits`, a whole number in JSON's own form ([`typed_integer`]).
     fn number_patch(
         &self,
         chip: usize,
         revision: u64,
         pointer: &str,
-        value: i64,
+        digits: &str,
     ) -> Result<(String, String), RuleEditRefusal> {
         let found = self.chip_drawn(chip, revision, pointer)?;
         let ChipEditor::Number { now, .. } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
-        if *now == value {
+        if now.to_string() == digits {
             return Err(RuleEditRefusal::Unchanged);
         }
         Ok((
-            rule_list::replace_patch(&found.pointer, Json::Number(value.to_string())),
+            rule_list::replace_patch(&found.pointer, Json::Number(digits.to_owned())),
             found.pointer.clone(),
         ))
     }
@@ -2511,7 +2525,7 @@ impl Editor {
         pointer: &str,
         value: i64,
     ) -> Result<(), RuleEditRefusal> {
-        let outcome = self.setting_number_row(beacon, setting, pointer, value);
+        let outcome = self.setting_number_row(beacon, setting, pointer, &value.to_string());
         self.ask_visit(beacon, outcome, None)
     }
 
@@ -2533,7 +2547,7 @@ impl Editor {
         text: &str,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = typed_integer(text)
-            .and_then(|value| self.setting_number_row(beacon, setting, pointer, value));
+            .and_then(|digits| self.setting_number_row(beacon, setting, pointer, &digits));
         let asked = self.ask_visit(beacon, outcome, Some(self.field_token));
         self.field_heard(asked)
     }
@@ -2543,7 +2557,7 @@ impl Editor {
         beacon: &str,
         setting: usize,
         pointer: &str,
-        value: i64,
+        digits: &str,
     ) -> Result<Json, RuleEditRefusal> {
         let found = self.setting_drawn(beacon, setting, pointer)?;
         let ChipEditor::Number { .. } = &found.editor else {
@@ -2551,7 +2565,7 @@ impl Editor {
         };
         // No `Unchanged` here: the detail is the beacon as the Lull sees it, and an earlier
         // step may change it, so setting it back is a row the verifier judges.
-        let settings = vocabulary::nested_setting(&found.pointer, Json::Number(value.to_string()))?;
+        let settings = vocabulary::nested_setting(&found.pointer, Json::Number(digits.to_owned()))?;
         Ok(vocabulary::settings_row(settings))
     }
 
@@ -7457,28 +7471,34 @@ mod tests {
     }
 
     /// **A value field's text is read as a whole number, or refused by its reason** (S3's
-    /// `fixp`, fix 1): an optional sign and digits within an `i64`, nothing else. A number past
-    /// 2^53 is exact, because no float is in the path.
+    /// `fixp`, fix 1; fix pass 1, item 3): an optional `+` or `-` and digits, nothing else, and of
+    /// any size: the client applies no bound the gateway did not send, so a number past an `i64`
+    /// is written to the wire as its digits and the gateway answers it in its own words. The digits
+    /// go out in JSON's own form: no `+`, no leading zero, no "-0".
     #[test]
     fn a_typed_value_is_a_whole_number_or_refused() {
-        assert_eq!(typed_integer("30"), Ok(30));
-        assert_eq!(typed_integer("-5"), Ok(-5));
-        assert_eq!(typed_integer("+7"), Ok(7));
-        assert_eq!(typed_integer("9007199254740993"), Ok(9_007_199_254_740_993));
-        assert_eq!(typed_integer("-9223372036854775808"), Ok(i64::MIN));
+        for (typed, wire) in [
+            ("30", "30"),
+            ("-5", "-5"),
+            ("+7", "7"),
+            ("007", "7"),
+            ("-0", "0"),
+            ("0", "0"),
+            ("-007", "-7"),
+            ("9007199254740993", "9007199254740993"),
+            ("-9223372036854775808", "-9223372036854775808"),
+            ("9223372036854775807", "9223372036854775807"),
+            ("9223372036854775808", "9223372036854775808"),
+            (
+                "123456789012345678901234567890",
+                "123456789012345678901234567890",
+            ),
+        ] {
+            assert_eq!(typed_integer(typed), Ok(wire.to_owned()), "{typed:?}");
+        }
         for refused in [
-            " 3",
-            "3 ",
-            "3.0",
-            "5*2",
-            "",
-            "-",
-            "+",
-            "--3",
-            "0x10",
-            "\u{0663}",
-            "99999999999999999999",
-            "9223372036854775808",
+            " 3", "3 ", "3.0", "5*2", "", "-", "+", "--3", "+-3", "0x10", "1,000", "\u{0663}",
+            "\u{FF13}",
         ] {
             assert_eq!(
                 typed_integer(refused),
@@ -7486,6 +7506,68 @@ mod tests {
                 "{refused:?}"
             );
         }
+    }
+
+    /// **A number past an `i64` reaches the wire as typed, and the gateway's answer is what the
+    /// person reads** (fix pass 1, item 3): at `i64::MAX`, one past it, and 30 digits.
+    #[test]
+    fn a_number_past_i64_goes_to_the_gateway_as_its_digits() {
+        for digits in [
+            "9223372036854775807",
+            "9223372036854775808",
+            "123456789012345678901234567890",
+        ] {
+            let mut editor = rendered(EXPAND_EAST);
+            let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+            editor.field_opened();
+            assert_eq!(
+                editor.set_number_text(pct, revision, &at, digits),
+                Ok(()),
+                "{digits}"
+            );
+            assert_eq!(
+                editor.status().key,
+                "rule_editing",
+                "the person reads Editing..."
+            );
+            let call = editor.next_call(false).expect("the patch");
+            assert_eq!(
+                patch_of_call(&call),
+                format!(r#"[{{"op":"replace","path":"{at}","value":{digits}}}]"#)
+            );
+            editor
+                .answered(Err((
+                    "INVALID_ARGUMENT",
+                    "the value at /declarative/handlers/0/when is out of range",
+                )))
+                .expect("settled");
+            assert_eq!(
+                editor.field_ask(),
+                &FieldAsk::Refused {
+                    key: GATEWAY_REFUSED_KEY.to_owned(),
+                    detail: "INVALID_ARGUMENT: the value at /declarative/handlers/0/when is out of range"
+                        .to_owned()
+                },
+                "the person reads the gateway's words in the popup"
+            );
+        }
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
+        assert_eq!(
+            editor.change_setting_number_text(
+                "b_00",
+                at,
+                &pointer,
+                "123456789012345678901234567890"
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(
+                r#"{"set_mandate_settings":{"retreat_hp_pct":123456789012345678901234567890}}"#
+            )
+        );
     }
 
     /// **The text goes to its patch exactly, or is refused where the player looks**: on the

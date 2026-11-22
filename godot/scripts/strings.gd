@@ -143,7 +143,7 @@ const TEXT := {
 	"status_rule_refused_rendering_out_of_range": "The rule list cannot be edited until it is drawn again.",
 	"status_rule_refused_not_this_kind": "That is not a {detail}. Click one on the map, or Escape.",
 	"status_rule_refused_arm_not_here": "That cannot go here: the gateway takes no {detail} at this point. Click something else, or Escape.",
-	"status_rule_refused_not_an_integer": "That is not a whole number (digits only, with a minus sign if it is negative), so nothing was sent.",
+	"status_rule_refused_not_an_integer": "That is not a whole number (digits, with a + or - in front if you write one), so nothing was sent.",
 	"status_rule_refused_no_vocabulary": "The words to pick from have not come yet this Lull (or were refused); see the picker's line.",
 	"status_rule_refused_not_in_rule": "That condition is not in the rule the picker was opened on.",
 	"status_rule_refused_no_such_entry": "That is not in the list the gateway sent any more.",
