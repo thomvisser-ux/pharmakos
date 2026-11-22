@@ -3284,20 +3284,65 @@ fn the_advisor_never_probes_for_a_survey_post() {
 // Fix pass 1: one kW budget, refusals, stones worth their goal
 // ---------------------------------------------------------------------------
 
-/// The new draw a composed round fields, kW: the Spire's 3, the Survey
-/// post's two scouts at 1 each and the guard's picket scout at 1, read from
-/// the patch it composes.
-fn new_draw(transcript: &[String]) -> i64 {
-    let Some(patch) = transcript
+/// A whole-number row of the rules text, by its path of keys.
+fn rules_row(path: &[&str]) -> i64 {
+    let table = read(&rules_json()).expect("the rules text reads");
+    let row = path
         .iter()
-        .find_map(|line| line.strip_prefix("patch_plan "))
-    else {
+        .try_fold(&table, |at, key| at.get(key))
+        .unwrap_or_else(|| panic!("the rules text has no `{}` row", path.join(".")));
+    match row {
+        Json::Number(lexeme) => lexeme.parse().expect("a whole number"),
+        other => panic!("`{}` is no number: {other:?}", path.join(".")),
+    }
+}
+
+/// Every `scout_count` and `picket_scouts` a JSON value sets, summed.
+fn scouts_set(value: &Json) -> i64 {
+    match value {
+        Json::Object(members) => members
+            .iter()
+            .map(|(key, held)| match (key.as_str(), held) {
+                ("scout_count" | "picket_scouts", Json::Number(lexeme)) => {
+                    lexeme.parse::<i64>().expect("a count")
+                }
+                _ => scouts_set(held),
+            })
+            .sum(),
+        Json::Array(items) => items.iter().map(scouts_set).sum(),
+        _ => 0,
+    }
+}
+
+/// The new draw a composed round fields, kW, priced at the rows every grid
+/// charges (fix pass 2, item 4): each scout it orders at `power.kw_per_unit`
+/// -- a Survey post's `scout_count` and a guard copy's `picket_scouts`, read
+/// from the patch, and the Defend the Core template's own picket when the
+/// guard fills that template alone (its step is the template's, so the patch
+/// does not carry it) -- and a queued Spire at its own `draw_kw`.
+fn new_draw(transcript: &[String]) -> i64 {
+    if !transcript
+        .iter()
+        .any(|line| line.starts_with("patch_plan "))
+    {
         return 0;
+    }
+    let ops = Json::Array(composing_ops(transcript));
+    let written = write(&ops);
+    let spire = if written.contains("queue_spire") {
+        rules_row(&["structures", "resonance_spire", "draw_kw"])
+    } else {
+        0
     };
-    let spire = if patch.contains("queue_spire") { 3 } else { 0 };
-    let survey = if patch.contains("survey_post") { 2 } else { 0 };
-    let guard = i64::from(patch.contains("place_guard"));
-    spire + survey + guard
+    let guard_alone =
+        !written.contains("place_guard") && written.contains("A Defend beacon beside the core");
+    let template_picket = if guard_alone {
+        let (text, _) = template("defend_the_core").expect("the library's Defend the Core");
+        scouts_set(&read(&strip_comments(&text)).expect("the template reads"))
+    } else {
+        0
+    };
+    spire + (scouts_set(&ops) + template_picket) * rules_row(&["power", "kw_per_unit"])
 }
 
 /// One kW budget (fix pass 1, item 1): the guard's picket, the Spire and the

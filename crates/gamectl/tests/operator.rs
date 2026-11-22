@@ -1755,7 +1755,9 @@ fn survey_posts_go_up_in_round_one_and_find_the_enemy_by_round_two() {
 /// Easy plays seat 0 through the seat's own token: its round-3 seal queues
 /// the Spire at the core and the real verifier accepts it, the sim queues the
 /// structure exactly once in that Push, and round 4's seal queues none.
-fn spire_match(rules: &str, spire_draw_kw: i64) -> SpireMatch {
+fn spire_match(rules: &str) -> SpireMatch {
+    let spire_draw_kw = rules_row(rules, &["structures", "resonance_spire", "draw_kw"]);
+    let kw_per_unit = rules_row(rules, &["power", "kw_per_unit"]);
     let rules = rules.to_owned();
     let host = Host::open_from(
         &rules,
@@ -1853,6 +1855,7 @@ fn spire_match(rules: &str, spire_draw_kw: i64) -> SpireMatch {
         headrooms,
         queued,
         spire_draw_kw,
+        kw_per_unit,
     }
 }
 
@@ -1864,42 +1867,79 @@ struct SpireMatch {
     headrooms: Vec<i64>,
     queued: Vec<usize>,
     spire_draw_kw: i64,
+    kw_per_unit: i64,
 }
 
 impl SpireMatch {
-    /// The new draw a seal adds: the Spire's, a Survey post's two scouts, a
-    /// guard's picket.
+    /// The new draw a seal adds, at the rows every grid charges (fix pass 2,
+    /// item 4): the Spire's own `draw_kw`, and each scout the seal orders (a
+    /// Survey post's `scout_count`, a guard's `picket_scouts`) at
+    /// `power.kw_per_unit`.
     fn drawn(&self, seal: &str) -> i64 {
         i64::from(seal.contains("queue_spire")) * self.spire_draw_kw
-            + i64::from(seal.contains("survey_post")) * 2
-            + i64::from(seal.contains("place_guard"))
+            + scouts_ordered(seal) * self.kw_per_unit
+    }
+}
+
+/// Every `scout_count` and `picket_scouts` a sealed playbook sets, summed.
+fn scouts_ordered(seal: &str) -> i64 {
+    fn set(value: &Json) -> i64 {
+        match value {
+            Json::Object(members) => members
+                .iter()
+                .map(|(key, held)| match (key.as_str(), held) {
+                    ("scout_count" | "picket_scouts", Json::Number(lexeme)) => {
+                        lexeme.parse::<i64>().expect("a count")
+                    }
+                    _ => set(held),
+                })
+                .sum(),
+            Json::Array(items) => items.iter().map(set).sum(),
+            _ => 0,
+        }
+    }
+    set(&pharmakos_plan_core::Document::parse(seal)
+        .expect("a sealed playbook reads")
+        .to_json())
+}
+
+/// A whole-number row of a rules text, by its path of keys.
+fn rules_row(rules: &str, path: &[&str]) -> i64 {
+    let table = params(rules);
+    let row = path
+        .iter()
+        .try_fold(&table, |at, key| at.get(key))
+        .unwrap_or_else(|| panic!("the rules text has no `{}` row", path.join(".")));
+    match row {
+        Json::Number(lexeme) => lexeme.parse().expect("a whole number"),
+        other => panic!("`{}` is no number: {other:?}", path.join(".")),
     }
 }
 
 #[test]
 fn easy_queues_the_spire_once_through_the_real_verifier_and_the_sim() {
+    let spire = spire_match(&rules_json());
     let SpireMatch {
         sealed_texts,
         headrooms,
         queued,
         ..
-    } = spire_match(&rules_json(), 3);
+    } = &spire;
     let [third, fourth] = sealed_texts.as_slice() else {
         panic!("Easy sealed rounds 3 and 4: {sealed_texts:#?}");
     };
     // One kW budget (fix pass 1, item 1): what the seal adds -- the Spire's
-    // 3 kW, a Survey post's two scouts, a guard's picket -- is never more than
-    // the headroom the forecast showed, and the real verifier accepted it.
-    for (seal, headroom) in sealed_texts.iter().zip(&headrooms) {
+    // draw, and the scouts a Survey post and a guard's picket order, at the
+    // rules rows -- is never more than the headroom the forecast showed, and
+    // the real verifier accepted it.
+    for (seal, headroom) in sealed_texts.iter().zip(headrooms) {
         eprintln!(
             "headroom {headroom} kW: Spire {}, Survey post {}, guard {}",
             seal.contains("queue_spire"),
             seal.contains("survey_post"),
             seal.contains("place_guard")
         );
-        let drawn = i64::from(seal.contains("queue_spire")) * 3
-            + i64::from(seal.contains("survey_post")) * 2
-            + i64::from(seal.contains("place_guard"));
+        let drawn = spire.drawn(seal);
         assert!(
             drawn <= *headroom,
             "{drawn} kW of new draw against {headroom} kW: {seal}"
@@ -1914,7 +1954,7 @@ fn easy_queues_the_spire_once_through_the_real_verifier_and_the_sim() {
         "round 4 queues none: {fourth}"
     );
     assert_eq!(
-        queued,
+        queued.as_slice(),
         [0, 0, 1, 1],
         "seat 0's Spires after each Push: none, then the one queued in round 3, and no second"
     );
@@ -1929,7 +1969,7 @@ fn easy_queues_the_spire_once_through_the_real_verifier_and_the_sim() {
 #[test]
 fn a_spire_at_the_margin_of_the_headroom_verifies_clean_through_the_real_verifier() {
     let base = rules_json();
-    let probe = spire_match(&base, 3);
+    let probe = spire_match(&base);
     let headroom = *probe.headrooms.first().expect("round 3's headroom");
     let draw = headroom.checked_sub(1).expect("a draw");
     let row = "\"resonance_spire\": {\n      \"cost_dollars\": 120,\n      \"hp\": 500,\n      \"draw_kw\": 3,";
@@ -1938,7 +1978,7 @@ fn a_spire_at_the_margin_of_the_headroom_verifies_clean_through_the_real_verifie
         &row.replace("\"draw_kw\": 3,", &format!("\"draw_kw\": {draw},")),
     );
     assert_ne!(tight, base, "the rules text carries the Spire's row");
-    let tight_match = spire_match(&tight, draw);
+    let tight_match = spire_match(&tight);
     let third = tight_match.sealed_texts.first().expect("round 3's seal");
     let tight_headroom = *tight_match.headrooms.first().expect("round 3's headroom");
     assert!(third.contains("queue_spire"), "the Spire fits: {third}");

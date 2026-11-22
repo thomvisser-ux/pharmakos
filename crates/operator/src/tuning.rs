@@ -25,6 +25,12 @@
 //! key-core (decisions-log items 90 and 113 (5); `crates/sim/src/power.rs`),
 //! which S1's plan, decision 14 (ruled by item 128), made the reading of the
 //! register's S1-14 rather than a guess.
+//!
+//! A fielded unit draws `power.kw_per_unit`, the row the sim's grid
+//! (`PowerRules::per_unit`) and the verifier's projection charge every unit
+//! at, so the scouts a guard post or a Survey post orders are charged at that
+//! row (S3's `opr3`, fix pass 2, item 4). `units.scout.draw_kw` is **not
+//! read**: no grid charges a scout at it.
 
 use pharmakos_proto::gp::v1::rules_table::{
     StructureKind as StructureRow, Structures, UnitKind as UnitRow, Units, Weapon,
@@ -131,11 +137,11 @@ pub(crate) struct Tuning {
     /// [`crate::easy::SURVEY_SCOUT_COUNT`] `units.scout.cost_dollars`).
     pub(crate) survey_cost_dollars: i64,
     /// What a Survey post's scouts draw once fielded, whole kW:
-    /// [`crate::easy::SURVEY_SCOUT_COUNT`] `units.scout.draw_kw` (a placed
+    /// [`crate::easy::SURVEY_SCOUT_COUNT`] times `power.kw_per_unit` (a placed
     /// beacon itself is net zero).
     pub(crate) survey_draw_kw: i64,
     /// What a guard post's one picket scout draws once fielded, whole kW
-    /// (`units.scout.draw_kw`; the Defend the Core template's
+    /// (`power.kw_per_unit`; the Defend the Core template's
     /// `picket_scouts: 1`, as [`Tuning::guard_cost_dollars`] counts it).
     pub(crate) guard_draw_kw: i64,
     /// `structures.resonance_spire.cost_dollars`: what queueing the Spire
@@ -287,13 +293,13 @@ fn route_prices(
 }
 
 /// What a Survey post's [`crate::easy::SURVEY_SCOUT_COUNT`] scouts draw,
-/// whole kW, from `units.scout.draw_kw`.
+/// whole kW, at `power.kw_per_unit` each.
 ///
 /// # Errors
 ///
 /// [`RulesError`] for a draw that does not fit.
-fn survey_draw(scout_draw_kw: u32) -> Result<i64, RulesError> {
-    i64::from(scout_draw_kw)
+fn survey_draw(kw_per_unit: u32) -> Result<i64, RulesError> {
+    i64::from(kw_per_unit)
         .checked_mul(i64::from(crate::easy::SURVEY_SCOUT_COUNT))
         .ok_or_else(|| RulesError(String::from("a Survey post's draw does not fit")))
 }
@@ -462,8 +468,8 @@ impl Tuning {
             vent_cost_dollars,
             guard_cost_dollars,
             survey_cost_dollars,
-            survey_draw_kw: survey_draw(scout.draw_kw)?,
-            guard_draw_kw: i64::from(scout.draw_kw),
+            survey_draw_kw: survey_draw(power.kw_per_unit)?,
+            guard_draw_kw: i64::from(power.kw_per_unit),
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
             beacon_cost_dollars: i64::from(beacon_row.cost_dollars),
             generator_output_kw: power
