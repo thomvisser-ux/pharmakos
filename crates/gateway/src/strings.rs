@@ -242,14 +242,17 @@ fn licence_name(value: i64) -> String {
     }
 }
 
-/// A licence's name in the player's words, or `None` for the enum's
-/// unspecified zero, which names no licence.
+/// A licence's name in the player's words: the title of the structure the
+/// licence lets a seat queue, as plan-core's blueprint list spells it (the
+/// vocabulary's and the view's one spelling, so the recap, the feed and the
+/// view cannot name one structure two ways; the review of #212). `None` for
+/// the enum's unspecified zero, and for any licence no blueprint names.
 #[must_use]
-pub const fn licence_title(licence: pharmakos_proto::gp::v1::Licence) -> Option<&'static str> {
-    match licence {
-        pharmakos_proto::gp::v1::Licence::ResonanceSpire => Some("Resonance Spire"),
-        pharmakos_proto::gp::v1::Licence::Unspecified => None,
-    }
+pub fn licence_title(licence: pharmakos_proto::gp::v1::Licence) -> Option<&'static str> {
+    pharmakos_plan_core::vocabulary::blueprints_by_slot()
+        .into_iter()
+        .find(|blueprint| blueprint.licence == Some(licence))
+        .map(|blueprint| blueprint.title)
 }
 
 // ---------------------------------------------------------------------------
@@ -1246,6 +1249,27 @@ mod tests {
         assert_eq!(
             super::licence_title(pharmakos_proto::gp::v1::Licence::Unspecified),
             None
+        );
+    }
+
+    /// The review of #212 (its mutant M11): a licence is named by the title of
+    /// the structure it unlocks, from plan-core's one table, so renaming the
+    /// blueprint renames the licence everywhere the recap and the feed say it.
+    #[test]
+    fn a_licence_is_named_by_its_structures_blueprint_title() {
+        let spire = pharmakos_plan_core::vocabulary::blueprints_by_slot()
+            .into_iter()
+            .find(|blueprint| {
+                blueprint.kind == pharmakos_sim::tables::StructureKind::ResonanceSpire
+            })
+            .expect("plan-core lists the Spire");
+        assert_eq!(
+            super::licence_title(pharmakos_proto::gp::v1::Licence::ResonanceSpire),
+            Some(spire.title)
+        );
+        assert_eq!(
+            super::licences_awarded(&[spire.title]).as_deref(),
+            Some(format!("Licence awarded: {}.", spire.title).as_str())
         );
     }
 
