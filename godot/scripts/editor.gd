@@ -1234,6 +1234,22 @@ func _draw_wizard(wizard: Dictionary, templates: Array) -> void:
 	Wizard.fill(_wizard_box, title, wizard, Callable(self, "wizard_send"), func() -> void: bridge.editor_wizard_use(), func() -> void: bridge.editor_wizard_close())
 
 
+## The open number field's chip in the rendering drawn now: the chip at the same pointer, when it
+## is still a number, so the field stays open with what was typed in it and names the new
+## rendering (fix pass 1, item 1: another field's edit landing re-renders the list). Returns
+## whether it found one; with none, the field closes, as M1 asks.
+func _rebind_number() -> bool:
+	if not _number_popup.visible or _number_chip.is_empty():
+		return false
+	var pointer := String(_number_chip.get("pointer", ""))
+	for index in _rule_chips.size():
+		var chip: Dictionary = _rule_chips[index]
+		if String(chip.get("pointer", "")) == pointer and String(chip.get("editor", "")) == "number":
+			_number_chip = {"index": index, "revision": _rules_rendering, "pointer": pointer}
+			return true
+	return false
+
+
 ## The rule list: `render_plan`'s lines, cut at its chips by the bridge, with the conflict
 ## connectors and the gateway's refusal of the last edit (S3's `ed3b`; scripts/rule_list.gd).
 func _draw_rules(state: Dictionary, unchecked: String) -> void:
@@ -1263,7 +1279,7 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 	# say what became of the value it sent (S3's `fixp`). The Visit & change field names no
 	# rendering, and closes only on its own answer.
 	if redrawn and rendering_moved:
-		if _number_setting.is_empty():
+		if _number_setting.is_empty() and not _rebind_number():
 			_number_popup.hide()
 		_choice_menu.hide()
 		_name_menu.hide()

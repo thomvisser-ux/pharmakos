@@ -320,6 +320,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_dormant_box(stage, editor, failures)
 	_check_the_load_folder(editor, failures)
 	_check_the_unreadable_counts(editor, failures)
+	await _check_the_rig_backed_panel(stage, editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
@@ -671,8 +672,8 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 		_key(stage, OS.find_keycode_from_string(character), character.unicode_at(0))
 	await _type_into(stage, field.field, "3")
 	_key(stage, KEY_ENTER, 0)
-	if heard.back() != "123":
-		failures.append("Tab, \"12\", a click and \"3\" sent `%s`, not \"123\"" % heard.back())
+	if heard != ["30", "30", "123"]:
+		failures.append("Tab, \"12\", a click and \"3\" sent %s, not a third \"123\" (the field shows `%s`)" % [heard, field.field.text])
 	if field.unit.text != "%" or not field.unit.visible:
 		failures.append("the unit is not drawn beside the field as sent: `%s`" % field.unit.text)
 	holder.queue_free()
@@ -994,6 +995,287 @@ func _check_the_unreadable_counts(editor: CanvasLayer, failures: Array[String]) 
 	if not rule_said:
 		failures.append("the rule list does not say an unreadable index")
 	editor._draw_state({"changes": 13, "has_text": false})
+
+
+## **The rig-backed checks** (fix pass 1, items 1 and 5), through the bridge's own rig and editor:
+## a value field's refusal said in its popup, one field's answer kept from the next field, the
+## dormant box's click while its edit is on its way, the Ready line after an accepted seal, and
+## Load's folder from its own button.
+func _check_the_rig_backed_panel(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var bridge: Node = editor.bridge
+	if not await _rig_begin(bridge):
+		failures.append("the rig-backed editor never held its text with its rule list rendered: %s" % bridge.editor_state().get("status_key", ""))
+		return
+	await _check_the_field_refusal_and_its_owner(stage, editor, bridge, failures)
+	await _check_the_dormant_box_through_the_rig(stage, editor, bridge, failures)
+	await _check_the_ready_line_through_the_rig(bridge, failures)
+	await _check_load_through_its_button(stage, editor, bridge, failures)
+
+
+## A value field's "abc" is refused in its own popup, by the bridge's typed refusal. Then chip A
+## sends 500 and, before the gateway answers, the person opens field B, a Visit & change number
+## setting (the rule list takes no edit while A's is on its way), and types in it: A's refusal,
+## and A's landing, are not B's to say, and B stays open with what was typed. Last, an edit of
+## another control re-renders the list under an open chip field: it stays open, its text kept.
+func _check_the_field_refusal_and_its_owner(stage: SubViewport, editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	var pct := _chip_index(bridge, "/cmdr_hp_pct/pct")
+	if pct < 0:
+		failures.append("the rendered rule list has no number chip to edit")
+		return
+	bridge.editor_describe_beacon("b_00")
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("beacon_detail", {}).get("known", false) and state.get("rules_editable", false)):
+		failures.append("the rig-backed editor never read b_00's detail with its rule list editable")
+		return
+	var settings: Array = bridge.editor_state().get("beacon_detail", {}).get("settings", [])
+	var setting := -1
+	for index in settings.size():
+		if String(settings[index].get("editor", "")) == "number":
+			setting = index
+	if setting < 0:
+		failures.append("b_00's detail lists no number setting")
+		return
+	editor._visit_beacon = "b_00"
+	var popup: PopupPanel = editor._number_popup
+	editor._on_rule_chip(pct)
+	await _settle()
+	await _type_in_popup(stage, editor, "abc")
+	_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+	await _settle()
+	if not popup.visible or editor._number_said.text != Strings.text("status_rule_refused_not_an_integer"):
+		failures.append("\"abc\" in the value field's popup says `%s` (open %s), not the bridge's refusal" % [editor._number_said.text, popup.visible])
+	for landed in [false, true]:
+		if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false)):
+			failures.append("the rule list never took an edit again")
+			return
+		editor._on_rule_chip(pct)
+		await _settle()
+		await _type_in_popup(stage, editor, "500")
+		_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+		if not await _rig_until(bridge, func(_state: Dictionary) -> bool: return not _held.is_empty(), func(method: String) -> bool: return method == "patch_plan"):
+			failures.append("chip A's edit never went out")
+			return
+		# Field B opens before the gateway answers A, and the person types in it.
+		editor._on_setting(setting)
+		await _settle()
+		await _type_in_popup(stage, editor, "7")
+		_release(bridge, "" if landed else _refusal("INVALID_ARGUMENT", "out of range"))
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("prose_current", false) and not state.get("busy", true))
+		await _settle()
+		if not popup.visible or editor._number_field.field.text != "7" or editor._number_said.visible:
+			failures.append("A's %s reached field B: open %s, `%s`, said `%s`" % ["landing" if landed else "refusal", popup.visible, editor._number_field.field.text, editor._number_said.text])
+		# A frame between a popup's close and its next open, as a hand takes: a popup opened in
+		# the frame it closed closes itself again.
+		popup.hide()
+		await _settle()
+	# An open chip field, and another control's edit landing under it: the list re-renders, and the
+	# field stays open on the chip at the same pointer with what was typed in it.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	editor._on_rule_chip(pct)
+	await _settle()
+	await _type_in_popup(stage, editor, "9")
+	var before := int(bridge.editor_state().get("rules_rendering", -1))
+	editor.act("go", {"beacon": "b_00"})
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return int(state.get("rules_rendering", -1)) != before and state.get("prose_current", false) and not state.get("busy", true))
+	await _settle()
+	if not popup.visible or editor._number_field.field.text != "9" or int(editor._number_chip.get("revision", -1)) == before:
+		failures.append("a re-render under an open chip field closed it or kept the old rendering: open %s, `%s`" % [popup.visible, editor._number_field.field.text])
+	popup.hide()
+
+
+## The value field's popup: a click into its field, then `text` key by key, through the stage.
+func _type_in_popup(stage: SubViewport, editor: CanvasLayer, text: String) -> void:
+	var inside := Vector2(editor._number_popup.position)
+	_click(stage, inside + editor._number_field.field.get_global_rect().get_center())
+	for character in text:
+		_key(stage, OS.find_keycode_from_string(character), character.unicode_at(0))
+	await get_tree().process_frame
+
+
+## E0601 on the rows: the box is shown and takes a click; while that click's edit is on its way a
+## second click at the same point reaches the bridge, which refuses it as busy, said beside the
+## box. Reaches the bridge's `dormant()` and `set_allow_dormant` through the rig.
+func _check_the_dormant_box_through_the_rig(stage: SubViewport, editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	_diagnostics = "{\"code\":\"E0601\",\"severity\":\"error\",\"path\":\"/declarative/route/0\",\"beginner\":\"Short of power.\",\"suggestions\":[{\"title\":\"Allow dormant beacons\",\"json_patch\":\"[{\\\"op\\\":\\\"add\\\",\\\"path\\\":\\\"/declarative/options\\\",\\\"value\\\":{\\\"allow_dormant_beacons\\\":true}}]\",\"applicability\":\"maybe_incorrect\"}]}"
+	bridge.editor_load(RIG_TEXT.to_utf8_buffer())
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rows_current", false) and state.get("dormant", {}).get("shown", false)):
+		failures.append("E0601 never showed the dormant box through the rig")
+		return
+	await _settle()
+	var box: CheckBox = editor._dormant
+	var toggles: Array = []
+	var listen := func(on: bool) -> void: toggles.append(on)
+	box.toggled.connect(listen)
+	var at := box.get_global_rect().get_center()
+	_click(stage, at)
+	await _rig_until(bridge, func(_state: Dictionary) -> bool: return not _held.is_empty(), func(method: String) -> bool: return method == "patch_plan")
+	await _settle()
+	_click(stage, at)
+	await _settle()
+	box.toggled.disconnect(listen)
+	if toggles.size() != 2:
+		failures.append("two clicks on the dormant box, the second while the first's edit was on its way, gave %d toggled" % toggles.size())
+	if String(bridge.editor_state().get("dormant", {}).get("refused", "")) != "busy" or editor._dormant_said.text != Strings.text("status_dormant_refused_busy"):
+		failures.append("the click while the edit was on its way is not said beside the box: `%s`" % editor._dormant_said.text)
+	_release(bridge, "")
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return not state.get("busy", true) and state.get("rows_current", false))
+	_diagnostics = ""
+
+
+## The Ready line from the bridge's word: the filing sentence before a seal, and after the
+## gateway accepted one this round, that Ready keeps it.
+func _check_the_ready_line_through_the_rig(bridge: Node, failures: Array[String]) -> void:
+	if Lobby.ready_line(bridge.editor_state()) != Strings.text("lobby_ready_help"):
+		failures.append("before a seal the Ready line says `%s`" % Lobby.ready_line(bridge.editor_state()))
+	bridge.editor_submit()
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("sealed_this_round", false)):
+		failures.append("an accepted seal never showed as this round's")
+	if Lobby.ready_line(bridge.editor_state()) != Strings.text("lobby_ready_sealed"):
+		failures.append("after an accepted seal the Ready line says `%s`" % Lobby.ready_line(bridge.editor_state()))
+
+
+## Load, pressed through its own button, opens in the folder of the file the text came from.
+func _check_load_through_its_button(stage: SubViewport, editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	var path := ProjectSettings.globalize_path("res://fixtures/needs_a_fix.jsonc")
+	if not editor.load_file(path) or not await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("file", "")) == path):
+		failures.append("the rig-backed editor never took `%s` as the text's file" % path)
+		return
+	editor._load_dialog.current_dir = ProjectSettings.globalize_path("res://scripts")
+	var load: Button = null
+	for button in editor._panel.find_children("*", "Button", true, false):
+		if (button as Button).text == Strings.text("load"):
+			load = button
+	if load == null:
+		failures.append("the panel has no Load button")
+		return
+	_click(stage, load.get_global_rect().get_center())
+	await _settle()
+	if editor._load_dialog.current_dir.trim_suffix("/") != path.get_base_dir().trim_suffix("/"):
+		failures.append("Load, pressed, opens in `%s`, not the text's file's folder" % editor._load_dialog.current_dir)
+	editor._load_dialog.hide()
+
+
+## --- The rig-backed checks (fix pass 1, item 5) ---------------------------------------------
+##
+## These reach the Rust they pin: the bridge's own watch rig and editor, both connections open,
+## and this script standing where the gateway would, answering each frame the rig sends with a
+## result of the gateway's shape (`_answer`). A check may hold a frame back (`hold`), answer it
+## later (`_release`), and drives the panel with input pushed into the stage.
+
+## The Lull footer every answer carries.
+const LULL_FOOTER := {"phase": "lull", "phase_remaining_ms": 180000, "round": 1}
+## The playbook the rig-backed checks open: any text, since this stand-in answers every check.
+const RIG_TEXT := "{\"declarative\":{\"route\":[]}}"
+
+## Frames held back by a check, `[link, request]` each.
+var _held: Array = []
+## What the stand-in's `verify_plan` reports: diagnostics as JSON text, and whether it qualifies.
+var _diagnostics := ""
+## Every `patch_plan` the stand-in answered, its `json_patch` as sent.
+var _patches: Array[String] = []
+
+
+## Starts the bridge's watch rig with both connections open, opens RIG_TEXT in the editor, and
+## answers until the editor holds it with its rule list rendered.
+func _rig_begin(bridge: Node) -> bool:
+	_held.clear()
+	_patches.clear()
+	_diagnostics = ""
+	bridge.configure(4, MesherRules.RULES_JSON)
+	bridge.watch_begin()
+	bridge.watch_opened(0)
+	bridge.watch_opened(1)
+	bridge.editor_seat("seat.0")
+	bridge.editor_load(RIG_TEXT.to_utf8_buffer())
+	return await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("has_text", false) and state.get("prose_current", false) and state.get("rows_current", false))
+
+
+## Answers the rig's frames until `done` holds of the editor state, or about four seconds pass.
+## `hold` is called with each request's method; a true answer keeps the frame back in `_held`.
+func _rig_until(bridge: Node, done: Callable, hold: Callable = Callable()) -> bool:
+	for _frame in 240:
+		for frame in bridge.watch_outbox():
+			var link := int(frame[0])
+			var text := String(frame[1])
+			var request: Dictionary = JSON.parse_string(text)
+			if hold.is_valid() and hold.call(String(request.get("method", ""))):
+				_held.append([link, text])
+				continue
+			bridge.watch_receive(link, _answer(text, ""))
+		if done.call(bridge.editor_state()):
+			return true
+		await get_tree().process_frame
+	return false
+
+
+## Answers the first held frame with the refusal `error` (a JSON-RPC error object as text), or
+## with its usual result when `error` is "".
+func _release(bridge: Node, error: String) -> void:
+	if _held.is_empty():
+		return
+	var held: Array = _held.pop_front()
+	bridge.watch_receive(int(held[0]), _answer(String(held[1]), error))
+
+
+## The stand-in's answer to the request `text`, as a JSON-RPC frame's text: `error` when one is
+## given, otherwise a result of the shape the gateway answers that method with, and the Lull
+## footer. Written as text, never through JSON.stringify of parsed numbers, which GDScript holds
+## as floats and would write as "1.0".
+func _answer(text: String, error: String) -> String:
+	var found := RegEx.create_from_string("\"id\": *([0-9]+)").search(text)
+	var id := found.get_string(1) if found != null else "0"
+	var head := "{\"jsonrpc\":\"2.0\",\"id\":%s," % id
+	if error != "":
+		return head + "\"error\":" + error + "}"
+	var request: Dictionary = JSON.parse_string(text)
+	var params: Dictionary = request.get("params", {})
+	var footer := "\"_status\":{\"phase\":\"lull\",\"phase_remaining_ms\":180000,\"round\":1}"
+	var body := ""
+	match String(request.get("method", "")):
+		"get_view":
+			body = "\"next_cursor\":\"c1\",\"complete\":true,"
+		"verify_plan":
+			body = "\"report\":{\"qualifies\":true,\"depth\":\"%s\",\"diagnostics\":[%s]}," % [String(params.get("depth", "quick")), _diagnostics]
+		"patch_plan":
+			_patches.append(String(params.get("json_patch", "")))
+			body = "\"playbook_jsonc\":%s,\"inverse_json_patch\":\"[]\"," % JSON.stringify(String(params.get("playbook_jsonc", "")) + " ")
+		"render_plan":
+			return _fixture("res://fixtures/rule_list_render.json", id)
+		"get_vocabulary":
+			return _fixture("res://fixtures/vocabulary.json", id)
+		"submit_plan":
+			body = "\"report\":{\"qualifies\":true,\"depth\":\"full\",\"diagnostics\":[]},\"accepted\":true,"
+		"get_briefing":
+			body = "\"notes\":\"\","
+		"list_drafts":
+			body = "\"drafts\":[],"
+		"list_templates":
+			body = "\"templates\":[],"
+		"get_map_summary":
+			body = "\"features\":[],"
+		"get_beacon":
+			return _fixture("res://fixtures/beacon_core.json", id)
+		"estimate_route", "resolve_refs":
+			return head + "\"error\":" + _refusal("NOT_FOUND", "the stand-in prices nothing") + "}"
+	return head + "\"result\":{" + body + footer + "}}"
+
+
+## A JSON-RPC error object as the gateway writes one: its own code under `data`.
+func _refusal(code: String, message: String) -> String:
+	return "{\"code\":-32000,\"message\":%s,\"data\":{\"code\":%s}}" % [JSON.stringify(message), JSON.stringify(code)]
+
+
+## A committed gateway answer's text, its id set to `id`.
+func _fixture(path: String, id: String) -> String:
+	return RegEx.create_from_string("\"id\": *[0-9]+").sub(FileAccess.get_file_as_string(path), "\"id\":" + id)
+
+
+## The rule-list chip whose pointer ends in `suffix`, by its index in the bridge's list, or -1.
+func _chip_index(bridge: Node, suffix: String) -> int:
+	var chips: Array = bridge.editor_state().get("rule_list", {}).get("chips", [])
+	for index in chips.size():
+		if String(chips[index].get("pointer", "")).ends_with(suffix):
+			return index
+	return -1
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4

@@ -1083,8 +1083,9 @@ enum Job {
     RuleEdit {
         patch: String,
         pointer: String,
-        /// Whether a value field sent it, so its popup hears what became of it.
-        field: bool,
+        /// The open value field that sent it, by its token ([`Editor::field_opened`]), so that
+        /// field's popup, and no other, hears what became of it; `None` when no field sent it.
+        field: Option<u64>,
     },
     /// `get_draft`: open the draft `id` (the carried one) as the text.
     GetDraft {
@@ -1105,8 +1106,8 @@ enum Job {
     Visit {
         beacon: String,
         row: Json,
-        /// Whether a value field sent it, as for a rule-list edit.
-        field: bool,
+        /// The value field that sent it, as for a rule-list edit.
+        field: Option<u64>,
     },
 }
 
@@ -1286,6 +1287,8 @@ pub struct Editor {
     rule_refusal: Option<RuleRefusal>,
     /// What became of the last value a value field sent ([`FieldAsk`]).
     field_ask: FieldAsk,
+    /// The open value field's token, taken at each open ([`Editor::field_opened`]).
+    field_token: u64,
     /// Why the last click on the E0601 checkbox was refused, and the revision it was refused at.
     dormant_refused: Option<(u64, DormantRefusal)>,
     /// The chip whose map pick the next map click is, by its index in the rule list.
@@ -1896,7 +1899,7 @@ impl Editor {
         value: i64,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.number_patch(chip, revision, pointer, value);
-        self.ask_rule_edit(outcome, pointer, false)
+        self.ask_rule_edit(outcome, pointer, None)
     }
 
     /// Chip `chip`'s value field sent `text`, exactly as typed: read as a whole number
@@ -1917,16 +1920,27 @@ impl Editor {
     ) -> Result<(), RuleEditRefusal> {
         let outcome =
             typed_integer(text).and_then(|value| self.number_patch(chip, revision, pointer, value));
-        let asked = self.ask_rule_edit(outcome, pointer, true);
+        let asked = self.ask_rule_edit(outcome, pointer, Some(self.field_token));
         self.field_heard(asked)
     }
 
-    /// A value field opened: nothing it sent before is its to say any more.
-    pub fn field_opened(&mut self) {
-        if self.field_ask != FieldAsk::Nothing {
-            self.field_ask = FieldAsk::Nothing;
-            self.touch();
+    /// Whether `job` was sent by the value field open now, so its answer is that field's to say.
+    fn hears(&self, job: &Job) -> bool {
+        match job {
+            Job::RuleEdit { field, .. } | Job::Visit { field, .. } => {
+                *field == Some(self.field_token)
+            }
+            _ => false,
         }
+    }
+
+    /// A value field opened: nothing it sent before is its to say any more.
+    /// Each open takes a new token, and only an answer to an edit sent under the current token
+    /// is the field's to say (fix pass 1: one field's answer showed in the next field's popup).
+    pub fn field_opened(&mut self) {
+        self.field_token = self.field_token.wrapping_add(1);
+        self.field_ask = FieldAsk::Nothing;
+        self.touch();
     }
 
     /// What became of the last value a value field sent.
@@ -1984,7 +1998,7 @@ impl Editor {
         which: usize,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.choice_patch(chip, revision, pointer, which);
-        self.ask_rule_edit(outcome, pointer, false)
+        self.ask_rule_edit(outcome, pointer, None)
     }
 
     fn choice_patch(
@@ -2093,7 +2107,7 @@ impl Editor {
         ) {
             self.picking = None;
         }
-        self.ask_rule_edit(outcome, &on, false)
+        self.ask_rule_edit(outcome, &on, None)
     }
 
     /// A map click on nothing (no beacon, feature or voxel) while a pick is on: refused as
@@ -2147,7 +2161,7 @@ impl Editor {
     /// itself, or on a rule of another array (a step onto a rule).
     pub fn move_rule(&mut self, from: &RuleNamed, to: &RuleNamed) -> Result<(), RuleEditRefusal> {
         let outcome = self.move_patch(from, to);
-        self.ask_rule_edit(outcome, &from.pointer, false)
+        self.ask_rule_edit(outcome, &from.pointer, None)
     }
 
     fn move_patch(
@@ -2268,13 +2282,13 @@ impl Editor {
     }
 
     /// Queues a composed rule-list edit, or says why there is none: on the status line, and on
-    /// the rule holding `on`, the pointer the control named (S3's `fixp`). `field` says whether a
-    /// value field sent it.
+    /// the rule holding `on`, the pointer the control named (S3's `fixp`). `field` is the token of
+    /// the value field that sent it ([`Editor::field_opened`]), `None` for any other control.
     fn ask_rule_edit(
         &mut self,
         outcome: Result<(String, String), RuleEditRefusal>,
         on: &str,
-        field: bool,
+        field: Option<u64>,
     ) -> Result<(), RuleEditRefusal> {
         match outcome {
             Ok((patch, pointer)) => {
@@ -2327,7 +2341,7 @@ impl Editor {
         entry: usize,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.predicate_patch(slot, rendering, pointer, family, entry);
-        self.ask_rule_edit(outcome, pointer, false)
+        self.ask_rule_edit(outcome, pointer, None)
     }
 
     fn predicate_patch(
@@ -2399,7 +2413,7 @@ impl Editor {
         which: usize,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.name_patch(chip, revision, pointer, which);
-        self.ask_rule_edit(outcome, pointer, false)
+        self.ask_rule_edit(outcome, pointer, None)
     }
 
     fn name_patch(
@@ -2498,7 +2512,7 @@ impl Editor {
         value: i64,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.setting_number_row(beacon, setting, pointer, value);
-        self.ask_visit(beacon, outcome, false)
+        self.ask_visit(beacon, outcome, None)
     }
 
     /// Setting `setting` of beacon `beacon`'s detail took `text` from its value field, exactly
@@ -2520,7 +2534,7 @@ impl Editor {
     ) -> Result<(), RuleEditRefusal> {
         let outcome = typed_integer(text)
             .and_then(|value| self.setting_number_row(beacon, setting, pointer, value));
-        let asked = self.ask_visit(beacon, outcome, true);
+        let asked = self.ask_visit(beacon, outcome, Some(self.field_token));
         self.field_heard(asked)
     }
 
@@ -2556,7 +2570,7 @@ impl Editor {
         which: usize,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.setting_choice_row(beacon, setting, pointer, which);
-        self.ask_visit(beacon, outcome, false)
+        self.ask_visit(beacon, outcome, None)
     }
 
     fn setting_choice_row(
@@ -2594,7 +2608,7 @@ impl Editor {
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::mandate_row(mandate)?)
         });
-        self.ask_visit(beacon, outcome, false)
+        self.ask_visit(beacon, outcome, None)
     }
 
     /// Add a Build target of blueprint `which` (as `get_vocabulary` sent it) at beacon
@@ -2660,7 +2674,7 @@ impl Editor {
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::add_target_row(entry, anchor)?)
         });
-        self.ask_visit(beacon, outcome, false)
+        self.ask_visit(beacon, outcome, None)
     }
 
     /// Remove beacon `beacon`'s Build target `which`, as its detail lists it: one route step
@@ -2683,7 +2697,7 @@ impl Editor {
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::remove_target_row(target))
         });
-        self.ask_visit(beacon, outcome, false)
+        self.ask_visit(beacon, outcome, None)
     }
 
     /// Queue blueprint `which`, as `get_vocabulary` sent it, at beacon `beacon`: one route step
@@ -2701,7 +2715,7 @@ impl Editor {
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::queue_row(blueprint)?)
         });
-        self.ask_visit(beacon, outcome, false)
+        self.ask_visit(beacon, outcome, None)
     }
 
     /// Whether a Visit & change row for `beacon` can be composed now: the door is open, there is
@@ -2749,7 +2763,7 @@ impl Editor {
         &mut self,
         beacon: &str,
         outcome: Result<Json, RuleEditRefusal>,
-        field: bool,
+        field: Option<u64>,
     ) -> Result<(), RuleEditRefusal> {
         match outcome {
             Ok(row) => {
@@ -3116,7 +3130,7 @@ impl Editor {
             Sent::Edit { base, retry } => {
                 if base == self.revision {
                     self.queue.push_front(*retry);
-                } else if field_sent(&retry) {
+                } else if self.hears(&retry) {
                     self.field_ask = FieldAsk::Refused {
                         key: "status_rule_refused_changed".to_owned(),
                         detail: String::new(),
@@ -3370,7 +3384,7 @@ impl Editor {
             .as_ref()
             .is_some_and(|ghost| ghost.state == GhostState::Waiting);
         // A value field's edit still queued will not go out: its popup says why.
-        if self.queue.iter().any(field_sent) {
+        if self.queue.iter().any(|job| self.hears(job)) {
             self.field_ask = FieldAsk::Refused {
                 key: format!("status_closed_{}", self.door.name()),
                 detail: String::new(),
@@ -3919,7 +3933,7 @@ impl Editor {
         let answer = patch_of(result)?;
         // A value field's edit landed, or another landed first and it was not taken: its popup
         // hears which.
-        if field_sent(job) {
+        if self.hears(job) {
             self.field_ask = if base == self.revision {
                 FieldAsk::Landed
             } else {
@@ -4220,7 +4234,7 @@ impl Editor {
             _ => {}
         }
         if let Sent::Edit { retry, .. } = sent
-            && field_sent(retry)
+            && self.hears(retry)
         {
             self.field_ask = FieldAsk::Refused {
                 key: GATEWAY_REFUSED_KEY.to_owned(),
@@ -4258,14 +4272,6 @@ impl Editor {
         }
         Settled::Refused
     }
-}
-
-/// Whether a value field sent this job ([`FieldAsk`]).
-const fn field_sent(job: &Job) -> bool {
-    matches!(
-        job,
-        Job::RuleEdit { field: true, .. } | Job::Visit { field: true, .. }
-    )
 }
 
 /// The check of the text a call is, and the revision it checks; `None` for a call that checks
@@ -7562,6 +7568,46 @@ mod tests {
         let text = editor.text.clone().expect("a text");
         editor.answered(Ok(&patched(&text, "[]"))).expect("settled");
         assert_eq!(editor.field_ask(), &FieldAsk::Landed);
+    }
+
+    /// **A field's answer is the field's that asked** (fix pass 1, item 1): chip A sends, the
+    /// person opens field B before the gateway answers, and A's refusal or landing is not B's to
+    /// say; B, which sent nothing, still hears nothing, and stays open with what was typed in it.
+    #[test]
+    fn a_fields_answer_goes_to_the_field_that_asked() {
+        for refused in [true, false] {
+            let mut editor = rendered(EXPAND_EAST);
+            let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+            editor.field_opened();
+            assert_eq!(editor.set_number_text(pct, revision, &at, "500"), Ok(()));
+            let _call = editor.next_call(false).expect("the patch");
+            // The person opens another field before the answer.
+            editor.field_opened();
+            assert_eq!(editor.field_ask(), &FieldAsk::Nothing);
+            if refused {
+                editor
+                    .answered(Err(("INVALID_ARGUMENT", "out of range")))
+                    .expect("settled");
+            } else {
+                let text = editor.text.clone().expect("a text");
+                editor.answered(Ok(&patched(&text, "[]"))).expect("settled");
+            }
+            assert_eq!(
+                editor.field_ask(),
+                &FieldAsk::Nothing,
+                "the second field sent nothing, yet it hears A's answer (refused: {refused})"
+            );
+        }
+        // A field's own answer still reaches it.
+        let mut editor = rendered(EXPAND_EAST);
+        let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+        editor.field_opened();
+        assert_eq!(editor.set_number_text(pct, revision, &at, "500"), Ok(()));
+        let _call = editor.next_call(false).expect("the patch");
+        editor
+            .answered(Err(("INVALID_ARGUMENT", "out of range")))
+            .expect("settled");
+        assert_eq!(editor.field_ask().name(), "refused");
     }
 
     /// **A Visit & change number setting reads its text the same way**, and sends a value past
