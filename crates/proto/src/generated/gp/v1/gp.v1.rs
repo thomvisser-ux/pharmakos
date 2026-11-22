@@ -1722,11 +1722,16 @@ pub mod location {
         /// in PlaceBeaconStep.at. A `toward` that finds no site fails its step and
         /// says why, with how many sites it weighed.
         ///
-        /// "Nearest" is targeting's (docs/design/targeting.md, "Nearest"; S3's
-        /// plan, E23): the least estimated travel, the item-61 estimator's integer
-        /// cost, from the candidate site to the feature's anchor column, over the
-        /// terrain the seat knows. Unreachable candidates are skipped, and ties go
-        /// to the lowest anchor y, then x. Straight-line distance is not used.
+        /// "Nearest" is targeting's, and for a stepping stone it is the second of
+        /// targeting's two measures (docs/design/targeting.md, "Nearest"; S3's plan,
+        /// E23; decisions-log item 168 (9) and item 169): the least cost of any walk
+        /// over the terrain, over the walkers' own step rule at the rules' step
+        /// costs, from the candidate site to the feature's anchor column. Nobody
+        /// walks from the stone to the feature when the stone is chosen, so the
+        /// measure is the closest site over the ground and not a served walk. The
+        /// terrain is the live world's until S4's knowledge mask. Candidates from
+        /// which the feature cannot be reached are skipped, and ties go to the
+        /// lowest site y, then x. Straight-line distance is not used.
         ///
         /// On the wire from S3's `con6`, and built by S3's `pred`. Before it the
         /// sim's compile refused `toward` with NotAtThisStage and the verifier with
@@ -1773,10 +1778,11 @@ pub struct FeatureRef {
 pub mod feature_ref {
     /// How a pick orders its candidates. One rank vocabulary for every kind.
     ///
-    /// NEAREST is the least estimated travel from the origin to the feature
-    /// over the terrain the seat knows — the item-61 estimator's integer cost —
-    /// with unreachable candidates skipped and ties to the lowest anchor y, then
-    /// x. The origin is the commander's column when the step starts (under
+    /// NEAREST is the least cost of the walk the router serves from the origin
+    /// to the feature (the walk itself, near or far, under no surcharge: the
+    /// first of targeting's two measures, decisions-log item 168 (9) and item
+    /// 169), with unreachable candidates skipped and ties to the lowest anchor y,
+    /// then x. The origin is the commander's column when the step starts (under
     /// `covering`), the target beacon's anchor (under `on`; for an initial row,
     /// the site `covering` chose), or, for a description a beacon holds, that
     /// beacon's anchor (targeting.md, "Nearest").
@@ -2697,8 +2703,8 @@ pub mod mine_settings {
         /// The most remaining yield (ore voxels times richness) among the reachable
         /// seams in the beacon's sphere, ties by nearest.
         Richest = 1,
-        /// Nearest as targeting defines it: the least estimated travel, ties to
-        /// the lowest anchor y, then x.
+        /// Nearest as targeting defines it: the least cost of the walk the router
+        /// serves from the origin to the seam, ties to the lowest anchor y, then x.
         Nearest = 2,
         /// Reads as NEAREST until S2's threat model, and the verifier warns that
         /// it does.
