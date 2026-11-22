@@ -7418,4 +7418,105 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             );
         }
     }
+
+    /// The test files that still read `CARGO_TARGET_DIR` raw, each with the
+    /// lane that owes the change (decisions-log item 165 (13)): the client
+    /// belongs to another lane, so the move to the parent of
+    /// `CARGO_TARGET_TMPDIR` is sequenced there. An entry fails
+    /// [`no_test_reads_the_target_dir_variable_raw`] the day its file stops
+    /// reading the variable, so the lane that fixes it deletes the entry.
+    const RAW_TARGET_DIR_OWED: &[(&str, &str)] = &[
+        (
+            "crates/client-gdext/tests/event_list.rs",
+            "fixp's successor",
+        ),
+        (
+            "crates/client-gdext/tests/vista_fixture.rs",
+            "fixp's successor",
+        ),
+    ];
+
+    /// The 1-based numbers of the lines of `text` that read
+    /// `CARGO_TARGET_DIR` outside a line comment.
+    fn raw_target_dir_lines(text: &str) -> Vec<usize> {
+        text.lines()
+            .zip(1..)
+            .filter(|(line, _)| {
+                let code = line.split_once("//").map_or(*line, |(code, _)| code);
+                code.contains("CARGO_TARGET_DIR")
+            })
+            .map(|(_, number)| number)
+            .collect()
+    }
+
+    #[test]
+    fn a_raw_read_is_found_and_a_comment_is_not() {
+        let text = "/// honours `CARGO_TARGET_DIR`\n\
+                    fn a() {}\n\
+                    let dir = std::env::var_os(\"CARGO_TARGET_DIR\");\n\
+                    let tmp = env!(\"CARGO_TARGET_TMPDIR\"); // not CARGO_TARGET_DIR\n";
+        assert_eq!(raw_target_dir_lines(text), vec![3]);
+    }
+
+    /// A test that reads `CARGO_TARGET_DIR` itself is misled by a relative
+    /// value (cargo resolves it against its own working folder, the test runs
+    /// in its crate's) and by a user-level `build.target-dir` with the
+    /// variable unset. The target directory is the parent of
+    /// `CARGO_TARGET_TMPDIR`, which cargo sets absolute (item 165 (13)).
+    #[test]
+    fn no_test_reads_the_target_dir_variable_raw() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("crates");
+        let mut files = Vec::new();
+        walk(&crates, &mut files).expect("crates/");
+        let mut readers: Vec<(String, usize)> = Vec::new();
+        let mut scanned = 0_usize;
+        for file in &files {
+            // `<member>/tests/**/*.rs`, as `crates/<member>/tests/...`.
+            let parts: Vec<String> = file
+                .strip_prefix(&crates)
+                .unwrap_or_else(|error| panic!("{}: {error}", file.display()))
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            let in_tests = parts.get(1).is_some_and(|part| part == "tests");
+            if !in_tests || file.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            scanned += 1;
+            let text = fs::read_to_string(file)
+                .unwrap_or_else(|error| panic!("reading {}: {error}", file.display()));
+            let relative = format!("crates/{}", parts.join("/"));
+            readers.extend(
+                raw_target_dir_lines(&text)
+                    .into_iter()
+                    .map(|line| (relative.clone(), line)),
+            );
+        }
+        assert!(
+            scanned > 50,
+            "only {scanned} test files found under crates/*/tests"
+        );
+        let unowed: Vec<String> = readers
+            .iter()
+            .filter(|(file, _)| !RAW_TARGET_DIR_OWED.iter().any(|(owed, _)| owed == file))
+            .map(|(file, line)| format!("{file}:{line}"))
+            .collect();
+        assert!(
+            unowed.is_empty(),
+            "these test lines read CARGO_TARGET_DIR raw; take the parent of \
+             env!(\"CARGO_TARGET_TMPDIR\") instead: {unowed:?}"
+        );
+        let paid: Vec<&str> = RAW_TARGET_DIR_OWED
+            .iter()
+            .filter(|(owed, _)| !readers.iter().any(|(file, _)| file == owed))
+            .map(|(owed, _)| *owed)
+            .collect();
+        assert!(
+            paid.is_empty(),
+            "these files no longer read CARGO_TARGET_DIR raw: delete their entries from \
+             RAW_TARGET_DIR_OWED: {paid:?}"
+        );
+    }
 }
