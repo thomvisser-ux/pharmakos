@@ -582,32 +582,25 @@ fn no_wildcard_binding_is_written_anywhere() {
 /// bound is a stack bound only on the stack this names.
 ///
 /// An allow-list, not a list of banned spellings (S3's `probw`, carried from
-/// `vfyq2`'s record; decisions-log item 168 (5)): a list of `thread::spawn`
-/// and `thread::Builder` let `std::thread::scope` (whose scoped spawns take
-/// the default stack), an imported `Builder` (`use std::thread::Builder;`,
-/// then `Builder::new()`), a braced import (`use std::{thread, ...}`) and a
-/// renamed module (`use std::thread as t;`) through. So the shipped code may
-/// name std's thread module in exactly one form, `thread::JoinHandle`, the
-/// handle `player_text_thread`'s builder answers; every other whole-word
-/// `thread` outside a string literal is a way to make a thread that is not
-/// the door, and is refused. "Names the module" is a `thread` that a path
-/// separator touches on either side, or any `thread` in a `use` item (where a
-/// braced list names it bare); a local binding called `thread` is neither.
+/// `vfyq2`'s record; decisions-log item 168 (5)), and a word scan, not a line
+/// shape (the review of #212): any whole-word `thread` in the shipped code,
+/// outside a string, character or raw-string literal and a comment, is
+/// refused unless it is written `thread::JoinHandle`, the handle
+/// `player_text_thread`'s builder answers. So `std::thread::scope`, an
+/// imported `Builder`, a braced import over several lines (`thread,`,
+/// `thread as t,`), a renamed module, a spaced path (`thread ::spawn`) and a
+/// local binding named `thread` are all refused; the gateway names its
+/// threads' handles otherwise.
 fn thread_offence(line: &str) -> Option<&'static str> {
-    let code = outside_strings(line);
-    let trimmed = code.trim_start();
-    let importing = trimmed.starts_with("use ") || trimmed.starts_with("pub use ");
+    let code = code_only(line);
     let mut from = 0_usize;
     while let Some(offset) = code.get(from..).and_then(|rest| find_word(rest, "thread")) {
         let start = from.saturating_add(offset);
         let end = start.saturating_add("thread".len());
-        let before = code.get(..start).unwrap_or("");
-        let after = code.get(end..).unwrap_or("");
-        let pathed = before.ends_with("::") || after.starts_with("::");
-        if (pathed || importing) && !after.starts_with("::JoinHandle") {
+        if !code.get(end..).unwrap_or("").starts_with("::JoinHandle") {
             return Some(
-                "names std's thread module other than as `thread::JoinHandle`: make every thread \
-                 with player_text_thread",
+                "names `thread` other than as `thread::JoinHandle`: make every thread with \
+                 player_text_thread",
             );
         }
         from = end;
@@ -638,29 +631,81 @@ fn find_word(text: &str, word: &str) -> Option<usize> {
     None
 }
 
-/// `line` with the inside of every string literal blanked, so a message
-/// ("starting the surface thread") is not read as a use of the module. A
-/// backslash escapes the next character inside a literal.
-fn outside_strings(line: &str) -> String {
+/// `line`'s code: every string literal (with its escapes), raw-string literal
+/// (`r"..."`, `r#"..."#`) and character literal blanked to an empty pair of
+/// quotes, and everything from a `//` outside them cut, so a message
+/// ("starting the surface thread") or a comment is not read as a use of the
+/// module, and a quote inside a character literal opens nothing. A lifetime
+/// (`'a`) is not a literal and is kept.
+fn code_only(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let at_char = |index: usize| chars.get(index).copied();
     let mut out = String::with_capacity(line.len());
-    let mut inside = false;
-    let mut escaped = false;
-    for c in line.chars() {
-        if inside {
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                inside = false;
-                out.push(c);
+    let mut at = 0_usize;
+    while let Some(c) = at_char(at) {
+        let next = at_char(at.saturating_add(1));
+        if c == '/' && next == Some('/') {
+            break;
+        }
+        let word_before = at
+            .checked_sub(1)
+            .and_then(at_char)
+            .is_some_and(|before| before.is_alphanumeric() || before == '_');
+        if c == 'r' && !word_before {
+            let mut hashes = 0_usize;
+            while at_char(at.saturating_add(1).saturating_add(hashes)) == Some('#') {
+                hashes = hashes.saturating_add(1);
             }
-            continue;
+            if at_char(at.saturating_add(1).saturating_add(hashes)) == Some('"') {
+                let mut close = at.saturating_add(2).saturating_add(hashes);
+                loop {
+                    match at_char(close) {
+                        None => return out,
+                        Some('"')
+                            if (1..=hashes)
+                                .all(|k| at_char(close.saturating_add(k)) == Some('#')) =>
+                        {
+                            break;
+                        }
+                        Some(_) => close = close.saturating_add(1),
+                    }
+                }
+                out.push_str("r\"\"");
+                at = close.saturating_add(1).saturating_add(hashes);
+                continue;
+            }
         }
         if c == '"' {
-            inside = true;
+            let mut close = at.saturating_add(1);
+            loop {
+                match at_char(close) {
+                    None => return out,
+                    Some('\\') => close = close.saturating_add(2),
+                    Some('"') => break,
+                    Some(_) => close = close.saturating_add(1),
+                }
+            }
+            out.push_str("\"\"");
+            at = close.saturating_add(1);
+            continue;
+        }
+        if c == '\'' {
+            // A character literal: one character or one escape, then a quote.
+            let close = if next == Some('\\') {
+                (at.saturating_add(3)..at.saturating_add(12)).find(|i| at_char(*i) == Some('\''))
+            } else if at_char(at.saturating_add(2)) == Some('\'') {
+                Some(at.saturating_add(2))
+            } else {
+                None
+            };
+            if let Some(close) = close {
+                out.push_str("''");
+                at = close.saturating_add(1);
+                continue;
+            }
         }
         out.push(c);
+        at = at.saturating_add(1);
     }
     out
 }
@@ -706,6 +751,16 @@ fn the_thread_guard_refuses_every_way_round_the_door() {
         "use std::{fs, thread};",
         "use std::thread as t;",
         "    let _ = ::std::thread::available_parallelism();",
+        // The review of #212's probe: lines of a braced `use` written over
+        // several lines, a character literal that holds a quote, a spaced
+        // path; and a few more of the same kinds.
+        "    thread as t,",
+        "    thread,",
+        "    let q = '\"'; std::thread::spawn(f);",
+        "    std::thread\t::spawn(f);",
+        "    let q = '\\''; thread::spawn(f);",
+        "    let thread = player_text_thread(\"x\");",
+        "    let s = r#\"a \" quote\"#; std::thread::spawn(f);",
     ] {
         assert!(
             thread_offence(line).is_some(),
@@ -715,12 +770,13 @@ fn the_thread_guard_refuses_every_way_round_the_door() {
     for line in [
         "use std::thread::JoinHandle;",
         "    let mut threads: Vec<JoinHandle<()>> = Vec::new();",
-        "    let thread = pharmakos_plan_core::stack::player_text_thread(\"gateway accept\")",
-        "    threads.push(thread);",
-        "    let started = pharmakos_plan_core::stack::player_text_thread(\"gateway connection\")",
+        "    let accepter = pharmakos_plan_core::stack::player_text_thread(\"gateway accept\")",
+        "    threads.push(accepter);",
         ") -> Result<std::thread::JoinHandle<()>, Error> {",
         "                \"this host could not start a connection thread: {}\",",
         "    \"a \\\"quoted\\\" thread\" ; let threads = 1;",
+        "    let s = r#\"a thread\"#; // the surface thread",
+        "fn f<'a>(x: &'a str) -> &'a str { x }",
     ] {
         assert_eq!(thread_offence(line), None, "the guard refused: {line}");
     }

@@ -154,7 +154,7 @@ impl Listener {
         let mut threads: Vec<JoinHandle<()>> = Vec::new();
         for socket in self.sockets {
             let sender = sender.clone();
-            let thread = pharmakos_plan_core::stack::player_text_thread("gateway accept")
+            let accepter = pharmakos_plan_core::stack::player_text_thread("gateway accept")
                 .spawn(move || {
                     accept_loop(&socket, &sender);
                 })
@@ -164,7 +164,7 @@ impl Listener {
                         crate::error::engine(&error)
                     ))
                 })?;
-            threads.push(thread);
+            threads.push(accepter);
         }
         drop(sender);
         Ok(Accepting { receiver, threads })
