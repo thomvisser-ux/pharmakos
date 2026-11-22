@@ -108,6 +108,9 @@ enum Verify {
     NeverButFixable,
     /// Every playbook qualifies FULL, and a QUICK verify answers no `report`.
     QuickUnreported,
+    /// No playbook qualifies FULL, and no report offers a fix, so every repair
+    /// takes out a goal.
+    NeverUnfixed,
 }
 
 /// How the scripted paged reads page.
@@ -167,6 +170,12 @@ struct Script {
     attack_post: Option<[i32; 3]>,
     /// Beacons a route ending on them does not reach, by id.
     unreachable: BTreeSet<String>,
+    /// An own beacon's sphere radius by id, where it is not the rules
+    /// table's base (24 voxels): a finished Spire grows it.
+    radii: BTreeMap<String, i64>,
+    /// The briefing's `licences_held`, as the wire spells each; left out of
+    /// the answer while empty, as the gateway leaves it.
+    licences: Vec<&'static str>,
     transcript: Vec<String>,
 }
 
@@ -214,6 +223,8 @@ impl Script {
             ageless: BTreeSet::new(),
             attack_post: None,
             unreachable: BTreeSet::new(),
+            radii: BTreeMap::new(),
+            licences: Vec::new(),
             transcript: Vec::new(),
         }
     }
@@ -343,11 +354,25 @@ impl Script {
                 let status = self.status();
                 self.ok(obj(vec![("status", status)]))
             }
-            "get_briefing" => self.ok(obj(vec![
-                ("notes", Json::String(self.notes.clone())),
-                ("segment_length_ms", num(self.segment_ms)),
-                ("prose", Json::String(String::from("scripted"))),
-            ])),
+            "get_briefing" => {
+                let mut briefing = vec![
+                    ("notes", Json::String(self.notes.clone())),
+                    ("segment_length_ms", num(self.segment_ms)),
+                    ("prose", Json::String(String::from("scripted"))),
+                ];
+                if !self.licences.is_empty() {
+                    briefing.push((
+                        "licences_held",
+                        Json::Array(
+                            self.licences
+                                .iter()
+                                .map(|held| Json::String((*held).to_owned()))
+                                .collect(),
+                        ),
+                    ));
+                }
+                self.ok(obj(briefing))
+            }
             "list_beacons" => self.list_beacons(&cursor),
             "get_economy_forecast" => self.ok(obj(vec![
                 ("treasury_now", num(self.treasury)),
@@ -463,6 +488,8 @@ impl Script {
                         row.push(("core", Json::Bool(beacon.core)));
                         row.push(("priority", Json::String(beacon.priority.to_owned())));
                         row.push(("powered", Json::Bool(beacon.powered)));
+                        let radius = self.radii.get(&beacon.id).copied().unwrap_or(24);
+                        row.push(("sphere_radius_voxels", num(radius)));
                     } else if !self.ageless.contains(&beacon.id) {
                         let age = self.sighting_ages.get(&beacon.id).copied().unwrap_or(0);
                         row.push(("sighting_age_ms", num(age)));
@@ -712,7 +739,9 @@ impl Script {
         if quick && self.verify == Verify::QuickUnreported {
             return self.ok(obj(vec![]));
         }
-        let qualifies = diagnostics.is_empty() && (quick || self.verify != Verify::NeverButFixable);
+        let qualifies = diagnostics.is_empty()
+            && (quick
+                || (self.verify != Verify::NeverButFixable && self.verify != Verify::NeverUnfixed));
         if !quick && self.verify == Verify::NeverButFixable {
             diagnostics.push(read(
                 r#"{"code":"E0301","severity":"error","path":"/declarative/route/0","suggestions":[{"title":"fix","json_patch":"[{\"op\":\"remove\",\"path\":\"/meta/note\"}]","applicability":"machine_applicable"}]}"#,
@@ -2624,4 +2653,235 @@ fn no_raid_post_stacks_on_one_or_on_a_guard() {
     assert!(ops.contains("A Defend beacon beside the core"), "{ops}");
     assert!(!ops.contains("Attack beacon"), "{ops}");
     assert!(!ops.contains("\"attack\""), "{ops}");
+}
+
+// ---------------------------------------------------------------------------
+// The Resonance Spire (S3's `opr3`)
+// ---------------------------------------------------------------------------
+
+/// The briefing's spelling of the Resonance Spire's licence: `gp.v1.Licence`'s
+/// value in the wire's lower case.
+const SPIRE_LICENCE: &str = "resonance_spire";
+
+/// The composing patch's `queue_spire` steps.
+fn spire_steps(ops: &[Json]) -> Vec<Json> {
+    ops.iter()
+        .filter_map(|op| op.get("value"))
+        .flat_map(|value| match value {
+            Json::Array(steps) => steps.clone(),
+            other => vec![other.clone()],
+        })
+        .filter(|step| step.get("label").and_then(text) == Some("queue_spire"))
+        .collect()
+}
+
+/// A busy seat that holds the Spire's licence.
+fn licensed() -> Script {
+    let mut world = Script::busy(0);
+    world.licences = vec![SPIRE_LICENCE];
+    world.treasury = 1_000;
+    world
+}
+
+/// Held licence, a core at the base radius, headroom for its 3 kW and the
+/// treasury for its $120: the Spire is queued at the core once, by one
+/// `queue_structure` row in an `interface` step of its own, inserted right
+/// after the core's dig depth (so the patch adds it at route 0 just before
+/// `deepen_core`), and the round is Easy's own.
+#[test]
+fn easy_queues_the_spire_at_its_core_once_it_holds_the_licence() {
+    let (script, played) = play(licensed());
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = composing_ops(&script.transcript);
+    let steps = spire_steps(&ops);
+    assert_eq!(steps.len(), 1, "queued exactly once: {ops:#?}");
+    let step = compact(steps.first().unwrap());
+    assert!(
+        step.contains(r#""beacon": { "beacon_id": "b_00" }"#)
+            && step.contains(r#""queue_structure": { "blueprint_id": "resonance_spire" }"#)
+            && step.contains(r#""on_fail": { "action": "SKIP" }"#),
+        "{step}"
+    );
+    let adds: Vec<&str> = ops
+        .iter()
+        .filter(|op| op.get("path").and_then(text) == Some("/declarative/route/0"))
+        .filter_map(|op| op.get("value")?.get("label").and_then(text))
+        .collect();
+    assert_eq!(
+        adds.last().copied(),
+        Some("deepen_core"),
+        "the core's step lands at route 0 last: {adds:?}"
+    );
+    assert_eq!(
+        adds.iter().rev().nth(1).copied(),
+        Some("queue_spire"),
+        "the Spire's lands right after it: {adds:?}"
+    );
+    assert!(played.why.contains("Resonance Spire"), "{}", played.why);
+}
+
+/// No licence, no Spire; and a licence the schema does not name is a round
+/// not read rather than one read as unlicensed.
+#[test]
+fn no_licence_queues_no_spire_and_an_unknown_licence_is_refused() {
+    let mut world = licensed();
+    world.licences = Vec::new();
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own);
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.contains("resonance_spire")),
+        "{:#?}",
+        script.transcript
+    );
+    let mut unknown = licensed();
+    unknown.licences = vec!["sensor_spire"];
+    let (_, played) = play(unknown);
+    assert_eq!(
+        played.refused.map(|refused| (refused.method, refused.code)),
+        Some((String::from("get_briefing"), String::from("MALFORMED")))
+    );
+}
+
+/// Never twice across rounds: a Spire of the seat's in view, finished or
+/// still going up, or a core whose sphere is grown past the base, queues no
+/// second one; and an incomplete view, which could not show one, queues none.
+#[test]
+fn a_spire_standing_or_going_up_is_never_queued_again() {
+    let mut going_up = licensed();
+    going_up.entities.push(Entity {
+        id: String::from("s_9"),
+        kind: "structure",
+        subtype: "resonance_spire",
+        owner: 0,
+        at: [34, 32, GROUND],
+    });
+    let mut grown = licensed();
+    grown.radii.insert(String::from("b_00"), 36);
+    let mut unseen = licensed();
+    unseen.paging = Paging::ViewNeverComplete;
+    for (what, world) in [("going up", going_up), ("grown", grown), ("unseen", unseen)] {
+        let (script, _) = play(world);
+        assert!(
+            !script
+                .transcript
+                .iter()
+                .any(|line| line.contains("queue_structure")),
+            "{what}: {:#?}",
+            script.transcript
+        );
+    }
+}
+
+/// The grid and the treasury: a headroom below the Spire's draw, or a
+/// treasury below its price once the round's goals are weighed, queues none.
+#[test]
+fn a_spire_the_grid_or_the_treasury_cannot_carry_is_not_queued() {
+    let mut short = licensed();
+    short.supply = 6;
+    short.draw = 4;
+    let mut poor = licensed();
+    poor.treasury = 100;
+    for (what, world) in [("kW", short), ("$", poor)] {
+        let (script, _) = play(world);
+        assert!(
+            !script
+                .transcript
+                .iter()
+                .any(|line| line.contains("queue_structure")),
+            "{what}: {:#?}",
+            script.transcript
+        );
+    }
+}
+
+/// A round whose only addition is the Spire is the Safe Playbook template
+/// with its route filled -- its own walk to safety, the core's dig depth, the
+/// Spire -- and is Easy's own seal, not its safe playbook.
+#[test]
+fn a_round_with_only_the_spire_fills_the_safe_template_as_its_own() {
+    let mut world = Script::new(0);
+    world.licences = vec![SPIRE_LICENCE];
+    world.treasury = 1_000;
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = composing_ops(&script.transcript);
+    let route = op_value(&ops, "replace", "/declarative/route").expect("the route filled");
+    let Json::Array(steps) = route else {
+        panic!("a route: {ops:#?}");
+    };
+    let labels: Vec<&str> = steps
+        .iter()
+        .filter_map(|step| step.get("label").and_then(text))
+        .collect();
+    assert_eq!(labels, ["to_safety", "deepen_core", "queue_spire"]);
+    assert!(
+        script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("patch_plan") && line.contains("Safe playbook")),
+        "the Safe Playbook template's own text is the base"
+    );
+}
+
+/// The repair of last resort still takes out the right step with the Spire
+/// in front: two seams, the second inserted at template route 1, which
+/// stands at route 3 behind `deepen_core` and `queue_spire` (route 2 without
+/// the Spire).
+#[test]
+fn a_repair_removes_the_right_step_behind_the_spire() {
+    let mut rich = Script::new(0);
+    for (anchor, site) in [([40, 30], [36, 30, GROUND]), ([24, 30], [28, 30, GROUND])] {
+        let mut seam = Feature::new("seam", "rich", anchor);
+        seam.site = Some(site);
+        rich.features.push(seam);
+    }
+    rich.treasury = 500;
+    rich.verify = Verify::NeverUnfixed;
+    let removal = |world: Script| {
+        let (script, _) = play(world);
+        script
+            .transcript
+            .iter()
+            .filter_map(|line| line.strip_prefix("patch_plan "))
+            .nth(1)
+            .and_then(|params| read(params).ok())
+            .and_then(|params| params.get("json_patch").and_then(text).map(str::to_owned))
+            .expect("a second patch: the removal")
+    };
+    assert_eq!(
+        removal(rich.clone()),
+        r#"[{"op":"remove","path":"/declarative/route/2"}]"#
+    );
+    rich.licences = vec![SPIRE_LICENCE];
+    rich.treasury = 1_000;
+    assert_eq!(
+        removal(rich),
+        r#"[{"op":"remove","path":"/declarative/route/3"}]"#
+    );
+}
+
+/// The advisor never offers the Spire: a human seat's safe playbook leaves
+/// configurations untouched and spends nothing (spec section 14), so neither
+/// it nor any suggestion queues one.
+#[test]
+fn the_spire_is_never_in_the_safe_playbook_or_a_suggestion() {
+    let (script, advice) = advise(licensed());
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.contains("queue_structure")),
+        "{:#?}",
+        script.transcript
+    );
+    assert!(!advice.safe_playbook_jsonc.contains("queue_structure"));
+    assert!(advice.suggestions.iter().all(|suggestion| {
+        suggestion
+            .parameters
+            .iter()
+            .all(|value| !value.value.contains("queue_structure"))
+    }));
 }

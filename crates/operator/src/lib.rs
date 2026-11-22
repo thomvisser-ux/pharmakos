@@ -62,7 +62,9 @@
 //! 12's threat model; [`easy`]'s Defend the Core). So are its raids, S2's
 //! `opra`: an Attack beacon beside the core raiding the nearest fixed target
 //! the seat knows of, an enemy beacon or an enemy commander in sight, scored
-//! alike (Raid an Enemy Beacon).
+//! alike (Raid an Enemy Beacon). And from S3 it queues the Resonance Spire
+//! at its core once its seat holds the licence, beside the round's goals and
+//! never ranked among them (S3's plan, `opr3`; [`easy`]'s plan).
 //!
 //! PLACEHOLDER: Easy's Survey post, chatter and target spread — owner, S5, with Normal and Hard
 

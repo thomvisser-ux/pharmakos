@@ -44,6 +44,10 @@
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
 //!
+//! The Resonance Spire costs no call: the licence is the briefing's, the
+//! core's radius `list_beacons`', and a Spire going up the view's, all fixed
+//! reads, and its step rides the composing `patch_plan`.
+//!
 //! An advisor makes the fixed reads, the three probes, the estimates, the
 //! instantiates and the safe playbook's calls, and nothing else
 //! ([`EASY_ADVISOR_CALL_BUDGET`]).
@@ -468,24 +472,27 @@ impl Easy {
     /// Plan and submit.
     fn plan(&self, wire: &mut Wire<'_, '_>, situation: &Situation, round: &mut Played) {
         let taps = candidates::legal_taps(wire, situation, &self.tuning);
-        let post = candidates::defend_post(wire, situation, &self.tuning);
-        let raid = candidates::raid_post(wire, situation, &self.tuning);
+        let post = candidates::defend_post(wire, situation);
+        let raid = candidates::raid_post(wire, situation);
         let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid);
         let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals);
         let top = candidates::top_k(&evaluated);
         let guard = candidates::guard(&evaluated);
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
+        let spire = compose::spire(situation, &self.tuning);
 
-        if let Some(composed) = compose::compose(situation, &self.tuning, &top, guard, &declared)
-            && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)
+        if let Some(composed) = compose::compose(
+            situation,
+            &self.tuning,
+            &top,
+            guard,
+            spire.as_ref(),
+            &declared,
+        ) && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)
             && submit(wire, &text)
         {
             round.submitted = Submitted::Own;
-            let why = match (composed.goals.first(), compose::fill_ms(situation)) {
-                (Some(first), Some(fill)) => compose::why_for(first, composed.goals.len(), fill),
-                _ => String::new(),
-            };
-            round.why = compose::with_seed(situation, &why);
+            round.why = compose::with_seed(situation, &composed.why);
             round.playbook_jsonc = Some(text);
             return;
         }
@@ -510,8 +517,8 @@ impl Easy {
         }
         if let Ok(situation) = read {
             let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
-            let post = candidates::defend_post(&mut wire, &situation, &self.tuning);
-            let raid = candidates::raid_post(&mut wire, &situation, &self.tuning);
+            let post = candidates::defend_post(&mut wire, &situation);
+            let raid = candidates::raid_post(&mut wire, &situation);
             let goals = candidates::enumerate(&situation, &self.tuning, &taps, post, raid);
             let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals);
             let declared =

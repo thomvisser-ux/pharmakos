@@ -325,7 +325,7 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "src/candidates.rs",
-        "let threat = i64::try_from(threat_near(situation, tuning, target.at())?).ok()?;",
+        "let threat = i64::try_from(threat_near(situation, tuning, target.at(), radius)?).ok()?;",
         1,
         "a threat past `i64` is no score at all, and the raid is then not weighed",
     ),

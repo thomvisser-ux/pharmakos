@@ -11,8 +11,10 @@
 //! shows of another seat's assets, each by what it is, so the threat model
 //! can weigh it by its weapon's row (S2's plan, decision 12); the segment
 //! feed the Lull still holds says whether the seat's commander died in the
-//! last Push (decision 35); capabilities have no method until S4, so there is
-//! nothing to read for them.
+//! last Push (decision 35); and capabilities are the briefing's
+//! `licences_held` since S3 (decisions-log item 153 (3)), whose one licence,
+//! the Resonance Spire's, is read with the core's sphere radius and the
+//! seat's own Spire in the view ([`crate::compose::spire`]).
 //!
 //! Every member is read **typed** ([`crate::wire`]'s readers): absent is
 //! proto3's default, and a member of the wrong shape refuses the round's read
@@ -75,6 +77,12 @@ pub(crate) struct Beacon {
     /// it (`BeaconSummary.sighting_age_ms`, 0 in live vision); `None` on an
     /// own beacon, which the seat never sights.
     pub(crate) sighting_age_ms: Option<i64>,
+    /// Own beacons only: its sphere's radius now, whole voxels, as the sim's
+    /// one radius function answers it (`BeaconSummary.sphere_radius_voxels`,
+    /// S3's plan, E3): the rules table's base, grown while a finished
+    /// Resonance Spire stands on the beacon. `None` for another seat's
+    /// beacon, whose radius is on no wire.
+    pub(crate) sphere_radius_voxels: Option<i64>,
 }
 
 /// A Quartermaster priority, in the brownout order's sense: the lowest sheds
@@ -326,6 +334,14 @@ pub(crate) struct Situation {
     /// False when `get_view` did not reach its complete page within
     /// [`PAGES_MAX`] pages: the entity list was then never read.
     pub(crate) view_complete: bool,
+    /// True when the briefing's `licences_held` holds the Resonance Spire's
+    /// licence (decisions-log item 153 (3); S3's plan, E2).
+    pub(crate) spire_licensed: bool,
+    /// True when the view shows a Resonance Spire of the seat's own, finished
+    /// or still going up: a queued Spire stands as a structure from the
+    /// moment it is queued (`crates/sim/src/world.rs`' `queue_capability`).
+    /// Meaningful only when [`Situation::view_complete`].
+    pub(crate) own_spire_seen: bool,
 }
 
 impl Situation {
@@ -368,6 +384,7 @@ impl Situation {
             0 => int_of(status, "segment_length_ms").map_err(at("get_status"))?,
             found => found,
         };
+        let spire_licensed = read_licences(&briefing)?;
 
         let beacons = read_beacons(wire, &own)?;
 
@@ -405,6 +422,8 @@ impl Situation {
             last_push,
             templates,
             view_complete: seen.complete,
+            spire_licensed,
+            own_spire_seen: seen.own_spire,
         })
     }
 }
@@ -464,6 +483,33 @@ fn feature_of(row: &Json) -> Result<Feature, Refused> {
     })
 }
 
+/// Whether the briefing's `licences_held` holds the Resonance Spire's
+/// licence. Each value is a `gp.v1.Licence` in the wire's lower case,
+/// translated by [`Wire::enum_name`]; the member is left out while the seat
+/// holds none, which reads as proto3's empty list.
+///
+/// # Errors
+///
+/// `MALFORMED` for a member that is not a list of licence names the schema
+/// knows: a licence the operator cannot read is not one it may guess at.
+fn read_licences(briefing: &Json) -> Result<bool, Refused> {
+    let mut spire = false;
+    for held in
+        array_of(briefing, "licences_held").map_err(|misread| misread.refused("get_briefing"))?
+    {
+        let name = Wire::enum_name("gp.v1.Licence", Some(held)).ok_or_else(|| {
+            malformed(
+                "get_briefing",
+                "a held licence that is no licence the schema names",
+            )
+        })?;
+        if name == pharmakos_proto::gp::v1::Licence::ResonanceSpire.as_str_name() {
+            spire = true;
+        }
+    }
+    Ok(spire)
+}
+
 /// Every beacon `list_beacons` shows, ascending by id, at most
 /// [`PAGES_MAX`] pages.
 ///
@@ -502,6 +548,21 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
                 }
                 Some(age)
             };
+            // An own beacon's sphere radius, which the gateway always writes:
+            // a radius of zero or less is no sphere, and an answer the
+            // operator cannot plan a reach around.
+            let sphere_radius_voxels = if mine {
+                let radius = int_of(row, "sphere_radius_voxels").map_err(misread)?;
+                if radius <= 0 {
+                    return Err(malformed(
+                        "list_beacons",
+                        "an own beacon with no sphere radius",
+                    ));
+                }
+                Some(radius)
+            } else {
+                None
+            };
             let priority = Wire::enum_name(
                 "gp.v1.InterfaceRow.QuartermasterPriority",
                 row.get("priority"),
@@ -517,6 +578,7 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
                 powered: mine && bool_of(row, "powered").map_err(misread)?,
                 priority: if mine { priority } else { None },
                 sighting_age_ms,
+                sphere_radius_voxels,
             });
         }
         text_of(&page, "next_cursor")
@@ -536,6 +598,7 @@ struct Seen {
     complete: bool,
     commander: Option<[i32; 3]>,
     enemies: Vec<Enemy>,
+    own_spire: bool,
 }
 
 /// Read the view to its complete page, which is the one that carries the
@@ -550,6 +613,7 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
         complete: false,
         commander: None,
         enemies: Vec::new(),
+        own_spire: false,
     };
     let mut cursor = String::new();
     for _ in 0..PAGES_MAX {
@@ -566,6 +630,9 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
                 let subtype = text_of(entity, "subtype").map_err(misread)?;
                 let owner = text_of(entity, "owner").map_err(misread)?;
                 if owner == own {
+                    if kind.as_deref() == Some("STRUCTURE") && subtype == "resonance_spire" {
+                        seen.own_spire = true;
+                    }
                     if kind.as_deref() == Some("UNIT") && subtype == "commander" {
                         // The least position when the view shows two, so the
                         // answer does not hang on the order of the list.

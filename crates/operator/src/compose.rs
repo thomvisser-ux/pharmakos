@@ -52,7 +52,7 @@
 use pharmakos_proto::json::Json;
 
 use crate::candidates::{Candidate, Goal, NoVent, RaidTarget, core_threat, route_index, tap_step};
-use crate::easy::{CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT};
+use crate::easy::{CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT, SAFE_PLAYBOOK};
 use crate::playbook::{Declared, op, pointer_get, with_member, with_pointer};
 use crate::situation::{Kind, LastPush, Situation};
 use crate::tuning::Tuning;
@@ -73,6 +73,97 @@ pub(crate) struct Composed {
     /// For each goal after the first, the patch that takes it out again:
     /// the repair of last resort.
     pub(crate) removals: Vec<Vec<Json>>,
+    /// The Resonance Spire queued at the core this round, if one is.
+    pub(crate) spire: Option<Spire>,
+    /// Why, in the sentences the playbook's note carries after its seed line.
+    pub(crate) why: String,
+}
+
+/// The Resonance Spire Easy queues at its core (S3's plan, `opr3`; decisions
+/// 6 and 13): once its seat holds the licence, while no Spire of the seat's
+/// stands or is going up, and while the grid's headroom carries the Spire's
+/// draw. It is **added** beside the round's goals, as the guard post is, and
+/// never ranked among them: its price comes out of the treasury and its time
+/// out of the hold before the greedy insertion.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Spire {
+    /// The core's `b_NN`, where it is queued.
+    pub(crate) core: String,
+    /// Game milliseconds it costs the route: one more visit at the core, its
+    /// handshake and its one `queue_structure` row.
+    pub(crate) time_ms: i64,
+    /// Whole $ the row takes when it commits.
+    pub(crate) cost_dollars: i64,
+}
+
+/// The Spire Easy would queue this round, or `None`: no licence, no core, a
+/// view that did not complete (so a Spire already queued could not be seen),
+/// a Spire of the seat's in view, a core whose sphere is grown past the base
+/// (a finished Spire stands on it), or a headroom that does not carry its
+/// draw. The treasury is the composition's to weigh ([`compose`]).
+///
+/// One Spire per beacon is the sim's rule (`spire_present`, and the
+/// verifier's E0513), and Easy queues one only at its core, so any Spire of
+/// the seat's is the core's.
+pub(crate) fn spire(situation: &Situation, tuning: &Tuning) -> Option<Spire> {
+    if !situation.spire_licensed || !situation.view_complete || situation.own_spire_seen {
+        return None;
+    }
+    let core = situation.core()?;
+    if core.sphere_radius_voxels? != tuning.sphere_radius_voxels {
+        return None;
+    }
+    let headroom = situation
+        .economy
+        .supply_kw
+        .checked_sub(situation.economy.draw_kw)?;
+    if headroom < tuning.spire_draw_kw {
+        return None;
+    }
+    Some(Spire {
+        core: core.id.clone(),
+        time_ms: tuning
+            .visit_handshake_ms
+            .checked_add(tuning.queue_structure_ms)?,
+        cost_dollars: tuning.spire_cost_dollars,
+    })
+}
+
+/// The step that queues the Resonance Spire at the core: one
+/// `queue_structure` row, skipped rather than retried if it fails (the
+/// licence voided, the core gone, a Spire already going up).
+pub(crate) fn spire_step(core: &str) -> Json {
+    object(vec![
+        ("label", string("queue_spire")),
+        (
+            "interface",
+            object(vec![
+                ("beacon", object(vec![("beacon_id", string(core))])),
+                (
+                    "rows",
+                    Json::Array(vec![object(vec![(
+                        "queue_structure",
+                        object(vec![("blueprint_id", string("resonance_spire"))]),
+                    )])]),
+                ),
+            ]),
+        ),
+        ("on_fail", object(vec![("action", string("SKIP"))])),
+    ])
+}
+
+/// Why the Spire is queued.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+pub(crate) fn spire_why(spire: &Spire, tuning: &Tuning, alone: bool) -> String {
+    format!(
+        "{} a Resonance Spire at the core {}, which your licence allows, for $ {} and {} kW \
+         of draw once it stands.",
+        if alone { "Queue" } else { "Then queue" },
+        spire.core,
+        spire.cost_dollars,
+        tuning.spire_draw_kw
+    )
 }
 
 /// The share of the segment the route may fill, game milliseconds; `None`
@@ -168,6 +259,7 @@ pub(crate) fn compose(
     tuning: &Tuning,
     top: &[Candidate],
     guard: Option<&Candidate>,
+    spire: Option<&Spire>,
     declared: &[Declared],
 ) -> Option<Composed> {
     let fill = fill_ms(situation)?;
@@ -177,35 +269,32 @@ pub(crate) fn compose(
         .find(|held| held.template_id == DEFEND_THE_CORE);
     let guard = guard.filter(|_| defend.is_some());
     // The walk to the core is one estimate's first leg, the same for every
-    // candidate; the largest is taken so no reading of it is under-held. No
-    // candidate at all is nothing to compose.
+    // candidate; the largest is taken so no reading of it is under-held. A
+    // round with no candidate is composed only for the Spire, whose step
+    // stands at the core the route opens at.
     let lead = top
         .iter()
         .chain(guard)
         .map(|candidate| candidate.lead_ms)
-        .max()?;
-    let held_back = match core {
-        Some(_) => tuning.edit_settings_base_ms.checked_add(lead)?,
-        None => 0,
-    };
-    // A post that does not fit the share is not placed: the share bounds the
-    // whole route, the post included.
-    let guard = guard.filter(|guard| guard.time_ms <= fill);
-    let (guard_ms, guard_dollars) = match guard {
-        Some(guard) => (guard.time_ms, guard.cost_dollars),
-        None => (0, 0),
-    };
+        .max();
+    if lead.is_none() && spire.is_none() {
+        return None;
+    }
+    let Added {
+        guard,
+        guard_ms,
+        spire,
+        share,
+        treasury,
+        held_back,
+    } = added(situation, tuning, fill, core.as_deref(), lead, guard, spire)?;
     let top = beside_the_guard(top, guard);
-    let goals = greedy(
-        &top,
-        fill.checked_sub(guard_ms)?,
-        situation.economy.treasury.checked_sub(guard_dollars)?,
-    );
-    // The core's step goes in at route 0 as the patch's last operation, and
-    // the guard's just before it, so every pointer above them is the
-    // template's; the removals are applied to the patched text, where each
-    // step stands one further on for each of them.
-    let core_shift = usize::from(core.is_some());
+    let goals = greedy(&top, share, treasury);
+    // The core's step goes in at route 0 as the patch's last operation, the
+    // Spire's just before it and the guard's before that, so every pointer
+    // above them is the template's; the removals are applied to the patched
+    // text, where each step stands one further on for each of them.
+    let core_shift = usize::from(core.is_some()).checked_add(usize::from(spire.is_some()))?;
     let (template_id, goals, guard_step, patch_parts) = match (goals.first(), guard) {
         (Some(first), _) => {
             let template_id = first.goal.template();
@@ -221,7 +310,7 @@ pub(crate) fn compose(
                 template,
                 &goals,
                 fill,
-                held_back.checked_add(guard_ms)?,
+                held_back?.checked_add(guard_ms)?,
                 shift,
             )?;
             (template_id, goals, guard_step, parts)
@@ -229,47 +318,47 @@ pub(crate) fn compose(
         (None, Some(guard)) => {
             let template = defend?;
             let goals = vec![guard.clone()];
-            let parts = place_patch(template, &goals, fill, held_back, core_shift)?;
+            let parts = place_patch(template, &goals, fill, held_back?, core_shift)?;
             (DEFEND_THE_CORE, goals, None, parts)
         }
-        (None, None) => return None,
+        (None, None) => {
+            return spire_alone(situation, tuning, spire?, core.as_deref()?, declared);
+        }
     };
     let (mut patch, mut removals) = patch_parts;
     let template = declared
         .iter()
         .find(|held| held.template_id == template_id)?;
-    let first = goals.first()?;
-    let mut why = why_for(first, goals.len(), fill);
-    if let Some((guard, _)) = &guard_step {
-        why = format!("{why} {}", why_for(guard, 1, fill));
+    let why = round_why(
+        situation,
+        tuning,
+        &goals,
+        guard_step.as_ref().map(|(guard, _)| guard),
+        spire,
+        fill,
+    )?;
+    patch.push(note_op(template, &with_seed(situation, &why)));
+    let guard = guard_step.map(|(guard, step)| {
+        patch.push(op("add", "/declarative/route/0", Some(step)));
+        // Taken out last of all: the repair of last resort removes the goals
+        // inserted after the first before it removes the guard.
+        removals.insert(
+            0,
+            vec![op(
+                "remove",
+                &format!("/declarative/route/{core_shift}"),
+                None,
+            )],
+        );
+        guard
+    });
+    if let Some(spire) = spire {
+        patch.push(op(
+            "add",
+            "/declarative/route/0",
+            Some(spire_step(&spire.core)),
+        ));
     }
-    if guard_step.is_some() || first.goal.template() == DEFEND_THE_CORE {
-        why = format!("{why} {}", guard_reason(situation, tuning));
-    }
-    let note = with_seed(situation, &why);
-    let kind = if pointer_get(&template.body, "/meta/note").is_some() {
-        "replace"
-    } else {
-        "add"
-    };
-    patch.push(op(kind, "/meta/note", Some(string(&note))));
-    let guard = match guard_step {
-        Some((guard, step)) => {
-            patch.push(op("add", "/declarative/route/0", Some(step)));
-            // Taken out last of all: the repair of last resort removes the
-            // goals inserted after the first before it removes the guard.
-            removals.insert(
-                0,
-                vec![op(
-                    "remove",
-                    &format!("/declarative/route/{core_shift}"),
-                    None,
-                )],
-            );
-            Some(guard)
-        }
-        None => None,
-    };
     if let Some(core) = core {
         patch.push(op("add", "/declarative/route/0", Some(deepen_core(&core))));
     }
@@ -279,7 +368,145 @@ pub(crate) fn compose(
         guard,
         patch,
         removals,
+        spire: spire.cloned(),
+        why,
     })
+}
+
+/// A round whose one addition is the Spire: the Safe Playbook template, its
+/// route filled with the template's own walk to safety, the core's dig depth
+/// and the Spire's step, and its note Easy's. The safe playbook itself never
+/// queues a Spire (spec section 14: it "leaves configurations untouched", and
+/// a person's timeout must not spend their $), so this is Easy's own plan on
+/// that template's frame, submitted and reported as its own.
+fn spire_alone(
+    situation: &Situation,
+    tuning: &Tuning,
+    spire: &Spire,
+    core: &str,
+    declared: &[Declared],
+) -> Option<Composed> {
+    let template = declared
+        .iter()
+        .find(|held| held.template_id == SAFE_PLAYBOOK)?;
+    let pointer = template.pointer_ending("/declarative/route")?;
+    let Json::Array(own) = template.own_value(pointer)? else {
+        return None;
+    };
+    let to_safety = own.first()?.clone();
+    let route = Json::Array(vec![to_safety, deepen_core(core), spire_step(&spire.core)]);
+    let why = spire_why(spire, tuning, true);
+    Some(Composed {
+        template_id: SAFE_PLAYBOOK,
+        goals: Vec::new(),
+        guard: None,
+        patch: vec![
+            op("replace", pointer, Some(route)),
+            note_op(template, &with_seed(situation, &why)),
+        ],
+        removals: Vec::new(),
+        spire: Some(spire.clone()),
+        why,
+    })
+}
+
+/// What the additions beside the goals leave the greedy insertion.
+struct Added<'a> {
+    /// The guard post that is placed, if one is.
+    guard: Option<&'a Candidate>,
+    /// Its time, 0 without one.
+    guard_ms: i64,
+    /// The Spire that is queued, if one is.
+    spire: Option<&'a Spire>,
+    /// The share left for the goals.
+    share: i64,
+    /// The treasury left for the goals.
+    treasury: i64,
+    /// What the hold gives up for the steps at the core, the guard's aside;
+    /// `None` only when there is no candidate, a round composed for the
+    /// Spire alone, which has no hold to take it from.
+    held_back: Option<i64>,
+}
+
+/// The guard post and the Spire, weighed before the goals. A post that does
+/// not fit the share is not placed, since the share bounds the whole route,
+/// the post included. The Spire's price comes after the guard's, so a seat
+/// that cannot carry both guards first; its step is at the core the route
+/// opens at, so a seat shown no core queues none. `None` when a figure does
+/// not fit.
+fn added<'a>(
+    situation: &Situation,
+    tuning: &Tuning,
+    fill: i64,
+    core: Option<&str>,
+    lead: Option<i64>,
+    guard: Option<&'a Candidate>,
+    spire: Option<&'a Spire>,
+) -> Option<Added<'a>> {
+    let guard = guard.filter(|guard| guard.time_ms <= fill);
+    let (guard_ms, guard_dollars) = match guard {
+        Some(guard) => (guard.time_ms, guard.cost_dollars),
+        None => (0, 0),
+    };
+    let treasury = situation.economy.treasury.checked_sub(guard_dollars)?;
+    let spire = spire
+        .filter(|spire| core == Some(spire.core.as_str()))
+        .filter(|spire| spire.cost_dollars <= treasury);
+    let (spire_ms, spire_dollars) = match spire {
+        Some(spire) => (spire.time_ms, spire.cost_dollars),
+        None => (0, 0),
+    };
+    let held_back = match (core, lead) {
+        (None, _) => Some(0),
+        (Some(_), Some(lead)) => tuning
+            .edit_settings_base_ms
+            .checked_add(lead)
+            .and_then(|held| held.checked_add(spire_ms)),
+        (Some(_), None) => None,
+    };
+    Some(Added {
+        guard,
+        guard_ms,
+        spire,
+        share: fill.checked_sub(guard_ms)?,
+        treasury: treasury.checked_sub(spire_dollars)?,
+        held_back,
+    })
+}
+
+/// Why the round is composed as it is: its first goal, counting the rest; the
+/// guard post beside them and its reason; the Spire. `None` with no goal.
+fn round_why(
+    situation: &Situation,
+    tuning: &Tuning,
+    goals: &[Candidate],
+    guard: Option<&Candidate>,
+    spire: Option<&Spire>,
+    fill: i64,
+) -> Option<String> {
+    let first = goals.first()?;
+    let mut why = why_for(first, goals.len(), fill);
+    if let Some(guard) = guard {
+        why = format!("{why} {}", why_for(guard, 1, fill));
+    }
+    if guard.is_some() || first.goal.template() == DEFEND_THE_CORE {
+        why = format!("{why} {}", guard_reason(situation, tuning));
+    }
+    if let Some(spire) = spire {
+        why = format!("{why} {}", spire_why(spire, tuning, false));
+    }
+    Some(why)
+}
+
+/// The operation that writes the round's note: a `replace` where the template
+/// has one, an `add` where it has none.
+fn note_op(template: &Declared, note: &str) -> Json {
+    let kind = if pointer_get(&template.body, "/meta/note").is_some() {
+        "replace"
+    } else {
+        "add"
+    };
+    op(kind, "/meta/note", Some(string(note)))
 }
 
 /// The top-k less any goal on the guard's seam: a raid post covers the seam

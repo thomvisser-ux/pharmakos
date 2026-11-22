@@ -98,9 +98,13 @@
 //!
 //! # The term that is zero at Easy, and why
 //!
-//! **Capability** (no licence or capability is on any wire until S4) is zero
-//! for every candidate. It is in the sum, with its weight, so a later stage
-//! fills a term rather than change a formula. A placed beacon adds no draw (since
+//! **Capability** is zero for every candidate. It is in the sum, with its
+//! weight, so a later stage fills a term rather than change a formula: no
+//! capability catalogue is on a wire until S4 to put a number on it. S3's one
+//! capability, the Resonance Spire, is not ranked here at all: once the seat
+//! holds its licence Easy **adds** it beside the round's goals, as the guard
+//! post is added ([`crate::compose::spire`]), so no capability points are
+//! invented for it. A placed beacon adds no draw (since
 //! T14b a beacon is net zero through its own key-core, decisions-log item 113
 //! (5)), which S1's plan, decision 14, made the reading of the register's
 //! S1-14, so no goal is charged a kW shortfall.
@@ -592,28 +596,16 @@ pub(crate) enum Post {
 /// beside the core. One call when the seat is shown its commander and its
 /// core and the library lists the template, none otherwise
 /// ([`crate::easy::GUARD_PROBE_CALLS`]).
-pub(crate) fn defend_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: &Tuning) -> Post {
-    post_beside_core(
-        wire,
-        situation,
-        tuning,
-        "DEFEND",
-        crate::easy::DEFEND_THE_CORE,
-    )
+pub(crate) fn defend_post(wire: &mut Wire<'_, '_>, situation: &Situation) -> Post {
+    post_beside_core(wire, situation, "DEFEND", crate::easy::DEFEND_THE_CORE)
 }
 
 /// The raid probe, the guard probe's twin for "the nearest own Attack
 /// beacon": a raid post beside the core already regroups and relaunches
 /// every segment, so a second one is never enumerated while one stands, nor
 /// while the probe cannot say ([`crate::easy::RAID_PROBE_CALLS`]).
-pub(crate) fn raid_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: &Tuning) -> Post {
-    post_beside_core(
-        wire,
-        situation,
-        tuning,
-        "ATTACK",
-        crate::easy::RAID_AN_ENEMY_BEACON,
-    )
+pub(crate) fn raid_post(wire: &mut Wire<'_, '_>, situation: &Situation) -> Post {
+    post_beside_core(wire, situation, "ATTACK", crate::easy::RAID_AN_ENEMY_BEACON)
 }
 
 /// Whether an own beacon on `mandate` stands inside the core's sphere: one
@@ -622,7 +614,6 @@ pub(crate) fn raid_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: 
 fn post_beside_core(
     wire: &mut Wire<'_, '_>,
     situation: &Situation,
-    tuning: &Tuning,
     mandate: &str,
     template: &str,
 ) -> Post {
@@ -653,7 +644,13 @@ fn post_beside_core(
                 .and_then(|leg| leg.get("to"))
                 .map(location_voxel);
             match anchor {
-                Some(Ok(at)) if within(core.at, at, tuning.sphere_radius_voxels) => Post::Stands,
+                Some(Ok(at))
+                    if core
+                        .sphere_radius_voxels
+                        .is_some_and(|radius| within(core.at, at, radius)) =>
+                {
+                    Post::Stands
+                }
                 Some(Ok(_)) => Post::None,
                 // An answer that does not say where the beacon stands.
                 Some(Err(_)) | None => Post::Unknown,
@@ -678,7 +675,7 @@ fn guard_goal(situation: &Situation, tuning: &Tuning, post: Post) -> Option<Goal
     {
         return None;
     }
-    post_seam(situation, tuning).map(|seam| Goal::Guard {
+    post_seam(situation).map(|seam| Goal::Guard {
         seam: seam.id.clone(),
     })
 }
@@ -693,10 +690,11 @@ fn lists(situation: &Situation, template: &str) -> bool {
 /// lower anchor `y`, then `x` -- the starting seam, which the core's sphere
 /// holds at every seed. `None` when the seat is shown no core or covers no
 /// live seam inside its sphere.
-fn post_seam<'s>(situation: &'s Situation, tuning: &Tuning) -> Option<&'s Feature> {
+fn post_seam(situation: &Situation) -> Option<&Feature> {
     let core = situation.core()?;
     let [cx, cy, _] = core.at;
-    let radius = tuning.sphere_radius_voxels;
+    // The core's sphere as the sim sizes it now, grown by a finished Spire.
+    let radius = core.sphere_radius_voxels?;
     situation
         .features
         .iter()
@@ -728,7 +726,7 @@ type RaidKey = (bool, Option<i64>, u8, String);
 /// seat has no post seam, or the treasury cannot carry the beacon and its
 /// raiders.
 fn raid_goals(situation: &Situation, tuning: &Tuning) -> Vec<Goal> {
-    let (Some(core), Some(seam)) = (situation.core(), post_seam(situation, tuning)) else {
+    let (Some(core), Some(seam)) = (situation.core(), post_seam(situation)) else {
         return Vec::new();
     };
     if !lists(situation, crate::easy::RAID_AN_ENEMY_BEACON)
@@ -994,21 +992,23 @@ pub(crate) fn evaluate(
 }
 
 /// The summed threat of the other seats' assets the view shows inside the
-/// core's sphere, in thousandths of a hit point per second (decision 12's
-/// model: each asset's weapon's damage per second, zero if unarmed); `None`
-/// when the seat is shown no core, or a sum does not fit.
+/// core's sphere, as `list_beacons` sizes it now (a finished Spire grows it),
+/// in thousandths of a hit point per second (decision 12's model: each
+/// asset's weapon's damage per second, zero if unarmed); `None` when the seat
+/// is shown no core, or a sum does not fit.
 pub(crate) fn core_threat(situation: &Situation, tuning: &Tuning) -> Option<u64> {
-    threat_near(situation, tuning, situation.core()?.at)
+    let core = situation.core()?;
+    threat_near(situation, tuning, core.at, core.sphere_radius_voxels?)
 }
 
-/// The summed threat of the other seats' assets the view shows within one
-/// sphere radius of `at`, in thousandths of a hit point per second (decision
+/// The summed threat of the other seats' assets the view shows within
+/// `radius` of `at`, in thousandths of a hit point per second (decision
 /// 12's model, as [`core_threat`] reads it); `None` when a sum does not fit.
-fn threat_near(situation: &Situation, tuning: &Tuning, at: [i32; 3]) -> Option<u64> {
+fn threat_near(situation: &Situation, tuning: &Tuning, at: [i32; 3], radius: i64) -> Option<u64> {
     situation
         .enemies
         .iter()
-        .filter(|enemy| within(at, enemy.at, tuning.sphere_radius_voxels))
+        .filter(|enemy| within(at, enemy.at, radius))
         .try_fold(0_u64, |sum, enemy| {
             sum.checked_add(tuning.threat(enemy.asset))
         })
@@ -1027,7 +1027,10 @@ fn threat_near(situation: &Situation, tuning: &Tuning, at: [i32; 3]) -> Option<u
 ///
 /// PLACEHOLDER: a raid on an enemy core is not charged the core's weapon, which no seat-facing field reveals — owner, S5, with Normal and Hard
 fn raid_attack(situation: &Situation, tuning: &Tuning, target: &RaidTarget) -> Option<i64> {
-    let threat = i64::try_from(threat_near(situation, tuning, target.at())?).ok()?;
+    // "Defends" is a threat radius, the base sphere's (the PLACEHOLDER
+    // above), and no beacon's sphere as it stands.
+    let radius = tuning.sphere_radius_voxels;
+    let threat = i64::try_from(threat_near(situation, tuning, target.at(), radius)?).ok()?;
     RAID_POINTS.checked_sub(
         threat
             .checked_mul(DEFENCE_POINTS_PER_HP_PER_SECOND)?

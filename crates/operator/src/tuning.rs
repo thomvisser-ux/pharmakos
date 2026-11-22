@@ -141,6 +141,17 @@ pub(crate) struct Tuning {
     /// `verifier.reach_memory_ms`: how long a sighting stays fresh, the
     /// window an Attack target's sighting must fall inside (E0418).
     pub(crate) reach_memory_ms: i64,
+    /// `structures.resonance_spire.cost_dollars`: what queueing the Spire
+    /// takes from the treasury when the row commits.
+    pub(crate) spire_cost_dollars: i64,
+    /// `structures.resonance_spire.draw_kw`: what the Spire draws once it
+    /// stands.
+    pub(crate) spire_draw_kw: i64,
+    /// `interface_times.queue_structure_ms`: one `queue_structure` row.
+    pub(crate) queue_structure_ms: i64,
+    /// `interface_times.visit_handshake_ms`: what every `interface` step pays
+    /// once on arrival, before its rows (spec section 5).
+    pub(crate) visit_handshake_ms: i64,
     /// Each armed kind's threat (S2's plan, decision 12): its weapon's damage
     /// per second, in thousandths of a hit point per second, as the sim's own
     /// threat model computes it from the same row.
@@ -250,6 +261,81 @@ fn attack_rows(
     Ok((raid_cost_dollars, reach_memory_ms))
 }
 
+/// The three route prices, a tap's, a Generator's and a guard post's, summed
+/// once: rows are `u32`, so the sums fit an `i64`, and a sum that did not would
+/// be a table refused rather than a price saturated.
+///
+/// # Errors
+///
+/// [`RulesError`] for a price that does not fit.
+fn route_prices(
+    generator: u32,
+    build_drone: u32,
+    beacon: u32,
+    scout: u32,
+) -> Result<(i64, i64, i64), RulesError> {
+    let too_dear = || {
+        RulesError(String::from(
+            "a route's price does not fit a whole $ figure",
+        ))
+    };
+    let tap = i64::from(generator)
+        .checked_add(i64::from(build_drone))
+        .ok_or_else(too_dear)?;
+    let vent = tap.checked_add(i64::from(beacon)).ok_or_else(too_dear)?;
+    let guard = i64::from(beacon)
+        .checked_add(i64::from(scout))
+        .ok_or_else(too_dear)?;
+    Ok((tap, vent, guard))
+}
+
+/// The rows queueing the Resonance Spire reads: its price and draw, which a
+/// table may state as zero, and the two interface times its visit pays,
+/// refused at zero or below, where they mean nothing.
+struct SpireRows {
+    cost_dollars: i64,
+    draw_kw: i64,
+    queue_structure_ms: i64,
+    visit_handshake_ms: i64,
+}
+
+impl SpireRows {
+    /// # Errors
+    ///
+    /// [`RulesError`] for an absent Spire row or a time that is not positive.
+    fn read(
+        row: Option<StructureRow>,
+        times: &pharmakos_proto::gp::v1::rules_table::InterfaceTimes,
+    ) -> Result<SpireRows, RulesError> {
+        let row = row.ok_or_else(|| {
+            RulesError(String::from(
+                "the rules text has no `structures.resonance_spire` row",
+            ))
+        })?;
+        let positive = |name: &str, value: i64| {
+            if value > 0 {
+                Ok(value)
+            } else {
+                Err(RulesError(format!(
+                    "the rules text has no `interface_times.{name}` row"
+                )))
+            }
+        };
+        Ok(SpireRows {
+            cost_dollars: i64::from(row.cost_dollars),
+            draw_kw: i64::from(row.draw_kw),
+            queue_structure_ms: positive(
+                "queue_structure_ms",
+                i64::from(times.queue_structure_ms),
+            )?,
+            visit_handshake_ms: positive(
+                "visit_handshake_ms",
+                i64::from(times.visit_handshake_ms),
+            )?,
+        })
+    }
+}
+
 impl Tuning {
     /// Read the rows from the rules text.
     ///
@@ -281,6 +367,7 @@ impl Tuning {
             .build_drone
             .ok_or_else(|| missing("units.build_drone"))?;
         let scout = units.scout.ok_or_else(|| missing("units.scout"))?;
+        let spire = SpireRows::read(structures.resonance_spire, &times)?;
         // Zero (or, for a time, below it) where zero means nothing: refused.
         for (row, value) in [
             (
@@ -321,23 +408,12 @@ impl Tuning {
                 return Err(missing(row));
             }
         }
-        // The three route prices, summed once here: rows are `u32`, so the
-        // sums fit an `i64`, and a sum that did not would be a table refused
-        // rather than a price saturated.
-        let too_dear = || {
-            RulesError(String::from(
-                "a route's price does not fit a whole $ figure",
-            ))
-        };
-        let tap_cost_dollars = i64::from(generator_row.cost_dollars)
-            .checked_add(i64::from(build_drone.cost_dollars))
-            .ok_or_else(too_dear)?;
-        let vent_cost_dollars = tap_cost_dollars
-            .checked_add(i64::from(beacon_row.cost_dollars))
-            .ok_or_else(too_dear)?;
-        let guard_cost_dollars = i64::from(beacon_row.cost_dollars)
-            .checked_add(i64::from(scout.cost_dollars))
-            .ok_or_else(too_dear)?;
+        let (tap_cost_dollars, vent_cost_dollars, guard_cost_dollars) = route_prices(
+            generator_row.cost_dollars,
+            build_drone.cost_dollars,
+            beacon_row.cost_dollars,
+            scout.cost_dollars,
+        )?;
         let (raid_cost_dollars, reach_memory_ms) =
             attack_rows(&table, units.raider, beacon_row.cost_dollars)?;
         Ok(Tuning {
@@ -360,6 +436,10 @@ impl Tuning {
             set_priority_ms: i64::from(times.set_priority_ms),
             place_beacon_deploy_ms: i64::from(times.place_beacon_deploy_ms),
             build_target_ms: i64::from(times.build_target_ms),
+            spire_cost_dollars: spire.cost_dollars,
+            spire_draw_kw: spire.draw_kw,
+            queue_structure_ms: spire.queue_structure_ms,
+            visit_handshake_ms: spire.visit_handshake_ms,
             threats,
         })
     }
