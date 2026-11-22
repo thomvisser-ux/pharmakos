@@ -3047,18 +3047,27 @@ impl PlayTick for Runner {
     }
 }
 
-/// The folder the producers above write into is the target directory cargo
-/// names: absolute, and the parent of `CARGO_TARGET_TMPDIR`, whatever spelling
-/// `CARGO_TARGET_DIR` had and whether or not it was set (decisions-log item 165
-/// (13)). A relative value read raw names a folder under this crate instead,
-/// and the `golden` step never reads what was written there.
+/// The folder the producers above write into is the target directory this
+/// very test binary was built into: cargo puts the binary at
+/// `<target>/<profile>/deps/`, so the running executable's own path, a fact
+/// independent of any variable, lies under the folder [`target_dir`] names,
+/// whatever spelling `CARGO_TARGET_DIR` had and whether or not it was set
+/// (decisions-log item 165 (13)). A relative value read raw names a folder
+/// under this crate instead, which the binary does not lie under, and the
+/// `golden` step never reads what was written there.
 #[test]
 fn the_target_dir_is_the_one_cargo_names() {
-    let named = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .parent()
-        .unwrap_or_else(|| panic!("CARGO_TARGET_TMPDIR always has a parent"))
-        .to_path_buf();
+    let canonical = |path: &std::path::Path| {
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|error| panic!("resolving {}: {error}", path.display()))
+    };
+    let exe = std::env::current_exe()
+        .unwrap_or_else(|error| panic!("the test binary's own path: {error}"));
     let found = target_dir();
-    assert!(found.is_absolute(), "{} is not absolute", found.display());
-    assert_eq!(found, named);
+    assert!(
+        canonical(&exe).starts_with(canonical(&found)),
+        "the test binary {} is not under the target directory {}",
+        exe.display(),
+        found.display()
+    );
 }
