@@ -1092,9 +1092,14 @@ impl ::prost::Name for GetEconomyForecastResponse {
 const NAME: &'static str = "GetEconomyForecastResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetEconomyForecastResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetEconomyForecastResponse".into() }}
-/// The travel estimate of item 61, exposed. Abstract search only; it never
-/// refines, steps or forks. Never optimistic: the answer is a bound the editor
-/// may round up, and a fogged leg is labelled as a bound rather than an ETA.
+/// The travel estimate of item 61, exposed, as decisions-log item 169 amends it.
+/// Each leg is the walk the router serves from where the leg starts, near or
+/// far, plus an allowance per extra route the walk needs; it never steps or
+/// forks. Never optimistic: counted from the tick the route is served, on
+/// static terrain and for a walk under no surcharge, a walker is not later than
+/// the answer, which the editor may round up. A fogged leg is labelled as a
+/// bound rather than an ETA. Answered in a Lull only: in every other phase the
+/// method is PHASE_CLOSED.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EstimateRouteRequest {
     /// Two or more. Legs are estimated in order.
@@ -2842,7 +2847,7 @@ pub enum Method {
     /// that introduces licences and therefore gives the method something to
     /// report.
     GetCapabilities = 29,
-    /// "estimate_route"
+    /// "estimate_route" — PHASE_CLOSED outside a Lull.
     EstimateRoute = 30,
     // --- Docs ----------------------------------------------------------------
 

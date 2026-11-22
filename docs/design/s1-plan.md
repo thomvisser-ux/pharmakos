@@ -451,7 +451,8 @@ sections that add one name it in their Owns lines.
   127 (12) ruled), per-viewer `e_NN`; the feature table in mapgen with its duplicate-anchor and
   overlap check (`MapError`), regenerated on restore and not hashed per tick, `power.rs`'s
   `one_vent` moved onto it (discharges S1-32); derived liveness by footprint scan; the resolver and
-  "nearest" (the item-61 estimator's `cost`, unreachable skipped, ties by anchor y then x); the
+  "nearest" (the item-61 estimator's `cost` [now the cost of the walk the router serves, item 169],
+  unreachable skipped, ties by anchor y then x); the
   three reading rules; `covering`'s spiral and the `on` rules; `covered {}`; one structure per voxel
   across seats; walk-in with `timeout_ms` bounding the walk and `no_path`; restart keeps the placed
   beacon; no stacking, a legality rule with no row (decision 10); `feature_lost` = 11, `not_own`
