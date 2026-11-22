@@ -1739,7 +1739,9 @@ fn read_header(line: &str) -> Header {
             Header::Other
         };
     };
-    let first = segments.first().map_or("", String::as_str);
+    let Some(first) = segments.first().map(String::as_str) else {
+        return Header::Other;
+    };
     if first.trim_matches(['"', '\'']) != "profile" {
         return Header::Other;
     }
