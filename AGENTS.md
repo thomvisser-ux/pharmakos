@@ -140,8 +140,9 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    Lull, before it parses anything (the owner's "Refuse in a Push", decisions-log item 169), and in a
    Lull prices each leg at the walk the router serves over the hosted world's own graph
    (`RouteAdapter::over`: a borrowed `Surface` and `Clusters` and a scratch of its own, no `World`),
-   its `covering` legs read through the same resolver — its knowledge and view reads read the frozen
-   snapshot or the live world through the fog filter, and none of them steps anything; `submit_plan`
+   `estimate_route`'s `covering` legs read through the same resolver, and the gateway's knowledge and
+   view reads read the frozen snapshot or the live world through the fog filter, and none of them
+   steps anything; `submit_plan`
    *compiles* the playbook (the sim's `Plan::compile`, called once, from `compile_decoded` in
    `surface/planning.rs`, which `compile_playbook`, `compile_canonical` and `resolve_refs` share, and
    which says a `PlanError` in the gateway's own words: the type is named in

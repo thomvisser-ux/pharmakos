@@ -158,7 +158,8 @@ was one measure for every ranking.)
   what a chip says and what the sim picks are one figure; the editor's ETA is the cost turned into
   ticks, plus an allowance per extra route the walk needs, so it is not guaranteed monotone with the
   rank where two candidates need a different number of routes. It prices climbs, pits and craters,
-  and never picks a target the commander cannot reach. It is exact: no abstract estimate stands in
+  and never picks a target the commander cannot reach. It reads the live, unfogged world until S4's
+  mask (item 168 (10)). It is exact: no abstract estimate stands in
   for the walk.
 - **Two measures.** A choice a unit then walks to (`covering`, `on`, a Mine beacon's seam) ranks by
   the walk above. `toward`'s stepping stone, which no unit walks from to the feature when it is
