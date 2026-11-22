@@ -4880,7 +4880,7 @@ impl World {
     /// The one place a decision cadence becomes a tick count. A table that sets
     /// it below one tick gets one tick, because a decision cannot land between
     /// ticks.
-    fn decision_ticks(&self) -> u32 {
+    pub(crate) fn decision_ticks(&self) -> u32 {
         Ms::new(self.rules.decision_tick_ms())
             .to_ticks_ceil()
             .max(1)
