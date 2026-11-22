@@ -638,6 +638,25 @@ of that premise.
   vocabulary. There is no verb that reads a path, opens a socket, shells out or loads code, and none
   may be added. The template/sample library is a local folder the gateway *reads* to list and
   instantiate; nothing in it executes.
+- **A player's text is quoted wherever a person is shown it.** Where a person is shown a sentence
+  built by `proto`, `plan-core`, the verifier or the gateway, a player's text in it is quoted:
+  `Quoted` is the text escaped and capped, and `Said` is built from a `&'static str`, a number, a
+  `char`, a `Quoted`, another `Said`, or the words of an `EngineWords` type (escaped and capped;
+  implementable only inside these four crates, which
+  `engine_words_are_named_only_behind_the_door` in `crates/plan-core/tests/door.rs` holds), never
+  from a `String`. The rest of that file's scans hold the other back ways in. `gamectl` escapes
+  its leaves where it prints them (`crates/gamectl/tests/shown.rs`), and the hidden-character
+  table, `json::grammar::HIDDEN`, is data. Quoting changes what a person is shown and never the
+  bytes of the player's file. So: do not build such a sentence from a `String`, do not add a way to
+  make a `Said` or a `Quoted` from raw text, and do not weaken the scans to pass a change
+  (decisions-log items 167 (5) and 168).
+- **Every thread that reads a player's text has a stated stack.** Playbook recursion is bounded by
+  the grammar's depth, and that is a bound on the stack only when the stack is a number: every
+  thread of `gamectl` and of the gateway that reads player text is made by
+  `pharmakos_plan_core::stack::player_text_thread` on `PLAYER_TEXT_STACK`, and the confinement
+  tests (`crates/gateway/tests/confinement.rs`, `crates/gamectl/tests/confinement.rs`) refuse
+  `thread::spawn` and `thread::Builder` in either crate's sources. So: make every new thread in
+  `gamectl` and the gateway through `player_text_thread` (decisions-log items 167 (6) and 168).
 - **No network telemetry.** Playtest mode is opt-in and local: "Export playtest bundle" writes a
   file the tester sends manually, containing survey, metrics, recording and the diagnostics log
   only — never playbooks, drafts, the notebook or the private replay. Networked telemetry is
