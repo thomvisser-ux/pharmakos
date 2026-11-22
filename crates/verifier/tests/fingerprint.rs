@@ -264,6 +264,42 @@ fn a_long_single_string_playbook_has_one_fingerprint_both_ways() {
     }
 }
 
+/// Strings of two-, three- and four-byte characters longer than one of the
+/// codec's string pieces (1,365 bytes) and than its gathering buffer (8,192
+/// bytes), shifted by an ASCII prefix of 0 to 3 bytes so a character
+/// straddles every place a piece or the buffer could end (S3's `fpstream`,
+/// fix pass 1: a cut that split a character, or replaced the halves, moves
+/// the fingerprint, and the reference catches it).
+#[test]
+fn a_long_string_of_wide_characters_has_one_fingerprint_three_ways() {
+    let mut agreed = 0_usize;
+    for wide in ['\u{e9}', '\u{20ac}', '\u{1f600}'] {
+        for prefix in 0..4_usize {
+            for bytes in [1_365_usize, 1_366, 2_731, 8_192, 8_193, 20_000] {
+                let count = bytes
+                    .checked_div(wide.len_utf8())
+                    .expect("a character is at least one byte")
+                    .saturating_add(1);
+                let title: String = "a"
+                    .repeat(prefix)
+                    .chars()
+                    .chain(core::iter::repeat_n(wide, count))
+                    .collect();
+                let text = format!(
+                    r#"{{"meta":{{"title":"{title}","note":"\n{title}"}},"kind":"PLAYBOOK"}}"#
+                );
+                assert!(
+                    both(&text).is_some(),
+                    "{} bytes of {wide:?} after {prefix} of ASCII",
+                    title.len()
+                );
+                agreed = agreed.saturating_add(1);
+            }
+        }
+    }
+    assert_eq!(agreed, 72);
+}
+
 /// splitmix64, for the stamps the variants below carry: seeded, and the same
 /// on every platform.
 fn mix(seed: u64) -> u64 {

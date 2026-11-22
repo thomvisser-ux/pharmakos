@@ -1732,6 +1732,22 @@ mod tests {
                 literal(&string(seed.wrapping_add(100), length.wrapping_mul(3) % 50)),
             ));
         }
+        // Wide characters alone, past one piece and past the buffer, shifted
+        // by 0 to 3 ASCII bytes so one straddles each place a cut could fall
+        // (fix pass 1).
+        for wide in ['\u{e9}', '\u{20ac}', '\u{1f600}'] {
+            for prefix in 0..4_usize {
+                for bytes in [1_366_usize, 8_193] {
+                    let count = bytes.div_ceil(wide.len_utf8());
+                    let title: String = "a"
+                        .repeat(prefix)
+                        .chars()
+                        .chain(core::iter::repeat_n(wide, count))
+                        .collect();
+                    out.push(format!(r#"{{"meta":{{"title":{}}}}}"#, literal(&title)));
+                }
+            }
+        }
         let leaf = |value: usize| {
             format!(r#"{{"segment_elapsed":{{"ms":{{"op":"EQ","value":{value}}}}}}}"#)
         };
