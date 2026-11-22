@@ -798,7 +798,8 @@ mod tests {
     #[test]
     fn the_served_buffer_holds_the_longest_route_from_the_start() {
         for (nodes, abstract_nodes, cells) in [(1, 1, 1), (64, 16, 16), (65_536, 8_192, 1_024)] {
-            let scratch = Scratch::new(nodes, abstract_nodes, cells, 18).expect("a ring for 18");
+            let scratch = Scratch::new(nodes, abstract_nodes, cells, 18)
+                .unwrap_or_else(|| panic!("a ring for 18"));
             assert!(
                 scratch.served.capacity() >= row(MAX_ROUTE_NODES),
                 "a scratch for {nodes} columns reserves {} served nodes, under {MAX_ROUTE_NODES}",
