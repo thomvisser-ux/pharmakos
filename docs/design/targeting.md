@@ -180,7 +180,7 @@ was one measure for every ranking.)
   has not already ruled out: candidates open in octile order, and a priced one is emitted once its
   key is below every unpriced candidate's `(bound, y, x)`. The octile bound never exceeds a served
   walk, so the order is exact. Nothing is capped; the work is bounded by the candidate count and the
-  router's own search, and is counted, not timed (item 169 (5) and (6) give the figures).
+  router's own search; the bound is on counted work, and item 169 (5) and (6) give counted work and, for `toward`, release-build timings from a machine that was not idle.
 - **Where it runs:** in the sim (the tick) and in the gateway (`resolve_refs`, `estimate_route`),
   which lend the host's pathing graph. The verifier does not rank (see Surfaces).
 - **Not in conditions in S1.** A condition reads every 250 ms, and re-ranking every evaluation
