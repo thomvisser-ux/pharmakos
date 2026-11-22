@@ -136,8 +136,8 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    holds its own gate in a Push as well, before it parses anything, as defence in depth,
    decisions-log items 133 and 135), a preview of what a step will bind and not a dry run, and
    `get_map_summary`'s features (unfogged in S1, decisions-log item 130 (3) (a)) read the hosted
-   world through the same resolver, their `travel_ms` and `reachable` told in a Lull only and
-   withheld, both absent, in every other phase with no walk priced (the owner's "Omit them in a
+   world through the same resolver, their `travel_ms` and `reachable` told to a seat in a Lull only and
+   withheld, both absent, in every other phase and for a caller that is no seat, with no walk priced (the owner's "Omit them in a
    Push", decisions-log item 170); `estimate_route` answers `PHASE_CLOSED` in every phase but a
    Lull, before it parses anything (the owner's "Refuse in a Push", decisions-log item 169), and in a
    Lull prices each leg at the walk the router serves over the hosted world's own graph
