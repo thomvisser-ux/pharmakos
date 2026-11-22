@@ -225,9 +225,6 @@ struct Condition {
     heading: Option<u32>,
     /// True on a structure going up, where the viewer may be told it.
     building: bool,
-    /// A beacon's sphere radius in whole voxels, where the viewer may be told
-    /// it.
-    sphere_radius: Option<u32>,
     /// How a structure or a wall is drawn.
     look: Option<Look>,
 }
@@ -366,20 +363,36 @@ fn visible_beacons<V: Vision>(
         };
         let condition = Condition {
             hp: Some((view::hp_wire(hp)?, view::hp_wire(max)?)),
-            sphere_radius,
             ..Condition::default()
         };
         // The viewer's own name for it: a seat's own `b_NN`, anybody else's
         // `e_NN` (decisions-log item 127 (13)).
         let name = views.beacon_name(viewer, world, row)?;
-        out.push(entity(
+        let mut listed = entity(
             &name,
             "BEACON",
             ("", strings::VIEW_BEACON),
             Some(owner),
             at,
             condition,
-        ));
+        );
+        // Written here, the one reader of the sphere in this module, so the
+        // sim's census of sphere readers (`crates/sim/tests/spire.rs`) names
+        // one function of the view: before the title, in field order.
+        if let (Some(radius), Json::Object(entries)) = (sphere_radius, &mut listed) {
+            let before_title = entries
+                .len()
+                .checked_sub(1)
+                .ok_or_else(|| Error::internal("a view entity was written with no title"))?;
+            entries.insert(
+                before_title,
+                (
+                    String::from("sphere_radius_voxels"),
+                    Json::Number(radius.to_string()),
+                ),
+            );
+        }
+        out.push(listed);
     }
     Ok(())
 }
@@ -938,12 +951,6 @@ fn entity(
     }
     if condition.building {
         entries.push((String::from("building"), Json::Bool(true)));
-    }
-    if let Some(radius) = condition.sphere_radius {
-        entries.push((
-            String::from("sphere_radius_voxels"),
-            Json::Number(radius.to_string()),
-        ));
     }
     if let Some(look) = condition.look {
         let [x, y, z] = look.size;
