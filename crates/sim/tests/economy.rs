@@ -126,23 +126,29 @@ impl Grid {
             .structures
             .as_ref()
             .unwrap_or_else(|| panic!("a structures block"));
-        let kw = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
+        let kw = |value: u32| {
+            i32::try_from(value).unwrap_or_else(|error| panic!("the value fits: {error}"))
+        };
         Grid {
             surplus: kw(power.core_surplus_kw),
             margin: kw(power.revive_margin_kw),
             per_unit: kw(power.kw_per_unit),
             starting_units: kw(units
                 .starting_build_drones
-                .saturating_add(units.starting_mining_drones)
-                .saturating_add(1)),
-            post: structures.survey_post.map_or(0, |row| kw(row.draw_kw)),
-            mortar: structures.mortar.map_or(0, |row| kw(row.draw_kw)),
+                .strict_add(units.starting_mining_drones)
+                .strict_add(1)),
+            post: structures
+                .survey_post
+                .map_or_else(|| panic!("the value is there"), |row| kw(row.draw_kw)),
+            mortar: structures
+                .mortar
+                .map_or_else(|| panic!("the value is there"), |row| kw(row.draw_kw)),
         }
     }
 
     /// What a seat's starting force draws, homed to its core.
     fn starting_load(self) -> i32 {
-        self.per_unit.saturating_mul(self.starting_units)
+        self.per_unit.strict_mul(self.starting_units)
     }
 }
 
@@ -160,9 +166,15 @@ fn ticks_of(feed: &[Event], kind: EventKind, beacon: BeaconId) -> Vec<u32> {
 fn core_of(world: &World, seat: SeatId) -> BeaconId {
     let beacons = world.beacons();
     let mut best: Option<u32> = None;
-    for row in 0..usize::try_from(beacons.len()).unwrap_or(0) {
+    for row in
+        0..usize::try_from(beacons.len()).unwrap_or_else(|error| panic!("the value fits: {error}"))
+    {
         if beacons.seats().get(row).copied() == Some(seat.raw()) {
-            let id = beacons.ids().get(row).copied().unwrap_or(0);
+            let id = beacons
+                .ids()
+                .get(row)
+                .copied()
+                .unwrap_or_else(|| panic!("the value is there"));
             if best.is_none_or(|held| id < held) {
                 best = Some(id);
             }
@@ -180,7 +192,7 @@ fn treasury(world: &World, seat: SeatId) -> Money {
         .treasuries()
         .get(row)
         .copied()
-        .unwrap_or(Money::ZERO)
+        .unwrap_or_else(|| panic!("the value is there"))
 }
 
 fn supply_and_draw(world: &World, seat: SeatId) -> (Kw, Kw) {
@@ -193,14 +205,24 @@ fn supply_and_draw(world: &World, seat: SeatId) -> (Kw, Kw) {
             .supplies()
             .get(row)
             .copied()
-            .unwrap_or(Kw::ZERO),
-        world.seats().draws().get(row).copied().unwrap_or(Kw::ZERO),
+            .unwrap_or_else(|| panic!("the value is there")),
+        world
+            .seats()
+            .draws()
+            .get(row)
+            .copied()
+            .unwrap_or_else(|| panic!("the value is there")),
     )
 }
 
 fn dormant(world: &World, beacon: BeaconId) -> bool {
-    let row = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
-    world.beacons().dormant().get(row).copied().unwrap_or(false)
+    let row = row_of(beacon.raw());
+    world
+        .beacons()
+        .dormant()
+        .get(row)
+        .copied()
+        .unwrap_or_else(|| panic!("the value is there"))
 }
 
 /// Run a Push to its end, collecting every event it reported.
@@ -278,13 +300,13 @@ fn a_starting_seam_yields_more_than_its_exposed_rim() {
     // Dug below the rim: some ore voxel under a footprint column's original
     // top is gone, which the skeleton's rule could never reach.
     let world = runner.world();
-    let row = usize::try_from(core.raw()).unwrap_or(usize::MAX);
+    let row = row_of(core.raw());
     let held = world
         .beacons()
         .seams()
         .get(row)
         .copied()
-        .unwrap_or(u32::MAX);
+        .unwrap_or_else(|| panic!("the value is there"));
     let starting = pristine
         .features()
         .features()
@@ -297,10 +319,10 @@ fn a_starting_seam_yields_more_than_its_exposed_rim() {
                 .positions()
                 .get(row)
                 .copied()
-                .unwrap_or([Fx::ZERO; 3]);
+                .unwrap_or_else(|| panic!("the value is there"));
             let [ax, ay, _] = at.map(Fx::floor_voxels);
-            let dx = i64::from(x.saturating_sub(ax));
-            let dy = i64::from(y.saturating_sub(ay));
+            let dx = i64::from(x.strict_sub(ax));
+            let dy = i64::from(y.strict_sub(ay));
             dx * dx + dy * dy
         })
         .unwrap_or_else(|| panic!("the map has a seam"));
@@ -348,7 +370,7 @@ fn a_restored_match_keeps_the_unbroken_runs_unit_limit() {
     let at = fixture
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(usize::MAX))
+        .get(row_of(core.raw()))
         .copied()
         .unwrap_or_else(|| panic!("the core has a place"));
     fixture
@@ -401,7 +423,11 @@ fn value_follows_condition_at_the_audit_and_at_the_recycle_refund() {
     // less by exactly the value the hit points carried — no more and no less.
     let before = world.held_value(seat);
     let full = world.beacon_max_hp(core);
-    let half = Hp::new(full.raw().checked_div(2).unwrap_or(0));
+    let half = Hp::new(
+        full.raw()
+            .checked_div(2)
+            .unwrap_or_else(|| panic!("the value is there")),
+    );
     assert!(
         world
             .request_damage(DamageOrder {
@@ -416,11 +442,11 @@ fn value_follows_condition_at_the_audit_and_at_the_recycle_refund() {
         .step(&mut pharmakos_sim::Enc::with_capacity(8 * 1024))
         .unwrap();
     let after = world.held_value(seat);
-    let lost = before.raw().saturating_sub(after.raw());
+    let lost = before.raw().strict_sub(after.raw());
     let expected = value_of(world.beacon_cost(), full.raw(), full.raw()).raw()
         - value_of(
             world.beacon_cost(),
-            full.raw().saturating_sub(half.raw()),
+            full.raw().strict_sub(half.raw()),
             full.raw(),
         )
         .raw();
@@ -433,21 +459,19 @@ fn value_follows_condition_at_the_audit_and_at_the_recycle_refund() {
     // is left, not of what it cost new.
     let remaining = value_of(
         world.beacon_cost(),
-        full.raw().saturating_sub(half.raw()),
+        full.raw().strict_sub(half.raw()),
         full.raw(),
     );
-    let percent = world
-        .rules()
-        .message()
-        .economy
-        .as_ref()
-        .map_or(0, |economy| economy.recycle_refund_percent);
+    let percent = world.rules().message().economy.as_ref().map_or_else(
+        || panic!("the value is there"),
+        |economy| economy.recycle_refund_percent,
+    );
     let purse = treasury(&world, seat);
     assert!(
         world.recycle_beacon(seat, core),
         "a seat may recycle its own"
     );
-    let refund = treasury(&world, seat).raw().saturating_sub(purse.raw());
+    let refund = treasury(&world, seat).raw().strict_sub(purse.raw());
     assert_eq!(
         refund,
         percent_of(remaining, percent).raw(),
@@ -461,11 +485,11 @@ fn value_follows_condition_at_the_audit_and_at_the_recycle_refund() {
     // truncated toward zero, and the divide after the multiply so the
     // truncation happens once — so a rounding change fails here.
     let cost = world.beacon_cost().raw();
-    let left = i64::from(full.raw().saturating_sub(half.raw()));
+    let left = i64::from(full.raw().strict_sub(half.raw()));
     let spelled = cost
-        .saturating_mul(left)
+        .strict_mul(left)
         .checked_div(i64::from(full.raw()))
-        .unwrap_or(0);
+        .unwrap_or_else(|| panic!("the value is there"));
     assert_eq!(
         remaining.raw(),
         spelled,
@@ -474,9 +498,9 @@ fn value_follows_condition_at_the_audit_and_at_the_recycle_refund() {
     assert_eq!(
         refund,
         spelled
-            .saturating_mul(i64::from(percent))
+            .strict_mul(i64::from(percent))
             .checked_div(100)
-            .unwrap_or(0),
+            .unwrap_or_else(|| panic!("the value is there")),
         "and the refund is that many percent of it, truncated the same way"
     );
     assert!(
@@ -498,9 +522,9 @@ fn paid_means_yours_survives_a_mid_build_death() {
     let at = world
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
 
     // Give the core a Build target one voxel along, so the drones reach it.
     world.set_writ(core, MandateKind::Build);
@@ -536,13 +560,11 @@ fn paid_means_yours_survives_a_mid_build_death() {
     let structure = queued.unwrap_or_else(|| panic!("the Quartermaster paid for the target"));
 
     // The money is gone, in full, from the instant the order committed.
-    let charged = purse
-        .raw()
-        .saturating_sub(treasury(runner.world(), seat).raw());
+    let charged = purse.raw().strict_sub(treasury(runner.world(), seat).raw());
     assert_eq!(charged, cost.raw(), "charged at commit, at the full price");
 
     // The thing is standing, unfinished, and worth almost nothing.
-    let row = usize::try_from(structure.raw()).unwrap_or(usize::MAX);
+    let row = row_of(structure.raw());
     assert_eq!(
         runner.world().structures().building().get(row).copied(),
         Some(true),
@@ -556,7 +578,7 @@ fn paid_means_yours_survives_a_mid_build_death() {
             .hit_points()
             .get(row)
             .copied()
-            .unwrap_or(Hp::ZERO)
+            .unwrap_or_else(|| panic!("the value is there"))
             .raw(),
         runner
             .world()
@@ -621,11 +643,10 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
     // not be short.
     let grid = Grid::of(&rules());
     assert!(grid.margin > 0, "a revive margin to stay under: {grid:?}");
-    let surplus = grid
-        .starting_load()
-        .saturating_add(grid.margin)
-        .saturating_sub(1);
-    let rules = rules_with_core_surplus(u32::try_from(surplus).unwrap_or(0));
+    let surplus = grid.starting_load().strict_add(grid.margin).strict_sub(1);
+    let rules = rules_with_core_surplus(
+        u32::try_from(surplus).unwrap_or_else(|error| panic!("the value fits: {error}")),
+    );
     let mut runner =
         Runner::new(world_with(rules, &[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let seat = SeatId::new(0);
@@ -635,7 +656,7 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
     // Give the units somewhere to be, so "parked" is a visible change.
     let away = [Fx::from_voxels(200), Fx::from_voxels(200), Fx::ZERO];
     for unit in 0..runner.world().units().len() {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = usize::try_from(unit).unwrap_or_else(|error| panic!("the value fits: {error}"));
         if runner.world().units().seats().get(row).copied() == Some(seat.raw()) {
             runner.world_mut().send_unit_directly(unit, away);
         }
@@ -674,7 +695,7 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
         .expect("an occupied seat has a commander");
     let mut parked = 0;
     for unit in 0..world.units().len() {
-        let index = usize::try_from(unit).unwrap_or(usize::MAX);
+        let index = usize::try_from(unit).unwrap_or_else(|error| panic!("the value fits: {error}"));
         if world.units().seats().get(index).copied() != Some(seat.raw()) {
             continue;
         }
@@ -710,9 +731,9 @@ fn the_brownout_order_is_priority_then_distance_then_the_core_last() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
 
     // Four more beacons of this seat: one near on normal priority, one far on
     // normal, one nearer on low, and one on high. The deficit is sized so that
@@ -751,10 +772,8 @@ fn the_brownout_order_is_priority_then_distance_then_the_core_last() {
     // Exactly two sheds settle it, at whatever the table says: two Mortars
     // shed leave the draw within the supply, and one would not.
     let grid = Grid::of(&rules());
-    let two_left = grid
-        .starting_load()
-        .saturating_add(grid.mortar.saturating_mul(2));
-    let three_left = two_left.saturating_add(grid.mortar);
+    let two_left = grid.starting_load().strict_add(grid.mortar.strict_mul(2));
+    let three_left = two_left.strict_add(grid.mortar);
     assert!(
         two_left <= grid.surplus && grid.surplus < three_left,
         "the fixture has to be short by more than one Mortar and by no more than \
@@ -813,9 +832,9 @@ fn a_placed_beacon_adds_no_draw() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let beacon = placed
         .world_mut()
         .place_beacon_directly(seat, offset(at, 8), MandateKind::None, PRIORITY_NORMAL)
@@ -843,7 +862,10 @@ fn a_placed_beacon_adds_no_draw() {
     // 0 kW, and before item 113 (5) a placed beacon's base would have been
     // shed at the first settle.
     let grid = Grid::of(&rules());
-    let tight = rules_with_core_surplus(u32::try_from(grid.starting_load()).unwrap_or(0));
+    let tight = rules_with_core_surplus(
+        u32::try_from(grid.starting_load())
+            .unwrap_or_else(|error| panic!("the value fits: {error}")),
+    );
     let mut runner =
         Runner::new(world_with(tight, &[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let beacon = runner
@@ -905,9 +927,9 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let mut posts: Vec<StructureId> = Vec::new();
     let mut load = grid.starting_load();
     let mut voxels: i16 = 2;
@@ -918,8 +940,8 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
                 .raise_structure(seat, core, StructureKind::SurveyPost, offset(at, voxels))
                 .unwrap_or_else(|| panic!("room for a structure")),
         );
-        load = load.saturating_add(grid.post);
-        voxels = voxels.saturating_add(1);
+        load = load.strict_add(grid.post);
+        voxels = voxels.strict_add(1);
     }
 
     let mut feed: Vec<Event> = Vec::new();
@@ -952,11 +974,11 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
                 })
                 .is_ok()
         );
-        load = load.saturating_sub(grid.post);
+        load = load.strict_sub(grid.post);
         runner.play_tick();
         feed.extend_from_slice(runner.events());
         runner.clear_events();
-        let spare = grid.surplus.saturating_sub(load);
+        let spare = grid.surplus.strict_sub(load);
         let dark = dormant(runner.world(), core);
         if revived_at.is_none() {
             assert_eq!(
@@ -1023,9 +1045,9 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let idle = runner
         .world_mut()
         .place_beacon_directly(seat, offset(at, 10), MandateKind::None, PRIORITY_NORMAL)
@@ -1037,8 +1059,8 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
             .world_mut()
             .raise_structure(seat, core, StructureKind::SurveyPost, offset(at, voxels))
             .unwrap_or_else(|| panic!("room for a structure"));
-        load = load.saturating_add(grid.post);
-        voxels = voxels.saturating_add(1);
+        load = load.strict_add(grid.post);
+        voxels = voxels.strict_add(1);
     }
     let mut feed: Vec<Event> = Vec::new();
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
@@ -1083,8 +1105,8 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
             .world_mut()
             .raise_structure(seat, loaded, StructureKind::SurveyPost, offset(at, voxels))
             .unwrap_or_else(|| panic!("room for a structure"));
-        load = load.saturating_add(grid.post);
-        voxels = voxels.saturating_add(1);
+        load = load.strict_add(grid.post);
+        voxels = voxels.strict_add(1);
     }
     let mut feed: Vec<Event> = Vec::new();
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
@@ -1126,9 +1148,9 @@ fn a_beacon_whose_shed_would_deepen_the_deficit_is_skipped() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
 
     // A low-priority expansion whose only homed asset is a Generator on the
     // zone's vent. It is first in the order, and shedding it would take its Generator's
@@ -1151,13 +1173,13 @@ fn a_beacon_whose_shed_would_deepen_the_deficit_is_skipped() {
         .unwrap_or_else(|| panic!("room for a beacon"));
     let mut load = grid.starting_load();
     let mut voxels: i16 = -2;
-    while load <= grid.surplus.saturating_add(output) {
+    while load <= grid.surplus.strict_add(output) {
         runner
             .world_mut()
             .raise_structure(seat, loaded, StructureKind::Mortar, offset(at, voxels))
             .unwrap_or_else(|| panic!("room for a structure"));
-        load = load.saturating_add(grid.mortar);
-        voxels = voxels.saturating_sub(1);
+        load = load.strict_add(grid.mortar);
+        voxels = voxels.strict_sub(1);
     }
     let mut feed: Vec<Event> = Vec::new();
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
@@ -1203,9 +1225,9 @@ fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
     let at = world
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let raised = world
         .place_beacon_directly(seat, offset(at, 4), MandateKind::None, PRIORITY_LOW)
         .unwrap_or_else(|| panic!("room for a beacon"));
@@ -1218,13 +1240,13 @@ fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
             world
                 .raise_structure(seat, beacon, StructureKind::SurveyPost, offset(at, voxels))
                 .unwrap_or_else(|| panic!("room for a structure"));
-            voxels = voxels.saturating_sub(1);
+            voxels = voxels.strict_sub(1);
         }
     }
     let ordinal = world
         .beacons()
         .ordinals()
-        .get(usize::try_from(raised.raw()).unwrap_or(usize::MAX))
+        .get(row_of(raised.raw()))
         .copied()
         .unwrap_or_else(|| panic!("the raised beacon has an ordinal"));
     let name = pharmakos_sim::tables::own_beacon_name(ordinal);
@@ -1275,7 +1297,7 @@ fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
             }
         }
         feed.extend(events);
-        if committed.is_some_and(|tick| runner.world().tick().raw() > tick.saturating_add(40)) {
+        if committed.is_some_and(|tick| runner.world().tick().raw() > tick.strict_add(40)) {
             break;
         }
     }
@@ -1284,7 +1306,7 @@ fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
         .world()
         .beacons()
         .priorities()
-        .get(usize::try_from(raised.raw()).unwrap_or(usize::MAX))
+        .get(row_of(raised.raw()))
         .copied();
     assert_eq!(priority, Some(PRIORITY_HIGH), "the row raised the beacon");
     Raise {
@@ -1300,14 +1322,14 @@ fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
 /// less the starting force's load), and at least one.
 fn posts_within_spare() -> i32 {
     let grid = Grid::of(&rules());
-    let spare = grid.surplus.saturating_sub(grid.starting_load());
+    let spare = grid.surplus.strict_sub(grid.starting_load());
     assert!(
         grid.post > 0 && spare >= grid.post,
         "the spare surplus holds a post: {grid:?}"
     );
     let mut posts: i32 = 0;
-    while posts.saturating_add(1).saturating_mul(grid.post) <= spare {
-        posts = posts.saturating_add(1);
+    while posts.strict_add(1).strict_mul(grid.post) <= spare {
+        posts = posts.strict_add(1);
     }
     posts
 }
@@ -1336,9 +1358,12 @@ fn a_raise_relights_a_dark_beacon_when_a_lower_shed_covers_it() {
         "the raised beacon relights once: {:?}",
         fixture.feed
     );
-    let at = relit.first().copied().unwrap_or(0);
+    let at = relit
+        .first()
+        .copied()
+        .unwrap_or_else(|| panic!("the value is there"));
     assert!(
-        at >= fixture.committed && at <= fixture.committed.saturating_add(1),
+        at >= fixture.committed && at <= fixture.committed.strict_add(1),
         "at once: at the settle that follows the commit ({at} against {})",
         fixture.committed
     );
@@ -1370,7 +1395,7 @@ fn a_raise_relights_nothing_when_no_lower_shed_covers_it() {
     // even with every lower-priority beacon shed its load does not fit. The
     // raise commits, the priority is HIGH, and the grid is left exactly as it
     // was: no swap is half-made, and no event reports one.
-    let raised_posts = posts_within_spare().saturating_add(1);
+    let raised_posts = posts_within_spare().strict_add(1);
     let fixture = raise_fixture(raised_posts, 1);
     let world = fixture.runner.world();
     assert!(
@@ -1395,7 +1420,7 @@ fn core_and_site(world: &World) -> (BeaconId, [Fx; 3]) {
     let at = world
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(usize::MAX))
+        .get(row_of(core.raw()))
         .copied()
         .unwrap_or_else(|| panic!("the core has a position"));
     (core, at)
@@ -1412,7 +1437,7 @@ fn raise_posts(world: &mut World, beacon: BeaconId, at: [Fx; 3], posts: i32, vox
                 offset(at, *voxels),
             )
             .unwrap_or_else(|| panic!("room for a structure"));
-        *voxels = voxels.saturating_sub(1);
+        *voxels = voxels.strict_sub(1);
     }
 }
 
@@ -1440,11 +1465,11 @@ fn a_revival_the_swap_undoes_in_one_settle_reports_nothing() {
     // beacon's revival, and nothing at all for the low one, which was dark
     // before the settle and is dark after it.
     let grid = Grid::of(&rules());
-    let spare = grid.surplus.saturating_sub(grid.starting_load());
+    let spare = grid.surplus.strict_sub(grid.starting_load());
     let posts = posts_within_spare();
-    let load = grid.post.saturating_mul(posts);
+    let load = grid.post.strict_mul(posts);
     assert!(
-        spare.saturating_sub(load) < grid.margin && spare.saturating_sub(grid.post) >= grid.margin,
+        spare.strict_sub(load) < grid.margin && spare.strict_sub(grid.post) >= grid.margin,
         "the margin holds the normal beacon dark and lets the low one's post revive: {grid:?}"
     );
     let mut world = world(&[20_000]);
@@ -1497,11 +1522,11 @@ fn of_two_equal_dark_beacons_the_lower_id_swaps_first() {
     // although the other stands nearer the core (the revival order would have
     // picked the nearer one).
     let grid = Grid::of(&rules());
-    let spare = grid.surplus.saturating_sub(grid.starting_load());
+    let spare = grid.surplus.strict_sub(grid.starting_load());
     let posts = posts_within_spare();
-    let load = grid.post.saturating_mul(posts);
+    let load = grid.post.strict_mul(posts);
     assert!(
-        load <= spare && spare.saturating_sub(grid.post) < load && spare < load.saturating_mul(2),
+        load <= spare && spare.strict_sub(grid.post) < load && spare < load.strict_mul(2),
         "each fits alone once the LOW beacon is shed, and the two never fit together: {grid:?}"
     );
     let mut world = world(&[20_000]);
@@ -1554,7 +1579,7 @@ fn a_dark_core_outranks_every_lit_expansion_in_the_swap() {
     let knob = world
         .beacons()
         .priorities()
-        .get(usize::try_from(core.raw()).unwrap_or(usize::MAX))
+        .get(row_of(core.raw()))
         .copied();
     assert!(
         knob.is_some_and(|knob| knob < PRIORITY_HIGH),
@@ -1577,12 +1602,12 @@ fn a_dark_core_outranks_every_lit_expansion_in_the_swap() {
         .unwrap_or_else(|| panic!("room for a beacon"));
     let mut voxels: i16 = -2;
     raise_posts(&mut world, high, at, 1, &mut voxels);
-    let room = grid.surplus.saturating_add(output);
+    let room = grid.surplus.strict_add(output);
     let mut load = grid.starting_load();
     let mut posts: i32 = 0;
-    while load.saturating_add(grid.post) <= room {
-        load = load.saturating_add(grid.post);
-        posts = posts.saturating_add(1);
+    while load.strict_add(grid.post) <= room {
+        load = load.strict_add(grid.post);
+        posts = posts.strict_add(1);
     }
     raise_posts(&mut world, core, at, posts, &mut voxels);
 
@@ -1612,11 +1637,12 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
     // force's load, so a core set dormant stays dark (the fixture of
     // `a_dormant_beacon_powers_down_everything_homed_to_it`).
     let grid = Grid::of(&rules());
-    let surplus = grid
-        .starting_load()
-        .saturating_add(grid.margin)
-        .saturating_sub(1);
-    let varied = || rules_with_core_surplus(u32::try_from(surplus).unwrap_or(0));
+    let surplus = grid.starting_load().strict_add(grid.margin).strict_sub(1);
+    let varied = || {
+        rules_with_core_surplus(
+            u32::try_from(surplus).unwrap_or_else(|error| panic!("the value fits: {error}")),
+        )
+    };
     let seat = SeatId::new(0);
 
     // Lit: the commander is in the draw.
@@ -1640,9 +1666,9 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let commander = runner
         .world()
         .commander_of(seat)
@@ -1652,7 +1678,7 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
         .world_mut()
         .send_unit_directly(commander.raw(), offset(at, 12));
     runner.world_mut().set_dormant(core, true);
-    let row = usize::try_from(commander.raw()).unwrap_or(usize::MAX);
+    let row = row_of(commander.raw());
     let start = runner.world().units().positions().get(row).copied();
     for tick in 0..40 {
         runner.play_tick();
@@ -1730,9 +1756,9 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let mut voxels: i16 = -2;
     let mut placed: Vec<BeaconId> = Vec::new();
     for (step, priority) in [
@@ -1749,7 +1775,7 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
             .world_mut()
             .raise_structure(seat, beacon, StructureKind::Mortar, offset(at, voxels))
             .unwrap_or_else(|| panic!("room for a structure"));
-        voxels = voxels.saturating_sub(1);
+        voxels = voxels.strict_sub(1);
         placed.push(beacon);
     }
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
@@ -1759,20 +1785,20 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
         .iter()
         .filter(|beacon| dormant(world, **beacon))
         .count();
-    let dark = i32::try_from(dark).unwrap_or(i32::MAX);
+    let dark = i32::try_from(dark).unwrap_or_else(|error| panic!("the value fits: {error}"));
     assert!(dark > 0, "the fixture sheds something");
     let load = dark_load(world, seat).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
         load,
         DarkLoad {
-            draw: Kw::new(grid.mortar.saturating_mul(dark)),
+            draw: Kw::new(grid.mortar.strict_mul(dark)),
             supply: Kw::ZERO,
         },
         "the dark load is the shed beacons' Mortars"
     );
     assert_eq!(
         load.shed(),
-        Ok(Kw::new(grid.mortar.saturating_mul(dark))),
+        Ok(Kw::new(grid.mortar.strict_mul(dark))),
         "and the shed kW is the same, with no supply gone dark"
     );
     assert_eq!(
@@ -1789,12 +1815,8 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
     // A dark core takes its surplus off the grid with it: the supply half.
     let mut runner = Runner::new(world_with(
         rules_with_core_surplus(
-            u32::try_from(
-                grid.starting_load()
-                    .saturating_add(grid.margin)
-                    .saturating_sub(1),
-            )
-            .unwrap_or(0),
+            u32::try_from(grid.starting_load().strict_add(grid.margin).strict_sub(1))
+                .unwrap_or_else(|error| panic!("the value is there: {error}")),
         ),
         &[20_000],
     ))
@@ -1805,10 +1827,7 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
     runner.play_tick();
     let world = runner.world();
     assert!(dormant(world, core), "the fixture held");
-    let surplus = grid
-        .starting_load()
-        .saturating_add(grid.margin)
-        .saturating_sub(1);
+    let surplus = grid.starting_load().strict_add(grid.margin).strict_sub(1);
     assert_eq!(
         dark_load(world, seat),
         Ok(DarkLoad {
@@ -1828,9 +1847,9 @@ fn the_autocannon_is_never_shed() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
 
     // An autocannon on the core, finished. It runs off the deep bore, outside
     // the grid: it adds nothing to the draw, so it can never be the thing that
@@ -1868,9 +1887,9 @@ fn only_one_generator_per_vent_adds_to_the_supply() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let (first, second) = vent_stands(runner.world(), at);
 
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
@@ -1923,9 +1942,9 @@ fn a_generator_on_a_tapped_vent_does_not_buy_its_beacon_a_revival() {
         .world()
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let (first, second) = vent_stands(runner.world(), at);
     let output = vent_output(runner.world(), &rules, first, second);
     assert!(output > grid.margin, "a vent worth tapping: {output} kW");
@@ -1950,12 +1969,12 @@ fn a_generator_on_a_tapped_vent_does_not_buy_its_beacon_a_revival() {
     // tap over the starting force's load.
     let spare = grid
         .surplus
-        .saturating_add(output)
-        .saturating_sub(grid.starting_load());
+        .strict_add(output)
+        .strict_sub(grid.starting_load());
     assert!(grid.mortar > 0, "a Mortar draws: {grid:?}");
     let mut mortars: i32 = 0;
     let mut offset_by: i16 = 8;
-    while mortars.saturating_mul(grid.mortar) <= spare {
+    while mortars.strict_mul(grid.mortar) <= spare {
         runner
             .world_mut()
             .raise_structure(
@@ -1965,15 +1984,14 @@ fn a_generator_on_a_tapped_vent_does_not_buy_its_beacon_a_revival() {
                 offset(at, offset_by),
             )
             .unwrap_or_else(|| panic!("room for a Mortar"));
-        mortars = mortars.saturating_add(1);
-        offset_by = offset_by.saturating_add(1);
+        mortars = mortars.strict_add(1);
+        offset_by = offset_by.strict_add(1);
     }
     // The case the rule has to see: crediting the stacked Generator's output
     // would have met the margin, so a cost summed from the homed rows revived
     // the expansion straight back into its deficit.
     assert!(
-        spare.saturating_sub(mortars.saturating_mul(grid.mortar).saturating_sub(output))
-            >= grid.margin,
+        spare.strict_sub(mortars.strict_mul(grid.mortar).strict_sub(output)) >= grid.margin,
         "the fixture is the case a hand-summed cost gets wrong: {grid:?}, \
          {mortars} Mortars, {output} kW"
     );
@@ -2020,9 +2038,9 @@ fn one_anchor_is_one_building() {
     let at = world
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let anchor = offset(at, 2);
     assert!(
         !world.anchor_is_claimed(seat, anchor),
@@ -2063,8 +2081,14 @@ fn one_anchor_is_one_building() {
 /// report is generation-time — so the test finds them the way a player would,
 /// by looking at the ground.
 fn vent_stands(world: &World, at: [Fx; 3]) -> ([Fx; 3], [Fx; 3]) {
-    let cx: i32 = at.first().map_or(0, |value| value.floor_voxels());
-    let cy: i32 = at.get(1).map_or(0, |value| value.floor_voxels());
+    let cx: i32 = at.first().map_or_else(
+        || panic!("the value is there"),
+        |value| value.floor_voxels(),
+    );
+    let cy: i32 = at.get(1).map_or_else(
+        || panic!("the value is there"),
+        |value| value.floor_voxels(),
+    );
     let mut found: Option<[i32; 3]> = None;
     let mut reach: i32 = 0;
     while reach <= 48 && found.is_none() {
@@ -2072,8 +2096,8 @@ fn vent_stands(world: &World, at: [Fx; 3]) -> ([Fx; 3], [Fx; 3]) {
         while dy <= reach {
             let mut dx: i32 = -reach;
             while dx <= reach {
-                let x = cx.saturating_add(dx);
-                let y = cy.saturating_add(dy);
+                let x = cx.strict_add(dx);
+                let y = cy.strict_add(dy);
                 if let Some(z) = world.voxels().top_solid_z(x, y)
                     && world
                         .voxels()
@@ -2084,22 +2108,45 @@ fn vent_stands(world: &World, at: [Fx; 3]) -> ([Fx; 3], [Fx; 3]) {
                     found = Some([x, y, z]);
                     break;
                 }
-                dx = dx.saturating_add(1);
+                dx = dx.strict_add(1);
             }
             if found.is_some() {
                 break;
             }
-            dy = dy.saturating_add(1);
+            dy = dy.strict_add(1);
         }
-        reach = reach.saturating_add(1);
+        reach = reach.strict_add(1);
     }
     let here = found.unwrap_or_else(|| panic!("the zone's heat vent is on the map"));
     let stand = |column: [i32; 3]| {
         [
-            Fx::from_voxels(i16::try_from(column.first().copied().unwrap_or(0)).unwrap_or(0)),
-            Fx::from_voxels(i16::try_from(column.get(1).copied().unwrap_or(0)).unwrap_or(0)),
             Fx::from_voxels(
-                i16::try_from(column.get(2).copied().unwrap_or(0).saturating_add(1)).unwrap_or(0),
+                i16::try_from(
+                    column
+                        .first()
+                        .copied()
+                        .unwrap_or_else(|| panic!("the value is there")),
+                )
+                .unwrap_or_else(|error| panic!("the value fits: {error}")),
+            ),
+            Fx::from_voxels(
+                i16::try_from(
+                    column
+                        .get(1)
+                        .copied()
+                        .unwrap_or_else(|| panic!("the value is there")),
+                )
+                .unwrap_or_else(|error| panic!("the value fits: {error}")),
+            ),
+            Fx::from_voxels(
+                i16::try_from(
+                    column
+                        .get(2)
+                        .copied()
+                        .unwrap_or_else(|| panic!("the value is there"))
+                        .strict_add(1),
+                )
+                .unwrap_or_else(|error| panic!("the value fits: {error}")),
             ),
         ]
     };
@@ -2109,13 +2156,21 @@ fn vent_stands(world: &World, at: [Fx; 3]) -> ([Fx; 3], [Fx; 3]) {
         let x = here
             .first()
             .copied()
-            .unwrap_or(0)
-            .saturating_add(step.first().copied().unwrap_or(0));
+            .unwrap_or_else(|| panic!("the value is there"))
+            .strict_add(
+                step.first()
+                    .copied()
+                    .unwrap_or_else(|| panic!("the value is there")),
+            );
         let y = here
             .get(1)
             .copied()
-            .unwrap_or(0)
-            .saturating_add(step.get(1).copied().unwrap_or(0));
+            .unwrap_or_else(|| panic!("the value is there"))
+            .strict_add(
+                step.get(1)
+                    .copied()
+                    .unwrap_or_else(|| panic!("the value is there")),
+            );
         if let Some(z) = world.voxels().top_solid_z(x, y)
             && world
                 .voxels()
@@ -2134,12 +2189,21 @@ fn vent_stands(world: &World, at: [Fx; 3]) -> ([Fx; 3], [Fx; 3]) {
 /// grade.
 fn vent_output(world: &World, rules: &RulesTable, first: [Fx; 3], second: [Fx; 3]) -> i32 {
     let below = |stand: [Fx; 3]| {
-        let x = stand.first().map_or(0, |value| value.floor_voxels());
-        let y = stand.get(1).map_or(0, |value| value.floor_voxels());
-        let z = stand.get(2).map_or(0, |value| value.floor_voxels());
+        let x = stand.first().map_or_else(
+            || panic!("the value is there"),
+            |value| value.floor_voxels(),
+        );
+        let y = stand.get(1).map_or_else(
+            || panic!("the value is there"),
+            |value| value.floor_voxels(),
+        );
+        let z = stand.get(2).map_or_else(
+            || panic!("the value is there"),
+            |value| value.floor_voxels(),
+        );
         world
             .voxels()
-            .get([x, y, z.saturating_sub(1)])
+            .get([x, y, z.strict_sub(1)])
             .and_then(Material::vent_richness)
             .unwrap_or_else(|| panic!("a vent under {stand:?}"))
     };
@@ -2159,12 +2223,18 @@ fn vent_output(world: &World, rules: &RulesTable, first: [Fx; 3], second: [Fx; 3
         Richness::Standard => by_grade.standard,
         Richness::Rich => by_grade.rich,
     })
-    .unwrap_or(i32::MAX)
+    .unwrap_or_else(|error| panic!("the value is there: {error}"))
 }
 
 /// A place `voxels` east of `at`, on the ground.
 fn offset(at: [Fx; 3], voxels: i16) -> [Fx; 3] {
-    [at[0].saturating_add(Fx::from_voxels(voxels)), at[1], at[2]]
+    [
+        at[0]
+            .checked_add(Fx::from_voxels(voxels))
+            .unwrap_or_else(|| panic!("the offset stays on the map")),
+        at[1],
+        at[2],
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -2179,9 +2249,9 @@ fn no_beacon_starves_another_within_a_band() {
     let at = world
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     let second = world
         .place_beacon_directly(seat, offset(at, 6), MandateKind::Build, PRIORITY_HIGH)
         .unwrap_or_else(|| panic!("room for a beacon"));
@@ -2201,7 +2271,7 @@ fn no_beacon_starves_another_within_a_band() {
                     .add_target(
                         beacon,
                         StructureKind::Generator.id(),
-                        offset(at, first.saturating_add(step))
+                        offset(at, first.strict_add(step))
                     )
                     .is_ok()
             );
@@ -2229,9 +2299,10 @@ fn no_beacon_starves_another_within_a_band() {
             if event.kind == EventKind::StructureQueued
                 && let Some(subject) = event.subject
             {
-                let row = subject
-                    .row()
-                    .map_or(usize::MAX, pharmakos_sim::ids::Row::index);
+                let row = subject.row().map_or_else(
+                    |error| panic!("the value is there: {error}"),
+                    pharmakos_sim::ids::Row::index,
+                );
                 if let Some(home) = runner.world().structures().homes().get(row).copied() {
                     served.push(home);
                     cursors.push(
@@ -2241,7 +2312,7 @@ fn no_beacon_starves_another_within_a_band() {
                             .qm_cursors()
                             .first()
                             .copied()
-                            .unwrap_or(u32::MAX),
+                            .unwrap_or_else(|| panic!("the value is there")),
                     );
                 }
             }
@@ -2312,11 +2383,11 @@ fn a_fabricator_order_the_headroom_cannot_run_is_held_until_a_generator_brings_s
         .unwrap_or_else(|| panic!("the held order was filled once supply came back"));
     assert_eq!(
         supply.raw(),
-        watched.first_supply.raw().saturating_add(output),
+        watched.first_supply.raw().strict_add(output),
         "the supply that came back is the Generator's tap"
     );
     assert!(
-        supply.raw().saturating_sub(draw.raw()) >= grid.per_unit,
+        supply.raw().strict_sub(draw.raw()) >= grid.per_unit,
         "and the headroom the Quartermaster read runs the scout: {supply:?} - {draw:?}"
     );
     assert_eq!(
@@ -2364,10 +2435,12 @@ impl HeldOrder {
         // so the surplus covers it too and the headroom is as described.
         let surplus = grid
             .starting_load()
-            .saturating_add(grid.per_unit)
-            .saturating_add(grid.per_unit)
-            .saturating_sub(1);
-        let rules = rules_with_core_surplus(u32::try_from(surplus).unwrap_or(0));
+            .strict_add(grid.per_unit)
+            .strict_add(grid.per_unit)
+            .strict_sub(1);
+        let rules = rules_with_core_surplus(
+            u32::try_from(surplus).unwrap_or_else(|error| panic!("the value fits: {error}")),
+        );
         // A long segment: the build drone has to walk to the vent and raise
         // the Generator inside it (at the committed table, about 51 of these
         // 120 s).
@@ -2377,9 +2450,9 @@ impl HeldOrder {
         let at = world
             .beacons()
             .positions()
-            .get(usize::try_from(core.raw()).unwrap_or(0))
+            .get(row_of(core.raw()))
             .copied()
-            .unwrap_or_default();
+            .unwrap_or_else(|| panic!("the value is there"));
         let (vent, _) = vent_stands(&world, at);
         let output = vent_output(&world, &rules, vent, vent);
         assert!(output > 0, "a vent worth tapping: {output} kW");
@@ -2390,7 +2463,7 @@ impl HeldOrder {
         // its own. The writs are set before their settings, because setting a
         // writ clears them.
         let tapper_at = world.standing_point([
-            vent[0].floor_voxels().saturating_add(2),
+            vent[0].floor_voxels().strict_add(2),
             vent[1].floor_voxels(),
             0,
         ]);
@@ -2407,7 +2480,6 @@ impl HeldOrder {
         world
             .field_unit(seat, tapper, UnitKind::BuildDrone, tapper_at)
             .unwrap_or_else(|| panic!("room for its build drone"));
-        let _ = core;
         let survey = world
             .place_beacon_directly(seat, offset(at, 6), MandateKind::Survey, PRIORITY_NORMAL)
             .unwrap_or_else(|| panic!("room for a beacon"));
@@ -2421,7 +2493,7 @@ impl HeldOrder {
         );
         world.set_treasury(
             seat,
-            Money::new(scout_cost.raw().saturating_add(generator_cost.raw())),
+            Money::new(scout_cost.raw().strict_add(generator_cost.raw())),
         );
         HeldOrder {
             runner: Runner::new(world).unwrap_or_else(|error| panic!("{error}")),
@@ -2505,23 +2577,19 @@ impl HeldOrder {
             // what the Quartermaster read.
             if world.is_decision_tick() {
                 assert!(
-                    supply.raw().saturating_sub(draw.raw()) < self.grid.per_unit,
+                    supply.raw().strict_sub(draw.raw()) < self.grid.per_unit,
                     "held only while the headroom is short: {supply:?} - {draw:?}"
                 );
                 assert!(
                     supply.raw() >= draw.raw(),
                     "the grid is lit, so the hold is the Quartermaster's, not a brownout's"
                 );
-                watched.held = watched.held.saturating_add(1);
+                watched.held = watched.held.strict_add(1);
             }
             let expected = if watched.generator_paid {
                 self.scout_cost
             } else {
-                Money::new(
-                    self.scout_cost
-                        .raw()
-                        .saturating_add(self.generator_cost.raw()),
-                )
+                Money::new(self.scout_cost.raw().strict_add(self.generator_cost.raw()))
             };
             assert_eq!(
                 treasury(world, seat),
@@ -2567,9 +2635,9 @@ fn a_survey_beacon_fields_its_scout_count_and_stops_there() {
     let at = world
         .beacons()
         .positions()
-        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .get(row_of(core.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     world.set_writ(core, MandateKind::Survey);
     world.set_scouts(core, 1);
     // A probe area nine columns square, its centre ten voxels east of the core.
@@ -2619,9 +2687,9 @@ fn a_sighting_stores_the_tick_it_was_taken_at_so_the_lull_adds_nothing() {
     let at = world
         .beacons()
         .positions()
-        .get(usize::try_from(theirs.raw()).unwrap_or(0))
+        .get(row_of(theirs.raw()))
         .copied()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("the value is there"));
     // An eye of the watcher's, planted beside the watched seat's core, so the
     // watcher's sphere covers something that is not its own. High priority so
     // that the brownout order cannot take this test's eye away from it: the
@@ -2669,12 +2737,14 @@ fn a_sighting_stores_the_tick_it_was_taken_at_so_the_lull_adds_nothing() {
 fn living_scouts(world: &World, beacon: BeaconId) -> u32 {
     let units = world.units();
     let mut total: u32 = 0;
-    for row in 0..usize::try_from(units.len()).unwrap_or(0) {
+    for row in
+        0..usize::try_from(units.len()).unwrap_or_else(|error| panic!("the value fits: {error}"))
+    {
         if units.homes().get(row).copied() == Some(beacon)
             && units.kinds().get(row).copied() == Some(UnitKind::Scout.id())
             && units.hit_points().get(row).is_some_and(|hp| hp.is_alive())
         {
-            total = total.saturating_add(1);
+            total = total.strict_add(1);
         }
     }
     total
@@ -2689,8 +2759,13 @@ fn sightings_of(world: &World, seat: SeatId) -> Vec<(u8, u32)> {
     for (row, who) in table.seats().iter().enumerate() {
         if *who == seat.raw() {
             out.push((
-                owners.get(row).copied().unwrap_or(0),
-                seen.get(row).copied().unwrap_or(0),
+                owners
+                    .get(row)
+                    .copied()
+                    .unwrap_or_else(|| panic!("the value is there")),
+                seen.get(row)
+                    .copied()
+                    .unwrap_or_else(|| panic!("the value is there")),
             ));
         }
     }
@@ -2731,10 +2806,8 @@ fn kill_credit_counts_only_other_seats_and_clamps_to_the_hit_points_removed() {
         world
             .request_damage(DamageOrder {
                 target: DamageTarget::Beacon(core),
-                amount: pharmakos_sim::math::quantity::Damage::new(i64::from(
-                    full.saturating_mul(10)
-                ))
-                .unwrap(),
+                amount: pharmakos_sim::math::quantity::Damage::new(i64::from(full.strict_mul(10)))
+                    .unwrap(),
                 by: SeatId::new(1),
                 source: None,
             })
@@ -2810,7 +2883,7 @@ fn a_tie_on_held_value_places_the_lower_seat_id_ahead() {
     }
     assert_eq!(
         paid.len(),
-        usize::try_from(SEATS).unwrap_or(0),
+        usize::try_from(SEATS).unwrap_or_else(|error| panic!("the value fits: {error}")),
         "every living seat is settled once: {paid:?}"
     );
     let level: Vec<i64> = paid
@@ -2820,7 +2893,7 @@ fn a_tie_on_held_value_places_the_lower_seat_id_ahead() {
                 .world()
                 .held_value(SeatId::new(*seat))
                 .raw()
-                .saturating_sub(*value)
+                .strict_sub(*value)
         })
         .collect();
     assert!(
@@ -2834,7 +2907,7 @@ fn a_tie_on_held_value_places_the_lower_seat_id_ahead() {
             .unwrap_or_else(|error| panic!("rank {rank} is on the ladder: {error}"))
     };
     let leader = bmi(0);
-    let last = bmi(SEATS.saturating_sub(1));
+    let last = bmi(SEATS.strict_sub(1));
     assert!(
         leader.raw() < last.raw(),
         "the ladder has to run downhill for the assertion below to mean \
@@ -2880,6 +2953,8 @@ fn the_settlement_ledger_matches_its_golden() {
             ) {
                 continue;
             }
+            // A rule, not a fallback: an event without a seat is filed as the
+            // neutral seat's, as the sim names it.
             let seat = event.seat.unwrap_or(SeatId::NEUTRAL);
             let (supply, draw) = supply_and_draw(runner.world(), seat);
             writeln!(
@@ -2900,7 +2975,7 @@ fn the_settlement_ledger_matches_its_golden() {
         }
     }
     // The closing audit: what every seat holds after the final settlement.
-    for seat in 0..u8::try_from(SEATS).unwrap_or(3) {
+    for seat in 0..u8::try_from(SEATS).unwrap_or_else(|error| panic!("the value fits: {error}")) {
         let id = SeatId::new(seat);
         let (supply, draw) = supply_and_draw(runner.world(), id);
         writeln!(
@@ -2970,8 +3045,9 @@ fn the_tick_bench_reports_counted_work() {
     let structures = runner.world().structures().len();
     let decisions = ticks
         .checked_div(5)
-        .unwrap_or(0)
-        .saturating_mul(SEATS.min(3));
+        .unwrap_or_else(|| panic!("the value is there"))
+        // A rule: at most three seats decide (AGENTS.md section 1).
+        .strict_mul(SEATS.min(3));
     let spends = feed
         .iter()
         .filter(|event| {
@@ -2993,13 +3069,13 @@ fn the_tick_bench_reports_counted_work() {
         "tick-bench\tticks={ticks}\tunit_ticks={}\tbeacon_ticks={}\tstructure_ticks={}\t\
          decision_ticks={decisions}\tvoxel_edits=0\tspends={spends}\t\
          ore_deliveries={deliveries}",
-        u64::from(units).saturating_mul(u64::from(ticks)),
-        u64::from(beacons).saturating_mul(u64::from(ticks)),
-        u64::from(structures).saturating_mul(u64::from(ticks)),
+        u64::from(units).strict_mul(u64::from(ticks)),
+        u64::from(beacons).strict_mul(u64::from(ticks)),
+        u64::from(structures).strict_mul(u64::from(ticks)),
     );
     assert!(ticks > 0, "the segment played");
     assert!(
-        units >= SEATS.saturating_mul(4),
+        units >= SEATS.strict_mul(4),
         "every occupied seat fielded its starting force"
     );
 }
@@ -3070,4 +3146,14 @@ fn the_target_dir_is_the_one_cargo_names() {
         exe.display(),
         found.display()
     );
+}
+
+/// A table index from an id's raw value: an id past `usize` is this file's
+/// failure, never a row of its own.
+fn row_of<T>(raw: T) -> usize
+where
+    usize: TryFrom<T>,
+    <usize as TryFrom<T>>::Error: std::fmt::Display,
+{
+    usize::try_from(raw).unwrap_or_else(|error| panic!("an id fits a usize: {error}"))
 }
