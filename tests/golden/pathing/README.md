@@ -35,9 +35,13 @@ records, `craters`, `graph repaired`, 48 repaired records: 101 lines.
 
 `<phase>` is `pristine` or `repaired`; `<start>` and `<goal>` are column ids
 (`x + y * size_x`); `cost`, `ticks` and `legs` are what
-`pharmakos_sim::pathing::estimate` returned at the commander's speed;
-`walked cost` is the refined and smoothed route's own cost, which is never
-dearer than the estimate; and the digest is xxh3 over the route's node sequence,
+`pharmakos_sim::pathing::estimate` returned at the commander's speed. Since
+lane `p3fix` (decisions-log item 169) a clear estimate **is** the walk the
+router serves, so `cost` is the walk's own cost and `ticks` its cost rounded up
+to the tick, plus an allowance per extra route a walk needs. No pair on this
+golden's map needs a second route, so `walked cost`, the refined and smoothed
+route's own cost, equals `cost` on every record, and no allowance enters
+`ticks`. The digest is xxh3 over the route's node sequence,
 four little-endian bytes a node — the same form the state hash sees it in. A
 query with no route writes `noroute` in place of the six numbers.
 
@@ -57,6 +61,8 @@ query with no route writes `noroute` in place of the six numbers.
 * **Only the repaired routes moved.** The chunk-footprint repair is not
   equivalent to a from-scratch rebuild. T7's three repair tests are the ones to
   run first.
-* **The estimate moved but the route did not.** Check the sign: item 61 makes
-  *never optimistic* part of the contract, and the editor's rounding rests on
-  it. An estimate that got smaller is the failure mode to look for.
+* **The estimate moved but the route did not.** The estimate is the walk the
+  router serves (item 169), so `cost` must equal `walked cost` on every record
+  here. A record where `cost` is under `walked cost`, or where `ticks` is under
+  `cost` rounded up to the tick, is the failure mode: item 61 makes *never
+  optimistic* part of the contract, and the editor's rounding rests on it.

@@ -499,11 +499,13 @@ puts that reading to the owner.
   (S2's plan §2.2) are each crate's next owner's, as a commit of its own in the lane's PR, under
   the global rule: a typed error, never a default on error.
 - **E23. `toward`'s "nearest" is targeting's.** `toward {feature}` resolves to the legal site,
-  inside the seat's spheres, nearest the named feature, where "nearest" is `targeting.md`'s metric
-  (~149): the least estimated travel, the item-61 estimator's integer cost, from the origin (here
-  the candidate site) to the feature's anchor column, over the terrain the seat knows; unreachable
-  candidates are skipped; ties go to the lowest anchor y, then x. Straight-line distance is not
-  used: item 127 (13)'s targeting design rejected it for "nearest", and item 151 (2) (a)'s
+  inside the seat's spheres, nearest the named feature, where "nearest" is `targeting.md`'s second
+  measure ("Nearest", as item 168 (9) and item 169 (6) have it): the least cost of any walk over
+  the terrain, over the walkers' own step rule, from the candidate site to the feature's anchor
+  column, in the live world until S4's mask; unreachable candidates are skipped; ties go to the
+  lowest site y, then x. [Amended by item 169: this was "the least estimated travel, the item-61
+  estimator's integer cost ... over the terrain the seat knows".] Straight-line distance is not
+  used: item 127 (12)'s targeting design rejected it for "nearest", and item 151 (2) (a)'s
   straight-line reading is confined to an Attack target from its staging point. A `toward` that
   finds no site says why, with how many sites it weighed.
 - **E24. The size budget's mechanics.** `bench3` measures QUICK, FULL and the decision tick at 64,
@@ -775,12 +777,14 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   Generators on two vents, the licence at a settlement, the queue, the growth, a target beyond the
   old radius built the round after) and `spire-lost` (staged by its two playbooks: the other seat's
   Attack destroys the Spire, the radius returns, the event log shows it).
-- **The seed's proof (item 156).** `resonance-spire` is the first proof that seed 20 can be earned, on
+- **The seed's proof (item 156).** `resonance-spire` is the first proof that seed 20 can be earned [item 169: "first proof" is of the scenario, not of the seed's being first: seed 13 also meets the criterion, and the owner kept 20, item 168 (4)], on
   section 1.1's schedule: round 1's beacon by `covering`, round 2's stone by voxel, because `toward`
   can't be sealed until `pred` and `vfy6`, and round 2's cover by `covering`. A money shortfall is cured
   first by dig depth, then by `tune3`'s rows; a re-pin can't cure it, because the next seeds in order
   (48, 55 and 64) take three placements too. A re-pin answers a geometry failure only: it adds the
-  failed clause to the search's criterion, so `no_earlier_seed_passes` still holds, and it changes
+  failed clause to the search's criterion, [amended by item 169: `no_earlier_seed_passes` is replaced
+  by `the_passing_seeds_through_twenty_are_thirteen_and_twenty`; seed 13 also passes, and the owner
+  kept 20 (item 168 (4))] and it changes
   `probation_seed.rs`, `host_link.gd`'s `MATCH_SEED` and this scenario in one commit, the lane's last,
   after `gwp` merges. If neither cures it, this lane stops and the main session puts decision 13 to
   the owner.
@@ -1294,6 +1298,8 @@ start waits for the other's merge.]
 
 [Amended by item 168, the owner's answers of 2026-11-21. Probation's seed stays 20 ("Keep 20"), whatever `p3fix`'s corrected measure says of seed 13; the answer binds `p3fix`, and the seed paragraphs above, which say a re-pin answers a geometry failure only, stand. The fog question from `p3fix` that the client findings' paragraph sends to the owner is answered: a short route's price under a mask is the rough estimate until S4, and from S4 it is priced over what the seat knows, with unknown columns at a fog price and never the true route ("Seat's knowledge, at S4"; carried to S4's plan). Whether another seat's structure shows as going up is answered "Own seat only". `tune3` also reads the double-ring carrier that a lone raider's own second charge can kill, left to it as a balance observation (item 168 (8)).]
 
+[Amended by item 169. `p3fix` (PR #190, `fix/sim-short-route-estimate`) is recorded there. A clear travel estimate is the walk the router serves plus an allowance per extra route ("Approve"), counted from the tick the route is served ("From when the route is served"), and `estimate_route` is `PHASE_CLOSED` outside a Lull ("Refuse in a Push"); the owner's "Omit them in a Push" for `get_map_summary`'s travel times is not built and is carried by the contract lane `mapw` (item 169 (3) (c)); "nearest" ranks by the served walk and `toward`'s stone is the closest site over the terrain (item 168 (9)); Probation's seed stays 20, and 13 also passes. E16 and S3-11: P3 missed on short routes, and the cause was a border crossing off the line, not the cluster corner (under 1 % of the excess on every band of 32 cells and under), so the corner entrance stays unbuilt, measured. Section 5.1's second clause, "Estimate ≤ 1 ms", is read by `cert3` on an estimate that now refines and smooths its route, which a far query did not before; `p3fix`'s figures are per call at the 64-waypoint maximum (the body counts 62 legs), and no one-leg p99 is recorded in its body. Item 167's amendment above says the sim's loader bounding the interface rates was carried to the next sim lane and that the rules table's door is `RulesGap::RowPastTheSim`: `p3fix` took the loader's bound (`RulesError::RowPastTheSim`) and removed the verifier's variant, so the door is the sim loader's and nothing of it is carried. The register's S3-11 row is discharged and its fog row is S4-11 (`docs/placeholders.md`).]
+
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
 the client's `con5` → `con6` → `gwp` → `gwr` → `ed3b` → (`opr3`'s merge) → `prob` → `demo3`, and
@@ -1614,8 +1620,8 @@ one of these wrong in the code raises it with the owner rather than building aro
 
 **2. [play] Which deferred items ride S3.** Earlier stages deferred these "to S3"; most are not in
 the row. *Gates `con6`.*
-- **(Recommended) In S3:** `toward`, with targeting's "nearest" (E23: least estimated travel, ties
-  to the lowest anchor y, then x), never cut under decision 13's recommendation; the own-beacon
+- **(Recommended) In S3:** `toward`, with targeting's "nearest" (E23: the least walking cost over the
+  terrain, ties to the lowest site y, then x; item 169), never cut under decision 13's recommendation; the own-beacon
   predicates (units by role, mandate, has a finished structure); kW supply and kW draw; the
   enemy-knowledge predicates with their freshness and E0209 (cut 2); the sighted beacons in the
   verifier's scope (S3-04). **To S4, with the Sensor Spire's reveals, which are reach:** real terrain
