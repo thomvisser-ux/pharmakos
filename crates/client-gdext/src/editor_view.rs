@@ -176,6 +176,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
         "accepted",
         submitted.is_some_and(|done| done.accepted).to_variant(),
     );
+    put("sealed_this_round", editor.sealed_this_round().to_variant());
     put("beacon_prose", editor.beacon_prose().to_variant());
     put("status_key", editor.status().key.to_variant());
     put("status_detail", editor.status().detail.to_variant());

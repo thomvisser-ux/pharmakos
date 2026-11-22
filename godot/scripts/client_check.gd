@@ -817,6 +817,11 @@ func _check_the_refused_ghost_line(editor: CanvasLayer, failures: Array[String])
 ## **Every seat's tally at the match's end** (item 155 (3) 7): the gateway's prose, then one frame
 ## a seat, each number as it came; between rounds, the prose alone.
 func _check_the_recap_words(failures: Array[String]) -> void:
+	# The Ready line says what Ready will do now (S3's `fixp`, P6b finding 4).
+	if Lobby.ready_line({}) != Strings.text("lobby_ready_help") or Lobby.ready_line({"sealed_this_round": false}) != Strings.text("lobby_ready_help"):
+		failures.append("with nothing sealed the Ready line says `%s`" % Lobby.ready_line({}))
+	if Lobby.ready_line({"sealed_this_round": true}) != Strings.text("lobby_ready_sealed"):
+		failures.append("with this round's seal the Ready line says `%s`" % Lobby.ready_line({"sealed_this_round": true}))
 	var between := {"round": 2, "prose": "Words.", "seat_tallies": []}
 	if Lobby.recap_text_of(between) != Strings.text("lobby_recap", {"round": 2, "prose": "Words."}):
 		failures.append("the recap between rounds says `%s`" % Lobby.recap_text_of(between))

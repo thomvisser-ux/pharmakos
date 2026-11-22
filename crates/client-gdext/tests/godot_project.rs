@@ -898,6 +898,19 @@ fn ready_says_what_it_does_and_the_gate_is_the_clients() {
             .contains("_ready_help.visible = String(state.get(\"phase\", \"\")) == \"lull\"")),
         "the explanation is for the Lull"
     );
+    assert!(
+        gd_code(&lobby, "_process")
+            .iter()
+            .any(|line| line.contains("_ready_help.text = ready_line(vista.bridge.editor_state())")),
+        "the line says what Ready does now (fixp)"
+    );
+    assert!(
+        gd_code(&lobby, "ready_line").iter().any(|line| line.contains(
+            "\"lobby_ready_sealed\" if editor_state.get(\"sealed_this_round\", false) else \"lobby_ready_help\""
+        )),
+        "the bridge's word picks the line"
+    );
+    assert!(string_row(&strings, "lobby_ready_sealed").contains("Ready keeps it"));
     for key in ["status_closed_ready", "unchecked_ready"] {
         let row = string_row(&strings, key);
         assert!(!row.contains("final"), "{key} claims a gateway rule: {row}");
