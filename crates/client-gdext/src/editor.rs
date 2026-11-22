@@ -173,9 +173,38 @@ pub struct Dormant {
     pub shown: bool,
     /// Whether the text on screen sets the option.
     pub checked: bool,
-    /// Whether a click is taken now: the rows describe the text on screen, no edit is on its
-    /// way, and there is a patch to apply.
+    /// Whether the box takes a click at all: only while the planning door is open. A click it
+    /// cannot take otherwise reaches the bridge and is refused with its reason (S3's `fixp`, P6b
+    /// finding 9: a press on a disabled box was dropped by Godot without a word).
     pub enabled: bool,
+    /// Why the last click was refused, while the text it was refused for is on screen.
+    pub refused: Option<DormantRefusal>,
+}
+
+/// Why a click on the E0601 checkbox was not taken: said on the status line and beside the box.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DormantRefusal {
+    /// The planning door is shut: said as the door's own line.
+    Shut,
+    /// The rows describe an older text than the one on screen: its checks are on their way.
+    Stale,
+    /// An edit is on its way.
+    Busy,
+    /// Ticked with no patch from the verifier, or cleared with nothing set: nothing to change.
+    NothingToChange,
+}
+
+impl DormantRefusal {
+    /// The name GDScript looks the words up by (`dormant_refused_<name>`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Shut => "shut",
+            Self::Stale => "stale",
+            Self::Busy => "busy",
+            Self::NothingToChange => "nothing_to_change",
+        }
+    }
 }
 
 /// A beacon selector: what Alt-click turns a fixed target into (spec section 13, "Alt-click
@@ -1257,6 +1286,8 @@ pub struct Editor {
     rule_refusal: Option<RuleRefusal>,
     /// What became of the last value a value field sent ([`FieldAsk`]).
     field_ask: FieldAsk,
+    /// Why the last click on the E0601 checkbox was refused, and the revision it was refused at.
+    dormant_refused: Option<(u64, DormantRefusal)>,
     /// The chip whose map pick the next map click is, by its index in the rule list.
     picking: Option<PickOn>,
     /// The rendering id: bumped on every rule-list answer the editor accepts, a re-render of
@@ -1681,17 +1712,43 @@ impl Editor {
     /// leave beacons dark is the player's call, and what it costs is the verifier's next
     /// report: E0601 becomes W0603, or back. Refused while the rows describe an older text
     /// or an edit is on its way, as a Fix is, and when there is nothing to change.
-    pub fn set_allow_dormant(&mut self, on: bool) -> bool {
-        if self.shut_to_asks() {
-            return false;
+    ///
+    /// # Errors
+    ///
+    /// A [`DormantRefusal`], said on the status line and beside the box: the door is shut, the
+    /// rows describe an older text, an edit is on its way, or there is nothing to change. Every
+    /// click reaches here, so none is lost without a word (S3's `fixp`, P6b finding 9).
+    pub fn set_allow_dormant(&mut self, on: bool) -> Result<(), DormantRefusal> {
+        let asked = self.dormant_ask(on);
+        match asked {
+            Ok(()) => self.dormant_refused = None,
+            Err(DormantRefusal::Shut) => {
+                self.dormant_refused = Some((self.revision, DormantRefusal::Shut));
+            }
+            Err(refusal) => {
+                self.dormant_refused = Some((self.revision, refusal));
+                let key = format!("dormant_refused_{}", refusal.name());
+                self.say(&key, "");
+            }
         }
-        if !self.rows_current() || self.busy() {
-            return false;
+        self.touch();
+        asked
+    }
+
+    fn dormant_ask(&mut self, on: bool) -> Result<(), DormantRefusal> {
+        if self.shut_to_asks() {
+            return Err(DormantRefusal::Shut);
+        }
+        if self.busy() {
+            return Err(DormantRefusal::Busy);
+        }
+        if !self.rows_current() {
+            return Err(DormantRefusal::Stale);
         }
         let patch = if on {
             match self.dormant_patch.clone() {
                 Some(patch) => patch,
-                None => return false,
+                None => return Err(DormantRefusal::NothingToChange),
             }
         } else if let Some(key) = self.text.as_deref().and_then(dormant_key) {
             // The key as the text spells it, so a hand-written camelCase option is removed
@@ -1701,7 +1758,7 @@ impl Editor {
                 ("path", text(&format!("{OPTIONS_POINTER}/{key}"))),
             ])]))
         } else {
-            return false;
+            return Err(DormantRefusal::NothingToChange);
         };
         self.queue.push_back(Job::SetOption { patch, on });
         self.say(
@@ -1712,7 +1769,7 @@ impl Editor {
             },
             "",
         );
-        true
+        Ok(())
     }
 
     /// The checkbox as the panel draws it.
@@ -1726,10 +1783,11 @@ impl Editor {
         Dormant {
             shown: checked || (self.rows_current() && named),
             checked,
-            enabled: self.rows_current()
-                && !self.busy()
-                && self.door == Door::Open
-                && (checked || self.dormant_patch.is_some()),
+            enabled: self.door == Door::Open,
+            refused: self
+                .dormant_refused
+                .filter(|(revision, _)| *revision == self.revision)
+                .map(|(_, refusal)| refusal),
         }
     }
 
@@ -5857,13 +5915,27 @@ mod tests {
                 .is_some_and(|row| row.fixes.is_empty()),
             "a choice, not a Fix button"
         );
-        assert!(!editor.set_allow_dormant(false), "nothing to clear");
-        assert!(editor.set_allow_dormant(true));
-        assert_eq!(editor.status().key, "dormant_allowing");
-        assert!(
-            !editor.dormant().enabled,
-            "not while the edit is on its way"
+        assert_eq!(
+            editor.set_allow_dormant(false),
+            Err(DormantRefusal::NothingToChange),
+            "nothing to clear"
         );
+        assert_eq!(editor.status().key, "dormant_refused_nothing_to_change");
+        assert_eq!(
+            editor.dormant().refused,
+            Some(DormantRefusal::NothingToChange),
+            "said beside the box"
+        );
+        assert_eq!(editor.set_allow_dormant(true), Ok(()));
+        assert_eq!(editor.status().key, "dormant_allowing");
+        assert_eq!(editor.dormant().refused, None);
+        assert!(
+            editor.dormant().enabled,
+            "the box still takes a click while the edit is on its way"
+        );
+        // A click while the edit is on its way reaches the bridge, and is refused by its reason.
+        assert_eq!(editor.set_allow_dormant(false), Err(DormantRefusal::Busy));
+        assert_eq!(editor.status().key, "dormant_refused_busy");
         let call = editor.next_call(false).expect("the patch");
         assert_eq!(call.method, "patch_plan");
         assert!(json::write(&call.params).contains("allow_dormant_beacons"));
@@ -5871,15 +5943,27 @@ mod tests {
         editor.answered(Ok(&patched(allowed, "[]"))).expect("reads");
         assert_eq!(editor.status().key, "dormant_allowed");
         assert!(editor.dormant().checked);
-        assert!(!editor.set_allow_dormant(false), "the rows are stale");
+        assert_eq!(
+            editor.set_allow_dormant(false),
+            Err(DormantRefusal::Stale),
+            "the rows are stale: its checks are on their way"
+        );
+        assert_eq!(editor.status().key, "dormant_refused_stale");
         assert_eq!(method_of(editor.next_call(false)), "verify_plan");
         let w0603 = r#"{"code":"W0603","severity":"warning","path":"/declarative/route/0","beginner":"Some beacons will go dark."}"#;
         editor
             .answered(Ok(&quick_report(w0603, true)))
             .expect("reads");
         assert!(editor.dormant().enabled);
-        assert!(editor.set_allow_dormant(false));
+        assert_eq!(editor.set_allow_dormant(false), Ok(()));
         let call = editor.next_call(false).expect("the removal");
+        editor.set_door(Door::Push);
+        assert!(
+            !editor.dormant().enabled,
+            "the shut door is the one disabled state"
+        );
+        assert_eq!(editor.set_allow_dormant(true), Err(DormantRefusal::Shut));
+        assert_eq!(editor.status().key, "closed_push");
         let written = json::write(&call.params);
         assert!(
             written.contains("remove") && written.contains("allow_dormant_beacons"),
@@ -5902,7 +5986,7 @@ mod tests {
             .expect("reads");
         let shown = editor.dormant();
         assert!(shown.shown && shown.checked && shown.enabled, "{shown:?}");
-        assert!(editor.set_allow_dormant(false));
+        assert_eq!(editor.set_allow_dormant(false), Ok(()));
         let call = editor.next_call(false).expect("the removal");
         let written = json::write(&call.params);
         assert!(

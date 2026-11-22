@@ -247,13 +247,20 @@ fn put_marks(state: &mut VarDictionary, editor: &Editor) {
     );
 }
 
-/// The E0601 checkbox as the panel draws it: `shown`, `checked` and `enabled`.
+/// The E0601 checkbox as the panel draws it: `shown`, `checked`, `enabled` (only the door
+/// disables it) and `refused` (why the last click was not taken, by name; "" for none).
 fn dormant_dictionary(editor: &Editor) -> VarDictionary {
     let dormant = editor.dormant();
     let mut option = VarDictionary::new();
     option.set(&"shown".to_variant(), &dormant.shown.to_variant());
     option.set(&"checked".to_variant(), &dormant.checked.to_variant());
     option.set(&"enabled".to_variant(), &dormant.enabled.to_variant());
+    // Why the last click was refused, by name ("" for none), drawn beside the box.
+    let refused = match dormant.refused {
+        Some(refusal) => refusal.name(),
+        None => "",
+    };
+    option.set(&"refused".to_variant(), &refused.to_variant());
     option
 }
 

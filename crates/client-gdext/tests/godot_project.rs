@@ -2796,3 +2796,33 @@ fn the_build_targets_are_marked_from_the_bridges_reading() {
         read("scripts/client_check.gd").contains("await _check_the_build_marks(editor, failures)")
     );
 }
+
+/// **No click on the dormant box is lost without a word** (S3's `fixp`, P6b finding 9): the box
+/// is disabled only by the bridge's `enabled`, which only the shut door clears, every click goes
+/// to the bridge, a refusal is drawn beside the box, and `--log-input` logs the box's presses,
+/// its toggles and, for each press the lobby logs, whether it fell inside the box.
+#[test]
+fn every_click_on_the_dormant_box_reaches_the_bridge() {
+    let editor = read("scripts/editor.gd");
+    assert!(
+        gd_code(&editor, "_on_dormant_toggled")
+            .contains(&"var taken: bool = bridge.editor_set_allow_dormant(on)")
+    );
+    assert!(gd_code(&editor, "_draw_dormant").iter().any(|line| {
+        line.contains("_dormant_said.text = Strings.text(\"status_dormant_refused_\" + refused)")
+    }));
+    assert!(
+        gd_code(&editor, "_on_dormant_down")
+            .contains(&"print(\"[editor] allow dormant: button_down\")")
+    );
+    assert!(
+        gd_code(&read("scripts/lobby.gd"), "_input")
+            .iter()
+            .any(|line| line.contains("editor.dormant_log(event.position)")),
+        "the lobby's press log says where the box was"
+    );
+    assert!(
+        read("scripts/client_check.gd")
+            .contains("await _check_the_dormant_box(stage, editor, failures)")
+    );
+}

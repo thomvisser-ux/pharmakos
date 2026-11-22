@@ -276,6 +276,8 @@ var _this_round: Label
 var _this_round_box: VBoxContainer
 var _chips: Label
 var _dormant: CheckBox
+## Why the box's last click was refused, beside it (S3's `fixp`, P6b finding 9).
+var _dormant_said: Label
 var _chips_drawn := ""
 var _templates_box: VBoxContainer
 var _wizard_box: VBoxContainer
@@ -1086,11 +1088,38 @@ static func feature_text(feature: Dictionary) -> String:
 
 
 ## E0601's checkbox: shown when the rows name the option or the text sets it, ticked when
-## the text sets it, and taking a click only when the bridge's editor would take it.
+## the text sets it. It is disabled only while the planning door is shut, which the status line
+## says already; every other click reaches the bridge, which takes it or refuses it with its
+## reason, on the status line and beside the box (S3's `fixp`, P6b finding 9: Godot drops a press
+## on a disabled box without a word, and the box was disabled while each check ran).
 func _draw_dormant(dormant: Dictionary) -> void:
 	_dormant.visible = dormant.get("shown", false)
 	_dormant.set_pressed_no_signal(dormant.get("checked", false))
 	_dormant.disabled = not dormant.get("enabled", false)
+	var refused := String(dormant.get("refused", ""))
+	_dormant_said.visible = _dormant.visible and refused != "" and refused != "shut"
+	_dormant_said.text = Strings.text("status_dormant_refused_" + refused) if _dormant_said.visible else ""
+	_dormant_said.accessibility_name = _dormant_said.text
+
+
+## With `--log-input`, a press on the box is logged.
+func _on_dormant_down() -> void:
+	if log_input:
+		print("[editor] allow dormant: button_down")
+
+
+## The box's click, with `--log-input` logged: whether it was taken.
+func _on_dormant_toggled(on: bool) -> void:
+	var taken: bool = bridge.editor_set_allow_dormant(on)
+	if log_input:
+		print("[editor] allow dormant: toggled %s, taken %s" % [on, taken])
+
+
+## With `--log-input`, the lobby's line for a press at `at`: whether it fell inside the dormant
+## box, and the box's state, so a real-window run tells a click the box took, one it refused, one
+## it was disabled for and one the window never delivered apart.
+func dormant_log(at: Vector2) -> String:
+	return "dormant box: inside %s, shown %s, disabled %s, pressed %s" % [_dormant.is_visible_in_tree() and _dormant.get_global_rect().has_point(at), _dormant.is_visible_in_tree(), _dormant.disabled, _dormant.button_pressed]
 
 
 ## The size meter: the verifier's two numbers as they came, and its refusal in its own words
@@ -1841,8 +1870,11 @@ func _build_panel() -> void:
 	_dormant.add_theme_icon_override("unchecked", ImageTexture.create_from_image(unticked_box(BOX_COLOUR)))
 	_dormant.add_theme_icon_override("unchecked_disabled", ImageTexture.create_from_image(unticked_box(BOX_COLOUR_DISABLED)))
 	_dormant.visible = false
-	_dormant.toggled.connect(func(on: bool) -> void: bridge.editor_set_allow_dormant(on))
+	_dormant.toggled.connect(_on_dormant_toggled)
+	_dormant.button_down.connect(_on_dormant_down)
 	column.add_child(_dormant)
+	_dormant_said = _label(column)
+	_dormant_said.visible = false
 
 	_heading(column, "rules_heading")
 	_rules_status = _label(column)

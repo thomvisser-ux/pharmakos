@@ -890,7 +890,7 @@ impl PharmakosBridge {
             return false;
         };
         self.panics.guard_or("editor_set_allow_dormant", false, || {
-            rig.editor_mut().set_allow_dormant(on)
+            rig.editor_mut().set_allow_dormant(on).is_ok()
         })
     }
 

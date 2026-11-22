@@ -246,7 +246,7 @@ func _notification(what: int) -> void:
 
 func _input(event: InputEvent) -> void:
 	if editor.log_input and event is InputEventMouseButton:
-		print("[lobby] _input: button %d %s at %s, alt_pressed %s, KEY_ALT held %s" % [event.button_index, "down" if event.pressed else "up", event.position, event.alt_pressed, Input.is_key_pressed(KEY_ALT)])
+		print("[lobby] _input: button %d %s at %s, alt_pressed %s, KEY_ALT held %s; %s" % [event.button_index, "down" if event.pressed else "up", event.position, event.alt_pressed, Input.is_key_pressed(KEY_ALT), editor.dormant_log(event.position)])
 
 
 func _on_announced(_match_id: String) -> void:

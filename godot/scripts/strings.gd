@@ -271,6 +271,11 @@ const TEXT := {
 	"status_dormant_allowed": "Dormant beacons allowed.",
 	"status_dormant_disallowing": "No longer allowing dormant beacons...",
 	"status_dormant_disallowed": "Dormant beacons no longer allowed.",
+	# A click on the box the bridge could not take, on the status line and beside the box (S3's
+	# `fixp`): never dropped without a word.
+	"status_dormant_refused_stale": "Not changed: the checks of the text on screen are on their way. Click the box again when they come.",
+	"status_dormant_refused_busy": "Not changed: an edit is on its way. Click the box again when it lands.",
+	"status_dormant_refused_nothing_to_change": "Not changed: the checks name no dormant-beacon option to set, and the text sets none to clear.",
 	# An ask the editor did not send, because the planning door is shut (finding K).
 	"status_closed_ready": "You pressed Ready: this client sends no planning call for the rest of this Lull.",
 	# Neither promises a next Lull: the last Push and the final recap have none (item 143 (3)).

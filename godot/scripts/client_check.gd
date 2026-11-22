@@ -314,6 +314,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_entry_list(stage, editor, failures)
 	_check_the_popups_are_opaque(editor, failures)
 	await _check_the_build_marks(editor, failures)
+	await _check_the_dormant_box(stage, editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
@@ -884,6 +885,43 @@ func _check_the_build_marks(editor: CanvasLayer, failures: Array[String]) -> voi
 	await get_tree().process_frame
 	if not editor.build_marks().is_empty() or editor.build_text() != Strings.text("build_none"):
 		failures.append("the Build marks outlived their text")
+
+
+## **The dormant box: no click is lost without a word** (S3's `fixp`, P6b finding 9): the box
+## shown and enabled, two press-and-release pairs at one point with no motion between them, pushed
+## into the stage, give two `toggled`; a refusal the bridge names is said beside the box; and only
+## the shut door disables it.
+func _check_the_dormant_box(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	editor._draw_state({"changes": 9, "has_text": true, "rows_current": true, "verdict": "quick", "dormant": {"shown": true, "checked": false, "enabled": true, "refused": ""}})
+	await _settle()
+	var box: CheckBox = editor._dormant
+	var toggles: Array = []
+	var listen := func(on: bool) -> void: toggles.append(on)
+	box.toggled.connect(listen)
+	var at := box.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = at
+	motion.global_position = at
+	stage.push_input(motion, true)
+	for _pair in 2:
+		for down in [true, false]:
+			var event := InputEventMouseButton.new()
+			event.button_index = MOUSE_BUTTON_LEFT
+			event.pressed = down
+			event.button_mask = MOUSE_BUTTON_MASK_LEFT if down else 0
+			event.position = at
+			event.global_position = at
+			stage.push_input(event, true)
+		await get_tree().process_frame
+	box.toggled.disconnect(listen)
+	if toggles.size() != 2:
+		failures.append("two clicks at one point on the dormant box gave %d toggled: %s" % [toggles.size(), toggles])
+	if not editor.dormant_log(at).contains("inside true"):
+		failures.append("the dormant box's log line does not place the press inside it: %s" % editor.dormant_log(at))
+	editor._draw_state({"changes": 10, "has_text": true, "rows_current": true, "verdict": "quick", "dormant": {"shown": true, "checked": false, "enabled": true, "refused": "busy"}})
+	if not editor._dormant_said.visible or editor._dormant_said.text != Strings.text("status_dormant_refused_busy"):
+		failures.append("a refused click is not said beside the box: `%s`" % editor._dormant_said.text)
+	editor._draw_state({"changes": 11, "has_text": false})
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4
