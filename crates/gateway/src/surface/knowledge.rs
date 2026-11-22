@@ -585,11 +585,14 @@ impl Surface {
     /// spectator's keep it. A courtesy, not a secret kept: the generated map is
     /// still served whole (item 107 (1)), and a local agent can read the seed
     /// from the private match cache's `match.json`. Neither is the feature
-    /// list in S1: decisions-log item 130 (3) (a) kept `live` on it and read
-    /// `live`, `covered`, `travel_ms` and `reachable` off the world as it
-    /// stands, unfogged, as targeting's own ranking is in S1, and the list is
-    /// fog-filtered from S3 with the knowledge store (the register's S1-48).
-    /// The terrain summary stays `reserved` until then (item 130 (3) (b)).
+    /// list yet: decisions-log item 130 (3) (a) kept `live` on it, and `live`
+    /// and `covered` read the world as it stands (the frozen world in a Lull
+    /// or a recap, the live one in a Push), unfogged, as targeting's own
+    /// ranking is; `travel_ms` and `reachable` are told only in a Lull, over
+    /// the frozen planning world, and withheld in every other phase (S3's
+    /// `mapw`). The list is fog-filtered from S4, with real terrain fog
+    /// (`gateway.proto`; S3's plan, decision 2, register S3-05), and the
+    /// terrain summary stays `reserved` until then (item 130 (3) (b)).
     ///
     /// Each feature's id, kind, grade and anchor are a pure function of the
     /// match's inputs; `covered`, `travel_ms` and `reachable` are the asking
@@ -642,15 +645,17 @@ impl Surface {
     /// each a `gp.api.v1.MapFeature`.
     ///
     /// For a seat, `covered` is whether one of its own living beacons' spheres
-    /// holds the feature (the opposite of a pick's `UNCOVERED`), and
-    /// `travel_ms` and `reachable` are the walk the router serves its
-    /// commander from where it stands to the column "nearest" measures to,
-    /// priced by the sim's own [`pharmakos_sim::targeting::Ranker`]
+    /// holds the feature (the opposite of a pick's `UNCOVERED`). **In a Lull
+    /// only**, `travel_ms` and `reachable` are the walk the router serves its
+    /// commander, over the frozen planning world, from where it stands to the
+    /// column "nearest" measures to, priced by the sim's own
+    /// [`pharmakos_sim::targeting::Ranker`]
     /// ([`pharmakos_sim::pathing::estimate::walk_cost`]; [`crate::targeting`]):
-    /// the one measure `resolve_refs` binds by, `estimate_route` answers in
-    /// and the Push walks (S3's `p3fix`). A commander that is not standing
-    /// anywhere (dead) reaches nothing, and the answer says so. Nothing is
-    /// stepped.
+    /// the measure `resolve_refs` binds by and `estimate_route` answers in,
+    /// both of which are Lull-only too (S3's `p3fix`). A commander that is not
+    /// standing anywhere (dead) reaches nothing, and the answer says so. In
+    /// every other phase both members are withheld and nothing is priced (see
+    /// below). Nothing is stepped.
     ///
     /// **Travel is told only in a Lull** (the owner's ruling of 2026-11-21,
     /// "Omit them in a Push", taken by S3's `mapw` to every phase that is not

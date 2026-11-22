@@ -6642,54 +6642,98 @@ mod tests {
 
     /// S3's `mapw`: outside a Lull `get_map_summary` withholds its travel
     /// times **and prices no walk** -- the sim's own walk tally on the
-    /// scratch the features are priced in does not move -- while in the Lull
-    /// before it the same seat's read prices walks (the positive control).
+    /// scratch the features are priced in does not move -- in a Push, a recap
+    /// and an ended match alike, while in the Lull before them the same
+    /// seat's read prices walks (the positive control).
     #[test]
     fn outside_a_lull_the_map_summary_prices_no_walk() {
-        let mut surface = hosted();
+        use pharmakos_sim::runner::MatchSettings;
+        use pharmakos_sim::world::WorldConfig;
+        let seed = 0x0000_0000_ca5c_aded;
+        let mut surface = Surface::new(
+            "m-0001",
+            seed,
+            rules(),
+            FogPolicy::fogged(),
+            &[SeatId::new(0), SeatId::new(1)],
+        )
+        .expect("a match id");
+        // One round of a one-second Push, so the match reaches its recap and
+        // its end in a few ticks.
+        let host = crate::host::Host::open(
+            &WorldConfig {
+                match_seed: seed,
+                seats: 2,
+                rules: rules(),
+                match_settings: MatchSettings {
+                    segment_lengths_ms: vec![1_000],
+                    round_limit: 1,
+                },
+            },
+            None,
+        )
+        .expect("a match");
+        surface.attach(host).expect("attached");
+        surface
+            .set_phase_remaining_ms(Ms::new(300_000))
+            .expect("a custom match takes a countdown");
+        surface.open_lull().expect("the opening Lull");
         let seat = Some(SeatId::new(0));
-        let fresh = |surface: &Surface| {
+        let walks_priced = |surface: &Surface, what: &str| {
             let host = surface.host().expect("hosted");
-            crate::targeting::scratch_for(host.world()).expect("a scratch")
+            let mut slot = Some(crate::targeting::scratch_for(host.world()).expect("a scratch"));
+            let features = surface
+                .map_features_priced(seat, &mut slot)
+                .expect("the features");
+            let walks = slot
+                .as_ref()
+                .map(|scratch| scratch.walks().expect("the count fits"));
+            (
+                features,
+                walks.unwrap_or_else(|| panic!("{what}: the slot keeps its scratch")),
+            )
         };
-        let mut in_lull = Some(fresh(&surface));
-        let _ = surface
-            .map_features_priced(seat, &mut in_lull)
-            .expect("the features in a Lull");
-        let walks = in_lull
-            .as_ref()
-            .map(|scratch| scratch.walks().expect("the count fits"));
+        let (_, in_lull) = walks_priced(&surface, "a Lull");
         assert!(
-            walks.is_some_and(|walks| walks > 0),
-            "a Lull prices the commander's walks: {walks:?}"
+            in_lull > 0,
+            "a Lull prices the commander's walks: {in_lull}"
         );
 
+        let no_walk = |surface: &Surface, what: &str| {
+            let (features, walks) = walks_priced(surface, what);
+            assert_eq!(walks, 0, "{what} prices no walk");
+            let mut empty = None;
+            let _ = surface
+                .map_features_priced(seat, &mut empty)
+                .expect("the features");
+            assert!(
+                empty.is_none(),
+                "{what} builds no search scratch to price one in"
+            );
+            assert!(!features.is_empty(), "{what}");
+            for feature in &features {
+                assert!(feature.get("travel_ms").is_none(), "{what}: {feature:?}");
+                assert!(feature.get("reachable").is_none(), "{what}: {feature:?}");
+                assert!(feature.get("covered").is_some(), "{what}: {feature:?}");
+            }
+        };
         assert!(surface.begin_push().expect("the Push begins"));
-        let mut in_push = Some(fresh(&surface));
-        let features = surface
-            .map_features_priced(seat, &mut in_push)
-            .expect("the features in a Push");
-        assert_eq!(
-            in_push
-                .as_ref()
-                .map(|scratch| scratch.walks().expect("the count fits")),
-            Some(0),
-            "a Push prices no walk"
-        );
-        let mut empty = None;
-        let _ = surface
-            .map_features_priced(seat, &mut empty)
-            .expect("the features in a Push");
-        assert!(
-            empty.is_none(),
-            "and builds no search scratch to price one in"
-        );
-        assert!(!features.is_empty());
-        for feature in &features {
-            assert!(feature.get("travel_ms").is_none(), "{feature:?}");
-            assert!(feature.get("reachable").is_none(), "{feature:?}");
-            assert!(feature.get("covered").is_some(), "{feature:?}");
+        assert_eq!(surface.time().phase, Phase::Push);
+        no_walk(&surface, "a Push");
+        for _ in 0..1_000 {
+            if surface.step().expect("a hosted match").is_none() {
+                break;
+            }
         }
+        assert_eq!(surface.time().phase, Phase::Recap, "the Push has ended");
+        no_walk(&surface, "a recap");
+        assert!(surface.end_recap().expect("the recap ends"));
+        assert_eq!(
+            surface.time().phase,
+            Phase::Ended,
+            "a one-round match ends at its recap's close"
+        );
+        no_walk(&surface, "an ended match");
     }
 
     /// Item 155 (3) 6's flood: a seat's Survey refreshes of one drained
