@@ -240,24 +240,6 @@ impl UnitTally {
         }
     }
 
-    /// The count as the world's per-decision [`WorkCounter`] copy takes it,
-    /// a `u32`, with `u32::MAX` standing for a count that is past it or
-    /// unmeasured.
-    ///
-    /// The one lossy reader, kept only because the decision phase's copy
-    /// into `World::decision_work` (`world.rs`, outside lane `dunit`'s
-    /// grant) takes a `u32`; every other reader uses [`UnitTally::read`].
-    /// The fix is the decision phase's: carry [`UnitTally::read`]'s answer
-    /// into `decision_work` and let its readers refuse an unmeasured
-    /// decision (lane `dunit`'s pull request names the lines).
-    #[must_use]
-    pub fn get(&self) -> u32 {
-        self.read()
-            .ok()
-            .and_then(|count| u32::try_from(count).ok())
-            .unwrap_or(u32::MAX)
-    }
-
     /// Start again from zero, measured.
     pub fn reset(&self) {
         self.count.store(0, core::sync::atomic::Ordering::Relaxed);

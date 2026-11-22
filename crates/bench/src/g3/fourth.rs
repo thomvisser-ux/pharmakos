@@ -60,7 +60,7 @@ pub struct FourthSeat {
     /// The same with the fourth, unplaced seat sealed too.
     pub four_ns: u128,
     /// The fourth seat's evaluation units on its last decision.
-    pub fourth_units: u32,
+    pub fourth_units: u64,
 }
 
 impl FourthSeat {
@@ -84,7 +84,7 @@ impl FourthSeat {
 struct Run {
     decision: Vec<u128>,
     hashes: Vec<u64>,
-    fourth: Option<u32>,
+    fourth: Option<u64>,
 }
 
 /// Play one run.
@@ -170,7 +170,8 @@ fn play(
     let fourth = runner
         .world()
         .decision_work(3)
-        .map(pharmakos_sim::seams::WorkCounter::spent);
+        .transpose()
+        .map_err(|reason| Error::Unmeasured { seat: 3, reason })?;
     Ok(Run {
         decision,
         hashes,
@@ -186,7 +187,7 @@ fn configuration(
     seats: u32,
     segment_ms: i32,
     playbook: &Playbook,
-) -> Result<(u128, u64, u64, Option<u32>), Error> {
+) -> Result<(u128, u64, u64, Option<u64>), Error> {
     let first = play(rules, seed, seats, segment_ms, playbook)?;
     let (mut best, mut fourth) = (first.decision, first.fourth);
     for _ in 1..RUNS {

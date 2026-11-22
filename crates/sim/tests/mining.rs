@@ -576,51 +576,98 @@ fn a_seam_choice_counts_its_estimates_and_a_held_seam_costs_none() {
     // work for it (one unit a node the walk pops, lane `dunit`).
     let fixture = world(&[180_000]);
     let features = u32::try_from(fixture.features().len()).expect("a few");
-    // The same walk, priced on its own scratch: from the core's column to the
-    // starting seam, the one candidate the choice prices.
-    let seam = starting_seam(&fixture, core(&fixture));
-    let pops = {
-        let row = fixture
-            .beacons()
-            .row_of_ordinal(SEAT, 0)
-            .expect("seat 0 has a core");
-        let origin = pharmakos_sim::targeting::column_of(
-            fixture
-                .beacons()
-                .positions()
-                .get(row)
-                .copied()
-                .expect("the core's row"),
-        );
-        let ground = fixture.ground();
-        let mut scratch = pharmakos_sim::pathing::search::Scratch::for_map(
-            fixture.surface(),
-            fixture.clusters().size(),
-        )
-        .expect("the map takes a search");
-        let mut ranker = pharmakos_sim::targeting::Ranker::new(&ground, origin, |at| at == seam);
-        assert!(
-            ranker.next(&ground, &mut scratch).is_some(),
-            "the seam is reached"
-        );
-        assert_eq!(scratch.walks().unwrap(), 1, "by one served walk");
-        scratch.expansions().unwrap() + scratch.abstract_expansions().unwrap()
-    };
-    assert!(pops > 0, "a served walk pops nodes");
+    let pops = starting_walk_pops(&fixture);
     let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
-    let first = runner.world().decision_work(0).expect("seat 0").spent();
+    let first = runner
+        .world()
+        .decision_work(0)
+        .expect("seat 0")
+        .expect("measured");
     assert_eq!(
-        u64::from(first),
+        first,
         u64::from(features) + pops,
         "a choice ranks every feature and charges its one walk's pops"
     );
     play(&mut runner, 5);
     assert_eq!(
-        runner.world().decision_work(0).expect("seat 0").spent(),
+        runner
+            .world()
+            .decision_work(0)
+            .expect("seat 0")
+            .expect("measured"),
         0,
         "a held seam with work left is kept, and keeping it estimates nothing"
+    );
+}
+
+/// The nodes the walk from seat 0's core to its starting seam pops, priced
+/// on its own scratch: the one walk a first seam choice prices.
+fn starting_walk_pops(fixture: &World) -> u64 {
+    let seam = starting_seam(fixture, core(fixture));
+    let row = fixture
+        .beacons()
+        .row_of_ordinal(SEAT, 0)
+        .expect("seat 0 has a core");
+    let origin = pharmakos_sim::targeting::column_of(
+        fixture
+            .beacons()
+            .positions()
+            .get(row)
+            .copied()
+            .expect("the core's row"),
+    );
+    let ground = fixture.ground();
+    let mut scratch = pharmakos_sim::pathing::search::Scratch::for_map(
+        fixture.surface(),
+        fixture.clusters().size(),
+    )
+    .expect("the map takes a search");
+    let mut ranker = pharmakos_sim::targeting::Ranker::new(&ground, origin, |at| at == seam);
+    assert!(
+        ranker.next(&ground, &mut scratch).is_some(),
+        "the seam is reached"
+    );
+    assert_eq!(scratch.walks().expect("a count"), 1, "by one served walk");
+    let pops =
+        scratch.expansions().expect("a count") + scratch.abstract_expansions().expect("a count");
+    assert!(pops > 0, "a served walk pops nodes");
+    pops
+}
+
+#[test]
+fn a_safest_seam_choice_counts_the_threats_it_scans() {
+    // `SAFEST` reads the seat's known threats before it ranks: a scan of
+    // every unit, structure and beacon row, one unit a row (lane `dunit`),
+    // beside the ranking's features and its walk's pops. No enemy is known
+    // at the start, so the nearest seam is the safest and the walk is the
+    // `NEAREST` choice's.
+    let mut fixture = world(&[180_000]);
+    let beacon = core(&fixture);
+    fixture.edit_mine_settings(
+        beacon,
+        MineEdit {
+            seam_choice: Some(SeamChoice::Safest),
+            ..MineEdit::default()
+        },
+    );
+    let features = u64::try_from(fixture.features().len()).expect("a few");
+    let pops = starting_walk_pops(&fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
+    assert!(runner.begin_push().unwrap());
+    play(&mut runner, 1);
+    let world = runner.world();
+    let rows = u64::try_from(
+        world.units().seats().len()
+            + world.structures().seats().len()
+            + world.beacons().seats().len(),
+    )
+    .expect("a count");
+    assert_eq!(
+        world.decision_work(0).expect("seat 0").expect("measured"),
+        features + pops + rows,
+        "a SAFEST choice ranks every feature, charges its walk's pops and the rows its threat scan reads"
     );
 }
 
@@ -639,7 +686,11 @@ fn a_spent_beacon_charges_no_ranking() {
     play(&mut runner, 5);
     assert_eq!(held(runner.world(), core), None, "the seam is spent");
     assert_eq!(
-        runner.world().decision_work(0).expect("seat 0").spent(),
+        runner
+            .world()
+            .decision_work(0)
+            .expect("seat 0")
+            .expect("measured"),
         0,
         "a choice with no candidate charges nothing"
     );

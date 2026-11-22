@@ -1672,7 +1672,11 @@ fn decision_units_never_reach_the_state_hash() {
                 .expect("the segment outlasts this test");
             chain.push((
                 runner.world().state_hash(),
-                runner.world().decision_work(0).expect("seat 0").spent(),
+                runner
+                    .world()
+                    .decision_work(0)
+                    .expect("seat 0")
+                    .expect("measured"),
             ));
         }
         chain

@@ -1035,6 +1035,63 @@ fn the_feature_table_is_regenerated_identically_on_restore() {
     assert!(names.contains(&START_VENT.to_owned()), "{names:?}");
 }
 
+/// A `safest` selector reads each candidate beacon's sphere threat, a scan of
+/// every unit, structure and beacon row for the armed enemies the seat sees:
+/// one unit a row it reads (lane `dunit`), beside the selector's one unit a
+/// candidate. Before the lane the scan was charged nothing.
+#[test]
+fn a_safest_selector_counts_the_threat_scan_it_reads() {
+    let wait = concat!(
+        r#"{"label":"wait","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
+        r#""timeout_ms":600000}"#
+    );
+    // A handler whose condition ranks the seat's beacons by `safest` and is
+    // never true: tried (1), its node (1), the ranking's candidates (one a
+    // beacon row) and, for each of the seat's own living beacons it weighs,
+    // the threat scan's rows.
+    let handler = concat!(
+        r#"{"id":"never","when":{"beacon_hp_pct":{"beacon":{"safest":{}},"pct":{"op":"LT","value":0}}},"#,
+        r#""body":[{"label":"pause","hold":{"ms":1000}}],"resume":"CONTINUE","cooldown_ms":5000,"max_fires":1}"#
+    );
+    let mut book = playbook(wait);
+    book.declarative.as_mut().unwrap().handlers = vec![json::decode(handler).expect("a handler")];
+    let plan = Plan::compile(&book, &rules()).expect("compiles");
+    let mut runner =
+        Runner::new(world_at(SEED, 2, &[180_000])).unwrap_or_else(|error| panic!("{error}"));
+    runner.seal_playbook(SeatId::new(SEAT), plan).unwrap();
+    assert!(runner.begin_push().unwrap());
+    // The sixth tick, by when the core's seam is held and keeping it costs
+    // nothing (`the_decision_tick_counts_its_evaluation_units`).
+    let _ = play(&mut runner, 6, |_, _| {});
+    let world = runner.world();
+    let units = world.decision_work(0).expect("seat 0").expect("measured");
+    let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
+    let own = world
+        .beacons()
+        .seats()
+        .iter()
+        .zip(world.beacons().hit_points())
+        .filter(|(owner, hp)| **owner == SEAT && hp.is_alive())
+        .count();
+    let scan = u64::try_from(
+        world.units().seats().len()
+            + world.structures().seats().len()
+            + world.beacons().seats().len(),
+    )
+    .unwrap();
+    let own = u64::try_from(own).unwrap();
+    println!("safest: {units} units; {beacon_rows} beacon rows, {own} own, {scan} rows a scan");
+    assert!(
+        own > 0 && scan > 0,
+        "the selector weighs a beacon and scans"
+    );
+    assert_eq!(
+        units,
+        3 + beacon_rows + own * scan,
+        "the handler, its node, the wait's node, the candidates and each candidate's threat scan"
+    );
+}
+
 #[test]
 fn the_decision_tick_counts_its_evaluation_units() {
     // P1's counted half (S1's plan, section 5): one evaluation unit per
@@ -1069,7 +1126,11 @@ fn the_decision_tick_counts_its_evaluation_units() {
         assert!(runner.begin_push().unwrap());
         let _ = play(&mut runner, 6, |_, _| {});
         (
-            runner.world().decision_work(0).expect("seat 0").spent(),
+            runner
+                .world()
+                .decision_work(0)
+                .expect("seat 0")
+                .expect("measured"),
             runner.world().state_hash(),
         )
     };
@@ -1129,13 +1190,13 @@ fn the_decision_tick_counts_its_evaluation_units() {
         let mut runner = Runner::new(fixture.clone()).unwrap_or_else(|error| panic!("{error}"));
         assert!(runner.begin_push().unwrap());
         let _ = play(&mut runner, 1, |_, _| {});
-        runner.world().decision_work(0).unwrap().spent()
+        runner.world().decision_work(0).unwrap().expect("measured")
     };
     let mut runner = open(fixture, COVER);
     let _ = play(&mut runner, 1, |_, _| {});
-    let covering = runner.world().decision_work(0).unwrap().spent();
+    let covering = runner.world().decision_work(0).unwrap().expect("measured");
     // The decision is the resolve and the seam choice, and nothing else.
-    assert_eq!(u64::from(covering), resolve + u64::from(seam));
+    assert_eq!(covering, resolve + seam);
     // Pinned exactly on the golden seed, so a change to what the resolver
     // charges shows here rather than drifting under a lower bound. The count
     // goes past the plan's four categories (S1's plan, section 5 item 3): it

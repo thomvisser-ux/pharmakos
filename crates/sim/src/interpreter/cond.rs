@@ -602,7 +602,7 @@ impl Board for View<'_> {
         View::commander_at(self)
     }
     fn row_threat(&self, row: usize) -> u64 {
-        live_row_threat(self.world, self.seat, row)
+        live_row_threat(self.world, self.seat, row, true)
     }
     fn row_repairs(&self, row: usize) -> bool {
         live_row_repairs(self.world, self.seat, row)
@@ -936,7 +936,7 @@ impl Board for SeatBoard<'_> {
         live_commander(self.world, self.seat).map(|(at, _)| at)
     }
     fn row_threat(&self, row: usize) -> u64 {
-        live_row_threat(self.world, self.seat, row)
+        live_row_threat(self.world, self.seat, row, false)
     }
     fn row_repairs(&self, row: usize) -> bool {
         live_row_repairs(self.world, self.seat, row)
@@ -984,8 +984,10 @@ fn live_commander_wounded(world: &World, seat: SeatId) -> bool {
         .is_some_and(|(_, hp)| hp < world.rules().unit_hp(crate::tables::UnitKind::Commander))
 }
 
-/// Decision 12's sphere threat for a live beacon row.
-fn live_row_threat(world: &World, seat: SeatId, row: usize) -> u64 {
+/// Decision 12's sphere threat for a live beacon row. `counted` charges the
+/// scan to the decision in progress ([`charge_known_threat_scan`]); a read
+/// outside a decision passes `false`.
+fn live_row_threat(world: &World, seat: SeatId, row: usize, counted: bool) -> u64 {
     world
         .beacons()
         .positions()
@@ -993,8 +995,25 @@ fn live_row_threat(world: &World, seat: SeatId, row: usize) -> u64 {
         .copied()
         // E7: cannot miss: every caller's `row` is a row of the beacon table it read
         .map_or(0, |centre| {
+            if counted {
+                charge_known_threat_scan(world);
+            }
             crate::defend::sphere_threat(world, seat, centre, world.sphere_radius_at_row(row))
         })
+}
+
+/// Charge the decision in progress the rows one
+/// [`crate::defend::for_each_known_threat`] reads: one unit a unit row, a
+/// structure row and a beacon row, every row of the three tables, since the
+/// scan reads each to learn whether it is an armed enemy the seat sees
+/// (lane `dunit`: one unit a primitive step). `tests/targeting.rs`'s
+/// `a_safest_selector_counts_the_threat_scan_it_reads` and
+/// `tests/mining.rs`'s `a_safest_seam_choice_counts_the_threats_it_scans`
+/// hold these counts to the scan.
+pub(crate) fn charge_known_threat_scan(world: &World) {
+    world.charge_decision_rows(world.units().seats().len());
+    world.charge_decision_rows(world.structures().seats().len());
+    world.charge_decision_rows(world.beacons().seats().len());
 }
 
 /// Decision 6's repair term for a live beacon row.

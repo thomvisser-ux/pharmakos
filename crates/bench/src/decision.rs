@@ -500,9 +500,9 @@ fn seat_work(world: &pharmakos_sim::world::World, seats: u32) -> Result<u64, Err
                     "the world keeps no counted work for seat {seat}, which sealed a playbook"
                 ))
             })?
-            .spent();
+            .map_err(|reason| Error::Unmeasured { seat, reason })?;
         sum = sum
-            .checked_add(u64::from(spent))
+            .checked_add(spent)
             .ok_or(Error::Overflow("the seats' counted work"))?;
     }
     Ok(sum)
