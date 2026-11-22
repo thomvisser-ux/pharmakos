@@ -249,6 +249,7 @@ path = [
     "tests/golden/gateway/demo_defend_the_core_render/**",
     "tests/golden/gateway/demo_raid_an_enemy_beacon_render/**",
     "tests/golden/gateway/demo_against_easy_render/**",
+    "tests/golden/gateway/list_templates_guided/**",
     "godot/fixtures/rule_list_render.json",
     "tests/golden/determinism/hold_and_build.playbook.json",
 ]
