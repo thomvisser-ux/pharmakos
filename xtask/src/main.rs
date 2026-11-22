@@ -7519,4 +7519,60 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
              RAW_TARGET_DIR_OWED: {paid:?}"
         );
     }
+
+    /// The `#` comment block that ends on the line before the first line of
+    /// `text` equal, trimmed, to `anchor`, as one line of words.
+    fn comment_above(text: &str, anchor: &str) -> String {
+        let lines: Vec<&str> = text.lines().collect();
+        let at = lines
+            .iter()
+            .position(|line| line.trim() == anchor)
+            .unwrap_or_else(|| panic!("no line `{anchor}`"));
+        let block: Vec<&str> = lines
+            .iter()
+            .take(at)
+            .rev()
+            .map(|line| line.trim())
+            .take_while(|line| line.starts_with('#'))
+            .map(|line| line.trim_start_matches('#').trim())
+            .collect();
+        block
+            .into_iter()
+            .rev()
+            .flat_map(str::split_whitespace)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The owner ratified the `[profile.dev.package.*]` tables on 2026-11-21
+    /// (decisions-log item 168 (1)), so the two comments that recorded the
+    /// change as the main session's ruling "which the owner can veto" cite the
+    /// ratification instead, and a revert of the correction fails here.
+    #[test]
+    fn the_profile_comments_cite_the_ratification() {
+        for (name, block) in [
+            (
+                "Cargo.toml",
+                comment_above(
+                    include_str!("../../Cargo.toml"),
+                    "[profile.dev.package.pharmakos-sim]",
+                ),
+            ),
+            (
+                ".github/workflows/ci.yml",
+                comment_above(
+                    include_str!("../../.github/workflows/ci.yml"),
+                    "timeout-minutes: 90",
+                ),
+            ),
+        ] {
+            assert!(block.contains("item 168 (1)"), "{name}: {block}");
+            assert!(block.contains("item 165 (1)"), "{name}: {block}");
+            assert!(!block.contains("owner can veto"), "{name}: {block}");
+            assert!(
+                !block.contains("records this change says so"),
+                "{name}: {block}"
+            );
+        }
+    }
 }

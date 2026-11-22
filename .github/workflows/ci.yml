@@ -150,11 +150,12 @@ jobs:
     # system's shards plus that operating system's leg job, and no other operating
     # system's shards hold it back (decisions-log item 148, the main session's call). A
     # fourth shard is a change to CI_SHARDS and the three shard matrices. Item 116 (6)(f)'s
-    # `[profile.*]` question was taken ahead of its 75-minute threshold, by the main
-    # session's ruling, which the owner can veto (no healthy leg had reached 75; shards sat
-    # at 35 to 54 of 90 and one degraded runner hit the limit, so the margin was thin, and
-    # this removes the cost at its cause; the decisions-log item that records this change
-    # says so): the suite runs pharmakos-sim and the third-party crates it runs optimised,
+    # `[profile.*]` question was taken ahead of its 75-minute threshold, on the main
+    # session's ruling (decisions-log item 165 (1); no healthy leg had reached 75; shards
+    # sat at 35 to 54 of 90 and one degraded runner hit the limit, so the margin was thin,
+    # and this removes the cost at its cause), and the owner ratified the change on
+    # 2026-11-21 (item 168 (1)), which closed item 119 (5)'s reservation for these tables:
+    # the suite runs pharmakos-sim and the third-party crates it runs optimised,
     # debug assertions and overflow checks on, and xtask's `test` step asks cargo for the
     # profile it resolved for every unit and refuses anything else. A further profile change
     # is still a contract change (AGENTS.md section 5), not a way out of the rule. The legs'
