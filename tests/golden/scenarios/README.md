@@ -383,7 +383,9 @@ is chosen and from where.
 **S3's `p3fix` moved the two `against-easy` chains, and no other.** The rule:
 a near pair's estimate (two columns in touching clusters) is priced at the
 route the router serves, not at the abstract graph's unsmoothed refinement
-(`crates/sim/src/pathing/estimate.rs`, "Near pairs"). Two causes move them,
+(the lane's part 1; since its gateway step every clear query, near or far, is
+so priced: `crates/sim/src/pathing/estimate.rs`, "A clear query: the served
+walk"). Two causes move them,
 told apart by playing each chain again with seat 0's hold set back to 9 900 ms:
 
 * **The input, from line 1016 in both.** Seat 0's pinned playbook
@@ -406,8 +408,9 @@ not move.
 3601**, round 2's first tick, where its `toward` step chooses the stone. The
 rule: `toward`'s stone is the legal site closest to its feature **over the
 terrain**, the least cost of any walk over the walkers' step rule (the grid
-optimum, `crates/sim/src/pathing/reach.rs`), where it had been the site with
-the least estimated (then served) walk to the feature
+optimum, `crates/sim/src/pathing/reach.rs`), where the lane's part 1 had
+taken the site with the least estimated walk to the feature and its part 2 the
+least served walk
 (`crates/sim/src/targeting.rs`, "Two measures"). From the commander at
 (188, 28), among 2 784 legal sites, the stone moved from (196, 66) to
 (199, 63); the event assertions all hold, the licence at tick 9600 included.

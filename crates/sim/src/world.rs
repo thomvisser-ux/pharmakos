@@ -8914,7 +8914,8 @@ mod ids_tests {
                 Ok(table) => {
                     assert!(loads, "a climb of {climb} loaded");
                     let surface_steps = table.step_diagonal() + table.climb_surcharge();
-                    let ring = crate::pathing::reach::Reach::new(1, surface_steps);
+                    let ring = crate::pathing::reach::Reach::new(1, surface_steps)
+                        .unwrap_or_else(|error| panic!("a ring: {error:?}"));
                     assert_eq!(ring.ring_len(), 29_127, "the ring at the bound");
                 }
                 Err(crate::rules::RulesError::OutOfRange { field, .. }) => {

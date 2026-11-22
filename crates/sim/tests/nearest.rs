@@ -409,7 +409,8 @@ fn the_grid_optimum_settles_in_cost_then_column_order() {
             scar(&mut world, seed);
         }
         let surface = world.surface();
-        let mut reach = Reach::new(surface.node_count(), surface.costs().max_step());
+        let mut reach =
+            Reach::new(surface.node_count(), surface.costs().max_step()).expect("a ring");
         let mut rng = Rng(seed ^ 0x0077);
         for _ in 0..3 {
             let (_, from) = origin(&world, &mut rng);
@@ -767,7 +768,7 @@ fn farthest_vent(world: &World, core: [i32; 2]) -> [i32; 2] {
 fn a_directed_flood_computes_one_h_a_column() {
     let world = world_of(PROBATION, 3);
     let surface = world.surface();
-    let mut reach = Reach::new(surface.node_count(), surface.costs().max_step());
+    let mut reach = Reach::new(surface.node_count(), surface.costs().max_step()).expect("a ring");
     let mut measured = Vec::new();
     for spheres in [0_i32, 1, 18, 40] {
         let (mut pops, mut evaluations) = (0, 0);

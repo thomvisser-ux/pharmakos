@@ -52,9 +52,9 @@
 //!    ever make the promise safer. Spike G2 measured the short-route band
 //!    (≤ 32 cells) at p90 9.2 % and max 66.6 %, "one second on a two-second
 //!    route", the error a whole second absorbs; since lane `p3fix` the sim
-//!    prices a pair whose clusters touch at the route the router serves, so a
-//!    route of 32 cells or less is exact on static terrain, counted from the
-//!    tick that serves it.
+//!    prices every clear query, near or far, at the walk the router serves
+//!    plus the allowance per extra route, so a route served in one piece is
+//!    exact on static terrain, counted from the tick that serves it.
 //!
 //! Recorded honestly, because item 57 records it: the promise is made on static
 //! terrain and a Push is not static. Under 20 craters/s the same estimate is

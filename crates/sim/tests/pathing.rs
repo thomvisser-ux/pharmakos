@@ -2633,7 +2633,7 @@ fn p3_holds_on_short_routes() {
 }
 
 // ---------------------------------------------------------------------------
-// Near pairs (lane `p3fix`): priced at the route the router serves
+// Clear queries (lane `p3fix`): every pair priced at the route the router serves
 // ---------------------------------------------------------------------------
 
 /// Pairs drawn per seed by [`a_clear_pair_is_priced_at_the_route_the_router_serves`].
@@ -3186,7 +3186,7 @@ fn serpentine_in(
 /// that bound; `the_repath_cap_is_served_round_robin_and_never_exceeded`
 /// holds the serving rule it rests on.
 ///
-/// Through serpentines of one to three folds (two to four routes), the signed
+/// Through serpentines of one to three folds (two, three and five routes), the signed
 /// error is printed per walk and its largest asserted inside item 61's 15 %.
 #[test]
 fn a_chained_walk_arrives_no_later_than_promised() {
@@ -3988,8 +3988,8 @@ fn a_near_estimate_in_the_tick_after_a_crater_reads_the_repaired_graph() {
 }
 
 /// A fog mask that marks no column unknown is a clear query (Part 2 of
-/// `p3fix-fix1.md`, decided in code): a near pair is priced at the served
-/// route, and nothing is priced through fog, exactly as `Fog::Clear` asks.
+/// `p3fix-fix1.md`, decided in code): a pair is priced at the served walk,
+/// and nothing is priced through fog, exactly as `Fog::Clear` asks.
 #[test]
 fn a_mask_that_hides_nothing_is_a_clear_query() {
     let mut fixture = Fixture::build(SEED, CLUSTER);
