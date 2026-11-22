@@ -627,7 +627,8 @@ fn copy_library(from: &Path, to: &Path) -> Result<(), String> {
     walk(from, &mut files).map_err(|error| format!("reading {}: {error}", from.display()))?;
     let mut copied = 0_usize;
     for file in files {
-        let name = crate::file_name(&file);
+        let name = crate::file_name(&file)
+            .ok_or_else(|| format!("{}: a walked file without a name", file.display()))?;
         let template = Path::new(&name)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonc"));
@@ -1430,7 +1431,8 @@ fn licence_files(registry: &Path, item: &Crate) -> Result<Vec<(String, String)>,
     files.sort();
     let mut texts: Vec<(String, String)> = Vec::new();
     for file in files {
-        let name = crate::file_name(&file);
+        let name = crate::file_name(&file)
+            .ok_or_else(|| format!("{}: a walked file without a name", file.display()))?;
         let upper = name.to_ascii_uppercase();
         if ["LICENSE", "LICENCE", "COPYING", "NOTICE"]
             .iter()

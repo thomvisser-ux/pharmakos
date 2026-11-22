@@ -201,7 +201,7 @@ pub(crate) fn collect(root: &Path) -> Result<Vec<PathBuf>, String> {
     }
     let mut files: Vec<PathBuf> = Vec::new();
     crate::walk(&dir, &mut files).map_err(|error| format!("reading {}: {error}", dir.display()))?;
-    files.retain(|path| crate::file_name(path).ends_with(SUFFIX));
+    files.retain(|path| crate::file_name(path).is_some_and(|name| name.ends_with(SUFFIX)));
     Ok(files)
 }
 
@@ -377,13 +377,12 @@ fn check_map(json: &Json, problems: &mut Vec<Problem>) {
 
     match map.get("seed").and_then(Json::as_str) {
         Some(seed) => {
-            // No `0x` leaves no digits, which the check below reports as a
-            // malformed seed: the absence is a reported problem, not a default.
-            let digits = seed.strip_prefix("0x").unwrap_or("");
-            let well_formed = digits.len() == 16
-                && digits
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+            let well_formed = seed.strip_prefix("0x").is_some_and(|digits| {
+                digits.len() == 16
+                    && digits
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            });
             if !well_formed {
                 problems.push(Problem::new(
                     "/map/seed",
@@ -434,7 +433,7 @@ fn check_seats(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> usize {
         unknown_keys(&base, members, SEAT_KEYS, problems);
 
         match integer(seat.get("seat")) {
-            Some(number) if number == i64::try_from(index).unwrap_or(-1) => {}
+            Some(number) if usize::try_from(number) == Ok(index) => {}
             Some(number) => problems.push(Problem::new(
                 &format!("{base}/seat"),
                 format!(
@@ -448,16 +447,19 @@ fn check_seats(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> usize {
             )),
         }
 
-        // A missing or non-string kind is read as none, which the check below
-        // reports as a problem at `/kind`.
-        let kind = seat.get("kind").and_then(Json::as_str).unwrap_or("");
-        if !SEAT_KINDS.contains(&kind) {
+        // A missing or non-string kind is reported at `/kind` like an unknown
+        // one.
+        let Some(kind) = seat
+            .get("kind")
+            .and_then(Json::as_str)
+            .filter(|kind| SEAT_KINDS.contains(kind))
+        else {
             problems.push(Problem::new(
                 &format!("{base}/kind"),
                 format!("must be one of {}", SEAT_KINDS.join(", ")),
             ));
             continue;
-        }
+        };
         if kind == "playbook" {
             match seat.get("playbook").and_then(Json::as_str) {
                 Some(relative) => check_repository_path(
@@ -507,7 +509,7 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) -> usize {
         unknown_keys(&base, members, SEGMENT_KEYS, problems);
 
         match integer(segment.get("index")) {
-            Some(number) if number == i64::try_from(index).unwrap_or(-1) => {}
+            Some(number) if usize::try_from(number) == Ok(index) => {}
             Some(number) => problems.push(Problem::new(
                 &format!("{base}/index"),
                 format!("segments run in order from 0; expected {index}, found {number}"),
@@ -627,9 +629,16 @@ fn check_assertions(root: &Path, json: &Json, nightly: bool, problems: &mut Vec<
             problems.push(Problem::new(&base, "must be an object"));
             continue;
         };
-        // A missing or non-string kind is read as none, which the checks below
-        // report as a problem at `/assert`.
-        let kind = assertion.get("assert").and_then(Json::as_str).unwrap_or("");
+        let Some(kind) = assertion.get("assert").and_then(Json::as_str) else {
+            problems.push(Problem::new(
+                &format!("{base}/assert"),
+                format!(
+                    "required: the assertion's kind, a string; {FORMAT} has exactly {}",
+                    ASSERTIONS.join(" and ")
+                ),
+            ));
+            continue;
+        };
         if RESERVED_ASSERTIONS.contains(&kind) {
             problems.push(Problem::new(
                 &format!("{base}/assert"),
@@ -849,105 +858,69 @@ fn integer(value: Option<&Json>) -> Option<i64> {
 /// alone. Spaces rather than deletion so that byte offsets in a JSON parse
 /// error still point at the right place in the original file.
 fn strip_comments(text: &str) -> String {
-    let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
-    let mut index = 0;
+    let mut chars = text.chars().peekable();
     let mut in_string = false;
     let mut escaped = false;
-
-    while index < bytes.len() {
-        let byte = *bytes.get(index).unwrap_or(&b' ');
+    // Read a character at a time, so a byte at or above 0x80 is always part
+    // of a whole character copied as itself (never `char::from` of one byte,
+    // which would mean Latin-1), and a blanked character becomes as many
+    // spaces as it has bytes: the stripped text keeps the original's byte
+    // offsets.
+    while let Some(character) = chars.next() {
         if in_string {
-            // Inside a string literal the same rule applies as outside it: a
-            // byte at or above 0x80 is part of a multi-byte UTF-8 sequence, and
-            // `char::from` on one would mean Latin-1 — an em dash in a `note` or
-            // a `summary` would come back as mojibake, in the step's summary
-            // line and in every diagnostic that quotes the scenario's `name`.
-            // Copying the whole character also keeps the stripped text the same
-            // byte length as the original, which is why comments become spaces
-            // rather than disappearing.
-            if byte >= 0x80 {
-                // `index` advances a whole character at a time, so it is a
-                // boundary inside `text` and the default is never read.
-                let rest = text.get(index..).unwrap_or("");
-                match rest.chars().next() {
-                    Some(character) => {
-                        out.push(character);
-                        index += character.len_utf8();
-                    }
-                    None => index += 1,
-                }
-                // A whole character was consumed literally, so it closes any
-                // pending escape. (JSON only ever escapes ASCII, so this is
-                // malformed input either way; the parser reports it.)
-                escaped = false;
-                continue;
-            }
-            out.push(char::from(byte));
+            out.push(character);
             if escaped {
                 escaped = false;
-            } else if byte == b'\\' {
+            } else if character == '\\' {
                 escaped = true;
-            } else if byte == b'"' {
+            } else if character == '"' {
                 in_string = false;
             }
-            index += 1;
             continue;
         }
-        if byte == b'"' {
-            in_string = true;
-            out.push('"');
-            index += 1;
-            continue;
-        }
-        if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
-            while index < bytes.len() && bytes.get(index) != Some(&b'\n') {
-                out.push(' ');
-                index += 1;
+        match (character, chars.peek()) {
+            ('"', _) => {
+                in_string = true;
+                out.push('"');
             }
-            continue;
-        }
-        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
-            let mut closed = false;
-            while index < bytes.len() {
-                let current = *bytes.get(index).unwrap_or(&b' ');
-                if current == b'\n' {
-                    out.push('\n');
-                } else {
-                    out.push(' ');
+            ('/', Some('/')) => {
+                blank(&mut out, character);
+                while let Some(next) = chars.next_if(|next| *next != '\n') {
+                    blank(&mut out, next);
                 }
-                if closed {
-                    index += 1;
-                    break;
-                }
-                if current == b'*' && bytes.get(index + 1) == Some(&b'/') {
-                    closed = true;
-                }
-                index += 1;
             }
-            continue;
-        }
-        // Bytes at or above 0x80 are the middle of a multi-byte UTF-8 sequence
-        // and never collide with the delimiters scanned for here, but they
-        // cannot go through `char::from`, which would mean Latin-1. Copy the
-        // whole character.
-        if byte < 0x80 {
-            out.push(char::from(byte));
-            index += 1;
-        } else {
-            // `index` advances a whole character at a time, so it is a
-            // boundary inside `text` and the default is never read.
-            let rest = text.get(index..).unwrap_or("");
-            match rest.chars().next() {
-                Some(character) => {
-                    out.push(character);
-                    index += character.len_utf8();
+            ('/', Some('*')) => {
+                blank(&mut out, character);
+                // The opener's own `*` cannot also close it: `/*/` is open.
+                if let Some(star) = chars.next() {
+                    blank(&mut out, star);
                 }
-                None => index += 1,
+                let mut previous_star = false;
+                for next in chars.by_ref() {
+                    blank(&mut out, next);
+                    if previous_star && next == '/' {
+                        break;
+                    }
+                    previous_star = next == '*';
+                }
             }
+            _ => out.push(character),
         }
     }
     out
+}
+
+/// A commented-out character as spaces, one per byte, except a newline, which
+/// stays so that line numbers in a parse error still match the file.
+fn blank(out: &mut String, character: char) {
+    if character == '\n' {
+        out.push('\n');
+    } else {
+        for _ in 0..character.len_utf8() {
+            out.push(' ');
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1003,61 @@ mod tests {
             r#"{"a":"http://x"}        "#
         );
         assert_eq!(strip_comments(r#"{"a":"b\"// c"}"#), r#"{"a":"b\"// c"}"#);
+    }
+
+    #[test]
+    fn block_comments_keep_offsets_and_lines_and_close_only_on_their_own_star() {
+        assert_eq!(
+            strip_comments("1/* a\n\u{e9} */2"),
+            format!("1{}\n{}2", " ".repeat(4), " ".repeat(5))
+        );
+        // The opener's `*` does not close it: everything after `/*/` up to a
+        // real `*/` is comment.
+        assert_eq!(strip_comments("1/*/ x */2"), format!("1{}2", " ".repeat(8)));
+        // An unclosed comment runs to the end, and a line comment to its line.
+        assert_eq!(strip_comments("1/* x"), "1    ");
+        assert_eq!(
+            strip_comments("1// \u{2014}\n2"),
+            format!("1{}\n2", " ".repeat(6))
+        );
+        for source in [
+            "1/* a\n\u{e9} */2",
+            "1/*/ x */2",
+            "1// \u{2014}\n2",
+            "\"\u{2014}\"/**/",
+        ] {
+            assert_eq!(strip_comments(source).len(), source.len(), "{source}");
+        }
+    }
+
+    #[test]
+    fn a_negative_seat_id_or_segment_index_is_a_problem_not_a_magic_value() {
+        let dir = scratch("negative-index");
+        let path = write(
+            &dir,
+            &GOOD
+                .replace("\"seat\": 0,", "\"seat\": -1,")
+                .replace("\"index\": 0,", "\"index\": -1,"),
+        );
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/seats/0/seat"), "{report}");
+        assert!(report.contains("expected 0, found -1"), "{report}");
+        assert!(report.contains("/segments/0/index"), "{report}");
+    }
+
+    #[test]
+    fn an_assertion_without_a_kind_is_named_as_missing() {
+        let dir = scratch("assert-missing");
+        let path = write(
+            &dir,
+            &GOOD.replace("\"assert\": \"event_fired\",", "\"assert\": 7,"),
+        );
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/assertions/0/assert"), "{report}");
+        assert!(
+            report.contains("required: the assertion's kind"),
+            "{report}"
+        );
     }
 
     #[test]
