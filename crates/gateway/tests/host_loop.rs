@@ -1702,3 +1702,110 @@ fn the_largest_accepted_inverse_round_trips_through_the_socket() {
     );
     running.quit();
 }
+
+// ---------------------------------------------------------------------------
+// S3's `probw`, item 9: the guided mark is filed before any call in its Lull
+// ---------------------------------------------------------------------------
+
+/// An advisor for the human seat that starts it at `hold_and_build`, with a
+/// reason, beside the gateway's own fallback, so its advice qualifies.
+struct Guiding;
+
+impl Advisor for Guiding {
+    fn advise(&mut self, _seat: u8, _call: &mut dyn FnMut(&Request) -> Json) -> Advice {
+        Advice {
+            safe_playbook_jsonc: String::from(pharmakos_gateway::host::SAFE_PLAYBOOK),
+            suggestions: vec![pharmakos_gateway::advice::Suggestion {
+                template_id: String::from("hold_and_build"),
+                parameters: Vec::new(),
+                why: String::from("Bookkeeping for hold_and_build."),
+            }],
+            start_here: Some(pharmakos_gateway::advice::StartHere {
+                template_id: String::from("hold_and_build"),
+                why: String::from("Start with hold_and_build: it is the advisor's pick."),
+            }),
+        }
+    }
+}
+
+/// Seat 1 played by the scripted operator, which says it is ready; every
+/// other seat advised by [`Guiding`].
+struct GuidedFactory {
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+impl Operators for GuidedFactory {
+    fn built_in(&mut self, seat: u8) -> Option<Box<dyn BuiltInSeat>> {
+        (seat == 1).then(|| {
+            let played: Box<dyn BuiltInSeat> = Box::new(Scripted {
+                seen: Arc::clone(&self.seen),
+            });
+            played
+        })
+    }
+
+    fn advisor(&mut self, _seat: u8) -> Option<Box<dyn Advisor>> {
+        Some(Box::new(Guiding))
+    }
+}
+
+/// The templates the human's `list_templates` marks as the guided pick.
+fn guided_picks(client: &mut Client) -> Vec<String> {
+    let answer = result(&client.call("list_templates", "{}"), "list_templates");
+    let Some(Json::Array(templates)) = answer.get("templates") else {
+        panic!("a template list: {answer:?}");
+    };
+    templates
+        .iter()
+        .filter(|template| template.get("guided_pick") == Some(&Json::Bool(true)))
+        .map(|template| match template.get("template_id") {
+            Some(Json::String(id)) => id.clone(),
+            other => panic!("a template id: {other:?}"),
+        })
+        .collect()
+}
+
+/// S3's `probw`, item 9, through the real `serve` loop: in a Probation match
+/// the human's very first call of round 1, a `list_templates`, already carries
+/// the advisor's guided pick, because the host files every in-process seat's
+/// work before it takes its first job and after every job; and the first
+/// `list_templates` of round 2 carries none.
+#[test]
+fn the_first_list_templates_of_a_probation_match_carries_the_guided_pick() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let probation = Config {
+        preset: pharmakos_gateway::probation::Preset::Probation,
+        ..config("m-probw-guided", Some(0))
+    };
+    let mut running = start(
+        &probation,
+        Box::new(GuidedFactory {
+            seen: Arc::clone(&seen),
+        }),
+    );
+    let seat_token = running
+        .announce
+        .seat_token
+        .clone()
+        .expect("a human seat's token");
+    // The human connects and asks first, before the lobby does anything.
+    let mut person = Client::open(running.announce.port, &seat_token);
+    assert_eq!(
+        guided_picks(&mut person),
+        ["hold_and_build"],
+        "the first call of the first Lull sees the advisor's pick"
+    );
+
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    skip_to_recap(&mut lobby);
+    let _ = result(&lobby.call("end_recap", "{}"), "end_recap");
+    let status = result(&lobby.call("get_status", "{}"), "get_status");
+    assert_eq!(phase_of(&status), "lull", "round 2's Lull: {status:?}");
+    assert_eq!(
+        guided_picks(&mut person),
+        Vec::<String>::new(),
+        "round 2 marks nothing"
+    );
+    running.quit();
+}
