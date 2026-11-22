@@ -541,7 +541,12 @@ impl Easy {
         let weighed = candidates::evaluate(wire, situation, &self.tuning, &declared, goals, true);
         round.estimates_refused.clone_from(&weighed.refused);
         let evaluated = weighed.candidates;
-        let top = candidates::top_k(&evaluated);
+        // No share to fill (a segment length past the arithmetic) is no goal:
+        // the composition then fails and the safe playbook is submitted.
+        let top = match compose::fill_ms(situation) {
+            Some(fill) => candidates::top_k(&evaluated, fill),
+            None => Vec::new(),
+        };
         let guard = candidates::guard(&evaluated);
         let survey = candidates::survey(&evaluated);
         let spire = compose::spire(situation, &self.tuning);

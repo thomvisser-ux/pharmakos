@@ -1474,30 +1474,34 @@ fn score(
     travel_ms: i64,
 ) -> Option<Candidate> {
     let on_site = priced(situation, tuning, declared, &goal, place)?;
-    let (cost, economy, expansion, defence, time_ms) = match goal.served() {
-        // A stone has no worth of its own: it is worth the goal it serves, by
-        // that goal's own terms, less the stone's price, over the stone's walk
-        // and deploy and the served goal's own whole time, which a later round
-        // spends. So a rich vent's stone outranks a lean seam's,
-        // and a stone never outranks a goal of the same worth placeable now,
-        // which pays no stone and waits no round.
-        Some(served) => {
-            // The served goal costs its own time in the later round, from
-            // the stone's sphere: at least as far as the stone is, so its
-            // travel is the stone's, a lower bound.
-            let served_on_site = priced(situation, tuning, declared, &served, place)?;
-            let (_, economy, expansion, _, served_ms) =
-                terms(situation, tuning, &served, travel_ms, served_on_site)?;
-            let cost = tuning.beacon_cost_dollars;
-            (
-                cost,
-                economy.checked_sub(cost)?,
-                expansion,
-                0,
-                travel_ms.checked_add(on_site)?.checked_add(served_ms)?,
-            )
-        }
-        None => terms(situation, tuning, &goal, travel_ms, on_site)?,
+    // A stone has no worth of its own: it is worth the goal it serves, by that
+    // goal's own terms, less the stone's price; this round spends its walk and
+    // deploy, and its rate counts the served goal's whole time too, which a
+    // later round spends. So of two far vents the rich one's stone outranks
+    // the lean one's, and a stone never outranks a goal of the same worth
+    // placeable now, which pays no stone and waits no round.
+    let (cost, economy, expansion, defence, time_ms, rate_ms) = if let Some(served) = goal.served()
+    {
+        // The served goal costs its own time in the later round, from
+        // the stone's sphere: at least as far as the stone is, so its
+        // travel is the stone's, a lower bound.
+        let served_on_site = priced(situation, tuning, declared, &served, place)?;
+        let (_, economy, expansion, _, served_ms) =
+            terms(situation, tuning, &served, travel_ms, served_on_site)?;
+        let cost = tuning.beacon_cost_dollars;
+        let round_ms = travel_ms.checked_add(on_site)?;
+        (
+            cost,
+            economy.checked_sub(cost)?,
+            expansion,
+            0,
+            round_ms,
+            round_ms.checked_add(served_ms)?,
+        )
+    } else {
+        let (cost, economy, expansion, defence, time_ms) =
+            terms(situation, tuning, &goal, travel_ms, on_site)?;
+        (cost, economy, expansion, defence, time_ms, time_ms)
     };
     // Risk: what the seat can see of other seats near the goal.
     //
@@ -1540,7 +1544,7 @@ fn score(
         .checked_add(w.capability.checked_mul(capability)?)?
         .checked_add(w.attack.checked_mul(attack)?)?
         .checked_sub(w.risk.checked_mul(risk)?)?;
-    let rate = utility.checked_mul(1_000)?.checked_div(time_ms)?;
+    let rate = utility.checked_mul(1_000)?.checked_div(rate_ms)?;
     Some(Candidate {
         id,
         goal,
@@ -1556,10 +1560,13 @@ fn score(
 /// The top-k by utility per second, ties to the lowest id, less any
 /// candidate worth nothing and less the guard, which is added beside the
 /// goals rather than ranked among them ([`guard`]).
-pub(crate) fn top_k(candidates: &[Candidate]) -> Vec<Candidate> {
+pub(crate) fn top_k(candidates: &[Candidate], fill: i64) -> Vec<Candidate> {
     let mut ranked: Vec<Candidate> = candidates
         .iter()
         .filter(|candidate| candidate.utility > 0)
+        // A goal the round's whole share cannot hold is no goal this round:
+        // ranked among the top-k it would only crowd out one that fits.
+        .filter(|candidate| candidate.time_ms <= fill)
         .filter(|candidate| !matches!(candidate.goal, Goal::Guard { .. } | Goal::Survey { .. }))
         .cloned()
         .collect();

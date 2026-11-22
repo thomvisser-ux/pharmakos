@@ -3443,3 +3443,40 @@ fn a_tap_inside_a_spire_grown_sphere_is_found() {
     assert!(probed(36), "the grown sphere's tap is probed");
     assert!(!probed(24), "the base sphere does not reach it");
 }
+
+/// A goal the round's share cannot hold is no goal this round (fix pass 1):
+/// three far rich seams whose stones rank above a near vent by rate, each too
+/// long to fit the segment's share, no longer fill the top-k, so the vent
+/// placeable now is composed.
+#[test]
+fn goals_too_long_for_the_share_do_not_crowd_out_one_that_fits() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.segment_ms = 60_000;
+    world.remaining_ms = 60_000;
+    for x in [2, 4, 6] {
+        let mut seam = Feature::new("seam", "rich", [x, 63]);
+        seam.site = None;
+        // Far enough that its walk (500 ms a voxel) passes the 42 s share.
+        seam.stone = Some([x, 75, GROUND]);
+        world.features.push(seam);
+    }
+    let mut vent = Feature::new("vent", "lean", [40, 32]);
+    vent.site = Some([36, 32, GROUND]);
+    world.features.push(vent);
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = composing_ops(&script.transcript);
+    assert_eq!(
+        op_value(
+            &ops,
+            "replace",
+            "/declarative/route/0/place_beacon/at/covering"
+        )
+        .map(|value| compact(&value))
+        .as_deref(),
+        Some(r#"{ "feature_id": "vent_40_32" }"#),
+        "{}",
+        played.why
+    );
+}

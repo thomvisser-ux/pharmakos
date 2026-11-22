@@ -797,13 +797,18 @@ fn the_safe_playbook_always_qualifies() {
 /// `(snapshot, seat)`: a named expectation, so a row that starts or stops
 /// raising says which seat, round and beacon moved, and the mechanism.
 ///
-/// None since S3's `opr3` fix pass 1. The power-short match's core is shed at
-/// the Push's first settle and never revived, and a raise needs a lit
-/// non-core beacon of the seat's: no seat of that match places one any more
-/// (with the grid short the Survey post's scouts do not fit the one kW
-/// budget, and its Build beacon does not fit beside them), so no round has a
-/// beacon to raise.
-const ROWS_THAT_RAISE: &[(&str, u8)] = &[];
+/// The power-short match's core is shed at the Push's first settle and never
+/// revived, so from round 2 on its seats are short. Each seat's round-1 seal
+/// places a lit non-core beacon (a stepping stone since S3's `opr3`, fix pass
+/// 1), which in round 2's Lull is its one beacon at risk (decision 14: lit and
+/// next in the shed order, since a raise relights), within reach, and is
+/// raised to HIGH; in round 3 seat 0 has a second beacon at risk, the one its
+/// round-2 seal placed, and raises it, while seat 1's is out of reach.
+const ROWS_THAT_RAISE: &[(&str, u8)] = &[
+    ("three-rounds-power-short/round-2", 0),
+    ("three-rounds-power-short/round-2", 1),
+    ("three-rounds-power-short/round-3", 0),
+];
 
 /// Decisions-log item 128 (S1's plan, decision 14; the register's S1-21),
 /// hosted and unforced, on every corpus row with no answer rewritten: power
@@ -915,11 +920,11 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 }
 
 /// The corpus rows on the committed rules whose seat's supply shows a
-/// Generator. None since S3's `opr3` fix pass 1: with no fresh sighting held,
-/// round 1's Survey post is weighed before the goals, and its $80 (a beacon
-/// and two scouts) leaves the starting treasury short of a Generator's $160
-/// (a beacon, its Generator and a build drone); the later rounds seal the
-/// safe playbook. The scenario's own Generator is
+/// Generator. None since S3's `opr3` fix pass 1: Easy spends the corpus's
+/// rounds on the Survey post and on stepping stones toward rich seams beyond
+/// its first sphere, which its Balanced terms value above a Generator (a rich
+/// seam's Mine about 1 180 points, a lean vent's Generator 140), so no seat
+/// builds one in three rounds. The scenario's own Generator is
 /// `the_scenario_generator_raises_supply_by_exactly_the_lean_vent`'s.
 const GENERATOR_ROWS: &[(&str, u8)] = &[];
 
@@ -1573,24 +1578,32 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
         eprintln!("{} seat {}: {}", row.snapshot, row.seat, row.note);
     }
     eprintln!("Probation's seed, the stones (round, seat, toward): {stones:?}");
-    // A named expectation, each round of each seat's stone chain: seat 0
-    // walks toward `seam_190_124` two rounds running; seat 1 starts toward
-    // `seam_163_202` and turns toward `seam_191_215` once its stone stands,
-    // because from the new sphere that seam ranks first by the scoring (both
-    // are rich seams, and the turn is the nearer). Neither chain reaches its
-    // seam within the three rounds: each stone advances one sphere and round
-    // 1 places the Survey post, so the goal a stone serves comes in a later
-    // round than this match plays.
+    // A named expectation, each round of each seat's stone chain. Seat 0
+    // walks toward `seam_190_124` in rounds 1 and 2 and in round 3 places the
+    // Mine beacon covering it, the goal its stones served. Seat 1 starts
+    // toward `seam_163_202`, turns toward `seam_191_215` once its first stone
+    // stands, because from the new sphere that seam ranks first by the
+    // scoring (both are rich seams; the turn is the nearer), and turns back in
+    // round 3; its chain reaches no seam within the three rounds.
     let wanted: Vec<(String, u8, String)> = [
+        ("probation/round-1", 0, "seam_190_124"),
+        ("probation/round-1", 1, "seam_163_202"),
         ("probation/round-2", 0, "seam_190_124"),
-        ("probation/round-2", 1, "seam_163_202"),
-        ("probation/round-3", 0, "seam_190_124"),
-        ("probation/round-3", 1, "seam_191_215"),
+        ("probation/round-2", 1, "seam_191_215"),
+        ("probation/round-3", 1, "seam_163_202"),
     ]
     .into_iter()
     .map(|(round, seat, feature)| (round.to_owned(), seat, feature.to_owned()))
     .collect();
     assert_eq!(stones, wanted, "{rows:#?}");
+    assert!(
+        rows.iter().any(|row| row.snapshot == "probation/round-3"
+            && row.seat == 0
+            && row
+                .note
+                .contains("A Mine beacon covering the rich scrap seam seam_190_124")),
+        "seat 0's stones are followed by the goal they served: {rows:#?}"
+    );
     assert!(
         rows.iter().all(|row| row.seal != Seal::NotEasy),
         "every seal is Easy's own, the verifier's accepted: {rows:#?}"
