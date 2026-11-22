@@ -313,6 +313,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_an_action_pick_closes_the_menus(stage, editor, failures)
 	await _check_the_entry_list(stage, editor, failures)
 	_check_the_popups_are_opaque(editor, failures)
+	await _check_the_build_marks(editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
@@ -854,6 +855,35 @@ func _check_the_popups_are_opaque(editor: CanvasLayer, failures: Array[String]) 
 		var panel: StyleBox = popup.get_theme_stylebox("panel")
 		if not (panel is StyleBoxFlat) or not panel.draw_center or panel.bg_color.a < 1.0:
 			failures.append("%s draws a panel that is not opaque: %s" % [popup.get_class(), panel])
+
+
+## **Build targets are marked on the map in the Lull** (S3's `fixp`, P6b finding 7): after the
+## panel's redraw, one mark per target whose anchor can be drawn (a voxel), a wall's box outlined,
+## and a line per target; an `on` vent the map does not list and an anchor the walk cannot read are
+## said and not marked.
+func _check_the_build_marks(editor: CanvasLayer, failures: Array[String]) -> void:
+	var targets := [
+		{"step": 1, "blueprint": "autocannon", "anchor": "voxel", "at": Vector3i(40, 41, 5), "has_box": false},
+		{"step": 2, "blueprint": "wall", "anchor": "voxel", "at": Vector3i(10, 11, 4), "has_box": true, "box_min": Vector3i(10, 11, 3), "box_max": Vector3i(14, 11, 7)},
+		{"step": 3, "blueprint": "generator", "anchor": "on", "feature": "vent_120_88", "has_box": false},
+		{"step": 4, "blueprint": "mortar", "anchor": "unknown", "has_box": false},
+	]
+	editor._draw_state({"changes": 7, "has_text": true, "build_targets": targets})
+	await get_tree().process_frame
+	var marks: Array[Node] = editor.build_marks()
+	if marks.size() != 2:
+		failures.append("%d Build target marks for two drawable anchors" % marks.size())
+	elif (marks[0] as Label3D).text != Strings.text("build_mark", {"step": 1, "blueprint": "autocannon"}):
+		failures.append("the first Build mark says `%s`" % (marks[0] as Label3D).text)
+	if (editor._build_boxes.mesh as ImmediateMesh).get_surface_count() != 1:
+		failures.append("the wall's box is not outlined")
+	var lines: PackedStringArray = editor.build_text().split("\n")
+	if lines.size() != 4 or lines[2] != Strings.text("build_on_unlisted", {"step": 3, "blueprint": "generator", "feature": "vent_120_88"}) or lines[3] != Strings.text("build_unknown", {"step": 4, "blueprint": "mortar"}):
+		failures.append("the Build target lines say `%s`" % editor.build_text())
+	editor._draw_state({"changes": 8, "has_text": false})
+	await get_tree().process_frame
+	if not editor.build_marks().is_empty() or editor.build_text() != Strings.text("build_none"):
+		failures.append("the Build marks outlived their text")
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4

@@ -2775,3 +2775,24 @@ fn every_popup_the_editor_owns_is_opaque() {
         read("scripts/client_check.gd").contains("_check_the_popups_are_opaque(editor, failures)")
     );
 }
+
+/// **Build targets are marked in the Lull** (S3's `fixp`, P6b finding 7): the panel's redraw draws
+/// the bridge's `build_targets`, and the client check counts the marks.
+#[test]
+fn the_build_targets_are_marked_from_the_bridges_reading() {
+    let editor = read("scripts/editor.gd");
+    assert!(
+        gd_code(&editor, "_draw_state").contains(&"_draw_build(state.get(\"build_targets\", []))")
+    );
+    let build = gd_code(&editor, "_draw_build");
+    assert!(
+        build
+            .iter()
+            .any(|line| line
+                .contains("_box_outline(boxes, target[\"box_min\"], target[\"box_max\"])")),
+        "a wall's box is outlined as written: {build:?}"
+    );
+    assert!(
+        read("scripts/client_check.gd").contains("await _check_the_build_marks(editor, failures)")
+    );
+}

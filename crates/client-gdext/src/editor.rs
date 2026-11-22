@@ -1274,6 +1274,9 @@ pub struct Editor {
     /// Every Attack beacon's target in the text on screen, read once per text
     /// ([`targeting::attack_targets`]), not once per frame.
     attack: Vec<targeting::AttackMark>,
+    /// Every Build target in the text on screen, read once per text
+    /// ([`targeting::build_targets`]).
+    build_marks: Vec<targeting::BuildMark>,
     chips_revision: Option<u64>,
     /// The chips (`resolve_refs`) are owed for the newest text.
     resolve_owed: bool,
@@ -1737,6 +1740,13 @@ impl Editor {
     #[must_use]
     pub fn attack_targets(&self) -> &[targeting::AttackMark] {
         &self.attack
+    }
+
+    /// Every Build target in the text on screen, in the file's order, for the map to mark in the
+    /// Lull ([`targeting::build_targets`]); none without a text.
+    #[must_use]
+    pub fn build_targets(&self) -> &[targeting::BuildMark] {
+        &self.build_marks
     }
 
     /// The chips: what each feature reference in the text reads now, in the file's order.
@@ -3992,6 +4002,7 @@ impl Editor {
         self.text = None;
         self.size = None;
         self.attack.clear();
+        self.build_marks.clear();
         self.step_labels.clear();
         self.rule_ids.clear();
         self.revision = self.revision.wrapping_add(1);
@@ -4028,6 +4039,7 @@ impl Editor {
     /// A new text is on screen: every check of it is owed.
     fn accept_text(&mut self, text: String) {
         self.attack = targeting::attack_targets(&text);
+        self.build_marks = targeting::build_targets(&text);
         self.step_labels = vocabulary::step_labels(&text);
         self.rule_ids = vocabulary::rule_ids(&text);
         self.rule_refusal = None;

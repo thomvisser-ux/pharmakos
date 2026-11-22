@@ -22,7 +22,9 @@ use crate::editor::{
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
 use crate::rule_list::{ChipEditor, NameKind, RuleChip, RuleList};
-use crate::targeting::{AttackAim, AttackMark, Chip, ChipFeature, FeatureKind, FeatureName};
+use crate::targeting::{
+    AttackAim, AttackMark, BuildAnchor, BuildMark, Chip, ChipFeature, FeatureKind, FeatureName,
+};
 use crate::variant::{int_variant, text_or_empty};
 use crate::vocabulary::{BeaconDetail, Entry, ParameterShape, Setting, Vocabulary};
 use crate::wizard::{Instance, Wizard};
@@ -203,10 +205,6 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("chips", chips_array(editor.chips()).to_variant());
     put("chips_current", editor.chips_current().to_variant());
     put(
-        "attack_targets",
-        attack_array(editor.attack_targets()).to_variant(),
-    );
-    put(
         "this_round",
         text_or_empty(editor.this_round()).to_variant(),
     );
@@ -233,7 +231,20 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("file", text_or_empty(editor.file()).to_variant());
     put("dormant", dormant_dictionary(editor).to_variant());
     put_rule_list(&mut state, editor);
+    put_marks(&mut state, editor);
     state
+}
+
+/// The map's marks: `attack_targets` ([`attack_array`]) and `build_targets` ([`build_array`]).
+fn put_marks(state: &mut VarDictionary, editor: &Editor) {
+    state.set(
+        &"attack_targets".to_variant(),
+        &attack_array(editor.attack_targets()).to_variant(),
+    );
+    state.set(
+        &"build_targets".to_variant(),
+        &build_array(editor.build_targets()).to_variant(),
+    );
 }
 
 /// The E0601 checkbox as the panel draws it: `shown`, `checked` and `enabled`.
@@ -683,6 +694,44 @@ fn attack_dictionary(mark: &AttackMark) -> VarDictionary {
         }
         AttackAim::Beacon(id) => out.set(&"id".to_variant(), &id.to_variant()),
         AttackAim::Selector | AttackAim::EnemyCommander | AttackAim::Unknown => {}
+    }
+    out
+}
+
+/// The Build targets as an array, in the file's order: each `pointer`, `step` (from 1; 0 outside
+/// the route), `blueprint` as written, `anchor` (`voxel`, `on`, `unknown`) with `at` (a
+/// `Vector3i`, sim axes) for a voxel or `feature` (its name) for `on`, and `has_box`, with
+/// `box_min` and `box_max` (`Vector3i`s) for a wall's box as written.
+fn build_array(marks: &[BuildMark]) -> VarArray {
+    let mut out = VarArray::new();
+    for mark in marks {
+        let mut one = VarDictionary::new();
+        one.set(&"pointer".to_variant(), &mark.pointer.to_variant());
+        one.set(&"step".to_variant(), &step_count(mark.step));
+        one.set(&"blueprint".to_variant(), &mark.blueprint.to_variant());
+        one.set(&"anchor".to_variant(), &mark.anchor.name().to_variant());
+        match &mark.anchor {
+            BuildAnchor::Voxel([x, y, z]) => {
+                one.set(&"at".to_variant(), &Vector3i::new(*x, *y, *z).to_variant());
+            }
+            BuildAnchor::On(id) => one.set(&"feature".to_variant(), &id.to_variant()),
+            BuildAnchor::Unknown => {}
+        }
+        one.set(
+            &"has_box".to_variant(),
+            &mark.wall_box.is_some().to_variant(),
+        );
+        if let Some([[a, b, c], [d, e, f]]) = mark.wall_box {
+            one.set(
+                &"box_min".to_variant(),
+                &Vector3i::new(a, b, c).to_variant(),
+            );
+            one.set(
+                &"box_max".to_variant(),
+                &Vector3i::new(d, e, f).to_variant(),
+            );
+        }
+        out.push(&one.to_variant());
     }
     out
 }

@@ -177,6 +177,10 @@ const ROUTE_LIFT := 1.2
 const ATTACK_COLOUR := Color(1.0, 0.35, 0.25)
 const ATTACK_MARK_LIFT := 2.0
 const ATTACK_BEACON_LIFT := 11.0
+## A Build target's mark: its colour, and how far over its anchor it floats, in voxels.
+## PLACEHOLDER: the Build target marks — OWNER, at S6.
+const BUILD_COLOUR := Color(0.45, 0.9, 1.0)
+const BUILD_MARK_LIFT := 2.5
 
 ## Menu item ids.
 const ITEM_GO := 1
@@ -259,6 +263,11 @@ var _attack_label: Label
 ## redraws its markers with every view. id -> Label3D for the named beacons.
 var _attack_marks: Node3D
 var _attack_beacons := {}
+var _build_label: Label
+## The map's marks for the Build targets the text writes: a mark per target whose anchor can be
+## drawn, and a wall's box as the outline of its two corners as written (S3's `fixp`).
+var _build_marks: Node3D
+var _build_boxes: MeshInstance3D
 var _notes_loaded := false
 var _meter: Label
 var _meter_answers := -1
@@ -917,6 +926,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_this_round(String(state.get("this_round", "")))
 	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
 	_draw_attack(state.get("attack_targets", []))
+	_draw_build(state.get("build_targets", []))
 	_draw_dormant(state.get("dormant", {}))
 	# The report the meter draws describes the text on screen only while the rows do. A Load the
 	# verifier refused opened nothing, so the text on screen is still the one it counted.
@@ -1662,6 +1672,70 @@ func _draw_attack(targets: Array) -> void:
 	_place_attack_marks()
 
 
+## The Build targets the text on screen writes (S3's `fixp`, P6b finding 7), read by the bridge's
+## lax walk of the player's own file: one line each in the panel, "step N: <blueprint as
+## written>", a mark at a voxel anchor or over the vent an `on` anchor names (where
+## `get_map_summary` lists it this Lull), and a wall's box drawn as the outline of its two corners
+## as written. It decides nothing: an anchor it cannot read, or a vent it does not list, is not
+## drawn, and its line says so. The verdict on each target is the verifier's, on the rows.
+func _draw_build(targets: Array) -> void:
+	for child in _build_marks.get_children():
+		child.queue_free()
+	var boxes: ImmediateMesh = _build_boxes.mesh
+	boxes.clear_surfaces()
+	var vents := {}
+	for feature in bridge.editor_features():
+		vents[String(feature.get("id", ""))] = feature["at"]
+	var lines: PackedStringArray = []
+	for target in targets:
+		var words := {"step": target.get("step", 0), "blueprint": target.get("blueprint", "")}
+		var anchor := String(target.get("anchor", "unknown"))
+		var at: Variant = null
+		if anchor == "voxel":
+			at = target["at"]
+			lines.append(Strings.text("build_voxel", words.merged({"x": at.x, "y": at.y, "z": at.z})))
+		elif anchor == "on" and vents.has(String(target.get("feature", ""))):
+			at = vents[String(target["feature"])]
+			lines.append(Strings.text("build_on", words.merged({"feature": target.get("feature", "")})))
+		elif anchor == "on":
+			lines.append(Strings.text("build_on_unlisted", words.merged({"feature": target.get("feature", "")})))
+		else:
+			lines.append(Strings.text("build_unknown", words))
+		if at != null:
+			var mark := _attack_mark(Strings.text("build_mark", words))
+			mark.modulate = BUILD_COLOUR
+			mark.position = _world(at) + Vector3(0.0, BUILD_MARK_LIFT, 0.0)
+			_build_marks.add_child(mark)
+		if target.get("has_box", false):
+			_box_outline(boxes, target["box_min"], target["box_max"])
+	_build_label.text = "\n".join(lines) if not lines.is_empty() else Strings.text("build_none")
+	_build_label.accessibility_name = _build_label.text
+
+
+## The outline of the box whose corners are the voxels `low` and `high` (inclusive, as written,
+## sim axes): its twelve edges, around the voxels' faces. A drawing of what the file says.
+static func _box_outline(mesh: ImmediateMesh, low: Vector3i, high: Vector3i) -> void:
+	var a := Vector3(mini(low.x, high.x), mini(low.z, high.z), mini(low.y, high.y))
+	var b := Vector3(maxi(low.x, high.x) + 1, maxi(low.z, high.z) + 1, maxi(low.y, high.y) + 1)
+	var corners := [Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, a.y, b.z), Vector3(a.x, a.y, b.z), Vector3(a.x, b.y, a.z), Vector3(b.x, b.y, a.z), Vector3(b.x, b.y, b.z), Vector3(a.x, b.y, b.z)]
+	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	mesh.surface_set_color(BUILD_COLOUR)
+	for edge in [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]:
+		mesh.surface_add_vertex(corners[edge[0]])
+		mesh.surface_add_vertex(corners[edge[1]])
+	mesh.surface_end()
+
+
+## The Build targets' marks as drawn, for a check to count.
+func build_marks() -> Array[Node]:
+	return _build_marks.get_children().filter(func(mark: Node) -> bool: return not mark.is_queued_for_deletion())
+
+
+## The Build targets' lines as drawn.
+func build_text() -> String:
+	return _build_label.text
+
+
 ## Puts each named beacon's mark over the vista's marker for that id, and hides it while
 ## the vista draws none: the view is what says the beacon is in sight.
 func _place_attack_marks() -> void:
@@ -1781,6 +1855,9 @@ func _build_panel() -> void:
 
 	_heading(column, "attack_heading")
 	_attack_label = _label(column)
+
+	_heading(column, "build_heading")
+	_build_label = _label(column)
 
 	_heading(column, "chips_heading")
 	_chips = _label(column)
@@ -1939,6 +2016,12 @@ func _build_map_nodes() -> void:
 	vista.add_child(_route_labels)
 	_attack_marks = Node3D.new()
 	vista.add_child(_attack_marks)
+	_build_marks = Node3D.new()
+	vista.add_child(_build_marks)
+	_build_boxes = MeshInstance3D.new()
+	_build_boxes.mesh = ImmediateMesh.new()
+	_build_boxes.material_override = line
+	vista.add_child(_build_boxes)
 	_ghost = MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = Vector3(2.0, 9.0, 2.0)
