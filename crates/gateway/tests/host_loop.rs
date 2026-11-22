@@ -1767,11 +1767,19 @@ fn guided_picks(client: &mut Client) -> Vec<String> {
 
 /// S3's `probw`, item 9, through the real `serve` loop: in a Probation match
 /// the human's very first call of round 1, a `list_templates`, already carries
-/// the advisor's guided pick, because the host files every in-process seat's
-/// work before it takes its first job and after every job; and the first
-/// `list_templates` of round 2 carries none.
+/// the advisor's guided pick, and the first `list_templates` of round 2
+/// carries none.
+///
+/// What it proves, and no more (the review of #212): the advice is filed
+/// **before the human's first call is answered**. The host files every
+/// in-process seat's work twice over -- before it takes its first job, and
+/// after every job, the human's connection upgrade included -- and either one
+/// alone files it before that call, so removing one of the two leaves this
+/// test green (the review's mutants M9 and M10); moving the filing to after a
+/// call's answer turns it red. It does not prove the filing comes before every
+/// job, which nothing a seat can call observes.
 #[test]
-fn the_first_list_templates_of_a_probation_match_carries_the_guided_pick() {
+fn the_advice_is_filed_before_the_humans_first_call_is_answered() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let probation = Config {
         preset: pharmakos_gateway::probation::Preset::Probation,
