@@ -593,14 +593,9 @@ fn copy_project(from: &Path, to: &Path) -> Result<(), String> {
         let relative = file
             .strip_prefix(from)
             .map_err(|error| format!("{}: {error}", file.display()))?;
-        let first = relative
-            .components()
-            .next()
-            .map(|component| component.as_os_str().to_string_lossy().into_owned())
-            // `file` was walked from under `from`, so `relative` has a first
-            // component and the empty default is never read.
-            .unwrap_or_default();
-        if first == ".godot" || first == CLIENT_STAGE_DIR {
+        // `Path::starts_with` compares whole components, as the first
+        // component's name did.
+        if relative.starts_with(".godot") || relative.starts_with(CLIENT_STAGE_DIR) {
             continue;
         }
         copy_file(&file, &to.join(relative))?;
@@ -889,14 +884,14 @@ pub(crate) fn crt_hits(bytes: &[u8]) -> Vec<String> {
 /// About 32 bytes around `at`, printable ASCII as itself and anything else as
 /// a dot.
 fn context(bytes: &[u8], at: usize) -> String {
-    // A display window: clamped to the bytes at both ends on purpose, and
-    // `start..end` inside them by construction, so the default is never read.
+    // A display window of up to 8 bytes before `at` and 24 from it: it
+    // starts at the first byte when `at` is nearer than 8 (a clamp on what is
+    // shown, never on what is found), and `take` ends it at the last.
     let start = at.saturating_sub(8);
-    let end = (at + 24).min(bytes.len());
     bytes
-        .get(start..end)
-        .unwrap_or_default()
         .iter()
+        .skip(start)
+        .take(at + 24 - start)
         .map(|byte| {
             if byte.is_ascii_graphic() || *byte == b' ' {
                 char::from(*byte)
@@ -1052,10 +1047,8 @@ pub(crate) fn judge_export(exit_ok: bool, saw_savepack: bool, present: &[bool]) 
 
 fn print_tail(text: &str, count: usize) {
     let lines: Vec<&str> = text.lines().collect();
-    // The last `count` lines, for display: the start is clamped at 0 on
-    // purpose, and inside `lines`, so the default is never read.
-    let start = lines.len().saturating_sub(count);
-    for line in lines.get(start..).unwrap_or_default() {
+    // The last `count` lines, or all of them when there are fewer.
+    for line in lines.iter().rev().take(count).rev() {
         println!("      | {line}");
     }
 }
@@ -1094,10 +1087,9 @@ fn glibc_floor(ctx: &Ctx, files: &[PathBuf]) -> Result<String, String> {
 /// The highest `GLIBC_` version named in `objdump -T` output, as integers.
 pub(crate) fn highest_glibc(text: &str) -> Option<Vec<u32>> {
     let mut best: Option<Vec<u32>> = None;
-    for (index, _) in text.match_indices("GLIBC_") {
-        // `GLIBC_` (six ASCII bytes) was found at `index`, so `index + 6` is
-        // a boundary inside `text` and the default is never read.
-        let rest = text.get(index + 6..).unwrap_or_default();
+    // Each piece after a `GLIBC_` runs to the next one, which starts with a
+    // letter, so the version's digits are whole in it.
+    for rest in text.split("GLIBC_").skip(1) {
         let digits: String = rest
             .chars()
             .take_while(|character| character.is_ascii_digit() || *character == '.')
@@ -1229,12 +1221,10 @@ pub(crate) fn parse_tree(listing: &str) -> Vec<Crate> {
             continue;
         }
         let words: Vec<&str> = line.split_whitespace().collect();
-        let (Some(name), Some(version)) = (words.first(), words.get(1)) else {
+        let [name, version, rest @ ..] = words.as_slice() else {
             continue;
         };
-        // `words` has at least two items (checked above), so the default is
-        // never read.
-        let mut rest: Vec<&str> = words.get(2..).unwrap_or_default().to_vec();
+        let mut rest: Vec<&str> = rest.to_vec();
         let mut member = false;
         if rest.first().is_some_and(|word| word.starts_with('(')) {
             member = true;
@@ -1246,12 +1236,10 @@ pub(crate) fn parse_tree(listing: &str) -> Vec<Crate> {
                 }
             }
         }
-        let source = if rest.last().is_some_and(|word| word.starts_with("http")) {
-            // `rest.last()` was just seen, so the default is never read.
-            rest.pop().unwrap_or_default().to_owned()
-        } else {
-            String::new()
-        };
+        let source = rest
+            .pop_if(|word| word.starts_with("http"))
+            .map(str::to_owned)
+            .unwrap_or_default();
         crates.push(Crate {
             name: (*name).to_owned(),
             version: version.trim_start_matches('v').to_owned(),
@@ -1764,7 +1752,7 @@ pub(crate) fn manifest_verdict(
 /// name, not a `.license` sidecar, not `REUSE.toml`, not an empty file.
 pub(crate) fn reuse_lints(name: &str, size: u32) -> bool {
     let relative = name.split_once('/').map_or(name, |(_, rest)| rest);
-    let base = relative.rsplit('/').next().unwrap_or(relative);
+    let base = relative.rsplit_once('/').map_or(relative, |(_, base)| base);
     let upper = base.to_ascii_uppercase();
     !(relative.starts_with("LICENSES/")
         || upper.starts_with("LICENSE")
@@ -1807,11 +1795,15 @@ fn reuse_check(
     let text = read_text(log)?;
     // Standard error shares the log, so a warning reuse prints there may sit
     // around the report: parse the one JSON object it wrote.
-    let report = match (text.find('{'), text.rfind('}')) {
-        // `{` and `}` are ASCII, so both are boundaries and the default is
-        // never read.
-        (Some(start), Some(end)) if start < end => text.get(start..=end).unwrap_or_default(),
-        _ => text.as_str(),
+    let object = text
+        .trim_start_matches(|character| character != '{')
+        .trim_end_matches(|character| character != '}');
+    // With no `{` before a `}`, nothing is left: the whole log is handed to
+    // the parser, whose refusal then quotes it.
+    let report = if object.is_empty() {
+        text.as_str()
+    } else {
+        object
     };
     let json = crate::Json::parse(report).map_err(|error| {
         format!(
@@ -2228,5 +2220,17 @@ SPDX-License-Identifier = \"MIT\"
                 assert!(text.contains(marker), "{name} lacks {marker}");
             }
         }
+    }
+
+    /// The display window round a hit: 8 bytes before it and 24 from it, cut
+    /// at either end of the bytes, with nothing outside them read.
+    #[test]
+    fn the_context_window_is_cut_at_both_ends() {
+        let bytes: Vec<u8> = (b'a'..=b'z').chain(b'A'..=b'Z').collect();
+        assert_eq!(context(&bytes, 10), "cdefghijklmnopqrstuvwxyzABCDEFGH");
+        assert_eq!(context(&bytes, 2), "abcdefghijklmnopqrstuvwxyz");
+        assert_eq!(context(&bytes, 50), "QRSTUVWXYZ");
+        assert_eq!(context(b"a\x00b", 1), "a.b");
+        assert_eq!(context(b"", 0), "");
     }
 }
