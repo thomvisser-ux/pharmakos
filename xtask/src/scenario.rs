@@ -857,6 +857,12 @@ fn integer(value: Option<&Json>) -> Option<i64> {
 /// Replaces `//` and `/* */` comments with spaces, leaving string literals
 /// alone. Spaces rather than deletion so that byte offsets in a JSON parse
 /// error still point at the right place in the original file.
+///
+/// A comment is what plan-core's reader takes for one
+/// (`crates/plan-core/src/jsonc.rs`, `comment_end`): a line comment runs to
+/// the first line feed or carriage return; a block comment to the first `*/`
+/// after its `/*`, and one that never closes is no comment, its text left for
+/// the parser to refuse.
 fn strip_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -879,18 +885,19 @@ fn strip_comments(text: &str) -> String {
             }
             continue;
         }
-        match (character, chars.peek()) {
+        let next = chars.peek().copied();
+        match (character, next) {
             ('"', _) => {
                 in_string = true;
                 out.push('"');
             }
             ('/', Some('/')) => {
                 blank(&mut out, character);
-                while let Some(next) = chars.next_if(|next| *next != '\n') {
+                while let Some(next) = chars.next_if(|next| !matches!(next, '\n' | '\r')) {
                     blank(&mut out, next);
                 }
             }
-            ('/', Some('*')) => {
+            ('/', Some('*')) if block_closes(chars.clone()) => {
                 blank(&mut out, character);
                 // The opener's own `*` cannot also close it: `/*/` is open.
                 if let Some(star) = chars.next() {
@@ -911,11 +918,25 @@ fn strip_comments(text: &str) -> String {
     out
 }
 
-/// A commented-out character as spaces, one per byte, except a newline, which
-/// stays so that line numbers in a parse error still match the file.
+/// Whether the block comment whose `/` was just read closes: `rest` starts at
+/// its `*`, and the comment ends at the first `*/` after that `*`. One that
+/// never closes is no comment, as plan-core's reader has it.
+fn block_closes(mut rest: std::iter::Peekable<std::str::Chars<'_>>) -> bool {
+    rest.next();
+    let mut previous_star = false;
+    rest.any(|next| {
+        let closes = previous_star && next == '/';
+        previous_star = next == '*';
+        closes
+    })
+}
+
+/// A commented-out character as spaces, one per byte, except a line feed or
+/// a carriage return, which stays so that line numbers in a parse error
+/// still match the file.
 fn blank(out: &mut String, character: char) {
-    if character == '\n' {
-        out.push('\n');
+    if matches!(character, '\n' | '\r') {
+        out.push(character);
     } else {
         for _ in 0..character.len_utf8() {
             out.push(' ');
@@ -1014,8 +1035,16 @@ mod tests {
         // The opener's `*` does not close it: everything after `/*/` up to a
         // real `*/` is comment.
         assert_eq!(strip_comments("1/*/ x */2"), format!("1{}2", " ".repeat(8)));
-        // An unclosed comment runs to the end, and a line comment to its line.
-        assert_eq!(strip_comments("1/* x"), "1    ");
+        // A block comment that never closes is no comment, as plan-core's
+        // reader has it (`jsonc::comment_end`): its text is left for the
+        // parser to refuse. A line comment runs to its line's end.
+        assert_eq!(strip_comments("1/* x"), "1/* x");
+        assert_eq!(strip_comments("1/* x */ /* y"), "1        /* y");
+        // A line comment ends at a carriage return as at a line feed, so a
+        // file with CR line endings does not lose its later lines.
+        assert_eq!(strip_comments("1// x\r2"), "1    \r2");
+        assert_eq!(strip_comments("1// x\r\n2"), "1    \r\n2");
+        assert_eq!(strip_comments("1/* a\r\nb */2"), "1    \r\n    2");
         assert_eq!(
             strip_comments("1// \u{2014}\n2"),
             format!("1{}\n2", " ".repeat(6))
