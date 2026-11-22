@@ -53,9 +53,12 @@
 //! # The counted half, and the curve (S3's `bench3`)
 //!
 //! Beside the nanoseconds, each decision tick's **counted evaluation units**
-//! (`World::decision_work`: handlers tried, condition nodes evaluated,
-//! selector candidates ranked and "nearest" estimates run), summed over the
-//! seats, are read after the tick: item 139 (5)'s "count carried to S3". The
+//! (`World::decision_work`: one a primitive step of counted work, charged
+//! where it happens -- a handler tried, a condition node evaluated, a
+//! selector candidate ranked, a feature the "nearest" ranker scans, a column
+//! a site search scans, and a node a search pops, a served walk's and a
+//! `toward`'s grid optimum's alike; `pharmakos_sim::seams::UnitTally`), summed
+//! over the seats, are read after the tick: item 139 (5)'s "count carried to S3". The
 //! count is the sim's, identical on every machine and every run (a run whose
 //! count differs stops the measurement, as a differing chain does), so it is
 //! the platform-free half of the same figure.

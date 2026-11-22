@@ -20,7 +20,8 @@
 //! alone. Each configuration is played [`RUNS`] times, every run held to the
 //! first's hash chain, and each tick keeps its fastest Decision phase; the line is the difference of the two means per
 //! decision tick, and the fourth seat's counted evaluation units
-//! (`World::decision_work`) say how much of the playbook it ran. No layout:
+//! (`World::decision_work`, one a primitive step, a search's pops included)
+//! say how much work its decisions did. No layout:
 //! at four seats a seat's share of the world totals is 75 units and 10
 //! beacons, which decision 2's 100 a seat does not fit, so both runs are the
 //! generated map alone. The mean sums the Decision phase over every tick and

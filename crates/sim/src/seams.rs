@@ -99,53 +99,183 @@ impl WorkCounter {
 }
 
 /// A running count of evaluation units that a **read-only** path can add to:
-/// what a decision's conditions, selectors and "nearest" estimates are
-/// measured in (P1's counted half, S1's plan section 5; decisions-log item
-/// 33 (c)).
+/// what a decision's counted work is measured in (P1's counted half, S1's
+/// plan section 5; decisions-log item 33 (c)).
+///
+/// **One unit is one primitive step of counted work, charged where the step
+/// happens** (lane `dunit`): a handler tried, a condition node evaluated, a
+/// selector candidate ranked, a feature the "nearest" ranker scans, a column
+/// a site search scans (the `covering` spiral's, the `toward` site
+/// listing's), and **a node a search pops** -- the grid and endpoint pops and
+/// the abstract pops of a served walk (`targeting::Ground::travel`) and the
+/// grid optimum's pops of a `toward` (`targeting::stone_site`), each charged
+/// as the change in the search scratch's own counters over the call. A call
+/// that pops nothing charges nothing: there is no flat charge per call. A
+/// search's heuristic is evaluated a bounded number of times per node it
+/// pushes, so the pops carry it and it is not charged again. A unit is a
+/// count, not a cost model: no step is weighted against another, so what a
+/// unit costs in nanoseconds per kind of step is the bench's to measure.
 ///
 /// The tally behind [`WorkCounter`]'s per-decision figure. It exists because
 /// a condition is evaluated over a `&World`, and counting there needs interior
-/// mutability; it is an atomic, with relaxed ordering, only so that a `World`
+/// mutability; it is atomics, with relaxed ordering, only so that a `World`
 /// holding one stays `Sync`. Nothing reads it from another thread, and every
 /// count is made in the tick's own fixed order.
+///
+/// It counts in `u64` by a checked add and never saturates: a sum that would
+/// pass `u64::MAX`, or a charge whose source count could not be read
+/// ([`UnitTally::add_measured`]), leaves the tally **unmeasured** under an
+/// enumerated reason ([`Unmeasured`]), which [`UnitTally::read`] answers in
+/// place of a number until the next reset. The first reason sticks.
 ///
 /// **It is not state**: never hashed, never saved, and it compares equal to
 /// any other tally, so two worlds that differ only in what was last measured
 /// are the same world. `tests/determinism.rs` keeps it out of the encoding.
 #[derive(Debug, Default)]
-pub struct UnitTally(core::sync::atomic::AtomicU32);
+pub struct UnitTally {
+    count: core::sync::atomic::AtomicU64,
+    /// [`Unmeasured::id`] of the first reason the count stopped being
+    /// measured, or [`MEASURED`] while it is a count.
+    fault: core::sync::atomic::AtomicU8,
+}
+
+/// The [`UnitTally::fault`] byte of a tally that still holds a count.
+const MEASURED: u8 = 0;
+
+/// Why a [`UnitTally`] holds no count since its last reset.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Unmeasured {
+    /// The units counted passed `u64::MAX`.
+    Overflowed,
+    /// A charge's source count, a search scratch's pop counter, could not be
+    /// read: it had itself passed `u64::MAX`, or it read lower after the
+    /// call than before it.
+    SourceUnreadable,
+}
+
+impl Unmeasured {
+    /// The reason's byte in [`UnitTally`]; never [`MEASURED`].
+    const fn id(self) -> u8 {
+        match self {
+            Unmeasured::Overflowed => 1,
+            Unmeasured::SourceUnreadable => 2,
+        }
+    }
+
+    /// The reason a fault byte names; `None` for [`MEASURED`].
+    const fn from_id(id: u8) -> Option<Unmeasured> {
+        match id {
+            1 => Some(Unmeasured::Overflowed),
+            2 => Some(Unmeasured::SourceUnreadable),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for Unmeasured {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Unmeasured::Overflowed => "the decision units counted passed u64::MAX",
+            Unmeasured::SourceUnreadable => {
+                "a search's pop counter could not be read for a decision-unit charge"
+            }
+        })
+    }
+}
+
+impl std::error::Error for Unmeasured {}
 
 impl UnitTally {
     /// A tally at zero.
     #[must_use]
     pub const fn new() -> UnitTally {
-        UnitTally(core::sync::atomic::AtomicU32::new(0))
+        UnitTally {
+            count: core::sync::atomic::AtomicU64::new(0),
+            fault: core::sync::atomic::AtomicU8::new(MEASURED),
+        }
     }
 
-    /// Add `units`, saturating.
+    /// Add `units`.
     pub fn add(&self, units: u32) {
-        let now = self.get();
-        self.0.store(
-            now.saturating_add(units),
-            core::sync::atomic::Ordering::Relaxed,
-        );
+        self.add_count(u64::from(units));
+    }
+
+    /// Add `units`, a count of primitive steps a search reports in `u64`.
+    /// A sum past `u64::MAX` leaves the tally [`Unmeasured::Overflowed`].
+    pub fn add_count(&self, units: u64) {
+        let now = self.count.load(core::sync::atomic::Ordering::Relaxed);
+        match now.checked_add(units) {
+            Some(next) => self
+                .count
+                .store(next, core::sync::atomic::Ordering::Relaxed),
+            None => self.fail(Unmeasured::Overflowed),
+        }
+    }
+
+    /// Add a measured count, or record why it could not be measured.
+    pub fn add_measured(&self, units: Result<u64, Unmeasured>) {
+        match units {
+            Ok(units) => self.add_count(units),
+            Err(reason) => self.fail(reason),
+        }
+    }
+
+    /// Record that the count is no longer measured; the first reason sticks.
+    fn fail(&self, reason: Unmeasured) {
+        if self.fault.load(core::sync::atomic::Ordering::Relaxed) == MEASURED {
+            self.fault
+                .store(reason.id(), core::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// What has been counted since the last reset.
-    #[must_use]
-    pub fn get(&self) -> u32 {
-        self.0.load(core::sync::atomic::Ordering::Relaxed)
+    ///
+    /// # Errors
+    ///
+    /// The [`Unmeasured`] reason, once the count stopped being a count.
+    pub fn read(&self) -> Result<u64, Unmeasured> {
+        match Unmeasured::from_id(self.fault.load(core::sync::atomic::Ordering::Relaxed)) {
+            Some(reason) => Err(reason),
+            None => Ok(self.count.load(core::sync::atomic::Ordering::Relaxed)),
+        }
     }
 
-    /// Start again from zero.
+    /// The count as the world's per-decision [`WorkCounter`] copy takes it,
+    /// a `u32`, with `u32::MAX` standing for a count that is past it or
+    /// unmeasured.
+    ///
+    /// The one lossy reader, kept only because the decision phase's copy
+    /// into `World::decision_work` (`world.rs`, outside lane `dunit`'s
+    /// grant) takes a `u32`; every other reader uses [`UnitTally::read`].
+    /// The fix is the decision phase's: carry [`UnitTally::read`]'s answer
+    /// into `decision_work` and let its readers refuse an unmeasured
+    /// decision (lane `dunit`'s pull request names the lines).
+    #[must_use]
+    pub fn get(&self) -> u32 {
+        self.read()
+            .ok()
+            .and_then(|count| u32::try_from(count).ok())
+            .unwrap_or(u32::MAX)
+    }
+
+    /// Start again from zero, measured.
     pub fn reset(&self) {
-        self.0.store(0, core::sync::atomic::Ordering::Relaxed);
+        self.count.store(0, core::sync::atomic::Ordering::Relaxed);
+        self.fault
+            .store(MEASURED, core::sync::atomic::Ordering::Relaxed);
     }
 }
 
 impl Clone for UnitTally {
     fn clone(&self) -> UnitTally {
-        UnitTally(core::sync::atomic::AtomicU32::new(self.get()))
+        UnitTally {
+            count: core::sync::atomic::AtomicU64::new(
+                self.count.load(core::sync::atomic::Ordering::Relaxed),
+            ),
+            fault: core::sync::atomic::AtomicU8::new(
+                self.fault.load(core::sync::atomic::Ordering::Relaxed),
+            ),
+        }
     }
 }
 

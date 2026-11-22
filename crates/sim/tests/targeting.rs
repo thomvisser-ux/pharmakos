@@ -1038,8 +1038,9 @@ fn the_feature_table_is_regenerated_identically_on_restore() {
 #[test]
 fn the_decision_tick_counts_its_evaluation_units() {
     // P1's counted half (S1's plan, section 5): one evaluation unit per
-    // handler tried, per condition node evaluated, per selector candidate and
-    // per "nearest" estimate, counted per seat per decision and never hashed.
+    // primitive step -- a handler tried, a condition node evaluated, a
+    // selector candidate, a feature scanned, a column scanned, a node a
+    // search pops -- counted per seat per decision and never hashed.
     //
     // One handler whose one-node condition is false, and a wait on a one-node
     // condition: each decision tries the handler (1), evaluates its condition
@@ -1084,24 +1085,70 @@ fn the_decision_tick_counts_its_evaluation_units() {
         "the count is not in the state hash: the same behaviour hashes the same"
     );
 
-    // A covering step counts its candidates, its estimates and its spiral.
-    let mut runner = open(world_at(SEED, 2, &[180_000]), COVER);
+    // A covering step counts its candidates, its walks' pops and its spiral.
+    let fixture = world_at(SEED, 2, &[180_000]);
+    // The resolve alone, on a fresh tally and a fresh scratch: one unit a
+    // feature the ranker scans, one a node each served walk pops, one a
+    // spiral column the covering search tries.
+    let resolve = {
+        let commander = fixture
+            .commander_of(SeatId::new(SEAT))
+            .expect("a commander");
+        let row = fixture.units().row_of(commander).expect("a live commander");
+        let start = fixture
+            .units()
+            .positions()
+            .get(row.index())
+            .copied()
+            .expect("the commander's row");
+        let tally = pharmakos_sim::seams::UnitTally::new();
+        let ground = pharmakos_sim::targeting::Ground {
+            work: &tally,
+            ..fixture.ground()
+        };
+        let mut scratch = Scratch::for_map(fixture.surface(), fixture.clusters().size()).unwrap();
+        pharmakos_sim::targeting::cover_counted(
+            &ground,
+            &mut scratch,
+            SeatId::new(SEAT),
+            start,
+            pharmakos_sim::targeting::FeatureSpec::Nearest {
+                kind: FeatureKind::Vent,
+                uncovered: true,
+            },
+        )
+        .expect("a covering site");
+        tally.read().expect("measured")
+    };
+    // The core's seam choice, which the first decision also makes (its
+    // starting mining drone gives it one, `pharmakos_sim::mining`), measured
+    // alone: the same first decision with no playbook sealed
+    // (`tests/mining.rs`'s `a_seam_choice_counts_its_estimates...` holds its
+    // parts, one a feature ranked and one a node its walk pops).
+    let seam = {
+        let mut runner = Runner::new(fixture.clone()).unwrap_or_else(|error| panic!("{error}"));
+        assert!(runner.begin_push().unwrap());
+        let _ = play(&mut runner, 1, |_, _| {});
+        runner.world().decision_work(0).unwrap().spent()
+    };
+    let mut runner = open(fixture, COVER);
     let _ = play(&mut runner, 1, |_, _| {});
     let covering = runner.world().decision_work(0).unwrap().spent();
+    // The decision is the resolve and the seam choice, and nothing else.
+    assert_eq!(u64::from(covering), resolve + u64::from(seam));
     // Pinned exactly on the golden seed, so a change to what the resolver
     // charges shows here rather than drifting under a lower bound. The count
     // goes past the plan's four categories (S1's plan, section 5 item 3): it
-    // also charges one unit per feature the ranker scans and one per spiral
-    // column the covering search tries, which the pull request names for
-    // `p1`'s report. Since S1's `mine` lane the first decision also makes the
-    // core's seam choice (its starting mining drone gives it one,
-    // `pharmakos_sim::mining`): one unit per feature ranked (ten on this map)
-    // and one estimate for the one seam with work in reach, so 412 + 11. The
-    // narrow and wide counts above are read at the sixth tick, by when the
-    // seam is held and keeping it costs nothing.
+    // charges one unit per feature the ranker scans, one per node a search
+    // pops and one per spiral column the covering search tries. Before lane
+    // `dunit` a served walk charged 1 whatever it popped, and this read 423
+    // (412 for the resolve and 11 for the seam choice). The narrow and wide
+    // counts above are read at the sixth tick, by when the seam is held and
+    // keeping it costs nothing.
+    println!("covering: {covering} = {resolve} for the resolve + {seam} for the seam choice");
     assert_eq!(
-        covering, 423,
-        "a covering resolution ranks every feature and walks a spiral: {covering}"
+        covering, 4_716,
+        "a covering resolution ranks every feature, walks and searches a spiral: {covering}"
     );
 }
 

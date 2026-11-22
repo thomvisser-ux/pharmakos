@@ -572,18 +572,49 @@ fn a_written_seam_choice_releases_the_held_seam() {
 fn a_seam_choice_counts_its_estimates_and_a_held_seam_costs_none() {
     // No playbook sealed, so a decision spends nothing but the seam choice:
     // seat 0's core holds no seam until its first decision, which ranks the
-    // map's features (one unit each) and estimates the one seam with work
-    // for it (one unit).
+    // map's features (one unit each) and prices the walk to the one seam with
+    // work for it (one unit a node the walk pops, lane `dunit`).
     let fixture = world(&[180_000]);
     let features = u32::try_from(fixture.features().len()).expect("a few");
+    // The same walk, priced on its own scratch: from the core's column to the
+    // starting seam, the one candidate the choice prices.
+    let seam = starting_seam(&fixture, core(&fixture));
+    let pops = {
+        let row = fixture
+            .beacons()
+            .row_of_ordinal(SEAT, 0)
+            .expect("seat 0 has a core");
+        let origin = pharmakos_sim::targeting::column_of(
+            fixture
+                .beacons()
+                .positions()
+                .get(row)
+                .copied()
+                .expect("the core's row"),
+        );
+        let ground = fixture.ground();
+        let mut scratch = pharmakos_sim::pathing::search::Scratch::for_map(
+            fixture.surface(),
+            fixture.clusters().size(),
+        )
+        .expect("the map takes a search");
+        let mut ranker = pharmakos_sim::targeting::Ranker::new(&ground, origin, |at| at == seam);
+        assert!(
+            ranker.next(&ground, &mut scratch).is_some(),
+            "the seam is reached"
+        );
+        assert_eq!(scratch.walks().unwrap(), 1, "by one served walk");
+        scratch.expansions().unwrap() + scratch.abstract_expansions().unwrap()
+    };
+    assert!(pops > 0, "a served walk pops nodes");
     let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
     let first = runner.world().decision_work(0).expect("seat 0").spent();
     assert_eq!(
-        first,
-        features + 1,
-        "a choice ranks every feature and estimates its one candidate"
+        u64::from(first),
+        u64::from(features) + pops,
+        "a choice ranks every feature and charges its one walk's pops"
     );
     play(&mut runner, 5);
     assert_eq!(
