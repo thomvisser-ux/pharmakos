@@ -593,14 +593,20 @@ fn copy_project(from: &Path, to: &Path) -> Result<(), String> {
         let relative = file
             .strip_prefix(from)
             .map_err(|error| format!("{}: {error}", file.display()))?;
-        // `Path::starts_with` compares whole components, as the first
-        // component's name did.
-        if relative.starts_with(".godot") || relative.starts_with(CLIENT_STAGE_DIR) {
+        if left_out_of_the_project_copy(relative) {
             continue;
         }
         copy_file(&file, &to.join(relative))?;
     }
     Ok(())
+}
+
+/// Whether a file of the Godot project, at `relative` inside it, is left out
+/// of the copy: anything under the import cache `.godot` or the staging
+/// folder. `Path::starts_with` compares whole components, so `.godotx/` and a
+/// nested `scripts/.godot/` are copied.
+fn left_out_of_the_project_copy(relative: &Path) -> bool {
+    relative.starts_with(".godot") || relative.starts_with(CLIENT_STAGE_DIR)
 }
 
 /// Every file directly in `from`, copied into `to`.
@@ -1771,6 +1777,17 @@ pub(crate) fn expected_lint_count(listed: &[zip::Listed]) -> usize {
         .count()
 }
 
+/// The JSON object in reuse's log: from its first `{` to its last `}`,
+/// because standard error shares the log and a warning reuse prints may sit
+/// around the report. With no `{` before a `}` nothing is left, and the whole
+/// log is handed to the parser, whose refusal then names it.
+fn report_object(text: &str) -> &str {
+    let object = text
+        .trim_start_matches(|character| character != '{')
+        .trim_end_matches(|character| character != '}');
+    if object.is_empty() { text } else { object }
+}
+
 fn reuse_check(
     require_tools: bool,
     base: &Path,
@@ -1793,19 +1810,7 @@ fn reuse_check(
         log,
     )?;
     let text = read_text(log)?;
-    // Standard error shares the log, so a warning reuse prints there may sit
-    // around the report: parse the one JSON object it wrote.
-    let object = text
-        .trim_start_matches(|character| character != '{')
-        .trim_end_matches(|character| character != '}');
-    // With no `{` before a `}`, nothing is left: the whole log is handed to
-    // the parser, whose refusal then quotes it.
-    let report = if object.is_empty() {
-        text.as_str()
-    } else {
-        object
-    };
-    let json = crate::Json::parse(report).map_err(|error| {
+    let json = crate::Json::parse(report_object(&text)).map_err(|error| {
         format!(
             "reuse printed no JSON ({error}); its output is in {}",
             log.display()
@@ -2232,5 +2237,52 @@ SPDX-License-Identifier = \"MIT\"
         assert_eq!(context(&bytes, 50), "QRSTUVWXYZ");
         assert_eq!(context(b"a\x00b", 1), "a.b");
         assert_eq!(context(b"", 0), "");
+    }
+
+    /// The highest version wins wherever it stands in the listing, the first
+    /// line included.
+    #[test]
+    fn the_glibc_floor_is_read_from_the_first_line_too() {
+        let text = "\
+0000 DF *UND* 0000 (GLIBC_2.34) pthread_create
+0000 DF *UND* 0000 (GLIBC_2.2.5) memcpy
+";
+        assert_eq!(highest_glibc(text), Some(vec![2, 34]));
+        assert_eq!(highest_glibc("(GLIBC_2.17) only"), Some(vec![2, 17]));
+    }
+
+    /// The project copy leaves out the import cache and the staging folder,
+    /// whole components only.
+    #[test]
+    fn the_project_copy_leaves_out_the_cache_and_the_stage() {
+        for left_out in [".godot/imported/x.ctex", ".godot", "bin/lib.dll"] {
+            assert!(
+                left_out_of_the_project_copy(Path::new(left_out)),
+                "{left_out}"
+            );
+        }
+        for copied in [
+            ".godotx/a.gd",
+            "scripts/.godot/a.gd",
+            "binary/a.gd",
+            "scripts/bin/a.gd",
+            "project.godot",
+        ] {
+            assert!(!left_out_of_the_project_copy(Path::new(copied)), "{copied}");
+        }
+    }
+
+    /// The report is the JSON object between the log's first `{` and last
+    /// `}`, whatever warnings sit around it; with none, the whole log.
+    #[test]
+    fn the_reuse_report_is_the_object_inside_the_log() {
+        assert_eq!(
+            report_object("warning: x\n{\"summary\": {\"a\": 1}}\nmore\n"),
+            "{\"summary\": {\"a\": 1}}"
+        );
+        assert_eq!(report_object("{\"a\": 1}"), "{\"a\": 1}");
+        assert_eq!(report_object("no report"), "no report");
+        assert_eq!(report_object("} then {"), "} then {");
+        assert_eq!(report_object("{ unclosed"), "{ unclosed");
     }
 }
