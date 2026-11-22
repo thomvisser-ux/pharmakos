@@ -4483,6 +4483,12 @@ pub fn strip_comments(text: &str) -> String {
 /// rule 4), so a text that is not JSON once its comments are gone is no document here, and
 /// each reader answers what it documents for one: no route, no option set, no reference.
 /// The verifier, asked about the same text, names what is wrong with it.
+///
+/// Its depth is bounded (decisions-log item 167 (9), carried to S3's `fixp`): `json::read` is the
+/// one grammar every reader shares, which refuses a value inside more than
+/// [`json::grammar::MAX_DEPTH`] containers with its typed error before it nests further, so a
+/// hostile file cannot exhaust this reader's stack, nor the recursive walks over what it returns
+/// (`targeting`'s and `vocabulary`'s), which never go deeper than the tree it built.
 pub(crate) fn lax_document(text: &str) -> Option<Json> {
     json::read(&strip_comments(text)).ok()
 }
@@ -4679,6 +4685,25 @@ mod tests {
 
     fn compact(value: &Json) -> String {
         json::write(value).split_whitespace().collect()
+    }
+
+    /// **The lax reader's depth is bounded** (decisions-log item 167 (9)): a text nested a million
+    /// deep is refused as no document, without exhausting the stack, and so is one container past
+    /// the shared grammar's bound; one at the bound is read, and the walks over it return.
+    #[test]
+    fn the_lax_reader_is_bounded_in_depth() {
+        let deep = |depth: usize| {
+            let mut text = "[".repeat(depth);
+            text.push_str(&"]".repeat(depth));
+            text
+        };
+        assert!(lax_document(&deep(1_000_000)).is_none());
+        let bound = json::grammar::MAX_DEPTH;
+        assert!(lax_document(&deep(bound.saturating_add(2))).is_none());
+        let at_bound = deep(bound);
+        assert!(lax_document(&at_bound).is_some());
+        assert!(targeting::attack_targets(&at_bound).is_empty());
+        assert!(targeting::build_targets(&deep(1_000_000)).is_empty());
     }
 
     #[test]
@@ -6907,6 +6932,55 @@ mod tests {
         assert_eq!(settled, Settled::Refused);
         assert_eq!(editor.refusals(), 1);
         assert!(editor.route().found_nothing.is_empty());
+    }
+
+    /// **`estimate_route`'s `PHASE_CLOSED`** (decisions-log item 169, carried to S3's `fixp`): the
+    /// editor never asks for an estimate outside an open Lull, its door; and one asked in the
+    /// Lull's last moment and refused `PHASE_CLOSED` is a refused call (AGENTS.md section 3 rule 4:
+    /// only `NOT_FOUND` is the route's answer), counted, and shown on the route's own line.
+    #[test]
+    fn a_phase_closed_estimate_is_never_asked_and_is_a_refusal_when_it_comes() {
+        let commander = Entity {
+            id: "u_1".to_owned(),
+            kind: EntityKind::Unit,
+            subtype: "commander".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: [358, 22, 36],
+            hp: None,
+            heading: None,
+        };
+        for door in [Door::Push, Door::Recap, Door::Ended, Door::Ready] {
+            let mut editor = loaded(EXPAND_EAST);
+            editor.set_door(door);
+            editor.set_entities(std::slice::from_ref(&commander));
+            for _ in 0..12 {
+                assert_ne!(
+                    method_of(editor.next_call(false)),
+                    "estimate_route",
+                    "no estimate behind a shut door ({door:?})"
+                );
+            }
+        }
+        let mut editor = loaded(EXPAND_EAST);
+        editor.set_entities(std::slice::from_ref(&commander));
+        assert_eq!(method_of(editor.next_call(false)), "estimate_route");
+        editor.set_door(Door::Push);
+        let settled = editor
+            .answered(Err(("PHASE_CLOSED", "planning is closed in a Push")))
+            .expect("settled");
+        assert_eq!(settled, Settled::Refused);
+        assert_eq!(editor.refusals(), 1, "counted as a refused call");
+        assert!(
+            editor.route().found_nothing.is_empty(),
+            "not the route's answer"
+        );
+        assert_eq!(
+            editor.unchecked(Check::Route),
+            Some(Unchecked::Refused(
+                "PHASE_CLOSED: planning is closed in a Push".to_owned()
+            )),
+            "shown on the route's own line"
+        );
     }
 
     // --- Part 2: the reads, the picker, the name picks and the Visit & change rows ---------
