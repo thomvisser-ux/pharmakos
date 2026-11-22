@@ -430,6 +430,58 @@ fn the_wizards_live_suggestion_qualifies_and_is_goldened_for_every_template() {
     }
 }
 
+/// S1's demo, finding L (decisions-log item 139 (2)): Hold & Build writes out
+/// the two settings it used to leave to their defaults, its new beacon's rules
+/// of engagement and its Build mandate's terraform, so its own FULL report in
+/// the lobby's Lull draws no I0003 note at either pointer and still qualifies.
+#[test]
+fn hold_and_build_writes_its_roe_and_terraform_and_draws_no_note_for_either() {
+    let mut surface = lobby();
+    let token = human_token(&mut surface);
+    let answer = call(
+        &mut surface,
+        &token,
+        "instantiate_template",
+        Json::Object(vec![(
+            String::from("template_id"),
+            Json::String(String::from("hold_and_build")),
+        )]),
+    );
+    let playbook = text_of(&answer, "playbook_jsonc");
+    let verified = call(
+        &mut surface,
+        &token,
+        "verify_plan",
+        Json::Object(vec![
+            (String::from("playbook_jsonc"), Json::String(playbook)),
+            (String::from("depth"), Json::String(String::from("full"))),
+        ]),
+    );
+    let report = verified.get("report").cloned().expect("a report");
+    assert_eq!(
+        report.get("qualifies"),
+        Some(&Json::Bool(true)),
+        "{report:?}"
+    );
+    let Some(Json::Array(diagnostics)) = report.get("diagnostics") else {
+        panic!("a report lists its diagnostics: {report:?}");
+    };
+    let noted: Vec<String> = diagnostics
+        .iter()
+        .filter(|diagnostic| text_of(diagnostic, "code") == "I0003")
+        .map(|diagnostic| text_of(diagnostic, "path"))
+        .collect();
+    for pointer in [
+        "/declarative/route/0/place_beacon/initial/mandate/roe",
+        "/declarative/route/0/place_beacon/initial/mandate/build/terraform",
+    ] {
+        assert!(
+            !noted.iter().any(|path| path == pointer),
+            "Hold & Build still leaves {pointer} to its default: {noted:?}"
+        );
+    }
+}
+
 /// A human seat nobody edits, in the lobby's match played to its round
 /// limit: it seals nothing, so at each Push the gateway files the safe
 /// playbook its Easy advisor gave it, which sets the core's dig depth, and

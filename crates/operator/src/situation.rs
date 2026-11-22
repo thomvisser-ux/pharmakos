@@ -617,7 +617,7 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
 /// no recap events, as the gateway resumes one), so there it reads as
 /// [`LastPush::Survived`] and the guard a death would add is not added.
 ///
-/// PLACEHOLDER: a resumed Lull forgets the last Push's death, which no seat-facing field carries — owner, S3, with `get_reports` or the feed's per-kind payload
+/// PLACEHOLDER: a resumed Lull forgets the last Push's death, which no seat-facing field carries — owner, S5, with Normal and Hard
 ///
 /// # Errors
 ///
