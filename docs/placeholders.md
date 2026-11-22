@@ -311,7 +311,7 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 | S3-08 | An absent `on_fail` means `SKIP` | `crates/sim/src/interpreter.rs` `DEFAULT_ON_FAIL` | — |
 | S3-09 | `max_deaths_before_fallback` = 0 means no limit | `crates/sim/src/interpreter/exec.rs` `out_of_deaths` | — |
 | S3-10 | Spike G2's section 9.9 values as rules rows: `LONG_RUN` = 6, `SMOOTH_LOOKAHEAD` = 16 | `crates/sim/src/pathing.rs` `LONG_RUN`, `SMOOTH_LOOKAHEAD` | G2 section 9.9 |
-| S3-11 | The corner entrance per cluster, recorded and deliberately not built | `crates/sim/src/pathing/clusters.rs` module doc | plan section 2.1 |
+| S3-11 | The corner entrance per cluster, recorded and deliberately not built. **Discharged by `p3fix` #190 (item 169 (1)): the lane measured it (a cluster corner carried under 1 % of the estimate's excess on every band of 32 cells and under) and did not build it, the module doc says so, and the marker is gone.** | `crates/sim/src/pathing/clusters.rs` module doc | plan section 2.1 |
 | S3-12 | `TARGETS_PER_BEACON` = 8, settled with the size budget at S3's exit | `crates/sim/src/world.rs` `TARGETS_PER_BEACON` | item 94 |
 | S3-13 | `SIGHTINGS_PER_SEAT` = 64 | `crates/sim/src/world.rs` `SIGHTINGS_PER_SEAT` | — |
 | S3-14 | No probe area is ever recorded as visited, so a Survey mandate works its first area only | `crates/sim/src/world.rs` `probe_to_enter`, and by pointer the Survey program's `run` in `crates/sim/src/programs.rs` | — |
@@ -360,6 +360,12 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 | S1-28 | A seam's shape: `SEAM_VOXELS_PER_COLUMN` = 4 and `SEAM_DISC_RADIUS` = 5. **Re-owned by `mine` #86 to S4's map re-derivation per decision 13 (item 133); moved here from S1 with its ID.** | `crates/sim/src/mapgen.rs` `SEAM_VOXELS_PER_COLUMN`, `SEAM_DISC_RADIUS` | — |
 | S1-29 | `STARTING_FEATURE_CLEARANCE` = 1. **Re-owned by `mine` #86 to S4's map re-derivation per decision 13 (item 133); moved here from S1 with its ID.** | `crates/sim/src/mapgen.rs` `STARTING_FEATURE_CLEARANCE` | — |
 | S1-30 | The starting force's two-voxel spacing, its footprint. **Re-owned by `mine` #86 to S4's map re-derivation per decision 13 (item 133); moved here from S1 with its ID.** | `crates/sim/src/mapgen.rs` `RING` | — |
+
+### A named lane
+
+| ID | What is guessed | Anchors | Source |
+|---|---|---|---|
+| S4-11 | The fogged travel estimate priced over the seat's knowledge, last-known state: until S4's knowledge mask, a query under a mask takes the rough abstract estimate (`cost * 3 / 2` per abstract edge with an unknown endpoint), and no production caller sets a mask. The S4 knowledge-store lane, at S4 | `crates/sim/src/pathing/estimate.rs` module docs, "Fog" | item 168 (10); item 169 (2) |
 
 ### No one named
 
@@ -631,7 +637,7 @@ Eight rows, each added by hand because no line says PLACEHOLDER:
 | U-05 | No pause button, and whether a minimised window keeps pacing (a stalled client is a pause) | none in the code; the T16a notes, section D | owner; no stage proposed | T16a notes, section D |
 | U-06 | Entity ids are opaque per-viewer handles; revisited if v1.1 agents or S7's recordings need two seats to agree | none in the code; the T16a notes, section D | owner, v1.1 | T16a notes, section D |
 | U-07 | The full predicate catalogue is S3's, and the plan asked `playbook.proto` to say so in a stub; no stub names it. **Discharged: `con6` #169 gave `playbook.proto` the eight predicates and `toward`, and `pred` #184 (item 161 (7)) evaluates them in the sim and retires E0020 to E0028. The proto's own comments still say they are refused "until S3's `pred`"; that wording is owed to the proto doc-comment PR.** | `proto/gp/v1/playbook.proto` `Condition`, `Toward` | owner, S3 | plan T1 |
-| U-08 | Route figures (`estimate_route`, `resolve_refs`' travel) are priced over the hosted world's voxels, so over edits the asking seat cannot see (a crater, a cut, a wall), until S3's fog mask prices unseen columns as unknown; an estimate can show that an unseen route has changed (item 148 (3) (d)) | `crates/gateway/src/routes.rs` `RouteAdapter::refresh` and `set_unknown_columns` (no marker) | owner, S3, with the fog mask | item 148 (3) (d) |
+| U-08 | Route figures (`estimate_route`, `resolve_refs`' travel) are priced over the hosted world's voxels, so over edits the asking seat cannot see (a crater, a cut, a wall), until the fog mask prices unseen columns as unknown, which item 168 (10) puts at S4; an estimate can show that an unseen route has changed (item 148 (3) (d)). `estimate_route` is closed outside a Lull since `p3fix` (item 169 (3)), and the figures are now the walk the router serves over the hosted world's own graph | `crates/gateway/src/routes.rs` `RouteAdapter::over` and `with_unknown_columns` (no marker) | owner, S4, with the fog mask | item 148 (3) (d); item 168 (10) |
 
 ### The owner at hardening
 
