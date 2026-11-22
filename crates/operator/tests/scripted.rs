@@ -3037,7 +3037,9 @@ fn far_vent() -> Script {
 
 /// A vent no site covers is weighed once more as a stone: one `toward`
 /// estimate naming it, and the round places a beacon `toward` it by name,
-/// with the Hold & Build place step's own timeout and `on_fail` SKIP.
+/// with a timeout of its own (never Hold & Build's 60 s: fix pass 2, item 1;
+/// `no_composed_placement_times_out_before_its_own_price`) and `on_fail`
+/// SKIP.
 #[test]
 fn a_far_vent_refused_for_covering_is_reached_with_a_stone() {
     let (script, played) = play(far_vent());
@@ -3048,7 +3050,7 @@ fn a_far_vent_refused_for_covering_is_reached_with_a_stone() {
         ops.contains(r#""place_beacon": { "at": { "toward": { "feature": { "feature_id": "vent_56_32" } } } }"#),
         "{ops}"
     );
-    assert!(ops.contains(r#""timeout_ms": 60000"#), "{ops}");
+    assert!(!ops.contains(r#""timeout_ms": 60000"#), "{ops}");
     assert!(ops.contains(r#""label": "stone""#), "{ops}");
     assert!(played.why.contains("stepping-stone"), "{}", played.why);
 }
@@ -3524,4 +3526,152 @@ fn goals_too_long_for_the_share_do_not_crowd_out_one_that_fits() {
         "{}",
         played.why
     );
+}
+
+// ---------------------------------------------------------------------------
+// Fix pass 2: each step's timeout is its own
+// ---------------------------------------------------------------------------
+
+/// The travel estimate's allowance for the wait before a walk starts, as the
+/// rules text derives it: `(4095 - 1) / repath_cap_per_tick + 1` ticks of
+/// 50 ms (`crates/operator/src/tuning.rs`' `walk_allowance_ms`, which
+/// `crates/gamectl/tests/ladder.rs` holds to the sim's).
+fn walk_allowance_ms() -> i64 {
+    let ticks = (4_095_i64 - 1)
+        .checked_div(rules_row(&["locomotion", "repath_cap_per_tick"]))
+        .expect("a positive repath cap");
+    (ticks + 1) * 50
+}
+
+/// Every placement a round composes, as the whole step it seals: each step
+/// the patch adds whole, and the template's own place step with what the
+/// patch writes into it (its `covering`, its `timeout_ms`), read from the
+/// text the composing `patch_plan` was given.
+fn composed_placements(transcript: &[String]) -> Vec<Json> {
+    let params = transcript
+        .iter()
+        .find_map(|line| line.strip_prefix("patch_plan "))
+        .and_then(|params| read(params).ok())
+        .expect("one composing patch");
+    let base = params
+        .get("playbook_jsonc")
+        .and_then(text)
+        .and_then(|jsonc| read(&strip_comments(jsonc)).ok())
+        .expect("the template the patch was applied to");
+    let ops = composing_ops(transcript);
+    let mut steps: Vec<Json> = ops
+        .iter()
+        .filter(|op| matches!(op.get("op").and_then(text), Some("add" | "replace")))
+        .filter_map(|op| op.get("value"))
+        .filter(|step| step.get("place_beacon").is_some())
+        .cloned()
+        .collect();
+    for op in &ops {
+        let Some(path) = op.get("path").and_then(text) else {
+            continue;
+        };
+        let Some(step_at) = path.strip_suffix("/timeout_ms") else {
+            continue;
+        };
+        let mut step = pointer_get(&base, step_at)
+            .cloned()
+            .expect("the template's place step");
+        let covering = format!("{step_at}/place_beacon/at/covering");
+        if let (Json::Object(members), Some(value)) = (&mut step, op.get("value")) {
+            members.retain(|(key, _)| key != "timeout_ms");
+            members.push((String::from("timeout_ms"), value.clone()));
+        }
+        if let Some(named) = ops
+            .iter()
+            .find(|op| op.get("path").and_then(text) == Some(covering.as_str()))
+            .and_then(|op| op.get("value"))
+            && let Some(Json::Object(place)) = match &mut step {
+                Json::Object(members) => members
+                    .iter_mut()
+                    .find(|(key, _)| key == "place_beacon")
+                    .map(|(_, place)| place),
+                _ => None,
+            }
+            && let Some((_, Json::Object(at))) = place.iter_mut().find(|(key, _)| key == "at")
+        {
+            at.clear();
+            at.push((String::from("covering"), named.clone()));
+        }
+        steps.push(step);
+    }
+    steps
+}
+
+/// The worlds the timeout property is held over: a busy round, a far vent's
+/// stone, a raid, a licensed core, the round after a commander's death (a
+/// guard beside the goals) and the same with every goal gone (the guard
+/// alone fills Defend the Core).
+fn timeout_worlds() -> Vec<(&'static str, Script)> {
+    let mut died = Script::busy(0);
+    died.round = 2;
+    died.feed_deaths = vec![0];
+    let mut guard_alone = Script::new(0);
+    let mut start = Feature::new("seam", "standard", [36, 34]);
+    start.covered = true;
+    guard_alone.features.push(start);
+    guard_alone.round = 3;
+    guard_alone.feed_deaths = vec![0];
+    vec![
+        ("busy", Script::busy(0)),
+        ("far vent", far_vent()),
+        ("raid", raid_world()),
+        ("licensed", licensed()),
+        ("died", died),
+        ("guard alone", guard_alone),
+    ]
+}
+
+/// No composed placement times out before its own price (fix pass 2, item
+/// 1): a `place_beacon`'s timeout bounds its walk, and every one Easy composes
+/// -- the template's own place step, a copy of it, a stone, a raid, a guard
+/// post, a Survey post -- carries a timeout of at least its walk from the core
+/// (the scripted estimate's leg), its on-site time as Easy prices it, and the
+/// travel estimate's allowance.
+#[test]
+fn no_composed_placement_times_out_before_its_own_price() {
+    let easy = Easy::new(&rules_json()).expect("the rules text reads");
+    let allowance = walk_allowance_ms();
+    assert_eq!(allowance, 12_800, "the committed repath cap's allowance");
+    let mut checked = 0_usize;
+    for (what, world) in timeout_worlds() {
+        let (script, played) = play(world);
+        assert_eq!(played.submitted, Submitted::Own, "{what}: {}", played.why);
+        let core = script
+            .beacons
+            .iter()
+            .find(|beacon| beacon.core && beacon.owner == script.seat)
+            .map(|beacon| beacon.at)
+            .expect("the seat's core");
+        for step in composed_placements(&script.transcript) {
+            let at = step
+                .get("place_beacon")
+                .and_then(|place| place.get("at"))
+                .expect("a placement's location");
+            let site = script.place(at).expect("the script answers the site");
+            let walk =
+                (i64::from(core[0] - site[0]).abs() + i64::from(core[1] - site[1]).abs()) * 500;
+            let on_site = easy.on_site_ms(&step).expect("Easy prices the step");
+            let timeout = match step.get("timeout_ms") {
+                Some(Json::Number(lexeme)) => lexeme.parse::<i64>().expect("a timeout"),
+                _ => panic!("{what}: a placement with no timeout: {}", compact(&step)),
+            };
+            eprintln!(
+                "{what}: {} walk {walk} on site {on_site} timeout {timeout}",
+                step.get("label").and_then(text).unwrap_or("?")
+            );
+            assert!(
+                timeout >= walk + on_site + allowance,
+                "{what}: {timeout} ms against a walk of {walk}, {on_site} on site and the \
+                 {allowance} allowance: {}",
+                compact(&step)
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 6, "every world composed a placement: {checked}");
 }

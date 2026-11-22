@@ -150,6 +150,10 @@ pub(crate) struct Tuning {
     /// `structures.resonance_spire.draw_kw`: what the Spire draws once it
     /// stands.
     pub(crate) spire_draw_kw: i64,
+    /// The travel estimate's own allowance for the wait before a walk starts,
+    /// game milliseconds ([`walk_allowance_ms`]): what a composed step's
+    /// timeout adds to its priced walk (S3's `opr3`, fix pass 2, item 1).
+    pub(crate) walk_allowance_ms: i64,
     /// Each armed kind's threat (S2's plan, decision 12): its weapon's damage
     /// per second, in thousandths of a hit point per second, as the sim's own
     /// threat model computes it from the same row.
@@ -375,6 +379,47 @@ impl Times {
     }
 }
 
+/// The most rows any world's router holds: the sim's `ids::ROOM_LIMIT`, which
+/// a world's unit ceiling never passes (`pathing::estimate::ROOM_ROWS`, the
+/// bound the estimate uses for a caller that holds a rules table and no world).
+/// The operator depends on `pharmakos-proto` alone, so it restates the figure;
+/// `crates/gamectl/tests/ladder.rs` holds it to the sim's.
+const ROUTER_ROWS_MAX: i64 = 4_095;
+
+/// Game milliseconds a sim tick lasts: the sim's `math::quantity::MS_PER_TICK`
+/// (its 20 Hz fixed tick), restated as [`ROUTER_ROWS_MAX`] is and held to the
+/// sim's by the same test.
+const MS_PER_TICK: i64 = 50;
+
+/// The travel estimate's own allowance for the wait before a walk starts, game
+/// milliseconds: what the estimate promises to count from (it is never
+/// optimistic **from the tick that serves the route**, the owner's reading of
+/// item 57, approved 2026-11-21) leaves out the first ask's wait in the repath
+/// queue, and that wait is bounded by the queue's own rule: one tick of
+/// rounding plus every row the router can hold served `repath_cap_per_tick` a
+/// tick, `(rows - 1) / cap + 1` ticks (`pathing::estimate::link_ticks`, the
+/// allowance the estimate itself adds per extra route), at [`ROUTER_ROWS_MAX`]
+/// rows, the bound every world keeps. A derived bound, not a rules row and not
+/// a guess: no step of Easy's times out on the wait the estimate leaves out.
+///
+/// # Errors
+///
+/// [`RulesError`] for a repath cap that is not positive (the sim refuses one).
+fn walk_allowance_ms(repath_cap_per_tick: u32) -> Result<i64, RulesError> {
+    let cap = i64::from(repath_cap_per_tick);
+    if cap <= 0 {
+        return Err(RulesError(String::from(
+            "the rules text has no `locomotion.repath_cap_per_tick` row",
+        )));
+    }
+    ROUTER_ROWS_MAX
+        .checked_sub(1)
+        .and_then(|rows| rows.checked_div(cap))
+        .and_then(|ticks| ticks.checked_add(1))
+        .and_then(|ticks| ticks.checked_mul(MS_PER_TICK))
+        .ok_or_else(|| RulesError(String::from("the walk's allowance does not fit")))
+}
+
 /// The rows queueing the Resonance Spire reads: its price and draw, which a
 /// table may state as zero.
 struct SpireRows {
@@ -425,6 +470,7 @@ impl Tuning {
             .interface_times
             .ok_or_else(|| missing("interface_times"))?;
         let units = table.units.ok_or_else(|| missing("units"))?;
+        let locomotion = table.locomotion.ok_or_else(|| missing("locomotion"))?;
         let threats = Threats::read(&units, &structures)?;
         let build_drone = units
             .build_drone
@@ -481,6 +527,7 @@ impl Tuning {
             seam_voxels: i64::from(economy.seam_voxels),
             spire_cost_dollars: spire.cost_dollars,
             spire_draw_kw: spire.draw_kw,
+            walk_allowance_ms: walk_allowance_ms(locomotion.repath_cap_per_tick)?,
             times: rates,
             threats,
         })

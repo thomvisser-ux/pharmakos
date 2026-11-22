@@ -347,6 +347,13 @@ pub(crate) struct Candidate {
     /// route visits first ([`crate::compose::deepen_core`]): the same for
     /// every candidate of a round, and 0 when the seat is shown no core.
     pub(crate) lead_ms: i64,
+    /// Game milliseconds of its walk from the core to `place`: the estimate's
+    /// last leg, what a composed step's timeout is derived from
+    /// ([`crate::compose::timeout_ms`]).
+    pub(crate) walk_ms: i64,
+    /// Game milliseconds its step costs on site, priced from the step as it
+    /// is composed ([`crate::price`]).
+    pub(crate) on_site_ms: i64,
     /// Whole $ it spends.
     pub(crate) cost_dollars: i64,
     /// Balanced utility, in points.
@@ -1551,6 +1558,8 @@ fn score(
         place,
         time_ms,
         lead_ms: 0,
+        walk_ms: travel_ms,
+        on_site_ms: on_site,
         cost_dollars: cost,
         utility,
         rate,

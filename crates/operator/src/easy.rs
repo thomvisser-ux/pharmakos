@@ -498,6 +498,15 @@ impl Easy {
         crate::price::step_ms(step, &self.tuning)
     }
 
+    /// The travel estimate's allowance for the wait before a walk starts, game
+    /// milliseconds, as Easy derives it from the rules text: what every
+    /// placement's timeout adds to its priced walk ([`crate::compose`]'s
+    /// "Each step's timeout").
+    #[must_use]
+    pub const fn walk_allowance_ms(&self) -> i64 {
+        self.tuning.walk_allowance_ms
+    }
+
     /// Play one seat's round: plan, submit, and say ready.
     pub fn play(&mut self, seat: u8, call: &mut Call<'_>) -> Played {
         let mut wire = Wire::new(call);

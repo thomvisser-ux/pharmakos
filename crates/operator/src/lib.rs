@@ -112,10 +112,10 @@ pub mod steps {
         crate::compose::spire_step(core)
     }
 
-    /// A stepping stone `toward` a named feature, with a place step's timeout.
+    /// A stepping stone `toward` a named feature, with a timeout.
     #[must_use]
     pub fn stone(feature: &str, timeout_ms: i64) -> Json {
-        crate::compose::stone_step("stone", feature, crate::wire::number(timeout_ms))
+        crate::compose::stone_step("stone", feature, Some(timeout_ms))
     }
 }
 pub use easy::{Advice, Easy, Played, StartHere, Submitted, SuggestedValue, Suggestion};

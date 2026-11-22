@@ -8,7 +8,9 @@
 //! segments; these matches play the ladder a match is hosted with, every seat
 //! Easy, through the same `Host::open_from`, `Surface` and
 //! `serve::InProcessSeats` the host loop uses. For each seat and round they
-//! record the seal and the forecast's headroom before it.
+//! record the seal, the forecast's headroom before it, and what became of each
+//! route step in the Push that followed, read from the seat's own feed lines
+//! ("Step N started.", "Step N completed.", "A step failed (reason): ...").
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -16,9 +18,10 @@
 )]
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use pharmakos_gamectl::host::{EasyOperators, LIBRARY_PATH};
-use pharmakos_gateway::fog::FogPolicy;
+use pharmakos_gateway::fog::{Audience, FogPolicy};
 use pharmakos_gateway::host::{Host, Settings, SphereVision};
 use pharmakos_gateway::limit::IN_PROCESS_LIMITS;
 use pharmakos_gateway::rpc::Request;
@@ -120,6 +123,19 @@ enum Seal {
     NotEasy,
 }
 
+/// What became of one route step in the Push after the seal.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Outcome {
+    /// The route never reached it.
+    NotRun,
+    /// It started and had not ended when the segment did.
+    Running,
+    /// It completed.
+    Completed,
+    /// It failed, for the reason the feed line names.
+    Failed(String),
+}
+
 /// One seat's round.
 #[derive(Clone, Debug)]
 struct SeatRound {
@@ -134,6 +150,53 @@ struct SeatRound {
     text: String,
     /// The sealed route's steps.
     steps: Vec<Json>,
+    /// What became of each, by index.
+    outcomes: Vec<Outcome>,
+}
+
+impl SeatRound {
+    /// The `toward` feature of each stone step, by route index.
+    fn stones(&self) -> Vec<(usize, String)> {
+        self.steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                match step
+                    .get("place_beacon")?
+                    .get("at")?
+                    .get("toward")?
+                    .get("feature")?
+                    .get("feature_id")?
+                {
+                    Json::String(feature) => Some((index, feature.clone())),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// The `covering` feature of each placement by name, by route index.
+    fn coverings(&self) -> Vec<(usize, String)> {
+        self.steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                match step
+                    .get("place_beacon")?
+                    .get("at")?
+                    .get("covering")?
+                    .get("feature_id")?
+                {
+                    Json::String(feature) => Some((index, feature.clone())),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    fn outcome(&self, index: usize) -> &Outcome {
+        self.outcomes.get(index).unwrap_or(&Outcome::NotRun)
+    }
 }
 
 /// The route steps of a sealed playbook, through plan-core's own JSONC
@@ -145,6 +208,61 @@ fn route_steps(text: &str) -> Vec<Json> {
     match body.get("declarative").and_then(|d| d.get("route")) {
         Some(Json::Array(steps)) => steps.clone(),
         _ => Vec::new(),
+    }
+}
+
+/// `Step N started.` and its kin: the step's index from 0.
+fn step_index(text: &str, tail: &str) -> Option<usize> {
+    text.strip_prefix("Step ")?
+        .strip_suffix(tail)?
+        .parse::<usize>()
+        .ok()?
+        .checked_sub(1)
+}
+
+/// `A step failed (timeout): ...`: the reason's name.
+fn failure_of(text: &str) -> Option<String> {
+    let rest = text.strip_prefix("A step failed (")?;
+    Some(rest.split_once(')')?.0.to_owned())
+}
+
+/// Per seat, the route step running and whether a rule's body is: a rule's
+/// steps are numbered in its own body, so its lines are not the route's.
+#[derive(Clone, Copy, Default)]
+struct Running {
+    step: Option<usize>,
+    in_rule: bool,
+}
+
+/// Read one feed line of a seat's own into its round's outcomes.
+fn read_line(row: &mut SeatRound, running: &mut Running, kind: &str, text: &str) {
+    match kind {
+        "rule_fired" => running.in_rule = true,
+        "rule_ended" => running.in_rule = false,
+        _ if running.in_rule => {}
+        "step_started" => {
+            if let Some(index) = step_index(text, " started.") {
+                running.step = Some(index);
+                if let Some(outcome) = row.outcomes.get_mut(index) {
+                    *outcome = Outcome::Running;
+                }
+            }
+        }
+        "step_completed" => {
+            if let Some(index) = step_index(text, " completed.")
+                && let Some(outcome) = row.outcomes.get_mut(index)
+            {
+                *outcome = Outcome::Completed;
+            }
+        }
+        "step_failed" => {
+            if let (Some(index), Some(reason)) = (running.step, failure_of(text))
+                && let Some(outcome) = row.outcomes.get_mut(index)
+            {
+                *outcome = Outcome::Failed(reason);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -186,6 +304,7 @@ fn ladder_match(rules: &str, seed: u64, seats: u32, rounds: u32) -> Vec<SeatRoun
             headrooms.push(number(forecast.get("headroom_kw_now")));
         }
         easy.plan(&mut surface);
+        let first = out.len();
         for (seat, headroom_kw) in ids.iter().zip(headrooms) {
             let state = surface
                 .seat_state(Subject::Seat(*seat), *seat)
@@ -209,13 +328,36 @@ fn ladder_match(rules: &str, seed: u64, seats: u32, rounds: u32) -> Vec<SeatRoun
                 seal,
                 headroom_kw,
                 text: text.unwrap_or_default(),
+                outcomes: vec![Outcome::NotRun; steps.len()],
                 steps,
             });
         }
         assert!(surface.begin_push().expect("the Push opens"));
-        while let Some(report) = surface.step().expect("a tick") {
-            if report.segment_ended {
-                break;
+        let mut running: Vec<Running> = vec![Running::default(); ids.len()];
+        let mut read = 0_usize;
+        loop {
+            let report = surface.step().expect("a tick");
+            let events = surface.feed().events();
+            if events.len() < read {
+                read = 0;
+            }
+            for event in events.get(read..).unwrap_or_default() {
+                let Audience::Private(seat) = event.audience else {
+                    continue;
+                };
+                let at = usize::from(seat.raw());
+                if let (Some(row), Some(state)) = (
+                    first.checked_add(at).and_then(|index| out.get_mut(index)),
+                    running.get_mut(at),
+                ) {
+                    read_line(row, state, &event.kind.to_string(), &event.text);
+                }
+            }
+            read = events.len();
+            match report {
+                Some(report) if report.segment_ended => break,
+                Some(_) => {}
+                None => break,
             }
         }
         surface.end_recap().expect("the recap closes");
@@ -290,4 +432,147 @@ fn scouts_are_charged_at_the_row_every_grid_charges_a_unit_at() {
         );
     }
     assert_eq!(seals.len(), 12, "twelve seats over the five matches");
+}
+
+/// The five committed matches over five rounds on the committed rules, played
+/// once for every test that reads them.
+fn five_rounds() -> &'static [SeatRound] {
+    static ROUNDS: OnceLock<Vec<SeatRound>> = OnceLock::new();
+    ROUNDS.get_or_init(|| {
+        let rules = rules_json();
+        MATCHES
+            .iter()
+            .flat_map(|&(seed, seats)| ladder_match(&rules, seed, seats, 5))
+            .collect()
+    })
+}
+
+/// Easy's allowance for the wait before a walk starts is the travel
+/// estimate's own: the sim's re-ask bound for a caller that holds a rules
+/// table and no world (`Speed::commander`'s `link_ticks`) in game
+/// milliseconds, so the operator's restatement of the router's rows and the
+/// tick's length cannot drift from the sim's.
+#[test]
+fn the_walk_allowance_is_the_estimates_own() {
+    let rules = rules_json();
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let link = pharmakos_sim::pathing::Speed::commander(&table).link_ticks;
+    let expected = i64::from(link) * i64::from(pharmakos_sim::math::quantity::MS_PER_TICK);
+    let easy = pharmakos_operator::Easy::new(&rules).expect("the rules text");
+    assert_eq!(easy.walk_allowance_ms(), expected);
+}
+
+/// A stone placed in round 2 (fix pass 2, item 1): on the determinism seed,
+/// at least one seat's round-2 seal places a stone and the stone's step
+/// completes. Before the fix every round-2 stone copied Hold & Build's 60 s
+/// timeout onto a priced walk of 79 to 80 s and failed `timeout`.
+#[test]
+fn a_round_two_stone_places_on_the_determinism_seed() {
+    let game = format!("{:x}/2", pharmakos_sim::DETERMINISM_MATCH_SEED);
+    let placed: Vec<&SeatRound> = five_rounds()
+        .iter()
+        .filter(|row| row.game == game && row.round == 2)
+        .filter(|row| {
+            row.stones()
+                .iter()
+                .any(|(index, _)| *row.outcome(*index) == Outcome::Completed)
+        })
+        .collect();
+    for row in five_rounds()
+        .iter()
+        .filter(|row| row.game == game && row.round <= 2)
+    {
+        eprintln!(
+            "round {} seat {}: stones {:?}, outcomes {:?}",
+            row.round,
+            row.seat,
+            row.stones(),
+            row.outcomes
+        );
+    }
+    assert!(!placed.is_empty(), "no round-2 stone placed on {game}");
+}
+
+/// No step Easy composes fails `timeout`, on the five committed matches over
+/// five rounds (fix pass 2, item 1): every placement's timeout is derived from
+/// its own price and the estimate's allowance, so a walk the estimate prices
+/// never outlasts it.
+#[test]
+fn no_composed_step_times_out_on_the_committed_matches() {
+    let timed_out: Vec<String> = five_rounds()
+        .iter()
+        .filter(|row| row.seal == Seal::Own)
+        .flat_map(|row| {
+            row.outcomes
+                .iter()
+                .enumerate()
+                .filter(|(_, outcome)| **outcome == Outcome::Failed(String::from("timeout")))
+                .map(move |(index, _)| {
+                    format!(
+                        "{} round {} seat {} step {}: {:?}",
+                        row.game,
+                        row.round,
+                        row.seat,
+                        index + 1,
+                        row.steps.get(index).and_then(|step| step.get("label"))
+                    )
+                })
+        })
+        .collect();
+    assert!(timed_out.is_empty(), "{timed_out:#?}");
+}
+
+/// Every stone either places or is followed by a different choice (fix pass
+/// 2, item 1): a seat whose stone toward a feature did not place never seals a
+/// stone toward the same feature in the next round. And the seat-chains -- a
+/// seat's stones toward one feature, over the five rounds -- that reach the
+/// goal the stone served (a later placement covering that feature, which
+/// completes), counted and printed for the pull request.
+#[test]
+fn every_stone_places_or_is_followed_by_a_different_choice() {
+    let rows = five_rounds();
+    let mut repeated: Vec<String> = Vec::new();
+    // (game, seat, feature) -> whether a covering placement of it completed
+    // after the chain began.
+    let mut chains: Vec<((String, u8, String), bool)> = Vec::new();
+    for row in rows.iter().filter(|row| row.seal == Seal::Own) {
+        for (index, feature) in row.stones() {
+            let key = (row.game.clone(), row.seat, feature.clone());
+            if !chains.iter().any(|(held, _)| *held == key) {
+                chains.push((key, false));
+            }
+            if *row.outcome(index) == Outcome::Completed {
+                continue;
+            }
+            let next = rows.iter().find(|later| {
+                later.game == row.game && later.seat == row.seat && later.round == row.round + 1
+            });
+            if next.is_some_and(|next| next.stones().iter().any(|(_, held)| *held == feature)) {
+                repeated.push(format!(
+                    "{} seat {} rounds {} and {}: {feature} ({:?})",
+                    row.game,
+                    row.seat,
+                    row.round,
+                    row.round + 1,
+                    row.outcome(index)
+                ));
+            }
+        }
+        for (index, feature) in row.coverings() {
+            if *row.outcome(index) != Outcome::Completed {
+                continue;
+            }
+            for ((game, seat, served), reached) in &mut chains {
+                if *game == row.game && *seat == row.seat && *served == feature {
+                    *reached = true;
+                }
+            }
+        }
+    }
+    let reached = chains.iter().filter(|(_, reached)| *reached).count();
+    eprintln!(
+        "seat-chains {}, reaching the goal they served {reached}: {chains:#?}",
+        chains.len()
+    );
+    assert!(repeated.is_empty(), "{repeated:#?}");
 }

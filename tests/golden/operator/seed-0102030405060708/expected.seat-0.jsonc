@@ -31,7 +31,7 @@
   },
   "kind": "PLAYBOOK",
   "declarative": {
-    "route": [{"label":"to_safety","move":{"to":{"safest":{}},"pace":"AVOID_KNOWN_THREATS"}},{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}},{"label":"survey_post","place_beacon":{"at":{"covering":{"feature_id":"seam_23_342"}},"tags":["survey"],"initial":{"priority":"NORMAL","mandate":{"survey":{"probe_areas":[{"min":{"x":191,"y":0,"z":0},"max":{"x":383,"y":383,"z":63}}],"scout_count":2}}}},"timeout_ms":60000,"on_fail":{"action":"SKIP"}}],
+    "route": [{"label":"to_safety","move":{"to":{"safest":{}},"pace":"AVOID_KNOWN_THREATS"}},{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}},{"label":"survey_post","place_beacon":{"at":{"covering":{"feature_id":"seam_23_342"}},"tags":["survey"],"initial":{"priority":"NORMAL","mandate":{"survey":{"probe_areas":[{"min":{"x":191,"y":0,"z":0},"max":{"x":383,"y":383,"z":63}}],"scout_count":2}}}},"timeout_ms":42200,"on_fail":{"action":"SKIP"}}],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander
       // walks back to safety and waits before carrying on.
