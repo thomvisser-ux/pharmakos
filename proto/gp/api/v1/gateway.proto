@@ -198,7 +198,7 @@ enum Method {
   // report.
   METHOD_GET_CAPABILITIES = 29 [(required_scope) = SCOPE_OBSERVE];
 
-  // "estimate_route"
+  // "estimate_route" — PHASE_CLOSED outside a Lull.
   METHOD_ESTIMATE_ROUTE = 30 [(required_scope) = SCOPE_OBSERVE];
 
   // --- Docs ----------------------------------------------------------------
@@ -950,13 +950,14 @@ message GetMapSummaryResponse {
 
   // Every vent and seam on the map (the register's S1-48), in feature id
   // order. Each feature's id, kind, grade and anchor are a pure function of
-  // the seed, the rules and the occupied seats. Its `live`, `covered`,
-  // `travel_ms` and `reachable` read the world as it stands (the frozen
-  // snapshot in a Lull or a recap, the live world in a Push), unfogged in S1
-  // as targeting.md's ranking already is, so a seam another seat has mined
-  // out shows here as not live. The list is fog-filtered from S4, with real
-  // terrain fog (S3's plan, decision 2, register S3-05; docs/design/targeting.md,
-  // "Descriptions (S1)" and "Surfaces").
+  // the seed, the rules and the occupied seats. Its `live` and `covered` read
+  // the world as it stands (the frozen world in a Lull or a recap, the live
+  // world in a Push), unfogged as targeting.md's ranking already is, so a
+  // seam another seat has mined out shows here as not live. Its `travel_ms`
+  // and `reachable` are told only in a Lull, over the frozen planning world,
+  // and withheld in every other phase (MapFeature). The list is fog-filtered
+  // from S4, with real terrain fog (S3's plan, decision 2, register S3-05;
+  // docs/design/targeting.md, "Descriptions (S1)" and "Surfaces").
   repeated MapFeature features = 5;
 
   // PLACEHOLDER: a fog-filtered terrain summary — owner, at S4, with real terrain fog (S3's plan, decision 2).
@@ -989,13 +990,29 @@ message MapFeature {
   // living beacons, awake or dormant: the opposite of a pick's UNCOVERED.
   bool covered = 7;
 
-  // Travel from the commander, game milliseconds, by the estimator "nearest"
-  // ranks with (targeting.md, "Nearest").
-  int32 travel_ms = 8;
+  // `travel_ms` and `reachable` together say one of three things, and no
+  // other combination is ever written:
+  //
+  // * reached: `reachable` is true and `travel_ms` is set;
+  // * unreachable: `reachable` is false and `travel_ms` is absent;
+  // * withheld: both are absent. That is every feature outside a Lull (a
+  //   Push, a recap, the lobby, an ended match), and every feature for a
+  //   caller that is no seat. In a Push the hosted world is the live one,
+  //   unfogged, and a recap's is the Push's end state, so a time there
+  //   would tell the seat about terrain it cannot see (the owner's ruling
+  //   of 2026-11-21, "Omit them in a Push"; S3's `mapw`).
+  //
+  // Both are `optional` (proto3 explicit presence) so that "not told" is its
+  // own state on the wire and never a 0 or a false.
+  //
+  // Travel from the commander, game milliseconds: the walk the router
+  // serves it over the frozen planning world, priced by the estimator
+  // "nearest" ranks with (targeting.md, "Nearest"; S3's `p3fix`).
+  optional int32 travel_ms = 8;
 
-  // False when no route reaches the feature; `travel_ms` is then 0 and
-  // means nothing.
-  bool reachable = 9;
+  // Whether a route reaches the feature from the commander, over the same
+  // world. A commander that is not standing anywhere reaches nothing.
+  optional bool reachable = 9;
 
   enum Kind {
     KIND_UNSPECIFIED = 0;
@@ -1082,9 +1099,14 @@ message GetEconomyForecastResponse {
   reserved 7 to 15;
 }
 
-// The travel estimate of item 61, exposed. Abstract search only; it never
-// refines, steps or forks. Never optimistic: the answer is a bound the editor
-// may round up, and a fogged leg is labelled as a bound rather than an ETA.
+// The travel estimate of item 61, exposed, as decisions-log item 169 amends it.
+// Each leg is the walk the router serves from where the leg starts, near or
+// far, plus an allowance per extra route the walk needs; it never steps or
+// forks. Never optimistic: counted from the tick the route is served, on
+// static terrain and for a walk under no surcharge, a walker is not later than
+// the answer, which the editor may round up. A fogged leg is labelled as a
+// bound rather than an ETA. Answered in a Lull only: in every other phase the
+// method is PHASE_CLOSED.
 message EstimateRouteRequest {
   // Two or more. Legs are estimated in order.
   repeated gp.v1.Location waypoints = 1;

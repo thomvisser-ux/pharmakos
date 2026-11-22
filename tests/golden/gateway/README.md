@@ -485,7 +485,10 @@ column (`pharmakos_sim::pathing::estimate::walk_cost`), ranked by the sim's own
 `Ranker` and turned into game milliseconds the way `estimate_route`'s legs are. The pick in `resolve_refs` is the sim's own
 `cover` and `on_vent`, and `targeting.rs`'s
 `resolve_refs_answers_as_the_sim_would_at_step_start` holds it to what the sim
-then binds when the step starts.
+then binds when the step starts. The travel members are a Lull's answer only:
+outside a Lull `get_map_summary` withholds `travel_ms` and `reachable`
+(decisions-log item 170), so these goldens, taken in the opening Lull, show the
+only phase in which they are told.
 
 What a diff means:
 
@@ -513,12 +516,15 @@ test's 60-second segment; a first-Lull re-tune moves it. S1's `econ` moved both
 by 300 000 ms when the tests began counting round 1 down from
 `match.first_lull_ms` rather than `match.lull_ms`.
 
-S3's `p3fix` moved every far feature's `travel_ms` in both, down by 0.6 to
-3.6 s, and nothing else: no candidate reordered and no pick changed. The rule:
-"nearest" ranks by the served walk, near or far, where a far pair was ranked
-at the abstract estimate, which charges the refinement before it is smoothed
-(`crates/sim/src/targeting.rs`, "Nearest"). The near ones (`vent_324_16`,
-`seam_348_31`) were priced at the served route already and did not move.
+S3's `p3fix` moved `travel_ms` on every feature in both, and nothing else: no
+candidate reordered and no pick changed. The rule: a travel figure is the walk
+the router serves, near or far, where `main` priced a far pair at the abstract
+estimate, which charges the refinement before it is smoothed
+(`crates/sim/src/targeting.rs`, "Nearest"; decisions-log item 169). Against
+`main` the eight far features moved down by 0.6 to 3.6 s, and the two near ones,
+which `main` had priced at the abstract estimate too, moved by the lane's first
+part (a pair whose clusters touch is priced at the served route):
+`vent_324_16` 45 800 to 39 200 ms and `seam_348_31` 15 400 to 13 600 ms.
 
 ### `briefing/`, `economy_forecast/` and `recap/`
 

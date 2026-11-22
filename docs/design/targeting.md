@@ -147,12 +147,25 @@ Nothing substitutes silently.
 
 ### Nearest
 
-**Nearest = the least estimated travel from the origin to the feature, over the terrain the seat
-knows. Unreachable candidates are skipped. Ties go to the lowest anchor y, then x.**
+**Nearest = the least cost of the walk the router serves from the origin to the feature. Unreachable
+candidates are skipped. Ties go to the lowest anchor y, then x.** (Item 168 (9), as built by lane
+`p3fix` and recorded in item 169. It replaces item 127 (12)'s "the least estimated travel", which
+was one measure for every ranking.)
 
-- **The metric** is the item-61 estimator's integer `cost`, from which the editor's ETA is derived.
-  For one walker the two are monotone, so what a chip says and what the sim picks agree. It prices
-  climbs, pits and craters, and never picks a target the commander cannot reach.
+- **The metric** is the cost of the walk itself (`pathing::estimate::walk_cost`): the router's own
+  route from the origin to the feature, with a route that stops short at `MAX_ROUTE_NODES` chained
+  from its end as the walker asks again, under no surcharge. A clear estimate is that same cost, so
+  what a chip says and what the sim picks are one figure; the editor's ETA is the cost turned into
+  ticks, plus an allowance per extra route the walk needs, so it is not guaranteed monotone with the
+  rank where two candidates need a different number of routes. It prices climbs, pits and craters,
+  and never picks a target the commander cannot reach. It reads the live, unfogged world until S4's
+  mask (item 168 (10)). It is exact: no abstract estimate stands in
+  for the walk.
+- **Two measures.** A choice a unit then walks to (`covering`, `on`, a Mine beacon's seam) ranks by
+  the walk above. `toward`'s stepping stone, which no unit walks from to the feature when it is
+  chosen (the commander walks to the stone), ranks by the least cost of any walk over the terrain
+  from the site to the feature's anchor column: the closest legal site over the ground, found by one
+  search outward from the feature, with ties to the lowest site y, then x.
 - **The origin:**
   - `covering`: the commander's column when the step starts.
   - `on`: the target beacon's anchor, or, for an initial row, the site `covering` chose.
@@ -163,8 +176,11 @@ knows. Unreachable candidates are skipped. Ties go to the lowest anchor y, then 
   remains, the answer is `no_target`, and the recap says so ("3 matched, none reachable").
 - **Ties:** `(cost, anchor y, anchor x)`, the pathfinder's own node order. Integers only; the order
   is total.
-- **Cost:** at most one estimate per candidate (six or fewer per kind on an S1 map), pruned by the
-  octile lower bound, and only when something reads. S1 measures it against the tick budget.
+- **Cost:** at most one priced walk per candidate, and only for a candidate the octile lower bound
+  has not already ruled out: candidates open in octile order, and a priced one is emitted once its
+  key is below every unpriced candidate's `(bound, y, x)`. The octile bound never exceeds a served
+  walk, so the order is exact. Nothing is capped; the work is bounded by the candidate count and the
+  router's own search; the bound is on counted work, and item 169 (5) and (6) give counted work and, for `toward`, release-build timings from a machine that was not idle.
 - **Where it runs:** in the sim (the tick) and in the gateway (`resolve_refs`, `estimate_route`),
   which lend the host's pathing graph. The verifier does not rank (see Surfaces).
 - **Not in conditions in S1.** A condition reads every 250 ms, and re-ranking every evaluation
@@ -264,7 +280,9 @@ range narrows to 12–49.
   - `Scope` gains the features (id, kind, grade, a live bit) and the commander's position.
   - A verifier that one day ranks carries the gateway's precomputed costs in `Scope`, hashed.
 - **`get_map_summary.features`** (S1-48) lists every feature with its id, kind, grade, coverage by
-  the seat and travel.
+  the seat and travel. Travel (`travel_ms`, `reachable`) is told in a Lull only; in every other
+  phase both members are absent, so "not told" is its own state on the wire (decisions-log item
+  170).
 - **`estimate_route`** accepts `covering` and returns the site, so Easy needs one call per candidate
   and keeps no second site algorithm. The operator derives no ids itself.
 - **The chip:** "now: Heat vent (120, 88) · 14 s · next (150, 20) · 16 s — nearest by travel from

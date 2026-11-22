@@ -585,18 +585,23 @@ impl Surface {
     /// spectator's keep it. A courtesy, not a secret kept: the generated map is
     /// still served whole (item 107 (1)), and a local agent can read the seed
     /// from the private match cache's `match.json`. Neither is the feature
-    /// list in S1: decisions-log item 130 (3) (a) kept `live` on it and read
-    /// `live`, `covered`, `travel_ms` and `reachable` off the world as it
-    /// stands, unfogged, as targeting's own ranking is in S1, and the list is
-    /// fog-filtered from S3 with the knowledge store (the register's S1-48).
-    /// The terrain summary stays `reserved` until then (item 130 (3) (b)).
+    /// list yet: decisions-log item 130 (3) (a) kept `live` on it, and `live`
+    /// and `covered` read the world as it stands (the frozen world in a Lull
+    /// or a recap, the live one in a Push), unfogged, as targeting's own
+    /// ranking is; `travel_ms` and `reachable` are told only in a Lull, over
+    /// the frozen planning world, and withheld in every other phase (S3's
+    /// `mapw`). The list is fog-filtered from S4, with real terrain fog
+    /// (`gateway.proto`; S3's plan, decision 2, register S3-05), and the
+    /// terrain summary stays `reserved` until then (item 130 (3) (b)).
     ///
     /// Each feature's id, kind, grade and anchor are a pure function of the
     /// match's inputs; `covered`, `travel_ms` and `reachable` are the asking
     /// **seat's** own (its own spheres, its own commander), so a caller that
     /// is no seat -- `admin`, a spectator -- is told the first six fields and
     /// none of the three, which would be about nobody
-    /// ([`Surface::map_features`]).
+    /// ([`Surface::map_features`]). A seat is told `travel_ms` and
+    /// `reachable` only in a Lull, and neither in any other phase (S3's
+    /// `mapw`).
     pub(super) fn get_map_summary(
         &self,
         subject: crate::token::Subject,
@@ -640,33 +645,66 @@ impl Surface {
     /// each a `gp.api.v1.MapFeature`.
     ///
     /// For a seat, `covered` is whether one of its own living beacons' spheres
-    /// holds the feature (the opposite of a pick's `UNCOVERED`), and
-    /// `travel_ms` and `reachable` are the walk the router serves its
-    /// commander from where it stands to the column "nearest" measures to,
-    /// priced by the sim's own [`pharmakos_sim::targeting::Ranker`]
+    /// holds the feature (the opposite of a pick's `UNCOVERED`). **In a Lull
+    /// only**, `travel_ms` and `reachable` are the walk the router serves its
+    /// commander, over the frozen planning world, from where it stands to the
+    /// column "nearest" measures to, priced by the sim's own
+    /// [`pharmakos_sim::targeting::Ranker`]
     /// ([`pharmakos_sim::pathing::estimate::walk_cost`]; [`crate::targeting`]):
-    /// the one measure `resolve_refs` binds by, `estimate_route` answers in
-    /// and the Push walks (S3's `p3fix`). A commander that is not standing
-    /// anywhere (dead, mid-Push) reaches nothing, and the answer says so.
-    /// Nothing is stepped.
+    /// the measure `resolve_refs` binds by and `estimate_route` answers in,
+    /// both of which are Lull-only too (S3's `p3fix`). A commander that is not
+    /// standing anywhere (dead) reaches nothing, and the answer says so. In
+    /// every other phase both members are withheld and nothing is priced (see
+    /// below). Nothing is stepped.
+    ///
+    /// **Travel is told only in a Lull** (the owner's ruling of 2026-11-21,
+    /// "Omit them in a Push", taken by S3's `mapw` to every phase that is not
+    /// a Lull, as [`Surface::estimate_route`]'s door is): in a Push the hosted
+    /// world is the live one, unfogged, and a recap's is the Push's end
+    /// state, so a time there would tell the seat about terrain it cannot
+    /// see. Outside a Lull both members are left out of every feature
+    /// (`gp.api.v1.MapFeature`'s third state, "withheld") and no walk is
+    /// priced at all.
     fn map_features(&self, seat: Option<SeatId>) -> Result<Vec<Json>, Error> {
+        self.map_features_priced(seat, &mut None)
+    }
+
+    /// [`Surface::map_features`], pricing its walks in `scratch`: the search
+    /// scratch is built there on the first walk when the slot is empty, so a
+    /// caller that keeps the slot reads the sim's own walk tally afterwards
+    /// (`surface::tests::outside_a_lull_the_map_summary_prices_no_walk`).
+    pub(super) fn map_features_priced(
+        &self,
+        seat: Option<SeatId>,
+        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
+    ) -> Result<Vec<Json>, Error> {
         let host = self.host()?;
         let world = host.world();
         let reads = crate::targeting::feature_reads(world, seat);
-        let commander = seat.and_then(|seat| crate::targeting::commander_point(world, seat));
-        let travel: Vec<(usize, pharmakos_sim::pathing::estimate::ServedWalk)> = match commander {
-            Some(commander) => {
-                let tally = pharmakos_sim::seams::UnitTally::new();
-                let ground = crate::targeting::lend(world, &tally);
-                let mut scratch = crate::targeting::scratch_for(world)?;
-                crate::targeting::ranked(
-                    &ground,
-                    &mut scratch,
-                    pharmakos_sim::targeting::column_of(commander),
-                    |_| true,
-                )
-            }
-            None => Vec::new(),
+        // `None` for a caller that is no seat, which is told none of the
+        // seat's own members.
+        let travel: Option<Travel> = match seat {
+            None => None,
+            Some(_) if !self.time.planning_open() => Some(Travel::Withheld),
+            Some(seat) => Some(Travel::Priced(
+                match crate::targeting::commander_point(world, seat) {
+                    Some(commander) => {
+                        let tally = pharmakos_sim::seams::UnitTally::new();
+                        let ground = crate::targeting::lend(world, &tally);
+                        let scratch = match scratch {
+                            Some(scratch) => scratch,
+                            None => scratch.insert(crate::targeting::scratch_for(world)?),
+                        };
+                        crate::targeting::ranked(
+                            &ground,
+                            scratch,
+                            pharmakos_sim::targeting::column_of(commander),
+                            |_| true,
+                        )
+                    }
+                    None => Vec::new(),
+                },
+            )),
         };
         reads
             .iter()
@@ -682,17 +720,20 @@ impl Surface {
                     (String::from("y"), Json::Number(read.y.to_string())),
                     (String::from("live"), Json::Bool(read.live)),
                 ];
-                if seat.is_some() {
-                    let reached = match travel.iter().find(|(index, _)| *index == read.index) {
+                let Some(travel) = &travel else {
+                    return Ok(Json::Object(entries));
+                };
+                entries.push((
+                    String::from("covered"),
+                    Json::Bool(read.covered_by.is_some()),
+                ));
+                if let Travel::Priced(walks) = travel {
+                    let reached = match walks.iter().find(|(index, _)| *index == read.index) {
                         // A commander with no speed walks nowhere, so the
                         // feature is not reached.
                         Some((_, walk)) => crate::targeting::travel_ms(world, *walk)?,
                         None => None,
                     };
-                    entries.push((
-                        String::from("covered"),
-                        Json::Bool(read.covered_by.is_some()),
-                    ));
                     // `travel_ms` only beside `reachable: true`, as
                     // `resolve_refs` writes it (decisions-log item 133 (3)
                     // (i)): a 0 beside an unreachable feature would read as
@@ -2327,6 +2368,17 @@ fn failure_lines(
         prose.push_str(&strings::recap_step_failed(value, times));
     }
     Ok(())
+}
+
+/// What [`Surface::map_features`] tells a seat of its travel to each
+/// feature: the walks priced over the frozen planning world in a Lull, or
+/// nothing at all in any other phase.
+enum Travel {
+    /// Outside a Lull: neither `travel_ms` nor `reachable` is written.
+    Withheld,
+    /// In a Lull: every feature the commander's walk reaches, with its walk;
+    /// a feature not listed is unreachable.
+    Priced(Vec<(usize, pharmakos_sim::pathing::estimate::ServedWalk)>),
 }
 
 /// The calling seat's own tally for [`Surface::get_recap`], from the counters
