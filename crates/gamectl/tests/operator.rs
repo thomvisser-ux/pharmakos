@@ -275,7 +275,8 @@ struct Row {
     /// Easy composed a plan this round: it called `patch_plan` at least once
     /// (the composition), which only its own plan's path does.
     composed: bool,
-    /// The `patch_plan` and `verify_plan` calls the built-in seat made.
+    /// The `patch_plan` and FULL `verify_plan` calls the built-in seat made
+    /// (the tap probe's QUICK verify left out).
     patches: u32,
     verifies: u32,
     /// Calls the built-in seat made this round.
@@ -584,7 +585,10 @@ fn visit(
             },
             composed: count(methods, "patch_plan") > 0,
             patches: count(methods, "patch_plan"),
-            verifies: count(methods, "verify_plan"),
+            // The tap probe's QUICK `verify_plan` rides its `resolve_refs`
+            // (`crates/operator/src/candidates.rs`' `probe`); every other one
+            // is the composition's FULL verify or a repair's.
+            verifies: count(methods, "verify_plan").saturating_sub(count(methods, "resolve_refs")),
             note,
             calls: u32::try_from(methods.len()).expect("counted"),
             safe_qualifies,
@@ -1219,12 +1223,12 @@ fn easy_fits_the_in_process_limits() {
         assert!(EASY_ADVISOR_CALL_BUDGET <= IN_PROCESS_LIMITS.per_tick);
         assert!(EASY_CALL_BUDGET <= IN_PROCESS_LIMITS.per_window);
         // The derivation's sums, pinned (`crates/operator/src/easy.rs`' table):
-        // 20 fixed reads, 2 tap probe, 1 guard probe, 1 raid probe, 30
-        // candidates, 30 stepping stones, 5 templates, 1 composition, 9
-        // verifies, 6 for the safe playbook and 3 to commit; the advisor's
-        // the same less the stones, the composition, the verifies and the
-        // commit.
-        assert!(EASY_CALL_BUDGET == 108);
+        // 20 fixed reads, 2 tap probe, 1 guard probe, 1 raid probe, 1 Survey
+        // probe, 30 candidates, 30 stepping stones, 5 templates, 1
+        // composition, 9 verifies, 6 for the safe playbook and 3 to commit;
+        // the advisor's the same less the Survey probe, the stones, the
+        // composition, the verifies and the commit.
+        assert!(EASY_CALL_BUDGET == 109);
         assert!(EASY_ADVISOR_CALL_BUDGET == 65);
     }
 }
@@ -1605,5 +1609,106 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
     assert!(
         rows.iter().all(|row| row.seal != Seal::NotEasy),
         "every seal is Easy's own, the verifier's accepted: {rows:#?}"
+    );
+}
+
+/// Spec section 14's Survey post through the real gateway (S3's plan,
+/// decision 3): on Probation's seed, with every seat Easy and no seat holding
+/// a sighting of the other's beacons, Easy seals Survey posts beside its core,
+/// and a post sealed before the last round has its scouts report
+/// (`area_surveyed` or `enemy_beacon_found`) by the end of the next Push.
+///
+/// Measured when this was written: seat 1's post of round 2 lands 22 s into
+/// the Push and fields its two scouts by 25 s, which find nothing in round 2's
+/// 180 s over the whole map and find seat 0's beacons 120 s into round 3. The
+/// spec's "refresh those sightings before the next Lull" therefore holds a
+/// round late at this probe area (the brief's TODO on the box; reported).
+#[test]
+fn a_survey_post_easy_places_has_its_scouts_survey_in_that_push() {
+    use pharmakos_gateway::fog::Audience;
+    let rules = rules_json();
+    let host = Host::open_from(
+        &rules,
+        PROBATION_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 3,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut surface = Surface::new(
+        &match_id("probation-survey"),
+        PROBATION_SEED,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    let mut easy = all_built_in(&mut surface, 2, &rules);
+    // (round, seat) for each Survey post sealed, and for each survey event.
+    let mut posts: Vec<(u32, u8)> = Vec::new();
+    let mut surveyed: Vec<(u32, u8)> = Vec::new();
+    for round in 1..=3_u32 {
+        for row in visit(
+            &format!("probation-survey/round-{round}"),
+            &mut surface,
+            2,
+            &rules,
+            &mut easy,
+        ) {
+            if row.seal == Seal::Own && row.note.contains("A Survey beacon beside the core") {
+                posts.push((round, row.seat));
+            }
+        }
+        assert!(surface.begin_push().expect("the Push opens"));
+        let mut seen = 0_usize;
+        while let Some(report) = surface.step().expect("a tick") {
+            let events = surface.feed().events();
+            if events.len() < seen {
+                seen = 0;
+            }
+            for event in events.get(seen..).unwrap_or_default() {
+                let kind = event.kind.to_string();
+                let owner = match event.audience {
+                    Audience::Private(seat) => Some(seat),
+                    Audience::World { owner, .. } => owner,
+                    Audience::Public => None,
+                };
+                if kind != "area_surveyed" && kind != "enemy_beacon_found" {
+                    continue;
+                }
+                if let Some(seat) = owner
+                    && !surveyed.contains(&(round, seat.raw()))
+                {
+                    surveyed.push((round, seat.raw()));
+                }
+            }
+            seen = events.len();
+            if report.segment_ended {
+                break;
+            }
+        }
+        surface.end_recap().expect("the recap closes");
+        if round < 3 {
+            surface.open_lull().expect("the next Lull");
+        }
+    }
+    eprintln!("Survey posts sealed: {posts:?}; survey events: {surveyed:?}");
+    assert!(!posts.is_empty(), "Easy surveys on Probation's seed");
+    for &(round, seat) in posts.iter().filter(|(round, _)| *round < 3) {
+        assert!(
+            surveyed.contains(&(round, seat)) || surveyed.contains(&(round + 1, seat)),
+            "the post sealed in round {round} by seat {seat} reported by the next Push:              {surveyed:?}"
+        );
+    }
+    assert_eq!(
+        posts,
+        [(2, 1), (3, 0)],
+        "a named expectation: which seat surveyed when"
     );
 }

@@ -104,6 +104,22 @@
 //! post seam, so the composition's one-goal-per-feature rule places at most
 //! one a round. Every other goal's attack is zero.
 //!
+//! # Vision, and the Survey post (S3's `opr3`)
+//!
+//! **A Survey goal**: place a Survey beacon `covering` the same seam beside
+//! the core, whose scouts look over the whole map (spec section 14: the
+//! operator "places a Survey post when the enemy sightings it needs are stale
+//! or missing"; S3's plan, decision 3). The sightings a raid needs are an
+//! enemy beacon's inside `verifier.reach_memory_ms` ([`raid_goals`]), so the
+//! trigger is that none is held ([`sightings_stale`]); then one probe asks
+//! whether a Survey beacon stands beside the core already ([`survey_post`]).
+//! It is enumerated with the guard, so the cut never drops it, and **added**
+//! beside the goals whenever its trigger holds, never ranked; it yields its
+//! seam to a guard post or a raid placed that round ([`crate::compose`]).
+//! The sequence is: a round places the post, its scouts sight the enemy, the
+//! next Lull holds a fresh sighting, a raid is weighed and the Survey post is
+//! not.
+//!
 //! # The term that is zero at Easy, and why
 //!
 //! **Capability** is zero for every candidate. It is in the sum, with its
@@ -174,6 +190,14 @@ pub(crate) enum Goal {
         seam: String,
         /// What the raiders raid.
         target: RaidTarget,
+    },
+    /// Place a Survey beacon covering the seam `seam`, beside the core, whose
+    /// scouts look over the whole map (spec section 14's Survey post; S3's
+    /// plan, decision 3): placed when the enemy sightings Easy needs are
+    /// stale or missing, so its scouts refresh them before the next Lull.
+    Survey {
+        /// The seam's name: the guard post's seam, beside the core.
+        seam: String,
     },
     /// Place a stepping-stone beacon `toward` the feature `feature`, which
     /// no site the seat's spheres allow covers yet (the register's S5-04;
@@ -249,6 +273,11 @@ impl Goal {
             }
             Goal::Guard { .. } => crate::easy::DEFEND_THE_CORE,
             Goal::Raid { .. } => crate::easy::RAID_AN_ENEMY_BEACON,
+            // Added beside another template's goals, and alone the Safe
+            // Playbook template's frame with its route filled
+            // ([`crate::compose`]); never ranked, so no template is filled
+            // with it.
+            Goal::Survey { .. } => crate::easy::SAFE_PLAYBOOK,
         }
     }
 
@@ -256,7 +285,10 @@ impl Goal {
     /// composed route.
     pub(crate) fn feature(&self) -> &str {
         match self {
-            Goal::Mine { seam, .. } | Goal::Guard { seam } | Goal::Raid { seam, .. } => seam,
+            Goal::Mine { seam, .. }
+            | Goal::Guard { seam }
+            | Goal::Raid { seam, .. }
+            | Goal::Survey { seam } => seam,
             Goal::Generator { vent, .. } | Goal::Tap { vent, .. } => vent,
             Goal::Stone { feature, .. } => feature,
         }
@@ -535,6 +567,7 @@ pub(crate) fn enumerate(
     taps: &[Tap],
     post: Post,
     raid: Post,
+    survey: Post,
 ) -> Vec<Goal> {
     if situation.commander.is_none() {
         return Vec::new();
@@ -581,15 +614,17 @@ pub(crate) fn enumerate(
     // The guard goes first, so that the cut never drops it, and the rest are
     // cut to the room it leaves.
     let guard = guard_goal(situation, tuning, post);
+    let survey = survey_goal(situation, tuning, survey);
     let raids = if raid == Post::None {
         raid_goals(situation, tuning)
     } else {
         Vec::new()
     };
-    // The guard and the raids go first, so that the cut never drops them, and
-    // the rest are cut to the room they leave.
+    // The guard, the Survey post and the raids go first, so that the cut
+    // never drops them, and the rest are cut to the room they leave.
     let goals: Vec<Goal> = guard
         .into_iter()
+        .chain(survey)
         .chain(raids)
         .chain(keyed.into_iter().map(|(_, goal)| goal))
         .collect();
@@ -678,6 +713,60 @@ fn post_beside_core(
             }
         }
     }
+}
+
+/// Whether the enemy sightings Easy needs are stale or missing (spec section
+/// 14: the operator "places a Survey post when the enemy sightings it needs
+/// are stale or missing"): no enemy beacon the seat holds a sighting of
+/// inside `verifier.reach_memory_ms`, the window a raid's target must be
+/// sighted in (E0418), so exactly a round with no beacon to raid
+/// ([`raid_goals`]). An enemy commander in sight is no sighting this needs:
+/// it is never remembered, so it raids only while it is in sight.
+pub(crate) fn sightings_stale(situation: &Situation, tuning: &Tuning) -> bool {
+    !situation.beacons.iter().any(|beacon| {
+        !beacon.own
+            && beacon
+                .sighting_age_ms
+                .is_some_and(|age| age <= tuning.reach_memory_ms)
+    })
+}
+
+/// The Survey probe, the guard probe's twin for "the nearest own Survey
+/// beacon", made only while the sightings are stale or missing
+/// ([`sightings_stale`]): a Survey post beside the core already scouts, so a
+/// second one is never enumerated while one stands, nor while the probe
+/// cannot say ([`crate::easy::SURVEY_PROBE_CALLS`]). A round with fresh
+/// sightings makes no call and weighs no post. The post's step is the Defend
+/// the Core template's own place step with its mandate made Survey's
+/// ([`crate::compose`]), so the library must list that template.
+pub(crate) fn survey_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: &Tuning) -> Post {
+    if !sightings_stale(situation, tuning) {
+        return Post::Unknown;
+    }
+    post_beside_core(wire, situation, "SURVEY", crate::easy::DEFEND_THE_CORE)
+}
+
+/// The Survey post a round could place: covering the post seam beside the
+/// core ([`post_seam`]), as the guard and the raid posts do. `None` when no
+/// Survey beacon is known not to stand beside the core ([`survey_post`]),
+/// the seat has no post seam, the treasury cannot carry the beacon and its
+/// scouts, or the grid's headroom cannot carry the scouts' draw (a scout
+/// fielded past the supply is the verifier's E0601, and on a dark grid none
+/// would walk).
+fn survey_goal(situation: &Situation, tuning: &Tuning, survey: Post) -> Option<Goal> {
+    let headroom = situation
+        .economy
+        .supply_kw
+        .checked_sub(situation.economy.draw_kw)?;
+    if survey != Post::None
+        || tuning.survey_cost_dollars > situation.economy.treasury
+        || headroom < tuning.survey_draw_kw
+    {
+        return None;
+    }
+    post_seam(situation).map(|seam| Goal::Survey {
+        seam: seam.id.clone(),
+    })
 }
 
 /// The guard post a round could place: the Defend the Core template's step,
@@ -982,7 +1071,8 @@ pub(crate) fn evaluate(
             // `cover` (the register's S1-20): the last leg ends there.
             Goal::Mine { seam: name, .. }
             | Goal::Generator { vent: name, .. }
-            | Goal::Guard { seam: name } => object(vec![(
+            | Goal::Guard { seam: name }
+            | Goal::Survey { seam: name } => object(vec![(
                 "covering",
                 object(vec![("feature_id", string(name))]),
             )]),
@@ -1019,6 +1109,7 @@ pub(crate) fn evaluate(
             | Goal::Generator { .. }
             | Goal::Tap { .. }
             | Goal::Guard { .. }
+            | Goal::Survey { .. }
             | Goal::Stone { .. } => reading(&estimate),
         };
         let Ok(Some((place, travel, lead))) = read else {
@@ -1093,7 +1184,11 @@ fn stone_for(goal: &Goal, refused: &Refused) -> Option<Goal> {
             feature: vent.clone(),
             kind: Kind::Vent,
         }),
-        Goal::Tap { .. } | Goal::Guard { .. } | Goal::Raid { .. } | Goal::Stone { .. } => None,
+        Goal::Tap { .. }
+        | Goal::Guard { .. }
+        | Goal::Raid { .. }
+        | Goal::Survey { .. }
+        | Goal::Stone { .. } => None,
     }
 }
 
@@ -1237,6 +1332,20 @@ fn terms(
                 post_ms(tuning, travel_ms)?,
             )
         }
+        Goal::Survey { .. } => {
+            let cost = tuning.survey_cost_dollars;
+            (
+                cost,
+                // A Survey post earns nothing: its worth is the sightings its
+                // scouts bring back, which the next round's raids read.
+                cost.checked_neg()?,
+                // Beside the core, inside its sphere: no reach it adds.
+                0,
+                0,
+                // As the guard's: the Survey row in place of the Defend row.
+                post_ms(tuning, travel_ms)?,
+            )
+        }
         Goal::Stone { .. } => {
             let cost = tuning.beacon_cost_dollars;
             (
@@ -1284,7 +1393,8 @@ fn score(
     // A guard post is charged none: the enemies near it are what it guards
     // against, and they are its defence term already.
     let near = match goal {
-        Goal::Guard { .. } => 0,
+        // A Survey post stands where the guard would, beside the core.
+        Goal::Guard { .. } | Goal::Survey { .. } => 0,
         Goal::Mine { .. }
         | Goal::Generator { .. }
         | Goal::Tap { .. }
@@ -1306,6 +1416,7 @@ fn score(
         | Goal::Generator { .. }
         | Goal::Tap { .. }
         | Goal::Guard { .. }
+        | Goal::Survey { .. }
         | Goal::Stone { .. } => 0,
     };
     let w = BALANCED;
@@ -1337,7 +1448,7 @@ pub(crate) fn top_k(candidates: &[Candidate]) -> Vec<Candidate> {
     let mut ranked: Vec<Candidate> = candidates
         .iter()
         .filter(|candidate| candidate.utility > 0)
-        .filter(|candidate| !matches!(candidate.goal, Goal::Guard { .. }))
+        .filter(|candidate| !matches!(candidate.goal, Goal::Guard { .. } | Goal::Survey { .. }))
         .cloned()
         .collect();
     ranked.sort_by_key(|candidate| (std::cmp::Reverse(candidate.rate), candidate.id));
@@ -1360,6 +1471,15 @@ pub(crate) fn guard_site(candidates: &[Candidate]) -> Option<&Candidate> {
 /// the core's sphere scores it too.
 pub(crate) fn guard(candidates: &[Candidate]) -> Option<&Candidate> {
     guard_site(candidates).filter(|candidate| candidate.utility > 0)
+}
+
+/// The Survey post Easy adds to its route beside the goals, when it was
+/// evaluated: whenever the trigger holds, whatever its utility, which is its
+/// price negated (spec section 14's trigger is the rule, not a score).
+pub(crate) fn survey(candidates: &[Candidate]) -> Option<&Candidate> {
+    candidates
+        .iter()
+        .find(|candidate| matches!(candidate.goal, Goal::Survey { .. }))
 }
 
 /// The raid the wizard's Raid an Enemy Beacon page is pre-filled with: the

@@ -37,6 +37,7 @@
 //! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` and one QUICK `verify_plan` over every tap Easy could make, when there is one (the register's S1-15) |
 //! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
 //! | the raid probe ([`RAID_PROBE_CALLS`]) | one `estimate_route` to the nearest own Attack beacon, so a raid post is never placed twice |
+//! | the Survey probe ([`SURVEY_PROBE_CALLS`]) | one `estimate_route` to the nearest own Survey beacon, in a round whose enemy sightings are stale or missing, so a Survey post is never placed twice; a built-in seat's only |
 //! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature, the guard post's and the raids' among them (a raid's by way of its post's site to its target) |
 //! | the stepping stones ([`STONE_CALLS`]) | one `estimate_route` to a `toward` waypoint per placement whose `covering` was refused `NOT_FOUND`, at most [`STONE_TARGETS_MAX`]; a built-in seat's only |
 //! | one instantiate per template | [`EASY_TEMPLATES`] `instantiate_template`, each with its own values, to read what it declares |
@@ -197,6 +198,14 @@ pub const RAID_FORCE_SIZE: u32 = 2;
 /// PLACEHOLDER: how many raid targets Easy weighs, 3 of its 30 candidates — owner, S5, with Normal and Hard
 pub const RAID_TARGETS_MAX: u32 = 3;
 
+/// How many scouts Easy's Survey post fields (spec section 14's Survey post;
+/// S3's plan, decision 3): the nightly Hunter arm's two
+/// (`scenarios/nightly/hunter.playbook.jsonc`). Spec section 6 names no
+/// count for the operator.
+///
+/// PLACEHOLDER: the Survey post's scout count, 2 as the Hunter arm's — owner, S5
+pub const SURVEY_SCOUT_COUNT: u32 = 2;
+
 /// How many refused placements a round weighs again as a stepping stone
 /// toward its feature (the register's S5-04;
 /// [`crate::candidates`]' `evaluate`), one `estimate_route` each.
@@ -208,8 +217,8 @@ pub const RAID_TARGETS_MAX: u32 = 3;
 /// at most, and Easy evaluates [`EASY_CANDIDATES`] candidates, so no round
 /// can have more refused placements than that: the largest retry count there
 /// can be is [`EASY_CANDIDATES`], and its worst case fits. With it the
-/// built-in seat's budget is [`EASY_CALL_BUDGET`], 108 calls, 20 under the
-/// limit (16 %), which is the stated margin;
+/// built-in seat's budget is [`EASY_CALL_BUDGET`], 109 calls, 19 under the
+/// limit (15 %), which is the stated margin;
 /// `crates/gamectl/tests/operator.rs`' `easy_fits_the_in_process_limits`
 /// holds the two together when it compiles, and
 /// `easy_never_exceeds_its_derived_call_budget` builds the worst case (every
@@ -310,6 +319,12 @@ pub const GUARD_PROBE_CALLS: u32 = 1;
 /// which says whether a raid post already stands beside the core.
 pub const RAID_PROBE_CALLS: u32 = 1;
 
+/// The Survey probe: one `estimate_route` to the nearest own Survey beacon,
+/// which says whether a Survey post already stands beside the core, made only
+/// in a round whose enemy sightings are stale or missing. A built-in seat's
+/// only: the advisor offers no Survey post.
+pub const SURVEY_PROBE_CALLS: u32 = 1;
+
 /// The stepping stones: one `estimate_route` per refused placement weighed
 /// again ([`STONE_TARGETS_MAX`]). A built-in seat's only: the advisor
 /// weighs no stone, since none is offered to the wizard.
@@ -333,6 +348,7 @@ pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + TAP_PROBE_CALLS
     + GUARD_PROBE_CALLS
     + RAID_PROBE_CALLS
+    + SURVEY_PROBE_CALLS
     + EASY_CANDIDATES
     + STONE_CALLS
     + EASY_TEMPLATES
@@ -500,10 +516,12 @@ impl Easy {
         let taps = candidates::legal_taps(wire, situation, &self.tuning);
         let post = candidates::defend_post(wire, situation);
         let raid = candidates::raid_post(wire, situation);
-        let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid);
+        let survey = candidates::survey_post(wire, situation, &self.tuning);
+        let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid, survey);
         let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals, true);
         let top = candidates::top_k(&evaluated);
         let guard = candidates::guard(&evaluated);
+        let survey = candidates::survey(&evaluated);
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
         let spire = compose::spire(situation, &self.tuning);
 
@@ -512,6 +530,7 @@ impl Easy {
             &self.tuning,
             &top,
             guard,
+            survey,
             spire.as_ref(),
             &declared,
         ) && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)
@@ -545,7 +564,15 @@ impl Easy {
             let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
             let post = candidates::defend_post(&mut wire, &situation);
             let raid = candidates::raid_post(&mut wire, &situation);
-            let goals = candidates::enumerate(&situation, &self.tuning, &taps, post, raid);
+            // The advisor offers no Survey post, so it never probes for one.
+            let goals = candidates::enumerate(
+                &situation,
+                &self.tuning,
+                &taps,
+                post,
+                raid,
+                candidates::Post::Unknown,
+            );
             let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals, false);
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);

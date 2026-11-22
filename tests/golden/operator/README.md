@@ -46,7 +46,12 @@ paid out of Hold & Build's hold, and a hold with nothing left for it is taken
 out; the visit goals keep the whole share. Since S3's `opr3` a feature no
 site of the seat's spheres covers is weighed once more as a **stepping
 stone**, a beacon placed `toward` it by name (the register's S5-04), as
-`seed-00000000ca5caded/expected.seat-2.jsonc` seals in round 1. A seat with nothing
+`seed-00000000ca5caded/expected.seat-2.jsonc` seals in round 1. Beside the
+goals Easy may add a **Survey post** (a Survey beacon by the core whose scouts
+look over the whole map, when it holds no fresh sighting of an enemy beacon)
+and, once its seat holds the licence, a **Resonance Spire** queued at the
+core; a round with nothing else fills the Safe Playbook template's route with
+them and is still Easy's own seal. A seat with nothing
 inside its route share seals its own **safe playbook** instead: the Safe
 Playbook template instantiated with its route -- the walk to safety, any
 priority raise, and the same `deepen_core`, last -- whose `meta.note` is the

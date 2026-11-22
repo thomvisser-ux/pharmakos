@@ -141,6 +141,14 @@ pub(crate) struct Tuning {
     /// `verifier.reach_memory_ms`: how long a sighting stays fresh, the
     /// window an Attack target's sighting must fall inside (E0418).
     pub(crate) reach_memory_ms: i64,
+    /// What a Survey post spends, whole $: its beacon and the scouts it
+    /// fields (`structures.beacon.cost_dollars` plus
+    /// [`crate::easy::SURVEY_SCOUT_COUNT`] `units.scout.cost_dollars`).
+    pub(crate) survey_cost_dollars: i64,
+    /// What a Survey post's scouts draw once fielded, whole kW:
+    /// [`crate::easy::SURVEY_SCOUT_COUNT`] `units.scout.draw_kw` (a placed
+    /// beacon itself is net zero).
+    pub(crate) survey_draw_kw: i64,
     /// `structures.resonance_spire.cost_dollars`: what queueing the Spire
     /// takes from the treasury when the row commits.
     pub(crate) spire_cost_dollars: i64,
@@ -261,7 +269,8 @@ fn attack_rows(
     Ok((raid_cost_dollars, reach_memory_ms))
 }
 
-/// The three route prices, a tap's, a Generator's and a guard post's, summed
+/// The four route prices, a tap's, a Generator's, a guard post's and a Survey
+/// post's (its beacon and [`crate::easy::SURVEY_SCOUT_COUNT`] scouts), summed
 /// once: rows are `u32`, so the sums fit an `i64`, and a sum that did not would
 /// be a table refused rather than a price saturated.
 ///
@@ -273,7 +282,7 @@ fn route_prices(
     build_drone: u32,
     beacon: u32,
     scout: u32,
-) -> Result<(i64, i64, i64), RulesError> {
+) -> Result<(i64, i64, i64, i64), RulesError> {
     let too_dear = || {
         RulesError(String::from(
             "a route's price does not fit a whole $ figure",
@@ -286,7 +295,23 @@ fn route_prices(
     let guard = i64::from(beacon)
         .checked_add(i64::from(scout))
         .ok_or_else(too_dear)?;
-    Ok((tap, vent, guard))
+    let survey = i64::from(scout)
+        .checked_mul(i64::from(crate::easy::SURVEY_SCOUT_COUNT))
+        .and_then(|scouts| scouts.checked_add(i64::from(beacon)))
+        .ok_or_else(too_dear)?;
+    Ok((tap, vent, guard, survey))
+}
+
+/// What a Survey post's [`crate::easy::SURVEY_SCOUT_COUNT`] scouts draw,
+/// whole kW, from `units.scout.draw_kw`.
+///
+/// # Errors
+///
+/// [`RulesError`] for a draw that does not fit.
+fn survey_draw(scout_draw_kw: u32) -> Result<i64, RulesError> {
+    i64::from(scout_draw_kw)
+        .checked_mul(i64::from(crate::easy::SURVEY_SCOUT_COUNT))
+        .ok_or_else(|| RulesError(String::from("a Survey post's draw does not fit")))
 }
 
 /// The rows queueing the Resonance Spire reads: its price and draw, which a
@@ -408,12 +433,13 @@ impl Tuning {
                 return Err(missing(row));
             }
         }
-        let (tap_cost_dollars, vent_cost_dollars, guard_cost_dollars) = route_prices(
-            generator_row.cost_dollars,
-            build_drone.cost_dollars,
-            beacon_row.cost_dollars,
-            scout.cost_dollars,
-        )?;
+        let (tap_cost_dollars, vent_cost_dollars, guard_cost_dollars, survey_cost_dollars) =
+            route_prices(
+                generator_row.cost_dollars,
+                build_drone.cost_dollars,
+                beacon_row.cost_dollars,
+                scout.cost_dollars,
+            )?;
         let (raid_cost_dollars, reach_memory_ms) =
             attack_rows(&table, units.raider, beacon_row.cost_dollars)?;
         Ok(Tuning {
@@ -422,6 +448,8 @@ impl Tuning {
             reach_memory_ms,
             vent_cost_dollars,
             guard_cost_dollars,
+            survey_cost_dollars,
+            survey_draw_kw: survey_draw(scout.draw_kw)?,
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
             beacon_cost_dollars: i64::from(beacon_row.cost_dollars),
             generator_output_kw: power

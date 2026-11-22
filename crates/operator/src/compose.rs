@@ -53,7 +53,9 @@
 use pharmakos_proto::json::Json;
 
 use crate::candidates::{Candidate, Goal, NoVent, RaidTarget, core_threat, route_index, tap_step};
-use crate::easy::{CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT, SAFE_PLAYBOOK};
+use crate::easy::{
+    CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT, SAFE_PLAYBOOK, SURVEY_SCOUT_COUNT,
+};
 use crate::playbook::{Declared, op, pointer_get, with_member, with_pointer};
 use crate::situation::{Kind, LastPush, Situation};
 use crate::tuning::Tuning;
@@ -76,6 +78,8 @@ pub(crate) struct Composed {
     pub(crate) removals: Vec<Vec<Json>>,
     /// The Resonance Spire queued at the core this round, if one is.
     pub(crate) spire: Option<Spire>,
+    /// The Survey post added beside the goals, if one is.
+    pub(crate) survey: Option<Candidate>,
     /// Why, in the sentences the playbook's note carries after its seed line.
     pub(crate) why: String,
 }
@@ -262,11 +266,16 @@ fn greedy(top: &[Candidate], share: i64, treasury: i64) -> Vec<Candidate> {
 /// the commander opens the route. With no goal beside it, the Defend the Core
 /// template is the round's playbook. A guard the library has no Defend the
 /// Core template for is not placed.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one composition read top to bottom: the additions weighed, the goals inserted,               the template filled and the front steps put in, each a helper already"
+)]
 pub(crate) fn compose(
     situation: &Situation,
     tuning: &Tuning,
     top: &[Candidate],
     guard: Option<&Candidate>,
+    survey: Option<&Candidate>,
     spire: Option<&Spire>,
     declared: &[Declared],
 ) -> Option<Composed> {
@@ -275,7 +284,12 @@ pub(crate) fn compose(
     let defend = declared
         .iter()
         .find(|held| held.template_id == DEFEND_THE_CORE);
-    let guard = guard.filter(|_| defend.is_some());
+    // The guard's step, and the Survey post's (its mandate made Survey's),
+    // are the Defend the Core template's place step: without it, neither.
+    let (guard, survey) = (
+        guard.filter(|_| defend.is_some()),
+        survey.filter(|_| defend.is_some()),
+    );
     // The walk to the core is one estimate's first leg, the same for every
     // candidate; the largest is taken so no reading of it is under-held. A
     // round with no candidate is composed only for the Spire, whose step
@@ -283,7 +297,8 @@ pub(crate) fn compose(
     let lead = top
         .iter()
         .chain(guard)
-        .map(|candidate| candidate.lead_ms)
+        .chain(survey)
+        .map(|c| c.lead_ms)
         .max();
     if lead.is_none() && spire.is_none() {
         return None;
@@ -298,58 +313,108 @@ pub(crate) fn compose(
     } = added(situation, tuning, fill, core.as_deref(), lead, guard, spire)?;
     let top = beside_the_guard(top, guard);
     let goals = greedy(&top, share, treasury);
+    let survey = survey_beside(survey, guard, &goals, share, treasury);
+    let (guard_step, survey_step, survey_ms) = post_steps(situation, defend, guard, survey)?;
     // The core's step goes in at route 0 as the patch's last operation, the
-    // Spire's just before it and the guard's before that, so every pointer
-    // above them is the template's; the removals are applied to the patched
-    // text, where each step stands one further on for each of them.
+    // Spire's just before it, the guard's before that and the Survey post's
+    // before that, so every pointer above them is the template's; the
+    // removals are applied to the patched text, where each step stands one
+    // further on for each of them.
     let core_shift = usize::from(core.is_some()).checked_add(usize::from(spire.is_some()))?;
-    let (template_id, goals, guard_step, patch_parts) = match (goals.first(), guard) {
+    let front = usize::from(survey_step.is_some());
+    let (template, goals, guard_step, patch_parts) = match (goals.first(), guard) {
         (Some(first), _) => {
-            let template_id = first.goal.template();
             let template = declared
                 .iter()
-                .find(|held| held.template_id == template_id)?;
-            let guard_step = match (guard, defend) {
-                (Some(guard), Some(defend)) => Some((guard.clone(), guard_copy(defend, guard)?)),
-                _ => None,
-            };
-            let shift = core_shift.checked_add(usize::from(guard_step.is_some()))?;
+                .find(|held| held.template_id == first.goal.template())?;
+            let shift = core_shift
+                .checked_add(usize::from(guard_step.is_some()))?
+                .checked_add(front)?;
             let parts = place_patch(
                 template,
                 &goals,
                 fill,
-                held_back?.checked_add(guard_ms)?,
+                held_back?.checked_add(guard_ms)?.checked_add(survey_ms)?,
                 shift,
             )?;
-            (template_id, goals, guard_step, parts)
+            (template, goals, guard_step, parts)
         }
         (None, Some(guard)) => {
             let template = defend?;
             let goals = vec![guard.clone()];
-            let parts = place_patch(template, &goals, fill, held_back?, core_shift)?;
-            (DEFEND_THE_CORE, goals, None, parts)
+            let parts = place_patch(
+                template,
+                &goals,
+                fill,
+                held_back?.checked_add(survey_ms)?,
+                core_shift.checked_add(front)?,
+            )?;
+            (template, goals, None, parts)
         }
         (None, None) => {
-            return spire_alone(situation, tuning, spire?, core.as_deref()?, declared);
+            return additions_alone(
+                situation,
+                tuning,
+                spire,
+                survey_step,
+                core.as_deref()?,
+                declared,
+            );
         }
     };
     let (mut patch, mut removals) = patch_parts;
-    let template = declared
-        .iter()
-        .find(|held| held.template_id == template_id)?;
+    let template_id = goals.first()?.goal.template();
     let why = round_why(
         situation,
         tuning,
         &goals,
         guard_step.as_ref().map(|(guard, _)| guard),
+        survey_step.as_ref().map(|(survey, _)| *survey),
         spire,
         fill,
     )?;
     patch.push(note_op(template, &with_seed(situation, &why)));
-    let guard = guard_step.map(|(guard, step)| {
-        patch.push(op("add", "/declarative/route/0", Some(step)));
-        // Taken out last of all: the repair of last resort removes the goals
-        // inserted after the first before it removes the guard.
+    let guard = front_steps(
+        &mut patch,
+        &mut removals,
+        survey_step.as_ref().map(|(_, step)| step),
+        guard_step,
+        spire,
+        core.as_deref(),
+        core_shift,
+    );
+    Some(Composed {
+        template_id,
+        goals,
+        guard,
+        patch,
+        removals,
+        spire: spire.cloned(),
+        survey: survey_step.map(|(survey, _)| survey.clone()),
+        why,
+    })
+}
+
+/// The steps in front of the template's, put in at route 0 one after another
+/// so each lands ahead of the last: the Survey post's, the guard's (with the
+/// removal that takes it out, last of all: the repair of last resort removes
+/// the goals inserted after the first before the guard), the Spire's and the
+/// core's. Answers the guard placed.
+fn front_steps(
+    patch: &mut Vec<Json>,
+    removals: &mut Vec<Vec<Json>>,
+    survey: Option<&Json>,
+    guard: Option<(Candidate, Json)>,
+    spire: Option<&Spire>,
+    core: Option<&str>,
+    core_shift: usize,
+) -> Option<Candidate> {
+    let mut front = |step: Json| patch.push(op("add", "/declarative/route/0", Some(step)));
+    if let Some(step) = survey {
+        front(step.clone());
+    }
+    let guard = guard.map(|(guard, step)| {
+        front(step);
         removals.insert(
             0,
             vec![op(
@@ -361,39 +426,117 @@ pub(crate) fn compose(
         guard
     });
     if let Some(spire) = spire {
-        patch.push(op(
-            "add",
-            "/declarative/route/0",
-            Some(spire_step(&spire.core)),
-        ));
+        front(spire_step(&spire.core));
     }
     if let Some(core) = core {
-        patch.push(op("add", "/declarative/route/0", Some(deepen_core(&core))));
+        front(deepen_core(core));
     }
-    Some(Composed {
-        template_id,
-        goals,
-        guard,
-        patch,
-        removals,
-        spire: spire.cloned(),
-        why,
-    })
+    guard
 }
 
-/// A round whose one addition is the Spire: the Safe Playbook template, its
-/// route filled with the template's own walk to safety, the core's dig depth
-/// and the Spire's step, and its note Easy's. The safe playbook itself never
-/// queues a Spire (spec section 14: it "leaves configurations untouched", and
-/// a person's timeout must not spend their $), so this is Easy's own plan on
-/// that template's frame, submitted and reported as its own.
-fn spire_alone(
+/// The Survey post that is placed beside the round's goals: whenever its
+/// trigger held ([`crate::candidates::survey`]), unless the guard post or a
+/// goal already covers its seam beside the core (one goal per feature: a
+/// raid post or a guard post stands on the site it would), and only while it
+/// fits what the goals left of the share and the treasury, which a figure
+/// that does not fit is not (as in the greedy insertion).
+fn survey_beside<'c>(
+    survey: Option<&'c Candidate>,
+    guard: Option<&Candidate>,
+    goals: &[Candidate],
+    share: i64,
+    treasury: i64,
+) -> Option<&'c Candidate> {
+    let survey = survey?;
+    let seam = survey.goal.feature();
+    if guard.is_some_and(|guard| guard.goal.feature() == seam)
+        || goals.iter().any(|goal| goal.goal.feature() == seam)
+    {
+        return None;
+    }
+    let (time, cost) = goals
+        .iter()
+        .try_fold((0_i64, 0_i64), |(time, cost), goal| {
+            Some((
+                time.checked_add(goal.time_ms)?,
+                cost.checked_add(goal.cost_dollars)?,
+            ))
+        })?;
+    let fits = time.checked_add(survey.time_ms)? <= share
+        && cost.checked_add(survey.cost_dollars)? <= treasury;
+    fits.then_some(survey)
+}
+
+/// The Survey post's step: the Defend the Core template's own place step
+/// covering the post seam by name, its label, tags and initial settings made
+/// a Survey post's -- the Survey mandate with one probe area over the whole
+/// map and [`SURVEY_SCOUT_COUNT`] scouts -- so its walk, timeout and
+/// `on_fail` are the library's.
+fn survey_copy(situation: &Situation, defend: &Declared, survey: &Candidate) -> Option<Json> {
+    let step = guard_copy(defend, survey)?;
+    let step = with_member(&step, "label", string("survey_post"));
+    let place = step.get("place_beacon")?;
+    let place = with_member(place, "tags", Json::Array(vec![string("survey")]));
+    let [x, y, z] = situation.map_size;
+    let max = [x.checked_sub(1)?, y.checked_sub(1)?, z.checked_sub(1)?];
+    let initial = object(vec![
+        ("priority", string("NORMAL")),
+        (
+            "mandate",
+            object(vec![(
+                "survey",
+                object(vec![
+                    (
+                        "probe_areas",
+                        Json::Array(vec![object(vec![
+                            ("min", voxel_json([0, 0, 0])),
+                            ("max", voxel_json(max)),
+                        ])]),
+                    ),
+                    ("scout_count", number(i64::from(SURVEY_SCOUT_COUNT))),
+                ]),
+            )]),
+        ),
+    ]);
+    let place = with_member(&place, "initial", initial);
+    Some(with_member(&step, "place_beacon", place))
+}
+
+/// Why the Survey post is placed: spec section 14's trigger, as Easy read it.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+fn survey_why(survey: &Candidate, tuning: &Tuning, fill: i64) -> String {
+    let seam = survey.goal.feature();
+    format!(
+        "A Survey beacon beside the core, covering the scrap seam {seam}, at {} as its site \
+         reads now, whose {SURVEY_SCOUT_COUNT} scouts look over the whole map, because you hold \
+         no sighting of an enemy beacon from the last {}: {} of route (Easy fills {} of the \
+         segment).",
+        place(survey.place),
+        seconds(tuning.reach_memory_ms),
+        seconds(survey.time_ms),
+        seconds(fill)
+    )
+}
+
+/// A round whose only additions are the Spire and the Survey post, with no
+/// goal and no guard: the Safe Playbook template, its route filled with the
+/// template's own walk to safety, the core's dig depth, the Spire's step and
+/// the Survey post's, and its note Easy's. The safe playbook itself never
+/// adds either (spec section 14: it "leaves configurations untouched", never
+/// places, and a person's timeout must not spend their $), so this is Easy's
+/// own plan on that template's frame, submitted and reported as its own.
+fn additions_alone(
     situation: &Situation,
     tuning: &Tuning,
-    spire: &Spire,
+    spire: Option<&Spire>,
+    survey: Option<(&Candidate, Json)>,
     core: &str,
     declared: &[Declared],
 ) -> Option<Composed> {
+    if spire.is_none() && survey.is_none() {
+        return None;
+    }
     let template = declared
         .iter()
         .find(|held| held.template_id == SAFE_PLAYBOOK)?;
@@ -401,19 +544,29 @@ fn spire_alone(
     let Json::Array(own) = template.own_value(pointer)? else {
         return None;
     };
-    let to_safety = own.first()?.clone();
-    let route = Json::Array(vec![to_safety, deepen_core(core), spire_step(&spire.core)]);
-    let why = spire_why(spire, tuning, true);
+    let fill = fill_ms(situation)?;
+    let mut route = vec![own.first()?.clone(), deepen_core(core)];
+    let mut why: Vec<String> = Vec::new();
+    if let Some(spire) = spire {
+        route.push(spire_step(&spire.core));
+        why.push(spire_why(spire, tuning, true));
+    }
+    if let Some((survey, step)) = &survey {
+        route.push(step.clone());
+        why.push(survey_why(survey, tuning, fill));
+    }
+    let why = why.join(" ");
     Some(Composed {
         template_id: SAFE_PLAYBOOK,
         goals: Vec::new(),
         guard: None,
         patch: vec![
-            op("replace", pointer, Some(route)),
+            op("replace", pointer, Some(Json::Array(route))),
             note_op(template, &with_seed(situation, &why)),
         ],
         removals: Vec::new(),
-        spire: Some(spire.clone()),
+        spire: spire.cloned(),
+        survey: survey.map(|(survey, _)| survey.clone()),
         why,
     })
 }
@@ -482,6 +635,39 @@ fn added<'a>(
     })
 }
 
+/// The guard post's step and the Survey post's, each copied from the Defend
+/// the Core template's place step, with the Survey post's time; `None` when a
+/// copy does not build. A guard's step is used only beside another
+/// template's goals (alone, it fills the Defend template itself).
+#[expect(
+    clippy::type_complexity,
+    reason = "a private helper's three answers, named where they are bound"
+)]
+fn post_steps<'c>(
+    situation: &Situation,
+    defend: Option<&Declared>,
+    guard: Option<&Candidate>,
+    survey: Option<&'c Candidate>,
+) -> Option<(
+    Option<(Candidate, Json)>,
+    Option<(&'c Candidate, Json)>,
+    i64,
+)> {
+    let guard_step = match (guard, defend) {
+        (Some(guard), Some(defend)) => Some((guard.clone(), guard_copy(defend, guard)?)),
+        _ => None,
+    };
+    let survey_step = match (survey, defend) {
+        (Some(survey), Some(defend)) => Some((survey, survey_copy(situation, defend, survey)?)),
+        _ => None,
+    };
+    let survey_ms = match &survey_step {
+        Some((survey, _)) => survey.time_ms,
+        None => 0,
+    };
+    Some((guard_step, survey_step, survey_ms))
+}
+
 /// Why the round is composed as it is: its first goal, counting the rest; the
 /// guard post beside them and its reason; the Spire. `None` with no goal.
 fn round_why(
@@ -489,6 +675,7 @@ fn round_why(
     tuning: &Tuning,
     goals: &[Candidate],
     guard: Option<&Candidate>,
+    survey: Option<&Candidate>,
     spire: Option<&Spire>,
     fill: i64,
 ) -> Option<String> {
@@ -502,6 +689,9 @@ fn round_why(
     }
     if let Some(spire) = spire {
         why = format!("{why} {}", spire_why(spire, tuning, false));
+    }
+    if let Some(survey) = survey {
+        why = format!("{why} {}", survey_why(survey, tuning, fill));
     }
     Some(why)
 }
@@ -617,6 +807,11 @@ fn place_patch(
                 }
                 place_copy(&place_step, &below, name, n)?
             }
+            // A Survey post is added beside the goals by its own step
+            // (`survey_copy`) and is never ranked among them (`top_k`), so no
+            // template is filled with one: a goal list holding one is not
+            // composed.
+            Goal::Survey { .. } => return None,
             Goal::Raid { seam, target } => {
                 // The post's seam, its target, and its staging at the site
                 // the estimate answered, so the raiders gather at home.
@@ -645,26 +840,17 @@ fn place_patch(
                 }
                 step
             }
-            Goal::Stone { feature, .. } => {
-                let label = if k == 0 {
-                    String::from("stone")
-                } else {
-                    format!("stone_{n}")
+            Goal::Stone { feature, .. } | Goal::Tap { vent: feature, .. } => {
+                let step = match &goal.goal {
+                    Goal::Tap { beacon, .. } => {
+                        tap_step(&numbered("add_generator", k, n), beacon, feature)
+                    }
+                    _ => stone_step(
+                        &numbered("stone", k, n),
+                        feature,
+                        place_step.get("timeout_ms")?.clone(),
+                    ),
                 };
-                let step = stone_step(&label, feature, place_step.get("timeout_ms")?.clone());
-                if k == 0 {
-                    patch.push(op("replace", &place_prefix, Some(step)));
-                    continue;
-                }
-                step
-            }
-            Goal::Tap { beacon, vent, .. } => {
-                let label = if k == 0 {
-                    String::from("add_generator")
-                } else {
-                    format!("add_generator_{n}")
-                };
-                let step = tap_step(&label, beacon, vent);
                 if k == 0 {
                     patch.push(op("replace", &place_prefix, Some(step)));
                     continue;
@@ -682,6 +868,16 @@ fn place_patch(
         removals.push(vec![op("remove", &shifted, None)]);
     }
     Some((patch, removals))
+}
+
+/// A whole step's label: the first goal's as given, each further one
+/// numbered, `stone` then `stone_2`.
+fn numbered(label: &str, k: usize, n: usize) -> String {
+    if k == 0 {
+        label.to_owned()
+    } else {
+        format!("{label}_{n}")
+    }
 }
 
 /// A stepping-stone step: a beacon placed `toward` a named feature, which
@@ -825,6 +1021,11 @@ pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String 
              reads now, whose raiders gather there and raid {}{more}{tail}",
             place(candidate.place),
             raid_words(target),
+        ),
+        Goal::Survey { seam } => format!(
+            "A Survey beacon beside the core, covering the scrap seam {seam}, at {} as its site \
+             reads now, whose scouts look over the whole map{more}{tail}",
+            place(candidate.place),
         ),
         Goal::Stone { feature, kind } => format!(
             "A stepping-stone beacon toward the {} {feature}, which no site your spheres allow \

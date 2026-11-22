@@ -55,8 +55,12 @@
 //!
 //! # What Easy does not do yet
 //!
-//! Spec section 14's Survey post, chatter and target spread are not built at
-//! Easy (decisions-log item 111, section A6). Its Defend guard is: S2's plan,
+//! Spec section 14's chatter and target spread are not built at Easy
+//! (decisions-log item 111, section A6). Its Survey post is, from S3 (S3's
+//! plan, decision 3): when it holds no sighting of an enemy beacon inside the
+//! reach window, the trigger as the spec words it, it places a Survey beacon
+//! beside its core whose scouts look over the whole map, so a raid has a
+//! fresh target in a later Lull. Its Defend guard is: S2's plan,
 //! decision 35, moved it from S5 to S2, and `oprd` built it (a guard post in
 //! the round after a Push in which the commander died, scored by decision
 //! 12's threat model; [`easy`]'s Defend the Core). So are its raids, S2's
@@ -68,7 +72,7 @@
 //! reaches past its first sphere with stepping stones placed `toward` a
 //! feature no site of its spheres covers (the register's S5-04).
 //!
-//! PLACEHOLDER: Easy's Survey post, chatter and target spread — owner, S5, with Normal and Hard
+//! PLACEHOLDER: Easy's chatter and target spread — owner, S5, with Normal and Hard
 
 pub mod easy;
 pub mod wire;
