@@ -64,6 +64,8 @@ const Lobby := preload("res://scripts/lobby.gd")
 const InstanceLog := preload("res://scripts/instance_log.gd")
 const ValueFieldScript := preload("res://scripts/value_field.gd")
 const Wizard := preload("res://scripts/wizard.gd")
+const Values := preload("res://scripts/values.gd")
+const Rows := preload("res://scripts/rows.gd")
 const Strings := preload("res://scripts/strings.gd")
 const OWNERS_WINDOW := Vector2i(1456, 819)
 ## A map as wide as the golden seed's, in voxels (x, up, north).
@@ -176,10 +178,11 @@ func _ready() -> void:
 	#    boundary is silent, so a healthy-looking run with a non-zero count here is
 	#    exactly the case this assertion is for. It is read AFTER the engine-side
 	#    upload, so a panic inside a `RenderingServer` call is part of the verdict.
-	var caught: int = bridge.caught_panics()
+	# A count past what an int holds comes as the bridge's refusal, a Dictionary: a failure too.
+	var caught: Variant = bridge.caught_panics()
 	print("[client-check] %s" % bridge.panic_report())
-	if caught != 0:
-		failures.append("%d panic(s) were caught at the bridge boundary" % caught)
+	if not (caught is int) or caught != 0:
+		failures.append("%s panic(s) were caught at the bridge boundary" % str(caught))
 
 	if failures.is_empty():
 		print("[client-check] OK")
@@ -316,6 +319,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_build_marks(editor, failures)
 	await _check_the_dormant_box(stage, editor, failures)
 	_check_the_load_folder(editor, failures)
+	_check_the_unreadable_counts(editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
@@ -938,6 +942,46 @@ func _check_the_load_folder(editor: CanvasLayer, failures: Array[String]) -> voi
 		failures.append("with no file of its own Load opens in `%s`, not the last file's folder `%s`" % [editor._load_dialog.current_dir, other])
 	if EditorPanel.load_folder({}) != "":
 		failures.append("with no file at all Load names a folder: `%s`" % EditorPanel.load_folder({}))
+
+
+## **No integer reader can fail at run time** (S3's `fixp`, the `godot_int` sweep's GDScript
+## half): the bridge's refusal of a count past `int`, `{"not_an_int": "<digits>"}`, fed to each
+## drawing path that reads one, is said as unreadable on its line, and no script error is raised.
+func _check_the_unreadable_counts(editor: CanvasLayer, failures: Array[String]) -> void:
+	var refusal := {"not_an_int": "18446744073709551615"}
+	var digits := "18446744073709551615"
+	if Values.int_of(7) != 7 or Values.int_of(refusal) is int:
+		failures.append("Values.int_of does not tell a count from the bridge's refusal")
+	editor._draw_meter({"answers": refusal})
+	if not editor.meter_text().contains(digits):
+		failures.append("the meter says `%s` of an unreadable answer count" % editor.meter_text())
+	var chip := EditorPanel.chip_line({"step": refusal, "now": {}, "failure": "no_target", "matched": 0})
+	if not chip.contains(digits):
+		failures.append("a chip says `%s` of an unreadable step" % chip)
+	editor._draw_attack([{"aim": "selector", "step": refusal}])
+	if not editor._attack_label.text.contains(digits):
+		failures.append("an Attack line says `%s` of an unreadable step" % editor._attack_label.text)
+	editor._draw_build([{"step": refusal, "blueprint": "wall", "anchor": "unknown", "has_box": false}])
+	if not editor.build_text().contains(digits):
+		failures.append("a Build line says `%s` of an unreadable step" % editor.build_text())
+	if not EditorPanel.picking_on({"picking": refusal}):
+		failures.append("an unreadable picking index does not leave the click to the bridge")
+	editor._draw_state({"changes": 12, "has_text": true, "undo_depth": refusal, "picking": refusal, "rows_current": true, "verdict": "quick", "rows": [{"severity": "warning", "sentence": "A row.", "code": "W0709", "pointer": "/x", "fixes": [{"title": "Fix it", "index": refusal}]}], "rule_list": {"lines": [{"segments": [{"text": "A line.", "chip": refusal}], "rule": refusal, "in_rule": -1}], "rules": [], "chips": [], "slots": []}, "prose_current": true, "rules_rendering": 3})
+	if editor._undo_button.disabled or not editor._undo_button.tooltip_text.contains(digits):
+		failures.append("an unreadable undo depth is not said on Undo: `%s`" % editor._undo_button.tooltip_text)
+	var fix_said := false
+	for label in editor._rows.find_children("*", "Label", true, false):
+		if (label as Label).text.contains(digits):
+			fix_said = true
+	if not fix_said or not Rows.fix_buttons(editor._rows).is_empty():
+		failures.append("a fix with an unreadable number is not said as unreadable, or is a button")
+	var rule_said := false
+	for label in editor._rules_box.find_children("*", "Label", true, false):
+		if (label as Label).text.contains(digits):
+			rule_said = true
+	if not rule_said:
+		failures.append("the rule list does not say an unreadable index")
+	editor._draw_state({"changes": 13, "has_text": false})
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4

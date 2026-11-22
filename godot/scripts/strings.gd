@@ -238,6 +238,19 @@ const TEXT := {
 	"row_where": "{code} at {pointer}",
 	"fix": "Fix: {title}",
 
+	# A count the bridge sent as its refusal, one past what `int` holds (S3's `fixp`): `what` it
+	# is, and the digits it held.
+	"value_unreadable": "{what} could not be read: the bridge sent {held}, past what this client's numbers hold.",
+	"value_changes": "The editor's change count",
+	"value_undo_depth": "How many edits Undo can take back",
+	"value_meter_answers": "The meter's answer count",
+	"value_recap_answers": "The recap's answer count",
+	"value_pending": "The view's waiting chunks",
+	"value_step": "The step number",
+	"value_fix": "This fix's number",
+	"value_index": "A position in the rule list",
+	"value_panics": "The bridge's caught-panic count",
+
 	# --- The status line: keys the bridge's editor names ---------------------------
 	"status_": "",
 	"status_load_not_text": "That file is not text, so it cannot be a playbook.",

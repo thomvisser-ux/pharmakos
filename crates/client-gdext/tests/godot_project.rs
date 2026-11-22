@@ -304,6 +304,7 @@ const SCRIPTS: &[&str] = &[
     "smoke_check.gd",
     "strings.gd",
     "value_field.gd",
+    "values.gd",
     "vista.gd",
     "vista_shot.gd",
     "watch_check.gd",
@@ -2604,7 +2605,7 @@ fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
     let slots = gd_code(&list, "_slots");
     assert!(
         slots.iter().any(|line| line.contains(
-            "if int(slot.get(\"rule\", -1)) != rule or not slot.get(\"pickable\", false):"
+            "if _index(slot.get(\"rule\", -1), unread) != rule or not slot.get(\"pickable\", false):"
         )),
         "a button only on a slot the bridge calls pickable (no group, no unknown op): {slots:?}"
     );
@@ -2713,13 +2714,13 @@ fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
     );
     let click = gd_code(&editor, "map_click");
     assert!(
-        click.iter().any(|line| line.contains(
-            "if int(picking.get(\"picking\", -1)) >= 0 or picking.get(\"anchoring\", false):"
-        )),
+        click
+            .iter()
+            .any(|line| line.contains("if picking_on(bridge.editor_state()):")),
         "an anchor pick takes the next map click: {click:?}"
     );
     assert!(
-        gd_code(&editor, "_a_pick_is_on")
+        gd_code(&editor, "picking_on")
             .iter()
             .any(|line| line.contains("state.get(\"anchoring\", false)")),
         "Escape stops an anchor pick as it stops a chip's"
@@ -2824,5 +2825,77 @@ fn every_click_on_the_dormant_box_reaches_the_bridge() {
     assert!(
         read("scripts/client_check.gd")
             .contains("await _check_the_dormant_box(stage, editor, failures)")
+    );
+}
+
+/// **No integer reader can fail at run time** (S3's `fixp`, the `godot_int` sweep's GDScript
+/// half): no script reads a count the bridge sends through `int_variant` with a bare `int(...)`,
+/// or types `caught_panics()` as an `int`; each goes through `values.gd`'s `int_of`, and the
+/// client check feeds every drawing path the bridge's refusal.
+#[test]
+fn every_count_the_bridge_sends_is_read_through_int_of() {
+    let keys = [
+        "changes",
+        "revision",
+        "undo_depth",
+        "answers",
+        "picking",
+        "step",
+        "pending",
+        "index",
+        "rule",
+        "chip",
+        "earlier",
+        "later",
+    ];
+    let mut found = Vec::new();
+    for script in SCRIPTS {
+        let text = read(&format!("scripts/{script}"));
+        for (number, line) in text.lines().enumerate() {
+            let code = line.split('#').next().unwrap_or_default();
+            if code.contains("caught_panics()") && code.contains(": int =") {
+                found.push(format!(
+                    "{script}:{}: {}",
+                    number.saturating_add(1),
+                    line.trim()
+                ));
+            }
+            // The bridge's own dictionaries, under the names the scripts give them; the editor's
+            // own (`_number_chip`, a drag's `data`) hold ints it put there itself.
+            for receiver in [
+                "state",
+                "s",
+                "meter",
+                "recap",
+                "chip",
+                "target",
+                "fix",
+                "line",
+                "segment",
+                "conflict",
+                "refusal",
+                "slot",
+                "drained",
+                "_editor()",
+                "picking",
+            ] {
+                for key in keys {
+                    if code.contains(&format!("int({receiver}.get(\"{key}\"")) {
+                        found.push(format!(
+                            "{script}:{}: {}",
+                            number.saturating_add(1),
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a count read with a bare int(): {found:#?}"
+    );
+    assert!(
+        read("scripts/client_check.gd").contains("_check_the_unreadable_counts(editor, failures)")
     );
 }

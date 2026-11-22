@@ -73,6 +73,7 @@ extends Node
 
 const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
+const Values := preload("res://scripts/values.gd")
 ## The credits overlay the chooser's Credits button adds (decisions-log item 117 (11)).
 const AboutScene := preload("res://scenes/credits.tscn")
 
@@ -209,7 +210,13 @@ static func ready_line(editor_state: Dictionary) -> String:
 func _draw_recap(phase: String) -> void:
 	var recap: Dictionary = vista.bridge.watch_recap()
 	var refusal := String(recap.get("refusal", ""))
-	var answered: bool = int(recap.get("answers", 0)) > 0 or refusal != ""
+	var answers: Variant = Values.int_of(recap.get("answers", 0))
+	if not (answers is int):
+		# A count past `int`: the recap's line says it cannot be read, in a recap and after the end.
+		_recap.visible = phase == "recap" or phase == "ended"
+		_recap.text = Values.unreadable_text(Strings.text("value_recap_answers"), answers)
+		return
+	var answered: bool = answers > 0 or refusal != ""
 	var shown: bool = (phase == "recap" or phase == "ended") and answered
 	_recap.visible = shown
 	if shown:

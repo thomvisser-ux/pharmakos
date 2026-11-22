@@ -141,6 +141,7 @@ const Wizard := preload("res://scripts/wizard.gd")
 const RuleList := preload("res://scripts/rule_list.gd")
 const ConditionPicker := preload("res://scripts/condition_picker.gd")
 const ValueField := preload("res://scripts/value_field.gd")
+const Values := preload("res://scripts/values.gd")
 
 ## How close, in screen pixels, a click must land to a beacon to pick it.
 ## PLACEHOLDER: the pick distance — OWNER, at S6.
@@ -607,10 +608,17 @@ func wizard_send(pointer: String, text: String) -> void:
 func refresh() -> void:
 	_draw_meter(bridge.watch_meter())
 	var state: Dictionary = bridge.editor_state()
-	if state.is_empty() or int(state.get("changes", 0)) == _changes:
+	if state.is_empty():
 		return
-	_changes = int(state.get("changes", 0))
+	# Every count the bridge sends is read through Values.int_of: one past `int` is its refusal,
+	# said as unreadable on its line, never a script error (S3's `fixp`).
+	var changes: Variant = Values.int_of(state.get("changes", 0))
+	if changes is int and changes == _changes:
+		return
+	_changes = changes if changes is int else -1
 	_draw_state(state)
+	if not (changes is int):
+		_status.text = Values.unreadable_text(Strings.text("value_changes"), changes)
 
 
 func _process(_delta: float) -> void:
@@ -639,10 +647,16 @@ func _input(event: InputEvent) -> void:
 		close_menu()
 
 
-## Whether a map pick is on: a rule-list chip's, or a Build target's anchor.
+## Whether a map pick is on: a rule-list chip's, or a Build target's anchor. A picking index
+## that cannot be read counts as a pick: the bridge, which holds the pick, answers the click.
 func _a_pick_is_on() -> bool:
-	var state: Dictionary = bridge.editor_state()
-	return int(state.get("picking", -1)) >= 0 or state.get("anchoring", false)
+	return picking_on(bridge.editor_state())
+
+
+## Whether the editor state says a map pick is on (see `_a_pick_is_on`).
+static func picking_on(state: Dictionary) -> bool:
+	var picking: Variant = Values.int_of(state.get("picking", -1))
+	return not (picking is int) or picking >= 0 or state.get("anchoring", false)
 
 
 ## Closes a map menu that is open when `event` is Escape going down, and says whether it did
@@ -683,8 +697,7 @@ func map_click(at: Vector2, alt: bool) -> bool:
 		_say_local("status_closed_ended", {})
 		return false
 	var camera: Camera3D = vista.rig.camera
-	var picking: Dictionary = bridge.editor_state()
-	if int(picking.get("picking", -1)) >= 0 or picking.get("anchoring", false):
+	if picking_on(bridge.editor_state()):
 		return _pick_at(camera, at)
 	var beacon := _beacon_under(camera, at)
 	if not beacon.is_empty():
@@ -931,7 +944,10 @@ func _draw_state(state: Dictionary) -> void:
 	_verdict.text = line
 	var open: bool = String(state.get("door", "open")) == "open"
 	Rows.fill(_rows, state.get("rows", []), Callable(self, "_on_fix_pressed"), state.get("rows_current", false) and not state.get("busy", false) and open, Callable(self, "_on_fix_down"))
-	_undo_button.disabled = int(state.get("undo_depth", 0)) == 0
+	# A depth that cannot be read leaves Undo to the bridge, which says why when there is none.
+	var depth: Variant = Values.int_of(state.get("undo_depth", 0))
+	_undo_button.disabled = depth is int and depth == 0
+	_undo_button.tooltip_text = "" if depth is int else Values.unreadable_text(Strings.text("value_undo_depth"), depth)
 	_new_button.disabled = not open
 	if state.get("beacon_prose", "") != "":
 		_beacon_label.text = String(state["beacon_prose"])
@@ -1030,9 +1046,17 @@ static func unchecked_text(state: Dictionary, check: String) -> String:
 ## The meter: the gateway's four numbers put into strings.gd's frame as they came. Redrawn
 ## only when a new answer has come.
 func _draw_meter(meter: Dictionary) -> void:
-	if meter.is_empty() or int(meter.get("answers", 0)) == _meter_answers:
+	if meter.is_empty():
 		return
-	_meter_answers = int(meter.get("answers", 0))
+	var answers: Variant = Values.int_of(meter.get("answers", 0))
+	if not (answers is int):
+		_meter_answers = -1
+		_meter.text = Values.unreadable_text(Strings.text("value_meter_answers"), answers)
+		_meter.accessibility_name = _meter.text
+		return
+	if answers == _meter_answers:
+		return
+	_meter_answers = answers
 	if _meter_answers == 0:
 		_meter.text = Strings.text("meter_waiting")
 	else:
@@ -1082,15 +1106,15 @@ func _draw_chips(chips: Array, current: bool, has_text: bool, unchecked: String)
 static func chip_line(chip: Dictionary) -> String:
 	var now: Dictionary = chip.get("now", {})
 	if now.is_empty():
-		return Strings.text("chip_nothing", {"step": chip.get("step", 0), "failure": chip.get("failure", ""), "matched": chip.get("matched", 0)})
+		return Strings.text("chip_nothing", {"step": Values.said(Strings.text("value_step"), chip.get("step", 0)), "failure": chip.get("failure", ""), "matched": chip.get("matched", 0)})
 	# The parts are joined, never added: a travel time is put into its frame as it came.
 	# A pick no route reaches (the gateway's `reachable`) has a travel time that means
 	# nothing, so the line says it is out of reach instead of drawing one.
 	var parts: PackedStringArray = []
 	if chip.get("reachable", false):
-		parts.append(Strings.text("chip_now", {"step": chip.get("step", 0), "feature": feature_text(now), "ms": now.get("travel_ms", 0)}))
+		parts.append(Strings.text("chip_now", {"step": Values.said(Strings.text("value_step"), chip.get("step", 0)), "feature": feature_text(now), "ms": now.get("travel_ms", 0)}))
 	else:
-		parts.append(Strings.text("chip_now_unreachable", {"step": chip.get("step", 0), "feature": feature_text(now)}))
+		parts.append(Strings.text("chip_now_unreachable", {"step": Values.said(Strings.text("value_step"), chip.get("step", 0)), "feature": feature_text(now)}))
 	var next: Dictionary = chip.get("next", {})
 	if not next.is_empty():
 		parts.append(Strings.text("chip_next", {"feature": feature_text(next), "ms": next.get("travel_ms", 0)}))
@@ -1230,7 +1254,9 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 	# A refused or unreadable vocabulary can be asked for once more, from the picker's line.
 	_picker_again.visible = String(_vocabulary.get("failed", "")) != ""
 	_rule_slots = list.get("slots", [])
-	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"))
+	# An unreadable picking index highlights no chip; the map click still goes to the bridge.
+	var picking: Variant = Values.int_of(state.get("picking", -1))
+	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), picking if picking is int else -1, state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"))
 	# An editor opened on the rendering drawn before names chips that may not be there any more
 	# (M1): it closes with that rendering, and the bridge would refuse its edit anyway. A redraw
 	# of the same rendering (an edit on its way, a refusal on a rule) keeps it, so its popup can
@@ -1699,7 +1725,7 @@ func _draw_attack(targets: Array) -> void:
 	var lines: PackedStringArray = []
 	for target in targets:
 		var aim := String(target.get("aim", "unknown"))
-		var step: int = target.get("step", 0)
+		var step := Values.said(Strings.text("value_step"), target.get("step", 0))
 		if aim == "voxel":
 			var at: Vector3i = target["at"]
 			lines.append(Strings.text("attack_voxel", {"step": step, "x": at.x, "y": at.y, "z": at.z}))
@@ -1736,7 +1762,7 @@ func _draw_build(targets: Array) -> void:
 		vents[String(feature.get("id", ""))] = feature["at"]
 	var lines: PackedStringArray = []
 	for target in targets:
-		var words := {"step": target.get("step", 0), "blueprint": target.get("blueprint", "")}
+		var words := {"step": Values.said(Strings.text("value_step"), target.get("step", 0)), "blueprint": target.get("blueprint", "")}
 		var anchor := String(target.get("anchor", "unknown"))
 		var at: Variant = null
 		if anchor == "voxel":
