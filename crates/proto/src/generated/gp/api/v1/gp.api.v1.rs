@@ -2517,13 +2517,24 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ViewChunk".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ViewChunk".into() }}
 /// One thing standing on the terrain, as this viewer may see it.
 ///
-/// WHERE IT IS AND WHAT IT IS, and, from S2, its hit points and heading. What
-/// a seat sees of ANOTHER seat's asset is S2's plan's decision 5, ruled by
+/// WHERE IT IS AND WHAT IT IS, and, from S2, its hit points and heading; from
+/// S3 (`probw`), its name in the player's words, a structure's look, and, on
+/// the viewer's own assets only, a beacon's sphere and a structure going up.
+/// What a seat sees of ANOTHER seat's asset is S2's plan's decision 5, ruled by
 /// decisions-log item 144 (11) (the register's S2-11): in live vision, its
 /// kind, position, heading and exact HP. This list is live vision only (an id
 /// absent from it is gone or no longer visible), so a remembered asset is not
-/// here: its age is BeaconSummary.sighting_age_ms. Power state and build
-/// progress are never shown for another seat's asset.
+/// here: its age is BeaconSummary.sighting_age_ms. Power state, build progress
+/// and a sphere's radius are never shown for another seat's asset (the owner's
+/// "Own seat only", decisions-log item 168 (11)); a spectator holding
+/// `spectate.nofog` is shown them on every asset.
+///
+/// A WALL is voxels, not a row of the sim's: it is listed here as a `structure`
+/// whose subtype is `wall`, one entity per wall a Build beacon is building or
+/// has built, while at least one of its voxels stands (S3's `probw`). It has no
+/// hit points of its own. Another seat's wall is listed only while one of its
+/// standing voxels is in the viewer's live vision, as another seat's
+/// structure is.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ViewEntity {
     /// OPAQUE, and scoped to the viewer this answer was built for. A seat's own
@@ -2531,9 +2542,10 @@ pub struct ViewEntity {
     /// a playbook names. Another seat's beacon is `e_NN`, this viewer's handle for
     /// it, or `v_N` until the viewer holds one: `v_N` names it to get_view alone,
     /// and the beacon takes its `e_NN` at the next Lull. A unit is `u_N`, a
-    /// structure `s_N`, a wreck or a ruin `w_N` and a shell `p_N`: each a handle
-    /// this viewer was given in the order it first saw the thing, because a dense
-    /// table row id would be a count of everything the match has ever made.
+    /// structure `s_N` (which a ruin keeps when the structure turns into one), a
+    /// wall `l_N`, a wreck `w_N` and a shell `p_N`: each a handle this viewer was
+    /// given in the order it first saw the thing, because a dense table row id
+    /// would be a count of everything the match has ever made.
     ///
     /// It is stable for one viewer for as long as the match is attached, and it
     /// means nothing to any other viewer or to any other method — except a `b_NN`
@@ -2553,7 +2565,8 @@ pub struct ViewEntity {
     #[prost(string, tag="4")]
     pub owner: ::prost::alloc::string::String,
     /// Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
-    /// positions are a recording's concern and are held at 9 to 15.
+    /// positions are a recording's concern and are held at 10 to 15. A wall
+    /// stands at its box's lowest corner, at its lowest standing voxel.
     ///
     /// PLACEHOLDER: whole-voxel positions — owner, S7, with the recording
     /// format. Whole voxels are enough for a camera and are not enough for a
@@ -2562,7 +2575,8 @@ pub struct ViewEntity {
     pub at: ::core::option::Option<super::super::v1::Voxel>,
     /// Hit points now, whole HP, on everything that has them: a unit, a
     /// structure or a beacon, the viewer's own or another seat's in live vision
-    /// alike. Unset on a shell, a wreck and a ruin, which have none.
+    /// alike, a structure going up included. Unset on a shell, a wreck, a ruin
+    /// and a wall, which have none.
     #[prost(uint32, optional, tag="6")]
     pub hp: ::core::option::Option<u32>,
     /// Its maximum hit points, whole HP, present exactly when `hp` is, so a
@@ -2574,9 +2588,113 @@ pub struct ViewEntity {
     /// has no heading of its own.
     #[prost(uint32, optional, tag="8")]
     pub heading: ::core::option::Option<u32>,
+    /// True while a structure is going up: from the tick its construction begins
+    /// until it reaches full hit points, which is when the sim finishes it. Absent
+    /// once it stands, and on everything that is not a structure. The sim keeps
+    /// no fraction of progress; `hp` over `max_hp` says how far it has risen. The
+    /// number held for build progress, discharged by S3's `probw`.
+    ///
+    /// OWN STRUCTURES ONLY, and every structure for a `spectate.nofog` spectator:
+    /// another seat's structure going up never carries it (S2's plan's decision
+    /// 5; the owner's "Own seat only", decisions-log item 168 (11)), so it is
+    /// drawn and named as standing, its hit points still shown in live vision
+    /// (item 148 (3) (b)).
+    #[prost(bool, optional, tag="9")]
+    pub building: ::core::option::Option<bool>,
+    /// A beacon's sphere of authority now, in whole voxels, so a client draws the
+    /// ring it never computes, for the whole of a Push as much as in a Lull: the
+    /// rules table's base, plus the Resonance Spire's bonus while a finished
+    /// Spire stands on this beacon (the sim's one function, as
+    /// BeaconSummary.sphere_radius_voxels reads it; S3's `probw`).
+    ///
+    /// OWN BEACONS ONLY, and every beacon for a `spectate.nofog` spectator: unset
+    /// on another seat's beacon, because a radius would show whether its Spire
+    /// stands (S2's plan's decision 5), and on everything that is not a beacon.
+    #[prost(uint32, optional, tag="16")]
+    pub sphere_radius_voxels: ::core::option::Option<u32>,
+    /// How a structure or a wall is drawn: a primitive shape and its size, set on
+    /// every structure, ruin and wall a viewer is shown (a look shows nothing the
+    /// entity's presence and subtype do not), and unset on everything else.
+    #[prost(message, optional, tag="17")]
+    pub look: ::core::option::Option<view_entity::Look>,
+    /// Its name in the player's words, from the gateway's one string table, so a
+    /// client names nothing from `subtype` (which stays, as the id): "Autocannon",
+    /// "Resonance Spire", "Wall", "Mining drone", "Beacon". While `building` is
+    /// set it is the gateway's going-up words, "Mortar, going up", so it says so
+    /// exactly where `building` does and nowhere else; a ruin's is "Mortar,
+    /// ruined".
+    #[prost(string, tag="18")]
+    pub title: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `ViewEntity`.
 pub mod view_entity {
+    /// A primitive look (S3's `probw`; client-wire-rulings, `fixq` 2: presentation
+    /// of what the view already says, with no art asset).
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Look {
+        /// One per structure kind, from one gateway table the compiler holds
+        /// exhaustive over the sim's kinds. Lower case on the JSON-RPC wire:
+        /// "tower" (decisions-log item 80).
+        #[prost(enumeration="look::Shape", tag="1")]
+        pub shape: i32,
+        /// Its size in whole voxels, x east, y north, z up, measured from `at`. A
+        /// structure stands on one column (spec section 5; the sim's footings and
+        /// its one-structure-per-voxel rule) and is given no height by the sim, so
+        /// it is 1 by 1 by 1, the voxel it stands in. A wall is its box: its
+        /// columns across, and from its lowest standing voxel up to its top.
+        #[prost(uint32, tag="2")]
+        pub x: u32,
+        #[prost(uint32, tag="3")]
+        pub y: u32,
+        #[prost(uint32, tag="4")]
+        pub z: u32,
+    }
+    /// Nested message and enum types in `Look`.
+    pub mod look {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+        #[repr(i32)]
+        pub enum Shape {
+            Unspecified = 0,
+            /// A plain block: the Generator.
+            Block = 1,
+            /// A narrow upright: the autocannon, the Survey post, the Resonance Spire.
+            Tower = 2,
+            /// A low bowl: the mortar.
+            Dish = 3,
+            /// A flat box filling its size: a wall.
+            Slab = 4,
+        }
+        impl Shape {
+            /// String value of the enum field names used in the ProtoBuf definition.
+            ///
+            /// The values are not transformed in any way and thus are considered stable
+            /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+            pub fn as_str_name(&self) -> &'static str {
+                match self {
+                    Self::Unspecified => "SHAPE_UNSPECIFIED",
+                    Self::Block => "BLOCK",
+                    Self::Tower => "TOWER",
+                    Self::Dish => "DISH",
+                    Self::Slab => "SLAB",
+                }
+            }
+            /// Creates an enum from field names used in the ProtoBuf definition.
+            pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+                match value {
+                    "SHAPE_UNSPECIFIED" => Some(Self::Unspecified),
+                    "BLOCK" => Some(Self::Block),
+                    "TOWER" => Some(Self::Tower),
+                    "DISH" => Some(Self::Dish),
+                    "SLAB" => Some(Self::Slab),
+                    _ => None,
+                }
+            }
+        }
+    }
+impl ::prost::Name for Look {
+const NAME: &'static str = "Look";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ViewEntity.Look".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ViewEntity.Look".into() }}
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Kind {

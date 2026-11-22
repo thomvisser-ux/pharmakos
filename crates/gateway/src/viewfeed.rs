@@ -151,6 +151,8 @@ struct ViewerState {
     structures: Vec<(u64, String)>,
     /// The wrecks this viewer has been shown, by wreck id.
     wrecks: Vec<(u64, String)>,
+    /// The walls this viewer has been shown, by their key (S3's `probw`).
+    walls: Vec<(WallKey, String)>,
     /// The shells in flight this viewer has been shown, by their key; a shell
     /// that has landed is forgotten ([`ViewFeed::forget_landed_shells`]).
     shells: Vec<(ShellKey, String)>,
@@ -178,6 +180,7 @@ impl ViewerState {
             units: Vec::new(),
             structures: Vec::new(),
             wrecks: Vec::new(),
+            walls: Vec::new(),
             shells: Vec::new(),
             shells_minted: 0,
             beacons: Vec::new(),
@@ -678,6 +681,30 @@ impl ViewFeed {
         }
     }
 
+    /// This viewer's opaque handle for a wall, `l_N`, minted on first sight
+    /// (S3's `probw`). A wall is voxels and has no id in any table, so it is
+    /// keyed by what makes it one wall ([`WallKey`]), and the number counts the
+    /// walls this viewer has been shown, as [`ViewFeed::unit_handle`]'s does.
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn wall_handle(&mut self, viewer: Viewer, key: WallKey) -> Result<String, Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        if let Some((_, handle)) = state.walls.iter().find(|(held, _)| *held == key) {
+            return Ok(handle.clone());
+        }
+        let number = state.walls.len().checked_add(1).ok_or_else(|| {
+            Error::internal("this viewer holds more wall handles than usize counts")
+        })?;
+        let handle = format!("l_{number}");
+        state.walls.push((key, handle.clone()));
+        Ok(handle)
+    }
+
     /// This viewer's opaque handle for a structure. As [`ViewFeed::unit_handle`].
     ///
     /// # Errors
@@ -988,6 +1015,23 @@ pub struct ShellKey {
     pub lands_at: u32,
     /// The point it was aimed at, raw Q16.16.
     pub aim: [i32; 3],
+}
+
+/// What makes one wall one wall: the beacon whose Build target it is, with
+/// the id's generation, its box of columns and its top. A Build target's row
+/// moves as the table keeps its `(beacon, kind)` order, so the row is not the
+/// key; two targets of one beacon with one box and one top are one wall of
+/// voxels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WallKey {
+    /// The beacon, a `BeaconId` raw value.
+    pub beacon: u32,
+    /// The box's lowest column, `[x, y]`.
+    pub min: [i16; 2],
+    /// The box's highest column, `[x, y]`.
+    pub max: [i16; 2],
+    /// The highest voxel the box fills.
+    pub top: i16,
 }
 
 /// This viewer's slot, made on first sight of it.

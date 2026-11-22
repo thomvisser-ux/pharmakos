@@ -375,7 +375,7 @@ fn the_view_shows_what_decision_5_rules() {
                 units = units.saturating_add(1);
                 let expected: BTreeSet<String> = [
                     "id", "kind", "subtype", "owner", "at", "x", "y", "z", "hp", "max_hp",
-                    "heading",
+                    "heading", "title",
                 ]
                 .iter()
                 .map(|key| (*key).to_owned())
@@ -385,14 +385,14 @@ fn the_view_shows_what_decision_5_rules() {
             }
             "beacon" => {
                 let expected: BTreeSet<String> = [
-                    "id", "kind", "subtype", "owner", "at", "x", "y", "z", "hp", "max_hp",
+                    "id", "kind", "subtype", "owner", "at", "x", "y", "z", "hp", "max_hp", "title",
                 ]
                 .iter()
                 .map(|key| (*key).to_owned())
                 .collect();
                 assert_eq!(
                     found, expected,
-                    "a beacon in sight: never its mandate or power: {entity:?}"
+                    "a beacon in sight: never its mandate, power or sphere: {entity:?}"
                 );
                 let core = world
                     .beacons()
@@ -492,6 +492,16 @@ fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_power_state() {
         "hp",
         "max_hp",
         "heading",
+        // S3's `probw`: every entity's name in the player's words and a
+        // structure's look; and, on the viewer's own assets only (or every
+        // asset for a no-fog spectator), a beacon's sphere and a structure going
+        // up -- the one fact of build progress the sim keeps, which the owner
+        // ruled own-seat only (decisions-log item 168 (11)).
+        "title",
+        "look",
+        "shape",
+        "sphere_radius_voxels",
+        "building",
         // A voxel.
         "x",
         "y",
@@ -535,7 +545,7 @@ fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_power_state() {
                     "a view under the `{policy}` policy carried `{key}`, which is not one of \
                      the fields `get_view` answers. \
                      Never on the wire: a destination, a route, a step or rule index, a mandate, \
-                     a treasury, a score, a power state, a build's progress, a count."
+                     a treasury, a score, a power state, another seat's build progress, a count."
                 );
             }
             assert!(found.contains("at_ms"), "the scan read a real answer");
@@ -1548,4 +1558,531 @@ impl Vision for Everything {
     fn sees(&self, _seat: SeatId, _at: &Voxel) -> bool {
         true
     }
+}
+
+// ---------------------------------------------------------------------------
+// S3's `probw`: the ring, a structure going up, the look, the names and walls
+// ---------------------------------------------------------------------------
+
+/// The scenario playbook that raises an autocannon and fills a wall at seat
+/// 0's core on the golden seed (`scenarios/s2/base-kit-at-the-core`).
+const BASE_KIT: &str = "scenarios/s2/base-kit-at-the-core.playbook.jsonc";
+
+/// Its segment: long enough for the autocannon and the wall.
+const KIT_SEGMENT_MS: i32 = 60_000;
+
+/// A two-seat match under `policy` whose Push has begun with seat 0 sealed on
+/// [`BASE_KIT`], `rebuild_destroyed` as given, and seat 1 on the safe
+/// playbook.
+fn base_kit(policy: FogPolicy, rebuild: bool) -> Surface {
+    let mut surface = hosted_as(MATCH, policy, 2, KIT_SEGMENT_MS, 1);
+    let text = fs::read_to_string(workspace_root().join(BASE_KIT)).expect("the scenario playbook");
+    let text = if rebuild {
+        text
+    } else {
+        let off = text.replace(
+            "\"rebuild_destroyed\": true",
+            "\"rebuild_destroyed\": false",
+        );
+        assert_ne!(off, text, "the playbook names rebuild_destroyed");
+        off
+    };
+    let token = seat_token(&mut surface, 0);
+    let mut remaining = FIRST_LULL_MS;
+    let answer = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut remaining,
+            "submit_plan",
+            &format!("{{\"playbook_jsonc\":{}}}", support::quote(&text)),
+        ),
+        "submit_plan",
+    );
+    assert_eq!(
+        answer.get("accepted"),
+        Some(&Json::Bool(true)),
+        "{answer:?}"
+    );
+    assert!(surface.begin_push().expect("a hosted match"), "the Push");
+    surface
+}
+
+/// A page decodes as a `gp.api.v1.GetViewResponse`, as a client reads it.
+fn decodes(page: &Json) {
+    let decoded: Result<pharmakos_proto::gp::api::v1::GetViewResponse, _> =
+        pharmakos_proto::json::decode_json(&support::canonical_answer(
+            "gp.api.v1.GetViewResponse",
+            page,
+        ));
+    assert!(decoded.is_ok(), "not a GetViewResponse: {decoded:?}");
+}
+
+/// One viewer reading the view as a client does: a keyframe first, then the
+/// cursor each completing page hands back.
+struct Watcher {
+    token: Token,
+    cursor: String,
+}
+
+impl Watcher {
+    fn new(token: Token) -> Watcher {
+        Watcher {
+            token,
+            cursor: String::new(),
+        }
+    }
+
+    /// The complete entity list of the next view, under `vision`.
+    fn entities<V: Vision>(&mut self, surface: &mut Surface, vision: &V) -> Vec<Json> {
+        loop {
+            let response = surface.call(
+                Some(&self.token),
+                &support::request(
+                    "get_view",
+                    &format!("{{\"cursor\":{}}}", support::quote(&self.cursor)),
+                ),
+                vision,
+            );
+            let page = result(&response, "get_view");
+            decodes(&page);
+            self.cursor = text_of(&page, "next_cursor");
+            if page.get("complete") == Some(&Json::Bool(true)) {
+                return array_of(&page, "entities");
+            }
+        }
+    }
+
+    /// As [`Watcher::entities`], through the production vision.
+    fn live(&mut self, surface: &mut Surface) -> Vec<Json> {
+        let sight = support::vision(surface);
+        self.entities(surface, &sight)
+    }
+}
+
+/// The first entity of `entities` with this subtype and owner.
+fn find<'a>(entities: &'a [Json], subtype: &str, owner: &str) -> Option<&'a Json> {
+    entities
+        .iter()
+        .find(|entity| text_of(entity, "subtype") == subtype && text_of(entity, "owner") == owner)
+}
+
+/// One whole-number member.
+fn number(value: &Json, key: &str) -> i32 {
+    match value.get(key) {
+        Some(Json::Number(text)) => text.parse::<i32>().expect("a whole number"),
+        other => panic!("{key}: {other:?} on {value:?}"),
+    }
+}
+
+/// Seat 0's live autocannon's `building` column, or `None` before it is
+/// placed.
+fn autocannon_building(surface: &Surface) -> Option<bool> {
+    let world = surface.host().expect("a match").world();
+    let structures = world.structures();
+    (0..structures.ids().len()).find_map(|row| {
+        let alive = structures.hit_points().get(row)?.is_alive();
+        let free = *structures.frees().get(row)?;
+        let ours = *structures.seats().get(row)? == 0;
+        let kind = *structures.kinds().get(row)?;
+        if alive && !free && ours && kind == pharmakos_sim::tables::StructureKind::Autocannon.id() {
+            structures.building().get(row).copied()
+        } else {
+            None
+        }
+    })
+}
+
+/// S3's `probw`, items 2 and 4: seat 0's autocannon carries `building: true`
+/// and the going-up title from its first page until the sim finishes it, then
+/// neither, for seat 0 and for a no-fog spectator, read against the sim's own
+/// column on every page; seat 1, which sees it in a casual match, is shown its
+/// hit points and never that it is going up, by flag or by name.
+#[test]
+fn a_structure_going_up_is_told_to_its_own_seat_and_the_no_fog_spectator_only() {
+    let mut surface = base_kit(FogPolicy::casual(), true);
+    let mut own = Watcher::new(seat_token(&mut surface, 0));
+    let mut theirs = Watcher::new(seat_token(&mut surface, 1));
+    let mut nofog = Watcher::new(spectator_token(&mut surface, true));
+    let mut going_up = 0_u32;
+    let mut standing = 0_u32;
+    for _ in 0..300 {
+        step(&mut surface, 4);
+        let Some(building) = autocannon_building(&surface) else {
+            continue;
+        };
+        let title = if building {
+            "Autocannon, going up"
+        } else {
+            "Autocannon"
+        };
+        for (who, watcher) in [("seat 0", &mut own), ("the no-fog spectator", &mut nofog)] {
+            let entities = watcher.live(&mut surface);
+            let cannon = find(&entities, "autocannon", "seat.0")
+                .unwrap_or_else(|| panic!("{who} sees seat 0's autocannon"));
+            assert_eq!(
+                cannon.get("building"),
+                building.then_some(&Json::Bool(true)),
+                "{who}: {cannon:?}"
+            );
+            assert_eq!(text_of(cannon, "title"), title, "{who}");
+            let look = cannon.get("look").expect("a structure's look");
+            assert_eq!(text_of(look, "shape"), "tower");
+            assert_eq!(
+                [number(look, "x"), number(look, "y"), number(look, "z")],
+                [1, 1, 1],
+                "one column, as the sim stands a structure"
+            );
+        }
+        let entities = theirs.live(&mut surface);
+        let cannon = find(&entities, "autocannon", "seat.0").expect("seat 1 sees it, unfogged");
+        assert_eq!(
+            cannon.get("building"),
+            None,
+            "never another seat's: {cannon:?}"
+        );
+        assert_eq!(text_of(cannon, "title"), "Autocannon", "named as standing");
+        assert!(cannon.get("hp").is_some(), "its hit points still show");
+        if building {
+            going_up = going_up.saturating_add(1);
+        } else {
+            assert!(going_up > 0, "it was first seen going up");
+            standing = standing.saturating_add(1);
+            if standing > 2 {
+                break;
+            }
+        }
+    }
+    assert!(
+        going_up > 0 && standing > 0,
+        "{going_up} pages going up, {standing} standing"
+    );
+}
+
+/// Seat 0's core with a finished Resonance Spire beside it, under `policy`,
+/// in its opening Lull, and the Spire's id.
+fn spire_at_the_core(policy: FogPolicy) -> (Surface, pharmakos_sim::tables::StructureId) {
+    use pharmakos_gateway::host::Host;
+    use pharmakos_sim::math::fixed::Fx;
+    let config = pharmakos_sim::world::WorldConfig {
+        match_seed: SEED,
+        seats: 2,
+        rules: support::rules(),
+        match_settings: pharmakos_sim::runner::MatchSettings {
+            segment_lengths_ms: vec![SEGMENT_MS],
+            round_limit: 3,
+        },
+    };
+    let mut world = pharmakos_sim::world::World::new(&config).expect("the world generates");
+    let row = (0..world.beacons().ids().len())
+        .find(|row| world.beacons().seats().get(*row) == Some(&0))
+        .expect("seat 0's core");
+    let core = pharmakos_sim::tables::BeaconId::new(
+        world.beacons().ids().get(row).copied().expect("an id"),
+    );
+    let at = world
+        .beacons()
+        .positions()
+        .get(row)
+        .copied()
+        .expect("a place");
+    let beside = [at[0].saturating_add(Fx::from_voxels(1)), at[1], at[2]];
+    let spire = world
+        .raise_structure(
+            SeatId::new(0),
+            core,
+            pharmakos_sim::tables::StructureKind::ResonanceSpire,
+            beside,
+        )
+        .expect("room for a Spire");
+    let bytes = pharmakos_sim::snapshot::Snapshot::capture(&world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("it encodes");
+    let mut host = Host::open(&config, Some(support::library_folder())).expect("a match");
+    host.resume(&bytes).expect("the world resumes");
+    let mut surface = Surface::new(
+        MATCH,
+        SEED,
+        support::rules(),
+        policy,
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a match id");
+    surface.attach(host).expect("attached");
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(FIRST_LULL_MS))
+        .expect("a countdown");
+    surface.open_lull().expect("the opening Lull");
+    (surface, spire)
+}
+
+/// `list_beacons`' radius for each of `token`'s own beacons, by id.
+fn listed_radii(surface: &mut Surface, token: &Token) -> Vec<(String, Json)> {
+    let listed = result(&call(surface, token, "list_beacons", "{}"), "list_beacons");
+    array_of(&listed, "beacons")
+        .into_iter()
+        .filter_map(|beacon| {
+            let id = text_of(&beacon, "beacon_id");
+            if !id.starts_with("b_") {
+                return None;
+            }
+            let radius = beacon
+                .get("sphere_radius_voxels")
+                .cloned()
+                .expect("an own beacon's radius");
+            Some((id, radius))
+        })
+        .collect()
+}
+
+/// The radius `entities` carries on the entity `id`.
+fn radius_of(entities: &[Json], id: &str) -> Option<Json> {
+    entities
+        .iter()
+        .find(|entity| text_of(entity, "id") == id)
+        .unwrap_or_else(|| panic!("{id} is listed"))
+        .get("sphere_radius_voxels")
+        .cloned()
+}
+
+/// S3's `probw`, item 1: a beacon entity carries the sim's radius on the
+/// viewer's own beacons, equal to `list_beacons`' for each, grown beside a
+/// finished Spire and the base elsewhere; never on another seat's beacon in
+/// live vision; on every beacon for a no-fog spectator; on nothing that is not
+/// a beacon; and a radius that changes in a Push changes the next page.
+#[test]
+fn the_ring_is_on_own_beacons_and_follows_the_spire() {
+    let (mut surface, spire) = spire_at_the_core(FogPolicy::casual());
+    let grown = Json::Number(support::rules().grown_sphere_radius_voxels().to_string());
+    let base = Json::Number(sphere_radius(&surface).to_string());
+    let zero = seat_token(&mut surface, 0);
+    let one = seat_token(&mut surface, 1);
+    let mut seat0 = Watcher::new(zero.clone());
+    let mut seat1 = Watcher::new(one.clone());
+    let mut nofog = Watcher::new(spectator_token(&mut surface, true));
+
+    for (token, watcher, theirs) in [(&zero, &mut seat0, "seat.1"), (&one, &mut seat1, "seat.0")] {
+        let entities = watcher.live(&mut surface);
+        for (id, radius) in listed_radii(&mut surface, token) {
+            assert_eq!(radius_of(&entities, &id), Some(radius), "{id}");
+        }
+        for entity in &entities {
+            let beacon = text_of(entity, "kind") == "beacon";
+            if !beacon || text_of(entity, "owner") == theirs {
+                assert_eq!(
+                    entity.get("sphere_radius_voxels"),
+                    None,
+                    "not an own beacon: {entity:?}"
+                );
+            }
+        }
+        assert!(
+            entities
+                .iter()
+                .any(|entity| text_of(entity, "kind") == "beacon"
+                    && text_of(entity, "owner") == theirs),
+            "the other seat's core is in live vision"
+        );
+    }
+    assert_eq!(
+        radius_of(&seat0.live(&mut surface), "b_00"),
+        Some(grown.clone())
+    );
+    assert_eq!(
+        radius_of(&seat1.live(&mut surface), "b_00"),
+        Some(base.clone())
+    );
+
+    let entities = nofog.live(&mut surface);
+    let cores: Vec<Option<Json>> = entities
+        .iter()
+        .filter(|entity| text_of(entity, "kind") == "beacon")
+        .map(|entity| entity.get("sphere_radius_voxels").cloned())
+        .collect();
+    assert_eq!(cores.len(), 2, "{entities:?}");
+    assert!(cores.contains(&Some(grown)) && cores.contains(&Some(base.clone())));
+
+    // The Spire falls in a Push: the very next page draws the base ring.
+    assert!(surface.begin_push().expect("a match"));
+    let host = surface.host_mut().expect("a match");
+    assert!(
+        host.file_damage(pharmakos_sim::world::DamageOrder {
+            target: pharmakos_sim::world::DamageTarget::Structure(spire),
+            amount: pharmakos_sim::math::quantity::Damage::new(i64::from(i32::MAX))
+                .expect("a positive amount"),
+            by: SeatId::NEUTRAL,
+            source: None,
+        })
+        .is_ok()
+    );
+    step(&mut surface, 2);
+    assert_eq!(
+        radius_of(&seat0.live(&mut surface), "b_00"),
+        Some(base.clone())
+    );
+    assert_eq!(
+        listed_radii(&mut surface, &zero)
+            .into_iter()
+            .find(|(id, _)| id == "b_00")
+            .map(|(_, radius)| radius),
+        Some(base)
+    );
+}
+
+/// The wall target of seat 0's core, once its row has committed: its box's
+/// lowest and highest columns and its top.
+fn wall_box(surface: &Surface) -> Option<([i16; 2], [i16; 2], i16)> {
+    let world = surface.host().expect("a match").world();
+    let targets = world.targets();
+    (0..targets.row_count()).find_map(|row| {
+        let top = *targets.wall_tops().get(row)?;
+        let area = *targets.areas().get(row)?;
+        (top != pharmakos_sim::tables::NO_WALL).then(|| (area.min_column(), area.max_column(), top))
+    })
+}
+
+/// Every wall voxel of seat 0 standing in the box.
+fn wall_voxels(surface: &Surface) -> Vec<[i32; 3]> {
+    let Some((low, high, top)) = wall_box(surface) else {
+        return Vec::new();
+    };
+    let voxels = surface.host().expect("a match").world().voxels();
+    let mut out = Vec::new();
+    for y in i32::from(low[1])..=i32::from(high[1]) {
+        for x in i32::from(low[0])..=i32::from(high[0]) {
+            for z in 0..=i32::from(top) {
+                if voxels
+                    .get([x, y, z])
+                    .and_then(Material::wall_of)
+                    .is_some_and(|(seat, _)| seat == SeatId::new(0))
+                {
+                    out.push([x, y, z]);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether seat 0's wall has been filled whole once.
+fn wall_done(surface: &Surface) -> bool {
+    let world = surface.host().expect("a match").world();
+    let targets = world.targets();
+    (0..targets.row_count()).any(|row| {
+        targets
+            .wall_tops()
+            .get(row)
+            .is_some_and(|top| *top != pharmakos_sim::tables::NO_WALL)
+            && targets.walls_done().get(row).copied() == Some(true)
+    })
+}
+
+/// S3's `probw`, item 5: a wall is listed as a `structure`/`wall` entity from
+/// its first standing voxel, under one handle on every page, at its box's
+/// lowest corner and lowest standing voxel, with a slab look its box's size
+/// and no hit points; another seat's wall only while one of its voxels is in
+/// that seat's vision; a no-fog spectator sees it; reading it moves no hashed
+/// state; and it goes when its last voxel does.
+#[test]
+fn a_wall_is_listed_while_a_voxel_of_it_stands() {
+    let mut surface = base_kit(FogPolicy::fogged(), false);
+    let mut own = Watcher::new(seat_token(&mut surface, 0));
+    let mut nofog = Watcher::new(spectator_token(&mut surface, true));
+    assert!(wall_voxels(&surface).is_empty());
+    assert_eq!(
+        find(&own.live(&mut surface), "wall", "seat.0"),
+        None,
+        "nothing stands yet"
+    );
+
+    let mut handle: Option<String> = None;
+    for _ in 0..600 {
+        step(&mut surface, 2);
+        let standing = wall_voxels(&surface);
+        let entities = own.live(&mut surface);
+        let wall = find(&entities, "wall", "seat.0");
+        if standing.is_empty() {
+            assert_eq!(wall, None, "no voxel stands");
+            continue;
+        }
+        let wall = wall.expect("a wall with a voxel standing is listed");
+        let (low, high, top) = wall_box(&surface).expect("the playbook's wall target");
+        let lowest = standing.iter().map(|at| at[2]).min().expect("one voxel");
+        assert_eq!(text_of(wall, "kind"), "structure");
+        assert_eq!(text_of(wall, "title"), "Wall");
+        assert_eq!(wall.get("hp"), None, "a wall has no hit points of its own");
+        assert_eq!(wall.get("building"), None);
+        let at = wall.get("at").expect("a place");
+        assert_eq!(
+            [number(at, "x"), number(at, "y"), number(at, "z")],
+            [i32::from(low[0]), i32::from(low[1]), lowest]
+        );
+        let look = wall.get("look").expect("a look");
+        assert_eq!(text_of(look, "shape"), "slab");
+        assert_eq!(
+            [number(look, "x"), number(look, "y"), number(look, "z")],
+            [
+                i32::from(high[0]) - i32::from(low[0]) + 1,
+                i32::from(high[1]) - i32::from(low[1]) + 1,
+                i32::from(top) - lowest + 1
+            ]
+        );
+        let id = text_of(wall, "id");
+        assert!(id.starts_with("l_"), "{id}");
+        assert_eq!(handle.get_or_insert_with(|| id.clone()), &id, "one handle");
+        if wall_done(&surface) {
+            break;
+        }
+    }
+    assert!(wall_done(&surface), "the wall is filled");
+    assert!(handle.is_some(), "the wall was listed");
+    assert!(find(&nofog.live(&mut surface), "wall", "seat.0").is_some());
+
+    // Seat 1, a map away: absent through its live vision and through a
+    // vision that sees none of it, listed through one that sees one voxel.
+    let mut theirs = Watcher::new(seat_token(&mut surface, 1));
+    assert_eq!(find(&theirs.live(&mut surface), "wall", "seat.0"), None);
+    let mut blind = pharmakos_gateway::fog::KnownVoxels::new();
+    blind.see(SeatId::new(1), &Voxel { x: 0, y: 0, z: 0 });
+    assert_eq!(
+        find(&theirs.entities(&mut surface, &blind), "wall", "seat.0"),
+        None
+    );
+    let voxel = *wall_voxels(&surface).last().expect("a voxel");
+    let mut one = pharmakos_gateway::fog::KnownVoxels::new();
+    one.see(
+        SeatId::new(1),
+        &Voxel {
+            x: voxel[0],
+            y: voxel[1],
+            z: voxel[2],
+        },
+    );
+    let before = surface.host().expect("a match").world().state_hash();
+    let entities = theirs.entities(&mut surface, &one);
+    assert_eq!(
+        surface.host().expect("a match").world().state_hash(),
+        before,
+        "reading a wall writes nothing"
+    );
+    let seen = find(&entities, "wall", "seat.0").expect("one voxel in sight lists it");
+    let ours = find(&own.live(&mut surface), "wall", "seat.0")
+        .cloned()
+        .expect("ours");
+    assert_eq!(
+        seen.get("at"),
+        ours.get("at"),
+        "its place is not what of it is seen"
+    );
+    assert_eq!(seen.get("look"), ours.get("look"));
+    assert_eq!(text_of(seen, "id"), "l_1", "seat 1's own count of walls");
+
+    // Its last voxel goes: so does the wall.
+    for at in wall_voxels(&surface) {
+        erase(&mut surface, at);
+    }
+    step(&mut surface, 2);
+    assert!(wall_voxels(&surface).is_empty(), "nothing rebuilds it");
+    assert_eq!(find(&own.live(&mut surface), "wall", "seat.0"), None);
 }

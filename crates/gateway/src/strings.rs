@@ -252,6 +252,51 @@ pub const fn licence_title(licence: pharmakos_proto::gp::v1::Licence) -> Option<
     }
 }
 
+// ---------------------------------------------------------------------------
+// The view's names (`gp.api.v1.ViewEntity.title`; S3's `probw`). The
+// gateway's final words, read by the owner at S3's demo with every other
+// string. A structure's and a wall's name is plan-core's blueprint title, the
+// one the vocabulary shows a player, so it is spelt there once and not here.
+// ---------------------------------------------------------------------------
+
+/// A beacon, whoever owns it: its mandate is never shown for another seat's,
+/// and a seat reads its own beacons' mandates from `list_beacons`.
+pub const VIEW_BEACON: &str = "Beacon";
+/// A mortar shell in flight.
+pub const VIEW_SHELL: &str = "Mortar shell";
+/// What a dead unit or structure leaves.
+pub const VIEW_WRECK: &str = "Wreck";
+
+/// A unit kind's name in the player's words, for the view. Exhaustive over
+/// the sim's kinds, so a new kind is a compile error here.
+#[must_use]
+pub const fn unit_title(kind: pharmakos_sim::tables::UnitKind) -> &'static str {
+    use pharmakos_sim::tables::UnitKind;
+    match kind {
+        UnitKind::Commander => "Commander",
+        UnitKind::BuildDrone => "Build drone",
+        UnitKind::MiningDrone => "Mining drone",
+        UnitKind::RepairDrone => "Repair drone",
+        UnitKind::Raider => "Raider",
+        UnitKind::Scout => "Scout",
+    }
+}
+
+/// A structure going up, in the view: "Mortar, going up". Told only where
+/// `ViewEntity.building` is (the owner's "Own seat only", decisions-log item
+/// 168 (11)).
+#[must_use]
+pub fn going_up(title: &str) -> String {
+    format!("{title}, going up")
+}
+
+/// A ruin, in the view: "Mortar, ruined". A ruin is nobody's, so its name
+/// says what it was and nothing of whose.
+#[must_use]
+pub fn ruined(title: &str) -> String {
+    format!("{title}, ruined")
+}
+
 /// The recap's licence line for the calling seat's own awards at this
 /// settlement (spec section 8: "announced in the recap"): "Licence awarded:
 /// Resonance Spire." `None` when `titles` is empty: the recap says nothing

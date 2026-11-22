@@ -27,13 +27,17 @@
 //! # Never on the wire
 //!
 //! A destination, a route, a step or a rule index, a mandate, a treasury, a
-//! score, a power state, a build's progress, a count. `no_view_ever_carries_a_...`
-//! asserts it as a key-set allow-list over the rendered JSON, for every viewer
-//! and under both fog policies, rather than as a promise in a comment. What a
-//! listed entity does carry beyond its kind and place is S2's plan's decision
-//! 5 (decisions-log item 144 (11)): in live vision, its hit points with their
-//! maximum and a unit's heading, for the viewer's own assets and another
-//! seat's alike.
+//! score, a power state, a count, and another seat's build progress or sphere.
+//! `no_view_ever_carries_a_...` asserts it as a key-set allow-list over the
+//! rendered JSON, for every viewer and under every fog policy, rather than as
+//! a promise in a comment. What a listed entity does carry beyond its kind and
+//! place is S2's plan's decision 5 (decisions-log item 144 (11)): in live
+//! vision, its hit points with their maximum and a unit's heading, for the
+//! viewer's own assets and another seat's alike; from S3's `probw`, its name
+//! and a structure's look for every asset, and a beacon's sphere and a
+//! structure going up for the viewer's own (every asset, for a no-fog
+//! spectator; the owner's "Own seat only", decisions-log item 168 (11)). Walls,
+//! which are voxels, are listed as structures ([`visible_walls`]).
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::{Json, base64};
@@ -46,9 +50,10 @@ use crate::error::Error;
 use crate::feed::ViewCursor;
 use crate::fog::{Audience, FogFilter, FogPolicy, Viewer, Vision};
 use crate::rpc::Request;
+use crate::strings;
 use crate::surface::Surface;
 use crate::view;
-use crate::viewfeed::{ShellKey, Sight, ViewFeed, ViewPage};
+use crate::viewfeed::{ShellKey, Sight, ViewFeed, ViewPage, WallKey};
 
 /// The full name of the entity-kind enum, for its lower-case wire spelling
 /// (decisions-log item 80).
@@ -205,6 +210,12 @@ const fn watches_the_world(viewer: Viewer) -> bool {
 /// plan, decision 5, ruled by decisions-log item 144 (11) (the register's
 /// S2-11). Everything the list holds is live vision, so every field is a
 /// live one.
+///
+/// From S3's `probw`, a structure's look on every structure and wall, and two
+/// facts told only where [`private_to`] holds -- the viewer's own asset, or
+/// any asset for a spectator with `spectate.nofog` -- a beacon's sphere and a
+/// structure going up (S2's plan's decision 5; the owner's "Own seat only",
+/// decisions-log item 168 (11)).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 struct Condition {
     /// Hit points now and at full condition, whole HP, or `None` for a thing
@@ -212,6 +223,68 @@ struct Condition {
     hp: Option<(u32, u32)>,
     /// A unit's heading in the sim's own units, 65 536 to the turn.
     heading: Option<u32>,
+    /// True on a structure going up, where the viewer may be told it.
+    building: bool,
+    /// A beacon's sphere radius in whole voxels, where the viewer may be told
+    /// it.
+    sphere_radius: Option<u32>,
+    /// How a structure or a wall is drawn.
+    look: Option<Look>,
+}
+
+/// One `gp.api.v1.ViewEntity.Look`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Look {
+    shape: view::Shape,
+    /// Whole voxels, `[x, y, z]`.
+    size: [u32; 3],
+}
+
+/// Whether this viewer is told an asset's private facts -- a beacon's sphere,
+/// a structure going up -- which S2's plan's decision 5 shows only on a seat's
+/// own assets (the owner's "Own seat only", decisions-log item 168 (11)): its
+/// own, for a seat, whatever the match's fog policy (the policy decides which
+/// entities are listed, not what each carries); every asset, for a spectator
+/// with `spectate.nofog`; nothing, for anybody else.
+const fn private_to(viewer: Viewer, owner: Option<u8>) -> bool {
+    match (viewer, owner) {
+        (Viewer::Seat(seat), Some(owner)) => seat.raw() == owner,
+        (Viewer::Seat(_), None) | (Viewer::Admin, _) => false,
+        (Viewer::Spectator { nofog }, _) => nofog,
+    }
+}
+
+/// The view's names for structure kinds: plan-core's blueprint titles, the
+/// words the vocabulary shows a player, read once per listing.
+struct Titles {
+    blueprints: Vec<pharmakos_plan_core::vocabulary::Blueprint>,
+}
+
+impl Titles {
+    fn new() -> Titles {
+        Titles {
+            blueprints: pharmakos_plan_core::vocabulary::blueprints_by_slot(),
+        }
+    }
+
+    /// `kind`'s name in the player's words.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a kind plan-core's list does not
+    /// hold, which is the two crates disagreeing about the sim's kinds.
+    fn structure(&self, kind: StructureKind) -> Result<&'static str, Error> {
+        self.blueprints
+            .iter()
+            .find(|blueprint| blueprint.kind == kind)
+            .map(|blueprint| blueprint.title)
+            .ok_or_else(|| {
+                Error::internal(said!(
+                    "plan-core lists no blueprint for structure kind {}",
+                    kind.id()
+                ))
+            })
+    }
 }
 
 /// The complete list of entities this viewer may see.
@@ -245,10 +318,12 @@ fn visible_entities<V: Vision>(
     viewer: Viewer,
 ) -> Result<Vec<Json>, Error> {
     let filter = FogFilter::new(fog, vision);
+    let titles = Titles::new();
     let mut out: Vec<Json> = Vec::new();
     visible_beacons(views, world, &filter, viewer, &mut out)?;
     visible_units(views, world, &filter, viewer, &mut out)?;
-    visible_structures(views, world, &filter, viewer, &mut out)?;
+    visible_structures(views, world, &filter, viewer, &titles, &mut out)?;
+    visible_walls(views, world, &filter, viewer, &titles, &mut out)?;
     visible_wrecks(views, world, &filter, viewer, &mut out)?;
     visible_shells(views, world, &filter, viewer, &mut out)?;
     Ok(out)
@@ -279,14 +354,32 @@ fn visible_beacons<V: Vision>(
         }
         let id = column(beacons.ids().get(row), "beacon", "id")?;
         let max = world.beacon_max_hp(BeaconId::new(id));
+        // The sim's one radius, as `list_beacons` reads it, on the viewer's own
+        // beacons only (S3's `probw`, item 1).
+        let sphere_radius = if private_to(viewer, Some(owner)) {
+            let radius = world.sphere_radius_voxels_of(BeaconId::new(id));
+            Some(u32::try_from(radius).map_err(|_| {
+                Error::internal(said!("a beacon's sphere radius is {} voxels", radius))
+            })?)
+        } else {
+            None
+        };
         let condition = Condition {
             hp: Some((view::hp_wire(hp)?, view::hp_wire(max)?)),
-            heading: None,
+            sphere_radius,
+            ..Condition::default()
         };
         // The viewer's own name for it: a seat's own `b_NN`, anybody else's
         // `e_NN` (decisions-log item 127 (13)).
         let name = views.beacon_name(viewer, world, row)?;
-        out.push(entity(&name, "BEACON", "", Some(owner), at, condition));
+        out.push(entity(
+            &name,
+            "BEACON",
+            ("", strings::VIEW_BEACON),
+            Some(owner),
+            at,
+            condition,
+        ));
     }
     Ok(())
 }
@@ -329,12 +422,13 @@ fn visible_units<V: Vision>(
                 view::hp_wire(world.rules().unit(kind).hp)?,
             )),
             heading: Some(u32::from(heading.raw())),
+            ..Condition::default()
         };
         let handle = views.unit_handle(viewer, id)?;
         out.push(entity(
             &handle,
             "UNIT",
-            view::unit_subtype(kind),
+            (view::unit_subtype(kind), strings::unit_title(kind)),
             Some(owner),
             at,
             condition,
@@ -353,6 +447,7 @@ fn visible_structures<V: Vision>(
     world: &World,
     filter: &FogFilter<'_, V>,
     viewer: Viewer,
+    titles: &Titles,
     out: &mut Vec<Json>,
 ) -> Result<(), Error> {
     let structures = world.structures();
@@ -386,7 +481,15 @@ fn visible_structures<V: Vision>(
             // A wall has no hit points of its own, and a ruin shows none.
             _ => None,
         };
-        let condition = Condition { hp, heading: None };
+        // A wall is voxels, never a row of this table (`visible_walls` lists
+        // walls), so a row of the wall's kind is the sim and the gateway
+        // disagreeing about what a structure row is.
+        if kind == StructureKind::Wall {
+            return Err(Error::internal(said!(
+                "structure row {} is of the wall's kind, and a wall is never a structure row",
+                row
+            )));
+        }
         let handle = views.structure_handle(viewer, id)?;
         // A ruin is listed as one (`ViewEntity.Kind.RUIN`), keeping the
         // subtype of the structure it was and the handle it had. The sim
@@ -406,17 +509,200 @@ fn visible_structures<V: Vision>(
                 }
             )));
         }
+        // Going up: the sim's own column, told where the viewer may be told it
+        // (S3's `probw`, item 2), and never on a ruin, which is nobody's.
+        let building = !ruined
+            && private_to(viewer, owner)
+            && column(structures.building().get(row), "structure", "building")?;
+        let name = titles.structure(kind)?;
+        let title = if ruined {
+            strings::ruined(name)
+        } else if building {
+            strings::going_up(name)
+        } else {
+            String::from(name)
+        };
+        let condition = Condition {
+            hp,
+            building,
+            look: Some(Look {
+                shape: view::structure_shape(kind),
+                size: view::STRUCTURE_SIZE,
+            }),
+            ..Condition::default()
+        };
         let listed = if ruined { "RUIN" } else { "STRUCTURE" };
         out.push(entity(
             &handle,
             listed,
-            view::structure_subtype(kind),
+            (view::structure_subtype(kind), &title),
             owner,
             at,
             condition,
         ));
     }
     Ok(())
+}
+
+/// The walls of [`visible_entities`], in the target table's order (S3's
+/// `probw`, item 5).
+///
+/// A wall is voxels, not a row: a Build target with a wall top
+/// ([`pharmakos_sim::tables::TargetTable::wall_tops`]) whose box of columns
+/// ([`pharmakos_sim::tables::TargetTable::areas`]) its seat's drones fill from
+/// the ground up. It is listed while at least one wall voxel of its seat stands
+/// in its box, read column by column from the box's top down through wall and
+/// air voxels to the ground, as the sim reads a wall's ground (a column's
+/// first solid voxel that is no wall's). Listed as a `structure`, subtype
+/// `wall`, at the box's lowest corner at its lowest standing voxel, with a
+/// `SLAB` look its box's size from there to its top and no hit points. The
+/// viewer's own walls always; another seat's only while one of its standing
+/// voxels passes the fog filter, as another seat's structure does; a no-fog
+/// spectator all. Read-only: nothing here writes the world.
+///
+/// # Errors
+///
+/// As [`visible_entities`], and [`crate::error::Code::Internal`] for a wall
+/// target whose beacon names no live row (a beacon's targets go with it) or
+/// whose size does not fit the wire's `uint32`.
+fn visible_walls<V: Vision>(
+    views: &mut ViewFeed,
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    titles: &Titles,
+    out: &mut Vec<Json>,
+) -> Result<(), Error> {
+    let targets = world.targets();
+    let title = titles.structure(StructureKind::Wall)?;
+    let build = pharmakos_sim::tables::TargetKind::Build.id();
+    for row in 0..targets.row_count() {
+        let top = column(targets.wall_tops().get(row), "target", "wall top")?;
+        if column(targets.kinds().get(row), "target", "kind")? != build
+            || top == pharmakos_sim::tables::NO_WALL
+        {
+            continue;
+        }
+        let beacon = column(targets.beacons().get(row), "target", "beacon")?;
+        let area = column(targets.areas().get(row), "target", "area")?;
+        let at_row = world.beacons().row_of(beacon).map_err(|_| {
+            Error::internal(said!(
+                "wall target row {} belongs to a beacon the table does not hold",
+                row
+            ))
+        })?;
+        let seat = column(
+            world.beacons().seats().get(at_row.index()),
+            "beacon",
+            "seat",
+        )?;
+        let Some(lowest) = wall_standing(world, filter, viewer, seat, area, top) else {
+            continue;
+        };
+        let [lx, ly] = area.min_column();
+        let [hx, hy] = area.max_column();
+        let span = |low: i32, high: i32| {
+            high.checked_sub(low)
+                .and_then(|span| span.checked_add(1))
+                .and_then(|span| u32::try_from(span).ok())
+                .ok_or_else(|| {
+                    Error::internal(said!(
+                        "wall target row {} spans {} to {}, which no size holds",
+                        row,
+                        low,
+                        high
+                    ))
+                })
+        };
+        let size = [
+            span(i32::from(lx), i32::from(hx))?,
+            span(i32::from(ly), i32::from(hy))?,
+            span(lowest, i32::from(top))?,
+        ];
+        let handle = views.wall_handle(
+            viewer,
+            WallKey {
+                beacon: beacon.raw(),
+                min: [lx, ly],
+                max: [hx, hy],
+                top,
+            },
+        )?;
+        let at = Voxel {
+            x: i32::from(lx),
+            y: i32::from(ly),
+            z: lowest,
+        };
+        let condition = Condition {
+            look: Some(Look {
+                shape: view::structure_shape(StructureKind::Wall),
+                size,
+            }),
+            ..Condition::default()
+        };
+        out.push(entity(
+            &handle,
+            "STRUCTURE",
+            (view::structure_subtype(StructureKind::Wall), title),
+            Some(seat),
+            at,
+            condition,
+        ));
+    }
+    Ok(())
+}
+
+/// The wall voxels of `seat` standing in the box `area` up to `top`, as this
+/// viewer may be shown them: `None` when none stands, or none passes the fog
+/// filter; otherwise the lowest of all that stand (shown or not, so a wall's
+/// place and size do not depend on what of it the viewer sees).
+///
+/// Each column is read from `top` down through wall and air voxels and stops
+/// at the first solid voxel that is no wall's -- the ground the wall was
+/// filled on -- or the map's floor, so a column costs its wall's height.
+fn wall_standing<V: Vision>(
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    seat: u8,
+    area: pharmakos_sim::tables::ColumnBox,
+    top: i16,
+) -> Option<i32> {
+    let voxels = world.voxels();
+    let [lx, ly] = area.min_column();
+    let [hx, hy] = area.max_column();
+    let mut lowest: Option<i32> = None;
+    let mut seen = false;
+    for y in i32::from(ly)..=i32::from(hy) {
+        for x in i32::from(lx)..=i32::from(hx) {
+            let mut z = i32::from(top);
+            while z >= 0 {
+                let Some(material) = voxels.get([x, y, z]) else {
+                    break;
+                };
+                match material.wall_of() {
+                    Some((builder, _)) if builder.raw() == seat => {
+                        lowest = Some(match lowest {
+                            Some(held) if held <= z => held,
+                            _ => z,
+                        });
+                        if !seen {
+                            seen = filter.visible(viewer, &world_at(Some(seat), Voxel { x, y, z }));
+                        }
+                    }
+                    Some(_) => {}
+                    None if material.is_air() => {}
+                    None => break,
+                }
+                match z.checked_sub(1) {
+                    Some(below) => z = below,
+                    None => break,
+                }
+            }
+        }
+    }
+    let lowest = lowest?;
+    seen.then_some(lowest)
 }
 
 /// The wrecks of [`visible_entities`], in table order: nobody's, with no hit
@@ -445,7 +731,14 @@ fn visible_wrecks<V: Vision>(
         }
         let id = column(wrecks.ids().get(row), "wreck", "id")?;
         let handle = views.wreck_handle(viewer, id)?;
-        out.push(entity(&handle, "WRECK", "", None, at, Condition::default()));
+        out.push(entity(
+            &handle,
+            "WRECK",
+            ("", strings::VIEW_WRECK),
+            None,
+            at,
+            Condition::default(),
+        ));
     }
     Ok(())
 }
@@ -528,7 +821,7 @@ fn visible_shells<V: Vision>(
         out.push(entity(
             &handle,
             "SHELL",
-            "",
+            ("", strings::VIEW_SHELL),
             Some(raw_owner),
             at,
             Condition::default(),
@@ -577,7 +870,7 @@ fn world_at(owner: Option<u8>, at: Voxel) -> Audience {
 fn entity(
     id: &str,
     kind: &str,
-    subtype: &str,
+    (subtype, title): (&str, &str),
     owner: Option<u8>,
     at: Voxel,
     condition: Condition,
@@ -605,6 +898,34 @@ fn entity(
     if let Some(heading) = condition.heading {
         entries.push((String::from("heading"), Json::Number(heading.to_string())));
     }
+    if condition.building {
+        entries.push((String::from("building"), Json::Bool(true)));
+    }
+    if let Some(radius) = condition.sphere_radius {
+        entries.push((
+            String::from("sphere_radius_voxels"),
+            Json::Number(radius.to_string()),
+        ));
+    }
+    if let Some(look) = condition.look {
+        let [x, y, z] = look.size;
+        entries.push((
+            String::from("look"),
+            Json::Object(vec![
+                (
+                    String::from("shape"),
+                    Json::String(pharmakos_proto::scope::wire_name(
+                        view::SHAPE_ENUM,
+                        look.shape.proto_name(),
+                    )),
+                ),
+                (String::from("x"), Json::Number(x.to_string())),
+                (String::from("y"), Json::Number(y.to_string())),
+                (String::from("z"), Json::Number(z.to_string())),
+            ]),
+        ));
+    }
+    entries.push((String::from("title"), Json::String(title.to_owned())));
     Json::Object(entries)
 }
 
@@ -645,4 +966,75 @@ fn render(at_ms: i32, page: &ViewPage, entities: &[Json]) -> Json {
         ),
         (String::from("complete"), Json::Bool(page.complete)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Titles, private_to};
+    use crate::fog::Viewer;
+    use crate::view::{self, Shape};
+    use pharmakos_sim::tables::{SeatId, StructureKind, UnitKind};
+
+    /// S3's `probw`, items 3 and 4, as table tests over the sim's own kinds:
+    /// every structure kind has a shape, a title and a wire spelling the schema
+    /// declares, the autocannon's look differs from the mortar's, a wall is a
+    /// slab, and every unit kind has a title of its own.
+    #[test]
+    fn every_kind_has_a_look_and_a_name() {
+        let titles = Titles::new();
+        let mut named: Vec<&str> = Vec::new();
+        for kind in StructureKind::ALL {
+            let title = titles.structure(kind).expect("plan-core names every kind");
+            assert!(!title.is_empty(), "{kind:?}");
+            named.push(title);
+            let shape = view::structure_shape(kind);
+            let wire = pharmakos_proto::scope::wire_name(view::SHAPE_ENUM, shape.proto_name());
+            assert_eq!(
+                pharmakos_proto::scope::from_wire_name(view::SHAPE_ENUM, &wire).as_deref(),
+                Some(shape.proto_name()),
+                "{kind:?}: the schema declares its shape"
+            );
+        }
+        named.sort_unstable();
+        named.dedup();
+        assert_eq!(named.len(), StructureKind::ALL.len(), "one name a kind");
+        assert_ne!(
+            view::structure_shape(StructureKind::Autocannon),
+            view::structure_shape(StructureKind::Mortar)
+        );
+        assert_eq!(view::structure_shape(StructureKind::Wall), Shape::Slab);
+        assert_eq!(
+            titles.structure(StructureKind::Wall).expect("a wall"),
+            "Wall"
+        );
+
+        let mut units: Vec<&str> = UnitKind::ALL
+            .iter()
+            .map(|kind| crate::strings::unit_title(*kind))
+            .collect();
+        assert!(units.iter().all(|title| !title.is_empty()));
+        units.sort_unstable();
+        units.dedup();
+        assert_eq!(units.len(), UnitKind::ALL.len(), "one name a unit kind");
+        assert_eq!(
+            crate::strings::going_up("Mortar"),
+            "Mortar, going up",
+            "the gateway's going-up words"
+        );
+    }
+
+    /// Who is told an asset's private facts: its own seat, and a no-fog
+    /// spectator; never another seat, a plain spectator or the lobby, and
+    /// nobody for a thing nobody owns but the no-fog spectator.
+    #[test]
+    fn private_facts_go_to_the_owner_and_the_no_fog_spectator_only() {
+        let zero = Viewer::Seat(SeatId::new(0));
+        assert!(private_to(zero, Some(0)));
+        assert!(!private_to(zero, Some(1)));
+        assert!(!private_to(zero, None));
+        assert!(private_to(Viewer::Spectator { nofog: true }, Some(1)));
+        assert!(private_to(Viewer::Spectator { nofog: true }, None));
+        assert!(!private_to(Viewer::Spectator { nofog: false }, Some(0)));
+        assert!(!private_to(Viewer::Admin, Some(0)));
+    }
 }
