@@ -401,6 +401,10 @@ pub struct Played {
     /// The refusal that kept the round from being read, when one did: the
     /// round then plans nothing and the gateway files the safe playbook.
     pub refused: Option<Refused>,
+    /// Every `estimate_route` the gateway refused for a reason other than
+    /// `NOT_FOUND` (which is its answer that nothing answers a waypoint): the
+    /// goal it weighed was dropped, and here is why.
+    pub estimates_refused: Vec<Refused>,
 }
 
 /// One suggested value for one declared template parameter.
@@ -453,6 +457,9 @@ pub struct Advice {
     /// The refusal that kept the round from being read, when one did: the
     /// advice is then empty and the gateway's fallback stands.
     pub refused: Option<Refused>,
+    /// Every `estimate_route` refused for a reason other than `NOT_FOUND`, as
+    /// [`Played::estimates_refused`].
+    pub estimates_refused: Vec<Refused>,
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +489,15 @@ impl Easy {
         })
     }
 
+    /// What a route step costs on site, game milliseconds, as Easy prices
+    /// every step it composes ([`crate::price`]): an `interface` step's
+    /// handshake and rows, a `place_beacon`'s deploy and initial rows, and
+    /// nothing for any other step. `None` for JSON that is no `gp.v1.Step`.
+    #[must_use]
+    pub fn on_site_ms(&self, step: &Json) -> Option<i64> {
+        crate::price::step_ms(step, &self.tuning)
+    }
+
     /// Play one seat's round: plan, submit, and say ready.
     pub fn play(&mut self, seat: u8, call: &mut Call<'_>) -> Played {
         let mut wire = Wire::new(call);
@@ -494,6 +510,7 @@ impl Easy {
             calls: 0,
             why: String::new(),
             refused: None,
+            estimates_refused: Vec::new(),
         };
         match Situation::read(&mut wire, seat) {
             Ok(situation) => {
@@ -518,11 +535,15 @@ impl Easy {
         let raid = candidates::raid_post(wire, situation);
         let survey = candidates::survey_post(wire, situation, &self.tuning);
         let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid, survey);
-        let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals, true);
+        // Declared before the estimates, since every candidate is priced from
+        // the step it is composed as ([`crate::price`]).
+        let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
+        let weighed = candidates::evaluate(wire, situation, &self.tuning, &declared, goals, true);
+        round.estimates_refused.clone_from(&weighed.refused);
+        let evaluated = weighed.candidates;
         let top = candidates::top_k(&evaluated);
         let guard = candidates::guard(&evaluated);
         let survey = candidates::survey(&evaluated);
-        let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
         let spire = compose::spire(situation, &self.tuning);
 
         if let Some(composed) = compose::compose(
@@ -573,9 +594,12 @@ impl Easy {
                 raid,
                 candidates::Post::Unknown,
             );
-            let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals, false);
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
+            let weighed =
+                candidates::evaluate(&mut wire, &situation, &self.tuning, &declared, goals, false);
+            advice.estimates_refused = weighed.refused;
+            let evaluated = weighed.candidates;
             let safe = safe::safe_playbook(&mut wire, &situation, &declared);
             advice.suggestions = suggestions(
                 &situation,

@@ -107,15 +107,17 @@
 //! # Vision, and the Survey post (S3's `opr3`)
 //!
 //! **A Survey goal**: place a Survey beacon `covering` the same seam beside
-//! the core, whose scouts look over the whole map (spec section 14: the
+//! the core, whose scouts look over the half of the ground away from the core (spec section 14: the
 //! operator "places a Survey post when the enemy sightings it needs are stale
 //! or missing"; S3's plan, decision 3). The sightings a raid needs are an
 //! enemy beacon's inside `verifier.reach_memory_ms` ([`raid_goals`]), so the
 //! trigger is that none is held ([`sightings_stale`]); then one probe asks
 //! whether a Survey beacon stands beside the core already ([`survey_post`]).
-//! It is enumerated with the guard, so the cut never drops it, and **added**
-//! beside the goals whenever its trigger holds, never ranked; it yields its
-//! seam to a guard post or a raid placed that round ([`crate::compose`]).
+//! It is enumerated with the guard, so the cut never drops it, and
+//! **weighed before the goals**, after the guard and the Spire, against one
+//! share, treasury and kW budget, never ranked; it yields its seam to a guard
+//! post, and stands aside when a raid is among the round's best goals
+//! ([`crate::compose`]).
 //! The sequence is: a round places the post, its scouts sight the enemy, the
 //! next Lull holds a fresh sighting, a raid is weighed and the Survey post is
 //! not.
@@ -140,6 +142,7 @@ use crate::easy::{
     EASY_CANDIDATES, EASY_TOP_K, EXPANSION_POINTS_PER_BEACON, RAID_POINTS, RAID_TARGETS_MAX,
     RISK_POINTS_PER_ENEMY, STONE_TARGETS_MAX,
 };
+use crate::playbook::Declared;
 use crate::situation::{Asset, Feature, Kind, LastPush, Situation, UnitKind};
 use crate::tuning::{Richness, Tuning};
 use crate::wire::{
@@ -192,7 +195,7 @@ pub(crate) enum Goal {
         target: RaidTarget,
     },
     /// Place a Survey beacon covering the seam `seam`, beside the core, whose
-    /// scouts look over the whole map (spec section 14's Survey post; S3's
+    /// scouts look over the half of the ground away from the core (spec section 14's Survey post; S3's
     /// plan, decision 3): placed when the enemy sightings Easy needs are
     /// stale or missing, so its scouts refresh them before the next Lull.
     Survey {
@@ -208,6 +211,8 @@ pub(crate) enum Goal {
         feature: String,
         /// Vent or seam.
         kind: Kind,
+        /// Its grade.
+        grade: Richness,
     },
 }
 
@@ -264,6 +269,35 @@ impl RaidTarget {
 }
 
 impl Goal {
+    /// The goal a stone serves: the placement at its far feature, which the
+    /// stone's sphere lets a later round make. `None` for any other goal.
+    pub(crate) fn served(&self) -> Option<Goal> {
+        match self {
+            Goal::Stone {
+                feature,
+                kind: Kind::Seam,
+                grade,
+            } => Some(Goal::Mine {
+                seam: feature.clone(),
+                grade: *grade,
+            }),
+            Goal::Stone {
+                feature,
+                kind: Kind::Vent,
+                grade,
+            } => Some(Goal::Generator {
+                vent: feature.clone(),
+                grade: *grade,
+            }),
+            Goal::Mine { .. }
+            | Goal::Generator { .. }
+            | Goal::Tap { .. }
+            | Goal::Guard { .. }
+            | Goal::Raid { .. }
+            | Goal::Survey { .. } => None,
+        }
+    }
+
     /// The template this goal fills.
     pub(crate) const fn template(&self) -> &'static str {
         match self {
@@ -355,7 +389,7 @@ pub(crate) struct Tap {
 
 /// The `(beacon, vent)` pairs a tap could be: every live vent the seat
 /// covers, beside every own lit beacon whose ground-plane distance to the
-/// vent's anchor is within the sphere radius (a necessary condition for the
+/// vent's anchor is within that beacon's sphere radius as listed (a necessary condition for the
 /// sphere to hold it; the gateway answers the rest), in the order of the
 /// vent's travel from the commander, then the vent's name, then the beacon's,
 /// cut at Easy's candidate count. Nothing when the treasury cannot carry one.
@@ -363,7 +397,6 @@ fn tap_pairs(situation: &Situation, tuning: &Tuning) -> Vec<(String, Feature)> {
     if tuning.tap_cost_dollars > situation.economy.treasury {
         return Vec::new();
     }
-    let radius = tuning.sphere_radius_voxels;
     let mut pairs: Vec<(String, Feature)> = Vec::new();
     for vent in situation
         .features
@@ -373,7 +406,12 @@ fn tap_pairs(situation: &Situation, tuning: &Tuning) -> Vec<(String, Feature)> {
         let [x, y] = vent.anchor;
         for beacon in situation.own_beacons().filter(|beacon| beacon.powered) {
             let [bx, by, _] = beacon.at;
-            if within([bx, by, 0], [x, y, 0], radius) {
+            // The beacon's sphere as the sim sizes it now, grown by a finished
+            // Spire; an own beacon always carries its radius on the wire.
+            if beacon
+                .sphere_radius_voxels
+                .is_some_and(|radius| within([bx, by, 0], [x, y, 0], radius))
+            {
                 pairs.push((beacon.id.clone(), vent.clone()));
             }
         }
@@ -749,19 +787,11 @@ pub(crate) fn survey_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning
 /// The Survey post a round could place: covering the post seam beside the
 /// core ([`post_seam`]), as the guard and the raid posts do. `None` when no
 /// Survey beacon is known not to stand beside the core ([`survey_post`]),
-/// the seat has no post seam, the treasury cannot carry the beacon and its
-/// scouts, or the grid's headroom cannot carry the scouts' draw (a scout
-/// fielded past the supply is the verifier's E0601, and on a dark grid none
-/// would walk).
+/// the seat has no post seam, or the treasury cannot carry the beacon and its
+/// scouts. The grid's headroom for its scouts is weighed with every other
+/// addition's draw in one kW budget ([`crate::compose`]).
 fn survey_goal(situation: &Situation, tuning: &Tuning, survey: Post) -> Option<Goal> {
-    let headroom = situation
-        .economy
-        .supply_kw
-        .checked_sub(situation.economy.draw_kw)?;
-    if survey != Post::None
-        || tuning.survey_cost_dollars > situation.economy.treasury
-        || headroom < tuning.survey_draw_kw
-    {
+    if survey != Post::None || tuning.survey_cost_dollars > situation.economy.treasury {
         return None;
     }
     post_seam(situation).map(|seam| Goal::Survey {
@@ -957,6 +987,11 @@ pub(crate) fn no_vent(situation: &Situation, tuning: &Tuning) -> NoVent {
     }
 }
 
+/// What one estimate says of a goal: the place its last leg ends on, that
+/// leg's travel and the travel before it, `None` when the route does not
+/// reach, or the [`Misread`] of an answer that does not read.
+type Reading = Result<Option<([i32; 3], i64, i64)>, Misread>;
+
 /// What one `estimate_route` answer says of a goal: the place its last leg
 /// ends on, that leg's travel, and the travel before it; `None` when the
 /// route does not reach.
@@ -965,7 +1000,7 @@ pub(crate) fn no_vent(situation: &Situation, tuning: &Tuning) -> NoVent {
 ///
 /// [`Misread`] for an answer that does not read, and for a reachable route
 /// with no leg, a leg with no place, or a figure below zero.
-fn reading(estimate: &Json) -> Result<Option<([i32; 3], i64, i64)>, Misread> {
+fn reading(estimate: &Json) -> Reading {
     if !bool_of(estimate, "reachable")? {
         return Ok(None);
     }
@@ -999,7 +1034,7 @@ fn reading(estimate: &Json) -> Result<Option<([i32; 3], i64, i64)>, Misread> {
 ///
 /// [`Misread`] for an answer that does not read, and for a reachable route
 /// with fewer than two legs, a leg with no place, or a figure below zero.
-fn raid_reading(estimate: &Json) -> Result<Option<([i32; 3], i64, i64)>, Misread> {
+fn raid_reading(estimate: &Json) -> Reading {
     if !bool_of(estimate, "reachable")? {
         return Ok(None);
     }
@@ -1057,13 +1092,14 @@ pub(crate) fn evaluate(
     wire: &mut Wire<'_, '_>,
     situation: &Situation,
     tuning: &Tuning,
+    declared: &[Declared],
     goals: Vec<Goal>,
     stones: bool,
-) -> Vec<Candidate> {
+) -> Evaluated {
+    let mut out = Evaluated::default();
     let Some(commander) = situation.commander else {
-        return Vec::new();
+        return out;
     };
-    let mut out: Vec<Candidate> = Vec::new();
     let mut far: Vec<(usize, Goal)> = Vec::new();
     for (id, goal) in goals.into_iter().enumerate() {
         let to = match &goal {
@@ -1093,31 +1129,27 @@ pub(crate) fn evaluate(
         if let Goal::Raid { target, .. } = &goal {
             waypoints.push(target.waypoint());
         }
-        let params = object(vec![("waypoints", Json::Array(waypoints))]);
-        let estimate = match wire.call("estimate_route", params) {
-            Ok(estimate) => estimate,
-            Err(refused) => {
-                if let Some(stone) = stone_for(&goal, &refused).filter(|_| stones) {
+        match estimated(wire, waypoints, &mut out.refused) {
+            Estimate::Answered(estimate) => {
+                let read = match goal {
+                    Goal::Raid { .. } => raid_reading(&estimate),
+                    Goal::Mine { .. }
+                    | Goal::Generator { .. }
+                    | Goal::Tap { .. }
+                    | Goal::Guard { .. }
+                    | Goal::Survey { .. }
+                    | Goal::Stone { .. } => reading(&estimate),
+                };
+                out.push(situation, tuning, declared, id, goal, &read);
+            }
+            // No site covers it: with `stones`, a Mine or Generator goal is
+            // weighed again as a stone toward its feature.
+            Estimate::NotFound => {
+                if let Some(stone) = stone_for(&goal).filter(|_| stones) {
                     far.push((id, stone));
                 }
-                continue;
             }
-        };
-        let read = match goal {
-            Goal::Raid { .. } => raid_reading(&estimate),
-            Goal::Mine { .. }
-            | Goal::Generator { .. }
-            | Goal::Tap { .. }
-            | Goal::Guard { .. }
-            | Goal::Survey { .. }
-            | Goal::Stone { .. } => reading(&estimate),
-        };
-        let Ok(Some((place, travel, lead))) = read else {
-            continue;
-        };
-        if let Some(mut candidate) = score(situation, tuning, id, goal, place, travel) {
-            candidate.lead_ms = lead;
-            out.push(candidate);
+            Estimate::Refused => {}
         }
     }
     for (id, goal) in first(far, STONE_TARGETS_MAX) {
@@ -1126,22 +1158,78 @@ pub(crate) fn evaluate(
         };
         let mut waypoints = from_the_core(situation, commander);
         waypoints.push(toward(feature));
-        let params = object(vec![("waypoints", Json::Array(waypoints))]);
-        // A refused `toward`, an answer that does not read and an unreachable
-        // stone are all a stone dropped, as a first estimate's are.
-        let read = match wire.call("estimate_route", params) {
-            Ok(estimate) => reading(&estimate),
-            Err(_) => continue,
-        };
-        if let Ok(Some((place, travel, lead))) = read
-            && let Some(mut candidate) = score(situation, tuning, id, goal, place, travel)
-        {
-            candidate.lead_ms = lead;
-            out.push(candidate);
+        // `NOT_FOUND` is the gateway's answer that no stone has a site: the
+        // stone is not weighed. Any other refusal is kept in `refused`.
+        if let Estimate::Answered(estimate) = estimated(wire, waypoints, &mut out.refused) {
+            let read = reading(&estimate);
+            out.push(situation, tuning, declared, id, goal, &read);
         }
     }
-    out.sort_by_key(|candidate| candidate.id);
     out
+}
+
+/// What [`evaluate`] weighed: every candidate whose estimate answered, in the
+/// order they were estimated (a stone, weighed after the first estimates,
+/// comes after them; every reader ranks by rate and id, or by kind, so the
+/// order decides nothing), and every refusal of an estimate other than the
+/// gateway's `NOT_FOUND`, which [`crate::easy`] reports with the round.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub(crate) struct Evaluated {
+    /// The candidates.
+    pub(crate) candidates: Vec<Candidate>,
+    /// The estimates refused for any other reason than `NOT_FOUND`.
+    pub(crate) refused: Vec<Refused>,
+}
+
+impl Evaluated {
+    /// Score one answered goal, or drop it: an answer that does not read or a
+    /// route that does not reach is a goal not weighed, as the module docs
+    /// say, and a goal whose step does not build has no price.
+    fn push(
+        &mut self,
+        situation: &Situation,
+        tuning: &Tuning,
+        declared: &[Declared],
+        id: usize,
+        goal: Goal,
+        read: &Reading,
+    ) {
+        let Ok(&Some((place, travel, lead))) = read.as_ref() else {
+            return;
+        };
+        if let Some(mut candidate) = score(situation, tuning, declared, id, goal, place, travel) {
+            candidate.lead_ms = lead;
+            self.candidates.push(candidate);
+        }
+    }
+}
+
+/// One estimate's outcome.
+enum Estimate {
+    /// The gateway answered.
+    Answered(Json),
+    /// The gateway answered `NOT_FOUND`: no site, selector or stone answers
+    /// the last waypoint.
+    NotFound,
+    /// Any other refusal, kept in the round's refusals.
+    Refused,
+}
+
+/// One `estimate_route` over `waypoints`.
+fn estimated(
+    wire: &mut Wire<'_, '_>,
+    waypoints: Vec<Json>,
+    refused: &mut Vec<Refused>,
+) -> Estimate {
+    let params = object(vec![("waypoints", Json::Array(waypoints))]);
+    match wire.call("estimate_route", params) {
+        Ok(estimate) => Estimate::Answered(estimate),
+        Err(refusal) if refusal.code == "NOT_FOUND" => Estimate::NotFound,
+        Err(refusal) => {
+            refused.push(refusal);
+            Estimate::Refused
+        }
+    }
 }
 
 /// The waypoints every goal's estimate opens with: the commander, then the
@@ -1168,21 +1256,20 @@ fn toward(feature: &str) -> Json {
     )])
 }
 
-/// The stone a refused placement is weighed as: a Mine or Generator goal whose
-/// `covering` the gateway answered `NOT_FOUND`, no site covering it. Any other
-/// goal, and any other refusal, is not a far feature.
-fn stone_for(goal: &Goal, refused: &Refused) -> Option<Goal> {
-    if refused.code != "NOT_FOUND" {
-        return None;
-    }
+/// The stone a placement the gateway answered `NOT_FOUND` for is weighed as:
+/// a Mine or Generator goal no site covers. Any other goal is not a far
+/// feature.
+fn stone_for(goal: &Goal) -> Option<Goal> {
     match goal {
-        Goal::Mine { seam, .. } => Some(Goal::Stone {
+        Goal::Mine { seam, grade } => Some(Goal::Stone {
             feature: seam.clone(),
             kind: Kind::Seam,
+            grade: *grade,
         }),
-        Goal::Generator { vent, .. } => Some(Goal::Stone {
+        Goal::Generator { vent, grade } => Some(Goal::Stone {
             feature: vent.clone(),
             kind: Kind::Vent,
+            grade: *grade,
         }),
         Goal::Tap { .. }
         | Goal::Guard { .. }
@@ -1255,14 +1342,19 @@ fn guard_defence(situation: &Situation, tuning: &Tuning) -> Option<i64> {
     from_threat.checked_add(from_death)
 }
 
-/// The time a post beside the core costs the route: there, place, then the
-/// priority row and the mandate's own row (Defend's or Attack's), costed at
-/// the edit's cap, an upper bound.
-fn post_ms(tuning: &Tuning, travel_ms: i64) -> Option<i64> {
-    travel_ms
-        .checked_add(tuning.place_beacon_deploy_ms)?
-        .checked_add(tuning.set_priority_ms)?
-        .checked_add(tuning.edit_settings_max_ms)
+/// What a goal's step costs on site, priced from the step exactly as it is
+/// composed ([`crate::compose::step_for`], [`crate::price::step_ms`]); `None`
+/// when the step does not build (its template is not declared) or does not
+/// price.
+fn priced(
+    situation: &Situation,
+    tuning: &Tuning,
+    declared: &[Declared],
+    goal: &Goal,
+    place: [i32; 3],
+) -> Option<i64> {
+    let step = crate::compose::step_for(goal, place, situation, declared)?;
+    crate::price::step_ms(&step, tuning)
 }
 
 /// One goal's price and its four scored terms before risk and attack:
@@ -1273,6 +1365,7 @@ fn terms(
     tuning: &Tuning,
     goal: &Goal,
     travel_ms: i64,
+    on_site: i64,
 ) -> Option<(i64, i64, i64, i64, i64)> {
     Some(match goal {
         Goal::Mine { grade, .. } => {
@@ -1285,9 +1378,7 @@ fn terms(
                 0,
                 // There, place, and back: the template's route returns home.
                 // PLACEHOLDER: the way back costed as the way there (travel x 2), not estimated — owner, S5, with Normal and Hard
-                travel_ms
-                    .checked_mul(2)?
-                    .checked_add(tuning.place_beacon_deploy_ms)?,
+                travel_ms.checked_mul(2)?.checked_add(on_site)?,
             )
         }
         Goal::Generator { grade, .. } => {
@@ -1298,12 +1389,10 @@ fn terms(
                 power.checked_sub(cost)?,
                 EXPANSION_POINTS_PER_BEACON,
                 0,
-                // There, place, and commit the initial Build target -- its own
-                // row since decision 15 -- on site; the commander then holds
-                // by the new beacon while its drone builds.
-                travel_ms
-                    .checked_add(tuning.place_beacon_deploy_ms)?
-                    .checked_add(tuning.build_target_ms)?,
+                // There, place, and commit the initial settings and the Build
+                // target on site; the commander then holds by the new beacon
+                // while its drone builds.
+                travel_ms.checked_add(on_site)?,
             )
         }
         Goal::Tap { grade, .. } => {
@@ -1315,7 +1404,7 @@ fn terms(
                 // No new beacon, so no new sphere.
                 0,
                 0,
-                travel_ms.checked_add(tuning.build_target_ms)?,
+                travel_ms.checked_add(on_site)?,
             )
         }
         Goal::Raid { .. } => {
@@ -1328,8 +1417,7 @@ fn terms(
                 // Beside the core, inside its sphere: no reach it adds.
                 0,
                 0,
-                // As the guard's: the Attack row in place of the Defend row.
-                post_ms(tuning, travel_ms)?,
+                travel_ms.checked_add(on_site)?,
             )
         }
         Goal::Survey { .. } => {
@@ -1342,21 +1430,19 @@ fn terms(
                 // Beside the core, inside its sphere: no reach it adds.
                 0,
                 0,
-                // As the guard's: the Survey row in place of the Defend row.
-                post_ms(tuning, travel_ms)?,
+                travel_ms.checked_add(on_site)?,
             )
         }
+        // A stone is scored as the goal it serves (`score`); weighed alone it
+        // is its price and its walk.
         Goal::Stone { .. } => {
             let cost = tuning.beacon_cost_dollars;
             (
                 cost,
-                // A stone earns nothing itself: its worth is the sphere it
-                // adds, which a later round covers the far feature from.
                 cost.checked_neg()?,
-                EXPANSION_POINTS_PER_BEACON,
                 0,
-                // There and place; the route goes on from the stone.
-                travel_ms.checked_add(tuning.place_beacon_deploy_ms)?,
+                0,
+                travel_ms.checked_add(on_site)?,
             )
         }
         Goal::Guard { .. } => {
@@ -1368,7 +1454,7 @@ fn terms(
                 // Beside the core, inside its sphere: no reach it adds.
                 0,
                 guard_defence(situation, tuning)?,
-                post_ms(tuning, travel_ms)?,
+                travel_ms.checked_add(on_site)?,
             )
         }
     })
@@ -1381,12 +1467,38 @@ fn terms(
 fn score(
     situation: &Situation,
     tuning: &Tuning,
+    declared: &[Declared],
     id: usize,
     goal: Goal,
     place: [i32; 3],
     travel_ms: i64,
 ) -> Option<Candidate> {
-    let (cost, economy, expansion, defence, time_ms) = terms(situation, tuning, &goal, travel_ms)?;
+    let on_site = priced(situation, tuning, declared, &goal, place)?;
+    let (cost, economy, expansion, defence, time_ms) = match goal.served() {
+        // A stone has no worth of its own: it is worth the goal it serves, by
+        // that goal's own terms, less the stone's price, over the stone's walk
+        // and deploy and the served goal's own whole time, which a later round
+        // spends. So a rich vent's stone outranks a lean seam's,
+        // and a stone never outranks a goal of the same worth placeable now,
+        // which pays no stone and waits no round.
+        Some(served) => {
+            // The served goal costs its own time in the later round, from
+            // the stone's sphere: at least as far as the stone is, so its
+            // travel is the stone's, a lower bound.
+            let served_on_site = priced(situation, tuning, declared, &served, place)?;
+            let (_, economy, expansion, _, served_ms) =
+                terms(situation, tuning, &served, travel_ms, served_on_site)?;
+            let cost = tuning.beacon_cost_dollars;
+            (
+                cost,
+                economy.checked_sub(cost)?,
+                expansion,
+                0,
+                travel_ms.checked_add(on_site)?.checked_add(served_ms)?,
+            )
+        }
+        None => terms(situation, tuning, &goal, travel_ms, on_site)?,
+    };
     // Risk: what the seat can see of other seats near the goal.
     //
     // PLACEHOLDER: "near" is within one sphere radius of the goal, the sphere radius reused as a threat radius — owner, S5, with the Balanced weights

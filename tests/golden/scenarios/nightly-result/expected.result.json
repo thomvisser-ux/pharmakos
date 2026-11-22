@@ -6,8 +6,8 @@
   "operator": "easy",
   "rules_hash": "1b26c525068bff61",
   "seeds": [
-    {"seed": "0x0102030405060708", "arm_seat": 0, "winners": [0], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "arm": "win"},
-    {"seed": "0x00000000ca5caded", "arm_seat": 1, "winners": [0, 1], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "arm": "shared"}
+    {"seed": "0x0102030405060708", "arm_seat": 0, "winners": [1], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "arm": "loss"},
+    {"seed": "0x00000000ca5caded", "arm_seat": 1, "winners": [1], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "arm": "win"}
   ],
-  "summary": {"seeds": 2, "arm_wins": 1, "shared": 1, "losses": 0, "win_rate_percent": 50}
+  "summary": {"seeds": 2, "arm_wins": 1, "shared": 0, "losses": 1, "win_rate_percent": 50}
 }

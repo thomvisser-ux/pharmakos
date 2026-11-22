@@ -127,6 +127,8 @@ enum Travel {
     Withheld,
     /// `reachable: true` with no `travel_ms`.
     NoFigure,
+    /// `reachable: false` beside a `travel_ms`.
+    FigureUnreached,
 }
 
 /// How the scripted paged reads page.
@@ -192,6 +194,9 @@ struct Script {
     survey_post: Option<[i32; 3]>,
     /// Beacons a route ending on them does not reach, by id.
     unreachable: BTreeSet<String>,
+    /// A `covering` or `toward` waypoint naming a feature refused with this
+    /// code instead of answered, by feature name.
+    refuse_feature: BTreeMap<String, &'static str>,
     /// An own beacon's sphere radius by id, where it is not the rules
     /// table's base (24 voxels): a finished Spire grows it.
     radii: BTreeMap<String, i64>,
@@ -247,6 +252,7 @@ impl Script {
             attack_post: None,
             survey_post: None,
             unreachable: BTreeSet::new(),
+            refuse_feature: BTreeMap::new(),
             radii: BTreeMap::new(),
             licences: Vec::new(),
             transcript: Vec::new(),
@@ -325,6 +331,18 @@ impl Script {
     fn place(&self, location: &Json) -> Result<[i32; 3], &'static str> {
         if let Some(voxel) = location.get("voxel") {
             return Ok(voxel_of(voxel));
+        }
+        if let Some(code) = ["covering", "toward"]
+            .iter()
+            .filter_map(|arm| location.get(arm))
+            .filter_map(|arm| {
+                arm.get("feature_id")
+                    .or_else(|| arm.get("feature")?.get("feature_id"))
+            })
+            .filter_map(text)
+            .find_map(|name| self.refuse_feature.get(name))
+        {
+            return Err(code);
         }
         if let Some(name) = location
             .get("covering")
@@ -563,6 +581,10 @@ impl Script {
                 match (index, self.travel) {
                     (0, Travel::Withheld) => {}
                     (0, Travel::NoFigure) => row.push(("reachable", Json::Bool(true))),
+                    (0, Travel::FigureUnreached) => {
+                        row.push(("travel_ms", num(1_000)));
+                        row.push(("reachable", Json::Bool(false)));
+                    }
                     _ => {
                         // `travel_ms` only beside `reachable: true`, as the
                         // gateway writes it.
@@ -1429,7 +1451,7 @@ fn a_feature_that_does_not_read_is_a_round_not_read_and_ready_is_still_said() {
 /// unreachable or as a walk of 0 ms; and `set_ready` is still said.
 #[test]
 fn a_feature_whose_travel_is_withheld_is_a_round_not_read() {
-    for travel in [Travel::Withheld, Travel::NoFigure] {
+    for travel in [Travel::Withheld, Travel::NoFigure, Travel::FigureUnreached] {
         let mut world = Script::busy(0);
         world.travel = travel;
         let (script, played) = play(world);
@@ -1734,8 +1756,8 @@ fn a_built_in_seat_says_ready_even_when_it_could_plan_nothing() {
 /// whose last leg is the site; it writes no walk (a `place_beacon` walks to
 /// its site itself), fills the hold, and ends the route at the core with its
 /// dig depth. Its note records the seed it did not use. The covered seam
-/// offers no Mine goal; it is estimated as the guard post's site and the
-/// Survey post's, and
+/// offers no Mine goal; it is estimated once, as the guard post's site (a
+/// Survey post stands already), and
 /// the post is not placed, since nothing threatens the core and the commander
 /// did not die.
 #[test]
@@ -1744,6 +1766,8 @@ fn easy_names_the_vent_it_covers_and_writes_no_site_of_its_own() {
     // otherwise be worth more per second than the vent.
     let mut world = Script::busy(0);
     world.features.retain(|feature| feature.id != "seam_20_60");
+    // A Survey post stands already, so none takes the share.
+    world.survey_post = Some([34, 34, GROUND]);
     let (script, played) = play(world);
     assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
     assert!(
@@ -1761,9 +1785,8 @@ fn easy_names_the_vent_it_covers_and_writes_no_site_of_its_own() {
             .iter()
             .filter(|line| line.starts_with("estimate_route") && line.contains("seam_36_34"))
             .count(),
-        2,
-        "the covered seam is the core's: no Mine goal, and two estimates, as the guard post's site \
-         and the Survey post's (no enemy sighting is held, so the Survey post is weighed)"
+        1,
+        "the covered seam is the core's: no Mine goal, and one estimate, as the guard post's site"
     );
     let ops = composing_ops(&script.transcript);
     assert_eq!(
@@ -1824,6 +1847,8 @@ fn the_walk_to_the_core_is_estimated_and_paid_out_of_the_hold() {
     let near = || {
         let mut world = Script::busy(0);
         world.features.retain(|feature| feature.id != "seam_20_60");
+        // A Survey post stands already, so none takes the share.
+        world.survey_post = Some([34, 34, GROUND]);
         world
     };
     let hold_of = |world: Script| {
@@ -1875,6 +1900,8 @@ fn a_hold_with_nothing_left_for_it_is_taken_out() {
     let world = || {
         let mut world = Script::busy(0);
         world.features.retain(|feature| feature.id != "seam_20_60");
+        // A Survey post stands already, so none takes the share.
+        world.survey_post = Some([34, 34, GROUND]);
         world
     };
     let (script, _) = play(world());
@@ -3172,7 +3199,10 @@ fn with_no_fresh_sighting_easy_places_a_survey_post_beside_its_core() {
     for wanted in [
         r#""covering": { "feature_id": "seam_36_34" }"#,
         r#""tags": [ "survey" ]"#,
-        r#""probe_areas": [ { "min": { "x": 0, "y": 0, "z": 0 }, "max": { "x": 63, "y": 63, "z": 31 } } ]"#,
+        // The core b_00 stands at (32, 32) of a 64-voxel map: one voxel past
+        // the middle (31) on both axes, so `x` decides, and the far half is
+        // the low one.
+        r#""probe_areas": [ { "min": { "x": 0, "y": 0, "z": 0 }, "max": { "x": 31, "y": 63, "z": 31 } } ]"#,
         r#""scout_count": 2"#,
         r#""on_fail": { "action": "SKIP" }"#,
     ] {
@@ -3248,4 +3278,168 @@ fn a_survey_post_never_stacks_contends_with_the_guard_or_overspends() {
 fn the_advisor_never_probes_for_a_survey_post() {
     let (script, _) = advise(Script::busy(0));
     assert_eq!(survey_probes(&script.transcript), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Fix pass 1: one kW budget, refusals, stones worth their goal
+// ---------------------------------------------------------------------------
+
+/// The new draw a composed round fields, kW: the Spire's 3, the Survey
+/// post's two scouts at 1 each and the guard's picket scout at 1, read from
+/// the patch it composes.
+fn new_draw(transcript: &[String]) -> i64 {
+    let Some(patch) = transcript
+        .iter()
+        .find_map(|line| line.strip_prefix("patch_plan "))
+    else {
+        return 0;
+    };
+    let spire = if patch.contains("queue_spire") { 3 } else { 0 };
+    let survey = if patch.contains("survey_post") { 2 } else { 0 };
+    let guard = i64::from(patch.contains("place_guard"));
+    spire + survey + guard
+}
+
+/// One kW budget (fix pass 1, item 1): the guard's picket, the Spire and the
+/// Survey post's scouts are weighed against one headroom, in that order, so
+/// the round never fields more new draw than the grid carries. Probe 5's case
+/// first (supply 10, draw 6: 4 kW, where the Spire and the post together are
+/// 5), then every headroom from 0 to 8 kW with the commander dead in the last
+/// Push, so the guard is weighed too.
+#[test]
+fn one_kw_budget_never_composes_more_draw_than_the_headroom() {
+    let mut probe = licensed();
+    probe.supply = 10;
+    probe.draw = 6;
+    let (script, played) = play(probe);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    assert_eq!(
+        new_draw(&script.transcript),
+        3,
+        "the Spire alone fits 4 kW: {}",
+        played.why
+    );
+    for died in [false, true] {
+        for headroom in 0..=8_i64 {
+            let mut world = licensed();
+            world.supply = 10;
+            world.draw = 10 - headroom;
+            if died {
+                world.round = 2;
+                world.feed_deaths = vec![0];
+            }
+            let (script, _) = play(world);
+            let drawn = new_draw(&script.transcript);
+            assert!(
+                drawn <= headroom,
+                "{drawn} kW against {headroom} (died {died})"
+            );
+        }
+    }
+}
+
+/// A stone is weighed only after the gateway's `NOT_FOUND` on `covering`;
+/// any other refusal drops the goal with no stone, and is reported with the
+/// round (fix pass 1, item 6).
+#[test]
+fn only_not_found_makes_a_stone_and_other_refusals_are_reported() {
+    let mut world = far_vent();
+    world
+        .refuse_feature
+        .insert(String::from("vent_56_32"), "RATE_LIMITED");
+    let (script, played) = play(world);
+    assert_eq!(towards(&script.transcript, "vent_56_32"), 0);
+    assert_eq!(
+        played
+            .estimates_refused
+            .iter()
+            .map(|refused| refused.code.as_str())
+            .collect::<Vec<_>>(),
+        ["RATE_LIMITED"]
+    );
+    // A `toward` refused for another reason than `NOT_FOUND` is reported too.
+    let mut toward = far_vent();
+    toward
+        .refuse_feature
+        .insert(String::from("vent_56_32"), "NOT_FOUND");
+    let (script, played) = play(toward);
+    assert_eq!(towards(&script.transcript, "vent_56_32"), 1);
+    assert!(
+        played.estimates_refused.is_empty(),
+        "{:?}",
+        played.estimates_refused
+    );
+}
+
+/// A stone is worth the goal it serves, less its price, over its walk and
+/// the served placement's own time (fix pass 1, item 2): of two far vents as
+/// far away, the rich one's stone outranks the lean one's, and a vent
+/// placeable now outranks a stone toward another vent of its grade; one
+/// stone a round.
+#[test]
+fn a_stone_is_worth_the_goal_it_serves_and_one_goes_up_a_round() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    let mut vent = Feature::new("vent", "rich", [56, 32]);
+    vent.site = None;
+    vent.stone = Some([50, 32, GROUND]);
+    let mut lean = Feature::new("vent", "lean", [8, 32]);
+    lean.site = None;
+    lean.stone = Some([14, 32, GROUND]);
+    world.features.extend([lean, vent]);
+    let (script, played) = play(world.clone());
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert_eq!(
+        ops.matches(r#""toward""#).count(),
+        1,
+        "one stone a round: {ops}"
+    );
+    assert!(ops.contains("vent_56_32"), "the rich vent's stone: {ops}");
+
+    let mut near = world;
+    let mut placeable = Feature::new("vent", "rich", [40, 40]);
+    placeable.site = Some([36, 40, GROUND]);
+    near.features.push(placeable);
+    let (script, played) = play(near);
+    let first = composing_ops(&script.transcript);
+    let covering = op_value(
+        &first,
+        "replace",
+        "/declarative/route/0/place_beacon/at/covering",
+    )
+    .map(|value| compact(&value));
+    assert_eq!(
+        covering.as_deref(),
+        Some(r#"{ "feature_id": "vent_40_40" }"#),
+        "the vent placeable now is first: {}",
+        played.why
+    );
+}
+
+/// A Spire-grown core sphere is read where a tap is looked for (fix pass 1,
+/// item 5): a covered vent 30 voxels from the core, past the base radius of
+/// 24 and inside the grown 36, is a tap pair the probe asks about; at the
+/// base radius it is not.
+#[test]
+fn a_tap_inside_a_spire_grown_sphere_is_found() {
+    let world = |radius: i64| {
+        let mut tap = Script::new(0);
+        let mut vent = Feature::new("vent", "rich", [62, 32]);
+        vent.covered = true;
+        tap.features.push(vent);
+        tap.on_reads
+            .insert((String::from("b_00"), String::from("vent_62_32")));
+        tap.radii.insert(String::from("b_00"), radius);
+        tap
+    };
+    let probed = |radius: i64| {
+        let (script, _) = play(world(radius));
+        script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("resolve_refs") && line.contains("vent_62_32"))
+    };
+    assert!(probed(36), "the grown sphere's tap is probed");
+    assert!(!probed(24), "the base sphere does not reach it");
 }

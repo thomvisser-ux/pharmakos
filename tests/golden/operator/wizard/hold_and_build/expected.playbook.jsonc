@@ -57,7 +57,7 @@
           {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
         ], "repair_threshold_pct": 50, "terraform": "NONE"}, "roe": "RETURN_FIRE"}}},
        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
-      {"label": "hold", "hold": {"ms": 86100}}
+      {"label": "hold", "hold": {"ms": 83100}}
     ],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander

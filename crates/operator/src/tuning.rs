@@ -92,6 +92,8 @@ impl Richness {
 pub(crate) struct Tuning {
     /// `beacon.sphere_radius_voxels`.
     pub(crate) sphere_radius_voxels: i64,
+    /// Spec section 5's interface rates, `interface_times` ([`Times`]).
+    pub(crate) times: Times,
     /// `structures.beacon.cost_dollars`.
     pub(crate) beacon_cost_dollars: i64,
     /// What a tap goal spends, whole $: `structures.generator.cost_dollars`
@@ -110,23 +112,6 @@ pub(crate) struct Tuning {
     ore_yield_per_voxel_dollars: ByRichness,
     /// `economy.seam_voxels`.
     pub(crate) seam_voxels: i64,
-    /// `interface_times.edit_settings_base_ms`: a one-field settings row,
-    /// which is what the core's dig depth is ([`crate::compose`]'s
-    /// `deepen_core`).
-    pub(crate) edit_settings_base_ms: i64,
-    /// `interface_times.build_target_ms`: one Build target, its own row since
-    /// S1's plan, decision 15 (decisions-log item 128 (3) (g)), whether it is
-    /// a placed beacon's initial target or an `add_build_target` row.
-    pub(crate) build_target_ms: i64,
-    /// `interface_times.place_beacon_deploy_ms`.
-    pub(crate) place_beacon_deploy_ms: i64,
-    /// `interface_times.set_priority_ms`: the priority row of a placed
-    /// beacon's `initial`.
-    pub(crate) set_priority_ms: i64,
-    /// `interface_times.edit_settings_max_ms`: the most one settings row
-    /// costs, which is what the guard post's Defend row is costed at, an upper
-    /// bound ([`crate::candidates`]).
-    pub(crate) edit_settings_max_ms: i64,
     /// What a guard goal spends, whole $: the Defend beacon and the one
     /// picket scout the Defend the Core template fields
     /// (`structures.beacon.cost_dollars` plus `units.scout.cost_dollars`).
@@ -149,17 +134,16 @@ pub(crate) struct Tuning {
     /// [`crate::easy::SURVEY_SCOUT_COUNT`] `units.scout.draw_kw` (a placed
     /// beacon itself is net zero).
     pub(crate) survey_draw_kw: i64,
+    /// What a guard post's one picket scout draws once fielded, whole kW
+    /// (`units.scout.draw_kw`; the Defend the Core template's
+    /// `picket_scouts: 1`, as [`Tuning::guard_cost_dollars`] counts it).
+    pub(crate) guard_draw_kw: i64,
     /// `structures.resonance_spire.cost_dollars`: what queueing the Spire
     /// takes from the treasury when the row commits.
     pub(crate) spire_cost_dollars: i64,
     /// `structures.resonance_spire.draw_kw`: what the Spire draws once it
     /// stands.
     pub(crate) spire_draw_kw: i64,
-    /// `interface_times.queue_structure_ms`: one `queue_structure` row.
-    pub(crate) queue_structure_ms: i64,
-    /// `interface_times.visit_handshake_ms`: what every `interface` step pays
-    /// once on arrival, before its rows (spec section 5).
-    pub(crate) visit_handshake_ms: i64,
     /// Each armed kind's threat (S2's plan, decision 12): its weapon's damage
     /// per second, in thousandths of a hit point per second, as the sim's own
     /// threat model computes it from the same row.
@@ -314,31 +298,47 @@ fn survey_draw(scout_draw_kw: u32) -> Result<i64, RulesError> {
         .ok_or_else(|| RulesError(String::from("a Survey post's draw does not fit")))
 }
 
-/// The rows queueing the Resonance Spire reads: its price and draw, which a
-/// table may state as zero, and the two interface times its visit pays,
-/// refused at zero or below, where they mean nothing.
-struct SpireRows {
-    cost_dollars: i64,
-    draw_kw: i64,
-    queue_structure_ms: i64,
-    visit_handshake_ms: i64,
+/// Spec section 5's interface rates, read out of `interface_times` once:
+/// what [`crate::price`] prices every composed step with. A rate whose zero
+/// means a row costs nothing at all -- the handshake, a settings edit's base
+/// and cap, a priority row, a Build target, a queued structure, the deploy --
+/// is refused at zero or below; the per-field step, the switch and the
+/// recycle are refused below zero only, as the verifier's rate card reads
+/// them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Times {
+    /// `visit_handshake_ms`.
+    pub(crate) visit_handshake: i64,
+    /// `set_priority_ms`.
+    pub(crate) set_priority: i64,
+    /// `edit_settings_base_ms`.
+    pub(crate) edit_settings_base: i64,
+    /// `edit_settings_per_field_ms`.
+    pub(crate) edit_settings_per_field: i64,
+    /// `edit_settings_max_ms`.
+    pub(crate) edit_settings_max: i64,
+    /// `build_target_ms`.
+    pub(crate) build_target: i64,
+    /// `queue_structure_ms`.
+    pub(crate) queue_structure: i64,
+    /// `switch_mandate_ms`.
+    pub(crate) switch_mandate: i64,
+    /// `recycle_ms`.
+    pub(crate) recycle: i64,
+    /// `place_beacon_deploy_ms`.
+    pub(crate) place_beacon_deploy: i64,
 }
 
-impl SpireRows {
+impl Times {
     /// # Errors
     ///
-    /// [`RulesError`] for an absent Spire row or a time that is not positive.
+    /// [`RulesError`] for a rate refused as the type's docs say.
     fn read(
-        row: Option<StructureRow>,
         times: &pharmakos_proto::gp::v1::rules_table::InterfaceTimes,
-    ) -> Result<SpireRows, RulesError> {
-        let row = row.ok_or_else(|| {
-            RulesError(String::from(
-                "the rules text has no `structures.resonance_spire` row",
-            ))
-        })?;
-        let positive = |name: &str, value: i64| {
-            if value > 0 {
+    ) -> Result<Times, RulesError> {
+        let rate = |name: &str, value: i32, positive: bool| {
+            let value = i64::from(value);
+            if value > 0 || (!positive && value == 0) {
                 Ok(value)
             } else {
                 Err(RulesError(format!(
@@ -346,17 +346,49 @@ impl SpireRows {
                 )))
             }
         };
+        Ok(Times {
+            visit_handshake: rate("visit_handshake_ms", times.visit_handshake_ms, true)?,
+            set_priority: rate("set_priority_ms", times.set_priority_ms, true)?,
+            edit_settings_base: rate("edit_settings_base_ms", times.edit_settings_base_ms, true)?,
+            edit_settings_per_field: rate(
+                "edit_settings_per_field_ms",
+                times.edit_settings_per_field_ms,
+                false,
+            )?,
+            edit_settings_max: rate("edit_settings_max_ms", times.edit_settings_max_ms, true)?,
+            build_target: rate("build_target_ms", times.build_target_ms, true)?,
+            queue_structure: rate("queue_structure_ms", times.queue_structure_ms, true)?,
+            switch_mandate: rate("switch_mandate_ms", times.switch_mandate_ms, false)?,
+            recycle: rate("recycle_ms", times.recycle_ms, false)?,
+            place_beacon_deploy: rate(
+                "place_beacon_deploy_ms",
+                times.place_beacon_deploy_ms,
+                true,
+            )?,
+        })
+    }
+}
+
+/// The rows queueing the Resonance Spire reads: its price and draw, which a
+/// table may state as zero.
+struct SpireRows {
+    cost_dollars: i64,
+    draw_kw: i64,
+}
+
+impl SpireRows {
+    /// # Errors
+    ///
+    /// [`RulesError`] for an absent Spire row or a time that is not positive.
+    fn read(row: Option<StructureRow>) -> Result<SpireRows, RulesError> {
+        let row = row.ok_or_else(|| {
+            RulesError(String::from(
+                "the rules text has no `structures.resonance_spire` row",
+            ))
+        })?;
         Ok(SpireRows {
             cost_dollars: i64::from(row.cost_dollars),
             draw_kw: i64::from(row.draw_kw),
-            queue_structure_ms: positive(
-                "queue_structure_ms",
-                i64::from(times.queue_structure_ms),
-            )?,
-            visit_handshake_ms: positive(
-                "visit_handshake_ms",
-                i64::from(times.visit_handshake_ms),
-            )?,
         })
     }
 }
@@ -392,7 +424,8 @@ impl Tuning {
             .build_drone
             .ok_or_else(|| missing("units.build_drone"))?;
         let scout = units.scout.ok_or_else(|| missing("units.scout"))?;
-        let spire = SpireRows::read(structures.resonance_spire, &times)?;
+        let spire = SpireRows::read(structures.resonance_spire)?;
+        let rates = Times::read(&times)?;
         // Zero (or, for a time, below it) where zero means nothing: refused.
         for (row, value) in [
             (
@@ -408,26 +441,6 @@ impl Tuning {
                 i64::from(generator_row.cost_dollars),
             ),
             ("economy.seam_voxels", i64::from(economy.seam_voxels)),
-            (
-                "interface_times.edit_settings_base_ms",
-                i64::from(times.edit_settings_base_ms),
-            ),
-            (
-                "interface_times.edit_settings_max_ms",
-                i64::from(times.edit_settings_max_ms),
-            ),
-            (
-                "interface_times.set_priority_ms",
-                i64::from(times.set_priority_ms),
-            ),
-            (
-                "interface_times.place_beacon_deploy_ms",
-                i64::from(times.place_beacon_deploy_ms),
-            ),
-            (
-                "interface_times.build_target_ms",
-                i64::from(times.build_target_ms),
-            ),
         ] {
             if value <= 0 {
                 return Err(missing(row));
@@ -450,6 +463,7 @@ impl Tuning {
             guard_cost_dollars,
             survey_cost_dollars,
             survey_draw_kw: survey_draw(scout.draw_kw)?,
+            guard_draw_kw: i64::from(scout.draw_kw),
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
             beacon_cost_dollars: i64::from(beacon_row.cost_dollars),
             generator_output_kw: power
@@ -459,15 +473,9 @@ impl Tuning {
                 .ore_yield_per_voxel_dollars
                 .ok_or_else(|| missing("economy.ore_yield_per_voxel_dollars"))?,
             seam_voxels: i64::from(economy.seam_voxels),
-            edit_settings_base_ms: i64::from(times.edit_settings_base_ms),
-            edit_settings_max_ms: i64::from(times.edit_settings_max_ms),
-            set_priority_ms: i64::from(times.set_priority_ms),
-            place_beacon_deploy_ms: i64::from(times.place_beacon_deploy_ms),
-            build_target_ms: i64::from(times.build_target_ms),
             spire_cost_dollars: spire.cost_dollars,
             spire_draw_kw: spire.draw_kw,
-            queue_structure_ms: spire.queue_structure_ms,
-            visit_handshake_ms: spire.visit_handshake_ms,
+            times: rates,
             threats,
         })
     }
@@ -534,7 +542,7 @@ mod tests {
                 "\"seam_voxels\": 0",
             ),
             (
-                "interface_times.edit_settings_base_ms",
+                "interface_times.edit_settings_base",
                 "\"edit_settings_base_ms\": 2000",
                 "\"edit_settings_base_ms\": 0",
             ),

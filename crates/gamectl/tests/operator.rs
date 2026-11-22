@@ -588,7 +588,9 @@ fn visit(
             // The tap probe's QUICK `verify_plan` rides its `resolve_refs`
             // (`crates/operator/src/candidates.rs`' `probe`); every other one
             // is the composition's FULL verify or a repair's.
-            verifies: count(methods, "verify_plan").saturating_sub(count(methods, "resolve_refs")),
+            verifies: count(methods, "verify_plan")
+                .checked_sub(count(methods, "resolve_refs"))
+                .expect("every tap probe's `resolve_refs` rides one QUICK `verify_plan`"),
             note,
             calls: u32::try_from(methods.len()).expect("counted"),
             safe_qualifies,
@@ -745,17 +747,15 @@ fn easy_passes_the_verifier_on_every_snapshot_of_the_corpus() {
         assert!(row.advisor_calls <= EASY_ADVISOR_CALL_BUDGET, "{row:#?}");
     }
     // What it chose, said so a reader of a red build can see it: on the
-    // determinism seed seat 0's starting vent is inside its route share, so
-    // in round one it places a Build beacon covering that vent, by name
-    // (S1's targeting: Easy emits names), and a seat with nothing it does not
-    // cover yet inside its share seals its safe playbook. The starting seam is
-    // covered by the core from the first tick and is the core's to work.
+    // determinism seed no seat holds a sighting in round one, so each seals
+    // a Survey post beside its core, weighed before the goals (spec section
+    // 14's trigger; S3's `opr3`, fix pass 1), by the starting seam's name.
     assert!(
-        rows.iter().any(|row| {
-            row.snapshot == "three-rounds/round-1"
-                && row.note.contains("covering the")
-                && row.note.contains("vent_")
-        }),
+        rows.iter()
+            .filter(|row| row.snapshot == "three-rounds/round-1")
+            .all(|row| row
+                .note
+                .contains("A Survey beacon beside the core, covering the scrap seam seam_")),
         "{rows:#?}"
     );
 }
@@ -794,25 +794,14 @@ fn the_safe_playbook_always_qualifies() {
 /// `(snapshot, seat)`: a named expectation, so a row that starts or stops
 /// raising says which seat, round and beacon moved, and the mechanism.
 ///
-/// On the committed rules nothing is dark and the draw never outruns the
-/// supply, so no row there is short. The power-short match's core is shed at
-/// the Push's first settle (1 kW of surplus against the starting force's
-/// 4 kW) and never revived, so from round 2 on its seats are short. Seat 0
-/// placed `b_01` in round 1, a Build beacon covering its starting vent, which
-/// is lit (a placed beacon adds no draw): in round 2's Lull it is the seat's
-/// one beacon at risk (decision 14: lit and next in the shed order, since a
-/// raise relights), within reach, so it is raised to HIGH; in round 3 it is
-/// HIGH already and nothing is raised.
-///
-/// Seat 1 does the same since lane `p3fix` (near pairs are priced at the
-/// served route): Easy's round-1 plan for it, costed on the exact prices,
-/// now places its own `b_01` (on the abstract prices it held no lit `b_01`
-/// in round 2); so in round 2 that `b_01` is its one beacon at risk,
-/// within reach, and is raised to HIGH, and in round 3 it is HIGH already.
-const ROWS_THAT_RAISE: &[(&str, u8)] = &[
-    ("three-rounds-power-short/round-2", 0),
-    ("three-rounds-power-short/round-2", 1),
-];
+/// None since S3's `opr3` fix pass 1. The power-short match's core is shed at
+/// the Push's first settle and never revived, and a raise needs a lit
+/// non-core beacon of the seat's: in round 1 neither seat of that match now
+/// places one (with the grid short, the Survey post's scouts do not fit the
+/// one kW budget, and Easy's exact pricing of the Build beacon's initial
+/// settings and the core visit's handshake puts its vent past the 42 s share
+/// of the corpus's 60 s segment), so no later round has a beacon to raise.
+const ROWS_THAT_RAISE: &[(&str, u8)] = &[];
 
 /// Decisions-log item 128 (S1's plan, decision 14; the register's S1-21),
 /// hosted and unforced, on every corpus row with no answer rewritten: power
@@ -924,26 +913,15 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 }
 
 /// The corpus rows on the committed rules whose seat's supply shows a
-/// Generator. At seed `0102...` every seat seals Hold & Build in round 1
-/// (`tests/golden/operator/seed-0102030405060708/expected.seat-0.jsonc`,
-/// `expected.seat-1.jsonc` and `expected.seat-2.jsonc`): a Build beacon on a
-/// lean vent with a Generator as its first target, `vent_52_335`,
-/// `vent_351_323` and `vent_171_51`, at 40 s, 40 s and 41 s of route from the
-/// core, each inside Easy's 42 s share (70 % of the 60 s segment). Each fits
-/// since the core's `deepen_core` step is paid out of the hold rather than out
-/// of the visit goals' share, and each hold, with nothing left for it, is
-/// taken out. Seats 0 and 2 show the Generator on their vents by round 3, and
-/// seat 1 from round 2.
-///
-/// Seat 1's Hold & Build is lane `p3fix`'s (near pairs are priced at the
-/// served route): on the abstract prices its route did not fit the share and
-/// the seat sealed the safe playbook in every round.
-const GENERATOR_ROWS: &[(&str, u8)] = &[
-    ("three-rounds/round-2", 1),
-    ("three-rounds/round-3", 0),
-    ("three-rounds/round-3", 1),
-    ("three-rounds/round-3", 2),
-];
+/// Generator. None since S3's `opr3` fix pass 1: the corpus plays 60 s
+/// segments, whose 70 % share is 42 s, and Easy now prices each step as the
+/// verifier does (the core visit's 1.5 s handshake and the Build beacon's
+/// initial-settings row, 3 s, which it used to leave out), so the starting
+/// vents at 40 s and 41 s of route no longer fit the share beside the core's
+/// step; and with no fresh sighting held, round 1 places a Survey post
+/// before the goals. The scenario's own Generator, on its 80 s segment, is
+/// `the_scenario_generator_raises_supply_by_exactly_the_lean_vent`'s.
+const GENERATOR_ROWS: &[(&str, u8)] = &[];
 
 /// The rules text's `power.core_surplus_kw` and the lean vent's
 /// `power.generator_output_kw`, kW.
@@ -1523,10 +1501,11 @@ fn a_suggested_raid_qualifies_through_the_real_verifier() {
     }
 }
 
-/// Probation's own seed (decisions-log items 154 (1) and 156 (1)): its
-/// second vent lies beyond the first sphere, which no `covering` site
-/// reaches, so Easy reaches toward it with a stepping stone (S3's `opr3`;
-/// the register's S5-04), in its own seal, verified by the real gateway.
+/// Probation's own seed (decisions-log items 154 (1) and 156 (1)): its rich
+/// seams lie beyond the first sphere, which no `covering` site reaches, so
+/// Easy reaches toward them with stepping stones (S3's `opr3`; the register's
+/// S5-04), each worth the Mine it serves (fix pass 1, item 2), in its own
+/// seal, verified by the real gateway.
 #[test]
 fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
     let rules = rules_json();
@@ -1575,72 +1554,210 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
             surface.open_lull().expect("the next Lull");
         }
     }
-    let stones: Vec<(&str, u8)> = rows
+    // (round, seat, the far feature) of every stone, read from the seal's
+    // note, and every placement covering a feature a stone walked toward.
+    let toward = |row: &Row| {
+        row.note
+            .split("A stepping-stone beacon toward the ")
+            .nth(1)
+            .and_then(|rest| rest.split(',').next())
+            .and_then(|words| words.split(' ').next_back())
+            .map(str::to_owned)
+    };
+    let stones: Vec<(String, u8, String)> = rows
         .iter()
-        .filter(|row| row.seal == Seal::Own && row.note.contains("A stepping-stone beacon toward"))
-        .map(|row| (row.snapshot.as_str(), row.seat))
+        .filter(|row| row.seal == Seal::Own)
+        .filter_map(|row| toward(row).map(|feature| (row.snapshot.clone(), row.seat, feature)))
         .collect();
-    eprintln!("Probation's seed, the rows that place a stone: {stones:?}");
     for row in &rows {
         eprintln!("{} seat {}: {}", row.snapshot, row.seat, row.note);
     }
-    // A named expectation: in round 1 each seat covers its starting vent; in
-    // round 2 both reach toward a vent beyond their spheres, seat 0 toward
-    // `vent_232_96`, the second vent `scenarios/s3/toward-stepping-stone`
-    // names, which it covers from the stone in round 3; seat 1 reaches again
-    // in round 3. A change says which seat and round moved, and why.
-    assert_eq!(
-        stones,
-        [
-            ("probation/round-2", 0),
-            ("probation/round-2", 1),
-            ("probation/round-3", 1)
-        ],
-        "{rows:#?}"
-    );
-    assert!(
-        rows.iter().any(|row| row.snapshot == "probation/round-3"
-            && row.seat == 0
-            && row
-                .note
-                .contains("A Build beacon covering the rich heat vent vent_232_96")),
-        "seat 0 covers the far vent from its stone: {rows:#?}"
-    );
+    eprintln!("Probation's seed, the stones (round, seat, toward): {stones:?}");
+    // A named expectation, each round of each seat's stone chain: seat 0
+    // walks toward `seam_190_124` two rounds running; seat 1 starts toward
+    // `seam_163_202` and turns toward `seam_191_215` once its stone stands,
+    // because from the new sphere that seam ranks first by the scoring (both
+    // are rich seams, and the turn is the nearer). Neither chain reaches its
+    // seam within the three rounds: each stone advances one sphere and round
+    // 1 places the Survey post, so the goal a stone serves comes in a later
+    // round than this match plays.
+    let wanted: Vec<(String, u8, String)> = [
+        ("probation/round-2", 0, "seam_190_124"),
+        ("probation/round-2", 1, "seam_163_202"),
+        ("probation/round-3", 0, "seam_190_124"),
+        ("probation/round-3", 1, "seam_191_215"),
+    ]
+    .into_iter()
+    .map(|(round, seat, feature)| (round.to_owned(), seat, feature.to_owned()))
+    .collect();
+    assert_eq!(stones, wanted, "{rows:#?}");
     assert!(
         rows.iter().all(|row| row.seal != Seal::NotEasy),
         "every seal is Easy's own, the verifier's accepted: {rows:#?}"
     );
 }
 
-/// Spec section 14's Survey post through the real gateway (S3's plan,
-/// decision 3): on Probation's seed, with every seat Easy and no seat holding
-/// a sighting of the other's beacons, Easy seals Survey posts beside its core,
-/// and a post sealed before the last round has its scouts report
-/// (`area_surveyed` or `enemy_beacon_found`) by the end of the next Push.
-///
-/// Measured when this was written: seat 1's post of round 2 lands 22 s into
-/// the Push and fields its two scouts by 25 s, which find nothing in round 2's
-/// 180 s over the whole map and find seat 0's beacons 120 s into round 3. The
-/// spec's "refresh those sightings before the next Lull" therefore holds a
-/// round late at this probe area (the brief's TODO on the box; reported).
-#[test]
-fn a_survey_post_easy_places_has_its_scouts_survey_in_that_push() {
+/// One hosted match on the committed seeds for the Survey post's tests:
+/// every seat Easy, the rules table's own ladder, `rounds` rounds. Per seat,
+/// the rounds whose seal places a Survey post, the round of its first
+/// `enemy_beacon_found`.
+struct Surveyed {
+    posts: Vec<(u32, u8)>,
+    first_found: Vec<(u8, u32)>,
+}
+
+fn survey_match(seed: u64, seats: u32, rounds: u32) -> Surveyed {
     use pharmakos_gateway::fog::Audience;
     let rules = rules_json();
     let host = Host::open_from(
         &rules,
-        PROBATION_SEED,
-        2,
+        seed,
+        seats,
         &Settings {
             segment_lengths_ms: Vec::new(),
-            round_limit: 3,
+            round_limit: rounds,
         },
         Some(root().join(LIBRARY_PATH)),
     )
     .expect("a match");
     let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
     let mut surface = Surface::new(
-        &match_id("probation-survey"),
+        &match_id(&format!("survey-{seed:x}-{seats}-{rounds}")),
+        seed,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(seats),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    let mut easy = all_built_in(&mut surface, seats, &rules);
+    let mut out = Surveyed {
+        posts: Vec::new(),
+        first_found: Vec::new(),
+    };
+    for round in 1..=rounds {
+        for row in visit(
+            &format!("survey-{seed:x}/round-{round}"),
+            &mut surface,
+            seats,
+            &rules,
+            &mut easy,
+        ) {
+            if row.seal == Seal::Own && row.note.contains("A Survey beacon beside the core") {
+                out.posts.push((round, row.seat));
+            }
+        }
+        assert!(surface.begin_push().expect("the Push opens"));
+        let mut read = 0_usize;
+        while let Some(report) = surface.step().expect("a tick") {
+            let events = surface.feed().events();
+            if events.len() < read {
+                read = 0;
+            }
+            for event in events.get(read..).unwrap_or_default() {
+                if event.kind.to_string() != "enemy_beacon_found" {
+                    continue;
+                }
+                let owner = match event.audience {
+                    Audience::Private(seat) => Some(seat),
+                    Audience::World { owner, .. } => owner,
+                    Audience::Public => None,
+                };
+                if let Some(seat) = owner
+                    && !out.first_found.iter().any(|(held, _)| *held == seat.raw())
+                {
+                    out.first_found.push((seat.raw(), round));
+                }
+            }
+            read = events.len();
+            if report.segment_ended {
+                break;
+            }
+        }
+        surface.end_recap().expect("the recap closes");
+        if round < rounds {
+            surface.open_lull().expect("the next Lull");
+        }
+    }
+    out
+}
+
+/// The committed seeds the Survey post is measured on, as `(seed, seats)`.
+const SURVEY_MATCHES: [(u64, u32); 5] = [
+    (PROBATION_SEED, 2),
+    (SEED, 2),
+    (SEED, 3),
+    (SCENARIO_SEED, 2),
+    (SCENARIO_SEED, 3),
+];
+
+/// `(round-1 Survey posts, of them finding an enemy beacon by the end of
+/// round 2's Push)` on [`SURVEY_MATCHES`].
+const SURVEY_ROUND_ONE: (usize, usize) = (12, 7);
+
+/// Spec section 14's Survey post through the real gateway (S3's plan,
+/// decision 3; fix pass 1, item 7), weighed before the goals and looking over
+/// the half of the ground away from the seat's core. On the committed seeds,
+/// every seat Easy, over two rounds: how many seats seal a post in round 1,
+/// and how many of those have their scouts find an enemy beacon by the end
+/// of round 2's Push. A named expectation with its counts; a change says
+/// which seat and seed moved.
+///
+/// The owner's reading of the spec's "refresh those sightings before the next
+/// Lull" (2026-11-22, "Refresh only (Recommended)"): it covers sightings
+/// already held, and a first discovery may take longer, so this test pins
+/// what a first discovery takes and does not require it inside one Push.
+#[test]
+fn survey_posts_go_up_in_round_one_and_find_the_enemy_by_round_two() {
+    let mut posted = 0_usize;
+    let mut found = 0_usize;
+    for (seed, seats) in SURVEY_MATCHES {
+        let surveyed = survey_match(seed, seats, 2);
+        eprintln!(
+            "seed {seed:#x}/{seats}: posts {:?}; first enemy found (seat, round) {:?}",
+            surveyed.posts, surveyed.first_found
+        );
+        for &(_, seat) in surveyed.posts.iter().filter(|(round, _)| *round == 1) {
+            posted = posted.checked_add(1).expect("a count");
+            if surveyed.first_found.iter().any(|&(held, _)| held == seat) {
+                found = found.checked_add(1).expect("a count");
+            }
+        }
+    }
+    eprintln!("round-1 Survey posts {posted}, finding the enemy by round 2: {found}");
+    assert_eq!(
+        (posted, found),
+        SURVEY_ROUND_ONE,
+        "the named expectation moved"
+    );
+}
+
+/// The Resonance Spire through the real verifier and the sim (fix pass 1,
+/// item 4). No hosted seat of Easy's earns the licence within the suite's
+/// rounds, so seat 0 earns it as `scenarios/s3/toward-stepping-stone` does:
+/// on Probation's seed it seals that scenario's playbook in rounds 1 and 2
+/// (a beacon on its start vent, then a stone toward the second vent and a
+/// beacon on it), and round 2's settlement awards the licence. From round 3
+/// Easy plays seat 0 through the seat's own token: its round-3 seal queues
+/// the Spire at the core and the real verifier accepts it, the sim queues the
+/// structure exactly once in that Push, and round 4's seal queues none.
+fn spire_match(rules: &str, spire_draw_kw: i64) -> SpireMatch {
+    let rules = rules.to_owned();
+    let host = Host::open_from(
+        &rules,
+        PROBATION_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 4,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut surface = Surface::new(
+        &match_id("hosted-spire"),
         PROBATION_SEED,
         table,
         FogPolicy::fogged(),
@@ -1649,66 +1766,172 @@ fn a_survey_post_easy_places_has_its_scouts_survey_in_that_push() {
     .expect("a surface");
     surface.attach(host).expect("attached");
     surface.open_lull().expect("the opening Lull");
-    let mut easy = all_built_in(&mut surface, 2, &rules);
-    // (round, seat) for each Survey post sealed, and for each survey event.
-    let mut posts: Vec<(u32, u8)> = Vec::new();
-    let mut surveyed: Vec<(u32, u8)> = Vec::new();
-    for round in 1..=3_u32 {
-        for row in visit(
-            &format!("probation-survey/round-{round}"),
-            &mut surface,
-            2,
-            &rules,
-            &mut easy,
-        ) {
-            if row.seal == Seal::Own && row.note.contains("A Survey beacon beside the core") {
-                posts.push((round, row.seat));
-            }
+    let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
+    let mut seats = InProcessSeats::open(&mut surface, &seat_ids(2), Some(0), &mut factory)
+        .expect("in-process seats");
+    let token = in_process_token(&mut surface, 0);
+    let stone_playbook =
+        std::fs::read_to_string(root().join("scenarios/s3/toward-stepping-stone.playbook.jsonc"))
+            .expect("the scenario's playbook");
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    let mut queued: Vec<usize> = Vec::new();
+    let mut headrooms: Vec<i64> = Vec::new();
+    let mut sealed_texts: Vec<String> = Vec::new();
+    for round in 1..=4_u32 {
+        seats.plan(&mut surface);
+        if round <= 2 {
+            let submitted = result(
+                &call(
+                    &mut surface,
+                    &token,
+                    "submit_plan",
+                    Json::Object(vec![(
+                        String::from("playbook_jsonc"),
+                        Json::String(stone_playbook.clone()),
+                    )]),
+                ),
+                "submit_plan",
+            );
+            assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
+        } else {
+            let forecast = result(
+                &call(&mut surface, &token, "get_economy_forecast", params("{}")),
+                "get_economy_forecast",
+            );
+            headrooms.push(number(&forecast, "headroom_kw_now"));
+            let played = {
+                let mut bridged =
+                    |method: &str, params: Json| call(&mut surface, &token, method, params);
+                easy.play(0, &mut bridged)
+            };
+            assert_eq!(
+                played.submitted,
+                pharmakos_operator::Submitted::Own,
+                "round {round}: {}",
+                played.why
+            );
+            sealed_texts.push(played.playbook_jsonc.unwrap_or_default());
         }
         assert!(surface.begin_push().expect("the Push opens"));
-        let mut seen = 0_usize;
         while let Some(report) = surface.step().expect("a tick") {
-            let events = surface.feed().events();
-            if events.len() < seen {
-                seen = 0;
-            }
-            for event in events.get(seen..).unwrap_or_default() {
-                let kind = event.kind.to_string();
-                let owner = match event.audience {
-                    Audience::Private(seat) => Some(seat),
-                    Audience::World { owner, .. } => owner,
-                    Audience::Public => None,
-                };
-                if kind != "area_surveyed" && kind != "enemy_beacon_found" {
-                    continue;
-                }
-                if let Some(seat) = owner
-                    && !surveyed.contains(&(round, seat.raw()))
-                {
-                    surveyed.push((round, seat.raw()));
-                }
-            }
-            seen = events.len();
             if report.segment_ended {
                 break;
             }
         }
+        // Seat 0's Resonance Spires, standing or going up, as the sim's table
+        // holds them after the Push.
+        let spires =
+            pharmakos_sim::spire::facts_of(surface.host().expect("hosted").world().structures())
+                .filter(|facts| {
+                    !facts.free
+                        && facts.alive
+                        && facts.seat == 0
+                        && facts.kind == pharmakos_sim::tables::StructureKind::ResonanceSpire.id()
+                })
+                .count();
+        queued.push(spires);
         surface.end_recap().expect("the recap closes");
-        if round < 3 {
+        if round < 4 {
             surface.open_lull().expect("the next Lull");
         }
     }
-    eprintln!("Survey posts sealed: {posts:?}; survey events: {surveyed:?}");
-    assert!(!posts.is_empty(), "Easy surveys on Probation's seed");
-    for &(round, seat) in posts.iter().filter(|(round, _)| *round < 3) {
+    SpireMatch {
+        sealed_texts,
+        headrooms,
+        queued,
+        spire_draw_kw,
+    }
+}
+
+/// What [`spire_match`] saw: Easy's seals for seat 0 in rounds 3 and 4, the
+/// headroom the forecast showed before each, and seat 0's Spires after each
+/// Push.
+struct SpireMatch {
+    sealed_texts: Vec<String>,
+    headrooms: Vec<i64>,
+    queued: Vec<usize>,
+    spire_draw_kw: i64,
+}
+
+impl SpireMatch {
+    /// The new draw a seal adds: the Spire's, a Survey post's two scouts, a
+    /// guard's picket.
+    fn drawn(&self, seal: &str) -> i64 {
+        i64::from(seal.contains("queue_spire")) * self.spire_draw_kw
+            + i64::from(seal.contains("survey_post")) * 2
+            + i64::from(seal.contains("place_guard"))
+    }
+}
+
+#[test]
+fn easy_queues_the_spire_once_through_the_real_verifier_and_the_sim() {
+    let SpireMatch {
+        sealed_texts,
+        headrooms,
+        queued,
+        ..
+    } = spire_match(&rules_json(), 3);
+    let [third, fourth] = sealed_texts.as_slice() else {
+        panic!("Easy sealed rounds 3 and 4: {sealed_texts:#?}");
+    };
+    // One kW budget (fix pass 1, item 1): what the seal adds -- the Spire's
+    // 3 kW, a Survey post's two scouts, a guard's picket -- is never more than
+    // the headroom the forecast showed, and the real verifier accepted it.
+    for (seal, headroom) in sealed_texts.iter().zip(&headrooms) {
+        eprintln!(
+            "headroom {headroom} kW: Spire {}, Survey post {}, guard {}",
+            seal.contains("queue_spire"),
+            seal.contains("survey_post"),
+            seal.contains("place_guard")
+        );
+        let drawn = i64::from(seal.contains("queue_spire")) * 3
+            + i64::from(seal.contains("survey_post")) * 2
+            + i64::from(seal.contains("place_guard"));
         assert!(
-            surveyed.contains(&(round, seat)) || surveyed.contains(&(round + 1, seat)),
-            "the post sealed in round {round} by seat {seat} reported by the next Push:              {surveyed:?}"
+            drawn <= *headroom,
+            "{drawn} kW of new draw against {headroom} kW: {seal}"
         );
     }
+    assert!(
+        third.contains("queue_spire"),
+        "round 3 queues the Spire: {third}"
+    );
+    assert!(
+        !fourth.contains("queue_spire"),
+        "round 4 queues none: {fourth}"
+    );
     assert_eq!(
-        posts,
-        [(2, 1), (3, 0)],
-        "a named expectation: which seat surveyed when"
+        queued,
+        [0, 0, 1, 1],
+        "seat 0's Spires after each Push: none, then the one queued in round 3, and no second"
+    );
+}
+
+/// The kW budget at its margin through the real verifier (fix pass 1, item
+/// 1): the same match on a rules text whose Spire draws all of round 3's
+/// headroom but 1 kW. Easy still queues it, nothing else it adds draws past
+/// the 1 kW left, and the real verifier accepts the seal (no E0601). The
+/// scripted `one_kw_budget_never_composes_more_draw_than_the_headroom`
+/// sweeps every headroom with the Spire, the Survey post and the guard.
+#[test]
+fn a_spire_at_the_margin_of_the_headroom_verifies_clean_through_the_real_verifier() {
+    let base = rules_json();
+    let probe = spire_match(&base, 3);
+    let headroom = *probe.headrooms.first().expect("round 3's headroom");
+    let draw = headroom.checked_sub(1).expect("a draw");
+    let row = "\"resonance_spire\": {\n      \"cost_dollars\": 120,\n      \"hp\": 500,\n      \"draw_kw\": 3,";
+    let tight = base.replace(
+        row,
+        &row.replace("\"draw_kw\": 3,", &format!("\"draw_kw\": {draw},")),
+    );
+    assert_ne!(tight, base, "the rules text carries the Spire's row");
+    let tight_match = spire_match(&tight, draw);
+    let third = tight_match.sealed_texts.first().expect("round 3's seal");
+    let tight_headroom = *tight_match.headrooms.first().expect("round 3's headroom");
+    assert!(third.contains("queue_spire"), "the Spire fits: {third}");
+    assert!(
+        tight_match.drawn(third) <= tight_headroom,
+        "{} kW against {tight_headroom} kW",
+        tight_match.drawn(third)
     );
 }
