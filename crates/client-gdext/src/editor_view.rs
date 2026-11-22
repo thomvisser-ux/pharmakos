@@ -16,8 +16,8 @@ use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::json;
 
 use crate::editor::{
-    Check, Editor, ReadFailed, Route, Row, RuleEditRefusal, Selector, SizeMeter, Target, Unchecked,
-    rows_of,
+    Check, Editor, FieldAsk, ReadFailed, Route, Row, RuleEditRefusal, Selector, SizeMeter, Target,
+    Unchecked, rows_of,
 };
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
@@ -248,8 +248,9 @@ fn dormant_dictionary(editor: &Editor) -> VarDictionary {
 /// The rule list's keys of the editor's state (S3's `ed3b`): `rule_list`
 /// ([`rule_list_dictionary`]), `rules_editable`, `rules_blocked` (why it takes no edit, by name; "" when it takes one), `rules_rendering` (the rendering id an editor names back; -1 before one), `picking` (the chip a pick is on for, -1 for
 /// none), `conflicts` (each `{earlier, later, sentence}`, rule indices) and `rule_refusal`
-/// (empty, or `{rule, detail}`: the gateway's refusal of the last rule-list edit and the rule
-/// it is shown on, -1 for none).
+/// (empty, or `{rule, key, detail}`: the refusal of the last rule-list edit, the gateway's or
+/// this client's, the string table's key for its words, and the rule it is shown on, -1 for
+/// none) and `field` (what became of the last value a value field sent).
 fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
     let mut put = |key: &str, value: Variant| state.set(&key.to_variant(), &value);
     put(
@@ -305,9 +306,22 @@ fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
     if let Some(refused) = editor.rule_refusal() {
         let rule = editor.rule_list().rule_holding(&refused.pointer);
         refusal.set(&"rule".to_variant(), &index_or_none(rule));
+        refusal.set(&"key".to_variant(), &refused.key.to_variant());
         refusal.set(&"detail".to_variant(), &refused.detail.to_variant());
     }
     put("rule_refusal", refusal.to_variant());
+    // What became of the last value a value field sent, for its popup: `state` (`nothing`,
+    // `waiting`, `refused`, `landed`), and for a refusal its words' `key` and `detail`.
+    let mut field = VarDictionary::new();
+    let ask = editor.field_ask();
+    field.set(&"state".to_variant(), &ask.name().to_variant());
+    let (key, detail) = match ask {
+        FieldAsk::Refused { key, detail } => (key.as_str(), detail.as_str()),
+        FieldAsk::Nothing | FieldAsk::Waiting | FieldAsk::Landed => ("", ""),
+    };
+    field.set(&"key".to_variant(), &key.to_variant());
+    field.set(&"detail".to_variant(), &detail.to_variant());
+    put("field", field.to_variant());
 }
 
 /// The rule list as a dictionary (S3's `ed3b`): `lines`, one per line of the prose, each

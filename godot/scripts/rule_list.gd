@@ -11,8 +11,8 @@
 # plain text and chips, at the spans `render_plan` placed (crates/client-gdext/src/rule_list.rs).
 # This script draws the runs and forwards the clicks:
 #   * a CHIP is drawn as a link in its sentence; a click on it asks the editor for its editor,
-#     which the chip's shape names (a number field within the bounds sent, an enum's values as
-#     sent, a pick on the map, or, for a step label or a rule id, the names the playbook itself
+#     which the chip's shape names (the value field with the bounds sent said beside it, an enum's values
+#     as sent, a pick on the map, or, for a step label or a rule id, the names the playbook itself
 #     holds, in file order). A chip the rule list does not edit (a duration, which waits on a
 #     display unit from the wire) is drawn dim, and a click says why;
 #   * a rule's or a step's sentence row can be DRAGGED onto another of the same list: the drop
@@ -20,8 +20,9 @@
 #   * the CONFLICT CONNECTOR joins the two rules a W0702 row names, a line in the list's left
 #     margin from the earlier rule to the later one, with the verifier's sentence under the
 #     later rule;
-#   * the gateway's refusal of a rule-list edit is shown under the rule it was of, in the
-#     gateway's words.
+#   * a refusal of a rule-list edit is shown under the rule it was of: the gateway's in its
+#     words, this client's (a value field's text that is no whole number, a value it already
+#     holds) in the status line's (S3's `fixp`).
 # The controls take a click only while the bridge says the rule list describes the text on
 # screen, no edit is on its way and the door is open (`rules_editable`), as Fix buttons do.
 #
@@ -81,7 +82,8 @@ static func fill(container: Container, list: Dictionary, revision: int, editable
 		if rule >= 0 and said.has(rule):
 			container.add_child(_note(Strings.text("rule_conflict", {"sentence": said[rule]})))
 		if rule >= 0 and int(refusal.get("rule", -1)) == rule:
-			container.add_child(_note(Strings.text("rule_refused", {"detail": refusal.get("detail", "")})))
+			# The gateway's refusal (`rule_refused`) or this client's, by the key the bridge names.
+			container.add_child(_note(Strings.text(String(refusal.get("key", "rule_refused")), {"detail": refusal.get("detail", "")})))
 	container.queue_redraw()
 	return true
 

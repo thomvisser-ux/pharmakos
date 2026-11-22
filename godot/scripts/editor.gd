@@ -49,8 +49,8 @@
 #     lists - label, raw value, the operator's mark and its why. Use puts the gateway's
 #     playbook into the editor byte for byte, as one edit Undo takes back;
 #   * the RULE LIST (scripts/rule_list.gd): `render_plan`'s lines for the text on screen;
-#     from S3's `ed3b`, with its chips (each edit one `replace`: a number field within the
-#     bounds sent, an enum's values as sent, a pick on the map), drag reordering (one `move`)
+#     from S3's `ed3b`, with its chips (each edit one `replace`: the value field, with the gateway's
+#     bounds said beside it, an enum's values as sent, a pick on the map), drag reordering (one `move`)
 #     and W0702's conflict connector, every patch composed by the bridge from the click;
 #   * the own $/kW METER: `get_economy_forecast`'s four numbers, as they came, through
 #     strings.gd's frame. Headroom is the gateway's, never supply minus draw. When it is
@@ -140,6 +140,7 @@ const Rows := preload("res://scripts/rows.gd")
 const Wizard := preload("res://scripts/wizard.gd")
 const RuleList := preload("res://scripts/rule_list.gd")
 const ConditionPicker := preload("res://scripts/condition_picker.gd")
+const ValueField := preload("res://scripts/value_field.gd")
 
 ## How close, in screen pixels, a click must land to a beacon to pick it.
 ## PLACEHOLDER: the pick distance — OWNER, at S6.
@@ -162,9 +163,6 @@ const SIZE_STALE_ALPHA := 0.35
 ## Still colours behind the words, never a flash: there is no motion, and no clock. Part of the
 ## panel's look, whose marker heads this file.
 const CHECKING_LOOK := Color(0.55, 0.6, 0.7, 0.22)
-## How far the number field's bounds open before the pair a chip sent is set: past every value
-## the field can hold exactly (the bridge keeps chips outside `i32` read-only).
-const FIELD_OPEN := 1.0e18
 const ANSWERED_LOOK := Color(0.95, 0.78, 0.25, 0.38)
 ## The unticked box: its side in pixels, its outline's width, and its colour, shown or disabled.
 ## PLACEHOLDER: the checkbox's box — OWNER, at S6's art pass.
@@ -267,12 +265,15 @@ var _rule_chips: Array = []
 ## it takes no edit now (`rules_blocked`, "" when it takes one).
 var _rules_rendering := -1
 var _rules_blocked := ""
-## A number chip's editor: a field within the bounds sent, and the chip it is for, named as
-## the bridge checks it: its index, the rendering and its pointer (M1).
+## A number's editor (a chip's, or a Visit & change setting's): the one value field
+## (scripts/value_field.gd), the gateway's bounds as sent in its note, and the chip it is for,
+## named as the bridge checks it: its index, the rendering and its pointer (M1). Its last line
+## says what became of the value it sent, the bridge's `field`.
 var _number_popup: PopupPanel
 var _number_heading: Label
 var _number_note: Label
-var _number_field: SpinBox
+var _number_said: Label
+var _number_field: ValueField
 var _number_chip := {}
 ## An enum chip's editor: its values as sent, and the chip it is for, named the same way.
 var _choice_menu: PopupMenu
@@ -864,6 +865,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_templates(state.get("templates", []))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
 	_draw_rules(state, unchecked_text(state, "prose"))
+	_draw_number_field(state.get("field", {}))
 	_fill_visit_menu(state)
 	_draw_this_round(String(state.get("this_round", "")))
 	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
@@ -1112,7 +1114,9 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 		_rules_status.text = ""
 	var list: Dictionary = state.get("rule_list", {})
 	_rule_chips = list.get("chips", [])
-	_rules_rendering = int(state.get("rules_rendering", -1))
+	var rendered := int(state.get("rules_rendering", -1))
+	var rendering_moved := rendered != _rules_rendering
+	_rules_rendering = rendered
 	_rules_blocked = String(state.get("rules_blocked", ""))
 	_step_labels = state.get("step_labels", PackedStringArray())
 	_rule_ids = state.get("rule_ids", PackedStringArray())
@@ -1122,17 +1126,21 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 	_picker_again.visible = String(_vocabulary.get("failed", "")) != ""
 	_rule_slots = list.get("slots", [])
 	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"))
-	# An editor opened on the list drawn before names chips that may not be there any more
-	# (M1): it closes with that list, and the bridge would refuse its edit anyway.
-	if redrawn:
-		_number_popup.hide()
+	# An editor opened on the rendering drawn before names chips that may not be there any more
+	# (M1): it closes with that rendering, and the bridge would refuse its edit anyway. A redraw
+	# of the same rendering (an edit on its way, a refusal on a rule) keeps it, so its popup can
+	# say what became of the value it sent (S3's `fixp`). The Visit & change field names no
+	# rendering, and closes only on its own answer.
+	if redrawn and rendering_moved:
+		if _number_setting.is_empty():
+			_number_popup.hide()
 		_choice_menu.hide()
 		_name_menu.hide()
 		_picker_popup.hide()
 
 
-## A click on rule-list chip `index` opens its editor, by the shape the gateway sent: a number
-## field within the bounds sent, the enum's values as sent, or a pick on the map; a chip the
+## A click on rule-list chip `index` opens its editor, by the shape the gateway sent: the value
+## field, with the gateway's bounds said beside it, the enum's values as sent, or a pick on the map; a chip the
 ## rule list does not edit says why. The edit itself is the bridge's one JSON Patch `replace`.
 func _on_rule_chip(index: int) -> void:
 	# No editor opens while the list takes no edit (M1): the bridge's reason is said instead.
@@ -1278,7 +1286,7 @@ func _visit_submenu(title: String) -> PopupMenu:
 
 
 ## One setting's row: an enum's values as sent in a submenu of their own, a number opening the
-## number field within the bounds sent, a value not edited here greyed with its reason.
+## value field, with the gateway's bounds said beside it, a value not edited here greyed with its reason.
 func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 	var title := Strings.text("menu_setting", {"title": setting.get("title", ""), "value": setting.get("value_json", "")})
 	match String(setting.get("editor", "")):
@@ -1329,49 +1337,65 @@ func _entry_rows(menu: PopupMenu, entries: Array, row: String) -> void:
 	menu.id_pressed.connect(func(which: int) -> void: bridge.editor_visit_row(_visit_beacon, row, which))
 
 
-## The number field for the chip `named`: the bounds the gateway sent, none where it set none,
-## and the unit beside it as sent. The value is shown as the file holds it, never clamped into
-## range (L1): a value outside the bounds sent opens the field past them, and the note says so
-## with the gateway's two numbers (`outside` is the bridge's reading). The one field serves every
-## chip, and Godot 4.7.2's `Range` keeps its maximum at least its minimum on every set (measured:
-## after 50..100, setting 0..10 maximum-first leaves 0..50), so both bounds are first opened
-## fully and only then set to the pair sent, which no earlier pair can cut (`set_bounds`).
+## The value field for the chip `named` (or, with `named` empty, the Visit & change setting
+## `_number_setting` names): the value as the file holds it, its `value_json`, never clamped
+## (L1), the unit beside it as sent, and the gateway's bounds in the note as sent, none where it
+## set none. A value outside them is said with the gateway's numbers (`outside` is the bridge's
+## reading). The field applies no bound: a value past one goes to the gateway, whose answer is
+## drawn. Each open releases the field's focus, so the first click selects the old value.
 func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	_number_chip = named
 	if not named.is_empty():
 		_number_setting = {}
+	bridge.editor_field_opened()
 	var outside: bool = chip.get("outside", false)
-	set_bounds(_number_field, chip)
-	_number_field.allow_lesser = outside or not chip.get("has_min", false)
-	_number_field.allow_greater = outside or not chip.get("has_max", false)
-	_number_field.value = chip.get("now", 0)
-	_number_field.suffix = String(chip.get("unit", ""))
+	var bounds := {"now": chip.get("value_json", ""), "min": chip.get("min", "-") if chip.get("has_min", false) else "-", "max": chip.get("max", "-") if chip.get("has_max", false) else "-"}
 	_number_heading.text = Strings.text("rule_number_heading", {"text": chip.get("text", "")})
-	_number_note.visible = outside
-	_number_note.text = Strings.text("rule_number_outside", {"now": chip.get("now", 0), "min": chip.get("min", "-"), "max": chip.get("max", "-")}) if outside else ""
+	var bounded: bool = chip.get("has_min", false) or chip.get("has_max", false)
+	_number_note.visible = outside or bounded
+	if outside:
+		_number_note.text = Strings.text("rule_number_outside", bounds)
+	elif bounded:
+		_number_note.text = Strings.text("rule_number_bounds", bounds)
+	else:
+		_number_note.text = ""
+	_number_said.text = ""
+	_number_said.visible = false
+	_number_field.open(String(chip.get("value_json", "")), String(chip.get("unit", "")), String(chip.get("text", "")))
 	_number_popup.position = Vector2i(get_viewport().get_mouse_position())
 	_number_popup.popup()
 
 
-## Sets `field`'s bounds to the pair `chip` sent, whatever it held before: both bounds opened
-## fully first, then the maximum and the minimum sent. A bound the gateway did not send stays
-## open (`FIELD_OPEN`).
-static func set_bounds(field: Range, chip: Dictionary) -> void:
-	field.min_value = -FIELD_OPEN
-	field.max_value = FIELD_OPEN
-	if chip.get("has_max", false):
-		field.max_value = chip.get("max")
-	if chip.get("has_min", false):
-		field.min_value = chip.get("min")
-
-
-func _on_number_send() -> void:
-	_number_popup.hide()
+## The value field sent `text`, exactly as typed: the bridge reads it and composes the edit, or
+## refuses it by its reason. The popup stays open and says what became of it
+## (`_draw_number_field`), closing once the edit lands.
+func _on_number_send(text: String) -> void:
 	if not _number_setting.is_empty():
-		bridge.editor_change_setting_number(String(_number_setting.get("beacon", "")), int(_number_setting.get("index", -1)), String(_number_setting.get("pointer", "")), int(_number_field.value))
-		_number_setting = {}
+		bridge.editor_change_setting_number_text(String(_number_setting.get("beacon", "")), int(_number_setting.get("index", -1)), String(_number_setting.get("pointer", "")), text)
+	else:
+		bridge.editor_set_number_text(int(_number_chip.get("index", -1)), int(_number_chip.get("revision", -1)), String(_number_chip.get("pointer", "")), text)
+	_draw_number_field(bridge.editor_state().get("field", {}))
+
+
+## The open value field's last line, from the bridge's `field`: "Sending..." while its edit is on
+## its way, the refusal in its own words (this client's or the gateway's), and closed once the edit
+## landed. A refusal is drawn where the player is looking, and on the chip's rule after it closes.
+func _draw_number_field(field: Dictionary) -> void:
+	if not _number_popup.visible:
 		return
-	bridge.editor_set_number(int(_number_chip.get("index", -1)), int(_number_chip.get("revision", -1)), String(_number_chip.get("pointer", "")), int(_number_field.value))
+	match String(field.get("state", "nothing")):
+		"waiting":
+			_number_said.text = Strings.text("rule_number_waiting")
+		"refused":
+			_number_said.text = Strings.text(String(field.get("key", "")), {"detail": field.get("detail", "")})
+		"landed":
+			_number_popup.hide()
+			_number_setting = {}
+			return
+		_:
+			_number_said.text = ""
+	_number_said.visible = _number_said.text != ""
+	_number_said.accessibility_name = _number_said.text
 
 
 func _on_choice(which: int) -> void:
@@ -1693,15 +1717,14 @@ func _build_menus() -> void:
 	_number_note.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
 	_number_note.visible = false
 	box.add_child(_number_note)
-	_number_field = SpinBox.new()
-	_number_field.step = 1.0
-	_number_field.rounded = true
+	_number_field = ValueField.new(Strings.text("rule_number_send"))
+	_number_field.sent.connect(_on_number_send)
 	box.add_child(_number_field)
-	var send := Button.new()
-	send.text = Strings.text("rule_number_send")
-	send.accessibility_name = send.text
-	send.pressed.connect(_on_number_send)
-	box.add_child(send)
+	_number_said = Label.new()
+	_number_said.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_number_said.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
+	_number_said.visible = false
+	box.add_child(_number_said)
 	add_child(_number_popup)
 
 

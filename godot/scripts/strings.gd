@@ -112,11 +112,14 @@ const TEXT := {
 	# sent; a refusal is its words.
 	"rule_number_heading": "Change {text}:",
 	"rule_number_send": "Set this value",
+	# The gateway's bounds for the value, as it sent them ("-" where it set none): the field applies
+	# none of them, and a value past them goes to the gateway, whose answer is drawn (S3's `fixp`).
+	"rule_number_bounds": "The gateway's range here: {min} to {max}.",
+	"rule_number_waiting": "Sending...",
 	"rule_conflict": "Never fires while the rule joined above it is true: {sentence}",
 	"rule_refused": "The gateway refused that edit: {detail}",
 	"rule_chip_read_only_ms": "This duration is shown as the gateway wrote it. Editing it here waits on a unit the gateway can send.",
 	"rule_chip_read_only_no_shape": "The gateway sent no way to edit this value.",
-	"rule_chip_read_only_not_exact": "This number is larger than the number field holds exactly, so it is shown and not edited here.",
 	# The file's value lies outside the gateway's bounds: shown as it is, never clamped (L1).
 	"rule_number_outside": "The file holds {now}, outside the range the gateway gives here ({min} to {max}). It is shown as it is; the checks say what it costs.",
 	# Why the rule list took no edit, by the bridge's reason (`RuleEditRefusal`), never in silence.
@@ -138,7 +141,7 @@ const TEXT := {
 	"status_rule_refused_rendering_out_of_range": "The rule list cannot be edited until it is drawn again.",
 	"status_rule_refused_not_this_kind": "That is not a {detail}. Click one on the map, or Escape.",
 	"status_rule_refused_arm_not_here": "That cannot go here: the gateway takes no {detail} at this point. Click something else, or Escape.",
-	"status_rule_refused_not_exact": "That number is larger than the field holds exactly, so it was not sent.",
+	"status_rule_refused_not_an_integer": "That is not a whole number (digits only, with a minus sign if it is negative), so nothing was sent.",
 	"status_rule_refused_no_vocabulary": "The words to pick from have not come yet this Lull (or were refused); see the picker's line.",
 	"status_rule_refused_not_in_rule": "That condition is not in the rule the picker was opened on.",
 	"status_rule_refused_no_such_entry": "That is not in the list the gateway sent any more.",

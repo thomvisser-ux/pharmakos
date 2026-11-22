@@ -303,6 +303,7 @@ const SCRIPTS: &[&str] = &[
     "rule_list_shot.gd",
     "smoke_check.gd",
     "strings.gd",
+    "value_field.gd",
     "vista.gd",
     "vista_shot.gd",
     "watch_check.gd",
@@ -2341,11 +2342,11 @@ fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
     let number = gd_code(&editor, "_open_number");
     assert!(
         number.iter().any(|line| line
-            .contains("_number_field.allow_lesser = outside or not chip.get(\"has_min\", false)"))
-            && number.iter().any(|line| line.contains(
-                "_number_field.allow_greater = outside or not chip.get(\"has_max\", false)"
-            )),
-        "the field's bounds are the ones sent, and none where none was sent: {number:?}"
+            .contains("_number_note.text = Strings.text(\"rule_number_bounds\", bounds)"))
+            && !number
+                .iter()
+                .any(|line| line.contains("min_value") || line.contains("max_value")),
+        "the gateway's bounds are said in the note and never applied by the field (S3's `fixp`): {number:?}"
     );
     let click = gd_code(&editor, "map_click");
     let pick = click
@@ -2475,8 +2476,9 @@ fn a_gone_ghost_closes_its_menu_and_a_modifier_is_not_an_input() {
 /// **A chip's editor names its chip, and never clamps** (the `ed3b` resume, M1 and L1): an
 /// edit names the chip's index, the rendering and its pointer, so it cannot land on a chip of
 /// another rendering; no editor opens while the list takes no edit, and the editors close when
-/// the list is redrawn; the number field shows the file's value as it is, its maximum set before
-/// its minimum, and says when that value lies outside the bounds sent.
+/// its rendering is redrawn; the value field shows the file's value as it is, applies no bound, and
+/// says the gateway's bounds and when that value lies outside them (S3's `fixp`: the one value
+/// field, `value_field.gd`, which holds only text).
 #[test]
 fn a_chip_editor_names_its_chip_and_never_clamps() {
     let editor = read("scripts/editor.gd");
@@ -2484,9 +2486,9 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
     let number = gd_code(&editor, "_open_number");
     assert!(
         gd_code(&editor, "_on_number_send").iter().any(|line| line.contains(
-            "bridge.editor_set_number(int(_number_chip.get(\"index\", -1)), int(_number_chip.get(\"revision\", -1)), String(_number_chip.get(\"pointer\", \"\")), int(_number_field.value))"
+            "bridge.editor_set_number_text(int(_number_chip.get(\"index\", -1)), int(_number_chip.get(\"revision\", -1)), String(_number_chip.get(\"pointer\", \"\")), text)"
         )),
-        "an edit names its chip's index, rendering and pointer (M1)"
+        "an edit names its chip's index, rendering and pointer (M1), and sends the text as typed (fixp)"
     );
     assert!(
         gd_code(&editor, "_on_choice").iter().any(|line| line.contains(
@@ -2508,41 +2510,37 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
         "the bridge's reason is said, and no editor opens: {chip:?}"
     );
     let rules = gd_code(&editor, "_draw_rules");
-    for wanted in ["if redrawn:", "_number_popup.hide()", "_choice_menu.hide()"] {
+    for wanted in [
+        "if redrawn and rendering_moved:",
+        "_number_popup.hide()",
+        "_choice_menu.hide()",
+    ] {
         assert!(
             rules.iter().any(|line| line.contains(wanted)),
             "{wanted}: {rules:?}"
         );
     }
-    // L1, as Godot measured it (fix pass 2 item 3): the one field's bounds are opened fully,
-    // then set to the pair sent, so no earlier pair cuts either; client_check.gd runs it.
+    // L1, fixp: no float and no bound in the client; the text goes to the bridge as typed.
     assert!(
-        number.contains(&"set_bounds(_number_field, chip)"),
+        number.iter().any(|line| line.contains(
+            "_number_field.open(String(chip.get(\"value_json\", \"\")), String(chip.get(\"unit\", \"\")), String(chip.get(\"text\", \"\")))"
+        )),
         "{number:?}"
     );
-    let bounds = gd_code(&editor, "set_bounds");
-    let opened = bounds
-        .iter()
-        .position(|line| *line == "field.max_value = FIELD_OPEN")
-        .expect("both bounds opened");
-    let sent = bounds
-        .iter()
-        .position(|line| *line == "field.max_value = chip.get(\"max\")")
-        .expect("the sent maximum");
     assert!(
-        bounds.first().copied() == Some("field.min_value = -FIELD_OPEN") && opened < sent,
-        "opened fully before the pair sent: {bounds:?}"
+        !editor.contains("SpinBox") && !editor.contains("set_bounds"),
+        "no SpinBox and no client bounds are left"
     );
     let check = read("scripts/client_check.gd");
     assert!(
-        check.contains("_check_the_number_field(editor, failures)")
+        check.contains("_check_the_value_field(stage, editor, failures)")
             && check.contains("_check_the_refused_ghost_line(editor, failures)"),
         "the client check runs both hostless checks"
     );
     assert!(
         number
             .iter()
-            .any(|line| line.contains("_number_field.allow_lesser = outside or"))
+            .any(|line| line.contains("_number_note.visible = outside or bounded"))
             && number
                 .iter()
                 .any(|line| line.contains("rule_number_outside")),
@@ -2621,7 +2619,7 @@ fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
 /// **A name chip and the Visit & change rows go through the bridge** (S3's `ed3b`, part 2): a
 /// step-label or rule-id chip offers the names the bridge read from the text and sends the
 /// pick's index; each Visit & change row is the bridge's (`editor_visit_row`,
-/// `editor_change_setting_choice`, `editor_change_setting_number`); an anchor pick takes the
+/// `editor_change_setting_choice`, `editor_change_setting_number_text`); an anchor pick takes the
 /// next map click, and Escape stops it.
 #[test]
 fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
@@ -2649,7 +2647,7 @@ fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
     assert!(
         gd_code(&editor, "_on_number_send")
             .iter()
-            .any(|line| line.contains("bridge.editor_change_setting_number(")),
+            .any(|line| line.contains("bridge.editor_change_setting_number_text(")),
         "a number setting's value is the bridge's row"
     );
     let click = gd_code(&editor, "map_click");

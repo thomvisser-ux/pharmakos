@@ -62,6 +62,8 @@ const VistaScene := preload("res://scenes/vista.tscn")
 const EditorPanel := preload("res://scripts/editor.gd")
 const Lobby := preload("res://scripts/lobby.gd")
 const InstanceLog := preload("res://scripts/instance_log.gd")
+const ValueFieldScript := preload("res://scripts/value_field.gd")
+const Wizard := preload("res://scripts/wizard.gd")
 const Strings := preload("res://scripts/strings.gd")
 const OWNERS_WINDOW := Vector2i(1456, 819)
 ## A map as wide as the golden seed's, in voxels (x, up, north).
@@ -305,7 +307,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_size_meter(editor, failures)
 	_check_the_box(editor, failures)
 	_check_escape(editor, failures)
-	_check_the_number_field(editor, failures)
+	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
 	_check_the_recap_words(failures)
@@ -619,31 +621,113 @@ func _check_escape(editor: CanvasLayer, failures: Array[String]) -> void:
 		failures.append("Escape reaching the window did not close the map menu")
 
 
-## **The rule list's number field keeps the pair each chip sent** (S3's `ed3b`, fix pass 2 item
-## 3). One field serves every chip, and Godot's `Range` keeps its maximum at least its minimum on
-## every set, so the bounds are set through `set_bounds`: chip B (0..10) after chip A (50..100)
-## must hold 0..10, and A after B 50..100, where a maximum-first order left B at 0..50. A bound
-## the gateway did not send stays open. The field holds every `i32` exactly, the range the bridge
-## lets into it (wider is drawn read-only); 2^52 + 1 it does not, which is why.
-func _check_the_number_field(editor: CanvasLayer, failures: Array[String]) -> void:
-	var field: SpinBox = editor._number_field
-	var a := {"has_min": true, "min": 50, "has_max": true, "max": 100}
-	var b := {"has_min": true, "min": 0, "has_max": true, "max": 10}
-	for pair in [[a, b], [b, a], [a, a]]:
-		EditorPanel.set_bounds(field, pair[0])
-		EditorPanel.set_bounds(field, pair[1])
-		var want: Dictionary = pair[1]
-		if field.min_value != float(want["min"]) or field.max_value != float(want["max"]):
-			failures.append("the number field holds %s..%s, not the %s..%s sent" % [field.min_value, field.max_value, want["min"], want["max"]])
-	EditorPanel.set_bounds(field, a)
-	EditorPanel.set_bounds(field, {"has_min": true, "min": 0, "has_max": false})
-	if field.min_value != 0.0 or field.max_value < float(EditorPanel.FIELD_OPEN):
-		failures.append("a maximum the gateway did not send is not open: %s..%s" % [field.min_value, field.max_value])
-	EditorPanel.set_bounds(field, {"has_min": false, "has_max": false})
-	for exact in [2147483647, -2147483648, 0]:
-		field.value = exact
-		if int(field.value) != exact:
-			failures.append("the number field holds %d as %d" % [exact, int(field.value)])
+## **One value field for every typed value** (S3's `fixp`, P6b findings 1 and 2), driven as a
+## person drives it, through the engine's input path: a click into a field holding "40", the keys
+## "3" and "0", and a click on Send (or Enter) give one `sent` carrying "30". At P6b the SpinBox
+## sent 40, or "4030". The second open after a use selects the old value on the first click too.
+## The same through the editor's own popup, and through a wizard page.
+func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var holder := Control.new()
+	holder.position = Vector2(40, 40)
+	stage.add_child(holder)
+	var field: HBoxContainer = ValueFieldScript.new("Send")
+	holder.add_child(field)
+	var heard: Array[String] = []
+	field.sent.connect(func(text: String) -> void: heard.append(text))
+	field.open("40", "%")
+	await _settle()
+	await _type_into(stage, field.field, "30")
+	_click(stage, field.send.get_global_rect().get_center())
+	if heard != ["30"]:
+		failures.append("the value field's click, keys and Send sent %s, not [\"30\"]" % [heard])
+	field.open("40", "%")
+	await _settle()
+	await _type_into(stage, field.field, "30")
+	_key(stage, KEY_ENTER, 0)
+	if heard != ["30", "30"]:
+		failures.append("a second open, keys and Enter sent %s, not a second \"30\"" % [heard])
+	if field.field.text != "30":
+		failures.append("the field shows `%s` after typing over \"40\"" % field.field.text)
+	if field.unit.text != "%" or not field.unit.visible:
+		failures.append("the unit is not drawn beside the field as sent: `%s`" % field.unit.text)
+	holder.queue_free()
+
+	# The editor's popup, through the popup's own window.
+	var sent: Array[String] = []
+	var listen := func(text: String) -> void: sent.append(text)
+	editor._number_field.sent.connect(listen)
+	editor._open_number({"index": 0, "revision": 0, "pointer": "/x"}, {"has_min": true, "min": 0, "has_max": true, "max": 100, "now": 40, "value_json": "40", "unit": "%", "text": "40"})
+	await _settle()
+	var popup: PopupPanel = editor._number_popup
+	if not popup.visible:
+		failures.append("the number popup did not open")
+	else:
+		# Measured headless on Godot 4.7.2: a click pushed into an embedded popup window reaches its
+		# text field (focus, selection, keys) but never presses a Button there, and pushed into the
+		# stage it is not forwarded at all. So the popup is driven by click, keys and Enter, and the
+		# click on Send by the same component on the stage, above.
+		await _type_into(popup, editor._number_field.field, "30")
+		_key(popup, KEY_ENTER, 0)
+		if sent != ["30"]:
+			failures.append("the editor's number popup sent %s, not [\"30\"]" % [sent])
+		if editor._number_note.text != Strings.text("rule_number_bounds", {"min": 0, "max": 100}):
+			failures.append("the number popup's note says `%s`, not the gateway's bounds" % editor._number_note.text)
+	editor._number_field.sent.disconnect(listen)
+	popup.hide()
+
+	# A wizard page.
+	var pages := VBoxContainer.new()
+	pages.position = Vector2(40, 40)
+	pages.custom_minimum_size = Vector2(380, 0)
+	stage.add_child(pages)
+	var asked: Array = []
+	Wizard.fill(pages, "a template", {"answered": true, "current": true, "pages": [{"pointer": "/seed", "label": "Seed", "value": "40", "suggested": true}]}, func(pointer: String, text: String) -> void: asked.append([pointer, text]), func() -> void: pass, func() -> void: pass)
+	await _settle()
+	var page: Control = Wizard.page_controls(pages)[0]
+	await _type_into(stage, page.get_meta("field"), "30")
+	_click(stage, (page.get_meta("send") as Button).get_global_rect().get_center())
+	if asked != [["/seed", "30"]]:
+		failures.append("the wizard page's click, keys and Send asked %s, not [[\"/seed\", \"30\"]]" % [asked])
+	pages.queue_free()
+
+
+## A click into `field` as a person makes it, then `text` typed key by key: the old value goes.
+func _type_into(viewport: Viewport, field: LineEdit, text: String) -> void:
+	_click(viewport, field.get_global_rect().get_center())
+	for character in text:
+		_key(viewport, OS.find_keycode_from_string(character), character.unicode_at(0))
+	await get_tree().process_frame
+
+
+## A left click at `at` in `viewport`'s coordinates: the mouse moves there, presses and releases.
+func _click(viewport: Viewport, at: Vector2) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = at
+	motion.global_position = at
+	viewport.push_input(motion, true)
+	for down in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.pressed = down
+		event.button_mask = MOUSE_BUTTON_MASK_LEFT if down else 0
+		event.position = at
+		event.global_position = at
+		viewport.push_input(event, true)
+
+
+## One key going down and up in `viewport`.
+func _key(viewport: Viewport, keycode: Key, unicode: int) -> void:
+	for down in [true, false]:
+		var event := InputEventKey.new()
+		event.keycode = keycode
+		event.unicode = unicode
+		event.pressed = down
+		viewport.push_input(event, true)
+
+
+func _settle() -> void:
+	for _frame in SETTLE_FRAMES:
+		await get_tree().process_frame
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4

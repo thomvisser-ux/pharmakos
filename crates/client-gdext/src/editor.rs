@@ -729,9 +729,9 @@ pub enum RuleEditRefusal {
     NotThisKind(&'static str),
     /// The gateway lists no such arm at this pointer: the arm the click would write.
     ArmNotHere(&'static str),
-    /// A number the field cannot hold exactly (outside `i32`, the wire's type for the bounds):
-    /// it would reach the file as another number, so it is not sent.
-    NotExact,
+    /// The text typed into a value field is not a whole number: an optional sign and digits,
+    /// nothing else (no space, no point, no expression), within an `i64`. Nothing is sent.
+    NotAnInteger,
     /// The vocabulary has not been read this Lull, or its read was refused.
     NoVocabulary,
     /// The condition slot is not inside the rule the picker was opened on.
@@ -778,7 +778,7 @@ impl RuleEditRefusal {
             Self::RenderingOutOfRange => "rendering_out_of_range",
             Self::NotThisKind(_) => "not_this_kind",
             Self::ArmNotHere(_) => "arm_not_here",
-            Self::NotExact => "not_exact",
+            Self::NotAnInteger => "not_an_integer",
             Self::NoVocabulary => "no_vocabulary",
             Self::NotInRule => "not_in_rule",
             Self::NoSuchEntry => "no_such_entry",
@@ -802,13 +802,18 @@ impl RuleEditRefusal {
     }
 }
 
-/// The gateway's refusal of a rule-list edit: shown on the rule that holds `pointer`, in the
-/// gateway's words.
+/// The refusal of a rule-list edit, the gateway's or this client's: shown on the rule that holds
+/// `pointer` (S3's `fixp`: a refusal is drawn where the player is looking, not only on the
+/// status line).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RuleRefusal {
-    /// What the edit was of: the chip's pointer, or the moved rule's.
+    /// What the edit was of: the chip's pointer, the moved rule's or the slot's.
     pub pointer: String,
-    /// `CODE: message`, as it came.
+    /// The string table's key for its words: [`GATEWAY_REFUSED_KEY`] for the gateway's refusal,
+    /// the status line's own key (`status_rule_refused_<name>`, `status_closed_<door>`) for one
+    /// of this client's.
+    pub key: String,
+    /// What fills the words: the gateway's `CODE: message`, as it came, or the refusal's detail.
     pub detail: String,
     /// The text it was asked of.
     revision: u64,
@@ -894,6 +899,63 @@ pub struct Conflict {
     pub later: usize,
     /// The row's sentence, the verifier's.
     pub sentence: String,
+}
+
+/// The string table's key for the gateway's refusal of an edit, drawn on its rule and in a value
+/// field's popup.
+pub const GATEWAY_REFUSED_KEY: &str = "rule_refused";
+
+/// What became of the last value sent from a value field (the number chip's, or a Visit & change
+/// number setting's), for the field's popup to say while it is open (S3's `fixp`).
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub enum FieldAsk {
+    /// Nothing was sent since the field opened.
+    #[default]
+    Nothing,
+    /// The edit is queued or on its way.
+    Waiting,
+    /// It was refused, by this client or by the gateway: the string table's key and its detail.
+    Refused {
+        /// The string table's key, as [`RuleRefusal::key`].
+        key: String,
+        /// What fills the words.
+        detail: String,
+    },
+    /// The edit landed.
+    Landed,
+}
+
+impl FieldAsk {
+    /// The name GDScript reads.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Nothing => "nothing",
+            Self::Waiting => "waiting",
+            Self::Refused { .. } => "refused",
+            Self::Landed => "landed",
+        }
+    }
+}
+
+/// A value field's text as the whole number it names: an optional `-` or `+`, then one or more
+/// ASCII digits, and nothing else, within an `i64`. A decoding of what the player typed, not a
+/// rule: whether the number is legal there is the gateway's (S3's `fixp`).
+///
+/// # Errors
+///
+/// [`RuleEditRefusal::NotAnInteger`] for anything else: an empty text, a space, a point, an
+/// expression, or a number past an `i64`.
+pub fn typed_integer(text: &str) -> Result<i64, RuleEditRefusal> {
+    let digits = match text.as_bytes() {
+        [b'-' | b'+', rest @ ..] => rest,
+        all => all,
+    };
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return Err(RuleEditRefusal::NotAnInteger);
+    }
+    text.parse::<i64>()
+        .map_err(|_| RuleEditRefusal::NotAnInteger)
 }
 
 /// What the last `submit_plan` said.
@@ -992,6 +1054,8 @@ enum Job {
     RuleEdit {
         patch: String,
         pointer: String,
+        /// Whether a value field sent it, so its popup hears what became of it.
+        field: bool,
     },
     /// `get_draft`: open the draft `id` (the carried one) as the text.
     GetDraft {
@@ -1012,6 +1076,8 @@ enum Job {
     Visit {
         beacon: String,
         row: Json,
+        /// Whether a value field sent it, as for a rule-list edit.
+        field: bool,
     },
 }
 
@@ -1183,8 +1249,11 @@ pub struct Editor {
     /// The rule list: `render_plan`'s lines, rules and chips for the text at
     /// `prose_revision`.
     rule_list: RuleList,
-    /// The gateway's refusal of the last rule-list edit, for the text it was asked of.
+    /// The refusal of the last rule-list edit, the gateway's or this client's, for the text it
+    /// was asked of.
     rule_refusal: Option<RuleRefusal>,
+    /// What became of the last value a value field sent ([`FieldAsk`]).
+    field_ask: FieldAsk,
     /// The chip whose map pick the next map click is, by its index in the rule list.
     picking: Option<PickOn>,
     /// The rendering id: bumped on every rule-list answer the editor accepts, a re-render of
@@ -1728,15 +1797,15 @@ impl Editor {
     }
 
     /// Chip `chip`'s number field sent `value`: one `replace` of it at the chip's pointer.
-    /// `revision` and `pointer` are the rendering and the chip the field was opened on. The
-    /// field holds the bounds the gateway sent; whether the value is legal is the verifier's
-    /// next report.
+    /// `revision` and `pointer` are the rendering and the chip the field was opened on. No
+    /// bound is applied here: the bounds are the gateway's, and whether the value is legal is
+    /// its next answer.
     ///
     /// # Errors
     ///
-    /// A [`RuleEditRefusal`], said on the status line: the list takes no edit now, it was
-    /// redrawn since the field opened, there is no such chip or it is not a number, or the
-    /// value is the one it holds.
+    /// A [`RuleEditRefusal`], said on the status line and on the chip's rule: the list takes
+    /// no edit now, it was redrawn since the field opened, there is no such chip or it is not a
+    /// number, or the value is the one it holds.
     pub fn set_number(
         &mut self,
         chip: usize,
@@ -1745,7 +1814,57 @@ impl Editor {
         value: i64,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.number_patch(chip, revision, pointer, value);
-        self.ask_rule_edit(outcome)
+        self.ask_rule_edit(outcome, pointer, false)
+    }
+
+    /// Chip `chip`'s value field sent `text`, exactly as typed: read as a whole number
+    /// ([`typed_integer`]) and sent as [`Editor::set_number`] sends one. What becomes of it is
+    /// [`Editor::field_ask`], for the field's popup.
+    ///
+    /// # Errors
+    ///
+    /// [`RuleEditRefusal::NotAnInteger`] for a text that names no whole number, and every
+    /// refusal [`Editor::set_number`] makes; each is said on the status line, on the chip's
+    /// rule and to the field.
+    pub fn set_number_text(
+        &mut self,
+        chip: usize,
+        revision: u64,
+        pointer: &str,
+        text: &str,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome =
+            typed_integer(text).and_then(|value| self.number_patch(chip, revision, pointer, value));
+        let asked = self.ask_rule_edit(outcome, pointer, true);
+        self.field_heard(asked)
+    }
+
+    /// A value field opened: nothing it sent before is its to say any more.
+    pub fn field_opened(&mut self) {
+        if self.field_ask != FieldAsk::Nothing {
+            self.field_ask = FieldAsk::Nothing;
+            self.touch();
+        }
+    }
+
+    /// What became of the last value a value field sent.
+    #[must_use]
+    pub const fn field_ask(&self) -> &FieldAsk {
+        &self.field_ask
+    }
+
+    /// A value field's ask was taken (it waits) or refused (with the words the status line
+    /// says), and hands the outcome back.
+    fn field_heard(&mut self, asked: Result<(), RuleEditRefusal>) -> Result<(), RuleEditRefusal> {
+        self.field_ask = match asked {
+            Ok(()) => FieldAsk::Waiting,
+            Err(_) => FieldAsk::Refused {
+                key: format!("status_{}", self.status.key),
+                detail: self.status.detail.clone(),
+            },
+        };
+        self.touch();
+        asked
     }
 
     fn number_patch(
@@ -1759,9 +1878,6 @@ impl Editor {
         let ChipEditor::Number { now, .. } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
-        if !held_exactly(value) {
-            return Err(RuleEditRefusal::NotExact);
-        }
         if *now == value {
             return Err(RuleEditRefusal::Unchanged);
         }
@@ -1786,7 +1902,7 @@ impl Editor {
         which: usize,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.choice_patch(chip, revision, pointer, which);
-        self.ask_rule_edit(outcome)
+        self.ask_rule_edit(outcome, pointer, false)
     }
 
     fn choice_patch(
@@ -1885,13 +2001,17 @@ impl Editor {
             return self.pick_anchor(&beacon, blueprint, target);
         }
         let outcome = self.pick_patch(target);
+        let on = match self.picking.as_ref() {
+            Some(PickOn::Chip { pointer, .. }) => pointer.clone(),
+            Some(PickOn::Anchor { .. }) | None => String::new(),
+        };
         if !matches!(
             outcome,
             Err(RuleEditRefusal::NotThisKind(_) | RuleEditRefusal::ArmNotHere(_))
         ) {
             self.picking = None;
         }
-        self.ask_rule_edit(outcome)
+        self.ask_rule_edit(outcome, &on, false)
     }
 
     /// A map click on nothing (no beacon, feature or voxel) while a pick is on: refused as
@@ -1945,7 +2065,7 @@ impl Editor {
     /// itself, or on a rule of another array (a step onto a rule).
     pub fn move_rule(&mut self, from: &RuleNamed, to: &RuleNamed) -> Result<(), RuleEditRefusal> {
         let outcome = self.move_patch(from, to);
-        self.ask_rule_edit(outcome)
+        self.ask_rule_edit(outcome, &from.pointer, false)
     }
 
     fn move_patch(
@@ -2065,19 +2185,38 @@ impl Editor {
         Ok(found)
     }
 
-    /// Queues a composed rule-list edit, or says why there is none.
+    /// Queues a composed rule-list edit, or says why there is none: on the status line, and on
+    /// the rule holding `on`, the pointer the control named (S3's `fixp`). `field` says whether a
+    /// value field sent it.
     fn ask_rule_edit(
         &mut self,
         outcome: Result<(String, String), RuleEditRefusal>,
+        on: &str,
+        field: bool,
     ) -> Result<(), RuleEditRefusal> {
         match outcome {
             Ok((patch, pointer)) => {
                 self.rule_refusal = None;
-                self.queue.push_back(Job::RuleEdit { patch, pointer });
+                self.queue.push_back(Job::RuleEdit {
+                    patch,
+                    pointer,
+                    field,
+                });
                 self.say("rule_editing", "");
                 Ok(())
             }
-            Err(refusal) => Err(self.refuse_rule_edit(refusal)),
+            Err(refusal) => {
+                let refusal = self.refuse_rule_edit(refusal);
+                if !on.is_empty() {
+                    self.rule_refusal = Some(RuleRefusal {
+                        pointer: on.to_owned(),
+                        key: format!("status_{}", self.status.key),
+                        detail: self.status.detail.clone(),
+                        revision: self.revision,
+                    });
+                }
+                Err(refusal)
+            }
         }
     }
 
@@ -2106,7 +2245,7 @@ impl Editor {
         entry: usize,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.predicate_patch(slot, rendering, pointer, family, entry);
-        self.ask_rule_edit(outcome)
+        self.ask_rule_edit(outcome, pointer, false)
     }
 
     fn predicate_patch(
@@ -2178,7 +2317,7 @@ impl Editor {
         which: usize,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.name_patch(chip, revision, pointer, which);
-        self.ask_rule_edit(outcome)
+        self.ask_rule_edit(outcome, pointer, false)
     }
 
     fn name_patch(
@@ -2277,7 +2416,30 @@ impl Editor {
         value: i64,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.setting_number_row(beacon, setting, pointer, value);
-        self.ask_visit(beacon, outcome)
+        self.ask_visit(beacon, outcome, false)
+    }
+
+    /// Setting `setting` of beacon `beacon`'s detail took `text` from its value field, exactly
+    /// as typed: read as a whole number ([`typed_integer`]) and sent as
+    /// [`Editor::change_setting_number`] sends one. What becomes of it is
+    /// [`Editor::field_ask`].
+    ///
+    /// # Errors
+    ///
+    /// [`RuleEditRefusal::NotAnInteger`] for a text that names no whole number, and every
+    /// refusal [`Editor::change_setting_number`] makes; each is said on the status line and to
+    /// the field.
+    pub fn change_setting_number_text(
+        &mut self,
+        beacon: &str,
+        setting: usize,
+        pointer: &str,
+        text: &str,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome = typed_integer(text)
+            .and_then(|value| self.setting_number_row(beacon, setting, pointer, value));
+        let asked = self.ask_visit(beacon, outcome, true);
+        self.field_heard(asked)
     }
 
     fn setting_number_row(
@@ -2293,9 +2455,6 @@ impl Editor {
         };
         // No `Unchanged` here: the detail is the beacon as the Lull sees it, and an earlier
         // step may change it, so setting it back is a row the verifier judges.
-        if !held_exactly(value) {
-            return Err(RuleEditRefusal::NotExact);
-        }
         let settings = vocabulary::nested_setting(&found.pointer, Json::Number(value.to_string()))?;
         Ok(vocabulary::settings_row(settings))
     }
@@ -2315,7 +2474,7 @@ impl Editor {
         which: usize,
     ) -> Result<(), RuleEditRefusal> {
         let outcome = self.setting_choice_row(beacon, setting, pointer, which);
-        self.ask_visit(beacon, outcome)
+        self.ask_visit(beacon, outcome, false)
     }
 
     fn setting_choice_row(
@@ -2353,7 +2512,7 @@ impl Editor {
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::mandate_row(mandate)?)
         });
-        self.ask_visit(beacon, outcome)
+        self.ask_visit(beacon, outcome, false)
     }
 
     /// Add a Build target of blueprint `which` (as `get_vocabulary` sent it) at beacon
@@ -2419,7 +2578,7 @@ impl Editor {
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::add_target_row(entry, anchor)?)
         });
-        self.ask_visit(beacon, outcome)
+        self.ask_visit(beacon, outcome, false)
     }
 
     /// Remove beacon `beacon`'s Build target `which`, as its detail lists it: one route step
@@ -2442,7 +2601,7 @@ impl Editor {
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::remove_target_row(target))
         });
-        self.ask_visit(beacon, outcome)
+        self.ask_visit(beacon, outcome, false)
     }
 
     /// Queue blueprint `which`, as `get_vocabulary` sent it, at beacon `beacon`: one route step
@@ -2460,7 +2619,7 @@ impl Editor {
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::queue_row(blueprint)?)
         });
-        self.ask_visit(beacon, outcome)
+        self.ask_visit(beacon, outcome, false)
     }
 
     /// Whether a Visit & change row for `beacon` can be composed now: the door is open, there is
@@ -2508,12 +2667,14 @@ impl Editor {
         &mut self,
         beacon: &str,
         outcome: Result<Json, RuleEditRefusal>,
+        field: bool,
     ) -> Result<(), RuleEditRefusal> {
         match outcome {
             Ok(row) => {
                 self.queue.push_back(Job::Visit {
                     beacon: beacon.to_owned(),
                     row,
+                    field,
                 });
                 self.say("visit_changing", "");
                 Ok(())
@@ -2873,6 +3034,11 @@ impl Editor {
             Sent::Edit { base, retry } => {
                 if base == self.revision {
                     self.queue.push_front(*retry);
+                } else if field_sent(&retry) {
+                    self.field_ask = FieldAsk::Refused {
+                        key: "status_rule_refused_changed".to_owned(),
+                        detail: String::new(),
+                    };
                 }
             }
             Sent::Undo { base } => {
@@ -3112,6 +3278,13 @@ impl Editor {
             .ghost
             .as_ref()
             .is_some_and(|ghost| ghost.state == GhostState::Waiting);
+        // A value field's edit still queued will not go out: its popup says why.
+        if self.queue.iter().any(field_sent) {
+            self.field_ask = FieldAsk::Refused {
+                key: format!("status_closed_{}", self.door.name()),
+                detail: String::new(),
+            };
+        }
         self.queue.clear();
         self.picking = None;
         self.owed.quick = false;
@@ -3317,18 +3490,18 @@ impl Editor {
                 self.say("wizard_used", "");
                 None
             }
-            Job::RuleEdit { patch, pointer } => {
-                let playbook = self.text.clone()?;
-                let revision = self.revision;
-                let params = patch_params(&playbook, &patch);
-                Some(self.send(
-                    Sent::Edit {
-                        base: revision,
-                        retry: Box::new(Job::RuleEdit { patch, pointer }),
-                    },
-                    "patch_plan",
-                    params,
-                ))
+            Job::RuleEdit {
+                patch,
+                pointer,
+                field,
+            } => {
+                let params = patch_params(self.text.as_deref()?, &patch);
+                let retry = Job::RuleEdit {
+                    patch,
+                    pointer,
+                    field,
+                };
+                Some(self.send_patch(params, retry))
             }
             Job::New { text } => {
                 // As a template's playbook: no file's, and Undo gives the text before it back
@@ -3376,7 +3549,7 @@ impl Editor {
                     object(Vec::new()),
                 ))
             }
-            Job::Visit { beacon, row } => {
+            Job::Visit { beacon, row, field } => {
                 let playbook = self.text.clone()?;
                 let revision = self.revision;
                 let label = fresh_label(&playbook, Action::Visit(Priority::Normal).stem());
@@ -3385,7 +3558,7 @@ impl Editor {
                 Some(self.send(
                     Sent::Edit {
                         base: revision,
-                        retry: Box::new(Job::Visit { beacon, row }),
+                        retry: Box::new(Job::Visit { beacon, row, field }),
                     },
                     "patch_plan",
                     params,
@@ -3393,6 +3566,20 @@ impl Editor {
             }
             other => self.render(other),
         }
+    }
+
+    /// An edit's `patch_plan` call with `params`, against the text as it is now, with `retry`
+    /// kept for a connection that drops before its answer.
+    fn send_patch(&mut self, params: Json, retry: Job) -> Call {
+        let base = self.revision;
+        self.send(
+            Sent::Edit {
+                base,
+                retry: Box::new(retry),
+            },
+            "patch_plan",
+            params,
+        )
     }
 
     /// The route estimate for the text on screen, when there is a route to price and a
@@ -3639,6 +3826,18 @@ impl Editor {
     /// put there.
     fn settle_edit(&mut self, base: u64, job: &Job, result: &Json) -> Result<(), BridgeError> {
         let answer = patch_of(result)?;
+        // A value field's edit landed, or another landed first and it was not taken: its popup
+        // hears which.
+        if field_sent(job) {
+            self.field_ask = if base == self.revision {
+                FieldAsk::Landed
+            } else {
+                FieldAsk::Refused {
+                    key: "status_rule_refused_changed".to_owned(),
+                    detail: String::new(),
+                }
+            };
+        }
         if base == self.revision {
             self.undo.push(Undo::Patch(answer.inverse_json_patch));
             self.drop_settled_ghost();
@@ -3923,11 +4122,20 @@ impl Editor {
             }
             _ => {}
         }
+        if let Sent::Edit { retry, .. } = sent
+            && field_sent(retry)
+        {
+            self.field_ask = FieldAsk::Refused {
+                key: GATEWAY_REFUSED_KEY.to_owned(),
+                detail: detail.clone(),
+            };
+        }
         if let Sent::Edit { base, retry } = sent
             && let Job::RuleEdit { pointer, .. } = retry.as_ref()
         {
             self.rule_refusal = Some(RuleRefusal {
                 pointer: pointer.clone(),
+                key: GATEWAY_REFUSED_KEY.to_owned(),
                 detail: detail.clone(),
                 revision: *base,
             });
@@ -3955,15 +4163,12 @@ impl Editor {
     }
 }
 
-/// The largest whole number the editor's number field (a 64-bit float) holds exactly: 2^53.
-/// A value past it may already be another number by the time it reaches the bridge, so it is
-/// refused ([`RuleEditRefusal::NotExact`]); every other value goes to the gateway, whose bounds
-/// and wire type are its to refuse. About the control's shape, not the game.
-const FIELD_EXACT: u64 = 9_007_199_254_740_992;
-
-/// Whether the number field holds `value` exactly ([`FIELD_EXACT`]).
-const fn held_exactly(value: i64) -> bool {
-    value.unsigned_abs() <= FIELD_EXACT
+/// Whether a value field sent this job ([`FieldAsk`]).
+const fn field_sent(job: &Job) -> bool {
+    matches!(
+        job,
+        Job::RuleEdit { field: true, .. } | Job::Visit { field: true, .. }
+    )
 }
 
 /// The check of the text a call is, and the revision it checks; `None` for a call that checks
@@ -6987,23 +7192,155 @@ mod tests {
         );
     }
 
-    /// **The number field refuses a value it cannot hold exactly** (carried from part 1's
-    /// review): past 2^53, never sent, for a chip and for a setting alike.
+    /// **A value field's text is read as a whole number, or refused by its reason** (S3's
+    /// `fixp`, fix 1): an optional sign and digits within an `i64`, nothing else. A number past
+    /// 2^53 is exact, because no float is in the path.
     #[test]
-    fn a_number_past_two_to_the_53_is_refused_not_sent() {
+    fn a_typed_value_is_a_whole_number_or_refused() {
+        assert_eq!(typed_integer("30"), Ok(30));
+        assert_eq!(typed_integer("-5"), Ok(-5));
+        assert_eq!(typed_integer("+7"), Ok(7));
+        assert_eq!(typed_integer("9007199254740993"), Ok(9_007_199_254_740_993));
+        assert_eq!(typed_integer("-9223372036854775808"), Ok(i64::MIN));
+        for refused in [
+            " 3",
+            "3 ",
+            "3.0",
+            "5*2",
+            "",
+            "-",
+            "+",
+            "--3",
+            "0x10",
+            "\u{0663}",
+            "99999999999999999999",
+            "9223372036854775808",
+        ] {
+            assert_eq!(
+                typed_integer(refused),
+                Err(RuleEditRefusal::NotAnInteger),
+                "{refused:?}"
+            );
+        }
+    }
+
+    /// **The text goes to its patch exactly, or is refused where the player looks**: on the
+    /// status line, on the chip's rule, and to the field's popup.
+    #[test]
+    fn a_typed_value_reaches_its_patch_or_its_refusal() {
         let mut editor = rendered(EXPAND_EAST);
         let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+        let rule = editor.rule_list().rule_holding(&at);
         assert_eq!(
-            editor.set_number(pct, revision, &at, 9_007_199_254_740_993),
-            Err(RuleEditRefusal::NotExact)
+            editor.set_number_text(pct, revision, &at, "abc"),
+            Err(RuleEditRefusal::NotAnInteger)
         );
-        assert_eq!(editor.status().key, "rule_refused_not_exact");
-        assert!(!editor.has_pending_jobs());
+        assert_eq!(editor.status().key, "rule_refused_not_an_integer");
+        assert!(!editor.has_pending_jobs(), "nothing is sent");
+        let refused = editor.rule_refusal().expect("on the chip's rule");
+        assert_eq!(refused.key, "status_rule_refused_not_an_integer");
+        assert_eq!(editor.rule_list().rule_holding(&refused.pointer), rule);
+        assert_eq!(
+            editor.field_ask(),
+            &FieldAsk::Refused {
+                key: "status_rule_refused_not_an_integer".to_owned(),
+                detail: String::new()
+            },
+            "the popup hears it while it is open"
+        );
+        // The value the chip holds now, typed again: Unchanged, on the rule and to the field.
+        let now = match editor.rule_list().chips.get(pct).map(|chip| &chip.editor) {
+            Some(ChipEditor::Number { now, .. }) => *now,
+            other => panic!("not a number chip: {other:?}"),
+        };
+        assert_eq!(
+            editor.set_number_text(pct, revision, &at, &now.to_string()),
+            Err(RuleEditRefusal::Unchanged)
+        );
+        assert_eq!(
+            editor.rule_refusal().map(|refusal| refusal.key.as_str()),
+            Some("status_rule_refused_unchanged")
+        );
+        // A new field forgets what the last one heard.
+        editor.field_opened();
+        assert_eq!(editor.field_ask(), &FieldAsk::Nothing);
+        // Past 2^53, exactly; past the gateway's bounds too: the gateway judges it.
+        assert_eq!(
+            editor.set_number_text(pct, revision, &at, "9007199254740993"),
+            Ok(())
+        );
+        assert_eq!(editor.field_ask(), &FieldAsk::Waiting);
+        assert!(
+            editor.rule_refusal().is_none(),
+            "a sent edit clears the rule's line"
+        );
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            format!(r#"[{{"op":"replace","path":"{at}","value":9007199254740993}}]"#)
+        );
+        // The gateway refuses it: the popup and the rule both say so in its words.
+        editor
+            .answered(Err(("INVALID_ARGUMENT", "out of range")))
+            .expect("settled");
+        assert_eq!(
+            editor.field_ask(),
+            &FieldAsk::Refused {
+                key: GATEWAY_REFUSED_KEY.to_owned(),
+                detail: "INVALID_ARGUMENT: out of range".to_owned()
+            }
+        );
+        assert_eq!(
+            editor.rule_refusal().map(|refusal| refusal.key.as_str()),
+            Some(GATEWAY_REFUSED_KEY)
+        );
+        // A value that lands: the field hears it landed.
+        assert_eq!(editor.set_number_text(pct, revision, &at, "-5"), Ok(()));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            format!(r#"[{{"op":"replace","path":"{at}","value":-5}}]"#)
+        );
+        let text = editor.text.clone().expect("a text");
+        editor.answered(Ok(&patched(&text, "[]"))).expect("settled");
+        assert_eq!(editor.field_ask(), &FieldAsk::Landed);
+    }
+
+    /// **A Visit & change number setting reads its text the same way**, and sends a value past
+    /// 2^53 exactly.
+    #[test]
+    fn a_typed_setting_value_is_read_the_same_way() {
         let mut editor = visit_editor();
         let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
         assert_eq!(
-            editor.change_setting_number("b_00", at, &pointer, 9_007_199_254_740_993),
-            Err(RuleEditRefusal::NotExact)
+            editor.change_setting_number_text("b_00", at, &pointer, "5*2"),
+            Err(RuleEditRefusal::NotAnInteger)
+        );
+        assert_eq!(editor.status().key, "rule_refused_not_an_integer");
+        assert_eq!(editor.field_ask().name(), "refused");
+        assert!(!editor.has_pending_jobs());
+        assert_eq!(
+            editor.change_setting_number_text("b_00", at, &pointer, "9007199254740993"),
+            Ok(())
+        );
+        assert_eq!(editor.field_ask(), &FieldAsk::Waiting);
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(r#"{"set_mandate_settings":{"retreat_hp_pct":9007199254740993}}"#)
+        );
+        // A shut door drops a field's edit that waited, and the popup says why.
+        let mut editor = visit_editor();
+        assert_eq!(
+            editor.change_setting_number_text("b_00", at, &pointer, "3"),
+            Ok(())
+        );
+        editor.set_door(Door::Push);
+        assert_eq!(
+            editor.field_ask(),
+            &FieldAsk::Refused {
+                key: "status_closed_push".to_owned(),
+                detail: String::new()
+            }
         );
     }
 
@@ -7259,26 +7596,24 @@ mod tests {
         );
     }
 
-    /// **only a number the field cannot hold exactly is refused**: past 2^53. A number
-    /// outside `i32` goes to the gateway, whose bounds are its to refuse.
+    /// **No number is refused for its size** (S3's `fixp`): with no float in the path, a value
+    /// past `i32` and past 2^53 is sent exactly, and the gateway's bounds are its to refuse.
     #[test]
-    fn only_a_number_past_two_to_the_53_is_refused() {
-        let mut editor = rendered(EXPAND_EAST);
-        let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
-        assert_eq!(editor.set_number(pct, revision, &at, 2_147_483_648), Ok(()));
-        let mut editor = rendered(EXPAND_EAST);
-        assert_eq!(
-            editor.set_number(pct, revision, &at, 9_007_199_254_740_993),
-            Err(RuleEditRefusal::NotExact)
-        );
-        assert_eq!(
-            editor.set_number(pct, revision, &at, -9_007_199_254_740_993),
-            Err(RuleEditRefusal::NotExact)
-        );
-        assert_eq!(
-            editor.set_number(pct, revision, &at, -9_007_199_254_740_992),
-            Ok(())
-        );
+    fn no_number_is_refused_for_its_size() {
+        for value in [
+            2_147_483_648,
+            9_007_199_254_740_993,
+            -9_007_199_254_740_993,
+            i64::MAX,
+        ] {
+            let mut editor = rendered(EXPAND_EAST);
+            let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+            assert_eq!(
+                editor.set_number(pct, revision, &at, value),
+                Ok(()),
+                "{value}"
+            );
+        }
     }
 
     /// **a setting this client cannot read keeps the rest**: the prose and the other
