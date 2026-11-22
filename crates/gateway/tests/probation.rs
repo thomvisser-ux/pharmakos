@@ -1369,3 +1369,134 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
         "the Spire unlocks with the licence"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S3's `probw`, item 7: `get_status` tells the preset and the seal held this round
+// ---------------------------------------------------------------------------
+
+/// `token`'s `get_status`, as the wire carries it and decoded as a client
+/// reads it.
+fn status_of(
+    surface: &mut Surface,
+    token: &Token,
+) -> (Json, pharmakos_proto::gp::api::v1::GetStatusResponse) {
+    let answer = result(&call(surface, token, "get_status", "{}"), "get_status");
+    let decoded = pharmakos_proto::json::decode_json(&support::canonical_answer(
+        "gp.api.v1.GetStatusResponse",
+        &answer,
+    ))
+    .unwrap_or_else(|error| panic!("not a gp.api.v1.GetStatusResponse: {error}: {answer:?}"));
+    (answer, decoded)
+}
+
+/// S3's `probw`, item 7: the preset, in both presets and across a resume, to
+/// every caller; and the seal held this round, to its seat alone: absent
+/// fresh, there after an accepted `submit_plan`, still there after a refused
+/// later one and through the Push, gone at the next round's Lull, and there
+/// again after a resume into a Lull where it was sealed. An admin and a
+/// spectator get no seal field.
+#[test]
+fn get_status_tells_the_preset_and_the_seal_held_this_round() {
+    use pharmakos_proto::gp::api::v1::Preset as Wire;
+    for (preset, wire) in [
+        (Preset::Probation, Wire::Probation),
+        (Preset::Custom, Wire::Custom),
+    ] {
+        let mut surface = hosted_under("m-status", preset, Some(1), 1_000, 3);
+        let admin = admin_token(&mut surface);
+        let spectator = spectator_token(&mut surface, true);
+        let seat = seat_token(&mut surface, 0);
+        let other = seat_token(&mut surface, 1);
+        for token in [&seat, &other, &admin, &spectator] {
+            let (answer, decoded) = status_of(&mut surface, token);
+            assert_eq!(decoded.preset(), wire, "{preset:?}: {answer:?}");
+            assert_eq!(
+                answer.get("preset"),
+                Some(&Json::String(String::from(preset.name()))),
+                "the config line's spelling"
+            );
+            assert_eq!(answer.get("sealed_this_round"), None, "fresh: {answer:?}");
+        }
+
+        let mut elapsed = 0_i32;
+        let route = walk_east(&surface, 0, 2, 0);
+        submit(&mut surface, &admin, &mut elapsed, 0, &route);
+        let (answer, decoded) = status_of(&mut surface, &seat);
+        assert!(decoded.sealed_this_round, "{preset:?}: sealed: {answer:?}");
+        let (answer, _) = status_of(&mut surface, &other);
+        assert_eq!(
+            answer.get("sealed_this_round"),
+            None,
+            "another seat's seal is not mine"
+        );
+        for token in [&admin, &spectator] {
+            let (answer, _) = status_of(&mut surface, token);
+            assert_eq!(answer.get("sealed_this_round"), None, "no seat: {answer:?}");
+        }
+
+        // A refused later submission leaves the seal held.
+        spend(&mut surface, &admin, &mut elapsed);
+        let refused = result(
+            &call(
+                &mut surface,
+                &seat,
+                "submit_plan",
+                &format!("{{\"playbook_jsonc\":{}}}", quote("{ not a playbook")),
+            ),
+            "submit_plan",
+        );
+        assert_eq!(
+            refused.get("accepted"),
+            Some(&Json::Bool(false)),
+            "{refused:?}"
+        );
+        let (answer, decoded) = status_of(&mut surface, &seat);
+        assert!(decoded.sealed_this_round, "still sealed: {answer:?}");
+
+        // A resume into this Lull keeps the seal, as the save does.
+        let saved = surface.lull_save().expect("a Lull saves");
+        let mut resumed = resume("m-status", &saved, preset, 1_000, 3);
+        let resumed_seat = seat_token(&mut resumed, 0);
+        let (answer, decoded) = status_of(&mut resumed, &resumed_seat);
+        assert!(decoded.sealed_this_round, "resumed sealed: {answer:?}");
+        assert_eq!(decoded.preset(), wire, "the preset across a resume");
+        let resumed_other = seat_token(&mut resumed, 1);
+        let (answer, _) = status_of(&mut resumed, &resumed_other);
+        assert_eq!(
+            answer.get("sealed_this_round"),
+            None,
+            "resumed, unsealed: {answer:?}"
+        );
+
+        // Through the Push the seal is this round's; the next Lull's is not.
+        play_push(&mut surface);
+        let (answer, decoded) = status_of(&mut surface, &seat);
+        assert!(decoded.sealed_this_round, "in the recap: {answer:?}");
+        // The gateway filed the safe playbook for seat 1 at the Push: a seal too.
+        let (answer, decoded) = status_of(&mut surface, &other);
+        assert!(decoded.sealed_this_round, "the filed seal: {answer:?}");
+        next_lull(&mut surface);
+        for token in [&seat, &other] {
+            let (answer, decoded) = status_of(&mut surface, token);
+            assert!(!decoded.sealed_this_round, "a new round: {answer:?}");
+            assert_eq!(decoded.preset(), wire);
+        }
+    }
+}
+
+/// S3's `probw`, item 7: with no match hosted there is no preset to tell, so
+/// the field is left out (`PRESET_UNSPECIFIED`) and nothing claims a seal.
+#[test]
+fn get_status_with_no_match_hosted_tells_no_preset() {
+    let mut surface = Surface::new("m-lobby", SEED, rules(), FogPolicy::fogged(), &SEATS)
+        .expect("a match id")
+        .with_preset(Preset::Probation, Some(SeatId::new(1)));
+    let admin = admin_token(&mut surface);
+    let (answer, decoded) = status_of(&mut surface, &admin);
+    assert_eq!(answer.get("preset"), None, "{answer:?}");
+    assert_eq!(
+        decoded.preset(),
+        pharmakos_proto::gp::api::v1::Preset::Unspecified
+    );
+    assert_eq!(answer.get("sealed_this_round"), None);
+}

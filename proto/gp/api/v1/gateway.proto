@@ -531,6 +531,38 @@ message GetStatusRequest {}
 
 message GetStatusResponse {
   Status status = 1;
+
+  // The preset the hosted match is played under, spelt as the config line
+  // spells it: "custom" or "probation" (lower case on the JSON-RPC wire, as
+  // every enum this surface answers with is; decisions-log item 80). Told to
+  // every caller, since a preset is the match's frame and no seat's secret;
+  // PRESET_UNSPECIFIED (absent) only when no match is hosted. A client reads
+  // it rather than remembering what it launched, so a resumed client knows
+  // (S3's `probw`). What a preset does is the gateway's: a client starts no
+  // countdown from this field, `Status.untimed_by_rule` says that.
+  Preset preset = 2;
+
+  // True when the caller is a seat that holds a seal of the current round:
+  // its own accepted `submit_plan`, or the safe playbook the gateway filed for
+  // it, from the moment it is held until the next round's Lull opens. A later
+  // refused submission leaves the seal it held. Absent (false) for a seat
+  // that holds none this round, and for every token that is not a seat, since
+  // whether a seat has sealed is that seat's own to know (S3's `probw`).
+  bool sealed_this_round = 3;
+}
+
+// The preset a match is played under (S3's plan, E7; the config line's
+// `preset`). Top level because the config line, a save and this method share
+// the one spelling.
+enum Preset {
+  PRESET_UNSPECIFIED = 0;
+
+  // Any match the preset changes nothing about.
+  CUSTOM = 1;
+
+  // The newcomer's first match: untimed Lulls, the Ledger's memos and the
+  // guided first pick (spec section 3; S3's plan, decisions 4, 5 and 13).
+  PROBATION = 2;
 }
 
 // Long poll. Returns when the trigger fires or the timeout elapses; a timeout

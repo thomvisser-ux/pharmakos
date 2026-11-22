@@ -337,6 +337,24 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetStatusRequest".
 pub struct GetStatusResponse {
     #[prost(message, optional, tag="1")]
     pub status: ::core::option::Option<Status>,
+    /// The preset the hosted match is played under, spelt as the config line
+    /// spells it: "custom" or "probation" (lower case on the JSON-RPC wire, as
+    /// every enum this surface answers with is; decisions-log item 80). Told to
+    /// every caller, since a preset is the match's frame and no seat's secret;
+    /// PRESET_UNSPECIFIED (absent) only when no match is hosted. A client reads
+    /// it rather than remembering what it launched, so a resumed client knows
+    /// (S3's `probw`). What a preset does is the gateway's: a client starts no
+    /// countdown from this field, `Status.untimed_by_rule` says that.
+    #[prost(enumeration="Preset", tag="2")]
+    pub preset: i32,
+    /// True when the caller is a seat that holds a seal of the current round:
+    /// its own accepted `submit_plan`, or the safe playbook the gateway filed for
+    /// it, from the moment it is held until the next round's Lull opens. A later
+    /// refused submission leaves the seal it held. Absent (false) for a seat
+    /// that holds none this round, and for every token that is not a seat, since
+    /// whether a seat has sealed is that seat's own to know (S3's `probw`).
+    #[prost(bool, tag="3")]
+    pub sealed_this_round: bool,
 }
 impl ::prost::Name for GetStatusResponse {
 const NAME: &'static str = "GetStatusResponse";
@@ -3025,6 +3043,41 @@ impl Method {
             "METHOD_ADVANCE_PUSH" => Some(Self::AdvancePush),
             "METHOD_END_RECAP" => Some(Self::EndRecap),
             "METHOD_REPORT_HOST_CLOCK" => Some(Self::ReportHostClock),
+            _ => None,
+        }
+    }
+}
+/// The preset a match is played under (S3's plan, E7; the config line's
+/// `preset`). Top level because the config line, a save and this method share
+/// the one spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum Preset {
+    Unspecified = 0,
+    /// Any match the preset changes nothing about.
+    Custom = 1,
+    /// The newcomer's first match: untimed Lulls, the Ledger's memos and the
+    /// guided first pick (spec section 3; S3's plan, decisions 4, 5 and 13).
+    Probation = 2,
+}
+impl Preset {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "PRESET_UNSPECIFIED",
+            Self::Custom => "CUSTOM",
+            Self::Probation => "PROBATION",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PRESET_UNSPECIFIED" => Some(Self::Unspecified),
+            "CUSTOM" => Some(Self::Custom),
+            "PROBATION" => Some(Self::Probation),
             _ => None,
         }
     }

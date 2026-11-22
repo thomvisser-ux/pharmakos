@@ -3118,6 +3118,42 @@ impl Surface {
         &self.fog
     }
 
+    /// `get_status`: the footer, the match's preset and, for a seat, whether it
+    /// holds a seal of the current round (`gp.api.v1.GetStatusResponse`; S3's
+    /// `probw`).
+    ///
+    /// The preset is written in [`Preset::name`]'s spelling, the config line's
+    /// and a save's, which is the lower-case wire name of `gp.api.v1.Preset`
+    /// (`crate::probation`'s tests hold the two equal); with no match hosted it
+    /// is left out, `PRESET_UNSPECIFIED`. The seal is the test
+    /// [`Surface::begin_push`]'s filing applies, a seal whose round is the
+    /// match's round, whoever filed it; it is told to that seat only, and left
+    /// out when false.
+    fn get_status(&self, subject: Subject) -> Json {
+        let mut entries = vec![(String::from("status"), self.time.footer())];
+        let Some(host) = self.host.as_ref() else {
+            return Json::Object(entries);
+        };
+        entries.push((
+            String::from("preset"),
+            Json::String(String::from(self.preset.name())),
+        ));
+        let round = host.runner().round();
+        let sealed = subject.seat().is_some_and(|seat| {
+            self.seats.iter().any(|slot| {
+                slot.seat == seat
+                    && slot
+                        .sealed
+                        .as_ref()
+                        .is_some_and(|sealed| sealed.round == round)
+            })
+        });
+        if sealed {
+            entries.push((String::from("sealed_this_round"), Json::Bool(true)));
+        }
+        Json::Object(entries)
+    }
+
     /// One seat's private state, if `subject` is that seat.
     ///
     /// # Errors
@@ -3360,10 +3396,7 @@ impl Surface {
         vision: &V,
     ) -> Result<Json, Error> {
         match method {
-            Method::GetStatus => Ok(Json::Object(vec![(
-                String::from("status"),
-                self.time.footer(),
-            )])),
+            Method::GetStatus => Ok(self.get_status(subject)),
             Method::WaitFor => self.wait_for(subject, held, request),
             Method::GetSegmentFeed => self.segment_feed(subject, held, request),
             Method::SaveNotes => self.save_notes(subject, request),
