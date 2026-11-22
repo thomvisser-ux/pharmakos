@@ -1811,10 +1811,18 @@ impl Editor {
             shown: checked || (self.rows_current() && named),
             checked,
             enabled: self.door == Door::Open,
+            // A refusal stands while its reason does: for the text it was refused for, and a stale
+            // or busy one only until the rows describe the text and no edit is on its way (fix
+            // pass 1, item 4).
             refused: self
                 .dormant_refused
                 .filter(|(revision, _)| *revision == self.revision)
-                .map(|(_, refusal)| refusal),
+                .map(|(_, refusal)| refusal)
+                .filter(|refusal| match refusal {
+                    DormantRefusal::Stale => !self.rows_current(),
+                    DormantRefusal::Busy => self.busy(),
+                    DormantRefusal::Shut | DormantRefusal::NothingToChange => true,
+                }),
         }
     }
 
@@ -6011,12 +6019,18 @@ mod tests {
             "the rows are stale: its checks are on their way"
         );
         assert_eq!(editor.status().key, "dormant_refused_stale");
+        assert_eq!(editor.dormant().refused, Some(DormantRefusal::Stale));
         assert_eq!(method_of(editor.next_call(false)), "verify_plan");
         let w0603 = r#"{"code":"W0603","severity":"warning","path":"/declarative/route/0","beginner":"Some beacons will go dark."}"#;
         editor
             .answered(Ok(&quick_report(w0603, true)))
             .expect("reads");
         assert!(editor.dormant().enabled);
+        assert_eq!(
+            editor.dormant().refused,
+            None,
+            "the stale refusal goes once the rows describe the text (fix pass 1, item 4)"
+        );
         assert_eq!(editor.set_allow_dormant(false), Ok(()));
         let call = editor.next_call(false).expect("the removal");
         editor.set_door(Door::Push);
