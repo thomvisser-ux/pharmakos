@@ -1342,7 +1342,7 @@ pub struct Editor {
     /// from a template, a carried draft or nowhere (finding G: Save as offers this name, and
     /// no other file's).
     file: Option<String>,
-    /// The last file a Load opened or a Save wrote this session, whatever the text on screen is
+    /// The last file a Load opened or a Save wrote this match (the editor starts afresh with each match), whatever the text on screen is
     /// now: where Load opens when the text has no file of its own (S3's `fixp`).
     last_file: Option<String>,
     /// The gateway's `safe_playbook_filed` line, when it filed this seat's safe playbook for
@@ -1418,7 +1418,7 @@ impl Editor {
         }
     }
 
-    /// The last file a Load opened or a Save wrote this session, if any: where Load opens when the
+    /// The last file a Load opened or a Save wrote this match (the editor starts afresh with each match), if any: where Load opens when the
     /// text on screen came from no file.
     #[must_use]
     pub fn last_file(&self) -> Option<&str> {

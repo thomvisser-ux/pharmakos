@@ -944,7 +944,7 @@ func _check_the_dormant_box(stage: SubViewport, editor: CanvasLayer, failures: A
 
 
 ## **Load opens where the text's own file is** (S3's `fixp`): the folder of the text's file, or
-## else of the last file Loaded or Saved this session.
+## else of the last file Loaded or Saved this match.
 func _check_the_load_folder(editor: CanvasLayer, failures: Array[String]) -> void:
 	var folder := ProjectSettings.globalize_path("res://fixtures")
 	editor.aim_load({"file": folder.path_join("needs_a_fix.jsonc"), "last_file": "C:/elsewhere/x.jsonc"})

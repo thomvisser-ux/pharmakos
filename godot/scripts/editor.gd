@@ -432,7 +432,7 @@ func open_save_as() -> void:
 
 
 ## Opens Load, with no name in its box (item 143 (3): it once showed a stray word), in the folder
-## of the text's own file, or else of the last file Loaded or Saved this session (S3's `fixp`:
+## of the text's own file, or else of the last file Loaded or Saved this match (S3's `fixp`:
 ## it opened in the launch folder). The native dialog is the operating system's.
 func open_load() -> void:
 	aim_load(bridge.editor_state())
@@ -449,7 +449,7 @@ func aim_load(state: Dictionary) -> void:
 
 
 ## The folder Load opens in: the text's own file's (`file`), else the last file Loaded or Saved
-## this session (`last_file`), else none, which leaves the dialog where it is.
+## this match (`last_file`), else none, which leaves the dialog where it is.
 static func load_folder(state: Dictionary) -> String:
 	var file := String(state.get("file", ""))
 	if file == "":
