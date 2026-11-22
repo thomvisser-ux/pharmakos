@@ -454,7 +454,14 @@ fn there_is_exactly_one_hash_seed_and_one_hash_function() {
             if line.contains("const STATE_HASH_SEED") {
                 seed_definitions += 1;
             }
-            if line.contains("xxh3_64_with_seed") && !path.ends_with("encoding.rs") {
+            // The one-shot function, the streaming state (`Xxh3` and its
+            // kin) and the crate itself: only src/encoding.rs names any of
+            // them, so `digest` and `StreamingDigest` are the one hash
+            // function's only two doors (S3's `fpstream`).
+            let names_the_hash = ["xxh3_64_with_seed", "Xxh3", "xxhash_rust"]
+                .iter()
+                .any(|name| line.contains(name));
+            if names_the_hash && !path.ends_with("encoding.rs") {
                 hash_calls.push(format!("{}:{number}", path.display()));
             }
             for other in ["sha2::", "blake3", "md5", "siphash", "fnv"] {
