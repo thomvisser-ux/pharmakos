@@ -21,8 +21,17 @@
 //! Pinned regression values, asserted in `tests/vectors.rs` as literals:
 //! `digest(b"") == 0xFE1A_F732_B028_10AD` and
 //! `digest(b"pharmakos/g4") == 0xE170_26C8_A5EA_4D30`.
+//!
+//! The one hash function has two shapes, and only this module names either:
+//! [`digest`] over bytes held whole, and [`StreamingDigest`] over bytes handed
+//! over in pieces, which answers what [`digest`] answers for the pieces
+//! joined, whatever the cut (`tests/vectors.rs` holds the two equal at every
+//! length to 300, across xxh3's block boundaries and under every chunking it
+//! tries). The streaming shape exists for the plan fingerprint (S3's
+//! `fpstream`), whose canonical text is hashed as it is written and never
+//! held whole.
 
-use xxhash_rust::xxh3::xxh3_64_with_seed;
+use xxhash_rust::xxh3::{Xxh3, xxh3_64_with_seed};
 
 /// The one compiled-in hash seed: the ASCII bytes `PHARMKOS`, big-endian in
 /// the literal so the constant reads as the word.
@@ -163,6 +172,57 @@ impl Enc {
 #[must_use]
 pub fn digest(bytes: &[u8]) -> u64 {
     xxh3_64_with_seed(bytes, STATE_HASH_SEED)
+}
+
+/// [`digest`], fed in pieces: xxh3-64 at [`STATE_HASH_SEED`] over every byte
+/// handed to [`StreamingDigest::update`], in order, as if they had been one
+/// slice.
+///
+/// The same function as [`digest`], not a second one: xxh3's own streaming
+/// state, seeded with the one seed, which answers the one-shot value for any
+/// cut of the same bytes. It holds a fixed state of a few hundred bytes and
+/// allocates nothing, so a text hashed through it is never held whole.
+#[derive(Clone)]
+pub struct StreamingDigest {
+    state: Xxh3,
+}
+
+impl Default for StreamingDigest {
+    fn default() -> StreamingDigest {
+        StreamingDigest::new()
+    }
+}
+
+impl core::fmt::Debug for StreamingDigest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // xxh3's state has no `Debug`, and its bytes say nothing a reader
+        // could use; the value so far is what the state means.
+        f.debug_struct("StreamingDigest")
+            .field("so_far", &hex(self.finish()))
+            .finish()
+    }
+}
+
+impl StreamingDigest {
+    /// A digest over no bytes yet, at [`STATE_HASH_SEED`].
+    #[must_use]
+    pub fn new() -> StreamingDigest {
+        StreamingDigest {
+            state: Xxh3::with_seed(STATE_HASH_SEED),
+        }
+    }
+
+    /// Hand over the next bytes.
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.state.update(bytes);
+    }
+
+    /// [`digest`] of every byte handed over so far, joined. The state is kept,
+    /// so more bytes may follow.
+    #[must_use]
+    pub fn finish(&self) -> u64 {
+        self.state.digest()
+    }
 }
 
 /// Lowercase, zero-padded, 16 hex digits — the only rendering of a hash in the

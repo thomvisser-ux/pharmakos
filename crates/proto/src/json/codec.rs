@@ -72,7 +72,9 @@
 //!   by a string comparison down the descriptor's maps at every node.
 //! * **Canonical text is written straight from the wire** ([`write_wire`]),
 //!   without building a [`Json`] tree first, and it is byte for byte what
-//!   [`super::write`] makes of [`wire_to_json`]'s answer.
+//!   [`super::write`] makes of [`wire_to_json`]'s answer; and
+//!   [`write_wire_into`] hands it on in pieces of one fixed buffer, so a
+//!   sink that hashes them never holds the text (S3's `fpstream`).
 //! * **Text is read straight to the wire** when it decodes
 //!   (`super::direct`, behind [`super::decode_direct`]), with no tree at all;
 //!   this module's [`json_to_wire`] is the exact path for a tree, and for a
@@ -80,8 +82,6 @@
 //!
 //! `super::reference` keeps the codec as it was before, test-only, and the
 //! differential tests hold this one to it: equal bytes or the same error.
-
-use std::fmt::Write as _;
 
 use super::base64;
 use super::index::{Index, Indexed, IndexedField, index};
@@ -196,11 +196,13 @@ pub fn json_to_encoded(full_name: &str, value: &Json) -> Result<Encoded, Error> 
 /// As [`wire_to_json`].
 pub fn write_wire(full_name: &str, bytes: &[u8]) -> Result<String, Error> {
     let mut out = String::with_capacity(bytes.len().saturating_mul(4));
-    write_wire_into(full_name, bytes, &[], &mut out)?;
+    write_into(full_name, bytes, &[], &mut out)?;
+    super::work::add(out.len());
     Ok(out)
 }
 
-/// [`write_wire`], appending to `out`, with one field left out.
+/// [`write_wire`], with one field left out, handed to `sink` in pieces as it
+/// is written.
 ///
 /// `omit` names the field by its path of `.proto` field names from the
 /// message, [`crate::fingerprint::FINGERPRINT_FIELD`] for a playbook's
@@ -210,16 +212,55 @@ pub fn write_wire(full_name: &str, bytes: &[u8]) -> Result<String, Error> {
 /// the last a message-typed one; a field the bytes do not carry leaves nothing
 /// out, and an empty path leaves nothing out.
 ///
+/// The text reaches `sink` in order, through [`Extend::extend`], in pieces of
+/// at most [`CHUNK`] bytes gathered in one buffer of that size (S3's
+/// `fpstream`): the pieces joined are the text, byte for byte, and the text is
+/// never held whole here, so a sink that hashes each piece as it comes (the
+/// plan fingerprint's) takes a fingerprint in a fixed amount of memory. A
+/// `String` is a sink, and is appended to. A cut may fall anywhere, inside a
+/// string's escapes included, never inside a character.
+///
 /// # Errors
 ///
 /// As [`wire_to_json`], and a path that names no singular field, which is
-/// refused before anything is written. Nothing is promised about what `out`
-/// holds after an error.
-pub fn write_wire_into(
+/// refused before anything is written. Nothing is promised about what the
+/// sink holds after an error.
+pub fn write_wire_into<S>(
     full_name: &str,
     bytes: &[u8],
     omit: &[&str],
-    out: &mut String,
+    sink: &mut S,
+) -> Result<(), Error>
+where
+    S: for<'t> Extend<&'t str> + ?Sized,
+{
+    let mut chunks = Chunks::new(sink, CHUNK);
+    write_into(full_name, bytes, omit, &mut chunks)?;
+    chunks.flush();
+    Ok(())
+}
+
+/// The most text [`write_wire_into`] gathers before it hands it on: 8 KiB.
+///
+/// What it buys is fewer, longer pieces for the sink, which for xxh3's
+/// streaming state means fewer calls per byte (each call pays a fixed cost
+/// before it reaches the block loop); what it costs is one buffer of this
+/// size per text. Any size writes the same pieces joined, so it is a cost
+/// and never a different text. Untimed: this machine was not idle when the
+/// size was chosen, so it is the order of a first-level data cache, well past
+/// xxh3's 1 KiB block, rather than a measured optimum.
+const CHUNK: Limit = match Limit::new(8 << 10) {
+    Some(limit) => limit,
+    None => panic!("the chunk is too small to hold one escaped character"),
+};
+
+/// The text of the message at `full_name` with `omit` left out, written to
+/// `out`, newline included.
+fn write_into<O: Out>(
+    full_name: &str,
+    bytes: &[u8],
+    omit: &[&str],
+    out: &mut O,
 ) -> Result<(), Error> {
     let index = index();
     let at = index
@@ -235,11 +276,225 @@ pub fn write_wire_into(
         depth: 0,
         indent: 0,
     };
-    let before = out.len();
     decoder.write_message(at, bytes, place, omit, out)?;
     out.push('\n');
-    super::work::add(out.len().saturating_sub(before));
     Ok(())
+}
+
+/// Where the canonical writer puts its text: a `String`, appended to in
+/// place, or [`Chunks`], which hands it on in pieces. The writer is the same
+/// code for both, so the two cannot write different text.
+trait Out: core::fmt::Write {
+    /// Append `text` as it is.
+    fn push_str(&mut self, text: &str);
+
+    /// Append one character.
+    fn push(&mut self, character: char);
+
+    /// Append `text` as a JSON string, quoted and escaped as
+    /// [`write_string`] writes it.
+    ///
+    /// # Errors
+    ///
+    /// Only [`Chunks`] can fail, and only if [`write_string`] stops putting a
+    /// string between two quotes (see [`Chunks::json_string`]).
+    fn json_string(&mut self, text: &str, path: &Path<'_>) -> Result<(), Error>;
+}
+
+impl Out for String {
+    fn push_str(&mut self, text: &str) {
+        String::push_str(self, text);
+    }
+
+    fn push(&mut self, character: char) {
+        String::push(self, character);
+    }
+
+    fn json_string(&mut self, text: &str, _path: &Path<'_>) -> Result<(), Error> {
+        write_string(text, self);
+        Ok(())
+    }
+}
+
+/// How much text [`Chunks`] gathers, and how long a piece of a string it
+/// escapes at once: every character of a piece escaped at its longest, with
+/// two quotes, still fits. Only [`Limit::new`] makes one, so a buffer too small
+/// for one escaped character cannot be asked for.
+#[derive(Clone, Copy, Debug)]
+struct Limit {
+    /// The most bytes the buffer holds.
+    bytes: usize,
+    /// The most bytes of a string escaped straight into the buffer, and the
+    /// most a long string's pieces take: `(bytes - 2) / 6`, at least one.
+    piece: usize,
+}
+
+/// The longest a character's escape is: `\u` and four hex digits.
+const LONGEST_ESCAPE: usize = 6;
+
+impl Limit {
+    /// A limit of `bytes`, or `None` when the buffer could not hold one
+    /// character escaped at its longest between two quotes.
+    const fn new(bytes: usize) -> Option<Limit> {
+        let Some(room) = bytes.checked_sub(2) else {
+            return None;
+        };
+        match room.checked_div(LONGEST_ESCAPE) {
+            Some(piece) if piece > 0 => Some(Limit { bytes, piece }),
+            _ => None,
+        }
+    }
+}
+
+/// Text gathered in one buffer of at most [`Limit::bytes`] and handed to a
+/// sink whenever the next piece would not fit, so the text is never held
+/// whole.
+///
+/// A piece longer than the buffer is handed on as it is, from where it
+/// already lies, without being copied; a string longer than
+/// [`Limit::piece`] is escaped in pieces of at most that many bytes, each of
+/// whose escapes fits the buffer, so no string is held whole either. Every
+/// byte handed on is counted by [`super::work`], as [`write_wire`] counts the
+/// same text.
+struct Chunks<'s, S: ?Sized> {
+    sink: &'s mut S,
+    buffer: String,
+    limit: Limit,
+}
+
+impl<'s, S> Chunks<'s, S>
+where
+    S: for<'t> Extend<&'t str> + ?Sized,
+{
+    fn new(sink: &'s mut S, limit: Limit) -> Chunks<'s, S> {
+        Chunks {
+            sink,
+            buffer: String::with_capacity(limit.bytes),
+            limit,
+        }
+    }
+
+    /// Hand `text` to the sink and count it.
+    fn feed(sink: &mut S, text: &str) {
+        if !text.is_empty() {
+            super::work::add(text.len());
+            sink.extend(core::iter::once(text));
+        }
+    }
+
+    /// Hand on what the buffer holds, and empty it.
+    fn flush(&mut self) {
+        Self::feed(self.sink, &self.buffer);
+        self.buffer.clear();
+    }
+
+    /// Whether `extra` more bytes fit the buffer without growing it past its
+    /// limit.
+    fn fits(&self, extra: usize) -> bool {
+        self.limit
+            .bytes
+            .checked_sub(self.buffer.len())
+            .is_some_and(|room| extra <= room)
+    }
+
+    /// `text` cut into the next piece of a long string and the rest: the
+    /// piece at most [`Limit::piece`] bytes, ended at a character boundary,
+    /// and at least the first character, so a piece is never empty while text
+    /// remains. `None` for an empty `text`, and otherwise only if `str`'s
+    /// own boundary search answered a place that is not one.
+    fn cut<'t>(&self, text: &'t str) -> Option<(&'t str, &'t str)> {
+        let at = match text.floor_char_boundary(self.limit.piece) {
+            0 => text.ceil_char_boundary(1),
+            at => at,
+        };
+        text.split_at_checked(at)
+            .filter(|(piece, _)| !piece.is_empty())
+    }
+}
+
+impl<S> core::fmt::Write for Chunks<'_, S>
+where
+    S: for<'t> Extend<&'t str> + ?Sized,
+{
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        Out::push_str(self, text);
+        Ok(())
+    }
+}
+
+impl<S> Out for Chunks<'_, S>
+where
+    S: for<'t> Extend<&'t str> + ?Sized,
+{
+    fn push_str(&mut self, text: &str) {
+        if !self.fits(text.len()) {
+            self.flush();
+        }
+        if self.fits(text.len()) {
+            self.buffer.push_str(text);
+        } else {
+            Self::feed(self.sink, text);
+        }
+    }
+
+    fn push(&mut self, character: char) {
+        let mut bytes = [0_u8; 4];
+        Out::push_str(self, character.encode_utf8(&mut bytes));
+    }
+
+    /// A string of at most [`Limit::piece`] bytes is escaped straight into
+    /// the buffer, which is emptied first if its escapes might not fit. A
+    /// longer one is written as its two quotes around the escapes of its
+    /// pieces, each piece escaped by [`write_string`] alone into the emptied
+    /// buffer and handed on without the two quotes that call puts around it.
+    /// Escaping is one character at a time, so the escapes of the pieces
+    /// joined are the escapes of the string, and the text is the one
+    /// [`write_string`] writes for the string whole.
+    fn json_string(&mut self, text: &str, path: &Path<'_>) -> Result<(), Error> {
+        if text.len() <= self.limit.piece {
+            // At most `piece` bytes, so at most `bytes` escaped and quoted:
+            // `Limit::new`'s arithmetic, which cannot overflow here.
+            let longest = text
+                .len()
+                .checked_mul(LONGEST_ESCAPE)
+                .and_then(|escaped| escaped.checked_add(2));
+            if !longest.is_some_and(|longest| self.fits(longest)) {
+                self.flush();
+            }
+            write_string(text, &mut self.buffer);
+            return Ok(());
+        }
+        let lost = || {
+            Error::at(
+                ErrorKind::Value,
+                &path.render(),
+                "a long string's escapes came back without the two quotes around them",
+            )
+        };
+        Out::push(self, '"');
+        self.flush();
+        let mut rest = text;
+        while !rest.is_empty() {
+            let (piece, after) = self.cut(rest).ok_or_else(|| {
+                Error::at(
+                    ErrorKind::Value,
+                    &path.render(),
+                    "a long string could not be cut at a character boundary",
+                )
+            })?;
+            write_string(piece, &mut self.buffer);
+            let escaped = self
+                .buffer
+                .strip_prefix('"')
+                .and_then(|inner| inner.strip_suffix('"'))
+                .ok_or_else(lost)?;
+            Self::feed(self.sink, escaped);
+            self.buffer.clear();
+            rest = after;
+        }
+        Out::push(self, '"');
+        Ok(())
+    }
 }
 
 /// Whether `omit` is a path [`write_wire_into`] can leave out of the message
@@ -438,13 +693,13 @@ impl<'b> Decoder<'b> {
 
     /// One message as canonical text, at `place`'s indentation, leaving out
     /// the field `omit` names.
-    fn write_message(
+    fn write_message<O: Out>(
         &mut self,
         at: usize,
         bytes: &'b [u8],
         place: Place<'_>,
         omit: &[&str],
-        out: &mut String,
+        out: &mut O,
     ) -> Result<(), Error> {
         let path = place.path;
         if !may_nest(place.depth) {
@@ -529,18 +784,19 @@ impl<'b> Decoder<'b> {
         Ok(())
     }
 
-    fn write_scalar(
+    fn write_scalar<O: Out>(
         &mut self,
         field: &IndexedField,
         value: Value<'b>,
         place: Place<'_>,
         omit: &[&str],
-        out: &mut String,
+        out: &mut O,
     ) -> Result<(), Error> {
         match scalar_of(field, value, place.path)? {
             Scalar::Bool(true) => out.push_str("true"),
             Scalar::Bool(false) => out.push_str("false"),
-            // Writing to a `String` cannot fail. A quoted number and base64
+            // Neither sink can fail: a `String` and `Chunks` both answer
+            // every write with `Ok`. A quoted number and base64
             // hold nothing `write_string` would escape, so they are quoted
             // here directly.
             Scalar::Signed(number) => {
@@ -560,7 +816,7 @@ impl<'b> Decoder<'b> {
                 out.push_str(&base64::encode(bytes));
                 out.push('"');
             }
-            Scalar::Text(text) | Scalar::Name(text) => write_string(text, out),
+            Scalar::Text(text) | Scalar::Name(text) => out.json_string(text, place.path)?,
             Scalar::Message(nested, payload) => {
                 let below = Place {
                     depth: place.depth.saturating_add(1),
@@ -582,11 +838,11 @@ const SPACES: &str = concat!(
 
 /// Two spaces a level: copied from [`SPACES`] in one piece, or pushed one by
 /// one past its 64 levels. Either way the same spaces.
-fn push_indent(depth: usize, out: &mut String) {
+fn push_indent<O: Out>(depth: usize, out: &mut O) {
     let width = depth.saturating_mul(2);
     match SPACES.get(..width) {
         Some(spaces) => out.push_str(spaces),
-        None => out.extend(core::iter::repeat_n(' ', width)),
+        None => (0..width).for_each(|_| out.push(' ')),
     }
 }
 
@@ -1397,4 +1653,210 @@ fn unsigned(value: &Json, path: &Path<'_>) -> Result<u64, Error> {
                 integer_refusal(lexeme, "is not a non-negative whole number", false),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    //! [`Chunks`] against the `String` the codec writes in place (S3's
+    //! `fpstream`): the pieces joined are the text, whatever the limit, and
+    //! the gathering buffer never grows.
+
+    use super::{CHUNK, Chunks, Limit, Out, write_into, write_wire, write_wire_into};
+    use crate::fingerprint::FINGERPRINT_FIELD;
+    use crate::json::{read, work};
+
+    /// The pieces a sink was handed, kept apart so a test can see the cuts.
+    #[derive(Default)]
+    struct Pieces(Vec<String>);
+
+    impl<'t> Extend<&'t str> for Pieces {
+        fn extend<I: IntoIterator<Item = &'t str>>(&mut self, pieces: I) {
+            self.0.extend(pieces.into_iter().map(str::to_owned));
+        }
+    }
+
+    /// splitmix64: seeded, the same on every platform.
+    fn mix(seed: u64) -> u64 {
+        let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    /// A string of `length` characters drawn from ones that escape at every
+    /// width (a quote, a backslash, a newline, two controls) and ones that are
+    /// one, two, three and four bytes of UTF-8 and escape not at all.
+    fn string(seed: u64, length: usize) -> String {
+        const ALPHABET: [char; 10] = [
+            'a',
+            '"',
+            '\\',
+            '\n',
+            '\u{1}',
+            '\u{1f}',
+            '\u{e9}',
+            '\u{20ac}',
+            '\u{1f600}',
+            ' ',
+        ];
+        let mut state = seed;
+        (0..length)
+            .map(|_| {
+                state = mix(state);
+                let at = usize::try_from(state % 10).expect("below ten");
+                ALPHABET.get(at).copied().expect("below ten")
+            })
+            .collect()
+    }
+
+    /// A JSON string literal for `text`, written with the codec's own
+    /// escaper, for a document to carry.
+    fn literal(text: &str) -> String {
+        let mut out = String::new();
+        super::write_string(text, &mut out);
+        out
+    }
+
+    /// Playbook documents: strings at lengths either side of every piece
+    /// size the limits below give, a long string, a nested condition, and a
+    /// stamped fingerprint for the omitting path.
+    fn documents() -> Vec<String> {
+        let mut out = Vec::new();
+        let lengths = [
+            0, 1, 2, 3, 5, 9, 10, 11, 12, 13, 40, 200, 1_364, 1_365, 1_366, 9_000,
+        ];
+        for (seed, length) in (0_u64..).zip(lengths) {
+            out.push(format!(
+                r#"{{"meta":{{"title":{},"note":{},"fingerprint":"AAAAAAAAAAE="}},"kind":"PLAYBOOK"}}"#,
+                literal(&string(seed, length)),
+                literal(&string(seed.wrapping_add(100), length.wrapping_mul(3) % 50)),
+            ));
+        }
+        // Wide characters alone, past one piece and past the buffer, shifted
+        // by 0 to 3 ASCII bytes so one straddles each place a cut could fall
+        // (fix pass 1).
+        for wide in ['\u{e9}', '\u{20ac}', '\u{1f600}'] {
+            for prefix in 0..4_usize {
+                for bytes in [1_366_usize, 8_193] {
+                    let count = bytes.div_ceil(wide.len_utf8());
+                    let title: String = "a"
+                        .repeat(prefix)
+                        .chars()
+                        .chain(core::iter::repeat_n(wide, count))
+                        .collect();
+                    out.push(format!(r#"{{"meta":{{"title":{}}}}}"#, literal(&title)));
+                }
+            }
+        }
+        let leaf = |value: usize| {
+            format!(r#"{{"segment_elapsed":{{"ms":{{"op":"EQ","value":{value}}}}}}}"#)
+        };
+        let leaves: Vec<String> = (0..21).map(leaf).collect();
+        let mut condition = leaves.join(",");
+        for _ in 0..12 {
+            condition = format!(r#"{{"any":{{"items":[{condition}]}}}}"#);
+        }
+        out.push(format!(
+            r#"{{"schema_version":{{"major":1}},"meta":{{"title":"p1","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{{"label":"r0","skip_if":{condition},"hold":{{"ms":1000}}}}]}}}}"#
+        ));
+        out
+    }
+
+    fn wire(text: &str) -> Vec<u8> {
+        let value = read(text).expect("a JSON document");
+        super::json_to_encoded("gp.v1.Playbook", &value)
+            .expect("a playbook")
+            .bytes()
+            .to_vec()
+    }
+
+    /// The text a limit writes, the pieces it was handed on in, and whether
+    /// the gathering buffer kept the capacity it was made with.
+    fn chunked(bytes: &[u8], omit: &[&str], limit: Limit) -> (String, Vec<String>, bool) {
+        let mut pieces = Pieces::default();
+        let mut chunks = Chunks::new(&mut pieces, limit);
+        let capacity = chunks.buffer.capacity();
+        write_into("gp.v1.Playbook", bytes, omit, &mut chunks).expect("the bytes write");
+        chunks.flush();
+        let kept = chunks.buffer.capacity() == capacity;
+        (pieces.0.concat(), pieces.0, kept)
+    }
+
+    #[test]
+    fn a_limit_too_small_for_one_escaped_character_is_refused() {
+        for bytes in 0..8 {
+            assert!(Limit::new(bytes).is_none(), "{bytes}");
+        }
+        let smallest = Limit::new(8).expect("eight bytes hold a quoted six-byte escape");
+        assert_eq!(smallest.piece, 1);
+        assert_eq!(CHUNK.bytes, 8 << 10);
+        assert_eq!(CHUNK.piece, 1_365);
+    }
+
+    #[test]
+    fn the_pieces_joined_are_the_text_at_every_limit() {
+        for document in documents() {
+            let bytes = wire(&document);
+            let whole = write_wire("gp.v1.Playbook", &bytes).expect("the bytes write");
+            let mut cleared = String::new();
+            write_into("gp.v1.Playbook", &bytes, FINGERPRINT_FIELD, &mut cleared)
+                .expect("the bytes write");
+            assert!(!cleared.contains("fingerprint"), "{cleared}");
+            for bytes_limit in (8..=80).chain([4_096, CHUNK.bytes]) {
+                let limit = Limit::new(bytes_limit).expect("a limit of eight or more");
+                for (omit, expected) in [(&[][..], &whole), (FINGERPRINT_FIELD, &cleared)] {
+                    let (text, pieces, kept) = chunked(&bytes, omit, limit);
+                    assert_eq!(&text, expected, "limit {bytes_limit}");
+                    assert!(kept, "the buffer grew at limit {bytes_limit}");
+                    assert!(
+                        pieces.iter().all(|piece| !piece.is_empty()),
+                        "an empty piece at limit {bytes_limit}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_string_is_never_held_whole() {
+        // A string of 9,000 characters, most of them escaped or wide, is
+        // handed on in pieces no longer than the buffer.
+        let title = string(7, 9_000);
+        let document = format!(r#"{{"meta":{{"title":{}}}}}"#, literal(&title));
+        let bytes = wire(&document);
+        let limit = Limit::new(64).expect("a limit");
+        let (text, pieces, kept) = chunked(&bytes, &[], limit);
+        assert_eq!(Ok(text), write_wire("gp.v1.Playbook", &bytes));
+        assert!(kept);
+        let longest = pieces.iter().map(String::len).max().expect("pieces");
+        assert!(longest <= 64, "a piece of {longest} bytes");
+    }
+
+    #[test]
+    fn the_work_counted_is_the_text_both_ways() {
+        for document in documents() {
+            let bytes = wire(&document);
+            let _ = work::take();
+            let whole = write_wire("gp.v1.Playbook", &bytes).expect("the bytes write");
+            let counted_whole = work::take();
+            let mut joined = String::new();
+            write_wire_into("gp.v1.Playbook", &bytes, &[], &mut joined).expect("the bytes write");
+            let counted_joined = work::take();
+            assert_eq!(joined, whole);
+            assert_eq!(counted_whole, counted_joined);
+            assert_eq!(
+                counted_whole,
+                u128::try_from(whole.len()).expect("a length")
+            );
+        }
+    }
+
+    #[test]
+    fn a_string_sink_is_appended_to_in_place() {
+        let mut text = String::from("a");
+        Out::push_str(&mut text, "bc");
+        Out::push(&mut text, 'd');
+        write_wire_into("gp.v1.Playbook", &[], &[], &mut text).expect("an empty playbook");
+        assert_eq!(text, "abcd{}\n");
+    }
 }
