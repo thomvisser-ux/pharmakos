@@ -291,6 +291,9 @@ func _check_the_view(failures: Array[String]) -> void:
 	stage.size = OWNERS_WINDOW
 	stage.own_world_3d = true
 	stage.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	# The editor's popups are windows embedded in the stage, as the game window embeds them, so
+	# input pushed into the stage reaches them as the window's input reaches them.
+	stage.gui_embed_subwindows = true
 	add_child(stage)
 	var vista: Node3D = VistaScene.instantiate()
 	stage.add_child(vista)
@@ -307,6 +310,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_size_meter(editor, failures)
 	_check_the_box(editor, failures)
 	_check_escape(editor, failures)
+	await _check_an_action_pick_closes_the_menus(stage, editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
@@ -662,14 +666,19 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 	if not popup.visible:
 		failures.append("the number popup did not open")
 	else:
-		# Measured headless on Godot 4.7.2: a click pushed into an embedded popup window reaches its
-		# text field (focus, selection, keys) but never presses a Button there, and pushed into the
-		# stage it is not forwarded at all. So the popup is driven by click, keys and Enter, and the
-		# click on Send by the same component on the stage, above.
-		await _type_into(popup, editor._number_field.field, "30")
-		_key(popup, KEY_ENTER, 0)
+		# Through the stage, which hands the input to the popup embedded in it, as the game window
+		# does: a click into the field, the keys, a click on "Set this value"; then Enter.
+		var inside := Vector2(popup.position)
+		_click(stage, inside + editor._number_field.field.get_global_rect().get_center())
+		for character in "30":
+			_key(stage, OS.find_keycode_from_string(character), character.unicode_at(0))
+		await get_tree().process_frame
+		_click(stage, inside + editor._number_field.send.get_global_rect().get_center())
 		if sent != ["30"]:
-			failures.append("the editor's number popup sent %s, not [\"30\"]" % [sent])
+			failures.append("the editor's number popup sent %s, not [\"30\"] (the field shows `%s`)" % [sent, editor._number_field.field.text])
+		_key(stage, KEY_ENTER, 0)
+		if sent != ["30", "30"]:
+			failures.append("Enter in the editor's number popup sent %s" % [sent])
 		if editor._number_note.text != Strings.text("rule_number_bounds", {"min": 0, "max": 100}):
 			failures.append("the number popup's note says `%s`, not the gateway's bounds" % editor._number_note.text)
 	editor._number_field.sent.disconnect(listen)
@@ -728,6 +737,63 @@ func _key(viewport: Viewport, keycode: Key, unicode: int) -> void:
 func _settle() -> void:
 	for _frame in SETTLE_FRAMES:
 		await get_tree().process_frame
+
+
+## **An action pick closes the map menus** (S3's `fixp`, P6b finding 3): a priority row and an
+## enum setting's value in the Visit & change submenus, and a target choice, each reached and
+## picked through the engine's input path, keys pushed into the stage, which hands them to the
+## menu that holds the focus: Right opens a submenu as hovering does, Enter picks the row in focus
+## (both through `PopupMenu`'s own activation, which runs Godot's hide-on-pick rule for the menu
+## and its parents). After an action no map menu is open; a target choice leaves the beacon menu
+## open, as the P6a fix asks.
+func _check_an_action_pick_closes_the_menus(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var beacon := {"id": "b_00", "owner": "seat.0", "position": Vector3.ZERO}
+	var detail := {"known": true, "id": "b_00", "priority": "normal", "settings": [{"title": "Rebuild", "pointer": "/build/rebuild_destroyed", "value_json": "true", "editor": "choice", "values": PackedStringArray(["true", "false"])}], "targets": []}
+	for case in ["priority", "setting", "target"]:
+		# A frame between one menu's close and the next click, as a person's hand takes.
+		await get_tree().process_frame
+		editor._on_beacon_clicked(beacon, false, Vector2(300, 300))
+		editor._visit_drawn = ""
+		editor._fill_visit_menu({"beacon_detail": detail, "vocabulary": {}})
+		await get_tree().process_frame
+		var menu: PopupMenu = editor._menu
+		if case == "target":
+			await _pick(stage, menu, menu.get_item_index(EditorPanel.ITEM_SELECTOR), KEY_ENTER, failures)
+			if not menu.visible:
+				failures.append("a target choice closed the beacon menu")
+			editor.close_menu()
+			continue
+		await _pick(stage, menu, _submenu_row(menu, editor._visit_menu), KEY_RIGHT, failures)
+		if case == "priority":
+			await _pick(stage, editor._visit_menu, editor._visit_menu.get_item_index(EditorPanel.ITEM_LOW), KEY_ENTER, failures)
+		else:
+			var settings: PopupMenu = editor._visit_submenus[0]
+			await _pick(stage, editor._visit_menu, _submenu_row(editor._visit_menu, settings), KEY_RIGHT, failures)
+			var values: PopupMenu = settings.get_child(0)
+			await _pick(stage, settings, _submenu_row(settings, values), KEY_RIGHT, failures)
+			await _pick(stage, values, 1, KEY_ENTER, failures)
+		if editor.menu_open():
+			failures.append("%s picked left a map menu open" % ("a priority row" if case == "priority" else "an enum setting's value"))
+		editor.close_menu()
+
+
+## Row `index` of `menu` put in focus, and `key` pushed into the stage; a menu that is not open
+## for it is a failure.
+func _pick(stage: SubViewport, menu: PopupMenu, index: int, key: Key, failures: Array[String]) -> void:
+	if not menu.visible or index < 0:
+		failures.append("a map menu was not open for its pick (row %d)" % index)
+		return
+	menu.set_focused_item(index)
+	_key(stage, key, 0)
+	await get_tree().process_frame
+
+
+## The row of `menu` that opens `submenu`, or -1.
+func _submenu_row(menu: PopupMenu, submenu: PopupMenu) -> int:
+	for index in menu.item_count:
+		if menu.get_item_submenu_node(index) == submenu:
+			return index
+	return -1
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4

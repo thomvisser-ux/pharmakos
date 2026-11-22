@@ -2634,15 +2634,35 @@ fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
             "bridge.editor_choose_name(int(_name_chip.get(\"index\", -1)), int(_name_chip.get(\"revision\", -1)), String(_name_chip.get(\"pointer\", \"\")), which)"
         ))
     );
+    // Each Visit & change pick is the bridge's row, and closes the map menus first (S3's `fixp`,
+    // P6b finding 3; `client_check.gd`'s `_check_an_action_pick_closes_the_menus` drives it).
+    let visit_row = gd_code(&editor, "_on_visit_row");
     assert!(
-        gd_code(&editor, "_entry_rows").iter().any(|line| line
-            .contains("menu.id_pressed.connect(func(which: int) -> void: bridge.editor_visit_row(_visit_beacon, row, which))")),
-        "a mandate or a blueprint is the bridge's row"
+        visit_row.first().copied() == Some("close_menu()")
+            && visit_row.contains(&"bridge.editor_visit_row(_visit_beacon, row, which)"),
+        "a mandate or a blueprint is the bridge's row, and the menus close: {visit_row:?}"
+    );
+    let setting_choice = gd_code(&editor, "_on_setting_choice");
+    assert!(
+        setting_choice.first().copied() == Some("close_menu()")
+            && setting_choice.contains(
+                &"bridge.editor_change_setting_choice(_visit_beacon, which, pointer, value)"
+            ),
+        "an enum setting's value is the bridge's row, and the menus close: {setting_choice:?}"
+    );
+    let on_menu = gd_code(&editor, "_on_menu");
+    let target_return = on_menu
+        .iter()
+        .position(|line| *line == "return")
+        .expect("the target choice returns");
+    assert!(
+        on_menu.get(target_return.saturating_add(1)).copied() == Some("close_menu()"),
+        "every action pick but a target choice closes the map menus: {on_menu:?}"
     );
     assert!(
-        gd_code(&editor, "_setting_row").iter().any(|line| line
-            .contains("bridge.editor_change_setting_choice(_visit_beacon, which, pointer, value)")),
-        "an enum setting's value is the bridge's row"
+        read("scripts/client_check.gd")
+            .contains("await _check_an_action_pick_closes_the_menus(stage, editor, failures)"),
+        "the client check drives the picks"
     );
     assert!(
         gd_code(&editor, "_on_number_send")

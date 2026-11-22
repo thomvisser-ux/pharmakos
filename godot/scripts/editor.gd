@@ -427,15 +427,33 @@ func status_text() -> String:
 	return _status.text
 
 
-## Closes the map menu, as a click elsewhere would.
+## Closes the map menus, every level of them, as a click elsewhere would. Every action pick
+## calls it (S3's `fixp`, P6b finding 3): Godot hides a submenu's parents on a checkable pick only
+## while each parent hides on one, and the beacon menu does not (its target choice, radio rows,
+## stays open on a pick, the P6a fix), so a priority row or an enum setting's value left it open
+## and the next map click only closed it. A target choice is the one pick that leaves it open.
 func close_menu() -> void:
-	_menu.hide()
-	_visit_menu.hide()
+	for menu in _map_menus():
+		menu.hide()
 
 
-## Whether a map menu is open.
+## Whether a map menu is open, at any level.
 func menu_open() -> bool:
-	return _menu.visible or _visit_menu.visible
+	for menu in _map_menus():
+		if menu.visible:
+			return true
+	return false
+
+
+## The map menus: the beacon, vent or ground menu, Visit & change, its submenus and theirs.
+func _map_menus() -> Array[PopupMenu]:
+	var out: Array[PopupMenu] = [_menu, _visit_menu]
+	for submenu in _visit_submenus:
+		out.append(submenu)
+		for child in submenu.get_children():
+			if child is PopupMenu:
+				out.append(child)
+	return out
 
 
 ## How many presses and handled clicks each counted panel button has had:
@@ -813,6 +831,8 @@ func _on_menu(id: int) -> void:
 		for index in SELECTORS.size():
 			_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), SELECTORS[index] == _selector)
 		return
+	# Every other entry is an action: it closes the map menus, whichever level it was picked in.
+	close_menu()
 	var target := _menu_target.duplicate()
 	if _selector != "":
 		target = {"selector": _selector}
@@ -1270,7 +1290,7 @@ func _fill_visit_menu(state: Dictionary) -> void:
 	var targets: Array = detail.get("targets", [])
 	for which in targets.size():
 		remove.add_item(Strings.text("menu_target_row", {"blueprint": targets[which].get("blueprint_id", ""), "anchor": targets[which].get("anchor", "")}), which)
-	remove.id_pressed.connect(func(which: int) -> void: bridge.editor_visit_row(_visit_beacon, "remove_target", which))
+	remove.id_pressed.connect(func(which: int) -> void: _on_visit_row("remove_target", which))
 	var queue := _visit_submenu(Strings.text("menu_queue"))
 	_entry_rows(queue, vocabulary.get("blueprints", []), "queue")
 
@@ -1299,7 +1319,7 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 				values.add_radio_check_item(Strings.text("menu_setting_value", {"value": listed[value]}), value)
 				values.set_item_checked(value, listed[value] == String(setting.get("value_json", "")))
 			var pointer := String(setting.get("pointer", ""))
-			values.id_pressed.connect(func(value: int) -> void: bridge.editor_change_setting_choice(_visit_beacon, which, pointer, value))
+			values.id_pressed.connect(func(value: int) -> void: _on_setting_choice(which, pointer, value))
 		"number":
 			settings.add_item(title, which)
 		_:
@@ -1314,8 +1334,22 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 			settings.set_item_tooltip(settings.item_count - 1, said)
 
 
+## An enum setting took its `value`th value: the bridge's one row, and the map menus close.
+func _on_setting_choice(which: int, pointer: String, value: int) -> void:
+	close_menu()
+	bridge.editor_change_setting_choice(_visit_beacon, which, pointer, value)
+
+
+## A Visit & change row on entry `which` of what `row` names: the bridge's one row, and the map
+## menus close.
+func _on_visit_row(row: String, which: int) -> void:
+	close_menu()
+	bridge.editor_visit_row(_visit_beacon, row, which)
+
+
 ## A number setting's row was picked: the number field opens on it, as on a number chip.
 func _on_setting(which: int) -> void:
+	close_menu()
 	var rows: Array = bridge.editor_state().get("beacon_detail", {}).get("settings", [])
 	if which < 0 or which >= rows.size() or String(rows[which].get("editor", "")) != "number":
 		return
@@ -1334,7 +1368,7 @@ func _entry_rows(menu: PopupMenu, entries: Array, row: String) -> void:
 			menu.set_item_disabled(menu.item_count - 1, true)
 		else:
 			menu.add_item(String(entry.get("title", "")), which)
-	menu.id_pressed.connect(func(which: int) -> void: bridge.editor_visit_row(_visit_beacon, row, which))
+	menu.id_pressed.connect(func(which: int) -> void: _on_visit_row(row, which))
 
 
 ## The value field for the chip `named` (or, with `named` empty, the Visit & change setting
