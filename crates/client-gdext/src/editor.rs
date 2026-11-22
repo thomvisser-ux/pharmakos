@@ -1326,6 +1326,9 @@ pub struct Editor {
     /// from a template, a carried draft or nowhere (finding G: Save as offers this name, and
     /// no other file's).
     file: Option<String>,
+    /// The last file a Load opened or a Save wrote this session, whatever the text on screen is
+    /// now: where Load opens when the text has no file of its own (S3's `fixp`).
+    last_file: Option<String>,
     /// The gateway's `safe_playbook_filed` line, when it filed this seat's safe playbook for
     /// the round under way (the line comes in the seat's own feed; finding J).
     filed: Option<String>,
@@ -1394,8 +1397,16 @@ impl Editor {
     pub fn saved_to(&mut self, file: &str) {
         if self.text.is_some() {
             self.file = Some(file.to_owned());
+            self.last_file = Some(file.to_owned());
             self.say("saved_file", file);
         }
+    }
+
+    /// The last file a Load opened or a Save wrote this session, if any: where Load opens when the
+    /// text on screen came from no file.
+    #[must_use]
+    pub fn last_file(&self) -> Option<&str> {
+        self.last_file.as_deref()
     }
 
     /// The file the text on screen was opened from or last saved to, if it came from one:
@@ -3955,6 +3966,9 @@ impl Editor {
             self.undo.clear();
             self.preview = None;
             self.ghost = None;
+            if file.is_some() {
+                self.last_file.clone_from(&file);
+            }
             self.file = file;
             // Another file is on screen: a template's pages describe a different playbook
             // (item 155 (3) 3).
@@ -6732,6 +6746,24 @@ mod tests {
     }
 
     /// Saving says where, from the editor's own status (so a redraw cannot wipe it).
+    #[test]
+    fn load_opens_where_the_last_file_was() {
+        let mut editor = Editor::new("seat.0");
+        assert_eq!(editor.last_file(), None);
+        assert!(editor.open(br#"{"declarative":{"route":[]}}"#, Some("C:/plays/a.jsonc")));
+        let _ = editor.next_call(false);
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        assert_eq!(editor.last_file(), Some("C:/plays/a.jsonc"));
+        // A text from no file keeps the last file Loaded or Saved, and a Save moves it.
+        assert!(editor.load(br#"{"declarative":{"route":[]}}"#));
+        let _ = editor.next_call(false);
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        assert_eq!(editor.file(), None);
+        assert_eq!(editor.last_file(), Some("C:/plays/a.jsonc"));
+        editor.saved_to("D:/other/b.jsonc");
+        assert_eq!(editor.last_file(), Some("D:/other/b.jsonc"));
+    }
+
     #[test]
     fn a_save_says_where_on_the_status_line() {
         let mut editor = loaded("{}");

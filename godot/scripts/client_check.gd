@@ -315,6 +315,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	_check_the_popups_are_opaque(editor, failures)
 	await _check_the_build_marks(editor, failures)
 	await _check_the_dormant_box(stage, editor, failures)
+	_check_the_load_folder(editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
@@ -922,6 +923,21 @@ func _check_the_dormant_box(stage: SubViewport, editor: CanvasLayer, failures: A
 	if not editor._dormant_said.visible or editor._dormant_said.text != Strings.text("status_dormant_refused_busy"):
 		failures.append("a refused click is not said beside the box: `%s`" % editor._dormant_said.text)
 	editor._draw_state({"changes": 11, "has_text": false})
+
+
+## **Load opens where the text's own file is** (S3's `fixp`): the folder of the text's file, or
+## else of the last file Loaded or Saved this session.
+func _check_the_load_folder(editor: CanvasLayer, failures: Array[String]) -> void:
+	var folder := ProjectSettings.globalize_path("res://fixtures")
+	editor.aim_load({"file": folder.path_join("needs_a_fix.jsonc"), "last_file": "C:/elsewhere/x.jsonc"})
+	if editor._load_dialog.current_dir.trim_suffix("/") != folder.trim_suffix("/"):
+		failures.append("Load opens in `%s`, not the text's file's folder `%s`" % [editor._load_dialog.current_dir, folder])
+	var other := ProjectSettings.globalize_path("res://scripts")
+	editor.aim_load({"file": "", "last_file": other.path_join("x.jsonc")})
+	if editor._load_dialog.current_dir.trim_suffix("/") != other.trim_suffix("/"):
+		failures.append("with no file of its own Load opens in `%s`, not the last file's folder `%s`" % [editor._load_dialog.current_dir, other])
+	if EditorPanel.load_folder({}) != "":
+		failures.append("with no file at all Load names a folder: `%s`" % EditorPanel.load_folder({}))
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4

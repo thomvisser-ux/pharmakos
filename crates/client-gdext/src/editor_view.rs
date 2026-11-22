@@ -229,6 +229,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("seal", editor.seal_line().name().to_variant());
     put("filed", editor.filed().to_variant());
     put("file", text_or_empty(editor.file()).to_variant());
+    put("last_file", text_or_empty(editor.last_file()).to_variant());
     put("dormant", dormant_dictionary(editor).to_variant());
     put_rule_list(&mut state, editor);
     put_marks(&mut state, editor);

@@ -427,11 +427,30 @@ func open_save_as() -> void:
 	_save_dialog.popup_centered_ratio(0.6)
 
 
-## Opens Load, with no name in its box (item 143 (3): it once showed a stray word). The native
-## dialog is the operating system's, and this is the one thing about its box the client holds.
+## Opens Load, with no name in its box (item 143 (3): it once showed a stray word), in the folder
+## of the text's own file, or else of the last file Loaded or Saved this session (S3's `fixp`:
+## it opened in the launch folder). The native dialog is the operating system's.
 func open_load() -> void:
-	_load_dialog.current_file = ""
+	aim_load(bridge.editor_state())
 	_load_dialog.popup_centered_ratio(0.6)
+
+
+## Sets the Load dialog's folder from the bridge's editor state (`load_folder`) and empties its
+## box.
+func aim_load(state: Dictionary) -> void:
+	var folder := load_folder(state)
+	if folder != "":
+		_load_dialog.current_dir = folder
+	_load_dialog.current_file = ""
+
+
+## The folder Load opens in: the text's own file's (`file`), else the last file Loaded or Saved
+## this session (`last_file`), else none, which leaves the dialog where it is.
+static func load_folder(state: Dictionary) -> String:
+	var file := String(state.get("file", ""))
+	if file == "":
+		file = String(state.get("last_file", ""))
+	return file.get_base_dir()
 
 
 ## A map action on a target: `go`, `visit_low`, `visit_normal`, `visit_high`, `recycle` or
