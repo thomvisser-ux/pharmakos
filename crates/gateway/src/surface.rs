@@ -6640,6 +6640,58 @@ mod tests {
         );
     }
 
+    /// S3's `mapw`: outside a Lull `get_map_summary` withholds its travel
+    /// times **and prices no walk** -- the sim's own walk tally on the
+    /// scratch the features are priced in does not move -- while in the Lull
+    /// before it the same seat's read prices walks (the positive control).
+    #[test]
+    fn outside_a_lull_the_map_summary_prices_no_walk() {
+        let mut surface = hosted();
+        let seat = Some(SeatId::new(0));
+        let fresh = |surface: &Surface| {
+            let host = surface.host().expect("hosted");
+            crate::targeting::scratch_for(host.world()).expect("a scratch")
+        };
+        let mut in_lull = Some(fresh(&surface));
+        let _ = surface
+            .map_features_priced(seat, &mut in_lull)
+            .expect("the features in a Lull");
+        let walks = in_lull
+            .as_ref()
+            .map(|scratch| scratch.walks().expect("the count fits"));
+        assert!(
+            walks.is_some_and(|walks| walks > 0),
+            "a Lull prices the commander's walks: {walks:?}"
+        );
+
+        assert!(surface.begin_push().expect("the Push begins"));
+        let mut in_push = Some(fresh(&surface));
+        let features = surface
+            .map_features_priced(seat, &mut in_push)
+            .expect("the features in a Push");
+        assert_eq!(
+            in_push
+                .as_ref()
+                .map(|scratch| scratch.walks().expect("the count fits")),
+            Some(0),
+            "a Push prices no walk"
+        );
+        let mut empty = None;
+        let _ = surface
+            .map_features_priced(seat, &mut empty)
+            .expect("the features in a Push");
+        assert!(
+            empty.is_none(),
+            "and builds no search scratch to price one in"
+        );
+        assert!(!features.is_empty());
+        for feature in &features {
+            assert!(feature.get("travel_ms").is_none(), "{feature:?}");
+            assert!(feature.get("reachable").is_none(), "{feature:?}");
+            assert!(feature.get("covered").is_some(), "{feature:?}");
+        }
+    }
+
     /// Item 155 (3) 6's flood: a seat's Survey refreshes of one drained
     /// batch are grouped a seat at a time, in the order each seat first
     /// refreshed, with how many and the oldest memory replaced; nothing else

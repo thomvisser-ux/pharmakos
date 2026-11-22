@@ -1908,3 +1908,164 @@ fn every_lull_reads_and_plays_on_as_its_save_does() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The map summary's travel times outside a Lull (S3's `mapw`; the owner's
+// ruling of 2026-11-21, "Omit them in a Push", taken to every phase that is
+// not a Lull as `estimate_route`'s door is)
+// ---------------------------------------------------------------------------
+
+/// A two-seat gateway on the golden seed with no match hosted yet: the lobby.
+fn in_the_lobby() -> Surface {
+    Surface::new(
+        MATCH,
+        support::SEED,
+        support::rules(),
+        FogPolicy::fogged(),
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a match id")
+}
+
+/// Host a one-round match on the golden seed in the lobby's `surface`: its
+/// runner opens in round 1's Lull, which the attach takes.
+fn host_one_round(surface: &mut Surface) {
+    let host = pharmakos_gateway::host::Host::open(
+        &pharmakos_sim::world::WorldConfig {
+            match_seed: support::SEED,
+            seats: 2,
+            rules: support::rules(),
+            match_settings: pharmakos_sim::runner::MatchSettings {
+                segment_lengths_ms: vec![support::SEGMENT_MS],
+                round_limit: 1,
+            },
+        },
+        None,
+    )
+    .expect("a match");
+    surface.attach(host).expect("attached");
+}
+
+/// Seat 0's `get_map_summary.features`, asked through the dispatcher with no
+/// clock reported (outside a Lull the gateway's ticks are the sim's).
+fn features_outside_a_lull(surface: &mut Surface) -> Vec<Json> {
+    let token = support::seat_token(surface, 0);
+    let answer = support::call(surface, &token, "get_map_summary", "{}");
+    array_of(&result(&answer, "get_map_summary"), "features")
+}
+
+/// Every feature of `features` carries the seat's `covered` and `live` and
+/// neither travel member: not a time, and not a `reachable: false` that would
+/// read as "no route reaches it".
+fn assert_travel_withheld(features: &[Json], phase: &str) {
+    assert!(
+        !features.is_empty(),
+        "{phase}: the golden seed lays vents and seams"
+    );
+    for feature in features {
+        for key in ["travel_ms", "reachable"] {
+            assert!(
+                feature.get(key).is_none(),
+                "{phase}: `{key}` is withheld outside a Lull: {feature:?}"
+            );
+        }
+        for key in ["covered", "live"] {
+            assert!(
+                feature.get(key).is_some(),
+                "{phase}: `{key}` is still told: {feature:?}"
+            );
+        }
+    }
+}
+
+/// Outside a Lull -- a Push, a recap, an ended match -- every feature of a
+/// seat's `get_map_summary` carries neither `travel_ms` nor `reachable`: in a
+/// Push the hosted world is the live one, unfogged, and a recap's is the
+/// Push's end state, so a travel time there would tell the seat about
+/// terrain it cannot see. The rest of the answer still comes. The lobby hosts
+/// no match, so it has no map to summarise and says nothing about travel; a
+/// hosted match opens in round 1's Lull.
+#[test]
+fn outside_a_lull_the_map_summary_withholds_every_travel_time() {
+    let mut surface = in_the_lobby();
+    let token = support::seat_token(&mut surface, 0);
+    let in_lobby = support::call(&mut surface, &token, "get_map_summary", "{}");
+    assert!(
+        in_lobby.get("result").is_none(),
+        "the lobby hosts no map: {in_lobby:?}"
+    );
+    host_one_round(&mut surface);
+    assert_eq!(
+        surface.time().phase,
+        pharmakos_proto::gp::api::v1::status::Phase::Lull,
+        "a hosted match opens in its first Lull"
+    );
+
+    surface
+        .set_phase_remaining_ms(Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
+    surface.open_lull().expect("the opening Lull");
+    let token = support::seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let in_lull = array_of(
+        &result(
+            &call_in_lull(&mut surface, &token, &mut left, "get_map_summary", "{}"),
+            "get_map_summary",
+        ),
+        "features",
+    );
+    assert!(
+        in_lull
+            .iter()
+            .all(|feature| feature.get("reachable").is_some()),
+        "the positive control: in a Lull every feature says whether it is reached"
+    );
+
+    assert!(surface.begin_push().expect("the Push begins"));
+    let _ = support::step(&mut surface, 3);
+    assert_travel_withheld(&features_outside_a_lull(&mut surface), "a Push");
+
+    let _ = support::step(&mut surface, 1_000);
+    assert_eq!(
+        surface.time().phase,
+        pharmakos_proto::gp::api::v1::status::Phase::Recap,
+        "the Push has ended"
+    );
+    assert_travel_withheld(&features_outside_a_lull(&mut surface), "a recap");
+
+    assert!(surface.end_recap().expect("the recap ends"));
+    assert_eq!(
+        surface.time().phase,
+        pharmakos_proto::gp::api::v1::status::Phase::Ended,
+        "a one-round match ends at its recap's close"
+    );
+    assert_travel_withheld(&features_outside_a_lull(&mut surface), "an ended match");
+}
+
+/// A match resumed from its Lull's save withholds the same members in the
+/// Push that follows as the live match does: the two Pushes' answers are
+/// byte for byte one answer.
+#[test]
+fn a_resumed_push_withholds_travel_as_the_live_one_does() {
+    let mut surface = support::hosted(2, SHORT_SEGMENT_MS, SHORT_ROUNDS);
+    let mut resumed = resumed_from(&surface.lull_save().expect("a Lull saves"));
+    let mut answers = Vec::new();
+    for surface in [&mut surface, &mut resumed] {
+        assert!(surface.begin_push().expect("the Push begins"));
+        let _ = support::step(surface, 3);
+        let token = support::seat_token(surface, 0);
+        let answer = result(
+            &support::call(surface, &token, "get_map_summary", "{}"),
+            "get_map_summary",
+        );
+        assert_travel_withheld(&array_of(&answer, "features"), "a Push");
+        answers.push(pharmakos_proto::json::write(&Json::Object(match answer {
+            Json::Object(fields) => fields
+                .into_iter()
+                .filter(|(key, _)| key != "_status")
+                .collect(),
+            other => panic!("an object, and it is {other:?}"),
+        })));
+    }
+    assert_eq!(answers.first(), answers.get(1), "live and resumed");
+}

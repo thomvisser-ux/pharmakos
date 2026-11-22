@@ -1974,8 +1974,8 @@ fn the_s1_economy_wire_round_trips_in_its_documented_spellings() {
                 y: 88,
                 live: true,
                 covered: false,
-                travel_ms: 14_000,
-                reachable: true,
+                travel_ms: Some(14_000),
+                reachable: Some(true),
             }],
             ..GetMapSummaryResponse::default()
         },
@@ -2606,4 +2606,54 @@ fn an_omit_path_that_names_no_singular_field_is_refused() {
         json::write_wire_into("gp.v1.Playbook", &bytes, path, &mut out).expect("a field");
         assert_eq!(out, json::encode(&playbook).expect("it writes"), "{path:?}");
     }
+}
+
+/// S3's `mapw`: `gp.api.v1.MapFeature`'s two travel members' other states.
+/// Unreachable writes `reachable: false` (explicit presence) and no time;
+/// withheld, which is every feature outside a Lull, writes neither, so it
+/// never reads as "unreachable".
+#[test]
+fn a_map_features_travel_states_round_trip() {
+    use gp_api::map_feature::Kind;
+    use gp_api::{GetMapSummaryResponse, MapFeature};
+
+    let feature = |travel_ms: Option<i32>, reachable: Option<bool>| MapFeature {
+        feature_id: "seam_3_4".to_owned(),
+        kind: Kind::Seam.into(),
+        grade: Richness::Rich.into(),
+        x: 3,
+        y: 4,
+        live: true,
+        covered: true,
+        travel_ms,
+        reachable,
+    };
+    round_trips(
+        &GetMapSummaryResponse {
+            features: vec![feature(None, Some(false))],
+            ..GetMapSummaryResponse::default()
+        },
+        concat!(
+            r#"{"features":[{"feature_id":"seam_3_4","kind":"SEAM","grade":"RICH","x":3,"y":4,"#,
+            r#""live":true,"covered":true,"reachable":false}]}"#
+        ),
+        &["reachable"],
+    );
+    let withheld = GetMapSummaryResponse {
+        features: vec![feature(None, None)],
+        ..GetMapSummaryResponse::default()
+    };
+    round_trips(
+        &withheld,
+        concat!(
+            r#"{"features":[{"feature_id":"seam_3_4","kind":"SEAM","grade":"RICH","x":3,"y":4,"#,
+            r#""live":true,"covered":true}]}"#
+        ),
+        &["covered"],
+    );
+    let text = json::encode(&withheld).expect("encodes");
+    assert!(
+        !text.contains("reachable") && !text.contains("travel_ms"),
+        "a withheld feature writes neither travel member: {text}"
+    );
 }
