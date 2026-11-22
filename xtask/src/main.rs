@@ -7469,32 +7469,174 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         }
     }
 
-    /// The test files that still read `CARGO_TARGET_DIR` raw, each with the
-    /// lane that owes the change (decisions-log item 165 (13)): the client
-    /// belongs to another lane, so the move to the parent of
-    /// `CARGO_TARGET_TMPDIR` is sequenced there. An entry fails
-    /// [`no_test_reads_the_target_dir_variable_raw`] the day its file stops
-    /// reading the variable, so the lane that fixes it deletes the entry.
-    const RAW_TARGET_DIR_OWED: &[(&str, &str)] = &[
+    /// The test files that still read `CARGO_TARGET_DIR` raw, each with how
+    /// many of its lines do and the lane that owes the change (decisions-log
+    /// item 165 (13)): the client belongs to another lane, so the move to the
+    /// parent of `CARGO_TARGET_TMPDIR` is sequenced there. An entry fails
+    /// [`no_test_reads_the_target_dir_variable_raw`] when its file's count
+    /// differs from it: a second raw read added to an owed file is not owed,
+    /// and a file that stops reading the variable has its entry deleted by the
+    /// lane that fixes it.
+    const RAW_TARGET_DIR_OWED: &[(&str, usize, &str)] = &[
         (
             "crates/client-gdext/tests/event_list.rs",
+            1,
             "fixp's successor",
         ),
         (
             "crates/client-gdext/tests/vista_fixture.rs",
+            1,
             "fixp's successor",
         ),
     ];
 
-    /// The 1-based numbers of the lines of `text` that read
-    /// `CARGO_TARGET_DIR` outside a line comment.
+    /// `text`, Rust source, with its comments blanked: a line comment to its
+    /// line's end and a block comment (nested, as Rust nests them) to its
+    /// close, each character replaced by a space and its newlines kept, so
+    /// line numbers hold. String literals, raw strings and character literals
+    /// are kept whole and their contents never open a comment: `"http://x"`
+    /// hides nothing after it. A lifetime (`'a`) is not a character literal.
+    fn rust_code(text: &str) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let at = |index: usize| chars.get(index).copied();
+        let mut out = String::with_capacity(text.len());
+        let mut index = 0;
+        while let Some(character) = at(index) {
+            match (character, at(index + 1)) {
+                ('/', Some('/')) => {
+                    while let Some(next) = at(index) {
+                        if next == '\n' {
+                            break;
+                        }
+                        blank_char(&mut out, next);
+                        index += 1;
+                    }
+                }
+                ('/', Some('*')) => {
+                    let mut depth = 0_usize;
+                    while let Some(next) = at(index) {
+                        match (next, at(index + 1)) {
+                            ('/', Some('*')) => {
+                                depth += 1;
+                                out.push_str("  ");
+                                index += 2;
+                            }
+                            ('*', Some('/')) => {
+                                depth -= 1;
+                                out.push_str("  ");
+                                index += 2;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {
+                                blank_char(&mut out, next);
+                                index += 1;
+                            }
+                        }
+                    }
+                }
+                ('r', Some('"' | '#')) if raw_string_at(&chars, index) => {
+                    // `r`, the hashes, the quote; the string ends at a quote
+                    // followed by as many hashes.
+                    let hashes = chars
+                        .iter()
+                        .skip(index + 1)
+                        .take_while(|next| **next == '#')
+                        .count();
+                    let mut end = index + 2 + hashes;
+                    while let Some(next) = at(end) {
+                        end += 1;
+                        let closing = chars
+                            .iter()
+                            .skip(end)
+                            .take(hashes)
+                            .filter(|after| **after == '#')
+                            .count();
+                        if next == '"' && closing == hashes {
+                            end += hashes;
+                            break;
+                        }
+                    }
+                    out.extend(chars.iter().take(end).skip(index));
+                    index = end;
+                }
+                ('"', _) => {
+                    out.push('"');
+                    index += 1;
+                    while let Some(next) = at(index) {
+                        out.push(next);
+                        index += 1;
+                        if next == '\\' {
+                            if let Some(escaped) = at(index) {
+                                out.push(escaped);
+                                index += 1;
+                            }
+                        } else if next == '"' {
+                            break;
+                        }
+                    }
+                }
+                ('\'', Some('\\')) => {
+                    // An escaped character literal, up to its closing quote.
+                    out.push('\'');
+                    out.push('\\');
+                    index += 2;
+                    while let Some(next) = at(index) {
+                        out.push(next);
+                        index += 1;
+                        if next == '\'' {
+                            break;
+                        }
+                    }
+                }
+                ('\'', Some(literal)) if at(index + 2) == Some('\'') => {
+                    out.push('\'');
+                    out.push(literal);
+                    out.push('\'');
+                    index += 3;
+                }
+                _ => {
+                    out.push(character);
+                    index += 1;
+                }
+            }
+        }
+        out
+    }
+
+    /// A commented-out character: a newline kept, anything else as many
+    /// spaces as its bytes.
+    fn blank_char(out: &mut String, character: char) {
+        if character == '\n' {
+            out.push('\n');
+        } else {
+            out.extend(std::iter::repeat_n(' ', character.len_utf8()));
+        }
+    }
+
+    /// Whether a raw string literal opens at `index` (`r"`, `r#"`, ...)
+    /// rather than an identifier ending in `r`.
+    fn raw_string_at(chars: &[char], index: usize) -> bool {
+        let starts_word = index
+            .checked_sub(1)
+            .and_then(|before| chars.get(before))
+            .is_none_or(|before| !(before.is_alphanumeric() || *before == '_'));
+        let quote = chars
+            .iter()
+            .skip(index + 1)
+            .find(|next| **next != '#')
+            .is_some_and(|next| *next == '"');
+        starts_word && quote
+    }
+
+    /// The 1-based numbers of the lines of `text`, Rust source, whose code
+    /// (comments blanked by [`rust_code`]) names `CARGO_TARGET_DIR`.
     fn raw_target_dir_lines(text: &str) -> Vec<usize> {
-        text.lines()
+        rust_code(text)
+            .lines()
             .zip(1..)
-            .filter(|(line, _)| {
-                let code = line.split_once("//").map_or(*line, |(code, _)| code);
-                code.contains("CARGO_TARGET_DIR")
-            })
+            .filter(|(line, _)| line.contains("CARGO_TARGET_DIR"))
             .map(|(_, number)| number)
             .collect()
     }
@@ -7506,6 +7648,82 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                     let dir = std::env::var_os(\"CARGO_TARGET_DIR\");\n\
                     let tmp = env!(\"CARGO_TARGET_TMPDIR\"); // not CARGO_TARGET_DIR\n";
         assert_eq!(raw_target_dir_lines(text), vec![3]);
+    }
+
+    /// A `//` inside a string, a raw string or a character literal opens no
+    /// comment, so a read after it on the line is still found (the review's
+    /// probe T5); a block comment, nested or across lines, hides what it
+    /// holds; a lifetime is not a character literal.
+    #[test]
+    fn the_reader_knows_strings_from_comments() {
+        let text = [
+            r#"fn f() { let u = "http://x"; let _ = std::env::var_os("CARGO_TARGET_DIR"); }"#,
+            r##"let r = r#"a // "b" "#; let _ = env::var("CARGO_TARGET_DIR");"##,
+            r#"let c = '"'; let _ = env::var("CARGO_TARGET_DIR");"#,
+            r#"let e = '\''; let _ = env::var("CARGO_TARGET_DIR");"#,
+            r#"fn g<'a>(x: &'a str) { let _ = env::var("CARGO_TARGET_DIR"); }"#,
+            r"/* CARGO_TARGET_DIR /* nested */ CARGO_TARGET_DIR",
+            r#"   CARGO_TARGET_DIR */ let s = "\"// a string"; let _ = env::var("CARGO_TARGET_DIR");"#,
+            r#"let p = "a\\"; // CARGO_TARGET_DIR"#,
+            r#"let q = r"CARGO_TARGET_DIR";"#,
+        ]
+        .join("\n");
+        assert_eq!(raw_target_dir_lines(&text), vec![1, 2, 3, 4, 5, 7, 9]);
+        assert_eq!(rust_code(&text).len(), text.len(), "offsets and lines hold");
+    }
+
+    /// The verdict over the raw reads found, against the owed list: every
+    /// owed file's count must equal its entry's, and a file with no entry may
+    /// have none.
+    fn raw_target_dir_verdict(
+        readers: &[(String, usize)],
+        owed: &[(&str, usize, &str)],
+    ) -> Result<(), String> {
+        let mut problems = Vec::new();
+        for (file, line) in readers {
+            if !owed.iter().any(|(owed_file, _, _)| owed_file == file) {
+                problems.push(format!(
+                    "{file}:{line} reads CARGO_TARGET_DIR raw; take the parent of \
+                     env!(\"CARGO_TARGET_TMPDIR\") instead"
+                ));
+            }
+        }
+        for (owed_file, count, lane) in owed {
+            let found = readers.iter().filter(|(file, _)| file == owed_file).count();
+            if found != *count {
+                problems.push(format!(
+                    "{owed_file} reads CARGO_TARGET_DIR raw on {found} line(s), and \
+                     RAW_TARGET_DIR_OWED owes {count} to {lane}: a new raw read is not owed, \
+                     and a file that reads it on fewer lines updates or deletes its entry"
+                ));
+            }
+        }
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("\n"))
+        }
+    }
+
+    #[test]
+    fn the_owed_list_is_kept_to_its_counts() {
+        let owed = [("crates/x/tests/a.rs", 1, "a lane")];
+        let one = vec![("crates/x/tests/a.rs".to_owned(), 80)];
+        assert_eq!(raw_target_dir_verdict(&one, &owed), Ok(()));
+        // The review's probe T8: a second raw read in an owed file.
+        let two = vec![
+            ("crates/x/tests/a.rs".to_owned(), 80),
+            ("crates/x/tests/a.rs".to_owned(), 108),
+        ];
+        assert!(
+            raw_target_dir_verdict(&two, &owed).is_err_and(|error| error.contains("2 line(s)"))
+        );
+        assert!(raw_target_dir_verdict(&[], &owed).is_err_and(|error| error.contains("0 line(s)")));
+        let other = vec![
+            ("crates/x/tests/a.rs".to_owned(), 80),
+            ("crates/y/tests/b.rs".to_owned(), 3),
+        ];
+        assert!(raw_target_dir_verdict(&other, &owed).is_err_and(|error| error.contains("b.rs:3")));
     }
 
     /// A test that reads `CARGO_TARGET_DIR` itself is misled by a relative
@@ -7548,26 +7766,9 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             scanned > 50,
             "only {scanned} test files found under crates/*/tests"
         );
-        let unowed: Vec<String> = readers
-            .iter()
-            .filter(|(file, _)| !RAW_TARGET_DIR_OWED.iter().any(|(owed, _)| owed == file))
-            .map(|(file, line)| format!("{file}:{line}"))
-            .collect();
-        assert!(
-            unowed.is_empty(),
-            "these test lines read CARGO_TARGET_DIR raw; take the parent of \
-             env!(\"CARGO_TARGET_TMPDIR\") instead: {unowed:?}"
-        );
-        let paid: Vec<&str> = RAW_TARGET_DIR_OWED
-            .iter()
-            .filter(|(owed, _)| !readers.iter().any(|(file, _)| file == owed))
-            .map(|(owed, _)| *owed)
-            .collect();
-        assert!(
-            paid.is_empty(),
-            "these files no longer read CARGO_TARGET_DIR raw: delete their entries from \
-             RAW_TARGET_DIR_OWED: {paid:?}"
-        );
+        if let Err(problems) = raw_target_dir_verdict(&readers, RAW_TARGET_DIR_OWED) {
+            panic!("{problems}");
+        }
     }
 
     /// The `#` comment block that ends on the line before the first line of
