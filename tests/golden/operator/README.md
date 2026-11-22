@@ -53,8 +53,8 @@ and, once its seat holds the licence, a **Resonance Spire** queued at the
 core; a round with nothing else fills the Safe Playbook template's route with
 them and is still Easy's own seal. Since S3's `opr3` fix pass 1 every case
 here is that: in round 1 no seat holds a sighting, the Survey post is
-weighed before the goals, and what it leaves of the 60 s segment's share and
-of the treasury carries no placement. A seat with nothing
+weighed before the goals, and what it leaves of the treasury carries no
+placement. A seat with nothing
 inside its route share seals its own **safe playbook** instead: the Safe
 Playbook template instantiated with its route -- the walk to safety, any
 priority raise, and the same `deepen_core`, last -- whose `meta.note` is the
@@ -100,7 +100,7 @@ moves, and the pull request says which:
   in its own first Lull;
 * **`patch_plan`'s layout** of a replaced or inserted value (plan-core);
 * **the producing tests' own match settings**: in
-  `crates/gamectl/tests/operator.rs` three seats, a 60 s segment
+  `crates/gamectl/tests/operator.rs` three seats, an 80 s segment
   (`SEGMENT_MS`, not the rules table's segment lengths), no units, three
   rounds; in `crates/gamectl/tests/wizard.rs` the lobby's two seats, the
   rules table's own segment ladder and three rounds. Easy fills 70 % of the

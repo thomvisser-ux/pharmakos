@@ -76,10 +76,13 @@ const PROBATION_SEED: u64 = 20;
 /// The scenario files' seed, the second golden seed.
 const SCENARIO_SEED: u64 = 0x0000_0000_ca5c_aded;
 
-/// The corpus's Push length: long enough for a commander to walk to a seam,
-/// place a beacon and walk back (spec section 5's 12 s deploy), short enough
-/// to step in a test.
-const SEGMENT_MS: i32 = 60_000;
+/// The corpus's Push length: long enough for a commander to walk to a vent
+/// and place a Build beacon with its initial settings at the prices the
+/// verifier charges (S3's `opr3`, fix pass 1: at 60 s the 42 s share no longer
+/// held the starting vents' 40 s routes once the core visit's handshake and
+/// the initial-settings row were priced), short enough to step in a test: the
+/// `against-easy` scenario's own 80 s.
+const SEGMENT_MS: i32 = 80_000;
 
 // ---------------------------------------------------------------------------
 // Hosting
@@ -796,11 +799,10 @@ fn the_safe_playbook_always_qualifies() {
 ///
 /// None since S3's `opr3` fix pass 1. The power-short match's core is shed at
 /// the Push's first settle and never revived, and a raise needs a lit
-/// non-core beacon of the seat's: in round 1 neither seat of that match now
-/// places one (with the grid short, the Survey post's scouts do not fit the
-/// one kW budget, and Easy's exact pricing of the Build beacon's initial
-/// settings and the core visit's handshake puts its vent past the 42 s share
-/// of the corpus's 60 s segment), so no later round has a beacon to raise.
+/// non-core beacon of the seat's: no seat of that match places one any more
+/// (with the grid short the Survey post's scouts do not fit the one kW
+/// budget, and its Build beacon does not fit beside them), so no round has a
+/// beacon to raise.
 const ROWS_THAT_RAISE: &[(&str, u8)] = &[];
 
 /// Decisions-log item 128 (S1's plan, decision 14; the register's S1-21),
@@ -913,13 +915,11 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 }
 
 /// The corpus rows on the committed rules whose seat's supply shows a
-/// Generator. None since S3's `opr3` fix pass 1: the corpus plays 60 s
-/// segments, whose 70 % share is 42 s, and Easy now prices each step as the
-/// verifier does (the core visit's 1.5 s handshake and the Build beacon's
-/// initial-settings row, 3 s, which it used to leave out), so the starting
-/// vents at 40 s and 41 s of route no longer fit the share beside the core's
-/// step; and with no fresh sighting held, round 1 places a Survey post
-/// before the goals. The scenario's own Generator, on its 80 s segment, is
+/// Generator. None since S3's `opr3` fix pass 1: with no fresh sighting held,
+/// round 1's Survey post is weighed before the goals, and its $80 (a beacon
+/// and two scouts) leaves the starting treasury short of a Generator's $160
+/// (a beacon, its Generator and a build drone); the later rounds seal the
+/// safe playbook. The scenario's own Generator is
 /// `the_scenario_generator_raises_supply_by_exactly_the_lean_vent`'s.
 const GENERATOR_ROWS: &[(&str, u8)] = &[];
 
