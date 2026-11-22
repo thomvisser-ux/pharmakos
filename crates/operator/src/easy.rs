@@ -38,6 +38,7 @@
 //! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
 //! | the raid probe ([`RAID_PROBE_CALLS`]) | one `estimate_route` to the nearest own Attack beacon, so a raid post is never placed twice |
 //! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature, the guard post's and the raids' among them (a raid's by way of its post's site to its target) |
+//! | the stepping stones ([`STONE_CALLS`]) | one `estimate_route` to a `toward` waypoint per placement whose `covering` was refused `NOT_FOUND`, at most [`STONE_TARGETS_MAX`]; a built-in seat's only |
 //! | one instantiate per template | [`EASY_TEMPLATES`] `instantiate_template`, each with its own values, to read what it declares |
 //! | the composition | [`COMPOSE_CALLS`]: one `patch_plan` filling the chosen template and inserting its goals |
 //! | the verifies | 1 `verify_plan`, then [`EASY_REPAIRS`] repairs of one `patch_plan` and one `verify_plan` each |
@@ -49,7 +50,7 @@
 //! reads, and its step rides the composing `patch_plan`.
 //!
 //! An advisor makes the fixed reads, the three probes, the estimates, the
-//! instantiates and the safe playbook's calls, and nothing else
+//! instantiates and the safe playbook's calls, and nothing else: no stone
 //! ([`EASY_ADVISOR_CALL_BUDGET`]).
 //! `easy_never_exceeds_its_derived_call_budget` asserts both on a worst-case
 //! scripted round, and the hosted tests in `crates/gamectl` assert them on
@@ -196,6 +197,25 @@ pub const RAID_FORCE_SIZE: u32 = 2;
 /// PLACEHOLDER: how many raid targets Easy weighs, 3 of its 30 candidates — owner, S5, with Normal and Hard
 pub const RAID_TARGETS_MAX: u32 = 3;
 
+/// How many refused placements a round weighs again as a stepping stone
+/// toward its feature (the register's S5-04;
+/// [`crate::candidates`]' `evaluate`), one `estimate_route` each.
+///
+/// **Derived, not picked** (AGENTS.md section 12: a limit only where it is
+/// technically necessary). The necessity is the in-process seat's call rate,
+/// 128 calls per tick (the gateway's `limit::IN_PROCESS_LIMITS`), which
+/// a round must fit on the one Lull tick it has. A placement is retried once
+/// at most, and Easy evaluates [`EASY_CANDIDATES`] candidates, so no round
+/// can have more refused placements than that: the largest retry count there
+/// can be is [`EASY_CANDIDATES`], and its worst case fits. With it the
+/// built-in seat's budget is [`EASY_CALL_BUDGET`], 108 calls, 20 under the
+/// limit (16 %), which is the stated margin;
+/// `crates/gamectl/tests/operator.rs`' `easy_fits_the_in_process_limits`
+/// holds the two together when it compiles, and
+/// `easy_never_exceeds_its_derived_call_budget` builds the worst case (every
+/// candidate a refused placement, every stone answered) and counts it.
+pub const STONE_TARGETS_MAX: u32 = EASY_CANDIDATES;
+
 // ---------------------------------------------------------------------------
 // The Balanced weighting
 // ---------------------------------------------------------------------------
@@ -290,6 +310,11 @@ pub const GUARD_PROBE_CALLS: u32 = 1;
 /// which says whether a raid post already stands beside the core.
 pub const RAID_PROBE_CALLS: u32 = 1;
 
+/// The stepping stones: one `estimate_route` per refused placement weighed
+/// again ([`STONE_TARGETS_MAX`]). A built-in seat's only: the advisor
+/// weighs no stone, since none is offered to the wizard.
+pub const STONE_CALLS: u32 = STONE_TARGETS_MAX;
+
 /// The composition: one `patch_plan`.
 pub const COMPOSE_CALLS: u32 = 1;
 
@@ -309,6 +334,7 @@ pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + GUARD_PROBE_CALLS
     + RAID_PROBE_CALLS
     + EASY_CANDIDATES
+    + STONE_CALLS
     + EASY_TEMPLATES
     + COMPOSE_CALLS
     + VERIFY_CALLS
@@ -475,7 +501,7 @@ impl Easy {
         let post = candidates::defend_post(wire, situation);
         let raid = candidates::raid_post(wire, situation);
         let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid);
-        let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals);
+        let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals, true);
         let top = candidates::top_k(&evaluated);
         let guard = candidates::guard(&evaluated);
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
@@ -520,7 +546,7 @@ impl Easy {
             let post = candidates::defend_post(&mut wire, &situation);
             let raid = candidates::raid_post(&mut wire, &situation);
             let goals = candidates::enumerate(&situation, &self.tuning, &taps, post, raid);
-            let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals);
+            let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals, false);
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
             let safe = safe::safe_playbook(&mut wire, &situation, &declared);

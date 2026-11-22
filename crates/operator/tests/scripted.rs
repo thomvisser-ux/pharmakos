@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use pharmakos_operator::easy::{
-    CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, PAGES_MAX, RAID_FORCE_SIZE,
-    RAID_TARGETS_MAX, SAFE_MAX_RAISED,
+    CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, EASY_CANDIDATES, PAGES_MAX,
+    RAID_FORCE_SIZE, RAID_TARGETS_MAX, SAFE_MAX_RAISED, STONE_CALLS, STONE_TARGETS_MAX,
 };
 use pharmakos_operator::{Easy, Submitted};
 use pharmakos_proto::json::{Json, read, write};
@@ -81,6 +81,9 @@ struct Feature {
     /// The site a `covering` waypoint naming it answers; `None` when the
     /// gateway refuses it (`NOT_FOUND`, no site covers it).
     site: Option<[i32; 3]>,
+    /// The stone a `toward` waypoint naming it answers; `None` when the
+    /// gateway refuses it (`NOT_FOUND`, no stepping stone).
+    stone: Option<[i32; 3]>,
 }
 
 impl Feature {
@@ -95,6 +98,7 @@ impl Feature {
             covered: false,
             travel_ms: Some(10_000),
             site: Some([x - 4, y, GROUND]),
+            stone: None,
         }
     }
 }
@@ -312,6 +316,19 @@ impl Script {
                 .iter()
                 .find(|feature| feature.id == name)
                 .and_then(|feature| feature.site)
+                .ok_or("NOT_FOUND");
+        }
+        if let Some(name) = location
+            .get("toward")
+            .and_then(|toward| toward.get("feature"))
+            .and_then(|feature| feature.get("feature_id"))
+            .and_then(text)
+        {
+            return self
+                .features
+                .iter()
+                .find(|feature| feature.id == name)
+                .and_then(|feature| feature.stone)
                 .ok_or("NOT_FOUND");
         }
         if let Some(nearest) = location
@@ -1594,8 +1611,10 @@ fn easy_never_exceeds_its_derived_call_budget() {
     );
     // And the budget is the derivation, not a number sized to fit: this round
     // spends every term but one `submit_plan` (its own plan never qualified,
-    // so only the safe one was submitted).
-    assert_eq!(played.calls, EASY_CALL_BUDGET - 1);
+    // so only the safe one was submitted) and the stepping stones, since every
+    // placement here has a site (`the_worst_stone_round_spends_every_term`
+    // spends those).
+    assert_eq!(played.calls, EASY_CALL_BUDGET - 1 - STONE_CALLS);
 
     // The other worst branch: its own plan qualifies and is refused at submit.
     let mut refused = worst.clone();
@@ -2884,4 +2903,157 @@ fn the_spire_is_never_in_the_safe_playbook_or_a_suggestion() {
             .iter()
             .all(|value| !value.value.contains("queue_structure"))
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Stepping stones (S3's `opr3`; the register's S5-04)
+// ---------------------------------------------------------------------------
+
+/// The `estimate_route` lines that end on a `toward` naming `feature`.
+fn towards(transcript: &[String], feature: &str) -> usize {
+    transcript
+        .iter()
+        .filter(|line| {
+            line.starts_with("estimate_route")
+                && line.contains(&format!(
+                    r#""toward": {{ "feature": {{ "feature_id": "{feature}" }} }}"#
+                ))
+        })
+        .count()
+}
+
+/// The busy seat whose vent no site of its spheres covers: the `covering`
+/// estimate is refused `NOT_FOUND`, and a `toward` names the stone.
+fn far_vent() -> Script {
+    let mut world = Script::busy(0);
+    world.features.retain(|feature| feature.id != "seam_20_60");
+    for feature in &mut world.features {
+        if feature.id == "vent_56_32" {
+            feature.site = None;
+            feature.stone = Some([50, 32, GROUND]);
+        }
+    }
+    world
+}
+
+/// A vent no site covers is weighed once more as a stone: one `toward`
+/// estimate naming it, and the round places a beacon `toward` it by name,
+/// with the Hold & Build place step's own timeout and `on_fail` SKIP.
+#[test]
+fn a_far_vent_refused_for_covering_is_reached_with_a_stone() {
+    let (script, played) = play(far_vent());
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    assert_eq!(towards(&script.transcript, "vent_56_32"), 1);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(
+        ops.contains(r#""place_beacon": { "at": { "toward": { "feature": { "feature_id": "vent_56_32" } } } }"#),
+        "{ops}"
+    );
+    assert!(ops.contains(r#""timeout_ms": 60000"#), "{ops}");
+    assert!(ops.contains(r#""label": "stone""#), "{ops}");
+    assert!(played.why.contains("stepping-stone"), "{}", played.why);
+}
+
+/// A `toward` the gateway refuses drops the stone, and the round seals what
+/// else it has (here nothing: its safe playbook).
+#[test]
+fn a_refused_toward_drops_the_stone() {
+    let mut world = far_vent();
+    for feature in &mut world.features {
+        feature.stone = None;
+    }
+    let (script, played) = play(world);
+    assert_eq!(towards(&script.transcript, "vent_56_32"), 1);
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("patch_plan") && line.contains("toward")),
+        "{:#?}",
+        script.transcript
+    );
+    assert_eq!(played.submitted, Submitted::Safe);
+}
+
+/// Every refused placement is weighed again once, and never twice; two
+/// stones the sim would stand on one site add one beacon, not two; and the
+/// bound is the candidate count, so it never binds.
+#[test]
+fn every_refused_placement_is_weighed_once_and_one_site_takes_one_stone() {
+    let mut world = far_vent();
+    let mut seam = Feature::new("seam", "rich", [56, 40]);
+    seam.site = None;
+    seam.stone = Some([50, 32, GROUND]);
+    world.features.push(seam);
+    world.treasury = 1_000;
+    let (script, _) = play(world);
+    assert_eq!(towards(&script.transcript, "vent_56_32"), 1);
+    assert_eq!(towards(&script.transcript, "seam_56_40"), 1);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert_eq!(ops.matches(r#""toward""#).count(), 1, "{ops}");
+    assert_eq!(STONE_TARGETS_MAX, EASY_CANDIDATES);
+}
+
+/// The wizard never sees a stone: the advisor weighs none, so it makes no
+/// `toward` estimate, and Hold & Build's page says why it has no vent.
+#[test]
+fn the_advisor_weighs_no_stone() {
+    let (script, advice) = advise(far_vent());
+    assert_eq!(towards(&script.transcript, "vent_56_32"), 0);
+    let hold = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "hold_and_build")
+        .expect("a Hold & Build page");
+    assert!(hold.parameters.is_empty(), "{hold:#?}");
+}
+
+/// The other worst round: every candidate a placement no site covers and
+/// every stone answered, so the stepping-stone term is spent to its bound,
+/// with every other term but one `submit_plan` -- the paged reads, the tap
+/// probe (a pair the gateway says is not legal), the guard and raid probes,
+/// the templates, the composition, every repair and the safe playbook.
+#[test]
+fn the_worst_stone_round_spends_every_term() {
+    let mut worst = short_with_four_lit(1);
+    worst.paging = Paging::ToTheBound;
+    worst.feed_deaths = vec![0];
+    worst.verify = Verify::NeverButFixable;
+    worst.treasury = 10_000;
+    for n in 0..40 {
+        let kind = if n % 2 == 0 { "seam" } else { "vent" };
+        let mut feature = Feature::new(kind, "standard", [2 + n, 2]);
+        feature.travel_ms = Some(1_000 + i64::from(n));
+        feature.site = None;
+        feature.stone = Some([30, 30 - n, GROUND]);
+        worst.features.push(feature);
+    }
+    let mut covered = Feature::new("vent", "rich", [40, 40]);
+    covered.covered = true;
+    worst.features.push(covered);
+    // More beacons at risk than the safe playbook estimates.
+    for n in 8..12 {
+        worst.beacons.push(Beacon {
+            id: format!("b_{n:02}"),
+            at: [30 + n, 20, GROUND],
+            owner: 1,
+            core: false,
+            powered: true,
+            priority: "low",
+        });
+    }
+    let (script, played) = play(worst);
+    let stones = script
+        .transcript
+        .iter()
+        .filter(|line| line.starts_with("estimate_route") && line.contains("toward"))
+        .count();
+    assert_eq!(u32::try_from(stones).unwrap(), STONE_CALLS);
+    assert_eq!(played.repairs, 4);
+    assert_eq!(played.submitted, Submitted::Safe);
+    assert_eq!(
+        played.calls,
+        u32::try_from(script.transcript.len()).unwrap()
+    );
+    assert_eq!(played.calls, EASY_CALL_BUDGET - 1);
 }

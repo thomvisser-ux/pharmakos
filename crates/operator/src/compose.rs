@@ -11,8 +11,9 @@
 //! before it names, fits what is left of the share, and is affordable from
 //! the treasury as it stands. The first goal chooses the template; each
 //! further one becomes one more step of it -- a Mine beacon covering its seam
-//! for Expand & Mine; a Build beacon covering its vent, or a Generator added
-//! to an existing beacon's list, for Hold & Build -- written as a JSON Patch
+//! for Expand & Mine; a Build beacon covering its vent, a Generator added to
+//! an existing beacon's list, or a stepping stone placed `toward` a far
+//! feature, for Hold & Build -- written as a JSON Patch
 //! the gateway's `patch_plan` applies to the template's own instantiation, so
 //! comments and layout survive.
 //!
@@ -225,6 +226,13 @@ fn greedy(top: &[Candidate], share: i64, treasury: i64) -> Vec<Candidate> {
             // One goal per feature: a second beacon covering one seam, or a
             // second Generator on one vent, would buy nothing the first
             // did not.
+            continue;
+        }
+        if matches!(candidate.goal, Goal::Stone { .. })
+            && goals.iter().any(|held| held.place == candidate.place)
+        {
+            // One beacon per site: two stones toward two features that the
+            // sim would stand on one column add one sphere, not two.
             continue;
         }
         let (Some(then_time), Some(then_cost)) = (
@@ -637,6 +645,19 @@ fn place_patch(
                 }
                 step
             }
+            Goal::Stone { feature, .. } => {
+                let label = if k == 0 {
+                    String::from("stone")
+                } else {
+                    format!("stone_{n}")
+                };
+                let step = stone_step(&label, feature, place_step.get("timeout_ms")?.clone());
+                if k == 0 {
+                    patch.push(op("replace", &place_prefix, Some(step)));
+                    continue;
+                }
+                step
+            }
             Goal::Tap { beacon, vent, .. } => {
                 let label = if k == 0 {
                     String::from("add_generator")
@@ -661,6 +682,26 @@ fn place_patch(
         removals.push(vec![op("remove", &shifted, None)]);
     }
     Some((patch, removals))
+}
+
+/// A stepping-stone step: a beacon placed `toward` a named feature, which
+/// the sim stands where the seat's spheres reach furthest toward it, with
+/// the template's own place step's timeout and skipped rather than retried if
+/// it finds no site (`scenarios/s3/toward-stepping-stone.playbook.jsonc`'s
+/// shape).
+fn stone_step(label: &str, feature: &str, timeout_ms: Json) -> Json {
+    object(vec![
+        ("label", string(label)),
+        (
+            "place_beacon",
+            object(vec![(
+                "at",
+                object(vec![("toward", object(vec![("feature", named(feature))]))]),
+            )]),
+        ),
+        ("timeout_ms", timeout_ms),
+        ("on_fail", object(vec![("action", string("SKIP"))])),
+    ])
 }
 
 /// The hold a Hold & Build suggestion fills the share with, if any is left
@@ -784,6 +825,12 @@ pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String 
              reads now, whose raiders gather there and raid {}{more}{tail}",
             place(candidate.place),
             raid_words(target),
+        ),
+        Goal::Stone { feature, kind } => format!(
+            "A stepping-stone beacon toward the {} {feature}, which no site your spheres allow \
+             covers yet, at {} as its site reads now{more}{tail}",
+            kind.name(),
+            place(candidate.place),
         ),
     }
 }

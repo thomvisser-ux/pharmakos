@@ -43,7 +43,10 @@ gives the core's Mine settings a `dig_max_depth` (decisions-log item 133 (3)
 (a)), inserted by the patch's last operation as the route's first element, so
 it lands however the rest of the route runs. Its walk and interface time are
 paid out of Hold & Build's hold, and a hold with nothing left for it is taken
-out; the visit goals keep the whole share. A seat with nothing
+out; the visit goals keep the whole share. Since S3's `opr3` a feature no
+site of the seat's spheres covers is weighed once more as a **stepping
+stone**, a beacon placed `toward` it by name (the register's S5-04), as
+`seed-00000000ca5caded/expected.seat-2.jsonc` seals in round 1. A seat with nothing
 inside its route share seals its own **safe playbook** instead: the Safe
 Playbook template instantiated with its route -- the walk to safety, any
 priority raise, and the same `deepen_core`, last -- whose `meta.note` is the

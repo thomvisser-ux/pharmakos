@@ -69,6 +69,10 @@ use pharmakos_sim::tables::SeatId;
 /// The determinism golden's seed.
 const SEED: u64 = pharmakos_sim::DETERMINISM_MATCH_SEED;
 
+/// Probation's own seed (`PROBATION_SEED` in
+/// `crates/sim/tests/probation_seed.rs`; decisions-log item 156 (1)).
+const PROBATION_SEED: u64 = 20;
+
 /// The scenario files' seed, the second golden seed.
 const SCENARIO_SEED: u64 = 0x0000_0000_ca5c_aded;
 
@@ -1214,6 +1218,14 @@ fn easy_fits_the_in_process_limits() {
         assert!(EASY_CALL_BUDGET <= IN_PROCESS_LIMITS.per_tick);
         assert!(EASY_ADVISOR_CALL_BUDGET <= IN_PROCESS_LIMITS.per_tick);
         assert!(EASY_CALL_BUDGET <= IN_PROCESS_LIMITS.per_window);
+        // The derivation's sums, pinned (`crates/operator/src/easy.rs`' table):
+        // 20 fixed reads, 2 tap probe, 1 guard probe, 1 raid probe, 30
+        // candidates, 30 stepping stones, 5 templates, 1 composition, 9
+        // verifies, 6 for the safe playbook and 3 to commit; the advisor's
+        // the same less the stones, the composition, the verifies and the
+        // commit.
+        assert!(EASY_CALL_BUDGET == 108);
+        assert!(EASY_ADVISOR_CALL_BUDGET == 65);
     }
 }
 
@@ -1505,4 +1517,93 @@ fn a_suggested_raid_qualifies_through_the_real_verifier() {
             target.value
         );
     }
+}
+
+/// Probation's own seed (decisions-log items 154 (1) and 156 (1)): its
+/// second vent lies beyond the first sphere, which no `covering` site
+/// reaches, so Easy reaches toward it with a stepping stone (S3's `opr3`;
+/// the register's S5-04), in its own seal, verified by the real gateway.
+#[test]
+fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
+    let rules = rules_json();
+    // Hosted as the lobby hosts Probation: two seats and the rules table's own
+    // segment ladder, every seat Easy here.
+    let host = Host::open_from(
+        &rules,
+        PROBATION_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 3,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut surface = Surface::new(
+        &match_id("probation-stones"),
+        PROBATION_SEED,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    let mut easy = all_built_in(&mut surface, 2, &rules);
+    let mut rows: Vec<Row> = Vec::new();
+    for round in 1..=3 {
+        rows.extend(visit(
+            &format!("probation/round-{round}"),
+            &mut surface,
+            2,
+            &rules,
+            &mut easy,
+        ));
+        assert!(surface.begin_push().expect("the Push opens"));
+        while let Some(report) = surface.step().expect("a tick") {
+            if report.segment_ended {
+                break;
+            }
+        }
+        surface.end_recap().expect("the recap closes");
+        if round < 3 {
+            surface.open_lull().expect("the next Lull");
+        }
+    }
+    let stones: Vec<(&str, u8)> = rows
+        .iter()
+        .filter(|row| row.seal == Seal::Own && row.note.contains("A stepping-stone beacon toward"))
+        .map(|row| (row.snapshot.as_str(), row.seat))
+        .collect();
+    eprintln!("Probation's seed, the rows that place a stone: {stones:?}");
+    for row in &rows {
+        eprintln!("{} seat {}: {}", row.snapshot, row.seat, row.note);
+    }
+    // A named expectation: in round 1 each seat covers its starting vent; in
+    // round 2 both reach toward a vent beyond their spheres, seat 0 toward
+    // `vent_232_96`, the second vent `scenarios/s3/toward-stepping-stone`
+    // names, which it covers from the stone in round 3; seat 1 reaches again
+    // in round 3. A change says which seat and round moved, and why.
+    assert_eq!(
+        stones,
+        [
+            ("probation/round-2", 0),
+            ("probation/round-2", 1),
+            ("probation/round-3", 1)
+        ],
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.snapshot == "probation/round-3"
+            && row.seat == 0
+            && row
+                .note
+                .contains("A Build beacon covering the rich heat vent vent_232_96")),
+        "seat 0 covers the far vent from its stone: {rows:#?}"
+    );
+    assert!(
+        rows.iter().all(|row| row.seal != Seal::NotEasy),
+        "every seal is Easy's own, the verifier's accepted: {rows:#?}"
+    );
 }

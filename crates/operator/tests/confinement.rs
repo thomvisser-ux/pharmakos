@@ -311,9 +311,12 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         1,
         POLICY,
     ),
+    // A refused `toward`, like a refused first estimate, is a stone dropped
+    // (`evaluate`'s docs): the operator's stated policy.
+    ("src/candidates.rs", "Err(_) => continue,", 1, POLICY),
     (
         "src/candidates.rs",
-        "let Ok(estimate) = wire.call(\"estimate_route\", params) else {",
+        "if let Ok(Some((place, travel, lead))) = read",
         1,
         POLICY,
     ),

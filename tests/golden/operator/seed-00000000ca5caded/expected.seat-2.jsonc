@@ -1,37 +1,49 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// safe_playbook.jsonc: the Safe Playbook template (spec section 14).
+// hold_and_build.jsonc: the Hold & Build template (decisions-log items 81 and
+// 113 (6)).
 //
-// What the built-in operator files for a seat that seals nothing verified
-// before the Lull ends, and what get_safe_plan shows, so a seat can see the
-// cost of a timeout. As written here it changes no beacon. The operator's
-// route may raise a beacon's Quartermaster priority and set how deep the
-// core's starting drone digs (decisions-log item 133); it never places,
-// recycles or switches a mandate.
+// It teaches the grid: place a Build beacon covering a heat vent your spheres
+// do not reach yet, give it a Generator on that vent as its first Build target,
+// and hold by it while its drone builds. A Generator stands on a heat vent, and
+// it is how a seat's kW supply rises. The target is an initial setting, and
+// initial settings are interface rows the commander commits on site after the
+// deploy, so this is still touch to change.
 //
-// With nothing raised, which is this file's own value, it is also the
-// gateway's fallback for a seat no operator advises: crates/gateway's
-// SAFE_PLAYBOOK is this template instantiated with no parameters, and
-// `the_gateways_fallback_is_the_safe_template_with_nothing_raised` keeps the
-// two equal ("written once, tested twice", decisions-log item 81).
+// Where the beacon goes is a description, not a place (docs/design/
+// targeting.md; decisions-log item 127 (12)): "the nearest vent you do not
+// cover yet". The step reads it when it starts, from where your commander
+// stands, and the sim chooses a legal site whose sphere holds that vent; the
+// step walks there itself, so no walk comes before it. The Generator's anchor
+// is "the vent this beacon was placed to cover", `covered`, so the target
+// always names the vent the site was chosen for. Your starting vent lies
+// outside your core's sphere at every seed (decisions-log items 90 and 95),
+// which is why a new beacon is placed rather than a target added to the core.
 //
-// Spec section 14 names "the flee and rescue rules". The rescue rides
-// `safest`, with no new vocabulary (S2's plan, decision 6): while the
-// commander is below full HP, `safest` ranks your beacons whose sphere holds a
-// live repair drone ahead of those without, so this route's walk to safety,
-// the flee rule's and the shadowing tail all walk a wounded commander to
-// where a drone heals it.
+// The wizard asks which vent: the description, or a vent by its name, such as
+// {"feature_id": "vent_324_16"}, which is what the built-in operator suggests.
+// A name is a fixed target for this map only; the description works on any.
+// A carried copy reads the description again every round, so it never places
+// a second beacon on a vent it already covers.
+//
+// The place-and-build shape is the owner's, confirmed at decisions-log item
+// 119 (9).
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
-    "title": "Safe playbook",
+    "title": "Hold & Build",
     "author_kind": "BUILTIN",
-    "note": "Move to the safest beacon, raise the priority of any beacon about to brown out, then stay with the safest beacon."
+    "note": "Easy, seat 2, round 1, told no seed (Easy draws nothing at random). A stepping-stone beacon toward the heat vent vent_98_135, which no site your spheres allow covers yet, at (47, 180, 30) as its site reads now: 40 points for 38 s of route (Easy fills 42 s of the segment)."
   },
   "kind": "PLAYBOOK",
   "declarative": {
-    "route": [{"label":"to_safety","move":{"to":{"safest":{}},"pace":"AVOID_KNOWN_THREATS"}},{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}}],
+    "route": [{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}},
+      // Why: the step walks to the site it reads, so its timeout bounds the
+      // walk as well as the deploy.
+      {"label":"stone","place_beacon":{"at":{"toward":{"feature":{"feature_id":"vent_98_135"}}}},"timeout_ms":60000,"on_fail":{"action":"SKIP"}},
+      {"label": "hold", "hold": {"ms": 800}}
+    ],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander
       // walks back to safety and waits before carrying on.
@@ -41,7 +53,6 @@
     ]
   },
   "on_death": {"on_respawn": "CONTINUE"},
-  // Why: once the route is done, stay with the safest beacon rather than hold
-  // one spot, so the commander goes with it if another beacon becomes safer.
+  // Why: after the hold, stay with the safest beacon and its drones.
   "fallback": {"shadow": {"beacon": {"safest": {}}}}
 }

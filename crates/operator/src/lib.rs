@@ -64,7 +64,9 @@
 //! the seat knows of, an enemy beacon or an enemy commander in sight, scored
 //! alike (Raid an Enemy Beacon). And from S3 it queues the Resonance Spire
 //! at its core once its seat holds the licence, beside the round's goals and
-//! never ranked among them (S3's plan, `opr3`; [`easy`]'s plan).
+//! never ranked among them (S3's plan, `opr3`; [`easy`]'s plan), and it
+//! reaches past its first sphere with stepping stones placed `toward` a
+//! feature no site of its spheres covers (the register's S5-04).
 //!
 //! PLACEHOLDER: Easy's Survey post, chatter and target spread — owner, S5, with Normal and Hard
 
