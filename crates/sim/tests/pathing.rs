@@ -3186,7 +3186,7 @@ fn serpentine_in(
 /// that bound; `the_repath_cap_is_served_round_robin_and_never_exceeded`
 /// holds the serving rule it rests on.
 ///
-/// Through serpentines of one to three folds (two to four routes), the signed
+/// Through serpentines of one to three folds (two, three and five routes), the signed
 /// error is printed per walk and its largest asserted inside item 61's 15 %.
 #[test]
 fn a_chained_walk_arrives_no_later_than_promised() {

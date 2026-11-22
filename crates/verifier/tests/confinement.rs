@@ -305,9 +305,9 @@ fn every_allow_is_audited_and_carries_a_reason() {
 fn the_verifier_never_ranks() {
     // docs/design/targeting.md, "Surfaces": "The verifier checks vocabulary,
     // legality of placement (which arm where), filters and existence, never
-    // rank." "Nearest" is the least estimated travel, and the estimator is the
-    // sim's pathing module, which the gateway lends to `resolve_refs` and
-    // `estimate_route`; a verifier that ranked would need it. So no source
+    // rank." "Nearest" is the least cost of the walk the router serves, which
+    // the sim's pathing module prices and the gateway reads for `resolve_refs`
+    // and `estimate_route`; a verifier that ranked would need it. So no source
     // here names the pathfinder at all, and the one place the estimate stage
     // is named is `lib.rs`'s pipeline. In particular the resolve stage, which
     // is where a description would be "resolved" if anything here resolved

@@ -10,13 +10,17 @@
 //! exception the design takes on purpose: `get_map_summary`'s features are
 //! unfogged in S1, as targeting's ranking is (decisions-log item 130 (3) (a)),
 //! and each seat-relative field in them is the asking seat's own -- and not
-//! one of them steps anything: `estimate_route` estimates its legs through
-//! [`crate::routes::RouteAdapter`], which owns its own search graph and has no
-//! `World` in its hand at all; a `covering` waypoint (answered only while the
-//! hosted world is the frozen one, outside a Push) and `get_map_summary`'s
-//! features read the hosted world through the sim's own resolver, borrowed
-//! read-only ([`crate::targeting`]), and rank by estimate rather than by
-//! running anything; and `get_economy_forecast` reads the calling seat's own
+//! one of them steps anything: `estimate_route` prices its legs through
+//! [`crate::routes::RouteAdapter`], which borrows the hosted world's surface
+//! and clusters and has no `World` in its hand, and it answers only in a Lull
+//! (the owner's "Refuse in a Push", 2026-11-21), its `covering` and `toward`
+//! waypoints included; `get_map_summary`'s features read the hosted world
+//! through the sim's own resolver, borrowed read-only ([`crate::targeting`]),
+//! and rank by the cost of the walk the router serves, priced without running
+//! anything, in every phase: their travel times are still given in a Push,
+//! over the live world, until the owner's "Omit them in a Push" is built
+//! (it needs the wire to say "no time" apart from "no route"); and
+//! `get_economy_forecast` reads the calling seat's own
 //! row of the hosted world -- the frozen planning world in a Lull or a recap,
 //! the live one in a Push -- and, in a Lull, prices the seat's own seal by the
 //! verifier's `$` projection, which is arithmetic over the file and runs
