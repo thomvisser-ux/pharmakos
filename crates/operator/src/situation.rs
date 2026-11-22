@@ -493,7 +493,27 @@ fn feature_of(row: &Json) -> Result<Feature, Refused> {
             )
         })
     };
+    // Both members are the gateway's answer in a Lull, the one phase the
+    // operator plans in, and `travel_ms` stands only beside `reachable:
+    // true` (`gateway.proto`'s `MapFeature`). Outside a Lull both are left
+    // out (lane `mapw`): an absent `reachable` is withheld, not unreachable,
+    // and an absent figure beside `reachable: true` is no walk of 0 ms, so
+    // either is a row refused rather than read as a default.
+    if row.get("reachable").is_none() {
+        return Err(malformed(
+            "get_map_summary",
+            &format!("feature `{id}` carries no `reachable`: its travel is withheld"),
+        ));
+    }
     let reachable = bool_of(row, "reachable").map_err(misread)?;
+    if reachable != row.get("travel_ms").is_some() {
+        return Err(malformed(
+            "get_map_summary",
+            &format!(
+                "feature `{id}`'s `travel_ms` does not stand exactly beside `reachable: true`"
+            ),
+        ));
+    }
     let travel_ms = int_of(row, "travel_ms").map_err(misread)?;
     Ok(Feature {
         id: id.to_owned(),
@@ -502,8 +522,6 @@ fn feature_of(row: &Json) -> Result<Feature, Refused> {
         anchor: [axis("x")?, axis("y")?],
         live: bool_of(row, "live").map_err(misread)?,
         covered: bool_of(row, "covered").map_err(misread)?,
-        // `travel_ms` "is then 0 and means nothing" (`gateway.proto`): read as
-        // absent, never as a free walk.
         travel_ms: reachable.then_some(travel_ms),
     })
 }

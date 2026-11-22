@@ -118,6 +118,17 @@ enum Verify {
     NeverUnfixed,
 }
 
+/// How the scripted map summary writes a feature's travel.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Travel {
+    /// As the gateway writes it in a Lull.
+    Written,
+    /// Left out, `reachable` and `travel_ms` both, as outside a Lull.
+    Withheld,
+    /// `reachable: true` with no `travel_ms`.
+    NoFigure,
+}
+
 /// How the scripted paged reads page.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Paging {
@@ -160,6 +171,10 @@ struct Script {
     bare_legs: bool,
     /// Answer one feature row with no grade.
     malformed_feature: bool,
+    /// How the first feature row carries its travel: as the gateway writes
+    /// it in a Lull, withheld (no `reachable`, no `travel_ms`, as outside a
+    /// Lull), or `reachable: true` with no `travel_ms`.
+    travel: Travel,
     /// The seats whose commander the last Push's feed says died, one
     /// `commander_died` line each.
     feed_deaths: Vec<u8>,
@@ -224,6 +239,7 @@ impl Script {
             refuse_everything: None,
             bare_legs: false,
             malformed_feature: false,
+            travel: Travel::Written,
             feed_deaths: Vec::new(),
             defend_post: None,
             sighting_ages: BTreeMap::new(),
@@ -544,8 +560,18 @@ impl Script {
                 row.push(("y", num(i64::from(feature.anchor[1]))));
                 row.push(("live", Json::Bool(feature.live)));
                 row.push(("covered", Json::Bool(feature.covered)));
-                row.push(("travel_ms", num(feature.travel_ms.unwrap_or(0))));
-                row.push(("reachable", Json::Bool(feature.travel_ms.is_some())));
+                match (index, self.travel) {
+                    (0, Travel::Withheld) => {}
+                    (0, Travel::NoFigure) => row.push(("reachable", Json::Bool(true))),
+                    _ => {
+                        // `travel_ms` only beside `reachable: true`, as the
+                        // gateway writes it.
+                        if let Some(travel) = feature.travel_ms {
+                            row.push(("travel_ms", num(travel)));
+                        }
+                        row.push(("reachable", Json::Bool(feature.travel_ms.is_some())));
+                    }
+                }
                 obj(row)
             })
             .collect();
@@ -1391,6 +1417,34 @@ fn a_feature_that_does_not_read_is_a_round_not_read_and_ready_is_still_said() {
             "set_ready"
         ]
     );
+}
+// ---------------------------------------------------------------------------
+// A feature's travel, withheld (lane `mapw`)
+// ---------------------------------------------------------------------------
+
+/// Outside a Lull the gateway leaves a feature's `reachable` and `travel_ms`
+/// out (lane `mapw`), and Easy reads the summary only in a Lull: a row with
+/// no `reachable`, or `reachable: true` with no `travel_ms`, is an answer
+/// the operator cannot plan from, refused as `MALFORMED` rather than read as
+/// unreachable or as a walk of 0 ms; and `set_ready` is still said.
+#[test]
+fn a_feature_whose_travel_is_withheld_is_a_round_not_read() {
+    for travel in [Travel::Withheld, Travel::NoFigure] {
+        let mut world = Script::busy(0);
+        world.travel = travel;
+        let (script, played) = play(world);
+        assert_eq!(
+            played.refused.map(|refused| (refused.method, refused.code)),
+            Some((String::from("get_map_summary"), String::from("MALFORMED")))
+        );
+        assert_eq!(
+            script
+                .transcript
+                .last()
+                .map(|line| line.split(' ').next().unwrap_or("")),
+            Some("set_ready")
+        );
+    }
 }
 
 /// A view that never completes and names no page after it is read once, not
