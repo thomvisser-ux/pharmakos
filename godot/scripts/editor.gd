@@ -201,6 +201,11 @@ const ITEM_LIST_QUEUE := 33
 const ENTRY_LISTS := {ITEM_LIST_MANDATE: ["mandate", "mandates", "menu_mandate"], ITEM_LIST_ADD_TARGET: ["add_target", "blueprints", "menu_add_target"], ITEM_LIST_QUEUE: ["queue", "blueprints", "menu_queue"]}
 ## A locked entry's sentence colour. PLACEHOLDER: the entry list's look — OWNER, at S6.
 const LOCKED_COLOUR := Color(0.65, 0.65, 0.65)
+## Every popup the editor owns draws this panel (S3's `fixp`, P6b finding 6): opaque. Measured on
+## Godot 4.7.2, the default theme's popup panel is a StyleBoxFlat drawing its centre at
+## Color(0.1, 0.1, 0.1, 0.6), so the map showed through the value field's popup and the picker.
+## PLACEHOLDER: the popups' panel colour — OWNER, at S6.
+const POPUP_COLOUR := Color(0.12, 0.12, 0.14, 1.0)
 ## The user argument (after `--`) that turns on the click logging.
 const LOG_INPUT_ARG := "--log-input"
 ## What New puts on screen: the empty playbook the client ships, one data file (the P6a
@@ -1320,6 +1325,7 @@ func _fill_visit_menu(state: Dictionary) -> void:
 ## A submenu of the Visit & change menu, titled `title`.
 func _visit_submenu(title: String) -> PopupMenu:
 	var submenu := PopupMenu.new()
+	opaque(submenu)
 	submenu.window_input.connect(close_menu_on_escape)
 	_visit_menu.add_child(submenu)
 	_visit_menu.add_submenu_node_item(title, submenu)
@@ -1334,6 +1340,7 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 	match String(setting.get("editor", "")):
 		"choice":
 			var values := PopupMenu.new()
+			opaque(values)
 			settings.add_child(values)
 			settings.add_submenu_node_item(title, values)
 			var listed: PackedStringArray = setting.get("values", PackedStringArray())
@@ -1813,11 +1820,13 @@ func _build_panel() -> void:
 
 func _build_menus() -> void:
 	_menu = PopupMenu.new()
+	opaque(_menu)
 	_menu.hide_on_checkable_item_selection = false
 	_menu.id_pressed.connect(_on_menu)
 	_menu.window_input.connect(close_menu_on_escape)
 	add_child(_menu)
 	_visit_menu = PopupMenu.new()
+	opaque(_visit_menu)
 	# Filled per beacon (`_fill_visit_menu`): the priority rows, then the detail's.
 	_visit_menu.add_item(Strings.text("menu_priority_low"), ITEM_LOW)
 	_visit_menu.add_item(Strings.text("menu_priority_normal"), ITEM_NORMAL)
@@ -1827,17 +1836,21 @@ func _build_menus() -> void:
 	_menu.add_child(_visit_menu)
 	# The rule list's chip editors (S3's `ed3b`).
 	_choice_menu = PopupMenu.new()
+	opaque(_choice_menu)
 	_choice_menu.id_pressed.connect(_on_choice)
 	add_child(_choice_menu)
 	_name_menu = PopupMenu.new()
+	opaque(_name_menu)
 	_name_menu.id_pressed.connect(_on_name)
 	add_child(_name_menu)
 	_build_picker()
 	_entry_popup = PopupPanel.new()
+	opaque(_entry_popup)
 	_entry_box = VBoxContainer.new()
 	_entry_popup.add_child(_entry_box)
 	add_child(_entry_popup)
 	_number_popup = PopupPanel.new()
+	opaque(_number_popup)
 	var box := VBoxContainer.new()
 	_number_popup.add_child(box)
 	_number_heading = Label.new()
@@ -1862,6 +1875,7 @@ func _build_menus() -> void:
 ## the tree of families, predicates and parameters, and Use.
 func _build_picker() -> void:
 	_picker_popup = PopupPanel.new()
+	opaque(_picker_popup)
 	var box := VBoxContainer.new()
 	_picker_popup.add_child(box)
 	var heading := Label.new()
@@ -1886,6 +1900,22 @@ func _build_picker() -> void:
 	use.pressed.connect(_on_picker_use)
 	box.add_child(use)
 	add_child(_picker_popup)
+
+
+## Gives `popup` the editor's one popup panel: opaque, POPUP_COLOUR.
+static func opaque(popup: Window) -> void:
+	var panel := StyleBoxFlat.new()
+	panel.bg_color = POPUP_COLOUR
+	panel.draw_center = true
+	panel.set_content_margin_all(6.0)
+	popup.add_theme_stylebox_override("panel", panel)
+
+
+## The popups the editor owns, for a check to read their panels.
+func popups() -> Array[Window]:
+	var out: Array[Window] = [_number_popup, _picker_popup, _entry_popup, _choice_menu, _name_menu]
+	out.append_array(_map_menus())
+	return out
 
 
 ## An unticked checkbox's box: a square outline in `colour`, clear inside.

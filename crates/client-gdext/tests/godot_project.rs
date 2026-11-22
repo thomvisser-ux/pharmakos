@@ -2739,3 +2739,39 @@ fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
         "the priority the beacon's summary sends is marked"
     );
 }
+
+/// **Every popup the editor owns draws the one opaque panel** (S3's `fixp`, P6b finding 6): each
+/// `PopupPanel.new()` and `PopupMenu.new()` in `editor.gd` is given it on the next line, and the
+/// client check reads every popup's resolved panel.
+#[test]
+fn every_popup_the_editor_owns_is_opaque() {
+    let editor = read("scripts/editor.gd");
+    let lines: Vec<&str> = editor.lines().map(str::trim).collect();
+    let mut made = 0_usize;
+    for (at, line) in lines.iter().enumerate() {
+        let Some((name, _)) = line
+            .strip_prefix("var ")
+            .unwrap_or(line)
+            .split_once(" := PopupPanel.new()")
+            .or_else(|| {
+                line.strip_prefix("var ")
+                    .unwrap_or(line)
+                    .split_once(" := PopupMenu.new()")
+            })
+            .or_else(|| line.split_once(" = PopupPanel.new()"))
+            .or_else(|| line.split_once(" = PopupMenu.new()"))
+        else {
+            continue;
+        };
+        made = made.saturating_add(1);
+        assert_eq!(
+            lines.get(at.saturating_add(1)).copied(),
+            Some(format!("opaque({name})").as_str()),
+            "{name} is made without the editor's panel"
+        );
+    }
+    assert!(made >= 8, "the scan found {made} popups");
+    assert!(
+        read("scripts/client_check.gd").contains("_check_the_popups_are_opaque(editor, failures)")
+    );
+}

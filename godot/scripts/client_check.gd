@@ -312,6 +312,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	_check_escape(editor, failures)
 	await _check_an_action_pick_closes_the_menus(stage, editor, failures)
 	await _check_the_entry_list(stage, editor, failures)
+	_check_the_popups_are_opaque(editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
@@ -841,6 +842,18 @@ func _check_the_entry_list(stage: SubViewport, editor: CanvasLayer, failures: Ar
 			failures.append("a click on an open entry picked %s" % [picked])
 	editor.entry_picked.disconnect(listen)
 	popup.hide()
+
+
+## **Popups draw an opaque panel** (S3's `fixp`, P6b finding 6): every popup the editor owns
+## resolves its `panel` to a style that draws its centre at alpha 1. Measured on Godot 4.7.2 the
+## default was a StyleBoxFlat at alpha 0.6, through which the map showed.
+func _check_the_popups_are_opaque(editor: CanvasLayer, failures: Array[String]) -> void:
+	var fallback: StyleBox = ThemeDB.get_default_theme().get_stylebox("panel", "PopupPanel")
+	print("[client-check] Godot's own popup panel: %s, centre %s" % [fallback.get_class(), fallback.bg_color if fallback is StyleBoxFlat else "-"])
+	for popup in editor.popups():
+		var panel: StyleBox = popup.get_theme_stylebox("panel")
+		if not (panel is StyleBoxFlat) or not panel.draw_center or panel.bg_color.a < 1.0:
+			failures.append("%s draws a panel that is not opaque: %s" % [popup.get_class(), panel])
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4
