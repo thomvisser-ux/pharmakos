@@ -580,25 +580,150 @@ fn no_wildcard_binding_is_written_anywhere() {
 /// moves) nor a builder of its own (a second size). The surface thread answers
 /// every method and the connection threads parse every frame, so the depth
 /// bound is a stack bound only on the stack this names.
-const THREADS_ON_A_STATED_STACK: &[(&str, &str)] = &[
-    (
-        "thread::spawn",
-        "a thread on the platform's default stack: use player_text_thread",
-    ),
-    (
-        "thread::Builder",
-        "a thread builder of its own: use player_text_thread",
-    ),
-];
+///
+/// An allow-list, not a list of banned spellings (S3's `probw`, carried from
+/// `vfyq2`'s record; decisions-log item 168 (5)): a list of `thread::spawn`
+/// and `thread::Builder` let `std::thread::scope` (whose scoped spawns take
+/// the default stack), an imported `Builder` (`use std::thread::Builder;`,
+/// then `Builder::new()`), a braced import (`use std::{thread, ...}`) and a
+/// renamed module (`use std::thread as t;`) through. So the shipped code may
+/// name std's thread module in exactly one form, `thread::JoinHandle`, the
+/// handle `player_text_thread`'s builder answers; every other whole-word
+/// `thread` outside a string literal is a way to make a thread that is not
+/// the door, and is refused. "Names the module" is a `thread` that a path
+/// separator touches on either side, or any `thread` in a `use` item (where a
+/// braced list names it bare); a local binding called `thread` is neither.
+fn thread_offence(line: &str) -> Option<&'static str> {
+    let code = outside_strings(line);
+    let trimmed = code.trim_start();
+    let importing = trimmed.starts_with("use ") || trimmed.starts_with("pub use ");
+    let mut from = 0_usize;
+    while let Some(offset) = code.get(from..).and_then(|rest| find_word(rest, "thread")) {
+        let start = from.saturating_add(offset);
+        let end = start.saturating_add("thread".len());
+        let before = code.get(..start).unwrap_or("");
+        let after = code.get(end..).unwrap_or("");
+        let pathed = before.ends_with("::") || after.starts_with("::");
+        if (pathed || importing) && !after.starts_with("::JoinHandle") {
+            return Some(
+                "names std's thread module other than as `thread::JoinHandle`: make every thread \
+                 with player_text_thread",
+            );
+        }
+        from = end;
+    }
+    None
+}
+
+/// The byte offset of the first whole-word `word` in `text`, as [`uses`]
+/// bounds a word.
+fn find_word(text: &str, word: &str) -> Option<usize> {
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let bytes = text.as_bytes();
+    let mut from = 0_usize;
+    while let Some(offset) = text.get(from..).and_then(|rest| rest.find(word)) {
+        let start = from.saturating_add(offset);
+        let end = start.saturating_add(word.len());
+        let before = start
+            .checked_sub(1)
+            .and_then(|index| bytes.get(index))
+            .copied()
+            .is_some_and(is_word);
+        let after = bytes.get(end).copied().is_some_and(is_word);
+        if !before && !after {
+            return Some(start);
+        }
+        from = start.saturating_add(1);
+    }
+    None
+}
+
+/// `line` with the inside of every string literal blanked, so a message
+/// ("starting the surface thread") is not read as a use of the module. A
+/// backslash escapes the next character inside a literal.
+fn outside_strings(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut inside = false;
+    let mut escaped = false;
+    for c in line.chars() {
+        if inside {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                inside = false;
+                out.push(c);
+            }
+            continue;
+        }
+        if c == '"' {
+            inside = true;
+        }
+        out.push(c);
+    }
+    out
+}
 
 #[test]
 fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
-    let findings = scan(THREADS_ON_A_STATED_STACK);
+    let mut findings: Vec<String> = Vec::new();
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (number, line) in code_lines(&text) {
+            if let Some(why) = thread_offence(&line) {
+                findings.push(format!(
+                    "{}:{number}: {why}\n    {}",
+                    path.display(),
+                    line.trim()
+                ));
+            }
+        }
+    }
     assert!(
         findings.is_empty(),
         "every gateway thread is made by player_text_thread:\n{}",
         findings.join("\n")
     );
+}
+
+/// The guard above sees every way std offers to make a thread off the door,
+/// the four the old list missed included, and passes the forms the shipped
+/// code writes.
+#[test]
+fn the_thread_guard_refuses_every_way_round_the_door() {
+    for line in [
+        "    let handle = std::thread::spawn(move || run());",
+        "    thread::spawn(move || run());",
+        "    let built = std::thread::Builder::new().stack_size(1);",
+        "    std::thread::scope(|s| { s.spawn(|| run()); });",
+        "    thread::scope(|s| { s.spawn(|| run()); });",
+        "use std::thread::Builder;",
+        "use std::thread::{Builder, JoinHandle};",
+        "use std::thread;",
+        "use std::{fs, thread};",
+        "use std::thread as t;",
+        "    let _ = ::std::thread::available_parallelism();",
+    ] {
+        assert!(
+            thread_offence(line).is_some(),
+            "the guard let through: {line}"
+        );
+    }
+    for line in [
+        "use std::thread::JoinHandle;",
+        "    let mut threads: Vec<JoinHandle<()>> = Vec::new();",
+        "    let thread = pharmakos_plan_core::stack::player_text_thread(\"gateway accept\")",
+        "    threads.push(thread);",
+        "    let started = pharmakos_plan_core::stack::player_text_thread(\"gateway connection\")",
+        ") -> Result<std::thread::JoinHandle<()>, Error> {",
+        "                \"this host could not start a connection thread: {}\",",
+        "    \"a \\\"quoted\\\" thread\" ; let threads = 1;",
+    ] {
+        assert_eq!(thread_offence(line), None, "the guard refused: {line}");
+    }
 }
 
 /// The one file of the gateway that names the sim's `PlanError` (S3's
