@@ -148,7 +148,11 @@ fn world_of(rules: RulesTable, movers: u32) -> World {
 /// closing a recap the moment one opens — is the same one the binary plays.
 fn chain(world: World, ticks: u32) -> String {
     let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
-    let mut out = String::with_capacity(usize::try_from(ticks).unwrap_or(0).saturating_mul(24));
+    let mut out = String::with_capacity(
+        usize::try_from(ticks)
+            .expect("the value fits")
+            .strict_mul(24),
+    );
     for tick in 0..ticks {
         let hash = if tick == 0 {
             runner.world().state_hash()
@@ -228,8 +232,8 @@ fn the_golden_has_no_carriage_return_and_ends_with_a_newline() {
          byte-identical files (.gitattributes marks *.hashes.txt as -text)"
     );
     assert_eq!(bytes.last().copied(), Some(b'\n'));
-    let lines = bytes.split(|b| *b == b'\n').count().saturating_sub(1);
-    assert_eq!(u32::try_from(lines).unwrap_or(0), GOLDEN_TICKS);
+    let lines = bytes.split(|b| *b == b'\n').count().strict_sub(1);
+    assert_eq!(u32::try_from(lines).expect("the value fits"), GOLDEN_TICKS);
 }
 
 #[test]
@@ -274,7 +278,22 @@ fn save_and_restore_round_trips_hash_identically() {
     // Fifty round-trips at fifty different points in the run, each one
     // asserting that the restored world hashes to exactly what the saved one
     // did and then continues to the same next hash.
+    //
+    // The restore target is a fresh world each round. Round 0 restores into
+    // one `world_with` builds, as every round once did; the later rounds
+    // restore into a clone of one built here, untouched. A clone is a value
+    // copy (the same tables, rows and derived state, only a different heap
+    // capacity, which nothing hashes or snapshots), so it is the same target:
+    // round 0 holds the world built once to a second fresh one, snapshot for
+    // snapshot, and every later round holds its clone to both the hash and
+    // the snapshot of the world built once. Built once rather than fifty times
+    // (decisions-log item 165 (13)).
     let mut world = world_with(rules());
+    let pristine = world_with(rules());
+    let pristine_bytes = Snapshot::capture(&pristine)
+        .expect("a fresh world is between ticks")
+        .to_bytes()
+        .expect("encoding a snapshot");
     let mut enc = Enc::with_capacity(64 * 1024);
     for round in 0..50 {
         for _ in 0..10 {
@@ -287,7 +306,34 @@ fn save_and_restore_round_trips_hash_identically() {
             .expect("encoding a snapshot");
         let decoded = Snapshot::from_bytes(&bytes).expect("decoding a snapshot");
 
-        let mut restored = world_with(rules());
+        let mut restored = if round == 0 {
+            let fresh = world_with(rules());
+            assert_eq!(
+                Snapshot::capture(&fresh)
+                    .expect("a fresh world is between ticks")
+                    .to_bytes()
+                    .expect("encoding a snapshot"),
+                pristine_bytes,
+                "two fresh worlds snapshot alike, so the one built once stands for each"
+            );
+            fresh
+        } else {
+            let target = pristine.clone();
+            assert_eq!(
+                target.state_hash(),
+                pristine.state_hash(),
+                "round {round}: the clone of the fresh world hashes as it does"
+            );
+            assert_eq!(
+                Snapshot::capture(&target)
+                    .expect("a clone of a fresh world is between ticks")
+                    .to_bytes()
+                    .expect("encoding a snapshot"),
+                pristine_bytes,
+                "round {round}: the clone of the fresh world snapshots as it does"
+            );
+            target
+        };
         decoded
             .restore_into(&mut restored)
             .expect("restoring a snapshot");
@@ -414,7 +460,7 @@ fn a_restore_resizes_the_derived_index_to_the_restored_world() {
     let centre = [Fx::from_voxels(192), Fx::from_voxels(192), Fx::ZERO];
     let found = small.candidates_near(centre, Fx::from_voxels(1_024)).len();
     assert_eq!(
-        u32::try_from(found).unwrap_or(0),
+        u32::try_from(found).expect("the value fits"),
         expected_units,
         "the broadphase did not grow with the restored unit table"
     );
@@ -463,12 +509,12 @@ fn the_tables_move_every_tick_and_not_merely_the_header() {
         let body = enc
             .as_bytes()
             .get(HEADER_BYTES..)
-            .unwrap_or_default()
+            .expect("an encoding holds its header")
             .to_vec();
         if let Some(before) = previous
             && before != body
         {
-            moved = moved.saturating_add(1);
+            moved = moved.strict_add(1);
         }
         previous = Some(body);
     }
@@ -580,8 +626,8 @@ fn a_performance_knob_is_not_hashed_state() {
         let altered = rules_edited(|message| {
             message.broadphase.get_or_insert_default().cell_size_voxels = cell_size;
             let mesher = message.mesher.get_or_insert_default();
-            mesher.surfaces_per_frame = mesher.surfaces_per_frame.saturating_add(4);
-            mesher.bytes_per_frame = mesher.bytes_per_frame.saturating_sub(1);
+            mesher.surfaces_per_frame = mesher.surfaces_per_frame.strict_add(4);
+            mesher.bytes_per_frame = mesher.bytes_per_frame.strict_sub(1);
         });
         assert_ne!(
             altered.rules_hash(),
@@ -683,14 +729,17 @@ fn the_broadphase_answer_does_not_depend_on_the_cell_size() {
         everything.push(world.candidates_near(centre, whole_map).len());
     }
 
-    let first = answers.first().cloned().unwrap_or_default();
+    let first = answers.first().cloned().expect("the run made answers");
     assert!(
         !first.is_empty(),
         "the broadphase found nothing at all within {} voxels of the middle of \
          the map; the test cannot see the property it is checking",
         radius.floor_voxels()
     );
-    let all = everything.first().copied().unwrap_or(0);
+    let all = everything
+        .first()
+        .copied()
+        .expect("the run counted the whole map");
     assert!(
         first.len() < all,
         "the small query returned every unit ({} of {}), so it is not a small \
@@ -1000,9 +1049,9 @@ fn store_chunks(voxels: &VoxelStore) -> Vec<Vec<u8>> {
             voxels
                 .chunk_bytes(chunk)
                 .map(|b| b.to_vec())
-                .unwrap_or_default(),
+                .expect("every chunk below the count has bytes"),
         );
-        chunk = chunk.saturating_add(1);
+        chunk = chunk.strict_add(1);
     }
     out
 }
@@ -1344,7 +1393,7 @@ fn save_and_restore_round_trips_with_modified_chunks() {
                 .is_ok()
         );
         let _ = world.step(&mut enc).unwrap();
-        craters = craters.saturating_add(1);
+        craters = craters.strict_add(1);
     }
     assert_eq!(craters, 6);
     let modified = world.voxels().modified_indices();
@@ -1392,7 +1441,7 @@ fn save_and_restore_round_trips_with_modified_chunks() {
             world.voxels().chunk_bytes(chunk),
             "chunk {chunk} came back different"
         );
-        chunk = chunk.saturating_add(1);
+        chunk = chunk.strict_add(1);
     }
     // Re-capturing the restored world reproduces the file byte for byte, which
     // is what says the modified flags themselves round-tripped: a restore that
@@ -1436,7 +1485,7 @@ fn the_voxel_edit_queue_is_bounded_and_says_so() {
             })
             .is_ok()
         {
-            accepted = accepted.saturating_add(1);
+            accepted = accepted.strict_add(1);
         }
     }
     assert!(
@@ -1484,7 +1533,7 @@ fn the_map_is_inside_the_hash_and_not_merely_beside_it() {
             )),
             "chunk {chunk}'s digest is not the digest of its bytes at tick zero"
         );
-        chunk = chunk.saturating_add(1);
+        chunk = chunk.strict_add(1);
     }
 
     // Walking keeps every unit on the surface of its column: the movement phase

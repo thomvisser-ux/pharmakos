@@ -47,7 +47,7 @@
 //! whose own text describes the grammar.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
+
 use std::path::Path;
 use std::process::Stdio;
 
@@ -100,15 +100,15 @@ pub(crate) enum Line {
 /// Reads one line of source text.
 pub(crate) fn classify(text: &str) -> Line {
     let mut found = Line::Nothing;
-    let mut from = 0;
-    while let Some(offset) = text.get(from..).and_then(|rest| rest.find(WORD)) {
-        let start = from + offset;
-        let end = start + WORD.len();
-        from = end;
-        let before = text.get(..start).and_then(|head| head.chars().next_back());
-        // `end` closes an ASCII word found in `text`: a boundary inside it, so
-        // the default is never read.
-        let after = text.get(end..).unwrap_or_default();
+    let mut rest = text;
+    // The character before the next occurrence when nothing of `rest` precedes
+    // it: none at the start of the line, and the last letter of the word just
+    // passed after that.
+    let mut before_rest: Option<char> = None;
+    while let Some((head, after)) = rest.split_once(WORD) {
+        let before = head.chars().next_back().or(before_rest);
+        rest = after;
+        before_rest = WORD.chars().next_back();
         if before.is_some_and(is_word_char) || after.chars().next().is_some_and(is_word_char) {
             continue; // HAS_PLACEHOLDERS, PLACEHOLDERs
         }
@@ -168,16 +168,16 @@ fn parse(rest: &str) -> Option<Marker> {
 /// marker's `when` often runs on into the comment's next line; the register
 /// groups by the part that is the stage and prints the marker's `what`.
 pub(crate) fn stage_of(when: &str) -> String {
-    let mut end = when.len();
-    for stop in [", ", " (", ": ", "; ", DASH, ". "] {
-        if let Some(at) = when.find(stop) {
-            end = end.min(at);
-        }
+    // The shortest head before any clause break; with none, the whole `when`.
+    let head = [", ", " (", ": ", "; ", DASH, ". "]
+        .iter()
+        .filter_map(|stop| when.split_once(stop).map(|(head, _)| head))
+        .min_by_key(|head| head.len());
+    let stage = match head {
+        Some(head) => head,
+        None => when,
     }
-    let stage = when
-        .get(..end)
-        .unwrap_or(when)
-        .trim_end_matches(['.', ',', ':', ';']);
+    .trim_end_matches(['.', ',', ':', ';']);
     if stage.is_empty() {
         when.to_owned()
     } else {
@@ -185,10 +185,11 @@ pub(crate) fn stage_of(when: &str) -> String {
     }
 }
 
-/// One line of `git grep -n` output: `<path>:<line>:<text>`.
+/// One line of `git grep -z -n` output: `<path>NUL<line>NUL<text>`. NUL
+/// cannot occur in a path, so a path holding a colon is read whole.
 pub(crate) fn split_grep_line(line: &str) -> Option<(&str, usize, &str)> {
-    let (path, rest) = line.split_once(':')?;
-    let (number, text) = rest.split_once(':')?;
+    let (path, rest) = line.split_once('\0')?;
+    let (number, text) = rest.split_once('\0')?;
     Some((path, number.parse().ok()?, text))
 }
 
@@ -206,12 +207,15 @@ pub(crate) struct Register {
 impl Register {
     /// The register over `git grep -n` output, in the order git printed it,
     /// which is path order.
-    pub(crate) fn from_grep(output: &str) -> Register {
+    pub(crate) fn from_grep(output: &str) -> Result<Register, String> {
         let mut register = Register::default();
         let mut last_file = String::new();
         for line in output.lines() {
             let Some((path, number, text)) = split_grep_line(line) else {
-                continue;
+                return Err(format!(
+                    "`git grep -z -n` printed a line that is not `<path>NUL<line>NUL<text>`, \
+                     so a marker on it could not be placed: {line:?}"
+                ));
             };
             let place = format!("{path}:{number}");
             let counted = match classify(text) {
@@ -234,46 +238,51 @@ impl Register {
                 path.clone_into(&mut last_file);
             }
         }
-        register
+        Ok(register)
     }
 
     /// Markers in the grammar.
     pub(crate) fn in_grammar(&self) -> usize {
-        self.filed
-            .values()
-            .map(Vec::len)
-            // A count of markers held in memory: it cannot reach `usize::MAX`,
-            // so it never saturates.
-            .fold(0, usize::saturating_add)
+        // The lengths of vectors held in memory: their sum is bounded by the
+        // address space, and overflow checks would refuse it loudly otherwise.
+        self.filed.values().map(Vec::len).sum()
     }
 
-    /// The report, whole.
+    /// The report, whole: its lines, each ending in a newline. Built as a
+    /// list and joined, so no `fmt::Result` from writing to a `String` (which
+    /// cannot fail) is produced to be thrown away.
     pub(crate) fn render(&self) -> String {
-        let mut out = String::new();
-        let _ = writeln!(
-            out,
-            "PLACEHOLDER register: {} marker(s) in {} file(s); {} in the grammar, {} to reword",
-            // Two counts of markers held in memory; their sum never saturates.
-            self.in_grammar().saturating_add(self.off_grammar.len()),
-            self.files,
-            self.in_grammar(),
-            self.off_grammar.len()
-        );
-        let _ = writeln!(out, "grammar: {GRAMMAR}");
+        let mut lines = vec![
+            format!(
+                "PLACEHOLDER register: {} marker(s) in {} file(s); {} in the grammar, {} to \
+                 reword",
+                self.in_grammar() + self.off_grammar.len(),
+                self.files,
+                self.in_grammar(),
+                self.off_grammar.len()
+            ),
+            format!("grammar: {GRAMMAR}"),
+        ];
         for ((when, who), markers) in &self.filed {
-            let _ = writeln!(out);
-            let _ = writeln!(out, "== {when} \u{2014} {who}");
-            for (place, what) in markers {
-                let _ = writeln!(out, "   {place}  {what}");
-            }
+            lines.push(String::new());
+            lines.push(format!("== {when} \u{2014} {who}"));
+            lines.extend(
+                markers
+                    .iter()
+                    .map(|(place, what)| format!("   {place}  {what}")),
+            );
         }
         if !self.off_grammar.is_empty() {
-            let _ = writeln!(out);
-            let _ = writeln!(out, "== to reword into `{GRAMMAR}`");
-            for (place, text) in &self.off_grammar {
-                let _ = writeln!(out, "   {place}  {text}");
-            }
+            lines.push(String::new());
+            lines.push(format!("== to reword into `{GRAMMAR}`"));
+            lines.extend(
+                self.off_grammar
+                    .iter()
+                    .map(|(place, text)| format!("   {place}  {text}")),
+            );
         }
+        let mut out = lines.join("\n");
+        out.push('\n');
         out
     }
 }
@@ -290,6 +299,7 @@ pub(crate) fn collect(root: &Path, require_tools: bool) -> Result<Register, Stri
     let mut args: Vec<&str> = vec![
         "grep",
         "--no-color",
+        "-z",
         "-n",
         "-I",
         "-w",
@@ -316,7 +326,7 @@ pub(crate) fn collect(root: &Path, require_tools: bool) -> Result<Register, Stri
         }
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(Register::from_grep(&text))
+    Register::from_grep(&text)
 }
 
 /// `cargo xtask placeholders [--check]`: prints the register; with `--check`,
@@ -411,13 +421,13 @@ mod tests {
     #[test]
     fn git_grep_output_becomes_a_register() {
         let output = "\
-Cargo.toml:25:rust-version = \"1.98\"\n\
-clippy.toml:40:# PLACEHOLDER: the held-back list \u{2014} owner, S1.\n\
-proto/a.proto:3:// PLACEHOLDER: tuning \u{2014} owner, S2.\n\
-proto/a.proto:9:// PLACEHOLDER STUB - the payload.\n\
-proto/a.proto:12:// a PLACEHOLDER, referred to\n\
-proto/b.proto:1:// PLACEHOLDER: tuning \u{2014} owner, S1\n";
-        let register = Register::from_grep(output);
+Cargo.toml\u{0}25\u{0}rust-version = \"1.98\"\n\
+clippy.toml\u{0}40\u{0}# PLACEHOLDER: the held-back list \u{2014} owner, S1.\n\
+proto/a.proto\u{0}3\u{0}// PLACEHOLDER: tuning \u{2014} owner, S2.\n\
+proto/a.proto\u{0}9\u{0}// PLACEHOLDER STUB - the payload.\n\
+proto/a.proto\u{0}12\u{0}// a PLACEHOLDER, referred to\n\
+proto/b.proto\u{0}1\u{0}// PLACEHOLDER: tuning \u{2014} owner, S1\n";
+        let register = Register::from_grep(output).expect("every line parses");
         assert_eq!(register.in_grammar(), 3);
         assert_eq!(
             register.off_grammar,
@@ -459,12 +469,62 @@ proto/b.proto:1:// PLACEHOLDER: tuning \u{2014} owner, S1\n";
     }
 
     #[test]
-    fn a_grep_line_splits_at_its_first_two_colons() {
+    fn a_grep_line_splits_at_its_two_nuls() {
         assert_eq!(
-            split_grep_line("a/b.rs:12:// PLACEHOLDER: x \u{2014} owner, S1: soon"),
+            split_grep_line("a/b.rs\u{0}12\u{0}// PLACEHOLDER: x \u{2014} owner, S1: soon"),
             Some(("a/b.rs", 12, "// PLACEHOLDER: x \u{2014} owner, S1: soon"))
         );
         assert_eq!(split_grep_line("no line number"), None);
+    }
+
+    /// `git grep -z -n` ends the path and the line number with NUL, so a path
+    /// holding a colon is read whole. Split at the colons, `a:3:b.rs` was read
+    /// as the file `a` at line 3.
+    #[test]
+    fn a_path_holding_a_colon_is_read_whole() {
+        assert_eq!(
+            split_grep_line("a:3:b.rs\u{0}7\u{0}// PLACEHOLDER: x \u{2014} owner, S1"),
+            Some(("a:3:b.rs", 7, "// PLACEHOLDER: x \u{2014} owner, S1"))
+        );
+        let register =
+            Register::from_grep("a:3:b.rs\u{0}7\u{0}// PLACEHOLDER: x \u{2014} owner, S1\n")
+                .expect("the line parses");
+        let filed = register
+            .filed
+            .get(&("S1".to_owned(), "owner".to_owned()))
+            .expect("the S1 group");
+        assert_eq!(filed, &vec![("a:3:b.rs:7".to_owned(), "x".to_owned())]);
+    }
+
+    /// A line the reader cannot place (here one without the two NULs `-z`
+    /// writes) fails the register rather than being skipped, so `--check` can
+    /// never pass over a marker it did not read.
+    #[test]
+    fn a_grep_line_that_does_not_parse_fails_the_register() {
+        let output = "a/b.rs\u{0}3\u{0}// PLACEHOLDER: x \u{2014} owner, S1\n\
+                      odd:name.rs:// PLACEHOLDER STUB - off the grammar\n";
+        let refused = Register::from_grep(output);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|error| error.contains("odd:name.rs")),
+            "{refused:?}"
+        );
+    }
+
+    /// The classifier still reads a marker after an earlier occurrence of
+    /// the word on the same line, and still passes over a longer word.
+    #[test]
+    fn a_marker_after_an_earlier_occurrence_is_read() {
+        assert!(matches!(
+            classify("// PLACEHOLDERs and PLACEHOLDER: x \u{2014} owner, S1"),
+            Line::Marker(_)
+        ));
+        assert!(matches!(
+            classify("PLACEHOLDERPLACEHOLDER: x"),
+            Line::Nothing
+        ));
+        assert!(matches!(classify("HAS_PLACEHOLDER: x"), Line::Nothing));
     }
 
     #[test]

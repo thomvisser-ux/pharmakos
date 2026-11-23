@@ -55,14 +55,24 @@ thread_local! {
 
 /// Count one allocation against the calling thread.
 fn charge() {
-    // `try_with` rather than `with`: during thread teardown the slot is gone,
-    // and an allocation then is not this test's business.
+    // This runs inside the global allocator, so it may not fail loudly: a
+    // panic or a print here allocates, which re-enters the allocator and
+    // recurses. `try_with` rather than `with` because during thread teardown
+    // the slot is gone, and an allocation then is no test's business; the
+    // `Err` of that case is dropped here and nowhere else, and no count is
+    // read then (`allocations` refuses a missing slot). A `u64` of
+    // allocations cannot reach its ceiling in a test, and `saturating_add`
+    // keeps the overflow check's panic out of the allocator all the same.
     let _ = ALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
 }
 
-/// How many times this thread has allocated so far.
+/// How many times this thread has allocated so far. Called only from a test's
+/// own body, where the slot exists; a missing slot is a failure, never a zero
+/// that would read as "nothing was allocated".
 fn allocations() -> u64 {
-    ALLOCATIONS.try_with(Cell::get).unwrap_or(0)
+    ALLOCATIONS
+        .try_with(Cell::get)
+        .expect("the counting slot exists on a running test's thread")
 }
 
 /// The system allocator, counting.
@@ -403,7 +413,10 @@ fn crater_at(world: &mut World, step: u32) {
     let depth = i32::try_from(size[1]).expect("the map fits in an i32");
     let x = i32::try_from(step.wrapping_mul(37) % 4096).expect("a column index") % width;
     let y = i32::try_from(step.wrapping_mul(53) % 4096).expect("a column index") % depth;
-    let z = world.voxels().top_solid_z(x, y).unwrap_or(0);
+    let z = world
+        .voxels()
+        .top_solid_z(x, y)
+        .expect("every column of the determinism map has ground");
     assert!(
         world
             .request_voxel_edit(VoxelEdit::Crater {
@@ -429,7 +442,10 @@ fn collapse_at(world: &mut World, step: u32) {
     let depth = i32::try_from(size[1]).expect("the map fits in an i32");
     let x = (i32::try_from(step.wrapping_mul(41) % 4096).expect("a column index") + 101) % width;
     let y = (i32::try_from(step.wrapping_mul(59) % 4096).expect("a column index") + 211) % depth;
-    let z = world.voxels().top_solid_z(x, y).unwrap_or(0);
+    let z = world
+        .voxels()
+        .top_solid_z(x, y)
+        .expect("every column of the determinism map has ground");
     for (dz, material) in [
         (2, pharmakos_sim::voxels::Material::STONE),
         (1, pharmakos_sim::voxels::Material::STONE),
