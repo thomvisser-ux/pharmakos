@@ -73,6 +73,7 @@ fn generate() -> Vec<(&'static str, &'static str, String)> {
             round: 1,
             ..Default::default()
         }),
+        ..GetStatusResponse::default()
     };
     let briefing = GetBriefingResponse {
         notes: "vent to the east; two drones idle at the core".to_owned(),

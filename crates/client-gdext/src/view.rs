@@ -955,6 +955,7 @@ mod tests {
                 hp: None,
                 max_hp: None,
                 heading: None,
+                ..ViewEntity::default()
             }],
             next_cursor: "c".to_owned(),
             complete,
@@ -1225,6 +1226,7 @@ mod tests {
             hp: None,
             max_hp: None,
             heading: None,
+            ..ViewEntity::default()
         }
     }
 
