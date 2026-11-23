@@ -178,6 +178,17 @@ pub fn operator_read_refused(method: &str, code: &str, message: &str) -> String 
     )
 }
 
+/// The tail of a built-in seat's line that follows lines standard error did
+/// not take: how many, by reason.
+#[must_use]
+pub fn operator_unsaid(earlier: &[(&str, u64)]) -> String {
+    let each: Vec<String> = earlier
+        .iter()
+        .map(|(reason, count)| format!("{reason} {count}"))
+        .collect();
+    format!("(Earlier lines not written: {}.)", each.join(", "))
+}
+
 /// A refusal of keeping a built-in seat's seal as its own draft, or of
 /// reading last round's back.
 #[must_use]
