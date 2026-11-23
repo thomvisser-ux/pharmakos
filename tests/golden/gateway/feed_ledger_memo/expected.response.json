@@ -1,0 +1,128 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "events": [
+      {
+        "at_ms": 0,
+        "kind": "safe_playbook_filed",
+        "text": "The Lull ended before you sealed, so the safe playbook was filed for you."
+      },
+      {
+        "at_ms": 0,
+        "kind": "plan_sealed",
+        "text": "The playbook of seat 0 was sealed: 1 route step."
+      },
+      {
+        "at_ms": 0,
+        "kind": "push_started",
+        "text": "The Push began. This segment runs 10 s."
+      },
+      {
+        "at_ms": 50,
+        "kind": "step_started",
+        "text": "Step 1 started."
+      },
+      {
+        "at_ms": 50,
+        "kind": "step_completed",
+        "text": "Step 1 completed."
+      },
+      {
+        "at_ms": 50,
+        "kind": "fallback_engaged",
+        "text": "The route of seat 0 ended and its fallback took over: the commander stays with the beacon its playbook names."
+      },
+      {
+        "at_ms": 10000,
+        "kind": "segment_ended",
+        "text": "The Push ended after 200 ticks."
+      },
+      {
+        "at_ms": 10000,
+        "kind": "recap_opened",
+        "text": "The recap opened: the Ledger settles."
+      },
+      {
+        "at_ms": 10000,
+        "kind": "settled",
+        "text": "The Ledger settled and credited seat 0 $ 95."
+      },
+      {
+        "at_ms": 10000,
+        "kind": "licence_awarded",
+        "text": "The Ledger awarded seat 0 a licence: Resonance Spire."
+      },
+      {
+        "at_ms": 10000,
+        "kind": "ledger_memo",
+        "text": "Notice of licence. You ran Generators on two vents at settlement. You may now queue a Resonance Spire at any of your beacons.",
+        "ledger_memo": {
+          "id": "first_licence",
+          "text": "Notice of licence. You ran Generators on two vents at settlement. You may now queue a Resonance Spire at any of your beacons."
+        }
+      }
+    ],
+    "digests": [
+      {
+        "from_ms": 0,
+        "to_ms": 60000,
+        "text": "0:00-1:00: 11 events. fallback_engaged 1, ledger_memo 1, licence_awarded 1, plan_sealed 1, push_started 1, recap_opened 1, safe_playbook_filed 1, segment_ended 1, settled 1, step_completed 1, step_started 1.",
+        "counts": [
+          {
+            "kind": "fallback_engaged",
+            "count": 1
+          },
+          {
+            "kind": "ledger_memo",
+            "count": 1
+          },
+          {
+            "kind": "licence_awarded",
+            "count": 1
+          },
+          {
+            "kind": "plan_sealed",
+            "count": 1
+          },
+          {
+            "kind": "push_started",
+            "count": 1
+          },
+          {
+            "kind": "recap_opened",
+            "count": 1
+          },
+          {
+            "kind": "safe_playbook_filed",
+            "count": 1
+          },
+          {
+            "kind": "segment_ended",
+            "count": 1
+          },
+          {
+            "kind": "settled",
+            "count": 1
+          },
+          {
+            "kind": "step_completed",
+            "count": 1
+          },
+          {
+            "kind": "step_started",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "next_cursor": "67a65959fc5a2fda0000000b5119fd5c",
+    "_status": {
+      "phase": "recap",
+      "phase_remaining_ms": 0,
+      "segment_length_ms": 10000,
+      "round": 1,
+      "untimed": true
+    }
+  }
+}

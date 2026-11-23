@@ -1,0 +1,57 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "templates": [
+      {
+        "template_id": "defend_the_core",
+        "title": "Defend the Core",
+        "tags": [
+          "guard"
+        ],
+        "summary": "Walk to your core, place a Defend beacon beside it that guards the core and your commander, and stay inside its sphere."
+      },
+      {
+        "template_id": "expand_and_mine",
+        "title": "Expand & Mine",
+        "tags": [
+          "mine"
+        ],
+        "summary": "Place a Mine beacon covering a scrap seam you do not cover yet, and walk home while it digs."
+      },
+      {
+        "template_id": "hold_and_build",
+        "title": "Hold & Build",
+        "tags": [
+          "power"
+        ],
+        "summary": "Grow the grid: place a Build beacon covering a heat vent you do not cover yet, with a Generator on the vent as its first target, and hold by it.",
+        "guided_pick": true,
+        "guided_pick_reason": "Start with hold_and_build: it is the advisor's pick."
+      },
+      {
+        "template_id": "raid_an_enemy_beacon",
+        "title": "Raid an Enemy Beacon",
+        "tags": [
+          "raid"
+        ],
+        "summary": "Walk to your core, place an Attack beacon beside it, and send its raiders against the nearest enemy beacon you know of."
+      },
+      {
+        "template_id": "safe_playbook",
+        "title": "Safe playbook",
+        "tags": [],
+        "summary": "Move to the safest beacon, raise the priority of any beacon about to brown out, then stay with the safest beacon."
+      }
+    ],
+    "next_cursor": "",
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 0,
+      "segment_length_ms": 1000,
+      "round": 1,
+      "untimed": true,
+      "untimed_by_rule": true
+    }
+  }
+}

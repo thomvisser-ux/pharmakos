@@ -17,9 +17,11 @@
 //! waypoints included; `get_map_summary`'s features read the hosted world
 //! through the sim's own resolver, borrowed read-only ([`crate::targeting`]),
 //! and rank by the cost of the walk the router serves, priced without running
-//! anything, in every phase: their travel times are still given in a Push,
-//! over the live world, until the owner's "Omit them in a Push" is built
-//! (it needs the wire to say "no time" apart from "no route"); and
+//! anything; their travel times (`travel_ms`, `reachable`) are told only in a
+//! Lull, over the frozen planning world, and withheld in every other phase, a
+//! Push, a recap and an ended match (the owner's "Omit them in a Push",
+//! 2026-11-21, built by S3's `mapw`; decisions-log item 170), so no walk is
+//! priced there; and
 //! `get_economy_forecast` reads the calling seat's own
 //! row of the hosted world -- the frozen planning world in a Lull or a recap,
 //! the live one in a Push -- and, in a Lull, prices the seat's own seal by the
@@ -3151,7 +3153,9 @@ fn licence_wire(licence: pharmakos_proto::gp::v1::Licence) -> String {
 /// voided ones gone with it. Each row names its seat, as `seat.0`. `None` when
 /// there is nothing to announce. The prose names `seat`'s own awards at this
 /// settlement, "Licence awarded: Resonance Spire.", whichever rows the wire
-/// carries.
+/// carries, and, once the match has ended, every award that stands with its
+/// seat and round ([`strings::licences_standing`]; S3's `probw`), so a client
+/// draws no licence rows of its own.
 ///
 /// # Errors
 ///
@@ -3166,21 +3170,35 @@ fn licence_line(
 ) -> Result<Option<Json>, Error> {
     let rows = licence_rows(world)?;
     let this_settlement = |row: &LicenceHeld| row.seat == seat && row.round == facts.round;
+    let title_of = |row: &LicenceHeld| {
+        strings::licence_title(row.licence).ok_or_else(|| {
+            Error::internal(said!(
+                "the string table names no licence {}",
+                row.licence.as_str_name()
+            ))
+        })
+    };
     let titles = rows
         .iter()
         .filter(|row| this_settlement(row))
-        .map(|row| {
-            strings::licence_title(row.licence).ok_or_else(|| {
-                Error::internal(said!(
-                    "the string table names no licence {}",
-                    row.licence.as_str_name()
-                ))
-            })
-        })
+        .map(title_of)
         .collect::<Result<Vec<&str>, Error>>()?;
     if let Some(line) = strings::licences_awarded(&titles) {
         prose.push(' ');
         prose.push_str(&line);
+    }
+    // Once the match has ended, every award that still stands, in words too,
+    // after the seat's own line (S3's `probw`, item 6): the rows the wire
+    // carries then, each with its seat and round.
+    if ended {
+        let standing = rows
+            .iter()
+            .map(|row| Ok((row.seat.raw(), title_of(row)?, row.round)))
+            .collect::<Result<Vec<(u8, &str, u32)>, Error>>()?;
+        if let Some(line) = strings::licences_standing(&standing) {
+            prose.push(' ');
+            prose.push_str(&line);
+        }
     }
     let told: Vec<Json> = rows
         .iter()
@@ -3675,9 +3693,19 @@ mod tests {
             line(1, true),
             (
                 Some(Json::Array(vec![row("seat.0", 2), row("seat.1", 1)])),
-                String::new()
+                String::from(
+                    " The licences that stand at the match's end: seat 0's Resonance Spire, \
+                     from round 2; seat 1's Resonance Spire, from round 1."
+                )
             ),
-            "at the match's end the fog lifts on every standing award"
+            "at the match's end the fog lifts on every standing award, in words too (probw, \
+             item 6)"
+        );
+        assert_eq!(
+            line(0, true).1,
+            " Licence awarded: Resonance Spire. The licences that stand at the match's end: \
+             seat 0's Resonance Spire, from round 2; seat 1's Resonance Spire, from round 1.",
+            "the seat's own line first, then every award that stands"
         );
     }
 }

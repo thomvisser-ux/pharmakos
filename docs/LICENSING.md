@@ -68,6 +68,22 @@ wherever it is, provided it carries no game expression. A file under a game-tier
 always carries one from the manifest, which is what keeps the library's licence alone to the
 permissively licensed areas.
 
+*The converse.* The check takes every expression `reuse` reports for a file together, as the set
+of licence identifiers they name, operators dropped. A tracked file outside `library/` whose set
+holds the same three licence identifiers as the combined expression, `GPL-3.0-or-later`, `MIT`
+and `Apache-2.0`, and which quotes nothing of the library, fails: it has no reason to carry the
+library's licence, and is `GPL-3.0-or-later`. That holds whatever else it carries beside them (a
+fourth licence, such as `... AND CC-BY-SA-4.0`, does not excuse it), whatever joins them (the
+order swapped, `OR` where `AND` is meant), and however they are split across its header, a
+sidecar and manifest blocks (a block's `GPL-3.0-or-later` beside a header's `MIT OR Apache-2.0`
+fails like the combined form). A media, font or descriptor file (the first extension list below)
+is never read and holds no prose, so it fails if its set holds the three. The converse needs the
+game's licence in the set: a file that carries `MIT OR Apache-2.0` with no `GPL-3.0-or-later`
+beside it and quotes nothing passes, because the permissive areas are permissive by their own
+tier. This is what turns a forgotten header red, the library's licence left on a file after its
+quotation was removed (decisions log §2.7 item 164 (3a)). Files under `library/` are the text
+quoted, not files that quote it, and are not held to the converse.
+
 *What the check reads from `library/`.* Every tracked file under `library/` that `reuse`
 reports; a file that `reuse` does not report because it ignores it (one whose name starts with `LICENSE`,
 `LICENCE` or `COPYING`, or ends `.license`; a licence text under `LICENSES/`; `REUSE.toml`; an
@@ -81,10 +97,14 @@ both. It reads `library/`'s current text on every run, so a changed template cha
 covered.
 
 *Which files, and how words are counted.* Every file `git ls-files` lists outside `library/`,
-except files with a binary extension (`png`, `jpg`, `jpeg`, `gif`, `ico`, `vox`, `ogg`, `wav`,
-`mp3`, `zip`, `pck`, `ttf`, `otf`, `woff`, `woff2`, `dll`, `so`, `dylib`, `exe`, `wasm`, `bin`,
-`binpb`) and the files `reuse` does not report because it ignores them (the list above). Any other file that is not
-UTF-8 text fails the check, and so does a file `reuse` should report and does not. The 8-word minimum counts whitespace-separated tokens
+except media, font and descriptor files (`png`, `jpg`, `jpeg`, `gif`, `ico`, `vox`, `ogg`,
+`wav`, `mp3`, `ttf`, `otf`, `woff`, `woff2`, and `binpb`, the descriptor set `buf` writes from
+`proto/` with source info excluded), which hold no prose and are never read, and the files
+`reuse` does not report because it ignores them (the list above). A tracked archive or
+executable (`zip`, `pck`, `wasm`, `dll`, `so`, `dylib`, `exe`, `bin`) fails the check whatever its
+licence: it can embed library text that the check cannot read, and a build output is not
+tracked. A tracked file missing from disk fails the check, and so does any other file that
+cannot be read or is not UTF-8 text, and a file `reuse` should report and does not. The 8-word minimum counts whitespace-separated tokens
 of a library string or comment paragraph (whitespace collapsed), punctuation included. A
 sentence ends at a full stop followed by a space, or at a full stop that ends the text; the
 text is split at every such full stop, so "e.g. " ends a piece, and a piece counts only if it
@@ -109,9 +129,8 @@ reuse`), after `reuse lint`, so it also runs on the docs-only fast path. It asks
 override block and no allow table. A failure names each file, the first words it quotes and
 the licence to write. This is the usual wording, one of several:
 
-    these quote library/ (MIT OR Apache-2.0) without carrying its licence: give each
-    `GPL-3.0-or-later AND (MIT OR Apache-2.0)` (REUSE.toml, or its own header), or
-    `MIT OR Apache-2.0` if it is purely the library's text:
+    these files' licences disagree with what they quote of library/ (MIT OR Apache-2.0);
+    each line names the licence to write (REUSE.toml, or the file's own header):
       <file> quotes "<first 60 characters>..." and is licensed `GPL-3.0-or-later` only; write
       `GPL-3.0-or-later AND (MIT OR Apache-2.0)`
 
@@ -122,16 +141,25 @@ Other file lines end differently, as the case needs:
     ... and carries GPL-3.0-or-later and MIT OR Apache-2.0 as two separate expressions;
         give it the combined expression: write <the combined form>
     <copy> is a byte copy of <source>, which is licensed [...], not [...]
+    <file> carries `<X>` and `<Y>` and quotes no sentence and no word run of library/, so
+        the library's licence has no reason to be there: write `GPL-3.0-or-later` (its own
+        header), or delete the REUSE.toml entry that gives it the library's licence
+                                                            (the converse; each expression once)
+    <file> carries `<X>` and is a media, font or descriptor file, which holds no library/
+        prose, so ...                                       (the converse, for such a file)
 
 Other refusals say that `reuse lint --json` did not run or gave an unreadable answer, that a file
-is not readable as text (add its extension to the binary list if it is binary), that `reuse`'s
-report has no entry for a file, or that the positive control failed.
+is not readable as text (add its extension to the media list, or to the archive list), that a
+tracked file is not on disk (restore it, or commit its removal), that a file could not be read
+from disk, that a tracked file is an archive or executable (untrack it), that `reuse`'s report
+has no entry for a file, or that the positive control failed.
 
 A positive control keeps "nothing found" from meaning "nothing looked at": the check fails
 unless it read more than 800 files, at least 5 library files and more than 100 word runs, and
 found each of eleven named files (the six template render goldens, the `instantiate_suggested`
 pair, `godot/fixtures/rule_list_render.json`, `scenarios/skeleton/against-easy.playbook.jsonc`
-and `crates/gateway/src/host.rs`) quoting the library.
+and `crates/gateway/src/host.rs`) quoting the library and carrying the game's licence and the library's, so
+the converse, which keys on those licences, cannot pass by finding nothing either.
 
 **`rules/`** is `MIT OR Apache-2.0` for the reason `proto/` is: `rules.v1.json`
 is the canonical JSON of one `gp.v1.RulesTable` (decisions log §2.7 item 78) —

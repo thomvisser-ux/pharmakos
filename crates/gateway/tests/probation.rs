@@ -1326,8 +1326,8 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
     );
 
     play_push(&mut surface);
-    let token = seat_token(&mut surface, 0);
-    let recap = result(&call(&mut surface, &token, "get_recap", "{}"), "get_recap");
+    let recap = golden_answer(&mut surface, 0, "get_recap", "recap_probation_round");
+    assert!(recap.get("ledger_memos").is_some(), "{recap:?}");
     let awarded = array_of(&recap, "licences_awarded");
     assert_eq!(awarded.len(), 1, "{recap:?}");
     let award = awarded.first().expect("the award");
@@ -1349,6 +1349,7 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
         vec![String::from(Memo::FirstLicence.name())],
         "the person's first licence issues its memo"
     );
+    memo_page_golden(&mut surface, 0);
 
     next_lull(&mut surface);
     let token = seat_token(&mut surface, 0);
@@ -1367,5 +1368,354 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
         spire(&mut surface).get("locked"),
         None,
         "the Spire unlocks with the licence"
+    );
+    the_match_end_names_the_award_that_stands(&mut surface);
+}
+
+/// S3's `probw`, item 6, played on from round 2's Lull of the licence test
+/// above: between rounds no recap names the awards that stand; at the match's
+/// end (round 3 of 3) every recap does, in words, with the seat and the round
+/// -- seat 1's names seat 0's award, and seat 0's names its own earlier one.
+fn the_match_end_names_the_award_that_stands(surface: &mut Surface) {
+    const STANDING: &str =
+        "The licence that stands at the match's end: seat 0's Resonance Spire, from round 1.";
+    play_push(surface);
+    for seat in [0, 1] {
+        let token = seat_token(surface, seat);
+        let recap = result(&call(surface, &token, "get_recap", "{}"), "get_recap");
+        assert!(
+            !text_of(&recap, "prose").contains("at the match's end"),
+            "seat {seat}, between rounds: {recap:?}"
+        );
+    }
+    next_lull(surface);
+    play_push(surface);
+    for seat in [0, 1] {
+        let recap = if seat == 1 {
+            golden_answer(surface, seat, "get_recap", "recap_probation_ended")
+        } else {
+            let token = seat_token(surface, seat);
+            result(&call(surface, &token, "get_recap", "{}"), "get_recap")
+        };
+        let prose = text_of(&recap, "prose");
+        assert!(prose.contains(STANDING), "seat {seat}, at the end: {prose}");
+        assert_eq!(
+            prose.matches("at the match's end").count(),
+            1,
+            "one sentence: {prose}"
+        );
+        assert!(
+            !prose.contains("Licence awarded:"),
+            "nothing was awarded at this settlement: {prose}"
+        );
+        let rows = array_of(&recap, "licences_awarded");
+        assert_eq!(rows.len(), 1, "the row the sentence names: {recap:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// S3's `probw`, item 7: `get_status` tells the preset and the seal held this round
+// ---------------------------------------------------------------------------
+
+/// `token`'s `get_status`, as the wire carries it and decoded as a client
+/// reads it.
+fn status_of(
+    surface: &mut Surface,
+    token: &Token,
+) -> (Json, pharmakos_proto::gp::api::v1::GetStatusResponse) {
+    let answer = result(&call(surface, token, "get_status", "{}"), "get_status");
+    let decoded = pharmakos_proto::json::decode_json(&support::canonical_answer(
+        "gp.api.v1.GetStatusResponse",
+        &answer,
+    ))
+    .unwrap_or_else(|error| panic!("not a gp.api.v1.GetStatusResponse: {error}: {answer:?}"));
+    (answer, decoded)
+}
+
+/// `token`'s `sealed_this_round`, decoded.
+fn seal_of(surface: &mut Surface, token: &Token) -> Option<bool> {
+    status_of(surface, token).1.sealed_this_round
+}
+
+/// S3's `probw`, item 7: the preset, in both presets and across a resume, to
+/// every caller; and the seal held this round, to its seat alone: false
+/// fresh, true after an accepted `submit_plan`, still true after a refused
+/// later one and through the Push, false at the next round's Lull, and true
+/// again after a resume into a Lull where it was sealed. An admin and a
+/// spectator get no seal field at all (fix pass 1: explicit presence).
+#[test]
+fn get_status_tells_the_preset_and_the_seal_held_this_round() {
+    use pharmakos_proto::gp::api::v1::Preset as Wire;
+    for (preset, wire) in [
+        (Preset::Probation, Wire::Probation),
+        (Preset::Custom, Wire::Custom),
+    ] {
+        let mut surface = hosted_under("m-status", preset, Some(1), 1_000, 3);
+        let admin = admin_token(&mut surface);
+        let spectator = spectator_token(&mut surface, true);
+        let seat = seat_token(&mut surface, 0);
+        let other = seat_token(&mut surface, 1);
+        for (token, a_seat) in [
+            (&seat, true),
+            (&other, true),
+            (&admin, false),
+            (&spectator, false),
+        ] {
+            let (answer, decoded) = status_of(&mut surface, token);
+            assert_eq!(decoded.preset(), wire, "{preset:?}: {answer:?}");
+            assert_eq!(
+                answer.get("preset"),
+                Some(&Json::String(String::from(preset.name()))),
+                "the config line's spelling"
+            );
+            // A seat is told false; a token that is no seat is told nothing.
+            let told = a_seat.then_some(&Json::Bool(false));
+            assert_eq!(answer.get("sealed_this_round"), told, "fresh: {answer:?}");
+        }
+
+        let mut elapsed = 0_i32;
+        let route = walk_east(&surface, 0, 2, 0);
+        submit(&mut surface, &admin, &mut elapsed, 0, &route);
+        assert_eq!(
+            seal_of(&mut surface, &seat),
+            Some(true),
+            "{preset:?}: sealed"
+        );
+        assert_eq!(
+            seal_of(&mut surface, &other),
+            Some(false),
+            "another seat's seal is not mine"
+        );
+        for token in [&admin, &spectator] {
+            let (answer, _) = status_of(&mut surface, token);
+            assert_eq!(answer.get("sealed_this_round"), None, "no seat: {answer:?}");
+        }
+
+        // A refused later submission leaves the seal held.
+        spend(&mut surface, &admin, &mut elapsed);
+        let refused = result(
+            &call(
+                &mut surface,
+                &seat,
+                "submit_plan",
+                &format!("{{\"playbook_jsonc\":{}}}", quote("{ not a playbook")),
+            ),
+            "submit_plan",
+        );
+        assert_eq!(
+            refused.get("accepted"),
+            Some(&Json::Bool(false)),
+            "{refused:?}"
+        );
+        assert_eq!(seal_of(&mut surface, &seat), Some(true), "still sealed");
+
+        // A resume into this Lull keeps the seal, as the save does.
+        let saved = surface.lull_save().expect("a Lull saves");
+        let mut resumed = resume("m-status", &saved, preset, 1_000, 3);
+        let resumed_seat = seat_token(&mut resumed, 0);
+        assert_eq!(
+            seal_of(&mut resumed, &resumed_seat),
+            Some(true),
+            "resumed sealed"
+        );
+        assert_eq!(
+            status_of(&mut resumed, &resumed_seat).1.preset(),
+            wire,
+            "the preset across a resume"
+        );
+        let resumed_other = seat_token(&mut resumed, 1);
+        assert_eq!(
+            seal_of(&mut resumed, &resumed_other),
+            Some(false),
+            "resumed, unsealed"
+        );
+
+        // Through the Push the seal is this round's; the next Lull's is not.
+        play_push(&mut surface);
+        assert_eq!(seal_of(&mut surface, &seat), Some(true), "in the recap");
+        // The gateway filed the safe playbook for seat 1 at the Push: a seal too.
+        assert_eq!(seal_of(&mut surface, &other), Some(true), "the filed seal");
+        next_lull(&mut surface);
+        for token in [&seat, &other] {
+            assert_eq!(seal_of(&mut surface, token), Some(false), "a new round");
+            assert_eq!(status_of(&mut surface, token).1.preset(), wire);
+        }
+    }
+}
+
+/// S3's `probw`, item 7: with no match hosted there is no preset to tell, so
+/// the field is left out (`PRESET_UNSPECIFIED`) and nothing claims a seal.
+#[test]
+fn get_status_with_no_match_hosted_tells_no_preset() {
+    let mut surface = Surface::new("m-lobby", SEED, rules(), FogPolicy::fogged(), &SEATS)
+        .expect("a match id")
+        .with_preset(Preset::Probation, Some(SeatId::new(1)));
+    let admin = admin_token(&mut surface);
+    let (answer, decoded) = status_of(&mut surface, &admin);
+    assert_eq!(answer.get("preset"), None, "{answer:?}");
+    assert_eq!(
+        decoded.preset(),
+        pharmakos_proto::gp::api::v1::Preset::Unspecified
+    );
+    assert_eq!(answer.get("sealed_this_round"), None);
+}
+
+// ---------------------------------------------------------------------------
+// S3's `probw`, item 8: Probation's goldens
+// ---------------------------------------------------------------------------
+
+/// `seat`'s answer to `method` with no parameters, written as the golden
+/// `case` (`support::write_golden`: the whole JSON-RPC answer, its footer
+/// included), and its `result`.
+fn golden_answer(surface: &mut Surface, seat: u8, method: &str, case: &str) -> Json {
+    let token = seat_token(surface, seat);
+    let response = call(surface, &token, method, "{}");
+    let answer = result(&response, method);
+    support::write_golden(case, &pharmakos_gateway::rpc::render(&response));
+    answer
+}
+
+/// The first page of `seat`'s segment feed that carries a `ledger_memo` line,
+/// written as the golden `feed_ledger_memo`: the line and its typed payload,
+/// as a client reads them (S3's plan, E5).
+fn memo_page_golden(surface: &mut Surface, seat: u8) {
+    let token = seat_token(surface, seat);
+    let mut cursor = String::new();
+    loop {
+        let response = call(
+            surface,
+            &token,
+            "get_segment_feed",
+            &format!("{{\"cursor\":{}}}", quote(&cursor)),
+        );
+        let page = result(&response, "get_segment_feed");
+        let events = array_of(&page, "events");
+        assert!(!events.is_empty(), "the feed holds a memo's line");
+        if events.iter().any(|event| {
+            text_of(event, "kind") == "ledger_memo" && event.get("ledger_memo").is_some()
+        }) {
+            support::write_golden(
+                "feed_ledger_memo",
+                &pharmakos_gateway::rpc::render(&response),
+            );
+            return;
+        }
+        cursor = text_of(&page, "next_cursor");
+    }
+}
+
+/// The golden `list_templates_guided`: the human seat's template list in a
+/// Probation match's first Lull, its advisor's start marked with its reason
+/// (the setup of `the_first_lull_marks_the_advisors_start_with_its_reason`).
+#[test]
+fn the_guided_template_list_answers_its_golden() {
+    let mut surface = hosted_under("m-guided", Preset::Probation, Some(0), 1_000, 2);
+    surface
+        .file_advice(
+            SeatId::new(0),
+            advice(
+                Some("hold_and_build"),
+                &["expand_and_mine", "hold_and_build"],
+            ),
+        )
+        .expect("filed");
+    let list = golden_answer(&mut surface, 0, "list_templates", "list_templates_guided");
+    assert!(
+        array_of(&list, "templates")
+            .iter()
+            .any(|template| template.get("guided_pick") == Some(&Json::Bool(true))),
+        "{list:?}"
+    );
+}
+
+/// The golden `get_status_probation`: a seat's `get_status` in a Probation
+/// Lull it has sealed: the footer untimed by rule, the preset and the seal.
+#[test]
+fn a_sealed_probation_status_answers_its_golden() {
+    let mut surface = hosted_under("m-status-golden", Preset::Probation, Some(0), 1_000, 2);
+    let admin = admin_token(&mut surface);
+    let mut elapsed = 0_i32;
+    let route = walk_east(&surface, 0, 2, 0);
+    submit(&mut surface, &admin, &mut elapsed, 0, &route);
+    let status = golden_answer(&mut surface, 0, "get_status", "get_status_probation");
+    assert_eq!(status.get("sealed_this_round"), Some(&Json::Bool(true)));
+    assert_eq!(
+        status.get("preset"),
+        Some(&Json::String(String::from("probation")))
+    );
+}
+
+/// What each advisor was told: its seat and the seal.
+type ToldSeals = std::sync::Arc<std::sync::Mutex<Vec<(u8, Option<Json>)>>>;
+
+/// An advisor that reads `get_status` and keeps the seal it is told.
+struct SealReader(ToldSeals);
+
+impl pharmakos_gateway::serve::Advisor for SealReader {
+    fn advise(
+        &mut self,
+        seat: u8,
+        call: &mut dyn FnMut(&pharmakos_gateway::rpc::Request) -> Json,
+    ) -> Advice {
+        let request = pharmakos_gateway::rpc::parse(
+            r#"{"jsonrpc":"2.0","id":1,"method":"get_status","params":{}}"#,
+        )
+        .expect("well formed");
+        let answer = call(&request);
+        let sealed = answer
+            .get("result")
+            .and_then(|result| result.get("sealed_this_round"))
+            .cloned();
+        if let Ok(mut held) = self.0.lock() {
+            held.push((seat, sealed));
+        }
+        Advice {
+            safe_playbook_jsonc: String::new(),
+            suggestions: Vec::new(),
+            start_here: None,
+        }
+    }
+}
+
+/// Advises every seat with a [`SealReader`] and plays none.
+struct AdvisesEverySeat(ToldSeals);
+
+impl pharmakos_gateway::serve::Operators for AdvisesEverySeat {
+    fn built_in(&mut self, _seat: u8) -> Option<Box<dyn pharmakos_gateway::serve::BuiltInSeat>> {
+        None
+    }
+
+    fn advisor(&mut self, _seat: u8) -> Option<Box<dyn pharmakos_gateway::serve::Advisor>> {
+        Some(Box::new(SealReader(std::sync::Arc::clone(&self.0))))
+    }
+}
+
+/// S3's `probw`, its last pass (item 5): the operator advising a seat calls
+/// through that seat's own narrower token, on which `get_status` stands, so it
+/// is told its own seat's `sealed_this_round` -- true for the seat that
+/// sealed, false for the one that did not -- and never another seat's.
+#[test]
+fn an_advisor_is_told_its_own_seats_seal_and_no_other() {
+    let mut surface = hosted_under("m-advisor-seal", Preset::Custom, Some(1), 1_000, 2);
+    let admin = admin_token(&mut surface);
+    let mut elapsed = 0_i32;
+    let route = walk_east(&surface, 0, 2, 0);
+    submit(&mut surface, &admin, &mut elapsed, 0, &route);
+    let told = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut operators = AdvisesEverySeat(std::sync::Arc::clone(&told));
+    let mut seats = pharmakos_gateway::serve::InProcessSeats::open(
+        &mut surface,
+        &SEATS,
+        Some(1),
+        &mut operators,
+    )
+    .expect("in-process seats");
+    seats.plan(&mut surface);
+    let mut told = told.lock().map(|held| held.clone()).unwrap_or_default();
+    told.sort_by_key(|(seat, _)| *seat);
+    assert_eq!(
+        told,
+        vec![(0, Some(Json::Bool(true))), (1, Some(Json::Bool(false))),],
+        "each advisor is told its own seat's seal"
     );
 }
