@@ -17,11 +17,10 @@
 // A scout scanning the corner finds seat 1's core (`enemy_beacon_found`,
 // tick 4666 in round 1). From then on the seat holds that sighting, and in
 // each Push a scout leaves the scan for it: the first refresh is tick 7691 in
-// round 2, and the chain carries every later one (ticks 13801 and 15291 in
-// round 2, 17456, 21481, 22966 and 24786 in round 3), so the sighting's age at
-// round 2's Lull is 66.7 s, at round 3's 15.5 s and at the match's end 20.7 s,
-// each inside the window although each Push after the first is longer than
-// it.
+// round 2, and the chain carries every later one (ticks 8916 and 15001 in
+// round 2, 18636, 21986 and 23206 in round 3), so the sighting's age at round
+// 2's Lull is 66.7 s, at round 3's 30.0 s and at the match's end 99.7 s, each
+// inside the window although each Push after the first is longer than it.
 // The core's autocannon reaches as far as a scout sees (24), so a refresh
 // costs scouts, which the beacon fields again (decisions-log item 173 (2),
 // "Refresh wins, accept losses").
