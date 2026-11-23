@@ -372,19 +372,20 @@ where
             }
             Long("root") => {
                 let value = flag_value(&mut parser)?;
-                root = Some(PathBuf::from(value));
+                once(&mut root, "--root", PathBuf::from(value))?;
             }
             Long("part") => {
                 let value = flag_value(&mut parser)?;
-                part = Some(value.to_string_lossy().into_owned());
+                once(&mut part, "--part", value.to_string_lossy().into_owned())?;
             }
             Long("depth") => {
                 let value = flag_value(&mut parser)?;
-                depth = match value.to_string_lossy().as_ref() {
-                    "quick" => Some(Depth::Quick),
-                    "full" => Some(Depth::Full),
+                let named = match value.to_string_lossy().as_ref() {
+                    "quick" => Depth::Quick,
+                    "full" => Depth::Full,
                     other => return Err(Failure::usage(strings::bad_depth(other))),
                 };
+                once(&mut depth, "--depth", named)?;
             }
             Long("preset") => {
                 let value = flag_value(&mut parser)?;
@@ -396,7 +397,7 @@ where
                         Preset::NAMES,
                     )));
                 };
-                preset = Some(named);
+                once(&mut preset, "--preset", named)?;
             }
             Long("operator") => {
                 let value = flag_value(&mut parser)?;
@@ -409,11 +410,11 @@ where
                         &names,
                     )));
                 };
-                options.operator = Some(operator);
+                once(&mut options.operator, "--operator", operator)?;
             }
             Long("seeds") => {
                 let value = flag_value(&mut parser)?;
-                options.seeds = Some(PathBuf::from(value));
+                once(&mut options.seeds, "--seeds", PathBuf::from(value))?;
             }
             Long("format") => {
                 let value = flag_value(&mut parser)?;
@@ -425,11 +426,11 @@ where
                         Format::NAMES,
                     )));
                 };
-                options.format = Some(format);
+                once(&mut options.format, "--format", format)?;
             }
             Long("out") => {
                 let value = flag_value(&mut parser)?;
-                options.out = Some(PathBuf::from(value));
+                once(&mut options.out, "--out", PathBuf::from(value))?;
             }
             Value(value) => operands.push(value),
             other => {
@@ -441,6 +442,17 @@ where
     let root = root.unwrap_or_else(|| cwd.to_path_buf());
     let command = command_of(&operands, part, depth, preset, options)?;
     Ok(Invocation { root, command })
+}
+
+/// Set a flag's value, once: a flag given twice is a usage error naming it,
+/// never the second value quietly winning (fix pass 1 of #219, item 4; the
+/// stance `flag_elsewhere` takes on a flag that does nothing).
+fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), Failure> {
+    if slot.is_some() {
+        return Err(Failure::usage(strings::flag_repeated(flag)));
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 /// The value after a flag that takes one.
@@ -733,6 +745,62 @@ mod tests {
             parsed(&["scenario", "run", "a", "--preset", "probation"]),
             Err(Exit::Usage),
             "a flag given to a command that does not read it is refused"
+        );
+    }
+
+    /// Every flag that takes a value, given twice to a command that reads
+    /// it, is a usage error naming the flag, whichever value comes second.
+    #[test]
+    fn every_flag_given_twice_is_refused_by_name() {
+        use super::OPTIONS;
+        let command_for = |command: &str| -> Vec<&str> {
+            match command {
+                "verify" => vec!["verify", "a.jsonc"],
+                "schema" => vec!["schema"],
+                "scenario" => vec!["scenario", "run", "a.scenario.jsonc", "--seeds", "s.txt"],
+                "" => vec!["docs"],
+                other => panic!("a command the table names and this test does not: {other}"),
+            }
+        };
+        let value_for = |flag: &str| -> &str {
+            match flag {
+                "--root" => ".",
+                "--part" => "step",
+                "--depth" => "quick",
+                "--preset" => "probation",
+                "--operator" => "easy",
+                "--seeds" => "s.txt",
+                "--format" => "json",
+                "--out" => "r.json",
+                other => panic!("a flag the table names and this test does not: {other}"),
+            }
+        };
+        let mut checked = 0_usize;
+        for row in OPTIONS {
+            if row.flag == "--help" || row.flag == "--version" {
+                continue;
+            }
+            let mut args = command_for(row.command);
+            // `--seeds` already stands in the scenario line; adding it once
+            // more is the repeat.
+            if !(row.flag == "--seeds" && row.command == "scenario") {
+                args.extend([row.flag, value_for(row.flag)]);
+            }
+            args.extend([row.flag, value_for(row.flag)]);
+            let error = parse(args.iter().map(|arg| (*arg).to_owned()), Path::new("."))
+                .expect_err("a repeated flag is refused");
+            assert_eq!(error.code, Exit::Usage, "{args:?}");
+            assert!(
+                error.message.contains(&format!("`{}`", row.flag))
+                    && error.message.contains("twice"),
+                "{args:?}: {}",
+                error.message
+            );
+            checked = checked.saturating_add(1);
+        }
+        assert_eq!(
+            checked, 9,
+            "every row that takes a value, verify's and scenario's --format both"
         );
     }
 

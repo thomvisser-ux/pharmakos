@@ -323,6 +323,15 @@ pub fn flag_elsewhere(command: &str, flag: &str, owners: &[&str]) -> String {
     )
 }
 
+/// A flag given twice.
+#[must_use]
+pub fn flag_repeated(flag: &str) -> String {
+    format!(
+        "{BINARY}: `{flag}` is given twice. It is refused rather than the second value \
+         quietly winning: give it once."
+    )
+}
+
 /// The working directory could not be read, so no relative path can be.
 #[must_use]
 pub fn no_working_directory(why: &str) -> String {
