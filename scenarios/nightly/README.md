@@ -46,7 +46,8 @@ power projection does not read those guards.
 | **Hunter** | A Survey beacon with two scouts over the whole map, placed first; an Attack beacon launching three raiders, which the seat can afford from round 2, at `enemy_commander` with no seat named: the nearest enemy commander the seat has seen inside `verifier.reach_memory_ms`, nearest the staging point at the map's centre, ties to the lowest seat id, chosen at launch; then `NEAREST_KNOWN`. | None in its target since S2's `vfy4`: with no sighting at the seal the verifier qualifies the target with `W0708` rather than `E0418` (the owner's ruling of 2026-10-27), and the sim holds the gathered force, counted, until a fresh sighting exists. The staging point is the centre, the one voxel that means the same from every spawn, rather than a place the archetype names. |
 
 One `PLACEHOLDER` in the playbooks is for the owner: the Turtle's walls
-(decisions-log item 150 (3)). While it stands, the Turtle's band still reads
+(decisions-log item 150 (3)), moved to S5, with the nightly bands' re-baseline,
+by decisions-log item 152 (1) 3. While it stands, the Turtle's band still reads
 as decision 18 writes it, but it measures the arm as built, a guarded core
 without walls, not the archetype spec section 15 names, so a low rate there is
 a floor and not a balance reading. The Hunter's band, since S2's `vfy4`, reads
