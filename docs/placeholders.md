@@ -329,6 +329,14 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 | S3-23 | A fog-filtered terrain summary in `get_map_summary`, numbers 6 to 15 held: S1-48's features landed in S1 and the terrain stayed reserved; the stage is `con2`'s reading, "for the owner to confirm" (item 130 (3) (b)). Added by S1's `demo` | `gateway.proto` `GetMapSummaryResponse` (`reserved 6 to 15`) | item 130 (3) (b) |
 | S5-04 | One expansion at most per goal **`oper` #96 (item 136) deleted `site_for` and its expansion heuristics, so Easy, like a human seat, reaches only the features a site covers; stepping-stone expansion comes with `toward`, which decision 3 (item 128) deferred to S3. Moved here from S5 with its ID by item 136 (3) (q).** | `crates/operator/src/candidates.rs` module doc (`site_for` deleted) | item 113 (7) |
 
+### A named lane
+
+| ID | What is guessed | Anchors | Source |
+|---|---|---|---|
+| S3-24 | A resumed Lull reads the last Push's deaths and failed steps as unread (`PushUnread::Resumed`) until the save carries them: Easy then adds no guard for a death and weighs every stone. The owner approved the fix on 2026-11-23 (item 177 (5)); lane `opsave` builds it and turns the ignored test `a_resumed_lull_seals_what_the_unresumed_one_does` green. **Replaces `opr3` fix pass 2's marker for the death alone, which no row of this register carried.** The marker reads "a resumed Lull reads the last Push's deaths and failed steps as unread until the save carries them, approved by the owner on 2026-11-23 — lane opsave, S3" | `crates/operator/src/situation.rs` `LastPush` | `opr3` #205 fix pass 4 (item 180) |
+| S3-25 | Which test units are heavy, read from CI's step timings (`HEAVY_UNITS`: `test`'s `lib` and `test:allocations`, `test-research`'s `test:allocations`). The marker reads "which units are heavy, read from CI's step timings — main session, when a unit's cost moves". **Nearest section:** no stage is named; its "when" is an event, a unit's cost moving (as S1-43). Added by `shard4` #217 (item 181) | `xtask/src/shard.rs` `HEAVY_UNITS` | `shard4` |
+| S3-26 | The split's salt, `SPLIT_SALT` (0 today), chosen from CI's step timings through `HEAVY_UNITS`: the smallest salt that puts each heavy unit on a shard of its own and the heaviest not on shard 1. The marker reads "the split's salt, chosen from CI's step timings through HEAVY_UNITS — main session, when a unit's cost moves". **Nearest section:** as S3-25. Added by `shard4` #217 (item 181) | `xtask/src/shard.rs` `SPLIT_SALT` | `shard4` |
+
 ### Tuning, delegated
 
 - `rules/README.md`'s Settled? table, the rows it marks S3 and S3's exit: 5 rows (7 `rules.proto`
@@ -388,7 +396,7 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 | S5-01 | A scenario's `safe` seat files the gateway's fallback, not an operator-made safe playbook | `crates/gamectl/src/scenario.rs` `SeatKind::Safe` | plan T18b |
 | S5-02 | A `builtin` seat plays Easy, and the `operator` scenario key waits for a second difficulty | `crates/gamectl/src/scenario.rs` `SeatKind::Builtin`; `crates/gamectl/src/scenario/run.rs` module doc "A builtin seat plays Easy"; unmarked copy `xtask/src/scenario.rs` `SEAT_KEYS` | item 113 (8) |
 | S5-03 | No spectator token is minted; decided with the built-in-only match flow | `crates/gateway/src/serve.rs` `mint_tokens` doc | T16a notes, section D |
-| S5-05 | The way back is costed as the way there | `crates/operator/src/candidates.rs` `score` (first) | — |
+| S5-05 | The way back is costed as the way there | `crates/operator/src/candidates.rs` `score` (first); `crates/operator/src/compose.rs` (a placement's timeout, from `opr3` fix pass 2) | — |
 | S5-06 | "Near" is one sphere radius, reused as a threat radius | `crates/operator/src/candidates.rs` `score` (second) | — |
 | S5-07 | Whether and how Easy uses its (match, seat, round) seed: top-k as best-of-k with no draw | `crates/operator/src/compose.rs` `seed_note` | decision C15 |
 | S5-08 | `EASY_CANDIDATES` = 30 | `crates/operator/src/easy.rs` `EASY_CANDIDATES` | spec section 14 |
@@ -401,6 +409,8 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 | S5-15 | Whether the `WorkCounter` becomes hashed state | `crates/sim/src/seams.rs` `WorkCounter` | — |
 | S5-16 | `HARNESS_WORK_BUDGET` = 1 000 000 | `crates/sim/src/world.rs` `HARNESS_WORK_BUDGET` | — |
 | S5-17 | Easy is the only built-in operator `gamectl scenario run --operator` names, so the nightly bands are read against Easy. The marker reads "Easy the only `--operator` — owner, S5, when Normal lands and the nightly bands are re-baselined". Added by `night` #119 (item 145). | `crates/gamectl/src/cli.rs` `--operator` | item 144 (6) |
+| S5-18 | A later round's worth read as a round's share of it: the served goal's worth divided by the chain's rounds. The marker reads "a later round's worth read as a round's share of it, the served goal's worth divided by the chain's rounds — owner, S5, with the Balanced weights". Added by `opr3` #205 (item 180) | `crates/operator/src/candidates.rs` the stone's scoring | `opr3` fix pass 2 |
+| S5-19 | A chain the match's remaining rounds cannot finish is weighed as one that can, because the round limit is on no seat-facing field (the owner's answer of 2026-11-23, "Leave for S5", item 177 (4): the briefing's prose is not read for it). Easy begins chains of stepping stones it cannot finish (13 in the five committed matches over five rounds). The marker reads "a chain the match's remaining rounds cannot finish, weighed as one that can, the round limit being on no seat-facing field — owner, S5, with a `Status` field". Added by `opr3` #205 (item 180) | `crates/operator/src/candidates.rs` module doc | `opr3` fix pass 3; item 177 (4) |
 | S1-17 | `SAFE_REACH_MS` = 60 000: spec section 14's "within 60 s travel", with "at risk" undefined there **Ruled 60 s by decision 14 (item 128); `oper` #96 rewords the marker to owner S5, with the operator's rows, since no rules row holds the operator's values. Moved here from S1 with its ID by item 136.** | `crates/operator/src/easy.rs` `SAFE_REACH_MS` | — |
 | S1-18 | `SAFE_MAX_RAISED` = 2: spec section 14's "up to 2" **Ruled 2 by decision 14 (item 128); `oper` #96 rewords the marker to owner S5, with the operator's rows. Moved here from S1 with its ID by item 136.** | `crates/operator/src/easy.rs` `SAFE_MAX_RAISED` | — |
 | S1-19 | `SAFE_ESTIMATES` = 4, a bound the spec does not state **Ruled 4 by decision 14 (item 128); `oper` #96 rewords the marker to owner S5, with the operator's rows. Moved here from S1 with its ID by item 136.** | `crates/operator/src/easy.rs` `SAFE_ESTIMATES` | — |
@@ -434,7 +444,7 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 | S6-19 | `ROUTE_COLOUR` and the ghost's colours (art) | `godot/scripts/editor.gd` `ROUTE_COLOUR` | — |
 | S6-20 | `ROUTE_LIFT` = 1.2 (art) | `godot/scripts/editor.gd` `ROUTE_LIFT` | — |
 | S6-21 | `user://`'s remembered match is a per-machine convenience, not state; the save browser | `godot/scripts/lobby.gd` header | w6 notes A4 |
-| S6-22 | Forgetting an ended match, and the New/Resume layout, including what a refused Resume leaves (New match unreachable until a restart) | `godot/scripts/lobby.gd` header | items 113 (11), 114 (5) |
+| S6-22 | Forgetting an ended match, and the New/Resume layout. **`prob` part 1 #216 (item 182) deleted the restart clause: a refused Resume now shows the host's refusal and offers the chooser again, with New match, so the row no longer says New match is unreachable until a restart.** | `godot/scripts/lobby.gd` header | items 113 (11), 114 (5) |
 | S6-23 | `EVENT_ROWS` = 14 | `godot/scripts/lobby.gd` `EVENT_ROWS` | — |
 | S6-24 | Accessibility polish beyond generated names (font scaling, reduced motion, focus order) | `godot/scripts/rows.gd` header; `godot/scripts/wizard.gd` header | plan T19 |
 | S6-25 | `ICON_COLOURS` (art pass) | `godot/scripts/rows.gd` `ICON_COLOURS` | — |
@@ -453,6 +463,8 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 | S6-38 | `meta.parameters` on a PLAYBOOK round-trips unread; whether the verifier refuses it with a code of its own | `playbook.proto` `Meta.parameters` | w6 notes D |
 | S1-40 | The lobby's match: the golden seed, two seats with the human at seat 0 and Easy at seat 1, the rules' segment ladder, and the round limit; the settings screen and the Probation preset. **With T22a:** `ROUND_LIMIT` becomes 3 and the comment records item 123 (2) 3, the settings screen and the Probation preset staying the owner's at S1. Cross-referenced from D-20 **`ui` #98 (item 136) rewords the marker to "the match the lobby hosts — OWNER, S6, with the settings screen", since item 127 (10) deferred the settings screen. Moved here from S1 with its ID by item 136.** | `godot/scripts/host_link.gd` `MATCH_SEED` and the constants after it | item 123 (2) 3 |
 | S6-40 | `DORMANT_CODES` (E0601, W0603), the codes for which the editor shows E0601's `allow_dormant_beacons` checkbox, is the client's reading of the diagnostic catalogue; a catalogue column naming the codes an option answers would make it the verifier's, as S6-01 says of `LOAD_REFUSALS` | `crates/client-gdext/src/editor.rs` `DORMANT_CODES` | item 136 |
+| S6-41 | The sphere ring's width, lift and colour. Added by `prob` part 1 #216 (item 182) | `godot/scripts/vista.gd` the ring's constants | `prob` |
+| S6-42 | The guided pick's look, `GUIDED_LOOK`, the tint of the button the gateway marks. Added by `prob` part 1 #216 (item 182) | `godot/scripts/editor.gd` `GUIDED_LOOK` | `prob` fix pass 1 |
 
 ### No one named
 
