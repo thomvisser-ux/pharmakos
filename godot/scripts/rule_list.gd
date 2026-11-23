@@ -11,8 +11,8 @@
 # plain text and chips, at the spans `render_plan` placed (crates/client-gdext/src/rule_list.rs).
 # This script draws the runs and forwards the clicks:
 #   * a CHIP is drawn as a link in its sentence; a click on it asks the editor for its editor,
-#     which the chip's shape names (a number field within the bounds sent, an enum's values as
-#     sent, a pick on the map, or, for a step label or a rule id, the names the playbook itself
+#     which the chip's shape names (the value field with the bounds sent said beside it, an enum's values
+#     as sent, a pick on the map, or, for a step label or a rule id, the names the playbook itself
 #     holds, in file order). A chip the rule list does not edit (a duration, which waits on a
 #     display unit from the wire) is drawn dim, and a click says why;
 #   * a rule's or a step's sentence row can be DRAGGED onto another of the same list: the drop
@@ -20,8 +20,9 @@
 #   * the CONFLICT CONNECTOR joins the two rules a W0702 row names, a line in the list's left
 #     margin from the earlier rule to the later one, with the verifier's sentence under the
 #     later rule;
-#   * the gateway's refusal of a rule-list edit is shown under the rule it was of, in the
-#     gateway's words.
+#   * a refusal of a rule-list edit is shown under the rule it was of: the gateway's in its
+#     words, this client's (a value field's text that is no whole number, a value it already
+#     holds) in the status line's (S3's `fixp`).
 # The controls take a click only while the bridge says the rule list describes the text on
 # screen, no edit is on its way and the door is open (`rules_editable`), as Fix buttons do.
 #
@@ -30,6 +31,7 @@
 extends RefCounted
 
 const Strings := preload("res://scripts/strings.gd")
+const Values := preload("res://scripts/values.gd")
 
 ## The width a line wraps at. PLACEHOLDER: the wrap width — OWNER, at S6.
 const LINE_WIDTH := 340.0
@@ -66,28 +68,47 @@ static func fill(container: Container, list: Dictionary, revision: int, editable
 	var rules: Array = list.get("rules", [])
 	var lines: Array = list.get("lines", [])
 	var said := {}
+	# Every index the bridge sends is read through Values.int_of; one it could not send as an `int`
+	# names nothing here, and the list says so under its last line (S3's `fixp`).
+	var unread: Array = []
 	for conflict in conflicts:
-		said[int(conflict.get("later", -1))] = String(conflict.get("sentence", ""))
+		var later := _index(conflict.get("later", -1), unread)
+		var earlier := _index(conflict.get("earlier", -1), unread)
+		if later >= 0 and earlier >= 0:
+			said[later] = String(conflict.get("sentence", ""))
 	for number in lines.size():
 		var line: Dictionary = lines[number]
-		var rule := int(line.get("rule", -1))
-		var row := _row(line, chips, editable, picking, on_chip)
+		var rule := _index(line.get("rule", -1), unread)
+		var row := _row(line, chips, editable, picking, on_chip, unread)
 		row.set_meta("rule", rule)
 		if rule >= 0 and rule < rules.size():
 			_draggable(row, rule, String(rules[rule].get("pointer", "")), String(rules[rule].get("parent", "")), revision, editable, on_move)
 		container.add_child(row)
 		if rule >= 0 and on_slot.is_valid():
-			_slots(container, list.get("slots", []), rule, editable, on_slot)
+			_slots(container, list.get("slots", []), rule, editable, on_slot, unread)
 		if rule >= 0 and said.has(rule):
 			container.add_child(_note(Strings.text("rule_conflict", {"sentence": said[rule]})))
-		if rule >= 0 and int(refusal.get("rule", -1)) == rule:
-			container.add_child(_note(Strings.text("rule_refused", {"detail": refusal.get("detail", "")})))
+		if rule >= 0 and _index(refusal.get("rule", -1), unread) == rule:
+			# The gateway's refusal (`rule_refused`) or this client's, by the key the bridge names.
+			container.add_child(_note(Strings.text(String(refusal.get("key", "rule_refused")), {"detail": refusal.get("detail", "")})))
+	if not unread.is_empty():
+		container.add_child(_note(Values.unreadable_text(Strings.text("value_index"), unread[0])))
 	container.queue_redraw()
 	return true
 
 
+## An index the bridge sent, or -1, which names nothing, when it sent its refusal; the refusal is
+## kept in `unread` for the list to say.
+static func _index(value: Variant, unread: Array) -> int:
+	var read: Variant = Values.int_of(value)
+	if read is int:
+		return read
+	unread.append(read)
+	return -1
+
+
 ## One line: its runs drawn in order, the chips as links whose meta is the chip's index.
-static func _row(line: Dictionary, chips: Array, editable: bool, picking: int, on_chip: Callable) -> RichTextLabel:
+static func _row(line: Dictionary, chips: Array, editable: bool, picking: int, on_chip: Callable, unread: Array) -> RichTextLabel:
 	var row := RichTextLabel.new()
 	row.fit_content = true
 	row.scroll_active = false
@@ -100,7 +121,7 @@ static func _row(line: Dictionary, chips: Array, editable: bool, picking: int, o
 	for segment in line.get("segments", []):
 		var piece := String(segment.get("text", ""))
 		text += piece
-		var chip := int(segment.get("chip", -1))
+		var chip := _index(segment.get("chip", -1), unread)
 		if chip < 0 or chip >= chips.size():
 			row.add_text(piece)
 			continue
@@ -120,10 +141,10 @@ static func _row(line: Dictionary, chips: Array, editable: bool, picking: int, o
 ## slot, with the op the gateway named), each a button in the gateway's words ("when, item 1
 ## of all", "step 1, skip if") that opens the condition picker on it. A group slot is drawn as
 ## no button: its items are the pick targets. The titles are the gateway's; none is composed.
-static func _slots(container: Container, slots: Array, rule: int, editable: bool, on_slot: Callable) -> void:
+static func _slots(container: Container, slots: Array, rule: int, editable: bool, on_slot: Callable, unread: Array) -> void:
 	for index in slots.size():
 		var slot: Dictionary = slots[index]
-		if int(slot.get("rule", -1)) != rule or not slot.get("pickable", false):
+		if _index(slot.get("rule", -1), unread) != rule or not slot.get("pickable", false):
 			continue
 		var button := Button.new()
 		button.flat = true
@@ -180,8 +201,9 @@ static func draw_connectors(container: Container) -> void:
 	if not container.has_meta("conflicts"):
 		return
 	for conflict in container.get_meta("conflicts"):
-		var earlier := _rule_row(container, int(conflict.get("earlier", -1)))
-		var later := _rule_row(container, int(conflict.get("later", -1)))
+		# An unreadable index draws no connector; fill said so under the list.
+		var earlier := _rule_row(container, _index(conflict.get("earlier", -1), []))
+		var later := _rule_row(container, _index(conflict.get("later", -1), []))
 		if earlier == null or later == null:
 			continue
 		var top := earlier.position.y + earlier.size.y * 0.5

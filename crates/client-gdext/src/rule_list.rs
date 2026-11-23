@@ -9,8 +9,8 @@
 //! **Nothing here parses a sentence.** Where a chip stands, what may be written there and
 //! what it holds now are `RenderPlanResponse.rules`' (`gp.api.v1.Chip`: its line, its span in
 //! code points, its `ValueShape` and its `value_json`); this module cuts the line at the spans
-//! the gateway sent and nowhere else. A chip's editor follows its shape as sent: a number
-//! field within the bounds sent, the values an enum's shape lists, or a pick on the map
+//! the gateway sent and nowhere else. A chip's editor follows its shape as sent: the value
+//! field (text, read by the bridge; the bounds sent are said beside it), the values an enum's shape lists, or a pick on the map
 //! within the arms the gateway names (AGENTS.md section 3 rule 4: no client holds the
 //! per-position rules). Every edit is one JSON Patch the client composes from a click (a
 //! `replace` at the chip's pointer, a `move` of one rule onto another's place), and the
@@ -58,11 +58,6 @@ pub enum ReadOnly {
     /// A value that does not fit the shape sent with it (an integer shape holding no integer):
     /// drawn as it came, with the reason, and not edited.
     Unreadable,
-    /// A whole number the number field cannot hold exactly: the field is a 64-bit float with
-    /// a step, which Godot 4.7.2 measured holding every `i32` exactly and not 2^52 + 1. A value
-    /// outside `i32` (the wire's type for the bounds) would come back as another number, so it
-    /// is drawn and not edited, never rounded. About the control's shape, not the game.
-    NotExact,
 }
 
 impl ReadOnly {
@@ -73,7 +68,6 @@ impl ReadOnly {
             Self::Milliseconds => "ms",
             Self::NoShape => "no_shape",
             Self::Unreadable => "unreadable",
-            Self::NotExact => "not_exact",
         }
     }
 }
@@ -481,9 +475,6 @@ pub(crate) fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
         }
         Shape::Integer(integer) => {
             let now = integer_of(&chip.pointer, &chip.value_json)?;
-            if i32::try_from(now).is_err() {
-                return Ok(ChipEditor::ReadOnly(ReadOnly::NotExact));
-            }
             ChipEditor::Number {
                 min: integer.min,
                 max: integer.max,
@@ -816,10 +807,10 @@ mod tests {
         assert!(!chip(None, None, -5).outside_bounds());
     }
 
-    /// A whole number outside `i32` is not put in the float field, which would send it back
-    /// as another number: it is drawn read-only, with its reason.
+    /// A whole number outside `i32` is a number chip like any other (S3's `fixp`): the value
+    /// field holds text, not a float, so nothing rounds it, and the gateway judges it.
     #[test]
-    fn a_number_the_field_cannot_hold_exactly_is_read_only() {
+    fn a_number_outside_i32_is_edited_like_any_other() {
         let answer = |value: &str| {
             json::read(&format!(
                 r#"{{"prose":"Route\n  1. go: wait 12 ticks.\n","rules":[{{"pointer":"/declarative/route/0","line":1,"line_count":1,"chips":[{{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{{"integer":{{"min":0}}}},"value_json":"{value}"}}]}}]}}"#
@@ -835,14 +826,20 @@ mod tests {
                 .expect("a chip")
         };
         assert!(matches!(editor("2147483647"), ChipEditor::Number { .. }));
-        assert_eq!(
+        assert!(matches!(
             editor("4503599627370497"),
-            ChipEditor::ReadOnly(ReadOnly::NotExact)
-        );
-        assert_eq!(
+            ChipEditor::Number {
+                now: 4_503_599_627_370_497,
+                ..
+            }
+        ));
+        assert!(matches!(
             editor("-2147483649"),
-            ChipEditor::ReadOnly(ReadOnly::NotExact)
-        );
+            ChipEditor::Number {
+                now: -2_147_483_649,
+                ..
+            }
+        ));
     }
 
     /// A slot takes a pick only when it is empty or a leaf with an op the gateway named: the

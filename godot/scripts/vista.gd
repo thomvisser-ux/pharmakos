@@ -37,6 +37,8 @@
 extends Node3D
 
 const MesherRules := preload("res://scripts/mesher_rules.gd")
+const Values := preload("res://scripts/values.gd")
+const Strings := preload("res://scripts/strings.gd")
 
 ## How quickly a marker closes on its latest position, per second.
 ## PLACEHOLDER: the markers' easing rate — OWNER, at S6.
@@ -194,7 +196,14 @@ func beacons() -> Array:
 
 func _process(delta: float) -> void:
 	var drained: Dictionary = bridge.view_drain(rig.camera.global_position)
-	pending = int(drained.get("pending", pending))
+	# A count past `int` is the bridge's refusal (S3's `fixp`): the drain is still owed, and the
+	# log says the count could not be read; `pending` keeps its "not known" -1.
+	var waiting: Variant = Values.int_of(drained.get("pending", pending))
+	if waiting is int:
+		pending = waiting
+	else:
+		pending = -1
+		push_warning(Values.unreadable_text(Strings.text("value_pending"), waiting))
 	var weight := 1.0 - exp(-EASE_RATE * delta)
 	for id in _markers:
 		var marker: Dictionary = _markers[id]

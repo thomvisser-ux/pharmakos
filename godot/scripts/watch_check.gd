@@ -149,6 +149,7 @@ extends Node
 
 const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
+const Values := preload("res://scripts/values.gd")
 
 ## The idle stretch: longer than the gateway's 30-second READ_TIMEOUT, so a connection
 ## with no keep-alive would be dropped inside it.
@@ -402,7 +403,7 @@ func _run() -> void:
 		_finish()
 		return
 	# Read once, not in a loop: the one answer so far is the only one asked for.
-	if int(recap.get("answers", 0)) != 1:
+	if _count(recap, "answers") != 1:
 		_failures.append("the recap was read more than once: %s" % recap)
 		_finish()
 		return
@@ -595,14 +596,14 @@ func _template(id: String) -> bool:
 
 	# Use, through its own button: the gateway's playbook, byte for byte, as one edit.
 	var text := String(_editor()["wizard"].get("playbook_jsonc", ""))
-	var before := int(_editor().get("revision", 0))
+	var before := _count(_editor(), "revision")
 	editor.refresh()
 	var use: Button = editor.wizard_use_button()
 	if use == null or use.disabled:
 		_failures.append("%s: Use is not offered on a current wizard" % id)
 		return false
 	use.pressed.emit()
-	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > before and not s.get("busy", true), "%s: Use never put the playbook in" % id):
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and not s.get("busy", true), "%s: Use never put the playbook in" % id):
 		return false
 	if vista.bridge.editor_bytes() != text.to_utf8_buffer():
 		_failures.append("%s: the editor's text is not the gateway's playbook_jsonc byte for byte" % id)
@@ -618,11 +619,11 @@ func _template(id: String) -> bool:
 	if own.is_empty():
 		_failures.append("the view shows no beacon of this seat's")
 		return false
-	var used := int(_editor().get("revision", 0))
+	var used := _count(_editor(), "revision")
 	editor._on_beacon_clicked(own, true, Vector2.ZERO)
 	editor._on_menu(editor.ITEM_GO)
 	editor.close_menu()
-	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > used and s.get("verdict", "") == "quick" and s.get("rows_current", false), "%s: the map action was never patched and checked" % id):
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > used and s.get("verdict", "") == "quick" and s.get("rows_current", false), "%s: the map action was never patched and checked" % id):
 		return false
 	if not _editor().get("qualifies", false):
 		_failures.append("%s: QUICK did not qualify the edited playbook: %s" % [id, _editor().get("rows", [])])
@@ -710,17 +711,17 @@ func _panel_lines() -> bool:
 	editor.open_template(PINNED_TEMPLATE)
 	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("wizard", {}).get("template_id", "") == PINNED_TEMPLATE and s.get("wizard", {}).get("current", false), "the panel lines: the template never answered"):
 		return false
-	var depth := int(_editor().get("undo_depth", 0))
-	var used := int(_editor().get("revision", 0))
+	var depth := _count(_editor(), "undo_depth")
+	var used := _count(_editor(), "revision")
 	vista.bridge.editor_wizard_use()
-	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > used and not s.get("busy", true) and not s.get("pending", true), "the panel lines: Use never put the playbook in"):
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > used and not s.get("busy", true) and not s.get("pending", true), "the panel lines: Use never put the playbook in"):
 		return false
 	editor.refresh()
 	if editor.status_text() != Strings.text("status_wizard_used"):
 		_failures.append("after Use the status line says `%s`" % editor.status_text())
-	var unused := int(_editor().get("revision", 0))
+	var unused := _count(_editor(), "revision")
 	vista.bridge.editor_undo()
-	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > unused and int(s.get("undo_depth", 0)) == depth and not s.get("busy", true), "the panel lines: Undo never came back"):
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > unused and _count(s, "undo_depth") == depth and not s.get("busy", true), "the panel lines: Undo never came back"):
 		return false
 	editor.refresh()
 	if editor.status_text() != Strings.text("status_undone"):
@@ -1106,7 +1107,7 @@ func _one_click(name: String, case: String) -> bool:
 	if name == "fix" and editor.panel_button("fix") == null:
 		_failures.append("%s: no Fix button was drawn for %s" % [what, file])
 		return false
-	var revision := int(_editor().get("revision", 0))
+	var revision := _count(_editor(), "revision")
 	if case == "menu":
 		var commander: Vector3i = vista.my_commander_at()
 		editor._on_ground_clicked(Vector3i(commander.x - 8, commander.y, commander.z), MENU_AT)
@@ -1152,7 +1153,7 @@ func _one_click(name: String, case: String) -> bool:
 		return false
 	match name:
 		"fix":
-			if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > revision and String(s.get("status_key", "")) == "fixed" and s.get("rows_current", false) and not s.get("busy", true), "%s: the Fix was never applied" % what):
+			if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > revision and String(s.get("status_key", "")) == "fixed" and s.get("rows_current", false) and not s.get("busy", true), "%s: the Fix was never applied" % what):
 				return false
 		"save":
 			var dialog: FileDialog = editor.save_dialog()
@@ -1236,11 +1237,11 @@ func _new_then_go_here() -> bool:
 		_failures.append("New's playbook has errors %s, where only the empty route's E0102 was due" % [codes])
 		return false
 	var commander: Vector3i = vista.my_commander_at()
-	var before := int(_editor().get("revision", 0))
+	var before := _count(_editor(), "revision")
 	editor._on_ground_clicked(Vector3i(commander.x - 8, commander.y, commander.z), Vector2.ZERO)
 	editor._on_menu(editor.ITEM_GO)
 	editor.close_menu()
-	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > before and s.get("rows_current", false) and not s.get("busy", true), "New's Go here was never patched and checked"):
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and s.get("rows_current", false) and not s.get("busy", true), "New's Go here was never patched and checked"):
 		return false
 	if not _editor().get("qualifies", false):
 		_failures.append("New, then one Go here, does not qualify at QUICK: %s" % [_editor().get("rows", [])])
@@ -1280,7 +1281,7 @@ func _edit() -> bool:
 	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("has_text", false) and s.get("rows_current", false) and not s.get("busy", true), "the file with a Fix never opened"):
 		return false
 	var rows: Array = _editor().get("rows", [])
-	var unfixed := int(_editor().get("revision", 0))
+	var unfixed := _count(_editor(), "revision")
 	var fixed := false
 	for index in rows.size():
 		if rows[index].get("code", "") == "E0108" and not (rows[index].get("fixes", []) as Array).is_empty():
@@ -1289,7 +1290,7 @@ func _edit() -> bool:
 		_failures.append("no Fix button was offered for E0108: %s" % [rows])
 		return false
 	_check_accessible_names("the Fix rows")
-	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > unfixed and s.get("rows_current", false) and s.get("qualifies", false), "the Fix did not leave a playbook QUICK accepts"):
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > unfixed and s.get("rows_current", false) and s.get("qualifies", false), "the Fix did not leave a playbook QUICK accepts"):
 		return false
 	print("[watch-check] Fix applied the verifier's patch; QUICK now qualifies it")
 
@@ -1313,7 +1314,7 @@ func _edit() -> bool:
 	if not await _save_as_offers(SAVED.get_file(), "the saved playbook"):
 		return false
 	print("[watch-check] opened and saved %s byte for byte" % COMMITTED)
-	var loaded_revision := int(_editor().get("revision", 0))
+	var loaded_revision := _count(_editor(), "revision")
 
 	# 4. The placement ghost, per click; the placement taken, and undone.
 	var commander: Vector3i = vista.my_commander_at()
@@ -1332,11 +1333,11 @@ func _edit() -> bool:
 		return false
 	editor._on_menu(editor.ITEM_PLACE)
 	editor.close_menu()
-	if int(_editor().get("revision", 0)) != loaded_revision + 1:
+	if _count(_editor(), "revision") != loaded_revision + 1:
 		_failures.append("the checked placement was not taken at once")
 		return false
 	vista.bridge.editor_undo()
-	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) == loaded_revision + 2 and not s.get("busy", true), "Undo never came back"):
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") == loaded_revision + 2 and not s.get("busy", true), "Undo never came back"):
 		return false
 	if vista.bridge.editor_bytes() != original:
 		_failures.append("Undo did not give the loaded bytes back")
@@ -1350,7 +1351,7 @@ func _edit() -> bool:
 	if own.is_empty():
 		_failures.append("the view shows no beacon of this seat's")
 		return false
-	var before := int(_editor().get("revision", 0))
+	var before := _count(_editor(), "revision")
 	# Through the map surface's own handlers: an Alt-click on the beacon (which also asks
 	# get_beacon about it), whose menu's first target is the nearest own beacon, then Go here.
 	editor._on_beacon_clicked(own, true, Vector2.ZERO)
@@ -1358,7 +1359,7 @@ func _edit() -> bool:
 		return false
 	editor._on_menu(editor.ITEM_GO)
 	editor.close_menu()
-	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > before and s.get("verdict", "") == "full" and s.get("route", {}).get("current", false), "the map action was never patched, checked and priced"):
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and s.get("verdict", "") == "full" and s.get("route", {}).get("current", false), "the map action was never patched, checked and priced"):
 		return false
 	var after := _editor()
 	if not after.get("qualifies", false):
@@ -1519,3 +1520,13 @@ func _until(condition: Callable, limit: float) -> bool:
 
 func _link_gone() -> bool:
 	return not _failures.is_empty() and not _ended
+
+
+## A count the bridge sent under `key`, read through Values.int_of (S3's `fixp`): one past `int`,
+## the bridge's refusal, is this check's failure, said as unreadable, and reads as -1 here.
+func _count(answer: Dictionary, key: String) -> int:
+	var read: Variant = Values.int_of(answer.get(key, 0))
+	if read is int:
+		return read
+	_failures.append(Values.unreadable_text(key, read))
+	return -1

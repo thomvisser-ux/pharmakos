@@ -14,7 +14,7 @@
 #
 # THIN (AGENTS.md section 3 rule 4): a value is never parsed, checked or converted here. What
 # the player types goes to the bridge exactly as typed (`on_send` with the page's pointer
-# and the text), which sends it to the gateway as an explicit value; a refusal is shown as
+# and the text, from the one value field, scripts/value_field.gd), which sends it to the gateway as an explicit value; a refusal is shown as
 # the gateway wrote it. Use hands the gateway's playbook to the editor through the bridge.
 #
 # Accessibility (spec section 13): each page's accessible name is its label, the value field's
@@ -28,6 +28,7 @@
 extends RefCounted
 
 const Strings := preload("res://scripts/strings.gd")
+const ValueField := preload("res://scripts/value_field.gd")
 
 ## The width a label wraps at. PLACEHOLDER: the wrap width — OWNER, at S6.
 const TEXT_WIDTH := 320.0
@@ -144,24 +145,16 @@ static func _page(page: Dictionary, on_send: Callable) -> Control:
 	named.accessibility_name = label
 	box.add_child(named)
 
-	var row := HBoxContainer.new()
+	# The one value field (scripts/value_field.gd): Enter and Send both send the text exactly as
+	# typed, and the first click selects the old value (S3's `fixp`).
+	var row := ValueField.new(Strings.text("wizard_send"))
+	row.name = "value"
+	row.open(String(page.get("value", "")), "", label)
 	box.add_child(row)
-	var field := LineEdit.new()
-	field.name = "field"
-	field.text = String(page.get("value", ""))
-	field.accessibility_name = label
-	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(field)
 	var pointer := String(page.get("pointer", ""))
-	var send := Button.new()
-	send.text = Strings.text("wizard_send")
-	send.accessibility_name = send.text
-	send.focus_mode = Control.FOCUS_NONE
-	send.pressed.connect(func() -> void: on_send.call(pointer, field.text))
-	field.text_submitted.connect(func(typed: String) -> void: on_send.call(pointer, typed))
-	row.add_child(send)
-	box.set_meta("field", field)
-	box.set_meta("send", send)
+	row.sent.connect(func(typed: String) -> void: on_send.call(pointer, typed))
+	box.set_meta("field", row.field)
+	box.set_meta("send", row.send)
 
 	var mark := Label.new()
 	mark.name = "mark"
