@@ -46,6 +46,31 @@
 //!   (`docs/design/targeting.md`, "toward"). It is never offered to the
 //!   wizard.
 //!
+//! # A stone's worth, and its chain (fix pass 2, item 2)
+//!
+//! A stone is worth the goal it serves, discounted by what the chain still
+//! needs: **the stones**, at least as many as the known positions say --
+//! the feature's anchor, the seat's own beacons and each one's listed sphere
+//! radius, a new beacon's sphere the rules table's base -- one a round, each
+//! at a beacon's price ([`stones_needed`]); and **the rounds**, those stones'
+//! and the served goal's, by which its worth is divided, a round's share of
+//! a worth that arrives that many rounds on. Its time per second is the whole
+//! chain's: each stone's walk and deploy (at least this one's), and the
+//! served goal's own time. So a goal placeable now of the same worth, no
+//! further than the served goal is, always outranks a stone: it pays no stone
+//! and waits no round.
+//!
+//! A chain once begun is **continued** until its feature is covered or a
+//! `toward` toward it is refused ([`chain_feature`]): no memory is kept
+//! between rounds (the operator holds none, and keeps none through the
+//! gateway), so the chain is read off the view. A stone is an own beacon,
+//! not the core, whose sphere holds no live feature's anchor; the feature a
+//! stone was placed toward is the far feature whose gap to the seat's spheres
+//! it closed the most (the sim stands a stone where the spheres reach
+//! furthest toward its feature, so its own sphere's radius is all of that
+//! gap closed). While a far feature is a begun chain's, only its stone is
+//! weighed; a refused `toward` toward it weighs the rest.
+//!
 //! **No site is computed here.** Each placement's one estimate is
 //! `estimate_route` from the commander, by way of the core when the seat has
 //! one ([`evaluate`]), to a `covering` waypoint naming the feature, and its
@@ -61,9 +86,10 @@
 //! live seam the seat covers nearest its core -- its starting seam, inside
 //! the core's sphere -- that protects the core and "my commander". It is
 //! enumerated every round the seat can afford one, first, so the cut never
-//! drops it and the wizard is offered its site; it is **added** to a built-in
-//! seat's route beside the round's goals, not ranked among them, whenever its
-//! utility is above zero ([`guard`]; [`crate::compose`]).
+//! drops it and the wizard is offered its site. In the round after a Push in
+//! which the commander died it is funded ahead of the ranking, as ruled
+//! ([`guard`]; [`crate::compose`]); otherwise it is ranked with every other
+//! candidate, on its threat.
 //!
 //! Its **defence** term is the threat model's (S2's plan, decision 12): the
 //! summed threat of the other seats' assets the view shows inside the core's
@@ -100,9 +126,10 @@
 //! for a beacon and a commander. Its economy is its price negated (the
 //! beacon and [`crate::easy::RAID_FORCE_SIZE`] raiders), its expansion
 //! nothing, and its risk the usual one near its site. A raid is ranked among
-//! the round's goals like any other ([`top_k`]); every raid names the same
+//! the round's goals like any other ([`ranked`]); every raid names the same
 //! post seam, so the composition's one-goal-per-feature rule places at most
-//! one a round. Every other goal's attack is zero.
+//! one a round. Every other goal's attack is zero, but the Survey post's,
+//! which is the raid it buys.
 //!
 //! # Vision, and the Survey post (S3's `opr3`)
 //!
@@ -113,11 +140,15 @@
 //! enemy beacon's inside `verifier.reach_memory_ms` ([`raid_goals`]), so the
 //! trigger is that none is held ([`sightings_stale`]); then one probe asks
 //! whether a Survey beacon stands beside the core already ([`survey_post`]).
-//! It is enumerated with the guard, so the cut never drops it, and
-//! **weighed before the goals**, after the guard and the Spire, against one
-//! share, treasury and kW budget, never ranked; it yields its seam to a guard
-//! post, and stands aside when a raid is among the round's best goals
-//! ([`crate::compose`]).
+//! It is enumerated with the guard, so the cut never drops it, and **ranked**
+//! with every other candidate (fix pass 2, item 2). Its worth is what it buys:
+//! the sightings a raid needs, so it is scored as the raid it buys -- an
+//! undefended target's [`RAID_POINTS`], less the raid's price, discounted by
+//! the [`crate::easy::SURVEY_RAID_ROUNDS`] its worth takes to arrive, less its
+//! own price -- over its own time and the raid's (at least its own: the raid
+//! post stands on the same seam). So it never outranks the round's goals of
+//! real worth, the seat's first Generator among them. It and the guard both
+//! cover the post seam, so a round places one of them ([`crate::compose`]).
 //! The sequence is: a round places the post, its scouts sight the enemy, the
 //! next Lull holds a fresh sighting, a raid is weighed and the Survey post is
 //! not.
@@ -128,9 +159,8 @@
 //! weight, so a later stage fills a term rather than change a formula: no
 //! capability catalogue is on a wire until S4 to put a number on it. S3's one
 //! capability, the Resonance Spire, is not ranked here at all: once the seat
-//! holds its licence Easy **adds** it beside the round's goals, as the guard
-//! post is added ([`crate::compose::spire`]), so no capability points are
-//! invented for it. A placed beacon adds no draw (since
+//! holds its licence Easy funds it ahead of the ranking, as ruled
+//! ([`crate::compose::spire`]), so no capability points are invented for it. A placed beacon adds no draw (since
 //! T14b a beacon is net zero through its own key-core, decisions-log item 113
 //! (5)), which S1's plan, decision 14, made the reading of the register's
 //! S1-14, so no goal is charged a kW shortfall.
@@ -140,7 +170,7 @@ use pharmakos_proto::json::Json;
 use crate::easy::{
     BALANCED, COMMANDER_DIED_POINTS, DEFENCE_POINTS_PER_HP_PER_SECOND, DOLLARS_PER_KW,
     EASY_CANDIDATES, EASY_TOP_K, EXPANSION_POINTS_PER_BEACON, RAID_POINTS, RAID_TARGETS_MAX,
-    RISK_POINTS_PER_ENEMY, STONE_TARGETS_MAX,
+    RISK_POINTS_PER_ENEMY, STONE_TARGETS_MAX, SURVEY_RAID_ROUNDS,
 };
 use crate::playbook::Declared;
 use crate::situation::{Asset, Feature, Kind, LastPush, Situation, UnitKind};
@@ -307,9 +337,9 @@ impl Goal {
             }
             Goal::Guard { .. } => crate::easy::DEFEND_THE_CORE,
             Goal::Raid { .. } => crate::easy::RAID_AN_ENEMY_BEACON,
-            // Added beside another template's goals, and alone the Safe
-            // Playbook template's frame with its route filled
-            // ([`crate::compose`]); never ranked, so no template is filled
+            // Funded as the round's post, in front of another template's
+            // goals, and alone the Safe Playbook template's frame with its
+            // route filled ([`crate::compose`]), so no template is filled
             // with it.
             Goal::Survey { .. } => crate::easy::SAFE_PLAYBOOK,
         }
@@ -1159,18 +1189,17 @@ pub(crate) fn evaluate(
             Estimate::Refused => {}
         }
     }
-    for (id, goal) in first(far, STONE_TARGETS_MAX) {
-        let Goal::Stone { feature, .. } = &goal else {
-            continue;
-        };
-        let mut waypoints = from_the_core(situation, commander);
-        waypoints.push(toward(feature));
-        // `NOT_FOUND` is the gateway's answer that no stone has a site: the
-        // stone is not weighed. Any other refusal is kept in `refused`.
-        if let Estimate::Answered(estimate) = estimated(wire, waypoints, &mut out.refused) {
-            let read = reading(&estimate);
-            out.push(situation, tuning, declared, id, goal, &read);
-        }
+    // A chain begun is continued (module docs): its stone is weighed alone,
+    // and the rest only when a `toward` toward its feature is refused.
+    let far = first(far, STONE_TARGETS_MAX);
+    let chain = chain_feature(situation, &far);
+    let (begun, rest): (Vec<_>, Vec<_>) = far
+        .into_iter()
+        .partition(|(_, goal)| chain.as_deref() == Some(goal.feature()));
+    let weighed = out.candidates.len();
+    out.stones(wire, situation, tuning, declared, commander, begun);
+    if out.candidates.len() == weighed {
+        out.stones(wire, situation, tuning, declared, commander, rest);
     }
     out
 }
@@ -1189,6 +1218,28 @@ pub(crate) struct Evaluated {
 }
 
 impl Evaluated {
+    /// Weigh each stone: one `toward` estimate each. `NOT_FOUND` is the
+    /// gateway's answer that no stone has a site: the stone is not weighed.
+    /// Any other refusal is kept in `refused`.
+    fn stones(
+        &mut self,
+        wire: &mut Wire<'_, '_>,
+        situation: &Situation,
+        tuning: &Tuning,
+        declared: &[Declared],
+        commander: [i32; 3],
+        stones: Vec<(usize, Goal)>,
+    ) {
+        for (id, goal) in stones {
+            let mut waypoints = from_the_core(situation, commander);
+            waypoints.push(toward(goal.feature()));
+            if let Estimate::Answered(estimate) = estimated(wire, waypoints, &mut self.refused) {
+                let read = reading(&estimate);
+                self.push(situation, tuning, declared, id, goal, &read);
+            }
+        }
+    }
+
     /// Score one answered goal, or drop it: an answer that does not read or a
     /// route that does not reach is a goal not weighed, as the module docs
     /// say, and a goal whose step does not build has no price.
@@ -1284,6 +1335,111 @@ fn stone_for(goal: &Goal) -> Option<Goal> {
         | Goal::Survey { .. }
         | Goal::Stone { .. } => None,
     }
+}
+
+/// A beacon's gap to a feature's anchor, whole voxels over the ground: how far
+/// past its sphere's listed radius the anchor lies (negative inside it);
+/// `None` for a beacon with no radius on the wire, or a figure that does not
+/// fit.
+fn gap(beacon: &crate::situation::Beacon, anchor: [i32; 2]) -> Option<i64> {
+    let [x, y] = anchor;
+    let [bx, by, _] = beacon.at;
+    distance2([bx, by, 0], [x, y, 0])?
+        .checked_isqrt()?
+        .checked_sub(beacon.sphere_radius_voxels?)
+}
+
+/// The seat's least gap to a feature's anchor over its own beacons, less
+/// `without` if one is named.
+fn least_gap(situation: &Situation, anchor: [i32; 2], without: Option<&str>) -> Option<i64> {
+    situation
+        .own_beacons()
+        .filter(|beacon| without != Some(beacon.id.as_str()))
+        .filter_map(|beacon| gap(beacon, anchor))
+        .min()
+}
+
+/// How many stepping stones a feature no site covers still needs, at least
+/// (module docs, "A stone's worth, and its chain"): a beacon placed inside an
+/// own sphere covers a feature within the base radius of it, so the feature is
+/// coverable once its gap is at most the base radius, and each stone closes at
+/// most one base radius of the gap. Over the ground, which is no further than
+/// the sim's own distance, so the count is a lower bound; at least one,
+/// because the gateway said no site covers it now. `None` for a feature the
+/// view does not list, a seat shown no beacon with a radius, or a figure that
+/// does not fit.
+pub(crate) fn stones_needed(situation: &Situation, tuning: &Tuning, feature: &str) -> Option<i64> {
+    let anchor = situation
+        .features
+        .iter()
+        .find(|held| held.id == feature)?
+        .anchor;
+    let radius = tuning.sphere_radius_voxels;
+    let gap = least_gap(situation, anchor, None)?;
+    // ceil(gap / radius) - 1, at least 1.
+    let needed = gap
+        .checked_add(radius.checked_sub(1)?)?
+        .checked_div(radius)?
+        .checked_sub(1)?;
+    Some(needed.max(1))
+}
+
+/// The far feature a begun chain is toward, if one is (module docs, "A stone's
+/// worth, and its chain"): over every stone the view shows -- an own beacon,
+/// not the core, whose sphere holds no live feature's anchor -- and every far
+/// feature this round refused for `covering`, the one whose gap to the seat's
+/// spheres the stone closed the most, ties to the smaller gap left, then the
+/// feature's name. `None` with no stone, or no stone that closed any far
+/// feature's gap.
+fn chain_feature(situation: &Situation, far: &[(usize, Goal)]) -> Option<String> {
+    let holds_a_feature = |beacon: &crate::situation::Beacon| {
+        situation
+            .features
+            .iter()
+            .filter(|feature| feature.live)
+            .any(|feature| gap(beacon, feature.anchor).is_some_and(|gap| gap <= 0))
+    };
+    let stones: Vec<&str> = situation
+        .own_beacons()
+        .filter(|beacon| !beacon.core && !holds_a_feature(beacon))
+        .map(|beacon| beacon.id.as_str())
+        .collect();
+    let mut best: Option<((i64, i64), String)> = None;
+    for (_, goal) in far {
+        let Some(anchor) = situation
+            .features
+            .iter()
+            .find(|feature| feature.id == goal.feature())
+            .map(|feature| feature.anchor)
+        else {
+            continue;
+        };
+        let Some(with) = least_gap(situation, anchor, None) else {
+            continue;
+        };
+        for stone in &stones {
+            let Some(closed) = least_gap(situation, anchor, Some(stone))
+                .and_then(|without| without.checked_sub(with))
+            else {
+                continue;
+            };
+            if closed <= 0 {
+                continue;
+            }
+            // Most closed first, then the smaller gap left, then the name.
+            let key = (closed, with.checked_neg()?);
+            let better = match &best {
+                None => true,
+                Some((held, name)) => {
+                    key > *held || (key == *held && goal.feature() < name.as_str())
+                }
+            };
+            if better {
+                best = Some((key, goal.feature().to_owned()));
+            }
+        }
+    }
+    best.map(|(_, feature)| feature)
 }
 
 /// The summed threat of the other seats' assets the view shows inside the
@@ -1431,9 +1587,11 @@ fn terms(
             let cost = tuning.survey_cost_dollars;
             (
                 cost,
-                // A Survey post earns nothing: its worth is the sightings its
-                // scouts bring back, which the next round's raids read.
-                cost.checked_neg()?,
+                // A Survey post earns nothing of its own: its worth is the
+                // raid its sightings buy (`score`), whose price it is charged
+                // the round's share of, beside its own.
+                cost.checked_neg()?
+                    .checked_sub(tuning.raid_cost_dollars.checked_div(SURVEY_RAID_ROUNDS)?)?,
                 // Beside the core, inside its sphere: no reach it adds.
                 0,
                 0,
@@ -1482,33 +1640,48 @@ fn score(
 ) -> Option<Candidate> {
     let on_site = priced(situation, tuning, declared, &goal, place)?;
     // A stone has no worth of its own: it is worth the goal it serves, by that
-    // goal's own terms, less the stone's price; this round spends its walk and
-    // deploy, and its rate counts the served goal's whole time too, which a
-    // later round spends. So of two far vents the rich one's stone outranks
-    // the lean one's, and a stone never outranks a goal of the same worth
-    // placeable now, which pays no stone and waits no round.
+    // goal's own terms, discounted by the stones and the rounds its chain
+    // still needs (module docs, "A stone's worth, and its chain"); this round
+    // spends its walk and deploy, and its rate counts the whole chain's time.
+    //
+    // PLACEHOLDER: a later round's worth read as a round's share of it, the served goal's worth divided by the chain's rounds — owner, S5, with the Balanced weights
     let (cost, economy, expansion, defence, time_ms, rate_ms) = if let Some(served) = goal.served()
     {
-        // The served goal costs its own time in the later round, from
-        // the stone's sphere: at least as far as the stone is, so its
-        // travel is the stone's, a lower bound.
+        // The served goal costs its own time in the later round, from the
+        // last stone's sphere: at least as far as this stone is, so its
+        // travel is this stone's, a lower bound.
         let served_on_site = priced(situation, tuning, declared, &served, place)?;
         let (_, economy, expansion, _, served_ms) =
             terms(situation, tuning, &served, travel_ms, served_on_site)?;
+        let stones = stones_needed(situation, tuning, goal.feature())?;
+        let rounds = stones.checked_add(1)?;
         let cost = tuning.beacon_cost_dollars;
         let round_ms = travel_ms.checked_add(on_site)?;
         (
             cost,
-            economy.checked_sub(cost)?,
-            expansion,
+            economy
+                .checked_div(rounds)?
+                .checked_sub(cost.checked_mul(stones)?)?,
+            expansion.checked_div(rounds)?,
             0,
             round_ms,
-            round_ms.checked_add(served_ms)?,
+            round_ms.checked_mul(stones)?.checked_add(served_ms)?,
         )
     } else {
         let (cost, economy, expansion, defence, time_ms) =
             terms(situation, tuning, &goal, travel_ms, on_site)?;
-        (cost, economy, expansion, defence, time_ms, time_ms)
+        // A Survey post's rate counts the raid it buys too, at least its own
+        // time: the raid post stands on the same seam.
+        let rate_ms = match goal {
+            Goal::Survey { .. } => time_ms.checked_mul(2)?,
+            Goal::Mine { .. }
+            | Goal::Generator { .. }
+            | Goal::Tap { .. }
+            | Goal::Guard { .. }
+            | Goal::Raid { .. }
+            | Goal::Stone { .. } => time_ms,
+        };
+        (cost, economy, expansion, defence, time_ms, rate_ms)
     };
     // Risk: what the seat can see of other seats near the goal.
     //
@@ -1535,11 +1708,13 @@ fn score(
     let capability = 0_i64;
     let attack = match &goal {
         Goal::Raid { target, .. } => raid_attack(situation, tuning, target)?,
+        // The raid a Survey post buys: an undefended target, as no target is
+        // in sight, its worth a round's share of the rounds it takes.
+        Goal::Survey { .. } => RAID_POINTS.checked_div(SURVEY_RAID_ROUNDS)?,
         Goal::Mine { .. }
         | Goal::Generator { .. }
         | Goal::Tap { .. }
         | Goal::Guard { .. }
-        | Goal::Survey { .. }
         | Goal::Stone { .. } => 0,
     };
     let w = BALANCED;
@@ -1566,18 +1741,22 @@ fn score(
     })
 }
 
-/// The top-k by utility per second, ties to the lowest id, less any
-/// candidate worth nothing and less the guard, which is added beside the
-/// goals rather than ranked among them ([`guard`]).
-pub(crate) fn top_k(candidates: &[Candidate], fill: i64) -> Vec<Candidate> {
-    let mut ranked: Vec<Candidate> = candidates
+/// The top-k by utility per second, ties to the lowest id, of every
+/// candidate worth something whose time fits `share` -- what the share holds
+/// once whatever was funded ahead of the ranking has taken its part (fix pass
+/// 2, item 3): a goal it cannot hold is no goal this round, and ranked among
+/// the top-k it would only crowd out one that fits -- less the one funded
+/// ahead of it (`ahead`, by id: the guard after the commander's death).
+pub(crate) fn ranked(
+    candidates: &[Candidate],
+    share: i64,
+    ahead: Option<usize>,
+) -> Vec<&Candidate> {
+    let mut ranked: Vec<&Candidate> = candidates
         .iter()
         .filter(|candidate| candidate.utility > 0)
-        // A goal the round's whole share cannot hold is no goal this round:
-        // ranked among the top-k it would only crowd out one that fits.
-        .filter(|candidate| candidate.time_ms <= fill)
-        .filter(|candidate| !matches!(candidate.goal, Goal::Guard { .. } | Goal::Survey { .. }))
-        .cloned()
+        .filter(|candidate| candidate.time_ms <= share)
+        .filter(|candidate| ahead != Some(candidate.id))
         .collect();
     ranked.sort_by_key(|candidate| (std::cmp::Reverse(candidate.rate), candidate.id));
     ranked.truncate(EASY_TOP_K);
@@ -1592,22 +1771,14 @@ pub(crate) fn guard_site(candidates: &[Candidate]) -> Option<&Candidate> {
         .find(|candidate| matches!(candidate.goal, Goal::Guard { .. }))
 }
 
-/// The guard post Easy adds to its route: the evaluated one, when it is worth
+/// The guard post Easy funds ahead of the ranking in the round after a Push
+/// in which its commander died: the evaluated one, when it is worth
 /// something. Spec section 14: Easy "adds a Defend guard on its commander when
 /// the commander has died recently", which decision 35 reads as the round
-/// after a Push in which its commander died, and decision 12's threat inside
-/// the core's sphere scores it too.
+/// after a Push in which its commander died; decision 12's threat inside the
+/// core's sphere scores it too, and ranks it in any other round.
 pub(crate) fn guard(candidates: &[Candidate]) -> Option<&Candidate> {
     guard_site(candidates).filter(|candidate| candidate.utility > 0)
-}
-
-/// The Survey post Easy adds to its route beside the goals, when it was
-/// evaluated: whenever the trigger holds, whatever its utility, which is its
-/// price negated (spec section 14's trigger is the rule, not a score).
-pub(crate) fn survey(candidates: &[Candidate]) -> Option<&Candidate> {
-    candidates
-        .iter()
-        .find(|candidate| matches!(candidate.goal, Goal::Survey { .. }))
 }
 
 /// The raid the wizard's Raid an Enemy Beacon page is pre-filled with: the

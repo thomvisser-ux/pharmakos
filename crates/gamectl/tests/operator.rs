@@ -750,15 +750,16 @@ fn easy_passes_the_verifier_on_every_snapshot_of_the_corpus() {
         assert!(row.advisor_calls <= EASY_ADVISOR_CALL_BUDGET, "{row:#?}");
     }
     // What it chose, said so a reader of a red build can see it: on the
-    // determinism seed no seat holds a sighting in round one, so each seals
-    // a Survey post beside its core, weighed before the goals (spec section
-    // 14's trigger; S3's `opr3`, fix pass 1), by the starting seam's name.
+    // determinism seed each seat's round one places a Build beacon on its
+    // start vent with a Generator on it, by the vent's name, ranked above a
+    // Survey post, which is worth the raid it buys (S3's `opr3`, fix pass 2,
+    // item 2).
     assert!(
         rows.iter()
             .filter(|row| row.snapshot == "three-rounds/round-1")
             .all(|row| row
                 .note
-                .contains("A Survey beacon beside the core, covering the scrap seam seam_")),
+                .contains("A Build beacon covering the lean heat vent vent_")),
         "{rows:#?}"
     );
 }
@@ -799,15 +800,15 @@ fn the_safe_playbook_always_qualifies() {
 ///
 /// The power-short match's core is shed at the Push's first settle and never
 /// revived, so from round 2 on its seats are short. Each seat's round-1 seal
-/// places a lit non-core beacon (a stepping stone since S3's `opr3`, fix pass
-/// 1), which in round 2's Lull is its one beacon at risk (decision 14: lit and
-/// next in the shed order, since a raise relights), within reach, and is
-/// raised to HIGH; in round 3 seat 0 has a second beacon at risk, the one its
-/// round-2 seal placed, and raises it, while seat 1's is out of reach.
+/// places a lit non-core beacon (the Build beacon on its start vent since S3's
+/// `opr3`, fix pass 2, item 2), which in round 2's Lull is its one beacon at
+/// risk (decision 14: lit and next in the shed order, since a raise
+/// relights), within reach, and is raised to HIGH. Round 2's seals place
+/// nothing more, so in round 3 that beacon is HIGH already and nothing is at
+/// risk.
 const ROWS_THAT_RAISE: &[(&str, u8)] = &[
     ("three-rounds-power-short/round-2", 0),
     ("three-rounds-power-short/round-2", 1),
-    ("three-rounds-power-short/round-3", 0),
 ];
 
 /// Decisions-log item 128 (S1's plan, decision 14; the register's S1-21),
@@ -920,13 +921,21 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 }
 
 /// The corpus rows on the committed rules whose seat's supply shows a
-/// Generator. None since S3's `opr3` fix pass 1: Easy spends the corpus's
-/// rounds on the Survey post and on stepping stones toward rich seams beyond
-/// its first sphere, which its Balanced terms value above a Generator (a rich
-/// seam's Mine about 1 180 points, a lean vent's Generator 140), so no seat
-/// builds one in three rounds. The scenario's own Generator is
+/// Generator: every seat of the three-round match from round 2 on, each the
+/// Generator its round-1 seal put on its lean start vent (S3's `opr3`, fix
+/// pass 2, item 2: one ranking, a stone discounted by the stones and rounds
+/// its chain still needs and a Survey post worth the raid it buys, so the
+/// seat's first Generator ranks first, as it did before the stones). The
+/// scenario's own Generator is
 /// `the_scenario_generator_raises_supply_by_exactly_the_lean_vent`'s.
-const GENERATOR_ROWS: &[(&str, u8)] = &[];
+const GENERATOR_ROWS: &[(&str, u8)] = &[
+    ("three-rounds/round-2", 0),
+    ("three-rounds/round-2", 1),
+    ("three-rounds/round-2", 2),
+    ("three-rounds/round-3", 0),
+    ("three-rounds/round-3", 1),
+    ("three-rounds/round-3", 2),
+];
 
 /// The rules text's `power.core_surplus_kw` and the lean vent's
 /// `power.generator_output_kw`, kW.
@@ -1507,10 +1516,11 @@ fn a_suggested_raid_qualifies_through_the_real_verifier() {
 }
 
 /// Probation's own seed (decisions-log items 154 (1) and 156 (1)): its rich
-/// seams lie beyond the first sphere, which no `covering` site reaches, so
+/// features lie beyond the first sphere, which no `covering` site reaches, so
 /// Easy reaches toward them with stepping stones (S3's `opr3`; the register's
-/// S5-04), each worth the Mine it serves (fix pass 1, item 2), in its own
-/// seal, verified by the real gateway.
+/// S5-04), each worth the goal it serves discounted by the stones and rounds
+/// its chain still needs (fix pass 2, item 2), in its own seal, verified by
+/// the real gateway.
 #[test]
 fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
     let rules = rules_json();
@@ -1578,31 +1588,24 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
         eprintln!("{} seat {}: {}", row.snapshot, row.seat, row.note);
     }
     eprintln!("Probation's seed, the stones (round, seat, toward): {stones:?}");
-    // A named expectation, each round of each seat's stone chain. Seat 0
-    // walks toward `seam_190_124` in rounds 1 and 2 and in round 3 places the
-    // Mine beacon covering it, the goal its stones served. Seat 1 starts
-    // toward `seam_163_202`, turns toward `seam_191_215` once its first stone
-    // stands, because from the new sphere that seam ranks first by the
-    // scoring (both are rich seams; the turn is the nearer), and turns back in
-    // round 3; its chain reaches no seam within the three rounds.
-    let wanted: Vec<(String, u8, String)> = [
-        ("probation/round-1", 0, "seam_190_124"),
-        ("probation/round-1", 1, "seam_163_202"),
-        ("probation/round-2", 0, "seam_190_124"),
-        ("probation/round-2", 1, "seam_191_215"),
-        ("probation/round-3", 1, "seam_163_202"),
-    ]
-    .into_iter()
-    .map(|(round, seat, feature)| (round.to_owned(), seat, feature.to_owned()))
-    .collect();
+    // A named expectation, each round of each seat's stone chain (fix pass
+    // 2, item 2). Both seats place the Generator on their start vent in round
+    // 1. Seat 0 walks one stone toward the rich vent `vent_232_96` in round 2,
+    // the one stone the known positions say it needs, and in round 3 places
+    // the Build beacon covering it, the goal its stone served. Seat 1 places a
+    // Survey post in round 2 and has nothing worth its treasury in round 3.
+    let wanted: Vec<(String, u8, String)> = [("probation/round-2", 0, "vent_232_96")]
+        .into_iter()
+        .map(|(round, seat, feature)| (round.to_owned(), seat, feature.to_owned()))
+        .collect();
     assert_eq!(stones, wanted, "{rows:#?}");
     assert!(
         rows.iter().any(|row| row.snapshot == "probation/round-3"
             && row.seat == 0
             && row
                 .note
-                .contains("A Mine beacon covering the rich scrap seam seam_190_124")),
-        "seat 0's stones are followed by the goal they served: {rows:#?}"
+                .contains("A Build beacon covering the rich heat vent vent_232_96")),
+        "seat 0's stone is followed by the goal it served: {rows:#?}"
     );
     assert!(
         rows.iter().all(|row| row.seal != Seal::NotEasy),
@@ -1705,16 +1708,19 @@ const SURVEY_MATCHES: [(u64, u32); 5] = [
     (SCENARIO_SEED, 3),
 ];
 
-/// `(round-1 Survey posts, of them finding an enemy beacon by the end of
-/// round 2's Push)` on [`SURVEY_MATCHES`].
-const SURVEY_ROUND_ONE: (usize, usize) = (12, 7);
+/// `(Survey posts sealed in rounds 1 and 2, of them finding an enemy beacon
+/// by the end of the next round's Push)` on [`SURVEY_MATCHES`] over three
+/// rounds.
+const SURVEY_POSTS: (usize, usize) = (12, 11);
 
 /// Spec section 14's Survey post through the real gateway (S3's plan,
-/// decision 3; fix pass 1, item 7), weighed before the goals and looking over
-/// the half of the ground away from the seat's core. On the committed seeds,
-/// every seat Easy, over two rounds: how many seats seal a post in round 1,
-/// and how many of those have their scouts find an enemy beacon by the end
-/// of round 2's Push. A named expectation with its counts; a change says
+/// decision 3), looking over the half of the ground away from the seat's core
+/// and **ranked** with every other candidate, worth the raid it buys (fix pass
+/// 2, item 2): so it goes up once the seat's first Generator is placed and the
+/// treasury carries it, not ahead of it. On the committed seeds, every seat
+/// Easy, over three rounds: how many seats seal a post in rounds 1 and 2, and
+/// how many of those have their scouts find an enemy beacon by the end of the
+/// next round's Push. A named expectation with its counts; a change says
 /// which seat and seed moved.
 ///
 /// The owner's reading of the spec's "refresh those sightings before the next
@@ -1722,28 +1728,30 @@ const SURVEY_ROUND_ONE: (usize, usize) = (12, 7);
 /// already held, and a first discovery may take longer, so this test pins
 /// what a first discovery takes and does not require it inside one Push.
 #[test]
-fn survey_posts_go_up_in_round_one_and_find_the_enemy_by_round_two() {
+fn survey_posts_go_up_once_the_first_generator_stands() {
     let mut posted = 0_usize;
     let mut found = 0_usize;
     for (seed, seats) in SURVEY_MATCHES {
-        let surveyed = survey_match(seed, seats, 2);
+        let surveyed = survey_match(seed, seats, 3);
         eprintln!(
-            "seed {seed:#x}/{seats}: posts {:?}; first enemy found (seat, round) {:?}",
+            "seed {seed:#x}/{seats}: posts (round, seat) {:?}; first enemy found (seat, round) {:?}",
             surveyed.posts, surveyed.first_found
         );
-        for &(_, seat) in surveyed.posts.iter().filter(|(round, _)| *round == 1) {
+        for &(round, seat) in surveyed.posts.iter().filter(|(round, _)| *round <= 2) {
             posted = posted.checked_add(1).expect("a count");
-            if surveyed.first_found.iter().any(|&(held, _)| held == seat) {
+            if surveyed
+                .first_found
+                .iter()
+                .any(|&(held, by)| held == seat && by <= round + 1)
+            {
                 found = found.checked_add(1).expect("a count");
             }
         }
     }
-    eprintln!("round-1 Survey posts {posted}, finding the enemy by round 2: {found}");
-    assert_eq!(
-        (posted, found),
-        SURVEY_ROUND_ONE,
-        "the named expectation moved"
+    eprintln!(
+        "Survey posts in rounds 1 and 2: {posted}, finding the enemy by the next round: {found}"
     );
+    assert_eq!((posted, found), SURVEY_POSTS, "the named expectation moved");
 }
 
 /// The Resonance Spire through the real verifier and the sim (fix pass 1,

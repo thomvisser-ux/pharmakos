@@ -58,17 +58,18 @@
 //! Spec section 14's chatter and target spread are not built at Easy
 //! (decisions-log item 111, section A6). Its Survey post is, from S3 (S3's
 //! plan, decision 3): when it holds no sighting of an enemy beacon inside the
-//! reach window, the trigger as the spec words it, it places a Survey beacon
-//! beside its core whose scouts look over the half of the ground away from it, so a raid has a
-//! fresh target in a later Lull. Its Defend guard is: S2's plan,
+//! reach window, the trigger as the spec words it, it weighs a Survey beacon
+//! beside its core whose scouts look over the half of the ground away from
+//! it, ranked with its goals and worth the raid it buys (S3's `opr3`, fix pass
+//! 2), so a raid has a fresh target in a later Lull. Its Defend guard is: S2's plan,
 //! decision 35, moved it from S5 to S2, and `oprd` built it (a guard post in
 //! the round after a Push in which the commander died, scored by decision
 //! 12's threat model; [`easy`]'s Defend the Core). So are its raids, S2's
 //! `opra`: an Attack beacon beside the core raiding the nearest fixed target
 //! the seat knows of, an enemy beacon or an enemy commander in sight, scored
 //! alike (Raid an Enemy Beacon). And from S3 it queues the Resonance Spire
-//! at its core once its seat holds the licence, beside the round's goals and
-//! never ranked among them (S3's plan, `opr3`; [`easy`]'s plan), and it
+//! at its core once its seat holds the licence, funded ahead of the round's
+//! ranked goals (S3's plan, `opr3`; [`easy`]'s plan), and it
 //! reaches past its first sphere with stepping stones placed `toward` a
 //! feature no site of its spheres covers (the register's S5-04).
 //!

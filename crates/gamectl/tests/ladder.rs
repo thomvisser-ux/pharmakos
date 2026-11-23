@@ -105,6 +105,40 @@ fn call(surface: &mut Surface, token: &Token, method: &str) -> Json {
         .unwrap_or_else(|| panic!("{method} was refused: {answer:?}"))
 }
 
+/// The seat's start vent, as [`SeatRound::start_vent`] says.
+fn start_vent(surface: &mut Surface, token: &Token, seat: SeatId) -> Option<String> {
+    let beacons = call(surface, token, "list_beacons");
+    let own = Json::String(format!("seat.{}", seat.raw()));
+    let core = match beacons.get("beacons") {
+        Some(Json::Array(rows)) => rows
+            .iter()
+            .find(|row| {
+                row.get("owner") == Some(&own) && row.get("core") == Some(&Json::Bool(true))
+            })
+            .and_then(|row| row.get("at"))
+            .map(|at| (number(at.get("x")), number(at.get("y"))))?,
+        _ => return None,
+    };
+    let map = call(surface, token, "get_map_summary");
+    let Some(Json::Array(features)) = map.get("features") else {
+        return None;
+    };
+    features
+        .iter()
+        .filter(|row| row.get("kind") == Some(&Json::String(String::from("vent"))))
+        .filter(|row| row.get("live") != Some(&Json::Bool(false)))
+        .filter_map(|row| {
+            let (x, y) = (number(row.get("x")), number(row.get("y")));
+            let d2 = (x - core.0).pow(2) + (y - core.1).pow(2);
+            match row.get("feature_id") {
+                Some(Json::String(id)) => Some(((d2, y, x), id.clone())),
+                _ => None,
+            }
+        })
+        .min()
+        .map(|(_, id)| id)
+}
+
 fn number(value: Option<&Json>) -> i64 {
     match value {
         Some(Json::Number(lexeme)) => lexeme.parse().expect("a whole number"),
@@ -146,6 +180,10 @@ struct SeatRound {
     seal: Seal,
     /// The forecast's `headroom_kw_now` before the seal.
     headroom_kw: i64,
+    /// The seat's start vent: the live vent nearest its core over the
+    /// ground, as `get_map_summary` and `list_beacons` show them before the
+    /// seal, ties to the lower anchor `y`, then `x`.
+    start_vent: Option<String>,
     /// The sealed playbook, comments and all.
     text: String,
     /// The sealed route's steps.
@@ -297,15 +335,16 @@ fn ladder_match(rules: &str, seed: u64, seats: u32, rounds: u32) -> Vec<SeatRoun
         InProcessSeats::open(&mut surface, &ids, None, &mut factory).expect("in-process seats");
     let mut out: Vec<SeatRound> = Vec::new();
     for round in 1..=rounds {
-        let mut headrooms: Vec<i64> = Vec::new();
+        let mut before: Vec<(i64, Option<String>)> = Vec::new();
         for seat in &ids {
             let token = in_process_token(&mut surface, *seat);
             let forecast = call(&mut surface, &token, "get_economy_forecast");
-            headrooms.push(number(forecast.get("headroom_kw_now")));
+            let vent = start_vent(&mut surface, &token, *seat);
+            before.push((number(forecast.get("headroom_kw_now")), vent));
         }
         easy.plan(&mut surface);
         let first = out.len();
-        for (seat, headroom_kw) in ids.iter().zip(headrooms) {
+        for (seat, (headroom_kw, start_vent)) in ids.iter().zip(before) {
             let state = surface
                 .seat_state(Subject::Seat(*seat), *seat)
                 .expect("its own")
@@ -327,6 +366,7 @@ fn ladder_match(rules: &str, seed: u64, seats: u32, rounds: u32) -> Vec<SeatRoun
                 seat: seat.raw(),
                 seal,
                 headroom_kw,
+                start_vent,
                 text: text.unwrap_or_default(),
                 outcomes: vec![Outcome::NotRun; steps.len()],
                 steps,
@@ -575,4 +615,92 @@ fn every_stone_places_or_is_followed_by_a_different_choice() {
         chains.len()
     );
     assert!(repeated.is_empty(), "{repeated:#?}");
+}
+
+/// What a seal places, by kind, for the seals-by-kind table: a placement's
+/// kind is read off its label (`place_power`, `place_mine`, `place_guard`,
+/// `place_raid`, `survey_post`, `stone`, `add_generator`, each numbered after
+/// the first), and the Spire's step and a safe or fallback seal are kinds of
+/// their own.
+fn kinds_of(row: &SeatRound) -> Vec<&'static str> {
+    match row.seal {
+        Seal::Safe => return vec!["safe"],
+        Seal::NotEasy => return vec!["fallback"],
+        Seal::Own => {}
+    }
+    let mut kinds: Vec<&'static str> = Vec::new();
+    for step in &row.steps {
+        let label = match step.get("label") {
+            Some(Json::String(label)) => label.as_str(),
+            _ => "",
+        };
+        let kind = [
+            ("place_power", "generator"),
+            ("place_mine", "mine"),
+            ("place_guard", "guard"),
+            ("place_raid", "raid"),
+            ("survey_post", "survey"),
+            ("stone", "stone"),
+            ("add_generator", "tap"),
+            ("queue_spire", "spire"),
+        ]
+        .iter()
+        .find(|(prefix, _)| label.starts_with(prefix))
+        .map(|(_, kind)| *kind);
+        if let Some(kind) = kind {
+            kinds.push(kind);
+        }
+    }
+    if kinds.is_empty() {
+        kinds.push("nothing placed");
+    }
+    kinds
+}
+
+/// The seals over the first `rounds` rounds, counted by kind.
+fn by_kind(rounds: u32) -> Vec<(&'static str, usize)> {
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    for row in five_rounds().iter().filter(|row| row.round <= rounds) {
+        for kind in kinds_of(row) {
+            match counts.iter_mut().find(|(held, _)| *held == kind) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((kind, 1)),
+            }
+        }
+    }
+    counts.sort_unstable();
+    counts
+}
+
+/// Easy builds what it built before its stones and its Survey post (fix pass
+/// 2, item 2): on the five committed matches over the rules ladder, every
+/// seat's round-1 seal places a Generator on its start vent, and the Push
+/// places it. The seals over three and five rounds, counted by kind, are
+/// printed for the pull request.
+#[test]
+fn round_one_places_a_generator_on_the_start_vent_on_every_seat() {
+    let mut missing: Vec<String> = Vec::new();
+    for row in five_rounds().iter().filter(|row| row.round == 1) {
+        let vent = row.start_vent.clone().unwrap_or_default();
+        let placed = row
+            .coverings()
+            .iter()
+            .any(|(index, feature)| *feature == vent && *row.outcome(*index) == Outcome::Completed);
+        eprintln!(
+            "{} seat {}: start vent {vent}, kinds {:?}, placed {placed}",
+            row.game,
+            row.seat,
+            kinds_of(row)
+        );
+        if !placed {
+            missing.push(format!("{} seat {}: {}", row.game, row.seat, row.text));
+        }
+    }
+    eprintln!("seals by kind over three rounds: {:?}", by_kind(3));
+    eprintln!("seals by kind over five rounds: {:?}", by_kind(5));
+    assert!(missing.is_empty(), "{missing:#?}");
+    assert_eq!(
+        five_rounds().iter().filter(|row| row.round == 1).count(),
+        12
+    );
 }

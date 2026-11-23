@@ -206,6 +206,13 @@ pub const RAID_TARGETS_MAX: u32 = 3;
 /// PLACEHOLDER: the Survey post's scout count, 2 as the Hunter arm's — owner, S5
 pub const SURVEY_SCOUT_COUNT: u32 = 2;
 
+/// The rounds a Survey post's worth takes to arrive (fix pass 2, item 2): its
+/// own, in whose Push its scouts sight the enemy, then the raid's, which is
+/// weighed only once a sighting is held in a Lull. Not a weight: the count of
+/// rounds the post's worth is discounted by ([`crate::candidates`], "Vision,
+/// and the Survey post").
+pub const SURVEY_RAID_ROUNDS: i64 = 2;
+
 /// How many refused placements a round weighs again as a stepping stone
 /// toward its feature (the register's S5-04;
 /// [`crate::candidates`]' `evaluate`), one `estimate_route` each.
@@ -552,20 +559,12 @@ impl Easy {
         let evaluated = weighed.candidates;
         // No share to fill (a segment length past the arithmetic) is no goal:
         // the composition then fails and the safe playbook is submitted.
-        let top = match compose::fill_ms(situation) {
-            Some(fill) => candidates::top_k(&evaluated, fill),
-            None => Vec::new(),
-        };
-        let guard = candidates::guard(&evaluated);
-        let survey = candidates::survey(&evaluated);
         let spire = compose::spire(situation, &self.tuning);
 
         if let Some(composed) = compose::compose(
             situation,
             &self.tuning,
-            &top,
-            guard,
-            survey,
+            &evaluated,
             spire.as_ref(),
             &declared,
         ) && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)

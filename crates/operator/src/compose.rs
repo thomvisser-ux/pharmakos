@@ -6,16 +6,37 @@
 //! Spec section 14: "compose visit goals by greedy insertion by utility per
 //! second until the route fills its target share of the segment (the
 //! segment's length comes from the snapshot)". At Easy the share is 70 %.
-//! The top-k candidates are walked in rank order and each is inserted when
-//! it is the same template's goal as the first, names a feature no goal
-//! before it names, fits what is left of the share, and is affordable from
-//! the treasury as it stands. The first goal chooses the template; each
-//! further one becomes one more step of it -- a Mine beacon covering its seam
-//! for Expand & Mine; a Build beacon covering its vent, a Generator added to
-//! an existing beacon's list, or a stepping stone placed `toward` a far
-//! feature, for Hold & Build -- written as a JSON Patch
-//! the gateway's `patch_plan` applies to the template's own instantiation, so
-//! comments and layout survive.
+//!
+//! # One ranking
+//!
+//! Every candidate -- a placement, a tap, a stone, a raid, the guard post and
+//! the Survey post -- is scored in the same terms ([`crate::candidates`]) and
+//! funded in score order from **one** budget: the share, the treasury and the
+//! kW headroom (the forecast's supply less its draw; S3's `opr3`, fix pass 2,
+//! item 2). Two things are funded ahead of the ranking, as ruled: the guard
+//! post in the round after a Push in which the commander died (spec section
+//! 14: Easy "adds a Defend guard on its commander when the commander has died
+//! recently", decision 35), and the Resonance Spire once the licence is held
+//! (S3's plan, decisions 6 and 13). The top-k of what they leave -- every
+//! candidate worth something whose time fits the share they leave, by utility
+//! per second, ties to the lowest id -- is walked in rank order:
+//!
+//! * a **post** (the guard, the Survey post) is funded when no post is yet:
+//!   both cover the post seam beside the core, so a round places one; its step
+//!   goes in front of the template's, beside the core where the route opens;
+//! * a **goal** is funded when it is the same template's goal as the first
+//!   (the first chooses the template), names a feature no goal or post before
+//!   it names, is the round's one stone if it is a stone, and fits what is
+//!   left of the budget, its timeout fitting the round.
+//!
+//! Each further goal becomes one more step of the template -- a Mine beacon
+//! covering its seam for Expand & Mine; a Build beacon covering its vent, a
+//! Generator added to an existing beacon's list, or a stepping stone placed
+//! `toward` a far feature, for Hold & Build -- written as a JSON Patch the
+//! gateway's `patch_plan` applies to the template's own instantiation, so
+//! comments and layout survive. A round with a post and no goal fills Defend
+//! the Core with the guard, or the Safe Playbook template's frame with the
+//! Survey post.
 //!
 //! Every target the patch writes is a **name** (Easy's row: "fixed targets
 //! only"; `docs/design/targeting.md`, its surfaces section): the template's description,
@@ -78,25 +99,16 @@ use crate::situation::{Kind, LastPush, Situation};
 use crate::tuning::Tuning;
 use crate::wire::{number, object, string, voxel_json};
 
-/// A composed round: the template, its goals, and the patch that fills it.
+/// A composed round: the template and the patch that fills it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Composed {
     /// Which template.
     pub(crate) template_id: &'static str,
-    /// The goals, in insertion order. With no goal but the guard post, the
-    /// guard is the one goal of the Defend the Core template.
-    pub(crate) goals: Vec<Candidate>,
-    /// The guard post added beside the goals of another template, if one is.
-    pub(crate) guard: Option<Candidate>,
     /// The JSON Patch, applied to the template's own instantiation.
     pub(crate) patch: Vec<Json>,
     /// For each goal after the first, the patch that takes it out again:
     /// the repair of last resort.
     pub(crate) removals: Vec<Vec<Json>>,
-    /// The Resonance Spire queued at the core this round, if one is.
-    pub(crate) spire: Option<Spire>,
-    /// The Survey post added beside the goals, if one is.
-    pub(crate) survey: Option<Candidate>,
     /// Why, in the sentences the playbook's note carries after its seed line.
     pub(crate) why: String,
 }
@@ -104,9 +116,9 @@ pub(crate) struct Composed {
 /// The Resonance Spire Easy queues at its core (S3's plan, `opr3`; decisions
 /// 6 and 13): once its seat holds the licence, while no Spire of the seat's
 /// stands or is going up, and while the grid's headroom carries the Spire's
-/// draw. It is **added** beside the round's goals, as the guard post is, and
-/// never ranked among them: its price comes out of the treasury and its time
-/// out of the hold before the greedy insertion.
+/// draw. It is **funded ahead of the ranking** (module docs, "One ranking"):
+/// its price and draw come out of the budget before any ranked candidate's,
+/// and its time out of the hold.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Spire {
     /// The core's `b_NN`, where it is queued.
@@ -252,81 +264,6 @@ pub(crate) fn deepen_core(core: &str) -> Json {
     ])
 }
 
-/// What the greedy insertion fills.
-struct Budget<'a> {
-    situation: &'a Situation,
-    tuning: &'a Tuning,
-    declared: &'a [Declared],
-    /// The share left for the goals.
-    share: i64,
-    /// The treasury left for the goals.
-    treasury: i64,
-    /// The walk back from the last post in front of the template's steps.
-    posts_back_ms: i64,
-}
-
-/// Greedy insertion over the top-k, in rank order, into the share and the
-/// treasury, each goal's timeout fitting the round ([`timeout_within`]).
-fn greedy(top: &[Candidate], budget: &Budget<'_>) -> Vec<Candidate> {
-    let mut goals: Vec<Candidate> = Vec::new();
-    let (mut time, mut cost) = (0_i64, 0_i64);
-    for candidate in top {
-        if goals
-            .first()
-            .is_some_and(|first| first.goal.template() != candidate.goal.template())
-        {
-            continue;
-        }
-        if goals
-            .iter()
-            .any(|held| held.goal.feature() == candidate.goal.feature())
-        {
-            // One goal per feature: a second beacon covering one seam, or a
-            // second Generator on one vent, would buy nothing the first
-            // did not.
-            continue;
-        }
-        if matches!(candidate.goal, Goal::Stone { .. })
-            && goals
-                .iter()
-                .any(|held| matches!(held.goal, Goal::Stone { .. }))
-        {
-            // One stone chain at a time: a round walks toward one far
-            // feature, and the next round's scoring says whether the same
-            // feature is still the best to reach (it is nearer by a sphere,
-            // so it usually is) or now coverable from the stone.
-            continue;
-        }
-        let (Some(then_time), Some(then_cost)) = (
-            time.checked_add(candidate.time_ms),
-            cost.checked_add(candidate.cost_dollars),
-        ) else {
-            continue;
-        };
-        if then_time > budget.share || then_cost > budget.treasury {
-            continue;
-        }
-        let back = match goals.last() {
-            Some(before) => Some(before.walk_ms),
-            None => lead_back(
-                budget.declared,
-                candidate.goal.template(),
-                budget.posts_back_ms,
-            ),
-        };
-        if back
-            .and_then(|back| timeout_within(back, candidate, budget.tuning, budget.situation))
-            .is_none()
-        {
-            continue;
-        }
-        time = then_time;
-        cost = then_cost;
-        goals.push(candidate.clone());
-    }
-    goals
-}
-
 /// The declared template of this id.
 fn declared_template<'d>(declared: &'d [Declared], template_id: &str) -> Option<&'d Declared> {
     declared.iter().find(|held| held.template_id == template_id)
@@ -343,170 +280,344 @@ fn lead_back(declared: &[Declared], template_id: &str, posts_back_ms: i64) -> Op
     Some(if index > 0 { 0 } else { posts_back_ms })
 }
 
-/// Compose the round from the top-k and the guard post, or `None` when
-/// nothing fits.
-///
-/// The guard, when there is one worth placing ([`crate::candidates::guard`]),
-/// is **added** beside the goals rather than ranked among them (spec section
-/// 14: Easy "adds a Defend guard on its commander"): its time comes out of the
-/// share and its price out of the treasury before the greedy insertion, and
-/// its step goes into the route right after the core's, beside the core where
-/// the commander opens the route. With no goal beside it, the Defend the Core
-/// template is the round's playbook. A guard the library has no Defend the
-/// Core template for is not placed.
+/// The post a round places in front of the template's steps. The guard post
+/// and the Survey post both cover the post seam beside the core
+/// ([`crate::candidates`]), so a round places one of them at most.
+#[derive(Clone, Copy)]
+enum Post<'a> {
+    /// A Defend beacon guarding the core and the commander.
+    Guard(&'a Candidate),
+    /// A Survey beacon whose scouts look over the far half of the map.
+    Survey(&'a Candidate),
+}
+
+impl<'a> Post<'a> {
+    /// The candidate it is.
+    const fn candidate(self) -> &'a Candidate {
+        match self {
+            Post::Guard(candidate) | Post::Survey(candidate) => candidate,
+        }
+    }
+}
+
+/// What one round funds.
+struct Funded<'a> {
+    /// The post in front of the template's steps, if one is funded.
+    post: Option<Post<'a>>,
+    /// The Spire queued at the core, if it is funded.
+    spire: Option<&'a Spire>,
+    /// The goals, in rank order.
+    goals: Vec<Candidate>,
+}
+
+/// Fund the round from one budget (module docs, "One ranking"): the guard
+/// post after the commander's death and the Spire first, as ruled, then the
+/// top-k of the rest in rank order. `None` when the headroom does not fit the
+/// arithmetic.
+fn fund<'a>(
+    situation: &Situation,
+    tuning: &Tuning,
+    declared: &[Declared],
+    evaluated: &'a [Candidate],
+    spire: Option<&'a Spire>,
+    fill: i64,
+) -> Option<Funded<'a>> {
+    let defend = declared_template(declared, DEFEND_THE_CORE).is_some();
+    let mut purse = Purse {
+        share: fill,
+        treasury: situation.economy.treasury,
+        headroom: situation
+            .economy
+            .supply_kw
+            .checked_sub(situation.economy.draw_kw)?,
+    };
+    let mut funded = Funded {
+        post: None,
+        spire: None,
+        goals: Vec::new(),
+    };
+    if defend && matches!(situation.last_push, LastPush::Died) {
+        funded.post = crate::candidates::guard(evaluated)
+            .filter(|guard| timeout_within(0, guard, tuning, situation).is_some())
+            .filter(|guard| purse.spend(guard.time_ms, guard.cost_dollars, tuning.guard_draw_kw))
+            .map(Post::Guard);
+    }
+    // Its step is at the core the route opens at, so a seat shown no core
+    // queues no Spire; its time comes out of the hold, as the core's step's
+    // does, rather than the share.
+    let core = situation.core().map(|core| core.id.as_str());
+    funded.spire = spire
+        .filter(|spire| core == Some(spire.core.as_str()))
+        .filter(|spire| purse.spend(0, spire.cost_dollars, spire.draw_kw));
+    let ahead = funded.post.map(|post| post.candidate().id);
+    for candidate in crate::candidates::ranked(evaluated, purse.share, ahead) {
+        match candidate.goal {
+            Goal::Guard { .. } | Goal::Survey { .. } => {
+                if defend {
+                    fund_post(
+                        situation,
+                        tuning,
+                        declared,
+                        &mut purse,
+                        &mut funded,
+                        candidate,
+                    );
+                }
+            }
+            Goal::Mine { .. }
+            | Goal::Generator { .. }
+            | Goal::Tap { .. }
+            | Goal::Raid { .. }
+            | Goal::Stone { .. } => {
+                fund_goal(
+                    situation,
+                    tuning,
+                    declared,
+                    &mut purse,
+                    &mut funded,
+                    candidate,
+                );
+            }
+        }
+    }
+    Some(funded)
+}
+
+/// Fund a post when no post is funded yet and no goal names its seam, its
+/// timeout and the first goal's (whose walk starts at the post's site) fit
+/// the round, and the budget carries its time, its price and its scouts'
+/// draw.
+fn fund_post<'a>(
+    situation: &Situation,
+    tuning: &Tuning,
+    declared: &[Declared],
+    purse: &mut Purse,
+    funded: &mut Funded<'a>,
+    candidate: &'a Candidate,
+) {
+    if funded.post.is_some()
+        || funded
+            .goals
+            .iter()
+            .any(|goal| goal.goal.feature() == candidate.goal.feature())
+        || timeout_within(0, candidate, tuning, situation).is_none()
+    {
+        return;
+    }
+    if let Some(first) = funded.goals.first()
+        && lead_back(declared, first.goal.template(), candidate.walk_ms)
+            .and_then(|back| timeout_within(back, first, tuning, situation))
+            .is_none()
+    {
+        return;
+    }
+    let (post, draw) = match candidate.goal {
+        Goal::Survey { .. } => (Post::Survey(candidate), tuning.survey_draw_kw),
+        Goal::Guard { .. }
+        | Goal::Mine { .. }
+        | Goal::Generator { .. }
+        | Goal::Tap { .. }
+        | Goal::Raid { .. }
+        | Goal::Stone { .. } => (Post::Guard(candidate), tuning.guard_draw_kw),
+    };
+    if purse.spend(candidate.time_ms, candidate.cost_dollars, draw) {
+        funded.post = Some(post);
+    }
+}
+
+/// Fund a goal when it is the same template's as the first, names a feature
+/// no goal or post before it names (a second beacon covering one seam, or a
+/// second Generator on one vent, would buy nothing the first did not, and a
+/// raid post covers the posts' seam), is the round's one stone if it is a
+/// stone (a round walks toward one far feature, and the next round's scoring
+/// says whether the same one is still the one to reach), its timeout fits
+/// the round, and the budget carries its time and its price.
+fn fund_goal(
+    situation: &Situation,
+    tuning: &Tuning,
+    declared: &[Declared],
+    purse: &mut Purse,
+    funded: &mut Funded<'_>,
+    candidate: &Candidate,
+) {
+    let goals = &funded.goals;
+    let other_template = goals
+        .first()
+        .is_some_and(|first| first.goal.template() != candidate.goal.template());
+    let named_before = goals
+        .iter()
+        .chain(funded.post.map(Post::candidate))
+        .any(|held| held.goal.feature() == candidate.goal.feature());
+    let second_stone = matches!(candidate.goal, Goal::Stone { .. })
+        && goals
+            .iter()
+            .any(|held| matches!(held.goal, Goal::Stone { .. }));
+    if other_template || named_before || second_stone {
+        return;
+    }
+    let back = match goals.last() {
+        Some(before) => Some(before.walk_ms),
+        None => lead_back(declared, candidate.goal.template(), walk_of(funded.post)),
+    };
+    if back
+        .and_then(|back| timeout_within(back, candidate, tuning, situation))
+        .is_none()
+    {
+        return;
+    }
+    if purse.spend(candidate.time_ms, candidate.cost_dollars, 0) {
+        funded.goals.push(candidate.clone());
+    }
+}
+
+/// A post's walk from the core, and none without a post.
+const fn walk_of(post: Option<Post<'_>>) -> i64 {
+    match post {
+        Some(post) => post.candidate().walk_ms,
+        None => 0,
+    }
+}
+
+/// What the hold gives up for what stands in front of the template's steps:
+/// the core's step, the walk to the core, the Spire's step and the post's;
+/// `None` when the seat is shown a core but no candidate gave the walk to it.
+fn held_back(
+    tuning: &Tuning,
+    core: Option<&str>,
+    lead: Option<i64>,
+    spire: Option<&Spire>,
+    post: Option<Post<'_>>,
+) -> Option<i64> {
+    let (Some(core), Some(lead)) = (core, lead) else {
+        return core.is_none().then_some(0);
+    };
+    let spire_ms = match spire {
+        Some(spire) => spire.time_ms,
+        None => 0,
+    };
+    let post_ms = match post {
+        Some(post) => post.candidate().time_ms,
+        None => 0,
+    };
+    crate::price::step_ms(&deepen_core(core), tuning)?
+        .checked_add(lead)?
+        .checked_add(spire_ms)?
+        .checked_add(post_ms)
+}
+
+/// Compose the round from every evaluated candidate and the Spire, or `None`
+/// when nothing is funded (module docs, "One ranking").
 pub(crate) fn compose(
     situation: &Situation,
     tuning: &Tuning,
-    top: &[Candidate],
-    guard: Option<&Candidate>,
-    survey: Option<&Candidate>,
+    evaluated: &[Candidate],
     spire: Option<&Spire>,
     declared: &[Declared],
 ) -> Option<Composed> {
     let fill = fill_ms(situation)?;
     let core = situation.core().map(|core| core.id.clone());
-    let defend = declared_template(declared, DEFEND_THE_CORE);
-    let opening_of = opening(top, guard, survey, defend.is_some());
-    if opening_of.lead.is_none() && spire.is_none() {
-        return None;
-    }
-    let (
-        Added {
-            guard,
-            guard_ms,
-            spire,
-            survey,
-            held_back,
-            ..
-        },
-        goals,
-    ) = weigh_and_insert(
-        situation,
-        tuning,
-        declared,
-        top,
-        opening_of,
-        spire,
-        core.as_deref(),
-        fill,
-    )?;
-    let mut posts = post_steps(situation, tuning, defend, guard, survey)?;
+    let Funded { post, spire, goals } = fund(situation, tuning, declared, evaluated, spire, fill)?;
+    // The walk to the core: one estimate's first leg, the same for every
+    // candidate, the largest taken so no reading of it is under-held.
+    let lead = goals
+        .iter()
+        .chain(post.map(Post::candidate))
+        .map(|candidate| candidate.lead_ms)
+        .max();
     // The core's step goes in at route 0 as the patch's last operation, the
-    // Spire's just before it, the guard's before that and the Survey post's
-    // before that, so every pointer above them is the template's; the
-    // removals are applied to the patched text, where each step stands one
-    // further on for each of them.
+    // Spire's just before it and the post's before that, so every pointer
+    // above them is the template's; the removals are applied to the patched
+    // text, where each step stands one further on for each of them.
     let core_shift = usize::from(core.is_some()).checked_add(usize::from(spire.is_some()))?;
-    let front = usize::from(posts.survey.is_some());
-    let (template, goals, patch_parts) = match (goals.first(), guard) {
+    let post_step = match post {
+        Some(post) => Some(post_step(situation, tuning, declared, post)?),
+        None => None,
+    };
+    let (template, goals, (mut patch, mut removals), front) = match (goals.first(), post) {
         (Some(first), _) => {
             let template = declared_template(declared, first.goal.template())?;
-            let shift = core_shift
-                .checked_add(usize::from(posts.guard.is_some()))?
-                .checked_add(front)?;
-            let parts = place_patch(
-                template,
-                &goals,
-                Fill {
-                    share_ms: fill,
-                    held_back: held_back?.checked_add(guard_ms)?,
-                    shift,
-                    lead_back: lead_back(declared, &template.template_id, posts.back_ms)?,
-                },
-                tuning,
-            )?;
-            (template, goals, parts)
+            let filled = Fill {
+                share_ms: fill,
+                held_back: held_back(tuning, core.as_deref(), lead, spire, post)?,
+                shift: core_shift.checked_add(usize::from(post.is_some()))?,
+                lead_back: lead_back(declared, &template.template_id, walk_of(post))?,
+            };
+            let parts = place_patch(template, &goals, filled, tuning)?;
+            (template, goals, parts, post_step)
         }
-        (None, Some(guard)) => {
-            let template = defend?;
+        // Alone, the guard fills the Defend template itself.
+        (None, Some(Post::Guard(guard))) => {
+            let template = declared_template(declared, DEFEND_THE_CORE)?;
             let goals = vec![guard.clone()];
-            let parts = place_patch(
-                template,
-                &goals,
-                Fill {
-                    share_ms: fill,
-                    held_back: held_back?,
-                    shift: core_shift.checked_add(front)?,
-                    lead_back: lead_back(declared, &template.template_id, 0)?,
-                },
-                tuning,
-            )?;
-            // Alone, the guard fills the Defend template itself.
-            posts.guard = None;
-            (template, goals, parts)
+            let filled = Fill {
+                share_ms: fill,
+                held_back: held_back(tuning, core.as_deref(), lead, spire, None)?,
+                shift: core_shift,
+                lead_back: lead_back(declared, &template.template_id, 0)?,
+            };
+            let parts = place_patch(template, &goals, filled, tuning)?;
+            (template, goals, parts, None)
         }
-        (None, None) => {
-            return additions_alone(
-                situation,
-                tuning,
-                spire,
-                posts.survey,
-                core.as_deref()?,
-                declared,
-            );
+        (None, Some(Post::Survey(_)) | None) => {
+            let survey = post_step
+                .as_ref()
+                .map(|(post, step)| (post.candidate(), step));
+            return additions_alone(situation, tuning, spire, survey, core.as_deref()?, declared);
         }
     };
-    let (mut patch, mut removals) = patch_parts;
     let template_id = goals.first()?.goal.template();
-    let why = round_why(situation, tuning, &goals, &posts, spire, fill)?;
+    let posted = front.as_ref().map(|(post, _)| *post);
+    let why = round_why(situation, tuning, &goals, posted, spire, fill)?;
     patch.push(note_op(template, &with_seed(situation, &why)));
-    let survey = posts.survey.as_ref().map(|(survey, _)| (*survey).clone());
-    let guard = front_steps(
+    front_steps(
         &mut patch,
         &mut removals,
-        posts,
+        front,
         spire,
         core.as_deref(),
         core_shift,
     );
     Some(Composed {
         template_id,
-        goals,
-        guard,
         patch,
         removals,
-        spire: spire.cloned(),
-        survey,
         why,
     })
 }
 
 /// The steps in front of the template's, put in at route 0 one after another
-/// so each lands ahead of the last: the Survey post's, the guard's (with the
+/// so each lands ahead of the last: the post's (with, for the guard, the
 /// removal that takes it out, last of all: the repair of last resort removes
 /// the goals inserted after the first before the guard), the Spire's and the
-/// core's. Answers the guard placed.
+/// core's.
 fn front_steps(
     patch: &mut Vec<Json>,
     removals: &mut Vec<Vec<Json>>,
-    posts: PostSteps<'_>,
+    front: Option<(Post<'_>, Json)>,
     spire: Option<&Spire>,
     core: Option<&str>,
     core_shift: usize,
-) -> Option<Candidate> {
-    let mut front = |step: Json| patch.push(op("add", "/declarative/route/0", Some(step)));
-    if let Some((_, step)) = posts.survey {
-        front(step);
+) {
+    let mut front_step = |step: Json| patch.push(op("add", "/declarative/route/0", Some(step)));
+    if let Some((post, step)) = front {
+        front_step(step);
+        if matches!(post, Post::Guard(_)) {
+            removals.insert(
+                0,
+                vec![op(
+                    "remove",
+                    &format!("/declarative/route/{core_shift}"),
+                    None,
+                )],
+            );
+        }
     }
-    let guard = posts.guard.map(|(guard, step)| {
-        front(step);
-        removals.insert(
-            0,
-            vec![op(
-                "remove",
-                &format!("/declarative/route/{core_shift}"),
-                None,
-            )],
-        );
-        guard
-    });
     if let Some(spire) = spire {
-        front(spire_step(&spire.core));
+        front_step(spire_step(&spire.core));
     }
     if let Some(core) = core {
-        front(deepen_core(core));
+        front_step(deepen_core(core));
     }
-    guard
 }
 
 /// The Survey post's step: the Defend the Core template's own place step
@@ -514,7 +625,7 @@ fn front_steps(
 /// a Survey post's -- the Survey mandate with one probe area, the half of the
 /// ground away from the seat's core ([`far_half`]), and [`SURVEY_SCOUT_COUNT`]
 /// scouts -- so its walk and `on_fail` are the library's; its timeout is its
-/// own ([`post_steps`]).
+/// own ([`post_step`]).
 fn survey_copy(situation: &Situation, defend: &Declared, seam: &str) -> Option<Json> {
     let step = guard_copy(defend, seam)?;
     let step = with_member(&step, "label", string("survey_post"));
@@ -601,7 +712,7 @@ fn additions_alone(
     situation: &Situation,
     tuning: &Tuning,
     spire: Option<&Spire>,
-    survey: Option<(&Candidate, Json)>,
+    survey: Option<(&Candidate, &Json)>,
     core: &str,
     declared: &[Declared],
 ) -> Option<Composed> {
@@ -622,144 +733,23 @@ fn additions_alone(
         route.push(spire_step(&spire.core));
         why.push(spire_why(spire, tuning, true));
     }
-    if let Some((survey, step)) = &survey {
+    if let Some((survey, step)) = survey {
         route.push(step.clone());
         why.push(survey_why(survey, tuning, fill));
     }
     let why = why.join(" ");
     Some(Composed {
         template_id: SAFE_PLAYBOOK,
-        goals: Vec::new(),
-        guard: None,
         patch: vec![
             op("replace", pointer, Some(Json::Array(route))),
             note_op(template, &with_seed(situation, &why)),
         ],
         removals: Vec::new(),
-        spire: spire.cloned(),
-        survey: survey.map(|(survey, _)| survey.clone()),
         why,
     })
 }
 
-/// The additions weighed against one budget ([`added`]), then the goals the
-/// greedy insertion fits into what they leave, less any on a post's seam.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "each is one input of the round's composition; a struct holding them would be built at this one call"
-)]
-fn weigh_and_insert<'a>(
-    situation: &Situation,
-    tuning: &Tuning,
-    declared: &[Declared],
-    top: &[Candidate],
-    opening: Opening<'a>,
-    spire: Option<&'a Spire>,
-    core: Option<&str>,
-    fill: i64,
-) -> Option<(Added<'a>, Vec<Candidate>)> {
-    let weighed = added(
-        situation,
-        tuning,
-        Weighed {
-            fill,
-            core,
-            lead: opening.lead,
-            guard: opening.guard,
-            spire,
-            survey: opening.survey,
-        },
-    )?;
-    let top = beside_the_posts(top, weighed.guard, weighed.survey);
-    let goals = greedy(
-        &top,
-        &Budget {
-            situation,
-            tuning,
-            declared,
-            share: weighed.share,
-            treasury: weighed.treasury,
-            posts_back_ms: posts_back(weighed.guard, weighed.survey),
-        },
-    );
-    Some((weighed, goals))
-}
-
-/// The posts a round can add, and the walk to the core.
-#[derive(Clone, Copy)]
-struct Opening<'a> {
-    guard: Option<&'a Candidate>,
-    survey: Option<&'a Candidate>,
-    /// The walk to the core: one estimate's first leg, the same for every
-    /// candidate, the largest taken so no reading of it is under-held; `None`
-    /// with no candidate, a round composed only for the Spire, whose step
-    /// stands at the core the route opens at.
-    lead: Option<i64>,
-}
-
-/// The guard's step and the Survey post's (its mandate made Survey's) are the
-/// Defend the Core template's place step, so without it there is neither. The
-/// Survey post yields to a raid worth placing (a commander in sight, whose
-/// raid post would stand on the post seam): a target already in view is what
-/// the post is for. It yields to the guard in [`added`].
-fn opening<'a>(
-    top: &[Candidate],
-    guard: Option<&'a Candidate>,
-    survey: Option<&'a Candidate>,
-    defend: bool,
-) -> Opening<'a> {
-    let guard = guard.filter(|_| defend);
-    let raid = top
-        .iter()
-        .any(|candidate| matches!(candidate.goal, Goal::Raid { .. }));
-    let survey = survey.filter(|_| defend && !raid);
-    let lead = top
-        .iter()
-        .chain(guard)
-        .chain(survey)
-        .map(|candidate| candidate.lead_ms)
-        .max();
-    Opening {
-        guard,
-        survey,
-        lead,
-    }
-}
-
-/// What the additions beside the goals leave the greedy insertion.
-struct Added<'a> {
-    /// The guard post that is placed, if one is.
-    guard: Option<&'a Candidate>,
-    /// Its time, 0 without one.
-    guard_ms: i64,
-    /// The Spire that is queued, if one is.
-    spire: Option<&'a Spire>,
-    /// The Survey post that is placed, if one is.
-    survey: Option<&'a Candidate>,
-    /// The share left for the goals.
-    share: i64,
-    /// The treasury left for the goals.
-    treasury: i64,
-    /// What the hold gives up for what stands in front of the template's
-    /// steps, the guard's aside: the core's step, the Spire's and the Survey
-    /// post's, and the walk to the core; `None` only when there is no
-    /// candidate, a round composed for the Spire alone, which has no hold to
-    /// take it from.
-    held_back: Option<i64>,
-}
-
-/// What [`added`] weighs.
-#[derive(Clone, Copy)]
-struct Weighed<'a, 'c> {
-    fill: i64,
-    core: Option<&'c str>,
-    lead: Option<i64>,
-    guard: Option<&'a Candidate>,
-    spire: Option<&'a Spire>,
-    survey: Option<&'a Candidate>,
-}
-
-/// What the additions spend, in the order they claim it.
+/// The one budget a round is funded from, as it stands.
 struct Purse {
     share: i64,
     treasury: i64,
@@ -768,15 +758,19 @@ struct Purse {
 
 impl Purse {
     /// Spend `time`, `dollars` and `kw` when all three fit, and say whether
-    /// they did; a figure that does not fit is not spent.
+    /// they did; a figure that does not fit is not spent. A figure spends
+    /// nothing at zero, so it is not held to what it leaves: a goal that
+    /// fields no draw is funded on a grid already short, as the verifier's
+    /// E0601 is raised only on draw a route adds.
     fn spend(&mut self, time: i64, dollars: i64, kw: i64) -> bool {
+        let fits = |left: i64, spent: i64| spent <= 0 || left >= 0;
         match (
             self.share.checked_sub(time),
             self.treasury.checked_sub(dollars),
             self.headroom.checked_sub(kw),
         ) {
             (Some(share), Some(treasury), Some(headroom))
-                if share >= 0 && treasury >= 0 && headroom >= 0 =>
+                if fits(share, time) && fits(treasury, dollars) && fits(headroom, kw) =>
             {
                 *self = Purse {
                     share,
@@ -790,149 +784,24 @@ impl Purse {
     }
 }
 
-/// The guard post, the Spire and the Survey post, weighed before the goals,
-/// in that order, against **one** budget: the share, the treasury and the kW
-/// headroom (the forecast's supply less its draw). Each takes its time, price
-/// and new draw from what the one before left, or is not added: the guard's
-/// picket scout, the Spire's own draw and the Survey post's scouts, each from
-/// its rules rows, so the round never fields more draw than the grid carries
-/// (a unit fielded past the supply is the verifier's E0601). The Spire's time
-/// comes out of the hold, as the core's step does, rather than the share; the
-/// Survey post yields its seam to the guard. Its step is at the core the route
-/// opens at, so a seat shown no core queues no Spire. `None` when a figure
+/// The post's step, with its own timeout ([`timeout_ms`]): the guard's or
+/// the Survey post's copy of the Defend the Core template's place step, first
+/// after the core's steps. `None` when the copy does not build or its timeout
 /// does not fit.
-fn added<'a>(
+fn post_step<'a>(
     situation: &Situation,
     tuning: &Tuning,
-    weighed: Weighed<'a, '_>,
-) -> Option<Added<'a>> {
-    let Weighed {
-        fill,
-        core,
-        lead,
-        guard,
-        spire,
-        survey,
-    } = weighed;
-    let mut purse = Purse {
-        share: fill,
-        treasury: situation.economy.treasury,
-        headroom: situation
-            .economy
-            .supply_kw
-            .checked_sub(situation.economy.draw_kw)?,
+    declared: &[Declared],
+    post: Post<'a>,
+) -> Option<(Post<'a>, Json)> {
+    let defend = declared_template(declared, DEFEND_THE_CORE)?;
+    let candidate = post.candidate();
+    let seam = candidate.goal.feature();
+    let step = match post {
+        Post::Guard(_) => guard_copy(defend, seam)?,
+        Post::Survey(_) => survey_copy(situation, defend, seam)?,
     };
-    let guard = guard
-        .filter(|guard| timeout_within(0, guard, tuning, situation).is_some())
-        .filter(|guard| purse.spend(guard.time_ms, guard.cost_dollars, tuning.guard_draw_kw));
-    let guard_ms = time_of(guard);
-    let spire = spire
-        .filter(|spire| core == Some(spire.core.as_str()))
-        .filter(|spire| purse.spend(0, spire.cost_dollars, spire.draw_kw));
-    let survey = survey
-        .filter(|survey| guard.is_none_or(|guard| guard.goal.feature() != survey.goal.feature()))
-        .filter(|survey| timeout_within(walk_of(guard), survey, tuning, situation).is_some())
-        .filter(|survey| purse.spend(survey.time_ms, survey.cost_dollars, tuning.survey_draw_kw));
-    let held_back = match (core, lead) {
-        (None, _) => Some(0),
-        (Some(core), Some(lead)) => {
-            let deepen = crate::price::step_ms(&deepen_core(core), tuning)?;
-            let spire_ms = match spire {
-                Some(spire) => spire.time_ms,
-                None => 0,
-            };
-            let survey_ms = time_of(survey);
-            deepen
-                .checked_add(lead)?
-                .checked_add(spire_ms)?
-                .checked_add(survey_ms)
-        }
-        (Some(_), None) => None,
-    };
-    Some(Added {
-        guard,
-        guard_ms,
-        spire,
-        survey,
-        share: purse.share,
-        treasury: purse.treasury,
-        held_back,
-    })
-}
-
-/// A post's time on the route, and none without a post.
-const fn time_of(post: Option<&Candidate>) -> i64 {
-    match post {
-        Some(post) => post.time_ms,
-        None => 0,
-    }
-}
-
-/// A post's walk from the core, and none without a post.
-const fn walk_of(post: Option<&Candidate>) -> i64 {
-    match post {
-        Some(post) => post.walk_ms,
-        None => 0,
-    }
-}
-
-/// The walk back from the last post in front of the template's steps: the
-/// Survey post's, which stands after the guard's, else the guard's, else
-/// none.
-const fn posts_back(guard: Option<&Candidate>, survey: Option<&Candidate>) -> i64 {
-    match (survey, guard) {
-        (Some(post), _) | (None, Some(post)) => post.walk_ms,
-        (None, None) => 0,
-    }
-}
-
-/// The guard post's and the Survey post's steps, each copied from the Defend
-/// the Core template's place step. A guard's step is used only beside another
-/// template's goals (alone, it fills the Defend template itself).
-struct PostSteps<'c> {
-    guard: Option<(Candidate, Json)>,
-    survey: Option<(&'c Candidate, Json)>,
-    /// The walk back from the last of them ([`posts_back`]).
-    back_ms: i64,
-}
-
-/// The posts' steps, each with its own timeout ([`timeout_ms`]): the guard's
-/// first after the core's steps, the Survey post's after it. `None` when a
-/// copy does not build or a timeout does not fit.
-fn post_steps<'c>(
-    situation: &Situation,
-    tuning: &Tuning,
-    defend: Option<&Declared>,
-    guard: Option<&Candidate>,
-    survey: Option<&'c Candidate>,
-) -> Option<PostSteps<'c>> {
-    let guard = match (guard, defend) {
-        (Some(guard), Some(defend)) => {
-            let step = guard_copy(defend, guard.goal.feature())?;
-            Some((guard.clone(), timed(&step, timeout_ms(0, guard, tuning)?)))
-        }
-        _ => None,
-    };
-    let after_guard = walk_of(guard.as_ref().map(|(guard, _)| guard));
-    let survey = match (survey, defend) {
-        (Some(survey), Some(defend)) => {
-            let step = survey_copy(situation, defend, survey.goal.feature())?;
-            Some((
-                survey,
-                timed(&step, timeout_ms(after_guard, survey, tuning)?),
-            ))
-        }
-        _ => None,
-    };
-    let back_ms = posts_back(
-        guard.as_ref().map(|(guard, _)| guard),
-        survey.as_ref().map(|(survey, _)| *survey),
-    );
-    Some(PostSteps {
-        guard,
-        survey,
-        back_ms,
-    })
+    Some((post, timed(&step, timeout_ms(0, candidate, tuning)?)))
 }
 
 /// A step with its `timeout_ms` set.
@@ -996,19 +865,22 @@ pub(crate) fn step_for(
 }
 
 /// Why the round is composed as it is: its first goal, counting the rest; the
-/// guard post beside them and its reason; the Spire. `None` with no goal.
+/// guard post beside them and its reason; the Spire; the Survey post. `None`
+/// with no goal.
 fn round_why(
     situation: &Situation,
     tuning: &Tuning,
     goals: &[Candidate],
-    posts: &PostSteps<'_>,
+    post: Option<Post<'_>>,
     spire: Option<&Spire>,
     fill: i64,
 ) -> Option<String> {
-    let guard = posts.guard.as_ref().map(|(guard, _)| guard);
-    let survey = posts.survey.as_ref().map(|(survey, _)| *survey);
     let first = goals.first()?;
     let mut why = why_for(first, goals.len(), fill);
+    let guard = match post {
+        Some(Post::Guard(guard)) => Some(guard),
+        Some(Post::Survey(_)) | None => None,
+    };
     if let Some(guard) = guard {
         why = format!("{why} {}", why_for(guard, 1, fill));
     }
@@ -1018,7 +890,7 @@ fn round_why(
     if let Some(spire) = spire {
         why = format!("{why} {}", spire_why(spire, tuning, false));
     }
-    if let Some(survey) = survey {
+    if let Some(Post::Survey(survey)) = post {
         why = format!("{why} {}", survey_why(survey, tuning, fill));
     }
     Some(why)
@@ -1033,25 +905,6 @@ fn note_op(template: &Declared, note: &str) -> Json {
         "add"
     };
     op(kind, "/meta/note", Some(string(note)))
-}
-
-/// The top-k less any goal on the guard's seam or the Survey post's: a raid
-/// post covers the seam the posts do, beside the core, so with a post placed
-/// the two would contend for one site, and the round makes no raid.
-fn beside_the_posts(
-    top: &[Candidate],
-    guard: Option<&Candidate>,
-    survey: Option<&Candidate>,
-) -> Vec<Candidate> {
-    top.iter()
-        .filter(|candidate| {
-            guard
-                .into_iter()
-                .chain(survey)
-                .all(|post| post.goal.feature() != candidate.goal.feature())
-        })
-        .cloned()
-        .collect()
 }
 
 /// `{"feature_id": "<name>"}`: a feature reference by name.
@@ -1150,10 +1003,9 @@ fn place_patch(
                 }
                 timed(&place_copy(&place_step, &below, name, n)?, timeout)
             }
-            // A Survey post is added beside the goals by its own step
-            // (`survey_copy`) and is never ranked among them (`top_k`), so no
-            // template is filled with one: a goal list holding one is not
-            // composed.
+            // A Survey post is funded as the round's post, in front of the
+            // template's steps by its own step (`survey_copy`), so no template
+            // is filled with one: a goal list holding one is not composed.
             Goal::Survey { .. } => return None,
             Goal::Raid { seam, target } => {
                 // The post's seam, its target, and its staging at the site

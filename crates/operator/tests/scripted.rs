@@ -3191,7 +3191,8 @@ fn survey_step(transcript: &[String]) -> Option<Json> {
 /// the reach window, Easy probes once for a Survey post beside its core, and,
 /// none standing, places one covering the post seam, its mandate Survey's
 /// with one probe area over the whole map (`get_map_summary.size`, here 64 x
-/// 64 x 32) and two scouts, beside the round's goals.
+/// 64 x 32) and two scouts, ranked with the round's goals and funded beside
+/// them.
 #[test]
 fn with_no_fresh_sighting_easy_places_a_survey_post_beside_its_core() {
     let (script, played) = play(Script::busy(0));
@@ -3674,4 +3675,103 @@ fn no_composed_placement_times_out_before_its_own_price() {
         }
     }
     assert!(checked >= 6, "every world composed a placement: {checked}");
+}
+
+// ---------------------------------------------------------------------------
+// Fix pass 2: one ranking
+// ---------------------------------------------------------------------------
+
+/// A goal placeable now outranks a stone toward a feature of the same worth
+/// (fix pass 2, item 2): two rich seams, one with a site the seat's spheres
+/// allow, a 20 s walk away, and one no site covers whose stone is an 8 s
+/// walk. The stone's worth is its Mine's discounted by the stone and the two
+/// rounds its chain takes, so the Mine placeable now is composed and the
+/// stone is not, though its own walk is the shorter.
+#[test]
+fn a_goal_placeable_now_outranks_a_stone_toward_a_feature_of_the_same_worth() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    let mut near = Feature::new("seam", "rich", [56, 32]);
+    near.site = Some([72, 32, GROUND]);
+    world.features.push(near);
+    let mut far = Feature::new("seam", "rich", [8, 32]);
+    far.site = None;
+    far.stone = Some([24, 32, GROUND]);
+    world.features.push(far);
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(ops.contains("seam_56_32"), "{} -- {ops}", played.why);
+    assert!(!ops.contains("toward"), "{} -- {ops}", played.why);
+}
+
+/// A chain once begun is continued (fix pass 2, item 2): the seat's stone
+/// `b_02` stands north of its core, its sphere holding no feature, so it is
+/// the stone toward the rich seam further north, whose gap to the seat's
+/// spheres it closed by its whole radius. A second far rich seam east of the
+/// core has a nearer stone site, and would rank first, but its gap the stone
+/// closed not at all: only the begun chain's stone is weighed, and composed.
+#[test]
+fn a_chain_once_begun_is_continued_toward_its_feature() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.beacons.push(Beacon {
+        id: String::from("b_02"),
+        at: [32, 56, GROUND],
+        owner: 0,
+        core: false,
+        powered: true,
+        priority: "normal",
+    });
+    let mut north = Feature::new("seam", "rich", [32, 110]);
+    north.site = None;
+    north.stone = Some([32, 80, GROUND]);
+    world.features.push(north);
+    let mut east = Feature::new("seam", "rich", [80, 40]);
+    east.site = None;
+    east.stone = Some([56, 40, GROUND]);
+    world.features.push(east);
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    assert_eq!(towards(&script.transcript, "seam_32_110"), 1);
+    assert_eq!(towards(&script.transcript, "seam_80_40"), 0);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(
+        ops.contains(r#""toward": { "feature": { "feature_id": "seam_32_110" } }"#),
+        "{} -- {ops}",
+        played.why
+    );
+}
+
+/// A begun chain whose `toward` is refused is shown unreachable: the rest of
+/// the far features are weighed, and the round reaches toward another.
+#[test]
+fn a_begun_chain_refused_its_stone_weighs_the_rest() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.beacons.push(Beacon {
+        id: String::from("b_02"),
+        at: [32, 56, GROUND],
+        owner: 0,
+        core: false,
+        powered: true,
+        priority: "normal",
+    });
+    let mut north = Feature::new("seam", "rich", [32, 110]);
+    north.site = None;
+    north.stone = None;
+    world.features.push(north);
+    let mut east = Feature::new("seam", "rich", [80, 40]);
+    east.site = None;
+    east.stone = Some([56, 40, GROUND]);
+    world.features.push(east);
+    let (script, played) = play(world);
+    assert_eq!(towards(&script.transcript, "seam_32_110"), 1);
+    assert_eq!(towards(&script.transcript, "seam_80_40"), 1);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(
+        ops.contains(r#""toward": { "feature": { "feature_id": "seam_80_40" } }"#),
+        "{} -- {ops}",
+        played.why
+    );
 }
