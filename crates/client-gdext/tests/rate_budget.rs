@@ -210,9 +210,10 @@ fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
             // The template list once in this Lull: asked at every Lull's opening (S3's
             // `prob`), so a round's guided mark is that round's alone.
             assert_eq!(count("list_templates"), 1, "{context}");
-            // `get_status`: the admin's first call, and the seat's one read at its open (S3's
-            // `prob`: the preset and the seat's seal, for a resumed client), beside any
-            // keep-alive.
+            // `get_status`: the admin's first call, and the seat's: owed at its open (this
+            // Lull's opening read) and again after the accepted submission (S3's `prob`), one
+            // call when the two are owed at once, as in this burst, whose planning calls go
+            // first; `rig.rs`'s five-round count and its submission test pin each row.
             assert!(count("get_status") >= 2, "{context}: {:?}", gateway.methods);
             assert!(
                 count("instantiate_template") >= 2,

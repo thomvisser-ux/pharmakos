@@ -1741,7 +1741,8 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
 /// the gateway hosts no match, `""` before one was read), `preset_check` (`not_read`,
 /// `no_match`, `unasked`, `agrees` or `disagrees`, with
 /// `preset_asked` naming what the lobby wrote when it disagrees), `sealed_this_round` (the
-/// seat connection's word, present only once it was told), and
+/// seat connection's word, present only while the rig is in the round and phase the answer
+/// was served in: `Rig::sealed_this_round`), and
 /// `status_failed`/`status_detail` (`refused` or `unreadable` and why, for the newest read).
 fn status_facts_into(state: &mut VarDictionary, rig: &Rig) {
     let facts = rig.status_facts();
@@ -1762,7 +1763,7 @@ fn status_facts_into(state: &mut VarDictionary, rig: &Rig) {
     };
     state.set(&"preset_asked".to_variant(), &asked.to_variant());
     // Only where the gateway said it: an absent key is "not told yet", never a false.
-    if let Some(sealed) = facts.sealed_this_round {
+    if let Some(sealed) = rig.sealed_this_round() {
         state.set(&"sealed_this_round".to_variant(), &sealed.to_variant());
     }
     // As `failed_into` says a read's failure: `""` is "the newest read came".

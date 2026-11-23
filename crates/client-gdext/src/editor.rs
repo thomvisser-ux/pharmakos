@@ -1358,6 +1358,9 @@ pub struct Editor {
     beacon: Option<BeaconDetail>,
     /// Why the beacon's detail did not come, when it did not.
     beacon_failed: Option<ReadFailed>,
+    /// The round of a submission the gateway accepted that the rig has not yet asked the
+    /// gateway about (`get_status`'s seal); taken by [`Editor::take_sealed_mark`].
+    seal_to_ask: Option<u32>,
     /// Why this Lull's template list did not come, when it did not: the list is then empty,
     /// never an earlier Lull's (whose guided mark is that Lull's alone).
     templates_failed: Option<ReadFailed>,
@@ -3105,6 +3108,12 @@ impl Editor {
         std::mem::take(&mut self.owed.edited)
     }
 
+    /// Whether the gateway accepted a submission since the last call: the rig asks it for the
+    /// seat's seal (`get_status`) rather than say it on the client's own word.
+    pub fn take_sealed_mark(&mut self) -> bool {
+        self.seal_to_ask.take().is_some()
+    }
+
     /// The answer to the call in flight: a result, or the gateway's refusal as
     /// `(code, message)`. Says whether it was an answer or a refused call: an
     /// `estimate_route` whose waypoint resolves to nothing is the gateway's answer about
@@ -4073,6 +4082,7 @@ impl Editor {
         if response.accepted {
             self.sealed = Some(text);
             self.sealed_round = Some(self.round);
+            self.seal_to_ask = Some(self.round);
             // A re-seal changes the Lull's "this round" sentence at once (targeting.md,
             // "Messages"), so the briefing is read again.
             self.queue.retain(|job| !matches!(job, Job::Briefing));

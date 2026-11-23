@@ -37,6 +37,7 @@
 //! | `end_recap` once the human continues | the editor's planning calls, in a Lull |
 //! | `advance_push`, when the pacer says | `get_economy_forecast`, for the meter |
 //! | | `get_recap`, once a recap opens or the match ends |
+//! | | `get_status`, at its open, each Lull's opening and after an accepted seal |
 //! | `report_host_clock`, outside a Push | `get_view` from the cursor after the match moved |
 //! | | `get_segment_feed` after the match moved |
 //! | a keep-alive `get_status` | a keep-alive `get_status` |
@@ -385,22 +386,37 @@ impl ServedPreset {
 
 /// What `get_status`'s body says beside its footer (S3's `probw`): the hosted match's preset,
 /// told to every caller, and for this seat whether it holds a seal of the current round, told
-/// to a seat's token alone. Read at the admin connection's first answer and the seat
-/// connection's first call, so a resumed client knows both; and again from every keep-alive.
-/// Each field is the gateway's last word on it, never a guess.
+/// to a seat's token alone. The preset is read from the admin connection's first answer and
+/// every later one; the seat's seal from the seat connection's `get_status`, which the rig asks
+/// when the seat connection opens, at every Lull's opening and once after this seat's
+/// `submit_plan` is accepted (and which a keep-alive also answers). Each field is the gateway's
+/// last word on it, never a guess: the client never sets the seal because it submitted, it asks.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct StatusFacts {
     /// How many `get_status` answers were read; zero before the first.
     pub answers: u64,
     /// What the gateway hosts; `None` before the first readable answer.
     pub preset: Option<ServedPreset>,
-    /// Whether this seat holds a seal of the current round (`sealed_this_round`), from the
-    /// seat connection's newest readable answer alone; `None` before one, or when that
-    /// answer did not say (the field's explicit presence: "not told" is never a false).
-    pub sealed_this_round: Option<bool>,
+    /// The seat connection's newest readable word on its seal (`sealed_this_round`), with the
+    /// round and phase its answer's footer names; `None` before one, or when that answer did not
+    /// say (the field's explicit presence: "not told" is never a false). It is that round's and
+    /// that phase's alone: [`Rig::sealed_this_round`] reads it only while the rig is still there.
+    pub sealed: Option<SealFact>,
     /// The newest read's refusal or unreadable answer, until a later read is read: the
     /// facts above are then the last read's, and the lobby says the newest did not come.
     pub failed: Option<ReadFailed>,
+}
+
+/// What the gateway told this seat of its seal, and when: the round and phase its answer's
+/// footer named.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SealFact {
+    /// The round the answer was served in.
+    pub round: u32,
+    /// The phase the answer was served in.
+    pub phase: Phase,
+    /// `sealed_this_round`, as told.
+    pub sealed: bool,
 }
 
 /// Whether the hosted match is the preset the lobby asked for (`Rig::expect_preset`).
@@ -522,8 +538,9 @@ struct Reads {
     meter: bool,
     /// A `get_recap`, because a recap opened or the match ended.
     recap: bool,
-    /// A `get_status` on the seat connection, because it opened: the seat's own facts
-    /// ([`StatusFacts`]) for a client that was not there when they were made.
+    /// A `get_status` on the seat connection: the seat's own facts ([`StatusFacts`]), owed
+    /// when the seat connection opens, at every Lull's opening and after this seat's accepted
+    /// `submit_plan`.
     status: bool,
 }
 
@@ -729,10 +746,14 @@ impl Rig {
         }
     }
 
-    /// The editor's edits restart the idle timer that owes FULL.
+    /// The editor's edits restart the idle timer that owes FULL, and a submission the gateway
+    /// accepted owes the seat's `get_status`, whose answer says the seal.
     fn sync_editor(&mut self) {
         if self.editor.take_edit_mark() {
             self.timing.idle.edited();
+        }
+        if self.editor.take_sealed_mark() {
+            self.reads.status = true;
         }
     }
 
@@ -919,7 +940,14 @@ impl Rig {
         if self.due.keyframe && self.timing.now_us() >= self.keyframe_not_before_us {
             return Some((Purpose::View, "get_view", cursor_params("")));
         }
-        if self.wants.ready && self.phase == Phase::Lull && !self.editor.has_pending_jobs() {
+        // Ready waits behind the seat's owed `get_status` as it waits behind the editor's
+        // calls, so a seal the gateway accepted is told in the Lull it was sealed in (S3's
+        // `prob`).
+        if self.wants.ready
+            && self.phase == Phase::Lull
+            && !self.editor.has_pending_jobs()
+            && !self.reads.status
+        {
             self.ready_sent = true;
             self.sync_door();
             return Some((
@@ -1230,7 +1258,7 @@ impl Rig {
                 self.status_facts.answers = self.status_facts.answers.saturating_add(1);
                 self.status_facts.preset = Some(preset);
                 if link == SEAT {
-                    self.status_facts.sealed_this_round = sealed;
+                    self.status_facts.sealed = sealed;
                 }
                 self.status_facts.failed = None;
                 Ok(())
@@ -1373,6 +1401,8 @@ impl Rig {
             }
             Phase::Lull => {
                 self.reads.meter = true;
+                // The seat's seal is the new round's: asked, never carried (S3's `prob`).
+                self.reads.status = true;
                 self.editor.lull_opened(footer.round);
                 self.timing.pacer.stop();
                 self.timing.clock.enter(ClockPhase::Lull {
@@ -1604,6 +1634,17 @@ impl Rig {
         &self.status_facts
     }
 
+    /// Whether this seat holds a seal of the current round, as the gateway told it in this
+    /// round and this phase; `None` ("not told") once the rig's round or phase has moved past the
+    /// answer, until the next one comes (asked at the next Lull's opening).
+    #[must_use]
+    pub fn sealed_this_round(&self) -> Option<bool> {
+        self.status_facts
+            .sealed
+            .filter(|fact| fact.round == self.round && fact.phase == self.phase)
+            .map(|fact| fact.sealed)
+    }
+
     /// The lobby wrote `preset` on a new match's config line: the gateway's answer is held to
     /// it ([`Rig::preset_check`]).
     pub fn expect_preset(&mut self, preset: MatchPreset) {
@@ -1706,16 +1747,17 @@ pub fn feed_rows_of_text(text: &str) -> Result<Vec<EventRow>, BridgeError> {
 }
 
 /// A `get_status` result read: what the gateway hosts, and `sealed_this_round` as the
-/// answer told it (`None` when it did not: an admin's token is no seat's and is told none).
+/// answer told it, with the round and phase its footer names (`None` when it did not tell it:
+/// an admin's token is no seat's and is told none).
 ///
 /// # Errors
 ///
-/// [`BridgeError::Schema`] for a body the schema refuses, and [`BridgeError::Rpc`] for a
-/// preset number the schema names none by.
+/// [`BridgeError::Schema`] for a body or footer the schema refuses, and [`BridgeError::Rpc`]
+/// for a preset number the schema names none by, or a told seal with no footer to say when.
 pub(crate) fn read_status_facts(
     result: &Json,
-) -> Result<(ServedPreset, Option<bool>), BridgeError> {
-    let (body, _) = split_footer(result);
+) -> Result<(ServedPreset, Option<SealFact>), BridgeError> {
+    let (body, footer) = split_footer(result);
     let status: GetStatusResponse =
         json::decode_json(&enums::canonical("gp.api.v1.GetStatusResponse", &body))?;
     let preset = ServedPreset::of_wire(status.preset).ok_or_else(|| {
@@ -1724,7 +1766,18 @@ pub(crate) fn read_status_facts(
             status.preset
         ))
     })?;
-    Ok((preset, status.sealed_this_round))
+    let sealed = match status.sealed_this_round {
+        None => None,
+        Some(sealed) => {
+            let served = served_status(footer.as_ref(), "get_status")?;
+            Some(SealFact {
+                round: served.round,
+                phase: Phase::of(served.phase),
+                sealed,
+            })
+        }
+    };
+    Ok((preset, sealed))
 }
 
 /// One of the recap's memos, read.
@@ -1872,6 +1925,8 @@ fn json_text(value: &Json) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::pacer::PACER_PERIOD_US;
 
@@ -2341,6 +2396,28 @@ mod tests {
         assert_eq!(method_of(briefing), "get_briefing");
         rig.receive(SEAT, &answer(id_of(briefing), r#"{"notes":""}"#, "lull"))
             .expect("reads");
+        // The accepted seal is asked of the gateway (S3's `prob`), and Ready waits behind that
+        // read too, so the seal is told in the Lull it was sealed in.
+        let sent = rig.poll(4);
+        let status = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("a seat call");
+        assert_eq!(method_of(status), "get_status");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(status),
+                r#"{"preset":"custom","sealed_this_round":true}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        assert_eq!(
+            rig.sealed_this_round(),
+            Some(true),
+            "as the gateway told it"
+        );
         let sent = rig.poll(4);
         let next = sent
             .iter()
@@ -3724,7 +3801,7 @@ mod tests {
             PresetCheck::Agrees(MatchPreset::Probation)
         );
         assert_eq!(
-            rig.status_facts().sealed_this_round,
+            rig.sealed_this_round(),
             None,
             "the admin's token is no seat's: what it is told of a seal is not taken"
         );
@@ -3783,7 +3860,7 @@ mod tests {
     fn the_seat_asks_get_status_when_it_opens_and_keeps_what_it_was_told() {
         let mut rig = in_lull();
         // `in_lull` answered the seat's open-time read with no fields: nothing was told.
-        assert_eq!(rig.status_facts().sealed_this_round, None);
+        assert_eq!(rig.sealed_this_round(), None);
         assert_eq!(rig.status_facts().preset, Some(ServedPreset::NoMatch));
         assert_eq!(rig.preset_check(), PresetCheck::NoMatch);
         // A reconnect asks again, once, ahead of the panel's reads.
@@ -3814,7 +3891,7 @@ mod tests {
             }
         }
         assert_eq!(asked, 1, "one read at the open, not a poll");
-        assert_eq!(rig.status_facts().sealed_this_round, Some(true));
+        assert_eq!(rig.sealed_this_round(), Some(true));
         assert_eq!(
             rig.status_facts().preset,
             Some(ServedPreset::Hosted(MatchPreset::Probation))
@@ -3937,5 +4014,162 @@ mod tests {
         let text = r#"{"prose":"p","ledger_memos":[{"text":"t"}],"_status":{"round":1}}"#;
         let read = rig.read_recap(&json::read(text).expect("json"));
         assert!(read.is_err(), "{read:?}");
+    }
+
+    /// One answer with `extra` fields before the footer, served in `phase` of `round`.
+    fn served(id: i64, extra: &str, phase: &str, round: u32) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"result":{{{extra}"_status":{{"phase":"{phase}","phase_remaining_ms":180000,"round":{round}}}}}}}"#
+        )
+    }
+
+    /// Drives the rig through `schedule` (one admin phase and round a step), answering every
+    /// call as a gateway would: the seat's `get_status` tells `sealed(round)`. Returns how many
+    /// seat `get_status` calls went out in each round, and what the rig said of the seal after
+    /// each step.
+    fn drive(
+        rig: &mut Rig,
+        schedule: &[(&str, u32)],
+        sealed: &dyn Fn(u32) -> bool,
+    ) -> (BTreeMap<u32, u32>, Vec<Option<bool>>) {
+        let mut asks: BTreeMap<u32, u32> = BTreeMap::new();
+        let mut seen = Vec::new();
+        let mut now = 0_u64;
+        for &(phase, round) in schedule {
+            // A step is longer than the clock's report interval, so the admin connection asks
+            // at every step and the phase the schedule names reaches the rig.
+            now += CLOCK_REPORT_US + 50_000;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(now) {
+                let method = method_of(&frame);
+                let extra = match method.as_str() {
+                    "get_status" if frame.link == SEAT => {
+                        *asks.entry(round).or_insert(0) += 1;
+                        format!(
+                            r#""preset":"probation","sealed_this_round":{},"#,
+                            sealed(round)
+                        )
+                    }
+                    "get_status" => r#""preset":"probation","#.to_owned(),
+                    "get_view" => r#""next_cursor":"c9","complete":true,"#.to_owned(),
+                    "get_segment_feed" => r#""events":[],"next_cursor":"f1","#.to_owned(),
+                    "report_host_clock" => r#""all_ready":false,"#.to_owned(),
+                    "get_recap" => r#""prose":"p","#.to_owned(),
+                    _ => String::new(),
+                };
+                rig.receive(frame.link, &served(id_of(&frame), &extra, phase, round))
+                    .expect("reads");
+            }
+            seen.push(rig.sealed_this_round());
+        }
+        (asks, seen)
+    }
+
+    /// The review's probe P1, as the behaviour it asks for: a seal the gateway told in round
+    /// 1 is round 1's, and in round 2's Lull the rig neither carries it nor guesses: it reads
+    /// "not told" until round 2's own answer, which it asks for at the Lull's opening.
+    #[test]
+    fn the_seats_seal_is_its_rounds_and_is_asked_again_at_every_lull() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let schedule: Vec<(&str, u32)> = (0..12)
+            .map(|_| ("lull", 1))
+            .chain((0..12).map(|_| ("push", 1)))
+            .chain((0..12).map(|_| ("lull", 2)))
+            .collect();
+        let (asks, seen) = drive(&mut rig, &schedule, &|round| round == 1);
+        assert_eq!(
+            asks.get(&2).copied(),
+            Some(1),
+            "round 2's Lull asks once: {asks:?}"
+        );
+        assert_eq!(rig.sealed_this_round(), Some(false), "round 2's own answer");
+        assert!(
+            seen.get(11).is_some_and(|told| *told == Some(true)),
+            "round 1's Lull was told its seal: {seen:?}"
+        );
+        assert!(
+            seen.get(12..24)
+                .is_some_and(|push| push.iter().all(Option::is_none)),
+            "the Push moved past the Lull's answer, so nothing is claimed: {seen:?}"
+        );
+    }
+
+    /// The seat's `get_status` over a five-round match: once when the seat connection opens
+    /// (which is round 1's Lull), once at each later Lull's opening, and no more (the rate
+    /// budget's rows).
+    #[test]
+    fn the_seats_status_reads_over_a_five_round_match() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let mut schedule: Vec<(&str, u32)> = Vec::new();
+        for round in 1..=5 {
+            schedule.extend((0..6).map(|_| ("lull", round)));
+            schedule.extend((0..6).map(|_| ("push", round)));
+            schedule.extend((0..6).map(|_| ("recap", round)));
+        }
+        let (asks, _) = drive(&mut rig, &schedule, &|_| false);
+        let expected: BTreeMap<u32, u32> = (1..=5).map(|round| (round, 1)).collect();
+        assert_eq!(asks, expected);
+    }
+
+    /// An accepted `submit_plan` of this seat asks the gateway once for the seal: the rig never
+    /// sets it on its own word.
+    #[test]
+    fn an_accepted_submission_asks_for_the_seal_and_never_infers_it() {
+        let mut rig = in_lull();
+        settle(&mut rig, 0);
+        assert!(rig.editor_mut().load(b"{}"));
+        let mut submitted = false;
+        let mut asked_after = 0;
+        for step in 0..24_u64 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            if step == 2 {
+                assert!(rig.editor_mut().submit());
+                submitted = true;
+            }
+            for frame in rig.poll(step) {
+                let method = method_of(&frame);
+                let result = match method.as_str() {
+                    "get_status" if frame.link == SEAT => {
+                        if submitted {
+                            asked_after += 1;
+                        }
+                        r#"{"preset":"probation"}"#.to_owned()
+                    }
+                    "submit_plan" => {
+                        assert_eq!(rig.sealed_this_round(), None);
+                        r#"{"accepted":true,"report":{"qualifies":true,"depth":"full","diagnostics":[]}}"#
+                            .to_owned()
+                    }
+                    "verify_plan" => {
+                        r#"{"report":{"qualifies":true,"depth":"quick","diagnostics":[]}}"#
+                            .to_owned()
+                    }
+                    "get_view" => r#"{"next_cursor":"c9","complete":true}"#.to_owned(),
+                    "get_segment_feed" => r#"{"events":[],"next_cursor":"f1"}"#.to_owned(),
+                    "report_host_clock" => r#"{"all_ready":false}"#.to_owned(),
+                    "estimate_route" => r#"{"reachable":true}"#.to_owned(),
+                    "render_plan" => r#"{"prose":"P"}"#.to_owned(),
+                    "list_drafts" => r#"{"drafts":[]}"#.to_owned(),
+                    "list_templates" => r#"{"templates":[]}"#.to_owned(),
+                    "get_vocabulary" => r#"{"families":[]}"#.to_owned(),
+                    "get_map_summary" => r#"{"features":[]}"#.to_owned(),
+                    "resolve_refs" => r#"{"refs":[]}"#.to_owned(),
+                    "get_briefing" => r#"{"notes":""}"#.to_owned(),
+                    _ => "{}".to_owned(),
+                };
+                let _ = rig.receive(frame.link, &answer(id_of(&frame), &result, "lull"));
+            }
+        }
+        assert!(submitted);
+        assert_eq!(asked_after, 1, "one read after the accepted submission");
+        assert_eq!(
+            rig.sealed_this_round(),
+            None,
+            "the answer told nothing, and the rig does not fill it in"
+        );
     }
 }
