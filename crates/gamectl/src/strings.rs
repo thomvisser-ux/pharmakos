@@ -162,6 +162,40 @@ pub fn host_on_a_terminal() -> String {
     )
 }
 
+/// `gamectl host`'s line for a built-in seat's round with something refused
+/// (`crate::host::refusals_said`): the seat, the round, and what was refused.
+#[must_use]
+pub fn operator_round(seat: u8, round: u32, what: &str) -> String {
+    format!("Easy, seat {seat}, round {round}: {what}")
+}
+
+/// The refusal that kept a built-in seat's round from being read.
+#[must_use]
+pub fn operator_read_refused(method: &str, code: &str, message: &str) -> String {
+    format!(
+        "the round was not read, because the gateway refused {method} with {code} ({message}), \
+         so it planned nothing."
+    )
+}
+
+/// The route estimates a built-in seat's round had refused for another reason
+/// than `NOT_FOUND`, each as its code and message.
+#[must_use]
+pub fn operator_estimates_refused(refused: &[(&str, &str)]) -> String {
+    let each: Vec<String> = refused
+        .iter()
+        .map(|(code, message)| format!("{code} ({message})"))
+        .collect();
+    let count = match refused.len() {
+        1 => String::from("1 route estimate was"),
+        many => format!("{many} route estimates were"),
+    };
+    format!(
+        "{count} refused, each dropping the goal it weighed: {}.",
+        each.join("; ")
+    )
+}
+
 /// `gamectl host` could not start or keep its match.
 #[must_use]
 pub fn host_refused(why: &str) -> String {

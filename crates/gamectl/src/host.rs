@@ -45,6 +45,12 @@
 //! (its safe playbook and one suggestion per template). Each is a fresh
 //! `Easy` built from the rules text, so no seat shares state with another.
 //!
+//! A built-in seat's round says on standard error what the gateway refused it
+//! (S3's `opr3`, fix pass 2, item 5): the refusal that kept the round from
+//! being read, and every route estimate refused for another reason than
+//! `NOT_FOUND`, each of which dropped the goal it weighed. One line a round,
+//! and none for a round with nothing refused ([`refusals_said`]).
+//!
 //! # Exit codes
 //!
 //! The table in [`crate::exit`], and nothing new:
@@ -66,14 +72,14 @@
 //! exported lobby passes the executable's folder as `--root` (decisions-log
 //! item 117 (3)).
 
-use std::io::IsTerminal as _;
+use std::io::{IsTerminal as _, Write};
 use std::path::Path;
 
 use pharmakos_gateway::Code;
 use pharmakos_gateway::advice::{Advice, StartHere, SuggestedValue, Suggestion};
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::serve::{self, Advisor, BuiltInSeat, Operators, Setup};
-use pharmakos_operator::{Easy, RulesError};
+use pharmakos_operator::{Easy, Played, RulesError};
 use pharmakos_proto::json::Json;
 
 use crate::exit::Failure;
@@ -108,7 +114,10 @@ impl EasyOperators {
 impl Operators for EasyOperators {
     fn built_in(&mut self, _seat: u8) -> Option<Box<dyn BuiltInSeat>> {
         let easy = Easy::new(&self.rules_json).ok()?;
-        Some(Box::new(EasySeat(easy)))
+        Some(Box::new(EasySeat {
+            easy,
+            said: Box::new(std::io::stderr()),
+        }))
     }
 
     fn advisor(&mut self, _seat: u8) -> Option<Box<dyn Advisor>> {
@@ -117,15 +126,42 @@ impl Operators for EasyOperators {
     }
 }
 
-/// Easy playing a seat.
-#[derive(Debug)]
-struct EasySeat(Easy);
+/// Easy playing a seat, and where its round says what was refused: this
+/// command's standard error (the module docs).
+struct EasySeat {
+    easy: Easy,
+    said: Box<dyn Write + Send>,
+}
 
 impl BuiltInSeat for EasySeat {
     fn plan(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json) {
         let mut bridged = bridge(call);
-        let _played = self.0.play(seat, &mut bridged);
+        let played = self.easy.play(seat, &mut bridged);
+        if let Some(line) = refusals_said(seat, &played) {
+            // Standard error is not checked: there would be nowhere to report
+            // the failure to (`main.rs`), and the round stands either way.
+            let _ = writeln!(self.said, "{line}");
+        }
     }
+}
+
+/// What a built-in seat's round says on standard error (the module docs):
+/// the refusal that kept it from being read, and the route estimates refused
+/// for another reason than `NOT_FOUND`; `None` when nothing was refused.
+#[must_use]
+pub fn refusals_said(seat: u8, played: &Played) -> Option<String> {
+    let read = played.refused.as_ref().map(|refused| {
+        strings::operator_read_refused(&refused.method, &refused.code, &refused.message)
+    });
+    let estimates: Vec<(&str, &str)> = played
+        .estimates_refused
+        .iter()
+        .map(|refused| (refused.code.as_str(), refused.message.as_str()))
+        .collect();
+    let estimates =
+        (!estimates.is_empty()).then(|| strings::operator_estimates_refused(&estimates));
+    let said: Vec<String> = read.into_iter().chain(estimates).collect();
+    (!said.is_empty()).then(|| strings::operator_round(seat, played.round, &said.join(" ")))
 }
 
 /// Easy advising a seat.
@@ -236,4 +272,119 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     // Nothing more goes to standard output: the announce line was the whole of
     // what this command writes there.
     Ok(String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use pharmakos_operator::{Refused, Submitted};
+
+    use super::*;
+
+    fn refused(method: &str, code: &str, message: &str) -> Refused {
+        Refused {
+            method: method.to_owned(),
+            code: code.to_owned(),
+            message: message.to_owned(),
+        }
+    }
+
+    fn played(refused: Option<Refused>, estimates_refused: Vec<Refused>) -> Played {
+        Played {
+            round: 2,
+            submitted: Submitted::Own,
+            playbook_jsonc: None,
+            repairs: 0,
+            ready: true,
+            calls: 40,
+            why: String::new(),
+            refused,
+            estimates_refused,
+        }
+    }
+
+    #[test]
+    fn a_round_with_nothing_refused_says_nothing() {
+        assert_eq!(refusals_said(1, &played(None, Vec::new())), None);
+    }
+
+    #[test]
+    fn every_estimate_refused_is_said_with_its_code() {
+        let said = refusals_said(
+            1,
+            &played(
+                None,
+                vec![
+                    refused("estimate_route", "RATE_LIMITED", "too many calls"),
+                    refused("estimate_route", "INTERNAL", "the router broke a chain"),
+                ],
+            ),
+        )
+        .expect("a line");
+        assert!(said.starts_with("Easy, seat 1, round 2:"), "{said}");
+        assert!(said.contains("2 route estimates"), "{said}");
+        assert!(said.contains("RATE_LIMITED (too many calls)"), "{said}");
+        assert!(
+            said.contains("INTERNAL (the router broke a chain)"),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn a_round_not_read_says_which_call_was_refused() {
+        let said = refusals_said(
+            0,
+            &played(
+                Some(refused("get_view", "RATE_LIMITED", "slow down")),
+                Vec::new(),
+            ),
+        )
+        .expect("a line");
+        assert!(said.contains("get_view"), "{said}");
+        assert!(said.contains("RATE_LIMITED (slow down)"), "{said}");
+    }
+
+    /// A writer the test reads back.
+    #[derive(Clone, Default)]
+    struct Heard(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Heard {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("the buffer").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The seat writes its line through its door: a gateway refusing every
+    /// call refuses the round's first read, and the seat says so.
+    #[test]
+    fn the_built_in_seat_says_its_refusals_through_its_door() {
+        let heard = Heard::default();
+        let mut seat = EasySeat {
+            easy: Easy::new(
+                &std::fs::read_to_string(
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/rules.v1.json"),
+                )
+                .expect("the rules text"),
+            )
+            .expect("the operator reads it"),
+            said: Box::new(heard.clone()),
+        };
+        let mut refusing = |_: &Request| {
+            pharmakos_proto::json::read(
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"no","data":{"code":"RATE_LIMITED"}}}"#,
+            )
+            .expect("a refusal")
+        };
+        seat.plan(1, &mut refusing);
+        let text = String::from_utf8(heard.0.lock().expect("the buffer").clone()).expect("UTF-8");
+        assert!(text.starts_with("Easy, seat 1, round 0:"), "{text}");
+        assert!(text.contains("RATE_LIMITED (no)"), "{text}");
+        assert!(text.ends_with('\n'), "{text}");
+    }
 }
