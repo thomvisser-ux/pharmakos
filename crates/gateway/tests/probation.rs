@@ -1644,3 +1644,78 @@ fn a_sealed_probation_status_answers_its_golden() {
         Some(&Json::String(String::from("probation")))
     );
 }
+
+/// What each advisor was told: its seat and the seal.
+type ToldSeals = std::sync::Arc<std::sync::Mutex<Vec<(u8, Option<Json>)>>>;
+
+/// An advisor that reads `get_status` and keeps the seal it is told.
+struct SealReader(ToldSeals);
+
+impl pharmakos_gateway::serve::Advisor for SealReader {
+    fn advise(
+        &mut self,
+        seat: u8,
+        call: &mut dyn FnMut(&pharmakos_gateway::rpc::Request) -> Json,
+    ) -> Advice {
+        let request = pharmakos_gateway::rpc::parse(
+            r#"{"jsonrpc":"2.0","id":1,"method":"get_status","params":{}}"#,
+        )
+        .expect("well formed");
+        let answer = call(&request);
+        let sealed = answer
+            .get("result")
+            .and_then(|result| result.get("sealed_this_round"))
+            .cloned();
+        if let Ok(mut held) = self.0.lock() {
+            held.push((seat, sealed));
+        }
+        Advice {
+            safe_playbook_jsonc: String::new(),
+            suggestions: Vec::new(),
+            start_here: None,
+        }
+    }
+}
+
+/// Advises every seat with a [`SealReader`] and plays none.
+struct AdvisesEverySeat(ToldSeals);
+
+impl pharmakos_gateway::serve::Operators for AdvisesEverySeat {
+    fn built_in(&mut self, _seat: u8) -> Option<Box<dyn pharmakos_gateway::serve::BuiltInSeat>> {
+        None
+    }
+
+    fn advisor(&mut self, _seat: u8) -> Option<Box<dyn pharmakos_gateway::serve::Advisor>> {
+        Some(Box::new(SealReader(std::sync::Arc::clone(&self.0))))
+    }
+}
+
+/// S3's `probw`, its last pass (item 5): the operator advising a seat calls
+/// through that seat's own narrower token, on which `get_status` stands, so it
+/// is told its own seat's `sealed_this_round` -- true for the seat that
+/// sealed, false for the one that did not -- and never another seat's.
+#[test]
+fn an_advisor_is_told_its_own_seats_seal_and_no_other() {
+    let mut surface = hosted_under("m-advisor-seal", Preset::Custom, Some(1), 1_000, 2);
+    let admin = admin_token(&mut surface);
+    let mut elapsed = 0_i32;
+    let route = walk_east(&surface, 0, 2, 0);
+    submit(&mut surface, &admin, &mut elapsed, 0, &route);
+    let told = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut operators = AdvisesEverySeat(std::sync::Arc::clone(&told));
+    let mut seats = pharmakos_gateway::serve::InProcessSeats::open(
+        &mut surface,
+        &SEATS,
+        Some(1),
+        &mut operators,
+    )
+    .expect("in-process seats");
+    seats.plan(&mut surface);
+    let mut told = told.lock().map(|held| held.clone()).unwrap_or_default();
+    told.sort_by_key(|(seat, _)| *seat);
+    assert_eq!(
+        told,
+        vec![(0, Some(Json::Bool(true))), (1, Some(Json::Bool(false))),],
+        "each advisor is told its own seat's seal"
+    );
+}

@@ -3129,6 +3129,13 @@ impl Surface {
     /// [`Surface::begin_push`]'s filing applies, a seal whose round is the
     /// match's round, whoever filed it; it is told to that seat only, true or
     /// false, and left out for every token that is not a seat.
+    ///
+    /// The built-in operator advising a seat calls through that seat's own,
+    /// narrower token ([`crate::serve::ADVISOR_METHODS`]), on which
+    /// `get_status` already stands: so it is told **its own seat's** value,
+    /// which is that seat's own knowledge and the same thing the seat's token
+    /// is told, and nothing about any other seat (S3's `probw`, its last pass;
+    /// `an_advisor_is_told_its_own_seats_seal_and_no_other`).
     fn get_status(&self, subject: Subject) -> Json {
         let mut entries = vec![(String::from("status"), self.time.footer())];
         let Some(host) = self.host.as_ref() else {
