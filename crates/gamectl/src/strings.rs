@@ -417,11 +417,40 @@ pub fn rules_gap(path: &str, why: &str) -> String {
 // verify
 // ---------------------------------------------------------------------------
 
-/// The heading of a report, naming what was verified and against what.
+/// The heading of a report, naming what was verified, how deep, and against
+/// which view (S3's plan, E19): `view` is [`verify_view_reference`] or
+/// [`verify_view_preset`]. No line of it begins with the word `error`, which
+/// the headless watch check reads as a diagnostic (`watch_check.gd`).
 #[must_use]
-pub fn verify_heading(path: &str, depth: &str) -> String {
+pub fn verify_heading(path: &str, depth: &str, view: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    format!("{path}\n  depth        {depth}")
+    format!("{path}\n  depth        {depth}\n  view         {view}")
+}
+
+/// The heading's view when the file is verified against the reference seat
+/// view ([`crate::seat`]), the default.
+#[must_use]
+pub fn verify_view_reference() -> String {
+    format!("the reference view (not a match's snapshot; `{BINARY} seat doctor` prints it)")
+}
+
+/// The heading's view under `--preset`: the lobby's match of that preset,
+/// its seed, and the seat whose opening Lull snapshot it is.
+#[must_use]
+pub fn verify_view_preset(preset: &str, seed: u64, seat: u8) -> String {
+    format!("{preset}, seed {seed}, seat {seat}'s opening Lull snapshot")
+}
+
+/// The sentence after the diagnostics of a reference-view report that
+/// carries `E0403`: in a match the beacon may be legal (decisions-log item
+/// 117 (1); `crate::seat`). Composed from the report's codes, never by
+/// checking anything again.
+#[must_use]
+pub fn verify_e0403_note() -> String {
+    String::from(
+        "  E0403 here is against the reference view. In a match the gateway checks against the \
+         seat's own frozen snapshot, where this beacon may be legal.",
+    )
 }
 
 /// The line that says a playbook may be sealed.
@@ -459,14 +488,61 @@ pub fn verify_diagnostic(severity: &str, code: &str, path: &str, message: &str) 
     format!("  {severity:<7} {code} {path}\n          {message}")
 }
 
+/// The sentence under a report verified against a preset's match, saying
+/// where the view came from.
+#[must_use]
+pub fn verify_footer_preset(preset: &str, seed: u64, seats: u32, seat: u8) -> String {
+    format!(
+        "  Verified by the gateway against seat {seat}'s frozen snapshot in the opening Lull of \
+         the {preset} match the lobby opens (seed {seed}, {seats} seats), hosted here as the \
+         lobby hosts it. A later Lull's snapshot is that round's own."
+    )
+}
+
+/// The lobby's config line, which this build copies, refused by this
+/// build's gateway.
+#[must_use]
+pub fn lobby_line_refused(why: &str) -> String {
+    format!(
+        "{BINARY} verify --preset: the lobby's config line this build carries is one its own \
+         gateway refuses: {why}"
+    )
+}
+
+/// The lobby's match would not open, or the gateway refused a host's call.
+#[must_use]
+pub fn lobby_match_refused(why: &str) -> String {
+    format!("{BINARY} verify --preset: the lobby's match would not open here: {why}")
+}
+
+/// The gateway refused the text before verifying it, as the lobby's match
+/// would: the answer, not an error.
+#[must_use]
+pub fn lobby_text_refused(why: &str) -> String {
+    format!(
+        "{BINARY} verify --preset: the gateway refuses this playbook before verifying it, as \
+         the lobby's match would: {why}"
+    )
+}
+
+/// The gateway's `verify_plan` answer is not a report this build reads.
+#[must_use]
+pub fn lobby_answer_unread(why: &str) -> String {
+    format!(
+        "{BINARY} verify --preset: the gateway's `verify_plan` answer is not a report this \
+         build reads: {why}"
+    )
+}
+
 /// The sentence under a report, saying which seat view produced it.
 #[must_use]
 pub fn verify_footer() -> String {
     String::from(
         "  Verified against the reference seat view (`gamectl seat doctor` prints it): one seat, \
          a core Build beacon `b_01` (the fixture's own id; a live seat's core is `b_00`), a Mine \
-         beacon `b_02` tagged `east`, one known enemy beacon `e_01`. A playbook is verified \
-         against a real match's frozen snapshot by the gateway, not here.",
+         beacon `b_02` tagged `east`, one known enemy beacon `e_01`. A real match's frozen \
+         snapshot is the gateway's: `--preset probation` has it verify against the lobby's \
+         Probation match.",
     )
 }
 

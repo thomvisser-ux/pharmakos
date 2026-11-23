@@ -26,7 +26,7 @@ fn a_path_an_operand_or_a_name_the_user_typed_is_printed_escaped() {
         strings::unreadable("scenario", HOSTILE, "no such file"),
         strings::path_escapes(HOSTILE),
         strings::rules_gap(HOSTILE, "a gap"),
-        strings::verify_heading(HOSTILE, "quick"),
+        strings::verify_heading(HOSTILE, "quick", &strings::verify_view_reference()),
         strings::verify_diagnostic("error", "E0001", HOSTILE, "a message"),
         // A problem's message is a sentence the reader composed, its leaves
         // escaped where it wrote them (fix pass 6, item 1); the path and the

@@ -42,15 +42,54 @@ use crate::rules;
 use crate::seat;
 use crate::strings;
 
+/// Which seat view a playbook is verified against.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum View {
+    /// The reference seat view ([`crate::seat`]), the default.
+    Reference,
+    /// The opening Lull of the match the lobby opens for this preset
+    /// (`--preset`; [`crate::lobby`]).
+    Preset(Preset),
+}
+
+/// A preset `--preset` names: the lobby's match of that preset.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Preset {
+    /// The newcomer's first match (spec section 3).
+    Probation,
+}
+
+impl Preset {
+    /// Every preset `--preset` accepts, as the command line spells them.
+    pub const NAMES: &[&str] = &["probation"];
+
+    /// The preset a command line names.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Preset> {
+        match name {
+            "probation" => Some(Preset::Probation),
+            _ => None,
+        }
+    }
+
+    /// How a report's heading and footer name it.
+    #[must_use]
+    pub const fn shown(self) -> &'static str {
+        match self {
+            Preset::Probation => "Probation",
+        }
+    }
+}
+
 /// Inspect one playbook file and render its report.
 ///
 /// # Errors
 ///
 /// [`Exit::Input`] for a file that is not there, [`Exit::Failed`] for a
 /// playbook that does not qualify, [`Exit::Internal`] when the rules table is
-/// missing a block the checks read.
-pub fn run(root: &Path, path: &Path, depth: Depth) -> Result<String, Failure> {
-    let rules = rules::load(root)?;
+/// missing a block the checks read, or, under a preset, when the lobby's match
+/// will not open or the gateway's answer is not a report.
+pub fn run(root: &Path, path: &Path, depth: Depth, view: View) -> Result<String, Failure> {
     let display = crate::display(path);
     let text = read_bounded(&root.join(path)).map_err(|error| {
         Failure::input(strings::unreadable(
@@ -59,7 +98,42 @@ pub fn run(root: &Path, path: &Path, depth: Depth) -> Result<String, Failure> {
             &error.to_string(),
         ))
     })?;
+    let (report, shown) = match view {
+        View::Reference => (
+            reference_report(root, text.as_deref(), depth)?,
+            Shown::Reference,
+        ),
+        View::Preset(preset) => {
+            let config = crate::lobby::probation()?;
+            let seat = crate::lobby::seat_of(&config)?;
+            let report = crate::lobby::verify(root, text.as_deref(), depth)?;
+            (
+                report,
+                Shown::Preset {
+                    preset,
+                    seed: config.seed,
+                    seats: config.seats,
+                    seat,
+                },
+            )
+        }
+    };
 
+    let rendered = render_against(&display, &report, &shown);
+    if report.qualifies {
+        Ok(rendered)
+    } else {
+        Err(Failure::new(Exit::Failed, rendered))
+    }
+}
+
+/// The report against the reference seat view.
+fn reference_report(
+    root: &Path,
+    text: Option<&str>,
+    depth: Depth,
+) -> Result<VerifyReport, Failure> {
+    let rules = rules::load(root)?;
     let snapshot = seat::snapshot().map_err(|error| {
         Failure::internal(format!(
             "this build's snapshot encoder refused its own reference snapshot: {error}"
@@ -69,23 +143,27 @@ pub fn run(root: &Path, path: &Path, depth: Depth) -> Result<String, Failure> {
     let gap = |error: &dyn std::fmt::Display| {
         Failure::internal(strings::rules_gap(rules::RULES_PATH, &error.to_string()))
     };
-    let report = if let Some(text) = text {
-        pharmakos_plan_core::verify_jsonc(&text, &snapshot, &scope, &rules, depth)
-            .map_err(|error| gap(&error))?
+    if let Some(text) = text {
+        pharmakos_plan_core::verify_jsonc(text, &snapshot, &scope, &rules, depth)
+            .map_err(|error| gap(&error))
     } else {
         // Past the cap in bytes, so past it whatever the bytes hold: `E0029`,
         // and the rest of the file is never read.
         let input = pharmakos_verifier::Input::too_long(&snapshot, &scope, &rules)
             .map_err(|error| gap(&error))?;
-        pharmakos_verifier::verify(&input, depth)
-    };
-
-    let rendered = render(&display, &report);
-    if report.qualifies {
-        Ok(rendered)
-    } else {
-        Err(Failure::new(Exit::Failed, rendered))
+        Ok(pharmakos_verifier::verify(&input, depth))
     }
+}
+
+/// The view a report was verified against, as its heading and footer say it.
+enum Shown {
+    Reference,
+    Preset {
+        preset: Preset,
+        seed: u64,
+        seats: u32,
+        seat: u8,
+    },
 }
 
 /// The file's text, read no further than the size cap needs (S3's `vfy6`):
@@ -115,13 +193,23 @@ pub(crate) fn read_bounded(path: &Path) -> std::io::Result<Option<String>> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-/// The report as a person reads it.
+/// The report as a person reads it, against the reference seat view.
 ///
 /// Public because `seat doctor` renders one too, and because the shape of this
 /// output is the thing `tests/verify.rs` reads `report_hash` out of.
 #[must_use]
 pub fn render(display: &str, report: &VerifyReport) -> String {
-    let mut text = strings::verify_heading(display, depth_name(report.depth));
+    render_against(display, report, &Shown::Reference)
+}
+
+fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> String {
+    let view = match shown {
+        Shown::Reference => strings::verify_view_reference(),
+        Shown::Preset {
+            preset, seed, seat, ..
+        } => strings::verify_view_preset(preset.shown(), *seed, *seat),
+    };
+    let mut text = strings::verify_heading(display, depth_name(report.depth), &view);
     text.push('\n');
     let errors = report
         .diagnostics
@@ -154,7 +242,27 @@ pub fn render(display: &str, report: &VerifyReport) -> String {
             )
         );
     }
-    let _ = writeln!(text, "{}", strings::verify_footer());
+    // E19: an `E0403` against the reference view says that a match may
+    // accept the beacon, from the report's codes alone. A preset's report is
+    // the match's own, so it needs no such sentence.
+    let reference_e0403 = matches!(shown, Shown::Reference)
+        && report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0403");
+    if reference_e0403 {
+        let _ = writeln!(text, "{}", strings::verify_e0403_note());
+    }
+    let footer = match shown {
+        Shown::Reference => strings::verify_footer(),
+        Shown::Preset {
+            preset,
+            seed,
+            seats,
+            seat,
+        } => strings::verify_footer_preset(preset.shown(), *seed, *seats, *seat),
+    };
+    let _ = writeln!(text, "{footer}");
     text
 }
 

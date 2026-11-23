@@ -300,3 +300,262 @@ fn a_long_pointer_is_printed_whole() {
         outcome.err
     );
 }
+
+// ---------------------------------------------------------------------------
+// The view a report names (S3's plan, E19) and the lobby's (`--preset`)
+// ---------------------------------------------------------------------------
+
+/// The reference view's heading line, word for word.
+const REFERENCE_VIEW: &str =
+    "  view         the reference view (not a match's snapshot; `gamectl seat doctor` prints it)";
+
+/// The Probation preset's heading line, word for word.
+const PROBATION_VIEW: &str = "  view         Probation, seed 20, seat 0's opening Lull snapshot";
+
+/// The sentence a reference-view report with `E0403` carries after its
+/// diagnostics.
+const E0403_NOTE: &str = "  E0403 here is against the reference view. In a match the gateway \
+                          checks against the seat's own frozen snapshot, where this beacon may \
+                          be legal.";
+
+/// A case the reference view refuses with `E0403`.
+const E0403_CASE: &str = "crates/verifier/tests/cases/e0403_site_outside_every_sphere.json";
+
+/// A playbook written for a live seat, which names its core `b_00`: the
+/// reference view's core is `b_01`, so it is `E0401` there.
+const NAMES_B_00: &str = "library/defend_the_core.jsonc";
+
+fn said(outcome: &pharmakos_gamectl::Outcome) -> String {
+    format!("{}{}", outcome.out, outcome.err)
+}
+
+/// The report's lines, wherever the exit code sent them: standard output when
+/// it qualifies, standard error when it does not.
+fn report_lines(outcome: &pharmakos_gamectl::Outcome) -> Vec<String> {
+    let text = if outcome.code == Exit::Ok {
+        &outcome.out
+    } else {
+        &outcome.err
+    };
+    text.lines().map(str::to_owned).collect()
+}
+
+/// E19: the report says at its head which view it was verified against, at
+/// either depth.
+#[test]
+fn the_heading_names_the_reference_view_at_either_depth() {
+    for (depth, word) in [("full", "FULL"), ("quick", "QUICK")] {
+        let outcome = gamectl(&[
+            "verify",
+            "--depth",
+            depth,
+            "examples/playbooks/expand_east.jsonc",
+        ]);
+        assert_eq!(outcome.code, Exit::Ok, "{}", said(&outcome));
+        let head: Vec<String> = report_lines(&outcome).into_iter().take(3).collect();
+        assert_eq!(
+            head,
+            vec![
+                String::from("examples/playbooks/expand_east.jsonc"),
+                format!("  depth        {word}"),
+                String::from(REFERENCE_VIEW),
+            ],
+            "{}",
+            outcome.out
+        );
+    }
+}
+
+/// E19: an `E0403` against the reference view is followed, directly after
+/// the diagnostics and before the footer, by the sentence that says a match
+/// may accept the beacon; a report without `E0403` has no such sentence.
+#[test]
+fn an_e0403_against_the_reference_view_says_a_match_may_accept_it() {
+    let refused = gamectl(&["verify", E0403_CASE]);
+    assert_eq!(refused.code, Exit::Failed, "{}", said(&refused));
+    let lines = report_lines(&refused);
+    let note = lines
+        .iter()
+        .position(|line| line == E0403_NOTE)
+        .unwrap_or_else(|| panic!("no E0403 note:\n{}", refused.err));
+    assert!(
+        lines
+            .get(note.saturating_sub(2))
+            .is_some_and(|line| line.trim_start().starts_with("error   E0403")),
+        "the note follows the last diagnostic, E0403 and its message:\n{}",
+        refused.err
+    );
+    assert!(
+        lines
+            .get(note.saturating_add(1))
+            .is_some_and(|line| line.starts_with("  Verified against the reference seat view")),
+        "the footer follows the note:\n{}",
+        refused.err
+    );
+    for args in [
+        &["verify", "examples/playbooks/expand_east.jsonc"][..],
+        &[
+            "verify",
+            "--depth",
+            "quick",
+            "examples/playbooks/expand_east.jsonc",
+        ],
+        &[
+            "verify",
+            "crates/verifier/tests/cases/e0102_empty_route.json",
+        ],
+    ] {
+        let outcome = gamectl(args);
+        assert!(
+            !said(&outcome).contains("E0403 here"),
+            "{args:?}: a report without E0403 carries no note:\n{}",
+            said(&outcome)
+        );
+    }
+}
+
+/// `--preset probation`: the file is verified by the gateway against seat 0's
+/// frozen snapshot in the opening Lull of the lobby's Probation match. A
+/// playbook naming the live core `b_00`, `E0401` against the reference view,
+/// qualifies there, and the heading names that view.
+#[test]
+fn the_probation_preset_verifies_against_the_lobby_s_match() {
+    let reference = gamectl(&["verify", NAMES_B_00]);
+    assert_eq!(reference.code, Exit::Failed, "{}", said(&reference));
+    assert!(reference.err.contains("E0401"), "{}", reference.err);
+
+    for (depth, word) in [("full", "FULL"), ("quick", "QUICK")] {
+        let preset = gamectl(&[
+            "verify",
+            "--preset",
+            "probation",
+            "--depth",
+            depth,
+            NAMES_B_00,
+        ]);
+        assert_eq!(preset.code, Exit::Ok, "{}", said(&preset));
+        let lines = report_lines(&preset);
+        let head: Vec<String> = lines.iter().take(3).cloned().collect();
+        assert_eq!(
+            head,
+            vec![
+                String::from(NAMES_B_00),
+                format!("  depth        {word}"),
+                String::from(PROBATION_VIEW),
+            ],
+            "{}",
+            preset.out
+        );
+        assert!(
+            lines.last().is_some_and(|line| line.starts_with(
+                "  Verified by the gateway against seat 0's frozen snapshot in the opening Lull \
+                 of the Probation match the lobby opens (seed 20, 2 seats)"
+            )),
+            "{}",
+            preset.out
+        );
+    }
+
+    // The match's own report carries no reference-view sentence, even where
+    // it says E0403 itself.
+    let e0403 = gamectl(&["verify", "--preset", "probation", E0403_CASE]);
+    assert_eq!(e0403.code, Exit::Failed, "{}", said(&e0403));
+    assert!(e0403.err.contains("E0403"), "{}", e0403.err);
+    assert!(!e0403.err.contains("E0403 here"), "{}", e0403.err);
+}
+
+/// The preset's report is the gateway's: the same file verified twice
+/// answers the same `report_hash`, and it is not the reference view's.
+#[test]
+fn the_preset_s_report_is_reproducible_and_its_own() {
+    let hash_of = |outcome: &pharmakos_gamectl::Outcome| -> String {
+        report_lines(outcome)
+            .iter()
+            .find_map(|line| {
+                line.trim_start()
+                    .strip_prefix("report_hash  ")
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| panic!("a report_hash:\n{}", said(outcome)))
+    };
+    let example = "examples/playbooks/expand_east.jsonc";
+    let first = gamectl(&["verify", "--preset", "probation", example]);
+    let second = gamectl(&["verify", "--preset", "probation", example]);
+    let reference = gamectl(&["verify", example]);
+    assert_eq!(hash_of(&first), hash_of(&second));
+    assert_ne!(hash_of(&first), hash_of(&reference));
+}
+
+/// A file past the size cap, read no further than the bound, is refused by
+/// the gateway before it verifies anything, as the lobby's match refuses it:
+/// the answer is no (exit 3), in the gateway's words.
+#[test]
+fn a_huge_file_is_refused_by_the_gateway_under_the_preset() {
+    let length = pharmakos_verifier::MAX_PLAYBOOK_READ
+        .checked_mul(2)
+        .expect("fits");
+    let path = scratch_file("nite3_huge_preset.json", &vec![0xff_u8; length]);
+    let shown = path.to_str().expect("a UTF-8 scratch path");
+    let outcome = gamectl(&["verify", "--preset", "probation", shown]);
+    assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
+    assert!(
+        outcome
+            .err
+            .contains("refuses this playbook before verifying it")
+            && outcome.err.contains(&format!(
+                "at most {} characters",
+                pharmakos_verifier::MAX_PLAYBOOK_CHARS
+            )),
+        "{}",
+        outcome.err
+    );
+}
+
+/// The lobby's line, which `gamectl` carries to open the preset's match, is
+/// the lobby's own: each field is held to `godot/scripts/host_link.gd`'s
+/// constant, and the seed to the sim's pin of the Probation seed
+/// (`crates/sim/tests/probation_seed.rs`).
+#[test]
+fn the_preset_s_match_is_the_one_the_lobby_opens() {
+    let read = |relative: &str| {
+        std::fs::read_to_string(root().join(relative))
+            .unwrap_or_else(|error| panic!("{relative}: {error}"))
+    };
+    let constant = |text: &str, prefix: &str| -> String {
+        text.lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .map_or_else(
+                || panic!("no line starts `{prefix}`"),
+                |value| value.trim().trim_matches('"').to_owned(),
+            )
+    };
+    let lobby = read("godot/scripts/host_link.gd");
+    let fields: Vec<&str> = pharmakos_gamectl::lobby::PROBATION_LINE
+        .split('\t')
+        .collect();
+    assert_eq!(fields.len(), 7, "the seven fields of a lobby's line");
+    for (index, prefix) in [
+        (1, "const MATCH_SEED := "),
+        (2, "const MATCH_SEATS := "),
+        (3, "const HUMAN_SEAT := "),
+        (4, "const LADDER := "),
+        (5, "const ROUND_LIMIT := "),
+        (6, "const PRESET := "),
+    ] {
+        assert_eq!(
+            fields.get(index).copied(),
+            Some(constant(&lobby, prefix).as_str()),
+            "field {index} of the line gamectl carries is not host_link.gd's `{prefix}`"
+        );
+    }
+    let pin = constant(
+        &read("crates/sim/tests/probation_seed.rs"),
+        "const PROBATION_SEED: u64 = ",
+    );
+    let config = pharmakos_gamectl::lobby::probation().expect("the line reads");
+    assert_eq!(
+        Some(config.seed.to_string().as_str()),
+        pin.strip_suffix(';'),
+        "the Probation seed the sim pins"
+    );
+}

@@ -26,6 +26,7 @@ host                      serve one match to the game client over this process's
     --root <dir>          the repository root every other path is read against (default: the working directory)
     --part <name>         schema only: one message of gp.v1 by its lower_snake_case name, instead of the whole playbook
     --depth <quick|full>  verify only: how deep to run the pipeline (default: full, which is what submit_plan runs)
+    --preset <probation>  verify only: verify against seat 0's opening Lull snapshot in the match the lobby opens for this preset, through the gateway, instead of the reference view
     --operator <easy>     scenario only: the built-in operator a `builtin` seat plays; easy, which carries the Balanced weighting, is the one this build has (default: easy)
     --seeds <file>        scenario only: play the scenario to its end once per seed in the file, each seed replacing its map seed and the arm alternating between seats 0 and 1, and write a result instead of checking its assertions
     --format <text|json>  scenario only: how a run over --seeds writes its result (default: text)

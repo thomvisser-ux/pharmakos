@@ -36,6 +36,7 @@ use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 
 use crate::exit::Failure;
 use crate::strings;
+use crate::verify::{Preset, View};
 
 /// One row of the command table: what it is called, how it is spelled in the
 /// help, and the half-line under it.
@@ -144,6 +145,13 @@ pub const OPTIONS: &[OptionRow] = &[
         flag: "--depth",
         command: "verify",
         about: "how deep to run the pipeline (default: full, which is what submit_plan runs)",
+    },
+    OptionRow {
+        spelling: "    --preset <probation>",
+        flag: "--preset",
+        command: "verify",
+        about: "verify against seat 0's opening Lull snapshot in the match the lobby opens for \
+                this preset, through the gateway, instead of the reference view",
     },
     OptionRow {
         spelling: "    --operator <easy>",
@@ -259,6 +267,9 @@ pub enum Command {
         /// How deep to run the pipeline. FULL by default, which is what
         /// `submit_plan` always runs (spec §11).
         depth: Depth,
+        /// The seat view it is verified against: the reference view unless
+        /// `--preset` names the lobby's match.
+        view: View,
     },
     /// Print the generated JSON Schema for one part of `gp.v1`.
     Schema {
@@ -322,6 +333,7 @@ where
     // refused.
     let mut depth: Option<Depth> = None;
     let mut options = RunOptions::default();
+    let mut preset: Option<Preset> = None;
     let mut operands: Vec<OsString> = Vec::new();
 
     loop {
@@ -343,31 +355,35 @@ where
                 });
             }
             Long("root") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 root = Some(PathBuf::from(value));
             }
             Long("part") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 part = Some(value.to_string_lossy().into_owned());
             }
             Long("depth") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 depth = match value.to_string_lossy().as_ref() {
                     "quick" => Some(Depth::Quick),
                     "full" => Some(Depth::Full),
                     other => return Err(Failure::usage(strings::bad_depth(other))),
                 };
             }
+            Long("preset") => {
+                let value = flag_value(&mut parser)?;
+                let name = value.to_string_lossy().into_owned();
+                let Some(named) = Preset::from_name(&name) else {
+                    return Err(Failure::usage(strings::bad_value(
+                        "--preset",
+                        &name,
+                        Preset::NAMES,
+                    )));
+                };
+                preset = Some(named);
+            }
             Long("operator") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 let name = value.to_string_lossy().into_owned();
                 let Some(operator) = Operator::from_name(&name) else {
                     let names: Vec<&str> = Operator::ALL.iter().map(|known| known.name()).collect();
@@ -380,15 +396,11 @@ where
                 options.operator = Some(operator);
             }
             Long("seeds") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 options.seeds = Some(PathBuf::from(value));
             }
             Long("format") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 let name = value.to_string_lossy().into_owned();
                 let Some(format) = Format::from_name(&name) else {
                     return Err(Failure::usage(strings::bad_value(
@@ -400,9 +412,7 @@ where
                 options.format = Some(format);
             }
             Long("out") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 options.out = Some(PathBuf::from(value));
             }
             Value(value) => operands.push(value),
@@ -413,8 +423,15 @@ where
     }
 
     let root = root.unwrap_or_else(|| cwd.to_path_buf());
-    let command = command_of(&operands, part, depth, options)?;
+    let command = command_of(&operands, part, depth, preset, options)?;
     Ok(Invocation { root, command })
+}
+
+/// The value after a flag that takes one.
+fn flag_value(parser: &mut lexopt::Parser) -> Result<OsString, Failure> {
+    parser
+        .value()
+        .map_err(|error| Failure::usage(strings::bad_argument(&error)))
 }
 
 /// The operands, once the flags are out of the way.
@@ -422,6 +439,7 @@ fn command_of(
     operands: &[OsString],
     part: Option<String>,
     depth: Option<Depth>,
+    preset: Option<Preset>,
     options: RunOptions,
 ) -> Result<Command, Failure> {
     let Some((first, rest)) = operands.split_first() else {
@@ -439,6 +457,7 @@ fn command_of(
             &[
                 ("--part", part.is_some()),
                 ("--depth", depth.is_some()),
+                ("--preset", preset.is_some()),
                 ("--operator", options.operator.is_some()),
                 ("--seeds", options.seeds.is_some()),
                 ("--format", options.format.is_some()),
@@ -455,6 +474,10 @@ fn command_of(
                 // FULL by default, which is what `submit_plan` always runs
                 // (spec §11).
                 depth: depth.unwrap_or(Depth::Full),
+                view: match preset {
+                    Some(preset) => View::Preset(preset),
+                    None => View::Reference,
+                },
             })
         }
         "schema" => {
@@ -577,6 +600,7 @@ fn no_operands(command: &str, rest: &[OsString]) -> Result<(), Failure> {
 mod tests {
     use super::{COMMANDS, Command, parse};
     use crate::exit::Exit;
+    use crate::verify::{Preset, View};
     use pharmakos_proto::gp::api::v1::verify_plan::Depth;
     use std::path::Path;
 
@@ -650,7 +674,8 @@ mod tests {
             parsed(&["verify", "--depth", "quick", "a.jsonc"]),
             Ok(Command::Verify {
                 path: "a.jsonc".into(),
-                depth: Depth::Quick
+                depth: Depth::Quick,
+                view: View::Reference,
             })
         );
         assert_eq!(
@@ -662,6 +687,27 @@ mod tests {
         assert_eq!(
             parsed(&["verify", "--depth", "deep", "a.jsonc"]),
             Err(Exit::Usage)
+        );
+    }
+
+    #[test]
+    fn preset_reaches_verify_and_names_its_values() {
+        assert_eq!(
+            parsed(&["verify", "--preset", "probation", "a.jsonc"]),
+            Ok(Command::Verify {
+                path: "a.jsonc".into(),
+                depth: Depth::Full,
+                view: View::Preset(Preset::Probation),
+            })
+        );
+        let error = parse(["verify", "--preset", "custom", "a.jsonc"], Path::new("."))
+            .expect_err("only the lobby's preset has a match to verify against");
+        assert_eq!(error.code, Exit::Usage);
+        assert!(error.message.contains("`probation`"), "{}", error.message);
+        assert_eq!(
+            parsed(&["scenario", "run", "a", "--preset", "probation"]),
+            Err(Exit::Usage),
+            "a flag given to a command that does not read it is refused"
         );
     }
 

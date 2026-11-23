@@ -31,6 +31,7 @@ const SOURCES: &[&str] = &[
     "src/exit.rs",
     "src/host.rs",
     "src/lib.rs",
+    "src/lobby.rs",
     "src/main.rs",
     "src/rules.rs",
     "src/scenario.rs",

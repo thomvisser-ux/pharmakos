@@ -42,6 +42,7 @@ pub mod docs;
 pub mod doctor;
 pub mod exit;
 pub mod host;
+pub mod lobby;
 pub mod rules;
 pub mod scenario;
 pub mod schema;
@@ -107,7 +108,7 @@ fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
         Command::Host => return host::run(root),
         Command::Help => Ok(strings::help()),
         Command::Version => Ok(strings::version()),
-        Command::Verify { path, depth } => verify::run(root, path, *depth),
+        Command::Verify { path, depth, view } => verify::run(root, path, *depth, *view),
         Command::Schema { part } => schema::run(part),
         Command::Docs => docs::run(),
         Command::ScenarioRun { path, options } => scenario::run::command(root, path, options),
