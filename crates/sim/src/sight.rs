@@ -229,6 +229,17 @@ impl World {
     /// nothing.
     #[must_use]
     pub fn sensor_at(&self, at: usize) -> Option<(Sensor, usize)> {
+        self.sensor_at_metered(at, &())
+    }
+
+    /// [`World::sensor_at`], reporting each position it reads to `meter`
+    /// ([`crate::seams::Meter`]): one row a position, sensor or not, and none
+    /// for the end of the walk. What it answers is [`World::sensor_at`]'s.
+    pub(crate) fn sensor_at_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        at: usize,
+        meter: &M,
+    ) -> Option<(Sensor, usize)> {
         let beacons = crate::math::index::row(self.beacons().len());
         let units = crate::math::index::row(self.units().len());
         let structures = crate::math::index::row(self.structures().len());
@@ -243,6 +254,7 @@ impl World {
             } else {
                 return None;
             };
+            meter.rows(1);
             at = at.saturating_add(1);
             if let Some(sensor) = sensor {
                 return Some((sensor, at));

@@ -1304,8 +1304,9 @@ fn compile(route: &str) -> Result<Plan, pharmakos_sim::interpreter::PlanError> {
 /// not: seat 0 at the most beacons the rules let a seat place
 /// (`room_per_seat` of the 40-beacon world total, 20 at two seats, beside its
 /// core: 21 spheres), spread so their spheres overlap as little as the map
-/// allows. Pinned: the columns scanned (one decision unit each), the sites
-/// listed, the spheres that listed one, and the nodes the search then pops.
+/// allows. Pinned: the decision units (one a column scanned and one a node
+/// popped), the sites listed, the spheres that listed one, and the nodes the
+/// search then pops.
 #[test]
 fn the_site_listing_at_a_seats_most_beacons() {
     let mut world = world_of(PROBATION, 2);
@@ -1348,11 +1349,355 @@ fn the_site_listing_at_a_seats_most_beacons() {
     );
     let measured = (
         found.ok().map(|stone| stone.site),
-        tally.get(),
+        tally.read(),
         stones.len(),
         scratch.reach().spheres().len(),
         popped(&scratch),
     );
     println!("the most beacons: {measured:?}");
-    assert_eq!(measured, (Some([232, 94]), 37_653, 36_513, 21, 14));
+    // The decision units are the columns scanned, 37,653, and the nodes the
+    // grid optimum popped, 14 (lane `dunit`: a pop is a unit).
+    assert_eq!(measured, (Some([232, 94]), Ok(37_667), 36_513, 21, 14));
+    assert_eq!(
+        measured.1,
+        Ok(listed_columns(&world, seat) + measured.4),
+        "a toward charges its columns and its pops, and nothing else"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Decision units follow counted work (lane `dunit`)
+// ---------------------------------------------------------------------------
+
+/// The columns a `toward`'s site listing scans for `seat`: the disc of each
+/// of its living beacons' spheres, at each one's own radius, overlaps
+/// included. Counted from the spiral's offsets, not from the listing.
+fn listed_columns(world: &World, seat: SeatId) -> u64 {
+    let ground = world.ground();
+    world
+        .beacons()
+        .seats()
+        .iter()
+        .zip(world.beacons().hit_points())
+        .zip(world.beacons().ids())
+        .filter(|((owner, hp), _)| **owner == seat.raw() && hp.is_alive())
+        .map(|(_, id)| {
+            let radius = ground.radius_of(Some(BeaconId::new(*id))).floor_voxels();
+            u64::try_from(pharmakos_sim::targeting::spiral_offsets(radius).len()).unwrap()
+        })
+        .sum()
+}
+
+/// The columns a `covering` search scans before it answers `site` for the
+/// feature anchored at `anchor`: every offset of the spiral whose ring is not
+/// past the site's ring, which the search scans whole.
+fn spiral_columns(world: &World, anchor: [i32; 2], site: [i32; 2]) -> u64 {
+    let key = |[dx, dy]: [i32; 2]| i64::from(dx).pow(2) + i64::from(dy).pow(2);
+    let at = key([site[0] - anchor[0], site[1] - anchor[1]]);
+    let columns = world
+        .ground()
+        .spiral
+        .iter()
+        .filter(|offset| key(**offset) <= at)
+        .count();
+    u64::try_from(columns).unwrap()
+}
+
+/// Seat 0's commander on the probation seed: its point and its column.
+fn commander_start(world: &World) -> ([pharmakos_sim::math::fixed::Fx; 3], [i32; 2]) {
+    let seat = SeatId::new(0);
+    let commander = world.commander_of(seat).expect("a commander");
+    let row = world.units().row_of(commander).expect("a live commander");
+    let start = world.units().positions()[row.index()];
+    (start, column_of(start))
+}
+
+/// The features reachable from `origin`, nearest by octile bound first, ties
+/// by index.
+fn by_octile(world: &World, origin: [i32; 2]) -> Vec<usize> {
+    let from = world.surface().node_of(origin[0], origin[1]).unwrap();
+    let mut reachable: Vec<(i64, usize)> = (0..world.features().len())
+        .filter_map(|index| {
+            let goal = measured_to(world, index, from)?;
+            Some((i64::from(world.surface().heuristic(from, goal)), index))
+        })
+        .collect();
+    reachable.sort_unstable();
+    reachable.into_iter().map(|(_, index)| index).collect()
+}
+
+/// A ranker over the one feature `index`, from `origin`, priced once: the
+/// units it charged and the nodes its scratch popped, on a fresh tally and a
+/// fresh scratch.
+fn one_walk(world: &World, origin: [i32; 2], index: usize) -> (u64, u64) {
+    let tally = pharmakos_sim::seams::UnitTally::new();
+    let ground = pharmakos_sim::targeting::Ground {
+        work: &tally,
+        ..world.ground()
+    };
+    let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
+    let mut ranker = Ranker::new(&ground, origin, |at| at == index);
+    let emitted = ranker.next(&ground, &mut scratch).map(|(at, _)| at);
+    assert_eq!(emitted, Some(index), "the one candidate is emitted");
+    assert_eq!(scratch.walks().unwrap(), 1, "and priced by one walk");
+    (tally.read().expect("measured"), popped(&scratch))
+}
+
+/// A ranker pricing a served walk charges the nodes the walk popped, and a
+/// far walk, which pops more, charges more than a near one on the same world.
+/// Before lane `dunit` a served walk charged one unit whatever it popped.
+#[test]
+fn a_ranked_walk_charges_the_nodes_it_pops() {
+    let world = world_of(PROBATION, 2);
+    let (_, origin) = commander_start(&world);
+    let order = by_octile(&world, origin);
+    let near = *order.first().expect("a reachable feature");
+    let far = *order.last().expect("a reachable feature");
+    let features = u64::try_from(world.features().len()).unwrap();
+    let (near_units, near_pops) = one_walk(&world, origin, near);
+    let (far_units, far_pops) = one_walk(&world, origin, far);
+    println!("near: {near_units} units, {near_pops} pops; far: {far_units} units, {far_pops} pops");
+    assert!(near_pops > 0, "a served walk pops nodes");
+    assert_eq!(
+        near_units,
+        features + near_pops,
+        "the ranker's scan, one a feature, and the walk's pops"
+    );
+    assert_eq!(far_units, features + far_pops);
+    assert!(far_pops > near_pops, "the far walk pops more");
+    assert!(far_units > near_units, "so it charges more");
+}
+
+/// `toward` on the probation seed's pinned vent charges its grid optimum's
+/// pops: the units less the columns the site listing scanned are exactly the
+/// nodes the search popped. Before lane `dunit` the pops were charged
+/// nothing.
+#[test]
+fn a_toward_charges_its_grid_optimum_pops() {
+    let world = world_of(PROBATION, 2);
+    let seat = SeatId::new(0);
+    let (start, _) = commander_start(&world);
+    let tally = pharmakos_sim::seams::UnitTally::new();
+    let ground = pharmakos_sim::targeting::Ground {
+        work: &tally,
+        ..world.ground()
+    };
+    let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
+    let mut stones: Vec<StoneCandidate> = Vec::new();
+    toward_counted(
+        &ground,
+        &mut scratch,
+        &mut stones,
+        seat,
+        start,
+        FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor: PROBATION_VENT,
+        },
+    )
+    .expect("a stone toward the pinned vent");
+    let pops = popped(&scratch);
+    let units = tally.read().expect("measured");
+    println!("the pinned vent: {units} units, {pops} pops");
+    assert!(pops > 0, "the grid optimum pops nodes");
+    assert_eq!(units - listed_columns(&world, seat), pops);
+}
+
+/// One resolve of [`decision_units_equal_the_primitive_steps_counted`]'s
+/// table.
+#[derive(Clone, Copy, Debug)]
+enum Resolve {
+    /// A ranker over one feature, priced by one served walk.
+    Walk(usize),
+    /// `toward` the probation seed's pinned vent, by name.
+    TowardName,
+    /// `toward` the nearest uncovered vent.
+    TowardNearest,
+    /// `covering` the vent anchored here, by name.
+    CoverName([i32; 2]),
+    /// `covering` the nearest uncovered vent, which is `first_vent`.
+    CoverNearest { first_vent: usize },
+}
+
+/// Run `resolve` for seat 0 on a fresh tally and a fresh scratch: the units
+/// it charged, the steps that are not pops counted without the resolver (one
+/// a feature the ranker scans, one a column a site search scans), and the
+/// nodes its scratch popped.
+fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64) {
+    let seat = SeatId::new(0);
+    let (start, origin) = commander_start(world);
+    let features = u64::try_from(world.features().len()).unwrap();
+    let tally = pharmakos_sim::seams::UnitTally::new();
+    let ground = pharmakos_sim::targeting::Ground {
+        work: &tally,
+        ..world.ground()
+    };
+    let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
+    let mut stones: Vec<StoneCandidate> = Vec::new();
+    let vents = FeatureSpec::Nearest {
+        kind: FeatureKind::Vent,
+        uncovered: true,
+    };
+    let named = |anchor: [i32; 2]| FeatureSpec::Name {
+        kind: FeatureKind::Vent,
+        anchor,
+    };
+    let steps = match resolve {
+        Resolve::Walk(index) => {
+            let mut ranker = Ranker::new(&ground, origin, |at| at == index);
+            assert!(ranker.next(&ground, &mut scratch).is_some(), "{label}");
+            features
+        }
+        Resolve::TowardName => {
+            toward_counted(
+                &ground,
+                &mut scratch,
+                &mut stones,
+                seat,
+                start,
+                named(PROBATION_VENT),
+            )
+            .expect(label);
+            listed_columns(world, seat)
+        }
+        Resolve::TowardNearest => {
+            toward_counted(&ground, &mut scratch, &mut stones, seat, start, vents).expect(label);
+            features + listed_columns(world, seat)
+        }
+        Resolve::CoverName(anchor) => {
+            let cover = pharmakos_sim::targeting::cover_counted(
+                &ground,
+                &mut scratch,
+                seat,
+                start,
+                named(anchor),
+            )
+            .expect(label);
+            spiral_columns(world, anchor, cover.site)
+        }
+        Resolve::CoverNearest { first_vent } => {
+            let cover =
+                pharmakos_sim::targeting::cover_counted(&ground, &mut scratch, seat, start, vents)
+                    .expect(label);
+            assert_eq!(
+                cover.feature, first_vent,
+                "{label}: the ranker's first vent has a site, so one spiral is searched"
+            );
+            let anchor = world.features().features()[first_vent].anchor;
+            features + spiral_columns(world, anchor, cover.site)
+        }
+    };
+    (tally.read().expect("measured"), steps, popped(&scratch))
+}
+
+/// **Decision units follow counted work**: over a table of resolves, each on
+/// a fresh tally and a fresh scratch, the units charged equal the primitive
+/// steps the structures' own counters and the test's own arithmetic count --
+/// one a feature the ranker scans, one a column a site search scans, one a
+/// node a search pops -- exactly. A search that pops without charging, or a
+/// charge with no step under it, fails here.
+#[test]
+fn decision_units_equal_the_primitive_steps_counted() {
+    let world = world_of(PROBATION, 2);
+    let seat = SeatId::new(0);
+    let (_, origin) = commander_start(&world);
+    let order = by_octile(&world, origin);
+    // The vent a `covering` nearest-uncovered picks, which the named
+    // `covering` then names.
+    let first_vent = {
+        let tally = pharmakos_sim::seams::UnitTally::new();
+        let ground = pharmakos_sim::targeting::Ground {
+            work: &tally,
+            ..world.ground()
+        };
+        let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
+        let mut ranker = Ranker::new(&ground, origin, |index| {
+            pharmakos_sim::targeting::matches_pick(&ground, seat, index, FeatureKind::Vent, true)
+        });
+        ranker.next(&ground, &mut scratch).expect("a vent").0
+    };
+    let first_anchor = world.features().features()[first_vent].anchor;
+    let cases = [
+        ("near walk", Resolve::Walk(order[0])),
+        ("far walk", Resolve::Walk(*order.last().unwrap())),
+        ("toward, named", Resolve::TowardName),
+        ("toward, nearest", Resolve::TowardNearest),
+        ("covering, named", Resolve::CoverName(first_anchor)),
+        ("covering, nearest", Resolve::CoverNearest { first_vent }),
+    ];
+    let mut measured = Vec::new();
+    for (label, resolve) in cases {
+        let (units, steps, pops) = resolve_once(&world, label, resolve);
+        println!("{label}: {units} units = {steps} steps + {pops} pops");
+        measured.push((label, units, steps + pops));
+    }
+    for (label, units, counted) in &measured {
+        assert_eq!(units, counted, "{label}: units are the steps counted");
+    }
+}
+
+/// A measurement is not state: the same `toward` and `covering` match, played
+/// twice, the second time with the world's decision tally made to fault on
+/// its next charge before every tick (`UnitTally::fault_next_charge`, which
+/// survives the decision's own reset), so every decision that charges
+/// anything ends unmeasured. Every tick hashes the same in both, and each
+/// decision the clean run measured is unmeasured in the faulted one: the
+/// fault reached inside the decision and changed nothing. The cross-build
+/// half -- that pricing the pops moved no chain -- is the committed scenario
+/// chains `toward-stepping-stone` and `cover-nearest-vent`, which
+/// `cargo xtask ci`'s `scenario` step plays.
+#[test]
+fn decision_units_never_reach_the_state_hash() {
+    use pharmakos_sim::seams::Unmeasured;
+    let route = concat!(
+        r#"{"label":"stone","place_beacon":{"at":{"toward":{"feature":{"feature_id":"vent_232_96"}}}},"timeout_ms":120000},"#,
+        r#"{"label":"cover","place_beacon":{"at":{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}},"timeout_ms":120000}"#
+    );
+    let play = |fault: bool| {
+        let mut runner = Runner::new(world_of(PROBATION, 2)).unwrap();
+        runner
+            .seal_playbook(SeatId::new(0), compile(route).expect("the route compiles"))
+            .expect("a Lull takes a seal");
+        assert!(runner.begin_push().unwrap());
+        let mut chain = Vec::new();
+        for _ in 0..60 {
+            if fault {
+                runner.world().ground().work.fault_next_charge();
+            }
+            runner
+                .step()
+                .unwrap()
+                .expect("the segment outlasts this test");
+            chain.push((
+                runner.world().state_hash(),
+                runner.world().decision_work(0).expect("seat 0"),
+            ));
+        }
+        chain
+    };
+    let clean = play(false);
+    let faulted = play(true);
+    assert!(
+        clean
+            .iter()
+            .any(|(_, units)| matches!(units, Ok(units) if *units > 0)),
+        "the match charges decision units"
+    );
+    let hashes = |chain: &[(u64, Result<u64, Unmeasured>)]| -> Vec<u64> {
+        chain.iter().map(|(hash, _)| *hash).collect()
+    };
+    assert_eq!(
+        hashes(&faulted),
+        hashes(&clean),
+        "a faulted tally moves no hash"
+    );
+    for ((_, clean), (_, faulted)) in clean.iter().zip(&faulted) {
+        if matches!(clean, Ok(units) if *units > 0) {
+            assert_eq!(
+                *faulted,
+                Err(Unmeasured::Overflowed),
+                "the fault fired inside the decision"
+            );
+        }
+    }
 }

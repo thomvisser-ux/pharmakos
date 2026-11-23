@@ -888,8 +888,20 @@ impl World {
     /// in flight lands whatever is seen. Walked sensor by sensor, so nothing
     /// allocates inside the tick.
     pub(crate) fn seen_by(&self, seat: u8, point: [Fx; 3]) -> bool {
+        self.seen_by_metered(seat, point, &())
+    }
+
+    /// [`World::seen_by`], reporting the sensor positions its walk reads to
+    /// `meter` ([`crate::seams::Meter`]), up to the sensor that sees the point
+    /// or the end. What it answers is [`World::seen_by`]'s.
+    pub(crate) fn seen_by_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        seat: u8,
+        point: [Fx; 3],
+        meter: &M,
+    ) -> bool {
         let mut at: usize = 0;
-        while let Some((sensor, next)) = self.sensor_at(at) {
+        while let Some((sensor, next)) = self.sensor_at_metered(at, meter) {
             at = next;
             if sensor.seat.raw() == seat && sensor.sees(&crate::sight::RadiusOnly, point) {
                 return true;
