@@ -593,19 +593,20 @@ fn copy_project(from: &Path, to: &Path) -> Result<(), String> {
         let relative = file
             .strip_prefix(from)
             .map_err(|error| format!("{}: {error}", file.display()))?;
-        let first = relative
-            .components()
-            .next()
-            .map(|component| component.as_os_str().to_string_lossy().into_owned())
-            // `file` was walked from under `from`, so `relative` has a first
-            // component and the empty default is never read.
-            .unwrap_or_default();
-        if first == ".godot" || first == CLIENT_STAGE_DIR {
+        if left_out_of_the_project_copy(relative) {
             continue;
         }
         copy_file(&file, &to.join(relative))?;
     }
     Ok(())
+}
+
+/// Whether a file of the Godot project, at `relative` inside it, is left out
+/// of the copy: anything under the import cache `.godot` or the staging
+/// folder. `Path::starts_with` compares whole components, so `.godotx/` and a
+/// nested `scripts/.godot/` are copied.
+fn left_out_of_the_project_copy(relative: &Path) -> bool {
+    relative.starts_with(".godot") || relative.starts_with(CLIENT_STAGE_DIR)
 }
 
 /// Every file directly in `from`, copied into `to`.
@@ -627,7 +628,8 @@ fn copy_library(from: &Path, to: &Path) -> Result<(), String> {
     walk(from, &mut files).map_err(|error| format!("reading {}: {error}", from.display()))?;
     let mut copied = 0_usize;
     for file in files {
-        let name = crate::file_name(&file);
+        let name = crate::file_name(&file)
+            .ok_or_else(|| format!("{}: a walked file without a name", file.display()))?;
         let template = Path::new(&name)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonc"));
@@ -888,14 +890,14 @@ pub(crate) fn crt_hits(bytes: &[u8]) -> Vec<String> {
 /// About 32 bytes around `at`, printable ASCII as itself and anything else as
 /// a dot.
 fn context(bytes: &[u8], at: usize) -> String {
-    // A display window: clamped to the bytes at both ends on purpose, and
-    // `start..end` inside them by construction, so the default is never read.
+    // A display window of up to 8 bytes before `at` and 24 from it: it
+    // starts at the first byte when `at` is nearer than 8 (a clamp on what is
+    // shown, never on what is found), and `take` ends it at the last.
     let start = at.saturating_sub(8);
-    let end = (at + 24).min(bytes.len());
     bytes
-        .get(start..end)
-        .unwrap_or_default()
         .iter()
+        .skip(start)
+        .take(at + 24 - start)
         .map(|byte| {
             if byte.is_ascii_graphic() || *byte == b' ' {
                 char::from(*byte)
@@ -1051,10 +1053,8 @@ pub(crate) fn judge_export(exit_ok: bool, saw_savepack: bool, present: &[bool]) 
 
 fn print_tail(text: &str, count: usize) {
     let lines: Vec<&str> = text.lines().collect();
-    // The last `count` lines, for display: the start is clamped at 0 on
-    // purpose, and inside `lines`, so the default is never read.
-    let start = lines.len().saturating_sub(count);
-    for line in lines.get(start..).unwrap_or_default() {
+    // The last `count` lines, or all of them when there are fewer.
+    for line in lines.iter().rev().take(count).rev() {
         println!("      | {line}");
     }
 }
@@ -1093,10 +1093,9 @@ fn glibc_floor(ctx: &Ctx, files: &[PathBuf]) -> Result<String, String> {
 /// The highest `GLIBC_` version named in `objdump -T` output, as integers.
 pub(crate) fn highest_glibc(text: &str) -> Option<Vec<u32>> {
     let mut best: Option<Vec<u32>> = None;
-    for (index, _) in text.match_indices("GLIBC_") {
-        // `GLIBC_` (six ASCII bytes) was found at `index`, so `index + 6` is
-        // a boundary inside `text` and the default is never read.
-        let rest = text.get(index + 6..).unwrap_or_default();
+    // Each piece after a `GLIBC_` runs to the next one, which starts with a
+    // letter, so the version's digits are whole in it.
+    for rest in text.split("GLIBC_").skip(1) {
         let digits: String = rest
             .chars()
             .take_while(|character| character.is_ascii_digit() || *character == '.')
@@ -1228,12 +1227,10 @@ pub(crate) fn parse_tree(listing: &str) -> Vec<Crate> {
             continue;
         }
         let words: Vec<&str> = line.split_whitespace().collect();
-        let (Some(name), Some(version)) = (words.first(), words.get(1)) else {
+        let [name, version, rest @ ..] = words.as_slice() else {
             continue;
         };
-        // `words` has at least two items (checked above), so the default is
-        // never read.
-        let mut rest: Vec<&str> = words.get(2..).unwrap_or_default().to_vec();
+        let mut rest: Vec<&str> = rest.to_vec();
         let mut member = false;
         if rest.first().is_some_and(|word| word.starts_with('(')) {
             member = true;
@@ -1245,12 +1242,10 @@ pub(crate) fn parse_tree(listing: &str) -> Vec<Crate> {
                 }
             }
         }
-        let source = if rest.last().is_some_and(|word| word.starts_with("http")) {
-            // `rest.last()` was just seen, so the default is never read.
-            rest.pop().unwrap_or_default().to_owned()
-        } else {
-            String::new()
-        };
+        let source = rest
+            .pop_if(|word| word.starts_with("http"))
+            .map(str::to_owned)
+            .unwrap_or_default();
         crates.push(Crate {
             name: (*name).to_owned(),
             version: version.trim_start_matches('v').to_owned(),
@@ -1430,7 +1425,8 @@ fn licence_files(registry: &Path, item: &Crate) -> Result<Vec<(String, String)>,
     files.sort();
     let mut texts: Vec<(String, String)> = Vec::new();
     for file in files {
-        let name = crate::file_name(&file);
+        let name = crate::file_name(&file)
+            .ok_or_else(|| format!("{}: a walked file without a name", file.display()))?;
         let upper = name.to_ascii_uppercase();
         if ["LICENSE", "LICENCE", "COPYING", "NOTICE"]
             .iter()
@@ -1762,7 +1758,7 @@ pub(crate) fn manifest_verdict(
 /// name, not a `.license` sidecar, not `REUSE.toml`, not an empty file.
 pub(crate) fn reuse_lints(name: &str, size: u32) -> bool {
     let relative = name.split_once('/').map_or(name, |(_, rest)| rest);
-    let base = relative.rsplit('/').next().unwrap_or(relative);
+    let base = relative.rsplit_once('/').map_or(relative, |(_, base)| base);
     let upper = base.to_ascii_uppercase();
     !(relative.starts_with("LICENSES/")
         || upper.starts_with("LICENSE")
@@ -1779,6 +1775,17 @@ pub(crate) fn expected_lint_count(listed: &[zip::Listed]) -> usize {
         .iter()
         .filter(|entry| !entry.is_directory() && reuse_lints(&entry.name, entry.size))
         .count()
+}
+
+/// The JSON object in reuse's log: from its first `{` to its last `}`,
+/// because standard error shares the log and a warning reuse prints may sit
+/// around the report. With no `{` before a `}` nothing is left, and the whole
+/// log is handed to the parser, whose refusal then names it.
+fn report_object(text: &str) -> &str {
+    let object = text
+        .trim_start_matches(|character| character != '{')
+        .trim_end_matches(|character| character != '}');
+    if object.is_empty() { text } else { object }
 }
 
 fn reuse_check(
@@ -1803,15 +1810,7 @@ fn reuse_check(
         log,
     )?;
     let text = read_text(log)?;
-    // Standard error shares the log, so a warning reuse prints there may sit
-    // around the report: parse the one JSON object it wrote.
-    let report = match (text.find('{'), text.rfind('}')) {
-        // `{` and `}` are ASCII, so both are boundaries and the default is
-        // never read.
-        (Some(start), Some(end)) if start < end => text.get(start..=end).unwrap_or_default(),
-        _ => text.as_str(),
-    };
-    let json = crate::Json::parse(report).map_err(|error| {
+    let json = crate::Json::parse(report_object(&text)).map_err(|error| {
         format!(
             "reuse printed no JSON ({error}); its output is in {}",
             log.display()
@@ -2226,5 +2225,64 @@ SPDX-License-Identifier = \"MIT\"
                 assert!(text.contains(marker), "{name} lacks {marker}");
             }
         }
+    }
+
+    /// The display window round a hit: 8 bytes before it and 24 from it, cut
+    /// at either end of the bytes, with nothing outside them read.
+    #[test]
+    fn the_context_window_is_cut_at_both_ends() {
+        let bytes: Vec<u8> = (b'a'..=b'z').chain(b'A'..=b'Z').collect();
+        assert_eq!(context(&bytes, 10), "cdefghijklmnopqrstuvwxyzABCDEFGH");
+        assert_eq!(context(&bytes, 2), "abcdefghijklmnopqrstuvwxyz");
+        assert_eq!(context(&bytes, 50), "QRSTUVWXYZ");
+        assert_eq!(context(b"a\x00b", 1), "a.b");
+        assert_eq!(context(b"", 0), "");
+    }
+
+    /// The highest version wins wherever it stands in the listing, the first
+    /// line included.
+    #[test]
+    fn the_glibc_floor_is_read_from_the_first_line_too() {
+        let text = "\
+0000 DF *UND* 0000 (GLIBC_2.34) pthread_create
+0000 DF *UND* 0000 (GLIBC_2.2.5) memcpy
+";
+        assert_eq!(highest_glibc(text), Some(vec![2, 34]));
+        assert_eq!(highest_glibc("(GLIBC_2.17) only"), Some(vec![2, 17]));
+    }
+
+    /// The project copy leaves out the import cache and the staging folder,
+    /// whole components only.
+    #[test]
+    fn the_project_copy_leaves_out_the_cache_and_the_stage() {
+        for left_out in [".godot/imported/x.ctex", ".godot", "bin/lib.dll"] {
+            assert!(
+                left_out_of_the_project_copy(Path::new(left_out)),
+                "{left_out}"
+            );
+        }
+        for copied in [
+            ".godotx/a.gd",
+            "scripts/.godot/a.gd",
+            "binary/a.gd",
+            "scripts/bin/a.gd",
+            "project.godot",
+        ] {
+            assert!(!left_out_of_the_project_copy(Path::new(copied)), "{copied}");
+        }
+    }
+
+    /// The report is the JSON object between the log's first `{` and last
+    /// `}`, whatever warnings sit around it; with none, the whole log.
+    #[test]
+    fn the_reuse_report_is_the_object_inside_the_log() {
+        assert_eq!(
+            report_object("warning: x\n{\"summary\": {\"a\": 1}}\nmore\n"),
+            "{\"summary\": {\"a\": 1}}"
+        );
+        assert_eq!(report_object("{\"a\": 1}"), "{\"a\": 1}");
+        assert_eq!(report_object("no report"), "no report");
+        assert_eq!(report_object("} then {"), "} then {");
+        assert_eq!(report_object("{ unclosed"), "{ unclosed");
     }
 }
