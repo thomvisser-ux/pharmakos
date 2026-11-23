@@ -3906,3 +3906,42 @@ fn the_spire_takes_its_priced_time_out_of_the_hold() {
         "{unlicensed} and {with_spire}"
     );
 }
+
+/// A begun chain whose stone no round's share carries is out of reach this
+/// round, as a refused `toward` is: the rest of the far features are weighed,
+/// and the round reaches toward another, rather than seal nothing of its own.
+#[test]
+fn a_begun_chain_whose_stone_does_not_fit_weighs_the_rest() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.segment_ms = 60_000;
+    world.remaining_ms = 60_000;
+    world.beacons.push(Beacon {
+        id: String::from("b_02"),
+        at: [32, 56, GROUND],
+        owner: 0,
+        core: false,
+        powered: true,
+        priority: "normal",
+    });
+    // The chain's stone: 62 voxels north of the core, 31 s of walk, which
+    // with its deploy is past the 42 s share.
+    let mut north = Feature::new("seam", "rich", [32, 110]);
+    north.site = None;
+    north.stone = Some([32, 94, GROUND]);
+    world.features.push(north);
+    let mut east = Feature::new("seam", "rich", [80, 40]);
+    east.site = None;
+    east.stone = Some([44, 40, GROUND]);
+    world.features.push(east);
+    let (script, played) = play(world);
+    assert_eq!(towards(&script.transcript, "seam_32_110"), 1);
+    assert_eq!(towards(&script.transcript, "seam_80_40"), 1);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(
+        ops.contains(r#""toward": { "feature": { "feature_id": "seam_80_40" } }"#),
+        "{} -- {ops}",
+        played.why
+    );
+}
