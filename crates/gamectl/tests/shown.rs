@@ -26,7 +26,7 @@ fn a_path_an_operand_or_a_name_the_user_typed_is_printed_escaped() {
         strings::unreadable("scenario", HOSTILE, "no such file"),
         strings::path_escapes(HOSTILE),
         strings::rules_gap(HOSTILE, "a gap"),
-        strings::verify_heading(HOSTILE, "quick"),
+        strings::verify_heading(HOSTILE, "quick", &strings::verify_view_reference()),
         strings::verify_diagnostic("error", "E0001", HOSTILE, "a message"),
         // A problem's message is a sentence the reader composed, its leaves
         // escaped where it wrote them (fix pass 6, item 1); the path and the
@@ -47,6 +47,14 @@ fn a_path_an_operand_or_a_name_the_user_typed_is_printed_escaped() {
         strings::scenario_passed(HOSTILE, 1),
         strings::seeds_refused(HOSTILE, "why"),
         strings::result_written(HOSTILE, 1, 0),
+        // `verify --preset`'s refusals (fix pass 1 of #219, item 12): the
+        // gateway's sentence is a leaf, escaped once more where it is said,
+        // which leaves text the gateway already escaped as it was.
+        strings::lobby_line_refused(HOSTILE),
+        strings::lobby_match_refused(HOSTILE),
+        strings::lobby_text_refused(HOSTILE),
+        strings::lobby_answer_unread(HOSTILE),
+        strings::verify_preset_too_long(HOSTILE, Some(1), 2, 3),
     ];
     for line in &lines {
         assert!(escaped(line), "printed raw: {line:?}");

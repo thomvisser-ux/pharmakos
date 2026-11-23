@@ -300,3 +300,518 @@ fn a_long_pointer_is_printed_whole() {
         outcome.err
     );
 }
+
+// ---------------------------------------------------------------------------
+// The view a report names (S3's plan, E19) and the lobby's (`--preset`)
+// ---------------------------------------------------------------------------
+
+/// The reference view's heading line, word for word.
+const REFERENCE_VIEW: &str =
+    "  view         the reference view (not a match's snapshot; `gamectl seat doctor` prints it)";
+
+/// The Probation preset's heading line, word for word.
+const PROBATION_VIEW: &str = "  view         Probation, seed 20, seat 0's opening Lull snapshot";
+
+/// The sentence a reference-view report with `E0403` carries after its
+/// diagnostics.
+const E0403_NOTE: &str = "  E0403 here is against the reference view. In a match the gateway \
+                          checks against the seat's own frozen snapshot, where this beacon may \
+                          be legal.";
+
+/// A case the reference view refuses with `E0403`.
+const E0403_CASE: &str = "crates/verifier/tests/cases/e0403_site_outside_every_sphere.json";
+
+/// A playbook written for a live seat, which names its core `b_00`: the
+/// reference view's core is `b_01`, so it is `E0401` there.
+const NAMES_B_00: &str = "library/defend_the_core.jsonc";
+
+fn said(outcome: &pharmakos_gamectl::Outcome) -> String {
+    format!("{}{}", outcome.out, outcome.err)
+}
+
+/// The report's lines, wherever the exit code sent them: standard output when
+/// it qualifies, standard error when it does not.
+fn report_lines(outcome: &pharmakos_gamectl::Outcome) -> Vec<String> {
+    let text = if outcome.code == Exit::Ok {
+        &outcome.out
+    } else {
+        &outcome.err
+    };
+    text.lines().map(str::to_owned).collect()
+}
+
+/// E19: the report says at its head which view it was verified against, at
+/// either depth.
+#[test]
+fn the_heading_names_the_reference_view_at_either_depth() {
+    for (depth, word) in [("full", "FULL"), ("quick", "QUICK")] {
+        let outcome = gamectl(&[
+            "verify",
+            "--depth",
+            depth,
+            "examples/playbooks/expand_east.jsonc",
+        ]);
+        assert_eq!(outcome.code, Exit::Ok, "{}", said(&outcome));
+        let head: Vec<String> = report_lines(&outcome).into_iter().take(3).collect();
+        assert_eq!(
+            head,
+            vec![
+                String::from("examples/playbooks/expand_east.jsonc"),
+                format!("  depth        {word}"),
+                String::from(REFERENCE_VIEW),
+            ],
+            "{}",
+            outcome.out
+        );
+    }
+}
+
+/// E19: an `E0403` against the reference view is followed, directly after
+/// the diagnostics and before the footer, by the sentence that says a match
+/// may accept the beacon; a report without `E0403` has no such sentence.
+#[test]
+fn an_e0403_against_the_reference_view_says_a_match_may_accept_it() {
+    let refused = gamectl(&["verify", E0403_CASE]);
+    assert_eq!(refused.code, Exit::Failed, "{}", said(&refused));
+    let lines = report_lines(&refused);
+    let note = lines
+        .iter()
+        .position(|line| line == E0403_NOTE)
+        .unwrap_or_else(|| panic!("no E0403 note:\n{}", refused.err));
+    assert!(
+        lines
+            .get(note.saturating_sub(2))
+            .is_some_and(|line| line.trim_start().starts_with("error   E0403")),
+        "the note follows the last diagnostic, E0403 and its message:\n{}",
+        refused.err
+    );
+    assert!(
+        lines
+            .get(note.saturating_add(1))
+            .is_some_and(|line| line.starts_with("  Verified against the reference seat view")),
+        "the footer follows the note:\n{}",
+        refused.err
+    );
+    for args in [
+        &["verify", "examples/playbooks/expand_east.jsonc"][..],
+        &[
+            "verify",
+            "--depth",
+            "quick",
+            "examples/playbooks/expand_east.jsonc",
+        ],
+        &[
+            "verify",
+            "crates/verifier/tests/cases/e0102_empty_route.json",
+        ],
+    ] {
+        let outcome = gamectl(args);
+        assert!(
+            !said(&outcome).contains("E0403 here"),
+            "{args:?}: a report without E0403 carries no note:\n{}",
+            said(&outcome)
+        );
+    }
+}
+
+/// `--preset probation`: the file is verified by the gateway against seat 0's
+/// frozen snapshot in the opening Lull of the lobby's Probation match. A
+/// playbook naming the live core `b_00`, `E0401` against the reference view,
+/// qualifies there, and the heading names that view.
+#[test]
+fn the_probation_preset_verifies_against_the_lobby_s_match() {
+    let reference = gamectl(&["verify", NAMES_B_00]);
+    assert_eq!(reference.code, Exit::Failed, "{}", said(&reference));
+    assert!(reference.err.contains("E0401"), "{}", reference.err);
+
+    for (depth, word) in [("full", "FULL"), ("quick", "QUICK")] {
+        let preset = gamectl(&[
+            "verify",
+            "--preset",
+            "probation",
+            "--depth",
+            depth,
+            NAMES_B_00,
+        ]);
+        assert_eq!(preset.code, Exit::Ok, "{}", said(&preset));
+        let lines = report_lines(&preset);
+        let head: Vec<String> = lines.iter().take(3).cloned().collect();
+        assert_eq!(
+            head,
+            vec![
+                String::from(NAMES_B_00),
+                format!("  depth        {word}"),
+                String::from(PROBATION_VIEW),
+            ],
+            "{}",
+            preset.out
+        );
+        assert!(
+            lines.last().is_some_and(|line| line.starts_with(
+                "  Verified by the gateway against seat 0's frozen snapshot in the opening Lull \
+                 of the Probation match the lobby opens (seed 20, 2 seats)"
+            )),
+            "{}",
+            preset.out
+        );
+    }
+
+    // The match's own report carries no reference-view sentence, even where
+    // it says E0403 itself.
+    let e0403 = gamectl(&["verify", "--preset", "probation", E0403_CASE]);
+    assert_eq!(e0403.code, Exit::Failed, "{}", said(&e0403));
+    assert!(e0403.err.contains("E0403"), "{}", e0403.err);
+    assert!(!e0403.err.contains("E0403 here"), "{}", e0403.err);
+}
+
+/// The preset's report is the gateway's: the same file verified twice
+/// answers the same `report_hash`, and it is not the reference view's.
+#[test]
+fn the_preset_s_report_is_reproducible_and_its_own() {
+    let hash_of = |outcome: &pharmakos_gamectl::Outcome| -> String {
+        report_lines(outcome)
+            .iter()
+            .find_map(|line| {
+                line.trim_start()
+                    .strip_prefix("report_hash  ")
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| panic!("a report_hash:\n{}", said(outcome)))
+    };
+    let example = "examples/playbooks/expand_east.jsonc";
+    let first = gamectl(&["verify", "--preset", "probation", example]);
+    let second = gamectl(&["verify", "--preset", "probation", example]);
+    let reference = gamectl(&["verify", example]);
+    assert_eq!(hash_of(&first), hash_of(&second));
+    assert_ne!(hash_of(&first), hash_of(&reference));
+}
+
+/// A file past the size cap in bytes, under the preset, is refused by this
+/// command itself, read no further than the bound: the answer is no (exit 3),
+/// with the file's real size and the cap, and no made-up figure (fix pass 1
+/// of #219, item 5; the gateway was once handed a text one character past
+/// the cap and its refusal quoted that length).
+#[test]
+fn a_huge_file_is_refused_by_gamectl_under_the_preset() {
+    let length = pharmakos_verifier::MAX_PLAYBOOK_READ
+        .checked_mul(2)
+        .expect("fits");
+    let path = scratch_file("nite3_huge_preset.json", &vec![0xff_u8; length]);
+    let shown = path.to_str().expect("a UTF-8 scratch path");
+    let outcome = gamectl(&["verify", "--preset", "probation", shown]);
+    assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
+    for wanted in [
+        format!("is {length} bytes"),
+        format!("past {} bytes", pharmakos_verifier::MAX_PLAYBOOK_READ),
+        format!(
+            "the {}-character cap",
+            pharmakos_verifier::MAX_PLAYBOOK_CHARS
+        ),
+        String::from("the gateway was not asked"),
+    ] {
+        assert!(outcome.err.contains(&wanted), "{wanted}: {}", outcome.err);
+    }
+    let one_past = pharmakos_verifier::MAX_PLAYBOOK_CHARS.saturating_add(1);
+    assert!(
+        !outcome.err.contains(&one_past.to_string()),
+        "no figure one past the cap: {}",
+        outcome.err
+    );
+}
+
+/// The lobby's line, which `gamectl` carries to open the preset's match, is
+/// the lobby's own: the lobby's Probation call is
+/// `HostLink.config_line(HostLink.match_id("local"), HostLink.LADDER)`
+/// (`godot/scripts/lobby.gd`), so its fields are `config_line`'s, in the
+/// order its `return` writes them, each the default `config_line` takes or
+/// the constant the lobby passes; the seed is also held to the sim's pin of
+/// the Probation seed (`crates/sim/tests/probation_seed.rs`). Read from the
+/// source, so a reorder of `config_line`'s fields is red here (fix pass 1 of
+/// #219, item 11).
+#[test]
+fn the_preset_s_match_is_the_one_the_lobby_opens() {
+    let read = |relative: &str| {
+        std::fs::read_to_string(root().join(relative))
+            .unwrap_or_else(|error| panic!("{relative}: {error}"))
+    };
+    let constant = |text: &str, name: &str| -> String {
+        let prefix = format!("const {name} := ");
+        text.lines()
+            .find_map(|line| line.strip_prefix(prefix.as_str()))
+            .map_or_else(
+                || panic!("no line starts `{prefix}`"),
+                |value| value.trim().trim_matches('"').to_owned(),
+            )
+    };
+    let lobby = read("godot/scripts/host_link.gd");
+    assert!(
+        read("godot/scripts/lobby.gd")
+            .contains("HostLink.config_line(HostLink.match_id(\"local\"), HostLink.LADDER)"),
+        "the lobby's call is the one this test reads"
+    );
+    // `config_line`'s `return`: a format string, then `% [`, its fields in
+    // order, and `]`.
+    let order: Vec<String> = lobby
+        .lines()
+        .skip_while(|line| !line.starts_with("static func config_line("))
+        .nth(1)
+        .and_then(|line| line.split_once("% ["))
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(fields, _)| {
+            fields
+                .split(',')
+                .map(|name| name.trim().to_owned())
+                .collect()
+        })
+        .expect("config_line's return names its fields");
+    assert_eq!(
+        order.len(),
+        7,
+        "the seven fields of a lobby's line: {order:?}"
+    );
+    let fields: Vec<&str> = pharmakos_gamectl::lobby::PROBATION_LINE
+        .split('\t')
+        .collect();
+    assert_eq!(fields.len(), order.len(), "{fields:?}");
+    for (index, (name, field)) in order.iter().zip(&fields).enumerate() {
+        let wanted = match name.as_str() {
+            // The id names the match's folder and reaches nothing hashed.
+            "match_id" => continue,
+            "seed" => constant(&lobby, "MATCH_SEED"),
+            "seats" => constant(&lobby, "MATCH_SEATS"),
+            "ladder" => constant(&lobby, "LADDER"),
+            "round_limit()" => constant(&lobby, "ROUND_LIMIT"),
+            "preset" => constant(&lobby, "PRESET"),
+            other => constant(&lobby, other),
+        };
+        assert_eq!(
+            *field, wanted,
+            "field {index}, `{name}`, of the line gamectl carries is not the lobby's"
+        );
+    }
+    let pin = read("crates/sim/tests/probation_seed.rs")
+        .lines()
+        .find_map(|line| line.strip_prefix("const PROBATION_SEED: u64 = "))
+        .map(str::to_owned)
+        .expect("the sim pins the Probation seed");
+    let config = pharmakos_gamectl::lobby::probation().expect("the line reads");
+    assert_eq!(
+        Some(config.seed.to_string().as_str()),
+        pin.strip_suffix(';'),
+        "the Probation seed the sim pins"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `--format json`: the report as the verifier's own JSON
+// ---------------------------------------------------------------------------
+
+/// A committed verifier golden's document: the encoder's text, which ends in
+/// one line feed. The verifier's producer writes a second one after it
+/// (`report_text` in `crates/verifier/tests/verifier.rs`); a command's output
+/// ends in exactly one, as every message of this binary does.
+fn verifier_golden(case: &str) -> String {
+    let path = root()
+        .join("tests/golden/verifier")
+        .join(case)
+        .join("expected.report.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
+        .replace("\r\n", "\n");
+    text.strip_suffix('\n')
+        .unwrap_or_else(|| panic!("{} ends in its producer's line feed", path.display()))
+        .to_owned()
+}
+
+/// The JSON report is the verifier's own `gp.api.v1.VerifyReport`: for the
+/// spec's worked example, whose `.jsonc` canonicalises to the verifier's own
+/// case bytes (the test above), it is byte for byte the golden the verifier
+/// commits, one object on standard output and nothing on standard error.
+#[test]
+fn the_json_report_is_the_verifier_s_own_golden_byte_for_byte() {
+    let outcome = gamectl(&[
+        "verify",
+        "--format",
+        "json",
+        "examples/playbooks/expand_east.jsonc",
+    ]);
+    assert_eq!(outcome.code, Exit::Ok, "{}", said(&outcome));
+    assert!(outcome.err.is_empty(), "{}", outcome.err);
+    assert_eq!(outcome.out, verifier_golden("expand_east"));
+}
+
+/// A playbook that does not qualify is still the answer: exit 3, the report
+/// as one JSON object on standard output (proto3 JSON leaves `qualifies:
+/// false` out), and nothing on standard error.
+#[test]
+fn a_refused_playbook_s_json_report_is_on_standard_output() {
+    let outcome = gamectl(&[
+        "verify",
+        "--format",
+        "json",
+        "crates/verifier/tests/cases/e0102_empty_route.json",
+    ]);
+    assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
+    assert!(outcome.err.is_empty(), "{}", outcome.err);
+    let parsed = json::read(&outcome.out).expect("one JSON document");
+    assert!(matches!(parsed, Json::Object(_)), "one object");
+    assert_eq!(parsed.get("qualifies"), None, "{}", outcome.out);
+    assert!(
+        outcome.out.contains("\"code\": \"E0102\""),
+        "{}",
+        outcome.out
+    );
+    assert!(outcome.out.ends_with("}\n"), "{:?}", outcome.out);
+}
+
+/// The JSON names what the human report names: the same `report_hash`,
+/// under the reference view and under the preset.
+#[test]
+fn the_json_report_carries_the_text_report_s_hash() {
+    for view in [&[][..], &["--preset", "probation"]] {
+        let mut text_args = vec!["verify"];
+        text_args.extend_from_slice(view);
+        text_args.push(NAMES_B_00);
+        let mut json_args = text_args.clone();
+        json_args.splice(1..1, ["--format", "json"]);
+        let text = gamectl(&text_args);
+        let json_outcome = gamectl(&json_args);
+        assert_eq!(text.code, json_outcome.code, "{view:?}");
+        let shown = report_lines(&text)
+            .iter()
+            .find_map(|line| {
+                line.trim_start()
+                    .strip_prefix("report_hash  ")
+                    .map(str::to_owned)
+            })
+            .expect("a report_hash line");
+        let parsed = json::read(&json_outcome.out).expect("one JSON document");
+        let Some(Json::String(encoded)) = parsed.get("report_hash") else {
+            panic!("{view:?}: a report_hash: {}", json_outcome.out);
+        };
+        let bytes = json::base64::decode(encoded).expect("base64");
+        let mut hex = String::new();
+        for byte in &bytes {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        assert_eq!(hex, shown, "{view:?}");
+    }
+}
+
+/// Every string in the JSON goes through the human report's escaping: a key
+/// the player wrote with U+202E and U+200B in it, which the verifier's
+/// pointer carries as it is, is written `\u202e` and `\u200b`, never raw.
+#[test]
+fn the_json_report_escapes_what_the_text_report_escapes() {
+    let text = "{\"kind\":\"PLAYBOOK\",\"a\u{202E}b\u{200B}c\":1}";
+    let path = scratch_file("nite3_hostile_key.json", text.as_bytes());
+    let shown = path.to_str().expect("a UTF-8 scratch path");
+    let outcome = gamectl(&["verify", "--format", "json", shown]);
+    assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
+    assert!(
+        !outcome.out.contains('\u{202E}') && !outcome.out.contains('\u{200B}'),
+        "printed raw: {:?}",
+        outcome.out
+    );
+    assert!(
+        outcome.out.contains("\\u202e") && outcome.out.contains("\\u200b"),
+        "{}",
+        outcome.out
+    );
+    let parsed = json::read(&outcome.out).expect("still one JSON document");
+    let Some(Json::Array(diagnostics)) = parsed.get("diagnostics") else {
+        panic!("diagnostics: {}", outcome.out);
+    };
+    assert!(
+        diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.get("path"),
+            Some(Json::String(path)) if path.contains('\u{202E}')
+        )),
+        "the escape reads back as the player's own character: {}",
+        outcome.out
+    );
+}
+
+/// Fix pass 1 of #219, item 3: under `--format json` every answer about the
+/// file is one JSON object on standard output with standard error empty, the
+/// exit code unchanged. A file past the cap is the reference view's `E0029`
+/// report, and under the preset a refusal object, where it once printed
+/// nothing on standard output. An unreadable path stays on standard error.
+#[test]
+fn every_json_answer_about_the_file_is_one_object_on_standard_output() {
+    let length = pharmakos_verifier::MAX_PLAYBOOK_READ
+        .checked_mul(2)
+        .expect("fits");
+    let path = scratch_file("nite3_huge_json.json", &vec![0xff_u8; length]);
+    let shown = path.to_str().expect("a UTF-8 scratch path");
+
+    let reference = gamectl(&["verify", "--format", "json", shown]);
+    assert_eq!(reference.code, Exit::Failed, "{}", said(&reference));
+    assert!(reference.err.is_empty(), "{}", reference.err);
+    let report = json::read(&reference.out).expect("one JSON document");
+    assert!(
+        reference.out.contains("\"code\": \"E0029\""),
+        "{}",
+        reference.out
+    );
+    assert!(
+        report.get("report_hash").is_some(),
+        "a report: {}",
+        reference.out
+    );
+
+    let preset = gamectl(&["verify", "--format", "json", "--preset", "probation", shown]);
+    assert_eq!(preset.code, Exit::Failed, "{}", said(&preset));
+    assert!(preset.err.is_empty(), "{}", preset.err);
+    let refusal = json::read(&preset.out).expect("one JSON document");
+    let Some(Json::Object(members)) = refusal.get("refusal") else {
+        panic!("a refusal object: {}", preset.out);
+    };
+    let keys: Vec<&str> = members.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, vec!["code", "message"], "{}", preset.out);
+    assert_eq!(
+        refusal.get("refusal").and_then(|inner| inner.get("code")),
+        Some(&Json::String(String::from("failed")))
+    );
+    assert!(
+        preset.out.contains("the gateway was not asked"),
+        "{}",
+        preset.out
+    );
+
+    let missing = gamectl(&[
+        "verify",
+        "--format",
+        "json",
+        "examples/playbooks/not_here.jsonc",
+    ]);
+    assert_eq!(missing.code, Exit::Input);
+    assert!(missing.out.is_empty(), "{}", missing.out);
+    assert!(missing.err.contains("not_here.jsonc"), "{}", missing.err);
+}
+
+#[test]
+fn a_refusal_names_its_exit_and_escapes_its_message() {
+    let json = pharmakos_gamectl::verify::refusal_json(Exit::Internal, "a\u{202E}b \"q\"");
+    let parsed = json::read(&json).expect("one JSON document");
+    assert_eq!(
+        parsed.get("refusal").and_then(|inner| inner.get("code")),
+        Some(&Json::String(String::from("internal")))
+    );
+    assert!(
+        !json.contains('\u{202E}') && json.contains("\\u202e"),
+        "{json}"
+    );
+}
+
+#[test]
+fn the_hidden_escape_writes_utf16_units() {
+    assert_eq!(
+        pharmakos_gamectl::verify::escape_hidden("\"a\u{202E}b\u{E0001}c\""),
+        "\"a\\u202eb\\udb40\\udc01c\""
+    );
+    assert_eq!(
+        pharmakos_gamectl::verify::escape_hidden("plain \u{e9}"),
+        "plain \u{e9}"
+    );
+}
