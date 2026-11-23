@@ -61,6 +61,7 @@ const FULL_LIGHT := 15
 const VistaScene := preload("res://scenes/vista.tscn")
 const EditorPanel := preload("res://scripts/editor.gd")
 const Lobby := preload("res://scripts/lobby.gd")
+const LobbyScene := preload("res://scenes/lobby.tscn")
 const InstanceLog := preload("res://scripts/instance_log.gd")
 const ValueFieldScript := preload("res://scripts/value_field.gd")
 const Wizard := preload("res://scripts/wizard.gd")
@@ -326,6 +327,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
 	_check_the_recap_words(failures)
+	await _check_the_lobby_after_a_failure(failures)
 	_check_the_logs(failures)
 
 
@@ -1340,6 +1342,56 @@ func _check_the_recap_words(failures: Array[String]) -> void:
 		var line := Strings.text("lobby_recap_tally", {"seat": seat["seat"], "kills": seat["kills"], "shared_kills": seat["shared_kills"], "value": seat["value_destroyed_dollars"], "losses": seat["losses"]})
 		if not words.contains(line):
 			failures.append("the match's end does not say `%s`: `%s`" % [line, words])
+
+
+## **After a failure the chooser comes back with a button its words name** (S3's `prob`, fix
+## pass 1). The real lobby, with no host: its link's failure is played to it in the three ways
+## a match can fail - a Resume refused before any announce, a resumed match that failed after
+## its announce, and a new match that failed after its announce - and each time the failure is
+## shown as it came, the chooser is shown with New match, Resume only when a line is remembered
+## and the failure was not that line's refused Resume, and the chooser and the watch strip are
+## never shown together. The remembered line the announces write is removed afterwards.
+func _check_the_lobby_after_a_failure(failures: Array[String]) -> void:
+	var lobby: Node = LobbyScene.instantiate()
+	add_child(lobby)
+	await get_tree().process_frame
+	var cases := [
+		{"name": "a Resume refused before its announce", "resuming": true, "announce": false, "resume": false},
+		{"name": "a resumed match failed after its announce", "resuming": true, "announce": true, "resume": true},
+		{"name": "a new match failed after its announce", "resuming": false, "announce": true, "resume": true},
+	]
+	for case in cases:
+		lobby._started = true
+		lobby._resuming = case["resuming"]
+		lobby._chooser.visible = false
+		lobby._line = "check\tline"
+		if case["announce"]:
+			lobby._on_announced("check")
+			if lobby._resuming:
+				failures.append("%s: the announce left `_resuming` set" % case["name"])
+			if lobby._chooser.visible:
+				failures.append("%s: the chooser shows beside the watch strip" % case["name"])
+		var reason := "the host said no (%s)" % case["name"]
+		lobby._on_failed(reason)
+		await get_tree().process_frame
+		var new_shown := false
+		for child in lobby._chooser.get_children():
+			if child is Button and child.visible and (child as Button).text == Lobby.new_match_text():
+				new_shown = true
+		if not lobby._chooser.visible or not new_shown:
+			failures.append("%s: no chooser with New match after the failure" % case["name"])
+		if lobby._strip.visible or lobby.editor.visible:
+			failures.append("%s: the watch strip or the editor stays beside the chooser" % case["name"])
+		if lobby._resume_button.visible != case["resume"]:
+			failures.append("%s: Resume is %s" % [case["name"], "shown" if lobby._resume_button.visible else "hidden"])
+		if not String(lobby._status.text).contains(reason):
+			failures.append("%s: the failure is not shown as it came: `%s`" % [case["name"], lobby._status.text])
+		if lobby._started:
+			failures.append("%s: the lobby still counts a match as started" % case["name"])
+	if FileAccess.file_exists(Lobby.REMEMBERED):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(Lobby.REMEMBERED))
+	lobby.queue_free()
+	await get_tree().process_frame
 
 
 ## **Each instance keeps its own log** (finding N): a second logger starting leaves the first's

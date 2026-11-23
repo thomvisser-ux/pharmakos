@@ -110,10 +110,11 @@ impl fmt::Display for SeedFileError {
                 f,
                 "line {line} repeats the seed on line {first}; a seed is played once"
             ),
+            // The seed past the cap is the cap's next number; written as
+            // `more than` rather than computed, so no sum can overflow.
             SeedFileError::TooManySeeds { line } => write!(
                 f,
-                "line {line} is seed number {}, and a seed file lists at most {MAX_SEEDS}",
-                MAX_SEEDS.saturating_add(1)
+                "line {line} is a seed past the {MAX_SEEDS} a seed file lists at most"
             ),
             SeedFileError::Empty => f.write_str("the file lists no seed"),
         }
@@ -143,8 +144,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Listed>, SeedFileError> {
     }
     let text = std::str::from_utf8(bytes).map_err(|_| SeedFileError::NotUtf8)?;
     let mut listed: Vec<Listed> = Vec::new();
-    for (index, raw) in text.split('\n').enumerate() {
-        let line = index.saturating_add(1);
+    for (line, raw) in (1_usize..).zip(text.split('\n')) {
         if raw.len() > MAX_LINE_BYTES {
             return Err(SeedFileError::LineTooLong { line });
         }

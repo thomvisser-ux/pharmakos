@@ -231,12 +231,19 @@ pub struct Scenario {
 
 impl Scenario {
     /// How many ticks the whole scenario plays, at 20 Hz.
-    #[must_use]
-    pub fn ticks(&self) -> u32 {
-        self.segments
-            .iter()
-            .map(|segment| ticks_of(segment.length_ms))
-            .fold(0_u32, u32::saturating_add)
+    ///
+    /// # Errors
+    ///
+    /// [`crate::exit::Exit::Input`] for a file whose segments add up to more
+    /// ticks than a `u32` counts: each is capped at [`MAX_SEGMENT_MS`], and
+    /// the format does not cap how many a file lists, so the sum is refused
+    /// rather than saturated.
+    pub fn ticks(&self) -> Result<u32, Failure> {
+        self.segments.iter().try_fold(0_u32, |total, segment| {
+            total
+                .checked_add(ticks_of(segment.length_ms))
+                .ok_or_else(|| Failure::input(strings::scenario_too_long(&self.source)))
+        })
     }
 }
 
@@ -1022,6 +1029,35 @@ mod tests {
 
     fn object(text: &str) -> Json {
         pharmakos_proto::json::read(text).expect("test JSON")
+    }
+
+    /// E22: a file's segments that add up past a `u32` of ticks are an input
+    /// error naming the file, never a saturated total.
+    #[test]
+    fn a_scenario_s_ticks_past_a_u32_are_refused() {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let source = root.join("scenarios/skeleton/expand-east-segment.scenario.jsonc");
+        let mut scenario = super::load(root, &source).expect("a committed scenario");
+        assert!(scenario.ticks().is_ok_and(|ticks| ticks > 0));
+        let longest = super::Segment {
+            index: 0,
+            length_ms: MAX_SEGMENT_MS,
+        };
+        let per = ticks_of(MAX_SEGMENT_MS);
+        // One more segment than a u32 of ticks holds at this length.
+        let past = u32::MAX
+            .checked_div(per)
+            .and_then(|whole| whole.checked_add(1))
+            .and_then(|count| usize::try_from(count).ok())
+            .expect("a count that fits a usize");
+        scenario.segments = vec![longest; past];
+        let refused = scenario.ticks().expect_err("past a u32");
+        assert_eq!(refused.code, crate::exit::Exit::Input);
+        assert!(
+            refused.message.contains("expand-east-segment"),
+            "{}",
+            refused.message
+        );
     }
 
     fn pointers(problems: &Problems) -> Vec<&str> {

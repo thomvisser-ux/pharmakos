@@ -20,7 +20,7 @@
 // voxels, which is one map's and one seat's, so a file played on twenty maps
 // from both seats cannot place one where it means anything. The autocannons
 // stand `on` vents, the one description a Build target takes.
-// PLACEHOLDER: the Turtle's walls, which a wall box of fixed voxels cannot place on every map and seat — owner, S2, at demo2
+// PLACEHOLDER: the Turtle's walls, which a wall box of fixed voxels cannot place on every map and seat — owner, S5, with the nightly bands' re-baseline
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {"title": "Nightly Turtle", "author_kind": "HUMAN"},

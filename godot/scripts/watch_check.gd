@@ -123,7 +123,13 @@
 #     footer says `untimed_by_rule`, so the rig starts no countdown and sends no
 #     `remaining_ms`, which a Probation gateway refuses with INVALID_ARGUMENT: across a
 #     stretch of clock reports the gateway refuses nothing, the footer stays untimed and
-#     the bridge's `timer`, the lobby's countdown, stays empty;
+#     the bridge's `timer`, the lobby's countdown, stays empty. Before that host, S3's `prob`
+#     resumes a six-field line (one remembered before the preset existed), sees the host
+#     refuse it before announcing, lets the refused host go (`host_link.gd`'s `reset`) and
+#     starts the lobby's line on the same link, as the lobby's refused Resume does; in the
+#     Lull, `get_status` names `probation` as asked, and round 1's first `list_templates`
+#     marks exactly one template with a sentence, which the panel draws as sent. The first
+#     host's legs hold `get_status` to `custom` and read the seat's `sealed_this_round`;
 #   * across every host: the bridge caught no panic, refused no view page, the gateway
 #     refused no call (so no burst met RATE_LIMITED), entities were drawn, and every host
 #     exited once the client let go of its standard input.
@@ -256,14 +262,20 @@ func _ready() -> void:
 		_line = HostLink.config_line(HostLink.match_id("watch-check"), ladder, CHECK_SEATS, CHECK_SEED, CHECK_PRESET)
 		written = _line
 		print("[watch-check] starting %s" % _gamectl)
+	if _probation:
+		# The Probation leg starts its own hosts: first a remembered line from before the
+		# preset existed, which the gateway refuses, then the lobby's own line.
+		_run_probation()
+		return
 	if not link.start(_gamectl, _root, written):
 		_finish()
 		return
 	editor.begin(HostLink.my_seat())
+	if not _resumed:
+		# What the check asks for, held to the gateway's `get_status` (S3's `prob`).
+		vista.bridge.watch_expect_preset(CHECK_PRESET)
 	print("[watch-check] host pid %d" % link.host_pid())
-	if _probation:
-		_run_probation()
-	elif _resumed:
+	if _resumed:
 		_run_resumed()
 	else:
 		_run()
@@ -337,6 +349,14 @@ func _run() -> void:
 		_finish()
 		return
 	print("[watch-check] Lull reached; %d markers drawn" % vista.marker_count())
+	if not await _until(func() -> bool: return _state().get("preset_check", "") != "not_read", EDIT_WAIT) or _state().get("preset_check", "") != "agrees" or _state().get("preset", "") != CHECK_PRESET:
+		_failures.append("get_status does not name the %s match the check asked for: %s" % [CHECK_PRESET, _state()])
+		_finish()
+		return
+	if not await _until(func() -> bool: return _state().has("sealed_this_round"), EDIT_WAIT):
+		_failures.append("the seat's get_status did not tell it whether it holds a seal: %s" % _state())
+		_finish()
+		return
 
 	if not await _edit():
 		_finish()
@@ -479,8 +499,20 @@ func _run_resumed() -> void:
 ## untimed by rule; across a stretch of clock reports the rig sends no countdown (the gateway
 ## would refuse one), the footer stays untimed, and no countdown is shown.
 func _run_probation() -> void:
+	if not await _older_line_refused():
+		_finish()
+		return
+	if not link.start(_gamectl, _root, _line):
+		_finish()
+		return
+	editor.begin(HostLink.my_seat())
+	vista.bridge.watch_expect_preset(HostLink.PRESET)
+	print("[watch-check] host pid %d" % link.host_pid())
 	if not await _until(func() -> bool: return _state().get("phase", "") == "lull" and _state().get("view_settled", false), START_WAIT):
 		_failures.append("the Probation host never reached a Lull with a complete keyframe")
+		_finish()
+		return
+	if not await _probation_frame():
 		_finish()
 		return
 	var refused_before := _refusals.size()
@@ -506,6 +538,63 @@ func _run_probation() -> void:
 		_failures.append("the Probation Lull ended by itself: %s" % state)
 	print("[watch-check] Probation: %.0f s of the Lull, %d clock report(s) answered, %d countdown(s) sent, none shown, untimed by rule %s, %d refusal(s)" % [PROBATION_WATCH, answered, countdowns, state.get("untimed_by_rule"), _refusals.size() - refused_before])
 	_finish()
+
+
+## A line remembered before the preset existed (six fields) is refused by the gateway when it
+## is resumed, and the link then starts another host (S3's `prob`; the plan's E6): what the
+## lobby's refused Resume leans on. The refusal's words are printed, never read: any refusal
+## before an announce is the refusal this needs. The refused host is gone once it refused.
+var _refused_reason := ""
+var _expecting_refusal := false
+
+
+func _older_line_refused() -> bool:
+	var fields := HostLink.config_line(HostLink.match_id("watch-check-older"), HostLink.LADDER).strip_edges().split("\t")
+	fields.resize(6)
+	_expecting_refusal = true
+	if not link.start(_gamectl, _root, HostLink.resume_line("\t".join(fields))):
+		_expecting_refusal = false
+		return false
+	var refused_pid: int = link.host_pid()
+	var refused := await _until(func() -> bool: return _refused_reason != "", START_WAIT)
+	_expecting_refusal = false
+	if not refused:
+		_failures.append("a six-field remembered line was not refused when resumed")
+		return false
+	if OS.is_process_running(refused_pid):
+		_failures.append("the host that refused the older line (pid %d) is still running" % refused_pid)
+		return false
+	link.reset()
+	print("[watch-check] a six-field remembered line was refused on resume: %s" % _refused_reason)
+	return true
+
+
+## The Probation match's frame on a real gateway (S3's `prob`): `get_status` names it
+## `probation`, as New match asked; round 1's first `list_templates` marks exactly one
+## template with a sentence, and the panel draws the mark and the sentence over it.
+func _probation_frame() -> bool:
+	if not await _until(func() -> bool: return _state().get("preset_check", "") != "not_read", EDIT_WAIT):
+		_failures.append("the Probation match's get_status was never read: %s" % _state())
+		return false
+	if _state().get("preset_check", "") != "agrees" or _state().get("preset", "") != "probation":
+		_failures.append("get_status does not name the lobby's Probation match: %s" % _state())
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("templates_known", false), "the Probation Lull's template list was never read"):
+		return false
+	var marked: Array = []
+	for template in _editor().get("templates", []):
+		if template.get("guided", false):
+			marked.append(template)
+	if marked.size() != 1 or String(marked[0].get("guided_reason", "")) == "":
+		_failures.append("round 1's template list does not mark one template with a sentence: %s" % [_editor().get("templates")])
+		return false
+	editor.refresh()
+	var drawn: Array = editor.guided_drawn()
+	if drawn != [String(marked[0].get("id", "")), String(marked[0].get("guided_reason", ""))]:
+		_failures.append("the panel does not draw the guided mark as sent: %s against %s" % [drawn, marked[0]])
+		return false
+	print("[watch-check] Probation: get_status names `probation`; round 1 marks %s: %s" % [marked[0].get("id"), marked[0].get("guided_reason")])
+	return true
 
 
 ## The carried draft is opened (through `get_draft`, the editor's one way to open it), with
@@ -1477,6 +1566,9 @@ func _report_failures() -> void:
 
 
 func _on_failed(reason: String) -> void:
+	if _expecting_refusal:
+		_refused_reason = reason
+		return
 	_failures.append("the host link failed: %s" % reason)
 
 
@@ -1484,7 +1576,7 @@ func _on_received(answer: Dictionary) -> void:
 	var refusal := String(answer.get("error", ""))
 	if refusal != "":
 		_refusals.append(refusal)
-	_events += (answer.get("events", PackedStringArray()) as PackedStringArray).size()
+	_events += (answer.get("events", []) as Array).size()
 	if answer.has("view"):
 		if (answer["view"] as Dictionary).is_empty():
 			_failures.append("a get_view page did not decode (the reason is in the log)")

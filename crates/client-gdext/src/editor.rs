@@ -1358,6 +1358,12 @@ pub struct Editor {
     beacon: Option<BeaconDetail>,
     /// Why the beacon's detail did not come, when it did not.
     beacon_failed: Option<ReadFailed>,
+    /// The round of a submission the gateway accepted that the rig has not yet asked the
+    /// gateway about (`get_status`'s seal); taken by [`Editor::take_sealed_mark`].
+    seal_to_ask: Option<u32>,
+    /// Why this Lull's template list did not come, when it did not: the list is then empty,
+    /// never an earlier Lull's (whose guided mark is that Lull's alone).
+    templates_failed: Option<ReadFailed>,
     /// The route's step labels in the text on screen, read once per text.
     step_labels: Vec<String>,
     /// The rules' ids in the text on screen, read once per text.
@@ -1632,7 +1638,7 @@ impl Editor {
 
     // --- The wizard (T19, pull request 2) -------------------------------------------------
 
-    /// Ask for the template list again (it is read once, at the first Lull, on its own).
+    /// Ask for the template list again (it is read at every Lull's opening, on its own).
     pub fn list_templates(&mut self) {
         if self.shut_to_asks() {
             return;
@@ -2803,8 +2809,8 @@ impl Editor {
 
     // --- What the rig tells the editor --------------------------------------------------
 
-    /// A Lull opened, in `round`. The notes and the drafts are read again, the template list
-    /// the first time, and a text the editor already holds is checked and rendered again
+    /// A Lull opened, in `round`. The notes, the drafts and the template list are read again,
+    /// and a text the editor already holds is checked and rendered again
     /// against the new snapshot; an open wizard asks again, because the operator's
     /// suggestion is made afresh at each Lull's start.
     pub fn lull_opened(&mut self, round: u32) {
@@ -2838,9 +2844,16 @@ impl Editor {
         self.queue
             .retain(|job| !matches!(job, Job::Briefing | Job::MapSummary));
         self.queue.push_back(Job::Briefing);
-        if !self.known.templates {
-            self.queue.push_back(Job::Templates);
+        // The template list every Lull, replaced whole (S3's `prob`): the guided first pick's
+        // mark is one Lull's, so a list carried into the next would draw it after the gateway
+        // stopped sending it. A new round's Lull draws no list until its own answer comes.
+        if new_round {
+            self.templates.clear();
+            self.known.templates = false;
+            self.templates_failed = None;
         }
+        self.queue.retain(|job| !matches!(job, Job::Templates));
+        self.queue.push_back(Job::Templates);
         self.queue.push_back(Job::Drafts);
         // The features the vent click picks from: their coverage moves every round.
         self.queue.push_back(Job::MapSummary);
@@ -3095,6 +3108,12 @@ impl Editor {
         std::mem::take(&mut self.owed.edited)
     }
 
+    /// Whether the gateway accepted a submission since the last call: the rig asks it for the
+    /// seat's seal (`get_status`) rather than say it on the client's own word.
+    pub fn take_sealed_mark(&mut self) -> bool {
+        self.seal_to_ask.take().is_some()
+    }
+
     /// The answer to the call in flight: a result, or the gateway's refusal as
     /// `(code, message)`. Says whether it was an answer or a refused call: an
     /// `estimate_route` whose waypoint resolves to nothing is the gateway's answer about
@@ -3345,10 +3364,28 @@ impl Editor {
         &self.templates
     }
 
-    /// Whether the template list has been read.
+    /// Whether this Lull's template list has been read.
     #[must_use]
     pub const fn templates_known(&self) -> bool {
         self.known.templates
+    }
+
+    /// Why this Lull's template list did not come, when it did not.
+    #[must_use]
+    pub const fn templates_failed(&self) -> Option<&ReadFailed> {
+        self.templates_failed.as_ref()
+    }
+
+    /// Why this Lull's template list will not come although nothing refused it: the door is
+    /// shut ([`Unchecked::Closed`]), so the read is not sent, as a check's is not. `None` once
+    /// the list came, when its read failed (that is [`Editor::templates_failed`]'s to say), and
+    /// while it is on its way in an open Lull.
+    #[must_use]
+    pub fn templates_unchecked(&self) -> Option<Unchecked> {
+        if self.known.templates || self.templates_failed.is_some() {
+            return None;
+        }
+        (self.door != Door::Open).then_some(Unchecked::Closed(self.door))
     }
 
     /// The wizard, when it is open.
@@ -3873,10 +3910,18 @@ impl Editor {
                     self.rules_rendering = Some(self.rendering);
                 }
             }
-            Sent::Templates => {
-                self.templates = wizard::templates_of(result)?;
-                self.known.templates = true;
-            }
+            Sent::Templates => match wizard::templates_of(result) {
+                Ok(rows) => {
+                    self.templates = rows;
+                    self.known.templates = true;
+                    self.templates_failed = None;
+                }
+                Err(error) => {
+                    self.templates.clear();
+                    self.templates_failed = Some(ReadFailed::Unreadable(error.to_string()));
+                    return Err(error);
+                }
+            },
             Sent::Instantiate { asked } => {
                 let instance: Instance = wizard::instance_of(result)?;
                 if let Some(wizard) = self.wizard.as_mut()
@@ -4049,6 +4094,7 @@ impl Editor {
         if response.accepted {
             self.sealed = Some(text);
             self.sealed_round = Some(self.round);
+            self.seal_to_ask = Some(self.round);
             // A re-seal changes the Lull's "this round" sentence at once (targeting.md,
             // "Messages"), so the briefing is read again.
             self.queue.retain(|job| !matches!(job, Job::Briefing));
@@ -4252,6 +4298,10 @@ impl Editor {
             Sent::Beacon { .. } => {
                 self.beacon = None;
                 self.beacon_failed = Some(ReadFailed::Refused(detail.clone()));
+            }
+            Sent::Templates => {
+                self.templates.clear();
+                self.templates_failed = Some(ReadFailed::Refused(detail.clone()));
             }
             _ => {}
         }
@@ -4865,6 +4915,7 @@ mod tests {
             at: [358, 22, 36],
             hp: None,
             heading: None,
+            ring: None,
         }]);
         // The load itself owes a route estimate.
         let call = editor.next_call(false).expect("the estimate");
@@ -5179,6 +5230,7 @@ mod tests {
             at: [358, 22, 36],
             hp: None,
             heading: None,
+            ring: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -6517,6 +6569,7 @@ mod tests {
             at: [358, 22, 36],
             hp: None,
             heading: None,
+            ring: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -6593,6 +6646,137 @@ mod tests {
         assert!(!editor.filed(), "a filing is its round's");
     }
 
+    /// Answers the editor's reads until it asks `list_templates`, which is left in flight.
+    fn until_templates(editor: &mut Editor) {
+        for _ in 0..32 {
+            let call = editor.next_call(false).expect("the Lull's reads");
+            if call.method == "list_templates" {
+                return;
+            }
+            let answer = match call.method {
+                "get_briefing" => read(r#"{"notes":""}"#),
+                "get_vocabulary" => read(r#"{"families":[]}"#),
+                "list_drafts" => read(r#"{"drafts":[]}"#),
+                "get_map_summary" => read(r#"{"features":[]}"#),
+                _ => quick_report("", true),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        panic!("the editor never asked for the template list");
+    }
+
+    /// A template list the door shut before (a Push, a recap, Ready) will not come: the panel
+    /// says why, in the checks' own words, rather than "Reading the templates..." for the rest
+    /// of the Lull (prob's fix pass 1, review item 7).
+    #[test]
+    fn a_template_list_the_door_shut_before_says_why_it_will_not_come() {
+        let mut editor = Editor::new("seat.0");
+        editor.lull_opened(1);
+        assert_eq!(
+            editor.templates_unchecked(),
+            None,
+            "on its way in an open Lull"
+        );
+        editor.set_door(Door::Push);
+        assert!(!editor.templates_known());
+        assert_eq!(
+            editor.templates_unchecked(),
+            Some(Unchecked::Closed(Door::Push))
+        );
+        // A list that came is no list owed, whatever the door; a failed read says its own why.
+        let mut read_one = Editor::new("seat.0");
+        read_one.lull_opened(1);
+        until_templates(&mut read_one);
+        read_one
+            .answered(Ok(&read(r#"{"templates":[]}"#)))
+            .expect("reads");
+        read_one.set_door(Door::Ready);
+        assert_eq!(read_one.templates_unchecked(), None);
+    }
+
+    /// The template list is asked at every Lull's opening and replaced whole (S3's `prob`):
+    /// round 1's guided mark is not drawn in round 2, whose list the gateway sends unmarked,
+    /// and between the new Lull's opening and its answer no list is drawn at all.
+    #[test]
+    fn the_template_list_is_read_every_lull_and_a_mark_is_its_lulls_alone() {
+        let marked = r#"{"templates":[{"template_id":"a","title":"A","guided_pick":true,"guided_pick_reason":"Start with a."},{"template_id":"b","title":"B"}]}"#;
+        let unmarked =
+            r#"{"templates":[{"template_id":"a","title":"A"},{"template_id":"b","title":"B"}]}"#;
+        let answer_lists = |editor: &mut Editor, list: &str| -> usize {
+            let mut asked = 0;
+            for _ in 0..32 {
+                let Some(call) = editor.next_call(false) else {
+                    return asked;
+                };
+                let answer = match call.method {
+                    "list_templates" => {
+                        asked += 1;
+                        read(list)
+                    }
+                    "get_briefing" => read(r#"{"notes":""}"#),
+                    "get_vocabulary" => read(r#"{"families":[]}"#),
+                    "get_map_summary" => read(r#"{"features":[]}"#),
+                    "list_drafts" => read(r#"{"drafts":[]}"#),
+                    _ => quick_report("", true),
+                };
+                editor.answered(Ok(&answer)).expect("reads");
+            }
+            panic!("the editor never went quiet");
+        };
+        let mut editor = Editor::new("seat.0");
+        editor.lull_opened(1);
+        assert_eq!(answer_lists(&mut editor, marked), 1, "one ask in the Lull");
+        let marks: Vec<Option<String>> = editor
+            .templates()
+            .iter()
+            .map(|row| row.guided.clone())
+            .collect();
+        assert_eq!(marks, [Some("Start with a.".to_owned()), None]);
+
+        editor.lull_opened(2);
+        assert!(
+            editor.templates().is_empty() && !editor.templates_known(),
+            "round 1's list, mark and all, is not drawn in round 2's Lull"
+        );
+        assert_eq!(answer_lists(&mut editor, unmarked), 1, "asked again, once");
+        assert!(editor.templates_known());
+        assert!(
+            editor.templates().iter().all(|row| row.guided.is_none()),
+            "a round-2 list with no mark draws none"
+        );
+
+        // An answer this client cannot read, or a refusal, leaves no list, and says why.
+        editor.lull_opened(3);
+        until_templates(&mut editor);
+        editor.answered(Ok(&read(marked))).expect("reads");
+        assert!(!editor.templates().is_empty());
+        // Asked again in the same Lull, and answered with a list this client cannot read: the
+        // list on screen, mark and all, goes with it.
+        editor.list_templates();
+        until_templates(&mut editor);
+        let twice = r#"{"templates":[{"template_id":"a","guided_pick":true,"guided_pick_reason":"x"},{"template_id":"b","guided_pick":true,"guided_pick_reason":"y"}]}"#;
+        assert!(editor.answered(Ok(&read(twice))).is_err());
+        assert!(editor.templates().is_empty());
+        assert!(matches!(
+            editor.templates_failed(),
+            Some(ReadFailed::Unreadable(_))
+        ));
+        // A readable list again, then a refusal right after it: the refusal's own arm is what
+        // takes the list (and its mark) off the panel.
+        editor.list_templates();
+        until_templates(&mut editor);
+        editor.answered(Ok(&read(marked))).expect("reads");
+        assert!(!editor.templates().is_empty() && editor.templates_failed().is_none());
+        editor.list_templates();
+        until_templates(&mut editor);
+        let _ = editor.answered(Err(("RATE_LIMITED", "slow down")));
+        assert_eq!(
+            editor.templates_failed(),
+            Some(&ReadFailed::Refused("RATE_LIMITED: slow down".to_owned()))
+        );
+        assert!(editor.templates().is_empty());
+    }
+
     /// Finding K: shutting the door drops what will never go out, says so when the player
     /// had asked for something, refuses asks at once, and opening it again in the same Lull
     /// owes the text's checks again.
@@ -6649,6 +6833,7 @@ mod tests {
             at: [358, 22, 36],
             hp: None,
             heading: None,
+            ring: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -6927,6 +7112,7 @@ mod tests {
             at: [358, 22, 36],
             hp: None,
             heading: None,
+            ring: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let said = "waypoint 1 covers nothing: its step would fail `illegal_site`";
@@ -6961,6 +7147,7 @@ mod tests {
             at: [358, 22, 36],
             hp: None,
             heading: None,
+            ring: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let settled = editor
@@ -6985,6 +7172,7 @@ mod tests {
             at: [358, 22, 36],
             hp: None,
             heading: None,
+            ring: None,
         };
         for door in [Door::Push, Door::Recap, Door::Ended, Door::Ready] {
             let mut editor = loaded(EXPAND_EAST);

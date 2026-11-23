@@ -37,8 +37,11 @@
 //! is standing on (`tick()`), the phase a refused `begin_push` was in and
 //! whether a match played to its end has ended (`phase()`), the round a seal
 //! belongs to, a refusal is named in and a nightly match reached (`round()`),
-//! how the match ended (`outcome()`), and on a shared win the final audit's
-//! tied seats (`audit::final_audit(host.world())`, a pure read). `Host::runner`
+//! how the match ended (`outcome()`), on a shared win the final audit's
+//! tied seats (`audit::final_audit(host.world())`, a pure read), and after
+//! every tick and at every Lull the Attack table's rows
+//! (`host.world().attack().rows()`), for the hunts a nightly result counts
+//! ([`Hunts`]), because the feed's `attack_launched` names no beacon. `Host::runner`
 //! hands out a `&Runner` and `Host::world` a `&World`, and every stepping
 //! method needs `&mut`, so the reach cannot become a second way to play a
 //! match; if `Surface` gains accessors for these, this file should take them
@@ -84,6 +87,7 @@
 //! PLACEHOLDER: a `builtin` seat plays Easy — owner, S5, with the `operator`
 //! scenario key that would name another difficulty.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -94,6 +98,8 @@ use pharmakos_gateway::serve;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
+use pharmakos_sim::World;
+use pharmakos_sim::attack::{Aim, AttackRow};
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchPhase, MatchSettings};
@@ -136,6 +142,89 @@ pub struct Fired {
     pub kind: String,
     /// Whose it was, when it was anybody's.
     pub seat: Option<u8>,
+    /// The round the match was in when the event was read off the feed,
+    /// counted from 1: the runner's own count of the segments it opened, held
+    /// equal to the sim's round at every Lull (`play_until` refuses a run
+    /// where the two disagree). A Push's events are its round's; what a recap
+    /// and the next Lull's opening leave on the feed is read in the Lull it
+    /// opened, so it carries that round.
+    pub round: u32,
+}
+
+/// The hunts a run's seats filed, and the ones that launched (S3's plan, E14:
+/// "the nightly result does not count hunts that never launched",
+/// decisions-log item 150 (2)).
+///
+/// A **hunt** is an Attack beacon whose target is the enemy commander
+/// ([`Aim::Commander`]); it is **filed** once its row has been seen in the
+/// Attack table with that aim, and **launched** once the row has been seen
+/// with a wave counted (`waves_used > 0`). That one condition is sufficient
+/// because of when the table is read: after every tick and at every Lull. The
+/// sim counts a wave on the tick the force launches (`attack.rs`, the tail of
+/// `gather`) and clears the count only on a new segment's first tick
+/// (`advance`), so the read after the launch tick always sees it, even when
+/// the attack ends on that same tick: `end()` resets the phase and the launch
+/// stamp, never the count. The phase and the stamp would each miss that case,
+/// so neither is read (fix pass 1 of #219, item 6).
+///
+/// Read from the world rather than the feed because the feed's
+/// `attack_launched` names no beacon (`crates/gateway/src/feed.rs`: a kind, a
+/// time, an audience, a text and a memo), so the feed cannot say *which*
+/// Attack beacon launched. The read is the Attack table's rows, through
+/// `Host::world()`, whose every method that writes needs `&mut`.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Hunts {
+    /// Every hunt's beacon seen filed, by its id's raw value (row and
+    /// generation, so a rebuilt beacon is a new hunt), and the seat that owns
+    /// it, read from the beacon table when the hunt is first seen.
+    pub filed: BTreeMap<u32, u8>,
+    /// Every hunt's beacon seen launched.
+    pub launched: BTreeSet<u32>,
+}
+
+impl Hunts {
+    /// How many of `seat`'s filed hunts never launched.
+    #[must_use]
+    pub fn unlaunched_of(&self, seat: u8) -> usize {
+        self.filed
+            .iter()
+            .filter(|(beacon, owner)| **owner == seat && !self.launched.contains(*beacon))
+            .count()
+    }
+
+    /// Read the Attack table once.
+    ///
+    /// # Errors
+    ///
+    /// [`Exit::Internal`] for an Attack row whose beacon the beacon table
+    /// does not hold: the sim's two tables disagreeing, never a hunt to count
+    /// as nobody's.
+    fn read(&mut self, world: &World) -> Result<(), Failure> {
+        for row in world.attack().rows() {
+            if !matches!(row.settings.aim, Aim::Commander(_)) {
+                continue;
+            }
+            let beacon = row.beacon.raw();
+            if let std::collections::btree_map::Entry::Vacant(slot) = self.filed.entry(beacon) {
+                let owner = world
+                    .beacons()
+                    .row_of(row.beacon)
+                    .ok()
+                    .and_then(|at| world.beacons().seats().get(at.index()).copied())
+                    .ok_or_else(|| {
+                        Failure::internal(format!(
+                            "an Attack row names beacon {beacon}, which the beacon table does \
+                             not hold"
+                        ))
+                    })?;
+                slot.insert(owner);
+            }
+            if launched(row) {
+                self.launched.insert(beacon);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// What one run produced.
@@ -157,16 +246,24 @@ pub struct Played {
     pub notes: Vec<String>,
     /// The rules table the match ran under.
     pub rules_hash: u64,
+    /// The hunts the seats filed and launched over the whole run.
+    pub hunts: Hunts,
 }
 
 impl Played {
     /// How many ticks were played in total.
-    #[must_use]
-    pub fn ticks(&self) -> u32 {
-        self.segments
-            .iter()
-            .copied()
-            .fold(0_u32, u32::saturating_add)
+    ///
+    /// # Errors
+    ///
+    /// [`Exit::Internal`] for a total past a `u32`: `play_push` counts each
+    /// segment in a `u32`, and the sum of several is refused rather than
+    /// saturated.
+    pub fn ticks(&self) -> Result<u32, Failure> {
+        self.segments.iter().try_fold(0_u32, |total, ticks| {
+            total
+                .checked_add(*ticks)
+                .ok_or_else(|| Failure::internal("a run of more ticks than a u32 counts"))
+        })
     }
 }
 
@@ -300,7 +397,9 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
     // way. Reviewed finding, wave 5. Computed in `u64` and capped there, so the
     // conversion is from a number below the cap and the sweep of S2's E7
     // leaves no fallback in it.
-    let reserve = u64::from(scenario.ticks())
+    // `saturating_mul` and `min` are exact here: a product past `u64::MAX`
+    // is past the cap, which is what the reservation is held to either way.
+    let reserve = u64::from(scenario.ticks()?)
         .saturating_mul(24)
         .min(CHAIN_RESERVE_CAP);
     let mut played = Played {
@@ -312,16 +411,19 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
         segments: Vec::with_capacity(scenario.segments.len()),
         notes: Vec::new(),
         rules_hash,
+        hunts: Hunts::default(),
     };
     let mut seen = 0_usize;
     let mut index = 0_usize;
 
     loop {
+        // The round this Lull opens: the runner's own count, held to the sim's.
+        let opened = round_of(&surface, index)?;
         // Whatever the last phase left on the feed, dated at the tick the match
         // is standing on. A Lull consumes no sim tick, so that is the tick
         // every line of it belongs to.
         let standing = surface_tick(&surface)?;
-        drain(&surface, &mut seen, standing, &mut played.events)?;
+        drain(&surface, &mut seen, standing, opened, &mut played)?;
 
         // The `builtin` seats plan first, then the playbook seats submit: the
         // order `gamectl host` has, whose surface thread plans its in-process
@@ -353,8 +455,8 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
             )));
         }
         seen = 0;
-        drain(&surface, &mut seen, anchor, &mut played.events)?;
-        let ticks = play_push(&mut surface, &mut seen, &mut played)?;
+        drain(&surface, &mut seen, anchor, opened, &mut played)?;
+        let ticks = play_push(&mut surface, &mut seen, opened, &mut played)?;
         if let Until::Segments = until {
             let wanted = scenario
                 .segments
@@ -371,7 +473,7 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
 
         surface.end_recap().map_err(internal)?;
         let more = match &mut until {
-            Until::Segments => index.saturating_add(1) < scenario.segments.len(),
+            Until::Segments => next_index(index)? < scenario.segments.len(),
             Until::MatchEnd(ending) => {
                 if phase(&surface)? == MatchPhase::Ended {
                     **ending = Some(ending_of(&surface)?);
@@ -395,9 +497,60 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
             .set_phase_remaining_ms(whole_lull(&surface)?)
             .map_err(internal)?;
         surface.open_lull().map_err(internal)?;
-        index = index.saturating_add(1);
+        index = next_index(index)?;
     }
     Ok(played)
+}
+
+/// Whether an Attack row, read after a tick, has launched this segment: a
+/// wave counted, the one field `end()` does not reset ([`Hunts`]).
+fn launched(row: &AttackRow) -> bool {
+    row.waves_used > 0
+}
+
+/// The segment after `index`.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] past a `usize`, which a run bounded by its round limit
+/// never reaches.
+fn next_index(index: usize) -> Result<usize, Failure> {
+    index
+        .checked_add(1)
+        .ok_or_else(|| Failure::internal("a segment index past a usize"))
+}
+
+/// The round segment `index` plays, counted from 1, from the runner's own
+/// count of the segments it has opened, and the sim's round held to it: an
+/// event's round is never inferred from its tick, and the two counts cannot
+/// drift apart in silence.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] for an index past a `u32`'s rounds, which the sim's
+/// `u32` round count would have refused first, and for a match standing in
+/// another round than the one this runner opened.
+fn round_of(surface: &Surface, index: usize) -> Result<u32, Failure> {
+    held_round(index, round(surface)?)
+}
+
+/// [`round_of`]'s rule, as a pure function of the runner's segment index and
+/// the sim's round (fix pass 1 of #219, item 7): the round the index opens,
+/// counted from 1, when the sim stands in that round, and otherwise the
+/// disagreement, named.
+fn held_round(index: usize, sim_round: u32) -> Result<u32, Failure> {
+    let opened = u32::try_from(index)
+        .ok()
+        .and_then(|index| index.checked_add(1))
+        .ok_or_else(|| Failure::internal(format!("segment {index} is past a u32's rounds")))?;
+    if sim_round == opened {
+        Ok(opened)
+    } else {
+        Err(Failure::internal(format!(
+            "this runner opened its segment {index} as round {opened} and the match is in round \
+             {sim_round}"
+        )))
+    }
 }
 
 /// Seal every `playbook` seat's file for the Lull the match stands in.
@@ -430,12 +583,17 @@ fn seal_all(
 
 /// Step the open Push to its segment's end, writing the chain and the
 /// events, and say how many ticks it played.
-fn play_push(surface: &mut Surface, seen: &mut usize, played: &mut Played) -> Result<u32, Failure> {
+fn play_push(
+    surface: &mut Surface,
+    seen: &mut usize,
+    round: u32,
+    played: &mut Played,
+) -> Result<u32, Failure> {
     let mut ticks = 0_u32;
     while let Some(report) = surface.step().map_err(internal)? {
         let tick = report.tick.raw();
         let _ = writeln!(played.chain, "{tick}\t{}", pharmakos_sim::hex(report.hash));
-        drain(surface, seen, tick, &mut played.events)?;
+        drain(surface, seen, tick, round, played)?;
         ticks = ticks
             .checked_add(1)
             .ok_or_else(|| Failure::internal("a segment of more ticks than a u32 counts"))?;
@@ -899,7 +1057,8 @@ fn report_hash_of(result: Option<&Json>) -> Result<Vec<u8>, Failure> {
 // Reading what happened
 // ---------------------------------------------------------------------------
 
-/// Copy the feed's new lines into the record, dated at `tick`.
+/// Copy the feed's new lines into the record, dated at `tick` and in
+/// `round`, and read the hunts ([`Hunts`]) from the world as it stands.
 ///
 /// The **feed**, not the sim's bus: `Surface::step` drains the bus onto the
 /// feed as part of stepping, which is the point of hosting through the surface
@@ -910,8 +1069,13 @@ fn drain(
     surface: &Surface,
     seen: &mut usize,
     tick: u32,
-    into: &mut Vec<Fired>,
+    round: u32,
+    played: &mut Played,
 ) -> Result<(), Failure> {
+    played
+        .hunts
+        .read(surface.host().map_err(internal)?.world())?;
+    let into = &mut played.events;
     let events = surface.feed().events();
     // The feed only grows within a segment, and `seen` restarts at zero when
     // `begin_push` opens a fresh one, so a feed shorter than what was read is
@@ -926,6 +1090,7 @@ fn drain(
     for event in fresh {
         into.push(Fired {
             tick,
+            round,
             kind: event.kind.name().to_owned(),
             seat: match event.audience {
                 Audience::Private(seat) => Some(seat.raw()),
@@ -999,7 +1164,7 @@ pub fn check(
     let mut text = strings::scenario_heading(
         &scenario.name,
         scenario.seats.len(),
-        played.ticks(),
+        played.ticks()?,
         &crate::verify::hex(&played.rules_hash.to_be_bytes()),
     );
     text.push('\n');
@@ -1031,7 +1196,9 @@ pub fn check(
                 let _ = writeln!(text, "{}", strings::scenario_assertion_ok(index, &what));
             }
             Err(why) => {
-                failed = failed.saturating_add(1);
+                failed = failed.checked_add(1).ok_or_else(|| {
+                    Failure::internal("more failed assertions than a usize counts")
+                })?;
                 let _ = writeln!(
                     text,
                     "{}",
@@ -1082,17 +1249,42 @@ fn hash_chain_equals(
     golden: &str,
     played: &Played,
 ) -> Result<Result<(), String>, Failure> {
-    let actual_path = crate::actual_for(golden);
-    let written = match &actual_path {
-        Some(path) => {
-            write_actual(path, &played.chain)?;
-            crate::display(path)
+    // A golden under `tests/golden/` has its fresh chain written beside the
+    // target directory's copy, where the `golden` step compares it; with no
+    // target directory the run cannot be checked there, and says so. A
+    // golden outside `tests/golden/` has no fresh path by the convention
+    // (`crate::actual_for`), which the scenario format refuses and the
+    // harness's own tests use to compare a doctored chain without writing it
+    // where the `golden` step reads (T20's items 11 and 12): compared, and
+    // not written.
+    let written = match crate::actual_for(golden) {
+        Ok(path) => {
+            write_actual(&path, &played.chain)?;
+            crate::display(&path)
         }
-        None => String::from("<no target directory to write it to>"),
+        Err(crate::ActualError::NotAGolden) => String::from("<nowhere: not under tests/golden/>"),
+        Err(error @ crate::ActualError::NoTargetDir(_)) => {
+            return Err(Failure::internal(strings::scenario_chain_unwritable(
+                golden,
+                &error.to_string(),
+            )));
+        }
     };
 
-    let Ok(committed) = std::fs::read_to_string(root.join(golden)) else {
-        return Ok(Err(strings::scenario_chain_missing(golden, &written)));
+    // Not there is the assertion's answer; any other failure to read the
+    // committed chain is the file, said with its error.
+    let committed = match std::fs::read_to_string(root.join(golden)) {
+        Ok(committed) => committed,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Err(strings::scenario_chain_missing(golden, &written)));
+        }
+        Err(error) => {
+            return Err(Failure::input(strings::unreadable(
+                "committed chain",
+                golden,
+                &error.to_string(),
+            )));
+        }
     };
     // The committed file is byte-compared, and `.gitattributes` marks
     // tests/golden/** as `-text` so git will not normalise it. A CRLF copy is
@@ -1110,9 +1302,15 @@ fn hash_chain_equals(
         .zip(&actual)
         .position(|(left, right)| left != right)
         .unwrap_or_else(|| expected.len().min(actual.len()));
+    // The line number shown, from 1. `at` is at most the shorter chain's
+    // length, a count of lines held in memory, so one past it is refused only
+    // if a usize could not count them.
+    let line = at
+        .checked_add(1)
+        .ok_or_else(|| Failure::internal("a chain of more lines than a usize counts"))?;
     Ok(Err(strings::scenario_chain_moved(
         golden,
-        at.saturating_add(1),
+        line,
         // A chain shorter than the other has no line at `at`, and
         // the message says which side ended there.
         expected.get(at).copied().unwrap_or("<end of file>"),
@@ -1139,8 +1337,109 @@ fn write_actual(path: &Path, chain: &str) -> Result<(), Failure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{open, whole_lull};
+    use super::{Hunts, Played, hash_chain_equals, next_index, open, whole_lull};
+    use crate::exit::Exit;
     use std::path::Path;
+
+    fn played(segments: Vec<u32>) -> Played {
+        Played {
+            chain: String::new(),
+            events: Vec::new(),
+            segments,
+            notes: Vec::new(),
+            rules_hash: 0,
+            hunts: Hunts::default(),
+        }
+    }
+
+    /// Fix pass 1 of #219, item 7: the runner's round is its segment index
+    /// plus one, and a sim standing in any other round is refused, naming both.
+    #[test]
+    fn the_runner_s_round_is_held_to_the_sim_s() {
+        assert_eq!(super::held_round(0, 1), Ok(1));
+        assert_eq!(super::held_round(5, 6), Ok(6));
+        for (index, sim) in [(0, 0), (0, 2), (1, 1), (5, 7)] {
+            let refused = super::held_round(index, sim).expect_err("a disagreement");
+            assert_eq!(refused.code, Exit::Internal);
+            assert!(
+                refused.message.contains(&format!("in round {sim}")),
+                "{}",
+                refused.message
+            );
+        }
+    }
+
+    /// Fix pass 1 of #219, item 6: a hunt that launched and ended on the same
+    /// tick, read after that tick, is regathered with no launch stamp and one
+    /// wave counted; it launched. A row that never launched has no wave.
+    #[test]
+    fn a_launch_is_its_wave_count_even_after_a_same_tick_end() {
+        use pharmakos_sim::attack::{AttackRow, NEVER, Phase};
+        use pharmakos_sim::tables::BeaconId;
+        let mut row = AttackRow::fresh(BeaconId::new(3));
+        assert!(!super::launched(&row), "a fresh row has not launched");
+        row.waves_used = 1;
+        row.phase = Phase::Gathering;
+        row.launched_at = NEVER;
+        assert!(
+            super::launched(&row),
+            "ended on its launch tick, it launched"
+        );
+        row.waves_used = 0;
+        row.phase = Phase::Launched;
+        row.launched_at = 120;
+        assert!(
+            !super::launched(&row),
+            "a force still out from an earlier segment was counted when it launched there; the count alone decides"
+        );
+    }
+
+    /// E22: the total of a run's segments is refused past a `u32`, never
+    /// saturated, and so is a segment index past a `usize`.
+    #[test]
+    fn a_count_past_its_type_is_refused() {
+        assert_eq!(played(vec![3_600, 6_000]).ticks(), Ok(9_600));
+        let refused = played(vec![u32::MAX, 1]).ticks().expect_err("past a u32");
+        assert_eq!(refused.code, Exit::Internal);
+        assert_eq!(next_index(4), Ok(5));
+        assert_eq!(
+            next_index(usize::MAX).map_err(|failure| failure.code),
+            Err(Exit::Internal)
+        );
+    }
+
+    /// A committed chain that is there and cannot be read is the file's
+    /// fault, said with its error, not a chain that is missing (E22). The
+    /// goldens are outside `tests/golden/`, so the run writes no fresh
+    /// chain into the tree the `golden` step and the cross-OS artefact read
+    /// (fix pass 1 of #219, item 8).
+    #[test]
+    fn a_committed_chain_that_cannot_be_read_is_an_input_error() {
+        let folder = crate::target_dir()
+            .expect("a target directory")
+            .join("scratch")
+            .join("nite3-unreadable-chain");
+        let golden = "scratch/nite3-unreadable/expected.hashes.txt";
+        // A folder where the chain's file should be: there, and not a file.
+        std::fs::create_dir_all(folder.join(golden)).expect("a scratch folder");
+        let refused = hash_chain_equals(&folder, golden, &played(vec![1])).expect_err("refused");
+        assert_eq!(refused.code, Exit::Input, "{}", refused.message);
+        // And one that is not there is the assertion's own answer.
+        let missing = "scratch/nite3-missing/expected.hashes.txt";
+        let answer = hash_chain_equals(&folder, missing, &played(vec![1])).expect("an answer");
+        assert!(
+            answer.is_err_and(|why| why.contains("nothing is committed")),
+            "a missing chain is a failed assertion"
+        );
+        for written in ["nite3-unreadable", "nite3-missing"] {
+            let fresh = crate::target_dir()
+                .expect("a target directory")
+                .join("golden")
+                .join("scenarios")
+                .join(written);
+            assert!(!fresh.exists(), "{} was written", fresh.display());
+        }
+    }
 
     /// The workspace root: this crate is `<root>/crates/gamectl`.
     fn root() -> &'static Path {

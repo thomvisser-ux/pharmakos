@@ -295,14 +295,17 @@ const SCRIPTS: &[&str] = &[
     "host_link.gd",
     "instance_log.gd",
     "lobby.gd",
+    "lobby_shot.gd",
     "mesher_rules.gd",
     "picker_shot.gd",
+    "ring_shot.gd",
     "rows.gd",
     "rows_shot.gd",
     "rule_list.gd",
     "rule_list_shot.gd",
     "smoke_check.gd",
     "strings.gd",
+    "templates_shot.gd",
     "value_field.gd",
     "values.gd",
     "vista.gd",
@@ -2898,4 +2901,389 @@ fn every_count_the_bridge_sends_is_read_through_int_of() {
     assert!(
         read("scripts/client_check.gd").contains("_check_the_unreadable_counts(editor, failures)")
     );
+}
+
+// --- S3's `prob`, part 1: the Probation lobby, the guided pick, the memos, the ring --------
+
+/// The New match button names the preset New match writes, through the string table's
+/// `preset_<name>` row fed `HostLink.PRESET` itself (no second literal), and the table has a
+/// row for every preset the schema names; the status line names the hosted preset through the
+/// same rows. Nothing says what a preset does.
+#[test]
+fn the_new_match_button_names_the_preset_it_writes_from_the_one_constant() {
+    let lobby = read("scripts/lobby.gd");
+    let strings = read("scripts/strings.gd");
+    let text = gd_function(&lobby, "new_match_text");
+    assert!(
+        text.iter()
+            .any(|line| line.contains("preset_name(HostLink.PRESET)")),
+        "the label is the constant the lobby writes: {text:?}"
+    );
+    let build = gd_function(&lobby, "_build_ui");
+    assert!(
+        build
+            .iter()
+            .any(|line| line.contains("_button(_chooser, new_match_text(), new_match)")),
+        "the chooser's New match button carries the label: {build:?}"
+    );
+    let name = gd_function(&lobby, "preset_name");
+    assert!(
+        name.iter()
+            .any(|line| line.contains(r#"Strings.text("preset_" + wire)"#)),
+        "a preset is named by its wire name's row: {name:?}"
+    );
+    assert!(string_row(&strings, "lobby_new_match").contains("{preset}"));
+    // The shipped smoke check presses the button by the lobby's own words, so the two never
+    // drift apart (the package's smoke run found the old fixed label missing).
+    assert!(
+        read("scripts/smoke_check.gd").contains("_chooser_button(Lobby.new_match_text())"),
+        "the smoke check finds New match by the lobby's label"
+    );
+    for preset in pharmakos_client_gdext::rig::MatchPreset::ALL {
+        let row = string_row(&strings, &format!("preset_{}", preset.name()));
+        assert!(
+            !row.contains('{'),
+            "a name, with nothing put into it: {row}"
+        );
+    }
+    let host_link = read("scripts/host_link.gd");
+    let written = host_link
+        .lines()
+        .find(|line| line.starts_with(r#"const PRESET := ""#))
+        .expect("host_link.gd's PRESET");
+    let value = written
+        .trim_start_matches(r#"const PRESET := ""#)
+        .trim_end_matches('"');
+    assert!(
+        pharmakos_client_gdext::rig::MatchPreset::of_name(value).is_some(),
+        "PRESET is a preset the schema names: {value}"
+    );
+    // The status line: the gateway's preset through the same rows, a disagreement said.
+    let line = gd_function(&lobby, "preset_line");
+    for needle in [
+        "preset_name(served)",
+        r#""lobby_preset_disagrees""#,
+        r#""lobby_preset_none""#,
+        r#""lobby_status_" + failed"#,
+    ] {
+        assert!(
+            line.iter().any(|one| one.contains(needle)),
+            "`{needle}` in preset_line: {line:?}"
+        );
+    }
+    let start = gd_function(&lobby, "_start");
+    assert!(
+        start
+            .iter()
+            .any(|one| one.contains("vista.bridge.watch_expect_preset(HostLink.PRESET)")),
+        "New match holds the gateway's answer to the preset it wrote: {start:?}"
+    );
+}
+
+/// Any failure the link reports - a refused Resume before its announce, or a match, resumed
+/// or new, that fails after its announce - is shown as it came, and the chooser comes back
+/// with New match (and Resume when a line is remembered and the failure was not that line's
+/// refused Resume), so the words on screen always name a button that is there (S3's plan, E6;
+/// prob's fix pass 1). The lobby reads no word of the refusal and no field of the line, lets
+/// the host go through `host_link.gd`'s `reset` (deferred, never from inside the link's own
+/// signal), and the remembered line stays until New match announces.
+#[test]
+fn a_failure_shows_the_refusal_and_offers_the_chooser_again() {
+    let lobby = read("scripts/lobby.gd");
+    let failed = gd_function(&lobby, "_on_failed");
+    let shown = failed
+        .iter()
+        .position(|line| line.contains(r#"Strings.text(key, {"reason": reason})"#))
+        .expect("the failure is shown as it came");
+    let offered = failed
+        .iter()
+        .position(|line| line.trim() == "_offer_chooser(not _resuming)")
+        .expect("every failure offers the chooser, without Resume after a refused one");
+    assert!(shown < offered, "{failed:?}");
+    for line in &failed {
+        let code = line.trim();
+        assert!(
+            code.starts_with('#') || !(code.contains("reason.") || code.contains("in reason")),
+            "the lobby reads no word of the refusal: {code}"
+        );
+    }
+    let offer = gd_function(&lobby, "_offer_chooser");
+    for needle in [
+        "link.reset.call_deferred()",
+        "_started = false",
+        "_resuming = false",
+        "_announced = false",
+        "_strip.visible = false",
+        "editor.visible = false",
+        r#"_resume_button.visible = resume_too and remembered_line() != """#,
+        "_chooser.visible = true",
+    ] {
+        assert!(
+            offer.iter().any(|line| line.trim().ends_with(needle)),
+            "`{needle}` in _offer_chooser: {offer:?}"
+        );
+    }
+    assert!(
+        !offer
+            .iter()
+            .any(|line| line.contains("REMEMBERED") || line.contains("_forget")),
+        "a refusal it cannot type loses no remembered match: {offer:?}"
+    );
+    let announced = gd_function(&lobby, "_on_announced");
+    assert!(
+        announced
+            .iter()
+            .any(|line| line.trim() == "_announced = true")
+    );
+    assert!(
+        announced
+            .iter()
+            .any(|line| line.trim() == "_resuming = false"),
+        "`_resuming` means a Resume with no announce yet: {announced:?}"
+    );
+    // The three failures are played to the real lobby by the headless client check.
+    assert!(
+        read("scripts/client_check.gd")
+            .contains("await _check_the_lobby_after_a_failure(failures)")
+    );
+    // A connection that cannot be opened ends the link; nothing runs on to an announce.
+    let host_link_text = read("scripts/host_link.gd");
+    let announce = gd_function(&host_link_text, "_read_announce");
+    let stop = announce
+        .iter()
+        .position(|line| line.trim() == "if _done:")
+        .expect("_read_announce stops once the link is done");
+    let emit = announce
+        .iter()
+        .position(|line| line.contains("announced.emit("))
+        .expect("the announce");
+    assert!(stop < emit, "{announce:?}");
+    // The restart clause of the old PLACEHOLDER is gone with the behaviour it described.
+    assert!(
+        !lobby.contains("restarts the client"),
+        "the lobby no longer asks a player to restart after a refused Resume"
+    );
+    // The link lets go of everything it held of the refused host, its tokens included.
+    let host_link = read("scripts/host_link.gd");
+    let reset = gd_function(&host_link, "reset");
+    for needle in [
+        "quit()",
+        "_pid = -1",
+        "_port = 0",
+        "_done = false",
+        r#"_stderr_text = """#,
+    ] {
+        assert!(
+            reset.iter().any(|line| line.trim() == needle),
+            "`{needle}` in reset: {reset:?}"
+        );
+    }
+    let quit = gd_function(&host_link, "quit");
+    assert!(
+        quit.iter()
+            .any(|line| line.trim() == r#"_tokens = ["", ""]"#),
+        "reset forgets the tokens through quit: {quit:?}"
+    );
+}
+
+/// The Ledger's memos: a feed row the bridge marks as the Ledger's is drawn under the speaker
+/// word from the string table in place of the kind, and the recap draws the memos, each as the
+/// gateway wrote it, under a heading only when there are any. The licence line is the prose's
+/// own sentence, drawn whole with it.
+#[test]
+fn the_lobby_draws_the_ledgers_memos_as_the_gateway_wrote_them() {
+    let lobby = read("scripts/lobby.gd");
+    let strings = read("scripts/strings.gd");
+    let row = gd_function(&lobby, "event_text_of");
+    assert!(
+        row.iter()
+            .any(|line| line.contains(r#"row.get("ledger", false)"#))
+            && row.iter().any(|line| line.contains(r#""event_ledger""#)),
+        "{row:?}"
+    );
+    assert!(string_row(&strings, "event_ledger").contains("The Ledger"));
+    assert!(string_row(&strings, "event_ledger").contains("{text}"));
+    let received = gd_function(&lobby, "_on_received");
+    assert!(
+        received
+            .iter()
+            .any(|line| line.contains("_rows.append(event_text_of(row))")),
+        "{received:?}"
+    );
+    let recap = gd_function(&lobby, "recap_text_of");
+    let heading = recap
+        .iter()
+        .position(|line| line.contains(r#""lobby_recap_memos""#))
+        .expect("the memos' heading");
+    assert!(
+        recap
+            .get(heading.saturating_sub(1))
+            .is_some_and(|line| line.contains("if not memos.is_empty():")),
+        "no heading without memos: {recap:?}"
+    );
+    assert!(
+        recap
+            .iter()
+            .any(|line| { line.contains(r#""lobby_recap_memo", {"text": memo.get("text", "")}"#) }),
+        "{recap:?}"
+    );
+    assert!(
+        recap
+            .iter()
+            .any(|line| line.contains(r#""prose": recap.get("prose", "")"#)),
+        "the prose, licence sentence and all, is drawn whole: {recap:?}"
+    );
+    assert!(string_row(&strings, "lobby_recap").contains("{prose}"));
+}
+
+/// The ring: the vista draws a beacon's ring at the radius the view sent, read through
+/// `Values.int_of`, and draws none where the view sent none; it names no subtype.
+#[test]
+fn the_vista_draws_a_beacons_ring_at_the_radius_the_view_sent() {
+    let vista = read("scripts/vista.gd");
+    let set = gd_function(&vista, "_set_ring");
+    assert!(
+        set.iter()
+            .any(|line| line.contains(r#"entity.has("ring")"#))
+            && set
+                .iter()
+                .any(|line| line.contains(r#"Values.int_of(entity["ring"])"#)),
+        "{set:?}"
+    );
+    let show = gd_function(&vista, "_show");
+    assert!(
+        show.iter()
+            .any(|line| line.trim() == "_set_ring(marker, entity)")
+    );
+    let ring = gd_function(&vista, "_ring");
+    assert!(
+        ring.iter()
+            .any(|line| line.contains("band.inner_radius = float(radius)")),
+        "the ring's size is the radius as sent: {ring:?}"
+    );
+    for line in set.iter().chain(&ring) {
+        assert!(
+            !line.contains("subtype"),
+            "the ring names no subtype: {line}"
+        );
+    }
+}
+
+/// The hostless shots `prob` adds draw byte copies of gateway goldens, and each copy is its
+/// golden byte for byte.
+#[test]
+fn the_probation_fixtures_are_the_gateways_goldens() {
+    for (copy, golden) in [
+        (
+            "get_status_probation.json",
+            "get_status_probation/expected.response.json",
+        ),
+        (
+            "recap_probation_round.json",
+            "recap_probation_round/expected.response.json",
+        ),
+        (
+            "recap_probation_ended.json",
+            "recap_probation_ended/expected.response.json",
+        ),
+        ("view_built.jsonl", "view_built/expected.keyframe.jsonl"),
+        (
+            "list_templates_guided.json",
+            "list_templates_guided/expected.response.json",
+        ),
+    ] {
+        let ours = fs::read(godot_dir().join("fixtures").join(copy)).expect("the copy");
+        let theirs = fs::read(
+            godot_dir()
+                .join("..")
+                .join("tests")
+                .join("golden")
+                .join("gateway")
+                .join(golden),
+        )
+        .expect("the golden");
+        assert!(
+            ours == theirs,
+            "godot/fixtures/{copy} is not a byte-identical copy of tests/golden/gateway/{golden}: \
+             the gateway is the producer, so the pull request that moves the golden re-copies it"
+        );
+    }
+    for (script, fixture) in [
+        (
+            "scripts/lobby_shot.gd",
+            "res://fixtures/get_status_probation.json",
+        ),
+        (
+            "scripts/lobby_shot.gd",
+            "res://fixtures/feed_ledger_memo.json",
+        ),
+        (
+            "scripts/lobby_shot.gd",
+            "res://fixtures/recap_probation_round.json",
+        ),
+        ("scripts/ring_shot.gd", "res://fixtures/view_built.jsonl"),
+        ("scripts/ring_shot.gd", "res://fixtures/view_keyframe.jsonl"),
+        (
+            "scripts/templates_shot.gd",
+            "res://fixtures/list_templates_guided.json",
+        ),
+    ] {
+        assert!(read(script).contains(fixture), "{script} draws {fixture}");
+    }
+}
+
+/// A template list the door shut before is said in the checks' own words, never left on
+/// "Reading the templates..." (prob's fix pass 1, review item 7).
+#[test]
+fn a_template_list_that_will_not_come_says_why() {
+    let editor = read("scripts/editor.gd");
+    let draw = gd_function(&editor, "fill_templates");
+    let shut = draw
+        .iter()
+        .position(|line| line.contains("elif shut != \"\":"))
+        .expect("the shut door's branch");
+    let waiting = draw
+        .iter()
+        .position(|line| line.contains("templates_waiting"))
+        .expect("the waiting words");
+    assert!(
+        shut < waiting,
+        "the shut door is said before any waiting: {draw:?}"
+    );
+    assert!(
+        draw.iter()
+            .any(|line| line.contains("Strings.text(\"unchecked_\" + shut")),
+        "{draw:?}"
+    );
+}
+
+/// The guided pick's mark adds no words of the client's: the gateway's sentence already says
+/// "Start here: ...", so the marked button is a look (`GUIDED_LOOK`) and the only words drawn for
+/// it are the gateway's (prob's fix pass 1, review item 4).
+#[test]
+fn the_guided_mark_is_a_look_and_the_words_are_the_gateways() {
+    let editor = read("scripts/editor.gd");
+    let strings = read("scripts/strings.gd");
+    assert!(
+        !strings.contains("\"template_guided\""),
+        "the string table holds no words for the mark"
+    );
+    let draw = gd_function(&editor, "fill_templates");
+    assert!(
+        draw.iter()
+            .any(|line| line.trim() == "button.self_modulate = GUIDED_LOOK"),
+        "{draw:?}"
+    );
+    assert!(
+        draw.iter()
+            .any(|line| line.contains("why.text = String(template.get(\"guided_reason\", \"\"))")),
+        "{draw:?}"
+    );
+    let guided = draw
+        .iter()
+        .skip_while(|line| !line.contains("if guided:"))
+        .take_while(|line| !line.contains("box.add_child(why)"))
+        .filter(|line| line.contains("Strings.text("))
+        .count();
+    assert_eq!(guided, 0, "no client words in the mark's branch: {draw:?}");
 }
