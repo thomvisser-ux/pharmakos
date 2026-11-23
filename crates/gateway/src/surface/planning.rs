@@ -573,7 +573,7 @@ impl Surface {
         // planning door: the shape it reads is the frozen snapshot's.
         if !self.time.planning_open() {
             return Err(Error::phase_closed(said!(
-                "`set_value_text` reads the frozen planning snapshot, which is open only in a                  Lull: ask in a Lull"
+                "`set_value_text` reads the frozen planning snapshot, open only in a Lull: ask in a Lull"
             )));
         }
         let seat = Surface::seat_of(subject, "a value to type")?;
