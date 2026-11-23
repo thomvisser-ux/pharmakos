@@ -1317,6 +1317,89 @@ fn a_wounded_safest_selector_counts_the_repair_search_it_reads() {
     );
 }
 
+/// Every decision's figure over a Push of seat 0's `route` followed by a long
+/// wait (so the route never ends and no fallback decides), `ticks` ticks of
+/// it, each value read once (a decision's figure stands until the next
+/// decision), the first decision's left out: it also makes the core's seam
+/// choice.
+fn later_decisions(world: World, route: &str, ticks: u32) -> Vec<u64> {
+    let wait = concat!(
+        r#"{"label":"after","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
+        r#""timeout_ms":600000}"#
+    );
+    let mut runner = open(world, &format!("{route},{wait}"));
+    let mut seen: Vec<u64> = Vec::new();
+    let _ = play(&mut runner, ticks, |world, _| {
+        let value = world.decision_work(0).expect("seat 0").expect("measured");
+        if seen.last() != Some(&value) {
+            seen.push(value);
+        }
+    });
+    seen.into_iter().skip(1).collect()
+}
+
+/// A row committing protected boxes writes each box once: one decision unit
+/// a box, at the commit (lane `dunit`, fix pass 1).
+#[test]
+fn a_committed_row_counts_the_boxes_it_writes() {
+    let fixture = world_at(SEED, 2, &[180_000]);
+    let [x, y, z] = core_voxel(&fixture);
+    let boxed = |dx: i32| {
+        format!(
+            r#"{{"min":{{"x":{},"y":{},"z":{z}}},"max":{{"x":{},"y":{},"z":{z}}}}}"#,
+            x + dx,
+            y - 1,
+            x + dx + 1,
+            y + 1
+        )
+    };
+    let route = format!(
+        r#"{{"label":"build","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{{"set_mandate_settings":{{"build":{{"protected_areas":[{},{},{}]}}}}}}]}},"timeout_ms":120000}}"#,
+        boxed(3),
+        boxed(6),
+        boxed(9)
+    );
+    let units = later_decisions(fixture, &route, 1_200);
+    println!("boxes: {units:?}");
+    assert_eq!(
+        units,
+        vec![0, 3, 1],
+        "the visit's walk and interface charge nothing, the commit its three boxes, then the wait one node a decision"
+    );
+}
+
+/// A row adding a wall target checks its box column by column before it is
+/// written: one decision unit a column checked (lane `dunit`, fix pass 1).
+#[test]
+fn a_committed_wall_counts_the_columns_it_checks() {
+    let fixture = world_at(SEED, 2, &[180_000]);
+    let [x, y, _] = core_voxel(&fixture);
+    // A three-by-two box four columns east of the core, from the lowest
+    // ground under it to three voxels over the highest.
+    let (lx, ly, hx, hy) = (x + 4, y - 1, x + 6, y);
+    let mut grounds = Vec::new();
+    for cy in ly..=hy {
+        for cx in lx..=hx {
+            grounds.push(fixture.voxels().top_solid_z(cx, cy).expect("ground"));
+        }
+    }
+    let floor = *grounds.iter().min().unwrap();
+    let top = *grounds.iter().max().unwrap() + 3;
+    let route = format!(
+        r#"{{"label":"wall","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{{"add_build_target":{{"target":{{"blueprint_id":"wall","anchor":{{"voxel":{{"x":{lx},"y":{ly},"z":{}}}}},"wall_box":{{"min":{{"x":{lx},"y":{ly},"z":{floor}}},"max":{{"x":{hx},"y":{hy},"z":{top}}}}}}}}}}}]}},"timeout_ms":120000}}"#,
+        floor + 1
+    );
+    let units = later_decisions(fixture, &route, 1_200);
+    println!("wall: {units:?}");
+    let columns = u64::try_from(grounds.len()).unwrap();
+    assert_eq!(columns, 6, "a three-by-two box");
+    assert_eq!(
+        units,
+        vec![0, columns, 1],
+        "the visit's walk and interface charge nothing, the commit its six columns, then the wait one node a decision"
+    );
+}
+
 #[test]
 fn the_decision_tick_counts_its_evaluation_units() {
     // P1's counted half (S1's plan, section 5): one evaluation unit per

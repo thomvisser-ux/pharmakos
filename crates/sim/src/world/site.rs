@@ -397,6 +397,9 @@ pub fn check_wall(world: &World, beacon: BeaconId, wall: WallBox) -> Result<(), 
     let top = i32::from(wall.top);
     for y in i32::from(ly)..=i32::from(hy) {
         for x in i32::from(lx)..=i32::from(hx) {
+            // One decision unit a column checked: every caller is a decision
+            // committing a row (lane `dunit`).
+            crate::seams::Meter::rows(world.decision_meter(), 1);
             let ground = ground_under_walls(world, x, y).ok_or(WallRefused::OffTheGround)?;
             if ground < i32::from(wall.floor) {
                 return Err(WallRefused::OffTheGround);

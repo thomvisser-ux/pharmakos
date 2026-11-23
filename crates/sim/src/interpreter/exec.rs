@@ -1468,6 +1468,8 @@ fn commit_row(
             if !protected.is_empty() {
                 world.clear_targets(beacon, TargetKind::Protected);
                 for (centre, area) in protected {
+                    // One decision unit a box written (lane `dunit`).
+                    world.charge_decision(1);
                     world
                         .add_area(beacon, AreaKind::Protected, point_of(*centre), *area)
                         .map_err(|_| StepFailure::TargetsUnwritten)?;
@@ -1476,6 +1478,8 @@ fn commit_row(
             if !probes.is_empty() {
                 world.clear_targets(beacon, TargetKind::Probe);
                 for (centre, area) in probes {
+                    // One decision unit a box written (lane `dunit`).
+                    world.charge_decision(1);
                     world
                         .add_area(beacon, AreaKind::Probe, point_of(*centre), *area)
                         .map_err(|_| StepFailure::TargetsUnwritten)?;
