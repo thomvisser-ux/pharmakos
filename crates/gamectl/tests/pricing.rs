@@ -206,3 +206,108 @@ fn easy_prices_every_step_it_composes_as_the_verifier_does() {
         );
     }
 }
+
+/// Every step of `seals` priced by Easy and by the verifier on `rules`, held
+/// equal; answers each step with the verifier's price.
+fn priced_alike(seals: &[String], rules: &str) -> Vec<(Json, i64)> {
+    let easy = Easy::new(rules).expect("the operator reads the rules text");
+    let table = RulesTable::from_canonical_json(rules).expect("a rules table");
+    let rates = Rates::from_rules(&table).expect("the rate card");
+    let mut priced: Vec<(Json, i64)> = Vec::new();
+    for step in seals.iter().flat_map(|seal| route_steps(seal)) {
+        let decoded: Step = pharmakos_proto::json::decode_json(&step).expect("a gp.v1.Step");
+        let verifier = i64::try_from(step_ms(&decoded, &rates).raw()).expect("a duration");
+        let operator = easy.on_site_ms(&step).expect("Easy prices the step");
+        assert_eq!(
+            operator,
+            verifier,
+            "{}: {}",
+            label(&step),
+            pharmakos_proto::json::write(&step)
+        );
+        priced.push((step, verifier));
+    }
+    priced
+}
+
+/// A step that reaches the settings edit's cap is priced at the cap by both
+/// (fix pass 2, item 6): on a rules text whose `edit_settings_max_ms` holds
+/// one field past the base, every composed edit of three fields or more
+/// reaches it, and the steps whose verifier price fell from the committed
+/// rules' are exactly the ones that did.
+#[test]
+fn easy_prices_a_step_at_the_settings_cap_as_the_verifier_does() {
+    let base = rules_json();
+    let capped = base.replace(
+        "\"edit_settings_max_ms\": 6000,",
+        "\"edit_settings_max_ms\": 2500,",
+    );
+    assert_ne!(capped, base, "the rules text carries the cap");
+    let seals = hosted_seals(pharmakos_sim::DETERMINISM_MATCH_SEED, 2, 2, &capped);
+    let at_cap = priced_alike(&seals, &capped);
+    let table = RulesTable::from_canonical_json(&base).expect("a rules table");
+    let uncapped = Rates::from_rules(&table).expect("the rate card");
+    let reached = at_cap
+        .iter()
+        .filter(|(step, price)| {
+            let decoded: Step = pharmakos_proto::json::decode_json(step).expect("a gp.v1.Step");
+            i64::try_from(step_ms(&decoded, &uncapped).raw()).expect("a duration") > *price
+        })
+        .count();
+    eprintln!("{reached} of {} composed steps reach the cap", at_cap.len());
+    assert!(reached > 0, "a composed step reaches the cap");
+}
+
+/// Easy's own composed raid and guard post, priced as the verifier prices
+/// them (fix pass 2, item 6). No hosted seal on the committed rules holds
+/// either within the suite's rounds (no enemy is sighted in time, and no
+/// commander dies), so the commander sees across the map here: round 1 sees
+/// the enemy commander and raids it (its staging at the post's site, its
+/// retarget `NONE`), and a commander the raid kills is guarded in round 2.
+#[test]
+fn easy_prices_its_composed_raid_and_guard_as_the_verifier_does() {
+    let base = rules_json();
+    let row = "\"vision_radius_voxels\": 10\n  },\n  \"beacon\"";
+    let wide = base.replace(row, &row.replace("10", "500"));
+    assert_ne!(wide, base, "the rules text carries the commander's sight");
+    let mut seals: Vec<String> = Vec::new();
+    for (seed, seats) in [
+        (pharmakos_sim::DETERMINISM_MATCH_SEED, 2),
+        (0x0000_0000_ca5c_aded, 2),
+        (20, 2),
+    ] {
+        seals.extend(hosted_seals(seed, seats, 3, &wide));
+    }
+    let priced = priced_alike(&seals, &wide);
+    let raids: Vec<&Json> = priced
+        .iter()
+        .map(|(step, _)| step)
+        .filter(|step| label(step).starts_with("place_raid"))
+        .collect();
+    let guards = priced
+        .iter()
+        .filter(|(step, _)| label(step).starts_with("place_guard"))
+        .count();
+    eprintln!("composed raids {}, guards {guards}", raids.len());
+    assert!(!raids.is_empty(), "Easy composed a raid");
+    for raid in &raids {
+        let attack = raid
+            .get("place_beacon")
+            .and_then(|place| place.get("initial"))
+            .and_then(|initial| initial.get("mandate"))
+            .and_then(|mandate| mandate.get("attack"))
+            .expect("an Attack mandate");
+        assert!(
+            attack.get("staging").is_some(),
+            "{}",
+            pharmakos_proto::json::write(raid)
+        );
+        assert_eq!(
+            attack.get("retarget"),
+            Some(&Json::String(String::from("NONE"))),
+            "{}",
+            pharmakos_proto::json::write(raid)
+        );
+    }
+    assert!(guards > 0, "Easy composed a guard post");
+}

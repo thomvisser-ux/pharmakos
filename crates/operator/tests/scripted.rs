@@ -3865,3 +3865,44 @@ fn a_begun_chain_refused_its_stone_weighs_the_rest() {
         played.why
     );
 }
+
+/// The Spire's time is its priced step's, paid out of the hold (fix pass 2,
+/// item 6): the same Hold & Build round with and without the licence, its
+/// goals unchanged, holds shorter by exactly the `queue_spire` step's price
+/// as Easy prices it (`crates/gamectl/tests/pricing.rs` holds that price to
+/// the verifier's).
+#[test]
+fn the_spire_takes_its_priced_time_out_of_the_hold() {
+    let world = || {
+        let mut world = Script::busy(0);
+        world.features.retain(|feature| feature.id != "seam_20_60");
+        world.survey_post = Some([34, 34, GROUND]);
+        world.treasury = 10_000;
+        world
+    };
+    let hold_of = |world: Script| {
+        let (script, played) = play(world);
+        assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+        let ops = composing_ops(&script.transcript);
+        op_value(&ops, "replace", "/declarative/route/1/hold/ms")
+            .and_then(|value| match value {
+                Json::Number(n) => n.parse::<i64>().ok(),
+                _ => None,
+            })
+            .expect("the hold, a number")
+    };
+    let unlicensed = hold_of(world());
+    let mut licensed = world();
+    licensed.licences = vec![SPIRE_LICENCE];
+    let with_spire = hold_of(licensed);
+    let easy = Easy::new(&rules_json()).expect("the rules text reads");
+    let spire = easy
+        .on_site_ms(&pharmakos_operator::steps::spire("b_00"))
+        .expect("the Spire's step prices");
+    assert!(spire > 0);
+    assert_eq!(
+        unlicensed - with_spire,
+        spire,
+        "{unlicensed} and {with_spire}"
+    );
+}
