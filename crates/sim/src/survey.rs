@@ -2184,6 +2184,105 @@ mod tests {
         );
     }
 
+    /// A meter that keeps its rows and its measured units apart.
+    #[derive(Default)]
+    struct Counted {
+        rows: core::cell::Cell<u64>,
+        measured: core::cell::Cell<u64>,
+    }
+
+    impl crate::seams::Meter for Counted {
+        fn rows(&self, rows: usize) {
+            let rows = u64::try_from(rows).unwrap_or_else(|error| panic!("{error}"));
+            self.rows.set(self.rows.get() + rows);
+        }
+
+        fn measured(&self, units: Result<u64, crate::seams::Unmeasured>) {
+            let units = units.unwrap_or_else(|reason| panic!("measured: {reason:?}"));
+            self.measured.set(self.measured.get() + units);
+        }
+    }
+
+    /// One decision of one scout with one due sighting, its counted work
+    /// tallied by hand from the loops it runs (as `dunit`'s
+    /// `decision_units_equal_the_primitive_steps_counted` tallies a resolve):
+    /// the rows, and apart from them the pops of the served legs it prices.
+    #[test]
+    fn the_scouts_decision_counts_exactly_the_rows_it_reads_and_the_pops() {
+        for pricing in [false, true] {
+            let mut runner = arranged(1, 1);
+            while !(runner.world().is_decision_tick()
+                && super::pricing_decision(runner.world()) == pricing)
+            {
+                step(&mut runner);
+            }
+            let world = runner.world();
+            let seat = SeatId::new(0);
+            let units = u64::from(world.units().len());
+            let table = world.sightings();
+            let rows = u64::try_from(table.seats().len()).unwrap_or_else(|error| panic!("{error}"));
+            let mine = table
+                .seats()
+                .iter()
+                .fold(0_u64, |count, who| count + u64::from(*who == 0));
+            let first_member = (0..crate::math::index::row(world.units().len()))
+                .position(|row| super::member(world, seat, Members::Survey, row))
+                .unwrap_or_else(|| panic!("a member"));
+            let first_member =
+                u64::try_from(first_member).unwrap_or_else(|error| panic!("{error}"));
+            // The sighting is a beacon's, so its own range covers it: the armed
+            // walk reads the table up to it.
+            let armed_at = (0..table.seats().len())
+                .position(|slot| table.seats().get(slot).copied() == Some(0))
+                .unwrap_or_else(|| panic!("the sighting"));
+            let armed_at = u64::try_from(armed_at).unwrap_or_else(|error| panic!("{error}"));
+            let threat = Counted::default();
+            crate::defend::for_each_known_threat_metered(world, seat, &threat, |_| {});
+            let n: u64 = 1;
+            let expected = threat.rows.get()
+                // The member scan, up to the first member.
+                + first_member + 1
+                // The rank walk: `n + 1` passes over the table, and a `due_in`
+                // read for each of the seat's rows on each.
+                + (n + 1) * (rows + mine)
+                // `walked_by_another`, the whole unit table, for the sighting.
+                + n * units
+                // The armed walk, up to the sighting itself.
+                + n * (armed_at + 1)
+                // `keep`: every unit row, and the member's find over the list.
+                + units + n
+                // `insert`: the sighting; every unit row; the member's head
+                // find over the list; its empty list's walks; its one
+                // position; and the splice's head find, at the front.
+                + n + units + n + 1 + n
+                // `depart_or_scan`: every unit row; the head find and the
+                // list's one entry; `list_leaves_time`'s entry and its bound
+                // leg, and on a pricing decision its served leg too.
+                + units + n + 1 + 1 + 1 + u64::from(pricing);
+            let before = crate::targeting::popped(runner.world_mut().scratch_mut())
+                .unwrap_or_else(|reason| panic!("{reason:?}"));
+            let meter = Counted::default();
+            decide_seat(runner.world_mut(), seat, Members::Survey, &meter);
+            let after = crate::targeting::popped(runner.world_mut().scratch_mut())
+                .unwrap_or_else(|reason| panic!("{reason:?}"));
+            assert_eq!(
+                meter.rows.get(),
+                expected,
+                "pricing {pricing}: the rows read"
+            );
+            assert_eq!(
+                meter.measured.get(),
+                after - before,
+                "pricing {pricing}: the pops of the legs priced"
+            );
+            assert_eq!(
+                meter.measured.get() > 0,
+                pricing,
+                "pops are counted on a pricing decision alone"
+            );
+        }
+    }
+
     /// One scout, 110 s left, two needed enemy beacon sightings 100 columns
     /// either side of the post: each alone is a 50 s walk, both together are
     /// not inside the Push. The one left out is first dropped as crowded out
