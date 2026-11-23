@@ -61,7 +61,7 @@ use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_operator::easy::{
     EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, SAFE_MAX_RAISED, SAFE_REACH_MS,
 };
-use pharmakos_operator::{Easy, FailedStones, Submitted};
+use pharmakos_operator::{Easy, FailedStones, PushUnread, StonesUnread, Submitted};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
@@ -2294,4 +2294,110 @@ fn a_stone_made_to_time_out_is_not_weighed_again() {
         "{toward:?}"
     );
     assert_eq!(played.failed_stones, FailedStones::None, "{}", played.why);
+}
+
+/// Round 2 of [`failed_stone_match`]'s match twice from one save (fix pass 4,
+/// item 2): its Lull saved, Easy plays seat 0 on the live surface, then on a
+/// fresh surface resumed from the save. Answers the live round and the
+/// resumed one.
+fn round_two_live_and_resumed() -> (pharmakos_operator::Played, pharmakos_operator::Played) {
+    let rules = rules_json();
+    let name = "resumed-stone";
+    let (mut surface, mut seats) = failed_stone_surface(name, &rules);
+    seats.plan(&mut surface);
+    let token = in_process_token(&mut surface, 0);
+    let submitted = result(
+        &call(
+            &mut surface,
+            &token,
+            "submit_plan",
+            Json::Object(vec![(
+                String::from("playbook_jsonc"),
+                Json::String(timed_stone_playbook(1_000)),
+            )]),
+        ),
+        "submit_plan",
+    );
+    assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
+    play_to_next_lull(&mut surface);
+    let saved = surface.lull_save().expect("a Lull saves");
+    let as_composed = |text: &str| text.to_owned();
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    let (_, live) = easy_plays_seat_zero(&mut surface, &mut easy, &as_composed);
+    let host = Host::open_from(
+        &rules,
+        PROBATION_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 3,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut resumed = Surface::new(
+        &match_id(name),
+        PROBATION_SEED,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface")
+    .resume(
+        host,
+        &saved,
+        pharmakos_gateway::save::Continuation {
+            generation: 1,
+            last_tick: 0,
+        },
+    )
+    .expect("the Lull resumes");
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    let (_, again) = easy_plays_seat_zero(&mut resumed, &mut easy, &as_composed);
+    (live, again)
+}
+
+/// A resumed Lull reads the last Push as unread, and says so (fix pass 4,
+/// item 2): the live round knows its stone toward `seam_190_124` failed; the
+/// same round resumed from a save, whose feed shows no Push, knows nothing of
+/// it, and its round says so in a typed state and in its "why", never as
+/// "nothing failed".
+#[test]
+fn a_resumed_lull_reads_the_last_push_as_unread() {
+    let (live, resumed) = round_two_live_and_resumed();
+    assert_eq!(
+        live.failed_stones,
+        FailedStones::Known(vec![String::from("seam_190_124")]),
+        "{}",
+        live.why
+    );
+    assert_eq!(
+        resumed.failed_stones,
+        FailedStones::Unread {
+            known: Vec::new(),
+            why: StonesUnread::Push(PushUnread::Resumed),
+        },
+        "{}",
+        resumed.why
+    );
+    assert!(
+        resumed.why.contains("not in this Lull's feed"),
+        "{}",
+        resumed.why
+    );
+}
+
+/// The review's probe P1(b) (fix pass 4, item 2): a resumed Lull seals what
+/// the unresumed one does. It cannot until the save carries the last Push's
+/// step outcomes and deaths, which the owner approved on 2026-11-23 and lane
+/// `opsave` builds; this is the red test that lane turns green.
+#[test]
+#[ignore = "red until lane opsave: the save carries the last Push's step outcomes and deaths (owner, 2026-11-23)"]
+fn a_resumed_lull_seals_what_the_unresumed_one_does() {
+    let (live, resumed) = round_two_live_and_resumed();
+    assert_eq!(
+        live.playbook_jsonc, resumed.playbook_jsonc,
+        "a resumed Lull seals what the unresumed one does"
+    );
 }

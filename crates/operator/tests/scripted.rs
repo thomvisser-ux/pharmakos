@@ -33,7 +33,7 @@ use pharmakos_operator::easy::{
     EASY_CANDIDATES, LAST_SEAL_CALLS, PAGES_MAX, RAID_FORCE_SIZE, RAID_TARGETS_MAX,
     SAFE_MAX_RAISED, STONE_CALLS, STONE_TARGETS_MAX, SURVEY_PROBE_CALLS,
 };
-use pharmakos_operator::{Easy, FailedStones, StonesUnread, Submitted};
+use pharmakos_operator::{Easy, FailedStones, PushUnread, StonesUnread, Submitted};
 use pharmakos_proto::json::{Json, read, write};
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,17 @@ enum Travel {
     FigureUnreached,
 }
 
+/// Whether the scripted feed shows the last Push.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Push {
+    /// Its digest counts the Push's `segment_ended`, as every Lull's after
+    /// the first does.
+    Shown,
+    /// It counts nothing: a Lull resumed from a save, whose feed is empty,
+    /// or a first round, which had no Push.
+    NotShown,
+}
+
 /// How the scripted paged reads page.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Paging {
@@ -183,6 +194,9 @@ struct Script {
     /// The seat's own step lines in the last Push's feed, `(kind, text)`, in
     /// order, after the deaths; the digest counts their `step_failed`s.
     feed_steps: Vec<(&'static str, String)>,
+    /// Whether the feed shows the last Push: its digest counts the Push's
+    /// `segment_ended`.
+    push: Push,
     /// The seat's own drafts, by id: the round each is stamped with, its
     /// text.
     drafts: BTreeMap<String, (u32, String)>,
@@ -255,6 +269,7 @@ impl Script {
             travel: Travel::Written,
             feed_deaths: Vec::new(),
             feed_steps: Vec::new(),
+            push: Push::Shown,
             drafts: BTreeMap::new(),
             refuse_draft: None,
             defend_post: None,
@@ -557,6 +572,12 @@ impl Script {
             ])
         }));
         let mut counts: Vec<Json> = Vec::new();
+        if self.push == Push::Shown {
+            counts.push(obj(vec![
+                ("kind", Json::String(String::from("segment_ended"))),
+                ("count", num(1)),
+            ]));
+        }
         let count = i64::try_from(self.feed_deaths.len()).unwrap();
         if count > 0 {
             counts.push(obj(vec![
@@ -4392,5 +4413,60 @@ fn a_built_in_seat_writes_no_draft() {
             .any(|line| line.starts_with("save_draft")),
         "{:#?}",
         script.transcript
+    );
+}
+
+/// A Lull after the first whose feed shows no Push, as a Lull resumed from a
+/// save opens (fix pass 4, item 2), knows neither the last Push's deaths nor
+/// its failed steps: both are the one typed state, no carried seal is read,
+/// every stone is weighed, no guard is added for a death, and the "why" says
+/// so. A first round, which had no Push, reads nothing as unread.
+#[test]
+fn a_lull_whose_feed_shows_no_push_reads_it_as_unread() {
+    let mut resumed = a_stone_failed_last_round();
+    resumed.push = Push::NotShown;
+    resumed.feed_steps.clear();
+    resumed.feed_deaths.clear();
+    let (script, played) = play(resumed);
+    assert_eq!(
+        played.failed_stones,
+        FailedStones::Unread {
+            known: Vec::new(),
+            why: StonesUnread::Push(PushUnread::Resumed),
+        }
+    );
+    assert_eq!(
+        towards(&script.transcript, "vent_56_32"),
+        1,
+        "{}",
+        played.why
+    );
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("get_draft")),
+        "{:#?}",
+        script.transcript
+    );
+    assert!(
+        played.why.contains("not in this Lull's feed"),
+        "{}",
+        played.why
+    );
+    assert!(
+        !composing_ops(&script.transcript)
+            .iter()
+            .any(|op| compact(op).contains("DEFEND")),
+        "no guard for a death it cannot see"
+    );
+    let mut first = far_vent();
+    first.push = Push::NotShown;
+    let (_, played) = play(first);
+    assert_eq!(played.failed_stones, FailedStones::None);
+    assert!(
+        !played.why.contains("not in this Lull's feed"),
+        "{}",
+        played.why
     );
 }

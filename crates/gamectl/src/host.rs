@@ -89,7 +89,7 @@ use pharmakos_gateway::Code;
 use pharmakos_gateway::advice::{Advice, StartHere, SuggestedValue, Suggestion};
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::serve::{self, Advisor, BuiltInSeat, Operators, Setup};
-use pharmakos_operator::{Easy, FailedStones, Played, RulesError, StonesUnread};
+use pharmakos_operator::{Easy, FailedStones, Played, PushUnread, RulesError, StonesUnread};
 use pharmakos_proto::json::Json;
 
 use crate::exit::Failure;
@@ -300,6 +300,10 @@ fn stones_unread(stones: &FailedStones) -> Option<String> {
         return None;
     };
     Some(match why {
+        StonesUnread::Push(PushUnread::Resumed) => strings::operator_push_not_in_feed(),
+        StonesUnread::Push(PushUnread::PastPages) => {
+            strings::operator_failures_past_pages(pharmakos_operator::easy::PAGES_MAX)
+        }
         StonesUnread::NoCarriedSeal => strings::operator_no_carried_seal(),
         StonesUnread::CarriedOfRound(round) => strings::operator_carried_of_round(*round),
         StonesUnread::CarriedUnread(refused) => {
@@ -475,6 +479,29 @@ mod tests {
             said.contains("INTERNAL (the router broke a chain)"),
             "{said}"
         );
+    }
+
+    /// Failed stones not all known are said, each with its cause (fix pass
+    /// 4, items 1 and 2).
+    #[test]
+    fn failed_stones_not_all_known_are_said() {
+        let mut resumed = played(None, Vec::new());
+        resumed.failed_stones = FailedStones::Unread {
+            known: Vec::new(),
+            why: StonesUnread::Push(PushUnread::Resumed),
+        };
+        let said = refusals_said(0, &resumed).expect("a line");
+        assert!(said.contains("not in this Lull's feed"), "{said}");
+        let mut none_carried = played(None, Vec::new());
+        none_carried.failed_stones = FailedStones::Unread {
+            known: Vec::new(),
+            why: StonesUnread::NoCarriedSeal,
+        };
+        let said = refusals_said(0, &none_carried).expect("a line");
+        assert!(said.contains("carried no seal"), "{said}");
+        let mut known = played(None, Vec::new());
+        known.failed_stones = FailedStones::Known(vec![String::from("seam_1_2")]);
+        assert_eq!(refusals_said(0, &known), None);
     }
 
     #[test]

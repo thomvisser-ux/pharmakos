@@ -123,6 +123,7 @@ pub use easy::{
     Advice, Easy, FailedStones, Played, StartHere, StonesUnread, Submitted, SuggestedValue,
     Suggestion,
 };
+pub use situation::PushUnread;
 pub use tuning::RulesError;
 pub use wire::{Call, Refused};
 

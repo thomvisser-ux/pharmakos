@@ -189,6 +189,26 @@ pub fn operator_unsaid(earlier: &[(&str, u64)]) -> String {
     format!("(Earlier lines not written: {}.)", each.join(", "))
 }
 
+/// A built-in seat's Lull shows no Push in its feed (one resumed from a save),
+/// so which of its stones failed is not known.
+#[must_use]
+pub fn operator_push_not_in_feed() -> String {
+    String::from(
+        "The last Push is not in this Lull's feed (a Lull resumed from a save opens with an \
+         empty one), so whether a stone failed in it is not known and every stone was weighed.",
+    )
+}
+
+/// A built-in seat's failed steps were not all read within the pages a round
+/// reads.
+#[must_use]
+pub fn operator_failures_past_pages(pages: u32) -> String {
+    format!(
+        "The last Push's failed steps were not all read within {pages} pages, so a stone whose \
+         failure was not read was weighed."
+    )
+}
+
 /// A built-in seat's steps failed in the last Push, and the gateway carried
 /// no seal of its own into the Lull to say which were stones.
 #[must_use]

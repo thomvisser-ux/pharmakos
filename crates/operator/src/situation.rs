@@ -299,10 +299,42 @@ pub(crate) enum LastPush {
     Survived,
     /// A `commander_died` line names this seat's commander.
     Died,
-    /// Some commander died where this seat could see, and the lines naming
-    /// whose were not all reached within [`PAGES_MAX`] pages. Easy then adds
-    /// no guard, and its "why" says the feed was not read to its end.
-    Unread,
+    /// Not known, for this reason. Easy then adds no guard for a death, and
+    /// its "why" says why it could not tell.
+    Unread(PushUnread),
+}
+
+/// Why the last Push's lines are not all known to a Lull (fix pass 4, items
+/// 2 and 3): one state for a death and for a failed step.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PushUnread {
+    /// The Lull's feed does not show the last Push at all: a Lull resumed
+    /// from a save opens with an empty feed, and the save does not carry the
+    /// last Push's outcomes.
+    ///
+    /// PLACEHOLDER: a resumed Lull reads the last Push's deaths and failed steps as unread until the save carries them, approved by the owner on 2026-11-23 — lane opsave, S3
+    Resumed,
+    /// The lines were not all reached within [`PAGES_MAX`] pages.
+    PastPages,
+}
+
+/// The route steps of the seat's own that failed in the last Push, by index
+/// from 0, read from its own feed lines (a rule body's steps are numbered in
+/// their body and are left out).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum FailedSteps {
+    /// Not asked for: an advisor does not read them.
+    NotRead,
+    /// Read to the end: these, none when none failed or there was no Push.
+    Known(Vec<usize>),
+    /// Not all known: these were seen, and the rest are not known, for this
+    /// reason.
+    Unread {
+        /// The failed steps that were seen.
+        seen: Vec<usize>,
+        /// Why the rest are not known.
+        why: PushUnread,
+    },
 }
 
 /// Everything the fixed reads told the operator.
@@ -332,11 +364,9 @@ pub(crate) struct Situation {
     pub(crate) enemies: Vec<Enemy>,
     /// Whether the seat's commander died in the last Push.
     pub(crate) last_push: LastPush,
-    /// The route steps of the seat's own that failed in the last Push, by
-    /// index from 0, read from its own feed lines (a rule body's steps are
-    /// numbered in their body and are left out); empty for an advisor, which
-    /// does not read them, and when none failed ([`read_last_push`]).
-    pub(crate) failed_steps: Vec<usize>,
+    /// The route steps of the seat's own that failed in the last Push
+    /// ([`read_last_push`]).
+    pub(crate) failed_steps: FailedSteps,
     /// The template ids the library lists, ascending.
     pub(crate) templates: Vec<String>,
     /// False when `get_view` did not reach its complete page within
@@ -419,7 +449,7 @@ impl Situation {
             .collect::<Result<Vec<Feature>, Refused>>()?;
 
         let seen = read_view(wire, &own)?;
-        let (last_push, failed_steps) = read_last_push(wire, seat, steps)?;
+        let (last_push, failed_steps) = read_last_push(wire, seat, round, steps)?;
         let templates = read_templates(wire)?;
 
         Ok(Situation {
@@ -727,8 +757,8 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
 pub(crate) enum Steps {
     /// Read them.
     Read,
-    /// Leave them unread.
-    Unread,
+    /// Do not ask: [`FailedSteps::NotRead`].
+    Skip,
 }
 
 /// One seat's own step lines, read in the feed's order: the route step
@@ -768,23 +798,24 @@ fn started_index(text: &str) -> Result<usize, Refused> {
 /// Push's own (the gateway starts a new feed when the next Push begins).
 ///
 /// The feed's digests count every kind over the whole segment, so the first
-/// page says whether any commander died where this seat could see and how
-/// many of the seat's own steps failed (a step's lines are told to its seat
-/// alone); only then are the lines read, at most [`PAGES_MAX`] pages. A line
-/// says whose commander it was in its words alone, since a feed event carries
-/// no seat field until its per-kind payload (`gateway.proto`'s `Event`, held
-/// to after S4), so the words are read strictly: the gateway's one string
-/// table writes "The commander of seat N died." and a line that does not read
-/// so is refused, never taken for another seat's. A failed step is the one
-/// whose `step_started` line came last outside a rule's body
-/// (`rule_fired` to `rule_ended`). Failures past the pages read are not
-/// known, and none is reported for them.
+/// page says whether it shows the last Push at all (its `segment_ended`,
+/// which every seat is shown), whether any commander died where this seat
+/// could see and how many of the seat's own steps failed (a step's lines are
+/// told to its seat alone); only then are the lines read, at most
+/// [`PAGES_MAX`] pages. A line says whose commander it was in its words
+/// alone, since a feed event carries no seat field until its per-kind
+/// payload (`gateway.proto`'s `Event`, held to after S4), so the words are
+/// read strictly: the gateway's one string table writes "The commander of
+/// seat N died." and a line that does not read so is refused, never taken
+/// for another seat's. A failed step is the one whose `step_started` line
+/// came last outside a rule's body (`rule_fired` to `rule_ended`).
 ///
-/// A Lull resumed from a save opens with a fresh, empty feed (the save holds
-/// no recap events, as the gateway resumes one), so there it reads as
-/// [`LastPush::Survived`] and the guard a death would add is not added.
-///
-/// PLACEHOLDER: a resumed Lull forgets the last Push's death, which no seat-facing field carries — owner, S5, with Normal and Hard
+/// What is not known is said, never read as "nothing happened": in a Lull
+/// after the first whose feed shows no Push (one resumed from a save, whose
+/// feed is empty) both the death and the failed steps are
+/// [`PushUnread::Resumed`]; deaths past the pages read are
+/// [`PushUnread::PastPages`]. Failures past the pages read are not known, and
+/// none is reported for them.
 ///
 /// # Errors
 ///
@@ -792,79 +823,101 @@ fn started_index(text: &str) -> Result<usize, Refused> {
 fn read_last_push(
     wire: &mut Wire<'_, '_>,
     seat: u8,
+    round: u32,
     steps: Steps,
-) -> Result<(LastPush, Vec<usize>), Refused> {
+) -> Result<(LastPush, FailedSteps), Refused> {
     let misread = |misread: Misread| misread.refused("get_segment_feed");
     // The fullest page the detail ladder serves (256 events), so the bound
     // reaches as far into a busy Push as the page count allows.
     let feed = |cursor: &str| object(vec![("cursor", string(cursor)), ("detail", string("full"))]);
     let mut page = wire.call("get_segment_feed", feed(""))?;
+    let shown = counted(&page, SEGMENT_ENDED).map_err(misread)? > 0;
+    let failed_of = |seen: Vec<usize>, unread: Option<PushUnread>| match (steps, unread) {
+        (Steps::Skip, _) => FailedSteps::NotRead,
+        (Steps::Read, None) => FailedSteps::Known(seen),
+        (Steps::Read, Some(why)) => FailedSteps::Unread { seen, why },
+    };
+    if !shown {
+        // No Push is shown: before the first round's Push there was none,
+        // and after it the feed was not kept (a resumed Lull).
+        return Ok(if round > 1 {
+            (
+                LastPush::Unread(PushUnread::Resumed),
+                failed_of(Vec::new(), Some(PushUnread::Resumed)),
+            )
+        } else {
+            (LastPush::Survived, failed_of(Vec::new(), None))
+        });
+    }
     let deaths = counted(&page, COMMANDER_DIED).map_err(misread)?;
     let failures = match steps {
         Steps::Read => counted(&page, STEP_FAILED).map_err(misread)?,
-        Steps::Unread => 0,
+        Steps::Skip => 0,
     };
-    let mut last_push = if deaths == 0 {
-        LastPush::Survived
-    } else {
-        LastPush::Unread
-    };
+    let mut died = false;
     let mut failed: Vec<usize> = Vec::new();
-    if deaths == 0 && failures == 0 {
-        return Ok((last_push, failed));
-    }
     let (mut deaths_seen, mut failures_seen) = (0_u64, 0_u64);
-    let mut running = Running::default();
     let more = |seen: u64, of: u64| seen < of;
-    for read in 1..=PAGES_MAX {
-        for event in array_of(&page, "events").map_err(misread)? {
-            let kind = text_of(event, "kind").map_err(misread)?;
-            let text = text_of(event, "text").map_err(misread)?;
-            let one = |seen: u64| {
-                seen.checked_add(1).ok_or_else(|| {
-                    malformed("get_segment_feed", "a count of lines that does not fit")
-                })
-            };
-            match kind {
-                COMMANDER_DIED => {
-                    if whose_commander_died(text)? == seat {
-                        last_push = LastPush::Died;
+    if deaths > 0 || failures > 0 {
+        let mut running = Running::default();
+        for read in 1..=PAGES_MAX {
+            for event in array_of(&page, "events").map_err(misread)? {
+                let kind = text_of(event, "kind").map_err(misread)?;
+                let text = text_of(event, "text").map_err(misread)?;
+                let one = |seen: u64| {
+                    seen.checked_add(1).ok_or_else(|| {
+                        malformed("get_segment_feed", "a count of lines that does not fit")
+                    })
+                };
+                match kind {
+                    COMMANDER_DIED => {
+                        if whose_commander_died(text)? == seat {
+                            died = true;
+                        }
+                        deaths_seen = one(deaths_seen)?;
                     }
-                    deaths_seen = one(deaths_seen)?;
-                }
-                "rule_fired" if steps == Steps::Read => running.in_rule = true,
-                "rule_ended" if steps == Steps::Read => running.in_rule = false,
-                "step_started" if steps == Steps::Read && !running.in_rule => {
-                    running.step = Some(started_index(text)?);
-                }
-                STEP_FAILED if steps == Steps::Read => {
-                    if !running.in_rule
-                        && let Some(index) = running.step
-                        && !failed.contains(&index)
-                    {
-                        failed.push(index);
+                    "rule_fired" if steps == Steps::Read => running.in_rule = true,
+                    "rule_ended" if steps == Steps::Read => running.in_rule = false,
+                    "step_started" if steps == Steps::Read && !running.in_rule => {
+                        running.step = Some(started_index(text)?);
                     }
-                    failures_seen = one(failures_seen)?;
+                    STEP_FAILED if steps == Steps::Read => {
+                        if !running.in_rule
+                            && let Some(index) = running.step
+                            && !failed.contains(&index)
+                        {
+                            failed.push(index);
+                        }
+                        failures_seen = one(failures_seen)?;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
+            let deaths_left = !died && more(deaths_seen, deaths);
+            if !deaths_left && !more(failures_seen, failures) {
+                break;
+            }
+            let cursor = text_of(&page, "next_cursor").map_err(misread)?.to_owned();
+            if cursor.is_empty() || read == PAGES_MAX {
+                break;
+            }
+            page = wire.call("get_segment_feed", feed(&cursor))?;
         }
-        let deaths_left = last_push != LastPush::Died && more(deaths_seen, deaths);
-        if !deaths_left && !more(failures_seen, failures) {
-            break;
-        }
-        let cursor = text_of(&page, "next_cursor").map_err(misread)?.to_owned();
-        if cursor.is_empty() || read == PAGES_MAX {
-            break;
-        }
-        page = wire.call("get_segment_feed", feed(&cursor))?;
     }
-    if last_push == LastPush::Unread && !more(deaths_seen, deaths) {
-        last_push = LastPush::Survived;
-    }
+    let last_push = if died {
+        LastPush::Died
+    } else if more(deaths_seen, deaths) {
+        LastPush::Unread(PushUnread::PastPages)
+    } else {
+        LastPush::Survived
+    };
     failed.sort_unstable();
-    Ok((last_push, failed))
+    Ok((last_push, failed_of(failed, None)))
 }
+
+/// The feed's kind for a segment's end, the gateway's `segment_ended`: a
+/// line every seat is shown, so a feed that counts none shows no Push.
+const SEGMENT_ENDED: &str = "segment_ended";
 
 /// The feed's kind for a step's failure, the gateway's `step_failed`.
 const STEP_FAILED: &str = "step_failed";
