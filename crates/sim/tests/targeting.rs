@@ -1035,11 +1035,421 @@ fn the_feature_table_is_regenerated_identically_on_restore() {
     assert!(names.contains(&START_VENT.to_owned()), "{names:?}");
 }
 
+// ---------------------------------------------------------------------------
+// The threat scans a decision reads, counted independently (lane `dunit`)
+// ---------------------------------------------------------------------------
+
+/// The sensor positions a walk asking whether `seat` sees `point` reads: each
+/// position up to and including the first sensor of `seat`'s that sees it, or
+/// every position when none does. Counted from `World::sensor_at`'s own
+/// positions, not from the sim's walk.
+fn seen_rows(world: &World, seat: SeatId, point: [Fx; 3]) -> u64 {
+    let total = world.beacons().seats().len()
+        + world.units().seats().len()
+        + world.structures().seats().len();
+    let mut at = 0_usize;
+    while let Some((sensor, next)) = world.sensor_at(at) {
+        at = next;
+        if sensor.seat == seat && sensor.sees(&pharmakos_sim::sight::RadiusOnly, point) {
+            return u64::try_from(at).unwrap();
+        }
+    }
+    u64::try_from(total).unwrap()
+}
+
+/// The rows one known-threat scan for `seat` reads, counted from the tables:
+/// every unit, structure and beacon row; for each armed living enemy unit,
+/// finished structure and core, the sensor walk asking whether `seat` sees
+/// it ([`seen_rows`]); and for each living enemy beacon, every beacon row
+/// (the search for its seat's core).
+fn threat_scan_rows(world: &World, seat: SeatId) -> u64 {
+    let rules = world.rules();
+    let enemy = |owner: u8| SeatId::new(owner).is_some() && owner != seat.raw();
+    let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
+    let mut rows = u64::try_from(
+        world.units().seats().len()
+            + world.structures().seats().len()
+            + world.beacons().seats().len(),
+    )
+    .unwrap();
+    let units = world.units();
+    for (((owner, kind), hp), at) in units
+        .seats()
+        .iter()
+        .zip(units.kinds())
+        .zip(units.hit_points())
+        .zip(units.positions())
+    {
+        let armed = pharmakos_sim::tables::UnitKind::from_id(*kind)
+            .and_then(|kind| rules.unit(kind).weapon)
+            .is_some();
+        if hp.is_alive() && enemy(*owner) && armed {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    let structures = world.structures();
+    for ((((owner, kind), hp), building), at) in structures
+        .seats()
+        .iter()
+        .zip(structures.kinds())
+        .zip(structures.hit_points())
+        .zip(structures.building())
+        .zip(structures.positions())
+    {
+        let armed = StructureKind::from_id(*kind)
+            .and_then(|kind| rules.structure(kind))
+            .and_then(|row| row.weapon)
+            .is_some();
+        if hp.is_alive() && !*building && enemy(*owner) && armed {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    let beacons = world.beacons();
+    for (((owner, hp), at), id) in beacons
+        .seats()
+        .iter()
+        .zip(beacons.hit_points())
+        .zip(beacons.positions())
+        .zip(beacons.ids())
+    {
+        if !hp.is_alive() || !enemy(*owner) {
+            continue;
+        }
+        rows += beacon_rows;
+        // A seat's core is its beacon of least id.
+        let core = beacons
+            .seats()
+            .iter()
+            .zip(beacons.ids())
+            .filter(|(seat, _)| *seat == owner)
+            .map(|(_, id)| *id)
+            .min();
+        if core == Some(*id) {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    rows
+}
+
+/// The unit rows a repair-drone search for `seat` round `centre` reads: each
+/// row up to and including the first living repair drone of `seat`'s inside
+/// the radius, or every row.
+fn repair_rows(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> u64 {
+    let units = world.units();
+    let limit = pharmakos_sim::math::fixed::Sq::of_radius(radius);
+    let found = units
+        .kinds()
+        .iter()
+        .zip(units.seats())
+        .zip(units.hit_points())
+        .zip(units.positions())
+        .position(|(((kind, owner), hp), at)| {
+            *kind == pharmakos_sim::tables::UnitKind::RepairDrone.id()
+                && *owner == seat.raw()
+                && hp.is_alive()
+                && pharmakos_sim::math::fixed::Sq::between(*at, centre) <= limit
+        });
+    u64::try_from(found.map_or(units.seats().len(), |row| row + 1)).unwrap()
+}
+
+/// Seat 0's living beacons, in row order: each one's id and where it stands.
+fn own_beacons(world: &World) -> Vec<(BeaconId, [Fx; 3])> {
+    let beacons = world.beacons();
+    beacons
+        .seats()
+        .iter()
+        .zip(beacons.hit_points())
+        .zip(beacons.ids())
+        .zip(beacons.positions())
+        .filter(|(((owner, hp), _), _)| **owner == SEAT && hp.is_alive())
+        .map(|((_, id), at)| (BeaconId::new(*id), *at))
+        .collect()
+}
+
+/// A world on the golden seed where seat 0 sees an armed enemy: seat 1's
+/// outpost beacon beside seat 0's core with a raider of seat 1's on it, and,
+/// when `drone` is set, a repair drone of seat 0's in the core's sphere.
+fn with_an_enemy_in_sight(drone: bool) -> World {
+    let mut world = world_at(SEED, 2, &[180_000]);
+    let zero = SeatId::new(SEAT);
+    let one = SeatId::new(1);
+    let (core, centre) = own_beacons(&world).first().copied().expect("a core");
+    let [cx, cy] = pharmakos_sim::targeting::column_of(centre);
+    let at = world.standing_point([cx + 6, cy + 2, 0]);
+    let outpost = world
+        .place_beacon_directly(one, at, MandateKind::Build, PRIORITY_NORMAL)
+        .expect("room for the enemy's beacon");
+    world.set_common(
+        outpost,
+        pharmakos_sim::tables::Common {
+            roe: 1,
+            retreat_hp_pct: 0,
+        },
+    );
+    world
+        .field_unit(one, outpost, pharmakos_sim::tables::UnitKind::Raider, at)
+        .expect("room for the raider");
+    if drone {
+        let near = world.standing_point([cx + 2, cy - 2, 0]);
+        world
+            .field_unit(
+                zero,
+                core,
+                pharmakos_sim::tables::UnitKind::RepairDrone,
+                near,
+            )
+            .expect("room for the drone");
+    }
+    world
+}
+
+/// The `safest` handler's decision on the sixth tick: its units and the world
+/// it ran on.
+fn safest_decision(world: World, wound: bool) -> Runner {
+    let wait = concat!(
+        r#"{"label":"wait","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
+        r#""timeout_ms":600000}"#
+    );
+    // A handler whose condition ranks the seat's beacons by `safest` and is
+    // never true: tried (1), its node (1), the ranking's candidates (one a
+    // beacon row) and, for each of the seat's own living beacons it weighs,
+    // the threat scan's rows (and, with the commander wounded, the repair
+    // search's).
+    let handler = concat!(
+        r#"{"id":"never","when":{"beacon_hp_pct":{"beacon":{"safest":{}},"pct":{"op":"LT","value":0}}},"#,
+        r#""body":[{"label":"pause","hold":{"ms":1000}}],"resume":"CONTINUE","cooldown_ms":5000,"max_fires":1}"#
+    );
+    let mut book = playbook(wait);
+    book.declarative.as_mut().unwrap().handlers = vec![json::decode(handler).expect("a handler")];
+    let plan = Plan::compile(&book, &rules()).expect("compiles");
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    runner.seal_playbook(SeatId::new(SEAT), plan).unwrap();
+    assert!(runner.begin_push().unwrap());
+    // The sixth tick, by when the core's seam is held and keeping it costs
+    // nothing (`the_decision_tick_counts_its_evaluation_units`). The wound
+    // lands on the fifth, before the sixth's decision.
+    let _ = play(&mut runner, 5, |_, _| {});
+    if wound {
+        let commander = runner
+            .world()
+            .commander_of(SeatId::new(SEAT))
+            .expect("a commander");
+        assert!(
+            runner
+                .world_mut()
+                .request_damage(DamageOrder {
+                    target: DamageTarget::Unit(UnitId::new(commander.raw())),
+                    amount: pharmakos_sim::math::quantity::Damage::new(1).unwrap(),
+                    by: SeatId::NEUTRAL,
+                    source: None,
+                })
+                .is_ok()
+        );
+    }
+    let _ = play(&mut runner, 1, |_, _| {});
+    runner
+}
+
+/// A `safest` selector reads each candidate beacon's sphere threat, a scan
+/// of every unit, structure and beacon row for the armed enemies the seat
+/// sees, with the sensor walk each armed enemy asks and the core search each
+/// enemy beacon asks: one unit a row each reads (lane `dunit`), beside the
+/// selector's one unit a candidate. Here seat 0 sees an armed enemy beside
+/// its core. Before the lane the scan was charged nothing; before its fix
+/// pass 1 the sensor walks and core searches were charged nothing.
+#[test]
+fn a_safest_selector_counts_the_threat_scan_it_reads() {
+    let runner = safest_decision(with_an_enemy_in_sight(false), false);
+    let world = runner.world();
+    let seat = SeatId::new(SEAT);
+    let units = world.decision_work(0).expect("seat 0").expect("measured");
+    let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
+    let own = own_beacons(world);
+    let scan = threat_scan_rows(world, seat);
+    let outer = u64::try_from(
+        world.units().seats().len()
+            + world.structures().seats().len()
+            + world.beacons().seats().len(),
+    )
+    .unwrap();
+    println!(
+        "safest: {units} units; {beacon_rows} beacon rows, {} own, {scan} rows a scan ({outer} outer)",
+        own.len()
+    );
+    assert!(!own.is_empty(), "the selector weighs a beacon");
+    assert!(
+        scan > outer,
+        "the scan asks sensor walks and core searches beside its own rows"
+    );
+    assert_eq!(
+        units,
+        3 + beacon_rows + u64::try_from(own.len()).unwrap() * scan,
+        "the handler, its node, the wait's node, the candidates and each candidate's threat scan"
+    );
+}
+
+/// With the commander wounded, `safest` also asks each candidate whether a
+/// repair drone of the seat's stands in its sphere: one unit a unit row the
+/// search reads, up to the drone that answers (lane `dunit`, fix pass 1).
+#[test]
+fn a_wounded_safest_selector_counts_the_repair_search_it_reads() {
+    let runner = safest_decision(with_an_enemy_in_sight(true), true);
+    let world = runner.world();
+    let seat = SeatId::new(SEAT);
+    let units = world.decision_work(0).expect("seat 0").expect("measured");
+    let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
+    let own = own_beacons(world);
+    let scan = threat_scan_rows(world, seat);
+    let repairs: u64 = own
+        .iter()
+        .map(|(id, centre)| repair_rows(world, seat, *centre, world.sphere_radius_of(*id)))
+        .sum();
+    let all_units = u64::try_from(world.units().seats().len()).unwrap();
+    println!("wounded safest: {units} units; {repairs} repair rows of {all_units} unit rows");
+    assert!(
+        repairs < all_units * u64::try_from(own.len()).unwrap(),
+        "the search stops at the drone"
+    );
+    assert_eq!(
+        units,
+        3 + beacon_rows + u64::try_from(own.len()).unwrap() * scan + repairs,
+        "the handler, its node, the wait's node, the candidates, the threat scans and the repair searches"
+    );
+}
+
+/// Every decision's figure over a Push of seat 0's `route` followed by a long
+/// wait (so the route never ends and no fallback decides), `ticks` ticks of
+/// it, each value read once (a decision's figure stands until the next
+/// decision), the first decision's left out: it also makes the core's seam
+/// choice.
+fn later_decisions(world: World, route: &str, ticks: u32) -> Vec<u64> {
+    let wait = concat!(
+        r#"{"label":"after","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
+        r#""timeout_ms":600000}"#
+    );
+    let mut runner = open(world, &format!("{route},{wait}"));
+    let mut seen: Vec<u64> = Vec::new();
+    let _ = play(&mut runner, ticks, |world, _| {
+        let value = world.decision_work(0).expect("seat 0").expect("measured");
+        if seen.last() != Some(&value) {
+            seen.push(value);
+        }
+    });
+    seen.into_iter().skip(1).collect()
+}
+
+/// A row committing protected boxes writes each box once: one decision unit
+/// a box, at the commit (lane `dunit`, fix pass 1).
+#[test]
+fn a_committed_row_counts_the_boxes_it_writes() {
+    let fixture = world_at(SEED, 2, &[180_000]);
+    let [x, y, z] = core_voxel(&fixture);
+    let boxed = |dx: i32| {
+        format!(
+            r#"{{"min":{{"x":{},"y":{},"z":{z}}},"max":{{"x":{},"y":{},"z":{z}}}}}"#,
+            x + dx,
+            y - 1,
+            x + dx + 1,
+            y + 1
+        )
+    };
+    let route = format!(
+        r#"{{"label":"build","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{{"set_mandate_settings":{{"build":{{"protected_areas":[{},{},{}]}}}}}}]}},"timeout_ms":120000}}"#,
+        boxed(3),
+        boxed(6),
+        boxed(9)
+    );
+    let units = later_decisions(fixture, &route, 1_200);
+    println!("boxes: {units:?}");
+    assert_eq!(
+        units,
+        vec![0, 3, 1],
+        "the visit's walk and interface charge nothing, the commit its three boxes, then the wait one node a decision"
+    );
+}
+
+/// A row adding a wall target checks its box column by column before it is
+/// written: one decision unit a column checked (lane `dunit`, fix pass 1).
+#[test]
+fn a_committed_wall_counts_the_columns_it_checks() {
+    let fixture = world_at(SEED, 2, &[180_000]);
+    let [x, y, _] = core_voxel(&fixture);
+    // A three-by-two box four columns east of the core, from the lowest
+    // ground under it to three voxels over the highest.
+    let (lx, ly, hx, hy) = (x + 4, y - 1, x + 6, y);
+    let mut grounds = Vec::new();
+    for cy in ly..=hy {
+        for cx in lx..=hx {
+            grounds.push(fixture.voxels().top_solid_z(cx, cy).expect("ground"));
+        }
+    }
+    let floor = *grounds.iter().min().unwrap();
+    let top = *grounds.iter().max().unwrap() + 3;
+    let route = format!(
+        r#"{{"label":"wall","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{{"add_build_target":{{"target":{{"blueprint_id":"wall","anchor":{{"voxel":{{"x":{lx},"y":{ly},"z":{}}}}},"wall_box":{{"min":{{"x":{lx},"y":{ly},"z":{floor}}},"max":{{"x":{hx},"y":{hy},"z":{top}}}}}}}}}}}]}},"timeout_ms":120000}}"#,
+        floor + 1
+    );
+    let units = later_decisions(fixture, &route, 1_200);
+    println!("wall: {units:?}");
+    let columns = u64::try_from(grounds.len()).unwrap();
+    assert_eq!(columns, 6, "a three-by-two box");
+    assert_eq!(
+        units,
+        vec![0, columns, 1],
+        "the visit's walk and interface charge nothing, the commit its six columns, then the wait one node a decision"
+    );
+}
+
+/// A Defend protect list's beacon is pinned as its row commits, inside the
+/// decision: a `safest` pick ranks the seat's beacons (one unit a beacon
+/// row) and reads each own living beacon's threat scan, all of it charged to
+/// the decision (lane `dunit`, fix pass 1). Before the pass the commit read
+/// it through a board that charged nothing.
+#[test]
+fn a_committed_protect_list_counts_the_ranking_it_reads() {
+    let wait = concat!(
+        r#"{"label":"after","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
+        r#""timeout_ms":600000}"#
+    );
+    let route = concat!(
+        r#"{"label":"defend","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate":{"defend":{"#,
+        r#""protect":[{"beacon":{"safest":{}}}],"engagement_radius_pct":100,"pursue":"SPHERE_EDGE"}}}]},"#,
+        r#""timeout_ms":120000}"#
+    );
+    let mut runner = open(world_at(SEED, 2, &[180_000]), &format!("{route},{wait}"));
+    // Each new figure, with the count the same decision's protect pick
+    // should charge, taken from the world it ran on.
+    let mut seen: Vec<(u64, u64)> = Vec::new();
+    let _ = play(&mut runner, 1_200, |world, _| {
+        let value = world.decision_work(0).expect("seat 0").expect("measured");
+        let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
+        let own = u64::try_from(own_beacons(world).len()).unwrap();
+        let pick = beacon_rows + own * threat_scan_rows(world, SeatId::new(SEAT));
+        if seen.last().map(|(units, _)| *units) != Some(value) {
+            seen.push((value, pick));
+        }
+    });
+    println!("protect: {seen:?}");
+    let units: Vec<u64> = seen.iter().map(|(units, _)| *units).collect();
+    // The first decision is the core's seam choice. The switch to Defend
+    // releases the seam, so the commit's decision makes the same choice
+    // again beside the pick.
+    let seam = *units.first().expect("a first decision");
+    let pick = seen.get(2).map(|(_, pick)| *pick).expect("a commit");
+    assert!(pick > 0, "the pick ranks and scans");
+    assert_eq!(
+        units,
+        vec![seam, 0, seam + pick, 1],
+        "the seam choice; nothing while the commander walks and interfaces; at the commit the pick and the seam chosen again; then the wait one node a decision"
+    );
+}
+
 #[test]
 fn the_decision_tick_counts_its_evaluation_units() {
     // P1's counted half (S1's plan, section 5): one evaluation unit per
-    // handler tried, per condition node evaluated, per selector candidate and
-    // per "nearest" estimate, counted per seat per decision and never hashed.
+    // primitive step -- a handler tried, a condition node evaluated, a
+    // selector candidate, a feature scanned, a column scanned, a node a
+    // search pops -- counted per seat per decision and never hashed.
     //
     // One handler whose one-node condition is false, and a wait on a one-node
     // condition: each decision tries the handler (1), evaluates its condition
@@ -1068,7 +1478,11 @@ fn the_decision_tick_counts_its_evaluation_units() {
         assert!(runner.begin_push().unwrap());
         let _ = play(&mut runner, 6, |_, _| {});
         (
-            runner.world().decision_work(0).expect("seat 0").spent(),
+            runner
+                .world()
+                .decision_work(0)
+                .expect("seat 0")
+                .expect("measured"),
             runner.world().state_hash(),
         )
     };
@@ -1084,24 +1498,70 @@ fn the_decision_tick_counts_its_evaluation_units() {
         "the count is not in the state hash: the same behaviour hashes the same"
     );
 
-    // A covering step counts its candidates, its estimates and its spiral.
-    let mut runner = open(world_at(SEED, 2, &[180_000]), COVER);
+    // A covering step counts its candidates, its walks' pops and its spiral.
+    let fixture = world_at(SEED, 2, &[180_000]);
+    // The resolve alone, on a fresh tally and a fresh scratch: one unit a
+    // feature the ranker scans, one a node each served walk pops, one a
+    // spiral column the covering search tries.
+    let resolve = {
+        let commander = fixture
+            .commander_of(SeatId::new(SEAT))
+            .expect("a commander");
+        let row = fixture.units().row_of(commander).expect("a live commander");
+        let start = fixture
+            .units()
+            .positions()
+            .get(row.index())
+            .copied()
+            .expect("the commander's row");
+        let tally = pharmakos_sim::seams::UnitTally::new();
+        let ground = pharmakos_sim::targeting::Ground {
+            work: &tally,
+            ..fixture.ground()
+        };
+        let mut scratch = Scratch::for_map(fixture.surface(), fixture.clusters().size()).unwrap();
+        pharmakos_sim::targeting::cover_counted(
+            &ground,
+            &mut scratch,
+            SeatId::new(SEAT),
+            start,
+            pharmakos_sim::targeting::FeatureSpec::Nearest {
+                kind: FeatureKind::Vent,
+                uncovered: true,
+            },
+        )
+        .expect("a covering site");
+        tally.read().expect("measured")
+    };
+    // The core's seam choice, which the first decision also makes (its
+    // starting mining drone gives it one, `pharmakos_sim::mining`), measured
+    // alone: the same first decision with no playbook sealed
+    // (`tests/mining.rs`'s `a_seam_choice_counts_its_estimates...` holds its
+    // parts, one a feature ranked and one a node its walk pops).
+    let seam = {
+        let mut runner = Runner::new(fixture.clone()).unwrap_or_else(|error| panic!("{error}"));
+        assert!(runner.begin_push().unwrap());
+        let _ = play(&mut runner, 1, |_, _| {});
+        runner.world().decision_work(0).unwrap().expect("measured")
+    };
+    let mut runner = open(fixture, COVER);
     let _ = play(&mut runner, 1, |_, _| {});
-    let covering = runner.world().decision_work(0).unwrap().spent();
+    let covering = runner.world().decision_work(0).unwrap().expect("measured");
+    // The decision is the resolve and the seam choice, and nothing else.
+    assert_eq!(covering, resolve + seam);
     // Pinned exactly on the golden seed, so a change to what the resolver
     // charges shows here rather than drifting under a lower bound. The count
     // goes past the plan's four categories (S1's plan, section 5 item 3): it
-    // also charges one unit per feature the ranker scans and one per spiral
-    // column the covering search tries, which the pull request names for
-    // `p1`'s report. Since S1's `mine` lane the first decision also makes the
-    // core's seam choice (its starting mining drone gives it one,
-    // `pharmakos_sim::mining`): one unit per feature ranked (ten on this map)
-    // and one estimate for the one seam with work in reach, so 412 + 11. The
-    // narrow and wide counts above are read at the sixth tick, by when the
-    // seam is held and keeping it costs nothing.
+    // charges one unit per feature the ranker scans, one per node a search
+    // pops and one per spiral column the covering search tries. Before lane
+    // `dunit` a served walk charged 1 whatever it popped, and this read 423
+    // (412 for the resolve and 11 for the seam choice). The narrow and wide
+    // counts above are read at the sixth tick, by when the seam is held and
+    // keeping it costs nothing.
+    println!("covering: {covering} = {resolve} for the resolve + {seam} for the seam choice");
     assert_eq!(
-        covering, 423,
-        "a covering resolution ranks every feature and walks a spiral: {covering}"
+        covering, 4_716,
+        "a covering resolution ranks every feature, walks and searches a spiral: {covering}"
     );
 }
 

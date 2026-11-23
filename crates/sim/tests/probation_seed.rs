@@ -482,8 +482,8 @@ fn a_toward_says_why_it_found_no_site() {
 /// least; and toward the pinned vent again with a Resonance Spire finished at
 /// the core, its sphere grown. Each prints the legal sites weighed, the
 /// columns of the spheres scanned, the decision units charged (one a column
-/// scanned; the search prices no walk since fix pass 2 of lane `p3fix`) and
-/// the nodes the search popped, which no unit charges.
+/// scanned and one a node popped, lane `dunit`; the search prices no walk
+/// since fix pass 2 of lane `p3fix`) and the nodes the search popped.
 #[test]
 #[ignore = "a measurement, run by hand: `cargo test --test probation_seed -- --ignored --nocapture toward_costs`"]
 fn toward_costs() {
@@ -522,10 +522,10 @@ fn toward_costs() {
             })
             .sum();
         let found = toward_counted(&ground, &mut scratch, &mut stones, seat, start, spec);
-        let units = tally.get();
+        let units = tally.read().expect("the decision units are measured");
         match found {
             Ok(stone) => println!(
-                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {units}                  decision units, {} nodes popped",
+                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {units} decision units, {} nodes popped",
                 stone.site,
                 stone.weighed,
                 scratch.expansions().expect("the count fits a u64")

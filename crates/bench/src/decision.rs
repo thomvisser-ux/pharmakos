@@ -53,9 +53,12 @@
 //! # The counted half, and the curve (S3's `bench3`)
 //!
 //! Beside the nanoseconds, each decision tick's **counted evaluation units**
-//! (`World::decision_work`: handlers tried, condition nodes evaluated,
-//! selector candidates ranked and "nearest" estimates run), summed over the
-//! seats, are read after the tick: item 139 (5)'s "count carried to S3". The
+//! (`World::decision_work`: one a primitive step of counted work, charged
+//! where it happens -- a handler tried, a condition node evaluated, a
+//! selector candidate ranked, a feature the "nearest" ranker scans, a column
+//! a site search scans, and a node a search pops, a served walk's and a
+//! `toward`'s grid optimum's alike; `pharmakos_sim::seams::UnitTally`), summed
+//! over the seats, are read after the tick: item 139 (5)'s "count carried to S3". The
 //! count is the sim's, identical on every machine and every run (a run whose
 //! count differs stops the measurement, as a differing chain does), so it is
 //! the platform-free half of the same figure.
@@ -490,19 +493,26 @@ fn play(
 fn seat_work(world: &pharmakos_sim::world::World, seats: u32) -> Result<u64, Error> {
     let mut sum: u64 = 0;
     for seat in 0..usize::try_from(seats).map_err(|_| Error::Overflow("the seat count"))? {
-        let spent = world
-            .decision_work(seat)
-            .ok_or_else(|| {
-                Error::Drift(format!(
-                    "the world keeps no counted work for seat {seat}, which sealed a playbook"
-                ))
-            })?
-            .spent();
+        let spent = seat_units(seat, world.decision_work(seat))?;
         sum = sum
-            .checked_add(u64::from(spent))
+            .checked_add(spent)
             .ok_or(Error::Overflow("the seats' counted work"))?;
     }
     Ok(sum)
+}
+
+/// One seat's counted units, as the world answers them
+/// (`World::decision_work`): its count, or why it has none.
+fn seat_units(
+    seat: usize,
+    work: Option<Result<u64, pharmakos_sim::seams::Unmeasured>>,
+) -> Result<u64, Error> {
+    work.ok_or_else(|| {
+        Error::Drift(format!(
+            "the world keeps no counted work for seat {seat}, which sealed a playbook"
+        ))
+    })?
+    .map_err(|reason| Error::Unmeasured { seat, reason })
 }
 
 /// One size of the decision tick's curve.
@@ -668,6 +678,20 @@ pub fn notice(timing: &DecisionTiming, os: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unmeasured_decision_is_the_benchs_own_error() {
+        use pharmakos_sim::seams::Unmeasured;
+        assert_eq!(seat_units(2, Some(Ok(57))), Ok(57));
+        for reason in [Unmeasured::Overflowed, Unmeasured::SourceUnreadable] {
+            assert_eq!(
+                seat_units(2, Some(Err(reason))),
+                Err(Error::Unmeasured { seat: 2, reason }),
+                "a count the sim could not take is refused, never read as a number"
+            );
+        }
+        assert!(matches!(seat_units(2, None), Err(Error::Drift(_))));
+    }
 
     fn sample(ns: u128, decision: bool) -> Sample {
         Sample {
