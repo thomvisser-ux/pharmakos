@@ -6720,6 +6720,12 @@ mod tests {
             editor.templates_failed(),
             Some(ReadFailed::Unreadable(_))
         ));
+        // A readable list again, then a refusal right after it: the refusal's own arm is what
+        // takes the list (and its mark) off the panel.
+        editor.list_templates();
+        until_templates(&mut editor);
+        editor.answered(Ok(&read(marked))).expect("reads");
+        assert!(!editor.templates().is_empty() && editor.templates_failed().is_none());
         editor.list_templates();
         until_templates(&mut editor);
         let _ = editor.answered(Err(("RATE_LIMITED", "slow down")));
