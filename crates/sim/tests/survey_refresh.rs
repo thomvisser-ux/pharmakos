@@ -429,7 +429,8 @@ fn surveyed_world(seed: u64, seats: u32) -> World {
 /// on seat 1's side of the cores' midpoint (across the axis the cores lie
 /// further apart on) as its probe area. At every Lull after the first, the
 /// round, the stalest sightings seat 0 holds, its living scouts, the scouts
-/// it lost and the sightings counted out of reach in the Push before.
+/// it lost, its stale sightings with whether each is [`excused`], and the
+/// Push before's drops, scout deaths and fielded scouts.
 fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
     let mut runner =
         Runner::new(surveyed_world(seed, seats)).unwrap_or_else(|error| panic!("{error}"));

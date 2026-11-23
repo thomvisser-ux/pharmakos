@@ -97,23 +97,41 @@
 //!   it; it is **needed** when it would be out of the window at the Lull with
 //!   no re-check before it. A seat's scouts are decided **together** on every
 //!   decision tick ([`decide_seat`] states the construction, its order and
-//!   its work): every due or needed sighting, needed first, then enemy
-//!   beacons, then oldest, goes into one scout's **list**, the ordered
-//!   sightings it will visit -- a scout already walking to one keeps it at its
-//!   head; each other goes at the end of the list it lengthens least, or,
-//!   where no end keeps every needed sighting fitting, into the list and
-//!   position it lengthens least -- and a scout leaves its scan only when it
-//!   must: its head is due and it has nothing to scan or the Push is in its
-//!   last [`REFRESH_INTERVAL`], or its list no longer leaves time to scan on
-//!   ([`list_leaves_time`]: the legs in order up to the last needed
-//!   sighting). Sightings under one remembered gun's range (every enemy
-//!   beacon is taken for a core) are split across the seat's scouts before
-//!   they are chained on one, so a scout killed refreshing a core does not
-//!   take the next sighting under that gun with it. On
-//!   a [`pricing_decision`], one in [`REPRICE_DECISIONS`], the check prices
-//!   the served legs; on any other it reads the octile bounds alone, and a
-//!   scout whose bounds leave no time sets off unpriced. A needed sighting no
-//!   list takes is counted under its [`Drop`] reason, once a Push, never
+//!   its work):
+//!   - every due or needed sighting, needed first, then enemy beacons, then
+//!     oldest, goes into one scout's **list**, the ordered sightings it will
+//!     visit;
+//!   - a scout already walking to one keeps it at its head;
+//!   - each other goes at the end of the list it lengthens least, or, where
+//!     no end keeps every needed sighting fitting, into the list and
+//!     position it lengthens least (cheapest insertion at the octile bound);
+//!   - ties go to the **later** position, then the lowest unit row, so a
+//!     sighting that costs the same either way is visited in rank order: the
+//!     earlier position would break S2's ruled acceptance tests
+//!     `the_stalest_sighting_is_refreshed_next` and `enemy_beacons_come_first`
+//!     (`tests/survey.rs`);
+//!   - a list never spans more than the reach window from its first needed
+//!     refresh to its last (with the departure's slack and a re-ask a leg),
+//!     or its first refresh would be stale again by the Lull;
+//!   - sightings under one remembered gun's range are split across the
+//!     seat's scouts before they are chained on one, so a scout killed
+//!     refreshing a core does not take the next sighting under that gun with
+//!     it. The seat takes **every enemy beacon for a core** and so for armed
+//!     (`beacon.core_weapon`), though a forward beacon is unarmed
+//!     (`crate::world::combat`): the gateway does not show a seat which of
+//!     another seat's beacons is its core, so the seat cannot tell. The cost:
+//!     sightings near a forward beacon are split across scouts when one
+//!     scout could have taken them in turn, and a death near one counts as a
+//!     death under a gun when a drop is named.
+//!
+//!   A scout leaves its scan only when it must: its head is due and it has
+//!   nothing to scan or the Push is in its last [`REFRESH_INTERVAL`], or its
+//!   list no longer leaves time to scan on ([`list_leaves_time`]: the legs in
+//!   order up to the last needed sighting). On a [`pricing_decision`], one in
+//!   [`REPRICE_DECISIONS`], that check prices the served legs; on any other
+//!   it reads the octile bounds alone, and a scout whose bounds leave no time
+//!   sets off at once, unpriced. A needed sighting no list takes is counted
+//!   under the [`Drop`] reason that names its cause, once a Push, never
 //!   silently stale. Every other scout scans.
 //! * **A re-check that finds nothing forgets.** A due sighting whose place one
 //!   of the seat's Survey scouts has in sight, and which no sensor renewed on
@@ -1510,9 +1528,13 @@ fn note_listed(world: &mut World, seat: SeatId, lists: &Lists) {
 ///    are split across the seat's scouts rather than chained on one. Only a
 ///    scout the connectivity oracle connects to the sighting counts (none:
 ///    `Scratch::survey_unserved`). A needed sighting no list takes is
-///    dropped for this decision under one [`Drop`] reason: out of reach when
-///    no scout alone reaches it before the Lull, a scout lost when the seat is
-///    short of the scouts its beacons field, crowded out otherwise.
+///    dropped for this decision under the [`Drop`] reason that names its
+///    cause, in this order: under a threat the seat sees now (it was never
+///    offered: decision 12); a scout lost, when it was listed and fitting
+///    earlier this Push and a scout of the seat has died since, under its
+///    gun or in sight of it, or anywhere while the seat is short of scouts;
+///    out of reach, when it was never listed this Push and no scout alone
+///    reaches it before the Lull; crowded out otherwise.
 /// 4. **Departure.** In ascending unit row, a scout with a list walks to its
 ///    head when it is already walking there; when its head is due and it has
 ///    nothing to scan or the Push is in its last [`REFRESH_INTERVAL`]; or
@@ -1544,8 +1566,13 @@ fn note_listed(world: &mut World, seat: SeatId, lists: &Lists) {
 /// insertion walks each of `m` lists, of at most `n` entries, a fixed number
 /// of times a sighting, with the prefix bounds, the fit margins and the span
 /// read from arrays, so `n² × m` octile bounds in all; the departure prices
-/// at most `n` served legs and one replacement's leg after each armed leg,
-/// on a pricing decision only, and none otherwise.
+/// a scout's served legs up to its last needed sighting, at most `n`, on a
+/// pricing decision only, and none on any other. No replacement's leg is
+/// priced: the death margin that priced one was not kept
+/// ([`list_leaves_time`]). Naming a drop reads the sighting table for the
+/// sighting's gun and the unit and beacon tables for the seat's scouts,
+/// once a drop; the [`Memory`] it consults is a measurement and reports
+/// nothing.
 fn decide_seat<M: crate::seams::Meter + ?Sized>(
     world: &mut World,
     seat: SeatId,
@@ -2063,10 +2090,14 @@ fn depart_or_scan<M: crate::seams::Meter + ?Sized>(
 /// scouts before they are chained on one, so a scout killed refreshing a core
 /// does not take the next sighting under that gun with it; and a needed
 /// sighting no list takes while the seat is short of a scout is counted as
-/// [`Drop::ScoutLost`]. A death margin in this check (a replacement's walk
-/// from the post after every leg under a gun) was built and measured, and
-/// set the scouts off so soon that more of them died and more sightings were
-/// stale at the Lull on every seed set measured; it is not kept.
+/// [`Drop::ScoutLost`]. A death margin in this check was built and measured
+/// twice, and is not kept: fix pass 3's (a replacement's walk from the post
+/// after every leg under a gun) and fix pass 4's narrow form (one margin per
+/// needed sighting under a gun, the larger of a replacement's walk from the
+/// post and another scout's list end, on that sighting's final departure
+/// only). Each set the scouts off so soon that more of them died at the
+/// guns, fewer cells were explored, and more sightings were stale at the
+/// Lull on the review's thirty seeds; the figures are in PR #210.
 ///
 /// What the code does. On a [`pricing_decision`] it prices the served legs in
 /// order ([`walk_ticks`] at the scout's speed). On any other decision it
