@@ -223,14 +223,11 @@ fn the_command_runs_on_the_stated_stack() {
     let mut findings: Vec<String> = Vec::new();
     for relative in SOURCES {
         let text = source(relative);
-        // The shipped code: everything before the first test module, read
-        // whole, so a literal or a comment that spans lines is read as one.
-        let shipped = text
-            .find("#[cfg(test)]")
-            .and_then(|index| text.get(..index))
-            .unwrap_or(&text);
-        for (number, why) in thread_offences(shipped) {
-            let line = shipped.lines().nth(number.saturating_sub(1)).unwrap_or("");
+        // The shipped code, read whole, so a literal or a comment that spans
+        // lines is read as one, less only the items `#[cfg(test)]` attributes
+        // ([`shipped_code`]); its lines are the file's.
+        for (number, why) in thread_offences(&shipped_code(&text)) {
+            let line = text.lines().nth(number.saturating_sub(1)).unwrap_or("");
             findings.push(format!("{relative}:{number}: {why}\n    {}", line.trim()));
         }
     }
@@ -243,6 +240,43 @@ fn the_command_runs_on_the_stated_stack() {
 
 /// Every way round the stack a review of the gateway's guard found, each a
 /// line the guard must refuse, and the spellings it must let through.
+/// The review of #219: the scan once stopped at the first `#[cfg(test)]`
+/// text, even one in a comment (T13) or a string (T14), so a spawn after it
+/// was never read; and a real test item hides only itself.
+#[test]
+fn the_thread_guard_reads_past_an_attribute_that_attributes_nothing() {
+    for text in [
+        "fn p() {\n    // #[cfg(test)] is where the tests start\n    let _ = std::thread::spawn(|| ());\n}\n",
+        "fn p() {\n    let _s = \"#[cfg(test)]\";\n    let _ = std::thread::spawn(|| ());\n}\n",
+        "/* #[cfg(test)] */\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nmod tests { fn t() {} }\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nfn t() {}\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nuse std::thread;\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+    ] {
+        assert!(
+            !thread_offences(&shipped_code(text)).is_empty(),
+            "the guard let through: {text}"
+        );
+    }
+    for text in [
+        "#[cfg(test)]\nmod tests {\n    fn t() { let _ = std::thread::spawn(|| ()); }\n}\n",
+        "#[cfg(test)]\n#[allow(dead_code)]\nfn t() { let _ = std::thread::spawn(|| { \"}\" }); }\n",
+    ] {
+        assert!(
+            thread_offences(&shipped_code(text)).is_empty(),
+            "a test item's own thread is not shipped code: {text}"
+        );
+    }
+    // The finding names the file's own line.
+    let text = "// one\n#[cfg(test)]\nmod t {\n}\nfn p() { std::thread::spawn(f); }\n";
+    assert_eq!(
+        thread_offences(&shipped_code(text))
+            .first()
+            .map(|(line, _)| *line),
+        Some(5)
+    );
+}
+
 #[test]
 fn the_thread_guard_refuses_every_way_round_the_stack() {
     for text in [
@@ -301,6 +335,76 @@ fn the_thread_guard_refuses_every_way_round_the_stack() {
     ] {
         assert_eq!(thread_offence(text), None, "the guard refused: {text}");
     }
+}
+
+/// `text`'s shipped code: [`code_only`]'s, every literal emptied and every
+/// comment removed, with every item an attribute `#[cfg(test)]` stands on
+/// blanked, line feeds kept, so a finding names the file's own line. Only an
+/// attribute in code counts: one written in a comment or a string attributes
+/// nothing, and the rest of the file is read past it.
+fn shipped_code(text: &str) -> String {
+    let code = code_only(text);
+    let skipped = test_item_lines(&code);
+    code.split('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            if skipped
+                .iter()
+                .any(|(from, to)| (*from..=*to).contains(&index))
+            {
+                ""
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+/// The lines, counting from 0 and both ends included, of each item that a
+/// `#[cfg(test)]` in `code` (already [`code_only`]) attributes: from the
+/// attribute through any further attributes to the item's end, which is its
+/// first `;` outside brackets, or the brace that closes its first `{`.
+fn test_item_lines(code: &str) -> Vec<(usize, usize)> {
+    const ATTRIBUTE: &str = "#[cfg(test)]";
+    let bytes = code.as_bytes();
+    let line_of = |at: usize| {
+        code.get(..at)
+            .map_or(0, |before| before.matches('\n').count())
+    };
+    let mut spans = Vec::new();
+    let mut from = 0_usize;
+    while let Some(offset) = code.get(from..).and_then(|rest| rest.find(ATTRIBUTE)) {
+        let start = from.saturating_add(offset);
+        let mut at = start.saturating_add(ATTRIBUTE.len());
+        let mut depth = 0_usize;
+        let mut braced = false;
+        let end = loop {
+            let Some(byte) = bytes.get(at).copied() else {
+                break code.len();
+            };
+            match byte {
+                b'(' | b'[' => depth = depth.saturating_add(1),
+                b')' | b']' => depth = depth.saturating_sub(1),
+                b'{' => {
+                    depth = depth.saturating_add(1);
+                    braced = true;
+                }
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if braced && depth == 0 {
+                        break at;
+                    }
+                }
+                b';' if depth == 0 => break at,
+                _ => {}
+            }
+            at = at.saturating_add(1);
+        };
+        spans.push((line_of(start), line_of(end)));
+        from = end.saturating_add(1);
+    }
+    spans
 }
 
 /// Why a piece of text names `thread` other than as the stated stack's
@@ -760,15 +864,20 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// The file's shipped code: comment-only lines removed, and everything from
-/// the first `#[cfg(test)]` on, because a unit test may fall back as it likes.
+/// The file's shipped lines, as written: comment-only lines removed, and the
+/// lines of every item `#[cfg(test)]` attributes ([`test_item_lines`]),
+/// because a unit test may fall back as it likes. An attribute written in a
+/// comment or a string attributes nothing, so nothing after it is skipped.
 fn code_lines(text: &str) -> Vec<String> {
-    let shipped = match text.find("#[cfg(test)]") {
-        Some(index) => text.get(..index).unwrap_or(text),
-        None => text,
-    };
-    shipped
-        .lines()
+    let skipped = test_item_lines(&code_only(text));
+    text.lines()
+        .enumerate()
+        .filter(|(index, _)| {
+            !skipped
+                .iter()
+                .any(|(from, to)| (*from..=*to).contains(index))
+        })
+        .map(|(_, line)| line)
         .filter(|line| !line.trim_start().starts_with("//"))
         .map(str::to_owned)
         .collect()
@@ -848,16 +957,32 @@ fn the_fallback_scan_finds_what_it_looks_for() {
         1,
         "the code line is seen; the comment and the test are not"
     );
+    // An attribute in a comment or a string is not one, and the code after a
+    // real test item is still the file's (fix pass 1 of #219).
+    for (probe, wanted) in [
+        ("// #[cfg(test)]\nfn f() { None::<u8>.unwrap_or(1); }\n", 1),
+        (
+            "const A: &str = \"#[cfg(test)]\";\nfn f() { None::<u8>.unwrap_or(1); }\n",
+            1,
+        ),
+        (
+            "#[cfg(test)]\nmod t { fn g() { None::<u8>.unwrap_or(1); } }\nfn f() { None::<u8>.unwrap_or(2); }\n",
+            1,
+        ),
+        ("#[cfg(test)]\nuse std::x::unwrap_or_y;\nfn f() {}\n", 0),
+    ] {
+        let seen = code_lines(probe)
+            .iter()
+            .filter(|line| line.contains("unwrap_or"))
+            .count();
+        assert_eq!(seen, wanted, "{probe:?}");
+    }
 }
 
 #[test]
 fn no_shipped_code_calls_a_sim_fixture() {
     for relative in SOURCES {
-        let text = source(relative);
-        let shipped = text
-            .find("#[cfg(test)]")
-            .and_then(|at| text.get(..at))
-            .unwrap_or(text.as_str());
+        let shipped = shipped_code(&source(relative));
         for (needle, why) in SIM_FIXTURES {
             assert!(
                 !shipped.contains(needle),
