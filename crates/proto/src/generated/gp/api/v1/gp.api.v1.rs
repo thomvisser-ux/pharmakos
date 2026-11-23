@@ -2309,10 +2309,11 @@ pub struct SetValueTextRequest {
     pub pointer: ::prost::alloc::string::String,
     /// What the player typed, in the shape's `display_unit`: "3" or "1.5" seconds
     /// for a duration, "40" for a percentage. Read after its leading and trailing
-    /// whitespace as an optional `-`, digits, and, for a duration only, a `.` and
-    /// up to three digits more; no `+`, no exponent, no separators. A duration
-    /// finer than a millisecond is refused, never rounded, and so is a value past
-    /// the shape's bounds or past what the field holds. Every refusal is
+    /// whitespace as an optional `-`, digits, and, for a duration only, a `.`
+    /// and digits that name whole milliseconds ("1.5", "1.500"); in any other
+    /// unit a `.` is refused ("40.0" is not 40). No `+`, no exponent, no
+    /// separators. A duration finer than a millisecond is refused, never rounded,
+    /// and so is a value past the shape's bounds or past what the field holds. Every refusal is
     /// INVALID_ARGUMENT in the gateway's words, the typed text quoted.
     #[prost(string, tag="3")]
     pub typed: ::prost::alloc::string::String,

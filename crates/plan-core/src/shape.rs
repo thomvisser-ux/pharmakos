@@ -302,7 +302,8 @@ pub enum Typed {
 /// trailing whitespace: an optional `-`, at least one digit, and, for a
 /// duration only, a `.` and up to three digits past it (more are refused
 /// unless they are zeros: a value finer than a millisecond is
-/// [`Typed::FinerThanAMillisecond`], never rounded). No `+`, no exponent, no
+/// [`Typed::FinerThanAMillisecond`], never rounded). In any other unit a `.`
+/// is [`Typed::NotWhole`], whatever follows it. No `+`, no exponent, no
 /// separators. The value must lie within the shape's bounds. Integer
 /// arithmetic only, every step checked.
 ///
@@ -327,14 +328,21 @@ pub fn typed_value(shape: &Shape, typed: &str) -> Result<i64, Typed> {
     };
     let all_digits =
         |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    if !all_digits(whole) || fraction.is_some_and(|fraction| !all_digits(fraction)) {
+    if !all_digits(whole) {
         return Err(Typed::NotANumber);
     }
     let scale: i64 = if *unit == UNIT_MS { 1000 } else { 1 };
+    // A `.` is read only in a unit with a fraction: in a whole-number unit
+    // "40.0" is refused, never read as 40 (S3's `fixq`, review fix pass 1).
+    if scale == 1 && fraction.is_some() {
+        return Err(Typed::NotWhole);
+    }
+    if fraction.is_some_and(|fraction| !all_digits(fraction)) {
+        return Err(Typed::NotANumber);
+    }
     let fraction = fraction.map(|fraction| fraction.trim_end_matches('0'));
     let thousandths: i64 = match fraction {
         None | Some("") => 0,
-        Some(_) if scale == 1 => return Err(Typed::NotWhole),
         Some(fraction) if fraction.len() > 3 => return Err(Typed::FinerThanAMillisecond),
         Some(fraction) => {
             let read: i64 = fraction.parse().map_err(|_| Typed::NotANumber)?;

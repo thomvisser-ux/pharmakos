@@ -402,3 +402,20 @@ fn a_uint32_field_takes_its_whole_range() {
         Err(SetValueError::DoesNotFit)
     );
 }
+
+/// Review fix pass 1, item 4: a `.` is read only where the display unit has
+/// a fraction (a duration). In a whole-number unit "40.0" is refused, typed,
+/// never read as 40.
+#[test]
+fn a_point_is_read_only_in_a_unit_with_a_fraction() {
+    let pct = "/declarative/handlers/0/when/cmdr_hp_pct/pct";
+    for odd in ["40.0", "40.", "40.00", "40.5"] {
+        assert_eq!(
+            typed(ONE_RULE, pct, odd),
+            Err(SetValueError::Typed(Typed::NotWhole)),
+            "{odd}"
+        );
+    }
+    let (patched, _) = typed(ONE_RULE, "/declarative/route/0/hold/ms", "2.0").expect("seconds");
+    assert!(patched.contains("\"ms\": 2000"), "{patched}");
+}
