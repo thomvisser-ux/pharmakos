@@ -296,11 +296,18 @@ impl UnitTally {
 pub trait Meter {
     /// `rows` more rows read.
     fn rows(&self, rows: usize);
+
+    /// `units` more units of counted work, or the reason they could not be
+    /// counted: what a search's pops are charged as, the change in its
+    /// scratch's counters over the call, which can be unreadable.
+    fn measured(&self, units: Result<u64, Unmeasured>);
 }
 
 /// Counts nothing: a scan run outside a decision.
 impl Meter for () {
     fn rows(&self, _rows: usize) {}
+
+    fn measured(&self, _units: Result<u64, Unmeasured>) {}
 }
 
 /// One unit a row read; a row count past `u64` leaves the tally
@@ -308,6 +315,10 @@ impl Meter for () {
 impl Meter for UnitTally {
     fn rows(&self, rows: usize) {
         self.add_measured(u64::try_from(rows).map_err(|_| Unmeasured::Overflowed));
+    }
+
+    fn measured(&self, units: Result<u64, Unmeasured>) {
+        self.add_measured(units);
     }
 }
 

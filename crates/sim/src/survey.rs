@@ -718,7 +718,10 @@ pub(crate) fn decide_scouts(world: &mut World) {
         let seat = world.seats().seats().get(index).copied().map(SeatId::new);
         let alive = world.seats().is_alive(index);
         if let Some(seat) = seat.filter(|_| alive) {
-            decide_seat(world, seat, Members::Survey);
+            // The Programs phase, outside any seat's decision: the scouts'
+            // work is no decision's, so it is counted nowhere, as Attack's
+            // breach search is not (decisions-log item 175 (4)).
+            decide_seat(world, seat, Members::Survey, &());
         }
     }
 }
@@ -736,7 +739,7 @@ pub(crate) fn run_scout(world: &mut World, unit: u32) {
     let Some(seat) = world.units().seats().get(row).copied().map(SeatId::new) else {
         return;
     };
-    decide_seat(world, seat, Members::One(row));
+    decide_seat(world, seat, Members::One(row), &());
 }
 
 /// Whether the unit in `row` is a living scout whose home is a living
@@ -815,11 +818,12 @@ struct Due {
 
 /// `seat`'s next due sighting after `after` in rank order, whose place lies
 /// inside no known threat's range (decision 12).
-fn next_due(
+fn next_due<M: crate::seams::Meter + ?Sized>(
     world: &World,
     seat: SeatId,
     after: Option<Rank>,
     threats: &[([Fx; 3], Sq)],
+    meter: &M,
 ) -> Option<Due> {
     let tick = world.tick().raw();
     let left = ticks_left(world);
@@ -835,6 +839,7 @@ fn next_due(
         .enumerate();
     let mut best: Option<Due> = None;
     for (slot, ((((who, asset), kind), place), seen)) in rows {
+        meter.rows(1);
         let rank = (*kind != AssetKind::Beacon.id(), *seen, *asset);
         if *who != seat.raw()
             || !due_at(*seen, tick)
@@ -862,7 +867,14 @@ fn next_due(
 
 /// The due sighting in the sighting table's `slot`, if it is still one of
 /// `seat`'s due sightings open to a scout.
-fn due_in(world: &World, seat: SeatId, slot: usize, threats: &[([Fx; 3], Sq)]) -> Option<Due> {
+fn due_in<M: crate::seams::Meter + ?Sized>(
+    world: &World,
+    seat: SeatId,
+    slot: usize,
+    threats: &[([Fx; 3], Sq)],
+    meter: &M,
+) -> Option<Due> {
+    meter.rows(1);
     let table = world.sightings();
     let (Some(who), Some(asset), Some(kind), Some(place), Some(seen)) = (
         table.seats().get(slot).copied(),
@@ -896,7 +908,13 @@ fn due_in(world: &World, seat: SeatId, slot: usize, threats: &[([Fx; 3], Sq)]) -
 
 /// Whether a scout of `seat` that this decision does not decide is walking
 /// to `place`: a sighting it already answers for.
-fn walked_by_another(world: &World, seat: SeatId, members: Members, place: [Fx; 3]) -> bool {
+fn walked_by_another<M: crate::seams::Meter + ?Sized>(
+    world: &World,
+    seat: SeatId,
+    members: Members,
+    place: [Fx; 3],
+    meter: &M,
+) -> bool {
     let units = world.units();
     units
         .kinds()
@@ -905,6 +923,7 @@ fn walked_by_another(world: &World, seat: SeatId, members: Members, place: [Fx; 
         .zip(units.hit_points())
         .zip(units.destinations())
         .enumerate()
+        .inspect(|_| meter.rows(1))
         .any(|(row, (((kind, owner), hp), to))| {
             *kind == UnitKind::Scout.id()
                 && *owner == seat.raw()
@@ -964,23 +983,25 @@ impl Lists<'_> {
 /// The scout in unit `row`'s list, in the order it walks it: the sighting it
 /// is already walking to first (rule (a)), then the rest in rank order. Calls
 /// `each` with every entry's position and due sighting, in that order.
-fn walk_list(
+fn walk_list<M: crate::seams::Meter + ?Sized>(
     world: &World,
     seat: SeatId,
     lists: &Lists<'_>,
     row: usize,
     threats: &[([Fx; 3], Sq)],
+    meter: &M,
     mut each: impl FnMut(usize, Due),
 ) {
     let going = world.units().destinations().get(row).copied();
     let mut head = None;
     for p in 0..lists.n {
+        meter.rows(1);
         if lists.owner(p) != Some(row) {
             continue;
         }
         let Some(due) = lists
             .slot(p)
-            .and_then(|slot| due_in(world, seat, slot, threats))
+            .and_then(|slot| due_in(world, seat, slot, threats, meter))
         else {
             continue;
         };
@@ -991,12 +1012,13 @@ fn walk_list(
         }
     }
     for p in 0..lists.n {
+        meter.rows(1);
         if lists.owner(p) != Some(row) || head == Some(p) {
             continue;
         }
         if let Some(due) = lists
             .slot(p)
-            .and_then(|slot| due_in(world, seat, slot, threats))
+            .and_then(|slot| due_in(world, seat, slot, threats, meter))
         {
             each(p, due);
         }
@@ -1017,17 +1039,18 @@ fn bound_ticks(world: &World, from: [Fx; 3], to: [Fx; 3]) -> i64 {
 /// The scout in unit `row`'s list as built so far: the bound on the tick it
 /// finishes it, counted from now, and the place it ends at (where it stands,
 /// for an empty list).
-fn list_end(
+fn list_end<M: crate::seams::Meter + ?Sized>(
     world: &World,
     seat: SeatId,
     lists: &Lists<'_>,
     row: usize,
     threats: &[([Fx; 3], Sq)],
+    meter: &M,
 ) -> Option<(i64, [Fx; 3], u32)> {
     let mut at = world.units().positions().get(row).copied()?;
     let mut finish: i64 = 0;
     let mut legs: u32 = 0;
-    walk_list(world, seat, lists, row, threats, |_, due| {
+    walk_list(world, seat, lists, row, threats, meter, |_, due| {
         finish = finish.saturating_add(bound_ticks(world, at, due.place));
         at = due.place;
         legs = legs.saturating_add(1);
@@ -1075,20 +1098,36 @@ fn list_end(
 /// A scout that has arrived where it was sent parks, so the end of the route
 /// does not carry it off before the next decision looks.
 ///
+/// Every loop reports the counted work it does to `meter`
+/// ([`crate::seams::Meter`]; decisions-log item 175 (1)): one unit a row it
+/// reads at its innermost loops (a unit row, a sighting row, a list
+/// position), the threat scan's rows through
+/// [`crate::defend::for_each_known_threat_metered`], and the nodes each served
+/// leg's search pops. A meter only hears counts: nothing this decides
+/// changes with it. [`decide_scouts`] and [`run_scout`] pass `()`, because the
+/// scouts are decided in the Programs phase, outside any seat's decision, as
+/// Attack's breach search is (item 175 (4)).
+///
 /// Work per decision, at a seat's most due sightings `n` (64, the sighting
 /// table's share) and its scouts `m`: the insertion evaluates `n × m` list
 /// ends of at most `n` legs each, octile bounds only, `n² × m` in all; the
 /// departure prices at most `n` served legs in all (each sighting is a leg of
 /// one list), on a pricing decision or once a list's bound no longer leaves
 /// time, and none otherwise.
-fn decide_seat(world: &mut World, seat: SeatId, members: Members) {
+fn decide_seat<M: crate::seams::Meter + ?Sized>(
+    world: &mut World,
+    seat: SeatId,
+    members: Members,
+    meter: &M,
+) {
     let mut threats = world.take_threat_scratch();
-    crate::defend::for_each_known_threat(world, seat, |known| {
+    crate::defend::for_each_known_threat_metered(world, seat, meter, |known| {
         threats.push((known.at, Sq::of_radius(known.weapon.range())));
     });
     // A seat with no scout this decision decides holds no list: its
     // sightings wait for a scout, and none of them is a drop.
     if !(0..crate::math::index::row(world.units().len()))
+        .inspect(|_| meter.rows(1))
         .any(|row| member(world, seat, members, row))
     {
         world.put_threat_scratch(threats);
@@ -1099,9 +1138,9 @@ fn decide_seat(world: &mut World, seat: SeatId, members: Members) {
     // The seat's due sightings, in rank order, but for those a scout this
     // decision does not decide is walking to.
     let mut after = None;
-    while let Some(due) = next_due(world, seat, after, &threats) {
+    while let Some(due) = next_due(world, seat, after, &threats, meter) {
         after = Some(due.rank);
-        if !walked_by_another(world, seat, members, due.place)
+        if !walked_by_another(world, seat, members, due.place, meter)
             && let Some(slot) = crate::ids::Row::of_index(due.slot)
         {
             rows.push(slot);
@@ -1112,9 +1151,9 @@ fn decide_seat(world: &mut World, seat: SeatId, members: Members) {
         rows.resize(len, crate::ids::Row::FIRST);
     }
     let mut lists = Lists { rows: &mut rows, n };
-    keep(world, seat, members, &mut lists, &threats);
-    insert(world, seat, members, &mut lists, &threats);
-    depart_or_scan(world, seat, members, &lists, &threats);
+    keep(world, seat, members, &mut lists, &threats, meter);
+    insert(world, seat, members, &mut lists, &threats, meter);
+    depart_or_scan(world, seat, members, &lists, &threats, meter);
     rows.clear();
     *world.sight_rows_mut() = rows;
     world.put_threat_scratch(threats);
@@ -1122,25 +1161,27 @@ fn decide_seat(world: &mut World, seat: SeatId, members: Members) {
 
 /// Step 1: in ascending unit row, every member walking to a due sighting no
 /// lower-row member keeps has it at the head of its list.
-fn keep(
+fn keep<M: crate::seams::Meter + ?Sized>(
     world: &World,
     seat: SeatId,
     members: Members,
     lists: &mut Lists<'_>,
     threats: &[([Fx; 3], Sq)],
+    meter: &M,
 ) {
     for row in 0..crate::math::index::row(world.units().len()) {
+        meter.rows(1);
         if !member(world, seat, members, row) {
             continue;
         }
         let Some(to) = world.units().destinations().get(row).copied() else {
             continue;
         };
-        let held = (0..lists.n).find(|p| {
+        let held = (0..lists.n).inspect(|_| meter.rows(1)).find(|p| {
             lists.owner(*p).is_none()
                 && lists
                     .slot(*p)
-                    .and_then(|slot| due_in(world, seat, slot, threats))
+                    .and_then(|slot| due_in(world, seat, slot, threats, meter))
                     .is_some_and(|due| due.place == to)
         });
         if let Some(p) = held {
@@ -1151,22 +1192,24 @@ fn keep(
 
 /// Step 2: every due sighting in no list, in rank order, appended to the list
 /// of the member that finishes soonest with it.
-fn insert(
+fn insert<M: crate::seams::Meter + ?Sized>(
     world: &mut World,
     seat: SeatId,
     members: Members,
     lists: &mut Lists<'_>,
     threats: &[([Fx; 3], Sq)],
+    meter: &M,
 ) {
     let left = i64::from(ticks_left(world));
     let link = i64::from(world.link_ticks());
     for p in 0..lists.n {
+        meter.rows(1);
         if lists.owner(p).is_some() {
             continue;
         }
         let Some(due) = lists
             .slot(p)
-            .and_then(|slot| due_in(world, seat, slot, threats))
+            .and_then(|slot| due_in(world, seat, slot, threats, meter))
         else {
             continue;
         };
@@ -1174,10 +1217,11 @@ fn insert(
         let goal = world.surface().node_of(gx, gy);
         let mut best: Option<(i64, usize, u32)> = None;
         for row in 0..crate::math::index::row(world.units().len()) {
+            meter.rows(1);
             if !member(world, seat, members, row) {
                 continue;
             }
-            let Some((finish, at, legs)) = list_end(world, seat, lists, row, threats) else {
+            let Some((finish, at, legs)) = list_end(world, seat, lists, row, threats, meter) else {
                 continue;
             };
             let [ax, ay] = column_of(at);
@@ -1211,15 +1255,17 @@ fn insert(
 /// Step 3: in ascending unit row, every member with a list walks to its head
 /// when it must, and every other member scans, re-scans or idles; a member
 /// that arrived parks.
-fn depart_or_scan(
+fn depart_or_scan<M: crate::seams::Meter + ?Sized>(
     world: &mut World,
     seat: SeatId,
     members: Members,
     lists: &Lists<'_>,
     threats: &[([Fx; 3], Sq)],
+    meter: &M,
 ) {
     let last_minute = refresh_pass(world);
     for row in 0..crate::math::index::row(world.units().len()) {
+        meter.rows(1);
         if !member(world, seat, members, row) {
             continue;
         }
@@ -1233,7 +1279,7 @@ fn depart_or_scan(
             continue;
         };
         let mut head: Option<[Fx; 3]> = None;
-        walk_list(world, seat, lists, row, threats, |_, due| {
+        walk_list(world, seat, lists, row, threats, meter, |_, due| {
             if head.is_none() {
                 head = Some(due.place);
             }
@@ -1242,7 +1288,7 @@ fn depart_or_scan(
             head == to
                 || last_minute
                 || !has_scan(world, seat, row, threats)
-                || !list_leaves_time(world, seat, lists, row, threats)
+                || !list_leaves_time(world, seat, lists, row, threats, meter)
         });
         let target = if leaves {
             head
@@ -1290,12 +1336,13 @@ fn depart_or_scan(
 /// does not count on: a scout renews a sighting once the place is within its
 /// vision radius, before it arrives. A list with no needed sighting always
 /// leaves time: nothing in it would be out of the window at the Lull.
-fn list_leaves_time(
+fn list_leaves_time<M: crate::seams::Meter + ?Sized>(
     world: &mut World,
     seat: SeatId,
     lists: &Lists<'_>,
     row: usize,
     threats: &[([Fx; 3], Sq)],
+    meter: &M,
 ) -> bool {
     let Some(start) = world.units().positions().get(row).copied() else {
         return true;
@@ -1306,7 +1353,7 @@ fn list_leaves_time(
     let mut bound: i64 = 0;
     let mut bound_needed: i64 = 0;
     let mut at = start;
-    walk_list(world, seat, lists, row, threats, |_, due| {
+    walk_list(world, seat, lists, row, threats, meter, |_, due| {
         bound = bound.saturating_add(bound_ticks(world, at, due.place));
         at = due.place;
         legs = legs.saturating_add(1);
@@ -1344,7 +1391,7 @@ fn list_leaves_time(
     while leg < needed {
         let mut index: u32 = 0;
         let mut next: Option<[Fx; 3]> = None;
-        walk_list(world, seat, lists, row, threats, |_, due| {
+        walk_list(world, seat, lists, row, threats, meter, |_, due| {
             if index == leg {
                 next = Some(due.place);
             }
@@ -1362,7 +1409,7 @@ fn list_leaves_time(
             broken = true;
             break;
         };
-        let Some(ticks) = served_walk_ticks(world, a, b, speed) else {
+        let Some(ticks) = served_walk_ticks(world, a, b, speed, meter) else {
             broken = true;
             break;
         };
@@ -1395,6 +1442,19 @@ fn has_scan(world: &World, seat: SeatId, row: usize, threats: &[([Fx; 3], Sq)]) 
     nearest_cell(world, seat, home, here, Pick::Unexplored, &open).is_some()
 }
 
+/// The nodes `scratch`'s searches have popped since its counters were last
+/// reset: the grid and endpoint pops (`expansions`, of which the endpoint
+/// sweeps' are a part) and the abstract pops, as `crate::targeting` reads
+/// them.
+fn popped(scratch: &crate::pathing::search::Scratch) -> Result<u64, crate::seams::Unmeasured> {
+    let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
+    scratch
+        .expansions()
+        .map_err(unreadable)?
+        .checked_add(scratch.abstract_expansions().map_err(unreadable)?)
+        .ok_or(crate::seams::Unmeasured::SourceUnreadable)
+}
+
 /// The ticks a scout takes, at the latest, on the walk the router serves from
 /// `start` to `goal` at `speed` ([`walk_ticks`]), or `None` when it serves
 /// none: `NoPath` (counted, [`Scratch::survey_unserved`](crate::pathing::search::Scratch)),
@@ -1402,9 +1462,24 @@ fn has_scan(world: &World, seat: SeatId, row: usize, threats: &[([Fx; 3], Sq)]) 
 /// [`Scratch::stalled`](crate::pathing::search::Scratch)), or a walker with no
 /// speed. A walk too long for a tick count is [`i64::MAX`] ticks: longer than
 /// any Push.
-fn served_walk_ticks(world: &mut World, start: Node, goal: Node, speed: Speed) -> Option<i64> {
+fn served_walk_ticks<M: crate::seams::Meter + ?Sized>(
+    world: &mut World,
+    start: Node,
+    goal: Node,
+    speed: Speed,
+    meter: &M,
+) -> Option<i64> {
     let (ground, scratch) = world.ground_and_scratch();
-    let walk = match walk_cost(ground.surface, ground.clusters, scratch, (start, goal)) {
+    // A served walk is charged the nodes its searches pop, the change in the
+    // scratch's own counters over the call (decisions-log item 175 (1)).
+    let before = popped(scratch);
+    let walked = walk_cost(ground.surface, ground.clusters, scratch, (start, goal));
+    meter.measured(popped(scratch).and_then(|after| {
+        after
+            .checked_sub(before?)
+            .ok_or(crate::seams::Unmeasured::SourceUnreadable)
+    }));
+    let walk = match walked {
         Ok(walk) => walk,
         Err(WalkError::NoPath(_)) => {
             scratch.survey_unserved.bump();
@@ -1483,4 +1558,174 @@ fn ticks_left(world: &World) -> u32 {
 fn due_at(seen: u32, now: u32) -> bool {
     // E7: rule: a sighting is taken on a tick already played, so it is never later than now
     now.saturating_sub(seen) >= REFRESH_INTERVAL.to_ticks_ceil()
+}
+
+#[cfg(test)]
+mod tests {
+    //! The scouts' decision reports its counted work to a [`Meter`]
+    //! (decisions-log item 175 (1)): one unit a row it reads at its innermost
+    //! loops, and the pops of each served leg it prices; and a measurement
+    //! never reaches the state hash.
+    //!
+    //! [`Meter`]: crate::seams::Meter
+
+    use super::{Members, decide_seat};
+    use crate::knowledge::{AssetId, AssetKind};
+    use crate::seams::{MandateKind, UnitTally};
+    use crate::tables::{
+        AreaKind, BeaconId, ColumnBox, NO_BLUEPRINT, PRIORITY_NORMAL, SeatId, UnitKind,
+    };
+    use crate::{MatchSettings, RulesTable, Runner, World, WorldConfig};
+
+    const SEED: u64 = 0x00F1_2E00_C0DE_0001;
+
+    /// A Push past its first minute: seat 0's Survey post at the map's
+    /// centre with `scouts` scouts and a probe strip along the south edge, and
+    /// `sightings` enemy beacon sightings seat 0 took on tick 1, each a
+    /// hundred columns from the centre in turn, so every one is due.
+    fn arranged(scouts: usize, sightings: usize) -> Runner {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let rules =
+            RulesTable::load(&path).unwrap_or_else(|error| panic!("the rules load: {error}"));
+        let mut world = World::new(&WorldConfig {
+            match_seed: SEED,
+            seats: 2,
+            rules,
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![600_000],
+                round_limit: 1,
+            },
+        })
+        .unwrap_or_else(|error| panic!("the world: {error}"));
+        let map = world
+            .rules()
+            .message()
+            .map
+            .unwrap_or_else(|| panic!("a map block"));
+        let (cx, cy) = (
+            i32::try_from(map.size_x.div_euclid(2)).unwrap_or_else(|error| panic!("{error}")),
+            i32::try_from(map.size_y.div_euclid(2)).unwrap_or_else(|error| panic!("{error}")),
+        );
+        let field = world.standing_point([cx, cy, 0]);
+        let post = world
+            .place_beacon_directly(SeatId::new(0), field, MandateKind::Survey, PRIORITY_NORMAL)
+            .unwrap_or_else(|| panic!("a post"));
+        world.set_scouts(post, 0);
+        let last_x = i16::try_from(map.size_x - 1).unwrap_or_else(|error| panic!("{error}"));
+        world
+            .add_area(
+                post,
+                AreaKind::Probe,
+                world.standing_point([cx, 8, 0]),
+                ColumnBox::new([0, 0], [last_x, 40]).unwrap_or_else(|| panic!("a box")),
+            )
+            .unwrap_or_else(|error| panic!("the area fits: {error:?}"));
+        for _ in 0..scouts {
+            world
+                .field_unit(SeatId::new(0), post, UnitKind::Scout, field)
+                .unwrap_or_else(|| panic!("a scout"));
+        }
+        let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("a runner: {error}"));
+        assert_eq!(runner.begin_push(), Ok(true));
+        for _ in 0..1_300 {
+            step(&mut runner);
+            runner.clear_events();
+        }
+        let offsets = [
+            (-100, 0),
+            (100, 0),
+            (0, 100),
+            (0, -100),
+            (-100, 100),
+            (100, -100),
+        ];
+        for (index, (dx, dy)) in offsets.iter().take(sightings).enumerate() {
+            let at = runner.world().standing_point([cx + dx, cy + dy, 0]);
+            let index = u32::try_from(index).unwrap_or_else(|error| panic!("{error}"));
+            let id = AssetId::of_beacon(BeaconId::new(index + 900))
+                .unwrap_or_else(|error| panic!("an id: {error:?}"));
+            runner.world_mut().see(
+                SeatId::new(0),
+                id,
+                SeatId::new(1),
+                AssetKind::Beacon.id(),
+                NO_BLUEPRINT,
+                at,
+                1,
+            );
+        }
+        runner
+    }
+
+    /// Play one tick of the Push.
+    fn step(runner: &mut Runner) {
+        match runner.step() {
+            Ok(Some(_)) => runner.clear_events(),
+            Ok(None) => panic!("the Push ended"),
+            Err(error) => panic!("a tick: {error}"),
+        }
+    }
+
+    /// The units one decision of seat 0's scouts counts.
+    fn units(scouts: usize, sightings: usize) -> u64 {
+        let mut runner = arranged(scouts, sightings);
+        let tally = UnitTally::new();
+        decide_seat(runner.world_mut(), SeatId::new(0), Members::Survey, &tally);
+        tally
+            .read()
+            .unwrap_or_else(|reason| panic!("measured: {reason:?}"))
+    }
+
+    #[test]
+    fn the_scouts_decision_counts_more_for_more_sightings_and_scouts() {
+        let base = units(1, 1);
+        let more_sightings = units(1, 4);
+        let more_scouts = units(3, 4);
+        assert!(
+            base > 0,
+            "a decision with a scout and a sighting counts work"
+        );
+        assert!(
+            more_sightings > base,
+            "more sightings, more work: {base} then {more_sightings}"
+        );
+        assert!(
+            more_scouts > more_sightings,
+            "more scouts, more work: {more_sightings} then {more_scouts}"
+        );
+    }
+
+    /// The same decision with a tally, with a faulted tally and with `()`
+    /// leaves the world hashing the same, then and for the ticks after.
+    #[test]
+    fn the_scouts_measurement_never_reaches_the_state_hash() {
+        let mut plain = arranged(2, 4);
+        let mut counted = arranged(2, 4);
+        let mut faulted = arranged(2, 4);
+        let tally = UnitTally::new();
+        let broken = UnitTally::new();
+        broken.fault_next_charge();
+        decide_seat(plain.world_mut(), SeatId::new(0), Members::Survey, &());
+        decide_seat(counted.world_mut(), SeatId::new(0), Members::Survey, &tally);
+        decide_seat(
+            faulted.world_mut(),
+            SeatId::new(0),
+            Members::Survey,
+            &broken,
+        );
+        assert!(
+            tally.read().is_ok_and(|units| units > 0),
+            "the tally counted"
+        );
+        assert!(broken.read().is_err(), "the faulted tally is unmeasured");
+        for _ in 0..400 {
+            let hash = plain.world().state_hash();
+            assert_eq!(counted.world().state_hash(), hash);
+            assert_eq!(faulted.world().state_hash(), hash);
+            for runner in [&mut plain, &mut counted, &mut faulted] {
+                step(runner);
+                runner.clear_events();
+            }
+        }
+    }
 }
