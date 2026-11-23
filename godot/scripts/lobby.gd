@@ -42,6 +42,17 @@
 #     `resume`. The gateway checks it against the save and decides where the match goes on
 #     (the Push a sealed save began, or the Lull a quit left); a refusal shows the host's
 #     own standard-error text, and nothing is retried with other values.
+#   * A REFUSED RESUME (S3's `prob`; the plan's E6): whatever the cause - a line remembered
+#     before the preset existed has six fields, and the gateway refuses it naming the field -
+#     the lobby shows the host's refusal as it came and offers the chooser again with New
+#     match and no Resume. It reads nothing but "a Resume was refused": it parses no word of
+#     the refusal and counts no field of the line. The remembered line stays until New match
+#     announces and overwrites it, so a refusal this client cannot type loses no match.
+# The New match button names the preset it will ask for (HostLink.PRESET, through the string
+# table's `preset_<name>` rows), and once a match is announced the status line names the
+# preset the gateway says it hosts (`get_status`'s `preset`, read by the bridge's rig) through
+# the same rows; a hosted preset that is not the one New match asked for is said as a
+# refusal. Nothing here states what a preset does: that is the gateway's and the rules'.
 # Once the host has announced, the lobby remembers the six-field line it wrote, in ONE
 # `user://` file that holds no token (the tokens stay in host_link.gd's variables).
 # Remembering the whole line rather than the id alone means a resume repeats exactly what
@@ -62,9 +73,7 @@
 # a per-machine convenience, not state: the save itself is the gateway's, in the private
 # match cache.
 # PLACEHOLDER: forgetting an ended match and the New/Resume layout — OWNER, S6. Forgetting
-# follows item 113 (11). That layout includes what a refused Resume leaves: the refusal is shown, the
-# chooser stays hidden and the line stays remembered, so the player restarts the client to
-# pick New match, and the next launch offers the same Resume again. Nothing is retried.
+# follows item 113 (11).
 #
 # PLACEHOLDER: the lobby's whole layout — OWNER, S6, with the real lobby. A strip of
 # buttons and a text column over the vista, the recap's line among them, are the skeleton's.
@@ -100,6 +109,10 @@ var _resuming := false
 ## The six-field line written to the host, remembered once it announces.
 var _line := ""
 var _chooser: HBoxContainer
+## The chooser's Resume button, or null when no line was remembered at launch.
+var _resume_button: Button = null
+## Whether the host announced a match: a failure before it is a refused start.
+var _announced := false
 ## The watch strip: shown once a match has started.
 var _strip: HBoxContainer
 ## Whether the lobby forgot the match because it ended; the status line then says so.
@@ -127,7 +140,8 @@ static func remembered_line() -> String:
 	return FileAccess.get_file_as_string(REMEMBERED).strip_edges()
 
 
-## Starts a new match under a fresh id.
+## Starts a new match under a fresh id, under HostLink.PRESET, which the bridge then holds the
+## gateway's `get_status` answer to.
 func new_match() -> void:
 	_start(HostLink.config_line(HostLink.match_id("local"), HostLink.LADDER), false)
 
@@ -151,6 +165,8 @@ func _start(line: String, resuming: bool) -> void:
 	var written := HostLink.resume_line(line) if resuming else line
 	if link.start(HostLink.find_gamectl(), HostLink.find_root(), written):
 		editor.begin(HostLink.my_seat())
+		if not resuming:
+			vista.bridge.watch_expect_preset(HostLink.PRESET)
 
 
 func _remember() -> void:
@@ -185,6 +201,9 @@ func _process(_delta: float) -> void:
 		parts.append(Strings.text("lobby_all_ready"))
 	if _forgotten:
 		parts.append(Strings.text("lobby_forgotten"))
+	var preset := preset_line(state)
+	if preset != "":
+		parts.append(preset)
 	# The gateway kept refusing the Lull's closing countdown at zero: the rig gave it up and
 	# ended the Lull without it, and the line says so in the gateway's words.
 	var zero_refused := String(state.get("zero_refusal", ""))
@@ -196,6 +215,40 @@ func _process(_delta: float) -> void:
 		_ready_help.text = ready_line(vista.bridge.editor_state())
 		_ready_help.accessibility_name = _ready_help.text
 	_draw_recap(String(state.get("phase", "")))
+
+
+## The preset's name as the string table spells it: the `preset_<name>` row for the wire's
+## name (`probation`, `custom`). It names; it never says what the preset does.
+static func preset_name(wire: String) -> String:
+	return Strings.text("preset_" + wire)
+
+
+## The New match button's words: the preset New match will write (HostLink.PRESET), named.
+static func new_match_text() -> String:
+	return Strings.text("lobby_new_match", {"preset": preset_name(HostLink.PRESET)})
+
+
+## The status line's words for the hosted match's preset, from the bridge's reading of
+## `get_status` (`preset`, `preset_check`, `preset_asked`, `status_failed`, `status_detail`):
+## the preset named, a refusal when it is not the one New match asked for, "" before the first
+## answer. A newest read that did not come is said beside the last one's name. A branch on the
+## bridge's word, for display.
+static func preset_line(state: Dictionary) -> String:
+	var check := String(state.get("preset_check", ""))
+	var served := String(state.get("preset", ""))
+	var said := ""
+	match check:
+		"agrees", "unasked":
+			said = Strings.text("lobby_preset", {"preset": preset_name(served)})
+		"disagrees":
+			said = Strings.text("lobby_preset_disagrees", {"asked": preset_name(String(state.get("preset_asked", ""))), "served": preset_name(served)})
+		"no_match":
+			said = Strings.text("lobby_preset_none")
+	var failed := String(state.get("status_failed", ""))
+	if failed != "":
+		var why := Strings.text("lobby_status_" + failed, {"detail": state.get("status_detail", "")})
+		said = why if said == "" else "%s %s" % [said, why]
+	return said
 
 
 ## What Ready will do now, in a Lull (S3's `fixp`, P6b finding 4): with a seal the gateway
@@ -227,9 +280,11 @@ func _draw_recap(phase: String) -> void:
 		_recap.accessibility_name = _recap.text
 
 
-## The recap's words: the gateway's prose under its heading, then every seat's tally when the
-## answer carries them, which it does once the match is decided (item 145 (7)). Each number is
-## put into its frame as it came.
+## The recap's words: the gateway's prose under its heading (its licence sentence among them,
+## drawn whole), then every seat's tally when the answer carries them, which it does once the
+## match is decided (item 145 (7)), then the Ledger's memos to this seat in the order they were
+## issued, each as the gateway wrote it, under a heading only when there are any (a custom
+## match is sent none). Each number is put into its frame as it came.
 static func recap_text_of(recap: Dictionary) -> String:
 	var lines: PackedStringArray = [Strings.text("lobby_recap", {"round": recap.get("round", 0), "prose": recap.get("prose", "")})]
 	var seats: Array = recap.get("seat_tallies", [])
@@ -237,7 +292,21 @@ static func recap_text_of(recap: Dictionary) -> String:
 		lines.append(Strings.text("lobby_recap_tallies"))
 	for seat in seats:
 		lines.append(Strings.text("lobby_recap_tally", {"seat": seat.get("seat", ""), "kills": seat.get("kills", 0), "shared_kills": seat.get("shared_kills", 0), "value": seat.get("value_destroyed_dollars", 0), "losses": seat.get("losses", 0)}))
+	var memos: Array = recap.get("memos", [])
+	if not memos.is_empty():
+		lines.append(Strings.text("lobby_recap_memos"))
+	for memo in memos:
+		lines.append(Strings.text("lobby_recap_memo", {"text": memo.get("text", "")}))
 	return "\n".join(lines)
+
+
+## One event-list row as the lobby draws it: an ordinary event as the bridge spelt it (its
+## time, kind and words), and one of the Ledger's memos under the Ledger's speaker word in
+## place of the kind (the bridge's `ledger`, read from the event's typed payload).
+static func event_text_of(row: Dictionary) -> String:
+	if row.get("ledger", false):
+		return Strings.text("event_ledger", {"clock": row.get("clock", ""), "text": row.get("text", "")})
+	return String(row.get("line", ""))
 
 
 ## The recap as drawn, for a check to read.
@@ -257,6 +326,7 @@ func _input(event: InputEvent) -> void:
 
 
 func _on_announced(_match_id: String) -> void:
+	_announced = true
 	_status.text = Strings.text("lobby_connected")
 	_strip.visible = true
 	editor.visible = true
@@ -264,10 +334,27 @@ func _on_announced(_match_id: String) -> void:
 
 
 func _on_failed(reason: String) -> void:
-	_failed = true
 	# A refusal is shown as the host wrote it (host_link.gd hands over its standard error).
 	var key := "lobby_resumed_failed" if _resuming else "lobby_failed"
 	_status.text = Strings.text(key, {"reason": reason})
+	if _resuming and not _announced:
+		# A refused Resume, whatever its cause: the chooser again, with New match and no
+		# Resume. The refusal's words are shown and never read; the remembered line stays.
+		_offer_new_match_only()
+		return
+	_failed = true
+
+
+## After a refused Resume: the link let go of the host that refused (host_link.gd's `reset`),
+## and the chooser shown again with New match and no Resume, so New match starts afresh.
+func _offer_new_match_only() -> void:
+	link.reset()
+	_started = false
+	_resuming = false
+	_line = ""
+	if _resume_button != null:
+		_resume_button.visible = false
+	_chooser.visible = true
 
 
 func _on_received(answer: Dictionary) -> void:
@@ -284,8 +371,8 @@ func _on_received(answer: Dictionary) -> void:
 		# An ended match keeps its save and its id stays taken (item 113 (11)): the lobby
 		# forgets it, so Resume does not replay its last Push.
 		_forget()
-	for row in answer.get("events", PackedStringArray()):
-		_rows.append(String(row))
+	for row in answer.get("events", []):
+		_rows.append(event_text_of(row))
 	while _rows.size() > EVENT_ROWS:
 		_rows.pop_front()
 	_events.text = "\n".join(_rows)
@@ -315,9 +402,9 @@ func _build_ui() -> void:
 	_chooser = HBoxContainer.new()
 	_chooser.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(_chooser)
-	_button(_chooser, Strings.text("lobby_new_match"), new_match)
+	_button(_chooser, new_match_text(), new_match)
 	if remembered_line() != "":
-		_button(_chooser, Strings.text("lobby_resume"), resume_match)
+		_resume_button = _button(_chooser, Strings.text("lobby_resume"), resume_match)
 	_button(_chooser, Strings.text("lobby_about"), _show_about)
 	var buttons := HBoxContainer.new()
 	buttons.mouse_filter = Control.MOUSE_FILTER_IGNORE

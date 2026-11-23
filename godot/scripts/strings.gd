@@ -41,10 +41,20 @@ const TEXT := {
 	"lobby_follow": "Follow",
 	"lobby_whole_map": "Whole map",
 	"lobby_speed_button": "{speed}x",
-	"lobby_new_match": "New match",
+	# The preset New match writes, named through the `preset_<name>` rows below (S3's `prob`).
+	"lobby_new_match": "New match: {preset}",
 	"lobby_resume": "Resume last match",
 	"lobby_choose": "Start a new match, or go on with the last one.",
-	"lobby_resumed_failed": "The match host would not resume the last match: {reason}",
+	"lobby_resumed_failed": "The match host would not resume the last match: {reason} Start a new match instead.",
+	# The preset the gateway says it hosts (`get_status`), named; a name, never what it does.
+	"lobby_preset": "Match: {preset}",
+	"lobby_preset_disagrees": "The match host is hosting {served}, not the {asked} match this lobby asked for.",
+	"lobby_preset_none": "The match host says it hosts no match.",
+	"lobby_status_refused": "(The match host refused the latest status read: {detail})",
+	"lobby_status_unreadable": "(The latest status read could not be read: {detail})",
+	# One row per preset the schema names (gp.api.v1.Preset), keyed by its wire name.
+	"preset_custom": "Custom",
+	"preset_probation": "Probation",
 	"lobby_forgotten": "The last match has ended, so there is nothing to resume.",
 	"lobby_about": "Credits",
 	# The recap: the gateway's own prose - the settlement, the shortfall and why a step
@@ -56,6 +66,11 @@ const TEXT := {
 	# as the gateway counted it.
 	"lobby_recap_tallies": "Every seat's tally:",
 	"lobby_recap_tally": "{seat}: destroyed {kills}, {shared_kills} of them shared, worth ${value}; lost {losses}.",
+	# The Ledger's memos on the recap, each the gateway's text (S3's plan, E5).
+	"lobby_recap_memos": "The Ledger's memos to you:",
+	"lobby_recap_memo": "  {text}",
+	# A memo in the event list: the Ledger's speaker word in place of the event's kind.
+	"event_ledger": "{clock}  The Ledger  {text}",
 
 	# --- The credits overlay (scripts/credits.gd; decisions-log item 117 (11)) ------
 	# The game's licences by area are written here, never read from files at run time.
@@ -99,6 +114,12 @@ const TEXT := {
 	# milliseconds): unit display is S6's (skeleton-plan-w6-notes.md section A4 item 5).
 	"templates_heading": "Start from a template",
 	"no_templates": "No templates.",
+	# The guided first pick (S3's plan, decision 5): over the template the gateway marked; the
+	# gateway's own sentence says why, under it. Generic: it names no template.
+	"template_guided": "Start here",
+	"templates_waiting": "Reading the templates...",
+	"templates_refused": "The gateway refused the template list: {detail}",
+	"templates_unreadable": "The template list could not be read: {detail}",
 	"template_button": "{title}",
 	"wizard_heading": "Template: {title}",
 	"wizard_waiting": "Asking the gateway...",
@@ -240,6 +261,7 @@ const TEXT := {
 
 	# A count the bridge sent as its refusal, one past what `int` holds (S3's `fixp`): `what` it
 	# is, and the digits it held.
+	"value_ring": "A beacon's sphere radius",
 	"value_unreadable": "{what} could not be read: the bridge sent {held}, past what this client's numbers hold.",
 	"value_changes": "The editor's change count",
 	"value_undo_depth": "How many edits Undo can take back",

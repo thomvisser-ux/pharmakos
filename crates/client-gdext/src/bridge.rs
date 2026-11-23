@@ -53,8 +53,7 @@
 use std::fmt;
 
 use godot::builtin::{
-    GString, PackedByteArray, PackedInt32Array, PackedStringArray, VarArray, VarDictionary,
-    Variant, Vector3, Vector3i,
+    GString, PackedByteArray, PackedInt32Array, VarArray, VarDictionary, Variant, Vector3, Vector3i,
 };
 use godot::classes::{INode3D, Node3D};
 use godot::meta::ToGodot;
@@ -81,7 +80,7 @@ use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
 use crate::pacer::WallClock;
 use crate::panics::PanicCounter;
-use crate::rig::{Answer, LullLengths, Rig};
+use crate::rig::{Answer, EventRow, LullLengths, MatchPreset, PresetCheck, Rig, Speaker};
 use crate::rules::{self, MesherRules};
 use crate::surface::{ColourQuantisation, Surface, SurfaceProbe};
 use crate::upload::{DEFAULT_UPLOAD_PATH, ResidentSurface, UploadCounters, UploadPath, Uploader};
@@ -618,9 +617,9 @@ impl PharmakosBridge {
         let mut report = VarDictionary::new();
         report.set(&"phase".to_variant(), &phase.to_variant());
         report.set(&"phase_changed".to_variant(), &phase_changed.to_variant());
-        let mut rows = PackedStringArray::new();
+        let mut rows = VarArray::new();
         for row in &events {
-            rows.push(row.as_str());
+            rows.push(&event_row_dictionary(row).to_variant());
         }
         report.set(&"events".to_variant(), &rows.to_variant());
         report.set(
@@ -642,6 +641,89 @@ impl PharmakosBridge {
             );
         }
         report
+    }
+
+    /// The lobby wrote the preset `name` (`custom`, `probation`) on a new match's config line:
+    /// the rig holds the gateway's `get_status` answer to it, and `watch_state`'s
+    /// `preset_check` says whether the two agree. Returns `false`, holding nothing, for a
+    /// name no preset has, or before `watch_begin`.
+    #[func]
+    fn watch_expect_preset(&mut self, name: GString) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let Some(preset) = MatchPreset::of_name(&name.to_string()) else {
+            godot_error!("[pharmakos] watch_expect_preset: `{name}` names no preset");
+            return false;
+        };
+        self.panics.guard_or("watch_expect_preset", false, || {
+            rig.expect_preset(preset);
+            true
+        })
+    }
+
+    /// A `get_recap` answer's text (a whole JSON-RPC answer) read with no gateway behind it,
+    /// in the shape `watch_recap` returns: what the hostless lobby shot draws. An empty
+    /// dictionary means the reason is in the log.
+    #[func]
+    fn watch_recap_of_response(&mut self, text: GString) -> VarDictionary {
+        let text = text.to_string();
+        let read = self.panics.guard("watch_recap_of_response", || {
+            crate::rig::recap_of_text(&text)
+        });
+        match read {
+            Some(Ok(recap)) => recap_dictionary(&recap),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] watch_recap_of_response: {error}");
+                VarDictionary::new()
+            }
+            None => VarDictionary::new(),
+        }
+    }
+
+    /// A `get_status` answer's text (a whole JSON-RPC answer) read with no gateway behind it, as
+    /// the rig reads one: `preset`, the served preset's name (`none` for no match hosted). An
+    /// empty dictionary means the reason is in the log.
+    #[func]
+    fn watch_status_of_response(&mut self, text: GString) -> VarDictionary {
+        let text = text.to_string();
+        let read = self.panics.guard("watch_status_of_response", || {
+            let frame = pharmakos_proto::json::read(&text)?;
+            let result = frame
+                .get("result")
+                .cloned()
+                .ok_or_else(|| BridgeError::Rpc("a committed answer with no result".to_owned()))?;
+            crate::rig::read_status_facts(&result)
+        });
+        let mut out = VarDictionary::new();
+        match read {
+            Some(Ok((preset, _))) => out.set(&"preset".to_variant(), &preset.name().to_variant()),
+            Some(Err(error)) => godot_error!("[pharmakos] watch_status_of_response: {error}"),
+            None => {}
+        }
+        out
+    }
+
+    /// A `get_segment_feed` answer's text (a whole JSON-RPC answer) read with no gateway behind
+    /// it: its event-list rows, each as `watch_receive`'s `events` carries one. An empty array
+    /// means the feed was empty or the reason is in the log.
+    #[func]
+    fn watch_rows_of_response(&mut self, text: GString) -> VarArray {
+        let text = text.to_string();
+        let read = self.panics.guard("watch_rows_of_response", || {
+            crate::rig::feed_rows_of_text(&text)
+        });
+        let mut rows = VarArray::new();
+        match read {
+            Some(Ok(events)) => {
+                for row in &events {
+                    rows.push(&event_row_dictionary(row).to_variant());
+                }
+            }
+            Some(Err(error)) => godot_error!("[pharmakos] watch_rows_of_response: {error}"),
+            None => {}
+        }
+        rows
     }
 
     /// The speeds the watch rig offers, `pacer::SPEEDS`, in order: the lobby builds its
@@ -1651,7 +1733,61 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
         &"last_error".to_variant(),
         &text_or_empty(rig.last_error()).to_variant(),
     );
+    status_facts_into(&mut state, rig);
     state
+}
+
+/// `get_status`'s facts on the watch state: `preset` (the served preset's name, `none` when
+/// the gateway hosts no match, `""` before one was read), `preset_check` (`not_read`,
+/// `no_match`, `unasked`, `agrees` or `disagrees`, with
+/// `preset_asked` naming what the lobby wrote when it disagrees), `sealed_this_round` (the
+/// seat connection's word, present only once it was told), and
+/// `status_failed`/`status_detail` (`refused` or `unreadable` and why, for the newest read).
+fn status_facts_into(state: &mut VarDictionary, rig: &Rig) {
+    let facts = rig.status_facts();
+    // `""` is "not read yet", a state of its own beside every name a read can give.
+    let served = match facts.preset {
+        None => "",
+        Some(preset) => preset.name(),
+    };
+    state.set(&"preset".to_variant(), &served.to_variant());
+    let check = rig.preset_check();
+    state.set(&"preset_check".to_variant(), &check.name().to_variant());
+    let asked = match check {
+        PresetCheck::Disagrees { asked, .. } => asked.name(),
+        PresetCheck::NotRead
+        | PresetCheck::NoMatch
+        | PresetCheck::Unasked(_)
+        | PresetCheck::Agrees(_) => "",
+    };
+    state.set(&"preset_asked".to_variant(), &asked.to_variant());
+    // Only where the gateway said it: an absent key is "not told yet", never a false.
+    if let Some(sealed) = facts.sealed_this_round {
+        state.set(&"sealed_this_round".to_variant(), &sealed.to_variant());
+    }
+    // As `failed_into` says a read's failure: `""` is "the newest read came".
+    let (failed, detail) = match facts.failed.as_ref() {
+        None => ("", ""),
+        Some(failed) => (failed.name(), failed.detail()),
+    };
+    state.set(&"status_failed".to_variant(), &failed.to_variant());
+    state.set(&"status_detail".to_variant(), &detail.to_variant());
+}
+
+/// One event-list row as a dictionary: `clock`, `kind`, `text` as the feed sent them,
+/// `ledger` (whether it is one of the Ledger's memos, which the lobby draws under the
+/// Ledger's speaker word) and `line`, the row as an ordinary event's is drawn.
+fn event_row_dictionary(row: &EventRow) -> VarDictionary {
+    let mut one = VarDictionary::new();
+    one.set(&"clock".to_variant(), &row.clock.to_variant());
+    one.set(&"kind".to_variant(), &row.kind.to_variant());
+    one.set(&"text".to_variant(), &row.text.to_variant());
+    one.set(
+        &"ledger".to_variant(),
+        &(row.speaker == Speaker::Ledger).to_variant(),
+    );
+    one.set(&"line".to_variant(), &row.line().to_variant());
+    one
 }
 
 /// One entity as a dictionary GDScript can read.
@@ -1674,6 +1810,11 @@ fn entity_dictionary(entity: &Entity) -> VarDictionary {
     }
     if let Some(heading) = entity.heading {
         dictionary.set(&"yaw".to_variant(), &yaw_of(heading).to_variant());
+    }
+    // A beacon's sphere, whole voxels, only where the view carried it: an absent key is "draw
+    // no ring" (another seat's beacon), never a ring of a guessed size.
+    if let Some(radius) = entity.ring {
+        dictionary.set(&"ring".to_variant(), &i64::from(radius.get()).to_variant());
     }
     dictionary
 }

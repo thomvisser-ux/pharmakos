@@ -69,6 +69,7 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
         at: [358, 22, 36],
         hp: None,
         heading: None,
+        ring: None,
     }]);
 
     let mut in_transit: Vec<(usize, usize, String)> = Vec::new();
@@ -206,7 +207,13 @@ fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
             // Pull request 2's calls share the same budget: the template list, the wizard's
             // two instantiations, the rule list, the carried draft and the meter.
             let count = |method: &str| gateway.count(method);
+            // The template list once in this Lull: asked at every Lull's opening (S3's
+            // `prob`), so a round's guided mark is that round's alone.
             assert_eq!(count("list_templates"), 1, "{context}");
+            // `get_status`: the admin's first call, and the seat's one read at its open (S3's
+            // `prob`: the preset and the seat's seal, for a resumed client), beside any
+            // keep-alive.
+            assert!(count("get_status") >= 2, "{context}: {:?}", gateway.methods);
             assert!(
                 count("instantiate_template") >= 2,
                 "{context}: {:?}",

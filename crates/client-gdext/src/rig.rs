@@ -101,11 +101,12 @@
 //! paced from its first answer, and the editor waits for the next Lull.
 
 use pharmakos_proto::gp::api::v1::{
-    GetEconomyForecastResponse, GetRecapResponse, GetSegmentFeedResponse, Status, status,
+    GetEconomyForecastResponse, GetRecapResponse, GetSegmentFeedResponse, GetStatusResponse,
+    Preset, Status, event, ledger_memo, status,
 };
 use pharmakos_proto::json::{self, Json};
 
-use crate::editor::{Door, Editor, SAFE_PLAYBOOK_FILED_KIND};
+use crate::editor::{Door, Editor, ReadFailed, SAFE_PLAYBOOK_FILED_KIND};
 use crate::enums;
 use crate::error::BridgeError;
 use crate::pacer::{CLOCK_REPORT_US, ClockPhase, KEEPALIVE_US, Timing, clock_text};
@@ -298,10 +299,177 @@ pub struct Recap {
     pub prose: String,
     /// Every seat's tally, ascending by seat as it came; empty between rounds.
     pub seat_tallies: Vec<SeatTallyRow>,
+    /// The Ledger's memos to this seat over the match so far, in the order the gateway
+    /// issued them (`ledger_memos`, S3's plan, E5); empty outside a Probation match. The
+    /// recap is where a memo stays after it scrolled off the event list.
+    pub memos: Vec<MemoRow>,
     /// The gateway's refusal of this recap's `get_recap`, `code: message` as it came, or
     /// empty. A recap whose feed lost a `segment_ended` is refused with `INTERNAL` naming
     /// the loss (decisions-log item 135 (1)), and that is the line the player is owed.
     pub refusal: String,
+}
+
+/// One of the Ledger's memos, as the gateway issued it (`gp.api.v1.LedgerMemo`).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MemoRow {
+    /// Which memo, spelt as the wire spells it (`power_shortfall`). Carried, never drawn
+    /// and never branched on: the text is the memo.
+    pub id: String,
+    /// The memo, exactly as the gateway wrote it.
+    pub text: String,
+}
+
+/// The preset a hosted match is played under, as `get_status` names it (S3's `probw`). What
+/// a preset changes is the gateway's: the client names it and decides nothing from it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MatchPreset {
+    /// `custom`.
+    Custom,
+    /// `probation`.
+    Probation,
+}
+
+impl MatchPreset {
+    /// Every preset the schema names, in its order (`gp.api.v1.Preset` without its
+    /// unspecified zero); a test holds the two lists together.
+    pub const ALL: [Self; 2] = [Self::Custom, Self::Probation];
+
+    /// The preset's name as the wire and the config line spell it, and the key the lobby's
+    /// string table names it by (`preset_<name>`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Custom => "custom",
+            Self::Probation => "probation",
+        }
+    }
+
+    /// The preset a name spells, or `None` for a name no preset has.
+    #[must_use]
+    pub fn of_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|preset| preset.name() == name)
+    }
+}
+
+/// What a `get_status` answer says the gateway hosts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ServedPreset {
+    /// The answer names no preset: the schema's word for "no match is hosted"
+    /// (`PRESET_UNSPECIFIED`, absent on the wire).
+    NoMatch,
+    /// A match is hosted under this preset.
+    Hosted(MatchPreset),
+}
+
+impl ServedPreset {
+    /// What an answer's decoded field says, or `None` for a number the schema names no
+    /// preset by, which this build cannot read.
+    fn of_wire(wire: i32) -> Option<Self> {
+        match Preset::try_from(wire) {
+            Ok(Preset::Unspecified) => Some(Self::NoMatch),
+            Ok(Preset::Custom) => Some(Self::Hosted(MatchPreset::Custom)),
+            Ok(Preset::Probation) => Some(Self::Hosted(MatchPreset::Probation)),
+            Err(_) => None,
+        }
+    }
+
+    /// The name the lobby's words are looked up by: the preset's own, or `none`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NoMatch => "none",
+            Self::Hosted(preset) => preset.name(),
+        }
+    }
+}
+
+/// What `get_status`'s body says beside its footer (S3's `probw`): the hosted match's preset,
+/// told to every caller, and for this seat whether it holds a seal of the current round, told
+/// to a seat's token alone. Read at the admin connection's first answer and the seat
+/// connection's first call, so a resumed client knows both; and again from every keep-alive.
+/// Each field is the gateway's last word on it, never a guess.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct StatusFacts {
+    /// How many `get_status` answers were read; zero before the first.
+    pub answers: u64,
+    /// What the gateway hosts; `None` before the first readable answer.
+    pub preset: Option<ServedPreset>,
+    /// Whether this seat holds a seal of the current round (`sealed_this_round`), from the
+    /// seat connection's newest readable answer alone; `None` before one, or when that
+    /// answer did not say (the field's explicit presence: "not told" is never a false).
+    pub sealed_this_round: Option<bool>,
+    /// The newest read's refusal or unreadable answer, until a later read is read: the
+    /// facts above are then the last read's, and the lobby says the newest did not come.
+    pub failed: Option<ReadFailed>,
+}
+
+/// Whether the hosted match is the preset the lobby asked for (`Rig::expect_preset`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PresetCheck {
+    /// No `get_status` answer has been read yet.
+    NotRead,
+    /// The gateway says it hosts no match.
+    NoMatch,
+    /// The lobby asked for none (a Resume repeats a remembered line): the gateway's word
+    /// names the match.
+    Unasked(MatchPreset),
+    /// The gateway hosts what the lobby asked for.
+    Agrees(MatchPreset),
+    /// The gateway hosts another preset than the one the lobby asked for: a refusal the
+    /// lobby shows, never papered over with the name it asked for.
+    Disagrees {
+        /// What the lobby wrote on the config line.
+        asked: MatchPreset,
+        /// What the gateway says it hosts.
+        served: MatchPreset,
+    },
+}
+
+impl PresetCheck {
+    /// The name GDScript looks the words up by.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NotRead => "not_read",
+            Self::NoMatch => "no_match",
+            Self::Unasked(_) => "unasked",
+            Self::Agrees(_) => "agrees",
+            Self::Disagrees { .. } => "disagrees",
+        }
+    }
+}
+
+/// Who an event-list row is from: the feed's ordinary event, or one of the Ledger's memos
+/// (an event whose typed payload is a `LedgerMemo`), which the lobby draws under the
+/// Ledger's speaker word.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Speaker {
+    /// An ordinary event: drawn with its kind.
+    Event,
+    /// The Ledger's memo: drawn with the speaker word in place of the kind.
+    Ledger,
+}
+
+/// One event-list row, as the feed sent it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct EventRow {
+    /// The event's time in the segment, as the pacer's clock spells it.
+    pub clock: String,
+    /// Its kind, as the gateway wrote it.
+    pub kind: String,
+    /// Its words: the gateway's text, or for a memo the memo's own text.
+    pub text: String,
+    /// Who it is from.
+    pub speaker: Speaker,
+}
+
+impl EventRow {
+    /// The row as the event list's golden and the log print it: the time, the kind and the
+    /// words, exactly as they came.
+    #[must_use]
+    pub fn line(&self) -> String {
+        format!("{}  {}  {}", self.clock, self.kind, self.text)
+    }
 }
 
 /// One connection's state.
@@ -329,7 +497,7 @@ pub struct Answer {
     /// A `get_view` result, footer included, for [`crate::view`] to decode and apply.
     pub view: Option<Json>,
     /// New event-list rows from `get_segment_feed`, in the feed's order.
-    pub events: Vec<String>,
+    pub events: Vec<EventRow>,
     /// The gateway's refusal, as `CODE: message`, when the call was refused.
     pub error: Option<String>,
     /// Whether this answer moved the phase.
@@ -354,6 +522,9 @@ struct Reads {
     meter: bool,
     /// A `get_recap`, because a recap opened or the match ended.
     recap: bool,
+    /// A `get_status` on the seat connection, because it opened: the seat's own facts
+    /// ([`StatusFacts`]) for a client that was not there when they were made.
+    status: bool,
 }
 
 /// What the human, the timer or the host clock asked for and the rig has not yet sent.
@@ -472,6 +643,11 @@ pub struct Rig {
     recap: Recap,
     /// The reads the seat connection owes the meter and the recap.
     reads: Reads,
+    /// What `get_status`'s body last said beside its footer.
+    status_facts: StatusFacts,
+    /// The preset the lobby wrote on a new match's config line, to hold the gateway's answer
+    /// to; `None` for a Resume, which repeats a remembered line.
+    asked_preset: Option<MatchPreset>,
 }
 
 impl Default for Rig {
@@ -516,6 +692,8 @@ impl Rig {
             meter: Meter::default(),
             recap: Recap::default(),
             reads: Reads::default(),
+            status_facts: StatusFacts::default(),
+            asked_preset: None,
         }
     }
 
@@ -547,6 +725,7 @@ impl Rig {
             self.due.keyframe = true;
             self.view_paging = None;
             self.due.feed = true;
+            self.reads.status = true;
         }
     }
 
@@ -605,6 +784,7 @@ impl Rig {
             Some((_, Purpose::Plan)) => self.editor.dropped(),
             Some((_, Purpose::Meter)) => self.reads.meter = true,
             Some((_, Purpose::Recap)) => self.reads.recap = true,
+            Some((_, Purpose::Status)) if link == SEAT => self.reads.status = true,
             _ => {}
         }
     }
@@ -763,6 +943,9 @@ impl Rig {
         // The meter goes ahead of the view and the feed: in a Push all three fall due at
         // every advance, and a debug host can take longer than the pacer's period over a
         // view page, so a meter behind them would never be asked. It is one small call.
+        if self.reads.status {
+            return Some((Purpose::Status, "get_status", object(Vec::new())));
+        }
         if self.reads.meter {
             return Some((Purpose::Meter, "get_economy_forecast", object(Vec::new())));
         }
@@ -805,6 +988,7 @@ impl Rig {
             Purpose::Feed => self.due.feed = false,
             Purpose::Meter => self.reads.meter = false,
             Purpose::Recap => self.reads.recap = false,
+            Purpose::Status if link == SEAT => self.reads.status = false,
             _ => {}
         }
         let text = json::write(&object(vec![
@@ -870,6 +1054,11 @@ impl Rig {
                 // words, as they came.
                 self.recap.refusal = format!("{code}: {message}");
             }
+            if purpose == Purpose::Status {
+                // The facts stand as the last read gave them; the newest read's refusal is
+                // said beside them.
+                self.status_facts.failed = Some(ReadFailed::Refused(format!("{code}: {message}")));
+            }
             let said = format!("{code}: {message}");
             if purpose == Purpose::Clock
                 && self.ran_out == RanOut::GivenUp
@@ -891,7 +1080,7 @@ impl Rig {
         // What the call was for is settled BEFORE the footer is read, so a footer this
         // build cannot read never leaves the pacer or the host clock waiting on an answer
         // that has already arrived.
-        let settled = self.settle(purpose, result, &mut answer);
+        let settled = self.settle(link, purpose, result, &mut answer);
         self.sync_editor();
         settled?;
         if link == ADMIN
@@ -905,6 +1094,7 @@ impl Rig {
     /// Routes one successful answer by what its call was for.
     fn settle(
         &mut self,
+        link: usize,
         purpose: Purpose,
         result: &Json,
         answer: &mut Answer,
@@ -1022,9 +1212,34 @@ impl Rig {
                 };
             }
             Purpose::Recap => self.take_recap(result)?,
-            Purpose::Status => {}
+            Purpose::Status => self.take_status(link, result)?,
         }
         Ok(())
+    }
+
+    /// Takes in a `get_status` answer's body: what the gateway hosts, and on the seat
+    /// connection what the seat was told of its seal of the round.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError`] for a body this build cannot read, or a preset number the schema names
+    /// none by. The reason is kept as the facts' `failed`, so the lobby says it.
+    fn take_status(&mut self, link: usize, result: &Json) -> Result<(), BridgeError> {
+        match read_status_facts(result) {
+            Ok((preset, sealed)) => {
+                self.status_facts.answers = self.status_facts.answers.saturating_add(1);
+                self.status_facts.preset = Some(preset);
+                if link == SEAT {
+                    self.status_facts.sealed_this_round = sealed;
+                }
+                self.status_facts.failed = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.status_facts.failed = Some(ReadFailed::Unreadable(error.to_string()));
+                Err(error)
+            }
+        }
     }
 
     /// Takes in a `get_recap` answer: its prose, and the round its own footer names (the
@@ -1050,35 +1265,7 @@ impl Rig {
 
     /// A `get_recap` answer, read.
     fn read_recap(&self, result: &Json) -> Result<Recap, BridgeError> {
-        let (body, footer) = split_footer(result);
-        let recap: GetRecapResponse =
-            json::decode_json(&enums::canonical("gp.api.v1.GetRecapResponse", &body))?;
-        let round = served_status(footer.as_ref(), "get_recap")?.round;
-        // A seat with no tally is not a seat that destroyed nothing: the gateway writes every
-        // field, so one without it is refused rather than drawn as zeros.
-        let seat_tallies = recap
-            .seat_tallies
-            .into_iter()
-            .map(|one| {
-                let tally = one.tally.ok_or_else(|| {
-                    BridgeError::Rpc(format!("`seat_tallies` names {} with no tally", one.seat))
-                })?;
-                Ok(SeatTallyRow {
-                    seat: one.seat,
-                    kills: tally.kills,
-                    shared_kills: tally.shared_kills,
-                    losses: tally.losses,
-                    value_destroyed_dollars: tally.value_destroyed_dollars,
-                })
-            })
-            .collect::<Result<Vec<_>, BridgeError>>()?;
-        Ok(Recap {
-            answers: self.recap.answers.saturating_add(1),
-            round,
-            prose: recap.prose,
-            seat_tallies,
-            refusal: String::new(),
-        })
+        recap_of(result, self.recap.answers.saturating_add(1))
     }
 
     /// The bridge could not decode or apply a `get_view` page the rig had already read.
@@ -1410,6 +1597,159 @@ impl Rig {
     pub const fn meter(&self) -> Meter {
         self.meter
     }
+
+    /// What `get_status`'s body last said beside its footer.
+    #[must_use]
+    pub const fn status_facts(&self) -> &StatusFacts {
+        &self.status_facts
+    }
+
+    /// The lobby wrote `preset` on a new match's config line: the gateway's answer is held to
+    /// it ([`Rig::preset_check`]).
+    pub fn expect_preset(&mut self, preset: MatchPreset) {
+        self.asked_preset = Some(preset);
+    }
+
+    /// Whether the hosted match is the preset the lobby asked for, by the gateway's last
+    /// readable word on it.
+    #[must_use]
+    pub fn preset_check(&self) -> PresetCheck {
+        match (self.status_facts.preset, self.asked_preset) {
+            (None, _) => PresetCheck::NotRead,
+            (Some(ServedPreset::NoMatch), _) => PresetCheck::NoMatch,
+            (Some(ServedPreset::Hosted(served)), None) => PresetCheck::Unasked(served),
+            (Some(ServedPreset::Hosted(served)), Some(asked)) if served == asked => {
+                PresetCheck::Agrees(served)
+            }
+            (Some(ServedPreset::Hosted(served)), Some(asked)) => {
+                PresetCheck::Disagrees { asked, served }
+            }
+        }
+    }
+}
+
+/// A `get_recap` answer read as the `answers`-th the recap has taken: its prose, every seat's
+/// tally, the Ledger's memos, and the round its own footer names.
+///
+/// # Errors
+///
+/// [`BridgeError`] for an answer, or a footer, this build cannot read.
+fn recap_of(result: &Json, answers: u64) -> Result<Recap, BridgeError> {
+    let (body, footer) = split_footer(result);
+    let recap: GetRecapResponse =
+        json::decode_json(&enums::canonical("gp.api.v1.GetRecapResponse", &body))?;
+    let round = served_status(footer.as_ref(), "get_recap")?.round;
+    // A seat with no tally is not a seat that destroyed nothing: the gateway writes every
+    // field, so one without it is refused rather than drawn as zeros.
+    let seat_tallies = recap
+        .seat_tallies
+        .into_iter()
+        .map(|one| {
+            let tally = one.tally.ok_or_else(|| {
+                BridgeError::Rpc(format!("`seat_tallies` names {} with no tally", one.seat))
+            })?;
+            Ok(SeatTallyRow {
+                seat: one.seat,
+                kills: tally.kills,
+                shared_kills: tally.shared_kills,
+                losses: tally.losses,
+                value_destroyed_dollars: tally.value_destroyed_dollars,
+            })
+        })
+        .collect::<Result<Vec<_>, BridgeError>>()?;
+    let memos = recap
+        .ledger_memos
+        .into_iter()
+        .map(memo_row)
+        .collect::<Result<Vec<_>, BridgeError>>()?;
+    Ok(Recap {
+        answers,
+        round,
+        prose: recap.prose,
+        seat_tallies,
+        memos,
+        refusal: String::new(),
+    })
+}
+
+/// A `get_recap` answer's text read with no gateway behind it (a whole JSON-RPC answer, or
+/// its result): what the hostless lobby shot draws, read as the rig reads a recap.
+///
+/// # Errors
+///
+/// [`BridgeError`] for a text this build cannot read.
+pub fn recap_of_text(text: &str) -> Result<Recap, BridgeError> {
+    let frame = json::read(text)?;
+    let result = frame
+        .get("result")
+        .cloned()
+        .ok_or_else(|| BridgeError::Rpc("a committed answer with no result".to_owned()))?;
+    recap_of(&result, 1)
+}
+
+/// A `get_segment_feed` answer's text read with no gateway behind it (a whole JSON-RPC answer,
+/// or its result): its event-list rows, as the rig reads a feed page.
+///
+/// # Errors
+///
+/// [`BridgeError`] for a text this build cannot read.
+pub fn feed_rows_of_text(text: &str) -> Result<Vec<EventRow>, BridgeError> {
+    let frame = json::read(text)?;
+    let result = frame
+        .get("result")
+        .cloned()
+        .ok_or_else(|| BridgeError::Rpc("a committed answer with no result".to_owned()))?;
+    let (body, _) = split_footer(&result);
+    let feed: GetSegmentFeedResponse =
+        json::decode_json(&enums::canonical("gp.api.v1.GetSegmentFeedResponse", &body))?;
+    event_rows(&feed)
+}
+
+/// A `get_status` result read: what the gateway hosts, and `sealed_this_round` as the
+/// answer told it (`None` when it did not: an admin's token is no seat's and is told none).
+///
+/// # Errors
+///
+/// [`BridgeError::Schema`] for a body the schema refuses, and [`BridgeError::Rpc`] for a
+/// preset number the schema names none by.
+pub(crate) fn read_status_facts(
+    result: &Json,
+) -> Result<(ServedPreset, Option<bool>), BridgeError> {
+    let (body, _) = split_footer(result);
+    let status: GetStatusResponse =
+        json::decode_json(&enums::canonical("gp.api.v1.GetStatusResponse", &body))?;
+    let preset = ServedPreset::of_wire(status.preset).ok_or_else(|| {
+        BridgeError::Rpc(format!(
+            "a get_status answer names the preset {}, which this build has no name for",
+            status.preset
+        ))
+    })?;
+    Ok((preset, status.sealed_this_round))
+}
+
+/// One of the recap's memos, read.
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] for a memo that names no memo (the unspecified zero), which no
+/// gateway issues.
+fn memo_row(memo: pharmakos_proto::gp::api::v1::LedgerMemo) -> Result<MemoRow, BridgeError> {
+    let id = memo_id(memo.id)?;
+    Ok(MemoRow {
+        id,
+        text: memo.text,
+    })
+}
+
+/// A memo's id as the wire spells it: the schema's name, in lower case (decisions-log item
+/// 80).
+fn memo_id(wire: i32) -> Result<String, BridgeError> {
+    match ledger_memo::Id::try_from(wire) {
+        Ok(ledger_memo::Id::Unspecified) | Err(_) => Err(BridgeError::Rpc(format!(
+            "a Ledger memo with the id {wire}, which names no memo"
+        ))),
+        Ok(id) => Ok(id.as_str_name().to_ascii_lowercase()),
+    }
 }
 
 /// The event list's rows for one `get_segment_feed` page, in the feed's order.
@@ -1417,26 +1757,33 @@ impl Rig {
 /// Each row is the event's time in the segment, its kind and its text, exactly as the
 /// gateway wrote them. Nothing is added, merged, reworded or filtered: the event list shows
 /// what the feed said, which is what its golden
-/// (`tests/golden/vista/expected.events.txt`) holds the client to.
+/// (`tests/golden/vista/expected.events.txt`) holds the client to. An event whose typed
+/// payload is one of the Ledger's memos is the Ledger's row ([`Speaker::Ledger`]) carrying
+/// the memo's own text: the branch is on the payload the schema types, never on the kind's
+/// spelling, so no feed kind is named here (S3's plan, E5).
 ///
 /// # Errors
 ///
 /// [`BridgeError::Rpc`] for an event at a negative time, which no gateway writes: the time
 /// is game milliseconds into the segment. The page is refused whole rather than shown with
 /// a row at a time it does not have.
-pub fn event_rows(feed: &GetSegmentFeedResponse) -> Result<Vec<String>, BridgeError> {
+pub fn event_rows(feed: &GetSegmentFeedResponse) -> Result<Vec<EventRow>, BridgeError> {
     feed.events
         .iter()
         .map(|event| {
             let at_ms = u64::try_from(event.at_ms).map_err(|_| {
                 BridgeError::Rpc(format!("an event at {} ms into the segment", event.at_ms))
             })?;
-            Ok(format!(
-                "{}  {}  {}",
-                clock_text(at_ms),
-                event.kind,
-                event.text
-            ))
+            let (speaker, text) = match &event.payload {
+                Some(event::Payload::LedgerMemo(memo)) => (Speaker::Ledger, memo.text.clone()),
+                None => (Speaker::Event, event.text.clone()),
+            };
+            Ok(EventRow {
+                clock: clock_text(at_ms),
+                kind: event.kind.clone(),
+                text,
+                speaker,
+            })
         })
         .collect()
 }
@@ -1947,6 +2294,7 @@ mod tests {
                     at: [358, 22, 36],
                     hp: None,
                     heading: None,
+                    ring: None,
                 }]);
             }
         };
@@ -3117,7 +3465,7 @@ mod tests {
                 let answered = rig
                     .receive(frame.link, &answer(id_of(&frame), &result, "recap"))
                     .expect("reads");
-                rows.extend(answered.events);
+                rows.extend(answered.events.iter().map(EventRow::line));
             }
         }
         assert_eq!(cursors.len(), 3, "two pages and the empty one: {cursors:?}");
@@ -3325,5 +3673,269 @@ mod tests {
             !rig.editor().has_pending_jobs(),
             "the editor waits for the next Lull and asks nothing in the Push"
         );
+    }
+
+    // --- S3's `prob`: the typed status read, the Ledger's memos -----------------------
+
+    /// The gateway's `get_status_probation` golden, through its byte copy.
+    const STATUS_PROBATION: &str =
+        include_str!("../../../godot/fixtures/get_status_probation.json");
+    /// The gateway's `recap_probation_round` golden, through its byte copy.
+    const RECAP_ROUND: &str = include_str!("../../../godot/fixtures/recap_probation_round.json");
+    /// The gateway's `recap_probation_ended` golden, through its byte copy.
+    const RECAP_ENDED: &str = include_str!("../../../godot/fixtures/recap_probation_ended.json");
+
+    /// A committed whole answer, renumbered to the call it answers.
+    fn fixture_answer(id: i64, fixture: &str) -> String {
+        let frame = json::read(fixture).expect("a committed answer");
+        let result = frame.get("result").expect("a result").clone();
+        json::write(&object(vec![
+            ("jsonrpc", Json::String("2.0".to_owned())),
+            ("id", number(id)),
+            ("result", result),
+        ]))
+    }
+
+    /// The rig's first admin call, answered with `fixture`.
+    fn first_status(rig: &mut Rig, fixture: &str) {
+        let sent = rig.poll(0);
+        let status = sent
+            .iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("the admin's first call");
+        assert_eq!(method_of(status), "get_status");
+        rig.receive(ADMIN, &fixture_answer(id_of(status), fixture))
+            .expect("reads");
+    }
+
+    #[test]
+    fn the_preset_is_read_from_get_status_and_held_to_what_the_lobby_asked() {
+        let mut rig = Rig::new();
+        assert_eq!(rig.preset_check(), PresetCheck::NotRead);
+        rig.expect_preset(MatchPreset::Probation);
+        rig.opened(ADMIN);
+        first_status(&mut rig, STATUS_PROBATION);
+        assert_eq!(
+            rig.status_facts().preset,
+            Some(ServedPreset::Hosted(MatchPreset::Probation))
+        );
+        assert_eq!(
+            rig.preset_check(),
+            PresetCheck::Agrees(MatchPreset::Probation)
+        );
+        assert_eq!(
+            rig.status_facts().sealed_this_round,
+            None,
+            "the admin's token is no seat's: what it is told of a seal is not taken"
+        );
+
+        let mut asked_other = Rig::new();
+        asked_other.expect_preset(MatchPreset::Custom);
+        asked_other.opened(ADMIN);
+        first_status(&mut asked_other, STATUS_PROBATION);
+        assert_eq!(
+            asked_other.preset_check(),
+            PresetCheck::Disagrees {
+                asked: MatchPreset::Custom,
+                served: MatchPreset::Probation,
+            },
+            "a hosted match that is not what New match asked for is said, never renamed"
+        );
+
+        let mut resumed = Rig::new();
+        resumed.opened(ADMIN);
+        first_status(&mut resumed, STATUS_PROBATION);
+        assert_eq!(
+            resumed.preset_check(),
+            PresetCheck::Unasked(MatchPreset::Probation),
+            "a Resume asks for none: the gateway's word names the match"
+        );
+    }
+
+    #[test]
+    fn every_preset_the_schema_names_has_a_name_and_no_other_does() {
+        let mut named = Vec::new();
+        for wire in 1..64_i32 {
+            if let Ok(preset) = Preset::try_from(wire) {
+                named.push(preset.as_str_name().to_ascii_lowercase());
+            }
+        }
+        let ours: Vec<String> = MatchPreset::ALL
+            .iter()
+            .map(|preset| preset.name().to_owned())
+            .collect();
+        assert_eq!(
+            ours, named,
+            "MatchPreset::ALL is gp.api.v1.Preset, in order"
+        );
+        for preset in MatchPreset::ALL {
+            assert_eq!(MatchPreset::of_name(preset.name()), Some(preset));
+        }
+        assert_eq!(
+            MatchPreset::of_name("Probation"),
+            None,
+            "the wire's spelling only"
+        );
+        assert_eq!(MatchPreset::of_name(""), None);
+    }
+
+    #[test]
+    fn the_seat_asks_get_status_when_it_opens_and_keeps_what_it_was_told() {
+        let mut rig = in_lull();
+        // `in_lull` answered the seat's open-time read with no fields: nothing was told.
+        assert_eq!(rig.status_facts().sealed_this_round, None);
+        assert_eq!(rig.status_facts().preset, Some(ServedPreset::NoMatch));
+        assert_eq!(rig.preset_check(), PresetCheck::NoMatch);
+        // A reconnect asks again, once, ahead of the panel's reads.
+        rig.dropped(SEAT);
+        rig.opened(SEAT);
+        let mut asked = 0;
+        for _ in 0..8 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(1) {
+                let method = method_of(&frame);
+                let result = match method.as_str() {
+                    "get_status" if frame.link == SEAT => {
+                        asked += 1;
+                        fixture_answer(id_of(&frame), STATUS_PROBATION)
+                    }
+                    "get_view" => answer(
+                        id_of(&frame),
+                        r#"{"next_cursor":"c9","complete":true}"#,
+                        "lull",
+                    ),
+                    "get_segment_feed" => {
+                        answer(id_of(&frame), r#"{"events":[],"next_cursor":"f1"}"#, "lull")
+                    }
+                    "report_host_clock" => answer(id_of(&frame), r#"{"all_ready":false}"#, "lull"),
+                    _ => answer(id_of(&frame), "{}", "lull"),
+                };
+                rig.receive(frame.link, &result).expect("reads");
+            }
+        }
+        assert_eq!(asked, 1, "one read at the open, not a poll");
+        assert_eq!(rig.status_facts().sealed_this_round, Some(true));
+        assert_eq!(
+            rig.status_facts().preset,
+            Some(ServedPreset::Hosted(MatchPreset::Probation))
+        );
+        assert_eq!(rig.status_facts().failed, None);
+    }
+
+    #[test]
+    fn a_refused_or_unreadable_status_is_said_and_the_last_facts_stand() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        first_status(&mut rig, STATUS_PROBATION);
+        let answers = rig.status_facts().answers;
+        // The seat's open-time read refused: said, and the preset read before still stands.
+        rig.opened(SEAT);
+        let mut refused = 0;
+        for _ in 0..8 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(1) {
+                let text = match method_of(&frame).as_str() {
+                    "get_status" if frame.link == SEAT => {
+                        refused += 1;
+                        refusal(id_of(&frame), "RATE_LIMITED", "slow down")
+                    }
+                    "get_view" => answer(
+                        id_of(&frame),
+                        r#"{"next_cursor":"c9","complete":true}"#,
+                        "lull",
+                    ),
+                    "get_segment_feed" => {
+                        answer(id_of(&frame), r#"{"events":[],"next_cursor":"f1"}"#, "lull")
+                    }
+                    "report_host_clock" => answer(id_of(&frame), r#"{"all_ready":false}"#, "lull"),
+                    _ => answer(id_of(&frame), "{}", "lull"),
+                };
+                rig.receive(frame.link, &text)
+                    .expect("a refusal is an answer");
+            }
+        }
+        assert_eq!(refused, 1, "a refused read is said, not asked in a loop");
+        assert_eq!(
+            rig.status_facts().failed,
+            Some(ReadFailed::Refused("RATE_LIMITED: slow down".to_owned()))
+        );
+        assert_eq!(
+            rig.status_facts().preset,
+            Some(ServedPreset::Hosted(MatchPreset::Probation))
+        );
+        assert_eq!(rig.status_facts().answers, answers);
+
+        // A preset number the schema has no name for cannot be read, and is said.
+        let mut unreadable = Rig::new();
+        unreadable.opened(ADMIN);
+        let sent = unreadable.poll(0);
+        let status = sent.first().expect("the first call");
+        let read = unreadable.receive(ADMIN, &answer(id_of(status), r#"{"preset":9}"#, "lull"));
+        assert!(read.is_err(), "{read:?}");
+        assert!(
+            matches!(
+                unreadable.status_facts().failed,
+                Some(ReadFailed::Unreadable(_))
+            ),
+            "{:?}",
+            unreadable.status_facts()
+        );
+        assert_eq!(unreadable.status_facts().preset, None);
+    }
+
+    /// The recap's memos, from the gateway's golden of a Probation round: in issue order, each
+    /// with its id as the wire spells it and its text as sent.
+    #[test]
+    fn the_recap_carries_the_ledgers_memos_as_the_gateway_issued_them() {
+        let rig = Rig::new();
+        let result = json::read(RECAP_ROUND)
+            .expect("json")
+            .get("result")
+            .expect("a result")
+            .clone();
+        let recap = rig.read_recap(&result).expect("the golden reads");
+        assert_eq!(
+            recap.memos,
+            vec![MemoRow {
+                id: "first_licence".to_owned(),
+                text: "Notice of licence. You ran Generators on two vents at settlement. You \
+                       may now queue a Resonance Spire at any of your beacons."
+                    .to_owned(),
+            }]
+        );
+        assert!(
+            recap.prose.ends_with("Licence awarded: Resonance Spire."),
+            "the licence line is the prose's own sentence, kept whole: {}",
+            recap.prose
+        );
+        let ended = json::read(RECAP_ENDED)
+            .expect("json")
+            .get("result")
+            .expect("a result")
+            .clone();
+        let ended = rig.read_recap(&ended).expect("the golden reads");
+        assert!(
+            ended.memos.is_empty(),
+            "the match's end carries none: {ended:?}"
+        );
+        assert!(
+            ended.prose.ends_with(
+                "The licence that stands at the match's end: seat 0's Resonance Spire, from round 1."
+            ),
+            "the gateway's final words name every standing award: {}",
+            ended.prose
+        );
+        let custom = rig
+            .read_recap(&json::read(r#"{"prose":"p","_status":{"round":1}}"#).expect("json"))
+            .expect("reads");
+        assert!(custom.memos.is_empty(), "a custom match is sent none");
+    }
+
+    #[test]
+    fn a_memo_that_names_no_memo_is_refused() {
+        let rig = Rig::new();
+        let text = r#"{"prose":"p","ledger_memos":[{"text":"t"}],"_status":{"round":1}}"#;
+        let read = rig.read_recap(&json::read(text).expect("json"));
+        assert!(read.is_err(), "{read:?}");
     }
 }

@@ -381,6 +381,23 @@ func quit() -> void:
 	_tokens = ["", ""]
 
 
+## Lets go of a host that failed before it announced (a refused Resume, a refused line), so
+## `start()` can spawn another: its standard input is closed, which ends a host still running,
+## and everything this link held of it is forgotten, the tokens included. The next `start()`
+## then begins a fresh watch rig (`watch_begin`), as the first did.
+func reset() -> void:
+	quit()
+	_pid = -1
+	_stderr = null
+	_stderr_text = ""
+	_announce = PackedByteArray()
+	_port = 0
+	_peers = [null, null]
+	_open = [false, false]
+	_reconnects = 0
+	_done = false
+
+
 func _read_announce() -> void:
 	var chunk := _stdio.get_buffer(4096)
 	if chunk.size() > 0:

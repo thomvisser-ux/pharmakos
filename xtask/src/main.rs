@@ -7471,24 +7471,13 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
 
     /// The test files that still read `CARGO_TARGET_DIR` raw, each with how
     /// many of its lines do and the lane that owes the change (decisions-log
-    /// item 165 (13)): the client belongs to another lane, so the move to the
-    /// parent of `CARGO_TARGET_TMPDIR` is sequenced there. An entry fails
+    /// item 165 (13)): none since S3's `prob` moved the client's two to the
+    /// parent of `CARGO_TARGET_TMPDIR` (item 172 (8) (b)). An entry fails
     /// [`no_test_reads_the_target_dir_variable_raw`] when its file's count
     /// differs from it: a second raw read added to an owed file is not owed,
     /// and a file that stops reading the variable has its entry deleted by the
     /// lane that fixes it.
-    const RAW_TARGET_DIR_OWED: &[(&str, usize, &str)] = &[
-        (
-            "crates/client-gdext/tests/event_list.rs",
-            1,
-            "fixp's successor",
-        ),
-        (
-            "crates/client-gdext/tests/vista_fixture.rs",
-            1,
-            "fixp's successor",
-        ),
-    ];
+    const RAW_TARGET_DIR_OWED: &[(&str, usize, &str)] = &[];
 
     /// `text`, Rust source, with its comments blanked: a line comment to its
     /// line's end and a block comment (nested, as Rust nests them) to its

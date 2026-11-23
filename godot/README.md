@@ -59,6 +59,11 @@ exported build, whose extension list the package job's import wrote (decisions-l
 | `fixtures/beacon_core.json` | a byte-identical copy of `tests/golden/gateway/get_beacon_core/expected.response.json` (seat 0's core beacon, its settings and no targets), for the Visit & change rows' tests; `tests/vocabulary.rs` keeps it identical. The lane that moves the golden re-copies it |
 | `fixtures/beacon_build.json` | a byte-identical copy of `tests/golden/gateway/get_beacon_build/expected.response.json` (a Build beacon holding targets, a wall and a described vent among them), for the removal row's tests; `tests/vocabulary.rs` keeps it identical. The lane that moves the golden re-copies it |
 | `fixtures/rule_list_render.json` | a byte-identical copy of the gateway's `tests/golden/gateway/demo_expand_and_mine_render/expected.response.json` (the Expand & Mine demo's `render_plan` answer, chips and all), for the hostless rule-list scene; `crates/client-gdext/tests/godot_project.rs` keeps it identical. **The lane that moves that golden re-copies it** in the same pull request, and re-renders the rule list's shot once `xtask` takes it |
+| `fixtures/get_status_probation.json` | a byte-identical copy of `tests/golden/gateway/get_status_probation/expected.response.json` (seat 0's `get_status` in a Probation match's first Lull: the preset and the seat's seal), for the hostless lobby shot; `crates/client-gdext/tests/godot_project.rs` keeps it identical and the rig's tests read it. **The lane that moves that golden re-copies it** in the same pull request |
+| `fixtures/feed_ledger_memo.json` | a byte-identical copy of `tests/golden/gateway/feed_ledger_memo/expected.response.json` (a feed page carrying one of the Ledger's memos), for the lobby shot's event list; `crates/client-gdext/tests/event_list.rs` keeps it identical and pins the memo's row. The lane that moves the golden re-copies it |
+| `fixtures/recap_probation_round.json` | a byte-identical copy of `tests/golden/gateway/recap_probation_round/expected.response.json` (a Probation round's recap: the licence sentence in its prose, one memo), for the lobby shot's recap; `godot_project.rs` keeps it identical and the rig's tests read it. The lane that moves the golden re-copies it |
+| `fixtures/recap_probation_ended.json` | a byte-identical copy of `tests/golden/gateway/recap_probation_ended/expected.response.json` (the match's last recap: every standing award in the gateway's final words), for the rig's tests; `godot_project.rs` keeps it identical. The lane that moves the golden re-copies it |
+| `fixtures/view_built.jsonl` | a byte-identical copy of `tests/golden/gateway/view_built/expected.keyframe.jsonl` (seat 0's keyframe with a finished Resonance Spire: the core's grown ring), for the ring shot and the view's tests; `godot_project.rs` keeps it identical. The lane that moves the golden re-copies it |
 | `playbooks/new.jsonc` | what New puts on screen: kind PLAYBOOK, an empty route, and the verifier's own `on_death` and `fallback` stubs, so one map step makes it sealable. It starts a player's own file, so it carries no header and no comment (comments round-trip into the player's text); it is MIT OR Apache-2.0 by its own `REUSE.toml` entry (the owner's ruling of 2026-11-17). Both export presets pack it by their include filter, `playbooks/*.jsonc` |
 | `scenes/boot.tscn` | the main scene: `--scene=<res path>` after `--` sends the run there, otherwise to the lobby |
 | `scenes/lobby.tscn` | the game at the skeleton: starts `gamectl host`, watches the match (T16), and edits the seat's orders (T19) |
@@ -68,6 +73,8 @@ exported build, whose extension list the package job's import wrote (decisions-l
 | `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.rows.png` |
 | `scenes/picker_shot.tscn` | the condition picker drawn from `fixtures/vocabulary.json` (a byte copy of the gateway's golden) with no host: the families, predicates and parameters as sent, one locked entry greyed with the gateway's reason; not yet in `cargo xtask screenshot`'s list (an `xtask` change), so run by hand |
 | `scenes/rule_list_shot.tscn` | the rule list drawn from `fixtures/rule_list_render.json` (a byte copy of the gateway's Expand & Mine render golden) with no host, its chips and one conflict connector; not yet in `cargo xtask screenshot`'s list (an `xtask` change), so run by hand |
+| `scenes/ring_shot.tscn` | the beacon's ring with no host: the vista over `fixtures/view_keyframe.jsonl` (the core's ring at the rules table's base) and then `fixtures/view_built.jsonl` (grown by a standing Resonance Spire), the camera opened on the core; without `--shot=` a check that each ring is drawn at the radius the view sent. Not yet in `cargo xtask screenshot`'s list (S3's `cert3` adds it, proposed golden `tests/golden/vista/expected.ring.png`), so run by hand |
+| `scenes/lobby_shot.tscn` | the lobby's Probation words with no host: the New match button, the status line's preset, the event list with the Ledger's memo, and a Probation round's recap with its memo and licence sentence, each drawn by `scripts/lobby.gd`'s own functions from the bridge's reading of a byte copy of a gateway golden; without `--shot=` a check of the same. Not yet in `cargo xtask screenshot`'s list (`cert3`, proposed golden `tests/golden/vista/expected.lobby.png`), so run by hand |
 | `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.wizard.png` |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
 | `scenes/smoke_check.tscn` | the shipped smoke check (T21): the real lobby idles, opens and closes the credits overlay, starts a New match and reaches the Lull; the one check the export keeps |
@@ -108,6 +115,39 @@ The same run with no human, headless, is CI's live acceptance:
 godot --headless --path godot res://scenes/watch_check.tscn -- \
     --gamectl=<target>/debug/gamectl[.exe] --root=<repository>
 ```
+
+## The Probation match (S3's `prob`, part 1)
+
+The lobby hosts Probation (`scripts/host_link.gd`'s `PRESET`): the New match button names it,
+"New match: Probation", from the string table's `preset_<name>` row fed that one constant,
+and once a match is announced the status line names the preset the gateway says it hosts
+(`get_status`'s `preset`, read by the bridge's rig at the admin connection's first call and
+the seat connection's open), through the same rows. A hosted preset that is not the one New
+match asked for is said as a refusal; a resumed match is named by the gateway alone. Nothing
+in the client says what a preset does.
+
+A Resume the host refuses - a line remembered before the preset existed has six fields, and
+the gateway refuses it naming the field - shows the host's refusal as it came and offers the
+chooser again, with New match and no Resume. The lobby reads only that a Resume was refused
+before the host announced; the remembered line stays until New match announces and replaces
+it. By hand: write a six-field line (the seven fields of a New match's line less the last)
+into `user://last_match.txt`, launch, press Resume, and see the refusal and a chooser offering
+New match only; New match then starts the match.
+
+In a Probation match's first Lull the template list marks the one template the gateway picked
+for a first match: "Start here" over its button and the gateway's own sentence under it, drawn
+as sent; the other templates stay offered. The list is asked for at every Lull's opening and
+replaced whole, so the mark is not drawn once the gateway stops sending it. The Ledger's memos
+are drawn in the event list under "The Ledger" in place of the event's kind, and on the recap
+under their own heading, each as the gateway wrote it; the licence sentence is the recap's own
+prose, drawn whole. Each own beacon carries a flat ring at the sphere radius the view sends,
+the rules table's base grown by a standing Resonance Spire; another seat's beacon is sent no
+radius and draws none.
+
+The headless watch check's Probation leg (`_run_probation`) resumes a six-field line first,
+sees it refused and starts the lobby's own line through the same link, then asserts that
+`get_status` names `probation`, that round 1's first `list_templates` marks exactly one
+template with a sentence, and that the panel draws the mark and the sentence as sent.
 
 ## The editor (T19, pull request 1)
 

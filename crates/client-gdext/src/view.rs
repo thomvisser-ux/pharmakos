@@ -224,6 +224,12 @@ pub struct Entity {
     /// north (+y), when the view carries one: a unit's. `None` for anything without a
     /// heading of its own.
     pub heading: Option<u16>,
+    /// A beacon's sphere of authority, whole voxels, when the view carries it: on this
+    /// seat's own beacons (and every beacon for a no-fog spectator), the rules table's base
+    /// grown by a standing Resonance Spire, as the gateway answered it (`probw`). `None` on
+    /// another seat's beacon, whose radius would show whether its Spire stands (S2's plan,
+    /// decision 5), so no ring is drawn for it and none is guessed.
+    pub ring: Option<NonZeroU32>,
 }
 
 /// An entity's hit points as the view gave them.
@@ -378,14 +384,25 @@ fn entity_of(entity: &ViewEntity) -> Result<Entity, BridgeError> {
             u16::try_from(heading).map_err(|_| refused("has a heading past the full turn"))
         })
         .transpose()?;
+    let kind = EntityKind::of_wire(entity.kind);
+    let ring = match entity.sphere_radius_voxels {
+        None => None,
+        Some(_) if kind != EntityKind::Beacon => {
+            return Err(refused("carries a sphere's radius and is no beacon"));
+        }
+        Some(radius) => {
+            Some(NonZeroU32::new(radius).ok_or_else(|| refused("has a sphere of radius zero"))?)
+        }
+    };
     Ok(Entity {
         id: entity.id.clone(),
-        kind: EntityKind::of_wire(entity.kind),
+        kind,
         subtype: entity.subtype.clone(),
         owner: entity.owner.clone(),
         at,
         hp,
         heading,
+        ring,
     })
 }
 
@@ -1288,6 +1305,65 @@ mod tests {
             let error = decode_page(&with_entities(vec![refused])).expect_err(&id);
             assert!(matches!(error, BridgeError::View(_)), "{id}: {error}");
         }
+    }
+
+    /// A beacon's ring is the radius the view sent (S3's `probw`), drawn only where it was
+    /// sent; a radius on anything but a beacon, or a radius of zero, refuses the page rather
+    /// than drawing a ring nobody sent or a ring of nothing.
+    #[test]
+    fn a_beacons_ring_is_carried_as_sent_and_a_ring_anywhere_else_is_refused() {
+        let mut own = entity("b_00", view_entity::Kind::Beacon, "seat.0");
+        own.sphere_radius_voxels = Some(36);
+        let theirs = entity("e_01", view_entity::Kind::Beacon, "seat.1");
+        let page = decode_page(&with_entities(vec![own, theirs])).expect("decodes");
+        let rings: Vec<Option<u32>> = page
+            .entities
+            .iter()
+            .map(|one| one.ring.map(NonZeroU32::get))
+            .collect();
+        assert_eq!(
+            rings,
+            [Some(36), None],
+            "another seat's beacon draws no ring"
+        );
+
+        let mut on_a_unit = entity("u_1", view_entity::Kind::Unit, "seat.0");
+        on_a_unit.sphere_radius_voxels = Some(24);
+        let mut on_a_structure = entity("s_1", view_entity::Kind::Structure, "seat.0");
+        on_a_structure.sphere_radius_voxels = Some(24);
+        let mut zero = entity("b_01", view_entity::Kind::Beacon, "seat.0");
+        zero.sphere_radius_voxels = Some(0);
+        for refused in [on_a_unit, on_a_structure, zero] {
+            let id = refused.id.clone();
+            let error = decode_page(&with_entities(vec![refused])).expect_err(&id);
+            assert!(matches!(error, BridgeError::View(_)), "{id}: {error}");
+        }
+    }
+
+    /// The gateway's two keyframe goldens, through their byte copies: the opening core's ring
+    /// at the rules table's base, and the core's ring grown once a Resonance Spire stands.
+    #[test]
+    fn the_committed_keyframes_carry_the_base_and_the_grown_ring() {
+        let ring_of = |text: &str| -> Vec<(String, u32)> {
+            let mut rings = Vec::new();
+            for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                let page = decode_page_text(line).expect("a get_view result");
+                for one in page.entities {
+                    if let Some(radius) = one.ring {
+                        rings.push((one.id, radius.get()));
+                    }
+                }
+            }
+            rings
+        };
+        assert_eq!(
+            ring_of(include_str!("../../../godot/fixtures/view_keyframe.jsonl")),
+            [("b_00".to_owned(), 24)]
+        );
+        assert_eq!(
+            ring_of(include_str!("../../../godot/fixtures/view_built.jsonl")),
+            [("b_00".to_owned(), 36)]
+        );
     }
 
     /// One crater in a delta queues the chunks its relight reaches, not the map: before S2

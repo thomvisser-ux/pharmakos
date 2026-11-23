@@ -184,16 +184,14 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("status_detail", editor.status().detail.to_variant());
     put("refusals", i64::from(editor.refusals()).to_variant());
 
-    let mut templates = VarArray::new();
-    for template in editor.templates() {
-        let mut one = VarDictionary::new();
-        one.set(&"id".to_variant(), &template.id.to_variant());
-        one.set(&"title".to_variant(), &template.title.to_variant());
-        one.set(&"summary".to_variant(), &template.summary.to_variant());
-        templates.push(&one.to_variant());
-    }
-    put("templates", templates.to_variant());
+    put(
+        "templates",
+        templates_array(editor.templates()).to_variant(),
+    );
     put("templates_known", editor.templates_known().to_variant());
+    let mut templates_read = VarDictionary::new();
+    failed_into(&mut templates_read, editor.templates_failed());
+    put("templates_read", templates_read.to_variant());
     put("wizard", wizard_dictionary(editor.wizard()).to_variant());
     let mut prose = PackedStringArray::new();
     for line in editor.prose() {
@@ -503,6 +501,29 @@ pub(crate) fn vocabulary_dictionary(
     out
 }
 
+/// The template list as the panel draws it: each template's `id`, `title` and `summary`, and
+/// the guided first pick's mark, `guided`, with the gateway's sentence, `guided_reason`, as
+/// sent (S3's plan, decision 5); `guided_reason` is empty on every unmarked template.
+fn templates_array(templates: &[crate::wizard::TemplateRow]) -> VarArray {
+    let mut out = VarArray::new();
+    for template in templates {
+        let mut one = VarDictionary::new();
+        one.set(&"id".to_variant(), &template.id.to_variant());
+        one.set(&"title".to_variant(), &template.title.to_variant());
+        one.set(&"summary".to_variant(), &template.summary.to_variant());
+        one.set(
+            &"guided".to_variant(),
+            &template.guided.is_some().to_variant(),
+        );
+        one.set(
+            &"guided_reason".to_variant(),
+            &text_or_empty(template.guided.as_deref()).to_variant(),
+        );
+        out.push(&one.to_variant());
+    }
+    out
+}
+
 /// Why a read did not come, under `failed` (`refused` or `unreadable`, `""` when it came or is
 /// on its way) and `detail` (the gateway's words or the decode's reason).
 fn failed_into(out: &mut VarDictionary, failed: Option<&ReadFailed>) {
@@ -796,6 +817,15 @@ pub(crate) fn recap_dictionary(recap: &Recap) -> VarDictionary {
         tallies.push(&one.to_variant());
     }
     out.set(&"seat_tallies".to_variant(), &tallies.to_variant());
+    // The Ledger's memos, in issue order, each `{id, text}` as sent; empty outside Probation.
+    let mut memos = VarArray::new();
+    for memo in &recap.memos {
+        let mut one = VarDictionary::new();
+        one.set(&"id".to_variant(), &memo.id.to_variant());
+        one.set(&"text".to_variant(), &memo.text.to_variant());
+        memos.push(&one.to_variant());
+    }
+    out.set(&"memos".to_variant(), &memos.to_variant());
     out
 }
 

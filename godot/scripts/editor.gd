@@ -577,6 +577,20 @@ func template_buttons() -> Array[Button]:
 	return out
 
 
+## The guided first pick as drawn, for a check to read: the mark's words, the id of the
+## template button under it and the gateway's sentence under that, or an empty array when no
+## template is marked.
+func guided_drawn() -> Array:
+	var children := _templates_box.get_children()
+	for index in children.size():
+		if children[index].name != "GuidedMark":
+			continue
+		var button: Node = children[index + 1] if index + 1 < children.size() else null
+		var why: Node = children[index + 2] if index + 2 < children.size() else null
+		return [(children[index] as Label).text, String(button.get_meta("id", "")) if button != null else "", (why as Label).text if why is Label else ""]
+	return []
+
+
 ## The meter as drawn.
 func meter_text() -> String:
 	return _meter.text
@@ -958,7 +972,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_drafts(state.get("drafts", []))
 	_draw_route(state.get("route", {}), state.get("has_text", false), unchecked_text(state, "route"))
 	_draw_ghost(state.get("ghost", {}))
-	_draw_templates(state.get("templates", []))
+	_draw_templates(state.get("templates", []), state.get("templates_known", false), state.get("templates_read", {}))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
 	_draw_rules(state, unchecked_text(state, "prose"))
 	_draw_number_field(state.get("field", {}))
@@ -1200,8 +1214,15 @@ func size_rect() -> Rect2:
 	return _size_box.get_global_rect()
 
 
-func _draw_templates(templates: Array) -> void:
-	var drawn := var_to_str(templates)
+## The template list as the gateway sent it this Lull (the bridge re-asks at every Lull's
+## opening): one button per template, and on the one the gateway marked as the guided first pick
+## (`guided`, S3's plan, decision 5) the words "Start here" and the gateway's own sentence under
+## it (`guided_reason`), drawn as sent. Which template is marked, and why, are the gateway's;
+## nothing here names one. `known` false is a list not read yet this Lull; `read` says why it did
+## not come, when it did not (`failed`, `detail`).
+func _draw_templates(templates: Array, known: bool, read: Dictionary) -> void:
+	var failed := String(read.get("failed", ""))
+	var drawn := var_to_str([templates, known, failed, read.get("detail", "")])
 	if drawn == _templates_drawn:
 		return
 	_templates_drawn = drawn
@@ -1210,17 +1231,38 @@ func _draw_templates(templates: Array) -> void:
 		child.queue_free()
 	if templates.is_empty():
 		var none := Label.new()
-		none.text = Strings.text("no_templates")
+		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		if failed != "":
+			none.text = Strings.text("templates_" + failed, {"detail": read.get("detail", "")})
+		elif not known:
+			none.text = Strings.text("templates_waiting")
+		else:
+			none.text = Strings.text("no_templates")
+		none.accessibility_name = none.text
 		_templates_box.add_child(none)
 		return
 	for template in templates:
 		var id := String(template.get("id", ""))
+		var guided: bool = template.get("guided", false)
+		if guided:
+			var mark := Label.new()
+			mark.text = Strings.text("template_guided")
+			mark.accessibility_name = mark.text
+			mark.name = "GuidedMark"
+			_templates_box.add_child(mark)
 		var button := _button(_templates_box, "", func() -> void: open_template(id))
 		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.text = Strings.text("template_button", {"title": template.get("title", "")})
 		button.accessibility_name = button.text
 		button.tooltip_text = String(template.get("summary", ""))
 		button.set_meta("id", id)
+		if guided:
+			var why := Label.new()
+			why.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			why.text = String(template.get("guided_reason", ""))
+			why.accessibility_name = why.text
+			why.name = "GuidedReason"
+			_templates_box.add_child(why)
 
 
 ## Redrawn only when the wizard's answer or refusal changed, so a value being typed is not
