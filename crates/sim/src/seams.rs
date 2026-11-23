@@ -99,53 +99,231 @@ impl WorkCounter {
 }
 
 /// A running count of evaluation units that a **read-only** path can add to:
-/// what a decision's conditions, selectors and "nearest" estimates are
-/// measured in (P1's counted half, S1's plan section 5; decisions-log item
-/// 33 (c)).
+/// what a decision's counted work is measured in (P1's counted half, S1's
+/// plan section 5; decisions-log item 33 (c)).
+///
+/// **One unit is one primitive step of counted work, charged where the step
+/// happens** (lane `dunit`): a handler tried, a condition node evaluated, a
+/// selector candidate ranked, a feature the "nearest" ranker scans, a column
+/// a site search scans (the `covering` spiral's, the `toward` site
+/// listing's), and **a node a search pops** -- the grid and endpoint pops and
+/// the abstract pops of a served walk (`targeting::Ground::travel`) and the
+/// grid optimum's pops of a `toward` (`targeting::stone_site`), each charged
+/// as the change in the search scratch's own counters over the call. A call
+/// that pops nothing charges nothing: there is no flat charge per call. A
+/// search's heuristic is evaluated a bounded number of times per node it
+/// pushes, so the pops carry it and it is not charged again. A unit is a
+/// count, not a cost model: no step is weighted against another, so what a
+/// unit costs in nanoseconds per kind of step is the bench's to measure.
 ///
 /// The tally behind [`WorkCounter`]'s per-decision figure. It exists because
 /// a condition is evaluated over a `&World`, and counting there needs interior
-/// mutability; it is an atomic, with relaxed ordering, only so that a `World`
+/// mutability; it is atomics, with relaxed ordering, only so that a `World`
 /// holding one stays `Sync`. Nothing reads it from another thread, and every
 /// count is made in the tick's own fixed order.
+///
+/// It counts in `u64` by a checked add and never saturates: a sum that would
+/// pass `u64::MAX`, or a charge whose source count could not be read
+/// ([`UnitTally::add_measured`]), leaves the tally **unmeasured** under an
+/// enumerated reason ([`Unmeasured`]), which [`UnitTally::read`] answers in
+/// place of a number until the next reset. The first reason sticks.
 ///
 /// **It is not state**: never hashed, never saved, and it compares equal to
 /// any other tally, so two worlds that differ only in what was last measured
 /// are the same world. `tests/determinism.rs` keeps it out of the encoding.
 #[derive(Debug, Default)]
-pub struct UnitTally(core::sync::atomic::AtomicU32);
+pub struct UnitTally {
+    count: core::sync::atomic::AtomicU64,
+    /// [`Unmeasured::id`] of the first reason the count stopped being
+    /// measured, or [`MEASURED`] while it is a count.
+    fault: core::sync::atomic::AtomicU8,
+    /// Whether the next charge is to leave the tally unmeasured whatever it
+    /// is ([`UnitTally::fault_next_charge`]). A reset keeps it.
+    armed: core::sync::atomic::AtomicBool,
+}
+
+/// The [`UnitTally::fault`] byte of a tally that still holds a count.
+const MEASURED: u8 = 0;
+
+/// Why a [`UnitTally`] holds no count since its last reset.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Unmeasured {
+    /// The units counted passed `u64::MAX`.
+    Overflowed,
+    /// A charge's source count, a search scratch's pop counter, could not be
+    /// read: it had itself passed `u64::MAX`, or it read lower after the
+    /// call than before it.
+    SourceUnreadable,
+}
+
+impl Unmeasured {
+    /// The reason's byte in [`UnitTally`]; never [`MEASURED`].
+    const fn id(self) -> u8 {
+        match self {
+            Unmeasured::Overflowed => 1,
+            Unmeasured::SourceUnreadable => 2,
+        }
+    }
+
+    /// The reason a fault byte names; `None` for [`MEASURED`].
+    const fn from_id(id: u8) -> Option<Unmeasured> {
+        match id {
+            1 => Some(Unmeasured::Overflowed),
+            2 => Some(Unmeasured::SourceUnreadable),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for Unmeasured {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Unmeasured::Overflowed => "the decision units counted passed u64::MAX",
+            Unmeasured::SourceUnreadable => {
+                "a search's pop counter could not be read for a decision-unit charge"
+            }
+        })
+    }
+}
+
+impl std::error::Error for Unmeasured {}
 
 impl UnitTally {
     /// A tally at zero.
     #[must_use]
     pub const fn new() -> UnitTally {
-        UnitTally(core::sync::atomic::AtomicU32::new(0))
+        UnitTally {
+            count: core::sync::atomic::AtomicU64::new(0),
+            fault: core::sync::atomic::AtomicU8::new(MEASURED),
+            armed: core::sync::atomic::AtomicBool::new(false),
+        }
     }
 
-    /// Add `units`, saturating.
+    /// Add `units`.
     pub fn add(&self, units: u32) {
-        let now = self.get();
-        self.0.store(
-            now.saturating_add(units),
-            core::sync::atomic::Ordering::Relaxed,
-        );
+        self.add_count(u64::from(units));
+    }
+
+    /// Add `units`, a count of primitive steps a search reports in `u64`.
+    /// A sum past `u64::MAX` leaves the tally [`Unmeasured::Overflowed`].
+    pub fn add_count(&self, units: u64) {
+        if self.fire_armed() {
+            return;
+        }
+        let now = self.count.load(core::sync::atomic::Ordering::Relaxed);
+        match now.checked_add(units) {
+            Some(next) => self
+                .count
+                .store(next, core::sync::atomic::Ordering::Relaxed),
+            None => self.fail(Unmeasured::Overflowed),
+        }
+    }
+
+    /// Add a measured count, or record why it could not be measured.
+    pub fn add_measured(&self, units: Result<u64, Unmeasured>) {
+        if self.fire_armed() {
+            return;
+        }
+        match units {
+            Ok(units) => self.add_count(units),
+            Err(reason) => self.fail(reason),
+        }
+    }
+
+    /// Record that the count is no longer measured; the first reason sticks.
+    fn fail(&self, reason: Unmeasured) {
+        if self.fault.load(core::sync::atomic::Ordering::Relaxed) == MEASURED {
+            self.fault
+                .store(reason.id(), core::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// What has been counted since the last reset.
-    #[must_use]
-    pub fn get(&self) -> u32 {
-        self.0.load(core::sync::atomic::Ordering::Relaxed)
+    ///
+    /// # Errors
+    ///
+    /// The [`Unmeasured`] reason, once the count stopped being a count.
+    pub fn read(&self) -> Result<u64, Unmeasured> {
+        match Unmeasured::from_id(self.fault.load(core::sync::atomic::Ordering::Relaxed)) {
+            Some(reason) => Err(reason),
+            None => Ok(self.count.load(core::sync::atomic::Ordering::Relaxed)),
+        }
     }
 
-    /// Start again from zero.
+    /// **A test seam: the sim never calls it.** Leave the tally
+    /// [`Unmeasured::Overflowed`] at its next charge, whatever that charge
+    /// is, even after a [`UnitTally::reset`] in between, so a test can fault
+    /// the tally inside a decision (after the decision's own reset) and show
+    /// that the match plays the same (`tests/nearest.rs`'s
+    /// `decision_units_never_reach_the_state_hash`).
+    #[doc(hidden)]
+    pub fn fault_next_charge(&self) {
+        self.armed
+            .store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether an armed fault fired on this charge: it leaves the tally
+    /// unmeasured and disarms.
+    fn fire_armed(&self) -> bool {
+        // A plain load on every charge; the swap only once a test armed it.
+        if self.armed.load(core::sync::atomic::Ordering::Relaxed)
+            && self
+                .armed
+                .swap(false, core::sync::atomic::Ordering::Relaxed)
+        {
+            self.fail(Unmeasured::Overflowed);
+            return true;
+        }
+        false
+    }
+
+    /// Start again from zero, measured. An armed fault stays armed.
     pub fn reset(&self) {
-        self.0.store(0, core::sync::atomic::Ordering::Relaxed);
+        self.count.store(0, core::sync::atomic::Ordering::Relaxed);
+        self.fault
+            .store(MEASURED, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Where a read-only scan reports the rows it reads, so that the same scan is
+/// charged when a decision runs it and costs nothing to count when anything
+/// else does.
+///
+/// A decision's caller passes the world's decision tally
+/// ([`UnitTally`], one unit a row read); every other caller passes `()`,
+/// which counts nothing. A meter never changes what the scan decides or
+/// returns: it only hears how many rows were read.
+pub trait Meter {
+    /// `rows` more rows read.
+    fn rows(&self, rows: usize);
+}
+
+/// Counts nothing: a scan run outside a decision.
+impl Meter for () {
+    fn rows(&self, _rows: usize) {}
+}
+
+/// One unit a row read; a row count past `u64` leaves the tally
+/// [`Unmeasured::Overflowed`].
+impl Meter for UnitTally {
+    fn rows(&self, rows: usize) {
+        self.add_measured(u64::try_from(rows).map_err(|_| Unmeasured::Overflowed));
     }
 }
 
 impl Clone for UnitTally {
     fn clone(&self) -> UnitTally {
-        UnitTally(core::sync::atomic::AtomicU32::new(self.get()))
+        UnitTally {
+            count: core::sync::atomic::AtomicU64::new(
+                self.count.load(core::sync::atomic::Ordering::Relaxed),
+            ),
+            fault: core::sync::atomic::AtomicU8::new(
+                self.fault.load(core::sync::atomic::Ordering::Relaxed),
+            ),
+            armed: core::sync::atomic::AtomicBool::new(
+                self.armed.load(core::sync::atomic::Ordering::Relaxed),
+            ),
+        }
     }
 }
 

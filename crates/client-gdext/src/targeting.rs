@@ -452,6 +452,145 @@ fn aim_of(target: &Json) -> AttackAim {
 /// rule for an unwritten integer; an axis that is not a whole number reads as
 /// [`AttackAim::Unknown`], not as zero.
 fn voxel_aim(voxel: &Json) -> AttackAim {
+    match voxel_axes(voxel) {
+        Some(at) => AttackAim::Voxel(at),
+        None => AttackAim::Unknown,
+    }
+}
+
+/// Where one Build target in the player's text goes, as the text writes it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum BuildAnchor {
+    /// A fixed voxel, sim axes.
+    Voxel([i32; 3]),
+    /// `on` a feature by its name, as written.
+    On(String),
+    /// An anchor this lax walk cannot read (a description, a shape it does not know): not drawn.
+    Unknown,
+}
+
+impl BuildAnchor {
+    /// The name GDScript reads.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Voxel(_) => "voxel",
+            Self::On(_) => "on",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One `gp.v1.BuildTarget` found in the player's text (S3's `fixp`, P6b finding 7).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BuildMark {
+    /// The target's JSON Pointer in the file.
+    pub pointer: String,
+    /// The route step it is written in, numbered from 1; `None` outside the route.
+    pub step: Option<usize>,
+    /// Its blueprint id as written, never checked against a catalogue here.
+    pub blueprint: String,
+    /// Where it goes.
+    pub anchor: BuildAnchor,
+    /// A wall's box as written, its two corners, sim axes; `None` when the target writes none or
+    /// this walk cannot read it.
+    pub wall_box: Option<[[i32; 3]; 2]>,
+}
+
+/// Every Build target in the playbook `text`, in the file's order: an `add_build_target` row's
+/// `target`, and each of a Build mandate's `targets[]` (a placement's initial mandate, a visit's
+/// `set_mandate`), read by the shape and not by the mandate's name, in either of proto JSON's spellings. So the editor can mark where each
+/// will go in the Lull (S3's `fixp`, P6b finding 7: nothing drew them).
+///
+/// Read laxly, like [`attack_targets`]: it decides nothing, an anchor this walk cannot read is
+/// [`BuildAnchor::Unknown`] and is not drawn, the blueprint is as written, and the verdict on the
+/// file is the verifier's. A text that is not JSON once its comments are gone names none.
+#[must_use]
+pub fn build_targets(text: &str) -> Vec<BuildMark> {
+    fn walk(value: &Json, pointer: &mut String, out: &mut Vec<BuildMark>) {
+        match value {
+            Json::Object(entries) => {
+                for (key, child) in entries {
+                    let mark = pointer.len();
+                    pointer.push('/');
+                    pointer.push_str(&key.replace('~', "~0").replace('/', "~1"));
+                    let row = key == "add_build_target" || key == "addBuildTarget";
+                    if row && let Some(target) = child.get("target") {
+                        out.push(build_mark(format!("{pointer}/target"), target));
+                    } else if key == "targets"
+                        && let Json::Array(targets) = child
+                    {
+                        // `gp.v1.BuildSettings.targets`, the one `targets` the schema has: read by
+                        // its shape, so no mandate is named here.
+                        for (index, target) in targets.iter().enumerate() {
+                            out.push(build_mark(format!("{pointer}/{index}"), target));
+                        }
+                    } else {
+                        walk(child, pointer, out);
+                    }
+                    pointer.truncate(mark);
+                }
+            }
+            Json::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    let mark = pointer.len();
+                    pointer.push('/');
+                    pointer.push_str(&index.to_string());
+                    walk(child, pointer, out);
+                    pointer.truncate(mark);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(document) = crate::editor::lax_document(text) {
+        walk(&document, &mut String::new(), &mut out);
+    }
+    out
+}
+
+/// One `gp.v1.BuildTarget` object at `pointer`, read laxly.
+fn build_mark(pointer: String, target: &Json) -> BuildMark {
+    let blueprint = match target
+        .get("blueprint_id")
+        .or_else(|| target.get("blueprintId"))
+    {
+        Some(Json::String(id)) => id.clone(),
+        Some(_) | None => String::new(),
+    };
+    let anchor = match target.get("anchor") {
+        Some(anchor) => match anchor.get("voxel") {
+            Some(voxel) => match voxel_axes(voxel) {
+                Some(at) => BuildAnchor::Voxel(at),
+                None => BuildAnchor::Unknown,
+            },
+            None => match anchor
+                .get("on")
+                .and_then(|on| on.get("feature_id").or_else(|| on.get("featureId")))
+            {
+                Some(Json::String(id)) => BuildAnchor::On(id.clone()),
+                Some(_) | None => BuildAnchor::Unknown,
+            },
+        },
+        None => BuildAnchor::Unknown,
+    };
+    let wall_box = target
+        .get("wall_box")
+        .or_else(|| target.get("wallBox"))
+        .and_then(|area| Some([voxel_axes(area.get("min")?)?, voxel_axes(area.get("max")?)?]));
+    BuildMark {
+        step: step_of(&pointer),
+        pointer,
+        blueprint,
+        anchor,
+        wall_box,
+    }
+}
+
+/// A `gp.v1.Voxel` object's axes. An absent axis is zero, proto3 JSON's own rule for an
+/// unwritten integer; an axis that is not a whole number in an `i32` reads as none.
+fn voxel_axes(voxel: &Json) -> Option<[i32; 3]> {
     let axis = |name: &str| -> Option<i32> {
         match voxel.get(name) {
             None => Some(0),
@@ -459,10 +598,7 @@ fn voxel_aim(voxel: &Json) -> AttackAim {
             Some(_) => None,
         }
     };
-    match (axis("x"), axis("y"), axis("z")) {
-        (Some(x), Some(y), Some(z)) => AttackAim::Voxel([x, y, z]),
-        _ => AttackAim::Unknown,
-    }
+    Some([axis("x")?, axis("y")?, axis("z")?])
 }
 
 /// The gateway's "This round: ..." sentence, found at the end of a Lull briefing's prose
@@ -528,6 +664,78 @@ fn at_pointer<'a>(document: &'a Json, pointer: &str) -> Option<&'a Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Every Build target in the text is read for its mark** (S3's `fixp`, P6b finding 7): an
+    /// `add_build_target` row's voxel, a placement's mandate's targets with an `on` anchor and a
+    /// wall's box, and an anchor this walk cannot read, kept and not drawn.
+    #[test]
+    fn every_build_target_is_read_for_its_mark() {
+        type Seen<'a> = (
+            Option<usize>,
+            &'a str,
+            &'a BuildAnchor,
+            Option<[[i32; 3]; 2]>,
+        );
+        let text = r#"{"declarative":{"route":[
+            {"label":"p","place_beacon":{"at":{"voxel":{"x":1,"y":2,"z":3}},"initial":{"build":{"targets":[
+                {"blueprint_id":"generator","anchor":{"on":{"feature_id":"vent_120_88"}}},
+                {"blueprintId":"wall","anchor":{"voxel":{"x":10,"y":11,"z":4}},"wallBox":{"min":{"x":10,"y":11,"z":3},"max":{"x":14,"y":11,"z":7}}}
+            ]}}}},
+            {"label":"v","interface":{"beacon":{"beacon_id":"b_00"},"rows":[
+                {"add_build_target":{"target":{"blueprint_id":"autocannon","anchor":{"voxel":{"x":40,"y":41}}}}},
+                {"add_build_target":{"target":{"blueprint_id":"mortar","anchor":{"on":{"vent":{}}}}}}
+            ]}}
+        ]}}"#;
+        let marks = build_targets(text);
+        let seen: Vec<Seen<'_>> = marks
+            .iter()
+            .map(|mark| {
+                (
+                    mark.step,
+                    mark.blueprint.as_str(),
+                    &mark.anchor,
+                    mark.wall_box,
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    Some(1),
+                    "generator",
+                    &BuildAnchor::On("vent_120_88".to_owned()),
+                    None
+                ),
+                (
+                    Some(1),
+                    "wall",
+                    &BuildAnchor::Voxel([10, 11, 4]),
+                    Some([[10, 11, 3], [14, 11, 7]])
+                ),
+                (
+                    Some(2),
+                    "autocannon",
+                    &BuildAnchor::Voxel([40, 41, 0]),
+                    None
+                ),
+                (Some(2), "mortar", &BuildAnchor::Unknown, None),
+            ]
+        );
+        assert_eq!(
+            marks.first().map(|mark| mark.pointer.as_str()),
+            Some("/declarative/route/0/place_beacon/initial/build/targets/0")
+        );
+        assert!(build_targets("not json").is_empty());
+        assert_eq!(
+            build_targets(
+                r#"{"a":{"add_build_target":{"target":{"anchor":{"voxel":{"x":"half"}}}}}}"#
+            )
+            .first()
+            .map(|mark| (mark.step, mark.anchor.clone())),
+            Some((None, BuildAnchor::Unknown))
+        );
+    }
 
     #[test]
     fn a_feature_name_is_spelt_back_into_its_kind_and_column() {

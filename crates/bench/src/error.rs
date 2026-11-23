@@ -59,6 +59,14 @@ pub enum Error {
     Empty(String),
     /// A count or a sum would not fit its type.
     Overflow(&'static str),
+    /// A seat's decision holds no counted work: the sim's tally says why
+    /// (`pharmakos_sim::seams::Unmeasured`).
+    Unmeasured {
+        /// The seat whose decision was not measured.
+        seat: usize,
+        /// Why the sim holds no count.
+        reason: pharmakos_sim::seams::Unmeasured,
+    },
     /// A generated playbook shape cannot be laid at the size asked for
     /// ([`crate::shapes::Shape`]).
     Shape {
@@ -86,6 +94,9 @@ impl fmt::Display for Error {
             | Error::Drift(reason)
             | Error::Empty(reason) => f.write_str(reason),
             Error::Overflow(what) => write!(f, "{what} does not fit its type"),
+            Error::Unmeasured { seat, reason } => {
+                write!(f, "seat {seat}'s decision was not measured: {reason}")
+            }
             Error::Shape {
                 shape,
                 units,

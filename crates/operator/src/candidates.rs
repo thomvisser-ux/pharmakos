@@ -46,19 +46,39 @@
 //!   (`docs/design/targeting.md`, "toward"). It is never offered to the
 //!   wizard.
 //!
-//! # A stone's worth, and its chain (fix pass 2, item 2)
+//! # A stone's worth, and its chain (fix passes 2 and 3)
 //!
-//! A stone is worth the goal it serves, discounted by what the chain still
-//! needs: **the stones**, at least as many as the known positions say --
-//! the feature's anchor, the seat's own beacons and each one's listed sphere
-//! radius, a new beacon's sphere the rules table's base -- one a round, each
-//! at a beacon's price ([`stones_needed`]); and **the rounds**, those stones'
-//! and the served goal's, by which its worth is divided, a round's share of
-//! a worth that arrives that many rounds on. Its time per second is the whole
-//! chain's: each stone's walk and deploy (at least this one's), and the
-//! served goal's own time. So a goal placeable now of the same worth, no
-//! further than the served goal is, always outranks a stone: it pays no stone
-//! and waits no round.
+//! A stone is charged its **own** price and time, and is worth two things,
+//! each measured from the known positions -- the features' anchors, the
+//! seat's own beacons and each one's listed sphere radius, a new beacon's
+//! sphere the rules table's base:
+//!
+//! * **what it buys this round**: its own sphere, at
+//!   [`EXPANSION_POINTS_PER_BEACON`] as every new sphere is; every other far
+//!   feature it brings **into reach** (coverable from its sphere next round),
+//!   at that feature's goal's worth over the two rounds it then takes; and
+//!   every other far feature it brings **nearer**, at a beacon's price for
+//!   each stone that feature's chain no longer needs ([`stone_buys`]);
+//! * **the goal it serves**, at that goal's worth divided by the rounds still
+//!   needed -- the stones its chain still needs, at least as many as the
+//!   known positions say and one a round ([`stones_needed`]), and the goal's
+//!   own round -- a round's share of a worth that arrives that many rounds on.
+//!
+//! Its time per second is its own walk and deploy and the served goal's own
+//! time, which the second half of its worth needs; the other stones' price
+//! and time are not charged to it (fix pass 3, item 1: charging the whole
+//! chain made every stone of a 5- to 8-stone chain worth less than nothing,
+//! so a seat with $900 sealed its safe playbook). So a goal placeable now of
+//! the same worth, no further than the served goal, outranks a stone toward
+//! it, which buys it only a round's share and waits a round.
+//!
+//! A chain the match's remaining rounds cannot finish would be worth only what
+//! its stones buy on their own; but the round limit is on no seat-facing
+//! field the operator reads (`gp.api.v1.Status` carries the round and not the
+//! limit, and the briefing says the limit in prose only), so every chain is
+//! weighed as if it can finish.
+//!
+//! PLACEHOLDER: a chain the match's remaining rounds cannot finish, weighed as one that can, the round limit being on no seat-facing field — owner, S5, with a `Status` field
 //!
 //! A chain once begun is **continued** until its feature is covered or shown
 //! out of reach -- a `toward` toward it refused, or a stone no round's share
@@ -349,9 +369,62 @@ pub(crate) struct Candidate {
     pub(crate) cost_dollars: i64,
     /// Balanced utility, in points.
     pub(crate) utility: i64,
-    /// Utility per second of `time_ms`, times 1 000.
-    pub(crate) rate: i64,
+    /// Utility per second, exactly ([`Rate`]): what the ranking orders by.
+    pub(crate) rate: Rate,
 }
+
+/// A candidate's utility per unit of time, kept as the fraction it is --
+/// `points` over `per_ms` game milliseconds, `per_ms` above zero -- so two
+/// rates compare exactly, by cross-multiplication (S3's `opr3`, fix pass 3,
+/// item 2): a rate divided down to whole points a second tied 140 points in
+/// 18 s with 240 in 30 s, and the tie went to the lower id, so the lower rate
+/// could be funded first. Each product is of two `i64`s, which an `i128`
+/// always holds, so the comparison never overflows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Rate {
+    points: i64,
+    per_ms: i64,
+}
+
+impl Rate {
+    /// Whether the rate is above zero: the worth it is a rate of is.
+    pub(crate) const fn is_positive(self) -> bool {
+        self.points > 0
+    }
+
+    /// `points` over `per_ms`; `None` when `per_ms` is not above zero, which
+    /// no candidate's time is ([`Tuning::read`] refuses every interface time
+    /// at zero).
+    pub(crate) const fn new(points: i64, per_ms: i64) -> Option<Rate> {
+        if per_ms > 0 {
+            Some(Rate { points, per_ms })
+        } else {
+            None
+        }
+    }
+}
+
+impl Ord for Rate {
+    fn cmp(&self, other: &Rate) -> std::cmp::Ordering {
+        let mine = i128::from(self.points) * i128::from(other.per_ms);
+        let theirs = i128::from(other.points) * i128::from(self.per_ms);
+        mine.cmp(&theirs)
+    }
+}
+
+impl PartialOrd for Rate {
+    fn partial_cmp(&self, other: &Rate) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Rate {
+    fn eq(&self, other: &Rate) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for Rate {}
 
 /// The whole-voxel squared distance between two voxels, or `None` when it
 /// does not fit: a distance that large is within no radius.
@@ -1043,7 +1116,7 @@ pub(crate) fn evaluate(
     tuning: &Tuning,
     declared: &[Declared],
     goals: Vec<Goal>,
-    stones: bool,
+    stones: Option<&[String]>,
 ) -> Evaluated {
     let mut out = Evaluated::default();
     let Some(commander) = situation.commander else {
@@ -1092,7 +1165,11 @@ pub(crate) fn evaluate(
             // No site covers it: with `stones`, a Mine or Generator goal is
             // weighed again as a stone toward its feature.
             Estimate::NotFound => {
-                if let Some(stone) = stone_for(&goal).filter(|_| stones) {
+                // A stone that failed last round is not weighed again: its
+                // chain is shown out of reach this round (fix pass 3, item 6).
+                if let (Some(stone), Some(failed)) = (stone_for(&goal), stones)
+                    && !failed.iter().any(|feature| feature == stone.feature())
+                {
                     far.push((id, stone));
                 }
             }
@@ -1116,7 +1193,7 @@ pub(crate) fn evaluate(
             .get(weighed..)
             .into_iter()
             .flatten()
-            .any(|stone| stone.utility > 0 && stone.time_ms <= fill),
+            .any(|stone| stone.rate.is_positive() && stone.time_ms <= fill),
         None => false,
     };
     if !continued {
@@ -1276,6 +1353,144 @@ fn least_gap(situation: &Situation, anchor: [i32; 2], without: Option<&str>) -> 
         .min()
 }
 
+/// The stones a gap still needs before a site inside the seat's spheres
+/// covers its feature: none while the gap is at most `radius` (a new
+/// beacon's base sphere), then `ceil(gap / radius) - 1`, each stone closing
+/// at most one base radius of it.
+fn stones_for_gap(gap: i64, radius: i64) -> Option<i64> {
+    if gap <= radius {
+        return Some(0);
+    }
+    gap.checked_add(radius.checked_sub(1)?)?
+        .checked_div(radius)?
+        .checked_sub(1)
+}
+
+/// The least walk from the seat's core to a site covering a feature at
+/// `anchor`, game milliseconds: the site stands within the base radius of the
+/// anchor, each step moves at most one voxel on each axis and costs at least
+/// [`Tuning::step_cost_min`], at `commander.cost_per_second`. A floor, never
+/// an estimate; `None` for a seat shown no core, or a figure that does not
+/// fit.
+fn walk_floor_ms(situation: &Situation, tuning: &Tuning, anchor: [i32; 2]) -> Option<i64> {
+    let [cx, cy, _] = situation.core()?.at;
+    let [x, y] = anchor;
+    let across = |p: i32, q: i32| i64::from(p).checked_sub(i64::from(q)).map(i64::abs);
+    let voxels = across(x, cx)?
+        .max(across(y, cy)?)
+        .checked_sub(tuning.sphere_radius_voxels)?
+        .max(0);
+    voxels
+        .checked_mul(tuning.step_cost_min)?
+        .checked_mul(1_000)?
+        .checked_div(tuning.commander_cost_per_second)
+}
+
+/// A goal's points and its own time, for a stone's worth: the Mine or
+/// Generator at `feature`, its travel no shorter than `travel_ms` (the
+/// stone's, which a goal past it walks at least) nor than the floor to it
+/// ([`walk_floor_ms`]), priced at `place` as composed. `None` for a goal whose
+/// step does not build or price, or a figure that does not fit.
+fn goal_worth(
+    situation: &Situation,
+    tuning: &Tuning,
+    declared: &[Declared],
+    goal: &Goal,
+    anchor: [i32; 2],
+    travel_ms: i64,
+    place: [i32; 3],
+) -> Option<(i64, i64)> {
+    let travel = travel_ms.max(walk_floor_ms(situation, tuning, anchor)?);
+    let on_site = priced(tuning, declared, goal, place)?;
+    let (_, economy, expansion, _, time_ms) = terms(situation, tuning, goal, travel, on_site)?;
+    let points = BALANCED
+        .economy
+        .checked_mul(economy)?
+        .checked_add(BALANCED.expansion.checked_mul(expansion)?)?;
+    Some((points, time_ms))
+}
+
+/// What a stone standing at `site` buys this round besides its own sphere
+/// (module docs, "A stone's worth, and its chain"), as thousandths of a point
+/// and the game milliseconds the goals that worth needs take: every live far
+/// feature but the one it serves that the seat's spheres do not reach yet,
+/// brought **into reach** by the stone's sphere at its goal's worth over the
+/// two rounds it then takes, with that goal's own time; or brought **nearer**
+/// by more than a stone of its own would bring it, at a beacon's price for
+/// each stone beyond that its chain no longer needs. A feature with no route,
+/// a goal worth nothing, or a figure that does not fit adds nothing.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each is one input of the stone's worth: the situation, its rows, the declared templates, the stone's site, travel and served feature"
+)]
+fn stone_buys(
+    situation: &Situation,
+    tuning: &Tuning,
+    declared: &[Declared],
+    site: [i32; 3],
+    travel_ms: i64,
+    served: &str,
+) -> Option<(i64, i64)> {
+    let radius = tuning.sphere_radius_voxels;
+    let [sx, sy, _] = site;
+    let (mut points, mut time) = (0_i64, 0_i64);
+    for feature in situation.features.iter().filter(|feature| {
+        feature.live && !feature.covered && feature.travel_ms.is_some() && feature.id != served
+    }) {
+        let Some(before) = least_gap(situation, feature.anchor, None) else {
+            continue;
+        };
+        let before_stones = stones_for_gap(before, radius)?;
+        if before_stones == 0 {
+            // Placeable from the spheres already: its own goal, not the
+            // stone's.
+            continue;
+        }
+        let [x, y] = feature.anchor;
+        let from_stone = distance2([sx, sy, 0], [x, y, 0])?
+            .checked_isqrt()?
+            .checked_sub(radius)?;
+        let after_stones = stones_for_gap(before.min(from_stone), radius)?;
+        if after_stones == 0 {
+            let goal = match feature.kind {
+                Kind::Seam => Goal::Mine {
+                    seam: feature.id.clone(),
+                    grade: feature.grade,
+                },
+                Kind::Vent => Goal::Generator {
+                    vent: feature.id.clone(),
+                    grade: feature.grade,
+                },
+            };
+            let (worth, goal_ms) = goal_worth(
+                situation,
+                tuning,
+                declared,
+                &goal,
+                feature.anchor,
+                travel_ms,
+                site,
+            )?;
+            if worth > 0 {
+                points = points.checked_add(worth.checked_mul(1_000)?.checked_div(2)?)?;
+                time = time.checked_add(goal_ms)?;
+            }
+        } else if let Some(beyond) = before_stones
+            .checked_sub(after_stones)?
+            .checked_sub(1)
+            .filter(|beyond| *beyond > 0)
+        {
+            points = points.checked_add(
+                tuning
+                    .beacon_cost_dollars
+                    .checked_mul(beyond)?
+                    .checked_mul(1_000)?,
+            )?;
+        }
+    }
+    Some((points, time))
+}
+
 /// How many stepping stones a feature no site covers still needs, at least
 /// (module docs, "A stone's worth, and its chain"): a beacon placed inside an
 /// own sphere covers a feature within the base radius of it, so the feature is
@@ -1291,14 +1506,8 @@ pub(crate) fn stones_needed(situation: &Situation, tuning: &Tuning, feature: &st
         .iter()
         .find(|held| held.id == feature)?
         .anchor;
-    let radius = tuning.sphere_radius_voxels;
     let gap = least_gap(situation, anchor, None)?;
-    // ceil(gap / radius) - 1, at least 1.
-    let needed = gap
-        .checked_add(radius.checked_sub(1)?)?
-        .checked_div(radius)?
-        .checked_sub(1)?;
-    Some(needed.max(1))
+    Some(stones_for_gap(gap, tuning.sphere_radius_voxels)?.max(1))
 }
 
 /// The far feature a begun chain is toward, if one is (module docs, "A stone's
@@ -1535,39 +1744,55 @@ fn score(
     travel_ms: i64,
 ) -> Option<Candidate> {
     let on_site = priced(tuning, declared, &goal, place)?;
-    // A stone has no worth of its own: it is worth the goal it serves, by that
-    // goal's own terms, discounted by the stones and the rounds its chain
-    // still needs (module docs, "A stone's worth, and its chain"); this round
-    // spends its walk and deploy, and its rate counts the whole chain's time.
+    // A stone is charged its own price and time and is worth what it buys
+    // this round and the goal it serves, discounted by the rounds still needed
+    // (module docs, "A stone's worth, and its chain"); `served_milli` is that
+    // half, in thousandths of a point, kept apart so the division by the
+    // rounds is the only rounding, at a thousandth.
     //
     // PLACEHOLDER: a later round's worth read as a round's share of it, the served goal's worth divided by the chain's rounds — owner, S5, with the Balanced weights
-    let (cost, economy, expansion, defence, time_ms, rate_ms) = if let Some(served) = goal.served()
-    {
-        // The served goal costs its own time in the later round, from the
-        // last stone's sphere: at least as far as this stone is, so its
-        // travel is this stone's, a lower bound.
-        let served_on_site = priced(tuning, declared, &served, place)?;
-        let (_, economy, expansion, _, served_ms) =
-            terms(situation, tuning, &served, travel_ms, served_on_site)?;
-        let stones = stones_needed(situation, tuning, goal.feature())?;
-        let rounds = stones.checked_add(1)?;
-        let cost = tuning.beacon_cost_dollars;
-        let round_ms = travel_ms.checked_add(on_site)?;
-        (
-            cost,
-            economy
+    let (cost, economy, expansion, defence, time_ms, rate_ms, served_milli) =
+        if let Some(served) = goal.served() {
+            // The served goal costs its own time in the later round, from the
+            // last stone's sphere: no shorter than this stone's walk, nor than
+            // the floor to the feature.
+            let anchor = situation
+                .features
+                .iter()
+                .find(|feature| feature.id == goal.feature())?
+                .anchor;
+            let (served_points, served_ms) = goal_worth(
+                situation, tuning, declared, &served, anchor, travel_ms, place,
+            )?;
+            let rounds = stones_needed(situation, tuning, goal.feature())?.checked_add(1)?;
+            let (buys, buys_ms) = stone_buys(
+                situation,
+                tuning,
+                declared,
+                place,
+                travel_ms,
+                goal.feature(),
+            )?;
+            let served_milli = served_points
+                .checked_mul(1_000)?
                 .checked_div(rounds)?
-                .checked_sub(cost.checked_mul(stones)?)?,
-            expansion.checked_div(rounds)?,
-            0,
-            round_ms,
-            round_ms.checked_mul(stones)?.checked_add(served_ms)?,
-        )
-    } else {
-        let (cost, economy, expansion, defence, time_ms) =
-            terms(situation, tuning, &goal, travel_ms, on_site)?;
-        (cost, economy, expansion, defence, time_ms, time_ms)
-    };
+                .checked_add(buys)?;
+            let cost = tuning.beacon_cost_dollars;
+            let round_ms = travel_ms.checked_add(on_site)?;
+            (
+                cost,
+                cost.checked_neg()?,
+                EXPANSION_POINTS_PER_BEACON,
+                0,
+                round_ms,
+                round_ms.checked_add(served_ms)?.checked_add(buys_ms)?,
+                served_milli,
+            )
+        } else {
+            let (cost, economy, expansion, defence, time_ms) =
+                terms(situation, tuning, &goal, travel_ms, on_site)?;
+            (cost, economy, expansion, defence, time_ms, time_ms, 0)
+        };
     // Risk: what the seat can see of other seats near the goal.
     //
     // PLACEHOLDER: "near" is within one sphere radius of the goal, the sphere radius reused as a threat radius — owner, S5, with the Balanced weights
@@ -1607,7 +1832,10 @@ fn score(
         .checked_add(w.capability.checked_mul(capability)?)?
         .checked_add(w.attack.checked_mul(attack)?)?
         .checked_sub(w.risk.checked_mul(risk)?)?;
-    let rate = utility.checked_mul(1_000)?.checked_div(rate_ms)?;
+    let utility_milli = utility.checked_mul(1_000)?.checked_add(served_milli)?;
+    let rate = Rate::new(utility_milli, rate_ms.checked_mul(1_000)?)?;
+    // Whole points, for the note: the worth rounded toward zero.
+    let utility = utility_milli.checked_div(1_000)?;
     Some(Candidate {
         id,
         goal,
@@ -1635,7 +1863,7 @@ pub(crate) fn ranked(
 ) -> Vec<&Candidate> {
     let mut ranked: Vec<&Candidate> = candidates
         .iter()
-        .filter(|candidate| candidate.utility > 0)
+        .filter(|candidate| candidate.rate.is_positive())
         .filter(|candidate| candidate.time_ms <= share)
         .filter(|candidate| ahead != Some(candidate.id))
         .collect();
@@ -1659,7 +1887,7 @@ pub(crate) fn guard_site(candidates: &[Candidate]) -> Option<&Candidate> {
 /// after a Push in which its commander died; decision 12's threat inside the
 /// core's sphere scores it too, and ranks it in any other round.
 pub(crate) fn guard(candidates: &[Candidate]) -> Option<&Candidate> {
-    guard_site(candidates).filter(|candidate| candidate.utility > 0)
+    guard_site(candidates).filter(|candidate| candidate.rate.is_positive())
 }
 
 /// The raid the wizard's Raid an Enemy Beacon page is pre-filled with: the
@@ -1680,7 +1908,7 @@ pub(crate) fn raid_site(candidates: &[Candidate]) -> Option<&Candidate> {
 pub(crate) fn best_for<'c>(candidates: &'c [Candidate], template: &str) -> Option<&'c Candidate> {
     candidates
         .iter()
-        .filter(|candidate| candidate.utility > 0 && candidate.goal.template() == template)
+        .filter(|candidate| candidate.rate.is_positive() && candidate.goal.template() == template)
         .filter(|candidate| !matches!(candidate.goal, Goal::Tap { .. } | Goal::Stone { .. }))
         .min_by_key(|candidate| (std::cmp::Reverse(candidate.rate), candidate.id))
 }

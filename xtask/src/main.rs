@@ -1739,7 +1739,9 @@ fn read_header(line: &str) -> Header {
             Header::Other
         };
     };
-    let first = segments.first().map_or("", String::as_str);
+    let Some(first) = segments.first().map(String::as_str) else {
+        return Header::Other;
+    };
     if first.trim_matches(['"', '\'']) != "profile" {
         return Header::Other;
     }
@@ -3067,15 +3069,13 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
              {HASH_GOLDEN} to compare them with. A chain that compares nothing checks nothing; \
              `cargo xtask determinism --bless` writes it, and the pull request says why"
         )),
-        ChainVerdict::Moved => Err(format!(
+        ChainVerdict::Moved(golden) => Err(format!(
             "the hash chain moved: {} differs from {}\n{}\n      A moved hash chain is a \
              behaviour change. Explain it in the pull request; never re-bless it to get a \
              red build to green.",
             HASH_FILE,
             HASH_GOLDEN,
-            // `Moved` comes only from a committed chain (`chain_verdict`), so the
-            // empty default is never read.
-            first_difference(golden.as_deref().unwrap_or_default(), &fresh)
+            first_difference(golden, &fresh)
         )),
     }
 }
@@ -3160,24 +3160,29 @@ fn determinism_run(ctx: &Ctx, seed: &str, ticks: &str, out: &str) -> Result<(), 
 
 /// What the `determinism` step makes of the fresh chain.
 #[derive(Debug, PartialEq, Eq)]
-enum ChainVerdict {
+enum ChainVerdict<'golden> {
     /// The committed chain equals the fresh one.
     Matches,
     /// `--bless`: write the fresh chain as the committed one.
     Bless,
     /// No committed chain, and no `--bless`: a failure.
     Missing,
-    /// The committed chain differs, and no `--bless`: a failure.
-    Moved,
+    /// The committed chain differs, and no `--bless`: a failure. It carries
+    /// the committed chain, so the report has it to compare.
+    Moved(&'golden [u8]),
 }
 
 /// The `determinism` step's decision, pure so that "a missing committed chain
 /// fails" is unit-tested rather than asserted in prose.
-fn chain_verdict(golden: Option<&[u8]>, fresh: &[u8], bless: bool) -> ChainVerdict {
+fn chain_verdict<'golden>(
+    golden: Option<&'golden [u8]>,
+    fresh: &[u8],
+    bless: bool,
+) -> ChainVerdict<'golden> {
     match golden {
         Some(golden) if golden == fresh => ChainVerdict::Matches,
         _ if bless => ChainVerdict::Bless,
-        Some(_) => ChainVerdict::Moved,
+        Some(golden) => ChainVerdict::Moved(golden),
         None => ChainVerdict::Missing,
     }
 }
@@ -3567,7 +3572,7 @@ fn judge_shot(ctx: &Ctx, shot: &Shot, image: Result<png::Image, String>) -> Resu
         image.width,
         image.height,
         shot.golden,
-        diff.describe()
+        diff.describe()?
     );
     annotate::notice(&format!("{}-screenshot", shot.name), &report);
     diff.check(png::MAX_MEAN_THOUSANDTHS, png::MAX_HARD_PPM)?;
@@ -5380,11 +5385,11 @@ fn buf_config_dir(root: &Path) -> Option<PathBuf> {
     None
 }
 
-fn file_name(path: &Path) -> String {
-    match path.file_name() {
-        Some(name) => name.to_string_lossy().into_owned(),
-        None => String::new(),
-    }
+/// A path's last component, lossily as text; `None` for a path that has
+/// none (a root, or one ending in `..`), which every caller handles itself.
+fn file_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
 }
 
 /// Walks `dir` in sorted order and collects every file below it. Sorted because
@@ -5440,20 +5445,21 @@ fn line_at(bytes: &[u8], offset: usize) -> String {
     if bytes.is_empty() {
         return "<empty file>".to_owned();
     }
-    let clamped = offset.min(bytes.len() - 1);
-    let start = bytes
-        .iter()
-        .take(clamped)
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |position| position + 1);
-    let end = bytes
-        .iter()
-        .skip(start)
-        .position(|byte| *byte == b'\n')
-        .map_or(bytes.len(), |position| start + position);
-    // `start..end` lies inside `bytes` by construction (both are positions
-    // found in it), so the empty default is never read; the line is for display.
-    let text = String::from_utf8_lossy(bytes.get(start..end).unwrap_or_default()).into_owned();
+    // The line holding byte `offset`, or the file's last line when the offset
+    // lies past it (the other file is the longer one). A final newline ends
+    // the last line rather than opening an empty one.
+    let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let mut line: &[u8] = &[];
+    let mut start = 0;
+    for piece in body.split(|byte| *byte == b'\n') {
+        line = piece;
+        let next = start + piece.len() + 1;
+        if offset < next {
+            break;
+        }
+        start = next;
+    }
+    let text = String::from_utf8_lossy(line).into_owned();
     if text.chars().count() > 120 {
         let mut truncated: String = text.chars().take(120).collect();
         truncated.push_str(" …");
@@ -6155,6 +6161,23 @@ overflow-checks = true\n";
         assert!(report.contains("gamma"), "{report}");
     }
 
+    /// The line shown is the one holding the offset, a newline's own line for
+    /// an offset on it, and the last line for an offset past the end.
+    #[test]
+    fn the_line_shown_is_the_one_holding_the_offset() {
+        assert_eq!(line_at(b"alpha\nbeta\n", 0), "alpha");
+        assert_eq!(line_at(b"alpha\nbeta\n", 5), "alpha");
+        assert_eq!(line_at(b"alpha\nbeta\n", 6), "beta");
+        assert_eq!(line_at(b"alpha\nbeta\n", 10), "beta");
+        assert_eq!(line_at(b"alpha\nbeta\n", 99), "beta");
+        assert_eq!(line_at(b"alpha\nbeta", 99), "beta");
+        assert_eq!(line_at(b"\n", 3), "");
+        assert_eq!(line_at(b"", 3), "<empty file>");
+        let report = first_difference(b"alpha\n", b"alpha\nmore\n");
+        assert!(report.contains("expected: alpha"), "{report}");
+        assert!(report.contains("actual:   more"), "{report}");
+    }
+
     fn strings(list: &[&str]) -> Vec<String> {
         list.iter().map(|item| (*item).to_owned()).collect()
     }
@@ -6662,24 +6685,51 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             "no workflows under {}",
             workflows.display()
         );
+        let unchecked = unread_rust_installers(&files).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            unchecked.is_empty(),
+            "these workflows install Rust and this test does not read them: {unchecked:?}"
+        );
+    }
+
+    /// The workflows other than the two the test reads that install Rust, by
+    /// file name. A workflow that cannot be read, or whose name is not text,
+    /// fails the scan: read as empty, it would pass as one that installs
+    /// nothing.
+    fn unread_rust_installers(files: &[PathBuf]) -> Result<Vec<String>, String> {
         let mut unchecked = Vec::new();
         for path in files {
             let name = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or_default()
+                .ok_or_else(|| format!("{}: a workflow without a text name", path.display()))?
                 .to_owned();
             if name == "ci.yml" || name == "nightly-scenarios.yml" {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("reading {}: {error}", path.display()))?;
             if text.contains("dtolnay/rust-toolchain@") {
                 unchecked.push(name);
             }
         }
+        Ok(unchecked)
+    }
+
+    /// The scan refuses a workflow it cannot read, rather than passing it.
+    #[test]
+    fn a_workflow_the_scan_cannot_read_fails_it() {
+        let missing = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(".github")
+            .join("workflows")
+            .join("no-such-workflow.yml");
+        let scanned = unread_rust_installers(&[missing]);
         assert!(
-            unchecked.is_empty(),
-            "these workflows install Rust and this test does not read them: {unchecked:?}"
+            scanned
+                .as_ref()
+                .is_err_and(|error| error.contains("no-such-workflow.yml")),
+            "{scanned:?}"
         );
     }
 
@@ -6872,7 +6922,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
         assert_eq!(
             chain_verdict(Some(b"0\ta\n"), b"0\tb\n", false),
-            ChainVerdict::Moved
+            ChainVerdict::Moved(b"0\ta\n")
         );
         assert_eq!(
             chain_verdict(Some(b"0\ta\n"), b"0\tb\n", true),
@@ -7415,6 +7465,364 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             assert!(
                 STEPS.iter().any(|step| step.name == *name),
                 "--quick names a step that does not exist: {name}"
+            );
+        }
+    }
+
+    /// The test files that still read `CARGO_TARGET_DIR` raw, each with how
+    /// many of its lines do and the lane that owes the change (decisions-log
+    /// item 165 (13)): the client belongs to another lane, so the move to the
+    /// parent of `CARGO_TARGET_TMPDIR` is sequenced there. An entry fails
+    /// [`no_test_reads_the_target_dir_variable_raw`] when its file's count
+    /// differs from it: a second raw read added to an owed file is not owed,
+    /// and a file that stops reading the variable has its entry deleted by the
+    /// lane that fixes it.
+    const RAW_TARGET_DIR_OWED: &[(&str, usize, &str)] = &[
+        (
+            "crates/client-gdext/tests/event_list.rs",
+            1,
+            "fixp's successor",
+        ),
+        (
+            "crates/client-gdext/tests/vista_fixture.rs",
+            1,
+            "fixp's successor",
+        ),
+    ];
+
+    /// `text`, Rust source, with its comments blanked: a line comment to its
+    /// line's end and a block comment (nested, as Rust nests them) to its
+    /// close, each character replaced by a space and its newlines kept, so
+    /// line numbers hold. String literals, raw strings and character literals
+    /// are kept whole and their contents never open a comment: `"http://x"`
+    /// hides nothing after it. A lifetime (`'a`) is not a character literal.
+    fn rust_code(text: &str) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let at = |index: usize| chars.get(index).copied();
+        let mut out = String::with_capacity(text.len());
+        let mut index = 0;
+        while let Some(character) = at(index) {
+            match (character, at(index + 1)) {
+                ('/', Some('/')) => {
+                    while let Some(next) = at(index) {
+                        if next == '\n' {
+                            break;
+                        }
+                        blank_char(&mut out, next);
+                        index += 1;
+                    }
+                }
+                ('/', Some('*')) => {
+                    let mut depth = 0_usize;
+                    while let Some(next) = at(index) {
+                        match (next, at(index + 1)) {
+                            ('/', Some('*')) => {
+                                depth += 1;
+                                out.push_str("  ");
+                                index += 2;
+                            }
+                            ('*', Some('/')) => {
+                                depth -= 1;
+                                out.push_str("  ");
+                                index += 2;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {
+                                blank_char(&mut out, next);
+                                index += 1;
+                            }
+                        }
+                    }
+                }
+                ('r', Some('"' | '#')) if raw_string_at(&chars, index) => {
+                    // `r`, the hashes, the quote; the string ends at a quote
+                    // followed by as many hashes.
+                    let hashes = chars
+                        .iter()
+                        .skip(index + 1)
+                        .take_while(|next| **next == '#')
+                        .count();
+                    let mut end = index + 2 + hashes;
+                    while let Some(next) = at(end) {
+                        end += 1;
+                        let closing = chars
+                            .iter()
+                            .skip(end)
+                            .take(hashes)
+                            .filter(|after| **after == '#')
+                            .count();
+                        if next == '"' && closing == hashes {
+                            end += hashes;
+                            break;
+                        }
+                    }
+                    out.extend(chars.iter().take(end).skip(index));
+                    index = end;
+                }
+                ('"', _) => {
+                    out.push('"');
+                    index += 1;
+                    while let Some(next) = at(index) {
+                        out.push(next);
+                        index += 1;
+                        if next == '\\' {
+                            if let Some(escaped) = at(index) {
+                                out.push(escaped);
+                                index += 1;
+                            }
+                        } else if next == '"' {
+                            break;
+                        }
+                    }
+                }
+                ('\'', Some('\\')) => {
+                    // An escaped character literal, up to its closing quote.
+                    out.push('\'');
+                    out.push('\\');
+                    index += 2;
+                    while let Some(next) = at(index) {
+                        out.push(next);
+                        index += 1;
+                        if next == '\'' {
+                            break;
+                        }
+                    }
+                }
+                ('\'', Some(literal)) if at(index + 2) == Some('\'') => {
+                    out.push('\'');
+                    out.push(literal);
+                    out.push('\'');
+                    index += 3;
+                }
+                _ => {
+                    out.push(character);
+                    index += 1;
+                }
+            }
+        }
+        out
+    }
+
+    /// A commented-out character: a newline kept, anything else as many
+    /// spaces as its bytes.
+    fn blank_char(out: &mut String, character: char) {
+        if character == '\n' {
+            out.push('\n');
+        } else {
+            out.extend(std::iter::repeat_n(' ', character.len_utf8()));
+        }
+    }
+
+    /// Whether a raw string literal opens at `index` (`r"`, `r#"`, ...)
+    /// rather than an identifier ending in `r`.
+    fn raw_string_at(chars: &[char], index: usize) -> bool {
+        let starts_word = index
+            .checked_sub(1)
+            .and_then(|before| chars.get(before))
+            .is_none_or(|before| !(before.is_alphanumeric() || *before == '_'));
+        let quote = chars
+            .iter()
+            .skip(index + 1)
+            .find(|next| **next != '#')
+            .is_some_and(|next| *next == '"');
+        starts_word && quote
+    }
+
+    /// The 1-based numbers of the lines of `text`, Rust source, whose code
+    /// (comments blanked by [`rust_code`]) names `CARGO_TARGET_DIR`.
+    fn raw_target_dir_lines(text: &str) -> Vec<usize> {
+        rust_code(text)
+            .lines()
+            .zip(1..)
+            .filter(|(line, _)| line.contains("CARGO_TARGET_DIR"))
+            .map(|(_, number)| number)
+            .collect()
+    }
+
+    #[test]
+    fn a_raw_read_is_found_and_a_comment_is_not() {
+        let text = "/// honours `CARGO_TARGET_DIR`\n\
+                    fn a() {}\n\
+                    let dir = std::env::var_os(\"CARGO_TARGET_DIR\");\n\
+                    let tmp = env!(\"CARGO_TARGET_TMPDIR\"); // not CARGO_TARGET_DIR\n";
+        assert_eq!(raw_target_dir_lines(text), vec![3]);
+    }
+
+    /// A `//` inside a string, a raw string or a character literal opens no
+    /// comment, so a read after it on the line is still found (the review's
+    /// probe T5); a block comment, nested or across lines, hides what it
+    /// holds; a lifetime is not a character literal.
+    #[test]
+    fn the_reader_knows_strings_from_comments() {
+        let text = [
+            r#"fn f() { let u = "http://x"; let _ = std::env::var_os("CARGO_TARGET_DIR"); }"#,
+            r##"let r = r#"a // "b" "#; let _ = env::var("CARGO_TARGET_DIR");"##,
+            r#"let c = '"'; let _ = env::var("CARGO_TARGET_DIR");"#,
+            r#"let e = '\''; let _ = env::var("CARGO_TARGET_DIR");"#,
+            r#"fn g<'a>(x: &'a str) { let _ = env::var("CARGO_TARGET_DIR"); }"#,
+            r"/* CARGO_TARGET_DIR /* nested */ CARGO_TARGET_DIR",
+            r#"   CARGO_TARGET_DIR */ let s = "\"// a string"; let _ = env::var("CARGO_TARGET_DIR");"#,
+            r#"let p = "a\\"; // CARGO_TARGET_DIR"#,
+            r#"let q = r"CARGO_TARGET_DIR";"#,
+        ]
+        .join("\n");
+        assert_eq!(raw_target_dir_lines(&text), vec![1, 2, 3, 4, 5, 7, 9]);
+        assert_eq!(rust_code(&text).len(), text.len(), "offsets and lines hold");
+    }
+
+    /// The verdict over the raw reads found, against the owed list: every
+    /// owed file's count must equal its entry's, and a file with no entry may
+    /// have none.
+    fn raw_target_dir_verdict(
+        readers: &[(String, usize)],
+        owed: &[(&str, usize, &str)],
+    ) -> Result<(), String> {
+        let mut problems = Vec::new();
+        for (file, line) in readers {
+            if !owed.iter().any(|(owed_file, _, _)| owed_file == file) {
+                problems.push(format!(
+                    "{file}:{line} reads CARGO_TARGET_DIR raw; take the parent of \
+                     env!(\"CARGO_TARGET_TMPDIR\") instead"
+                ));
+            }
+        }
+        for (owed_file, count, lane) in owed {
+            let found = readers.iter().filter(|(file, _)| file == owed_file).count();
+            if found != *count {
+                problems.push(format!(
+                    "{owed_file} reads CARGO_TARGET_DIR raw on {found} line(s), and \
+                     RAW_TARGET_DIR_OWED owes {count} to {lane}: a new raw read is not owed, \
+                     and a file that reads it on fewer lines updates or deletes its entry"
+                ));
+            }
+        }
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("\n"))
+        }
+    }
+
+    #[test]
+    fn the_owed_list_is_kept_to_its_counts() {
+        let owed = [("crates/x/tests/a.rs", 1, "a lane")];
+        let one = vec![("crates/x/tests/a.rs".to_owned(), 80)];
+        assert_eq!(raw_target_dir_verdict(&one, &owed), Ok(()));
+        // The review's probe T8: a second raw read in an owed file.
+        let two = vec![
+            ("crates/x/tests/a.rs".to_owned(), 80),
+            ("crates/x/tests/a.rs".to_owned(), 108),
+        ];
+        assert!(
+            raw_target_dir_verdict(&two, &owed).is_err_and(|error| error.contains("2 line(s)"))
+        );
+        assert!(raw_target_dir_verdict(&[], &owed).is_err_and(|error| error.contains("0 line(s)")));
+        let other = vec![
+            ("crates/x/tests/a.rs".to_owned(), 80),
+            ("crates/y/tests/b.rs".to_owned(), 3),
+        ];
+        assert!(raw_target_dir_verdict(&other, &owed).is_err_and(|error| error.contains("b.rs:3")));
+    }
+
+    /// A test that reads `CARGO_TARGET_DIR` itself is misled by a relative
+    /// value (cargo resolves it against its own working folder, the test runs
+    /// in its crate's) and by a user-level `build.target-dir` with the
+    /// variable unset. The target directory is the parent of
+    /// `CARGO_TARGET_TMPDIR`, which cargo sets absolute (item 165 (13)).
+    #[test]
+    fn no_test_reads_the_target_dir_variable_raw() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("crates");
+        let mut files = Vec::new();
+        walk(&crates, &mut files).expect("crates/");
+        let mut readers: Vec<(String, usize)> = Vec::new();
+        let mut scanned = 0_usize;
+        for file in &files {
+            // `<member>/tests/**/*.rs`, as `crates/<member>/tests/...`.
+            let parts: Vec<String> = file
+                .strip_prefix(&crates)
+                .unwrap_or_else(|error| panic!("{}: {error}", file.display()))
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            let in_tests = parts.get(1).is_some_and(|part| part == "tests");
+            if !in_tests || file.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            scanned += 1;
+            let text = fs::read_to_string(file)
+                .unwrap_or_else(|error| panic!("reading {}: {error}", file.display()));
+            let relative = format!("crates/{}", parts.join("/"));
+            readers.extend(
+                raw_target_dir_lines(&text)
+                    .into_iter()
+                    .map(|line| (relative.clone(), line)),
+            );
+        }
+        assert!(
+            scanned > 50,
+            "only {scanned} test files found under crates/*/tests"
+        );
+        if let Err(problems) = raw_target_dir_verdict(&readers, RAW_TARGET_DIR_OWED) {
+            panic!("{problems}");
+        }
+    }
+
+    /// The `#` comment block that ends on the line before the first line of
+    /// `text` equal, trimmed, to `anchor`, as one line of words.
+    fn comment_above(text: &str, anchor: &str) -> String {
+        let lines: Vec<&str> = text.lines().collect();
+        let at = lines
+            .iter()
+            .position(|line| line.trim() == anchor)
+            .unwrap_or_else(|| panic!("no line `{anchor}`"));
+        let block: Vec<&str> = lines
+            .iter()
+            .take(at)
+            .rev()
+            .map(|line| line.trim())
+            .take_while(|line| line.starts_with('#'))
+            .map(|line| line.trim_start_matches('#').trim())
+            .collect();
+        block
+            .into_iter()
+            .rev()
+            .flat_map(str::split_whitespace)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The owner ratified the `[profile.dev.package.*]` tables on 2026-11-21
+    /// (decisions-log item 168 (1)), so the two comments that recorded the
+    /// change as the main session's ruling "which the owner can veto" cite the
+    /// ratification instead, and a revert of the correction fails here.
+    #[test]
+    fn the_profile_comments_cite_the_ratification() {
+        for (name, block) in [
+            (
+                "Cargo.toml",
+                comment_above(
+                    include_str!("../../Cargo.toml"),
+                    "[profile.dev.package.pharmakos-sim]",
+                ),
+            ),
+            (
+                ".github/workflows/ci.yml",
+                comment_above(
+                    include_str!("../../.github/workflows/ci.yml"),
+                    "timeout-minutes: 90",
+                ),
+            ),
+        ] {
+            assert!(block.contains("item 168 (1)"), "{name}: {block}");
+            assert!(block.contains("item 165 (1)"), "{name}: {block}");
+            assert!(!block.contains("owner can veto"), "{name}: {block}");
+            assert!(
+                !block.contains("records this change says so"),
+                "{name}: {block}"
             );
         }
     }

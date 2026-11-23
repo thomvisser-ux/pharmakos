@@ -26,9 +26,9 @@ use pharmakos_gateway::host::{Host, Settings, SphereVision};
 use pharmakos_gateway::limit::IN_PROCESS_LIMITS;
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::scopes::{Scope, ScopeSet};
-use pharmakos_gateway::serve::InProcessSeats;
 use pharmakos_gateway::surface::{InProcess, Surface};
 use pharmakos_gateway::token::{Subject, Token};
+use pharmakos_operator::{Easy, Submitted};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
@@ -64,16 +64,17 @@ fn seat_ids(seats: u32) -> Vec<SeatId> {
 
 /// A seat's own token, registered as an in-process one.
 fn in_process_token(surface: &mut Surface, seat: SeatId) -> Token {
+    seat_token(surface, seat, &[Scope::Observe, Scope::Plan, Scope::Docs])
+}
+
+/// A seat's own token with `scopes`, registered as an in-process one, as the
+/// host registers a built-in seat's.
+fn seat_token(surface: &mut Surface, seat: SeatId, scopes: &[Scope]) -> Token {
     let tick = surface.time().tick;
     let held = surface.match_id().to_owned();
     let (token, handle) = surface
         .tokens()
-        .mint(
-            Subject::Seat(seat),
-            &held,
-            ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::Docs]),
-            tick,
-        )
+        .mint(Subject::Seat(seat), &held, ScopeSet::of(scopes), tick)
         .expect("minted");
     surface.register_in_process(
         handle,
@@ -180,10 +181,17 @@ struct SeatRound {
     seal: Seal,
     /// The forecast's `headroom_kw_now` before the seal.
     headroom_kw: i64,
+    /// The forecast's `treasury_now` before the seal.
+    treasury: i64,
     /// The seat's start vent: the live vent nearest its core over the
     /// ground, as `get_map_summary` and `list_beacons` show them before the
     /// seal, ties to the lower anchor `y`, then `x`.
     start_vent: Option<String>,
+    /// What Easy said it submitted.
+    submitted: Submitted,
+    /// How many of the candidates Easy weighed its budget would have funded
+    /// on their own (`Played::fundable`).
+    fundable: usize,
     /// The sealed playbook, comments and all.
     text: String,
     /// The sealed route's steps.
@@ -304,6 +312,69 @@ fn read_line(row: &mut SeatRound, running: &mut Running, kind: &str, text: &str)
     }
 }
 
+/// Play the Push after the seals, reading each seat's own feed lines into
+/// its round's outcomes (`out[first..]`, one row per seat in seat order).
+fn play_push(surface: &mut Surface, out: &mut [SeatRound], first: usize, seats: usize) {
+    assert!(surface.begin_push().expect("the Push opens"));
+    let mut running: Vec<Running> = vec![Running::default(); seats];
+    let mut read = 0_usize;
+    loop {
+        let report = surface.step().expect("a tick");
+        let events = surface.feed().events();
+        if events.len() < read {
+            read = 0;
+        }
+        for event in events.get(read..).unwrap_or_default() {
+            let Audience::Private(seat) = event.audience else {
+                continue;
+            };
+            let at = usize::from(seat.raw());
+            if let (Some(row), Some(state)) = (
+                first.checked_add(at).and_then(|index| out.get_mut(index)),
+                running.get_mut(at),
+            ) {
+                read_line(row, state, &event.kind.to_string(), &event.text);
+            }
+        }
+        read = events.len();
+        match report {
+            Some(report) if report.segment_ended => break,
+            Some(_) => {}
+            None => break,
+        }
+    }
+}
+
+/// Easy plays one seat's round through the seat's own in-process token, as
+/// the host's built-in seat does (`gamectl host`'s `EasySeat`).
+fn play_seat(
+    surface: &mut Surface,
+    seat: SeatId,
+    operator: &mut Easy,
+) -> pharmakos_operator::Played {
+    let token = seat_token(
+        surface,
+        seat,
+        &[Scope::Observe, Scope::Plan, Scope::PlanSubmit, Scope::Docs],
+    );
+    let mut bridged = |method: &str, params: Json| {
+        let vision = surface.host().map_or_else(
+            |_| SphereVision::default(),
+            |host| SphereVision::of(host.world()),
+        );
+        surface.call(
+            Some(&token),
+            &Request {
+                id: Json::Number(String::from("1")),
+                method: method.to_owned(),
+                params,
+            },
+            &vision,
+        )
+    };
+    operator.play(seat.raw(), &mut bridged)
+}
+
 /// One match on the rules table's ladder, every seat Easy, `rounds` rounds.
 fn ladder_match(rules: &str, seed: u64, seats: u32, rounds: u32) -> Vec<SeatRound> {
     let game = format!("{seed:x}/{seats}");
@@ -330,21 +401,36 @@ fn ladder_match(rules: &str, seed: u64, seats: u32, rounds: u32) -> Vec<SeatRoun
     .expect("a surface");
     surface.attach(host).expect("attached");
     surface.open_lull().expect("the opening Lull");
-    let mut factory = EasyOperators::new(rules).expect("the operator reads the rules text");
-    let mut easy =
-        InProcessSeats::open(&mut surface, &ids, None, &mut factory).expect("in-process seats");
+    // Easy plays each seat through the seat's own in-process token, as the
+    // host's built-in seat does (`gamectl host`'s `EasySeat`), so each round's
+    // `Played` is read here.
+    EasyOperators::new(rules).expect("the operator reads the rules text");
+    let mut easy: Vec<Easy> = ids
+        .iter()
+        .map(|_| Easy::new(rules).expect("the rules text"))
+        .collect();
     let mut out: Vec<SeatRound> = Vec::new();
     for round in 1..=rounds {
-        let mut before: Vec<(i64, Option<String>)> = Vec::new();
+        let mut before: Vec<(i64, i64, Option<String>)> = Vec::new();
         for seat in &ids {
             let token = in_process_token(&mut surface, *seat);
             let forecast = call(&mut surface, &token, "get_economy_forecast");
             let vent = start_vent(&mut surface, &token, *seat);
-            before.push((number(forecast.get("headroom_kw_now")), vent));
+            before.push((
+                number(forecast.get("headroom_kw_now")),
+                number(forecast.get("treasury_now")),
+                vent,
+            ));
         }
-        easy.plan(&mut surface);
+        let mut played: Vec<(Submitted, usize)> = Vec::new();
+        for (seat, operator) in ids.iter().zip(&mut easy) {
+            let round_played = play_seat(&mut surface, *seat, operator);
+            played.push((round_played.submitted, round_played.fundable));
+        }
         let first = out.len();
-        for (seat, (headroom_kw, start_vent)) in ids.iter().zip(before) {
+        for ((seat, (headroom_kw, treasury, start_vent)), (submitted, fundable)) in
+            ids.iter().zip(before).zip(played)
+        {
             let state = surface
                 .seat_state(Subject::Seat(*seat), *seat)
                 .expect("its own")
@@ -366,40 +452,16 @@ fn ladder_match(rules: &str, seed: u64, seats: u32, rounds: u32) -> Vec<SeatRoun
                 seat: seat.raw(),
                 seal,
                 headroom_kw,
+                treasury,
                 start_vent,
+                submitted,
+                fundable,
                 text: text.unwrap_or_default(),
                 outcomes: vec![Outcome::NotRun; steps.len()],
                 steps,
             });
         }
-        assert!(surface.begin_push().expect("the Push opens"));
-        let mut running: Vec<Running> = vec![Running::default(); ids.len()];
-        let mut read = 0_usize;
-        loop {
-            let report = surface.step().expect("a tick");
-            let events = surface.feed().events();
-            if events.len() < read {
-                read = 0;
-            }
-            for event in events.get(read..).unwrap_or_default() {
-                let Audience::Private(seat) = event.audience else {
-                    continue;
-                };
-                let at = usize::from(seat.raw());
-                if let (Some(row), Some(state)) = (
-                    first.checked_add(at).and_then(|index| out.get_mut(index)),
-                    running.get_mut(at),
-                ) {
-                    read_line(row, state, &event.kind.to_string(), &event.text);
-                }
-            }
-            read = events.len();
-            match report {
-                Some(report) if report.segment_ended => break,
-                Some(_) => {}
-                None => break,
-            }
-        }
+        play_push(&mut surface, &mut out, first, ids.len());
         surface.end_recap().expect("the recap closes");
         if round < rounds {
             surface.open_lull().expect("the next Lull");
@@ -703,4 +765,50 @@ fn round_one_places_a_generator_on_the_start_vent_on_every_seat() {
         five_rounds().iter().filter(|row| row.round == 1).count(),
         12
     );
+}
+
+/// The safe seals, by match, seat and round, over the five rounds, with the
+/// treasury each held.
+fn safe_seals() -> Vec<(String, u8, u32, i64)> {
+    five_rounds()
+        .iter()
+        .filter(|row| row.seal == Seal::Safe)
+        .map(|row| (row.game.clone(), row.seat, row.round, row.treasury))
+        .collect()
+}
+
+/// An idle treasury is never answered with the safe playbook (fix pass 3,
+/// item 1): on the five committed matches over five rounds, no seat seals its
+/// safe playbook while a candidate of positive worth fits its budget on its
+/// own, nor while it holds a beacon's price: a stone's own sphere is worth
+/// more than the beacon costs, so a seat that can pay for one always has a
+/// goal. Before the fix, one seat in every match sealed its safe playbook in
+/// rounds 3 to 5 holding $421 to $914, because charging a stone the whole
+/// chain's stones left every far feature's stone worth less than nothing.
+/// The safe seals by match, seat and round are printed for the pull request.
+#[test]
+fn no_seat_seals_its_safe_playbook_while_a_worthwhile_candidate_fits() {
+    let beacon = {
+        let table = pharmakos_proto::json::read(&rules_json()).expect("the rules text reads");
+        number(
+            table
+                .get("structures")
+                .and_then(|rows| rows.get("beacon"))
+                .and_then(|row| row.get("cost_dollars")),
+        )
+    };
+    let idle: Vec<String> = five_rounds()
+        .iter()
+        .filter(|row| {
+            row.submitted == Submitted::Safe && (row.fundable > 0 || row.treasury >= beacon)
+        })
+        .map(|row| {
+            format!(
+                "{} round {} seat {}: {} candidates fit alone, ${} held",
+                row.game, row.round, row.seat, row.fundable, row.treasury
+            )
+        })
+        .collect();
+    eprintln!("safe seals (match, seat, round): {:?}", safe_seals());
+    assert!(idle.is_empty(), "{idle:#?}");
 }

@@ -20,7 +20,8 @@
 //! alone. Each configuration is played [`RUNS`] times, every run held to the
 //! first's hash chain, and each tick keeps its fastest Decision phase; the line is the difference of the two means per
 //! decision tick, and the fourth seat's counted evaluation units
-//! (`World::decision_work`) say how much of the playbook it ran. No layout:
+//! (`World::decision_work`, one a primitive step, a search's pops included)
+//! say how much work its decisions did. No layout:
 //! at four seats a seat's share of the world totals is 75 units and 10
 //! beacons, which decision 2's 100 a seat does not fit, so both runs are the
 //! generated map alone. The mean sums the Decision phase over every tick and
@@ -59,7 +60,7 @@ pub struct FourthSeat {
     /// The same with the fourth, unplaced seat sealed too.
     pub four_ns: u128,
     /// The fourth seat's evaluation units on its last decision.
-    pub fourth_units: u32,
+    pub fourth_units: u64,
 }
 
 impl FourthSeat {
@@ -83,7 +84,26 @@ impl FourthSeat {
 struct Run {
     decision: Vec<u128>,
     hashes: Vec<u64>,
-    fourth: Option<u32>,
+    fourth: Option<u64>,
+}
+
+/// The fourth seat's index.
+const FOURTH: usize = 3;
+
+/// The fourth seat's counted units on its last decision, as the world
+/// answers them (`World::decision_work`): `None` for a world without a fourth
+/// seat.
+///
+/// # Errors
+///
+/// [`Error::Unmeasured`] when the sim holds no count for it.
+fn fourth_units(
+    work: Option<Result<u64, pharmakos_sim::seams::Unmeasured>>,
+) -> Result<Option<u64>, Error> {
+    work.transpose().map_err(|reason| Error::Unmeasured {
+        seat: FOURTH,
+        reason,
+    })
 }
 
 /// Play one run.
@@ -166,10 +186,7 @@ fn play(
             break;
         }
     }
-    let fourth = runner
-        .world()
-        .decision_work(3)
-        .map(pharmakos_sim::seams::WorkCounter::spent);
+    let fourth = fourth_units(runner.world().decision_work(FOURTH))?;
     Ok(Run {
         decision,
         hashes,
@@ -185,7 +202,7 @@ fn configuration(
     seats: u32,
     segment_ms: i32,
     playbook: &Playbook,
-) -> Result<(u128, u64, u64, Option<u32>), Error> {
+) -> Result<(u128, u64, u64, Option<u64>), Error> {
     let first = play(rules, seed, seats, segment_ms, playbook)?;
     let (mut best, mut fourth) = (first.decision, first.fourth);
     for _ in 1..RUNS {
@@ -256,4 +273,26 @@ pub fn measure(
         fourth_units: fourth
             .ok_or_else(|| Error::Drift("the four-seat world has no fourth seat".to_owned()))?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, FOURTH, fourth_units};
+    use pharmakos_sim::seams::Unmeasured;
+
+    #[test]
+    fn an_unmeasured_fourth_seat_is_the_benchs_own_error() {
+        assert_eq!(fourth_units(Some(Ok(57))), Ok(Some(57)));
+        assert_eq!(fourth_units(None), Ok(None));
+        for reason in [Unmeasured::Overflowed, Unmeasured::SourceUnreadable] {
+            assert_eq!(
+                fourth_units(Some(Err(reason))),
+                Err(Error::Unmeasured {
+                    seat: FOURTH,
+                    reason
+                }),
+                "a count the sim could not take is refused, never read as a number"
+            );
+        }
+    }
 }

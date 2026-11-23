@@ -29,8 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use pharmakos_operator::easy::{
-    CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, EASY_CANDIDATES, PAGES_MAX,
-    RAID_FORCE_SIZE, RAID_TARGETS_MAX, SAFE_MAX_RAISED, STONE_CALLS, STONE_TARGETS_MAX,
+    CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, EASY_CANDIDATES,
+    LAST_SEAL_CALLS, PAGES_MAX, RAID_FORCE_SIZE, RAID_TARGETS_MAX, SAFE_MAX_RAISED, STONE_CALLS,
+    STONE_TARGETS_MAX,
 };
 use pharmakos_operator::{Easy, Submitted};
 use pharmakos_proto::json::{Json, read, write};
@@ -179,6 +180,11 @@ struct Script {
     /// The seats whose commander the last Push's feed says died, one
     /// `commander_died` line each.
     feed_deaths: Vec<u8>,
+    /// The seat's own step lines in the last Push's feed, `(kind, text)`, in
+    /// order, after the deaths; the digest counts their `step_failed`s.
+    feed_steps: Vec<(&'static str, String)>,
+    /// The seat's own drafts, by id: the round each was saved in, its text.
+    drafts: BTreeMap<String, (u32, String)>,
     /// Where the seat's nearest Defend beacon stands, if one does: what an
     /// `estimate_route` to `nearest {filter: {mandate: DEFEND}}` reaches.
     defend_post: Option<[i32; 3]>,
@@ -245,6 +251,8 @@ impl Script {
             malformed_feature: false,
             travel: Travel::Written,
             feed_deaths: Vec::new(),
+            feed_steps: Vec::new(),
+            drafts: BTreeMap::new(),
             defend_post: None,
             sighting_ages: BTreeMap::new(),
             ageless: BTreeSet::new(),
@@ -454,6 +462,31 @@ impl Script {
                 ]))
             }
             "verify_plan" => self.verify_plan(params),
+            "save_draft" => {
+                let id = params
+                    .get("draft_id")
+                    .and_then(text)
+                    .unwrap_or("")
+                    .to_owned();
+                let body = params
+                    .get("playbook_jsonc")
+                    .and_then(text)
+                    .unwrap_or("")
+                    .to_owned();
+                self.drafts.insert(id.clone(), (self.round, body));
+                self.ok(obj(vec![("draft_id", Json::String(id))]))
+            }
+            "get_draft" => {
+                let id = params.get("draft_id").and_then(text).unwrap_or("");
+                match self.drafts.get(id) {
+                    Some((round, body)) => self.ok(obj(vec![
+                        ("playbook_jsonc", Json::String(body.clone())),
+                        ("label", Json::String(String::from("Easy's last seal"))),
+                        ("round", num(i64::from(*round))),
+                    ])),
+                    None => Script::refuse("NOT_FOUND"),
+                }
+            }
             "submit_plan" => {
                 let accepted = self.accept_submit;
                 self.accept_submit = true;
@@ -489,7 +522,12 @@ impl Script {
         } else {
             &self.feed_deaths
         };
-        let events: Vec<Json> = lines
+        let steps: &[(&'static str, String)] = if self.paging == Paging::ToTheBound {
+            &[]
+        } else {
+            &self.feed_steps
+        };
+        let mut events: Vec<Json> = lines
             .iter()
             .map(|seat| {
                 obj(vec![
@@ -504,15 +542,34 @@ impl Script {
                 ])
             })
             .collect();
+        events.extend(steps.iter().map(|(kind, line)| {
+            obj(vec![
+                ("at_ms", num(2_000)),
+                ("kind", Json::String((*kind).to_owned())),
+                ("text", Json::String(line.clone())),
+            ])
+        }));
+        let mut counts: Vec<Json> = Vec::new();
         let count = i64::try_from(self.feed_deaths.len()).unwrap();
-        let counts = if count == 0 {
-            Vec::new()
-        } else {
-            vec![obj(vec![
+        if count > 0 {
+            counts.push(obj(vec![
                 ("kind", Json::String(String::from("commander_died"))),
                 ("count", num(count)),
-            ])]
-        };
+            ]));
+        }
+        let failed = i64::try_from(
+            self.feed_steps
+                .iter()
+                .filter(|(kind, _)| *kind == "step_failed")
+                .count(),
+        )
+        .unwrap();
+        if failed > 0 {
+            counts.push(obj(vec![
+                ("kind", Json::String(String::from("step_failed"))),
+                ("count", num(failed)),
+            ]));
+        }
         self.ok(obj(vec![
             ("events", Json::Array(events)),
             (
@@ -1536,8 +1593,9 @@ fn the_operator_does_not_depend_on_the_host_clock() {
 }
 
 /// Spec section 14: "It ignores the notebook." And it writes nothing but its
-/// own seal: a built-in seat's only writes are `submit_plan` and `set_ready`,
-/// an advisor's are none, and neither ever touches the notebook or the drafts.
+/// own seal: a built-in seat's only writes are `submit_plan`, the draft it
+/// keeps of its own seal (`save_draft`, fix pass 3, item 6) and `set_ready`;
+/// an advisor's are none; and neither ever touches the notebook.
 #[test]
 fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
     let reads = [
@@ -1573,8 +1631,16 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
         .collect();
     assert_eq!(
         writes,
-        ["submit_plan", "set_ready"],
-        "its own seal, then ready"
+        ["submit_plan", "save_draft", "set_ready"],
+        "its own seal, its draft of it, then ready"
+    );
+    assert!(
+        a.transcript
+            .iter()
+            .filter(|line| line.starts_with("save_draft"))
+            .all(|line| line.contains(r#""draft_id": "easy-last-seal""#)),
+        "the one draft it keeps: {:#?}",
+        a.transcript
     );
 
     let (a, advice_a) = advise(quiet);
@@ -1692,8 +1758,13 @@ fn easy_never_exceeds_its_derived_call_budget() {
     // spends every term but one `submit_plan` (its own plan never qualified,
     // so only the safe one was submitted) and the stepping stones, since every
     // placement here has a site (`the_worst_stone_round_spends_every_term`
-    // spends those).
-    assert_eq!(played.calls, EASY_CALL_BUDGET - 1 - STONE_CALLS);
+    // spends those) and the last seal's two: no own seal is kept, and the
+    // feed paged to its bound reaches no failed step to read last round's
+    // back for.
+    assert_eq!(
+        played.calls,
+        EASY_CALL_BUDGET - 1 - STONE_CALLS - LAST_SEAL_CALLS
+    );
 
     // The other worst branch: its own plan qualifies and is refused at submit.
     let mut refused = worst.clone();
@@ -3152,7 +3223,8 @@ fn the_worst_stone_round_spends_every_term() {
         played.calls,
         u32::try_from(script.transcript.len()).unwrap()
     );
-    assert_eq!(played.calls, EASY_CALL_BUDGET - 1);
+    // Every term but one `submit_plan` and the last seal's two (as above).
+    assert_eq!(played.calls, EASY_CALL_BUDGET - 1 - LAST_SEAL_CALLS);
 }
 
 // ---------------------------------------------------------------------------
@@ -3812,4 +3884,299 @@ fn a_begun_chain_whose_stone_does_not_fit_weighs_the_rest() {
         "{} -- {ops}",
         played.why
     );
+}
+
+// ---------------------------------------------------------------------------
+// Fix pass 3: exact rates
+// ---------------------------------------------------------------------------
+
+/// A vent at `[x, 32]` whose site is four voxels west of it, its travel the
+/// scripted walk from the core to that site.
+fn vent_at(grade: &'static str, x: i32) -> Feature {
+    let mut vent = Feature::new("vent", grade, [x, 32]);
+    vent.travel_ms = Some(i64::from((x - 4 - 32).abs()) * 500);
+    vent.site = Some([x - 4, 32, GROUND]);
+    vent
+}
+
+/// The review's probe (fix pass 3, item 2): a lean vent beside the core, 140
+/// points in 17.5 s, and a standard vent 240 points in 29.5 s, with $160 for
+/// one. The standard vent's rate is the higher (8.14 against 8.0 points a
+/// second), and a rate divided down to whole points a second tied them at 8,
+/// so the lean one went first on its lower id. Compared exactly, the standard
+/// vent is funded.
+#[test]
+fn the_higher_rate_is_funded_however_close() {
+    let mut world = Script::new(0);
+    world.treasury = 160;
+    world.features.push(vent_at("lean", 36));
+    world.features.push(vent_at("standard", 60));
+    let (script, played) = play(world);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(ops.contains("vent_60_32"), "{} -- {ops}", played.why);
+    assert!(!ops.contains("vent_36_32"), "{} -- {ops}", played.why);
+}
+
+/// The funding order is the exact rate order (fix pass 3, item 2): over
+/// generated worlds of vents at random grades and distances, with the
+/// treasury for one, the vent composed is the one of the highest utility per
+/// second by exact cross-multiplication of its points and its time, ties to
+/// the lowest id (the nearest, then the name).
+#[test]
+fn the_funding_order_is_the_exact_rate_order() {
+    let easy = Easy::new(&rules_json()).expect("the rules text reads");
+    let mut seed: u64 = 0x0005_eed0;
+    let mut next = |below: u64| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        i64::try_from((seed >> 33) % below).expect("small")
+    };
+    let mut checked = 0;
+    for _ in 0..200 {
+        let mut world = Script::new(0);
+        world.treasury = 160;
+        let mut vents: Vec<(i64, i64, String, i64)> = Vec::new();
+        for _ in 0..3 {
+            let x = i32::try_from(37 + next(28)).expect("a column");
+            let (grade, points) = *[("lean", 140_i64), ("standard", 240), ("rich", 340)]
+                .get(usize::try_from(next(3)).expect("an index"))
+                .expect("a grade");
+            let vent = vent_at(grade, x);
+            if world.features.iter().any(|held| held.id == vent.id) {
+                continue;
+            }
+            let walk = vent.travel_ms.expect("a travel");
+            vents.push((points, walk, vent.id.clone(), walk));
+            world.features.push(vent);
+        }
+        let (script, played) = play(world);
+        if played.submitted != Submitted::Own {
+            continue;
+        }
+        let ops = composing_ops(&script.transcript);
+        let Some(on_site) = template("hold_and_build")
+            .and_then(|(text, _)| read(&strip_comments(&text)).ok())
+            .and_then(|body| pointer_get(&body, "/declarative/route/0").cloned())
+            .and_then(|step| easy.on_site_ms(&step))
+        else {
+            panic!("Hold & Build's place step prices");
+        };
+        // The best by exact rate, ties to the nearest, then the name.
+        let best = vents
+            .iter()
+            .max_by(|a, b| {
+                let (ta, tb) = (i128::from(a.1 + on_site), i128::from(b.1 + on_site));
+                (i128::from(a.0) * tb)
+                    .cmp(&(i128::from(b.0) * ta))
+                    .then_with(|| b.3.cmp(&a.3))
+                    .then_with(|| b.2.cmp(&a.2))
+            })
+            .expect("a vent");
+        let written = compact(&Json::Array(ops));
+        assert!(
+            written.contains(&best.2),
+            "{vents:?}: {} -- {written}",
+            played.why
+        );
+        checked += 1;
+    }
+    assert!(checked > 100, "{checked} worlds composed");
+}
+
+// ---------------------------------------------------------------------------
+// Fix pass 3: the top-k cut and the segment fit, held by their own cases
+// ---------------------------------------------------------------------------
+
+/// The top-k is cut against what the guard leaves (fix pass 3, item 3): in
+/// the round after the commander's death the guard is funded first and
+/// leaves 23 s of the 42 s share. Three stones toward rich seams, each 27 s
+/// of route, outrank the near lean vent and fit the whole share, but not
+/// what the guard leaves; the vent, 17.5 s, does. Cut against the whole share
+/// the stones would take the top-k and nothing past the guard would be
+/// composed; cut against what the guard leaves, the vent is.
+#[test]
+fn stones_that_fit_the_share_but_not_what_the_guard_leaves_never_crowd_out_the_vent() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.segment_ms = 60_000;
+    world.remaining_ms = 60_000;
+    world.round = 2;
+    world.feed_deaths = vec![0];
+    let mut start = Feature::new("seam", "standard", [36, 34]);
+    start.covered = true;
+    start.travel_ms = Some(3_000);
+    world.features.push(start);
+    for x in [30, 32, 34] {
+        let mut seam = Feature::new("seam", "rich", [x, 70]);
+        seam.site = None;
+        seam.stone = Some([x, 62, GROUND]);
+        world.features.push(seam);
+    }
+    world.features.push(vent_at("lean", 36));
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(ops.contains("place_guard"), "{} -- {ops}", played.why);
+    assert!(ops.contains("vent_36_32"), "{} -- {ops}", played.why);
+    assert!(!ops.contains("toward"), "{} -- {ops}", played.why);
+}
+
+/// A step whose timeout is longer than the segment is not composed (fix pass
+/// 3, item 4): in a 40 s segment, so a 28 s share, a vent 27.5 s of route
+/// away fits the share, but its timeout (its walk, its on-site time and the
+/// estimate's 12.8 s allowance, 40.3 s) is past the segment, so it could not
+/// finish in the round and is not composed.
+#[test]
+fn a_step_whose_timeout_is_past_the_segment_is_not_composed() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.segment_ms = 40_000;
+    world.remaining_ms = 40_000;
+    world.features.push(vent_at("lean", 56));
+    let (script, played) = play(world);
+    let composed = script
+        .transcript
+        .iter()
+        .any(|line| line.starts_with("patch_plan ") && line.contains("vent_56_32"));
+    assert!(!composed, "{}", played.why);
+    // The same vent in a segment long enough for its timeout is composed.
+    let mut long = Script::new(0);
+    long.treasury = 1_000;
+    long.segment_ms = 41_000;
+    long.remaining_ms = 41_000;
+    long.features.push(vent_at("lean", 56));
+    let (script, played) = play(long);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(ops.contains("vent_56_32"), "{} -- {ops}", played.why);
+}
+
+// ---------------------------------------------------------------------------
+// Fix pass 3: a failed stone is noticed
+// ---------------------------------------------------------------------------
+
+/// Round 2 of the far vent's world: last round's seal, kept as the seat's own
+/// draft, walked a stone toward `vent_56_32` as its route step 2, and the
+/// last Push's feed says that step failed on `timeout`.
+fn a_stone_failed_last_round() -> Script {
+    let mut world = far_vent();
+    world.round = 2;
+    let kept = r#"{"schema_version": {"major": 1, "minor": 0}, "meta": {"title": "Hold & Build"},
+        "kind": "PLAYBOOK", "declarative": {"route": [
+        {"label": "deepen_core", "interface": {"beacon": {"beacon_id": "b_00"}, "rows": []}},
+        // The stone, step 2.
+        {"label": "stone", "place_beacon": {"at": {"toward": {"feature": {"feature_id": "vent_56_32"}}}}, "timeout_ms": 1000},
+        {"label": "hold", "hold": {"ms": 1000}}]}}"#;
+    world
+        .drafts
+        .insert(String::from("easy-last-seal"), (1, kept.to_owned()));
+    world.feed_steps = vec![
+        ("step_started", String::from("Step 1 started.")),
+        ("step_completed", String::from("Step 1 completed.")),
+        ("step_started", String::from("Step 2 started.")),
+        (
+            "step_failed",
+            String::from(
+                "A step failed (timeout): it ran past its timeout. Its on_fail decided what came next.",
+            ),
+        ),
+    ];
+    world
+}
+
+/// A stone that failed last round is not weighed again unchanged (fix pass
+/// 3, item 6): its chain ends this round as a refused `toward` ends it. The
+/// last Push's feed counts a failed step of the seat's own, the kept draft
+/// says that step was the stone toward `vent_56_32`, and this round makes no
+/// `toward` estimate for it.
+#[test]
+fn a_stone_that_failed_last_round_is_not_weighed_again() {
+    let (script, played) = play(a_stone_failed_last_round());
+    assert_eq!(
+        towards(&script.transcript, "vent_56_32"),
+        0,
+        "{}",
+        played.why
+    );
+    assert_eq!(
+        script
+            .transcript
+            .iter()
+            .filter(|line| line.starts_with("get_draft"))
+            .count(),
+        1
+    );
+    assert!(
+        played.drafts_refused.is_empty(),
+        "{:?}",
+        played.drafts_refused
+    );
+}
+
+/// What does not say a stone failed leaves it weighed: a failure inside a
+/// rule's body (its steps are numbered in the body), a kept draft of an older
+/// round, no kept draft at all, and a step that completed.
+#[test]
+fn only_a_failed_stone_of_last_rounds_seal_ends_its_chain() {
+    let mut in_rule = a_stone_failed_last_round();
+    in_rule.feed_steps = vec![
+        ("step_started", String::from("Step 1 started.")),
+        ("rule_fired", String::from("Rule 1 fired.")),
+        ("step_started", String::from("Step 2 started.")),
+        (
+            "step_failed",
+            String::from(
+                "A step failed (timeout): it ran past its timeout. Its on_fail decided what came next.",
+            ),
+        ),
+        ("rule_ended", String::from("Rule 1 ended.")),
+    ];
+    let mut older = a_stone_failed_last_round();
+    older.round = 3;
+    let mut none_kept = a_stone_failed_last_round();
+    none_kept.drafts.clear();
+    let mut completed = a_stone_failed_last_round();
+    completed.feed_steps = vec![
+        ("step_started", String::from("Step 2 started.")),
+        ("step_completed", String::from("Step 2 completed.")),
+    ];
+    for (what, world) in [
+        ("in a rule's body", in_rule),
+        ("an older draft", older),
+        ("no draft", none_kept),
+        ("completed", completed),
+    ] {
+        let (script, played) = play(world);
+        assert_eq!(
+            towards(&script.transcript, "vent_56_32"),
+            1,
+            "{what}: {}",
+            played.why
+        );
+        assert!(
+            played.drafts_refused.is_empty(),
+            "{what}: {:?}",
+            played.drafts_refused
+        );
+    }
+}
+
+/// An own seal is kept as the seat's own draft, saved over last round's, and
+/// a safe playbook is not.
+#[test]
+fn an_own_seal_is_kept_as_the_seats_draft() {
+    let (script, played) = play(far_vent());
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let (round, kept) = script.drafts.get("easy-last-seal").expect("the seal kept");
+    assert_eq!(*round, 1);
+    assert_eq!(
+        Some(kept),
+        played.playbook_jsonc.as_ref(),
+        "the seal, as sealed"
+    );
+    let mut nothing = Script::new(0);
+    nothing.treasury = 0;
+    let (script, played) = play(nothing);
+    assert_eq!(played.submitted, Submitted::Safe, "{}", played.why);
+    assert!(script.drafts.is_empty());
 }

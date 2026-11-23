@@ -440,17 +440,19 @@ pub struct World {
     /// radius in search order ([`crate::targeting::spiral_offsets`]). Derived
     /// from the rules table once, so a decision allocates nothing.
     spiral: Vec<[i32; 2]>,
-    /// The evaluation units the decision in progress has spent: handlers
-    /// tried, condition nodes, selector candidates and "nearest" estimates.
-    /// P1's counted half (S1's plan, section 5; decisions-log item 33 (c)).
-    /// **Never hashed**: a [`crate::seams::UnitTally`], so the read-only half
-    /// of a decision can count, and reset at every seat's decision.
+    /// The evaluation units the decision in progress has spent, one a
+    /// primitive step of counted work ([`crate::seams::UnitTally`]: a handler
+    /// tried, a condition node, a selector candidate, a feature or column or
+    /// unit scanned, a node a search pops). P1's counted half (S1's plan,
+    /// section 5; decisions-log item 33 (c)). **Never hashed**: a
+    /// [`crate::seams::UnitTally`], so the read-only half of a decision can
+    /// count, and reset at every seat's decision.
     decision_units: crate::seams::UnitTally,
-    /// Per seat, what its last decision tick's decision spent, as a
-    /// [`WorkCounter`] (the per-tick counter's own type, reused). Not hashed,
-    /// and `tests/determinism.rs` keeps it out of the state encoding as it
-    /// keeps the tick's counter out.
-    decision_work: Vec<WorkCounter>,
+    /// Per seat, what its last decision tick's decision spent, as the tally
+    /// read it: the count, or why it holds none. Not hashed, and
+    /// `tests/determinism.rs` keeps it out of the state encoding as it keeps
+    /// the tick's counter out.
+    decision_work: Vec<Result<u64, crate::seams::Unmeasured>>,
     broadphase: Csr,
     /// The HPA\* surface graph. Derived from the chunk store and the cost rows,
     /// rebuilt on a restore rather than carried in a snapshot.
@@ -1350,10 +1352,7 @@ impl World {
                 config.rules.sphere_radius_voxels(),
             )),
             decision_units: crate::seams::UnitTally::new(),
-            decision_work: vec![
-                WorkCounter::with_budget(u32::MAX);
-                crate::math::index::row(config.seats)
-            ],
+            decision_work: vec![Ok(0); crate::math::index::row(config.seats)],
             broadphase,
             repairer: Repairer::new(clusters.cluster_count()),
             surface,
@@ -1746,14 +1745,24 @@ impl World {
         self.decision_units.add(units);
     }
 
-    /// What `seat_index`'s last decision spent, in evaluation units: handlers
-    /// tried, condition nodes evaluated, selector candidates ranked and
-    /// "nearest" estimates run (P1's counted half, S1's plan section 5).
+    /// The decision in progress's tally as a [`crate::seams::Meter`]: what a
+    /// scan a decision runs reports the rows it reads to, one unit a row.
+    pub(crate) const fn decision_meter(&self) -> &crate::seams::UnitTally {
+        &self.decision_units
+    }
+
+    /// What `seat_index`'s last decision spent, in evaluation units, one a
+    /// primitive step of counted work ([`crate::seams::UnitTally`]; P1's
+    /// counted half, S1's plan section 5), or the
+    /// [`crate::seams::Unmeasured`] reason it holds no count.
     ///
     /// **Not hashed**: a measurement of the decision, not an input to the
     /// next one. `None` for a seat the world does not have.
     #[must_use]
-    pub fn decision_work(&self, seat_index: usize) -> Option<WorkCounter> {
+    pub fn decision_work(
+        &self,
+        seat_index: usize,
+    ) -> Option<Result<u64, crate::seams::Unmeasured>> {
         self.decision_work.get(seat_index).copied()
     }
 
@@ -4843,11 +4852,8 @@ impl World {
             if let Ok(id) = u8::try_from(seat) {
                 crate::mining::refresh_seams(self, SeatId::new(id));
             }
-            let mut spent = WorkCounter::with_budget(u32::MAX);
-            // Cannot refuse: a budget of `u32::MAX` holds any one `u32` charge.
-            let _ = spent.charge(self.decision_units.get());
             if let Some(slot) = self.decision_work.get_mut(seat) {
-                *slot = spent;
+                *slot = self.decision_units.read();
             }
             seat = seat.saturating_add(1);
         }

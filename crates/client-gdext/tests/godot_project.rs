@@ -303,6 +303,8 @@ const SCRIPTS: &[&str] = &[
     "rule_list_shot.gd",
     "smoke_check.gd",
     "strings.gd",
+    "value_field.gd",
+    "values.gd",
     "vista.gd",
     "vista_shot.gd",
     "watch_check.gd",
@@ -897,6 +899,19 @@ fn ready_says_what_it_does_and_the_gate_is_the_clients() {
             .contains("_ready_help.visible = String(state.get(\"phase\", \"\")) == \"lull\"")),
         "the explanation is for the Lull"
     );
+    assert!(
+        gd_code(&lobby, "_process")
+            .iter()
+            .any(|line| line.contains("_ready_help.text = ready_line(vista.bridge.editor_state())")),
+        "the line says what Ready does now (fixp)"
+    );
+    assert!(
+        gd_code(&lobby, "ready_line").iter().any(|line| line.contains(
+            "\"lobby_ready_sealed\" if editor_state.get(\"sealed_this_round\", false) else \"lobby_ready_help\""
+        )),
+        "the bridge's word picks the line"
+    );
+    assert!(string_row(&strings, "lobby_ready_sealed").contains("Ready keeps it"));
     for key in ["status_closed_ready", "unchecked_ready"] {
         let row = string_row(&strings, key);
         assert!(!row.contains("final"), "{key} claims a gateway rule: {row}");
@@ -2341,11 +2356,11 @@ fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
     let number = gd_code(&editor, "_open_number");
     assert!(
         number.iter().any(|line| line
-            .contains("_number_field.allow_lesser = outside or not chip.get(\"has_min\", false)"))
-            && number.iter().any(|line| line.contains(
-                "_number_field.allow_greater = outside or not chip.get(\"has_max\", false)"
-            )),
-        "the field's bounds are the ones sent, and none where none was sent: {number:?}"
+            .contains("_number_note.text = Strings.text(\"rule_number_bounds\", bounds)"))
+            && !number
+                .iter()
+                .any(|line| line.contains("min_value") || line.contains("max_value")),
+        "the gateway's bounds are said in the note and never applied by the field (S3's `fixp`): {number:?}"
     );
     let click = gd_code(&editor, "map_click");
     let pick = click
@@ -2475,8 +2490,9 @@ fn a_gone_ghost_closes_its_menu_and_a_modifier_is_not_an_input() {
 /// **A chip's editor names its chip, and never clamps** (the `ed3b` resume, M1 and L1): an
 /// edit names the chip's index, the rendering and its pointer, so it cannot land on a chip of
 /// another rendering; no editor opens while the list takes no edit, and the editors close when
-/// the list is redrawn; the number field shows the file's value as it is, its maximum set before
-/// its minimum, and says when that value lies outside the bounds sent.
+/// its rendering is redrawn; the value field shows the file's value as it is, applies no bound, and
+/// says the gateway's bounds and when that value lies outside them (S3's `fixp`: the one value
+/// field, `value_field.gd`, which holds only text).
 #[test]
 fn a_chip_editor_names_its_chip_and_never_clamps() {
     let editor = read("scripts/editor.gd");
@@ -2484,9 +2500,9 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
     let number = gd_code(&editor, "_open_number");
     assert!(
         gd_code(&editor, "_on_number_send").iter().any(|line| line.contains(
-            "bridge.editor_set_number(int(_number_chip.get(\"index\", -1)), int(_number_chip.get(\"revision\", -1)), String(_number_chip.get(\"pointer\", \"\")), int(_number_field.value))"
+            "bridge.editor_set_number_text(int(_number_chip.get(\"index\", -1)), int(_number_chip.get(\"revision\", -1)), String(_number_chip.get(\"pointer\", \"\")), text)"
         )),
-        "an edit names its chip's index, rendering and pointer (M1)"
+        "an edit names its chip's index, rendering and pointer (M1), and sends the text as typed (fixp)"
     );
     assert!(
         gd_code(&editor, "_on_choice").iter().any(|line| line.contains(
@@ -2508,41 +2524,37 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
         "the bridge's reason is said, and no editor opens: {chip:?}"
     );
     let rules = gd_code(&editor, "_draw_rules");
-    for wanted in ["if redrawn:", "_number_popup.hide()", "_choice_menu.hide()"] {
+    for wanted in [
+        "if redrawn and rendering_moved:",
+        "_number_popup.hide()",
+        "_choice_menu.hide()",
+    ] {
         assert!(
             rules.iter().any(|line| line.contains(wanted)),
             "{wanted}: {rules:?}"
         );
     }
-    // L1, as Godot measured it (fix pass 2 item 3): the one field's bounds are opened fully,
-    // then set to the pair sent, so no earlier pair cuts either; client_check.gd runs it.
+    // L1, fixp: no float and no bound in the client; the text goes to the bridge as typed.
     assert!(
-        number.contains(&"set_bounds(_number_field, chip)"),
+        number.iter().any(|line| line.contains(
+            "_number_field.open(String(chip.get(\"value_json\", \"\")), String(chip.get(\"unit\", \"\")), String(chip.get(\"text\", \"\")))"
+        )),
         "{number:?}"
     );
-    let bounds = gd_code(&editor, "set_bounds");
-    let opened = bounds
-        .iter()
-        .position(|line| *line == "field.max_value = FIELD_OPEN")
-        .expect("both bounds opened");
-    let sent = bounds
-        .iter()
-        .position(|line| *line == "field.max_value = chip.get(\"max\")")
-        .expect("the sent maximum");
     assert!(
-        bounds.first().copied() == Some("field.min_value = -FIELD_OPEN") && opened < sent,
-        "opened fully before the pair sent: {bounds:?}"
+        !editor.contains("SpinBox") && !editor.contains("set_bounds"),
+        "no SpinBox and no client bounds are left"
     );
     let check = read("scripts/client_check.gd");
     assert!(
-        check.contains("_check_the_number_field(editor, failures)")
+        check.contains("_check_the_value_field(stage, editor, failures)")
             && check.contains("_check_the_refused_ghost_line(editor, failures)"),
         "the client check runs both hostless checks"
     );
     assert!(
         number
             .iter()
-            .any(|line| line.contains("_number_field.allow_lesser = outside or"))
+            .any(|line| line.contains("_number_note.visible = outside or bounded"))
             && number
                 .iter()
                 .any(|line| line.contains("rule_number_outside")),
@@ -2593,7 +2605,7 @@ fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
     let slots = gd_code(&list, "_slots");
     assert!(
         slots.iter().any(|line| line.contains(
-            "if int(slot.get(\"rule\", -1)) != rule or not slot.get(\"pickable\", false):"
+            "if _index(slot.get(\"rule\", -1), unread) != rule or not slot.get(\"pickable\", false):"
         )),
         "a button only on a slot the bridge calls pickable (no group, no unknown op): {slots:?}"
     );
@@ -2621,7 +2633,7 @@ fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
 /// **A name chip and the Visit & change rows go through the bridge** (S3's `ed3b`, part 2): a
 /// step-label or rule-id chip offers the names the bridge read from the text and sends the
 /// pick's index; each Visit & change row is the bridge's (`editor_visit_row`,
-/// `editor_change_setting_choice`, `editor_change_setting_number`); an anchor pick takes the
+/// `editor_change_setting_choice`, `editor_change_setting_number_text`); an anchor pick takes the
 /// next map click, and Escape stops it.
 #[test]
 fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
@@ -2636,31 +2648,79 @@ fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
             "bridge.editor_choose_name(int(_name_chip.get(\"index\", -1)), int(_name_chip.get(\"revision\", -1)), String(_name_chip.get(\"pointer\", \"\")), which)"
         ))
     );
+    // Each Visit & change pick is the bridge's row, and closes the map menus first (S3's `fixp`,
+    // P6b finding 3; `client_check.gd`'s `_check_an_action_pick_closes_the_menus` drives it).
+    let visit_row = gd_code(&editor, "_on_visit_row");
     assert!(
-        gd_code(&editor, "_entry_rows").iter().any(|line| line
-            .contains("menu.id_pressed.connect(func(which: int) -> void: bridge.editor_visit_row(_visit_beacon, row, which))")),
-        "a mandate or a blueprint is the bridge's row"
+        visit_row.first().copied() == Some("close_menu()")
+            && visit_row.contains(&"bridge.editor_visit_row(_visit_beacon, row, which)"),
+        "a mandate or a blueprint is the bridge's row, and the menus close: {visit_row:?}"
+    );
+    let setting_choice = gd_code(&editor, "_on_setting_choice");
+    assert!(
+        setting_choice.first().copied() == Some("close_menu()")
+            && setting_choice.contains(
+                &"bridge.editor_change_setting_choice(_visit_beacon, which, pointer, value)"
+            ),
+        "an enum setting's value is the bridge's row, and the menus close: {setting_choice:?}"
+    );
+    let on_menu = gd_code(&editor, "_on_menu");
+    let target_return = on_menu
+        .iter()
+        .position(|line| *line == "return")
+        .expect("the target choice returns");
+    let closed = on_menu
+        .iter()
+        .position(|line| *line == "close_menu()")
+        .expect("the menus close");
+    let first_action = on_menu
+        .iter()
+        .position(|line| line.starts_with("act(") || line.starts_with("open_entry_list("))
+        .expect("an action");
+    assert!(
+        target_return < closed && closed < first_action,
+        "every action pick but a target choice closes the map menus first: {on_menu:?}"
+    );
+    // The vocabulary's lists open as the editor's own entry list (P6b finding 5), a locked entry
+    // greyed with the gateway's sentence wrapped under it; client_check.gd measures it.
+    let entry = gd_code(&editor, "_entry");
+    for wanted in [
+        "pick.disabled = true",
+        "why.text = Strings.text(\"menu_entry_locked\", {\"locked\": locked})",
+        "why.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART",
+    ] {
+        assert!(entry.contains(&wanted), "{wanted}: {entry:?}");
+    }
+    assert!(
+        gd_code(&editor, "_on_entry")
+            .contains(&"bridge.editor_visit_row(_entry_beacon, _entry_row, which)"),
+        "an entry is the bridge's row"
     );
     assert!(
-        gd_code(&editor, "_setting_row").iter().any(|line| line
-            .contains("bridge.editor_change_setting_choice(_visit_beacon, which, pointer, value)")),
-        "an enum setting's value is the bridge's row"
+        read("scripts/client_check.gd")
+            .contains("await _check_the_entry_list(stage, editor, failures)"),
+        "the client check measures the entry list"
+    );
+    assert!(
+        read("scripts/client_check.gd")
+            .contains("await _check_an_action_pick_closes_the_menus(stage, editor, failures)"),
+        "the client check drives the picks"
     );
     assert!(
         gd_code(&editor, "_on_number_send")
             .iter()
-            .any(|line| line.contains("bridge.editor_change_setting_number(")),
+            .any(|line| line.contains("bridge.editor_change_setting_number_text(")),
         "a number setting's value is the bridge's row"
     );
     let click = gd_code(&editor, "map_click");
     assert!(
-        click.iter().any(|line| line.contains(
-            "if int(picking.get(\"picking\", -1)) >= 0 or picking.get(\"anchoring\", false):"
-        )),
+        click
+            .iter()
+            .any(|line| line.contains("if picking_on(bridge.editor_state()):")),
         "an anchor pick takes the next map click: {click:?}"
     );
     assert!(
-        gd_code(&editor, "_a_pick_is_on")
+        gd_code(&editor, "picking_on")
             .iter()
             .any(|line| line.contains("state.get(\"anchoring\", false)")),
         "Escape stops an anchor pick as it stops a chip's"
@@ -2678,5 +2738,164 @@ fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
                 "_visit_menu.set_item_checked(_visit_menu.item_count - 1, now == String(row[1]))"
             )),
         "the priority the beacon's summary sends is marked"
+    );
+}
+
+/// **Every popup the editor owns draws the one opaque panel** (S3's `fixp`, P6b finding 6): each
+/// `PopupPanel.new()` and `PopupMenu.new()` in `editor.gd` is given it on the next line, and the
+/// client check reads every popup's resolved panel.
+#[test]
+fn every_popup_the_editor_owns_is_opaque() {
+    let editor = read("scripts/editor.gd");
+    let lines: Vec<&str> = editor.lines().map(str::trim).collect();
+    let mut made = 0_usize;
+    for (at, line) in lines.iter().enumerate() {
+        let Some((name, _)) = line
+            .strip_prefix("var ")
+            .unwrap_or(line)
+            .split_once(" := PopupPanel.new()")
+            .or_else(|| {
+                line.strip_prefix("var ")
+                    .unwrap_or(line)
+                    .split_once(" := PopupMenu.new()")
+            })
+            .or_else(|| line.split_once(" = PopupPanel.new()"))
+            .or_else(|| line.split_once(" = PopupMenu.new()"))
+        else {
+            continue;
+        };
+        made = made.saturating_add(1);
+        assert_eq!(
+            lines.get(at.saturating_add(1)).copied(),
+            Some(format!("opaque({name})").as_str()),
+            "{name} is made without the editor's panel"
+        );
+    }
+    assert!(made >= 8, "the scan found {made} popups");
+    assert!(
+        read("scripts/client_check.gd").contains("_check_the_popups_are_opaque(editor, failures)")
+    );
+}
+
+/// **Build targets are marked in the Lull** (S3's `fixp`, P6b finding 7): the panel's redraw draws
+/// the bridge's `build_targets`, and the client check counts the marks.
+#[test]
+fn the_build_targets_are_marked_from_the_bridges_reading() {
+    let editor = read("scripts/editor.gd");
+    assert!(
+        gd_code(&editor, "_draw_state").contains(&"_draw_build(state.get(\"build_targets\", []))")
+    );
+    let build = gd_code(&editor, "_draw_build");
+    assert!(
+        build
+            .iter()
+            .any(|line| line
+                .contains("_box_outline(boxes, target[\"box_min\"], target[\"box_max\"])")),
+        "a wall's box is outlined as written: {build:?}"
+    );
+    assert!(
+        read("scripts/client_check.gd").contains("await _check_the_build_marks(editor, failures)")
+    );
+}
+
+/// **No click on the dormant box is lost without a word** (S3's `fixp`, P6b finding 9): the box
+/// is disabled only by the bridge's `enabled`, which only the shut door clears, every click goes
+/// to the bridge, a refusal is drawn beside the box, and `--log-input` logs the box's presses,
+/// its toggles and, for each press the lobby logs, whether it fell inside the box.
+#[test]
+fn every_click_on_the_dormant_box_reaches_the_bridge() {
+    let editor = read("scripts/editor.gd");
+    assert!(
+        gd_code(&editor, "_on_dormant_toggled")
+            .contains(&"var taken: bool = bridge.editor_set_allow_dormant(on)")
+    );
+    assert!(gd_code(&editor, "_draw_dormant").iter().any(|line| {
+        line.contains("_dormant_said.text = Strings.text(\"status_dormant_refused_\" + refused)")
+    }));
+    assert!(
+        gd_code(&editor, "_on_dormant_down")
+            .contains(&"print(\"[editor] allow dormant: button_down\")")
+    );
+    assert!(
+        gd_code(&read("scripts/lobby.gd"), "_input")
+            .iter()
+            .any(|line| line.contains("editor.dormant_log(event.position)")),
+        "the lobby's press log says where the box was"
+    );
+    assert!(
+        read("scripts/client_check.gd")
+            .contains("await _check_the_dormant_box(stage, editor, failures)")
+    );
+}
+
+/// **No integer reader can fail at run time** (S3's `fixp`, the `godot_int` sweep's GDScript
+/// half): no script reads a count the bridge sends through `int_variant` with a bare `int(...)`,
+/// or types `caught_panics()` as an `int`; each goes through `values.gd`'s `int_of`, and the
+/// client check feeds every drawing path the bridge's refusal.
+#[test]
+fn every_count_the_bridge_sends_is_read_through_int_of() {
+    let keys = [
+        "changes",
+        "revision",
+        "undo_depth",
+        "answers",
+        "picking",
+        "step",
+        "pending",
+        "index",
+        "rule",
+        "chip",
+        "earlier",
+        "later",
+    ];
+    let mut found = Vec::new();
+    for script in SCRIPTS {
+        let text = read(&format!("scripts/{script}"));
+        for (number, line) in text.lines().enumerate() {
+            let code = line.split('#').next().unwrap_or_default();
+            if code.contains("caught_panics()") && code.contains(": int =") {
+                found.push(format!(
+                    "{script}:{}: {}",
+                    number.saturating_add(1),
+                    line.trim()
+                ));
+            }
+            // The bridge's own dictionaries, under the names the scripts give them; the editor's
+            // own (`_number_chip`, a drag's `data`) hold ints it put there itself.
+            for receiver in [
+                "state",
+                "s",
+                "meter",
+                "recap",
+                "chip",
+                "target",
+                "fix",
+                "line",
+                "segment",
+                "conflict",
+                "refusal",
+                "slot",
+                "drained",
+                "_editor()",
+                "picking",
+            ] {
+                for key in keys {
+                    if code.contains(&format!("int({receiver}.get(\"{key}\"")) {
+                        found.push(format!(
+                            "{script}:{}: {}",
+                            number.saturating_add(1),
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a count read with a bare int(): {found:#?}"
+    );
+    assert!(
+        read("scripts/client_check.gd").contains("_check_the_unreadable_counts(editor, failures)")
     );
 }

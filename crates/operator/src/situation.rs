@@ -329,6 +329,11 @@ pub(crate) struct Situation {
     pub(crate) enemies: Vec<Enemy>,
     /// Whether the seat's commander died in the last Push.
     pub(crate) last_push: LastPush,
+    /// The route steps of the seat's own that failed in the last Push, by
+    /// index from 0, read from its own feed lines (a rule body's steps are
+    /// numbered in their body and are left out); empty for an advisor, which
+    /// does not read them, and when none failed ([`read_last_push`]).
+    pub(crate) failed_steps: Vec<usize>,
     /// The template ids the library lists, ascending.
     pub(crate) templates: Vec<String>,
     /// False when `get_view` did not reach its complete page within
@@ -363,7 +368,11 @@ impl Situation {
     /// the shape the schema gives it, a feature row or an entity that does not
     /// read, or a `commander_died` line that does not say whose: a round the
     /// operator cannot read is a round it does not plan.
-    pub(crate) fn read(wire: &mut Wire<'_, '_>, seat: u8) -> Result<Situation, Refused> {
+    pub(crate) fn read(
+        wire: &mut Wire<'_, '_>,
+        seat: u8,
+        steps: Steps,
+    ) -> Result<Situation, Refused> {
         let own = format!("seat.{seat}");
 
         let answer = wire.call("get_status", object(vec![]))?;
@@ -406,7 +415,7 @@ impl Situation {
             .collect::<Result<Vec<Feature>, Refused>>()?;
 
         let seen = read_view(wire, &own)?;
-        let last_push = read_last_push(wire, seat)?;
+        let (last_push, failed_steps) = read_last_push(wire, seat, steps)?;
         let templates = read_templates(wire)?;
 
         Ok(Situation {
@@ -420,6 +429,7 @@ impl Situation {
             commander: seen.commander,
             enemies: seen.enemies,
             last_push,
+            failed_steps,
             templates,
             view_complete: seen.complete,
             spire_licensed,
@@ -685,18 +695,65 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
     Ok(seen)
 }
 
-/// Whether this seat's commander died in the last Push, from the segment
-/// feed the Lull still holds: the Push's own (the gateway starts a new feed
-/// when the next Push begins).
+/// Whether [`Situation::read`] reads the seat's own failed route steps from
+/// the last Push's feed: a built-in seat does, to notice a stone that failed
+/// ([`crate::easy`]); an advisor does not, since it composes no stone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Steps {
+    /// Read them.
+    Read,
+    /// Leave them unread.
+    Unread,
+}
+
+/// One seat's own step lines, read in the feed's order: the route step
+/// running, and whether a rule's body is (its steps are numbered in its body).
+#[derive(Clone, Copy, Default)]
+struct Running {
+    step: Option<usize>,
+    in_rule: bool,
+}
+
+/// `Step N started.`, the gateway's own words: the step's index from 0.
+///
+/// # Errors
+///
+/// `MALFORMED` for a line that does not read so: a step the operator cannot
+/// number is not taken for another one.
+fn started_index(text: &str) -> Result<usize, Refused> {
+    let unread = || {
+        malformed(
+            "get_segment_feed",
+            "a `step_started` line that names no step",
+        )
+    };
+    let number = text
+        .strip_prefix("Step ")
+        .and_then(|rest| rest.strip_suffix(" started."))
+        .ok_or_else(unread)?;
+    number
+        .parse::<usize>()
+        .map_err(|_| unread())?
+        .checked_sub(1)
+        .ok_or_else(unread)
+}
+
+/// Whether this seat's commander died in the last Push, and which of its own
+/// route steps failed in it, from the segment feed the Lull still holds: the
+/// Push's own (the gateway starts a new feed when the next Push begins).
 ///
 /// The feed's digests count every kind over the whole segment, so the first
-/// page says whether any commander died where this seat could see; only then
-/// are the lines read, at most [`PAGES_MAX`] pages, for the one that names
-/// this seat. A line says whose commander it was in its words alone, since a
-/// feed event carries no seat field until its per-kind payload (`gateway.
-/// proto`'s `Event`, held to after S4), so the words are read strictly: the
-/// gateway's one string table writes "The commander of seat N died." and a
-/// line that does not read so is refused, never taken for another seat's.
+/// page says whether any commander died where this seat could see and how
+/// many of the seat's own steps failed (a step's lines are told to its seat
+/// alone); only then are the lines read, at most [`PAGES_MAX`] pages. A line
+/// says whose commander it was in its words alone, since a feed event carries
+/// no seat field until its per-kind payload (`gateway.proto`'s `Event`, held
+/// to after S4), so the words are read strictly: the gateway's one string
+/// table writes "The commander of seat N died." and a line that does not read
+/// so is refused, never taken for another seat's. A failed step is the one
+/// whose `step_started` line came last outside a rule's body
+/// (`rule_fired` to `rule_ended`). Failures past the pages read are not
+/// known, and none is reported for them.
 ///
 /// A Lull resumed from a save opens with a fresh, empty feed (the save holds
 /// no recap events, as the gateway resumes one), so there it reads as
@@ -707,31 +764,69 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
 /// # Errors
 ///
 /// The refusal, and `MALFORMED` for an answer that does not read.
-fn read_last_push(wire: &mut Wire<'_, '_>, seat: u8) -> Result<LastPush, Refused> {
+fn read_last_push(
+    wire: &mut Wire<'_, '_>,
+    seat: u8,
+    steps: Steps,
+) -> Result<(LastPush, Vec<usize>), Refused> {
     let misread = |misread: Misread| misread.refused("get_segment_feed");
     // The fullest page the detail ladder serves (256 events), so the bound
     // reaches as far into a busy Push as the page count allows.
     let feed = |cursor: &str| object(vec![("cursor", string(cursor)), ("detail", string("full"))]);
     let mut page = wire.call("get_segment_feed", feed(""))?;
-    let deaths = deaths_counted(&page).map_err(misread)?;
-    if deaths == 0 {
-        return Ok(LastPush::Survived);
+    let deaths = counted(&page, COMMANDER_DIED).map_err(misread)?;
+    let failures = match steps {
+        Steps::Read => counted(&page, STEP_FAILED).map_err(misread)?,
+        Steps::Unread => 0,
+    };
+    let mut last_push = if deaths == 0 {
+        LastPush::Survived
+    } else {
+        LastPush::Unread
+    };
+    let mut failed: Vec<usize> = Vec::new();
+    if deaths == 0 && failures == 0 {
+        return Ok((last_push, failed));
     }
-    let mut seen: u64 = 0;
+    let (mut deaths_seen, mut failures_seen) = (0_u64, 0_u64);
+    let mut running = Running::default();
+    let more = |seen: u64, of: u64| seen < of;
     for read in 1..=PAGES_MAX {
         for event in array_of(&page, "events").map_err(misread)? {
-            if text_of(event, "kind").map_err(misread)? != COMMANDER_DIED {
-                continue;
+            let kind = text_of(event, "kind").map_err(misread)?;
+            let text = text_of(event, "text").map_err(misread)?;
+            let one = |seen: u64| {
+                seen.checked_add(1).ok_or_else(|| {
+                    malformed("get_segment_feed", "a count of lines that does not fit")
+                })
+            };
+            match kind {
+                COMMANDER_DIED => {
+                    if whose_commander_died(text)? == seat {
+                        last_push = LastPush::Died;
+                    }
+                    deaths_seen = one(deaths_seen)?;
+                }
+                "rule_fired" if steps == Steps::Read => running.in_rule = true,
+                "rule_ended" if steps == Steps::Read => running.in_rule = false,
+                "step_started" if steps == Steps::Read && !running.in_rule => {
+                    running.step = Some(started_index(text)?);
+                }
+                STEP_FAILED if steps == Steps::Read => {
+                    if !running.in_rule
+                        && let Some(index) = running.step
+                        && !failed.contains(&index)
+                    {
+                        failed.push(index);
+                    }
+                    failures_seen = one(failures_seen)?;
+                }
+                _ => {}
             }
-            if whose_commander_died(text_of(event, "text").map_err(misread)?)? == seat {
-                return Ok(LastPush::Died);
-            }
-            seen = seen.checked_add(1).ok_or_else(|| {
-                malformed("get_segment_feed", "a count of lines that does not fit")
-            })?;
         }
-        if seen >= deaths {
-            return Ok(LastPush::Survived);
+        let deaths_left = last_push != LastPush::Died && more(deaths_seen, deaths);
+        if !deaths_left && !more(failures_seen, failures) {
+            break;
         }
         let cursor = text_of(&page, "next_cursor").map_err(misread)?.to_owned();
         if cursor.is_empty() || read == PAGES_MAX {
@@ -739,32 +834,38 @@ fn read_last_push(wire: &mut Wire<'_, '_>, seat: u8) -> Result<LastPush, Refused
         }
         page = wire.call("get_segment_feed", feed(&cursor))?;
     }
-    Ok(LastPush::Unread)
+    if last_push == LastPush::Unread && !more(deaths_seen, deaths) {
+        last_push = LastPush::Survived;
+    }
+    failed.sort_unstable();
+    Ok((last_push, failed))
 }
 
-/// How many `commander_died` lines the feed's digests count over the whole
-/// segment.
+/// The feed's kind for a step's failure, the gateway's `step_failed`.
+const STEP_FAILED: &str = "step_failed";
+
+/// How many lines of `kind` the feed's digests count over the whole segment.
 ///
 /// # Errors
 ///
 /// [`Misread`] for a digest that does not read, or a sum that does not fit.
-fn deaths_counted(page: &Json) -> Result<u64, Misread> {
-    let mut deaths: u64 = 0;
+fn counted(page: &Json, kind: &str) -> Result<u64, Misread> {
+    let mut total: u64 = 0;
     for digest in array_of(page, "digests")? {
         for count in array_of(digest, "counts")? {
-            if text_of(count, "kind")? == COMMANDER_DIED {
+            if text_of(count, "kind")? == kind {
                 let counted = u64::try_from(int_of(count, "count")?).map_err(|_| Misread {
                     key: String::from("count"),
                     wanted: "a count of zero or more",
                 })?;
-                deaths = deaths.checked_add(counted).ok_or_else(|| Misread {
+                total = total.checked_add(counted).ok_or_else(|| Misread {
                     key: String::from("count"),
                     wanted: "a count whose sum fits",
                 })?;
             }
         }
     }
-    Ok(deaths)
+    Ok(total)
 }
 
 /// The template ids the library lists, ascending.

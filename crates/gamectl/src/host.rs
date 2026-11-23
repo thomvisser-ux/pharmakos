@@ -47,9 +47,18 @@
 //!
 //! A built-in seat's round says on standard error what the gateway refused it
 //! (S3's `opr3`, fix pass 2, item 5): the refusal that kept the round from
-//! being read, and every route estimate refused for another reason than
-//! `NOT_FOUND`, each of which dropped the goal it weighed. One line a round,
-//! and none for a round with nothing refused ([`refusals_said`]).
+//! being read, every route estimate refused for another reason than
+//! `NOT_FOUND`, each of which dropped the goal it weighed, and a refusal of
+//! keeping its seal as its own draft or of reading last round's back. One line a round,
+//! and none for a round with nothing refused ([`refusals_said`]). A line
+//! standard error would not take is not dropped silently: it is counted by
+//! its reason ([`Unsaid`]), and the next line that is written says how many
+//! went unwritten before it. Standard error is the only door this command
+//! has besides the announce line: the host's other counters (the dropped
+//! connections) are the gateway's, which `serve.rs` writes into the audit log
+//! it closes, and no seam takes a count of this crate's there. Returning the
+//! error would not help: the gateway's caller of a built-in seat cannot act
+//! on a full pipe.
 //!
 //! # Exit codes
 //!
@@ -88,11 +97,99 @@ use crate::{rules, strings};
 /// The built-in operator's factory: Easy for every seat, as a built-in seat
 /// or as an advisor (see the module docs).
 ///
-/// It holds the public rules text and nothing else, and builds a fresh
-/// [`Easy`] from it for every seat it is asked about.
-#[derive(Clone, PartialEq, Eq, Debug)]
+/// It holds the public rules text and the count of lines its seats could not
+/// write ([`Unsaid`]), and builds a fresh [`Easy`] from the text for every
+/// seat it is asked about.
+#[derive(Clone, Debug)]
 pub struct EasyOperators {
     rules_json: String,
+    unsaid: std::sync::Arc<Unsaid>,
+}
+
+/// Why a built-in seat's line was not written to standard error.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UnsaidReason {
+    /// The reader hung up (`ErrorKind::BrokenPipe`): the lobby has gone.
+    BrokenPipe,
+    /// Any other write error.
+    Other,
+}
+
+impl UnsaidReason {
+    /// Every reason, in the order a line names them.
+    pub const ALL: [UnsaidReason; 2] = [UnsaidReason::BrokenPipe, UnsaidReason::Other];
+
+    /// Its name in a line.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            UnsaidReason::BrokenPipe => "broken_pipe",
+            UnsaidReason::Other => "other",
+        }
+    }
+
+    /// The reason a write error is counted under.
+    #[must_use]
+    pub fn of(error: &std::io::Error) -> UnsaidReason {
+        match error.kind() {
+            std::io::ErrorKind::BrokenPipe => UnsaidReason::BrokenPipe,
+            _ => UnsaidReason::Other,
+        }
+    }
+}
+
+/// The lines a host's built-in seats could not write to standard error, by
+/// reason, since the last line that was written: shared by every seat of the
+/// host, and said by the next line that is written ([`EasySeat`]).
+#[derive(Debug, Default)]
+pub struct Unsaid {
+    broken_pipe: std::sync::atomic::AtomicU64,
+    other: std::sync::atomic::AtomicU64,
+}
+
+impl Unsaid {
+    const fn counter(&self, reason: UnsaidReason) -> &std::sync::atomic::AtomicU64 {
+        match reason {
+            UnsaidReason::BrokenPipe => &self.broken_pipe,
+            UnsaidReason::Other => &self.other,
+        }
+    }
+
+    /// Count one line not written for `reason`. A host that fails `u64::MAX`
+    /// writes wraps rather than panics; at one a round that is never.
+    pub fn count(&self, reason: UnsaidReason) {
+        self.counter(reason)
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many lines are unwritten for `reason`.
+    #[must_use]
+    pub fn of(&self, reason: UnsaidReason) -> u64 {
+        self.counter(reason)
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Take the counts, leaving zero: what the next written line says.
+    fn take(&self) -> Vec<(UnsaidReason, u64)> {
+        UnsaidReason::ALL
+            .iter()
+            .map(|reason| {
+                (
+                    *reason,
+                    self.counter(*reason)
+                        .swap(0, std::sync::atomic::Ordering::SeqCst),
+                )
+            })
+            .collect()
+    }
+
+    /// Put taken counts back, for a line that was not written either.
+    fn restore(&self, taken: &[(UnsaidReason, u64)]) {
+        for (reason, count) in taken {
+            self.counter(*reason)
+                .fetch_add(*count, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
 }
 
 impl EasyOperators {
@@ -107,7 +204,15 @@ impl EasyOperators {
         let _checked = Easy::new(rules_json)?;
         Ok(EasyOperators {
             rules_json: rules_json.to_owned(),
+            unsaid: std::sync::Arc::default(),
         })
+    }
+
+    /// The lines this host's built-in seats could not write, by reason, not
+    /// yet said by a line that was.
+    #[must_use]
+    pub fn unsaid(&self) -> &Unsaid {
+        &self.unsaid
     }
 }
 
@@ -117,6 +222,7 @@ impl Operators for EasyOperators {
         Some(Box::new(EasySeat {
             easy,
             said: Box::new(std::io::stderr()),
+            unsaid: std::sync::Arc::clone(&self.unsaid),
         }))
     }
 
@@ -131,6 +237,7 @@ impl Operators for EasyOperators {
 struct EasySeat {
     easy: Easy,
     said: Box<dyn Write + Send>,
+    unsaid: std::sync::Arc<Unsaid>,
 }
 
 impl BuiltInSeat for EasySeat {
@@ -138,9 +245,30 @@ impl BuiltInSeat for EasySeat {
         let mut bridged = bridge(call);
         let played = self.easy.play(seat, &mut bridged);
         if let Some(line) = refusals_said(seat, &played) {
-            // Standard error is not checked: there would be nowhere to report
-            // the failure to (`main.rs`), and the round stands either way.
-            let _ = writeln!(self.said, "{line}");
+            self.say(&line);
+        }
+    }
+}
+
+impl EasySeat {
+    /// Write one line, with the count of lines not written before it; a line
+    /// that is not written is counted by its reason and its earlier counts
+    /// kept for the next (the module docs).
+    fn say(&mut self, line: &str) {
+        let taken = self.unsaid.take();
+        let earlier: Vec<(&str, u64)> = taken
+            .iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(reason, count)| (reason.name(), *count))
+            .collect();
+        let written = if earlier.is_empty() {
+            writeln!(self.said, "{line}")
+        } else {
+            writeln!(self.said, "{line} {}", strings::operator_unsaid(&earlier))
+        };
+        if let Err(error) = written {
+            self.unsaid.restore(&taken);
+            self.unsaid.count(UnsaidReason::of(&error));
         }
     }
 }
@@ -160,7 +288,10 @@ pub fn refusals_said(seat: u8, played: &Played) -> Option<String> {
         .collect();
     let estimates =
         (!estimates.is_empty()).then(|| strings::operator_estimates_refused(&estimates));
-    let said: Vec<String> = read.into_iter().chain(estimates).collect();
+    let drafts = played.drafts_refused.iter().map(|refused| {
+        strings::operator_draft_refused(&refused.method, &refused.code, &refused.message)
+    });
+    let said: Vec<String> = read.into_iter().chain(estimates).chain(drafts).collect();
     (!said.is_empty()).then(|| strings::operator_round(seat, played.round, &said.join(" ")))
 }
 
@@ -301,6 +432,8 @@ mod tests {
             why: String::new(),
             refused,
             estimates_refused,
+            fundable: 0,
+            drafts_refused: Vec::new(),
         }
     }
 
@@ -374,6 +507,7 @@ mod tests {
             )
             .expect("the operator reads it"),
             said: Box::new(heard.clone()),
+            unsaid: std::sync::Arc::default(),
         };
         let mut refusing = |_: &Request| {
             pharmakos_proto::json::read(
@@ -386,5 +520,51 @@ mod tests {
         assert!(text.starts_with("Easy, seat 1, round 0:"), "{text}");
         assert!(text.contains("RATE_LIMITED (no)"), "{text}");
         assert!(text.ends_with('\n'), "{text}");
+    }
+
+    /// A writer that refuses every write, as a full or closed pipe does.
+    struct Refusing(std::io::ErrorKind);
+
+    impl Write for Refusing {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A line standard error would not take is counted by its reason, and the
+    /// next line that is written says how many went unwritten (fix pass 3,
+    /// item 7).
+    #[test]
+    fn a_line_not_written_is_counted_and_said_by_the_next() {
+        let unsaid = std::sync::Arc::new(Unsaid::default());
+        let rules = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/rules.v1.json"),
+        )
+        .expect("the rules text");
+        let mut seat = EasySeat {
+            easy: Easy::new(&rules).expect("the operator reads it"),
+            said: Box::new(Refusing(std::io::ErrorKind::BrokenPipe)),
+            unsaid: std::sync::Arc::clone(&unsaid),
+        };
+        seat.say("first");
+        seat.say("second");
+        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), 2);
+        seat.said = Box::new(Refusing(std::io::ErrorKind::WriteZero));
+        seat.say("third");
+        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), 2);
+        assert_eq!(unsaid.of(UnsaidReason::Other), 1);
+        let heard = Heard::default();
+        seat.said = Box::new(heard.clone());
+        seat.say("fourth");
+        let text = String::from_utf8(heard.0.lock().expect("the buffer").clone()).expect("UTF-8");
+        assert!(text.starts_with("fourth "), "{text}");
+        assert!(text.contains("broken_pipe 2"), "{text}");
+        assert!(text.contains("other 1"), "{text}");
+        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), 0);
+        assert_eq!(unsaid.of(UnsaidReason::Other), 0);
     }
 }

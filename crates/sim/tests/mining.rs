@@ -572,24 +572,221 @@ fn a_written_seam_choice_releases_the_held_seam() {
 fn a_seam_choice_counts_its_estimates_and_a_held_seam_costs_none() {
     // No playbook sealed, so a decision spends nothing but the seam choice:
     // seat 0's core holds no seam until its first decision, which ranks the
-    // map's features (one unit each) and estimates the one seam with work
-    // for it (one unit).
+    // map's features (one unit each) and prices the walk to the one seam with
+    // work for it (one unit a node the walk pops, lane `dunit`).
     let fixture = world(&[180_000]);
     let features = u32::try_from(fixture.features().len()).expect("a few");
+    let pops = starting_walk_pops(&fixture);
     let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
-    let first = runner.world().decision_work(0).expect("seat 0").spent();
+    let first = runner
+        .world()
+        .decision_work(0)
+        .expect("seat 0")
+        .expect("measured");
     assert_eq!(
         first,
-        features + 1,
-        "a choice ranks every feature and estimates its one candidate"
+        u64::from(features) + pops,
+        "a choice ranks every feature and charges its one walk's pops"
     );
     play(&mut runner, 5);
     assert_eq!(
-        runner.world().decision_work(0).expect("seat 0").spent(),
+        runner
+            .world()
+            .decision_work(0)
+            .expect("seat 0")
+            .expect("measured"),
         0,
         "a held seam with work left is kept, and keeping it estimates nothing"
+    );
+}
+
+/// The nodes the walk from seat 0's core to its starting seam pops, priced
+/// on its own scratch: the one walk a first seam choice prices.
+fn starting_walk_pops(fixture: &World) -> u64 {
+    let seam = starting_seam(fixture, core(fixture));
+    let row = fixture
+        .beacons()
+        .row_of_ordinal(SEAT, 0)
+        .expect("seat 0 has a core");
+    let origin = pharmakos_sim::targeting::column_of(
+        fixture
+            .beacons()
+            .positions()
+            .get(row)
+            .copied()
+            .expect("the core's row"),
+    );
+    let ground = fixture.ground();
+    let mut scratch = pharmakos_sim::pathing::search::Scratch::for_map(
+        fixture.surface(),
+        fixture.clusters().size(),
+    )
+    .expect("the map takes a search");
+    let mut ranker = pharmakos_sim::targeting::Ranker::new(&ground, origin, |at| at == seam);
+    assert!(
+        ranker.next(&ground, &mut scratch).is_some(),
+        "the seam is reached"
+    );
+    assert_eq!(scratch.walks().expect("a count"), 1, "by one served walk");
+    let pops =
+        scratch.expansions().expect("a count") + scratch.abstract_expansions().expect("a count");
+    assert!(pops > 0, "a served walk pops nodes");
+    pops
+}
+
+/// The sensor positions a walk asking whether `seat` sees `point` reads: each
+/// position up to and including the first sensor of `seat`'s that sees it, or
+/// every position when none does. Counted from `World::sensor_at`'s own
+/// positions, not from the sim's walk.
+fn seen_rows(world: &World, seat: SeatId, point: [pharmakos_sim::math::fixed::Fx; 3]) -> u64 {
+    let total = world.beacons().seats().len()
+        + world.units().seats().len()
+        + world.structures().seats().len();
+    let mut at = 0_usize;
+    while let Some((sensor, next)) = world.sensor_at(at) {
+        at = next;
+        if sensor.seat == seat && sensor.sees(&pharmakos_sim::sight::RadiusOnly, point) {
+            return u64::try_from(at).expect("a count");
+        }
+    }
+    u64::try_from(total).expect("a count")
+}
+
+/// The rows one known-threat scan for `seat` reads, counted from the tables
+/// (`tests/targeting.rs` holds the same count beside its `safest` tests):
+/// every unit, structure and beacon row; the sensor walk each armed living
+/// enemy unit, finished structure and core asks; and every beacon row for
+/// each living enemy beacon (the search for its seat's core).
+fn threat_scan_rows(world: &World, seat: SeatId) -> u64 {
+    let rules = world.rules();
+    let enemy = |owner: u8| SeatId::new(owner).is_some() && owner != seat.raw();
+    let beacon_rows = u64::try_from(world.beacons().seats().len()).expect("a count");
+    let mut rows = u64::try_from(
+        world.units().seats().len()
+            + world.structures().seats().len()
+            + world.beacons().seats().len(),
+    )
+    .expect("a count");
+    let units = world.units();
+    for (((owner, kind), hp), at) in units
+        .seats()
+        .iter()
+        .zip(units.kinds())
+        .zip(units.hit_points())
+        .zip(units.positions())
+    {
+        let armed = UnitKind::from_id(*kind)
+            .and_then(|kind| rules.unit(kind).weapon)
+            .is_some();
+        if hp.is_alive() && enemy(*owner) && armed {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    let structures = world.structures();
+    for ((((owner, kind), hp), building), at) in structures
+        .seats()
+        .iter()
+        .zip(structures.kinds())
+        .zip(structures.hit_points())
+        .zip(structures.building())
+        .zip(structures.positions())
+    {
+        let armed = StructureKind::from_id(*kind)
+            .and_then(|kind| rules.structure(kind))
+            .and_then(|row| row.weapon)
+            .is_some();
+        if hp.is_alive() && !*building && enemy(*owner) && armed {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    let beacons = world.beacons();
+    for (((owner, hp), at), id) in beacons
+        .seats()
+        .iter()
+        .zip(beacons.hit_points())
+        .zip(beacons.positions())
+        .zip(beacons.ids())
+    {
+        if !hp.is_alive() || !enemy(*owner) {
+            continue;
+        }
+        rows += beacon_rows;
+        // A seat's core is its beacon of least id.
+        let core = beacons
+            .seats()
+            .iter()
+            .zip(beacons.ids())
+            .filter(|(seat, _)| *seat == owner)
+            .map(|(_, id)| *id)
+            .min();
+        if core == Some(*id) {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    rows
+}
+
+#[test]
+fn a_safest_seam_choice_counts_the_threats_it_scans() {
+    // `SAFEST` reads the seat's known threats before it ranks: a scan of
+    // every unit, structure and beacon row, with the sensor walk each armed
+    // enemy asks and the core search each enemy beacon asks, one unit a row
+    // read (lane `dunit` and its fix pass 1), beside the ranking's features
+    // and its walk's pops. Seat 1 has an outpost and a raider in sight of
+    // seat 0's core, on the side away from its starting seam, so the nearest
+    // seam is still the safest and the walk is the `NEAREST` choice's.
+    let mut fixture = world(&[180_000]);
+    let beacon = core(&fixture);
+    let core_row = fixture
+        .beacons()
+        .row_of_ordinal(SEAT, 0)
+        .expect("seat 0 has a core");
+    let [cx, cy] = pharmakos_sim::targeting::column_of(
+        fixture
+            .beacons()
+            .positions()
+            .get(core_row)
+            .copied()
+            .expect("the core's row"),
+    );
+    let one = SeatId::new(1);
+    let at = fixture.standing_point([cx + 12, cy + 8, 0]);
+    let outpost = fixture
+        .place_beacon_directly(one, at, MandateKind::Build, PRIORITY_NORMAL)
+        .expect("room for the enemy's beacon");
+    fixture
+        .field_unit(one, outpost, UnitKind::Raider, at)
+        .expect("room for the raider");
+    fixture.edit_mine_settings(
+        beacon,
+        MineEdit {
+            seam_choice: Some(SeamChoice::Safest),
+            ..MineEdit::default()
+        },
+    );
+    let features = u64::try_from(fixture.features().len()).expect("a few");
+    let pops = starting_walk_pops(&fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
+    assert!(runner.begin_push().unwrap());
+    play(&mut runner, 1);
+    let world = runner.world();
+    let scan = threat_scan_rows(world, SEAT);
+    let outer = u64::try_from(
+        world.units().seats().len()
+            + world.structures().seats().len()
+            + world.beacons().seats().len(),
+    )
+    .expect("a count");
+    assert!(
+        scan > outer,
+        "the scan asks sensor walks and core searches beside its own rows"
+    );
+    assert_eq!(
+        world.decision_work(0).expect("seat 0").expect("measured"),
+        features + pops + scan,
+        "a SAFEST choice ranks every feature, charges its walk's pops and the rows its threat scan reads"
     );
 }
 
@@ -608,7 +805,11 @@ fn a_spent_beacon_charges_no_ranking() {
     play(&mut runner, 5);
     assert_eq!(held(runner.world(), core), None, "the seam is spent");
     assert_eq!(
-        runner.world().decision_work(0).expect("seat 0").spent(),
+        runner
+            .world()
+            .decision_work(0)
+            .expect("seat 0")
+            .expect("measured"),
         0,
         "a choice with no candidate charges nothing"
     );

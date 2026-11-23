@@ -151,7 +151,7 @@ fn easy_prices_every_step_it_composes_as_the_verifier_does() {
         (0x0000_0000_ca5c_aded, 3),
         (20, 2),
     ] {
-        for seal in hosted_seals(seed, seats, 3, &rules) {
+        for seal in hosted_seals(seed, seats, 5, &rules) {
             steps.extend(route_steps(&seal));
         }
     }

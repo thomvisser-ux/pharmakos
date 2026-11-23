@@ -16,13 +16,15 @@ use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::json;
 
 use crate::editor::{
-    Check, Editor, ReadFailed, Route, Row, RuleEditRefusal, Selector, SizeMeter, Target, Unchecked,
-    rows_of,
+    Check, Editor, FieldAsk, ReadFailed, Route, Row, RuleEditRefusal, Selector, SizeMeter, Target,
+    Unchecked, rows_of,
 };
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
 use crate::rule_list::{ChipEditor, NameKind, RuleChip, RuleList};
-use crate::targeting::{AttackAim, AttackMark, Chip, ChipFeature, FeatureKind, FeatureName};
+use crate::targeting::{
+    AttackAim, AttackMark, BuildAnchor, BuildMark, Chip, ChipFeature, FeatureKind, FeatureName,
+};
 use crate::variant::{int_variant, text_or_empty};
 use crate::vocabulary::{BeaconDetail, Entry, ParameterShape, Setting, Vocabulary};
 use crate::wizard::{Instance, Wizard};
@@ -176,6 +178,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
         "accepted",
         submitted.is_some_and(|done| done.accepted).to_variant(),
     );
+    put("sealed_this_round", editor.sealed_this_round().to_variant());
     put("beacon_prose", editor.beacon_prose().to_variant());
     put("status_key", editor.status().key.to_variant());
     put("status_detail", editor.status().detail.to_variant());
@@ -202,10 +205,6 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("chips", chips_array(editor.chips()).to_variant());
     put("chips_current", editor.chips_current().to_variant());
     put(
-        "attack_targets",
-        attack_array(editor.attack_targets()).to_variant(),
-    );
-    put(
         "this_round",
         text_or_empty(editor.this_round()).to_variant(),
     );
@@ -230,26 +229,48 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("seal", editor.seal_line().name().to_variant());
     put("filed", editor.filed().to_variant());
     put("file", text_or_empty(editor.file()).to_variant());
+    put("last_file", text_or_empty(editor.last_file()).to_variant());
     put("dormant", dormant_dictionary(editor).to_variant());
     put_rule_list(&mut state, editor);
+    put_marks(&mut state, editor);
     state
 }
 
-/// The E0601 checkbox as the panel draws it: `shown`, `checked` and `enabled`.
+/// The map's marks: `attack_targets` ([`attack_array`]) and `build_targets` ([`build_array`]).
+fn put_marks(state: &mut VarDictionary, editor: &Editor) {
+    state.set(
+        &"attack_targets".to_variant(),
+        &attack_array(editor.attack_targets()).to_variant(),
+    );
+    state.set(
+        &"build_targets".to_variant(),
+        &build_array(editor.build_targets()).to_variant(),
+    );
+}
+
+/// The E0601 checkbox as the panel draws it: `shown`, `checked`, `enabled` (only the door
+/// disables it) and `refused` (why the last click was not taken, by name; "" for none).
 fn dormant_dictionary(editor: &Editor) -> VarDictionary {
     let dormant = editor.dormant();
     let mut option = VarDictionary::new();
     option.set(&"shown".to_variant(), &dormant.shown.to_variant());
     option.set(&"checked".to_variant(), &dormant.checked.to_variant());
     option.set(&"enabled".to_variant(), &dormant.enabled.to_variant());
+    // Why the last click was refused, by name ("" for none), drawn beside the box.
+    let refused = match dormant.refused {
+        Some(refusal) => refusal.name(),
+        None => "",
+    };
+    option.set(&"refused".to_variant(), &refused.to_variant());
     option
 }
 
 /// The rule list's keys of the editor's state (S3's `ed3b`): `rule_list`
 /// ([`rule_list_dictionary`]), `rules_editable`, `rules_blocked` (why it takes no edit, by name; "" when it takes one), `rules_rendering` (the rendering id an editor names back; -1 before one), `picking` (the chip a pick is on for, -1 for
 /// none), `conflicts` (each `{earlier, later, sentence}`, rule indices) and `rule_refusal`
-/// (empty, or `{rule, detail}`: the gateway's refusal of the last rule-list edit and the rule
-/// it is shown on, -1 for none).
+/// (empty, or `{rule, key, detail}`: the refusal of the last rule-list edit, the gateway's or
+/// this client's, the string table's key for its words, and the rule it is shown on, -1 for
+/// none) and `field` (what became of the last value a value field sent).
 fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
     let mut put = |key: &str, value: Variant| state.set(&key.to_variant(), &value);
     put(
@@ -305,9 +326,22 @@ fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
     if let Some(refused) = editor.rule_refusal() {
         let rule = editor.rule_list().rule_holding(&refused.pointer);
         refusal.set(&"rule".to_variant(), &index_or_none(rule));
+        refusal.set(&"key".to_variant(), &refused.key.to_variant());
         refusal.set(&"detail".to_variant(), &refused.detail.to_variant());
     }
     put("rule_refusal", refusal.to_variant());
+    // What became of the last value a value field sent, for its popup: `state` (`nothing`,
+    // `waiting`, `refused`, `landed`), and for a refusal its words' `key` and `detail`.
+    let mut field = VarDictionary::new();
+    let ask = editor.field_ask();
+    field.set(&"state".to_variant(), &ask.name().to_variant());
+    let (key, detail) = match ask {
+        FieldAsk::Refused { key, detail } => (key.as_str(), detail.as_str()),
+        FieldAsk::Nothing | FieldAsk::Waiting | FieldAsk::Landed => ("", ""),
+    };
+    field.set(&"key".to_variant(), &key.to_variant());
+    field.set(&"detail".to_variant(), &detail.to_variant());
+    put("field", field.to_variant());
 }
 
 /// The rule list as a dictionary (S3's `ed3b`): `lines`, one per line of the prose, each
@@ -668,6 +702,44 @@ fn attack_dictionary(mark: &AttackMark) -> VarDictionary {
         }
         AttackAim::Beacon(id) => out.set(&"id".to_variant(), &id.to_variant()),
         AttackAim::Selector | AttackAim::EnemyCommander | AttackAim::Unknown => {}
+    }
+    out
+}
+
+/// The Build targets as an array, in the file's order: each `pointer`, `step` (from 1; 0 outside
+/// the route), `blueprint` as written, `anchor` (`voxel`, `on`, `unknown`) with `at` (a
+/// `Vector3i`, sim axes) for a voxel or `feature` (its name) for `on`, and `has_box`, with
+/// `box_min` and `box_max` (`Vector3i`s) for a wall's box as written.
+fn build_array(marks: &[BuildMark]) -> VarArray {
+    let mut out = VarArray::new();
+    for mark in marks {
+        let mut one = VarDictionary::new();
+        one.set(&"pointer".to_variant(), &mark.pointer.to_variant());
+        one.set(&"step".to_variant(), &step_count(mark.step));
+        one.set(&"blueprint".to_variant(), &mark.blueprint.to_variant());
+        one.set(&"anchor".to_variant(), &mark.anchor.name().to_variant());
+        match &mark.anchor {
+            BuildAnchor::Voxel([x, y, z]) => {
+                one.set(&"at".to_variant(), &Vector3i::new(*x, *y, *z).to_variant());
+            }
+            BuildAnchor::On(id) => one.set(&"feature".to_variant(), &id.to_variant()),
+            BuildAnchor::Unknown => {}
+        }
+        one.set(
+            &"has_box".to_variant(),
+            &mark.wall_box.is_some().to_variant(),
+        );
+        if let Some([[a, b, c], [d, e, f]]) = mark.wall_box {
+            one.set(
+                &"box_min".to_variant(),
+                &Vector3i::new(a, b, c).to_variant(),
+            );
+            one.set(
+                &"box_max".to_variant(),
+                &Vector3i::new(d, e, f).to_variant(),
+            );
+        }
+        out.push(&one.to_variant());
     }
     out
 }

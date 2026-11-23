@@ -44,6 +44,7 @@
 //! | the verifies | 1 `verify_plan`, then [`EASY_REPAIRS`] repairs of one `patch_plan` and one `verify_plan` each |
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
+//! | the last seal ([`LAST_SEAL_CALLS`]) | one `get_draft` of the seat's last seal when the last Push's feed counts a failed step of its own, and one `save_draft` keeping this round's own seal; a built-in seat's only |
 //!
 //! The Resonance Spire costs no call: the licence is the briefing's, the
 //! core's radius `list_beacons`', and a Spire going up the view's, all fixed
@@ -62,10 +63,11 @@ use crate::candidates::{self, Candidate};
 use crate::compose::{self, Composed};
 use crate::playbook::{self, Declared};
 use crate::safe::{self, SafePlan};
-use crate::situation::{Kind, Situation};
+use crate::situation::{Kind, Situation, Steps};
 use crate::tuning::{RulesError, Tuning};
 use crate::wire::{
-    Call, Misread, Refused, Wire, array_of, bool_of, compact, object, string, text_of,
+    Call, Misread, Refused, Wire, array_of, bool_of, compact, int_of, malformed, object, string,
+    text_of,
 };
 
 // ---------------------------------------------------------------------------
@@ -327,6 +329,19 @@ pub const SAFE_CALLS: u32 = SAFE_ESTIMATES + 1 + 1;
 /// The commit: two submits at most, and `set_ready`.
 pub const COMMIT_CALLS: u32 = 2 + 1;
 
+/// The last seal: one `get_draft` and one `save_draft` (fix pass 3, item 6).
+/// A built-in seat keeps its own seal as its own draft, under
+/// [`LAST_SEAL_DRAFT_ID`], so the next Lull can say which of its steps the
+/// feed's failed-step lines name -- the feed numbers a step and does not say
+/// what it was. State kept through the gateway, the seat's own and nobody
+/// else's (a draft never leaves the gateway for another seat); the notebook
+/// is never touched. The advisor neither reads nor writes drafts.
+pub const LAST_SEAL_CALLS: u32 = 2;
+
+/// The draft id a built-in seat keeps its last own seal under: one draft,
+/// saved over every round.
+pub const LAST_SEAL_DRAFT_ID: &str = "easy-last-seal";
+
 /// The most calls a built-in seat's round makes, derived term by term (see
 /// the module docs).
 pub const EASY_CALL_BUDGET: u32 = FIXED_READS
@@ -339,7 +354,8 @@ pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + COMPOSE_CALLS
     + VERIFY_CALLS
     + SAFE_CALLS
-    + COMMIT_CALLS;
+    + COMMIT_CALLS
+    + LAST_SEAL_CALLS;
 
 /// The most calls an advisor's round makes.
 pub const EASY_ADVISOR_CALL_BUDGET: u32 = FIXED_READS
@@ -389,6 +405,14 @@ pub struct Played {
     /// `NOT_FOUND` (which is its answer that nothing answers a waypoint): the
     /// goal it weighed was dropped, and here is why.
     pub estimates_refused: Vec<Refused>,
+    /// How many of the candidates it weighed the round's budget would have
+    /// funded on their own (fix pass 3, item 1): a round that sealed its safe
+    /// playbook with this above zero had a goal it should have composed.
+    pub fundable: usize,
+    /// Every refusal of keeping the seal as the seat's own draft, or of
+    /// reading last round's back, other than `NOT_FOUND` for a draft not
+    /// saved yet (fix pass 3, item 6).
+    pub drafts_refused: Vec<Refused>,
 }
 
 /// One suggested value for one declared template parameter.
@@ -504,8 +528,10 @@ impl Easy {
             why: String::new(),
             refused: None,
             estimates_refused: Vec::new(),
+            fundable: 0,
+            drafts_refused: Vec::new(),
         };
-        match Situation::read(&mut wire, seat) {
+        match Situation::read(&mut wire, seat, Steps::Read) {
             Ok(situation) => {
                 round.round = situation.round;
                 self.plan(&mut wire, &situation, &mut round);
@@ -530,9 +556,18 @@ impl Easy {
         // Declared before the estimates, since every candidate is priced from
         // the step it is composed as ([`crate::price`]).
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
-        let weighed = candidates::evaluate(wire, situation, &self.tuning, &declared, goals, true);
+        let failed = failed_stones(wire, situation, &mut round.drafts_refused);
+        let weighed = candidates::evaluate(
+            wire,
+            situation,
+            &self.tuning,
+            &declared,
+            goals,
+            Some(&failed),
+        );
         round.estimates_refused.clone_from(&weighed.refused);
         let evaluated = weighed.candidates;
+        round.fundable = compose::fundable(situation, &self.tuning, &evaluated, &declared);
         // No share to fill (a segment length past the arithmetic) is no goal:
         // the composition then fails and the safe playbook is submitted.
         let spire = compose::spire(situation, &self.tuning);
@@ -548,6 +583,7 @@ impl Easy {
         {
             round.submitted = Submitted::Own;
             round.why = compose::with_seed(situation, &composed.why);
+            keep_seal(wire, &text, &mut round.drafts_refused);
             round.playbook_jsonc = Some(text);
             return;
         }
@@ -566,7 +602,7 @@ impl Easy {
     pub fn advise(&mut self, seat: u8, call: &mut Call<'_>) -> Advice {
         let mut wire = Wire::new(call);
         let mut advice = Advice::default();
-        let read = Situation::read(&mut wire, seat);
+        let read = Situation::read(&mut wire, seat, Steps::Unread);
         if let Err(refused) = &read {
             advice.refused = Some(refused.clone());
         }
@@ -578,7 +614,7 @@ impl Easy {
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
             let weighed =
-                candidates::evaluate(&mut wire, &situation, &self.tuning, &declared, goals, false);
+                candidates::evaluate(&mut wire, &situation, &self.tuning, &declared, goals, None);
             advice.estimates_refused = weighed.refused;
             let evaluated = weighed.candidates;
             let safe = safe::safe_playbook(&mut wire, &situation, &declared);
@@ -706,6 +742,93 @@ fn patched_text(wire: &mut Wire<'_, '_>, text: &str, json_patch: &str) -> Option
 
 /// Submit, and say whether it was accepted: a refusal, and an answer that
 /// does not read, are not an acceptance.
+/// Keep this round's own seal as the seat's own draft ([`LAST_SEAL_CALLS`]),
+/// saved over last round's; a refusal is kept with the round's.
+fn keep_seal(wire: &mut Wire<'_, '_>, text: &str, refused: &mut Vec<Refused>) {
+    let params = object(vec![
+        ("draft_id", string(LAST_SEAL_DRAFT_ID)),
+        ("label", string("Easy's last seal")),
+        ("playbook_jsonc", string(text)),
+    ]);
+    if let Err(refusal) = wire.call("save_draft", params) {
+        refused.push(refusal);
+    }
+}
+
+/// The far features of last round's stones that failed (fix pass 3, item 6):
+/// the seat's own route steps the last Push's feed says failed
+/// ([`Situation::failed_steps`]), read against last round's seal as the seat
+/// kept it ([`keep_seal`]), each one a `toward` placement naming its feature.
+/// No call when no step failed; a draft not saved yet (`NOT_FOUND`) or one
+/// from another round says nothing, and any other refusal, or a draft that
+/// does not read, is kept with the round's.
+fn failed_stones(
+    wire: &mut Wire<'_, '_>,
+    situation: &Situation,
+    refused: &mut Vec<Refused>,
+) -> Vec<String> {
+    if situation.failed_steps.is_empty() {
+        return Vec::new();
+    }
+    let answer = match wire.call(
+        "get_draft",
+        object(vec![("draft_id", string(LAST_SEAL_DRAFT_ID))]),
+    ) {
+        Ok(answer) => answer,
+        Err(refusal) if refusal.code == "NOT_FOUND" => return Vec::new(),
+        Err(refusal) => {
+            refused.push(refusal);
+            return Vec::new();
+        }
+    };
+    // A draft of another round's seal says nothing of last round's steps.
+    let last_round = situation.round.checked_sub(1).map(i64::from);
+    match int_of(&answer, "round") {
+        Ok(round) if Some(round) == last_round => {}
+        Ok(_) => return Vec::new(),
+        Err(misread) => {
+            refused.push(misread.refused("get_draft"));
+            return Vec::new();
+        }
+    }
+    let read = text_of(&answer, "playbook_jsonc")
+        .map_err(|misread| misread.refused("get_draft"))
+        .and_then(|jsonc| {
+            pharmakos_proto::json::read(&crate::wire::strip_comments(jsonc))
+                .map_err(|_| malformed("get_draft", "the kept seal does not read"))
+        });
+    let body = match read {
+        Ok(body) => body,
+        Err(refusal) => {
+            refused.push(refusal);
+            return Vec::new();
+        }
+    };
+    let Some(Json::Array(route)) = body
+        .get("declarative")
+        .and_then(|declarative| declarative.get("route"))
+    else {
+        return Vec::new();
+    };
+    situation
+        .failed_steps
+        .iter()
+        .filter_map(|index| route.get(*index))
+        .filter_map(|step| {
+            match step
+                .get("place_beacon")?
+                .get("at")?
+                .get("toward")?
+                .get("feature")?
+                .get("feature_id")?
+            {
+                Json::String(feature) => Some(feature.clone()),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 fn submit(wire: &mut Wire<'_, '_>, text: &str) -> bool {
     wire.call(
         "submit_plan",
