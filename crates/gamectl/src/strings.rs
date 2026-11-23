@@ -181,12 +181,26 @@ pub fn operator_read_refused(method: &str, code: &str, message: &str) -> String 
 /// The tail of a built-in seat's line that follows lines standard error did
 /// not take: how many, by reason.
 #[must_use]
-pub fn operator_unsaid(earlier: &[(&str, u64)]) -> String {
+pub fn operator_unsaid(earlier: &[(&str, String)]) -> String {
     let each: Vec<String> = earlier
         .iter()
         .map(|(reason, count)| format!("{reason} {count}"))
         .collect();
     format!("(Earlier lines not written: {}.)", each.join(", "))
+}
+
+/// `gamectl host`'s last line, for the built-in seats' lines standard error
+/// did not take and no later line said: how many, by reason.
+#[must_use]
+pub fn operator_unsaid_at_close(earlier: &[(&str, String)]) -> String {
+    let each: Vec<String> = earlier
+        .iter()
+        .map(|(reason, count)| format!("{reason} {count}"))
+        .collect();
+    format!(
+        "The match host ended with built-in seats' lines not written: {}.",
+        each.join(", ")
+    )
 }
 
 /// A built-in seat's Lull shows no Push in its feed (one resumed from a save),
