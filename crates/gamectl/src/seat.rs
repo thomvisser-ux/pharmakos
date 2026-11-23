@@ -43,15 +43,20 @@
 //! file — which is the skeleton plan's T15 acceptance line, and is why it is
 //! written that way rather than against a hash literal.
 //!
-//! PLACEHOLDER: verifying against a real match's frozen snapshot rather than the reference view — owner, at S3 (Save/Load).
-//! Verifying against a **real** match's frozen snapshot — the one
-//! the gateway hands the editor. The owner answered on 2026-09-27
-//! (decisions-log item 117 (1)): a shipped `gamectl verify` **keeps this
-//! reference view**. The live check at `submit_plan` is the authority, so a
-//! file placing a beacon outside the reference view's spheres gets E0403 from
-//! the command line although the game accepts it; [`crate::strings::verify_footer`]
-//! says the view is the reference one, and the zip's note says the rest. The
-//! question is revisited at S3 (Save/Load), OWNER.
+//! # The reference view stays, and every report says so
+//!
+//! The owner answered on 2026-09-27 (decisions-log item 117 (1)) that a
+//! shipped `gamectl verify` **keeps this reference view**, and S3 closed the
+//! question it left open (the register's S3-03, by S3's `nite3`, E19): the
+//! live check at `submit_plan` is the authority, so a file placing a beacon
+//! outside the reference view's spheres gets E0403 from the command line
+//! although the game may accept it. Every report therefore names its view at
+//! its head ([`crate::strings::verify_view_reference`]), a report carrying
+//! E0403 says that a match may accept the beacon
+//! ([`crate::strings::verify_e0403_note`]), the footer describes the view
+//! ([`crate::strings::verify_footer`]), and the zip's note says the rest. A
+//! file written for a live seat can instead be verified against the match the
+//! lobby opens, by the gateway, with `--preset probation` ([`crate::lobby`]).
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;

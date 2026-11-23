@@ -11,6 +11,11 @@
 //! * every arm's playbook **qualifies**, and each arm plays **one round on its
 //!   own seed** through `submit_plan`, with no refusal and its event
 //!   assertions held, from each of the two seats the nightly puts it on;
+//! * the Rusher plays **two rounds** on its own seed from each seat and
+//!   launches its raid in round 2 (S3's `nite3`; decisions-log item 151 (4)),
+//!   so its band cannot turn into a floor between two nights without a red
+//!   pull request, and each night's result counts every seat's launches per
+//!   round and the hunts that never launched (E14);
 //! * the result's shape is pinned by a golden, a two-seed run of the result
 //!   fixture (`tests/golden/scenarios/nightly-result/expected.result.json`),
 //!   which this file produces for the `golden` step;
@@ -118,8 +123,8 @@ fn the_arms_are_the_whole_set() {
 }
 
 /// The arm's own scenario with the arm on `arm_seat` and Easy on the other,
-/// cut to its first round, as the nightly would seat it.
-fn one_round(arm: &str, arm_seat: u8) -> scenario::Scenario {
+/// cut to its first `count` rounds, as the nightly would seat it.
+fn rounds(arm: &str, arm_seat: u8, count: usize) -> scenario::Scenario {
     let loaded = scenario::load(&root(), Path::new(arm)).expect("a valid arm");
     let playbook = loaded
         .seats
@@ -141,7 +146,12 @@ fn one_round(arm: &str, arm_seat: u8) -> scenario::Scenario {
         })
         .collect();
     let mut cut = scenario::Scenario { seats, ..loaded };
-    cut.segments.truncate(1);
+    assert!(
+        cut.segments.len() >= count,
+        "{arm} lists {} segments, fewer than the {count} rounds asked for",
+        cut.segments.len()
+    );
+    cut.segments.truncate(count);
     cut
 }
 
@@ -172,7 +182,7 @@ fn qualifies_and_plays_a_round_through_the_door(arm: &str) {
         .map(|seat| seat.seat)
         .expect("an arm seats a playbook");
     for arm_seat in [0_u8, 1] {
-        let cut = one_round(arm, arm_seat);
+        let cut = rounds(arm, arm_seat, 1);
         let played = run::play(&root(), &cut)
             .unwrap_or_else(|failure| panic!("{arm} on seat {arm_seat}: {}", failure.message));
         if arm_seat == own_seat {
@@ -199,6 +209,69 @@ fn qualifies_and_plays_a_round_through_the_door(arm: &str) {
                 "{arm} with the arm on seat {arm_seat}: seat {seat} sealed nothing"
             );
         }
+        // Every event carries the round it was read in, and one round was
+        // played.
+        assert!(
+            played.events.iter().all(|fired| fired.round == 1),
+            "{arm} on seat {arm_seat}: an event outside round 1"
+        );
+        // The hunts' count reads the Attack table: the Hunter's Attack beacon
+        // aims at the enemy commander, the other arms' at none.
+        assert_eq!(
+            played.hunts.filed.is_empty(),
+            arm != HUNTER,
+            "{arm} on seat {arm_seat}: hunts filed {:?}",
+            played.hunts
+        );
+    }
+}
+
+/// The Rusher's guard (S3's plan, task `nite3`; decisions-log item 151 (4)):
+/// the arm launches its raid in round 2 on its own seed, from each of the two
+/// seats the nightly puts it on. Its band reads "an early raid on the nearest
+/// known enemy beacon, launched in round 2" only while that holds
+/// (`scenarios/nightly/README.md`), so a change to the scouts' vision, the
+/// spawn layout, Survey or the Attack mandate that stops the launch is red
+/// here, on the pull request, rather than a floor a night later. It asserts
+/// the launch, not its absence from round 1.
+#[test]
+fn rusher_launches_in_round_two_on_its_own_seed() {
+    for arm_seat in [0_u8, 1] {
+        let cut = rounds(RUSHER, arm_seat, 2);
+        let played = run::play(&root(), &cut)
+            .unwrap_or_else(|failure| panic!("rusher on seat {arm_seat}: {}", failure.message));
+        assert_eq!(played.segments.len(), 2, "two rounds played");
+        // Each event's round is the segment it was read in: round 1 is ticks
+        // 1 to 3 600, round 2 the 6 000 after it, and the Lull between them
+        // stands on tick 3 600.
+        let first = played.segments.first().copied().expect("round 1");
+        for fired in &played.events {
+            let inside = match fired.round {
+                1 => fired.tick <= first,
+                2 => fired.tick >= first,
+                _ => false,
+            };
+            assert!(
+                inside,
+                "rusher on seat {arm_seat}: {fired:?} is not in its round"
+            );
+        }
+        let launches: Vec<(u32, u32)> = played
+            .events
+            .iter()
+            .filter(|fired| fired.kind == "attack_launched" && fired.seat == Some(arm_seat))
+            .map(|fired| (fired.round, fired.tick))
+            .collect();
+        assert!(
+            launches.iter().any(|(round, _)| *round == 2),
+            "the Rusher on seat {arm_seat} did not launch in round 2 of its own seed {}: {}",
+            cut.source,
+            match launches.first() {
+                Some((round, tick)) =>
+                    format!("its first launch was in round {round}, tick {tick}"),
+                None => String::from("it launched in neither round"),
+            }
+        );
     }
 }
 
@@ -242,7 +315,10 @@ fn a_two_seed_run_writes_the_committed_result() {
     let actual = pharmakos_gamectl::actual_for(RESULT_GOLDEN).expect("a target directory");
     std::fs::create_dir_all(actual.parent().expect("a parent")).expect("the golden's directory");
     std::fs::write(&actual, outcome.out.as_bytes()).expect("the fresh result");
-    let committed = std::fs::read_to_string(root().join(RESULT_GOLDEN)).unwrap_or_default();
+    // A golden that is not there is a red test naming it, never an empty
+    // text compared with the fresh one (E22).
+    let committed = std::fs::read_to_string(root().join(RESULT_GOLDEN))
+        .unwrap_or_else(|error| panic!("reading {RESULT_GOLDEN}: {error}"));
     assert_eq!(
         committed.replace("\r\n", "\n"),
         outcome.out,
@@ -392,5 +468,50 @@ fn the_reader_holds_an_arm_to_an_arms_rules() {
         refused.message.contains("AND on the hash chain"),
         "{}",
         refused.message
+    );
+}
+
+/// E14's hunt count sees a hunt launch: `scenarios/s2/hunt-the-commander`'s
+/// Attack beacon hunts seat 1's commander, launches by tick 6 300 and ends
+/// the attack when the commander dies, which resets the row's launch stamp
+/// (`attack.rs`' `end`). The hunt is filed and counted launched, so none is
+/// left unlaunched; the Hunter's one round, above, files one that never
+/// launches.
+#[test]
+fn a_hunt_that_launches_is_not_counted_unlaunched() {
+    let loaded = scenario::load(
+        &root(),
+        Path::new("scenarios/s2/hunt-the-commander.scenario.jsonc"),
+    )
+    .expect("a committed scenario");
+    let played =
+        run::play(&root(), &loaded).unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(
+        played
+            .events
+            .iter()
+            .any(|fired| fired.kind == "attack_launched" && fired.seat == Some(0)),
+        "the hunt launched"
+    );
+    assert_eq!(played.hunts.filed.len(), 1, "{:?}", played.hunts);
+    assert_eq!(
+        played
+            .hunts
+            .filed
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<u32>>(),
+        played.hunts.launched,
+        "{:?}",
+        played.hunts
+    );
+    assert_eq!(
+        played.hunts.filed.values().copied().collect::<Vec<u8>>(),
+        vec![0],
+        "the hunt is seat 0's"
+    );
+    assert_eq!(
+        (played.hunts.unlaunched_of(0), played.hunts.unlaunched_of(1)),
+        (0, 0)
     );
 }

@@ -101,6 +101,12 @@ pub struct Failure {
     pub code: Exit,
     /// The sentence printed on standard error, from [`crate::strings`].
     pub message: String,
+    /// What goes to standard output beside it: empty, except where the
+    /// answer is no and the caller asked for it in a form a program reads
+    /// (`verify --format json` on a playbook that does not qualify), where it
+    /// is the whole answer and [`Failure::message`] is empty
+    /// ([`Failure::answered`]).
+    pub output: String,
 }
 
 impl Failure {
@@ -110,6 +116,18 @@ impl Failure {
         Failure {
             code,
             message: message.into(),
+            output: String::new(),
+        }
+    }
+
+    /// A failure whose answer is printed on standard output, with nothing on
+    /// standard error: the answer is no, and the caller reads it as data.
+    #[must_use]
+    pub fn answered(code: Exit, output: impl Into<String>) -> Failure {
+        Failure {
+            code,
+            message: String::new(),
+            output: output.into(),
         }
     }
 

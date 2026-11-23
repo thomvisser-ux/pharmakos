@@ -50,6 +50,11 @@ pub struct TemplateRow {
     pub title: String,
     /// Its one-sentence summary, from the file.
     pub summary: String,
+    /// The guided first pick's mark, as sent (S3's plan, decision 5 and E25): the gateway's
+    /// sentence saying why to start here, present exactly when the gateway marked this
+    /// template (`guided_pick`). The gateway marks one template, for a Probation match's
+    /// human seat in its first Lull, and none anywhere else; the client names none.
+    pub guided: Option<String>,
 }
 
 /// One wizard page: one declared parameter, as the gateway filled it.
@@ -216,15 +221,80 @@ pub fn instance_of_text(text: &str) -> Result<Instance, BridgeError> {
 pub fn templates_of(result: &Json) -> Result<Vec<TemplateRow>, BridgeError> {
     let response: ListTemplatesResponse =
         json::decode_json(&body(result, "gp.api.v1.ListTemplatesResponse"))?;
-    Ok(response
-        .templates
-        .into_iter()
-        .map(|template| TemplateRow {
+    // The list is one page: the gateway lists the whole library on it. A cursor would mean
+    // templates this client was not shown, so the list is refused rather than drawn short.
+    if !response.next_cursor.is_empty() {
+        return Err(unreadable_list(
+            "/next_cursor",
+            "the template list says more templates follow, and it is read as one page",
+        ));
+    }
+    let mut rows = Vec::with_capacity(response.templates.len());
+    let mut marked = 0_usize;
+    for (index, template) in response.templates.into_iter().enumerate() {
+        let at = |field: &str| format!("/templates/{index}/{field}");
+        // The reason is set exactly when the mark is (the schema's comment): a mark with no
+        // sentence, or a sentence with no mark, is a list this client cannot draw as sent.
+        let guided = match (template.guided_pick, template.guided_pick_reason.is_empty()) {
+            (true, false) => Some(template.guided_pick_reason),
+            (false, true) => None,
+            (true, true) => {
+                return Err(unreadable_list(
+                    &at("guided_pick_reason"),
+                    "a template is marked as the first pick with no sentence saying why",
+                ));
+            }
+            (false, false) => {
+                return Err(unreadable_list(
+                    &at("guided_pick"),
+                    "a template carries the first pick's sentence and no mark",
+                ));
+            }
+        };
+        if guided.is_some() {
+            marked = marked.saturating_add(1);
+            if marked > 1 {
+                return Err(unreadable_list(
+                    &at("guided_pick"),
+                    "a second template is marked as the first pick, and the gateway marks one",
+                ));
+            }
+        }
+        rows.push(TemplateRow {
             id: template.template_id,
             title: template.title,
             summary: template.summary,
-        })
-        .collect())
+            guided,
+        });
+    }
+    Ok(rows)
+}
+
+/// A template list this client cannot draw as sent: a schema refusal at `pointer`.
+fn unreadable_list(pointer: &str, message: &str) -> BridgeError {
+    BridgeError::Schema {
+        pointer: pointer.to_owned(),
+        message: message.to_owned(),
+    }
+}
+
+/// A `list_templates` answer's text (a whole JSON-RPC answer, or its result) read with no
+/// gateway behind it, as [`templates_of`] reads one: what the hostless template-list shot draws.
+///
+/// # Errors
+///
+/// As [`templates_of`], and [`BridgeError::Rpc`] for a refusal in place of an answer.
+pub fn templates_of_text(text: &str) -> Result<Vec<TemplateRow>, BridgeError> {
+    let frame = json::read(text)?;
+    if frame.get("error").is_some() {
+        return Err(BridgeError::Rpc(
+            "the answer is a refusal, not a template list".to_owned(),
+        ));
+    }
+    match frame.get("result") {
+        Some(result) => templates_of(result),
+        None => templates_of(&frame),
+    }
 }
 
 /// A `render_plan` result's prose, one row per line, each line exactly as it came.
@@ -281,5 +351,81 @@ mod tests {
             prose_rows("Title\n\nRoute\n  1. go\n    guard\n"),
             vec!["Title", "", "Route", "  1. go", "    guard"]
         );
+    }
+
+    /// The gateway's `list_templates_guided` golden, read where it is committed: a Probation
+    /// match's first Lull, one template marked with the gateway's sentence.
+    const GUIDED: &str =
+        include_str!("../../../tests/golden/gateway/list_templates_guided/expected.response.json");
+
+    fn result_of(text: &str) -> Json {
+        json::read(text)
+            .expect("json")
+            .get("result")
+            .expect("a result")
+            .clone()
+    }
+
+    #[test]
+    fn the_guided_pick_is_the_one_template_the_gateway_marked_with_its_sentence() {
+        let rows = templates_of(&result_of(GUIDED)).expect("the golden reads");
+        let marked: Vec<(&str, &str)> = rows
+            .iter()
+            .filter_map(|row| row.guided.as_deref().map(|why| (row.id.as_str(), why)))
+            .collect();
+        assert_eq!(marked.len(), 1, "{rows:?}");
+        let golden = json::read(GUIDED).expect("json");
+        let Some(Json::Array(templates)) = golden.get("result").and_then(|r| r.get("templates"))
+        else {
+            panic!("the golden lists templates");
+        };
+        let sent = templates
+            .iter()
+            .find(|template| matches!(template.get("guided_pick"), Some(Json::Bool(true))))
+            .expect("the golden marks one");
+        let Some(Json::String(id)) = sent.get("template_id") else {
+            panic!("an id");
+        };
+        let Some(Json::String(why)) = sent.get("guided_pick_reason") else {
+            panic!("a reason");
+        };
+        assert_eq!(marked, [(id.as_str(), why.as_str())], "drawn as sent");
+        assert_eq!(
+            rows.len(),
+            templates.len(),
+            "every other template stays offered"
+        );
+    }
+
+    #[test]
+    fn a_list_marked_twice_or_marked_without_a_reason_is_unreadable() {
+        let refused = [
+            (
+                r#"{"templates":[{"template_id":"a","guided_pick":true}]}"#,
+                "/templates/0/guided_pick_reason",
+            ),
+            (
+                r#"{"templates":[{"template_id":"a","guided_pick_reason":"why"}]}"#,
+                "/templates/0/guided_pick",
+            ),
+            (
+                r#"{"templates":[{"template_id":"a","guided_pick":true,"guided_pick_reason":"x"},{"template_id":"b","guided_pick":true,"guided_pick_reason":"y"}]}"#,
+                "/templates/1/guided_pick",
+            ),
+            (
+                r#"{"templates":[{"template_id":"a"}],"next_cursor":"more"}"#,
+                "/next_cursor",
+            ),
+        ];
+        for (text, at) in refused {
+            match templates_of(&json::read(text).expect("json")) {
+                Err(BridgeError::Schema { pointer, .. }) => assert_eq!(pointer, at, "{text}"),
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+        let none =
+            templates_of(&json::read(r#"{"templates":[{"template_id":"a"}]}"#).expect("json"))
+                .expect("an unmarked list reads");
+        assert_eq!(none.first().and_then(|row| row.guided.clone()), None);
     }
 }

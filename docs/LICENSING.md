@@ -116,6 +116,12 @@ removed, so a re-wrapped comment, an escaped quote or an escaped newline inside 
 A byte copy under `godot/fixtures/` of a file under `tests/golden/` or `scenarios/` must carry
 exactly the same expressions as its source.
 
+*Library text embedded in the GPL binaries.* The game's binaries embed library text at compile
+time (the gateway's safe playbook, which `gamectl` carries). A `GPL-3.0-or-later` binary may embed
+text under `MIT OR Apache-2.0`, which those licences permit, and the zips ship both licence texts
+(see "What a zip carries"). This holds whether the text is a hand-kept copy in the source or
+`library/safe_playbook.jsonc` embedded by `include_str!` (decisions log §2.7 item 177 (9)).
+
 *Which mechanism.* The file's own SPDX header where the file can carry one; a `.license`
 sidecar or a `REUSE.toml` block where it cannot (JSON, a byte copy, a hash chain); an
 `override` entry only where the file embeds another file's SPDX header, as the gateway's

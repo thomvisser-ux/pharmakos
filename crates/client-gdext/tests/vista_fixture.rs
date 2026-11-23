@@ -119,8 +119,14 @@ fn index_digest(buffers: &MeshBuffers) -> u64 {
     xxh3_64(&bytes)
 }
 
+/// The cargo target directory: the parent of `CARGO_TARGET_TMPDIR`, which cargo sets
+/// absolute, so a relative `CARGO_TARGET_DIR` or a user-level `build.target-dir` cannot
+/// mislead it (decisions-log items 165 (13) and 172 (8) (b)).
 fn target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), PathBuf::from)
+    Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .parent()
+        .expect("CARGO_TARGET_TMPDIR always has a parent")
+        .to_path_buf()
 }
 
 #[test]

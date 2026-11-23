@@ -39,6 +39,7 @@ extends Node
 
 const Strings := preload("res://scripts/strings.gd")
 const LobbyScene := preload("res://scenes/lobby.tscn")
+const Lobby := preload("res://scripts/lobby.gd")
 const InstanceLog := preload("res://scripts/instance_log.gd")
 
 ## Frames the lobby runs idle before anything is pressed, and between the overlay's steps.
@@ -80,7 +81,8 @@ func _ready() -> void:
 		return
 
 	# 3. A New match, through the chooser's own button.
-	var start := _chooser_button(Strings.text("lobby_new_match"))
+	# The button names the preset New match writes (S3's `prob`): the lobby's own words.
+	var start := _chooser_button(Lobby.new_match_text())
 	if start == null:
 		_fail("the chooser has no New match button")
 		return

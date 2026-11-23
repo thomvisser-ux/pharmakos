@@ -36,6 +36,7 @@ use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 
 use crate::exit::Failure;
 use crate::strings;
+use crate::verify::{Preset, View};
 
 /// One row of the command table: what it is called, how it is spelled in the
 /// help, and the half-line under it.
@@ -146,6 +147,23 @@ pub const OPTIONS: &[OptionRow] = &[
         about: "how deep to run the pipeline (default: full, which is what submit_plan runs)",
     },
     OptionRow {
+        spelling: "    --preset <probation>",
+        flag: "--preset",
+        command: "verify",
+        about: "verify against seat 0's opening Lull snapshot in the match the lobby opens for \
+                this preset, through the gateway, instead of the reference view",
+    },
+    OptionRow {
+        spelling: "    --format <text|json>",
+        flag: "--format",
+        command: "verify",
+        about: "how verify answers: text for a person, or json, one JSON object on standard \
+                output, the verifier's own report or, where there is none, {\"refusal\": \
+                {\"code\": \"failed\" or \"internal\", \"message\"}}, the exit code \
+                unchanged; a usage error and an unreadable file stay on standard error \
+                (default: text)",
+    },
+    OptionRow {
         spelling: "    --operator <easy>",
         flag: "--operator",
         command: "scenario",
@@ -207,13 +225,17 @@ impl Operator {
     }
 }
 
-/// How a run over a seed file writes its result (`--format`).
+/// How a command writes its answer (`--format`): `verify`'s report, or the
+/// result of a run over a seed file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Format {
-    /// One line per seed and a summary, for a person.
+    /// For a person: `verify`'s report as lines, a run's result as a line
+    /// per seed and a summary.
     Text,
-    /// One JSON document, `pharmakos.nightly-result.v1`, for the nightly
-    /// workflow's alarm band and for diffing nights.
+    /// For a program: `verify`'s report as the verifier's own
+    /// `gp.api.v1.VerifyReport` JSON, or a run's result as one document,
+    /// `pharmakos.nightly-result.v1`, for the nightly workflow's alarm band
+    /// and for diffing nights.
     Json,
 }
 
@@ -259,6 +281,11 @@ pub enum Command {
         /// How deep to run the pipeline. FULL by default, which is what
         /// `submit_plan` always runs (spec §11).
         depth: Depth,
+        /// The seat view it is verified against: the reference view unless
+        /// `--preset` names the lobby's match.
+        view: View,
+        /// `--format`: text unless `json` is asked for.
+        format: Format,
     },
     /// Print the generated JSON Schema for one part of `gp.v1`.
     Schema {
@@ -322,6 +349,7 @@ where
     // refused.
     let mut depth: Option<Depth> = None;
     let mut options = RunOptions::default();
+    let mut preset: Option<Preset> = None;
     let mut operands: Vec<OsString> = Vec::new();
 
     loop {
@@ -343,31 +371,36 @@ where
                 });
             }
             Long("root") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
-                root = Some(PathBuf::from(value));
+                let value = flag_value(&mut parser)?;
+                once(&mut root, "--root", PathBuf::from(value))?;
             }
             Long("part") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
-                part = Some(value.to_string_lossy().into_owned());
+                let value = flag_value(&mut parser)?;
+                once(&mut part, "--part", value.to_string_lossy().into_owned())?;
             }
             Long("depth") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
-                depth = match value.to_string_lossy().as_ref() {
-                    "quick" => Some(Depth::Quick),
-                    "full" => Some(Depth::Full),
+                let value = flag_value(&mut parser)?;
+                let named = match value.to_string_lossy().as_ref() {
+                    "quick" => Depth::Quick,
+                    "full" => Depth::Full,
                     other => return Err(Failure::usage(strings::bad_depth(other))),
                 };
+                once(&mut depth, "--depth", named)?;
+            }
+            Long("preset") => {
+                let value = flag_value(&mut parser)?;
+                let name = value.to_string_lossy().into_owned();
+                let Some(named) = Preset::from_name(&name) else {
+                    return Err(Failure::usage(strings::bad_value(
+                        "--preset",
+                        &name,
+                        Preset::NAMES,
+                    )));
+                };
+                once(&mut preset, "--preset", named)?;
             }
             Long("operator") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 let name = value.to_string_lossy().into_owned();
                 let Some(operator) = Operator::from_name(&name) else {
                     let names: Vec<&str> = Operator::ALL.iter().map(|known| known.name()).collect();
@@ -377,18 +410,14 @@ where
                         &names,
                     )));
                 };
-                options.operator = Some(operator);
+                once(&mut options.operator, "--operator", operator)?;
             }
             Long("seeds") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
-                options.seeds = Some(PathBuf::from(value));
+                let value = flag_value(&mut parser)?;
+                once(&mut options.seeds, "--seeds", PathBuf::from(value))?;
             }
             Long("format") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let value = flag_value(&mut parser)?;
                 let name = value.to_string_lossy().into_owned();
                 let Some(format) = Format::from_name(&name) else {
                     return Err(Failure::usage(strings::bad_value(
@@ -397,13 +426,11 @@ where
                         Format::NAMES,
                     )));
                 };
-                options.format = Some(format);
+                once(&mut options.format, "--format", format)?;
             }
             Long("out") => {
-                let value = parser
-                    .value()
-                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
-                options.out = Some(PathBuf::from(value));
+                let value = flag_value(&mut parser)?;
+                once(&mut options.out, "--out", PathBuf::from(value))?;
             }
             Value(value) => operands.push(value),
             other => {
@@ -413,8 +440,26 @@ where
     }
 
     let root = root.unwrap_or_else(|| cwd.to_path_buf());
-    let command = command_of(&operands, part, depth, options)?;
+    let command = command_of(&operands, part, depth, preset, options)?;
     Ok(Invocation { root, command })
+}
+
+/// Set a flag's value, once: a flag given twice is a usage error naming it,
+/// never the second value quietly winning (fix pass 1 of #219, item 4; the
+/// stance `flag_elsewhere` takes on a flag that does nothing).
+fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), Failure> {
+    if slot.is_some() {
+        return Err(Failure::usage(strings::flag_repeated(flag)));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+/// The value after a flag that takes one.
+fn flag_value(parser: &mut lexopt::Parser) -> Result<OsString, Failure> {
+    parser
+        .value()
+        .map_err(|error| Failure::usage(strings::bad_argument(&error)))
 }
 
 /// The operands, once the flags are out of the way.
@@ -422,6 +467,7 @@ fn command_of(
     operands: &[OsString],
     part: Option<String>,
     depth: Option<Depth>,
+    preset: Option<Preset>,
     options: RunOptions,
 ) -> Result<Command, Failure> {
     let Some((first, rest)) = operands.split_first() else {
@@ -439,6 +485,7 @@ fn command_of(
             &[
                 ("--part", part.is_some()),
                 ("--depth", depth.is_some()),
+                ("--preset", preset.is_some()),
                 ("--operator", options.operator.is_some()),
                 ("--seeds", options.seeds.is_some()),
                 ("--format", options.format.is_some()),
@@ -455,6 +502,12 @@ fn command_of(
                 // FULL by default, which is what `submit_plan` always runs
                 // (spec §11).
                 depth: depth.unwrap_or(Depth::Full),
+                view: match preset {
+                    Some(preset) => View::Preset(preset),
+                    None => View::Reference,
+                },
+                // Text by default: the report for a person.
+                format: options.format.unwrap_or(Format::Text),
             })
         }
         "schema" => {
@@ -532,16 +585,21 @@ fn flags_belong_to(command: &str, given: &[(&str, bool)]) -> Result<(), Failure>
         if !given {
             continue;
         }
-        let owner = OPTIONS
+        // A flag has a row for each command that reads it (`--format` is
+        // `verify`'s and `scenario`'s).
+        let owners: Vec<&str> = OPTIONS
             .iter()
-            .find(|row| row.flag == flag)
+            .filter(|row| row.flag == flag)
             .map(|row| row.command)
-            .ok_or_else(|| {
-                Failure::internal(format!("`{flag}` is parsed and has no options row"))
-            })?;
-        if command != owner {
+            .collect();
+        if owners.is_empty() {
+            return Err(Failure::internal(format!(
+                "`{flag}` is parsed and has no options row"
+            )));
+        }
+        if !owners.contains(&command) {
             return Err(Failure::usage(strings::flag_elsewhere(
-                command, flag, owner,
+                command, flag, &owners,
             )));
         }
     }
@@ -575,8 +633,9 @@ fn no_operands(command: &str, rest: &[OsString]) -> Result<(), Failure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{COMMANDS, Command, parse};
+    use super::{COMMANDS, Command, Format, parse};
     use crate::exit::Exit;
+    use crate::verify::{Preset, View};
     use pharmakos_proto::gp::api::v1::verify_plan::Depth;
     use std::path::Path;
 
@@ -650,7 +709,9 @@ mod tests {
             parsed(&["verify", "--depth", "quick", "a.jsonc"]),
             Ok(Command::Verify {
                 path: "a.jsonc".into(),
-                depth: Depth::Quick
+                depth: Depth::Quick,
+                view: View::Reference,
+                format: Format::Text,
             })
         );
         assert_eq!(
@@ -666,8 +727,107 @@ mod tests {
     }
 
     #[test]
+    fn preset_reaches_verify_and_names_its_values() {
+        assert_eq!(
+            parsed(&["verify", "--preset", "probation", "a.jsonc"]),
+            Ok(Command::Verify {
+                path: "a.jsonc".into(),
+                depth: Depth::Full,
+                view: View::Preset(Preset::Probation),
+                format: Format::Text,
+            })
+        );
+        let error = parse(["verify", "--preset", "custom", "a.jsonc"], Path::new("."))
+            .expect_err("only the lobby's preset has a match to verify against");
+        assert_eq!(error.code, Exit::Usage);
+        assert!(error.message.contains("`probation`"), "{}", error.message);
+        assert_eq!(
+            parsed(&["scenario", "run", "a", "--preset", "probation"]),
+            Err(Exit::Usage),
+            "a flag given to a command that does not read it is refused"
+        );
+    }
+
+    /// Every flag that takes a value, given twice to a command that reads
+    /// it, is a usage error naming the flag, whichever value comes second.
+    #[test]
+    fn every_flag_given_twice_is_refused_by_name() {
+        use super::OPTIONS;
+        let command_for = |command: &str| -> Vec<&str> {
+            match command {
+                "verify" => vec!["verify", "a.jsonc"],
+                "schema" => vec!["schema"],
+                "scenario" => vec!["scenario", "run", "a.scenario.jsonc", "--seeds", "s.txt"],
+                "" => vec!["docs"],
+                other => panic!("a command the table names and this test does not: {other}"),
+            }
+        };
+        let value_for = |flag: &str| -> &str {
+            match flag {
+                "--root" => ".",
+                "--part" => "step",
+                "--depth" => "quick",
+                "--preset" => "probation",
+                "--operator" => "easy",
+                "--seeds" => "s.txt",
+                "--format" => "json",
+                "--out" => "r.json",
+                other => panic!("a flag the table names and this test does not: {other}"),
+            }
+        };
+        let mut checked = 0_usize;
+        for row in OPTIONS {
+            if row.flag == "--help" || row.flag == "--version" {
+                continue;
+            }
+            let mut args = command_for(row.command);
+            // `--seeds` already stands in the scenario line; adding it once
+            // more is the repeat.
+            if !(row.flag == "--seeds" && row.command == "scenario") {
+                args.extend([row.flag, value_for(row.flag)]);
+            }
+            args.extend([row.flag, value_for(row.flag)]);
+            let error = parse(args.iter().map(|arg| (*arg).to_owned()), Path::new("."))
+                .expect_err("a repeated flag is refused");
+            assert_eq!(error.code, Exit::Usage, "{args:?}");
+            assert!(
+                error.message.contains(&format!("`{}`", row.flag))
+                    && error.message.contains("twice"),
+                "{args:?}: {}",
+                error.message
+            );
+            checked = checked.saturating_add(1);
+        }
+        assert_eq!(
+            checked, 9,
+            "every row that takes a value, verify's and scenario's --format both"
+        );
+    }
+
+    #[test]
+    fn format_reaches_verify_and_scenario_run_and_nothing_else() {
+        assert_eq!(
+            parsed(&["verify", "--format", "json", "a.jsonc"]),
+            Ok(Command::Verify {
+                path: "a.jsonc".into(),
+                depth: Depth::Full,
+                view: View::Reference,
+                format: Format::Json,
+            })
+        );
+        let error = parse(["docs", "--format", "json"], Path::new("."))
+            .expect_err("docs reads no --format");
+        assert_eq!(error.code, Exit::Usage);
+        assert!(
+            error.message.contains("`verify`'s or `scenario`'s"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
     fn the_nightly_flags_reach_scenario_run() {
-        use super::{Format, Operator, RunOptions};
+        use super::{Operator, RunOptions};
         assert_eq!(
             parsed(&[
                 "scenario",
