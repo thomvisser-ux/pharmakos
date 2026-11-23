@@ -381,6 +381,23 @@ func quit() -> void:
 	_tokens = ["", ""]
 
 
+## Lets go of a host that failed before it announced (a refused Resume, a refused line), so
+## `start()` can spawn another: its standard input is closed, which ends a host still running,
+## and everything this link held of it is forgotten, the tokens included. The next `start()`
+## then begins a fresh watch rig (`watch_begin`), as the first did.
+func reset() -> void:
+	quit()
+	_pid = -1
+	_stderr = null
+	_stderr_text = ""
+	_announce = PackedByteArray()
+	_port = 0
+	_peers = [null, null]
+	_open = [false, false]
+	_reconnects = 0
+	_done = false
+
+
 func _read_announce() -> void:
 	var chunk := _stdio.get_buffer(4096)
 	if chunk.size() > 0:
@@ -405,6 +422,10 @@ func _read_announce() -> void:
 	_tokens = [fields[2], fields[3]]
 	for link in [ADMIN, SEAT]:
 		_connect(link)
+		# A connection that could not be opened ended the link (and may have reset it from
+		# the failure's handler): nothing runs on, and no announce follows a failure.
+		if _done:
+			return
 	announced.emit(fields[1])
 
 
@@ -414,7 +435,9 @@ func _connect(link: int) -> void:
 	peer.handshake_headers = PackedStringArray(["Authorization: Bearer " + String(_tokens[link])])
 	var error := peer.connect_to_url("ws://127.0.0.1:%d/" % _port)
 	if error != OK:
+		_done = true
 		failed.emit("could not open connection %d" % link)
+		return
 	_peers[link] = peer
 	_open[link] = false
 

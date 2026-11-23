@@ -64,6 +64,7 @@ fn recap_then_burst(continue_after: usize, latency: usize, seat_first: bool) -> 
         at: [358, 22, 36],
         hp: None,
         heading: None,
+        ring: None,
     }]);
 
     let mut in_transit: Vec<(usize, usize, String)> = Vec::new();

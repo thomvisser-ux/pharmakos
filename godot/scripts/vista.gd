@@ -33,6 +33,14 @@
 # S3 (S2's stage demo, decisions-log item 155 (3) 4): every structure is the same cube until the
 # art pass, so a structure carries its `subtype`, as the gateway spelt it, over it. The name is
 # drawn only when the camera is close enough to read it, and it decides nothing.
+#
+# S3 (S3's `prob`, the plan's E3): a beacon the view gives a sphere radius
+# (`sphere_radius_voxels`, on this seat's own beacons) carries a flat ring of that radius, in
+# voxels as sent, on the plane of the voxel the beacon stands on: the rules table's base, grown
+# while a finished Resonance Spire stands on it, both the gateway's number. Another seat's
+# beacon is sent no radius, so it carries no ring. The ring is a view of a number: it computes
+# no reach and nothing reads it back. It follows the view through a Push as in a Lull, and is
+# redrawn when the radius the view sends changes.
 
 extends Node3D
 
@@ -78,6 +86,12 @@ const BAR_GAP := 0.03
 const NAME_LIFT := 1.0
 const NAME_PIXEL := 0.02
 const NAME_RANGE := 55.0
+## A beacon's ring: how wide its band is drawn, how far over the beacon's voxel plane it floats
+## (so the ground under it does not hide it), and its colour, all presentation.
+## PLACEHOLDER: the sphere ring's width, lift and colour — OWNER, at S6.
+const RING_WIDTH := 0.35
+const RING_LIFT := 0.15
+const RING_COLOUR := Color(1.0, 0.62, 0.20, 0.85)
 
 ## The seat this client plays, as the gateway spells a seat: `seat.0`. Empty for a
 ## spectator. Own against other is `owner == my_seat` and nothing more.
@@ -88,7 +102,8 @@ var my_seat := ""
 var pending := -1
 
 ## id -> {"node": Node3D, "target": Vector3, "kind": String, "subtype": String,
-## "owner": String, "at": Vector3i, "yaw": float or null, "fill": MeshInstance3D or null}
+## "owner": String, "at": Vector3i, "yaw": float or null, "fill": MeshInstance3D or null,
+## "ring": int (the radius drawn, voxels; 0 for none)}
 var _markers := {}
 
 @onready var bridge: Node = $Bridge
@@ -244,12 +259,14 @@ func _show(entities: Array, snap: bool) -> void:
 				"at": at,
 				"yaw": null,
 				"fill": node.get_node_or_null("Bar/Fill"),
+				"ring": 0,
 			}
 		var marker: Dictionary = _markers[id]
 		marker["target"] = goal
 		marker["at"] = at
 		marker["yaw"] = float(entity["yaw"]) if entity.has("yaw") else null
 		_set_bar(marker, entity)
+		_set_ring(marker, entity)
 		if snap:
 			marker["node"].position = goal
 	for id in _markers.keys():
@@ -280,6 +297,57 @@ func _set_bar(marker: Dictionary, entity: Dictionary) -> void:
 	quad.size = Vector2(BAR_SIZE.x * share, BAR_SIZE.y)
 	# Left-aligned in the billboard's own plane, so the bar empties towards its left end.
 	quad.center_offset = Vector3(-BAR_SIZE.x * (1.0 - share) * 0.5, 0.0, BAR_GAP)
+
+
+## Draws the beacon's ring at the radius the view sent, replacing the drawn one when the radius
+## changes and taking it away when the view sends none. The bridge refuses a radius on anything
+## but a beacon, and a radius of zero, so a ring is always a beacon's and always has a size.
+func _set_ring(marker: Dictionary, entity: Dictionary) -> void:
+	var radius: int = 0
+	if entity.has("ring"):
+		var read: Variant = Values.int_of(entity["ring"])
+		if read is int:
+			radius = read
+		else:
+			push_warning(Values.unreadable_text(Strings.text("value_ring"), read))
+	if radius == int(marker["ring"]):
+		return
+	var node: Node3D = marker["node"]
+	var drawn := node.get_node_or_null("Ring")
+	if drawn != null:
+		node.remove_child(drawn)
+		drawn.queue_free()
+	marker["ring"] = radius
+	if radius > 0:
+		node.add_child(_ring(radius))
+
+
+## A flat ring of `radius` voxels round the marker's feet, on the plane of its voxel.
+func _ring(radius: int) -> MeshInstance3D:
+	var band := TorusMesh.new()
+	band.inner_radius = float(radius)
+	band.outer_radius = float(radius) + RING_WIDTH
+	band.rings = 128
+	var paint := StandardMaterial3D.new()
+	paint.albedo_color = RING_COLOUR
+	paint.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	paint.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	band.material = paint
+	var ring := MeshInstance3D.new()
+	ring.name = "Ring"
+	ring.mesh = band
+	ring.position = Vector3(0.0, RING_LIFT, 0.0)
+	# The ring lies flat whatever way the marker turns: a beacon never turns, and the band is
+	# round, so its turn shows nothing.
+	ring.scale = Vector3(1.0, 0.05, 1.0)
+	return ring
+
+
+## The radius of the ring drawn on the marker the view calls `id`, in voxels; 0 for none.
+func ring_of(id: String) -> int:
+	if not _markers.has(id):
+		return 0
+	return int(_markers[id]["ring"])
 
 
 func _marker_for(entity: Dictionary) -> Node3D:

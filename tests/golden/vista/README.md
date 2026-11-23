@@ -140,13 +140,20 @@ Committed from the `screenshot` job's bootstrap render on CI's Linux leg
 (workflow run 35820083263, xvfb + lavapipe, Godot 4.7.2), looked at before it
 was committed and again by the main session before the merge.
 
+**Re-rendered by S3's `prob`** (pull request #216) when the vista began drawing an own
+beacon's ring: taken from the `vista-screenshot` artefact (`actual.vista.png`) of workflow run
+45137461179 at `9746210d`, and compared by eye by the main session with the golden it replaced:
+identical but for the new ring round seat 0's core.
+
 It shows **the whole generated map of the golden seed** (`0x00000000ca5caded`,
 384 x 384 x 64 voxels, 12 x 2 x 12 chunks) from above its north-east corner, as
 a diamond on the ash-grey sky of the Pall: open dirt terrain with the generator's
 contour steps visible as fine lines, the scrap seams as pale-yellow blobs, the
 heat vents as small blue patches, the stone of the map's rim along the two near
 edges, and seat 0's own beacon and units as small markers near the right-hand
-corner of the frame (the beacon a glowing yellow pillar). Nothing else stands on it, because the
+corner of the frame (the beacon a glowing yellow pillar), with the beacon's sphere of authority
+drawn round it as a thin flat orange ring at the radius the view sends (24 voxels, the rules
+table's base; S3's `prob`). Nothing else stands on it, because the
 fixture is seat 0's view of the opening Lull. Checked by eye for the bug classes
 this golden exists for: no cracks between chunks, no missing chunk, no
 back-face-culled holes, and the tops facing the camera (winding correct).

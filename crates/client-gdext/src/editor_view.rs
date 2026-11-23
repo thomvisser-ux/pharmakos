@@ -184,16 +184,14 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("status_detail", editor.status().detail.to_variant());
     put("refusals", i64::from(editor.refusals()).to_variant());
 
-    let mut templates = VarArray::new();
-    for template in editor.templates() {
-        let mut one = VarDictionary::new();
-        one.set(&"id".to_variant(), &template.id.to_variant());
-        one.set(&"title".to_variant(), &template.title.to_variant());
-        one.set(&"summary".to_variant(), &template.summary.to_variant());
-        templates.push(&one.to_variant());
-    }
-    put("templates", templates.to_variant());
+    put(
+        "templates",
+        templates_array(editor.templates()).to_variant(),
+    );
     put("templates_known", editor.templates_known().to_variant());
+    let mut templates_read = VarDictionary::new();
+    failed_into(&mut templates_read, editor.templates_failed());
+    put("templates_read", templates_read.to_variant());
     put("wizard", wizard_dictionary(editor.wizard()).to_variant());
     let mut prose = PackedStringArray::new();
     for line in editor.prose() {
@@ -214,18 +212,17 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     // key "" while the check is on its way (finding K; a refusal is its own check's).
     let mut unchecked = VarDictionary::new();
     for check in Check::ALL {
-        let (key, detail) = match editor.unchecked(check) {
-            None => (String::new(), String::new()),
-            Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
-            Some(Unchecked::Unreadable(said)) => ("unreadable".to_owned(), said),
-            Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
-        };
-        let mut why = VarDictionary::new();
-        why.set(&"key".to_variant(), &key.to_variant());
-        why.set(&"detail".to_variant(), &detail.to_variant());
-        unchecked.set(&check.name().to_variant(), &why.to_variant());
+        unchecked.set(
+            &check.name().to_variant(),
+            &unchecked_dictionary(editor.unchecked(check)).to_variant(),
+        );
     }
     put("unchecked", unchecked.to_variant());
+    // Why the template list will not come, in the checks' words (`{key, detail}`).
+    put(
+        "templates_unchecked",
+        unchecked_dictionary(editor.templates_unchecked()).to_variant(),
+    );
     put("seal", editor.seal_line().name().to_variant());
     put("filed", editor.filed().to_variant());
     put("file", text_or_empty(editor.file()).to_variant());
@@ -500,6 +497,44 @@ pub(crate) fn vocabulary_dictionary(
     out.set(&"families".to_variant(), &families.to_variant());
     out.set(&"mandates".to_variant(), &mandates.to_variant());
     out.set(&"blueprints".to_variant(), &blueprints.to_variant());
+    out
+}
+
+/// Why something the panel waits for will not come, as `{key, detail}`: `key` is `refused`,
+/// `unreadable` or the shut door's name, and `""` while it is on its way.
+fn unchecked_dictionary(why: Option<Unchecked>) -> VarDictionary {
+    let (key, detail) = match why {
+        None => (String::new(), String::new()),
+        Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
+        Some(Unchecked::Unreadable(said)) => ("unreadable".to_owned(), said),
+        Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
+    };
+    let mut out = VarDictionary::new();
+    out.set(&"key".to_variant(), &key.to_variant());
+    out.set(&"detail".to_variant(), &detail.to_variant());
+    out
+}
+
+/// The template list as the panel draws it: each template's `id`, `title` and `summary`, and
+/// the guided first pick's mark, `guided`, with the gateway's sentence, `guided_reason`, as
+/// sent (S3's plan, decision 5); `guided_reason` is empty on every unmarked template.
+pub(crate) fn templates_array(templates: &[crate::wizard::TemplateRow]) -> VarArray {
+    let mut out = VarArray::new();
+    for template in templates {
+        let mut one = VarDictionary::new();
+        one.set(&"id".to_variant(), &template.id.to_variant());
+        one.set(&"title".to_variant(), &template.title.to_variant());
+        one.set(&"summary".to_variant(), &template.summary.to_variant());
+        one.set(
+            &"guided".to_variant(),
+            &template.guided.is_some().to_variant(),
+        );
+        one.set(
+            &"guided_reason".to_variant(),
+            &text_or_empty(template.guided.as_deref()).to_variant(),
+        );
+        out.push(&one.to_variant());
+    }
     out
 }
 
@@ -796,6 +831,15 @@ pub(crate) fn recap_dictionary(recap: &Recap) -> VarDictionary {
         tallies.push(&one.to_variant());
     }
     out.set(&"seat_tallies".to_variant(), &tallies.to_variant());
+    // The Ledger's memos, in issue order, each `{id, text}` as sent; empty outside Probation.
+    let mut memos = VarArray::new();
+    for memo in &recap.memos {
+        let mut one = VarDictionary::new();
+        one.set(&"id".to_variant(), &memo.id.to_variant());
+        one.set(&"text".to_variant(), &memo.text.to_variant());
+        memos.push(&one.to_variant());
+    }
+    out.set(&"memos".to_variant(), &memos.to_variant());
     out
 }
 

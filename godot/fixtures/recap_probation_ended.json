@@ -1,0 +1,53 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "prose": "Round 3 ran 200 ticks. The match ended: round_limit. The final audit names seat 0 the winner. The Ledger settled and credited you $ 110, your Basic Minimum Income at band 2 (+10 %). The award fund pays out from S4, when there are awards to split it by. In this match you destroyed no enemy assets and lost no assets. The licence that stands at the match's end: seat 0's Resonance Spire, from round 1.",
+    "settlement": {
+      "bmi_dollars": 110,
+      "band_rank": 2,
+      "band_percent": 10,
+      "award_dollars": 0
+    },
+    "tally": {
+      "kills": 0,
+      "shared_kills": 0,
+      "losses": 0,
+      "value_destroyed_dollars": 0
+    },
+    "seat_tallies": [
+      {
+        "seat": "seat.0",
+        "tally": {
+          "kills": 0,
+          "shared_kills": 0,
+          "losses": 0,
+          "value_destroyed_dollars": 0
+        }
+      },
+      {
+        "seat": "seat.1",
+        "tally": {
+          "kills": 0,
+          "shared_kills": 0,
+          "losses": 0,
+          "value_destroyed_dollars": 0
+        }
+      }
+    ],
+    "licences_awarded": [
+      {
+        "seat": "seat.0",
+        "licence": "resonance_spire",
+        "round_awarded": 1
+      }
+    ],
+    "_status": {
+      "phase": "recap",
+      "phase_remaining_ms": 0,
+      "segment_length_ms": 10000,
+      "round": 3,
+      "untimed": true
+    }
+  }
+}
