@@ -357,3 +357,28 @@ fn a_file_with_no_canonical_form_is_refused() {
         Err(NewRuleError::NoCanonicalForm(_))
     ));
 }
+
+/// Review fix pass 1, item 2: a pointer that names no schema field takes no
+/// typed number (it is not "past what this value can hold"), and a bound in
+/// a unit with no name is said with no trailing space.
+#[test]
+fn a_pointer_naming_no_field_takes_no_number_and_a_bare_count_has_no_trailing_space() {
+    let nowhere = "/nowhere/set_mandate_settings/retreat_hp_pct";
+    assert_eq!(
+        typed(ONE_RULE, nowhere, "40"),
+        Err(SetValueError::NoNumberHere)
+    );
+    let fires = "/declarative/handlers/0/max_fires";
+    let error = typed(ONE_RULE, fires, "0").expect_err("below the least");
+    let words = pharmakos_plan_core::edit::set_value_words(&error, "0");
+    assert_eq!(
+        words.as_str(),
+        "`0` is below the least this takes, 1",
+        "no trailing space after a bound with no unit"
+    );
+    let error = typed(ONE_RULE, "/declarative/route/0/hold/ms", "0").expect_err("below 1 ms");
+    assert_eq!(
+        pharmakos_plan_core::edit::set_value_words(&error, "0").as_str(),
+        "`0` is below the least this takes, 0.001 s"
+    );
+}

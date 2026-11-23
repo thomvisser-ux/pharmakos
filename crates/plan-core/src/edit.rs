@@ -120,9 +120,12 @@ pub fn set_value_text(
     if !matches!(shape, Shape::Integer { .. }) {
         return Err(SetValueError::NoNumberHere);
     }
-    let value = typed_value(&shape, typed).map_err(SetValueError::Typed)?;
+    // The field the pointer names, by the schema: one that names no integer
+    // field takes no typed number, whatever shape a table offered for it.
     let tokens = split_pointer(pointer).map_err(SetValueError::Refused)?;
-    if !fits(field_kind(&tokens), value) {
+    let kind = field_kind(&tokens).ok_or(SetValueError::NoNumberHere)?;
+    let value = typed_value(&shape, typed).map_err(SetValueError::Typed)?;
+    if !fits(kind, value).ok_or(SetValueError::NoNumberHere)? {
         return Err(SetValueError::DoesNotFit);
     }
     let patch =
@@ -175,18 +178,27 @@ pub fn set_value_words(error: &SetValueError, typed: &str) -> Said {
             said!("`{}` is past what this value can hold", quoted(typed))
         }
         SetValueError::Typed(Typed::BelowLeast(least, unit)) => said!(
-            "`{}` is below the least this takes, {} {}",
+            "`{}` is below the least this takes, {}{}",
             quoted(typed),
             quoted(least),
-            *unit
+            spaced(unit)
         ),
         SetValueError::Typed(Typed::AboveMost(most, unit)) => said!(
-            "`{}` is above the most this takes, {} {}",
+            "`{}` is above the most this takes, {}{}",
             quoted(typed),
             quoted(most),
-            *unit
+            spaced(unit)
         ),
         SetValueError::Refused(why) => why.shown(),
+    }
+}
+
+/// A unit after a number: a space and the unit, or nothing for a bare count.
+fn spaced(unit: &'static str) -> Said {
+    if unit.is_empty() {
+        Said::from("")
+    } else {
+        said!(" {}", unit)
     }
 }
 
@@ -275,15 +287,15 @@ fn field_kind(tokens: &[String]) -> Option<ScalarKind> {
     kind
 }
 
-/// Whether `value` fits a field of `kind`; a field the schema does not name
-/// fits nothing.
-fn fits(kind: Option<ScalarKind>, value: i64) -> bool {
+/// Whether `value` fits a field of `kind`; `None` for a kind that is no
+/// 32-bit integer, which takes no typed number at all.
+fn fits(kind: ScalarKind, value: i64) -> Option<bool> {
     match kind {
-        Some(ScalarKind::Int32 | ScalarKind::Sint32 | ScalarKind::Sfixed32) => {
-            i32::try_from(value).is_ok()
+        ScalarKind::Int32 | ScalarKind::Sint32 | ScalarKind::Sfixed32 => {
+            Some(i32::try_from(value).is_ok())
         }
-        Some(ScalarKind::Uint32 | ScalarKind::Fixed32) => u32::try_from(value).is_ok(),
-        _ => false,
+        ScalarKind::Uint32 | ScalarKind::Fixed32 => Some(u32::try_from(value).is_ok()),
+        _ => None,
     }
 }
 
