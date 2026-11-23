@@ -64,8 +64,8 @@
 //! `opra`: an Attack beacon beside the core raiding the nearest fixed target
 //! the seat knows of, an enemy beacon or an enemy commander in sight, scored
 //! alike (Raid an Enemy Beacon). And from S3 it queues the Resonance Spire
-//! at its core once its seat holds the licence, beside the round's goals and
-//! never ranked among them (S3's plan, `opr3`; [`easy`]'s plan), and it
+//! at its core once its seat holds the licence, funded ahead of the round's
+//! ranked goals (S3's plan, `opr3`; [`easy`]'s plan), and it
 //! reaches past its first sphere with stepping stones placed `toward` a
 //! feature no site of its spheres covers (the register's S5-04).
 //!
@@ -109,10 +109,10 @@ pub mod steps {
         crate::compose::spire_step(core)
     }
 
-    /// A stepping stone `toward` a named feature, with a place step's timeout.
+    /// A stepping stone `toward` a named feature, with a timeout.
     #[must_use]
     pub fn stone(feature: &str, timeout_ms: i64) -> Json {
-        crate::compose::stone_step("stone", feature, crate::wire::number(timeout_ms))
+        crate::compose::stone_step("stone", feature, Some(timeout_ms))
     }
 }
 pub use easy::{Advice, Easy, Played, StartHere, Submitted, SuggestedValue, Suggestion};

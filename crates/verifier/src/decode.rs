@@ -59,7 +59,6 @@ use pharmakos_proto::json::grammar::quoted;
 use pharmakos_proto::json::{self, Json};
 use pharmakos_proto::{SCHEMA_VERSION, schema_version};
 
-use crate::hash;
 use crate::pointer;
 use crate::report::{Builder, Diag, patch_add, patch_remove, patch_replace};
 
@@ -132,7 +131,7 @@ pub(crate) struct Decoded<'a> {
     /// ([`crate::Input::canonical`]), or the one decoded here.
     pub(crate) playbook: Cow<'a, Playbook>,
     /// Its plan fingerprint, or `None` when it has none
-    /// ([`hash::plan_fingerprint`] says when).
+    /// ([`pharmakos_sim::hash::plan_fingerprint_of`] says when).
     pub(crate) fingerprint: Option<u64>,
 }
 
@@ -234,14 +233,15 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded<'static>> {
     if named_reserved(&value, out) {
         return None;
     }
-    match json::decode_json::<Playbook>(&value) {
+    match json::decode_json_encoded::<Playbook>(&value) {
         // The direct reader answers for every document the codec accepts, so
         // this arm is reached only if the two disagree; it answers as the
-        // decode stage always has, with the fingerprint of the playbook.
-        Ok(playbook) => {
-            let fingerprint = hash::plan_fingerprint(&playbook);
+        // first path does, with the fingerprint written from the wire bytes
+        // the tree was encoded to, so there is one fingerprint function.
+        Ok(decoded) => {
+            let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded).ok();
             Some(Decoded {
-                playbook: Cow::Owned(playbook),
+                playbook: Cow::Owned(decoded.into_message()),
                 fingerprint,
             })
         }

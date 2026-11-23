@@ -750,14 +750,15 @@ fn easy_passes_the_verifier_on_every_snapshot_of_the_corpus() {
         assert!(row.advisor_calls <= EASY_ADVISOR_CALL_BUDGET, "{row:#?}");
     }
     // What it chose, said so a reader of a red build can see it: on the
-    // determinism seed each seat's round one reaches past its first sphere
-    // with a stepping stone toward a rich seam, by name (S5-04).
+    // determinism seed each seat's round one places a Build beacon on its
+    // start vent with a Generator on it, by the vent's name (S3's `opr3`, fix
+    // pass 2, item 2).
     assert!(
         rows.iter()
             .filter(|row| row.snapshot == "three-rounds/round-1")
             .all(|row| row
                 .note
-                .contains("A stepping-stone beacon toward the rich scrap seam seam_")),
+                .contains("A Build beacon covering the lean heat vent vent_")),
         "{rows:#?}"
     );
 }
@@ -798,15 +799,15 @@ fn the_safe_playbook_always_qualifies() {
 ///
 /// The power-short match's core is shed at the Push's first settle and never
 /// revived, so from round 2 on its seats are short. Each seat's round-1 seal
-/// places a lit non-core beacon (a stepping stone since S3's `opr3`, fix pass
-/// 1), which in round 2's Lull is its one beacon at risk (decision 14: lit and
-/// next in the shed order, since a raise relights), within reach, and is
-/// raised to HIGH; in round 3 seat 0 has a second beacon at risk, the one its
-/// round-2 seal placed, and raises it, while seat 1's is out of reach.
+/// places a lit non-core beacon (the Build beacon on its start vent since S3's
+/// `opr3`, fix pass 2, item 2), which in round 2's Lull is its one beacon at
+/// risk (decision 14: lit and next in the shed order, since a raise
+/// relights), within reach, and is raised to HIGH. Round 2's seals place
+/// nothing more, so in round 3 that beacon is HIGH already and nothing is at
+/// risk.
 const ROWS_THAT_RAISE: &[(&str, u8)] = &[
     ("three-rounds-power-short/round-2", 0),
     ("three-rounds-power-short/round-2", 1),
-    ("three-rounds-power-short/round-3", 0),
 ];
 
 /// Decisions-log item 128 (S1's plan, decision 14; the register's S1-21),
@@ -919,13 +920,20 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 }
 
 /// The corpus rows on the committed rules whose seat's supply shows a
-/// Generator. None since S3's `opr3` fix pass 1: Easy spends the corpus's
-/// rounds on stepping stones toward rich seams beyond
-/// its first sphere, which its Balanced terms value above a Generator (a rich
-/// seam's Mine about 1 180 points, a lean vent's Generator 140), so no seat
-/// builds one in three rounds. The scenario's own Generator is
+/// Generator: every seat of the three-round match from round 2 on, each the
+/// Generator its round-1 seal put on its lean start vent (S3's `opr3`, fix
+/// pass 2, item 2: one ranking, a stone discounted by the stones and rounds
+/// its chain still needs, so the seat's first Generator ranks first, as it did before the stones). The
+/// scenario's own Generator is
 /// `the_scenario_generator_raises_supply_by_exactly_the_lean_vent`'s.
-const GENERATOR_ROWS: &[(&str, u8)] = &[];
+const GENERATOR_ROWS: &[(&str, u8)] = &[
+    ("three-rounds/round-2", 0),
+    ("three-rounds/round-2", 1),
+    ("three-rounds/round-2", 2),
+    ("three-rounds/round-3", 0),
+    ("three-rounds/round-3", 1),
+    ("three-rounds/round-3", 2),
+];
 
 /// The rules text's `power.core_surplus_kw` and the lean vent's
 /// `power.generator_output_kw`, kW.
@@ -1506,10 +1514,11 @@ fn a_suggested_raid_qualifies_through_the_real_verifier() {
 }
 
 /// Probation's own seed (decisions-log items 154 (1) and 156 (1)): its rich
-/// seams lie beyond the first sphere, which no `covering` site reaches, so
+/// features lie beyond the first sphere, which no `covering` site reaches, so
 /// Easy reaches toward them with stepping stones (S3's `opr3`; the register's
-/// S5-04), each worth the Mine it serves (fix pass 1, item 2), in its own
-/// seal, verified by the real gateway.
+/// S5-04), each worth the goal it serves discounted by the stones and rounds
+/// its chain still needs (fix pass 2, item 2), in its own seal, verified by
+/// the real gateway.
 #[test]
 fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
     let rules = rules_json();
@@ -1577,23 +1586,25 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
         eprintln!("{} seat {}: {}", row.snapshot, row.seat, row.note);
     }
     eprintln!("Probation's seed, the stones (round, seat, toward): {stones:?}");
-    // A named expectation, each round of each seat's stone chain (cut 3: no
-    // Survey post). Seat 0 walks toward `seam_190_124` in every round; seat
-    // 1 starts toward `seam_163_202`, turns toward `seam_191_215` once its
-    // first stone stands and turns back in round 3. Neither chain reaches its
-    // seam within the three rounds.
-    let wanted: Vec<(String, u8, String)> = [
-        ("probation/round-1", 0, "seam_190_124"),
-        ("probation/round-1", 1, "seam_163_202"),
-        ("probation/round-2", 0, "seam_190_124"),
-        ("probation/round-2", 1, "seam_191_215"),
-        ("probation/round-3", 0, "seam_190_124"),
-        ("probation/round-3", 1, "seam_163_202"),
-    ]
-    .into_iter()
-    .map(|(round, seat, feature)| (round.to_owned(), seat, feature.to_owned()))
-    .collect();
+    // A named expectation, each round of each seat's stone chain (fix pass
+    // 2, item 2). Both seats place the Generator on their start vent in round
+    // 1. Seat 0 walks one stone toward the rich vent `vent_232_96` in round 2,
+    // the one stone the known positions say it needs, and in round 3 places
+    // the Build beacon covering it, the goal its stone served. Seat 1 places a
+    // Survey post in round 2 and has nothing worth its treasury in round 3.
+    let wanted: Vec<(String, u8, String)> = [("probation/round-2", 0, "vent_232_96")]
+        .into_iter()
+        .map(|(round, seat, feature)| (round.to_owned(), seat, feature.to_owned()))
+        .collect();
     assert_eq!(stones, wanted, "{rows:#?}");
+    assert!(
+        rows.iter().any(|row| row.snapshot == "probation/round-3"
+            && row.seat == 0
+            && row
+                .note
+                .contains("A Build beacon covering the rich heat vent vent_232_96")),
+        "seat 0's stone is followed by the goal it served: {rows:#?}"
+    );
     assert!(
         rows.iter().all(|row| row.seal != Seal::NotEasy),
         "every seal is Easy's own, the verifier's accepted: {rows:#?}"
@@ -1609,7 +1620,9 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
 /// Easy plays seat 0 through the seat's own token: its round-3 seal queues
 /// the Spire at the core and the real verifier accepts it, the sim queues the
 /// structure exactly once in that Push, and round 4's seal queues none.
-fn spire_match(rules: &str, spire_draw_kw: i64) -> SpireMatch {
+fn spire_match(rules: &str) -> SpireMatch {
+    let spire_draw_kw = rules_row(rules, &["structures", "resonance_spire", "draw_kw"]);
+    let kw_per_unit = rules_row(rules, &["power", "kw_per_unit"]);
     let rules = rules.to_owned();
     let host = Host::open_from(
         &rules,
@@ -1707,6 +1720,7 @@ fn spire_match(rules: &str, spire_draw_kw: i64) -> SpireMatch {
         headrooms,
         queued,
         spire_draw_kw,
+        kw_per_unit,
     }
 }
 
@@ -1718,42 +1732,78 @@ struct SpireMatch {
     headrooms: Vec<i64>,
     queued: Vec<usize>,
     spire_draw_kw: i64,
+    kw_per_unit: i64,
 }
 
 impl SpireMatch {
-    /// The new draw a seal adds: the Spire's, a Survey post's two scouts, a
-    /// guard's picket.
+    /// The new draw a seal adds, at the rows every grid charges (fix pass 2,
+    /// item 4): the Spire's own `draw_kw`, and each scout the seal orders (a
+    /// guard's `picket_scouts`) at
+    /// `power.kw_per_unit`.
     fn drawn(&self, seal: &str) -> i64 {
         i64::from(seal.contains("queue_spire")) * self.spire_draw_kw
-            + i64::from(seal.contains("survey_post")) * 2
-            + i64::from(seal.contains("place_guard"))
+            + scouts_ordered(seal) * self.kw_per_unit
+    }
+}
+
+/// Every `scout_count` and `picket_scouts` a sealed playbook sets, summed.
+fn scouts_ordered(seal: &str) -> i64 {
+    fn set(value: &Json) -> i64 {
+        match value {
+            Json::Object(members) => members
+                .iter()
+                .map(|(key, held)| match (key.as_str(), held) {
+                    ("scout_count" | "picket_scouts", Json::Number(lexeme)) => {
+                        lexeme.parse::<i64>().expect("a count")
+                    }
+                    _ => set(held),
+                })
+                .sum(),
+            Json::Array(items) => items.iter().map(set).sum(),
+            _ => 0,
+        }
+    }
+    set(&pharmakos_plan_core::Document::parse(seal)
+        .expect("a sealed playbook reads")
+        .to_json())
+}
+
+/// A whole-number row of a rules text, by its path of keys.
+fn rules_row(rules: &str, path: &[&str]) -> i64 {
+    let table = params(rules);
+    let row = path
+        .iter()
+        .try_fold(&table, |at, key| at.get(key))
+        .unwrap_or_else(|| panic!("the rules text has no `{}` row", path.join(".")));
+    match row {
+        Json::Number(lexeme) => lexeme.parse().expect("a whole number"),
+        other => panic!("`{}` is no number: {other:?}", path.join(".")),
     }
 }
 
 #[test]
 fn easy_queues_the_spire_once_through_the_real_verifier_and_the_sim() {
+    let spire = spire_match(&rules_json());
     let SpireMatch {
         sealed_texts,
         headrooms,
         queued,
         ..
-    } = spire_match(&rules_json(), 3);
+    } = &spire;
     let [third, fourth] = sealed_texts.as_slice() else {
         panic!("Easy sealed rounds 3 and 4: {sealed_texts:#?}");
     };
     // One kW budget (fix pass 1, item 1): what the seal adds -- the Spire's
-    // 3 kW, a Survey post's two scouts, a guard's picket -- is never more than
-    // the headroom the forecast showed, and the real verifier accepted it.
-    for (seal, headroom) in sealed_texts.iter().zip(&headrooms) {
+    // draw, and the scouts a guard's picket orders, at the
+    // rules rows -- is never more than the headroom the forecast showed, and
+    // the real verifier accepted it.
+    for (seal, headroom) in sealed_texts.iter().zip(headrooms) {
         eprintln!(
-            "headroom {headroom} kW: Spire {}, Survey post {}, guard {}",
+            "headroom {headroom} kW: Spire {}, guard {}",
             seal.contains("queue_spire"),
-            seal.contains("survey_post"),
             seal.contains("place_guard")
         );
-        let drawn = i64::from(seal.contains("queue_spire")) * 3
-            + i64::from(seal.contains("survey_post")) * 2
-            + i64::from(seal.contains("place_guard"));
+        let drawn = spire.drawn(seal);
         assert!(
             drawn <= *headroom,
             "{drawn} kW of new draw against {headroom} kW: {seal}"
@@ -1768,7 +1818,7 @@ fn easy_queues_the_spire_once_through_the_real_verifier_and_the_sim() {
         "round 4 queues none: {fourth}"
     );
     assert_eq!(
-        queued,
+        queued.as_slice(),
         [0, 0, 1, 1],
         "seat 0's Spires after each Push: none, then the one queued in round 3, and no second"
     );
@@ -1779,11 +1829,11 @@ fn easy_queues_the_spire_once_through_the_real_verifier_and_the_sim() {
 /// headroom but 1 kW. Easy still queues it, nothing else it adds draws past
 /// the 1 kW left, and the real verifier accepts the seal (no E0601). The
 /// scripted `one_kw_budget_never_composes_more_draw_than_the_headroom`
-/// sweeps every headroom with the Spire, the Survey post and the guard.
+/// sweeps every headroom with the Spire and the guard.
 #[test]
 fn a_spire_at_the_margin_of_the_headroom_verifies_clean_through_the_real_verifier() {
     let base = rules_json();
-    let probe = spire_match(&base, 3);
+    let probe = spire_match(&base);
     let headroom = *probe.headrooms.first().expect("round 3's headroom");
     let draw = headroom.checked_sub(1).expect("a draw");
     let row = "\"resonance_spire\": {\n      \"cost_dollars\": 120,\n      \"hp\": 500,\n      \"draw_kw\": 3,";
@@ -1792,7 +1842,7 @@ fn a_spire_at_the_margin_of_the_headroom_verifies_clean_through_the_real_verifie
         &row.replace("\"draw_kw\": 3,", &format!("\"draw_kw\": {draw},")),
     );
     assert_ne!(tight, base, "the rules text carries the Spire's row");
-    let tight_match = spire_match(&tight, draw);
+    let tight_match = spire_match(&tight);
     let third = tight_match.sealed_texts.first().expect("round 3's seal");
     let tight_headroom = *tight_match.headrooms.first().expect("round 3's headroom");
     assert!(third.contains("queue_spire"), "the Spire fits: {third}");

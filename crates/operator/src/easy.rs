@@ -482,6 +482,15 @@ impl Easy {
         crate::price::step_ms(step, &self.tuning)
     }
 
+    /// The travel estimate's allowance for the wait before a walk starts, game
+    /// milliseconds, as Easy derives it from the rules text: what every
+    /// placement's timeout adds to its priced walk ([`crate::compose`]'s
+    /// "Each step's timeout").
+    #[must_use]
+    pub const fn walk_allowance_ms(&self) -> i64 {
+        self.tuning.walk_allowance_ms
+    }
+
     /// Play one seat's round: plan, submit, and say ready.
     pub fn play(&mut self, seat: u8, call: &mut Call<'_>) -> Played {
         let mut wire = Wire::new(call);
@@ -526,18 +535,12 @@ impl Easy {
         let evaluated = weighed.candidates;
         // No share to fill (a segment length past the arithmetic) is no goal:
         // the composition then fails and the safe playbook is submitted.
-        let top = match compose::fill_ms(situation) {
-            Some(fill) => candidates::top_k(&evaluated, fill),
-            None => Vec::new(),
-        };
-        let guard = candidates::guard(&evaluated);
         let spire = compose::spire(situation, &self.tuning);
 
         if let Some(composed) = compose::compose(
             situation,
             &self.tuning,
-            &top,
-            guard,
+            &evaluated,
             spire.as_ref(),
             &declared,
         ) && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)

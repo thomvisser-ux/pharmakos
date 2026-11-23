@@ -3033,7 +3033,9 @@ fn far_vent() -> Script {
 
 /// A vent no site covers is weighed once more as a stone: one `toward`
 /// estimate naming it, and the round places a beacon `toward` it by name,
-/// with the Hold & Build place step's own timeout and `on_fail` SKIP.
+/// with a timeout of its own (never Hold & Build's 60 s: fix pass 2, item 1;
+/// `no_composed_placement_times_out_before_its_own_price`) and `on_fail`
+/// SKIP.
 #[test]
 fn a_far_vent_refused_for_covering_is_reached_with_a_stone() {
     let (script, played) = play(far_vent());
@@ -3044,7 +3046,7 @@ fn a_far_vent_refused_for_covering_is_reached_with_a_stone() {
         ops.contains(r#""place_beacon": { "at": { "toward": { "feature": { "feature_id": "vent_56_32" } } } }"#),
         "{ops}"
     );
-    assert!(ops.contains(r#""timeout_ms": 60000"#), "{ops}");
+    assert!(!ops.contains(r#""timeout_ms": 60000"#), "{ops}");
     assert!(ops.contains(r#""label": "stone""#), "{ops}");
     assert!(played.why.contains("stepping-stone"), "{}", played.why);
 }
@@ -3157,27 +3159,71 @@ fn the_worst_stone_round_spends_every_term() {
 // Fix pass 1: one kW budget, refusals, stones worth their goal
 // ---------------------------------------------------------------------------
 
-/// The new draw a composed round fields, kW: the Spire's 3, the Survey
-/// post's two scouts at 1 each and the guard's picket scout at 1, read from
-/// the patch it composes.
-fn new_draw(transcript: &[String]) -> i64 {
-    let Some(patch) = transcript
+/// A whole-number row of the rules text, by its path of keys.
+fn rules_row(path: &[&str]) -> i64 {
+    let table = read(&rules_json()).expect("the rules text reads");
+    let row = path
         .iter()
-        .find_map(|line| line.strip_prefix("patch_plan "))
-    else {
-        return 0;
-    };
-    let spire = if patch.contains("queue_spire") { 3 } else { 0 };
-    let survey = if patch.contains("survey_post") { 2 } else { 0 };
-    let guard = i64::from(patch.contains("place_guard"));
-    spire + survey + guard
+        .try_fold(&table, |at, key| at.get(key))
+        .unwrap_or_else(|| panic!("the rules text has no `{}` row", path.join(".")));
+    match row {
+        Json::Number(lexeme) => lexeme.parse().expect("a whole number"),
+        other => panic!("`{}` is no number: {other:?}", path.join(".")),
+    }
 }
 
-/// One kW budget (fix pass 1, item 1): the guard's picket, the Spire and the
-/// Survey post's scouts are weighed against one headroom, in that order, so
-/// the round never fields more new draw than the grid carries. Probe 5's case
-/// first (supply 10, draw 6: 4 kW, where the Spire and the post together are
-/// 5), then every headroom from 0 to 8 kW with the commander dead in the last
+/// Every `scout_count` and `picket_scouts` a JSON value sets, summed.
+fn scouts_set(value: &Json) -> i64 {
+    match value {
+        Json::Object(members) => members
+            .iter()
+            .map(|(key, held)| match (key.as_str(), held) {
+                ("scout_count" | "picket_scouts", Json::Number(lexeme)) => {
+                    lexeme.parse::<i64>().expect("a count")
+                }
+                _ => scouts_set(held),
+            })
+            .sum(),
+        Json::Array(items) => items.iter().map(scouts_set).sum(),
+        _ => 0,
+    }
+}
+
+/// The new draw a composed round fields, kW, priced at the rows every grid
+/// charges (fix pass 2, item 4): each scout it orders at `power.kw_per_unit`
+/// -- a Survey post's `scout_count` and a guard copy's `picket_scouts`, read
+/// from the patch, and the Defend the Core template's own picket when the
+/// guard fills that template alone (its step is the template's, so the patch
+/// does not carry it) -- and a queued Spire at its own `draw_kw`.
+fn new_draw(transcript: &[String]) -> i64 {
+    if !transcript
+        .iter()
+        .any(|line| line.starts_with("patch_plan "))
+    {
+        return 0;
+    }
+    let ops = Json::Array(composing_ops(transcript));
+    let written = write(&ops);
+    let spire = if written.contains("queue_spire") {
+        rules_row(&["structures", "resonance_spire", "draw_kw"])
+    } else {
+        0
+    };
+    let guard_alone =
+        !written.contains("place_guard") && written.contains("A Defend beacon beside the core");
+    let template_picket = if guard_alone {
+        let (text, _) = template("defend_the_core").expect("the library's Defend the Core");
+        scouts_set(&read(&strip_comments(&text)).expect("the template reads"))
+    } else {
+        0
+    };
+    spire + (scouts_set(&ops) + template_picket) * rules_row(&["power", "kw_per_unit"])
+}
+
+/// One kW budget (fix pass 1, item 1): the guard's picket and the Spire are
+/// weighed against one headroom, so the round never fields more new draw
+/// than the grid carries (cut 3: no Survey post). Probe 5's case first
+/// (supply 10, draw 6: 4 kW), then every headroom from 0 to 8 kW with the commander dead in the last
 /// Push, so the guard is weighed too.
 #[test]
 fn one_kw_budget_never_composes_more_draw_than_the_headroom() {
@@ -3351,5 +3397,380 @@ fn goals_too_long_for_the_share_do_not_crowd_out_one_that_fits() {
         Some(r#"{ "feature_id": "vent_40_32" }"#),
         "{}",
         played.why
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fix pass 2: each step's timeout is its own
+// ---------------------------------------------------------------------------
+
+/// The travel estimate's allowance for the wait before a walk starts, as the
+/// rules text derives it: `(4095 - 1) / repath_cap_per_tick + 1` ticks of
+/// 50 ms (`crates/operator/src/tuning.rs`' `walk_allowance_ms`, which
+/// `crates/gamectl/tests/ladder.rs` holds to the sim's).
+fn walk_allowance_ms() -> i64 {
+    let ticks = (4_095_i64 - 1)
+        .checked_div(rules_row(&["locomotion", "repath_cap_per_tick"]))
+        .expect("a positive repath cap");
+    (ticks + 1) * 50
+}
+
+/// Every placement a round composes, as the whole step it seals: each step
+/// the patch adds whole, and the template's own place step with what the
+/// patch writes into it (its `covering`, its `timeout_ms`), read from the
+/// text the composing `patch_plan` was given.
+fn composed_placements(transcript: &[String]) -> Vec<Json> {
+    let params = transcript
+        .iter()
+        .find_map(|line| line.strip_prefix("patch_plan "))
+        .and_then(|params| read(params).ok())
+        .expect("one composing patch");
+    let base = params
+        .get("playbook_jsonc")
+        .and_then(text)
+        .and_then(|jsonc| read(&strip_comments(jsonc)).ok())
+        .expect("the template the patch was applied to");
+    let ops = composing_ops(transcript);
+    let mut steps: Vec<Json> = ops
+        .iter()
+        .filter(|op| matches!(op.get("op").and_then(text), Some("add" | "replace")))
+        .filter_map(|op| op.get("value"))
+        .filter(|step| step.get("place_beacon").is_some())
+        .cloned()
+        .collect();
+    for op in &ops {
+        let Some(path) = op.get("path").and_then(text) else {
+            continue;
+        };
+        let Some(step_at) = path.strip_suffix("/timeout_ms") else {
+            continue;
+        };
+        let mut step = pointer_get(&base, step_at)
+            .cloned()
+            .expect("the template's place step");
+        let covering = format!("{step_at}/place_beacon/at/covering");
+        if let (Json::Object(members), Some(value)) = (&mut step, op.get("value")) {
+            members.retain(|(key, _)| key != "timeout_ms");
+            members.push((String::from("timeout_ms"), value.clone()));
+        }
+        if let Some(named) = ops
+            .iter()
+            .find(|op| op.get("path").and_then(text) == Some(covering.as_str()))
+            .and_then(|op| op.get("value"))
+            && let Some(Json::Object(place)) = match &mut step {
+                Json::Object(members) => members
+                    .iter_mut()
+                    .find(|(key, _)| key == "place_beacon")
+                    .map(|(_, place)| place),
+                _ => None,
+            }
+            && let Some((_, Json::Object(at))) = place.iter_mut().find(|(key, _)| key == "at")
+        {
+            at.clear();
+            at.push((String::from("covering"), named.clone()));
+        }
+        steps.push(step);
+    }
+    steps
+}
+
+/// The worlds the timeout property is held over: a busy round, a far vent's
+/// stone, a raid, a licensed core, the round after a commander's death (a
+/// guard beside the goals) and the same with every goal gone (the guard
+/// alone fills Defend the Core).
+fn timeout_worlds() -> Vec<(&'static str, Script)> {
+    let mut died = Script::busy(0);
+    died.round = 2;
+    died.feed_deaths = vec![0];
+    let mut guard_alone = Script::new(0);
+    let mut start = Feature::new("seam", "standard", [36, 34]);
+    start.covered = true;
+    guard_alone.features.push(start);
+    guard_alone.round = 3;
+    guard_alone.feed_deaths = vec![0];
+    vec![
+        ("busy", Script::busy(0)),
+        ("far vent", far_vent()),
+        ("raid", raid_world()),
+        ("licensed", licensed()),
+        ("died", died),
+        ("guard alone", guard_alone),
+    ]
+}
+
+/// No composed placement times out before its own price (fix pass 2, item
+/// 1): a `place_beacon`'s timeout bounds its walk, and every one Easy composes
+/// -- the template's own place step, a copy of it, a stone, a raid, a guard
+/// post -- carries a timeout of at least its walk from the core
+/// (the scripted estimate's leg), its on-site time as Easy prices it, and the
+/// travel estimate's allowance.
+#[test]
+fn no_composed_placement_times_out_before_its_own_price() {
+    let easy = Easy::new(&rules_json()).expect("the rules text reads");
+    let allowance = walk_allowance_ms();
+    assert_eq!(allowance, 12_800, "the committed repath cap's allowance");
+    let mut checked = 0_usize;
+    for (what, world) in timeout_worlds() {
+        let (script, played) = play(world);
+        assert_eq!(played.submitted, Submitted::Own, "{what}: {}", played.why);
+        let core = script
+            .beacons
+            .iter()
+            .find(|beacon| beacon.core && beacon.owner == script.seat)
+            .map(|beacon| beacon.at)
+            .expect("the seat's core");
+        for step in composed_placements(&script.transcript) {
+            let at = step
+                .get("place_beacon")
+                .and_then(|place| place.get("at"))
+                .expect("a placement's location");
+            let site = script.place(at).expect("the script answers the site");
+            let walk =
+                (i64::from(core[0] - site[0]).abs() + i64::from(core[1] - site[1]).abs()) * 500;
+            let on_site = easy.on_site_ms(&step).expect("Easy prices the step");
+            let timeout = match step.get("timeout_ms") {
+                Some(Json::Number(lexeme)) => lexeme.parse::<i64>().expect("a timeout"),
+                _ => panic!("{what}: a placement with no timeout: {}", compact(&step)),
+            };
+            eprintln!(
+                "{what}: {} walk {walk} on site {on_site} timeout {timeout}",
+                step.get("label").and_then(text).unwrap_or("?")
+            );
+            assert!(
+                timeout >= walk + on_site + allowance,
+                "{what}: {timeout} ms against a walk of {walk}, {on_site} on site and the \
+                 {allowance} allowance: {}",
+                compact(&step)
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 6, "every world composed a placement: {checked}");
+}
+
+// ---------------------------------------------------------------------------
+// Fix pass 2: one ranking
+// ---------------------------------------------------------------------------
+
+/// A world of the reviewer's probe (fix pass 2, item 3): a 60 s segment, so
+/// a 42 s share; the starting seam covered beside the core; three stones
+/// toward rich seams whose site is at `y`; and a near lean vent.
+fn crowded(y: i32) -> Script {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.segment_ms = 60_000;
+    world.remaining_ms = 60_000;
+    let mut start = Feature::new("seam", "standard", [36, 34]);
+    start.covered = true;
+    start.travel_ms = Some(3_000);
+    world.features.push(start);
+    for x in [2, 4, 6] {
+        let mut seam = Feature::new("seam", "rich", [x, 63]);
+        seam.site = None;
+        seam.stone = Some([x, y, GROUND]);
+        world.features.push(seam);
+    }
+    let mut vent = Feature::new("vent", "lean", [40, 32]);
+    vent.site = Some([36, 32, GROUND]);
+    world.features.push(vent);
+    world
+}
+
+/// The top-k cuts against what is funded ahead of the ranking, not the whole
+/// share (fix pass 2, item 3): in the round after the commander's death the
+/// guard post is funded first, and stones that fit the 42 s share but not
+/// what the guard leaves of it are no goals this round, so they never crowd
+/// out the near vent, which fits: Easy composes the guard and the vent.
+#[test]
+fn goals_that_do_not_fit_what_the_guard_leaves_do_not_crowd_out_one_that_does() {
+    for y in [44_i32, 48, 52, 56] {
+        let mut world = crowded(y);
+        world.round = 2;
+        world.feed_deaths = vec![0];
+        let (script, played) = play(world);
+        let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+        assert!(
+            ops.contains("place_guard"),
+            "y {y}: {} -- {ops}",
+            played.why
+        );
+        assert!(ops.contains("vent_40_32"), "y {y}: {} -- {ops}", played.why);
+        assert!(!ops.contains("toward"), "y {y}: {} -- {ops}", played.why);
+    }
+}
+
+/// The reviewer's probe itself (fix pass 2, items 2 and 3), with no Survey
+/// post since cut 3: each round composes its best goal by utility per second
+/// that fits: with a fresh sighting, the raid on it; else the stone where its
+/// site is near enough to fit the share (its served Mine is worth more per
+/// second than the lean vent's Generator), the vent where the stone no longer
+/// fits.
+#[test]
+fn far_stones_never_crowd_out_the_goals() {
+    for y in [40_i32, 44, 48, 52, 56, 60, 64, 68] {
+        for fresh in [false, true] {
+            let mut world = crowded(y);
+            if fresh {
+                world.beacons.push(Beacon {
+                    id: String::from("e_01"),
+                    at: [60, 60, GROUND],
+                    owner: 1,
+                    core: false,
+                    powered: false,
+                    priority: "",
+                });
+                world.sighting_ages.insert(String::from("e_01"), 0);
+            }
+            let (script, played) = play(world);
+            let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+            eprintln!(
+                "y {y} fresh {fresh}: vent {} stone {} raid {}",
+                ops.contains("vent_40_32"),
+                ops.contains("toward"),
+                ops.contains("\"e_01\"")
+            );
+            let goal = if fresh {
+                ops.contains("\"e_01\"")
+            } else {
+                ops.contains("vent_40_32") || ops.contains("toward")
+            };
+            assert!(goal, "y {y}, fresh {fresh}: {} -- {ops}", played.why);
+        }
+    }
+}
+
+/// A goal placeable now outranks a stone toward a feature of the same worth
+/// (fix pass 2, item 2): two rich seams, one with a site the seat's spheres
+/// allow, a 20 s walk away, and one no site covers whose stone is an 8 s
+/// walk. The stone's worth is its Mine's discounted by the stone and the two
+/// rounds its chain takes, so the Mine placeable now is composed and the
+/// stone is not, though its own walk is the shorter.
+#[test]
+fn a_goal_placeable_now_outranks_a_stone_toward_a_feature_of_the_same_worth() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    let mut near = Feature::new("seam", "rich", [56, 32]);
+    near.site = Some([72, 32, GROUND]);
+    world.features.push(near);
+    let mut far = Feature::new("seam", "rich", [8, 32]);
+    far.site = None;
+    far.stone = Some([24, 32, GROUND]);
+    world.features.push(far);
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(ops.contains("seam_56_32"), "{} -- {ops}", played.why);
+    assert!(!ops.contains("toward"), "{} -- {ops}", played.why);
+}
+
+/// A chain once begun is continued (fix pass 2, item 2): the seat's stone
+/// `b_02` stands north of its core, its sphere holding no feature, so it is
+/// the stone toward the rich seam further north, whose gap to the seat's
+/// spheres it closed by its whole radius. A second far rich seam east of the
+/// core has a nearer stone site, and would rank first, but its gap the stone
+/// closed not at all: only the begun chain's stone is weighed, and composed.
+#[test]
+fn a_chain_once_begun_is_continued_toward_its_feature() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.beacons.push(Beacon {
+        id: String::from("b_02"),
+        at: [32, 56, GROUND],
+        owner: 0,
+        core: false,
+        powered: true,
+        priority: "normal",
+    });
+    let mut north = Feature::new("seam", "rich", [32, 110]);
+    north.site = None;
+    north.stone = Some([32, 80, GROUND]);
+    world.features.push(north);
+    let mut east = Feature::new("seam", "rich", [80, 40]);
+    east.site = None;
+    east.stone = Some([56, 40, GROUND]);
+    world.features.push(east);
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    assert_eq!(towards(&script.transcript, "seam_32_110"), 1);
+    assert_eq!(towards(&script.transcript, "seam_80_40"), 0);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(
+        ops.contains(r#""toward": { "feature": { "feature_id": "seam_32_110" } }"#),
+        "{} -- {ops}",
+        played.why
+    );
+}
+
+/// A begun chain whose `toward` is refused is shown unreachable: the rest of
+/// the far features are weighed, and the round reaches toward another.
+#[test]
+fn a_begun_chain_refused_its_stone_weighs_the_rest() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.beacons.push(Beacon {
+        id: String::from("b_02"),
+        at: [32, 56, GROUND],
+        owner: 0,
+        core: false,
+        powered: true,
+        priority: "normal",
+    });
+    let mut north = Feature::new("seam", "rich", [32, 110]);
+    north.site = None;
+    north.stone = None;
+    world.features.push(north);
+    let mut east = Feature::new("seam", "rich", [80, 40]);
+    east.site = None;
+    east.stone = Some([56, 40, GROUND]);
+    world.features.push(east);
+    let (script, played) = play(world);
+    assert_eq!(towards(&script.transcript, "seam_32_110"), 1);
+    assert_eq!(towards(&script.transcript, "seam_80_40"), 1);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(
+        ops.contains(r#""toward": { "feature": { "feature_id": "seam_80_40" } }"#),
+        "{} -- {ops}",
+        played.why
+    );
+}
+
+/// The Spire's time is its priced step's, paid out of the hold (fix pass 2,
+/// item 6): the same Hold & Build round with and without the licence, its
+/// goals unchanged, holds shorter by exactly the `queue_spire` step's price
+/// as Easy prices it (`crates/gamectl/tests/pricing.rs` holds that price to
+/// the verifier's).
+#[test]
+fn the_spire_takes_its_priced_time_out_of_the_hold() {
+    let world = || {
+        let mut world = Script::busy(0);
+        world.features.retain(|feature| feature.id != "seam_20_60");
+        world.survey_post = Some([34, 34, GROUND]);
+        world.treasury = 10_000;
+        world
+    };
+    let hold_of = |world: Script| {
+        let (script, played) = play(world);
+        assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+        let ops = composing_ops(&script.transcript);
+        op_value(&ops, "replace", "/declarative/route/1/hold/ms")
+            .and_then(|value| match value {
+                Json::Number(n) => n.parse::<i64>().ok(),
+                _ => None,
+            })
+            .expect("the hold, a number")
+    };
+    let unlicensed = hold_of(world());
+    let mut licensed = world();
+    licensed.licences = vec![SPIRE_LICENCE];
+    let with_spire = hold_of(licensed);
+    let easy = Easy::new(&rules_json()).expect("the rules text reads");
+    let spire = easy
+        .on_site_ms(&pharmakos_operator::steps::spire("b_00"))
+        .expect("the Spire's step prices");
+    assert!(spire > 0);
+    assert_eq!(
+        unlicensed - with_spire,
+        spire,
+        "{unlicensed} and {with_spire}"
     );
 }

@@ -442,20 +442,55 @@ fn fork_is_behind_the_research_feature_and_nowhere_else() {
     );
 }
 
+/// Every code line of `src/encoding.rs` that may name the hash crate, its
+/// state or its functions, whole and trimmed: the one private import, the
+/// streaming state's field and its one seeded constructor, and the one-shot
+/// function's two seeded calls (`Enc::finish` and `digest`). Anything else in
+/// that file that names them — another function of the crate, an unseeded
+/// call, a `pub use` or a type alias that hands the crate on under another
+/// name — is a second door to a hash function, and fails (S3's `fpstream`,
+/// fix pass 1).
+const ENCODING_HASH_LINES: &[&str] = &[
+    "use xxhash_rust::xxh3::{Xxh3, xxh3_64_with_seed};",
+    "state: Xxh3,",
+    "state: Xxh3::with_seed(STATE_HASH_SEED),",
+    "xxh3_64_with_seed(&self.buf, STATE_HASH_SEED)",
+    "xxh3_64_with_seed(bytes, STATE_HASH_SEED)",
+];
+
+/// Whether a code line names the hash crate or anything from it: every one
+/// of its names starts `xxh` or `Xxh`.
+fn names_the_hash(line: &str) -> bool {
+    line.contains("xxh") || line.contains("Xxh")
+}
+
 #[test]
 fn there_is_exactly_one_hash_seed_and_one_hash_function() {
     let mut seed_definitions = 0_usize;
     let mut hash_calls: Vec<String> = Vec::new();
+    let mut encoding_lines: Vec<String> = Vec::new();
     for path in sources() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
+        let is_encoding = path.ends_with("encoding.rs");
         for (number, line) in code_lines(&text) {
             if line.contains("const STATE_HASH_SEED") {
                 seed_definitions += 1;
             }
-            if line.contains("xxh3_64_with_seed") && !path.ends_with("encoding.rs") {
-                hash_calls.push(format!("{}:{number}", path.display()));
+            // The hash crate is named in src/encoding.rs alone, and there
+            // only on the lines `ENCODING_HASH_LINES` lists, so `digest` and
+            // `StreamingDigest` are the one hash function's only two doors
+            // (S3's `fpstream`).
+            if names_the_hash(&line) {
+                if is_encoding {
+                    encoding_lines.push(line.trim().to_owned());
+                    if !ENCODING_HASH_LINES.contains(&line.trim()) {
+                        hash_calls.push(format!("{}:{number}: {}", path.display(), line.trim()));
+                    }
+                } else {
+                    hash_calls.push(format!("{}:{number}", path.display()));
+                }
             }
             for other in ["sha2::", "blake3", "md5", "siphash", "fnv"] {
                 assert!(
@@ -472,8 +507,21 @@ fn there_is_exactly_one_hash_seed_and_one_hash_function() {
     );
     assert!(
         hash_calls.is_empty(),
-        "the hash function is called from outside src/encoding.rs, which is how a second \
-         encoding starts: {hash_calls:?}"
+        "the hash crate is named outside src/encoding.rs's own seeded uses, which is how a \
+         second encoding starts: {hash_calls:?}"
+    );
+    // Each listed line once: the guard reads the file it means, and a line
+    // that left the file leaves the list too.
+    let mut found = encoding_lines.clone();
+    found.sort();
+    let mut listed: Vec<String> = ENCODING_HASH_LINES
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect();
+    listed.sort();
+    assert_eq!(
+        found, listed,
+        "src/encoding.rs names the hash crate on exactly the listed lines, each once"
     );
 }
 

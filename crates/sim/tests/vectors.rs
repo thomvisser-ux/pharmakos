@@ -15,7 +15,9 @@
     reason = "clippy.toml sets allow-expect-in-tests and allow-unwrap-in-tests, but that configuration only recognises #[test] functions and #[cfg(test)] modules — not an integration test's helper functions. A panic is this file's failure report (clippy.toml's own wording)."
 )]
 
-use pharmakos_sim::encoding::{ENCODING_VERSION, Enc, STATE_HASH_SEED, digest, hex};
+use pharmakos_sim::encoding::{
+    ENCODING_VERSION, Enc, STATE_HASH_SEED, StreamingDigest, digest, hex,
+};
 use pharmakos_sim::math::fixed::{Angle, Fx, QUARTER_TURN, SIN_TABLE_LEN, Sq, cos, sin, sin_table};
 use pharmakos_sim::math::quantity::{Hp, Kw, MS_PER_TICK, Money, Ms, TICK_HZ, Tick};
 use pharmakos_sim::math::random::{Stream, StreamRng, mix64};
@@ -365,7 +367,7 @@ fn the_quantities_say_what_they_do_at_the_limit() {
 #[test]
 fn the_plan_fingerprint_is_unmoved() {
     use pharmakos_proto::gp::v1::Playbook;
-    use pharmakos_sim::hash::plan_fingerprint;
+    use pharmakos_sim::hash::{plan_fingerprint, plan_fingerprint_of};
     let cases = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("verifier")
@@ -378,12 +380,20 @@ fn the_plan_fingerprint_is_unmoved() {
     ] {
         let text = std::fs::read_to_string(cases.join(format!("{case}.json")))
             .unwrap_or_else(|error| panic!("{case}: the verifier's case file: {error}"));
-        let playbook: Playbook = pharmakos_proto::json::decode(&text)
+        let decoded = pharmakos_proto::json::decode_encoded::<Playbook>(&text)
             .unwrap_or_else(|error| panic!("{case}: a playbook: {error}"));
+        let playbook = decoded.message().clone();
         assert_eq!(
             plan_fingerprint(&playbook).map(hex),
             Ok(hex(pinned)),
             "{case}: the fingerprint the verifier golden carries"
+        );
+        // And from the wire bytes, the text hashed in pieces as it is
+        // written (S3's `fpstream`).
+        assert_eq!(
+            plan_fingerprint_of(&decoded).map(hex),
+            Ok(hex(pinned)),
+            "{case}: the streamed fingerprint"
         );
         // A stamped fingerprint is cleared before hashing, so stamping the
         // file with any value leaves the fingerprint where it was.
@@ -392,5 +402,127 @@ fn the_plan_fingerprint_is_unmoved() {
             meta.fingerprint = vec![0xff; 8];
         }
         assert_eq!(plan_fingerprint(&stamped), plan_fingerprint(&playbook));
+    }
+}
+
+/// The streaming digest (S3's `fpstream`) over its two pinned literals, the
+/// second cut at every point: the values decisions log item 48 pinned for
+/// [`digest`], so the streaming shape is held to a literal too, not only to
+/// the one-shot shape.
+#[test]
+fn the_streaming_digest_answers_the_pinned_digests() {
+    assert_eq!(StreamingDigest::new().finish(), 0xFE1A_F732_B028_10AD);
+    assert_eq!(StreamingDigest::default().finish(), 0xFE1A_F732_B028_10AD);
+    let text = b"pharmakos/g4";
+    for cut in 0..=text.len() {
+        let (head, tail) = text.split_at(cut);
+        let mut streamed = StreamingDigest::new();
+        streamed.update(head);
+        streamed.update(&[]);
+        streamed.update(tail);
+        assert_eq!(streamed.finish(), 0xE170_26C8_A5EA_4D30, "cut at {cut}");
+    }
+}
+
+/// `bytes` handed to a streaming digest in pieces of the lengths `sizes`
+/// gives in turn (a zero is an empty write), the last piece whatever is left.
+fn streamed(bytes: &[u8], mut sizes: impl FnMut() -> usize) -> u64 {
+    let mut digest = StreamingDigest::new();
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let size = sizes().min(rest.len());
+        let (piece, after) = rest.split_at(size);
+        digest.update(piece);
+        rest = after;
+    }
+    digest.finish()
+}
+
+/// The lengths xxh3's streaming state treats differently: every length to 300
+/// (the short paths end at 16, 128 and 240, and the state's own buffer is 256
+/// bytes), and either side of a stripe (64 bytes), of the buffer, and of a
+/// block (1,024 bytes at the default secret's size) several times over.
+fn boundary_lengths() -> Vec<usize> {
+    let mut lengths: Vec<usize> = (0..=300).collect();
+    for edge in [
+        320, 448, 511, 512, 513, 767, 768, 1_023, 1_024, 1_025, 1_088, 2_047, 2_048, 2_049, 2_240,
+        2_367, 3_072, 4_095, 4_096, 4_097, 8_192, 8_193,
+    ] {
+        for length in [edge - 1, edge, edge + 1] {
+            if !lengths.contains(&length) {
+                lengths.push(length);
+            }
+        }
+    }
+    lengths
+}
+
+/// Every boundary length under seven chunkings: a byte at a time, the whole
+/// slice at once, odd fixed sizes, sizes either side of the state's buffer,
+/// and seeded sizes with empty writes between them. Each must answer what
+/// [`digest`] answers for the slice whole.
+#[test]
+fn the_streaming_digest_is_the_digest_under_every_chunking() {
+    let buffer = sanity_buffer(8_194);
+    for length in boundary_lengths() {
+        let bytes = buffer.get(..length).unwrap();
+        let whole = digest(bytes);
+        assert_eq!(streamed(bytes, || 1), whole, "{length}: a byte at a time");
+        assert_eq!(streamed(bytes, || usize::MAX), whole, "{length}: one write");
+        for size in [3_usize, 7, 64, 255, 256, 257] {
+            assert_eq!(
+                streamed(bytes, || size),
+                whole,
+                "{length}: pieces of {size}"
+            );
+        }
+        let mut state = u64::try_from(length).unwrap();
+        let seeded = streamed(bytes, || {
+            state = mix64(state);
+            // One write in four is empty; the rest are 1 to 300 bytes.
+            if state % 4 == 0 {
+                0
+            } else {
+                usize::try_from(state % 300).unwrap() + 1
+            }
+        });
+        assert_eq!(seeded, whole, "{length}: seeded pieces with empty writes");
+    }
+}
+
+/// Every two-way cut of every text to 300 bytes, and seeded many-way cuts of
+/// texts past every block size the fingerprint meets (the size budget's
+/// canonical text is 431,573 bytes at its first shape).
+#[test]
+fn the_streaming_digest_is_the_digest_at_every_cut() {
+    let buffer = sanity_buffer(500_000);
+    for length in 0..=300 {
+        let bytes = buffer.get(..length).unwrap();
+        let whole = digest(bytes);
+        for cut in 0..=length {
+            let (head, tail) = bytes.split_at(cut);
+            let mut digest = StreamingDigest::new();
+            digest.update(head);
+            digest.update(tail);
+            assert_eq!(digest.finish(), whole, "{length} cut at {cut}");
+        }
+    }
+    for (seed, length) in (1_u64..).zip([4_096_usize, 65_537, 431_573, 500_000]) {
+        let bytes = buffer.get(..length).unwrap();
+        let whole = digest(bytes);
+        for round in 0..8_u64 {
+            let mut state = seed.wrapping_mul(1_000).wrapping_add(round);
+            let longest = *[17_usize, 1_024, 8_192, 70_000]
+                .get(usize::try_from(round % 4).unwrap())
+                .unwrap();
+            let cut = streamed(bytes, || {
+                state = mix64(state);
+                usize::try_from(state % u64::try_from(longest).unwrap()).unwrap()
+            });
+            assert_eq!(
+                cut, whole,
+                "{length}: round {round}, pieces below {longest}"
+            );
+        }
     }
 }
