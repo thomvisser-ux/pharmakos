@@ -30,6 +30,7 @@ const SOURCES: &[&str] = &[
     "src/easy.rs",
     "src/lib.rs",
     "src/playbook.rs",
+    "src/price.rs",
     "src/safe.rs",
     "src/situation.rs",
     "src/tuning.rs",
@@ -289,6 +290,18 @@ const POLICY: &str = "a refused or unreadable answer is a plan, candidate or pro
 /// exactly, how many lines it is, the rule)`.
 const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     (
+        "src/price.rs",
+        "let step: Step = pharmakos_proto::json::decode_json(step).ok()?;",
+        1,
+        "a step is the operator's own JSON, built from a declared template or its own          builders; one that is no `gp.v1.Step` has no price, and the candidate it prices is not          weighed (`candidates.rs`' `priced`)",
+    ),
+    (
+        "src/price.rs",
+        "i64::try_from(list.len()).ok()",
+        1,
+        "a list in one decoded step is far shorter than `i64::MAX`; a count that did not fit          would leave the step unpriced, not priced at a default",
+    ),
+    (
         "src/candidates.rs",
         ".ok()",
         2,
@@ -307,13 +320,7 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ("src/candidates.rs", "Err(_) => Vec::new(),", 1, POLICY),
     (
         "src/candidates.rs",
-        "let Ok(Some((place, travel, lead))) = read else {",
-        1,
-        POLICY,
-    ),
-    (
-        "src/candidates.rs",
-        "let Ok(estimate) = wire.call(\"estimate_route\", params) else {",
+        "let Ok(&Some((place, travel, lead))) = read.as_ref() else {",
         1,
         POLICY,
     ),
@@ -325,7 +332,7 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "src/candidates.rs",
-        "let threat = i64::try_from(threat_near(situation, tuning, target.at())?).ok()?;",
+        "let threat = i64::try_from(threat_near(situation, tuning, target.at(), radius)?).ok()?;",
         1,
         "a threat past `i64` is no score at all, and the raid is then not weighed",
     ),

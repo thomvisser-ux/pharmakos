@@ -34,7 +34,7 @@
   "meta": {
     "title": "Hold & Build",
     "author_kind": "BUILTIN",
-    "note": "Easy, seat 0, round 1, told no seed (Easy draws nothing at random). A Build beacon covering the lean heat vent vent_52_335, at (43, 344, 29) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 40 s of route (Easy fills 42 s of the segment)."
+    "note": "Easy, seat 0, round 1, told no seed (Easy draws nothing at random). A Build beacon covering the lean heat vent vent_52_335, at (43, 344, 29) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 43 s of route (Easy fills 56 s of the segment)."
   },
   "kind": "PLAYBOOK",
   "declarative": {
@@ -48,11 +48,17 @@
         // of yours inside the sphere is repaired once it falls below half its
         // hit points, and an omitted threshold would mean never (S2's plan,
         // decision 38).
-        // PLACEHOLDER: the repair threshold, 50, a proposal — owner, at S2's demo
+        // PLACEHOLDER: the repair threshold, 50, a proposal — owner, at S3's demo
+        // Why: the two settings an omitted value would leave to the reader,
+        // written as they read (S1's demo, finding L): the beacon answers fire
+        // and starts none, and its mandate reshapes no terrain to place a
+        // target.
         "initial": {"mandate": {"build": {"targets": [
           {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
-        ], "repair_threshold_pct": 50}}}},
-       "timeout_ms": 60000, "on_fail": {"action": "SKIP"}}],
+        ], "repair_threshold_pct": 50, "terraform": "NONE"}, "roe": "RETURN_FIRE"}}},
+       "timeout_ms": 54900, "on_fail": {"action": "SKIP"}},
+      {"label": "hold", "hold": {"ms": 8400}}
+    ],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander
       // walks back to safety and waits before carrying on.
