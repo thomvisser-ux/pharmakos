@@ -99,7 +99,7 @@ use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::World;
-use pharmakos_sim::attack::{Aim, NEVER, Phase as AttackPhase};
+use pharmakos_sim::attack::{Aim, AttackRow};
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchPhase, MatchSettings};
@@ -158,11 +158,14 @@ pub struct Fired {
 /// A **hunt** is an Attack beacon whose target is the enemy commander
 /// ([`Aim::Commander`]); it is **filed** once its row has been seen in the
 /// Attack table with that aim, and **launched** once the row has been seen
-/// launched: on its way or fighting ([`AttackPhase::Launched`]), walking home
-/// after it ([`AttackPhase::Returning`]), stamped with a launch tick, or with a
-/// wave counted this segment. Read after every tick and at every Lull, so a
-/// launch is seen on the tick it happens even if the attack ends on the next
-/// one, and a row that `end()` reset still counts through `waves_used`.
+/// with a wave counted (`waves_used > 0`). That one condition is sufficient
+/// because of when the table is read: after every tick and at every Lull. The
+/// sim counts a wave on the tick the force launches (`attack.rs`, the tail of
+/// `gather`) and clears the count only on a new segment's first tick
+/// (`advance`), so the read after the launch tick always sees it, even when
+/// the attack ends on that same tick: `end()` resets the phase and the launch
+/// stamp, never the count. The phase and the stamp would each miss that case,
+/// so neither is read (fix pass 1 of #219, item 6).
 ///
 /// Read from the world rather than the feed because the feed's
 /// `attack_launched` names no beacon (`crates/gateway/src/feed.rs`: a kind, a
@@ -193,8 +196,7 @@ impl Hunts {
             }
             let beacon = row.beacon.raw();
             self.filed.insert(beacon);
-            if row.phase != AttackPhase::Gathering || row.launched_at != NEVER || row.waves_used > 0
-            {
+            if launched(row) {
                 self.launched.insert(beacon);
             }
         }
@@ -474,6 +476,12 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
         index = next_index(index)?;
     }
     Ok(played)
+}
+
+/// Whether an Attack row, read after a tick, has launched this segment: a
+/// wave counted, the one field `end()` does not reset ([`Hunts`]).
+fn launched(row: &AttackRow) -> bool {
+    row.waves_used > 0
 }
 
 /// The segment after `index`.
@@ -1309,6 +1317,31 @@ mod tests {
             rules_hash: 0,
             hunts: Hunts::default(),
         }
+    }
+
+    /// Fix pass 1 of #219, item 6: a hunt that launched and ended on the same
+    /// tick, read after that tick, is regathered with no launch stamp and one
+    /// wave counted; it launched. A row that never launched has no wave.
+    #[test]
+    fn a_launch_is_its_wave_count_even_after_a_same_tick_end() {
+        use pharmakos_sim::attack::{AttackRow, NEVER, Phase};
+        use pharmakos_sim::tables::BeaconId;
+        let mut row = AttackRow::fresh(BeaconId::new(3));
+        assert!(!super::launched(&row), "a fresh row has not launched");
+        row.waves_used = 1;
+        row.phase = Phase::Gathering;
+        row.launched_at = NEVER;
+        assert!(
+            super::launched(&row),
+            "ended on its launch tick, it launched"
+        );
+        row.waves_used = 0;
+        row.phase = Phase::Launched;
+        row.launched_at = 120;
+        assert!(
+            !super::launched(&row),
+            "a force still out from an earlier segment was counted when it launched there; the count alone decides"
+        );
     }
 
     /// E22: the total of a run's segments is refused past a `u32`, never
