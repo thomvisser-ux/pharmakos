@@ -43,10 +43,13 @@ decision 29), the winners, the end reason, the end tick, the rounds, the
 arm's outcome (`win` only as the sole winner), and, since S3's `nite3` (the
 plan's E14, additive, so the format string stayed `v1`), `launches`, each
 seat's `attack_launched` count per round (`[[seat 0's round 1, round 2, ...],
-[seat 1's ...]]`, one entry per round played), and `hunts_unlaunched`, how
-many Attack beacons aimed at an enemy commander the two seats filed and never
-launched over the match (read from the Attack table, because the feed's
-`attack_launched` names no beacon); then the summary, whose
+[seat 1's ...]]`, one entry per round played), and `hunts_unlaunched`, each
+seat's Attack beacons aimed at an enemy commander filed and never launched over
+the match, `[seat 0, seat 1]`, shaped like `launches` so the built-in
+operator's hunts never mix into the arm's (read from the Attack table, because
+the feed's `attack_launched` names no beacon; widened from one number by
+`nite3`'s fix pass, before any release read it, so the format string stayed
+`v1`); then the summary, whose
 `win_rate_percent` is `arm_wins x 100 / seeds` rounded down (M-01). One seed
 per line, so a diff reads seed by seed. **It moves** when the format moves
 (a contract change, AGENTS.md section 5), or when either match ends

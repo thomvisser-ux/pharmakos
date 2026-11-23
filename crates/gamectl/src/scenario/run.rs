@@ -87,7 +87,7 @@
 //! PLACEHOLDER: a `builtin` seat plays Easy — owner, S5, with the `operator`
 //! scenario key that would name another difficulty.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -175,31 +175,55 @@ pub struct Fired {
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Hunts {
     /// Every hunt's beacon seen filed, by its id's raw value (row and
-    /// generation, so a rebuilt beacon is a new hunt).
-    pub filed: BTreeSet<u32>,
+    /// generation, so a rebuilt beacon is a new hunt), and the seat that owns
+    /// it, read from the beacon table when the hunt is first seen.
+    pub filed: BTreeMap<u32, u8>,
     /// Every hunt's beacon seen launched.
     pub launched: BTreeSet<u32>,
 }
 
 impl Hunts {
-    /// How many filed hunts never launched.
+    /// How many of `seat`'s filed hunts never launched.
     #[must_use]
-    pub fn unlaunched(&self) -> usize {
-        self.filed.difference(&self.launched).count()
+    pub fn unlaunched_of(&self, seat: u8) -> usize {
+        self.filed
+            .iter()
+            .filter(|(beacon, owner)| **owner == seat && !self.launched.contains(*beacon))
+            .count()
     }
 
     /// Read the Attack table once.
-    fn read(&mut self, world: &World) {
+    ///
+    /// # Errors
+    ///
+    /// [`Exit::Internal`] for an Attack row whose beacon the beacon table
+    /// does not hold: the sim's two tables disagreeing, never a hunt to count
+    /// as nobody's.
+    fn read(&mut self, world: &World) -> Result<(), Failure> {
         for row in world.attack().rows() {
             if !matches!(row.settings.aim, Aim::Commander(_)) {
                 continue;
             }
             let beacon = row.beacon.raw();
-            self.filed.insert(beacon);
+            if let std::collections::btree_map::Entry::Vacant(slot) = self.filed.entry(beacon) {
+                let owner = world
+                    .beacons()
+                    .row_of(row.beacon)
+                    .ok()
+                    .and_then(|at| world.beacons().seats().get(at.index()).copied())
+                    .ok_or_else(|| {
+                        Failure::internal(format!(
+                            "an Attack row names beacon {beacon}, which the beacon table does \
+                             not hold"
+                        ))
+                    })?;
+                slot.insert(owner);
+            }
             if launched(row) {
                 self.launched.insert(beacon);
             }
         }
+        Ok(())
     }
 }
 
@@ -1048,7 +1072,9 @@ fn drain(
     round: u32,
     played: &mut Played,
 ) -> Result<(), Failure> {
-    played.hunts.read(surface.host().map_err(internal)?.world());
+    played
+        .hunts
+        .read(surface.host().map_err(internal)?.world())?;
     let into = &mut played.events;
     let events = surface.feed().events();
     // The feed only grows within a segment, and `seen` restarts at zero when

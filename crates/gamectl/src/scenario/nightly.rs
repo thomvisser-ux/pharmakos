@@ -102,7 +102,7 @@ pub struct SeedResult {
     /// How many hunts, Attack beacons aimed at an enemy commander, the seats
     /// filed and never launched over the whole match
     /// ([`crate::scenario::run::Hunts`]).
-    pub hunts_unlaunched: usize,
+    pub hunts_unlaunched: [usize; 2],
 }
 
 /// Count each seat's launches per round from what a match fired.
@@ -140,6 +140,23 @@ pub fn launches_of(events: &[Fired], rounds: u32) -> Result<[Vec<u32>; 2], Failu
             .ok_or_else(|| refused("is one launch past a u32"))?;
     }
     Ok(launches)
+}
+
+/// Each seat's hunts that never launched, `[seat 0, seat 1]`, shaped like
+/// `launches`, so the built-in operator's hunts never mix into the arm's
+/// figure (fix pass 1 of #219, item 10).
+///
+/// # Errors
+///
+/// [`Exit::Internal`] for a hunt filed by a seat an arm's match does not
+/// have.
+pub fn hunts_of(hunts: &crate::scenario::run::Hunts) -> Result<[usize; 2], Failure> {
+    if let Some((beacon, seat)) = hunts.filed.iter().find(|(_, seat)| **seat > 1) {
+        return Err(Failure::internal(format!(
+            "a hunt (beacon {beacon}) was filed by seat {seat}, and an arm's match seats 0 and 1"
+        )));
+    }
+    Ok([hunts.unlaunched_of(0), hunts.unlaunched_of(1)])
 }
 
 /// The event kind a launch is (`EventKind::AttackLaunched`'s name).
@@ -309,7 +326,7 @@ pub fn play_seeds(
             ending,
             outcome,
             launches,
-            hunts_unlaunched: played.hunts.unlaunched(),
+            hunts_unlaunched: hunts_of(&played.hunts)?,
         });
     }
     let summary = summarise(&seeds_played)?;
@@ -431,7 +448,7 @@ pub fn render_json(result: &NightlyResult) -> Result<String, Failure> {
             ),
             (
                 String::from("hunts_unlaunched"),
-                number(&seed.hunts_unlaunched),
+                Json::Array(seed.hunts_unlaunched.iter().map(|n| number(n)).collect()),
             ),
         ]);
         lines.push(format!("    {}", write(&entry)));
@@ -489,7 +506,7 @@ pub fn render_text(result: &NightlyResult) -> String {
         let _ = writeln!(
             out,
             "  {}  arm on seat {}: {} after {} round(s), tick {}, won by {}: {}; launches by \
-             round {}; {} hunt(s) never launched",
+             round {}; hunts never launched seat 0 {}, seat 1 {}",
             seeds::spell(seed.seed),
             seed.arm_seat,
             seed.ending.reason,
@@ -502,7 +519,8 @@ pub fn render_text(result: &NightlyResult) -> String {
             },
             seed.outcome.name(),
             launched.join(", "),
-            seed.hunts_unlaunched
+            seed.hunts_unlaunched[0],
+            seed.hunts_unlaunched[1]
         );
     }
     let _ = write!(
@@ -556,7 +574,7 @@ mod tests {
             },
             outcome,
             launches: [vec![0], vec![0]],
-            hunts_unlaunched: 0,
+            hunts_unlaunched: [0, 0],
         }
     }
 
@@ -595,7 +613,7 @@ mod tests {
         second.ending.rounds = 3;
         second.launches = launches_of(&[launch(Some(0), 3, 10_000), launch(Some(0), 3, 10_400)], 3)
             .expect("two launches in a played round");
-        second.hunts_unlaunched = 1;
+        second.hunts_unlaunched = [0, 1];
         let seeds = vec![first, second];
         let summary = summarise(&seeds).expect("two seeds");
         NightlyResult {
@@ -623,7 +641,7 @@ mod tests {
             .expect("the first seed's line");
         assert!(
             first.ends_with(
-                "\"arm\": \"win\", \"launches\": [[0, 1, 0], [0, 0, 0]], \"hunts_unlaunched\": 0},"
+                "\"arm\": \"win\", \"launches\": [[0, 1, 0], [0, 0, 0]], \"hunts_unlaunched\": [0, 0]},"
             ),
             "{first}"
         );
@@ -633,7 +651,7 @@ mod tests {
             .expect("the second seed's line");
         assert!(
             second.ends_with(
-                "\"arm\": \"loss\", \"launches\": [[0, 0, 2], [0, 0, 0]], \"hunts_unlaunched\": 1}"
+                "\"arm\": \"loss\", \"launches\": [[0, 0, 2], [0, 0, 0]], \"hunts_unlaunched\": [0, 1]}"
             ),
             "{second}"
         );
@@ -667,13 +685,13 @@ mod tests {
         );
         assert!(
             lines.get(1).is_some_and(|line| line.ends_with(
-                "win; launches by round seat 0 0/1/0, seat 1 0/0/0; 0 hunt(s) never launched"
+                "win; launches by round seat 0 0/1/0, seat 1 0/0/0; hunts never launched seat 0 0, seat 1 0"
             )),
             "{text}"
         );
         assert!(
             lines.get(2).is_some_and(|line| line.ends_with(
-                "loss; launches by round seat 0 0/0/2, seat 1 0/0/0; 1 hunt(s) never launched"
+                "loss; launches by round seat 0 0/0/2, seat 1 0/0/0; hunts never launched seat 0 0, seat 1 1"
             )),
             "{text}"
         );
@@ -712,6 +730,25 @@ mod tests {
         }
         arm.seats = vec![builtin(0), playbook(1)];
         assert_eq!(arm_of(&arm).ok().as_deref(), Some("p.jsonc"));
+    }
+
+    /// Fix pass 1 of #219, item 10: each seat's unlaunched hunts on its own,
+    /// so the built-in operator's never mix into the arm's; a hunt filed by a
+    /// seat an arm's match does not have is refused.
+    #[test]
+    fn unlaunched_hunts_are_counted_per_seat() {
+        use crate::scenario::run::Hunts;
+        let mut hunts = Hunts::default();
+        hunts.filed.insert(3, 0);
+        hunts.filed.insert(9, 1);
+        hunts.filed.insert(12, 1);
+        hunts.launched.insert(9);
+        assert_eq!(super::hunts_of(&hunts).expect("two seats"), [1, 1]);
+        hunts.launched.insert(3);
+        assert_eq!(super::hunts_of(&hunts).expect("two seats"), [0, 1]);
+        hunts.filed.insert(20, 2);
+        let refused = super::hunts_of(&hunts).expect_err("a third seat");
+        assert_eq!(refused.code, Exit::Internal);
     }
 
     /// A launch the count cannot place is the sim, the gateway and this

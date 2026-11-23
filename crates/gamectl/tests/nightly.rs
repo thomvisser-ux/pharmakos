@@ -495,9 +495,23 @@ fn a_hunt_that_launches_is_not_counted_unlaunched() {
     );
     assert_eq!(played.hunts.filed.len(), 1, "{:?}", played.hunts);
     assert_eq!(
-        played.hunts.filed, played.hunts.launched,
+        played
+            .hunts
+            .filed
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<u32>>(),
+        played.hunts.launched,
         "{:?}",
         played.hunts
     );
-    assert_eq!(played.hunts.unlaunched(), 0);
+    assert_eq!(
+        played.hunts.filed.values().copied().collect::<Vec<u8>>(),
+        vec![0],
+        "the hunt is seat 0's"
+    );
+    assert_eq!(
+        (played.hunts.unlaunched_of(0), played.hunts.unlaunched_of(1)),
+        (0, 0)
+    );
 }
