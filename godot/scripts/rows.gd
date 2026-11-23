@@ -29,6 +29,7 @@
 extends RefCounted
 
 const Strings := preload("res://scripts/strings.gd")
+const Values := preload("res://scripts/values.gd")
 
 ## The icon colours by severity. PLACEHOLDER: the icon colours — OWNER, at S6's art pass.
 const ICON_COLOURS := {
@@ -136,13 +137,22 @@ static func _row(row: Dictionary, index: int, on_fix: Callable, fixes_enabled: b
 	body.add_child(where)
 
 	for fix in row.get("fixes", []):
+		var index_read: Variant = Values.int_of(fix.get("index", 0))
+		if not (index_read is int):
+			# A fix the bridge cannot name back is said as unreadable, and is no button (S3's `fixp`).
+			var unread := Label.new()
+			unread.text = Values.unreadable_text(Strings.text("value_fix"), index_read)
+			unread.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			unread.custom_minimum_size = Vector2(SENTENCE_WIDTH, 0)
+			body.add_child(unread)
+			continue
 		var button := Button.new()
 		button.text = Strings.text("fix", {"title": fix.get("title", "")})
 		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.accessibility_name = button.text
 		button.disabled = not fixes_enabled
 		button.focus_mode = Control.FOCUS_NONE
-		var which := int(fix.get("index", 0))
+		var which: int = index_read
 		button.set_meta(FIX, [index, which])
 		button.pressed.connect(func() -> void: on_fix.call(index, which))
 		if on_fix_down.is_valid():

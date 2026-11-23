@@ -1375,7 +1375,7 @@ fn commit_row(
                 // written: the verifier sees no terrain (decisions-log item 146
                 // (4)), so these halves of its checks are the sim's.
                 if let Some(wall) = target.wall {
-                    crate::site::check_wall(world, beacon, wall)?;
+                    crate::site::check_wall(world, beacon, wall, world.decision_meter())?;
                 }
                 world
                     .add_bound_target(
@@ -1468,6 +1468,8 @@ fn commit_row(
             if !protected.is_empty() {
                 world.clear_targets(beacon, TargetKind::Protected);
                 for (centre, area) in protected {
+                    // One decision unit a box written (lane `dunit`).
+                    world.charge_decision(1);
                     world
                         .add_area(beacon, AreaKind::Protected, point_of(*centre), *area)
                         .map_err(|_| StepFailure::TargetsUnwritten)?;
@@ -1476,6 +1478,8 @@ fn commit_row(
             if !probes.is_empty() {
                 world.clear_targets(beacon, TargetKind::Probe);
                 for (centre, area) in probes {
+                    // One decision unit a box written (lane `dunit`).
+                    world.charge_decision(1);
                     world
                         .add_area(beacon, AreaKind::Probe, point_of(*centre), *area)
                         .map_err(|_| StepFailure::TargetsUnwritten)?;
@@ -1554,8 +1558,9 @@ fn resolve_protected(
         match entry {
             crate::defend::Protect::Commander => escort = true,
             crate::defend::Protect::Beacon(spec) => {
-                let beacon = super::cond::resolve_beacon_for(world, seat, *spec)
-                    .ok_or(StepFailure::NoTarget)?;
+                let beacon =
+                    super::cond::resolve_beacon_for(world, seat, *spec, world.decision_meter())
+                        .ok_or(StepFailure::NoTarget)?;
                 if !beacons.contains(&beacon) {
                     beacons.push(beacon);
                 }
@@ -2133,7 +2138,7 @@ fn walls_stand(world: &World, beacon: BeaconId, spec: &Row) -> Result<(), StepFa
         return Ok(());
     };
     for wall in targets.iter().filter_map(|target| target.wall) {
-        crate::site::check_wall(world, beacon, wall)?;
+        crate::site::check_wall(world, beacon, wall, world.decision_meter())?;
     }
     Ok(())
 }

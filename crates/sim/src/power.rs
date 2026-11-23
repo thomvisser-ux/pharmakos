@@ -837,9 +837,20 @@ fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
 /// E1).
 #[must_use]
 pub(crate) fn core_of(world: &World, seat: SeatId) -> Option<BeaconId> {
+    core_of_metered(world, seat, &())
+}
+
+/// [`core_of`], reporting the beacon rows it reads to `meter`
+/// ([`crate::seams::Meter`]): every row. What it answers is [`core_of`]'s.
+pub(crate) fn core_of_metered<M: crate::seams::Meter + ?Sized>(
+    world: &World,
+    seat: SeatId,
+    meter: &M,
+) -> Option<BeaconId> {
     let beacons = world.beacons();
     let mut best: Option<u32> = None;
     for (owner, id) in beacons.seats().iter().zip(beacons.ids()) {
+        meter.rows(1);
         if *owner == seat.raw() && best.is_none_or(|held| *id < held) {
             best = Some(*id);
         }
