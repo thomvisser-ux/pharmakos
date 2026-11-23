@@ -47,8 +47,9 @@
 //!
 //! A built-in seat's round says on standard error what the gateway refused it
 //! (S3's `opr3`, fix pass 2, item 5): the refusal that kept the round from
-//! being read, and every route estimate refused for another reason than
-//! `NOT_FOUND`, each of which dropped the goal it weighed. One line a round,
+//! being read, every route estimate refused for another reason than
+//! `NOT_FOUND`, each of which dropped the goal it weighed, and a refusal of
+//! keeping its seal as its own draft or of reading last round's back. One line a round,
 //! and none for a round with nothing refused ([`refusals_said`]).
 //!
 //! # Exit codes
@@ -160,7 +161,10 @@ pub fn refusals_said(seat: u8, played: &Played) -> Option<String> {
         .collect();
     let estimates =
         (!estimates.is_empty()).then(|| strings::operator_estimates_refused(&estimates));
-    let said: Vec<String> = read.into_iter().chain(estimates).collect();
+    let drafts = played.drafts_refused.iter().map(|refused| {
+        strings::operator_draft_refused(&refused.method, &refused.code, &refused.message)
+    });
+    let said: Vec<String> = read.into_iter().chain(estimates).chain(drafts).collect();
     (!said.is_empty()).then(|| strings::operator_round(seat, played.round, &said.join(" ")))
 }
 
@@ -302,6 +306,7 @@ mod tests {
             refused,
             estimates_refused,
             fundable: 0,
+            drafts_refused: Vec::new(),
         }
     }
 

@@ -178,6 +178,15 @@ pub fn operator_read_refused(method: &str, code: &str, message: &str) -> String 
     )
 }
 
+/// A refusal of keeping a built-in seat's seal as its own draft, or of
+/// reading last round's back.
+#[must_use]
+pub fn operator_draft_refused(method: &str, code: &str, message: &str) -> String {
+    format!(
+        "The gateway refused {method} with {code} ({message}), so the seat's last seal is not kept to say which of its steps failed."
+    )
+}
+
 /// The route estimates a built-in seat's round had refused for another reason
 /// than `NOT_FOUND`, each as its code and message.
 #[must_use]

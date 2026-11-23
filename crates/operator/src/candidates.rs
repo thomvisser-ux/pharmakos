@@ -1205,7 +1205,7 @@ pub(crate) fn evaluate(
     tuning: &Tuning,
     declared: &[Declared],
     goals: Vec<Goal>,
-    stones: bool,
+    stones: Option<&[String]>,
 ) -> Evaluated {
     let mut out = Evaluated::default();
     let Some(commander) = situation.commander else {
@@ -1256,7 +1256,11 @@ pub(crate) fn evaluate(
             // No site covers it: with `stones`, a Mine or Generator goal is
             // weighed again as a stone toward its feature.
             Estimate::NotFound => {
-                if let Some(stone) = stone_for(&goal).filter(|_| stones) {
+                // A stone that failed last round is not weighed again: its
+                // chain is shown out of reach this round (fix pass 3, item 6).
+                if let (Some(stone), Some(failed)) = (stone_for(&goal), stones)
+                    && !failed.iter().any(|feature| feature == stone.feature())
+                {
                     far.push((id, stone));
                 }
             }
