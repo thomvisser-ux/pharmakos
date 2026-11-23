@@ -278,6 +278,25 @@ fn unreadable_list(pointer: &str, message: &str) -> BridgeError {
     }
 }
 
+/// A `list_templates` answer's text (a whole JSON-RPC answer, or its result) read with no
+/// gateway behind it, as [`templates_of`] reads one: what the hostless template-list shot draws.
+///
+/// # Errors
+///
+/// As [`templates_of`], and [`BridgeError::Rpc`] for a refusal in place of an answer.
+pub fn templates_of_text(text: &str) -> Result<Vec<TemplateRow>, BridgeError> {
+    let frame = json::read(text)?;
+    if frame.get("error").is_some() {
+        return Err(BridgeError::Rpc(
+            "the answer is a refusal, not a template list".to_owned(),
+        ));
+    }
+    match frame.get("result") {
+        Some(result) => templates_of(result),
+        None => templates_of(&frame),
+    }
+}
+
 /// A `render_plan` result's prose, one row per line, each line exactly as it came.
 ///
 /// # Errors

@@ -518,7 +518,7 @@ fn unchecked_dictionary(why: Option<Unchecked>) -> VarDictionary {
 /// The template list as the panel draws it: each template's `id`, `title` and `summary`, and
 /// the guided first pick's mark, `guided`, with the gateway's sentence, `guided_reason`, as
 /// sent (S3's plan, decision 5); `guided_reason` is empty on every unmarked template.
-fn templates_array(templates: &[crate::wizard::TemplateRow]) -> VarArray {
+pub(crate) fn templates_array(templates: &[crate::wizard::TemplateRow]) -> VarArray {
     let mut out = VarArray::new();
     for template in templates {
         let mut one = VarDictionary::new();

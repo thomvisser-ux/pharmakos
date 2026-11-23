@@ -85,7 +85,18 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 #     (item 116 (6)(i));
 #   * rule_list_render.json copies tests/golden/gateway/demo_expand_and_mine_render/
 #     expected.response.json (the rule-list scene, S3's `ed3b`);
-#     crates/client-gdext/tests/godot_project.rs keeps the two identical.
+#     crates/client-gdext/tests/godot_project.rs keeps the two identical;
+#   * vocabulary.json, beacon_core.json and beacon_build.json copy the get_vocabulary,
+#     get_beacon_core and get_beacon_build goldens (S3's `ed3b`);
+#     crates/client-gdext/tests/vocabulary.rs keeps them identical;
+#   * get_status_probation.json, recap_probation_round.json, recap_probation_ended.json and
+#     view_built.jsonl copy the goldens of those names (S3's `prob`), and
+#     feed_ledger_memo.json copies the feed_ledger_memo golden;
+#     crates/client-gdext/tests/godot_project.rs and event_list.rs keep them identical;
+#   * list_templates_guided.json copies tests/golden/gateway/list_templates_guided/
+#     expected.response.json (the template-list scene, S3's `prob`), whose summaries quote
+#     library/, so it carries both licences, as its golden does, by the block below that
+#     lists the goldens quoting library/; godot_project.rs keeps the two identical.
 [[annotations]]
 path = ["godot/fixtures/**"]
 precedence = "aggregate"
@@ -251,6 +262,7 @@ path = [
     "tests/golden/gateway/demo_against_easy_render/**",
     "tests/golden/gateway/list_templates_guided/**",
     "godot/fixtures/rule_list_render.json",
+    "godot/fixtures/list_templates_guided.json",
     "tests/golden/determinism/hold_and_build.playbook.json",
 ]
 precedence = "aggregate"

@@ -1466,6 +1466,25 @@ impl PharmakosBridge {
         }
     }
 
+    /// The template list from one `list_templates` answer's text (a whole JSON-RPC answer, or
+    /// its result) with no gateway behind it, in the shape of the editor state's `templates`:
+    /// what the hostless template-list shot draws. An empty array means the list was empty or
+    /// the reason is in the log.
+    #[func]
+    fn editor_templates_of_response(&mut self, text: GString) -> VarArray {
+        let text = text.to_string();
+        match self.panics.guard("editor_templates_of_response", || {
+            crate::wizard::templates_of_text(&text)
+        }) {
+            Some(Ok(rows)) => crate::editor_view::templates_array(&rows),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] editor_templates_of_response: {error}");
+                VarArray::new()
+            }
+            None => VarArray::new(),
+        }
+    }
+
     /// The own `$`/`kW` meter: `answers`, `phase`, and `treasury_now`, `supply_kw_now`,
     /// `draw_kw_now` and `headroom_kw_now` exactly as the gateway last answered them. Empty
     /// before `watch_begin`.

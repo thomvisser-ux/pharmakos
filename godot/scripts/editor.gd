@@ -580,18 +580,9 @@ func template_buttons() -> Array[Button]:
 	return out
 
 
-## The guided first pick as drawn, for a check to read: the id of the template button the
-## panel marks (its GUIDED_LOOK) and the gateway's sentence drawn under it, or an empty array
-## when no template is marked.
+## The guided first pick as drawn on the panel, for a check to read (`guided_in`).
 func guided_drawn() -> Array:
-	var children := _templates_box.get_children()
-	for index in children.size():
-		var button: Node = children[index]
-		if not (button is Button and button.has_meta("guided")):
-			continue
-		var why: Node = children[index + 1] if index + 1 < children.size() else null
-		return [String(button.get_meta("id", "")), (why as Label).text if why is Label and why.name == "GuidedReason" else ""]
-	return []
+	return guided_in(_templates_box)
 
 
 ## The meter as drawn.
@@ -1217,22 +1208,29 @@ func size_rect() -> Rect2:
 	return _size_box.get_global_rect()
 
 
-## The template list as the gateway sent it this Lull (the bridge re-asks at every Lull's
-## opening): one button per template, and the one the gateway marked as the guided first pick
-## (`guided`, S3's plan, decision 5) drawn in GUIDED_LOOK with the gateway's own sentence under
-## it (`guided_reason`), as sent: the client adds no words to the mark. Which template is marked, and why, are the gateway's;
-## nothing here names one. `known` false is a list not read yet this Lull; `read` says why it did
-## not come, when it did not (`failed`, `detail`); `unchecked` why it will not come, the door
-## being shut (`key`, in the checks' own words), so no "Reading..." waits on a shut door.
+## Redrawn only when the list, its state or its why changed (`fill_templates`).
 func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked: Dictionary) -> void:
-	var failed := String(read.get("failed", ""))
-	var shut := String(unchecked.get("key", ""))
-	var drawn := var_to_str([templates, known, failed, read.get("detail", ""), shut])
+	var drawn := var_to_str([templates, known, read, unchecked])
 	if drawn == _templates_drawn:
 		return
 	_templates_drawn = drawn
-	for child in _templates_box.get_children():
-		_templates_box.remove_child(child)
+	fill_templates(_templates_box, templates, known, read, unchecked, open_template)
+
+
+## The template list as the gateway sent it this Lull (the bridge re-asks at every Lull's
+## opening), drawn into `box`: one button per template, pressing which calls `open` with its
+## id, and the one the gateway marked as the guided first pick (`guided`, S3's plan, decision 5)
+## drawn in GUIDED_LOOK with the gateway's own sentence under it (`guided_reason`), as sent: the
+## client adds no words to the mark. Which template is marked, and why, are the gateway's;
+## nothing here names one. `known` false is a list not read yet this Lull; `read` says why it did
+## not come, when it did not (`failed`, `detail`); `unchecked` why it will not come, the door
+## being shut (`key`, in the checks' own words), so no "Reading..." waits on a shut door. Static,
+## so the hostless template-list shot draws the panel's own picture.
+static func fill_templates(box: Container, templates: Array, known: bool, read: Dictionary, unchecked: Dictionary, open: Callable) -> void:
+	var failed := String(read.get("failed", ""))
+	var shut := String(unchecked.get("key", ""))
+	for child in box.get_children():
+		box.remove_child(child)
 		child.queue_free()
 	if templates.is_empty():
 		var none := Label.new()
@@ -1246,12 +1244,15 @@ func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked:
 		else:
 			none.text = Strings.text("no_templates")
 		none.accessibility_name = none.text
-		_templates_box.add_child(none)
+		box.add_child(none)
 		return
 	for template in templates:
 		var id := String(template.get("id", ""))
 		var guided: bool = template.get("guided", false)
-		var button := _button(_templates_box, "", func() -> void: open_template(id))
+		var button := Button.new()
+		button.focus_mode = Control.FOCUS_NONE
+		button.pressed.connect(func() -> void: open.call(id))
+		box.add_child(button)
 		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.text = Strings.text("template_button", {"title": template.get("title", "")})
 		button.accessibility_name = button.text
@@ -1267,7 +1268,21 @@ func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked:
 			why.text = String(template.get("guided_reason", ""))
 			why.accessibility_name = why.text
 			why.name = "GuidedReason"
-			_templates_box.add_child(why)
+			box.add_child(why)
+
+
+## The guided first pick as drawn in `box`, for a check to read: the id of the template button
+## marked (its GUIDED_LOOK) and the gateway's sentence drawn under it, or an empty array when no
+## template is marked.
+static func guided_in(box: Container) -> Array:
+	var children := box.get_children()
+	for index in children.size():
+		var button: Node = children[index]
+		if not (button is Button and button.has_meta("guided")):
+			continue
+		var why: Node = children[index + 1] if index + 1 < children.size() else null
+		return [String(button.get_meta("id", "")), (why as Label).text if why is Label and why.name == "GuidedReason" else ""]
+	return []
 
 
 ## Redrawn only when the wizard's answer or refusal changed, so a value being typed is not

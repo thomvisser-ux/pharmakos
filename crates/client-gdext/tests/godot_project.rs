@@ -305,6 +305,7 @@ const SCRIPTS: &[&str] = &[
     "rule_list_shot.gd",
     "smoke_check.gd",
     "strings.gd",
+    "templates_shot.gd",
     "value_field.gd",
     "values.gd",
     "vista.gd",
@@ -3163,6 +3164,10 @@ fn the_probation_fixtures_are_the_gateways_goldens() {
             "recap_probation_ended/expected.response.json",
         ),
         ("view_built.jsonl", "view_built/expected.keyframe.jsonl"),
+        (
+            "list_templates_guided.json",
+            "list_templates_guided/expected.response.json",
+        ),
     ] {
         let ours = fs::read(godot_dir().join("fixtures").join(copy)).expect("the copy");
         let theirs = fs::read(
@@ -3195,6 +3200,10 @@ fn the_probation_fixtures_are_the_gateways_goldens() {
         ),
         ("scripts/ring_shot.gd", "res://fixtures/view_built.jsonl"),
         ("scripts/ring_shot.gd", "res://fixtures/view_keyframe.jsonl"),
+        (
+            "scripts/templates_shot.gd",
+            "res://fixtures/list_templates_guided.json",
+        ),
     ] {
         assert!(read(script).contains(fixture), "{script} draws {fixture}");
     }
@@ -3205,7 +3214,7 @@ fn the_probation_fixtures_are_the_gateways_goldens() {
 #[test]
 fn a_template_list_that_will_not_come_says_why() {
     let editor = read("scripts/editor.gd");
-    let draw = gd_function(&editor, "_draw_templates");
+    let draw = gd_function(&editor, "fill_templates");
     let shut = draw
         .iter()
         .position(|line| line.contains("elif shut != \"\":"))
@@ -3236,7 +3245,7 @@ fn the_guided_mark_is_a_look_and_the_words_are_the_gateways() {
         !strings.contains("\"template_guided\""),
         "the string table holds no words for the mark"
     );
-    let draw = gd_function(&editor, "_draw_templates");
+    let draw = gd_function(&editor, "fill_templates");
     assert!(
         draw.iter()
             .any(|line| line.trim() == "button.self_modulate = GUIDED_LOOK"),
@@ -3250,7 +3259,7 @@ fn the_guided_mark_is_a_look_and_the_words_are_the_gateways() {
     let guided = draw
         .iter()
         .skip_while(|line| !line.contains("if guided:"))
-        .take_while(|line| !line.contains("_templates_box.add_child(why)"))
+        .take_while(|line| !line.contains("box.add_child(why)"))
         .filter(|line| line.contains("Strings.text("))
         .count();
     assert_eq!(guided, 0, "no client words in the mark's branch: {draw:?}");
