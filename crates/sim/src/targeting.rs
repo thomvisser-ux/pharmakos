@@ -200,14 +200,47 @@ pub struct Ground<'a> {
     /// The spiral's offsets ([`spiral_offsets`]).
     pub spiral: &'a [[i32; 2]],
     /// Where the work a resolution does is counted: P1's evaluation units
-    /// (S1's plan, section 5). Not hashed.
+    /// (S1's plan, section 5), one a primitive step
+    /// ([`crate::seams::UnitTally`]): here, one a feature the ranker scans,
+    /// one a column a site search scans, and one a node a search pops. Not
+    /// hashed.
     pub work: &'a crate::seams::UnitTally,
+}
+
+/// The nodes `scratch`'s searches have popped since its counters were last
+/// reset: the grid and endpoint pops (`expansions`, of which the endpoint
+/// sweeps' are a part, so they are not added again) and the abstract pops.
+fn popped(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
+    let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
+    scratch
+        .expansions()
+        .map_err(unreadable)?
+        .checked_add(scratch.abstract_expansions().map_err(unreadable)?)
+        .ok_or(crate::seams::Unmeasured::SourceUnreadable)
+}
+
+/// The nodes popped since `before` was read ([`popped`]): what the call
+/// between the two reads popped. The scratch's counters are shared with
+/// every other search the world makes, so a call is charged the change over
+/// it, never the absolute count.
+fn popped_since(
+    before: Result<u64, crate::seams::Unmeasured>,
+    scratch: &Scratch,
+) -> Result<u64, crate::seams::Unmeasured> {
+    popped(scratch)?
+        .checked_sub(before?)
+        .ok_or(crate::seams::Unmeasured::SourceUnreadable)
 }
 
 impl Ground<'_> {
     /// Count `units` of evaluation work.
     fn charge(&self, units: u32) {
         self.work.add(units);
+    }
+
+    /// Charge the nodes popped since `before` ([`popped_since`]).
+    fn charge_pops(&self, before: Result<u64, crate::seams::Unmeasured>, scratch: &Scratch) {
+        self.work.add_measured(popped_since(before, scratch));
     }
 
     /// The **base** sphere radius, `beacon.sphere_radius_voxels`, which the
@@ -422,9 +455,14 @@ impl Ground<'_> {
     /// The integer cost of the walk the router serves from `from` to `to`
     /// ([`walk_cost`]): what a choice a unit then walks to ranks by
     /// ([`Ranker`]; the module docs' "Two measures").
+    ///
+    /// Charged the nodes the walk popped, grid, endpoint and abstract, and
+    /// nothing for the call itself: a walk that pops nothing searched nothing.
     fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<ServedWalk, WalkError> {
-        self.charge(1);
-        walk_cost(self.surface, self.clusters, scratch, (from, to))
+        let before = popped(scratch);
+        let walk = walk_cost(self.surface, self.clusters, scratch, (from, to));
+        self.charge_pops(before, scratch);
+        walk
     }
 }
 
@@ -875,7 +913,13 @@ fn stone_site(
     let Some(goal) = ground.measure_to(feature, start) else {
         return Sited::Unreached(weighed);
     };
-    match closest_site(scratch, ground.surface, goal) {
+    // The grid optimum's pops are the search's work, charged one a node as a
+    // served walk's are; its heuristic, evaluated once a node it reaches,
+    // rides on them and is not charged again.
+    let before = popped(scratch);
+    let closest = closest_site(scratch, ground.surface, goal);
+    ground.charge_pops(before, scratch);
+    match closest {
         Ok(Some(site)) => Sited::Stone(site, weighed),
         // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out
         Ok(None) => Sited::Unreached(weighed),
