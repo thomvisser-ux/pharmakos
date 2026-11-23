@@ -82,33 +82,23 @@ pub(crate) const fn external_attributes(kind: Kind) -> u32 {
     }
 }
 
-/// The CRC-32 lookup table (IEEE 802.3, reflected polynomial `0xEDB88320`).
-fn crc_table() -> [u32; 256] {
-    std::array::from_fn(|slot| {
-        // `slot` is below 256, which a `u32` holds: the default is never read.
-        let mut value = u32::try_from(slot).unwrap_or_default();
-        for _ in 0..8 {
-            value = if value & 1 == 1 {
-                (value >> 1) ^ 0xEDB8_8320
-            } else {
-                value >> 1
-            };
-        }
-        value
-    })
-}
-
-/// The CRC-32 of `bytes`, as zip stores it.
+/// The CRC-32 of `bytes`, as zip stores it (IEEE 802.3, reflected polynomial
+/// `0xEDB88320`), computed a bit at a time.
+///
+/// Bitwise rather than through a 256-entry table: a table lookup is an index
+/// the lint set refuses (`indexing_slicing`) or a `get` whose `None` arm can
+/// never be taken, and either would put a value the code never reads in the
+/// one function every zip entry passes through. Each step folds the low bit
+/// in by masking the polynomial with that bit spread over the word
+/// (`0 - bit`), so there is no branch and no fallible conversion.
 pub(crate) fn crc32(bytes: &[u8]) -> u32 {
-    let table = crc_table();
     let mut crc: u32 = 0xFFFF_FFFF;
     for byte in bytes {
-        let low = (crc ^ u32::from(*byte)) & 0xFF;
-        // `low` is masked to a byte, so it fits a `usize` and indexes the
-        // 256-entry table: neither default is ever read.
-        let slot = usize::try_from(low).unwrap_or_default();
-        let entry = table.get(slot).copied().unwrap_or_default();
-        crc = (crc >> 8) ^ entry;
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0_u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
     }
     !crc
 }
@@ -478,6 +468,19 @@ mod tests {
     fn the_crc_has_its_check_value() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
         assert_eq!(crc32(b""), 0);
+    }
+
+    /// Published CRC-32 values beside the check value, and every byte value
+    /// once, so the bitwise loop is held on high bits as well as ASCII.
+    #[test]
+    fn the_crc_matches_published_vectors() {
+        assert_eq!(crc32(b"a"), 0xE8B7_BE43);
+        assert_eq!(
+            crc32(b"The quick brown fox jumps over the lazy dog"),
+            0x414F_A339
+        );
+        let every: Vec<u8> = (0..=255_u8).collect();
+        assert_eq!(crc32(&every), 0x2905_8C73);
     }
 
     #[test]

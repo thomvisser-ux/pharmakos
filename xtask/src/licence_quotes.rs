@@ -425,7 +425,10 @@ fn read_report(json: &str) -> Result<BTreeMap<String, Vec<String>>, Refusal> {
 
 /// The files `reuse` does not report, by its own rule: the licence texts under `LICENSES/` and any `LICENSE*` file, sidecars, `REUSE.toml` itself, empty files.
 fn reuse_ignores(file: &str, empty: bool) -> bool {
-    let name = file.rsplit('/').next().unwrap_or(file).to_ascii_uppercase();
+    let name = file
+        .rsplit_once('/')
+        .map_or(file, |(_, name)| name)
+        .to_ascii_uppercase();
     empty
         || file.starts_with("LICENSES/")
         || name.starts_with("LICENSE")

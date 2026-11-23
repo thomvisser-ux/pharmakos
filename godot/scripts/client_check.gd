@@ -62,6 +62,10 @@ const VistaScene := preload("res://scenes/vista.tscn")
 const EditorPanel := preload("res://scripts/editor.gd")
 const Lobby := preload("res://scripts/lobby.gd")
 const InstanceLog := preload("res://scripts/instance_log.gd")
+const ValueFieldScript := preload("res://scripts/value_field.gd")
+const Wizard := preload("res://scripts/wizard.gd")
+const Values := preload("res://scripts/values.gd")
+const Rows := preload("res://scripts/rows.gd")
 const Strings := preload("res://scripts/strings.gd")
 const OWNERS_WINDOW := Vector2i(1456, 819)
 ## A map as wide as the golden seed's, in voxels (x, up, north).
@@ -174,10 +178,11 @@ func _ready() -> void:
 	#    boundary is silent, so a healthy-looking run with a non-zero count here is
 	#    exactly the case this assertion is for. It is read AFTER the engine-side
 	#    upload, so a panic inside a `RenderingServer` call is part of the verdict.
-	var caught: int = bridge.caught_panics()
+	# A count past what an int holds comes as the bridge's refusal, a Dictionary: a failure too.
+	var caught: Variant = bridge.caught_panics()
 	print("[client-check] %s" % bridge.panic_report())
-	if caught != 0:
-		failures.append("%d panic(s) were caught at the bridge boundary" % caught)
+	if not (caught is int) or caught != 0:
+		failures.append("%s panic(s) were caught at the bridge boundary" % str(caught))
 
 	if failures.is_empty():
 		print("[client-check] OK")
@@ -289,6 +294,9 @@ func _check_the_view(failures: Array[String]) -> void:
 	stage.size = OWNERS_WINDOW
 	stage.own_world_3d = true
 	stage.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	# The editor's popups are windows embedded in the stage, as the game window embeds them, so
+	# input pushed into the stage reaches them as the window's input reaches them.
+	stage.gui_embed_subwindows = true
 	add_child(stage)
 	var vista: Node3D = VistaScene.instantiate()
 	stage.add_child(vista)
@@ -305,7 +313,16 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_size_meter(editor, failures)
 	_check_the_box(editor, failures)
 	_check_escape(editor, failures)
-	_check_the_number_field(editor, failures)
+	await _check_an_action_pick_closes_the_menus(stage, editor, failures)
+	await _check_the_entry_list(stage, editor, failures)
+	_check_the_popups_are_opaque(editor, failures)
+	await _check_the_build_marks(editor, failures)
+	await _check_the_dormant_box(stage, editor, failures)
+	_check_the_load_folder(editor, failures)
+	_check_the_unreadable_counts(editor, failures)
+	await _check_the_tall_entry_list(stage, editor, failures)
+	await _check_the_rig_backed_panel(stage, editor, failures)
+	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
 	_check_the_recap_words(failures)
@@ -619,31 +636,670 @@ func _check_escape(editor: CanvasLayer, failures: Array[String]) -> void:
 		failures.append("Escape reaching the window did not close the map menu")
 
 
-## **The rule list's number field keeps the pair each chip sent** (S3's `ed3b`, fix pass 2 item
-## 3). One field serves every chip, and Godot's `Range` keeps its maximum at least its minimum on
-## every set, so the bounds are set through `set_bounds`: chip B (0..10) after chip A (50..100)
-## must hold 0..10, and A after B 50..100, where a maximum-first order left B at 0..50. A bound
-## the gateway did not send stays open. The field holds every `i32` exactly, the range the bridge
-## lets into it (wider is drawn read-only); 2^52 + 1 it does not, which is why.
-func _check_the_number_field(editor: CanvasLayer, failures: Array[String]) -> void:
-	var field: SpinBox = editor._number_field
-	var a := {"has_min": true, "min": 50, "has_max": true, "max": 100}
-	var b := {"has_min": true, "min": 0, "has_max": true, "max": 10}
-	for pair in [[a, b], [b, a], [a, a]]:
-		EditorPanel.set_bounds(field, pair[0])
-		EditorPanel.set_bounds(field, pair[1])
-		var want: Dictionary = pair[1]
-		if field.min_value != float(want["min"]) or field.max_value != float(want["max"]):
-			failures.append("the number field holds %s..%s, not the %s..%s sent" % [field.min_value, field.max_value, want["min"], want["max"]])
-	EditorPanel.set_bounds(field, a)
-	EditorPanel.set_bounds(field, {"has_min": true, "min": 0, "has_max": false})
-	if field.min_value != 0.0 or field.max_value < float(EditorPanel.FIELD_OPEN):
-		failures.append("a maximum the gateway did not send is not open: %s..%s" % [field.min_value, field.max_value])
-	EditorPanel.set_bounds(field, {"has_min": false, "has_max": false})
-	for exact in [2147483647, -2147483648, 0]:
-		field.value = exact
-		if int(field.value) != exact:
-			failures.append("the number field holds %d as %d" % [exact, int(field.value)])
+## **One value field for every typed value** (S3's `fixp`, P6b findings 1 and 2), driven as a
+## person drives it, through the engine's input path: a click into a field holding "40", the keys
+## "3" and "0", and a click on Send (or Enter) give one `sent` carrying "30". At P6b the SpinBox
+## sent 40, or "4030". The second open after a use selects the old value on the first click too.
+## The same through the editor's own popup, and through a wizard page.
+func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var holder := Control.new()
+	holder.position = Vector2(40, 40)
+	stage.add_child(holder)
+	var field: HBoxContainer = ValueFieldScript.new("Send")
+	holder.add_child(field)
+	var heard: Array[String] = []
+	field.sent.connect(func(text: String) -> void: heard.append(text))
+	field.open("40", "%")
+	await _settle()
+	await _type_into(stage, field.field, "30")
+	_click(stage, field.send.get_global_rect().get_center())
+	if heard != ["30"]:
+		failures.append("the value field's click, keys and Send sent %s, not [\"30\"]" % [heard])
+	field.open("40", "%")
+	await _settle()
+	await _type_into(stage, field.field, "30")
+	_key(stage, KEY_ENTER, 0)
+	if heard != ["30", "30"]:
+		failures.append("a second open, keys and Enter sent %s, not a second \"30\"" % [heard])
+	if field.field.text != "30":
+		failures.append("the field shows `%s` after typing over \"40\"" % field.field.text)
+	# Tab's focus, keys, then a click to move the caret, then a key: the click places the caret
+	# and selects nothing, so the typed text is kept (fix pass 1, item 2).
+	field.open("40", "%")
+	await _settle()
+	field.field.grab_focus()
+	await get_tree().process_frame
+	for character in "12":
+		_key(stage, OS.find_keycode_from_string(character), character.unicode_at(0))
+	await _type_into(stage, field.field, "3")
+	_key(stage, KEY_ENTER, 0)
+	if heard != ["30", "30", "123"]:
+		failures.append("Tab, \"12\", a click and \"3\" sent %s, not a third \"123\" (the field shows `%s`)" % [heard, field.field.text])
+	if field.unit.text != "%" or not field.unit.visible:
+		failures.append("the unit is not drawn beside the field as sent: `%s`" % field.unit.text)
+	holder.queue_free()
+
+	# The editor's popup, through the popup's own window.
+	var sent: Array[String] = []
+	var listen := func(text: String) -> void: sent.append(text)
+	editor._number_field.sent.connect(listen)
+	editor._open_number({"index": 0, "revision": 0, "pointer": "/x"}, {"has_min": true, "min": 0, "has_max": true, "max": 100, "now": 40, "value_json": "40", "unit": "%", "text": "40"})
+	await _settle()
+	var popup: PopupPanel = editor._number_popup
+	if not popup.visible:
+		failures.append("the number popup did not open")
+	else:
+		# Through the stage, which hands the input to the popup embedded in it, as the game window
+		# does: a click into the field, the keys, a click on "Set this value"; then Enter.
+		var inside := Vector2(popup.position)
+		_click(stage, inside + editor._number_field.field.get_global_rect().get_center())
+		for character in "30":
+			_key(stage, OS.find_keycode_from_string(character), character.unicode_at(0))
+		await get_tree().process_frame
+		_click(stage, inside + editor._number_field.send.get_global_rect().get_center())
+		if sent != ["30"]:
+			failures.append("the editor's number popup sent %s, not [\"30\"] (the field shows `%s`)" % [sent, editor._number_field.field.text])
+		_key(stage, KEY_ENTER, 0)
+		if sent != ["30", "30"]:
+			failures.append("Enter in the editor's number popup sent %s" % [sent])
+		if editor._number_note.text != Strings.text("rule_number_bounds", {"min": 0, "max": 100}):
+			failures.append("the number popup's note says `%s`, not the gateway's bounds" % editor._number_note.text)
+	editor._number_field.sent.disconnect(listen)
+	popup.hide()
+
+	# A wizard page.
+	var pages := VBoxContainer.new()
+	pages.position = Vector2(40, 40)
+	pages.custom_minimum_size = Vector2(380, 0)
+	stage.add_child(pages)
+	var asked: Array = []
+	Wizard.fill(pages, "a template", {"answered": true, "current": true, "pages": [{"pointer": "/seed", "label": "Seed", "value": "40", "suggested": true}]}, func(pointer: String, text: String) -> void: asked.append([pointer, text]), func() -> void: pass, func() -> void: pass)
+	await _settle()
+	var page: Control = Wizard.page_controls(pages)[0]
+	await _type_into(stage, page.get_meta("field"), "30")
+	_click(stage, (page.get_meta("send") as Button).get_global_rect().get_center())
+	if asked != [["/seed", "30"]]:
+		failures.append("the wizard page's click, keys and Send asked %s, not [[\"/seed\", \"30\"]]" % [asked])
+	pages.queue_free()
+
+
+## A click into `field` as a person makes it, then `text` typed key by key: the old value goes.
+func _type_into(viewport: Viewport, field: LineEdit, text: String) -> void:
+	_click(viewport, field.get_global_rect().get_center())
+	for character in text:
+		_key(viewport, OS.find_keycode_from_string(character), character.unicode_at(0))
+	await get_tree().process_frame
+
+
+## A left click at `at` in `viewport`'s coordinates: the mouse moves there, presses and releases.
+func _click(viewport: Viewport, at: Vector2) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = at
+	motion.global_position = at
+	viewport.push_input(motion, true)
+	for down in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.pressed = down
+		event.button_mask = MOUSE_BUTTON_MASK_LEFT if down else 0
+		event.position = at
+		event.global_position = at
+		viewport.push_input(event, true)
+
+
+## One key going down and up in `viewport`.
+func _key(viewport: Viewport, keycode: Key, unicode: int) -> void:
+	for down in [true, false]:
+		var event := InputEventKey.new()
+		event.keycode = keycode
+		event.unicode = unicode
+		event.pressed = down
+		viewport.push_input(event, true)
+
+
+func _settle() -> void:
+	for _frame in SETTLE_FRAMES:
+		await get_tree().process_frame
+
+
+## **An action pick closes the map menus** (S3's `fixp`, P6b finding 3): a priority row and an
+## enum setting's value in the Visit & change submenus, and a target choice, each reached and
+## picked through the engine's input path, keys pushed into the stage, which hands them to the
+## menu that holds the focus: Right opens a submenu as hovering does, Enter picks the row in focus
+## (both through `PopupMenu`'s own activation, which runs Godot's hide-on-pick rule for the menu
+## and its parents). After an action no map menu is open; a target choice leaves the beacon menu
+## open, as the P6a fix asks.
+func _check_an_action_pick_closes_the_menus(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var beacon := {"id": "b_00", "owner": "seat.0", "position": Vector3.ZERO}
+	var detail := {"known": true, "id": "b_00", "priority": "normal", "settings": [{"title": "Rebuild", "pointer": "/build/rebuild_destroyed", "value_json": "true", "editor": "choice", "values": PackedStringArray(["true", "false"])}], "targets": []}
+	for case in ["priority", "setting", "target"]:
+		# A frame between one menu's close and the next click, as a person's hand takes.
+		await get_tree().process_frame
+		editor._on_beacon_clicked(beacon, false, Vector2(300, 300))
+		editor._visit_drawn = ""
+		editor._fill_visit_menu({"beacon_detail": detail, "vocabulary": {}})
+		await get_tree().process_frame
+		var menu: PopupMenu = editor._menu
+		if case == "target":
+			await _pick(stage, menu, menu.get_item_index(EditorPanel.ITEM_SELECTOR), KEY_ENTER, failures)
+			if not menu.visible:
+				failures.append("a target choice closed the beacon menu")
+			editor.close_menu()
+			continue
+		await _pick(stage, menu, _submenu_row(menu, editor._visit_menu), KEY_RIGHT, failures)
+		if case == "priority":
+			await _pick(stage, editor._visit_menu, editor._visit_menu.get_item_index(EditorPanel.ITEM_LOW), KEY_ENTER, failures)
+		else:
+			var settings: PopupMenu = editor._visit_submenus[0]
+			await _pick(stage, editor._visit_menu, _submenu_row(editor._visit_menu, settings), KEY_RIGHT, failures)
+			var values: PopupMenu = settings.get_child(0)
+			await _pick(stage, settings, _submenu_row(settings, values), KEY_RIGHT, failures)
+			await _pick(stage, values, 1, KEY_ENTER, failures)
+		if editor.menu_open():
+			failures.append("%s picked left a map menu open" % ("a priority row" if case == "priority" else "an enum setting's value"))
+		editor.close_menu()
+
+
+## Row `index` of `menu` put in focus, and `key` pushed into the stage; a menu that is not open
+## for it is a failure.
+func _pick(stage: SubViewport, menu: PopupMenu, index: int, key: Key, failures: Array[String]) -> void:
+	if not menu.visible or index < 0:
+		failures.append("a map menu was not open for its pick (row %d)" % index)
+		return
+	menu.set_focused_item(index)
+	_key(stage, key, 0)
+	await get_tree().process_frame
+
+
+## The row of `menu` that opens `submenu`, or -1.
+func _submenu_row(menu: PopupMenu, submenu: PopupMenu) -> int:
+	for index in menu.item_count:
+		if menu.get_item_submenu_node(index) == submenu:
+			return index
+	return -1
+
+
+## **Lists of entries are drawn in a list that fits** (S3's `fixp`, P6b finding 5): the
+## vocabulary's blueprints, from the gateway's committed answer, open beside the menu they were
+## picked from, at most PANEL_WIDTH wide and inside the window, with the locked Resonance Spire's
+## sentence under it; a click on that row (pushed into the stage) picks nothing, and a click on an
+## open row picks it. At P6b a PopupMenu, which does not wrap, ran wider than the window.
+func _check_the_entry_list(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var words: Dictionary = editor.bridge.editor_vocabulary_of_response(FileAccess.get_file_as_string("res://fixtures/vocabulary.json"))
+	var blueprints: Array = words.get("blueprints", [])
+	if blueprints.is_empty():
+		failures.append("the vocabulary fixture listed no blueprint")
+		return
+	var picked: Array = []
+	var listen := func(row: String, which: int) -> void: picked.append([row, which])
+	editor.entry_picked.connect(listen)
+	# Beside a menu near the window's right edge, where the old submenu ran off it.
+	editor.open_entry_list(EditorPanel.ITEM_LIST_ADD_TARGET, blueprints, Rect2(Vector2(OWNERS_WINDOW.x - 200, 200), Vector2(180, 300)))
+	await _settle()
+	var popup: PopupPanel = editor._entry_popup
+	var rect := Rect2(Vector2(popup.position), Vector2(popup.size))
+	print("[client-check] the entry list: %s, %d rows" % [rect, editor.entry_rows().size()])
+	if rect.size.x > EditorPanel.PANEL_WIDTH or not Rect2(Vector2.ZERO, Vector2(OWNERS_WINDOW)).encloses(rect):
+		failures.append("the entry list %s is wider than %d or outside the window" % [rect, EditorPanel.PANEL_WIDTH])
+	var spire: Control = null
+	var open_row: Control = null
+	for row in editor.entry_rows():
+		var entry: Dictionary = blueprints[int(row.get_meta("entry"))]
+		if String(entry.get("name", "")) == "resonance_spire":
+			spire = row
+		elif String(entry.get("locked", "")) == "" and open_row == null:
+			open_row = row
+	if spire == null or not spire.has_meta("locked") or not String(spire.get_meta("locked")).contains(String(blueprints[int(spire.get_meta("entry"))].get("locked", "?"))):
+		failures.append("the locked Resonance Spire's row does not show its sentence")
+	else:
+		_click(stage, rect.position + (spire.get_child(0) as Control).get_global_rect().get_center())
+		await get_tree().process_frame
+		if not picked.is_empty():
+			failures.append("a click on the locked Spire picked %s" % [picked])
+	if open_row != null:
+		_click(stage, rect.position + (open_row.get_child(0) as Control).get_global_rect().get_center())
+		await get_tree().process_frame
+		if picked != [["add_target", int(open_row.get_meta("entry"))]]:
+			failures.append("a click on an open entry picked %s" % [picked])
+	editor.entry_picked.disconnect(listen)
+	popup.hide()
+
+
+## **Popups draw an opaque panel** (S3's `fixp`, P6b finding 6): every popup the editor owns
+## resolves its `panel` to a style that draws its centre at alpha 1. Measured on Godot 4.7.2 the
+## default was a StyleBoxFlat at alpha 0.6, through which the map showed.
+func _check_the_popups_are_opaque(editor: CanvasLayer, failures: Array[String]) -> void:
+	var fallback: StyleBox = ThemeDB.get_default_theme().get_stylebox("panel", "PopupPanel")
+	print("[client-check] Godot's own popup panel: %s, centre %s" % [fallback.get_class(), fallback.bg_color if fallback is StyleBoxFlat else "-"])
+	for popup in editor.popups():
+		var panel: StyleBox = popup.get_theme_stylebox("panel")
+		if not (panel is StyleBoxFlat) or not panel.draw_center or panel.bg_color.a < 1.0:
+			failures.append("%s draws a panel that is not opaque: %s" % [popup.get_class(), panel])
+
+
+## **Build targets are marked on the map in the Lull** (S3's `fixp`, P6b finding 7): after the
+## panel's redraw, one mark per target whose anchor can be drawn (a voxel), a wall's box outlined,
+## and a line per target; an `on` vent the map does not list and an anchor the walk cannot read are
+## said and not marked.
+func _check_the_build_marks(editor: CanvasLayer, failures: Array[String]) -> void:
+	var targets := [
+		{"step": 1, "blueprint": "autocannon", "anchor": "voxel", "at": Vector3i(40, 41, 5), "has_box": false},
+		{"step": 2, "blueprint": "wall", "anchor": "voxel", "at": Vector3i(10, 11, 4), "has_box": true, "box_min": Vector3i(10, 11, 3), "box_max": Vector3i(14, 11, 7)},
+		{"step": 3, "blueprint": "generator", "anchor": "on", "feature": "vent_120_88", "has_box": false},
+		{"step": 4, "blueprint": "mortar", "anchor": "unknown", "has_box": false},
+	]
+	editor._draw_state({"changes": 7, "has_text": true, "build_targets": targets})
+	await get_tree().process_frame
+	var marks: Array[Node] = editor.build_marks()
+	if marks.size() != 2:
+		failures.append("%d Build target marks for two drawable anchors" % marks.size())
+	elif (marks[0] as Label3D).text != Strings.text("build_mark", {"step": 1, "blueprint": "autocannon"}):
+		failures.append("the first Build mark says `%s`" % (marks[0] as Label3D).text)
+	if (editor._build_boxes.mesh as ImmediateMesh).get_surface_count() != 1:
+		failures.append("the wall's box is not outlined")
+	var lines: PackedStringArray = editor.build_text().split("\n")
+	if lines.size() != 4 or lines[2] != Strings.text("build_on_unlisted", {"step": 3, "blueprint": "generator", "feature": "vent_120_88"}) or lines[3] != Strings.text("build_unknown", {"step": 4, "blueprint": "mortar"}):
+		failures.append("the Build target lines say `%s`" % editor.build_text())
+	editor._draw_state({"changes": 8, "has_text": false})
+	await get_tree().process_frame
+	if not editor.build_marks().is_empty() or editor.build_text() != Strings.text("build_none"):
+		failures.append("the Build marks outlived their text")
+
+
+## **The dormant box: no click is lost without a word** (S3's `fixp`, P6b finding 9): the box
+## shown and enabled, two press-and-release pairs at one point with no motion between them, pushed
+## into the stage, give two `toggled`; a refusal the bridge names is said beside the box; and only
+## the shut door disables it.
+func _check_the_dormant_box(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	editor._draw_state({"changes": 9, "has_text": true, "rows_current": true, "verdict": "quick", "dormant": {"shown": true, "checked": false, "enabled": true, "refused": ""}})
+	await _settle()
+	var box: CheckBox = editor._dormant
+	var toggles: Array = []
+	var listen := func(on: bool) -> void: toggles.append(on)
+	box.toggled.connect(listen)
+	var at := box.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = at
+	motion.global_position = at
+	stage.push_input(motion, true)
+	for _pair in 2:
+		for down in [true, false]:
+			var event := InputEventMouseButton.new()
+			event.button_index = MOUSE_BUTTON_LEFT
+			event.pressed = down
+			event.button_mask = MOUSE_BUTTON_MASK_LEFT if down else 0
+			event.position = at
+			event.global_position = at
+			stage.push_input(event, true)
+		await get_tree().process_frame
+	box.toggled.disconnect(listen)
+	if toggles.size() != 2:
+		failures.append("two clicks at one point on the dormant box gave %d toggled: %s" % [toggles.size(), toggles])
+	if not editor.dormant_log(at).contains("inside true"):
+		failures.append("the dormant box's log line does not place the press inside it: %s" % editor.dormant_log(at))
+	editor._draw_state({"changes": 10, "has_text": true, "rows_current": true, "verdict": "quick", "dormant": {"shown": true, "checked": false, "enabled": true, "refused": "busy"}})
+	if not editor._dormant_said.visible or editor._dormant_said.text != Strings.text("status_dormant_refused_busy"):
+		failures.append("a refused click is not said beside the box: `%s`" % editor._dormant_said.text)
+	editor._draw_state({"changes": 11, "has_text": false})
+
+
+## **Load opens where the text's own file is** (S3's `fixp`): the folder of the text's file, or
+## else of the last file Loaded or Saved this match.
+func _check_the_load_folder(editor: CanvasLayer, failures: Array[String]) -> void:
+	var folder := ProjectSettings.globalize_path("res://fixtures")
+	editor.aim_load({"file": folder.path_join("needs_a_fix.jsonc"), "last_file": "C:/elsewhere/x.jsonc"})
+	if editor._load_dialog.current_dir.trim_suffix("/") != folder.trim_suffix("/"):
+		failures.append("Load opens in `%s`, not the text's file's folder `%s`" % [editor._load_dialog.current_dir, folder])
+	var other := ProjectSettings.globalize_path("res://scripts")
+	editor.aim_load({"file": "", "last_file": other.path_join("x.jsonc")})
+	if editor._load_dialog.current_dir.trim_suffix("/") != other.trim_suffix("/"):
+		failures.append("with no file of its own Load opens in `%s`, not the last file's folder `%s`" % [editor._load_dialog.current_dir, other])
+	if EditorPanel.load_folder({}) != "":
+		failures.append("with no file at all Load names a folder: `%s`" % EditorPanel.load_folder({}))
+
+
+## **No integer reader can fail at run time** (S3's `fixp`, the `godot_int` sweep's GDScript
+## half): the bridge's refusal of a count past `int`, `{"not_an_int": "<digits>"}`, fed to each
+## drawing path that reads one, is said as unreadable on its line, and no script error is raised.
+func _check_the_unreadable_counts(editor: CanvasLayer, failures: Array[String]) -> void:
+	var refusal := {"not_an_int": "18446744073709551615"}
+	var digits := "18446744073709551615"
+	if Values.int_of(7) != 7 or Values.int_of(refusal) is int:
+		failures.append("Values.int_of does not tell a count from the bridge's refusal")
+	editor._draw_meter({"answers": refusal})
+	if not editor.meter_text().contains(digits):
+		failures.append("the meter says `%s` of an unreadable answer count" % editor.meter_text())
+	var chip := EditorPanel.chip_line({"step": refusal, "now": {}, "failure": "no_target", "matched": 0})
+	if not chip.contains(digits):
+		failures.append("a chip says `%s` of an unreadable step" % chip)
+	editor._draw_attack([{"aim": "selector", "step": refusal}])
+	if not editor._attack_label.text.contains(digits):
+		failures.append("an Attack line says `%s` of an unreadable step" % editor._attack_label.text)
+	editor._draw_build([{"step": refusal, "blueprint": "wall", "anchor": "unknown", "has_box": false}])
+	if not editor.build_text().contains(digits):
+		failures.append("a Build line says `%s` of an unreadable step" % editor.build_text())
+	if not EditorPanel.picking_on({"picking": refusal}):
+		failures.append("an unreadable picking index does not leave the click to the bridge")
+	editor._draw_state({"changes": 12, "has_text": true, "undo_depth": refusal, "picking": refusal, "rows_current": true, "verdict": "quick", "rows": [{"severity": "warning", "sentence": "A row.", "code": "W0709", "pointer": "/x", "fixes": [{"title": "Fix it", "index": refusal}]}], "rule_list": {"lines": [{"segments": [{"text": "A line.", "chip": refusal}], "rule": refusal, "in_rule": -1}], "rules": [], "chips": [], "slots": []}, "prose_current": true, "rules_rendering": 3})
+	if editor._undo_button.disabled or not editor._undo_button.tooltip_text.contains(digits):
+		failures.append("an unreadable undo depth is not said on Undo: `%s`" % editor._undo_button.tooltip_text)
+	var fix_said := false
+	for label in editor._rows.find_children("*", "Label", true, false):
+		if (label as Label).text.contains(digits):
+			fix_said = true
+	if not fix_said or not Rows.fix_buttons(editor._rows).is_empty():
+		failures.append("a fix with an unreadable number is not said as unreadable, or is a button")
+	var rule_said := false
+	for label in editor._rules_box.find_children("*", "Label", true, false):
+		if (label as Label).text.contains(digits):
+			rule_said = true
+	if not rule_said:
+		failures.append("the rule list does not say an unreadable index")
+	editor._draw_state({"changes": 13, "has_text": false})
+
+
+## **The rig-backed checks** (fix pass 1, items 1 and 5), through the bridge's own rig and editor:
+## a value field's refusal said in its popup, one field's answer kept from the next field, the
+## dormant box's click while its edit is on its way, the Ready line after an accepted seal, and
+## Load's folder from its own button.
+func _check_the_rig_backed_panel(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var bridge: Node = editor.bridge
+	if not await _rig_begin(bridge):
+		failures.append("the rig-backed editor never held its text with its rule list rendered: %s" % bridge.editor_state().get("status_key", ""))
+		return
+	await _check_the_field_refusal_and_its_owner(stage, editor, bridge, failures)
+	await _check_the_dormant_box_through_the_rig(stage, editor, bridge, failures)
+	await _check_the_ready_line_through_the_rig(bridge, failures)
+	await _check_load_through_its_button(stage, editor, bridge, failures)
+
+
+## A value field's "abc" is refused in its own popup, by the bridge's typed refusal. Then chip A
+## sends 500 and, before the gateway answers, the person opens field B, a Visit & change number
+## setting (the rule list takes no edit while A's is on its way), and types in it: A's refusal,
+## and A's landing, are not B's to say, and B stays open with what was typed. Last, an edit of
+## another control re-renders the list under an open chip field: it stays open, its text kept.
+func _check_the_field_refusal_and_its_owner(stage: SubViewport, editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	var pct := _chip_index(bridge, "/cmdr_hp_pct/pct")
+	if pct < 0:
+		failures.append("the rendered rule list has no number chip to edit")
+		return
+	bridge.editor_describe_beacon("b_00")
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("beacon_detail", {}).get("known", false) and state.get("rules_editable", false)):
+		failures.append("the rig-backed editor never read b_00's detail with its rule list editable")
+		return
+	var settings: Array = bridge.editor_state().get("beacon_detail", {}).get("settings", [])
+	var setting := -1
+	for index in settings.size():
+		if String(settings[index].get("editor", "")) == "number":
+			setting = index
+	if setting < 0:
+		failures.append("b_00's detail lists no number setting")
+		return
+	editor._visit_beacon = "b_00"
+	var popup: PopupPanel = editor._number_popup
+	editor._on_rule_chip(pct)
+	await _settle()
+	await _type_in_popup(stage, editor, "abc")
+	_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+	await _settle()
+	if not popup.visible or editor._number_said.text != Strings.text("status_rule_refused_not_an_integer"):
+		failures.append("\"abc\" in the value field's popup says `%s` (open %s), not the bridge's refusal" % [editor._number_said.text, popup.visible])
+	for landed in [false, true]:
+		if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false)):
+			failures.append("the rule list never took an edit again")
+			return
+		editor._on_rule_chip(pct)
+		await _settle()
+		await _type_in_popup(stage, editor, "500")
+		_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+		if not await _rig_until(bridge, func(_state: Dictionary) -> bool: return not _held.is_empty(), func(method: String) -> bool: return method == "patch_plan"):
+			failures.append("chip A's edit never went out")
+			return
+		# Field B opens before the gateway answers A, and the person types in it.
+		editor._on_setting(setting)
+		await _settle()
+		await _type_in_popup(stage, editor, "7")
+		_release(bridge, "" if landed else _refusal("INVALID_ARGUMENT", "out of range"))
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("prose_current", false) and not state.get("busy", true))
+		await _settle()
+		if not popup.visible or editor._number_field.field.text != "7" or editor._number_said.visible:
+			failures.append("A's %s reached field B: open %s, `%s`, said `%s`" % ["landing" if landed else "refusal", popup.visible, editor._number_field.field.text, editor._number_said.text])
+		# A frame between a popup's close and its next open, as a hand takes: a popup opened in
+		# the frame it closed closes itself again.
+		popup.hide()
+		await _settle()
+	# An open chip field, and another control's edit landing under it: the list re-renders, and the
+	# field stays open on the chip at the same pointer with what was typed in it.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	editor._on_rule_chip(pct)
+	await _settle()
+	await _type_in_popup(stage, editor, "9")
+	var before := int(bridge.editor_state().get("rules_rendering", -1))
+	editor.act("go", {"beacon": "b_00"})
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return int(state.get("rules_rendering", -1)) != before and state.get("prose_current", false) and not state.get("busy", true))
+	await _settle()
+	if not popup.visible or editor._number_field.field.text != "9" or int(editor._number_chip.get("revision", -1)) == before:
+		failures.append("a re-render under an open chip field closed it or kept the old rendering: open %s, `%s`" % [popup.visible, editor._number_field.field.text])
+	popup.hide()
+
+
+## The value field's popup: a click into its field, then `text` key by key, through the stage.
+func _type_in_popup(stage: SubViewport, editor: CanvasLayer, text: String) -> void:
+	var inside := Vector2(editor._number_popup.position)
+	_click(stage, inside + editor._number_field.field.get_global_rect().get_center())
+	for character in text:
+		_key(stage, OS.find_keycode_from_string(character), character.unicode_at(0))
+	await get_tree().process_frame
+
+
+## E0601 on the rows: the box is shown and takes a click; while that click's edit is on its way a
+## second click at the same point reaches the bridge, which refuses it as busy, said beside the
+## box. Reaches the bridge's `dormant()` and `set_allow_dormant` through the rig.
+func _check_the_dormant_box_through_the_rig(stage: SubViewport, editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	_diagnostics = "{\"code\":\"E0601\",\"severity\":\"error\",\"path\":\"/declarative/route/0\",\"beginner\":\"Short of power.\",\"suggestions\":[{\"title\":\"Allow dormant beacons\",\"json_patch\":\"[{\\\"op\\\":\\\"add\\\",\\\"path\\\":\\\"/declarative/options\\\",\\\"value\\\":{\\\"allow_dormant_beacons\\\":true}}]\",\"applicability\":\"maybe_incorrect\"}]}"
+	bridge.editor_load(RIG_TEXT.to_utf8_buffer())
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rows_current", false) and state.get("dormant", {}).get("shown", false)):
+		failures.append("E0601 never showed the dormant box through the rig")
+		return
+	await _settle()
+	var box: CheckBox = editor._dormant
+	var toggles: Array = []
+	var listen := func(on: bool) -> void: toggles.append(on)
+	box.toggled.connect(listen)
+	var at := box.get_global_rect().get_center()
+	_click(stage, at)
+	await _rig_until(bridge, func(_state: Dictionary) -> bool: return not _held.is_empty(), func(method: String) -> bool: return method == "patch_plan")
+	await _settle()
+	_click(stage, at)
+	await _settle()
+	box.toggled.disconnect(listen)
+	if toggles.size() != 2:
+		failures.append("two clicks on the dormant box, the second while the first's edit was on its way, gave %d toggled" % toggles.size())
+	if String(bridge.editor_state().get("dormant", {}).get("refused", "")) != "busy" or editor._dormant_said.text != Strings.text("status_dormant_refused_busy"):
+		failures.append("the click while the edit was on its way is not said beside the box: `%s`" % editor._dormant_said.text)
+	_release(bridge, "")
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return not state.get("busy", true) and state.get("rows_current", false))
+	_diagnostics = ""
+
+
+## The Ready line from the bridge's word: the filing sentence before a seal, and after the
+## gateway accepted one this round, that Ready keeps it.
+func _check_the_ready_line_through_the_rig(bridge: Node, failures: Array[String]) -> void:
+	if Lobby.ready_line(bridge.editor_state()) != Strings.text("lobby_ready_help"):
+		failures.append("before a seal the Ready line says `%s`" % Lobby.ready_line(bridge.editor_state()))
+	bridge.editor_submit()
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("sealed_this_round", false)):
+		failures.append("an accepted seal never showed as this round's")
+	if Lobby.ready_line(bridge.editor_state()) != Strings.text("lobby_ready_sealed"):
+		failures.append("after an accepted seal the Ready line says `%s`" % Lobby.ready_line(bridge.editor_state()))
+
+
+## Load, pressed through its own button, opens in the folder of the file the text came from.
+func _check_load_through_its_button(stage: SubViewport, editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	var path := ProjectSettings.globalize_path("res://fixtures/needs_a_fix.jsonc")
+	if not editor.load_file(path) or not await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("file", "")) == path):
+		failures.append("the rig-backed editor never took `%s` as the text's file" % path)
+		return
+	editor._load_dialog.current_dir = ProjectSettings.globalize_path("res://scripts")
+	var load: Button = null
+	for button in editor._panel.find_children("*", "Button", true, false):
+		if (button as Button).text == Strings.text("load"):
+			load = button
+	if load == null:
+		failures.append("the panel has no Load button")
+		return
+	_click(stage, load.get_global_rect().get_center())
+	await _settle()
+	if editor._load_dialog.current_dir.trim_suffix("/") != path.get_base_dir().trim_suffix("/"):
+		failures.append("Load, pressed, opens in `%s`, not the text's file's folder" % editor._load_dialog.current_dir)
+	editor._load_dialog.hide()
+
+
+## **The entry list scrolls when it is taller than the window** (fix pass 1, item 6): 40 entries
+## in a window 600 pixels tall stay inside it, in a frame that scrolls.
+func _check_the_tall_entry_list(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
+	var kept := stage.size
+	stage.size = Vector2i(OWNERS_WINDOW.x, 600)
+	await _settle()
+	var entries: Array = []
+	for index in 40:
+		entries.append({"name": "e%d" % index, "title": "Entry %d" % index, "locked": ""})
+	editor.open_entry_list(EditorPanel.ITEM_LIST_QUEUE, entries, Rect2(Vector2(200, 300), Vector2(180, 200)))
+	await _settle()
+	var popup: PopupPanel = editor._entry_popup
+	var rect := Rect2(Vector2(popup.position), Vector2(popup.size))
+	print("[client-check] 40 entries in a 600 px window: %s" % rect)
+	if not Rect2(Vector2.ZERO, Vector2(stage.size)).encloses(rect):
+		failures.append("40 entries in a 600 px window run outside it: %s" % rect)
+	if editor._entry_scroll.get_v_scroll_bar().max_value <= editor._entry_scroll.size.y:
+		failures.append("40 entries in a 600 px window do not scroll")
+	popup.hide()
+	stage.size = kept
+	await _settle()
+
+
+## --- The rig-backed checks (fix pass 1, item 5) ---------------------------------------------
+##
+## These reach the Rust they pin: the bridge's own watch rig and editor, both connections open,
+## and this script standing where the gateway would, answering each frame the rig sends with a
+## result of the gateway's shape (`_answer`). A check may hold a frame back (`hold`), answer it
+## later (`_release`), and drives the panel with input pushed into the stage.
+
+## The Lull footer every answer carries.
+const LULL_FOOTER := {"phase": "lull", "phase_remaining_ms": 180000, "round": 1}
+## The playbook the rig-backed checks open: any text, since this stand-in answers every check.
+const RIG_TEXT := "{\"declarative\":{\"route\":[]}}"
+
+## Frames held back by a check, `[link, request]` each.
+var _held: Array = []
+## What the stand-in's `verify_plan` reports: diagnostics as JSON text, and whether it qualifies.
+var _diagnostics := ""
+## Every `patch_plan` the stand-in answered, its `json_patch` as sent.
+var _patches: Array[String] = []
+
+
+## Starts the bridge's watch rig with both connections open, opens RIG_TEXT in the editor, and
+## answers until the editor holds it with its rule list rendered.
+func _rig_begin(bridge: Node) -> bool:
+	_held.clear()
+	_patches.clear()
+	_diagnostics = ""
+	bridge.configure(4, MesherRules.RULES_JSON)
+	bridge.watch_begin()
+	bridge.watch_opened(0)
+	bridge.watch_opened(1)
+	bridge.editor_seat("seat.0")
+	bridge.editor_load(RIG_TEXT.to_utf8_buffer())
+	return await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("has_text", false) and state.get("prose_current", false) and state.get("rows_current", false))
+
+
+## Answers the rig's frames until `done` holds of the editor state, or about four seconds pass.
+## `hold` is called with each request's method; a true answer keeps the frame back in `_held`.
+func _rig_until(bridge: Node, done: Callable, hold: Callable = Callable()) -> bool:
+	for _frame in 240:
+		for frame in bridge.watch_outbox():
+			var link := int(frame[0])
+			var text := String(frame[1])
+			var request: Dictionary = JSON.parse_string(text)
+			if hold.is_valid() and hold.call(String(request.get("method", ""))):
+				_held.append([link, text])
+				continue
+			bridge.watch_receive(link, _answer(text, ""))
+		if done.call(bridge.editor_state()):
+			return true
+		await get_tree().process_frame
+	return false
+
+
+## Answers the first held frame with the refusal `error` (a JSON-RPC error object as text), or
+## with its usual result when `error` is "".
+func _release(bridge: Node, error: String) -> void:
+	if _held.is_empty():
+		return
+	var held: Array = _held.pop_front()
+	bridge.watch_receive(int(held[0]), _answer(String(held[1]), error))
+
+
+## The stand-in's answer to the request `text`, as a JSON-RPC frame's text: `error` when one is
+## given, otherwise a result of the shape the gateway answers that method with, and the Lull
+## footer. Written as text, never through JSON.stringify of parsed numbers, which GDScript holds
+## as floats and would write as "1.0".
+func _answer(text: String, error: String) -> String:
+	var found := RegEx.create_from_string("\"id\": *([0-9]+)").search(text)
+	var id := found.get_string(1) if found != null else "0"
+	var head := "{\"jsonrpc\":\"2.0\",\"id\":%s," % id
+	if error != "":
+		return head + "\"error\":" + error + "}"
+	var request: Dictionary = JSON.parse_string(text)
+	var params: Dictionary = request.get("params", {})
+	var footer := "\"_status\":{\"phase\":\"lull\",\"phase_remaining_ms\":180000,\"round\":1}"
+	var body := ""
+	match String(request.get("method", "")):
+		"get_view":
+			body = "\"next_cursor\":\"c1\",\"complete\":true,"
+		"verify_plan":
+			body = "\"report\":{\"qualifies\":true,\"depth\":\"%s\",\"diagnostics\":[%s]}," % [String(params.get("depth", "quick")), _diagnostics]
+		"patch_plan":
+			_patches.append(String(params.get("json_patch", "")))
+			body = "\"playbook_jsonc\":%s,\"inverse_json_patch\":\"[]\"," % JSON.stringify(String(params.get("playbook_jsonc", "")) + " ")
+		"render_plan":
+			return _fixture("res://fixtures/rule_list_render.json", id)
+		"get_vocabulary":
+			return _fixture("res://fixtures/vocabulary.json", id)
+		"submit_plan":
+			body = "\"report\":{\"qualifies\":true,\"depth\":\"full\",\"diagnostics\":[]},\"accepted\":true,"
+		"get_briefing":
+			body = "\"notes\":\"\","
+		"list_drafts":
+			body = "\"drafts\":[],"
+		"list_templates":
+			body = "\"templates\":[],"
+		"get_map_summary":
+			body = "\"features\":[],"
+		"get_beacon":
+			return _fixture("res://fixtures/beacon_core.json", id)
+		"estimate_route", "resolve_refs":
+			return head + "\"error\":" + _refusal("NOT_FOUND", "the stand-in prices nothing") + "}"
+	return head + "\"result\":{" + body + footer + "}}"
+
+
+## A JSON-RPC error object as the gateway writes one: its own code under `data`.
+func _refusal(code: String, message: String) -> String:
+	return "{\"code\":-32000,\"message\":%s,\"data\":{\"code\":%s}}" % [JSON.stringify(message), JSON.stringify(code)]
+
+
+## A committed gateway answer's text, its id set to `id`.
+func _fixture(path: String, id: String) -> String:
+	return RegEx.create_from_string("\"id\": *[0-9]+").sub(FileAccess.get_file_as_string(path), "\"id\":" + id)
+
+
+## The rule-list chip whose pointer ends in `suffix`, by its index in the bridge's list, or -1.
+func _chip_index(bridge: Node, suffix: String) -> int:
+	var chips: Array = bridge.editor_state().get("rule_list", {}).get("chips", [])
+	for index in chips.size():
+		if String(chips[index].get("pointer", "")).ends_with(suffix):
+			return index
+	return -1
 
 
 ## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4
@@ -667,6 +1323,11 @@ func _check_the_refused_ghost_line(editor: CanvasLayer, failures: Array[String])
 ## **Every seat's tally at the match's end** (item 155 (3) 7): the gateway's prose, then one frame
 ## a seat, each number as it came; between rounds, the prose alone.
 func _check_the_recap_words(failures: Array[String]) -> void:
+	# The Ready line says what Ready will do now (S3's `fixp`, P6b finding 4).
+	if Lobby.ready_line({}) != Strings.text("lobby_ready_help") or Lobby.ready_line({"sealed_this_round": false}) != Strings.text("lobby_ready_help"):
+		failures.append("with nothing sealed the Ready line says `%s`" % Lobby.ready_line({}))
+	if Lobby.ready_line({"sealed_this_round": true}) != Strings.text("lobby_ready_sealed"):
+		failures.append("with this round's seal the Ready line says `%s`" % Lobby.ready_line({"sealed_this_round": true}))
 	var between := {"round": 2, "prose": "Words.", "seat_tallies": []}
 	if Lobby.recap_text_of(between) != Strings.text("lobby_recap", {"round": 2, "prose": "Words."}):
 		failures.append("the recap between rounds says `%s`" % Lobby.recap_text_of(between))

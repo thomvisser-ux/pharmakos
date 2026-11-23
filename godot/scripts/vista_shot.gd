@@ -86,11 +86,12 @@ func _draw_and_shoot(shot: String) -> void:
 	for i in SETTLE_DRAWS:
 		await get_tree().process_frame
 
-	var caught: int = vista.bridge.caught_panics()
+	# A count past what an int holds comes as the bridge's refusal, a Dictionary: a failure too.
+	var caught: Variant = vista.bridge.caught_panics()
 	print("[vista-shot] %d page(s), %d markers, drained over %d draws; %s" % [
 		pages, vista.marker_count(), draws, vista.bridge.panic_report()])
-	if caught != 0:
-		_fail("%d panic(s) were caught at the bridge boundary" % caught)
+	if not (caught is int) or caught != 0:
+		_fail("%s panic(s) were caught at the bridge boundary" % str(caught))
 		return
 	if shot != "":
 		await RenderingServer.frame_post_draw

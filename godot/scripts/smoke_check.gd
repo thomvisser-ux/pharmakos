@@ -96,9 +96,10 @@ func _ready() -> void:
 	if not ClassDB.class_exists(BRIDGE_CLASS) or bridge.get_class() != BRIDGE_CLASS:
 		_fail("the bridge is not a %s: the extension did not load" % BRIDGE_CLASS)
 		return
-	var caught: int = bridge.caught_panics()
-	if caught != 0:
-		_fail("the bridge caught %d panic(s)" % caught)
+	# A count past what an int holds comes as the bridge's refusal, a Dictionary: a failure too.
+	var caught: Variant = bridge.caught_panics()
+	if not (caught is int) or caught != 0:
+		_fail("the bridge caught %s panic(s)" % str(caught))
 		return
 	var own_log := FileAccess.get_file_as_string(InstanceLog.path_of(OS.get_process_id()))
 	if not own_log.contains("[boot]"):
