@@ -87,6 +87,25 @@ struct Run {
     fourth: Option<u64>,
 }
 
+/// The fourth seat's index.
+const FOURTH: usize = 3;
+
+/// The fourth seat's counted units on its last decision, as the world
+/// answers them (`World::decision_work`): `None` for a world without a fourth
+/// seat.
+///
+/// # Errors
+///
+/// [`Error::Unmeasured`] when the sim holds no count for it.
+fn fourth_units(
+    work: Option<Result<u64, pharmakos_sim::seams::Unmeasured>>,
+) -> Result<Option<u64>, Error> {
+    work.transpose().map_err(|reason| Error::Unmeasured {
+        seat: FOURTH,
+        reason,
+    })
+}
+
 /// Play one run.
 fn play(
     rules: &RulesTable,
@@ -167,11 +186,7 @@ fn play(
             break;
         }
     }
-    let fourth = runner
-        .world()
-        .decision_work(3)
-        .transpose()
-        .map_err(|reason| Error::Unmeasured { seat: 3, reason })?;
+    let fourth = fourth_units(runner.world().decision_work(FOURTH))?;
     Ok(Run {
         decision,
         hashes,
@@ -258,4 +273,26 @@ pub fn measure(
         fourth_units: fourth
             .ok_or_else(|| Error::Drift("the four-seat world has no fourth seat".to_owned()))?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, FOURTH, fourth_units};
+    use pharmakos_sim::seams::Unmeasured;
+
+    #[test]
+    fn an_unmeasured_fourth_seat_is_the_benchs_own_error() {
+        assert_eq!(fourth_units(Some(Ok(57))), Ok(Some(57)));
+        assert_eq!(fourth_units(None), Ok(None));
+        for reason in [Unmeasured::Overflowed, Unmeasured::SourceUnreadable] {
+            assert_eq!(
+                fourth_units(Some(Err(reason))),
+                Err(Error::Unmeasured {
+                    seat: FOURTH,
+                    reason
+                }),
+                "a count the sim could not take is refused, never read as a number"
+            );
+        }
+    }
 }
