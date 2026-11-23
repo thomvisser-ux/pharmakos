@@ -65,15 +65,33 @@ pub(crate) fn notice(title: &str, text: &str) {
 }
 
 /// Appends a fenced section to `$GITHUB_STEP_SUMMARY`, for readers who *are*
-/// signed in. A failure to write is not worth failing a build over — the
-/// annotations above already carry the same text.
+/// signed in. A failure to write does not fail the build — the annotations
+/// above already carry the same text — but it is said, as a `::warning::`
+/// naming the error, rather than swallowed.
 pub(crate) fn summary(title: &str, text: &str) {
     let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") else {
         return;
     };
-    if let Ok(mut file) = OpenOptions::new().append(true).create(true).open(path) {
-        let _ = writeln!(file, "### {title}\n\n```\n{text}\n```\n");
+    let written = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "### {title}\n\n```\n{text}\n```\n"));
+    if let Err(error) = written {
+        println!("{}", summary_warning(title, &path, &error));
     }
+}
+
+/// The warning a failed write of the step summary prints, one workflow
+/// command line. Pure, so its text is pinned.
+fn summary_warning(title: &str, path: &std::ffi::OsStr, error: &std::io::Error) -> String {
+    format!(
+        "::warning title=step summary not written::{}",
+        encode(&format!(
+            "the section `{title}` was not appended to {}: {error}; the annotations carry its text",
+            path.to_string_lossy()
+        ))
+    )
 }
 
 /// Workflow-command escaping: a command is one line, so `%`, `\r` and `\n` all
@@ -179,5 +197,16 @@ mod tests {
         // Exercised for the panic-free path; the assertion is that it does not
         // publish an annotation with an empty body, which reads as a bug.
         notice("empty-section", "   \n  \n");
+    }
+
+    #[test]
+    fn a_failed_summary_write_is_a_warning_on_one_line() {
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied\nagain");
+        let line = summary_warning("g3", std::ffi::OsStr::new("/x/summary"), &error);
+        assert_eq!(
+            line,
+            "::warning title=step summary not written::the section `g3` was not appended to \
+             /x/summary: denied%0Aagain; the annotations carry its text"
+        );
     }
 }

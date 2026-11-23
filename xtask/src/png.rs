@@ -48,8 +48,6 @@
 //! compared by cross-multiplication, so the verdict is identical on every
 //! platform. Percentages are rendered from integers for the report only.
 
-use std::fmt::Write as _;
-
 // ---------------------------------------------------------------------------
 // Thresholds
 // ---------------------------------------------------------------------------
@@ -142,14 +140,20 @@ impl Image {
         }
         let n = i64::try_from(samples.len())
             .map_err(|error| format!("sample count does not fit: {error}"))?;
-        let sum: i64 = samples.iter().copied().fold(0, i64::wrapping_add);
+        let sum = samples
+            .iter()
+            .try_fold(0_i64, |sum, value| sum.checked_add(*value))
+            .ok_or_else(|| overflow("the red channel's sum"))?;
         let mean = sum.div_euclid(n);
         let mut total: i64 = 0;
         for value in &samples {
-            // Samples of 0 to 255 over an image's pixels: the squares and
-            // their sum stay far inside `i64`, so nothing saturates.
-            let delta = value.saturating_sub(mean);
-            total = total.saturating_add(delta.saturating_mul(delta));
+            let delta = value
+                .checked_sub(mean)
+                .ok_or_else(|| overflow("a red sample's distance from the mean"))?;
+            total = delta
+                .checked_mul(delta)
+                .and_then(|square| total.checked_add(square))
+                .ok_or_else(|| overflow("the red channel's squared distances"))?;
         }
         u64::try_from(total.div_euclid(n))
             .map_err(|error| format!("variance does not fit: {error}"))
@@ -178,15 +182,26 @@ impl Diff {
     /// For the *report* only. [`Diff::check`] cross-multiplies instead, because
     /// this ratio is truncated: at the vista's own resolution two pixels wrong
     /// by a full 255 on every channel still render as `0.000`.
-    pub(crate) fn mean_thousandths(&self) -> u64 {
-        // Pixel counts and sums of 0-255 differences, scaled by at most a
-        // million: inside `u64` for any image this compares, so this and the
-        // products below never saturate.
-        let denominator = self.pixels.saturating_mul(3);
+    ///
+    /// An empty comparison has no mean and reads as zero; a product that does
+    /// not fit a `u64` is refused rather than saturated.
+    pub(crate) fn mean_thousandths(&self) -> Result<u64, String> {
+        let denominator = self.channel_count()?;
         if denominator == 0 {
-            return 0;
+            return Ok(0);
         }
-        self.total.saturating_mul(1_000).div_euclid(denominator)
+        let scaled = self
+            .total
+            .checked_mul(1_000)
+            .ok_or_else(|| overflow("the mean difference in thousandths"))?;
+        Ok(scaled.div_euclid(denominator))
+    }
+
+    /// The colour channels compared: three a pixel.
+    fn channel_count(&self) -> Result<u64, String> {
+        self.pixels
+            .checked_mul(3)
+            .ok_or_else(|| overflow("the channel count"))
     }
 
     /// Share of hard differences, in parts per million.
@@ -194,11 +209,15 @@ impl Diff {
     /// For the *report* only, and truncated like the mean above: at 1920×1080
     /// one hard pixel is 1 000 000 / 2 073 600 = 0 ppm. [`Diff::check`] never
     /// reads it, so that `MAX_HARD_PPM = 0` means the zero pixels it says.
-    pub(crate) fn hard_ppm(&self) -> u64 {
+    pub(crate) fn hard_ppm(&self) -> Result<u64, String> {
         if self.pixels == 0 {
-            return 0;
+            return Ok(0);
         }
-        self.hard.saturating_mul(1_000_000).div_euclid(self.pixels)
+        let scaled = self
+            .hard
+            .checked_mul(1_000_000)
+            .ok_or_else(|| overflow("the hard share in parts per million"))?;
+        Ok(scaled.div_euclid(self.pixels))
     }
 
     /// `Ok(())` when the image is within the thresholds, `Err(report)` when it
@@ -213,15 +232,19 @@ impl Diff {
     /// mean — a step reporting ok for an assertion it never made, which is the
     /// failure this whole module exists to prevent.
     pub(crate) fn check(&self, max_mean_thousandths: u64, max_hard_ppm: u64) -> Result<(), String> {
-        let mean_ok = self.total.saturating_mul(1_000)
-            <= max_mean_thousandths.saturating_mul(self.pixels.saturating_mul(3));
+        // Every product is of two `u64`s widened to `u128`, which always fits,
+        // so the verdict is exact for every input and nothing saturates
+        // towards a pass; a channel count past `u64` is refused.
+        let channels = self.channel_count()?;
+        let mean_ok = u128::from(self.total) * 1_000
+            <= u128::from(max_mean_thousandths) * u128::from(channels);
         let hard_ok =
-            self.hard.saturating_mul(1_000_000) <= max_hard_ppm.saturating_mul(self.pixels);
+            u128::from(self.hard) * 1_000_000 <= u128::from(max_hard_ppm) * u128::from(self.pixels);
         if mean_ok && hard_ok {
             return Ok(());
         }
-        let mean = self.mean_thousandths();
-        let hard = self.hard_ppm();
+        let mean = self.mean_thousandths()?;
+        let hard = self.hard_ppm()?;
         Err(format!(
             "the render differs from its golden: mean {} of 255 (limit {}), {} of {} pixels ({} %, \
              limit {} %) over {HARD_DELTA}, worst channel delta {}.\n      Look for cracks, \
@@ -245,39 +268,37 @@ impl Diff {
 
     /// A one-paragraph human report, used in the step log and in the
     /// `::notice::` annotation.
-    pub(crate) fn describe(&self) -> String {
-        let mut text = String::new();
-        let _ = writeln!(
-            text,
-            "mean abs diff {} of 255 (limit {})",
-            decimal(self.mean_thousandths(), 3),
-            decimal(MAX_MEAN_THOUSANDTHS, 3)
-        );
-        let _ = writeln!(
-            text,
-            "{} of {} pixels differ at all; {} differ by more than {HARD_DELTA} ({} %, limit {} %)",
+    pub(crate) fn describe(&self) -> Result<String, String> {
+        Ok(format!(
+            "mean abs diff {} of 255 (limit {})\n{} of {} pixels differ at all; {} differ by \
+             more than {HARD_DELTA} ({} %, limit {} %)\nworst single-channel delta {}",
+            decimal(self.mean_thousandths()?, 3),
+            decimal(MAX_MEAN_THOUSANDTHS, 3),
             self.differing,
             self.pixels,
             self.hard,
-            decimal(self.hard_ppm(), 4),
-            decimal(MAX_HARD_PPM, 4)
-        );
-        let _ = write!(text, "worst single-channel delta {}", self.worst);
-        text
+            decimal(self.hard_ppm()?, 4),
+            decimal(MAX_HARD_PPM, 4),
+            self.worst,
+        ))
     }
 }
 
 /// Renders `value`, scaled by `10^places`, as a decimal string — the report's
 /// only formatting, and it is integer arithmetic so a percentage never drags a
 /// float into a crate that forbids them.
-fn decimal(value: u64, places: u32) -> String {
-    let scale = 10_u64.pow(places);
+fn decimal(value: u64, places: u8) -> String {
+    let scale = 10_u64.pow(u32::from(places));
     let whole = value.div_euclid(scale);
     let fraction = value.rem_euclid(scale);
-    // `places` is a decimal place count (2 or 3), which every `usize` holds,
-    // so the default is never read.
-    let width = usize::try_from(places).unwrap_or(0);
+    let width = usize::from(places);
     format!("{whole}.{fraction:0width$}")
+}
+
+/// The refusal of a statistic whose arithmetic leaves its integer type: the
+/// comparison is refused rather than saturated towards a verdict.
+fn overflow(what: &str) -> String {
+    format!("{what} does not fit its integer type; the comparison is refused, not saturated")
 }
 
 /// Compares two decoded images. A size mismatch is an error rather than a
@@ -318,16 +339,20 @@ pub(crate) fn compare(shot: &Image, golden: &Image) -> Result<Diff, String> {
                 .get(golden_base + channel)
                 .ok_or_else(|| "the golden's pixel buffer is short".to_owned())?;
             let delta = left.abs_diff(right);
-            // At most 255 a channel over an image's pixels: inside `u64`, so
-            // this and the counts below never saturate.
-            total = total.saturating_add(u64::from(delta));
+            total = total
+                .checked_add(u64::from(delta))
+                .ok_or_else(|| overflow("the summed channel difference"))?;
             pixel_worst = pixel_worst.max(delta);
         }
         if pixel_worst > 0 {
-            differing = differing.saturating_add(1);
+            differing = differing
+                .checked_add(1)
+                .ok_or_else(|| overflow("the differing pixel count"))?;
         }
         if pixel_worst > HARD_DELTA {
-            hard = hard.saturating_add(1);
+            hard = hard
+                .checked_add(1)
+                .ok_or_else(|| overflow("the hard pixel count"))?;
         }
         worst = worst.max(pixel_worst);
     }
@@ -463,16 +488,18 @@ fn unfilter(raw: &[u8], width: u32, height: u32, channels: usize) -> Result<Vec<
         cursor += stride;
 
         for index in 0..stride {
-            let left = if index >= channels {
-                i32::from(*line.get(index - channels).unwrap_or(&0))
-            } else {
-                0
+            // The PNG specification's zero applies only before a row's first
+            // pixel; above the first row `previous` holds zeros by
+            // construction. A scanline shorter than its stride is a corrupt
+            // image, refused by name.
+            let left = match index.checked_sub(channels) {
+                Some(at) => scan_byte(&line, at, row)?,
+                None => 0,
             };
-            let above = i32::from(*previous.get(index).unwrap_or(&0));
-            let above_left = if index >= channels {
-                i32::from(*previous.get(index - channels).unwrap_or(&0))
-            } else {
-                0
+            let above = scan_byte(&previous, index, row)?;
+            let above_left = match index.checked_sub(channels) {
+                Some(at) => scan_byte(&previous, at, row)?,
+                None => 0,
             };
             let addend: i32 = match filter {
                 0 => 0,
@@ -501,6 +528,21 @@ fn unfilter(raw: &[u8], width: u32, height: u32, channels: usize) -> Result<Vec<
     }
 
     Ok(out)
+}
+
+/// The byte at `at` of a scanline, or the refusal of a scanline too short to
+/// hold it.
+fn scan_byte(scanline: &[u8], at: usize, row: usize) -> Result<i32, String> {
+    scanline
+        .get(at)
+        .map(|value| i32::from(*value))
+        .ok_or_else(|| {
+            format!(
+                "a scanline used for row {row} is {} bytes and has no byte {at}: the image is \
+                 corrupt",
+                scanline.len()
+            )
+        })
 }
 
 fn paeth(left: i32, above: i32, above_left: i32) -> i32 {
@@ -976,15 +1018,15 @@ mod tests {
         // channel a logged-out viewer can read (G1 section 10.12).
         assert_eq!(diff.pixels, 14_400);
         assert_eq!(diff.hard, 1_200);
-        assert_eq!(diff.hard_ppm(), 83_333);
+        assert_eq!(diff.hard_ppm(), Ok(83_333));
         assert!(
             report.contains("8.3333 %"),
             "1 200 of 14 400 pixels is 8.3333 %, not 0.0833 %: {report}"
         );
         assert!(
-            diff.describe().contains("8.3333 %"),
+            diff.describe().expect("describes").contains("8.3333 %"),
             "the annotation carries the same number: {}",
-            diff.describe()
+            diff.describe().expect("describes")
         );
 
         // And the limit is rendered on the same scale. Checked against the loose
@@ -1057,9 +1099,9 @@ mod tests {
             total: 3_000,
         };
         // 3000 / (1000 * 3) = 1.000 levels of 255.
-        assert_eq!(diff.mean_thousandths(), 1_000);
+        assert_eq!(diff.mean_thousandths(), Ok(1_000));
         // 20 of 1000 pixels = 2 %.
-        assert_eq!(diff.hard_ppm(), 20_000);
+        assert_eq!(diff.hard_ppm(), Ok(20_000));
         // The limits are passed in rather than taken from the constants, so that
         // changing the shipped thresholds does not quietly change
         // what this test is asserting.
@@ -1103,8 +1145,8 @@ mod tests {
         };
         // Both rendered shares truncate to zero: the report cannot be what the
         // verdict is made of.
-        assert_eq!(diff.hard_ppm(), 0);
-        assert_eq!(diff.mean_thousandths(), 0);
+        assert_eq!(diff.hard_ppm(), Ok(0));
+        assert_eq!(diff.mean_thousandths(), Ok(0));
         let report = diff
             .check(MAX_MEAN_THOUSANDTHS, MAX_HARD_PPM)
             .expect_err("one pixel over 32 is news, not a rasteriser tie-break");
@@ -1154,5 +1196,51 @@ mod tests {
         assert_eq!(decimal(20_000, 4), "2.0000");
         assert_eq!(decimal(83_333, 4), "8.3333");
         assert_eq!(decimal(200, 4), "0.0200");
+    }
+
+    /// A comparison whose products leave `u64` is judged exactly. Before, both
+    /// sides saturated to `u64::MAX` and compared equal, so an image wrong on
+    /// every channel passed a limit of 4 thousandths.
+    #[test]
+    fn a_verdict_past_u64_is_exact_and_not_saturated_to_a_pass() {
+        let diff = Diff {
+            pixels: 1 << 62,
+            differing: 1 << 62,
+            hard: 0,
+            worst: 255,
+            total: u64::MAX,
+        };
+        assert!(diff.check(4, 0).is_err(), "a mean far past the limit fails");
+        assert!(
+            diff.mean_thousandths().is_err(),
+            "a mean whose scaled sum leaves u64 is refused, not saturated"
+        );
+        let hard = Diff {
+            pixels: 1 << 62,
+            differing: 1 << 62,
+            hard: 1 << 62,
+            worst: 255,
+            total: 0,
+        };
+        assert!(hard.hard_ppm().is_err(), "a share past u64 is refused");
+        assert!(hard.check(4, 999_999).is_err(), "every pixel hard fails");
+        assert!(
+            hard.check(4, 1_000_000).is_ok(),
+            "a limit of a million ppm passes"
+        );
+    }
+
+    /// A channel count past `u64` refuses the comparison.
+    #[test]
+    fn a_channel_count_past_u64_is_refused() {
+        let diff = Diff {
+            pixels: u64::MAX,
+            differing: 0,
+            hard: 0,
+            worst: 0,
+            total: 0,
+        };
+        assert!(diff.check(4, 0).is_err());
+        assert!(diff.mean_thousandths().is_err());
     }
 }
