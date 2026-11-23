@@ -1637,18 +1637,23 @@ fn decision_units_equal_the_primitive_steps_counted() {
 }
 
 /// A measurement is not state: the same `toward` and `covering` match, played
-/// twice, the second time with the world's decision tally driven past
-/// `u64::MAX` before every tick, hashes the same at every tick and charges
-/// each decision the same. The cross-build half -- that pricing the pops
-/// moved no chain -- is the committed scenario chains `toward-stepping-stone`
-/// and `cover-nearest-vent`, which `cargo xtask ci`'s `scenario` step plays.
+/// twice, the second time with the world's decision tally made to fault on
+/// its next charge before every tick (`UnitTally::fault_next_charge`, which
+/// survives the decision's own reset), so every decision that charges
+/// anything ends unmeasured. Every tick hashes the same in both, and each
+/// decision the clean run measured is unmeasured in the faulted one: the
+/// fault reached inside the decision and changed nothing. The cross-build
+/// half -- that pricing the pops moved no chain -- is the committed scenario
+/// chains `toward-stepping-stone` and `cover-nearest-vent`, which
+/// `cargo xtask ci`'s `scenario` step plays.
 #[test]
 fn decision_units_never_reach_the_state_hash() {
+    use pharmakos_sim::seams::Unmeasured;
     let route = concat!(
         r#"{"label":"stone","place_beacon":{"at":{"toward":{"feature":{"feature_id":"vent_232_96"}}}},"timeout_ms":120000},"#,
         r#"{"label":"cover","place_beacon":{"at":{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}},"timeout_ms":120000}"#
     );
-    let play = |poison: bool| {
+    let play = |fault: bool| {
         let mut runner = Runner::new(world_of(PROBATION, 2)).unwrap();
         runner
             .seal_playbook(SeatId::new(0), compile(route).expect("the route compiles"))
@@ -1656,15 +1661,8 @@ fn decision_units_never_reach_the_state_hash() {
         assert!(runner.begin_push().unwrap());
         let mut chain = Vec::new();
         for _ in 0..60 {
-            if poison {
-                let work = runner.world().ground().work;
-                work.add_count(u64::MAX);
-                work.add_count(u64::MAX);
-                assert_eq!(
-                    work.read(),
-                    Err(pharmakos_sim::seams::Unmeasured::Overflowed),
-                    "the tally is unmeasured between decisions"
-                );
+            if fault {
+                runner.world().ground().work.fault_next_charge();
             }
             runner
                 .step()
@@ -1672,19 +1670,34 @@ fn decision_units_never_reach_the_state_hash() {
                 .expect("the segment outlasts this test");
             chain.push((
                 runner.world().state_hash(),
-                runner
-                    .world()
-                    .decision_work(0)
-                    .expect("seat 0")
-                    .expect("measured"),
+                runner.world().decision_work(0).expect("seat 0"),
             ));
         }
         chain
     };
     let clean = play(false);
+    let faulted = play(true);
     assert!(
-        clean.iter().any(|(_, units)| *units > 0),
+        clean
+            .iter()
+            .any(|(_, units)| matches!(units, Ok(units) if *units > 0)),
         "the match charges decision units"
     );
-    assert_eq!(play(true), clean);
+    let hashes = |chain: &[(u64, Result<u64, Unmeasured>)]| -> Vec<u64> {
+        chain.iter().map(|(hash, _)| *hash).collect()
+    };
+    assert_eq!(
+        hashes(&faulted),
+        hashes(&clean),
+        "a faulted tally moves no hash"
+    );
+    for ((_, clean), (_, faulted)) in clean.iter().zip(&faulted) {
+        if matches!(clean, Ok(units) if *units > 0) {
+            assert_eq!(
+                *faulted,
+                Err(Unmeasured::Overflowed),
+                "the fault fired inside the decision"
+            );
+        }
+    }
 }

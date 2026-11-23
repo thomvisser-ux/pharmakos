@@ -137,6 +137,9 @@ pub struct UnitTally {
     /// [`Unmeasured::id`] of the first reason the count stopped being
     /// measured, or [`MEASURED`] while it is a count.
     fault: core::sync::atomic::AtomicU8,
+    /// Whether the next charge is to leave the tally unmeasured whatever it
+    /// is ([`UnitTally::fault_next_charge`]). A reset keeps it.
+    armed: core::sync::atomic::AtomicBool,
 }
 
 /// The [`UnitTally::fault`] byte of a tally that still holds a count.
@@ -192,6 +195,7 @@ impl UnitTally {
         UnitTally {
             count: core::sync::atomic::AtomicU64::new(0),
             fault: core::sync::atomic::AtomicU8::new(MEASURED),
+            armed: core::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -203,6 +207,9 @@ impl UnitTally {
     /// Add `units`, a count of primitive steps a search reports in `u64`.
     /// A sum past `u64::MAX` leaves the tally [`Unmeasured::Overflowed`].
     pub fn add_count(&self, units: u64) {
+        if self.fire_armed() {
+            return;
+        }
         let now = self.count.load(core::sync::atomic::Ordering::Relaxed);
         match now.checked_add(units) {
             Some(next) => self
@@ -214,6 +221,9 @@ impl UnitTally {
 
     /// Add a measured count, or record why it could not be measured.
     pub fn add_measured(&self, units: Result<u64, Unmeasured>) {
+        if self.fire_armed() {
+            return;
+        }
         match units {
             Ok(units) => self.add_count(units),
             Err(reason) => self.fail(reason),
@@ -240,7 +250,30 @@ impl UnitTally {
         }
     }
 
-    /// Start again from zero, measured.
+    /// Leave the tally [`Unmeasured::Overflowed`] at its next charge, whatever
+    /// that charge is, even after a [`UnitTally::reset`] in between: a seam
+    /// for the tests that prove a measurement is not state, by faulting the
+    /// tally inside a decision (after the decision's own reset) and showing
+    /// that the match plays the same. Nothing in the sim arms it.
+    pub fn fault_next_charge(&self) {
+        self.armed
+            .store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether an armed fault fired on this charge: it leaves the tally
+    /// unmeasured and disarms.
+    fn fire_armed(&self) -> bool {
+        if self
+            .armed
+            .swap(false, core::sync::atomic::Ordering::Relaxed)
+        {
+            self.fail(Unmeasured::Overflowed);
+            return true;
+        }
+        false
+    }
+
+    /// Start again from zero, measured. An armed fault stays armed.
     pub fn reset(&self) {
         self.count.store(0, core::sync::atomic::Ordering::Relaxed);
         self.fault
@@ -282,6 +315,9 @@ impl Clone for UnitTally {
             ),
             fault: core::sync::atomic::AtomicU8::new(
                 self.fault.load(core::sync::atomic::Ordering::Relaxed),
+            ),
+            armed: core::sync::atomic::AtomicBool::new(
+                self.armed.load(core::sync::atomic::Ordering::Relaxed),
             ),
         }
     }
