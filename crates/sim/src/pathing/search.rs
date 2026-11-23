@@ -209,6 +209,7 @@ pub struct Scratch {
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
     pub(crate) reach_faults: Tally,
+    pub(crate) survey_unserved: Tally,
 }
 
 /// A diagnostic count that never reads wrong: it counts up by a checked add,
@@ -326,6 +327,7 @@ impl Scratch {
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
             reach_faults: Tally::ZERO,
+            survey_unserved: Tally::ZERO,
         })
     }
 
@@ -458,6 +460,19 @@ impl Scratch {
         self.stalled.read()
     }
 
+    /// Survey re-checks the router served no walk to since the last reset
+    /// ([`crate::pathing::estimate::WalkError::NoPath`] met while a scout's
+    /// walk to a due sighting was priced, `crate::survey`): a scout dropped
+    /// as a candidate for that sighting, counted here so the drop is read,
+    /// never silent.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_unserved(&self) -> Result<u64, TallyOverflow> {
+        self.survey_unserved.read()
+    }
+
     /// Grid-optimum searches that met a [`crate::pathing::reach::ReachError`]
     /// since the last reset: a `toward` with no stone for it, counted here so
     /// the miss is read, never silent. Nothing hands the search a column it
@@ -479,6 +494,7 @@ impl Scratch {
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
         self.reach_faults = Tally::ZERO;
+        self.survey_unserved = Tally::ZERO;
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the

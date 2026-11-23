@@ -85,26 +85,28 @@
 //!   when that column is ground the scout can reach (the router's own
 //!   connectivity oracle), so a scan never sends a scout to a column it cannot
 //!   stand on.
-//! * **The refresh pass.** Once nothing is left to scan, and in any case
-//!   before the next Lull, so that its playbook is written on fresh knowledge
-//!   (decisions-log item 13; never cut, item 144 (11); the owner's reading of
-//!   2026-11-22: the sentence binds the sightings a seat already holds), the
-//!   scout walks to the sighting most due a re-check. "Before the next Lull"
-//!   is the Push's last [`REFRESH_INTERVAL`], or earlier for a scout whose
-//!   walk to that sighting needs more than the Push has left
-//!   ([`walk_needs_the_rest`]: the walk the router serves, at the scout's
-//!   speed, at the latest), so a scout scanning far from a sighting sets off
-//!   in time to reach it rather than at a fixed minute that a long walk cannot
-//!   fit. A sighting is **due** once it is [`REFRESH_INTERVAL`] old, and
-//!   stays due for as long as the seat holds it, past the reach window
-//!   (`verifier.reach_memory_ms`) as much as inside it: a Push can be longer
-//!   than the window, so a sighting a scout could not reach in time during
-//!   the scan has left the window by the pass, and the pass is what brings it
-//!   back. The due sightings rank **enemy beacons first**, then oldest first
-//!   -- the one closest to leaving the window, or longest out of it -- ties
-//!   to the lowest asset id. A scout already walking to a due sighting keeps
-//!   it while no due enemy beacon outranks it, so a scout does not turn back
-//!   and forth between two.
+//! * **The refresh pass.** The due sightings are re-checked before the next
+//!   Lull, so that its playbook is written on fresh knowledge (decisions-log
+//!   item 13; never cut, item 144 (11); decisions-log, the item recording
+//!   2026-11-22's Survey ruling: the sentence binds the sightings a seat
+//!   already holds). A sighting is **due** once it is [`REFRESH_INTERVAL`]
+//!   old, and stays due for as long as the seat holds it, past the reach
+//!   window (`verifier.reach_memory_ms`) as much as inside it: a Push can be
+//!   longer than the window, so a sighting the scan kept the scouts from has
+//!   left the window by the time they turn to it, and the re-check is what
+//!   brings it back. The due sightings rank **enemy beacons first**, then
+//!   oldest first -- the one closest to leaving the window, or longest out of
+//!   it -- ties to the lowest asset id. A seat's scouts are decided
+//!   **together** on every decision tick ([`decide_seat`] states the
+//!   algorithm and its order): a scout already walking to a due sighting
+//!   keeps it; each other sighting goes to the free scout whose served walk
+//!   reaches it soonest; and that scout leaves its scan only when it must --
+//!   it has nothing to scan, or the Push is in its last
+//!   [`REFRESH_INTERVAL`], or the sighting would be out of the window at the
+//!   Lull and the walk the router serves to it, at the scout's speed, at the
+//!   latest, no longer leaves time to scan on ([`walk_leaves_time`]), priced
+//!   once every [`REPRICE_DECISIONS`] decisions while its octile bound leaves
+//!   time and every decision once it does not. Every other scout scans.
 //! * **A re-check that finds nothing forgets.** A due sighting whose place one
 //!   of the seat's Survey scouts has in sight, and which no sensor renewed on
 //!   that decision tick, remembers an asset that is no longer there, and the
@@ -119,8 +121,9 @@
 //!   a sighting inside the weapon range of an armed enemy asset the seat sees
 //!   now is no destination. The walk itself is the router's: a route that
 //!   prices a known threat's range is `AVOID_KNOWN_THREATS`, S2's `atk`'s.
-//! * **Several scouts** of one beacon share the work: a destination a scout of
-//!   the same beacon in a lower row is already walking to is not taken again.
+//! * **Several scouts** share the work: a sighting goes to one scout of the
+//!   seat (the refresh pass above), and a cell a scout of the same beacon in
+//!   a lower row is already walking to is not scanned again.
 //! * **Arrival.** A scout that has reached the place it was sent to parks
 //!   there, so the wandering a unit at the end of its route is given
 //!   ([`World`]'s arrival draw) does not carry it off before it looks.
@@ -138,13 +141,23 @@ use crate::knowledge::{AssetId, AssetKind, Position};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::Ms;
 use crate::pathing::estimate::{EstimateError, WalkError, walk_cost, walk_ticks};
+use crate::pathing::surface::Node;
 use crate::pathing::{Speed, ticks_for_cost};
+use crate::seams::MandateKind;
 use crate::sight::{RadiusOnly, Sensor};
 use crate::tables::{
     BeaconId, ColumnBox, NO_BLUEPRINT, SeatId, StructureId, TargetKind, UnitId, UnitKind,
 };
 use crate::targeting::column_of;
 use crate::world::World;
+
+/// How many decision intervals apart a free scout's walk to a sighting it may
+/// have to set off for is priced ([`pricing_decision`]): every eighth, two
+/// seconds of game time at `match.decision_tick_ms` 250. The departure rule's
+/// slack grows with it ([`walk_leaves_time`]), so a longer cadence prices
+/// fewer walks and sets a scout off up to that much sooner.
+// PLACEHOLDER: Survey's re-pricing cadence, every 8th decision (2 s) — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run
+pub const REPRICE_DECISIONS: u32 = 8;
 
 /// The explored table's coarse cell, in columns on a side.
 ///
@@ -689,8 +702,26 @@ fn nearest_cell(
     best.map(|(_, cell, point)| (cell, point))
 }
 
-/// Run one decision of a scout that is not standing a picket (spec section
-/// 6's Survey row): scan, or refresh, or idle at its beacon. Called by
+/// Every Survey scout's decision on a decision tick, seat by seat in
+/// ascending seat id: [`crate::programs::run_all`] calls it before the units'
+/// programs run, so a seat's scouts are decided together ([`decide_seat`]).
+/// A Survey scout's own program then does nothing ([`is_survey_scout`]).
+pub(crate) fn decide_scouts(world: &mut World) {
+    if !world.is_decision_tick() {
+        return;
+    }
+    for index in 0..crate::math::index::row(world.seats().len()) {
+        let seat = world.seats().seats().get(index).copied().map(SeatId::new);
+        let alive = world.seats().is_alive(index);
+        if let Some(seat) = seat.filter(|_| alive) {
+            decide_seat(world, seat, Members::Survey);
+        }
+    }
+}
+
+/// Run one decision of a scout that is neither standing a picket nor a
+/// Survey beacon's (a scout whose home is some other beacon): it is decided
+/// alone, by the same rules ([`decide_seat`]). Called by
 /// [`crate::programs::ScoutProgram`] on every tick; it decides on a decision
 /// tick only, and between two the scout walks where it was sent.
 pub(crate) fn run_scout(world: &mut World, unit: u32) {
@@ -698,66 +729,558 @@ pub(crate) fn run_scout(world: &mut World, unit: u32) {
         return;
     }
     let row = crate::math::index::row(unit);
-    let units = world.units();
-    let (Some(seat), Some(home), Some(here), Some(going)) = (
-        units.seats().get(row).copied().map(SeatId::new),
-        units.homes().get(row).copied(),
-        units.positions().get(row).copied(),
-        units.destinations().get(row).copied(),
-    ) else {
+    let Some(seat) = world.units().seats().get(row).copied().map(SeatId::new) else {
         return;
     };
+    decide_seat(world, seat, Members::One(row));
+}
+
+/// Whether the unit in `row` is a living scout whose home is a living
+/// Survey beacon: one [`decide_scouts`] decides.
+pub(crate) fn is_survey_scout(world: &World, row: usize) -> bool {
+    let units = world.units();
+    let (Some(kind), Some(hp), Some(home)) = (
+        units.kinds().get(row).copied(),
+        units.hit_points().get(row).copied(),
+        units.homes().get(row).copied(),
+    ) else {
+        return false;
+    };
+    if kind != UnitKind::Scout.id() || !hp.is_alive() {
+        return false;
+    }
+    let Ok(beacon) = world.beacons().row_of(home) else {
+        return false;
+    };
+    let beacon = beacon.index();
+    world.beacons().mandates().get(beacon).copied() == Some(MandateKind::Survey.id())
+        && world
+            .beacons()
+            .hit_points()
+            .get(beacon)
+            .is_some_and(|hp| hp.is_alive())
+}
+
+/// The scouts one [`decide_seat`] decides.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Members {
+    /// The seat's Survey scouts whose programs run this tick: home lit and
+    /// not retreating. A scout whose retreat ends on this tick is decided on
+    /// the next decision tick, one interval later, because the retreat is
+    /// read here before the programs end it.
+    Survey,
+    /// One scout, in this row.
+    One(usize),
+}
+
+/// Whether the unit in `row` is one of `members` of `seat`.
+fn member(world: &World, seat: SeatId, members: Members, row: usize) -> bool {
+    match members {
+        Members::One(one) => one == row,
+        Members::Survey => {
+            let units = world.units();
+            units.seats().get(row).copied() == Some(seat.raw())
+                && is_survey_scout(world, row)
+                && units.retreats().get(row).is_some_and(|to| !to.is_some())
+                && units
+                    .homes()
+                    .get(row)
+                    .copied()
+                    .is_some_and(|home| crate::power::beacon_is_live(world, home))
+        }
+    }
+}
+
+/// A due sighting's rank: not an enemy beacon (beacons first), then the tick
+/// it was seen on (oldest first), then its asset id. A total order: a seat
+/// holds one sighting per asset.
+type Rank = (bool, u32, u32);
+
+/// One due sighting of a seat's, open to a scout: its rank, place and age.
+#[derive(Clone, Copy, Debug)]
+struct Due {
+    rank: Rank,
+    place: [Fx; 3],
+    age: u32,
+}
+
+/// `seat`'s next due sighting of tier `beacons` after `after` in rank order,
+/// whose place lies inside no known threat's range (decision 12).
+fn next_due(
+    world: &World,
+    seat: SeatId,
+    beacons: bool,
+    after: Option<Rank>,
+    threats: &[([Fx; 3], Sq)],
+) -> Option<Due> {
+    let tick = world.tick().raw();
+    let table = world.sightings();
+    let rows = table
+        .seats()
+        .iter()
+        .zip(table.assets())
+        .zip(table.kinds())
+        .zip(table.places())
+        .zip(table.seen_at());
+    let mut best: Option<Due> = None;
+    for ((((who, asset), kind), place), seen) in rows {
+        let rank = (*kind != AssetKind::Beacon.id(), *seen, *asset);
+        if *who != seat.raw()
+            || rank.0 == beacons
+            || !due_at(*seen, tick)
+            || after.is_some_and(|after| rank <= after)
+            || threats
+                .iter()
+                .any(|(at, reach)| Sq::between(*at, *place) <= *reach)
+        {
+            continue;
+        }
+        if best.is_none_or(|held| rank < held.rank) {
+            // E7: rule: a sighting is taken on a tick already played, so it is never later than now
+            let age = tick.saturating_sub(*seen);
+            best = Some(Due {
+                rank,
+                place: *place,
+                age,
+            });
+        }
+    }
+    best
+}
+
+/// Whether a scout of `seat` already goes to `place` on this decision: one
+/// in `going` (kept or sent), or one this decision does not decide.
+fn taken(
+    world: &World,
+    seat: SeatId,
+    members: Members,
+    going: &[crate::ids::Row],
+    place: [Fx; 3],
+) -> bool {
+    let units = world.units();
+    units
+        .kinds()
+        .iter()
+        .zip(units.seats())
+        .zip(units.hit_points())
+        .zip(units.destinations())
+        .enumerate()
+        .any(|(row, (((kind, owner), hp), to))| {
+            *kind == UnitKind::Scout.id()
+                && *owner == seat.raw()
+                && hp.is_alive()
+                && *to == place
+                && (going.iter().any(|held| held.index() == row)
+                    || !member(world, seat, members, row))
+        })
+}
+
+/// One seat's Survey scouts, decided together (spec section 6's Survey row:
+/// "scan unexplored ground first, then re-check the sightings closest to
+/// leaving the reach window, enemy beacons first ... refresh those sightings
+/// before the next Lull"). The algorithm, and its order, which is total:
+///
+/// 1. **The due sightings are assigned to the scouts**, enemy beacons first
+///    (the whole beacon tier, then the rest), each tier in rank order
+///    ([`Rank`]: oldest first, ties to the lowest asset id). In each tier:
+///    * **a scout already walking to a due sighting keeps it** (the scouts in
+///      ascending unit row; two walking to one, the lower row keeps it);
+///    * then each sighting no scout keeps, in rank order, goes to **the free
+///      scout whose served walk reaches it soonest** (ties to the lowest unit
+///      row; [`soonest`]), and that scout sets off for it **only if it must**:
+///      it has nothing to scan, or the Push is in its last
+///      [`REFRESH_INTERVAL`], or the sighting would be out of the reach
+///      window at the Lull and no free scout's walk to it leaves time to scan
+///      on ([`walk_leaves_time`]). A sighting no scout must set off for takes
+///      none, and the tier stops after as many sightings as it had free
+///      scouts, so the scouts answer for the most due first. A scout walking
+///      to a lower tier's sighting is free for an enemy beacon.
+/// 2. **Every other scout scans**, in ascending unit row: the nearest
+///    unexplored cell no lower-row scout of its beacon is walking to; with
+///    none, a cell due a re-scan (decision 7); with none, it idles at its
+///    beacon. "Scan first" stays the rule: only the scouts a refresh needs
+///    leave the scan.
+///
+/// A scout that has arrived where it was sent parks, so the end of the
+/// route does not carry it off before the next decision looks.
+fn decide_seat(world: &mut World, seat: SeatId, members: Members) {
     let mut threats = world.take_threat_scratch();
     crate::defend::for_each_known_threat(world, seat, |known| {
         threats.push((known.at, Sq::of_radius(known.weapon.range())));
     });
-    let (scan, refresh, due_cell) = {
-        let open = |point: [Fx; 3]| {
-            !threats
-                .iter()
-                .any(|(at, reach)| Sq::between(*at, point) <= *reach)
-                && !claimed(world, home, row, point)
-        };
-        let scan =
-            nearest_cell(world, seat, home, here, Pick::Unexplored, &open).map(|(_, point)| point);
-        let refresh = most_due(world, seat, going, &open);
-        // Decision 7: a due cell is scanned again only when no unexplored
-        // cell is left, and after the sightings due a re-check, the spec's
-        // second job; so it takes the time a scout was idle.
-        let due_cell = (scan.is_none() && refresh.is_none())
-            .then(|| {
-                nearest_cell(world, seat, home, here, Pick::Due, &open).map(|(_, point)| point)
-            })
-            .flatten();
-        (scan, refresh, due_cell)
-    };
+    let mut going = core::mem::take(world.sight_rows_mut());
+    going.clear();
+    for beacons in [true, false] {
+        keep(world, seat, members, beacons, &threats, &mut going);
+        assign(world, seat, members, beacons, &threats, &mut going);
+    }
+    scan_or_idle(world, seat, members, &threats, &going);
+    going.clear();
+    *world.sight_rows_mut() = going;
     world.put_threat_scratch(threats);
-    // The refresh pass: nothing left to scan, the Push's last
-    // [`REFRESH_INTERVAL`], or the walk to the sighting this scout would
-    // re-check now needing all the Push has left (spec section 6: "they
-    // refresh those sightings before the next Lull"). A scout already on its
-    // way to that sighting keeps on, as `most_due` keeps it: the walk left
-    // shrinks as it goes, and turning back to the scan would only send it out
-    // again.
-    let pass = scan.is_none()
-        || refresh_pass(world)
-        || refresh.is_some_and(|to| to == going || walk_needs_the_rest(world, here, to));
-    let target = if pass {
-        refresh.or(scan).or(due_cell)
-    } else {
-        scan
-    };
-    match target {
-        // Arrived (on the map, whatever the heights): park, so the end of the
-        // route's wandering does not carry the scout off before the next
-        // decision looks.
-        Some([tx, ty, _])
-            if crate::programs::within(here, [tx, ty, here[2]], world.arrive_radius()) =>
-        {
-            world.park_unit(unit);
+}
+
+/// Step 1's first half for one tier: every member walking to a due sighting
+/// of the tier that no lower-row scout keeps, keeps it.
+fn keep(
+    world: &World,
+    seat: SeatId,
+    members: Members,
+    beacons: bool,
+    threats: &[([Fx; 3], Sq)],
+    going: &mut Vec<crate::ids::Row>,
+) {
+    for row in 0..crate::math::index::row(world.units().len()) {
+        if !member(world, seat, members, row) || going.iter().any(|held| held.index() == row) {
+            continue;
         }
-        Some(to) => world.send_unit(unit, to),
-        None => crate::programs::idle_at_home(world, unit),
+        let Some(to) = world.units().destinations().get(row).copied() else {
+            continue;
+        };
+        let mut after = None;
+        while let Some(due) = next_due(world, seat, beacons, after, threats) {
+            after = Some(due.rank);
+            if due.place == to {
+                if !taken(world, seat, members, going, to)
+                    && let Some(held) = crate::ids::Row::of_index(row)
+                {
+                    going.push(held);
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Step 1's second half for one tier: the sightings no scout keeps, in rank
+/// order, each to the free member that reaches it soonest when one must set
+/// off now; at most as many sightings as the tier had free members.
+fn assign(
+    world: &mut World,
+    seat: SeatId,
+    members: Members,
+    beacons: bool,
+    threats: &[([Fx; 3], Sq)],
+    going: &mut Vec<crate::ids::Row>,
+) {
+    let free = (0..crate::math::index::row(world.units().len()))
+        .filter(|row| {
+            member(world, seat, members, *row) && !going.iter().any(|held| held.index() == *row)
+        })
+        .count();
+    let left = ticks_left(world);
+    let window = world.rules().attack().reach_memory.to_ticks_floor();
+    let last_minute = refresh_pass(world);
+    let mut considered: usize = 0;
+    let mut after = None;
+    while considered < free {
+        let Some(due) = next_due(world, seat, beacons, after, threats) else {
+            return;
+        };
+        after = Some(due.rank);
+        if taken(world, seat, members, going, due.place) {
+            continue;
+        }
+        considered = considered.saturating_add(1);
+        // A member with nothing to scan, the nearest of them, sets off: it
+        // has nothing else to do.
+        let idle = soonest(world, seat, members, going, due.place, Want::Idle, threats);
+        let chosen = match idle {
+            Soonest::Scout(row) => Some(row),
+            Soonest::Time | Soonest::None if last_minute => {
+                match soonest(world, seat, members, going, due.place, Want::Any, threats) {
+                    Soonest::Scout(row) => Some(row),
+                    Soonest::Time | Soonest::None => None,
+                }
+            }
+            // E7: rule: an age and a tick count of one match, so their sum is past any window long before `u32`
+            Soonest::Time | Soonest::None if due.age.saturating_add(left) > window => {
+                match soonest(
+                    world,
+                    seat,
+                    members,
+                    going,
+                    due.place,
+                    Want::Pressed {
+                        left,
+                        pricing: pricing_decision(world),
+                    },
+                    threats,
+                ) {
+                    Soonest::Scout(row) => Some(row),
+                    Soonest::Time | Soonest::None => None,
+                }
+            }
+            // Fresh at the Lull without a re-check now: the last minute's
+            // pass re-checks it, and nobody leaves the scan for it yet.
+            Soonest::Time | Soonest::None => None,
+        };
+        if let Some(row) = chosen
+            && let (Some(held), Ok(unit)) = (crate::ids::Row::of_index(row), u32::try_from(row))
+        {
+            world.send_unit(unit, due.place);
+            going.push(held);
+        }
+    }
+}
+
+/// Which free members [`soonest`] weighs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Want {
+    /// Only those with nothing to scan.
+    Idle,
+    /// Every free member.
+    Any,
+    /// Every free member, and the one reaching the place soonest only when
+    /// none's walk leaves time to scan on with `left` ticks of the Push to
+    /// play ([`walk_leaves_time`]). Off a [`pricing_decision`], a member whose
+    /// octile bound leaves time is taken to have time without its walk being
+    /// priced: the next pricing decision prices it.
+    Pressed {
+        /// The ticks the Push has left.
+        left: u32,
+        /// Whether this decision prices the walks ([`pricing_decision`]).
+        pricing: bool,
+    },
+}
+
+/// What [`soonest`] found.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Soonest {
+    /// The member, by unit row, whose served walk reaches the place soonest.
+    Scout(usize),
+    /// Under [`Want::Pressed`], a member whose walk leaves time: nobody must
+    /// set off yet.
+    Time,
+    /// No member it weighs can walk to the place.
+    None,
+}
+
+/// The free member of `seat`'s (not in `going`) whose served walk reaches
+/// `place` soonest, ties to the lowest unit row ([`Want`] says which members
+/// count). The walks are priced in the order of their octile bounds, which no
+/// served walk undercuts, and the search stops once the next bound is no
+/// sooner than the best walk priced, so a member a bound already rules out
+/// is never priced.
+fn soonest(
+    world: &mut World,
+    seat: SeatId,
+    members: Members,
+    going: &[crate::ids::Row],
+    place: [Fx; 3],
+    want: Want,
+    threats: &[([Fx; 3], Sq)],
+) -> Soonest {
+    let speed = Speed {
+        link_ticks: world.link_ticks(),
+        ..Speed::of_kind(world.rules(), UnitKind::Scout)
+    };
+    let [tx, ty] = column_of(place);
+    let Some(goal) = world.surface().node_of(tx, ty) else {
+        // A place off the surface graph: the router serves no walk there.
+        world.scratch_mut().survey_unserved.bump();
+        return Soonest::None;
+    };
+    let mut best: Option<(i64, usize)> = None;
+    let mut cursor: Option<(i64, usize)> = None;
+    loop {
+        // The next candidate in (bound, row) order.
+        let mut next: Option<(i64, usize, Node)> = None;
+        for row in 0..crate::math::index::row(world.units().len()) {
+            if !member(world, seat, members, row) || going.iter().any(|held| held.index() == row) {
+                continue;
+            }
+            let Some(here) = world.units().positions().get(row).copied() else {
+                continue;
+            };
+            let [fx, fy] = column_of(here);
+            let Some(start) = world.surface().node_of(fx, fy) else {
+                continue;
+            };
+            // Two columns of the map, inside `i16` (`RulesTable::map_last_voxel`):
+            // their difference holds.
+            let bound = world.surface().costs().octile(tx - fx, ty - fy);
+            let Some(bound) = ticks_for_cost(bound, speed.cost_per_second).map(i64::from) else {
+                continue;
+            };
+            let key = (bound, row);
+            if cursor.is_some_and(|cursor| key <= cursor)
+                || next.is_some_and(|(b, r, _)| key >= (b, r))
+            {
+                continue;
+            }
+            if want == Want::Idle && has_scan(world, seat, row, threats) {
+                continue;
+            }
+            next = Some((bound, row, start));
+        }
+        let Some((bound, row, start)) = next else {
+            break;
+        };
+        cursor = Some((bound, row));
+        if best.is_some_and(|(walk, _)| bound > walk) {
+            break;
+        }
+        if let Want::Pressed {
+            left,
+            pricing: false,
+        } = want
+            && walk_leaves_time(world, bound, left)
+        {
+            return Soonest::Time;
+        }
+        let Some(walk) = served_walk_ticks(world, start, goal, speed) else {
+            continue;
+        };
+        if let Want::Pressed { left, .. } = want
+            && walk_leaves_time(world, walk, left)
+        {
+            return Soonest::Time;
+        }
+        if best.is_none_or(|held| (walk, row) < held) {
+            best = Some((walk, row));
+        }
+    }
+    best.map_or(Soonest::None, |(_, row)| Soonest::Scout(row))
+}
+
+/// Whether the member in `row` has an unexplored cell to scan.
+fn has_scan(world: &World, seat: SeatId, row: usize, threats: &[([Fx; 3], Sq)]) -> bool {
+    let units = world.units();
+    let (Some(home), Some(here)) = (
+        units.homes().get(row).copied(),
+        units.positions().get(row).copied(),
+    ) else {
+        return false;
+    };
+    let open = |point: [Fx; 3]| {
+        !threats
+            .iter()
+            .any(|(at, reach)| Sq::between(*at, point) <= *reach)
+            && !claimed(world, home, row, point)
+    };
+    nearest_cell(world, seat, home, here, Pick::Unexplored, &open).is_some()
+}
+
+/// The ticks a scout takes, at the latest, on the walk the router serves from
+/// `start` to `goal` at `speed` ([`walk_ticks`]), or `None` when it serves
+/// none: `NoPath` (counted, [`Scratch::survey_unserved`](crate::pathing::search::Scratch)),
+/// or a chain whose queries stop falling (counted,
+/// [`Scratch::stalled`](crate::pathing::search::Scratch)), or a walker with no
+/// speed. A walk too long for a tick count is [`i64::MAX`] ticks: longer than
+/// any Push.
+fn served_walk_ticks(world: &mut World, start: Node, goal: Node, speed: Speed) -> Option<i64> {
+    let (ground, scratch) = world.ground_and_scratch();
+    let walk = match walk_cost(ground.surface, ground.clusters, scratch, (start, goal)) {
+        Ok(walk) => walk,
+        Err(WalkError::NoPath(_)) => {
+            scratch.survey_unserved.bump();
+            return None;
+        }
+        Err(WalkError::Stalled { .. }) => {
+            scratch.stalled.bump();
+            return None;
+        }
+    };
+    match walk_ticks(walk, speed) {
+        Ok(ticks) => ticks.map(i64::from),
+        Err(EstimateError::PastCost { .. } | EstimateError::PastTicks { .. }) => Some(i64::MAX),
+        // `walk_ticks` prices a served walk and never meets a chain; were it
+        // to, the chain is one whose queries stopped falling, as above.
+        Err(EstimateError::Stalled { .. }) => {
+            scratch.stalled.bump();
+            None
+        }
+    }
+}
+
+/// Whether a walk of `walk` ticks, set off at the next [`pricing_decision`],
+/// still arrives before the Lull with `left` ticks of the Push to play: the
+/// walk plus the slack is less than `left`.
+///
+/// What holds, exactly. [`walk_ticks`] is never optimistic from the tick the
+/// router serves the route: the scout arrives no later than that, plus the
+/// wait for its first route, one re-ask ([`World::link_ticks`]). A free
+/// scout's walk is priced on pricing decisions only, every
+/// [`REPRICE_DECISIONS`] decision intervals, so it sets off up to that many
+/// intervals after the walk first needed the rest; and meanwhile it walks on
+/// with its scan, which lengthens its walk by at most the ticks it walked
+/// (each step away is one step back), as many intervals again. The slack is
+/// twice the pricing cadence and the re-ask. Sight is further slack the rule
+/// does not count on: the scout renews the sighting once the place is within
+/// its vision radius, before it arrives.
+fn walk_leaves_time(world: &World, walk: i64, left: u32) -> bool {
+    // A `u32` interval times a small cadence, doubled, plus a `u32`: inside an
+    // `i64`.
+    let slack = 2 * i64::from(world.decision_ticks()) * i64::from(REPRICE_DECISIONS)
+        + i64::from(world.link_ticks());
+    walk.saturating_add(slack) < i64::from(left)
+}
+
+/// Whether this decision tick prices free scouts' walks to the sightings
+/// they may have to set off for: the Push's first decision, then every
+/// [`REPRICE_DECISIONS`]th. Between two, a walk is priced only when its octile
+/// bound no longer leaves time, so a scout far from its deadline is priced
+/// once a cadence rather than once a decision, and one near it every
+/// decision.
+fn pricing_decision(world: &World) -> bool {
+    let elapsed = world.tick().since(world.match_state().segment_started());
+    // E7: rule: a decision tick is past the Push's first tick, so `elapsed` is at least one
+    let decision = elapsed.saturating_sub(1);
+    // E7: cannot miss: `World::decision_ticks` is at least one and the cadence a positive constant
+    decision
+        .checked_div(world.decision_ticks())
+        .and_then(|decisions| decisions.checked_rem(REPRICE_DECISIONS))
+        .is_some_and(|phase| phase == 0)
+}
+
+/// Step 2: every member that does not go to a sighting scans, re-scans or
+/// idles, in ascending unit row; and every member that arrived parks.
+fn scan_or_idle(
+    world: &mut World,
+    seat: SeatId,
+    members: Members,
+    threats: &[([Fx; 3], Sq)],
+    going: &[crate::ids::Row],
+) {
+    for row in 0..crate::math::index::row(world.units().len()) {
+        if !member(world, seat, members, row) {
+            continue;
+        }
+        let units = world.units();
+        let (Some(home), Some(here), Some(to), Ok(unit)) = (
+            units.homes().get(row).copied(),
+            units.positions().get(row).copied(),
+            units.destinations().get(row).copied(),
+            u32::try_from(row),
+        ) else {
+            continue;
+        };
+        let target = if going.iter().any(|held| held.index() == row) {
+            Some(to)
+        } else {
+            let open = |point: [Fx; 3]| {
+                !threats
+                    .iter()
+                    .any(|(at, reach)| Sq::between(*at, point) <= *reach)
+                    && !claimed(world, home, row, point)
+            };
+            nearest_cell(world, seat, home, here, Pick::Unexplored, &open)
+                .or_else(|| nearest_cell(world, seat, home, here, Pick::Due, &open))
+                .map(|(_, point)| point)
+        };
+        match target {
+            // Arrived (on the map, whatever the heights): park, so the end of
+            // the route's wandering does not carry the scout off before the
+            // next decision looks.
+            Some([tx, ty, _])
+                if crate::programs::within(here, [tx, ty, here[2]], world.arrive_radius()) =>
+            {
+                world.park_unit(unit);
+            }
+            Some(to) => world.send_unit(unit, to),
+            None => crate::programs::idle_at_home(world, unit),
+        }
     }
 }
 
@@ -778,7 +1301,8 @@ fn claimed(world: &World, home: BeaconId, row: usize, point: [Fx; 3]) -> bool {
 }
 
 /// Whether the running Push is in its last [`REFRESH_INTERVAL`], the refresh
-/// pass for every scout ([`walk_needs_the_rest`] starts it sooner for one).
+/// pass for every free scout ([`decide_seat`] sets one off sooner when its walk
+/// needs it).
 fn refresh_pass(world: &World) -> bool {
     ticks_left(world) <= REFRESH_INTERVAL.to_ticks_ceil()
 }
@@ -795,117 +1319,9 @@ fn ticks_left(world: &World) -> u32 {
     end.saturating_sub(world.tick().raw())
 }
 
-/// Whether a scout at `here` must set off for the sighting at `to` now to
-/// re-check it before the Lull: the walk the router serves from `here` to
-/// `to`, at the scout's speed, at the latest ([`walk_ticks`]), plus one
-/// decision interval (the scout decides on decision ticks only, so it may
-/// set off that much later) and one re-ask (the wait before the router
-/// serves its first route), is at least what the Push has left.
-///
-/// The octile bound over the footprint at the base step costs, which no
-/// walk undercuts ([`StepCosts::octile`](crate::pathing::surface::StepCosts)),
-/// answers first when it already needs the rest, so a scout close to the
-/// deadline is not priced a walk it must take anyway.
-///
-/// No walk, no need: a sighting the router serves no walk to from here
-/// (`NoPath`) is no destination a scout can reach in time, as "nearest"
-/// skips an unreachable candidate (`targeting.md`); a chain whose queries
-/// stop falling is the same, counted under its own reason
-/// ([`Scratch::stalled`](crate::pathing::search::Scratch)). A walk too long
-/// for a tick count needs more than any Push has, so it needs the rest.
-fn walk_needs_the_rest(world: &mut World, here: [Fx; 3], to: [Fx; 3]) -> bool {
-    let left = i64::from(ticks_left(world));
-    // Two `u32` counts: inside an `i64`.
-    let slack = i64::from(world.decision_ticks()) + i64::from(world.link_ticks());
-    let speed = Speed {
-        link_ticks: world.link_ticks(),
-        ..Speed::of_kind(world.rules(), UnitKind::Scout)
-    };
-    let [fx, fy] = column_of(here);
-    let [tx, ty] = column_of(to);
-    // Two columns of the map, inside `i16` (`RulesTable::map_last_voxel`):
-    // their difference holds.
-    let bound = world.surface().costs().octile(tx - fx, ty - fy);
-    if ticks_for_cost(bound, speed.cost_per_second)
-        .is_some_and(|ticks| i64::from(ticks) + slack >= left)
-    {
-        return true;
-    }
-    let (ground, scratch) = world.ground_and_scratch();
-    let (Some(from), Some(goal)) = (
-        ground.surface.node_of(fx, fy),
-        ground.surface.node_of(tx, ty),
-    ) else {
-        return false;
-    };
-    let walk = match walk_cost(ground.surface, ground.clusters, scratch, (from, goal)) {
-        Ok(walk) => walk,
-        Err(WalkError::NoPath(_)) => return false,
-        Err(WalkError::Stalled { .. }) => {
-            scratch.stalled.bump();
-            return false;
-        }
-    };
-    match walk_ticks(walk, speed) {
-        // An `i32` plus a sum of two `u32`s: inside an `i64`.
-        Ok(Some(ticks)) => i64::from(ticks) + slack >= left,
-        // A scout with no speed walks nowhere, so no walk is needed.
-        Ok(None) => false,
-        Err(EstimateError::PastCost { .. } | EstimateError::PastTicks { .. }) => true,
-        // `walk_ticks` prices a served walk and never meets a chain; were it
-        // to, the chain is one whose queries stopped falling, as above.
-        Err(EstimateError::Stalled { .. }) => {
-            scratch.stalled.bump();
-            false
-        }
-    }
-}
-
 /// Whether a sighting taken on tick `seen` is due a re-check on tick `now`:
 /// at least [`REFRESH_INTERVAL`] old.
 fn due_at(seen: u32, now: u32) -> bool {
     // E7: rule: a sighting is taken on a tick already played, so it is never later than now
     now.saturating_sub(seen) >= REFRESH_INTERVAL.to_ticks_ceil()
-}
-
-/// Where a scout in the refresh pass walks: to `seat`'s sighting most due a
-/// re-check, inside the reach window or past it, keeping `going` while it is
-/// one of them and no due enemy beacon outranks it, or `None` when none is
-/// due.
-fn most_due(
-    world: &World,
-    seat: SeatId,
-    going: [Fx; 3],
-    open: &dyn Fn([Fx; 3]) -> bool,
-) -> Option<[Fx; 3]> {
-    let tick = world.tick().raw();
-    let table = world.sightings();
-    let rows = table
-        .seats()
-        .iter()
-        .zip(table.assets())
-        .zip(table.kinds())
-        .zip(table.places())
-        .zip(table.seen_at());
-    // The key: not an enemy beacon (beacons first), then the tick it was seen
-    // on (oldest first), then the asset id.
-    let mut best: Option<((bool, u32, u32), [Fx; 3])> = None;
-    // Whether `going` is a due sighting, and in which tier.
-    let mut kept: Option<bool> = None;
-    for ((((who, asset), kind), place), seen) in rows {
-        if *who != seat.raw() || !due_at(*seen, tick) || !open(*place) {
-            continue;
-        }
-        let key = (*kind != AssetKind::Beacon.id(), *seen, *asset);
-        if *place == going && kept.is_none() {
-            kept = Some(key.0);
-        }
-        if best.is_none_or(|(held, _)| key < held) {
-            best = Some((key, *place));
-        }
-    }
-    match (best, kept) {
-        (Some(((tier, _, _), _)), Some(held)) if held == tier => Some(going),
-        (best, _) => best.map(|(_, place)| place),
-    }
 }

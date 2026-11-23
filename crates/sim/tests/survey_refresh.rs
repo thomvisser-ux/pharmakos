@@ -31,15 +31,18 @@
     reason = "clippy.toml sets allow-expect-in-tests and allow-unwrap-in-tests, but that configuration only recognises #[test] functions and #[cfg(test)] modules, not an integration test's helpers. A panic is this file's failure report: these are panic lints, not determinism lints (AGENTS.md section 5)."
 )]
 
+use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::knowledge::{AssetId, AssetKind};
 use pharmakos_sim::math::fixed::Fx;
+use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::runner::{MatchPhase, Runner};
 use pharmakos_sim::seams::MandateKind;
-use pharmakos_sim::survey::REFRESH_INTERVAL;
+use pharmakos_sim::survey::{REFRESH_INTERVAL, REPRICE_DECISIONS};
 use pharmakos_sim::tables::{
     AreaKind, BeaconId, ColumnBox, PRIORITY_NORMAL, SeatId, UnitId, UnitKind,
 };
+use pharmakos_sim::voxels::{Material, VoxelEdit};
 use pharmakos_sim::world::{World, WorldConfig};
 use pharmakos_sim::{MatchSettings, RulesTable, default_rules_path};
 use std::path::PathBuf;
@@ -48,13 +51,16 @@ use std::path::PathBuf;
 const SEED: u64 = 0x00F1_2E00_C0DE_0001;
 
 /// The committed seeds and seat counts: Probation's seed 20 with two seats,
-/// and the determinism and scenario seeds with two and three.
-const COMMITTED: [(u64, u32); 5] = [
+/// and the determinism and scenario seeds with two and three; and seed 2 with
+/// three seats, where PR #210's first review found a scout displaced from a
+/// sighting it had walked toward for minutes (fix pass 1, item 1).
+const COMMITTED: [(u64, u32); 6] = [
     (20, 2),
     (0x0102_0304_0506_0708, 2),
     (0x0102_0304_0506_0708, 3),
     (0x0000_0000_CA5C_ADED, 2),
     (0x0000_0000_CA5C_ADED, 3),
+    (2, 3),
 ];
 
 /// The rounds the property plays: the ladder's three lengths and one more.
@@ -82,6 +88,28 @@ fn world(seed: u64, seats: u32, segment_lengths_ms: Vec<i32>, round_limit: u32) 
         match_settings: MatchSettings {
             segment_lengths_ms,
             round_limit,
+        },
+    })
+    .unwrap_or_else(|error| panic!("generating the world: {error}"))
+}
+
+/// A world whose scout sees `vision` voxels, the committed table otherwise.
+fn sighted_world(vision: u32, segment_lengths_ms: Vec<i32>) -> World {
+    let mut message = rules().message().clone();
+    message
+        .units
+        .as_mut()
+        .and_then(|units| units.scout.as_mut())
+        .expect("a scout row")
+        .vision_radius_voxels = vision;
+    World::new(&WorldConfig {
+        match_seed: SEED,
+        seats: 2,
+        rules: RulesTable::from_message(&message)
+            .unwrap_or_else(|error| panic!("the edited table: {error}")),
+        match_settings: MatchSettings {
+            segment_lengths_ms,
+            round_limit: 1,
         },
     })
     .unwrap_or_else(|error| panic!("generating the world: {error}"))
@@ -483,4 +511,267 @@ fn the_refresh_pass_rechecks_a_sighting_past_the_reach_window() {
         place,
         "a sighting out of the reach window is re-checked, not left to go stale for good"
     );
+}
+
+/// An enemy raider homed to seat 1's core, put down at `at`.
+fn passer_by(world: &mut World, at: [Fx; 3]) -> UnitId {
+    let home = core(world, seat(1));
+    world
+        .field_unit(seat(1), home, UnitKind::Raider, at)
+        .expect("a raider")
+}
+
+/// Take `unit` out of every seat-0 sensor: stand it beside seat 1's core.
+fn away(world: &mut World, unit: UnitId) {
+    let home = beacon_at(world, core(world, seat(1)));
+    let there = ground(world, home, 0, -6);
+    assert!(world.place_unit_directly(unit, there), "a living unit");
+}
+
+/// Destroy `unit` at once, on seat 1's order.
+fn kill(runner: &mut Runner, unit: UnitId) {
+    runner
+        .world_mut()
+        .request_damage(pharmakos_sim::world::DamageOrder {
+            target: pharmakos_sim::world::DamageTarget::Unit(unit),
+            amount: pharmakos_sim::math::quantity::Damage::new(1_000_000).expect("positive"),
+            by: seat(1),
+            source: None,
+        })
+        .expect("the order is filed");
+}
+
+/// A scout already walking to a due sighting keeps it when another scout of
+/// its seat, in a lower unit row, becomes free: the newcomer takes the other
+/// sighting (fix pass 1, item 1; the old rule gave the sighting to the lower
+/// row and sent the walker elsewhere).
+#[test]
+fn a_scout_walking_to_a_sighting_keeps_it() {
+    // Vision 8, so a scout at the post sees neither sighting's place.
+    let mut world = sighted_world(8, vec![600_000]);
+    let [last_x, last_y] = last_column(&world);
+    let field = world.standing_point([last_x.div_euclid(2), last_y.div_euclid(2), 0]);
+    let post = survey_post(&mut world, field);
+    let east = ground(&world, field, 40, 0);
+    let west = ground(&world, field, -40, 0);
+    let first = passer_by(&mut world, east);
+    let second = passer_by(&mut world, west);
+    // A scout at each raider sights it; the one in the lower row is lost, so
+    // its row is free for the newcomer.
+    let lost = scout_at(&mut world, post, east);
+    let walker = scout_at(&mut world, post, west);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(runner.begin_push(), Ok(true));
+    let mut feed = Vec::new();
+    play(&mut runner, 10, &mut feed);
+    away(runner.world_mut(), first);
+    away(runner.world_mut(), second);
+    kill(&mut runner, lost);
+    play(&mut runner, 10, &mut feed);
+    let first = AssetId::of_unit(first).unwrap();
+    let second = AssetId::of_unit(second).unwrap();
+    let (first_place, first_seen) = remembered(runner.world(), first).expect("sighted");
+    let (second_place, _) = remembered(runner.world(), second).expect("sighted");
+
+    // Both due: the walker, alone, sets off for the first.
+    let due = REFRESH_INTERVAL.to_ticks_ceil();
+    let now = runner.world().tick().raw();
+    play(&mut runner, first_seen + due + 10 - now, &mut feed);
+    assert_eq!(
+        going(runner.world(), walker),
+        first_place,
+        "the walker re-checks the first"
+    );
+    // A newcomer, in the freed lower row.
+    let post_at = beacon_at(runner.world(), post);
+    let newcomer = scout_at(runner.world_mut(), post, post_at);
+    let row = |world: &World, unit: UnitId| world.units().row_of(unit).expect("alive").index();
+    assert!(
+        row(runner.world(), newcomer) < row(runner.world(), walker),
+        "the arrangement needs the newcomer below the walker"
+    );
+    play(&mut runner, 6, &mut feed);
+    assert_eq!(
+        going(runner.world(), walker),
+        first_place,
+        "the walker keeps the sighting it is walking to"
+    );
+    assert_eq!(
+        going(runner.world(), newcomer),
+        second_place,
+        "the newcomer takes the other"
+    );
+}
+
+/// Where a scout stood when it decided, and the ticks the Push had left.
+type Decided = ([Fx; 3], u32);
+
+/// The departure rule, pinned at its tick: a scout that sees two voxels, so a
+/// sighting is renewed only on arrival, sets off on a decision on which its
+/// served walk to the sighting, plus the slack (twice the re-pricing cadence
+/// in decision intervals, and one re-ask), is at least what the Push has
+/// left; not while the last pricing decision before it found time; and
+/// arrives before the Lull.
+#[test]
+fn a_scout_sets_off_on_the_decision_its_walk_needs() {
+    let mut world = sighted_world(2, vec![300_000]);
+    let [last_x, last_y] = last_column(&world);
+    let field = world.standing_point([last_x.div_euclid(2), last_y.div_euclid(2), 0]);
+    let post = survey_post(&mut world, field);
+    let sphere = i32::from(rules().sphere_radius_voxels());
+    let lone_at = ground(&world, field, -(sphere + 16), 0);
+    let lone = world
+        .place_beacon_directly(seat(1), lone_at, MandateKind::None, PRIORITY_NORMAL)
+        .expect("a beacon");
+    let [fx, _] = column(field);
+    world
+        .add_area(
+            post,
+            AreaKind::Probe,
+            ground(&world, field, 40, 0),
+            boxed(fx + 40, 0, last_x, last_y),
+        )
+        .expect("the probe area fits");
+    let scout = scout_at(&mut world, post, lone_at);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(runner.begin_push(), Ok(true));
+    let mut feed = Vec::new();
+    play(&mut runner, 10, &mut feed);
+    let lone = AssetId::of_beacon(lone).unwrap();
+    let (place, first) = remembered(runner.world(), lone).expect("sighted");
+
+    let interval = Ms::new(rules().decision_tick_ms()).to_ticks_ceil().max(1);
+    let slack = 2 * interval * REPRICE_DECISIONS + runner.world().link_ticks();
+    let started = runner.world().match_state().segment_started().raw();
+    let end = started + runner.world().match_state().segment_ticks();
+    // Per decision: where the scout stood and what the Push had left when it
+    // decided; the departure is the decision that first sent it to the place.
+    let mut before: Option<Decided> = None;
+    let mut departure: Option<(u32, [Fx; 3], u32, Option<Decided>)> = None;
+    while departure.is_none() && runner.world().tick().raw() < end {
+        let world = runner.world();
+        let row = world.units().row_of(scout).expect("alive").index();
+        let at = world.units().positions()[row];
+        let was = going(world, scout);
+        play(&mut runner, 1, &mut feed);
+        let world = runner.world();
+        let tick = world.tick().raw();
+        // The tick just played was a decision tick: the Push's first tick,
+        // then every interval.
+        let elapsed = tick - started;
+        if elapsed == 0 || !(elapsed - 1).is_multiple_of(interval) {
+            continue;
+        }
+        let left = end - tick;
+        if was != place && going(world, scout) == place {
+            departure = Some((tick, at, left, before));
+        }
+        // A pricing decision: the Push's first decision, then every
+        // `REPRICE_DECISIONS`th.
+        if (elapsed - 1)
+            .div_euclid(interval)
+            .is_multiple_of(REPRICE_DECISIONS)
+        {
+            before = Some((at, left));
+        }
+    }
+    let (tick, at, left, before) = departure.expect("the scout sets off for the beacon");
+    let walk = served_ticks(runner.world(), at, place);
+    assert!(
+        walk + slack >= left,
+        "set off on tick {tick} with {left} ticks left, on a walk of {walk} ticks and a slack of {slack}"
+    );
+    let (then_at, then_left) = before.expect("a decision before the departure");
+    let then_walk = served_ticks(runner.world(), then_at, place);
+    assert!(
+        then_walk + slack < then_left,
+        "not a cadence late: at the pricing decision before, {then_left} ticks left on a walk of {then_walk}"
+    );
+    assert!(
+        walk > REFRESH_INTERVAL.to_ticks_ceil(),
+        "the walk is longer than the last minute's, so the fixed pass would not have done: {walk}"
+    );
+    play_out(&mut runner, &mut feed);
+    let (_, last) = remembered(runner.world(), lone).expect("still held");
+    assert!(last > first, "renewed on arrival, before the Lull");
+}
+
+/// File `edit`, stepping the world once when the edit queue is full.
+fn file(world: &mut World, enc: &mut Enc, edit: VoxelEdit) {
+    if world.request_voxel_edit(edit).is_err() {
+        world.step(enc).expect("a tick");
+        world.request_voxel_edit(edit).expect("room after a tick");
+    }
+}
+
+/// A ring of stone three voxels high, `radius` columns round `centre`: a
+/// wall no walker climbs, with no gap.
+fn ring(world: &mut World, centre: [i32; 2], radius: i32) {
+    let mut enc = Enc::with_capacity(64 * 1024);
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let d2 = dx * dx + dy * dy;
+            if d2 < (radius - 1) * (radius - 1) || d2 > radius * radius {
+                continue;
+            }
+            let (x, y) = (centre[0] + dx, centre[1] + dy);
+            let Some(top) = world.voxels().top_solid_z(x, y) else {
+                continue;
+            };
+            for z in top + 1..=top + 3 {
+                file(
+                    world,
+                    &mut enc,
+                    VoxelEdit::Set {
+                        at: [x, y, z],
+                        material: Material::STONE,
+                        by: None,
+                    },
+                );
+            }
+        }
+    }
+    // Step until the graph has settled every edit filed.
+    for _ in 0..3 {
+        world.step(&mut enc).expect("a tick");
+    }
+}
+
+/// A due sighting no walk reaches is no destination, and the drop is counted
+/// (`Scratch::survey_unserved`), never silent (fix pass 1, item 5).
+#[test]
+fn a_sighting_no_walk_reaches_is_counted() {
+    let mut world = sighted_world(8, vec![600_000]);
+    let [last_x, last_y] = last_column(&world);
+    let field = world.standing_point([last_x.div_euclid(2), last_y.div_euclid(2), 0]);
+    let post = survey_post(&mut world, field);
+    let inside = ground(&world, field, 40, 0);
+    ring(&mut world, column(inside), 4);
+    let inside = world.standing_point([column(inside)[0], column(inside)[1], 0]);
+    let raider = passer_by(&mut world, inside);
+    // A scout inside the ring sights the raider and is lost; the raider
+    // leaves.
+    let lost = scout_at(&mut world, post, inside);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(runner.begin_push(), Ok(true));
+    let mut feed = Vec::new();
+    play(&mut runner, 10, &mut feed);
+    away(runner.world_mut(), raider);
+    kill(&mut runner, lost);
+    play(&mut runner, 10, &mut feed);
+    let raider = AssetId::of_unit(raider).unwrap();
+    let (place, seen) = remembered(runner.world(), raider).expect("sighted");
+
+    // Due, and a scout at the post with nothing to scan: no walk reaches the
+    // place, so the scout does not go, and the drop is counted.
+    let due = REFRESH_INTERVAL.to_ticks_ceil();
+    let now = runner.world().tick().raw();
+    play(&mut runner, seen + due + 1 - now, &mut feed);
+    let post_at = beacon_at(runner.world(), post);
+    let scout = scout_at(runner.world_mut(), post, post_at);
+    let before = runner.world_mut().scratch_mut().survey_unserved().unwrap();
+    play(&mut runner, 6, &mut feed);
+    let after = runner.world_mut().scratch_mut().survey_unserved().unwrap();
+    assert_ne!(going(runner.world(), scout), place, "no walk reaches it");
+    assert!(after > before, "the drop is counted: {before} then {after}");
 }
