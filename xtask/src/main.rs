@@ -7152,6 +7152,107 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     /// hold are named, so a metadata reader that lost a kind is red here.
     #[test]
     fn the_shards_of_the_real_workspace_are_the_unsharded_set() {
+        for total in 1..=4_u32 {
+            for (step, keys) in &real_workspace_units() {
+                let mut union: Vec<String> = Vec::new();
+                for index in 1..=total {
+                    let shard = match shard::Shard::parse(&format!("{index}/{total}")) {
+                        Ok(shard) => shard,
+                        Err(error) => panic!("{error}"),
+                    };
+                    union.extend(keys.iter().filter(|key| shard.holds(step, key)).cloned());
+                }
+                union.sort();
+                let mut all = keys.clone();
+                all.sort();
+                assert_eq!(union, all, "{step} over {total} shard(s)");
+            }
+        }
+    }
+
+    /// `shard::SPLIT_SALT`'s rule over `shard::HEAVY_UNITS`, at the shard
+    /// count ci.yml runs: each heavy unit is a unit of this workspace (so a
+    /// renamed one is red here, not a rule that silently stopped binding),
+    /// each falls to a shard no other heavy unit falls to, and the heaviest
+    /// does not fall to shard 1, which also runs every step that is not
+    /// sharded. No salt below `SPLIT_SALT` meets the rule, so the salt is the
+    /// one the rule picks and not a hand-tuned number.
+    #[test]
+    fn the_heavy_units_fall_apart_on_ci() {
+        let total = ci_shards_total();
+        let units = real_workspace_units();
+        for (step, key) in shard::HEAVY_UNITS {
+            let known = units
+                .iter()
+                .any(|(owner, keys)| owner == step && keys.iter().any(|owned| owned == key));
+            assert!(known, "{step}/{key} is not a unit of this workspace");
+        }
+        // `None` is the split CI runs (`holds`); `Some(salt)` the same split
+        // under another salt.
+        let shards = |salt: Option<u32>| -> Vec<u32> {
+            shard::HEAVY_UNITS
+                .iter()
+                .map(|(step, key)| {
+                    let found: Vec<u32> = (1..=total)
+                        .filter(
+                            |index| match shard::Shard::parse(&format!("{index}/{total}")) {
+                                Ok(shard) => match salt {
+                                    None => shard.holds(step, key),
+                                    Some(salt) => shard.holds_salted(salt, step, key),
+                                },
+                                Err(error) => panic!("{error}"),
+                            },
+                        )
+                        .collect();
+                    match found.as_slice() {
+                        [one] => *one,
+                        other => panic!("{step}/{key} falls to shards {other:?} of {total}"),
+                    }
+                })
+                .collect()
+        };
+        let apart = |held: &[u32]| {
+            let mut sorted = held.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            sorted.len() == held.len() && held.first().is_some_and(|first| *first != 1)
+        };
+        let held = shards(None);
+        assert!(
+            apart(&held),
+            "with salt {} the heavy units {:?} fall to shards {held:?} of {total}",
+            shard::SPLIT_SALT,
+            shard::HEAVY_UNITS
+        );
+        let smallest = (0..=shard::SPLIT_SALT).find(|salt| apart(&shards(Some(*salt))));
+        assert_eq!(
+            smallest,
+            Some(shard::SPLIT_SALT),
+            "SPLIT_SALT is the smallest salt that sets the heavy units apart"
+        );
+    }
+
+    /// The shard count ci.yml's `CI_SHARDS` sets.
+    fn ci_shards_total() -> u32 {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let totals: Vec<&str> = ci
+            .lines()
+            .map(str::trim)
+            .filter_map(|line| line.strip_prefix("CI_SHARDS: "))
+            .collect();
+        match totals.as_slice() {
+            [one] => match one.trim_matches('"').parse() {
+                Ok(total) if total >= 1 => total,
+                other => panic!("CI_SHARDS is not a shard count: {other:?}"),
+            },
+            other => panic!("CI_SHARDS is set once: {other:?}"),
+        }
+    }
+
+    /// Every unit of the three sharded steps, keyed by step, read the way a
+    /// shard reads them; the ones every run must hold are named, so a metadata
+    /// reader that lost a kind is red.
+    fn real_workspace_units() -> [(&'static str, Vec<String>); 3] {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let Some(root) = manifest.parent() else {
             panic!("xtask's manifest directory has no parent");
@@ -7208,30 +7309,14 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         };
         assert!(!scenarios.is_empty(), "no scenario is played");
 
-        let keyed: [(&str, Vec<String>); 3] = [
+        [
             ("test", test_units.iter().map(shard::Unit::key).collect()),
             (
                 "test-research",
                 research_units.iter().map(shard::Unit::key).collect(),
             ),
             ("scenario", scenarios),
-        ];
-        for total in 1..=4_u32 {
-            for (step, keys) in &keyed {
-                let mut union: Vec<String> = Vec::new();
-                for index in 1..=total {
-                    let shard = match shard::Shard::parse(&format!("{index}/{total}")) {
-                        Ok(shard) => shard,
-                        Err(error) => panic!("{error}"),
-                    };
-                    union.extend(keys.iter().filter(|key| shard.holds(step, key)).cloned());
-                }
-                union.sort();
-                let mut all = keys.clone();
-                all.sort();
-                assert_eq!(union, all, "{step} over {total} shard(s)");
-            }
-        }
+        ]
     }
 
     /// ci.yml's split agrees with itself: each operating system's `ci-shard-<os>`
@@ -7277,6 +7362,111 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         assert!(
             ci.contains(r#"cargo xtask ci --shard "${{ matrix.shard }}/${CI_SHARDS}""#),
             "each shard runs its own `--shard n/CI_SHARDS`"
+        );
+    }
+
+    /// The leg job's half of the split: the `cargo xtask ci (<os>)` job, the
+    /// required check, reads a report from every shard 1 to `CI_SHARDS` and
+    /// counts as failed a shard that sent none, one that failed, and, off the
+    /// fast path, one that did not run and pass its suite; and the job fails on
+    /// any failed shard. This pins the lines that do it, in order, so that
+    /// narrowing the loop or dropping a check is red here. It reads the
+    /// script's text rather than running it: xtask takes no dependencies, and
+    /// on Windows a bare `bash` can resolve to WSL's launcher rather than Git
+    /// Bash, so a test that spawned one would not test the same thing on every
+    /// machine.
+    #[test]
+    fn the_leg_job_requires_every_shards_report() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let lines: Vec<&str> = ci.lines().map(str::trim).collect();
+        let Some(start) = lines
+            .iter()
+            .position(|line| *line == "- name: Read every shard's report")
+        else {
+            panic!("ci.yml has no `Read every shard's report` step");
+        };
+        let Some(rest) = lines.get(start..).and_then(|tail| tail.get(1..)) else {
+            panic!("the step's name is ci.yml's last line");
+        };
+        // To the next step, or to the end of the file when it is the last.
+        let end = rest
+            .iter()
+            .position(|line| line.starts_with("- name: "))
+            .unwrap_or(rest.len());
+        let Some(script) = rest.get(..end) else {
+            panic!("the step's lines end past the file");
+        };
+        // A run of consecutive lines; a leading `~` matches a substring.
+        let has_run = |wanted: &[&str]| {
+            script.windows(wanted.len()).any(|window| {
+                window
+                    .iter()
+                    .zip(wanted)
+                    .all(|(line, want)| match want.strip_prefix('~') {
+                        Some(part) => line.contains(part),
+                        None => line == want,
+                    })
+            })
+        };
+        let every_shard = r#"for n in $(seq 1 "${CI_SHARDS}"); do"#;
+        let report = r#"report="shards/shard-${{ matrix.os }}-${n}/status.txt""#;
+        let failed = r#"failed="${failed} ${n}""#;
+        for (what, wanted) in [
+            (
+                "a shard with no report fails",
+                vec![
+                    every_shard,
+                    report,
+                    r#"if [ ! -f "$report" ]; then"#,
+                    "~sent no report",
+                    failed,
+                ],
+            ),
+            (
+                "a report that names another split fails",
+                vec![
+                    r#"if ! grep -qx "shard=${n}/${CI_SHARDS}" "$report"; then"#,
+                    "~names another split",
+                    failed,
+                ],
+            ),
+            (
+                "a failed shard fails",
+                vec![
+                    r#"elif ! grep -qx 'status=success' "$report"; then"#,
+                    "~failed; its log is",
+                    failed,
+                ],
+            ),
+            (
+                "off the fast path, a shard that did not run and pass its suite fails",
+                vec![
+                    every_shard,
+                    report,
+                    r#"[ -f "$report" ] || continue"#,
+                    r#"if ! grep -qx 'suite=success' "$report"; then"#,
+                    "~did not run and pass its suite",
+                    failed,
+                ],
+            ),
+            (
+                "the failed shards are the step's output",
+                vec![r#"echo "failed=${failed}" >> "$GITHUB_OUTPUT""#],
+            ),
+        ] {
+            assert!(has_run(&wanted), "the leg job's report check: {what}");
+        }
+        let fails_on_any: Vec<&&str> = lines
+            .iter()
+            .filter(|line| {
+                **line
+                    == r#"if [ "${{ steps.shards.outcome }}" != "success" ] || [ -n "${{ steps.shards.outputs.failed }}" ]; then"#
+            })
+            .collect();
+        assert_eq!(
+            fails_on_any.len(),
+            1,
+            "the leg job fails once on any failed shard, in the steps every leg shares"
         );
     }
 
