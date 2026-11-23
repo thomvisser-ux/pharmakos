@@ -29,8 +29,10 @@
 //! * **What the library is:** every tracked file under `library/` that `reuse` reports (a
 //!   `.jsonc` or `.json` by its strings and comments, anything else by its paragraphs).
 //! * **What is read:** every file `git ls-files` lists outside `library/`, so a file not yet
-//!   added is seen once it is. A binary file is skipped by extension from the named
-//!   [`BINARY`] list; any other read or UTF-8 error is a [`Refusal`], never a skip.
+//!   added is seen once it is. A media, font or descriptor file (the named [`BINARY`] list) is
+//!   never read; a tracked archive or executable ([`OPAQUE`]) is a [`Refusal`], because it can
+//!   embed library text the check cannot read; a tracked file missing from disk, and any other
+//!   read or UTF-8 error, is a [`Refusal`], never a skip.
 //! * **What licence it has:** `reuse lint --json`'s answer for the file, the expressions as the
 //!   tool concluded them from the manifest, the sidecar and the header together, so this agrees
 //!   with `reuse lint` by construction (precedence and globs included) and no manifest is read
@@ -87,11 +89,19 @@ const COMBINED: &str = "GPL-3.0-or-later AND (MIT OR Apache-2.0)";
 /// The expressions a file that quotes the library may carry.
 const ALLOWED: [&str; 3] = [GAME, LIBRARY, COMBINED];
 
-/// Files read as bytes and never as text, by extension.
+/// Files never read as text, by extension: media, fonts, and the protobuf descriptor set
+/// (`buf` writes it from `proto/` with source info excluded, so it holds the schema's names and
+/// no prose). None of them can hold a sentence of the library, so the check reads none of them
+/// and holds each one's licence to the converse alone.
 const BINARY: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "ico", "vox", "ogg", "wav", "mp3", "zip", "pck", "ttf", "otf",
-    "woff", "woff2", "dll", "so", "dylib", "exe", "wasm", "bin", "binpb",
+    "png", "jpg", "jpeg", "gif", "ico", "vox", "ogg", "wav", "mp3", "ttf", "otf", "woff", "woff2",
+    "binpb",
 ];
+
+/// Archives and executables, by extension. Either can embed library text (a packed `.pck` holds
+/// the library itself) and the check cannot read inside it, so a tracked one is a
+/// [`Refusal::Opaque`], never a pass: build outputs are not tracked.
+const OPAQUE: &[&str] = &["zip", "pck", "wasm", "dll", "so", "dylib", "exe", "bin"];
 
 /// Why the check could not give an answer. Every one fails the test.
 #[derive(Debug, PartialEq, Eq)]
@@ -102,6 +112,12 @@ pub(crate) enum Refusal {
     Reuse(String),
     /// A tracked text file could not be read as UTF-8 text.
     Unreadable { file: String, why: String },
+    /// A tracked file is not on disk (deleted in the working tree and not yet committed).
+    Missing(String),
+    /// A tracked file could not be read from disk for another reason.
+    Read { file: String, why: String },
+    /// A tracked archive or executable: it can embed library text the check cannot read.
+    Opaque(String),
     /// A tracked file that `reuse` should have reported is not in its report.
     NotReported(String),
     /// A library file could not be read.
@@ -122,9 +138,20 @@ impl fmt::Display for Refusal {
             Refusal::Unreadable { file, why } => {
                 write!(
                     f,
-                    "{file} is not readable as text ({why}); add its extension to BINARY if it is binary"
+                    "{file} is not readable as text ({why}); add its extension to BINARY if it is a \
+                     media or font file, or to OPAQUE if it is an archive or executable"
                 )
             }
+            Refusal::Missing(file) => write!(
+                f,
+                "{file} is tracked and not on disk; restore it, or commit its removal"
+            ),
+            Refusal::Read { file, why } => write!(f, "{file} could not be read from disk ({why})"),
+            Refusal::Opaque(file) => write!(
+                f,
+                "{file} is a tracked archive or executable, which can embed library/ text the \
+                 check cannot read; untrack it (a build output belongs in the target folder)"
+            ),
             Refusal::NotReported(file) => write!(f, "reuse's report has no entry for {file}"),
             Refusal::Library(why) => write!(f, "library/: {why}"),
             Refusal::Control(why) => write!(f, "the quotation check's positive control: {why}"),
@@ -515,7 +542,7 @@ fn identifiers(expression: &str) -> Vec<&str> {
 /// quotes nothing of the library.
 fn unquoted_problem(file: &str, expression: &str, binary: bool) -> String {
     let why = if binary {
-        "is a binary file, which cannot quote library/"
+        "is a media, font or descriptor file, which holds no library/ prose"
     } else {
         "quotes no sentence and no word run of library/"
     };
@@ -552,6 +579,9 @@ pub(crate) fn check(
     let mut fixtures: BTreeMap<&str, &str> = BTreeMap::new();
     let mut texts: Vec<(&str, &str)> = Vec::new();
     for (file, bytes) in files.iter().filter(|(f, _)| !f.starts_with("library/")) {
+        if has_extension(file, OPAQUE) {
+            return Err(Refusal::Opaque(file.clone()));
+        }
         if is_binary(file) {
             // Not read: a binary quotes nothing, so the combined expression is a miss on it.
             if let Some(expression) = report.get(file).and_then(|e| combined_of(e)) {
@@ -616,12 +646,42 @@ pub(crate) fn check(
     Ok(outcome)
 }
 
-/// A file read as bytes and never as text, by its extension.
+/// A file never read as text, by its extension ([`BINARY`]).
 fn is_binary(file: &str) -> bool {
+    has_extension(file, BINARY)
+}
+
+fn has_extension(file: &str, list: &[&str]) -> bool {
     Path::new(file)
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| BINARY.contains(&e))
+        .is_some_and(|e| list.contains(&e))
+}
+
+/// The tracked files' bytes, each read through `read`, except a [`BINARY`] file, which is
+/// listed by name with no bytes and never read ([`check`] holds its licence to the converse
+/// alone). A file `read` cannot find is [`Refusal::Missing`]; any other read error is
+/// [`Refusal::Read`].
+fn read_tracked<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    mut read: impl FnMut(&str) -> std::io::Result<Vec<u8>>,
+) -> Result<Vec<(String, Vec<u8>)>, Refusal> {
+    let mut files = Vec::new();
+    for name in names {
+        let bytes = if is_binary(name) {
+            Vec::new()
+        } else {
+            read(name).map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Refusal::Missing(name.to_owned()),
+                _ => Refusal::Read {
+                    file: name.to_owned(),
+                    why: e.to_string(),
+                },
+            })?
+        };
+        files.push((name.to_owned(), bytes));
+    }
+    Ok(files)
 }
 
 /// The files the manifest and the reviews named as quoting the library and carrying the
@@ -657,23 +717,10 @@ fn check_tree_refusing(root: &Path, require_tools: bool) -> Result<String, Refus
             String::from_utf8_lossy(&listed.stderr).into_owned(),
         ));
     }
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    for name in String::from_utf8_lossy(&listed.stdout)
-        .split('\0')
-        .filter(|f| !f.is_empty())
-    {
-        // A binary is listed by name only: [`check`] never reads its bytes, and still holds
-        // its licence to the converse rule.
-        let bytes = if is_binary(name) {
-            Vec::new()
-        } else {
-            fs::read(root.join(name)).map_err(|e| Refusal::Unreadable {
-                file: name.to_owned(),
-                why: e.to_string(),
-            })?
-        };
-        files.push((name.to_owned(), bytes));
-    }
+    let listed = String::from_utf8_lossy(&listed.stdout);
+    let files = read_tracked(listed.split('\0').filter(|f| !f.is_empty()), |name| {
+        fs::read(root.join(name))
+    })?;
     // `reuse lint` exits non-zero on a non-compliant tree and still writes the report; the step
     // has already run it and passed, so only a failure to run it, or an answer that is not the
     // report, is a refusal.
@@ -1144,7 +1191,7 @@ mod tests {
     }
 
     #[test]
-    fn a_binary_file_that_carries_the_combined_expression_is_a_miss() {
+    fn a_media_file_that_names_both_licences_is_a_miss() {
         let library = format!("{{\"note\": \"{SENTENCE}\"}}\n");
         let files = [
             (s("library/t.jsonc"), library.into_bytes()),
@@ -1159,12 +1206,81 @@ mod tests {
         assert_eq!(
             found,
             Ok(vec![format!(
-                "assets/a.png carries `{COMBINED}` and is a binary file, which cannot quote \
-                 library/, so the library's licence has no reason to be there: write \
-                 `GPL-3.0-or-later` (its own header), or delete the REUSE.toml entry that gives \
-                 it the combined form"
+                "assets/a.png carries `{COMBINED}` and is a media, font or descriptor file, \
+                 which holds no library/ prose, so the library's licence has no reason to be \
+                 there: write `GPL-3.0-or-later` (its own header), or delete the REUSE.toml \
+                 entry that gives it the combined form"
             )])
         );
+    }
+
+    #[test]
+    fn a_tracked_archive_or_executable_is_a_refusal_whatever_its_licence() {
+        let library = format!("{{\"note\": \"{SENTENCE}\"}}\n");
+        for name in [
+            "a/x.zip",
+            "a/x.pck",
+            "a/x.wasm",
+            "a/x.dll",
+            "a/x.so",
+            "a/x.dylib",
+            "a/x.exe",
+            "a/x.bin",
+        ] {
+            for expressions in [vec![s(GAME)], vec![s(COMBINED)], vec![s(LIBRARY)]] {
+                let files = [
+                    (s("library/t.jsonc"), library.clone().into_bytes()),
+                    (s(name), Vec::new()),
+                ];
+                let report = BTreeMap::from([(s(name), expressions.clone())]);
+                assert_eq!(
+                    check(&files, &report).map(|o| o.misses),
+                    Err(Refusal::Opaque(s(name))),
+                    "{name} {expressions:?}"
+                );
+            }
+        }
+        assert!(
+            Refusal::Opaque(s("a/x.zip"))
+                .to_string()
+                .starts_with("a/x.zip is a tracked archive or executable")
+        );
+    }
+
+    #[test]
+    fn a_tracked_file_missing_from_disk_is_a_refusal_that_says_so() {
+        let missing = read_tracked(["a/gone.rs"], |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        });
+        assert_eq!(missing, Err(Refusal::Missing(s("a/gone.rs"))));
+        let message = Refusal::Missing(s("a/gone.rs")).to_string();
+        assert!(message.contains("not on disk"), "{message}");
+        assert!(!message.contains("BINARY"), "{message}");
+        let denied = read_tracked(["a/locked.rs"], |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        });
+        assert!(
+            matches!(&denied, Err(Refusal::Read { file, .. }) if file == "a/locked.rs"),
+            "{denied:?}"
+        );
+    }
+
+    #[test]
+    fn a_media_file_is_listed_by_name_and_never_read() {
+        let mut read: Vec<String> = Vec::new();
+        let files = read_tracked(["a/x.png", "a/y.rs", "a/z.binpb"], |name| {
+            read.push(s(name));
+            Ok(b"text".to_vec())
+        });
+        assert_eq!(
+            files,
+            Ok(vec![
+                (s("a/x.png"), Vec::new()),
+                (s("a/y.rs"), b"text".to_vec()),
+                (s("a/z.binpb"), Vec::new()),
+            ])
+        );
+        assert_eq!(read, vec![s("a/y.rs")]);
     }
 
     /// An outcome that passes every count of the positive control, with `known` quoting the

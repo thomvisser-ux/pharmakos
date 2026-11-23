@@ -72,9 +72,8 @@ permissively licensed areas.
 other expression of the same three licence identifiers (the order swapped, `OR` where `AND` is
 meant), and quotes nothing of the library, fails: it has no reason to carry the library's
 licence, and is `GPL-3.0-or-later`. It fails whether the combined form comes from its own header,
-a sidecar or a manifest block, and whatever else it carries beside it. A binary file (by the
-extension list below) is never read and cannot quote, so it fails if it carries the combined
-form. The converse holds the combined form only: a file that carries `MIT OR Apache-2.0` alone
+a sidecar or a manifest block, and whatever else it carries beside it. A media, font or descriptor file (the first extension list below) is never read and holds no
+prose, so it fails if it carries the combined form. The converse holds the combined form only: a file that carries `MIT OR Apache-2.0` alone
 and quotes nothing passes, because the permissive areas are permissive by their own tier. This
 is what turns a forgotten header red, the combined form left on a file after its quotation was
 removed (decisions log §2.7 item 164 (3a)).
@@ -92,10 +91,14 @@ both. It reads `library/`'s current text on every run, so a changed template cha
 covered.
 
 *Which files, and how words are counted.* Every file `git ls-files` lists outside `library/`,
-except files with a binary extension (`png`, `jpg`, `jpeg`, `gif`, `ico`, `vox`, `ogg`, `wav`,
-`mp3`, `zip`, `pck`, `ttf`, `otf`, `woff`, `woff2`, `dll`, `so`, `dylib`, `exe`, `wasm`, `bin`,
-`binpb`) and the files `reuse` does not report because it ignores them (the list above). Any other file that is not
-UTF-8 text fails the check, and so does a file `reuse` should report and does not. The 8-word minimum counts whitespace-separated tokens
+except media, font and descriptor files (`png`, `jpg`, `jpeg`, `gif`, `ico`, `vox`, `ogg`,
+`wav`, `mp3`, `ttf`, `otf`, `woff`, `woff2`, and `binpb`, the descriptor set `buf` writes from
+`proto/` with source info excluded), which hold no prose and are never read, and the files
+`reuse` does not report because it ignores them (the list above). A tracked archive or
+executable (`zip`, `pck`, `wasm`, `dll`, `so`, `dylib`, `exe`, `bin`) fails the check whatever its
+licence: it can embed library text that the check cannot read, and a build output is not
+tracked. A tracked file missing from disk fails the check, and so does any other file that
+cannot be read or is not UTF-8 text, and a file `reuse` should report and does not. The 8-word minimum counts whitespace-separated tokens
 of a library string or comment paragraph (whitespace collapsed), punctuation included. A
 sentence ends at a full stop followed by a space, or at a full stop that ends the text; the
 text is split at every such full stop, so "e.g. " ends a piece, and a piece counts only if it
@@ -136,12 +139,14 @@ Other file lines end differently, as the case needs:
         library's licence has no reason to be there: write `GPL-3.0-or-later` (its own
         header), or delete the REUSE.toml entry that gives it the combined form
                                                             (the converse)
-    <file> carries `<X>` and is a binary file, which cannot quote library/, so ...
-                                                            (the converse, for a binary)
+    <file> carries `<X>` and is a media, font or descriptor file, which holds no library/
+        prose, so ...                                       (the converse, for such a file)
 
 Other refusals say that `reuse lint --json` did not run or gave an unreadable answer, that a file
-is not readable as text (add its extension to the binary list if it is binary), that `reuse`'s
-report has no entry for a file, or that the positive control failed.
+is not readable as text (add its extension to the media list, or to the archive list), that a
+tracked file is not on disk (restore it, or commit its removal), that a file could not be read
+from disk, that a tracked file is an archive or executable (untrack it), that `reuse`'s report
+has no entry for a file, or that the positive control failed.
 
 A positive control keeps "nothing found" from meaning "nothing looked at": the check fails
 unless it read more than 800 files, at least 5 library files and more than 100 word runs, and
