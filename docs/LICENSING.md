@@ -68,15 +68,21 @@ wherever it is, provided it carries no game expression. A file under a game-tier
 always carries one from the manifest, which is what keeps the library's licence alone to the
 permissively licensed areas.
 
-*The converse.* A tracked file outside `library/` that carries the combined expression, or any
-other expression of the same three licence identifiers (the order swapped, `OR` where `AND` is
-meant), and quotes nothing of the library, fails: it has no reason to carry the library's
-licence, and is `GPL-3.0-or-later`. It fails whether the combined form comes from its own header,
-a sidecar or a manifest block, and whatever else it carries beside it. A media, font or descriptor file (the first extension list below) is never read and holds no
-prose, so it fails if it carries the combined form. The converse holds the combined form only: a file that carries `MIT OR Apache-2.0` alone
-and quotes nothing passes, because the permissive areas are permissive by their own tier. This
-is what turns a forgotten header red, the combined form left on a file after its quotation was
-removed (decisions log §2.7 item 164 (3a)).
+*The converse.* The check takes every expression `reuse` reports for a file together, as the set
+of licence identifiers they name, operators dropped. A tracked file outside `library/` whose set
+holds the same three licence identifiers as the combined expression, `GPL-3.0-or-later`, `MIT`
+and `Apache-2.0`, and which quotes nothing of the library, fails: it has no reason to carry the
+library's licence, and is `GPL-3.0-or-later`. That holds whatever else it carries beside them (a
+fourth licence, such as `... AND CC-BY-SA-4.0`, does not excuse it), whatever joins them (the
+order swapped, `OR` where `AND` is meant), and however they are split across its header, a
+sidecar and manifest blocks (a block's `GPL-3.0-or-later` beside a header's `MIT OR Apache-2.0`
+fails like the combined form). A media, font or descriptor file (the first extension list below)
+is never read and holds no prose, so it fails if its set holds the three. The converse needs the
+game's licence in the set: a file that carries `MIT OR Apache-2.0` with no `GPL-3.0-or-later`
+beside it and quotes nothing passes, because the permissive areas are permissive by their own
+tier. This is what turns a forgotten header red, the library's licence left on a file after its
+quotation was removed (decisions log §2.7 item 164 (3a)). Files under `library/` are the text
+quoted, not files that quote it, and are not held to the converse.
 
 *What the check reads from `library/`.* Every tracked file under `library/` that `reuse`
 reports; a file that `reuse` does not report because it ignores it (one whose name starts with `LICENSE`,
@@ -135,10 +141,10 @@ Other file lines end differently, as the case needs:
     ... and carries GPL-3.0-or-later and MIT OR Apache-2.0 as two separate expressions;
         give it the combined expression: write <the combined form>
     <copy> is a byte copy of <source>, which is licensed [...], not [...]
-    <file> carries `<X>` and quotes no sentence and no word run of library/, so the
-        library's licence has no reason to be there: write `GPL-3.0-or-later` (its own
-        header), or delete the REUSE.toml entry that gives it the combined form
-                                                            (the converse)
+    <file> carries `<X>` and `<Y>` and quotes no sentence and no word run of library/, so
+        the library's licence has no reason to be there: write `GPL-3.0-or-later` (its own
+        header), or delete the REUSE.toml entry that gives it the library's licence
+                                                            (the converse; each expression once)
     <file> carries `<X>` and is a media, font or descriptor file, which holds no library/
         prose, so ...                                       (the converse, for such a file)
 
@@ -152,8 +158,8 @@ A positive control keeps "nothing found" from meaning "nothing looked at": the c
 unless it read more than 800 files, at least 5 library files and more than 100 word runs, and
 found each of eleven named files (the six template render goldens, the `instantiate_suggested`
 pair, `godot/fixtures/rule_list_render.json`, `scenarios/skeleton/against-easy.playbook.jsonc`
-and `crates/gateway/src/host.rs`) quoting the library and carrying the combined expression, so
-the converse, which keys on that expression, cannot pass by finding nothing either.
+and `crates/gateway/src/host.rs`) quoting the library and carrying the game's licence and the library's, so
+the converse, which keys on those licences, cannot pass by finding nothing either.
 
 **`rules/`** is `MIT OR Apache-2.0` for the reason `proto/` is: `rules.v1.json`
 is the canonical JSON of one `gp.v1.RulesTable` (decisions log §2.7 item 78) —
