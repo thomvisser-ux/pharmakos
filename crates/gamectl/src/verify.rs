@@ -111,9 +111,23 @@ pub fn run(
             Shown::Reference,
         ),
         View::Preset(preset) => {
+            // A file past the cap in bytes was read no further than the
+            // bound, so there is no text to send: refused here, with the
+            // file's real size, and the gateway is not asked.
+            let Some(text) = text.as_deref() else {
+                let size = std::fs::metadata(root.join(path))
+                    .ok()
+                    .map(|metadata| metadata.len());
+                return Err(Failure::failed(strings::verify_preset_too_long(
+                    &display,
+                    size,
+                    pharmakos_verifier::MAX_PLAYBOOK_READ,
+                    pharmakos_verifier::MAX_PLAYBOOK_CHARS,
+                )));
+            };
             let config = crate::lobby::probation()?;
             let seat = crate::lobby::seat_of(&config)?;
-            let report = crate::lobby::verify(root, text.as_deref(), depth)?;
+            let report = crate::lobby::verify(root, text, depth)?;
             (
                 report,
                 Shown::Preset {

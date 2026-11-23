@@ -517,6 +517,23 @@ pub fn lobby_match_refused(why: &str) -> String {
     format!("{BINARY} verify --preset: the lobby's match would not open here: {why}")
 }
 
+/// A file past the size cap in bytes, under `--preset`: refused by this
+/// command, read no further than the bound, with the file's size when the
+/// file system says it (`size`), and no figure made up when it does not.
+#[must_use]
+pub fn verify_preset_too_long(path: &str, size: Option<u64>, read: usize, chars: usize) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    let size = match size {
+        Some(bytes) => format!("is {bytes} bytes"),
+        None => String::from("is longer"),
+    };
+    format!(
+        "{BINARY} verify --preset: `{path}` {size}: past {read} bytes, a playbook is past the \
+         {chars}-character cap whatever the bytes hold. It was read no further than that, and \
+         the gateway was not asked."
+    )
+}
+
 /// The gateway refused the text before verifying it, as the lobby's match
 /// would: the answer, not an error.
 #[must_use]

@@ -486,11 +486,13 @@ fn the_preset_s_report_is_reproducible_and_its_own() {
     assert_ne!(hash_of(&first), hash_of(&reference));
 }
 
-/// A file past the size cap, read no further than the bound, is refused by
-/// the gateway before it verifies anything, as the lobby's match refuses it:
-/// the answer is no (exit 3), in the gateway's words.
+/// A file past the size cap in bytes, under the preset, is refused by this
+/// command itself, read no further than the bound: the answer is no (exit 3),
+/// with the file's real size and the cap, and no made-up figure (fix pass 1
+/// of #219, item 5; the gateway was once handed a text one character past
+/// the cap and its refusal quoted that length).
 #[test]
-fn a_huge_file_is_refused_by_the_gateway_under_the_preset() {
+fn a_huge_file_is_refused_by_gamectl_under_the_preset() {
     let length = pharmakos_verifier::MAX_PLAYBOOK_READ
         .checked_mul(2)
         .expect("fits");
@@ -498,15 +500,21 @@ fn a_huge_file_is_refused_by_the_gateway_under_the_preset() {
     let shown = path.to_str().expect("a UTF-8 scratch path");
     let outcome = gamectl(&["verify", "--preset", "probation", shown]);
     assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
+    for wanted in [
+        format!("is {length} bytes"),
+        format!("past {} bytes", pharmakos_verifier::MAX_PLAYBOOK_READ),
+        format!(
+            "the {}-character cap",
+            pharmakos_verifier::MAX_PLAYBOOK_CHARS
+        ),
+        String::from("the gateway was not asked"),
+    ] {
+        assert!(outcome.err.contains(&wanted), "{wanted}: {}", outcome.err);
+    }
+    let one_past = pharmakos_verifier::MAX_PLAYBOOK_CHARS.saturating_add(1);
     assert!(
-        outcome
-            .err
-            .contains("refuses this playbook before verifying it")
-            && outcome.err.contains(&format!(
-                "at most {} characters",
-                pharmakos_verifier::MAX_PLAYBOOK_CHARS
-            )),
-        "{}",
+        !outcome.err.contains(&one_past.to_string()),
+        "no figure one past the cap: {}",
         outcome.err
     );
 }

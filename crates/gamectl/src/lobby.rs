@@ -88,11 +88,9 @@ pub fn seat_of(config: &Config) -> Result<u8, Failure> {
 /// Verify `playbook_jsonc` against the human seat's frozen snapshot in the
 /// opening Lull of the lobby's Probation match, at `depth`.
 ///
-/// `None` is a file past the size cap in bytes, which [`crate::verify`]
-/// refused to read further: the gateway is handed a text one character past
-/// [`pharmakos_verifier::MAX_PLAYBOOK_CHARS`], which it refuses before
-/// verifying, counting no further than one character past the cap, exactly as
-/// it refuses the file's own text.
+/// A file past the size cap in bytes is not handed here: [`crate::verify`]
+/// refuses it itself, read no further than the bound, and never asks the
+/// gateway about a text it did not read.
 ///
 /// # Errors
 ///
@@ -100,11 +98,7 @@ pub fn seat_of(config: &Config) -> Result<u8, Failure> {
 /// [`crate::exit::Exit::Failed`] when the gateway refuses the text before
 /// verifying it, and [`crate::exit::Exit::Internal`] when the match will not
 /// open or the gateway's answer is not a report.
-pub fn verify(
-    root: &Path,
-    playbook_jsonc: Option<&str>,
-    depth: Depth,
-) -> Result<VerifyReport, Failure> {
+pub fn verify(root: &Path, playbook_jsonc: &str, depth: Depth) -> Result<VerifyReport, Failure> {
     let config = probation()?;
     let seat = seat_of(&config)?;
     let mut surface = open(root, &config)?;
@@ -117,21 +111,10 @@ pub fn verify(
             Tick::ZERO,
         )
         .map_err(gateway)?;
-    let past_the_cap: String;
-    let text = if let Some(text) = playbook_jsonc {
-        text
-    } else {
-        past_the_cap = " ".repeat(
-            pharmakos_verifier::MAX_PLAYBOOK_CHARS
-                .checked_add(1)
-                .ok_or_else(|| Failure::internal("the size cap is the largest usize"))?,
-        );
-        past_the_cap.as_str()
-    };
     let params = pharmakos_proto::json::write(&Json::Object(vec![
         (
             String::from("playbook_jsonc"),
-            Json::String(text.to_owned()),
+            Json::String(playbook_jsonc.to_owned()),
         ),
         (
             String::from("depth"),
