@@ -189,12 +189,31 @@ pub fn operator_unsaid(earlier: &[(&str, u64)]) -> String {
     format!("(Earlier lines not written: {}.)", each.join(", "))
 }
 
-/// A refusal of keeping a built-in seat's seal as its own draft, or of
-/// reading last round's back.
+/// A built-in seat's steps failed in the last Push, and the gateway carried
+/// no seal of its own into the Lull to say which were stones.
 #[must_use]
-pub fn operator_draft_refused(method: &str, code: &str, message: &str) -> String {
+pub fn operator_no_carried_seal() -> String {
+    String::from(
+        "Steps failed in the last Push, and the gateway carried no seal of the seat's own into \
+         this Lull, so which were stones is not known and every stone was weighed.",
+    )
+}
+
+/// A built-in seat's carried seal is stamped with another round.
+#[must_use]
+pub fn operator_carried_of_round(round: i64) -> String {
     format!(
-        "The gateway refused {method} with {code} ({message}), so the seat's last seal is not kept to say which of its steps failed."
+        "Steps failed in the last Push, and the seal the gateway carried is stamped with round \
+         {round}, so which were stones is not known and every stone was weighed."
+    )
+}
+
+/// A built-in seat's carried seal was refused or does not read.
+#[must_use]
+pub fn operator_carried_unread(method: &str, code: &str, message: &str) -> String {
+    format!(
+        "The gateway refused {method} with {code} ({message}), so which of the last Push's \
+         failed steps were stones is not known and every stone was weighed."
     )
 }
 

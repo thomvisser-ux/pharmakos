@@ -29,11 +29,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use pharmakos_operator::easy::{
-    CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, EASY_CANDIDATES,
-    LAST_SEAL_CALLS, PAGES_MAX, RAID_FORCE_SIZE, RAID_TARGETS_MAX, SAFE_MAX_RAISED, STONE_CALLS,
-    STONE_TARGETS_MAX, SURVEY_PROBE_CALLS,
+    CARRIED_DRAFT_ID, CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET,
+    EASY_CANDIDATES, LAST_SEAL_CALLS, PAGES_MAX, RAID_FORCE_SIZE, RAID_TARGETS_MAX,
+    SAFE_MAX_RAISED, STONE_CALLS, STONE_TARGETS_MAX, SURVEY_PROBE_CALLS,
 };
-use pharmakos_operator::{Easy, Submitted};
+use pharmakos_operator::{Easy, FailedStones, StonesUnread, Submitted};
 use pharmakos_proto::json::{Json, read, write};
 
 // ---------------------------------------------------------------------------
@@ -183,8 +183,11 @@ struct Script {
     /// The seat's own step lines in the last Push's feed, `(kind, text)`, in
     /// order, after the deaths; the digest counts their `step_failed`s.
     feed_steps: Vec<(&'static str, String)>,
-    /// The seat's own drafts, by id: the round each was saved in, its text.
+    /// The seat's own drafts, by id: the round each is stamped with, its
+    /// text.
     drafts: BTreeMap<String, (u32, String)>,
+    /// Refuse `get_draft` with this code.
+    refuse_draft: Option<&'static str>,
     /// Where the seat's nearest Defend beacon stands, if one does: what an
     /// `estimate_route` to `nearest {filter: {mandate: DEFEND}}` reaches.
     defend_post: Option<[i32; 3]>,
@@ -253,6 +256,7 @@ impl Script {
             feed_deaths: Vec::new(),
             feed_steps: Vec::new(),
             drafts: BTreeMap::new(),
+            refuse_draft: None,
             defend_post: None,
             sighting_ages: BTreeMap::new(),
             ageless: BTreeSet::new(),
@@ -477,11 +481,14 @@ impl Script {
                 self.ok(obj(vec![("draft_id", Json::String(id))]))
             }
             "get_draft" => {
+                if let Some(code) = self.refuse_draft {
+                    return Script::refuse(code);
+                }
                 let id = params.get("draft_id").and_then(text).unwrap_or("");
                 match self.drafts.get(id) {
                     Some((round, body)) => self.ok(obj(vec![
                         ("playbook_jsonc", Json::String(body.clone())),
-                        ("label", Json::String(String::from("Easy's last seal"))),
+                        ("label", Json::String(String::from("carried from round 1"))),
                         ("round", num(i64::from(*round))),
                     ])),
                     None => Script::refuse("NOT_FOUND"),
@@ -1631,16 +1638,8 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
         .collect();
     assert_eq!(
         writes,
-        ["submit_plan", "save_draft", "set_ready"],
-        "its own seal, its draft of it, then ready"
-    );
-    assert!(
-        a.transcript
-            .iter()
-            .filter(|line| line.starts_with("save_draft"))
-            .all(|line| line.contains(r#""draft_id": "easy-last-seal""#)),
-        "the one draft it keeps: {:#?}",
-        a.transcript
+        ["submit_plan", "set_ready"],
+        "its own seal, then ready"
     );
 
     let (a, advice_a) = advise(quiet);
@@ -1759,8 +1758,8 @@ fn easy_never_exceeds_its_derived_call_budget() {
     // so only the safe one was submitted) and the stepping stones, since every
     // placement here has a site (`the_worst_stone_round_spends_every_term`
     // spends those), the Survey probe, since a fresh sighting is held, and
-    // the last seal's two: no own seal is kept, and the feed paged to its
-    // bound reaches no failed step to read last round's back for.
+    // the last seal's one: the feed paged to its bound reaches no failed
+    // step to read the carried seal back for.
     assert_eq!(
         played.calls,
         EASY_CALL_BUDGET - 1 - STONE_CALLS - SURVEY_PROBE_CALLS - LAST_SEAL_CALLS
@@ -3225,7 +3224,7 @@ fn the_worst_stone_round_spends_every_term() {
         played.calls,
         u32::try_from(script.transcript.len()).unwrap()
     );
-    // Every term but one `submit_plan` and the last seal's two (as above).
+    // Every term but one `submit_plan` and the last seal's one (as above).
     assert_eq!(played.calls, EASY_CALL_BUDGET - 1 - LAST_SEAL_CALLS);
 }
 
@@ -4180,16 +4179,27 @@ fn a_step_whose_timeout_is_past_the_segment_is_not_composed() {
 }
 
 // ---------------------------------------------------------------------------
-// Fix pass 3: a failed stone is noticed
+// Fix pass 3: a failed stone is noticed (fix pass 4: through the carried draft)
 // ---------------------------------------------------------------------------
 
-/// Round 2 of the far vent's world: last round's seal, kept as the seat's own
-/// draft, walked a stone toward `vent_56_32` as its route step 2, and the
-/// last Push's feed says that step failed on `timeout`.
+/// The `toward` failure line the gateway writes for a timed-out step.
+fn timed_out() -> (&'static str, String) {
+    (
+        "step_failed",
+        String::from(
+            "A step failed (timeout): it ran past its timeout. Its on_fail decided what came next.",
+        ),
+    )
+}
+
+/// Round 2 of the far vent's world: last round's seal, which the gateway
+/// carried into this Lull as the seat's draft `carried` stamped with round 2,
+/// walked a stone toward `vent_56_32` as its route step 2, and the last
+/// Push's feed says that step failed on `timeout`.
 fn a_stone_failed_last_round() -> Script {
     let mut world = far_vent();
     world.round = 2;
-    let kept = r#"{"schema_version": {"major": 1, "minor": 0}, "meta": {"title": "Hold & Build"},
+    let carried = r#"{"schema_version": {"major": 1, "minor": 0}, "meta": {"title": "Hold & Build"},
         "kind": "PLAYBOOK", "declarative": {"route": [
         {"label": "deepen_core", "interface": {"beacon": {"beacon_id": "b_00"}, "rows": []}},
         // The stone, step 2.
@@ -4197,26 +4207,21 @@ fn a_stone_failed_last_round() -> Script {
         {"label": "hold", "hold": {"ms": 1000}}]}}"#;
     world
         .drafts
-        .insert(String::from("easy-last-seal"), (1, kept.to_owned()));
+        .insert(String::from(CARRIED_DRAFT_ID), (2, carried.to_owned()));
     world.feed_steps = vec![
         ("step_started", String::from("Step 1 started.")),
         ("step_completed", String::from("Step 1 completed.")),
         ("step_started", String::from("Step 2 started.")),
-        (
-            "step_failed",
-            String::from(
-                "A step failed (timeout): it ran past its timeout. Its on_fail decided what came next.",
-            ),
-        ),
+        timed_out(),
     ];
     world
 }
 
 /// A stone that failed last round is not weighed again unchanged (fix pass
 /// 3, item 6): its chain ends this round as a refused `toward` ends it. The
-/// last Push's feed counts a failed step of the seat's own, the kept draft
-/// says that step was the stone toward `vent_56_32`, and this round makes no
-/// `toward` estimate for it.
+/// last Push's feed counts a failed step of the seat's own, the carried
+/// draft says that step was the stone toward `vent_56_32`, and this round
+/// makes no `toward` estimate for it.
 #[test]
 fn a_stone_that_failed_last_round_is_not_weighed_again() {
     let (script, played) = play(a_stone_failed_last_round());
@@ -4231,19 +4236,21 @@ fn a_stone_that_failed_last_round_is_not_weighed_again() {
             .transcript
             .iter()
             .filter(|line| line.starts_with("get_draft"))
-            .count(),
-        1
+            .collect::<Vec<_>>(),
+        [r#"get_draft { "draft_id": "carried" }"#],
     );
-    assert!(
-        played.drafts_refused.is_empty(),
-        "{:?}",
-        played.drafts_refused
+    assert_eq!(
+        played.failed_stones,
+        FailedStones::Known(vec![String::from("vent_56_32")])
     );
 }
 
-/// What does not say a stone failed leaves it weighed: a failure inside a
-/// rule's body (its steps are numbered in the body), a kept draft of an older
-/// round, no kept draft at all, and a step that completed.
+/// What does not say a stone failed leaves it weighed, and says which it is:
+/// a failure inside a rule's body (its steps are numbered in the body) and a
+/// step that completed are no failed stone; a carried draft stamped with
+/// another round, no carried draft at all, a refused `get_draft` and a
+/// carried seal that does not read are [`FailedStones::Unread`], each with
+/// its cause, and never "nothing failed".
 #[test]
 fn only_a_failed_stone_of_last_rounds_seal_ends_its_chain() {
     let mut in_rule = a_stone_failed_last_round();
@@ -4251,28 +4258,43 @@ fn only_a_failed_stone_of_last_rounds_seal_ends_its_chain() {
         ("step_started", String::from("Step 1 started.")),
         ("rule_fired", String::from("Rule 1 fired.")),
         ("step_started", String::from("Step 2 started.")),
-        (
-            "step_failed",
-            String::from(
-                "A step failed (timeout): it ran past its timeout. Its on_fail decided what came next.",
-            ),
-        ),
+        timed_out(),
         ("rule_ended", String::from("Rule 1 ended.")),
     ];
     let mut older = a_stone_failed_last_round();
     older.round = 3;
-    let mut none_kept = a_stone_failed_last_round();
-    none_kept.drafts.clear();
+    let mut none_carried = a_stone_failed_last_round();
+    none_carried.drafts.clear();
     let mut completed = a_stone_failed_last_round();
     completed.feed_steps = vec![
         ("step_started", String::from("Step 2 started.")),
         ("step_completed", String::from("Step 2 completed.")),
     ];
-    for (what, world) in [
-        ("in a rule's body", in_rule),
-        ("an older draft", older),
-        ("no draft", none_kept),
-        ("completed", completed),
+    let mut unreadable = a_stone_failed_last_round();
+    unreadable.drafts.insert(
+        String::from(CARRIED_DRAFT_ID),
+        (2, String::from("{ not json")),
+    );
+    let mut past_route = a_stone_failed_last_round();
+    past_route.feed_steps = vec![
+        ("step_started", String::from("Step 9 started.")),
+        timed_out(),
+    ];
+    for (what, world, expected) in [
+        ("in a rule's body", in_rule, Expected::Nothing),
+        ("completed", completed, Expected::Nothing),
+        (
+            "an older draft",
+            older,
+            Expected::Unread(StonesUnread::CarriedOfRound(2)),
+        ),
+        (
+            "no carried draft",
+            none_carried,
+            Expected::Unread(StonesUnread::NoCarriedSeal),
+        ),
+        ("unreadable", unreadable, Expected::UnreadCarried),
+        ("past the route", past_route, Expected::UnreadCarried),
     ] {
         let (script, played) = play(world);
         assert_eq!(
@@ -4281,30 +4303,94 @@ fn only_a_failed_stone_of_last_rounds_seal_ends_its_chain() {
             "{what}: {}",
             played.why
         );
-        assert!(
-            played.drafts_refused.is_empty(),
-            "{what}: {:?}",
-            played.drafts_refused
-        );
+        match expected {
+            Expected::Nothing => assert_eq!(played.failed_stones, FailedStones::None, "{what}"),
+            Expected::Unread(why) => {
+                assert_eq!(
+                    played.failed_stones,
+                    FailedStones::Unread {
+                        known: Vec::new(),
+                        why
+                    },
+                    "{what}"
+                );
+                assert!(
+                    played.why.contains("is not all known"),
+                    "{what}: {}",
+                    played.why
+                );
+            }
+            Expected::UnreadCarried => {
+                assert!(
+                    matches!(
+                        &played.failed_stones,
+                        FailedStones::Unread {
+                            why: StonesUnread::CarriedUnread(refused),
+                            ..
+                        } if refused.method == "get_draft" && refused.code == "MALFORMED"
+                    ),
+                    "{what}: {:?}",
+                    played.failed_stones
+                );
+                assert!(
+                    played.why.contains("is not all known"),
+                    "{what}: {}",
+                    played.why
+                );
+            }
+        }
     }
 }
 
-/// An own seal is kept as the seat's own draft, saved over last round's, and
-/// a safe playbook is not.
+/// A `get_draft` of the carried seal that the gateway refuses is
+/// [`FailedStones::Unread`] with the refusal, and the stone is weighed.
 #[test]
-fn an_own_seal_is_kept_as_the_seats_draft() {
+fn a_refused_carried_draft_is_unread_with_its_refusal() {
+    let mut refused = a_stone_failed_last_round();
+    refused.refuse_draft = Some("RATE_LIMITED");
+    let (_, played) = play(refused);
+    assert!(
+        matches!(
+            &played.failed_stones,
+            FailedStones::Unread {
+                why: StonesUnread::CarriedUnread(refused),
+                ..
+            } if refused.code == "RATE_LIMITED"
+        ),
+        "{:?}",
+        played.failed_stones
+    );
+}
+
+/// What [`only_a_failed_stone_of_last_rounds_seal_ends_its_chain`] expects of
+/// a case.
+enum Expected {
+    /// No failed stone.
+    Nothing,
+    /// Not known, for this cause.
+    Unread(StonesUnread),
+    /// Not known: the carried seal refused as `MALFORMED`.
+    UnreadCarried,
+}
+
+/// A built-in seat writes nothing but its own seal (fix pass 4, item 1): an
+/// own seal and a safe one alike leave the seat's drafts as they were.
+#[test]
+fn a_built_in_seat_writes_no_draft() {
     let (script, played) = play(far_vent());
     assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
-    let (round, kept) = script.drafts.get("easy-last-seal").expect("the seal kept");
-    assert_eq!(*round, 1);
-    assert_eq!(
-        Some(kept),
-        played.playbook_jsonc.as_ref(),
-        "the seal, as sealed"
-    );
+    assert!(script.drafts.is_empty());
     let mut nothing = Script::new(0);
     nothing.treasury = 0;
     let (script, played) = play(nothing);
     assert_eq!(played.submitted, Submitted::Safe, "{}", played.why);
     assert!(script.drafts.is_empty());
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("save_draft")),
+        "{:#?}",
+        script.transcript
+    );
 }

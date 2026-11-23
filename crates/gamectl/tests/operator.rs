@@ -58,10 +58,10 @@ use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::serve::InProcessSeats;
 use pharmakos_gateway::surface::{InProcess, Surface};
 use pharmakos_gateway::token::{Subject, Token};
-use pharmakos_operator::Easy;
 use pharmakos_operator::easy::{
     EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, SAFE_MAX_RAISED, SAFE_REACH_MS,
 };
+use pharmakos_operator::{Easy, FailedStones, Submitted};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
@@ -1183,20 +1183,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
         let easy = surface
             .seat_state(Subject::Seat(SeatId::new(1)), SeatId::new(1))
             .expect("its own");
-        // Its notebook untouched; its one draft is its own seal, kept so the
-        // next Lull can say which step a failed-step line names (fix pass 3,
-        // item 6).
-        assert!(easy.notebook.is_empty());
-        assert!(
-            easy.drafts
-                .iter()
-                .all(|draft| draft.draft_id == pharmakos_operator::easy::LAST_SEAL_DRAFT_ID),
-            "{:?}",
-            easy.drafts
-                .iter()
-                .map(|draft| &draft.draft_id)
-                .collect::<Vec<_>>()
-        );
+        assert!(easy.notebook.is_empty() && easy.drafts.is_empty());
         assert!(
             easy.sealed
                 .as_ref()
@@ -1232,10 +1219,10 @@ fn easy_fits_the_in_process_limits() {
         // The derivation's sums, pinned (`crates/operator/src/easy.rs`' table):
         // 20 fixed reads, 2 tap probe, 1 guard probe, 1 raid probe, 1 Survey
         // probe, 30 candidates, 30 stepping stones, 5 templates, 1
-        // composition, 9 verifies, 6 for the safe playbook, 3 to commit and 2
+        // composition, 9 verifies, 6 for the safe playbook, 3 to commit and 1
         // for the last seal; the advisor's the same less the Survey probe, the
         // stones, the composition, the verifies, the commit and the last seal.
-        assert!(EASY_CALL_BUDGET == 111);
+        assert!(EASY_CALL_BUDGET == 110);
         assert!(EASY_ADVISOR_CALL_BUDGET == 65);
     }
 }
@@ -2043,17 +2030,12 @@ fn timed_stone_playbook(timeout_ms: i64) -> String {
     )
 }
 
-/// One Probation match for the failed stone (fix pass 3, item 6): seat 1 is
-/// Easy's built-in seat; seat 0 seals, in round 1, a playbook whose one step
-/// is a stone toward `seam_190_124` with a timeout of `timeout_ms`, and keeps
-/// it as its own draft under Easy's id, as Easy keeps its own seal. In round 2
-/// Easy plays seat 0 through the seat's own token: the `toward` waypoints of
-/// its estimates, by feature, and whether its round's feed said a step of its
-/// failed are what it answers.
-fn failed_stone_match(timeout_ms: i64) -> (Vec<String>, pharmakos_operator::Played) {
-    let rules = rules_json();
+/// A Probation match, two seats, three rounds, opened to its first Lull, with
+/// seat 1 as Easy's built-in seat and seat 0 advised: what the failed-stone
+/// tests play seat 0 in.
+fn failed_stone_surface(name: &str, rules: &str) -> (Surface, InProcessSeats) {
     let host = Host::open_from(
-        &rules,
+        rules,
         PROBATION_SEED,
         2,
         &Settings {
@@ -2063,9 +2045,9 @@ fn failed_stone_match(timeout_ms: i64) -> (Vec<String>, pharmakos_operator::Play
         Some(root().join(LIBRARY_PATH)),
     )
     .expect("a match");
-    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let table = RulesTable::from_canonical_json(rules).expect("a rules table");
     let mut surface = Surface::new(
-        &match_id(&format!("failed-stone-{timeout_ms}")),
+        &match_id(name),
         PROBATION_SEED,
         table,
         FogPolicy::fogged(),
@@ -2074,41 +2056,15 @@ fn failed_stone_match(timeout_ms: i64) -> (Vec<String>, pharmakos_operator::Play
     .expect("a surface");
     surface.attach(host).expect("attached");
     surface.open_lull().expect("the opening Lull");
-    let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
-    let mut seats = InProcessSeats::open(&mut surface, &seat_ids(2), Some(0), &mut factory)
+    let mut factory = EasyOperators::new(rules).expect("the operator reads the rules text");
+    let seats = InProcessSeats::open(&mut surface, &seat_ids(2), Some(0), &mut factory)
         .expect("in-process seats");
-    let stone = timed_stone_playbook(timeout_ms);
-    // Round 1: seat 0 seals the stone and keeps it as Easy keeps its own.
-    seats.plan(&mut surface);
-    let token = in_process_token(&mut surface, 0);
-    let submitted = result(
-        &call(
-            &mut surface,
-            &token,
-            "submit_plan",
-            Json::Object(vec![(
-                String::from("playbook_jsonc"),
-                Json::String(stone.clone()),
-            )]),
-        ),
-        "submit_plan",
-    );
-    assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
-    result(
-        &call(
-            &mut surface,
-            &token,
-            "save_draft",
-            Json::Object(vec![
-                (
-                    String::from("draft_id"),
-                    Json::String(String::from(pharmakos_operator::easy::LAST_SEAL_DRAFT_ID)),
-                ),
-                (String::from("playbook_jsonc"), Json::String(stone)),
-            ]),
-        ),
-        "save_draft",
-    );
+    (surface, seats)
+}
+
+/// Play the Push after the seals to its end, close its recap and open the
+/// next Lull.
+fn play_to_next_lull(surface: &mut Surface) {
     assert!(surface.begin_push().expect("the Push opens"));
     while let Some(report) = surface.step().expect("a tick") {
         if report.segment_ended {
@@ -2116,11 +2072,19 @@ fn failed_stone_match(timeout_ms: i64) -> (Vec<String>, pharmakos_operator::Play
         }
     }
     surface.end_recap().expect("the recap closes");
-    surface.open_lull().expect("round 2's Lull");
-    // Round 2: Easy plays seat 0 through its own token.
-    let token = in_process_token(&mut surface, 0);
+    surface.open_lull().expect("the next Lull");
+}
+
+/// Easy plays seat 0's round through the seat's own token, every
+/// `submit_plan` passed through `submitted` on its way: the `toward`
+/// features of its estimates, in order, and its round.
+fn easy_plays_seat_zero(
+    surface: &mut Surface,
+    easy: &mut Easy,
+    submitted: &dyn Fn(&str) -> String,
+) -> (Vec<String>, pharmakos_operator::Played) {
+    let token = in_process_token(surface, 0);
     let mut toward: Vec<String> = Vec::new();
-    let mut easy = Easy::new(&rules).expect("the rules text");
     let played = {
         let mut bridged = |method: &str, params: Json| {
             if method == "estimate_route"
@@ -2133,18 +2097,182 @@ fn failed_stone_match(timeout_ms: i64) -> (Vec<String>, pharmakos_operator::Play
             {
                 toward.push(feature.clone());
             }
-            call(&mut surface, &token, method, params)
+            let params = match (method, params.get("playbook_jsonc")) {
+                ("submit_plan", Some(Json::String(text))) => Json::Object(vec![(
+                    String::from("playbook_jsonc"),
+                    Json::String(submitted(text)),
+                )]),
+                _ => params,
+            };
+            call(surface, &token, method, params)
         };
         easy.play(0, &mut bridged)
     };
     (toward, played)
 }
 
+/// The seal with every stone step's `timeout_ms` set to `ms`: Easy's own
+/// labels (`stone`, `stone_2`, ...) and its compact step spelling.
+fn stones_timed_to(text: &str, ms: i64) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("\"label\":\"stone") {
+        let (head, tail) = rest.split_at(at);
+        out.push_str(head);
+        let key = "\"timeout_ms\":";
+        let start = tail.find(key).expect("a stone step has a timeout") + key.len();
+        let digits = tail
+            .get(start..)
+            .expect("the timeout")
+            .bytes()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        out.push_str(tail.get(..start).expect("up to the timeout"));
+        out.push_str(&ms.to_string());
+        rest = tail.get(start + digits..).expect("after the timeout");
+    }
+    out.push_str(rest);
+    out
+}
+
+/// One Probation match in which Easy itself seals a stone and that stone
+/// fails (fix pass 4, item 1): Easy plays seat 0 in rounds 1 to 3 through the
+/// seat's own token. Round 2's seal places a stone toward `seam_190_124` (the
+/// Probation table's stones); with `stone_ms` set, its timeout is cut to that
+/// on the way to `submit_plan`, so it fails `timeout` in round 2's Push. No
+/// test writes a draft: what round 3 reads back is the gateway's carried
+/// draft. Answers round 2's seal, and round 3's `toward` estimates and round.
+fn easy_seals_a_stone(stone_ms: Option<i64>) -> (String, Vec<String>, pharmakos_operator::Played) {
+    let rules = rules_json();
+    let name = match stone_ms {
+        Some(ms) => format!("easy-stone-{ms}"),
+        None => String::from("easy-stone-as-composed"),
+    };
+    let (mut surface, mut seats) = failed_stone_surface(&name, &rules);
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    let as_composed = |text: &str| text.to_owned();
+    // Round 1: the start vent's Generator.
+    seats.plan(&mut surface);
+    let (_, first) = easy_plays_seat_zero(&mut surface, &mut easy, &as_composed);
+    assert_eq!(first.submitted, Submitted::Own, "{}", first.why);
+    play_to_next_lull(&mut surface);
+    // Round 2: the stone, its timeout cut when asked.
+    seats.plan(&mut surface);
+    let cut = |text: &str| stone_ms.map_or_else(|| text.to_owned(), |ms| stones_timed_to(text, ms));
+    let (_, second) = easy_plays_seat_zero(&mut surface, &mut easy, &cut);
+    assert_eq!(second.submitted, Submitted::Own, "{}", second.why);
+    let sealed = surface
+        .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
+        .expect("its own")
+        .sealed
+        .as_ref()
+        .expect("round 2's seal")
+        .playbook_jsonc
+        .clone();
+    assert!(
+        sealed.contains("\"toward\":{\"feature\":{\"feature_id\":\"seam_190_124\"}}"),
+        "{sealed}"
+    );
+    play_to_next_lull(&mut surface);
+    // Round 3: what Easy weighs.
+    seats.plan(&mut surface);
+    let (toward, third) = easy_plays_seat_zero(&mut surface, &mut easy, &as_composed);
+    let drafts = surface
+        .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
+        .expect("its own")
+        .drafts
+        .iter()
+        .map(|draft| draft.draft_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        drafts,
+        [pharmakos_operator::easy::CARRIED_DRAFT_ID],
+        "the seat's only draft is the one the gateway carried"
+    );
+    (sealed, toward, third)
+}
+
+/// A stone Easy itself sealed, which failed, is not weighed again unchanged
+/// (fix pass 4, item 1): round 3 reads the failed step from its feed and the
+/// stone from the gateway's carried draft, and makes no `toward` estimate for
+/// `seam_190_124`. Its control, with the timeout Easy composed, places the
+/// stone, and round 3 says no stone failed and weighs the seam's chain.
+#[test]
+fn a_stone_easy_sealed_that_failed_is_not_weighed_again() {
+    let (sealed, toward, played) = easy_seals_a_stone(Some(1_000));
+    eprintln!("timed out: toward {toward:?}; {}", played.why);
+    assert!(sealed.contains("\"timeout_ms\":1000"), "{sealed}");
+    assert_eq!(
+        played.failed_stones,
+        FailedStones::Known(vec![String::from("seam_190_124")]),
+        "{}",
+        played.why
+    );
+    assert!(
+        !toward.iter().any(|feature| feature == "seam_190_124"),
+        "{toward:?}"
+    );
+    let (_, toward, played) = easy_seals_a_stone(None);
+    eprintln!("placed: toward {toward:?}; {}", played.why);
+    assert!(
+        toward.iter().any(|feature| feature == "seam_190_124"),
+        "{toward:?}"
+    );
+    assert!(
+        played.failed_stones.known().is_empty()
+            && !matches!(played.failed_stones, FailedStones::Unread { .. }),
+        "{:?}",
+        played.failed_stones
+    );
+}
+
+/// The operator's restatement of the gateway's carried draft id is the
+/// gateway's.
+#[test]
+fn the_carried_draft_id_is_the_gateways() {
+    assert_eq!(
+        pharmakos_operator::easy::CARRIED_DRAFT_ID,
+        pharmakos_gateway::surface::CARRIED_DRAFT_ID
+    );
+}
+
+/// One Probation match for a failed stone a person sealed (fix pass 3, item
+/// 6): seat 1 is Easy's built-in seat; seat 0 seals, in round 1, a playbook
+/// whose one step is a stone toward `seam_190_124` with a timeout of
+/// `timeout_ms`. The gateway carries that seal into round 2 as the seat's
+/// draft, as it carries every seat's own seal. In round 2 Easy plays seat 0
+/// through the seat's own token: the `toward` waypoints of its estimates, by
+/// feature, and its round are what it answers.
+fn failed_stone_match(timeout_ms: i64) -> (Vec<String>, pharmakos_operator::Played) {
+    let rules = rules_json();
+    let (mut surface, mut seats) =
+        failed_stone_surface(&format!("failed-stone-{timeout_ms}"), &rules);
+    let stone = timed_stone_playbook(timeout_ms);
+    // Round 1: seat 0 seals the stone.
+    seats.plan(&mut surface);
+    let token = in_process_token(&mut surface, 0);
+    let submitted = result(
+        &call(
+            &mut surface,
+            &token,
+            "submit_plan",
+            Json::Object(vec![(String::from("playbook_jsonc"), Json::String(stone))]),
+        ),
+        "submit_plan",
+    );
+    assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
+    play_to_next_lull(&mut surface);
+    // Round 2: Easy plays seat 0 through its own token.
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    easy_plays_seat_zero(&mut surface, &mut easy, &|text: &str| text.to_owned())
+}
+
 /// A stone that failed last round is not weighed again (fix pass 3, item 6),
 /// hosted: a stone toward `seam_190_124` with a 1 s timeout fails `timeout`
-/// in round 1's Push, and round 2's Easy, reading its own feed and its kept
-/// seal, weighs no stone toward that seam. With a timeout the walk fits, the
-/// stone places, and round 2 weighs the chain's next stone toward it.
+/// in round 1's Push, and round 2's Easy, reading its own feed and the
+/// gateway's carried draft, weighs no stone toward that seam. With a timeout
+/// the walk fits, the stone places, and round 2 weighs the chain's next
+/// stone toward it.
 #[test]
 fn a_stone_made_to_time_out_is_not_weighed_again() {
     let (toward, played) = failed_stone_match(1_000);
@@ -2153,10 +2281,11 @@ fn a_stone_made_to_time_out_is_not_weighed_again() {
         !toward.iter().any(|feature| feature == "seam_190_124"),
         "{toward:?}"
     );
-    assert!(
-        played.drafts_refused.is_empty(),
-        "{:?}",
-        played.drafts_refused
+    assert_eq!(
+        played.failed_stones,
+        FailedStones::Known(vec![String::from("seam_190_124")]),
+        "{}",
+        played.why
     );
     let (toward, played) = failed_stone_match(240_000);
     eprintln!("placed: toward {toward:?}; {}", played.why);
@@ -2164,4 +2293,5 @@ fn a_stone_made_to_time_out_is_not_weighed_again() {
         toward.iter().any(|feature| feature == "seam_190_124"),
         "{toward:?}"
     );
+    assert_eq!(played.failed_stones, FailedStones::None, "{}", played.why);
 }

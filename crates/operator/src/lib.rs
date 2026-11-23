@@ -119,7 +119,10 @@ pub mod steps {
         crate::compose::stone_step("stone", feature, Some(timeout_ms))
     }
 }
-pub use easy::{Advice, Easy, Played, StartHere, Submitted, SuggestedValue, Suggestion};
+pub use easy::{
+    Advice, Easy, FailedStones, Played, StartHere, StonesUnread, Submitted, SuggestedValue,
+    Suggestion,
+};
 pub use tuning::RulesError;
 pub use wire::{Call, Refused};
 

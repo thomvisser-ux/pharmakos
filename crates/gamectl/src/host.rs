@@ -48,8 +48,9 @@
 //! A built-in seat's round says on standard error what the gateway refused it
 //! (S3's `opr3`, fix pass 2, item 5): the refusal that kept the round from
 //! being read, every route estimate refused for another reason than
-//! `NOT_FOUND`, each of which dropped the goal it weighed, and a refusal of
-//! keeping its seal as its own draft or of reading last round's back. One line a round,
+//! `NOT_FOUND`, each of which dropped the goal it weighed, and why last
+//! round's failed stones were not all known when they were not
+//! (`Played::failed_stones`). One line a round,
 //! and none for a round with nothing refused ([`refusals_said`]). A line
 //! standard error would not take is not dropped silently: it is counted by
 //! its reason ([`Unsaid`]), and the next line that is written says how many
@@ -88,7 +89,7 @@ use pharmakos_gateway::Code;
 use pharmakos_gateway::advice::{Advice, StartHere, SuggestedValue, Suggestion};
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::serve::{self, Advisor, BuiltInSeat, Operators, Setup};
-use pharmakos_operator::{Easy, Played, RulesError};
+use pharmakos_operator::{Easy, FailedStones, Played, RulesError, StonesUnread};
 use pharmakos_proto::json::Json;
 
 use crate::exit::Failure;
@@ -288,11 +289,23 @@ pub fn refusals_said(seat: u8, played: &Played) -> Option<String> {
         .collect();
     let estimates =
         (!estimates.is_empty()).then(|| strings::operator_estimates_refused(&estimates));
-    let drafts = played.drafts_refused.iter().map(|refused| {
-        strings::operator_draft_refused(&refused.method, &refused.code, &refused.message)
-    });
-    let said: Vec<String> = read.into_iter().chain(estimates).chain(drafts).collect();
+    let stones = stones_unread(&played.failed_stones);
+    let said: Vec<String> = read.into_iter().chain(estimates).chain(stones).collect();
     (!said.is_empty()).then(|| strings::operator_round(seat, played.round, &said.join(" ")))
+}
+
+/// Why last round's failed stones were not all known, when they were not.
+fn stones_unread(stones: &FailedStones) -> Option<String> {
+    let FailedStones::Unread { why, .. } = stones else {
+        return None;
+    };
+    Some(match why {
+        StonesUnread::NoCarriedSeal => strings::operator_no_carried_seal(),
+        StonesUnread::CarriedOfRound(round) => strings::operator_carried_of_round(*round),
+        StonesUnread::CarriedUnread(refused) => {
+            strings::operator_carried_unread(&refused.method, &refused.code, &refused.message)
+        }
+    })
 }
 
 /// Easy advising a seat.
@@ -433,7 +446,7 @@ mod tests {
             refused,
             estimates_refused,
             fundable: 0,
-            drafts_refused: Vec::new(),
+            failed_stones: FailedStones::None,
         }
     }
 
