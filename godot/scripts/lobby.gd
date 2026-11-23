@@ -17,7 +17,8 @@
 # line shows no countdown while the admin footer says the phase has none (`_status.untimed`;
 # the bridge's `timer` is then empty; decisions-log item 135). Ready is this seat's
 # `set_ready`, and its label and the line under it, shown in a Lull, say what it does: with
-# nothing sealed the gateway files the safe playbook (decisions-log item 143 (4)). Continue
+# nothing sealed the gateway files the safe playbook (decisions-log item 143 (4)), and with a
+# seal the gateway accepted this round Ready keeps it (`ready_line`, S3's `fixp`). Continue
 # leaves the recap.
 #
 # THE RECAP (S1's plan, task `ui`): in a recap and once the match has ended, the column
@@ -72,6 +73,7 @@ extends Node
 
 const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
+const Values := preload("res://scripts/values.gd")
 ## The credits overlay the chooser's Credits button adds (decisions-log item 117 (11)).
 const AboutScene := preload("res://scenes/credits.tscn")
 
@@ -190,7 +192,17 @@ func _process(_delta: float) -> void:
 		parts.append(Strings.text("lobby_zero_refused", {"detail": zero_refused}))
 	_status.text = "  ".join(parts)
 	_ready_help.visible = String(state.get("phase", "")) == "lull"
+	if _ready_help.visible:
+		_ready_help.text = ready_line(vista.bridge.editor_state())
+		_ready_help.accessibility_name = _ready_help.text
 	_draw_recap(String(state.get("phase", "")))
+
+
+## What Ready will do now, in a Lull (S3's `fixp`, P6b finding 4): with a seal the gateway
+## accepted this round (the bridge's editor's `sealed_this_round`), Ready keeps it; with none, the
+## gateway files the safe playbook. A branch on the bridge's word, for display.
+static func ready_line(editor_state: Dictionary) -> String:
+	return Strings.text("lobby_ready_sealed" if editor_state.get("sealed_this_round", false) else "lobby_ready_help")
 
 
 ## The recap's prose, as the gateway wrote it, in a recap and after the match has ended;
@@ -198,7 +210,13 @@ func _process(_delta: float) -> void:
 func _draw_recap(phase: String) -> void:
 	var recap: Dictionary = vista.bridge.watch_recap()
 	var refusal := String(recap.get("refusal", ""))
-	var answered: bool = int(recap.get("answers", 0)) > 0 or refusal != ""
+	var answers: Variant = Values.int_of(recap.get("answers", 0))
+	if not (answers is int):
+		# A count past `int`: the recap's line says it cannot be read, in a recap and after the end.
+		_recap.visible = phase == "recap" or phase == "ended"
+		_recap.text = Values.unreadable_text(Strings.text("value_recap_answers"), answers)
+		return
+	var answered: bool = answers > 0 or refusal != ""
 	var shown: bool = (phase == "recap" or phase == "ended") and answered
 	_recap.visible = shown
 	if shown:
@@ -235,7 +253,7 @@ func _notification(what: int) -> void:
 
 func _input(event: InputEvent) -> void:
 	if editor.log_input and event is InputEventMouseButton:
-		print("[lobby] _input: button %d %s at %s, alt_pressed %s, KEY_ALT held %s" % [event.button_index, "down" if event.pressed else "up", event.position, event.alt_pressed, Input.is_key_pressed(KEY_ALT)])
+		print("[lobby] _input: button %d %s at %s, alt_pressed %s, KEY_ALT held %s; %s" % [event.button_index, "down" if event.pressed else "up", event.position, event.alt_pressed, Input.is_key_pressed(KEY_ALT), editor.dormant_log(event.position)])
 
 
 func _on_announced(_match_id: String) -> void:

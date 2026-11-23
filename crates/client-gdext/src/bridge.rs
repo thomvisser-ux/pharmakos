@@ -890,7 +890,7 @@ impl PharmakosBridge {
             return false;
         };
         self.panics.guard_or("editor_set_allow_dormant", false, || {
-            rig.editor_mut().set_allow_dormant(on)
+            rig.editor_mut().set_allow_dormant(on).is_ok()
         })
     }
 
@@ -901,30 +901,41 @@ impl PharmakosBridge {
     // rendering. An index or a revision no Rust type holds (a negative int) is refused
     // through the editor like any other refusal, by its reason on the status line.
 
-    /// Rule-list chip `chip`'s number field sent `value`: one `replace` through `patch_plan`.
-    /// Returns whether it was taken; a refusal is on the status line.
+    /// Rule-list chip `chip`'s value field sent `text`, exactly as typed: the editor reads it
+    /// as a whole number and sends one `replace` through `patch_plan`. Returns whether it was
+    /// taken; a refusal is on the status line, on the chip's rule and in the state's `field`.
     #[func]
-    fn editor_set_number(
+    fn editor_set_number_text(
         &mut self,
         chip: i64,
         revision: i64,
         pointer: GString,
-        value: i64,
+        text: GString,
     ) -> bool {
         let Some(rig) = self.rig.as_mut() else {
             return false;
         };
-        let pointer = pointer.to_string();
-        self.panics.guard_or("editor_set_number", false, || {
+        let (pointer, text) = (pointer.to_string(), text.to_string());
+        self.panics.guard_or("editor_set_number_text", false, || {
             let editor = rig.editor_mut();
             match (usize::try_from(chip), u64::try_from(revision)) {
-                (Ok(chip), Ok(revision)) => {
-                    editor.set_number(chip, revision, &pointer, value).is_ok()
-                }
+                (Ok(chip), Ok(revision)) => editor
+                    .set_number_text(chip, revision, &pointer, &text)
+                    .is_ok(),
                 (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchChip),
                 (_, Err(_)) => refused(editor, RuleEditRefusal::Changed),
             }
         })
+    }
+
+    /// A value field opened: what the last one heard is no longer its to say.
+    #[func]
+    fn editor_field_opened(&mut self) {
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self
+                .panics
+                .guard("editor_field_opened", || rig.editor_mut().field_opened());
+        }
     }
 
     /// Rule-list chip `chip`'s enum took its `which`th value as sent: one `replace`.
@@ -1107,25 +1118,26 @@ impl PharmakosBridge {
     }
 
     /// Visit & change: beacon `beacon`'s setting `setting` (its index and pointer in the editor
-    /// state's `beacon_detail`) to the number `value`. One route step, one row.
+    /// state's `beacon_detail`) took `text` from its value field, exactly as typed: read as a
+    /// whole number, one route step, one row. A refusal is on the status line and in `field`.
     #[func]
-    fn editor_change_setting_number(
+    fn editor_change_setting_number_text(
         &mut self,
         beacon: GString,
         setting: i64,
         pointer: GString,
-        value: i64,
+        text: GString,
     ) -> bool {
         let Some(rig) = self.rig.as_mut() else {
             return false;
         };
-        let (beacon, pointer) = (beacon.to_string(), pointer.to_string());
+        let (beacon, pointer, text) = (beacon.to_string(), pointer.to_string(), text.to_string());
         self.panics
-            .guard_or("editor_change_setting_number", false, || {
+            .guard_or("editor_change_setting_number_text", false, || {
                 let editor = rig.editor_mut();
                 match usize::try_from(setting) {
                     Ok(setting) => editor
-                        .change_setting_number(&beacon, setting, &pointer, value)
+                        .change_setting_number_text(&beacon, setting, &pointer, &text)
                         .is_ok(),
                     Err(_) => refused(editor, RuleEditRefusal::NoSuchEntry),
                 }

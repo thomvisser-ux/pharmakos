@@ -35,6 +35,8 @@ const TEXT := {
 	# Under the button, in a Lull (decisions-log item 143 (4)). Ready ends the Lull once every
 	# seat is ready, and with nothing sealed the gateway files the safe playbook.
 	"lobby_ready_help": "With nothing sealed, Ready files the safe playbook for you.",
+	# With a seal the gateway accepted this round (S3's `fixp`).
+	"lobby_ready_sealed": "Your seal for this round stands: Ready keeps it.",
 	"lobby_continue": "Continue",
 	"lobby_follow": "Follow",
 	"lobby_whole_map": "Whole map",
@@ -112,11 +114,14 @@ const TEXT := {
 	# sent; a refusal is its words.
 	"rule_number_heading": "Change {text}:",
 	"rule_number_send": "Set this value",
+	# The gateway's bounds for the value, as it sent them ("-" where it set none): the field applies
+	# none of them, and a value past them goes to the gateway, whose answer is drawn (S3's `fixp`).
+	"rule_number_bounds": "The gateway's range here: {min} to {max}.",
+	"rule_number_waiting": "Sending...",
 	"rule_conflict": "Never fires while the rule joined above it is true: {sentence}",
 	"rule_refused": "The gateway refused that edit: {detail}",
 	"rule_chip_read_only_ms": "This duration is shown as the gateway wrote it. Editing it here waits on a unit the gateway can send.",
 	"rule_chip_read_only_no_shape": "The gateway sent no way to edit this value.",
-	"rule_chip_read_only_not_exact": "This number is larger than the number field holds exactly, so it is shown and not edited here.",
 	# The file's value lies outside the gateway's bounds: shown as it is, never clamped (L1).
 	"rule_number_outside": "The file holds {now}, outside the range the gateway gives here ({min} to {max}). It is shown as it is; the checks say what it costs.",
 	# Why the rule list took no edit, by the bridge's reason (`RuleEditRefusal`), never in silence.
@@ -138,7 +143,7 @@ const TEXT := {
 	"status_rule_refused_rendering_out_of_range": "The rule list cannot be edited until it is drawn again.",
 	"status_rule_refused_not_this_kind": "That is not a {detail}. Click one on the map, or Escape.",
 	"status_rule_refused_arm_not_here": "That cannot go here: the gateway takes no {detail} at this point. Click something else, or Escape.",
-	"status_rule_refused_not_exact": "That number is larger than the field holds exactly, so it was not sent.",
+	"status_rule_refused_not_an_integer": "That is not a whole number (digits, with a + or - in front if you write one), so nothing was sent.",
 	"status_rule_refused_no_vocabulary": "The words to pick from have not come yet this Lull (or were refused); see the picker's line.",
 	"status_rule_refused_not_in_rule": "That condition is not in the rule the picker was opened on.",
 	"status_rule_refused_no_such_entry": "That is not in the list the gateway sent any more.",
@@ -179,7 +184,8 @@ const TEXT := {
 	"menu_remove_target": "Remove a build target",
 	"menu_target_row": "{blueprint} at {anchor}",
 	"menu_queue": "Queue a structure",
-	"menu_entry_locked": "{title} (locked: {locked})",
+	# Under a locked entry in the entry list, the gateway's sentence as it came.
+	"menu_entry_locked": "Locked: {locked}",
 	"menu_detail_waiting": "Reading this beacon...",
 	"menu_detail_refused": "This beacon's detail: {detail}",
 	"menu_detail_unreadable": "This beacon's detail could not be read: {detail}",
@@ -232,6 +238,19 @@ const TEXT := {
 	"row_where": "{code} at {pointer}",
 	"fix": "Fix: {title}",
 
+	# A count the bridge sent as its refusal, one past what `int` holds (S3's `fixp`): `what` it
+	# is, and the digits it held.
+	"value_unreadable": "{what} could not be read: the bridge sent {held}, past what this client's numbers hold.",
+	"value_changes": "The editor's change count",
+	"value_undo_depth": "How many edits Undo can take back",
+	"value_meter_answers": "The meter's answer count",
+	"value_recap_answers": "The recap's answer count",
+	"value_pending": "The view's waiting chunks",
+	"value_step": "The step number",
+	"value_fix": "This fix's number",
+	"value_index": "A position in the rule list",
+	"value_panics": "The bridge's caught-panic count",
+
 	# --- The status line: keys the bridge's editor names ---------------------------
 	"status_": "",
 	"status_load_not_text": "That file is not text, so it cannot be a playbook.",
@@ -265,6 +284,11 @@ const TEXT := {
 	"status_dormant_allowed": "Dormant beacons allowed.",
 	"status_dormant_disallowing": "No longer allowing dormant beacons...",
 	"status_dormant_disallowed": "Dormant beacons no longer allowed.",
+	# A click on the box the bridge could not take, on the status line and beside the box (S3's
+	# `fixp`): never dropped without a word.
+	"status_dormant_refused_stale": "Not changed: the checks of the text on screen are on their way. Click the box again when they come.",
+	"status_dormant_refused_busy": "Not changed: an edit is on its way. Click the box again when it lands.",
+	"status_dormant_refused_nothing_to_change": "Not changed: the checks name no dormant-beacon option to set, and the text sets none to clear.",
 	# An ask the editor did not send, because the planning door is shut (finding K).
 	"status_closed_ready": "You pressed Ready: this client sends no planning call for the rest of this Lull.",
 	# Neither promises a next Lull: the last Push and the final recap have none (item 143 (3)).
@@ -302,6 +326,14 @@ const TEXT := {
 	"chip_now": "Step {step}: now {feature}, {ms} ms",
 	"chip_now_unreachable": "Step {step}: now {feature}, which no route reaches from where it is read",
 	"attack_heading": "Attack targets",
+	# The Build targets the text writes (S3's `fixp`): each blueprint as the file writes it.
+	"build_heading": "Build targets",
+	"build_none": "No Build target in the text.",
+	"build_mark": "step {step}: {blueprint}",
+	"build_voxel": "Step {step}: {blueprint} at ({x}, {y}, {z})",
+	"build_on": "Step {step}: {blueprint} on {feature}",
+	"build_on_unlisted": "Step {step}: {blueprint} on {feature}, which the map does not list this Lull, so it is not marked",
+	"build_unknown": "Step {step}: {blueprint} at a place this panel cannot read, so it is not marked; the checks say what is wrong",
 	"attack_none": "No Attack beacon in the text.",
 	"attack_mark": "Attack (step {step})",
 	"attack_voxel": "Step {step}: attacks the ground at ({x}, {y}, {z})",
