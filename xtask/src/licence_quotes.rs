@@ -38,11 +38,17 @@
 //!   compared exactly (`OR` where `AND` is meant fails), and the file must carry the combined
 //!   expression, or the library's with no game expression beside it (a game expression and the
 //!   library's as two separate expressions is neither).
+//! * **The converse:** a tracked file outside `library/` that carries the combined expression
+//!   (any spelling of its terms) and quotes nothing of the library keeps the library's licence
+//!   for no reason, and fails: it is `GPL-3.0-or-later` (decisions-log item 164 (3a)). A binary
+//!   file cannot quote, so one that carries the combined expression fails too. The library's
+//!   licence alone is not tested this way: the permissive areas are permissive by their own
+//!   tier, whether or not they quote.
 //! * **Byte copies:** a file under `godot/fixtures/` that is byte-identical to one under
 //!   `tests/golden/` or `scenarios/` carries exactly the same expressions as it.
 //! * **A positive control:** the check asserts it scanned a plausible number of files and that
-//!   the files known to quote the library are found quoting it, so "nothing found" cannot mean
-//!   "nothing looked at".
+//!   the files known to quote the library are found quoting it and carrying the combined
+//!   expression, so "nothing found" cannot mean "nothing looked at", in either direction.
 //!
 //! # Where it runs
 //!
@@ -102,7 +108,9 @@ pub(crate) enum Refusal {
     Library(String),
     /// The positive control failed: the check looked at too little to mean anything.
     Control(String),
-    /// Files that quote the library without carrying its licence.
+    /// Files whose licences disagree with what they quote: a quoting file without the
+    /// library's licence, a non-quoting file with the combined expression, a byte copy whose
+    /// expressions differ from its source's. Each line names the file and the fix.
     Misses(Vec<String>),
 }
 
@@ -122,9 +130,8 @@ impl fmt::Display for Refusal {
             Refusal::Control(why) => write!(f, "the quotation check's positive control: {why}"),
             Refusal::Misses(misses) => write!(
                 f,
-                "these quote library/ (MIT OR Apache-2.0) without carrying its licence: give each \
-                 `{COMBINED}` (REUSE.toml, or its own header), or `{LIBRARY}` if it is purely the \
-                 library's text:\n  {}",
+                "these files' licences disagree with what they quote of library/ ({LIBRARY}); \
+                 each line names the licence to write (REUSE.toml, or the file's own header):\n  {}",
                 misses.join("\n  ")
             ),
         }
@@ -141,7 +148,10 @@ pub(crate) struct Outcome {
     pub(crate) library_runs: usize,
     /// Files that quote the library, with the expressions each carries.
     pub(crate) quoting: BTreeMap<String, Vec<String>>,
-    /// Quoting files whose licences are wrong, and copies that differ from their source.
+    /// Files that carry the combined expression, quoting or not.
+    pub(crate) combined: BTreeSet<String>,
+    /// Quoting files whose licences are wrong, non-quoting files that carry the combined
+    /// expression, and copies that differ from their source.
     pub(crate) misses: Vec<String>,
 }
 
@@ -478,6 +488,44 @@ fn licence_problem(expressions: &[String]) -> Option<String> {
     }
 }
 
+/// The first of a file's expressions that names the game's licence and the library's together:
+/// the combined expression, or any other spelling of the same licence identifiers (the order
+/// swapped, `OR` where `AND` is meant). A file that quotes nothing has no reason to carry the
+/// library's licence beside the game's in any form.
+fn combined_of(expressions: &[String]) -> Option<&str> {
+    let combined = identifiers(COMBINED);
+    expressions
+        .iter()
+        .find(|e| e.as_str() == COMBINED || identifiers(e) == combined)
+        .map(String::as_str)
+}
+
+/// An expression's licence identifiers, operators dropped, sorted and each once: the set of
+/// licences it names, whatever joins them.
+fn identifiers(expression: &str) -> Vec<&str> {
+    let mut found: Vec<&str> = terms(expression)
+        .into_iter()
+        .filter(|t| !matches!(*t, "AND" | "OR" | "WITH"))
+        .collect();
+    found.dedup();
+    found
+}
+
+/// The miss for a file that carries `expression` (the combined one, or a spelling of it) and
+/// quotes nothing of the library.
+fn unquoted_problem(file: &str, expression: &str, binary: bool) -> String {
+    let why = if binary {
+        "is a binary file, which cannot quote library/"
+    } else {
+        "quotes no sentence and no word run of library/"
+    };
+    format!(
+        "{file} carries `{expression}` and {why}, so the library's licence has no reason to be \
+         there: write `{GAME}` (its own header), or delete the REUSE.toml entry that gives it \
+         the combined form"
+    )
+}
+
 fn sorted_set(expressions: &[String]) -> Vec<String> {
     let mut set = expressions.to_vec();
     set.sort();
@@ -505,6 +553,13 @@ pub(crate) fn check(
     let mut texts: Vec<(&str, &str)> = Vec::new();
     for (file, bytes) in files.iter().filter(|(f, _)| !f.starts_with("library/")) {
         if is_binary(file) {
+            // Not read: a binary quotes nothing, so the combined expression is a miss on it.
+            if let Some(expression) = report.get(file).and_then(|e| combined_of(e)) {
+                outcome.combined.insert(file.clone());
+                outcome
+                    .misses
+                    .push(unquoted_problem(file, expression, true));
+            }
             continue;
         }
         let text = std::str::from_utf8(bytes).map_err(|e| Refusal::Unreadable {
@@ -517,6 +572,10 @@ pub(crate) fn check(
             None if reuse_ignores(file, text.is_empty()) => continue,
             None => return Err(Refusal::NotReported(file.clone())),
         };
+        let combined = combined_of(expressions);
+        if combined.is_some() {
+            outcome.combined.insert(file.clone());
+        }
         if let Some(quoted) = library.quoted_in(&normalise(text)) {
             if let Some(problem) = licence_problem(expressions) {
                 let shown: String = quoted.chars().take(60).collect();
@@ -525,6 +584,10 @@ pub(crate) fn check(
                     .push(format!("{file} quotes \"{shown}...\" and {problem}"));
             }
             outcome.quoting.insert(file.clone(), expressions.clone());
+        } else if let Some(expression) = combined {
+            outcome
+                .misses
+                .push(unquoted_problem(file, expression, false));
         }
         texts.push((file, text));
     }
@@ -561,8 +624,9 @@ fn is_binary(file: &str) -> bool {
         .is_some_and(|e| BINARY.contains(&e))
 }
 
-/// The files the manifest and the reviews named as quoting the library; the check has to find
-/// every one, or it is looking at nothing.
+/// The files the manifest and the reviews named as quoting the library and carrying the
+/// combined expression; the check has to find every one doing both, or it is looking at
+/// nothing.
 const KNOWN: &[&str] = &[
     "tests/golden/gateway/demo_hold_and_build_render/expected.response.json",
     "tests/golden/gateway/demo_expand_and_mine_render/expected.response.json",
@@ -597,12 +661,17 @@ fn check_tree_refusing(root: &Path, require_tools: bool) -> Result<String, Refus
     for name in String::from_utf8_lossy(&listed.stdout)
         .split('\0')
         .filter(|f| !f.is_empty())
-        .filter(|f| !is_binary(f))
     {
-        let bytes = fs::read(root.join(name)).map_err(|e| Refusal::Unreadable {
-            file: name.to_owned(),
-            why: e.to_string(),
-        })?;
+        // A binary is listed by name only: [`check`] never reads its bytes, and still holds
+        // its licence to the converse rule.
+        let bytes = if is_binary(name) {
+            Vec::new()
+        } else {
+            fs::read(root.join(name)).map_err(|e| Refusal::Unreadable {
+                file: name.to_owned(),
+                why: e.to_string(),
+            })?
+        };
         files.push((name.to_owned(), bytes));
     }
     // `reuse lint` exits non-zero on a non-compliant tree and still writes the report; the step
@@ -613,6 +682,14 @@ fn check_tree_refusing(root: &Path, require_tools: bool) -> Result<String, Refus
         .map_err(|e| Refusal::Reuse(e.to_string()))?;
     let report = read_report(&String::from_utf8_lossy(&answer.stdout))?;
     let outcome = check(&files, &report)?;
+    verdict(outcome, KNOWN)
+}
+
+/// The positive control, then the misses, then the step's line. The control holds both
+/// directions: every `known` file must be found quoting the library (or the quotation finder
+/// is looking at nothing) and found carrying the combined expression (or the converse rule,
+/// which keys on that expression, is looking at nothing).
+fn verdict(outcome: Outcome, known: &[&str]) -> Result<String, Refusal> {
     if outcome.scanned <= 800 {
         return Err(Refusal::Control(format!(
             "only {} files were read",
@@ -625,18 +702,25 @@ fn check_tree_refusing(root: &Path, require_tools: bool) -> Result<String, Refus
             outcome.library_files, outcome.library_runs
         )));
     }
-    if let Some(known) = KNOWN.iter().find(|k| !outcome.quoting.contains_key(**k)) {
+    if let Some(file) = known.iter().find(|k| !outcome.quoting.contains_key(**k)) {
         return Err(Refusal::Control(format!(
-            "{known} is known to quote the library and was not found quoting it"
+            "{file} is known to quote the library and was not found quoting it"
+        )));
+    }
+    if let Some(file) = known.iter().find(|k| !outcome.combined.contains(**k)) {
+        return Err(Refusal::Control(format!(
+            "{file} is known to carry `{COMBINED}` and was not found carrying it"
         )));
     }
     if !outcome.misses.is_empty() {
         return Err(Refusal::Misses(outcome.misses));
     }
     Ok(format!(
-        "{} files read; every one that quotes the library ({}) carries its licence",
+        "{} files read; every one that quotes the library ({}) carries its licence, and every \
+         one that carries `{COMBINED}` ({}) quotes the library",
         outcome.scanned,
-        outcome.quoting.len()
+        outcome.quoting.len(),
+        outcome.combined.len()
     ))
 }
 
@@ -859,6 +943,8 @@ mod tests {
     #[test]
     fn a_byte_copy_carries_every_expression_its_source_does() {
         let library = format!("{{\"note\": \"{SENTENCE}\"}}\n");
+        // Neither quotes the library, so neither may carry the combined form (the converse);
+        // the copy rule is about the two agreeing.
         let files = [
             ("library/t.jsonc", library.as_str()),
             ("tests/golden/a/r.json", "same bytes"),
@@ -867,15 +953,15 @@ mod tests {
         let differing = run(
             &files,
             &[
-                ("tests/golden/a/r.json", &[COMBINED]),
-                ("godot/fixtures/r.json", &[GAME]),
+                ("tests/golden/a/r.json", &[GAME]),
+                ("godot/fixtures/r.json", &[LIBRARY]),
             ],
         );
         let same = run(
             &files,
             &[
-                ("tests/golden/a/r.json", &[COMBINED]),
-                ("godot/fixtures/r.json", &[COMBINED, COMBINED]),
+                ("tests/golden/a/r.json", &[GAME]),
+                ("godot/fixtures/r.json", &[GAME, GAME]),
             ],
         );
         assert_eq!(differing.map(|o| o.misses.len()), Ok(1));
@@ -955,6 +1041,165 @@ mod tests {
         }
         let pair = one_file(&library, "crates/x/src/a.rs", &text, &[GAME, LIBRARY]);
         assert_eq!(pair.map(|o| o.misses.len()), Ok(1));
+    }
+
+    /// What the converse says about `file` carrying `expression` and quoting nothing.
+    fn unquoted_line(file: &str, expression: &str) -> String {
+        format!(
+            "{file} carries `{expression}` and quotes no sentence and no word run of library/, \
+             so the library's licence has no reason to be there: write `GPL-3.0-or-later` (its \
+             own header), or delete the REUSE.toml entry that gives it the combined form"
+        )
+    }
+
+    #[test]
+    fn a_file_that_carries_the_combined_expression_and_quotes_nothing_is_a_miss() {
+        let library = sentence_library();
+        let library = as_refs(&library);
+        let found = one_file(
+            &library,
+            "tests/golden/x/report.json",
+            "{\"code\": \"I0003\", \"message\": \"A setting left out takes its default.\"}",
+            &[COMBINED],
+        );
+        assert_eq!(
+            found.map(|o| o.misses),
+            Ok(vec![unquoted_line("tests/golden/x/report.json", COMBINED)])
+        );
+    }
+
+    #[test]
+    fn a_file_that_carries_the_combined_expression_and_quotes_passes() {
+        let library = sentence_library();
+        let library = as_refs(&library);
+        let found = one_file(
+            &library,
+            "tests/golden/x/render.json",
+            &format!("{{\"prose\": \"{SENTENCE}\"}}"),
+            &[COMBINED],
+        );
+        assert_eq!(found.map(|o| o.misses), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_file_that_quotes_nothing_passes_with_the_games_licence_or_the_librarys_alone() {
+        let library = sentence_library();
+        let library = as_refs(&library);
+        for expressions in [
+            &[GAME][..],
+            &[LIBRARY],
+            &[LIBRARY, LIBRARY],
+            &["CC-BY-SA-4.0"],
+        ] {
+            let found = one_file(
+                &library,
+                "tests/golden/x/plain.json",
+                "{\"code\": \"I0003\"}",
+                expressions,
+            );
+            assert_eq!(found.map(|o| o.misses), Ok(Vec::new()), "{expressions:?}");
+        }
+    }
+
+    #[test]
+    fn the_combined_expression_beside_another_still_fails_a_file_that_quotes_nothing() {
+        let library = sentence_library();
+        let library = as_refs(&library);
+        // A manifest block's combined form beside a header's or a sidecar's own expression:
+        // `reuse` reports both, and the combined one alone is the miss.
+        for expressions in [
+            &[GAME, COMBINED][..],
+            &[COMBINED, LIBRARY],
+            &[COMBINED, COMBINED],
+        ] {
+            let found = one_file(
+                &library,
+                "crates/x/src/a.rs",
+                "// nothing of the library\n",
+                expressions,
+            );
+            assert_eq!(
+                found.map(|o| o.misses),
+                Ok(vec![unquoted_line("crates/x/src/a.rs", COMBINED)]),
+                "{expressions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn another_spelling_of_the_combined_expression_fails_a_file_that_quotes_nothing() {
+        let library = sentence_library();
+        let library = as_refs(&library);
+        for spelling in [
+            "(MIT OR Apache-2.0) AND GPL-3.0-or-later",
+            "GPL-3.0-or-later OR (MIT OR Apache-2.0)",
+        ] {
+            let found = one_file(&library, "crates/x/src/a.rs", "// nothing\n", &[spelling]);
+            assert_eq!(
+                found.map(|o| o.misses),
+                Ok(vec![unquoted_line("crates/x/src/a.rs", spelling)]),
+                "{spelling}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_binary_file_that_carries_the_combined_expression_is_a_miss() {
+        let library = format!("{{\"note\": \"{SENTENCE}\"}}\n");
+        let files = [
+            (s("library/t.jsonc"), library.into_bytes()),
+            (s("assets/a.png"), Vec::new()),
+            (s("assets/b.png"), Vec::new()),
+        ];
+        let report = BTreeMap::from([
+            (s("assets/a.png"), vec![s(COMBINED)]),
+            (s("assets/b.png"), vec![s("CC-BY-SA-4.0")]),
+        ]);
+        let found = check(&files, &report).map(|o| o.misses);
+        assert_eq!(
+            found,
+            Ok(vec![format!(
+                "assets/a.png carries `{COMBINED}` and is a binary file, which cannot quote \
+                 library/, so the library's licence has no reason to be there: write \
+                 `GPL-3.0-or-later` (its own header), or delete the REUSE.toml entry that gives \
+                 it the combined form"
+            )])
+        );
+    }
+
+    /// An outcome that passes every count of the positive control, with `known` quoting the
+    /// library (`quoting`) and carrying the combined expression (`combined`) as given.
+    fn counted(quoting: &[&str], combined: &[&str]) -> Outcome {
+        Outcome {
+            scanned: 801,
+            library_files: 5,
+            library_runs: 101,
+            quoting: quoting.iter().map(|f| (s(f), vec![s(COMBINED)])).collect(),
+            combined: combined.iter().map(|f| s(f)).collect(),
+            misses: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_positive_control_holds_both_directions() {
+        let known = ["a/quotes.json"];
+        assert!(verdict(counted(&known, &known), &known).is_ok());
+        let not_quoting = verdict(counted(&[], &known), &known);
+        assert!(
+            matches!(&not_quoting, Err(Refusal::Control(why)) if why.contains("not found quoting")),
+            "{not_quoting:?}"
+        );
+        let not_combined = verdict(counted(&known, &[]), &known);
+        assert!(
+            matches!(&not_combined, Err(Refusal::Control(why)) if why.contains("not found carrying")),
+            "{not_combined:?}"
+        );
+        let mut missed = counted(&known, &known);
+        missed.misses.push(unquoted_line("b/x.rs", COMBINED));
+        assert!(matches!(
+            verdict(missed, &known),
+            Err(Refusal::Misses(m)) if m.len() == 1
+        ));
     }
 
     #[test]

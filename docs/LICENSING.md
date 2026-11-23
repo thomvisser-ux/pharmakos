@@ -68,6 +68,17 @@ wherever it is, provided it carries no game expression. A file under a game-tier
 always carries one from the manifest, which is what keeps the library's licence alone to the
 permissively licensed areas.
 
+*The converse.* A tracked file outside `library/` that carries the combined expression, or any
+other expression of the same three licence identifiers (the order swapped, `OR` where `AND` is
+meant), and quotes nothing of the library, fails: it has no reason to carry the library's
+licence, and is `GPL-3.0-or-later`. It fails whether the combined form comes from its own header,
+a sidecar or a manifest block, and whatever else it carries beside it. A binary file (by the
+extension list below) is never read and cannot quote, so it fails if it carries the combined
+form. The converse holds the combined form only: a file that carries `MIT OR Apache-2.0` alone
+and quotes nothing passes, because the permissive areas are permissive by their own tier. This
+is what turns a forgotten header red, the combined form left on a file after its quotation was
+removed (decisions log §2.7 item 164 (3a)).
+
 *What the check reads from `library/`.* Every tracked file under `library/` that `reuse`
 reports; a file that `reuse` does not report because it ignores it (one whose name starts with `LICENSE`,
 `LICENCE` or `COPYING`, or ends `.license`; a licence text under `LICENSES/`; `REUSE.toml`; an
@@ -109,9 +120,8 @@ reuse`), after `reuse lint`, so it also runs on the docs-only fast path. It asks
 override block and no allow table. A failure names each file, the first words it quotes and
 the licence to write. This is the usual wording, one of several:
 
-    these quote library/ (MIT OR Apache-2.0) without carrying its licence: give each
-    `GPL-3.0-or-later AND (MIT OR Apache-2.0)` (REUSE.toml, or its own header), or
-    `MIT OR Apache-2.0` if it is purely the library's text:
+    these files' licences disagree with what they quote of library/ (MIT OR Apache-2.0);
+    each line names the licence to write (REUSE.toml, or the file's own header):
       <file> quotes "<first 60 characters>..." and is licensed `GPL-3.0-or-later` only; write
       `GPL-3.0-or-later AND (MIT OR Apache-2.0)`
 
@@ -122,6 +132,12 @@ Other file lines end differently, as the case needs:
     ... and carries GPL-3.0-or-later and MIT OR Apache-2.0 as two separate expressions;
         give it the combined expression: write <the combined form>
     <copy> is a byte copy of <source>, which is licensed [...], not [...]
+    <file> carries `<X>` and quotes no sentence and no word run of library/, so the
+        library's licence has no reason to be there: write `GPL-3.0-or-later` (its own
+        header), or delete the REUSE.toml entry that gives it the combined form
+                                                            (the converse)
+    <file> carries `<X>` and is a binary file, which cannot quote library/, so ...
+                                                            (the converse, for a binary)
 
 Other refusals say that `reuse lint --json` did not run or gave an unreadable answer, that a file
 is not readable as text (add its extension to the binary list if it is binary), that `reuse`'s
@@ -131,7 +147,8 @@ A positive control keeps "nothing found" from meaning "nothing looked at": the c
 unless it read more than 800 files, at least 5 library files and more than 100 word runs, and
 found each of eleven named files (the six template render goldens, the `instantiate_suggested`
 pair, `godot/fixtures/rule_list_render.json`, `scenarios/skeleton/against-easy.playbook.jsonc`
-and `crates/gateway/src/host.rs`) quoting the library.
+and `crates/gateway/src/host.rs`) quoting the library and carrying the combined expression, so
+the converse, which keys on that expression, cannot pass by finding nothing either.
 
 **`rules/`** is `MIT OR Apache-2.0` for the reason `proto/` is: `rules.v1.json`
 is the canonical JSON of one `gp.v1.RulesTable` (decisions log §2.7 item 78) —
