@@ -25,6 +25,28 @@
 //! kW ratings, yields, interface times, the sphere radius -- comes from the
 //! rules text ([`crate::tuning`]).
 //!
+//! # What the last Push says, and what it cannot
+//!
+//! A built-in seat reads two things from the last Push's feed: whether its
+//! commander died (decision 35's guard) and which of its own route steps
+//! failed, which it reads against last round's own seal as the gateway
+//! carried it into the Lull ([`CARRIED_DRAFT_ID`]) to leave out a stone that
+//! failed. What the feed cannot show is one typed state,
+//! `PushUnread`, never "nothing happened":
+//!
+//! * a Lull after the first whose feed shows no Push, as a Lull resumed from
+//!   a save opens with an empty feed ([`PushUnread::Resumed`]);
+//! * lines past the [`PAGES_MAX`] pages a round reads
+//!   ([`PushUnread::PastPages`]).
+//!
+//! Under it Easy adds no guard post for a death it cannot see, leaves out the
+//! stones it knows failed, and weighs every other stone as if it had not
+//! failed; its "why" says which, and so does `gamectl host`'s standard error
+//! ([`Played::failed_stones`]). A resumed Lull may therefore seal another
+//! stone than the unresumed one would: the save does not carry the last
+//! Push's outcomes yet, which is lane `opsave`'s (the PLACEHOLDER on
+//! [`PushUnread::Resumed`]).
+//!
 //! # The call budget, derived
 //!
 //! The budget is in **evaluation units** (spec section 14; decision C6), and
@@ -37,15 +59,22 @@
 //! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` and one QUICK `verify_plan` over every tap Easy could make, when there is one (the register's S1-15) |
 //! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
 //! | the raid probe ([`RAID_PROBE_CALLS`]) | one `estimate_route` to the nearest own Attack beacon, so a raid post is never placed twice |
+//! | the Survey probe ([`SURVEY_PROBE_CALLS`]) | one `estimate_route` to the nearest own Survey beacon, in a round whose enemy sightings are stale or missing, so a Survey post is never placed twice; a built-in seat's only |
 //! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature, the guard post's and the raids' among them (a raid's by way of its post's site to its target) |
+//! | the stepping stones ([`STONE_CALLS`]) | one `estimate_route` to a `toward` waypoint per placement whose `covering` was refused `NOT_FOUND`, at most [`STONE_TARGETS_MAX`]; a built-in seat's only |
 //! | one instantiate per template | [`EASY_TEMPLATES`] `instantiate_template`, each with its own values, to read what it declares |
 //! | the composition | [`COMPOSE_CALLS`]: one `patch_plan` filling the chosen template and inserting its goals |
 //! | the verifies | 1 `verify_plan`, then [`EASY_REPAIRS`] repairs of one `patch_plan` and one `verify_plan` each |
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
+//! | the last seal ([`LAST_SEAL_CALLS`]) | one `get_draft` of the seat's last seal when the last Push's feed counts a failed step of its own, and one `save_draft` keeping this round's own seal; a built-in seat's only |
+//!
+//! The Resonance Spire costs no call: the licence is the briefing's, the
+//! core's radius `list_beacons`', and a Spire going up the view's, all fixed
+//! reads, and its step rides the composing `patch_plan`.
 //!
 //! An advisor makes the fixed reads, the three probes, the estimates, the
-//! instantiates and the safe playbook's calls, and nothing else
+//! instantiates and the safe playbook's calls, and nothing else: no stone
 //! ([`EASY_ADVISOR_CALL_BUDGET`]).
 //! `easy_never_exceeds_its_derived_call_budget` asserts both on a worst-case
 //! scripted round, and the hosted tests in `crates/gamectl` assert them on
@@ -57,10 +86,12 @@ use crate::candidates::{self, Candidate};
 use crate::compose::{self, Composed};
 use crate::playbook::{self, Declared};
 use crate::safe::{self, SafePlan};
-use crate::situation::{Kind, Situation};
+pub use crate::situation::PushUnread;
+use crate::situation::{FailedSteps, Kind, Situation, Steps};
 use crate::tuning::{RulesError, Tuning};
 use crate::wire::{
-    Call, Misread, Refused, Wire, array_of, bool_of, compact, object, string, text_of,
+    Call, Misread, Refused, Wire, array_of, bool_of, compact, int_of, malformed, object, string,
+    text_of,
 };
 
 // ---------------------------------------------------------------------------
@@ -122,7 +153,7 @@ pub const SAFE_ESTIMATES: u32 = 4;
 /// layer (decisions-log item 133 (3) (a); [`crate::compose::deepen_core`]):
 /// Expand & Mine's own value for a new Mine beacon, so the two agree.
 ///
-/// PLACEHOLDER: the core's dig depth Easy and the safe playbook write, 4 as Expand & Mine's own — owner, S3, with the balance check re-run once `toward` lets Easy reach past one beacon (item 139 (1) rulings 4 and 6: it stands at 4 for S1, after `tune`'s balance check report)
+/// PLACEHOLDER: the core's dig depth Easy and the safe playbook write, 4 as Expand & Mine's own — owner, S3's demo, with `tune3`'s balance re-run (the dig depth stands at 4 until then; item 139 (1) rulings 4 and 6 kept it at 4 for S1, after `tune`'s balance check report)
 ///
 /// Tuned with the numbers (register S1-52) and kept at 4: a seam is laid four
 /// voxels deep (depths 0 to 3 below its original top, the sim's
@@ -191,6 +222,40 @@ pub const RAID_FORCE_SIZE: u32 = 2;
 ///
 /// PLACEHOLDER: how many raid targets Easy weighs, 3 of its 30 candidates — owner, S5, with Normal and Hard
 pub const RAID_TARGETS_MAX: u32 = 3;
+
+/// How many scouts Easy's Survey post fields (spec section 14's Survey post;
+/// S3's plan, decision 3): the nightly Hunter arm's two
+/// (`scenarios/nightly/hunter.playbook.jsonc`). Spec section 6 names no
+/// count for the operator.
+///
+/// PLACEHOLDER: the Survey post's scout count, 2 as the Hunter arm's — owner, S5
+pub const SURVEY_SCOUT_COUNT: u32 = 2;
+
+/// The rounds a Survey post's worth takes to arrive (fix pass 2, item 2): its
+/// own, in whose Push its scouts sight the enemy, then the raid's, which is
+/// weighed only once a sighting is held in a Lull. Not a weight: the count of
+/// rounds the post's worth is discounted by ([`crate::candidates`], "Vision,
+/// and the Survey post").
+pub const SURVEY_RAID_ROUNDS: i64 = 2;
+
+/// How many refused placements a round weighs again as a stepping stone
+/// toward its feature (the register's S5-04;
+/// [`crate::candidates`]' `evaluate`), one `estimate_route` each.
+///
+/// **Derived, not picked** (AGENTS.md section 12: a limit only where it is
+/// technically necessary). The necessity is the in-process seat's call rate,
+/// 128 calls per tick (the gateway's `limit::IN_PROCESS_LIMITS`), which
+/// a round must fit on the one Lull tick it has. A placement is retried once
+/// at most, and Easy evaluates [`EASY_CANDIDATES`] candidates, so no round
+/// can have more refused placements than that: the largest retry count there
+/// can be is [`EASY_CANDIDATES`], and its worst case fits. With it the
+/// built-in seat's budget is [`EASY_CALL_BUDGET`], 109 calls, 19 under the
+/// limit (15 %), which is the stated margin;
+/// `crates/gamectl/tests/operator.rs`' `easy_fits_the_in_process_limits`
+/// holds the two together when it compiles, and
+/// `easy_never_exceeds_its_derived_call_budget` builds the worst case (every
+/// candidate a refused placement, every stone answered) and counts it.
+pub const STONE_TARGETS_MAX: u32 = EASY_CANDIDATES;
 
 // ---------------------------------------------------------------------------
 // The Balanced weighting
@@ -286,6 +351,17 @@ pub const GUARD_PROBE_CALLS: u32 = 1;
 /// which says whether a raid post already stands beside the core.
 pub const RAID_PROBE_CALLS: u32 = 1;
 
+/// The Survey probe: one `estimate_route` to the nearest own Survey beacon,
+/// which says whether a Survey post already stands beside the core, made only
+/// in a round whose enemy sightings are stale or missing. A built-in seat's
+/// only: the advisor offers no Survey post.
+pub const SURVEY_PROBE_CALLS: u32 = 1;
+
+/// The stepping stones: one `estimate_route` per refused placement weighed
+/// again ([`STONE_TARGETS_MAX`]). A built-in seat's only: the advisor
+/// weighs no stone, since none is offered to the wizard.
+pub const STONE_CALLS: u32 = STONE_TARGETS_MAX;
+
 /// The composition: one `patch_plan`.
 pub const COMPOSE_CALLS: u32 = 1;
 
@@ -298,18 +374,38 @@ pub const SAFE_CALLS: u32 = SAFE_ESTIMATES + 1 + 1;
 /// The commit: two submits at most, and `set_ready`.
 pub const COMMIT_CALLS: u32 = 2 + 1;
 
+/// The last seal: one `get_draft` of the gateway's carried draft (fix pass 3,
+/// item 6, and fix pass 4, item 1). The feed numbers a failed step and does
+/// not say what it was, so a built-in seat reads last round's own seal back
+/// from the draft the gateway carries into every Lull for every seat
+/// ([`CARRIED_DRAFT_ID`]: the gateway's draft continuity, spec section 13,
+/// which copies the seat's own seal, never one the gateway filed, stamped
+/// with the new round).
+/// The seat writes nothing for it: it writes nothing but its own seal, and
+/// the notebook is never read. The advisor reads no draft.
+pub const LAST_SEAL_CALLS: u32 = 1;
+
+/// The id of the draft the gateway carries last round's own seal into a Lull
+/// under: the gateway's own id for it, restated here because the operator
+/// names nothing of the gateway's (AGENTS.md section 3, rule 3), and held to
+/// the gateway's by `crates/gamectl/tests/operator.rs`.
+pub const CARRIED_DRAFT_ID: &str = "carried";
+
 /// The most calls a built-in seat's round makes, derived term by term (see
 /// the module docs).
 pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + TAP_PROBE_CALLS
     + GUARD_PROBE_CALLS
     + RAID_PROBE_CALLS
+    + SURVEY_PROBE_CALLS
     + EASY_CANDIDATES
+    + STONE_CALLS
     + EASY_TEMPLATES
     + COMPOSE_CALLS
     + VERIFY_CALLS
     + SAFE_CALLS
-    + COMMIT_CALLS;
+    + COMMIT_CALLS
+    + LAST_SEAL_CALLS;
 
 /// The most calls an advisor's round makes.
 pub const EASY_ADVISOR_CALL_BUDGET: u32 = FIXED_READS
@@ -355,6 +451,67 @@ pub struct Played {
     /// The refusal that kept the round from being read, when one did: the
     /// round then plans nothing and the gateway files the safe playbook.
     pub refused: Option<Refused>,
+    /// Every `estimate_route` the gateway refused for a reason other than
+    /// `NOT_FOUND` (which is its answer that nothing answers a waypoint): the
+    /// goal it weighed was dropped, and here is why.
+    pub estimates_refused: Vec<Refused>,
+    /// How many of the candidates it weighed the round's budget would have
+    /// funded on their own (fix pass 3, item 1): a round that sealed its safe
+    /// playbook with this above zero had a goal it should have composed.
+    pub fundable: usize,
+    /// Which of last round's stones failed, as far as the round could tell
+    /// (fix pass 3, item 6; fix pass 4): the ones it knows are not weighed
+    /// again this round.
+    pub failed_stones: FailedStones,
+}
+
+/// Which of last round's stones failed, read from the last Push's feed and
+/// the seal the gateway carried into this Lull ([`CARRIED_DRAFT_ID`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum FailedStones {
+    /// No route step of the seat's own failed in the last Push, or there was
+    /// no Push before this Lull, or the round was not read.
+    None,
+    /// Steps failed, and these are the far features of those that were
+    /// stones (none, when no failed step was a stone).
+    Known(Vec<String>),
+    /// Not all known: the far features of the failed stones that are known,
+    /// and why the rest are not. Easy leaves the known ones out and weighs
+    /// every other stone as if it had not failed, and its "why" says so: in
+    /// a resumed Lull, whose feed shows no Push, that is every stone.
+    Unread {
+        /// The failed stones' far features that are known.
+        known: Vec<String>,
+        /// Why the rest are not.
+        why: StonesUnread,
+    },
+}
+
+impl FailedStones {
+    /// The far features this round does not weigh a stone toward.
+    #[must_use]
+    pub fn known(&self) -> &[String] {
+        match self {
+            FailedStones::None => &[],
+            FailedStones::Known(known) | FailedStones::Unread { known, .. } => known,
+        }
+    }
+}
+
+/// Why the failed stones of last round are not all known.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum StonesUnread {
+    /// The last Push's failed steps are not all known to this Lull
+    /// ([`PushUnread`]).
+    Push(PushUnread),
+    /// Steps failed, and the gateway carried no seal of the seat's own into
+    /// this Lull (it filed the safe playbook for the seat, or the seat sealed
+    /// nothing), so the steps cannot be named.
+    NoCarriedSeal,
+    /// The carried draft is stamped with another round than this Lull's.
+    CarriedOfRound(i64),
+    /// `get_draft` refused the carried draft, or its answer does not read.
+    CarriedUnread(Refused),
 }
 
 /// One suggested value for one declared template parameter.
@@ -407,6 +564,9 @@ pub struct Advice {
     /// The refusal that kept the round from being read, when one did: the
     /// advice is then empty and the gateway's fallback stands.
     pub refused: Option<Refused>,
+    /// Every `estimate_route` refused for a reason other than `NOT_FOUND`, as
+    /// [`Played::estimates_refused`].
+    pub estimates_refused: Vec<Refused>,
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +596,24 @@ impl Easy {
         })
     }
 
+    /// What a route step costs on site, game milliseconds, as Easy prices
+    /// every step it composes ([`crate::price`]): an `interface` step's
+    /// handshake and rows, a `place_beacon`'s deploy and initial rows, and
+    /// nothing for any other step. `None` for JSON that is no `gp.v1.Step`.
+    #[must_use]
+    pub fn on_site_ms(&self, step: &Json) -> Option<i64> {
+        crate::price::step_ms(step, &self.tuning)
+    }
+
+    /// The travel estimate's allowance for the wait before a walk starts, game
+    /// milliseconds, as Easy derives it from the rules text: what every
+    /// placement's timeout adds to its priced walk ([`crate::compose`]'s
+    /// "Each step's timeout").
+    #[must_use]
+    pub const fn walk_allowance_ms(&self) -> i64 {
+        self.tuning.walk_allowance_ms
+    }
+
     /// Play one seat's round: plan, submit, and say ready.
     pub fn play(&mut self, seat: u8, call: &mut Call<'_>) -> Played {
         let mut wire = Wire::new(call);
@@ -448,8 +626,11 @@ impl Easy {
             calls: 0,
             why: String::new(),
             refused: None,
+            estimates_refused: Vec::new(),
+            fundable: 0,
+            failed_stones: FailedStones::None,
         };
-        match Situation::read(&mut wire, seat) {
+        match Situation::read(&mut wire, seat, Steps::Read) {
             Ok(situation) => {
                 round.round = situation.round;
                 self.plan(&mut wire, &situation, &mut round);
@@ -468,24 +649,43 @@ impl Easy {
     /// Plan and submit.
     fn plan(&self, wire: &mut Wire<'_, '_>, situation: &Situation, round: &mut Played) {
         let taps = candidates::legal_taps(wire, situation, &self.tuning);
-        let post = candidates::defend_post(wire, situation, &self.tuning);
-        let raid = candidates::raid_post(wire, situation, &self.tuning);
-        let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid);
-        let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals);
-        let top = candidates::top_k(&evaluated);
-        let guard = candidates::guard(&evaluated);
+        let post = candidates::defend_post(wire, situation);
+        let raid = candidates::raid_post(wire, situation);
+        let survey = candidates::survey_post(wire, situation, &self.tuning);
+        let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid, survey);
+        // Declared before the estimates, since every candidate is priced from
+        // the step it is composed as ([`crate::price`]).
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
+        round.failed_stones = failed_stones(wire, situation);
+        let weighed = candidates::evaluate(
+            wire,
+            situation,
+            &self.tuning,
+            &declared,
+            goals,
+            Some(round.failed_stones.known()),
+        );
+        round.estimates_refused.clone_from(&weighed.refused);
+        let evaluated = weighed.candidates;
+        round.fundable = compose::fundable(situation, &self.tuning, &evaluated, &declared);
+        // No share to fill (a segment length past the arithmetic) is no goal:
+        // the composition then fails and the safe playbook is submitted.
+        let spire = compose::spire(situation, &self.tuning);
 
-        if let Some(composed) = compose::compose(situation, &self.tuning, &top, guard, &declared)
-            && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)
+        if let Some(composed) = compose::compose(
+            situation,
+            &self.tuning,
+            &evaluated,
+            spire.as_ref(),
+            &declared,
+        ) && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)
             && submit(wire, &text)
         {
             round.submitted = Submitted::Own;
-            let why = match (composed.goals.first(), compose::fill_ms(situation)) {
-                (Some(first), Some(fill)) => compose::why_for(first, composed.goals.len(), fill),
-                _ => String::new(),
-            };
-            round.why = compose::with_seed(situation, &why);
+            round.why = with_stones(
+                compose::with_seed(situation, &composed.why),
+                &round.failed_stones,
+            );
             round.playbook_jsonc = Some(text);
             return;
         }
@@ -495,7 +695,10 @@ impl Easy {
             && submit(wire, &safe.jsonc)
         {
             round.submitted = Submitted::Safe;
-            round.why = compose::with_seed(situation, &safe::why_safe(situation, Some(&safe)));
+            round.why = with_stones(
+                compose::with_seed(situation, &safe::why_safe(situation, Some(&safe))),
+                &round.failed_stones,
+            );
             round.playbook_jsonc = Some(safe.jsonc);
         }
     }
@@ -504,18 +707,29 @@ impl Easy {
     pub fn advise(&mut self, seat: u8, call: &mut Call<'_>) -> Advice {
         let mut wire = Wire::new(call);
         let mut advice = Advice::default();
-        let read = Situation::read(&mut wire, seat);
+        let read = Situation::read(&mut wire, seat, Steps::Skip);
         if let Err(refused) = &read {
             advice.refused = Some(refused.clone());
         }
         if let Ok(situation) = read {
             let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
-            let post = candidates::defend_post(&mut wire, &situation, &self.tuning);
-            let raid = candidates::raid_post(&mut wire, &situation, &self.tuning);
-            let goals = candidates::enumerate(&situation, &self.tuning, &taps, post, raid);
-            let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals);
+            let post = candidates::defend_post(&mut wire, &situation);
+            let raid = candidates::raid_post(&mut wire, &situation);
+            // The advisor offers no Survey post, so it never probes for one.
+            let goals = candidates::enumerate(
+                &situation,
+                &self.tuning,
+                &taps,
+                post,
+                raid,
+                candidates::Post::Unknown,
+            );
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
+            let weighed =
+                candidates::evaluate(&mut wire, &situation, &self.tuning, &declared, goals, None);
+            advice.estimates_refused = weighed.refused;
+            let evaluated = weighed.candidates;
             let safe = safe::safe_playbook(&mut wire, &situation, &declared);
             advice.suggestions = suggestions(
                 &situation,
@@ -637,6 +851,138 @@ fn patched_text(wire: &mut Wire<'_, '_>, text: &str, json_patch: &str) -> Option
         .ok()?;
     let out = text_of(&answer, "playbook_jsonc").ok()?;
     (!out.is_empty()).then(|| out.to_owned())
+}
+
+/// The far features of last round's stones that failed (fix pass 3, item 6;
+/// fix pass 4, items 1 to 3): the seat's own route steps the last Push's
+/// feed says failed ([`Situation::failed_steps`]), read against last round's
+/// own seal as the gateway carried it into this Lull ([`stones_at`]). No call
+/// when no step is known to have failed. Failed steps not all known (a
+/// resumed Lull, or failures past the pages read) are
+/// [`FailedStones::Unread`] with the stones that are known, never "nothing
+/// failed".
+fn failed_stones(wire: &mut Wire<'_, '_>, situation: &Situation) -> FailedStones {
+    let unread = |known: Vec<String>, why: StonesUnread| FailedStones::Unread { known, why };
+    match &situation.failed_steps {
+        FailedSteps::NotRead => FailedStones::None,
+        FailedSteps::Known(seen) if seen.is_empty() => FailedStones::None,
+        FailedSteps::Known(seen) => match stones_at(wire, situation, seen) {
+            Ok(known) => FailedStones::Known(known),
+            Err(why) => unread(Vec::new(), why),
+        },
+        FailedSteps::Unread { seen, why } if seen.is_empty() => {
+            unread(Vec::new(), StonesUnread::Push(*why))
+        }
+        FailedSteps::Unread { seen, why } => match stones_at(wire, situation, seen) {
+            Ok(known) => unread(known, StonesUnread::Push(*why)),
+            Err(carried) => unread(Vec::new(), carried),
+        },
+    }
+}
+
+/// The far features of the stones among `steps`, read from last round's own
+/// seal as the gateway carried it into this Lull ([`CARRIED_DRAFT_ID`]), each
+/// one a `toward` placement naming its feature.
+///
+/// # Errors
+///
+/// The [`StonesUnread`] cause when the carried draft is absent (`NOT_FOUND`),
+/// stamped with another round, refused, or does not read, or a step is past
+/// its route.
+fn stones_at(
+    wire: &mut Wire<'_, '_>,
+    situation: &Situation,
+    steps: &[usize],
+) -> Result<Vec<String>, StonesUnread> {
+    let answer = match wire.call(
+        "get_draft",
+        object(vec![("draft_id", string(CARRIED_DRAFT_ID))]),
+    ) {
+        Ok(answer) => answer,
+        Err(refusal) if refusal.code == "NOT_FOUND" => return Err(StonesUnread::NoCarriedSeal),
+        Err(refusal) => return Err(StonesUnread::CarriedUnread(refusal)),
+    };
+    // The gateway stamps the carried draft with the round it is carried into.
+    match int_of(&answer, "round") {
+        Ok(round) if round == i64::from(situation.round) => {}
+        Ok(round) => return Err(StonesUnread::CarriedOfRound(round)),
+        Err(misread) => return Err(StonesUnread::CarriedUnread(misread.refused("get_draft"))),
+    }
+    let read = text_of(&answer, "playbook_jsonc")
+        .map_err(|misread| misread.refused("get_draft"))
+        .and_then(|jsonc| {
+            pharmakos_proto::json::read(&crate::wire::strip_comments(jsonc))
+                .map_err(|_| malformed("get_draft", "the carried seal does not read"))
+        });
+    let body = read.map_err(StonesUnread::CarriedUnread)?;
+    let Some(Json::Array(route)) = body
+        .get("declarative")
+        .and_then(|declarative| declarative.get("route"))
+    else {
+        return Err(StonesUnread::CarriedUnread(malformed(
+            "get_draft",
+            "the carried seal has no route",
+        )));
+    };
+    let mut known: Vec<String> = Vec::new();
+    for index in steps {
+        let Some(step) = route.get(*index) else {
+            return Err(StonesUnread::CarriedUnread(malformed(
+                "get_draft",
+                "a failed step past the carried seal's route",
+            )));
+        };
+        if let Some(Json::String(feature)) = step
+            .get("place_beacon")
+            .and_then(|place| place.get("at"))
+            .and_then(|at| at.get("toward"))
+            .and_then(|toward| toward.get("feature"))
+            .and_then(|feature| feature.get("feature_id"))
+        {
+            known.push(feature.clone());
+        }
+    }
+    Ok(known)
+}
+
+/// A round's "why" with a sentence after it when last round's failed stones
+/// were not all known: which stones it left out, and why the rest could not
+/// be told.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+fn with_stones(why: String, stones: &FailedStones) -> String {
+    let FailedStones::Unread { known, why: unread } = stones else {
+        return why;
+    };
+    let cause = match unread {
+        StonesUnread::Push(PushUnread::Resumed) => String::from(
+            "the last Push is not in this Lull's feed (a Lull resumed from a save opens with an \
+             empty one)",
+        ),
+        StonesUnread::Push(PushUnread::PastPages) => {
+            format!("the feed's failed steps were not all read within {PAGES_MAX} pages")
+        }
+        StonesUnread::NoCarriedSeal => String::from(
+            "steps failed and the gateway carried no seal of this seat's own into this Lull to \
+             name them",
+        ),
+        StonesUnread::CarriedOfRound(round) => {
+            format!("steps failed and the carried seal is stamped with round {round}, not this one")
+        }
+        StonesUnread::CarriedUnread(refused) => format!(
+            "steps failed and the carried seal could not be read ({} {}: {})",
+            refused.method, refused.code, refused.message
+        ),
+    };
+    let left_out = if known.is_empty() {
+        String::new()
+    } else {
+        format!(" Easy left out the stones toward {}.", known.join(", "))
+    };
+    format!(
+        "{why} (Which of last round's stones failed is not all known, because {cause}, so \
+         every stone not known to have failed was weighed.{left_out})"
+    )
 }
 
 /// Submit, and say whether it was accepted: a refusal, and an answer that

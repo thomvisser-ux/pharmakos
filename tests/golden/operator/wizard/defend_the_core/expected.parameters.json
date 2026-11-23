@@ -9,9 +9,9 @@
     {
       "pointer": "/declarative/route/2/hold/ms",
       "label": "How long to stand by the guard post, in game milliseconds",
-      "value": "97500",
+      "value": "99000",
       "suggested": true
     }
   ],
-  "why": "Easy, seat 0, round 1, told no seed (Easy draws nothing at random). A Defend beacon beside the core, covering the scrap seam seam_348_31, at (351, 29, 36) as its site reads now, guarding the core and your commander: -70 points for 29 s of route (Easy fills 126 s of the segment). No threat is in sight inside your core's sphere and your commander did not die in the last Push."
+  "why": "Easy, seat 0, round 1, told no seed (Easy draws nothing at random). A Defend beacon beside the core, covering the scrap seam seam_348_31, at (351, 29, 36) as its site reads now, guarding the core and your commander: -70 points for 27 s of route (Easy fills 126 s of the segment). No threat is in sight inside your core's sphere and your commander did not die in the last Push."
 }

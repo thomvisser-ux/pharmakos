@@ -7,7 +7,7 @@ Route
   2. place_guard: place a beacon at a site covering Scrap seam (348, 31), tagged "guard", on a Defend mandate: protecting beacon "b_00" and your commander, engaging within 100% of the sphere, pursuing to the sphere edge and with a picket of 1 scouts, at normal Quartermaster priority (18 s on site).
     Give up after 1:00.
     On failure, move on to the next step.
-  3. hold: hold for 97.5 s.
+  3. hold: hold for 1:39.
 
 Rules
   1. "flee", when the commander is at or below 40% HP and the commander took damage in the last 3 s:
