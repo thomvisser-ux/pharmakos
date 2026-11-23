@@ -585,7 +585,8 @@ impl PharmakosBridge {
 
     /// Reads one text frame from connection `link`.
     ///
-    /// Returns `phase`, `phase_changed`, `events` (new event-list rows, as strings),
+    /// Returns `phase`, `phase_changed`, `events` (new event-list rows, each a dictionary
+    /// `{clock, kind, text, ledger, line}`: `event_row_dictionary`),
     /// `error` (the gateway's refusal, empty when there was none) and, for a `get_view`
     /// answer, `view`: what `view_apply` returns for the same result. An empty dictionary
     /// means the frame could not be read, and the reason is in the log.
