@@ -157,9 +157,11 @@ pub const OPTIONS: &[OptionRow] = &[
         spelling: "    --format <text|json>",
         flag: "--format",
         command: "verify",
-        about: "how verify writes its report: text for a person, or json, the verifier's own \
-                report as one JSON object on standard output whatever the answer (default: \
-                text)",
+        about: "how verify answers: text for a person, or json, one JSON object on standard \
+                output, the verifier's own report or, where there is none, {\"refusal\": \
+                {\"code\": \"failed\" or \"internal\", \"message\"}}, the exit code \
+                unchanged; a usage error and an unreadable file stay on standard error \
+                (default: text)",
     },
     OptionRow {
         spelling: "    --operator <easy>",

@@ -36,6 +36,7 @@ use std::path::Path;
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::json::Json;
 
 use crate::cli::Format;
 use crate::exit::{Exit, Failure};
@@ -90,6 +91,13 @@ impl Preset {
 /// playbook that does not qualify, [`Exit::Internal`] when the rules table is
 /// missing a block the checks read, or, under a preset, when the lobby's match
 /// will not open or the gateway's answer is not a report.
+///
+/// Under `--format json` every answer about the file is one JSON object on
+/// standard output, with standard error empty and the exit code unchanged
+/// (fix pass 1 of #219, item 3): the report, or, where there is no report, a
+/// refusal ([`refusal_json`]). Only the two failures that are not about the
+/// file stay on standard error: a usage error (exit 1, before this runs) and
+/// a path or a rules table that cannot be read (exit 2).
 pub fn run(
     root: &Path,
     path: &Path,
@@ -98,12 +106,48 @@ pub fn run(
     format: Format,
 ) -> Result<String, Failure> {
     let display = crate::display(path);
+    let answered = answer(root, path, &display, depth, view);
+    match format {
+        Format::Text => {
+            let (report, shown) = answered?;
+            let rendered = render_against(&display, &report, &shown)?;
+            if report.qualifies {
+                Ok(rendered)
+            } else {
+                Err(Failure::new(Exit::Failed, rendered))
+            }
+        }
+        // The report as data, on standard output whatever the answer: exit
+        // 3 still says it does not qualify, and standard error stays empty.
+        Format::Json => {
+            let json = match answered {
+                Ok((report, _)) => json_of(&report).map(|json| (json, report.qualifies)),
+                Err(failure) => Err(failure),
+            };
+            match json {
+                Ok((json, true)) => Ok(json),
+                Ok((json, false)) => Err(Failure::answered(Exit::Failed, json)),
+                Err(failure) if matches!(failure.code, Exit::Usage | Exit::Input) => Err(failure),
+                Err(failure) => Err(Failure::answered(
+                    failure.code,
+                    refusal_json(failure.code, &failure.message),
+                )),
+            }
+        }
+    }
+}
+
+/// The report about the file and the view it is against, or why there is
+/// none.
+fn answer(
+    root: &Path,
+    path: &Path,
+    display: &str,
+    depth: Depth,
+    view: View,
+) -> Result<(VerifyReport, Shown), Failure> {
     let text = read_bounded(&root.join(path)).map_err(|error| {
-        Failure::input(strings::unreadable(
-            "playbook",
-            &display,
-            &error.to_string(),
-        ))
+        Failure::input(strings::unreadable("playbook", display, &error.to_string()))
     })?;
     let (report, shown) = match view {
         View::Reference => (
@@ -119,7 +163,7 @@ pub fn run(
                     .ok()
                     .map(|metadata| metadata.len());
                 return Err(Failure::failed(strings::verify_preset_too_long(
-                    &display,
+                    display,
                     size,
                     pharmakos_verifier::MAX_PLAYBOOK_READ,
                     pharmakos_verifier::MAX_PLAYBOOK_CHARS,
@@ -140,26 +184,32 @@ pub fn run(
         }
     };
 
-    match format {
-        Format::Text => {
-            let rendered = render_against(&display, &report, &shown)?;
-            if report.qualifies {
-                Ok(rendered)
-            } else {
-                Err(Failure::new(Exit::Failed, rendered))
-            }
-        }
-        // The report as data, on standard output whatever the answer: exit
-        // 3 still says it does not qualify, and standard error stays empty.
-        Format::Json => {
-            let json = json_of(&report)?;
-            if report.qualifies {
-                Ok(json)
-            } else {
-                Err(Failure::answered(Exit::Failed, json))
-            }
-        }
-    }
+    Ok((report, shown))
+}
+
+/// A refusal as JSON, for `--format json` where there is no report: one
+/// object, `{"refusal": {"code": ..., "message": ...}}`, its `code` the exit
+/// code's meaning, `failed` (exit 3: the file is refused before it is
+/// verified, as a file past the cap is under `--preset`) or `internal` (exit
+/// 4: this build disagreeing with itself), and its `message` the sentence the
+/// text form says, written as [`json_of`] writes a string.
+#[must_use]
+pub fn refusal_json(code: Exit, message: &str) -> String {
+    let name = match code {
+        Exit::Failed => "failed",
+        Exit::Internal => "internal",
+        Exit::Ok => "ok",
+        Exit::Usage => "usage",
+        Exit::Input => "input",
+    };
+    let value = Json::Object(vec![(
+        String::from("refusal"),
+        Json::Object(vec![
+            (String::from("code"), Json::String(String::from(name))),
+            (String::from("message"), Json::String(message.to_owned())),
+        ]),
+    )]);
+    escape_hidden(&pharmakos_proto::json::write(&value))
 }
 
 /// The report as the verifier's own JSON: canonical `gp.api.v1.VerifyReport`,

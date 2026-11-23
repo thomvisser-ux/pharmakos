@@ -698,6 +698,78 @@ fn the_json_report_escapes_what_the_text_report_escapes() {
     );
 }
 
+/// Fix pass 1 of #219, item 3: under `--format json` every answer about the
+/// file is one JSON object on standard output with standard error empty, the
+/// exit code unchanged. A file past the cap is the reference view's `E0029`
+/// report, and under the preset a refusal object, where it once printed
+/// nothing on standard output. An unreadable path stays on standard error.
+#[test]
+fn every_json_answer_about_the_file_is_one_object_on_standard_output() {
+    let length = pharmakos_verifier::MAX_PLAYBOOK_READ
+        .checked_mul(2)
+        .expect("fits");
+    let path = scratch_file("nite3_huge_json.json", &vec![0xff_u8; length]);
+    let shown = path.to_str().expect("a UTF-8 scratch path");
+
+    let reference = gamectl(&["verify", "--format", "json", shown]);
+    assert_eq!(reference.code, Exit::Failed, "{}", said(&reference));
+    assert!(reference.err.is_empty(), "{}", reference.err);
+    let report = json::read(&reference.out).expect("one JSON document");
+    assert!(
+        reference.out.contains("\"code\": \"E0029\""),
+        "{}",
+        reference.out
+    );
+    assert!(
+        report.get("report_hash").is_some(),
+        "a report: {}",
+        reference.out
+    );
+
+    let preset = gamectl(&["verify", "--format", "json", "--preset", "probation", shown]);
+    assert_eq!(preset.code, Exit::Failed, "{}", said(&preset));
+    assert!(preset.err.is_empty(), "{}", preset.err);
+    let refusal = json::read(&preset.out).expect("one JSON document");
+    let Some(Json::Object(members)) = refusal.get("refusal") else {
+        panic!("a refusal object: {}", preset.out);
+    };
+    let keys: Vec<&str> = members.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, vec!["code", "message"], "{}", preset.out);
+    assert_eq!(
+        refusal.get("refusal").and_then(|inner| inner.get("code")),
+        Some(&Json::String(String::from("failed")))
+    );
+    assert!(
+        preset.out.contains("the gateway was not asked"),
+        "{}",
+        preset.out
+    );
+
+    let missing = gamectl(&[
+        "verify",
+        "--format",
+        "json",
+        "examples/playbooks/not_here.jsonc",
+    ]);
+    assert_eq!(missing.code, Exit::Input);
+    assert!(missing.out.is_empty(), "{}", missing.out);
+    assert!(missing.err.contains("not_here.jsonc"), "{}", missing.err);
+}
+
+#[test]
+fn a_refusal_names_its_exit_and_escapes_its_message() {
+    let json = pharmakos_gamectl::verify::refusal_json(Exit::Internal, "a\u{202E}b \"q\"");
+    let parsed = json::read(&json).expect("one JSON document");
+    assert_eq!(
+        parsed.get("refusal").and_then(|inner| inner.get("code")),
+        Some(&Json::String(String::from("internal")))
+    );
+    assert!(
+        !json.contains('\u{202E}') && json.contains("\\u202e"),
+        "{json}"
+    );
+}
+
 #[test]
 fn the_hidden_escape_writes_utf16_units() {
     assert_eq!(
