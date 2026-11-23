@@ -470,3 +470,34 @@ fn the_reader_holds_an_arm_to_an_arms_rules() {
         refused.message
     );
 }
+
+/// E14's hunt count sees a hunt launch: `scenarios/s2/hunt-the-commander`'s
+/// Attack beacon hunts seat 1's commander, launches by tick 6 300 and ends
+/// the attack when the commander dies, which resets the row's launch stamp
+/// (`attack.rs`' `end`). The hunt is filed and counted launched, so none is
+/// left unlaunched; the Hunter's one round, above, files one that never
+/// launches.
+#[test]
+fn a_hunt_that_launches_is_not_counted_unlaunched() {
+    let loaded = scenario::load(
+        &root(),
+        Path::new("scenarios/s2/hunt-the-commander.scenario.jsonc"),
+    )
+    .expect("a committed scenario");
+    let played =
+        run::play(&root(), &loaded).unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(
+        played
+            .events
+            .iter()
+            .any(|fired| fired.kind == "attack_launched" && fired.seat == Some(0)),
+        "the hunt launched"
+    );
+    assert_eq!(played.hunts.filed.len(), 1, "{:?}", played.hunts);
+    assert_eq!(
+        played.hunts.filed, played.hunts.launched,
+        "{:?}",
+        played.hunts
+    );
+    assert_eq!(played.hunts.unlaunched(), 0);
+}
