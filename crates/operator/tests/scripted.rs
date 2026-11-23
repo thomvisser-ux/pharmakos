@@ -4043,3 +4043,41 @@ fn the_funding_order_is_the_exact_rate_order() {
     }
     assert!(checked > 100, "{checked} worlds composed");
 }
+
+// ---------------------------------------------------------------------------
+// Fix pass 3: the top-k cut and the segment fit, held by their own cases
+// ---------------------------------------------------------------------------
+
+/// The top-k is cut against what the guard leaves (fix pass 3, item 3): in
+/// the round after the commander's death the guard is funded first and
+/// leaves 23 s of the 42 s share. Three stones toward rich seams, each 27 s
+/// of route, outrank the near lean vent and fit the whole share, but not
+/// what the guard leaves; the vent, 17.5 s, does. Cut against the whole share
+/// the stones would take the top-k and nothing past the guard would be
+/// composed; cut against what the guard leaves, the vent is.
+#[test]
+fn stones_that_fit_the_share_but_not_what_the_guard_leaves_never_crowd_out_the_vent() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.segment_ms = 60_000;
+    world.remaining_ms = 60_000;
+    world.round = 2;
+    world.feed_deaths = vec![0];
+    let mut start = Feature::new("seam", "standard", [36, 34]);
+    start.covered = true;
+    start.travel_ms = Some(3_000);
+    world.features.push(start);
+    for x in [30, 32, 34] {
+        let mut seam = Feature::new("seam", "rich", [x, 70]);
+        seam.site = None;
+        seam.stone = Some([x, 62, GROUND]);
+        world.features.push(seam);
+    }
+    world.features.push(vent_at("lean", 36));
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(ops.contains("place_guard"), "{} -- {ops}", played.why);
+    assert!(ops.contains("vent_36_32"), "{} -- {ops}", played.why);
+    assert!(!ops.contains("toward"), "{} -- {ops}", played.why);
+}
