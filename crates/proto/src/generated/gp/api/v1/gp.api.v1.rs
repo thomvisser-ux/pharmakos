@@ -347,14 +347,16 @@ pub struct GetStatusResponse {
     /// countdown from this field, `Status.untimed_by_rule` says that.
     #[prost(enumeration="Preset", tag="2")]
     pub preset: i32,
-    /// True when the caller is a seat that holds a seal of the current round:
-    /// its own accepted `submit_plan`, or the safe playbook the gateway filed for
-    /// it, from the moment it is held until the next round's Lull opens. A later
-    /// refused submission leaves the seal it held. Absent (false) for a seat
-    /// that holds none this round, and for every token that is not a seat, since
-    /// whether a seat has sealed is that seat's own to know (S3's `probw`).
-    #[prost(bool, tag="3")]
-    pub sealed_this_round: bool,
+    /// For a seat: whether it holds a seal of the current round -- its own
+    /// accepted `submit_plan`, or the safe playbook the gateway filed for it --
+    /// true from the moment it is held until the next round's Lull opens, and
+    /// false otherwise. A later refused submission leaves the seal it held.
+    /// ABSENT for every token that is not a seat (an admin, a spectator), since
+    /// whether a seat has sealed is that seat's own to know: explicit presence
+    /// (proto3 `optional`), so "not told" is never written as a false (S3's
+    /// `probw`, its review's fix pass 1).
+    #[prost(bool, optional, tag="3")]
+    pub sealed_this_round: ::core::option::Option<bool>,
 }
 impl ::prost::Name for GetStatusResponse {
 const NAME: &'static str = "GetStatusResponse";

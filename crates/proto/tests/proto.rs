@@ -2705,7 +2705,7 @@ fn the_probw_view_and_status_fields_round_trip_in_their_documented_spellings() {
     round_trips(
         &GetStatusResponse {
             preset: Preset::Probation.into(),
-            sealed_this_round: true,
+            sealed_this_round: Some(true),
             ..GetStatusResponse::default()
         },
         r#"{"preset":"PROBATION","sealed_this_round":true}"#,

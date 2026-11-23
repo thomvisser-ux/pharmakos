@@ -3127,8 +3127,8 @@ impl Surface {
     /// (`crate::probation`'s tests hold the two equal); with no match hosted it
     /// is left out, `PRESET_UNSPECIFIED`. The seal is the test
     /// [`Surface::begin_push`]'s filing applies, a seal whose round is the
-    /// match's round, whoever filed it; it is told to that seat only, and left
-    /// out when false.
+    /// match's round, whoever filed it; it is told to that seat only, true or
+    /// false, and left out for every token that is not a seat.
     fn get_status(&self, subject: Subject) -> Json {
         let mut entries = vec![(String::from("status"), self.time.footer())];
         let Some(host) = self.host.as_ref() else {
@@ -3139,17 +3139,15 @@ impl Surface {
             Json::String(String::from(self.preset.name())),
         ));
         let round = host.runner().round();
-        let sealed = subject.seat().is_some_and(|seat| {
-            self.seats.iter().any(|slot| {
+        if let Some(seat) = subject.seat() {
+            let sealed = self.seats.iter().any(|slot| {
                 slot.seat == seat
                     && slot
                         .sealed
                         .as_ref()
                         .is_some_and(|sealed| sealed.round == round)
-            })
-        });
-        if sealed {
-            entries.push((String::from("sealed_this_round"), Json::Bool(true)));
+            });
+            entries.push((String::from("sealed_this_round"), Json::Bool(sealed)));
         }
         Json::Object(entries)
     }
