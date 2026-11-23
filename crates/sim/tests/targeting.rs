@@ -1035,12 +1035,177 @@ fn the_feature_table_is_regenerated_identically_on_restore() {
     assert!(names.contains(&START_VENT.to_owned()), "{names:?}");
 }
 
-/// A `safest` selector reads each candidate beacon's sphere threat, a scan of
-/// every unit, structure and beacon row for the armed enemies the seat sees:
-/// one unit a row it reads (lane `dunit`), beside the selector's one unit a
-/// candidate. Before the lane the scan was charged nothing.
-#[test]
-fn a_safest_selector_counts_the_threat_scan_it_reads() {
+// ---------------------------------------------------------------------------
+// The threat scans a decision reads, counted independently (lane `dunit`)
+// ---------------------------------------------------------------------------
+
+/// The sensor positions a walk asking whether `seat` sees `point` reads: each
+/// position up to and including the first sensor of `seat`'s that sees it, or
+/// every position when none does. Counted from `World::sensor_at`'s own
+/// positions, not from the sim's walk.
+fn seen_rows(world: &World, seat: SeatId, point: [Fx; 3]) -> u64 {
+    let total = world.beacons().seats().len()
+        + world.units().seats().len()
+        + world.structures().seats().len();
+    let mut at = 0_usize;
+    while let Some((sensor, next)) = world.sensor_at(at) {
+        at = next;
+        if sensor.seat == seat && sensor.sees(&pharmakos_sim::sight::RadiusOnly, point) {
+            return u64::try_from(at).unwrap();
+        }
+    }
+    u64::try_from(total).unwrap()
+}
+
+/// The rows one known-threat scan for `seat` reads, counted from the tables:
+/// every unit, structure and beacon row; for each armed living enemy unit,
+/// finished structure and core, the sensor walk asking whether `seat` sees
+/// it ([`seen_rows`]); and for each living enemy beacon, every beacon row
+/// (the search for its seat's core).
+fn threat_scan_rows(world: &World, seat: SeatId) -> u64 {
+    let rules = world.rules();
+    let enemy = |owner: u8| SeatId::new(owner).is_some() && owner != seat.raw();
+    let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
+    let mut rows = u64::try_from(
+        world.units().seats().len()
+            + world.structures().seats().len()
+            + world.beacons().seats().len(),
+    )
+    .unwrap();
+    let units = world.units();
+    for (((owner, kind), hp), at) in units
+        .seats()
+        .iter()
+        .zip(units.kinds())
+        .zip(units.hit_points())
+        .zip(units.positions())
+    {
+        let armed = pharmakos_sim::tables::UnitKind::from_id(*kind)
+            .and_then(|kind| rules.unit(kind).weapon)
+            .is_some();
+        if hp.is_alive() && enemy(*owner) && armed {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    let structures = world.structures();
+    for ((((owner, kind), hp), building), at) in structures
+        .seats()
+        .iter()
+        .zip(structures.kinds())
+        .zip(structures.hit_points())
+        .zip(structures.building())
+        .zip(structures.positions())
+    {
+        let armed = StructureKind::from_id(*kind)
+            .and_then(|kind| rules.structure(kind))
+            .and_then(|row| row.weapon)
+            .is_some();
+        if hp.is_alive() && !*building && enemy(*owner) && armed {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    let beacons = world.beacons();
+    for (((owner, hp), at), id) in beacons
+        .seats()
+        .iter()
+        .zip(beacons.hit_points())
+        .zip(beacons.positions())
+        .zip(beacons.ids())
+    {
+        if !hp.is_alive() || !enemy(*owner) {
+            continue;
+        }
+        rows += beacon_rows;
+        // A seat's core is its beacon of least id.
+        let core = beacons
+            .seats()
+            .iter()
+            .zip(beacons.ids())
+            .filter(|(seat, _)| *seat == owner)
+            .map(|(_, id)| *id)
+            .min();
+        if core == Some(*id) {
+            rows += seen_rows(world, seat, *at);
+        }
+    }
+    rows
+}
+
+/// The unit rows a repair-drone search for `seat` round `centre` reads: each
+/// row up to and including the first living repair drone of `seat`'s inside
+/// the radius, or every row.
+fn repair_rows(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> u64 {
+    let units = world.units();
+    let limit = pharmakos_sim::math::fixed::Sq::of_radius(radius);
+    let found = units
+        .kinds()
+        .iter()
+        .zip(units.seats())
+        .zip(units.hit_points())
+        .zip(units.positions())
+        .position(|(((kind, owner), hp), at)| {
+            *kind == pharmakos_sim::tables::UnitKind::RepairDrone.id()
+                && *owner == seat.raw()
+                && hp.is_alive()
+                && pharmakos_sim::math::fixed::Sq::between(*at, centre) <= limit
+        });
+    u64::try_from(found.map_or(units.seats().len(), |row| row + 1)).unwrap()
+}
+
+/// Seat 0's living beacons, in row order: each one's id and where it stands.
+fn own_beacons(world: &World) -> Vec<(BeaconId, [Fx; 3])> {
+    let beacons = world.beacons();
+    beacons
+        .seats()
+        .iter()
+        .zip(beacons.hit_points())
+        .zip(beacons.ids())
+        .zip(beacons.positions())
+        .filter(|(((owner, hp), _), _)| **owner == SEAT && hp.is_alive())
+        .map(|((_, id), at)| (BeaconId::new(*id), *at))
+        .collect()
+}
+
+/// A world on the golden seed where seat 0 sees an armed enemy: seat 1's
+/// outpost beacon beside seat 0's core with a raider of seat 1's on it, and,
+/// when `drone` is set, a repair drone of seat 0's in the core's sphere.
+fn with_an_enemy_in_sight(drone: bool) -> World {
+    let mut world = world_at(SEED, 2, &[180_000]);
+    let zero = SeatId::new(SEAT);
+    let one = SeatId::new(1);
+    let (core, centre) = own_beacons(&world).first().copied().expect("a core");
+    let [cx, cy] = pharmakos_sim::targeting::column_of(centre);
+    let at = world.standing_point([cx + 6, cy + 2, 0]);
+    let outpost = world
+        .place_beacon_directly(one, at, MandateKind::Build, PRIORITY_NORMAL)
+        .expect("room for the enemy's beacon");
+    world.set_common(
+        outpost,
+        pharmakos_sim::tables::Common {
+            roe: 1,
+            retreat_hp_pct: 0,
+        },
+    );
+    world
+        .field_unit(one, outpost, pharmakos_sim::tables::UnitKind::Raider, at)
+        .expect("room for the raider");
+    if drone {
+        let near = world.standing_point([cx + 2, cy - 2, 0]);
+        world
+            .field_unit(
+                zero,
+                core,
+                pharmakos_sim::tables::UnitKind::RepairDrone,
+                near,
+            )
+            .expect("room for the drone");
+    }
+    world
+}
+
+/// The `safest` handler's decision on the sixth tick: its units and the world
+/// it ran on.
+fn safest_decision(world: World, wound: bool) -> Runner {
     let wait = concat!(
         r#"{"label":"wait","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
         r#""timeout_ms":600000}"#
@@ -1048,7 +1213,8 @@ fn a_safest_selector_counts_the_threat_scan_it_reads() {
     // A handler whose condition ranks the seat's beacons by `safest` and is
     // never true: tried (1), its node (1), the ranking's candidates (one a
     // beacon row) and, for each of the seat's own living beacons it weighs,
-    // the threat scan's rows.
+    // the threat scan's rows (and, with the commander wounded, the repair
+    // search's).
     let handler = concat!(
         r#"{"id":"never","when":{"beacon_hp_pct":{"beacon":{"safest":{}},"pct":{"op":"LT","value":0}}},"#,
         r#""body":[{"label":"pause","hold":{"ms":1000}}],"resume":"CONTINUE","cooldown_ms":5000,"max_fires":1}"#
@@ -1056,39 +1222,98 @@ fn a_safest_selector_counts_the_threat_scan_it_reads() {
     let mut book = playbook(wait);
     book.declarative.as_mut().unwrap().handlers = vec![json::decode(handler).expect("a handler")];
     let plan = Plan::compile(&book, &rules()).expect("compiles");
-    let mut runner =
-        Runner::new(world_at(SEED, 2, &[180_000])).unwrap_or_else(|error| panic!("{error}"));
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner.seal_playbook(SeatId::new(SEAT), plan).unwrap();
     assert!(runner.begin_push().unwrap());
     // The sixth tick, by when the core's seam is held and keeping it costs
-    // nothing (`the_decision_tick_counts_its_evaluation_units`).
-    let _ = play(&mut runner, 6, |_, _| {});
+    // nothing (`the_decision_tick_counts_its_evaluation_units`). The wound
+    // lands on the fifth, before the sixth's decision.
+    let _ = play(&mut runner, 5, |_, _| {});
+    if wound {
+        let commander = runner
+            .world()
+            .commander_of(SeatId::new(SEAT))
+            .expect("a commander");
+        assert!(
+            runner
+                .world_mut()
+                .request_damage(DamageOrder {
+                    target: DamageTarget::Unit(UnitId::new(commander.raw())),
+                    amount: pharmakos_sim::math::quantity::Damage::new(1).unwrap(),
+                    by: SeatId::NEUTRAL,
+                    source: None,
+                })
+                .is_ok()
+        );
+    }
+    let _ = play(&mut runner, 1, |_, _| {});
+    runner
+}
+
+/// A `safest` selector reads each candidate beacon's sphere threat, a scan
+/// of every unit, structure and beacon row for the armed enemies the seat
+/// sees, with the sensor walk each armed enemy asks and the core search each
+/// enemy beacon asks: one unit a row each reads (lane `dunit`), beside the
+/// selector's one unit a candidate. Here seat 0 sees an armed enemy beside
+/// its core. Before the lane the scan was charged nothing; before its fix
+/// pass 1 the sensor walks and core searches were charged nothing.
+#[test]
+fn a_safest_selector_counts_the_threat_scan_it_reads() {
+    let runner = safest_decision(with_an_enemy_in_sight(false), false);
     let world = runner.world();
+    let seat = SeatId::new(SEAT);
     let units = world.decision_work(0).expect("seat 0").expect("measured");
     let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
-    let own = world
-        .beacons()
-        .seats()
-        .iter()
-        .zip(world.beacons().hit_points())
-        .filter(|(owner, hp)| **owner == SEAT && hp.is_alive())
-        .count();
-    let scan = u64::try_from(
+    let own = own_beacons(world);
+    let scan = threat_scan_rows(world, seat);
+    let outer = u64::try_from(
         world.units().seats().len()
             + world.structures().seats().len()
             + world.beacons().seats().len(),
     )
     .unwrap();
-    let own = u64::try_from(own).unwrap();
-    println!("safest: {units} units; {beacon_rows} beacon rows, {own} own, {scan} rows a scan");
+    println!(
+        "safest: {units} units; {beacon_rows} beacon rows, {} own, {scan} rows a scan ({outer} outer)",
+        own.len()
+    );
+    assert!(!own.is_empty(), "the selector weighs a beacon");
     assert!(
-        own > 0 && scan > 0,
-        "the selector weighs a beacon and scans"
+        scan > outer,
+        "the scan asks sensor walks and core searches beside its own rows"
     );
     assert_eq!(
         units,
-        3 + beacon_rows + own * scan,
+        3 + beacon_rows + u64::try_from(own.len()).unwrap() * scan,
         "the handler, its node, the wait's node, the candidates and each candidate's threat scan"
+    );
+}
+
+/// With the commander wounded, `safest` also asks each candidate whether a
+/// repair drone of the seat's stands in its sphere: one unit a unit row the
+/// search reads, up to the drone that answers (lane `dunit`, fix pass 1).
+#[test]
+fn a_wounded_safest_selector_counts_the_repair_search_it_reads() {
+    let runner = safest_decision(with_an_enemy_in_sight(true), true);
+    let world = runner.world();
+    let seat = SeatId::new(SEAT);
+    let units = world.decision_work(0).expect("seat 0").expect("measured");
+    let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
+    let own = own_beacons(world);
+    let scan = threat_scan_rows(world, seat);
+    let repairs: u64 = own
+        .iter()
+        .map(|(id, centre)| repair_rows(world, seat, *centre, world.sphere_radius_of(*id)))
+        .sum();
+    let all_units = u64::try_from(world.units().seats().len()).unwrap();
+    println!("wounded safest: {units} units; {repairs} repair rows of {all_units} unit rows");
+    assert!(
+        repairs < all_units * u64::try_from(own.len()).unwrap(),
+        "the search stops at the drone"
+    );
+    assert_eq!(
+        units,
+        3 + beacon_rows + u64::try_from(own.len()).unwrap() * scan + repairs,
+        "the handler, its node, the wait's node, the candidates, the threat scans and the repair searches"
     );
 }
 

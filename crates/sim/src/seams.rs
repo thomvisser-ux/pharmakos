@@ -248,6 +248,32 @@ impl UnitTally {
     }
 }
 
+/// Where a read-only scan reports the rows it reads, so that the same scan is
+/// charged when a decision runs it and costs nothing to count when anything
+/// else does.
+///
+/// A decision's caller passes the world's decision tally
+/// ([`UnitTally`], one unit a row read); every other caller passes `()`,
+/// which counts nothing. A meter never changes what the scan decides or
+/// returns: it only hears how many rows were read.
+pub trait Meter {
+    /// `rows` more rows read.
+    fn rows(&self, rows: usize);
+}
+
+/// Counts nothing: a scan run outside a decision.
+impl Meter for () {
+    fn rows(&self, _rows: usize) {}
+}
+
+/// One unit a row read; a row count past `u64` leaves the tally
+/// [`Unmeasured::Overflowed`].
+impl Meter for UnitTally {
+    fn rows(&self, rows: usize) {
+        self.add_measured(u64::try_from(rows).map_err(|_| Unmeasured::Overflowed));
+    }
+}
+
 impl Clone for UnitTally {
     fn clone(&self) -> UnitTally {
         UnitTally {

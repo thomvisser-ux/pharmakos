@@ -1745,11 +1745,10 @@ impl World {
         self.decision_units.add(units);
     }
 
-    /// Count one evaluation unit a row of a table scan that reads `rows`
-    /// rows, against the decision in progress.
-    pub(crate) fn charge_decision_rows(&self, rows: usize) {
-        self.decision_units
-            .add_measured(u64::try_from(rows).map_err(|_| crate::seams::Unmeasured::Overflowed));
+    /// The decision in progress's tally as a [`crate::seams::Meter`]: what a
+    /// scan a decision runs reports the rows it reads to, one unit a row.
+    pub(crate) const fn decision_meter(&self) -> &crate::seams::UnitTally {
+        &self.decision_units
     }
 
     /// What `seat_index`'s last decision spent, in evaluation units, one a

@@ -105,7 +105,25 @@ pub(crate) struct Known {
 
 /// Call `each` with every armed enemy asset `seat` sees this tick: units in
 /// ascending row, then finished structures, then cores. A pure read.
-pub(crate) fn for_each_known_threat<F: FnMut(Known)>(world: &World, seat: SeatId, mut each: F) {
+pub(crate) fn for_each_known_threat<F: FnMut(Known)>(world: &World, seat: SeatId, each: F) {
+    for_each_known_threat_metered(world, seat, &(), each);
+}
+
+/// [`for_each_known_threat`], reporting every row it reads to `meter`
+/// ([`crate::seams::Meter`]): each unit, structure and beacon row of its own
+/// walk, the sensor positions each [`World::seen_by`] it asks reads
+/// ([`World::seen_by_metered`]), and the beacon rows each
+/// [`crate::power::core_of`] it asks reads. What it hands `each` is
+/// [`for_each_known_threat`]'s.
+pub(crate) fn for_each_known_threat_metered<M, F>(
+    world: &World,
+    seat: SeatId,
+    meter: &M,
+    mut each: F,
+) where
+    M: crate::seams::Meter + ?Sized,
+    F: FnMut(Known),
+{
     let units = world.units();
     let rows = units
         .seats()
@@ -114,6 +132,7 @@ pub(crate) fn for_each_known_threat<F: FnMut(Known)>(world: &World, seat: SeatId
         .zip(units.hit_points())
         .zip(units.positions());
     for (((owner, kind), hp), at) in rows {
+        meter.rows(1);
         if !hp.is_alive() || !enemy(seat, *owner) {
             continue;
         }
@@ -122,7 +141,7 @@ pub(crate) fn for_each_known_threat<F: FnMut(Known)>(world: &World, seat: SeatId
         else {
             continue;
         };
-        report(world, seat, *at, weapon, &mut each);
+        report(world, seat, *at, weapon, meter, &mut each);
     }
     let structures = world.structures();
     let rows = structures
@@ -133,6 +152,7 @@ pub(crate) fn for_each_known_threat<F: FnMut(Known)>(world: &World, seat: SeatId
         .zip(structures.building())
         .zip(structures.positions());
     for ((((owner, kind), hp), building), at) in rows {
+        meter.rows(1);
         if !hp.is_alive() || *building || !enemy(seat, *owner) {
             continue;
         }
@@ -142,7 +162,7 @@ pub(crate) fn for_each_known_threat<F: FnMut(Known)>(world: &World, seat: SeatId
         else {
             continue;
         };
-        report(world, seat, *at, weapon, &mut each);
+        report(world, seat, *at, weapon, meter, &mut each);
     }
     let beacons = world.beacons();
     let rows = beacons
@@ -152,16 +172,24 @@ pub(crate) fn for_each_known_threat<F: FnMut(Known)>(world: &World, seat: SeatId
         .zip(beacons.positions())
         .zip(Row::all());
     for (((owner, hp), at), row) in rows {
+        meter.rows(1);
         if !hp.is_alive() || !enemy(seat, *owner) {
             continue;
         }
         let Some(id) = beacons.id_of(row) else {
             continue;
         };
-        if crate::power::core_of(world, SeatId::new(*owner)) != Some(id) {
+        if crate::power::core_of_metered(world, SeatId::new(*owner), meter) != Some(id) {
             continue;
         }
-        report(world, seat, *at, world.rules().core_weapon(), &mut each);
+        report(
+            world,
+            seat,
+            *at,
+            world.rules().core_weapon(),
+            meter,
+            &mut each,
+        );
     }
 }
 
@@ -171,14 +199,15 @@ pub(crate) fn enemy(seat: SeatId, owner: u8) -> bool {
 }
 
 /// Hand one armed enemy asset to `each` when `seat` sees it.
-fn report<F: FnMut(Known)>(
+fn report<M: crate::seams::Meter + ?Sized, F: FnMut(Known)>(
     world: &World,
     seat: SeatId,
     at: [Fx; 3],
     weapon: WeaponRow,
+    meter: &M,
     each: &mut F,
 ) {
-    if world.seen_by(seat.raw(), at) {
+    if world.seen_by_metered(seat.raw(), at, meter) {
         each(Known {
             at,
             threat: Threat::of(Some(weapon)),
@@ -192,11 +221,20 @@ fn report<F: FnMut(Known)>(
 /// `radius` (the beacon's own, [`World::sphere_radius_of`]) (decision
 /// 12's `most_threatened` and `safest` term). Saturates by rule: a sum past
 /// `u64` is no sum a map can hold.
+///
+/// Reports the rows its scan reads to `meter`
+/// ([`for_each_known_threat_metered`]).
 #[must_use]
-pub(crate) fn sphere_threat(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> u64 {
+pub(crate) fn sphere_threat<M: crate::seams::Meter + ?Sized>(
+    world: &World,
+    seat: SeatId,
+    centre: [Fx; 3],
+    radius: Fx,
+    meter: &M,
+) -> u64 {
     let limit = Sq::of_radius(radius);
     let mut sum: u64 = 0;
-    for_each_known_threat(world, seat, |known| {
+    for_each_known_threat_metered(world, seat, meter, |known| {
         if Sq::between(known.at, centre) <= limit {
             sum = sum.saturating_add(known.threat.milli_hp_per_second());
         }
@@ -226,9 +264,16 @@ pub(crate) fn threat_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3], rad
 }
 
 /// Whether `seat` has a live repair drone inside the sphere centred on
-/// `centre` (decision 6's rescue term).
+/// `centre` (decision 6's rescue term). Reports each unit row it reads to
+/// `meter` ([`crate::seams::Meter`]), up to the first drone that answers.
 #[must_use]
-pub(crate) fn repairs_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> bool {
+pub(crate) fn repairs_in_sphere<M: crate::seams::Meter + ?Sized>(
+    world: &World,
+    seat: SeatId,
+    centre: [Fx; 3],
+    radius: Fx,
+    meter: &M,
+) -> bool {
     let limit = Sq::of_radius(radius);
     let units = world.units();
     units
@@ -238,6 +283,7 @@ pub(crate) fn repairs_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3], ra
         .zip(units.hit_points())
         .zip(units.positions())
         .any(|(((kind, owner), hp), at)| {
+            meter.rows(1);
             *kind == UnitKind::RepairDrone.id()
                 && *owner == seat.raw()
                 && hp.is_alive()

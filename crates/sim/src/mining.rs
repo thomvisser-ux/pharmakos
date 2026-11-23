@@ -867,10 +867,14 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
             .map(crate::tables::SeatId::new)
     {
         // The scan is the seat's decision's work, one unit a row it reads.
-        crate::interpreter::cond::charge_known_threat_scan(world);
-        crate::defend::for_each_known_threat(world, seat, |known| {
-            threats.push((known.at, Sq::of_radius(known.weapon.range())));
-        });
+        crate::defend::for_each_known_threat_metered(
+            world,
+            seat,
+            world.decision_meter(),
+            |known| {
+                threats.push((known.at, Sq::of_radius(known.weapon.range())));
+            },
+        );
     }
     let (ground, scratch) = world.ground_and_scratch();
     let mut ranker = Ranker::new(&ground, origin, |index| {
