@@ -114,9 +114,6 @@ const TEXT := {
 	# milliseconds): unit display is S6's (skeleton-plan-w6-notes.md section A4 item 5).
 	"templates_heading": "Start from a template",
 	"no_templates": "No templates.",
-	# The guided first pick (S3's plan, decision 5): over the template the gateway marked; the
-	# gateway's own sentence says why, under it. Generic: it names no template.
-	"template_guided": "Start here",
 	"templates_waiting": "Reading the templates...",
 	"templates_refused": "The gateway refused the template list: {detail}",
 	"templates_unreadable": "The template list could not be read: {detail}",

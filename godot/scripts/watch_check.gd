@@ -590,7 +590,7 @@ func _probation_frame() -> bool:
 		return false
 	editor.refresh()
 	var drawn: Array = editor.guided_drawn()
-	if drawn != [Strings.text("template_guided"), String(marked[0].get("id", "")), String(marked[0].get("guided_reason", ""))]:
+	if drawn != [String(marked[0].get("id", "")), String(marked[0].get("guided_reason", ""))]:
 		_failures.append("the panel does not draw the guided mark as sent: %s against %s" % [drawn, marked[0]])
 		return false
 	print("[watch-check] Probation: get_status names `probation`; round 1 marks %s: %s" % [marked[0].get("id"), marked[0].get("guided_reason")])

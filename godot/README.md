@@ -135,7 +135,8 @@ into `user://last_match.txt`, launch, press Resume, and see the refusal and a ch
 New match only; New match then starts the match.
 
 In a Probation match's first Lull the template list marks the one template the gateway picked
-for a first match: "Start here" over its button and the gateway's own sentence under it, drawn
+for a first match: its button is tinted, a mark with no words, and the gateway's own sentence
+("Start here: ...") is drawn under it
 as sent; the other templates stay offered. The list is asked for at every Lull's opening and
 replaced whole, so the mark is not drawn once the gateway stops sending it. The Ledger's memos
 are drawn in the event list under "The Ledger" in place of the event's kind, and on the recap

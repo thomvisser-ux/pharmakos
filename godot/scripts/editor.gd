@@ -165,6 +165,9 @@ const SIZE_STALE_ALPHA := 0.35
 ## panel's look, whose marker heads this file.
 const CHECKING_LOOK := Color(0.55, 0.6, 0.7, 0.22)
 const ANSWERED_LOOK := Color(0.95, 0.78, 0.25, 0.38)
+## The guided first pick's look: the marked template's button is tinted, a mark with no words.
+## PLACEHOLDER: the guided pick's look — OWNER, at S6.
+const GUIDED_LOOK := Color(1.0, 0.85, 0.45)
 ## The unticked box: its side in pixels, its outline's width, and its colour, shown or disabled.
 ## PLACEHOLDER: the checkbox's box — OWNER, at S6's art pass.
 const BOX_SIDE := 16
@@ -577,17 +580,17 @@ func template_buttons() -> Array[Button]:
 	return out
 
 
-## The guided first pick as drawn, for a check to read: the mark's words, the id of the
-## template button under it and the gateway's sentence under that, or an empty array when no
-## template is marked.
+## The guided first pick as drawn, for a check to read: the id of the template button the
+## panel marks (its GUIDED_LOOK) and the gateway's sentence drawn under it, or an empty array
+## when no template is marked.
 func guided_drawn() -> Array:
 	var children := _templates_box.get_children()
 	for index in children.size():
-		if children[index].name != "GuidedMark":
+		var button: Node = children[index]
+		if not (button is Button and button.has_meta("guided")):
 			continue
-		var button: Node = children[index + 1] if index + 1 < children.size() else null
-		var why: Node = children[index + 2] if index + 2 < children.size() else null
-		return [(children[index] as Label).text, String(button.get_meta("id", "")) if button != null else "", (why as Label).text if why is Label else ""]
+		var why: Node = children[index + 1] if index + 1 < children.size() else null
+		return [String(button.get_meta("id", "")), (why as Label).text if why is Label and why.name == "GuidedReason" else ""]
 	return []
 
 
@@ -1215,9 +1218,9 @@ func size_rect() -> Rect2:
 
 
 ## The template list as the gateway sent it this Lull (the bridge re-asks at every Lull's
-## opening): one button per template, and on the one the gateway marked as the guided first pick
-## (`guided`, S3's plan, decision 5) the words "Start here" and the gateway's own sentence under
-## it (`guided_reason`), drawn as sent. Which template is marked, and why, are the gateway's;
+## opening): one button per template, and the one the gateway marked as the guided first pick
+## (`guided`, S3's plan, decision 5) drawn in GUIDED_LOOK with the gateway's own sentence under
+## it (`guided_reason`), as sent: the client adds no words to the mark. Which template is marked, and why, are the gateway's;
 ## nothing here names one. `known` false is a list not read yet this Lull; `read` says why it did
 ## not come, when it did not (`failed`, `detail`); `unchecked` why it will not come, the door
 ## being shut (`key`, in the checks' own words), so no "Reading..." waits on a shut door.
@@ -1248,12 +1251,6 @@ func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked:
 	for template in templates:
 		var id := String(template.get("id", ""))
 		var guided: bool = template.get("guided", false)
-		if guided:
-			var mark := Label.new()
-			mark.text = Strings.text("template_guided")
-			mark.accessibility_name = mark.text
-			mark.name = "GuidedMark"
-			_templates_box.add_child(mark)
 		var button := _button(_templates_box, "", func() -> void: open_template(id))
 		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.text = Strings.text("template_button", {"title": template.get("title", "")})
@@ -1261,6 +1258,10 @@ func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked:
 		button.tooltip_text = String(template.get("summary", ""))
 		button.set_meta("id", id)
 		if guided:
+			# The mark is a look, not words: the gateway's own sentence under the button says
+			# why, and the client adds none of its own.
+			button.set_meta("guided", true)
+			button.self_modulate = GUIDED_LOOK
 			var why := Label.new()
 			why.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			why.text = String(template.get("guided_reason", ""))
