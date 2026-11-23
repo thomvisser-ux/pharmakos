@@ -852,7 +852,7 @@ impl Surface {
     /// operator's safe playbook for the calling seat, as
     /// [`Surface::file_advice`] verified and filed it this round. A seat no
     /// operator advises, or whose advice did not qualify, is shown the
-    /// gateway's fallback, [`crate::host::SAFE_PLAYBOOK`] — which is exactly
+    /// gateway's fallback, [`crate::host::safe_playbook`] — which is exactly
     /// what [`Surface::begin_push`] would file for it, so what this answers
     /// and what a timeout costs are the same playbook.
     pub(super) fn get_safe_plan(&self, subject: crate::token::Subject) -> Result<Json, Error> {

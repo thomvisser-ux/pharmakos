@@ -24,7 +24,7 @@
 //! * The safe playbook is **verified FULL and compiled when it is filed**,
 //!   against the frozen snapshot the whole Lull plans against. One that does
 //!   not qualify, or will not compile, is replaced by the gateway's fallback
-//!   ([`crate::host::SAFE_PLAYBOOK`]) with an audit line saying so -- never
+//!   ([`crate::host::safe_playbook`]) with an audit line saying so -- never
 //!   silently. `get_safe_plan` answers what would be filed, and
 //!   [`crate::surface::Surface::begin_push`] files it.
 //! * The suggestions are stored per seat and answered only to that seat, by

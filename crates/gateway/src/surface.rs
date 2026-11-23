@@ -2595,7 +2595,7 @@ impl Surface {
     /// that one was verified FULL and compiled when it was filed
     /// ([`Surface::file_advice`]), against the frozen snapshot this Lull has
     /// planned against all along, so it is filed here as it stands. Otherwise
-    /// the gateway's fallback, [`crate::host::SAFE_PLAYBOOK`] — for a seat no
+    /// the gateway's fallback, [`crate::host::safe_playbook`] — for a seat no
     /// operator advises, and for one whose advice did not qualify, which the
     /// audit log already says.
     ///

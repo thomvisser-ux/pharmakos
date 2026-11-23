@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
-// SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The match host: the one place in this crate that steps a [`Runner`].
 //!
@@ -95,11 +95,12 @@ use crate::routes::RouteAdapter;
 /// It is the spec's safe playbook in the one situation that needs no reading
 /// of the seat's own economy (decision C16): move to the safest beacon, raise
 /// nothing, then shadow the safest beacon, with the flee rule. It leaves every
-/// beacon's configuration as it is. "Written once, tested twice" (item 81):
-/// `the_gateways_fallback_is_the_safe_template_with_nothing_raised` holds it
-/// canonical-equal, comments aside, to the template instantiated with no
-/// parameters, so the file the editor renders and the constant a timeout
-/// files cannot drift apart.
+/// beacon's configuration as it is. It is **the library file itself**,
+/// embedded at compile time ([`SAFE_TEMPLATE`]) and instantiated with no
+/// parameters through plan-core, so the file the editor renders and the text
+/// a timeout files are one source and cannot drift apart (decisions-log item
+/// 164 (3a); S3's `fixq`). The embedding means no disk read at run time, so
+/// the fallback cannot go missing with a library folder.
 ///
 /// It is JSONC, comments and all, because that is what every other playbook a
 /// client receives is and because the "why" note is the teaching half
@@ -109,38 +110,30 @@ use crate::routes::RouteAdapter;
 /// decision 6, ruled by decisions-log item 144 (11)): while the commander is
 /// below full HP, `safest` ranks the seat's own beacons whose sphere holds a
 /// live repair drone ahead of those without, so this route's walk to safety
-/// and its shadowing of the safest beacon are the rescue, and this constant
+/// and its shadowing of the safest beacon are the rescue, and this playbook
 /// gains nothing for it. The term is the sim's, built by S2's `dfnd`. A seat no operator advises is still filed this text, which writes
 /// nothing to any beacon.
-pub const SAFE_PLAYBOOK: &str = concat!(
-    "// The safe playbook: what is filed for you if the Lull ends with nothing\n",
-    "// sealed and no built-in operator advised you. It spends nothing, places\n",
-    "// nothing and changes no beacon.\n",
-    "{\n",
-    "  \"schema_version\": {\"major\": 1, \"minor\": 0},\n",
-    "  \"meta\": {\n",
-    "    \"title\": \"Safe playbook\",\n",
-    "    \"author_kind\": \"BUILTIN\",\n",
-    "    \"note\": \"Move to the safest beacon, raise the priority of any beacon about to brown out, then stay with the safest beacon.\"\n",
-    "  },\n",
-    "  \"kind\": \"PLAYBOOK\",\n",
-    "  \"declarative\": {\n",
-    "    \"route\": [\n",
-    "      // Nothing is raised: the whole route is the walk to safety.\n",
-    "      {\"label\": \"to_safety\", \"move\": {\"to\": {\"safest\": {}}, \"pace\": \"AVOID_KNOWN_THREATS\"}}\n",
-    "    ],\n",
-    "    \"handlers\": [\n",
-    "      // Hurt and under fire, walk back to safety and wait.\n",
-    "      {\"id\": \"flee\", \"when\": {\"all\": {\"items\": [{\"cmdr_hp_pct\": {\"cmp\": \"LE\", \"pct\": 40}}, {\"cmdr_took_damage_within\": {\"ms\": 3000}}]}},\n",
-    "       \"body\": [{\"label\": \"flee_to_safety\", \"move\": {\"to\": {\"safest\": {}}}}, {\"label\": \"flee_wait\", \"hold\": {\"ms\": 8000}}],\n",
-    "       \"resume\": \"CONTINUE\", \"cooldown_ms\": 30000, \"max_fires\": 3}\n",
-    "    ]\n",
-    "  },\n",
-    "  \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n",
-    "  // Then stay with the safest beacon, wherever that turns out to be.\n",
-    "  \"fallback\": {\"shadow\": {\"beacon\": {\"safest\": {}}}}\n",
-    "}\n",
-);
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the embedded template does not
+/// instantiate: this build's library and its plan-core disagreeing, which
+/// `tests` pin never happens, and which [`Host::open`] raises at start-up
+/// rather than at the first timeout.
+pub fn safe_playbook() -> Result<String, Error> {
+    pharmakos_plan_core::instantiate(SAFE_TEMPLATE, &[], &[])
+        .map(|made| made.playbook_jsonc)
+        .map_err(|error| {
+            Error::internal(said!(
+                "the embedded Safe Playbook template does not instantiate: {}",
+                error.said()
+            ))
+        })
+}
+
+/// The library's Safe Playbook template as this build carries it:
+/// `library/safe_playbook.jsonc`, embedded at compile time.
+pub const SAFE_TEMPLATE: &str = include_str!("../../../library/safe_playbook.jsonc");
 
 /// Where the gateway's own tests and `gamectl host` find the template
 /// library, relative to the workspace root: the flat `library/` folder
@@ -220,7 +213,7 @@ impl Host {
         Ok(Host {
             runner,
             library,
-            safe_playbook: String::from(SAFE_PLAYBOOK),
+            safe_playbook: safe_playbook()?,
         })
     }
 
@@ -410,7 +403,7 @@ impl Host {
     }
 
     /// The fallback safe playbook, as JSONC: what a seat with no advice of its
-    /// own is shown and filed ([`SAFE_PLAYBOOK`] unless a host replaced it).
+    /// own is shown and filed ([`safe_playbook`] unless a host replaced it).
     #[must_use]
     pub fn safe_playbook(&self) -> &str {
         &self.safe_playbook
@@ -951,7 +944,7 @@ impl Vision for LiveVision {
 
 #[cfg(test)]
 mod tests {
-    use super::{Host, SAFE_PLAYBOOK};
+    use super::{Host, safe_playbook};
     use crate::error::Code;
     use pharmakos_sim::rules::RulesTable;
     use pharmakos_sim::runner::{MatchPhase, MatchSettings};
@@ -1044,7 +1037,7 @@ mod tests {
         assert_eq!(host.runner().phase(), MatchPhase::Lull);
         assert_eq!(host.runner().round(), 1);
         assert!(host.routes().columns() > 0);
-        assert_eq!(host.safe_playbook(), SAFE_PLAYBOOK);
+        assert_eq!(host.safe_playbook(), safe_playbook().expect("the fallback"));
         assert_eq!(host.library(), None);
     }
 
@@ -1055,8 +1048,11 @@ mod tests {
     /// standing still.
     #[test]
     fn the_safe_playbook_this_gateway_files_compiles() {
-        let plan = crate::surface::planning::compile_playbook(SAFE_PLAYBOOK, &rules())
-            .expect("the safe playbook is runnable");
+        let plan = crate::surface::planning::compile_playbook(
+            &safe_playbook().expect("the fallback"),
+            &rules(),
+        )
+        .expect("the safe playbook is runnable");
         assert_eq!(plan.route().len(), 1, "one step, and it is stand still");
         assert_eq!(
             plan.max_deaths_before_fallback(),
@@ -1077,8 +1073,11 @@ mod tests {
             None,
         )
         .expect("a match");
-        let plan = crate::surface::planning::compile_playbook(SAFE_PLAYBOOK, &rules())
-            .expect("the safe playbook");
+        let plan = crate::surface::planning::compile_playbook(
+            &safe_playbook().expect("the fallback"),
+            &rules(),
+        )
+        .expect("the safe playbook");
         host.seal_plans(vec![
             (SeatId::new(0), plan.clone()),
             (SeatId::new(1), plan.clone()),
@@ -1115,8 +1114,11 @@ mod tests {
             None,
         )
         .expect("a match");
-        let plan = crate::surface::planning::compile_playbook(SAFE_PLAYBOOK, &rules())
-            .expect("the safe playbook");
+        let plan = crate::surface::planning::compile_playbook(
+            &safe_playbook().expect("the fallback"),
+            &rules(),
+        )
+        .expect("the safe playbook");
         // Seat 2 is not a seat of this two-seat match, and it is last in the
         // list -- so a loop would have sealed seats 0 and 1 before finding out.
         let error = host

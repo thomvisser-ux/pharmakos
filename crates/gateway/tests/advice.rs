@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use pharmakos_gateway::advice::{Advice, SuggestedValue, Suggestion};
 use pharmakos_gateway::fog::{FogPolicy, Vision};
-use pharmakos_gateway::host::SAFE_PLAYBOOK;
+use pharmakos_gateway::host::safe_playbook;
 use pharmakos_gateway::rpc::{self, Request};
 use pharmakos_gateway::serve::{Advisor, BuiltInSeat, InProcessSeats, Operators};
 use pharmakos_gateway::surface::Surface;
@@ -211,11 +211,17 @@ fn reading_advisor(transcript: Arc<Mutex<Vec<String>>>) -> impl Advisor {
             ),
             (
                 "verify_plan",
-                format!(r#"{{"playbook_jsonc":{}}}"#, quote(SAFE_PLAYBOOK)),
+                format!(
+                    r#"{{"playbook_jsonc":{}}}"#,
+                    quote(safe_playbook().expect("the fallback").as_str())
+                ),
             ),
             (
                 "render_plan",
-                format!(r#"{{"playbook_jsonc":{}}}"#, quote(SAFE_PLAYBOOK)),
+                format!(
+                    r#"{{"playbook_jsonc":{}}}"#,
+                    quote(safe_playbook().expect("the fallback").as_str())
+                ),
             ),
             ("get_safe_plan", String::from("{}")),
             ("get_view", String::from("{}")),
@@ -242,7 +248,7 @@ fn reading_advisor(transcript: Arc<Mutex<Vec<String>>>) -> impl Advisor {
                 [axis("x"), axis("y"), axis("z")]
             });
         Advice {
-            safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
+            safe_playbook_jsonc: safe_playbook().expect("the fallback"),
             suggestions: vec![hold_and_build(
                 first,
                 &format!("Seat {seat}'s first beacon is where the Generator goes."),
@@ -260,7 +266,10 @@ fn fixed_advisor(advice: Advice) -> impl Advisor {
 /// The safe playbook with its flee rule's wait changed, so two seats' safe
 /// playbooks can be told apart by one number.
 fn safe_with_wait(ms: u32) -> String {
-    SAFE_PLAYBOOK.replace("\"ms\": 8000", &format!("\"ms\": {ms}"))
+    safe_playbook()
+        .expect("the fallback")
+        .as_str()
+        .replace("\"ms\": 8000", &format!("\"ms\": {ms}"))
 }
 
 /// What a seat's private store holds of its advice.
@@ -297,7 +306,7 @@ fn a_suggested_instantiation_reports_every_declared_parameter_in_order() {
         Given::default().advises(
             0,
             fixed_advisor(Advice {
-                safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
+                safe_playbook_jsonc: safe_playbook().expect("the fallback"),
                 suggestions: vec![hold_and_build(
                     [150, 13, 118],
                     "A Build beacon at the edge of your core's sphere holds the heat vent nearest \
@@ -428,7 +437,7 @@ fn an_explicit_parameter_beats_a_suggestion() {
         Given::default().advises(
             0,
             fixed_advisor(Advice {
-                safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
+                safe_playbook_jsonc: safe_playbook().expect("the fallback"),
                 suggestions: vec![hold_and_build([150, 13, 118], "Because.")],
                 start_here: None,
             }),
@@ -799,7 +808,7 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
                     }
                 }
                 Advice {
-                    safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
+                    safe_playbook_jsonc: safe_playbook().expect("the fallback"),
                     suggestions: Vec::new(),
                     start_here: None,
                 }
@@ -894,7 +903,7 @@ fn the_advisor_leaves_the_humans_view_feed_as_it_found_it() {
                             &format!(r#"{{"cursor":{}}}"#, quote(&cursor)),
                         ));
                         Advice {
-                            safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
+                            safe_playbook_jsonc: safe_playbook().expect("the fallback"),
                             suggestions: Vec::new(),
                             start_here: None,
                         }
@@ -940,7 +949,10 @@ fn the_advisor_leaves_the_humans_view_feed_as_it_found_it() {
 #[test]
 fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_and_audited() {
     // A negative hold: the verifier's E0109.
-    let refused = SAFE_PLAYBOOK.replace("\"ms\": 8000", "\"ms\": -1");
+    let refused = safe_playbook()
+        .expect("the fallback")
+        .as_str()
+        .replace("\"ms\": 8000", "\"ms\": -1");
     // More handlers than the interpreter's ceiling. Until S2's `vfy2` the
     // verifier qualified it and the compile refused it (`INVALID_ARGUMENT`);
     // the verifier now reads the sim's own ceiling (E0113), so it is refused
@@ -957,12 +969,13 @@ fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_an
              \"resume\": \"CONTINUE\", \"cooldown_ms\": 30000, \"max_fires\": 1},\n",
         );
     }
-    let uncompilable = SAFE_PLAYBOOK.replace(
+    let uncompilable = safe_playbook().expect("the fallback").as_str().replace(
         "    \"handlers\": [\n",
         &format!("    \"handlers\": [\n{extra}"),
     );
     assert_ne!(
-        uncompilable, SAFE_PLAYBOOK,
+        uncompilable,
+        safe_playbook().expect("the fallback").as_str(),
         "the replacement found its step"
     );
     let good = safe_with_wait(11_000);
@@ -1003,7 +1016,7 @@ fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_an
         let expected = if own {
             advised.clone()
         } else {
-            String::from(SAFE_PLAYBOOK)
+            safe_playbook().expect("the fallback")
         };
         let shown = text_of(
             &result(
@@ -1064,7 +1077,7 @@ fn a_suggestion_that_would_not_instantiate_is_dropped_and_audited() {
             Given::default().advises(
                 0,
                 fixed_advisor(Advice {
-                    safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
+                    safe_playbook_jsonc: safe_playbook().expect("the fallback"),
                     suggestions: vec![suggestion.clone()],
                     start_here: None,
                 }),
