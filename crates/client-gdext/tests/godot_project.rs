@@ -3035,6 +3035,29 @@ fn a_failure_shows_the_refusal_and_offers_the_chooser_again() {
             .iter()
             .any(|line| line.trim() == "_announced = true")
     );
+    assert!(
+        announced
+            .iter()
+            .any(|line| line.trim() == "_resuming = false"),
+        "`_resuming` means a Resume with no announce yet: {announced:?}"
+    );
+    // The three failures are played to the real lobby by the headless client check.
+    assert!(
+        read("scripts/client_check.gd")
+            .contains("await _check_the_lobby_after_a_failure(failures)")
+    );
+    // A connection that cannot be opened ends the link; nothing runs on to an announce.
+    let host_link_text = read("scripts/host_link.gd");
+    let announce = gd_function(&host_link_text, "_read_announce");
+    let stop = announce
+        .iter()
+        .position(|line| line.trim() == "if _done:")
+        .expect("_read_announce stops once the link is done");
+    let emit = announce
+        .iter()
+        .position(|line| line.contains("announced.emit("))
+        .expect("the announce");
+    assert!(stop < emit, "{announce:?}");
     // The restart clause of the old PLACEHOLDER is gone with the behaviour it described.
     assert!(
         !lobby.contains("restarts the client"),
