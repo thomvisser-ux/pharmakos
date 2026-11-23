@@ -520,46 +520,80 @@ fn a_huge_file_is_refused_by_gamectl_under_the_preset() {
 }
 
 /// The lobby's line, which `gamectl` carries to open the preset's match, is
-/// the lobby's own: each field is held to `godot/scripts/host_link.gd`'s
-/// constant, and the seed to the sim's pin of the Probation seed
-/// (`crates/sim/tests/probation_seed.rs`).
+/// the lobby's own: the lobby's Probation call is
+/// `HostLink.config_line(HostLink.match_id("local"), HostLink.LADDER)`
+/// (`godot/scripts/lobby.gd`), so its fields are `config_line`'s, in the
+/// order its `return` writes them, each the default `config_line` takes or
+/// the constant the lobby passes; the seed is also held to the sim's pin of
+/// the Probation seed (`crates/sim/tests/probation_seed.rs`). Read from the
+/// source, so a reorder of `config_line`'s fields is red here (fix pass 1 of
+/// #219, item 11).
 #[test]
 fn the_preset_s_match_is_the_one_the_lobby_opens() {
     let read = |relative: &str| {
         std::fs::read_to_string(root().join(relative))
             .unwrap_or_else(|error| panic!("{relative}: {error}"))
     };
-    let constant = |text: &str, prefix: &str| -> String {
+    let constant = |text: &str, name: &str| -> String {
+        let prefix = format!("const {name} := ");
         text.lines()
-            .find_map(|line| line.strip_prefix(prefix))
+            .find_map(|line| line.strip_prefix(prefix.as_str()))
             .map_or_else(
                 || panic!("no line starts `{prefix}`"),
                 |value| value.trim().trim_matches('"').to_owned(),
             )
     };
     let lobby = read("godot/scripts/host_link.gd");
+    assert!(
+        read("godot/scripts/lobby.gd")
+            .contains("HostLink.config_line(HostLink.match_id(\"local\"), HostLink.LADDER)"),
+        "the lobby's call is the one this test reads"
+    );
+    // `config_line`'s `return`: a format string, then `% [`, its fields in
+    // order, and `]`.
+    let order: Vec<String> = lobby
+        .lines()
+        .skip_while(|line| !line.starts_with("static func config_line("))
+        .nth(1)
+        .and_then(|line| line.split_once("% ["))
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(fields, _)| {
+            fields
+                .split(',')
+                .map(|name| name.trim().to_owned())
+                .collect()
+        })
+        .expect("config_line's return names its fields");
+    assert_eq!(
+        order.len(),
+        7,
+        "the seven fields of a lobby's line: {order:?}"
+    );
     let fields: Vec<&str> = pharmakos_gamectl::lobby::PROBATION_LINE
         .split('\t')
         .collect();
-    assert_eq!(fields.len(), 7, "the seven fields of a lobby's line");
-    for (index, prefix) in [
-        (1, "const MATCH_SEED := "),
-        (2, "const MATCH_SEATS := "),
-        (3, "const HUMAN_SEAT := "),
-        (4, "const LADDER := "),
-        (5, "const ROUND_LIMIT := "),
-        (6, "const PRESET := "),
-    ] {
+    assert_eq!(fields.len(), order.len(), "{fields:?}");
+    for (index, (name, field)) in order.iter().zip(&fields).enumerate() {
+        let wanted = match name.as_str() {
+            // The id names the match's folder and reaches nothing hashed.
+            "match_id" => continue,
+            "seed" => constant(&lobby, "MATCH_SEED"),
+            "seats" => constant(&lobby, "MATCH_SEATS"),
+            "ladder" => constant(&lobby, "LADDER"),
+            "round_limit()" => constant(&lobby, "ROUND_LIMIT"),
+            "preset" => constant(&lobby, "PRESET"),
+            other => constant(&lobby, other),
+        };
         assert_eq!(
-            fields.get(index).copied(),
-            Some(constant(&lobby, prefix).as_str()),
-            "field {index} of the line gamectl carries is not host_link.gd's `{prefix}`"
+            *field, wanted,
+            "field {index}, `{name}`, of the line gamectl carries is not the lobby's"
         );
     }
-    let pin = constant(
-        &read("crates/sim/tests/probation_seed.rs"),
-        "const PROBATION_SEED: u64 = ",
-    );
+    let pin = read("crates/sim/tests/probation_seed.rs")
+        .lines()
+        .find_map(|line| line.strip_prefix("const PROBATION_SEED: u64 = "))
+        .map(str::to_owned)
+        .expect("the sim pins the Probation seed");
     let config = pharmakos_gamectl::lobby::probation().expect("the line reads");
     assert_eq!(
         Some(config.seed.to_string().as_str()),
