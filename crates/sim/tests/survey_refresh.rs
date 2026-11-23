@@ -44,6 +44,7 @@ use pharmakos_sim::tables::{
 use pharmakos_sim::voxels::{Material, VoxelEdit};
 use pharmakos_sim::world::{World, WorldConfig};
 use pharmakos_sim::{MatchSettings, RulesTable, default_rules_path};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// The surv tests' seed (`tests/survey.rs`).
@@ -236,11 +237,110 @@ struct Lull {
     /// The scouts it lost in the Push before.
     lost: usize,
     /// Every sighting of any kind seat 0 holds past reach memory: its kind,
-    /// asset id and age in ticks.
-    stale: Vec<(u8, u32, u32)>,
-    /// Seat 0's Survey drops of the Push before, once each
-    /// (`Scratch::survey_drops`): the asset id and the reason.
-    drops: Vec<(u32, Drop)>,
+    /// asset id, age in ticks, and whether it is excused ([`excused`]).
+    stale: Vec<(u8, u32, u32, Result<String, String>)>,
+    /// Seat 0's Survey drops of the Push before, once each for every asset
+    /// and reason (`Scratch::survey_drops`): the asset id, the reason and the
+    /// last decision tick it was dropped on.
+    drops: Vec<(u32, Drop, u32)>,
+    /// The ticks of the Push before on which a scout of seat 0's died.
+    deaths: Vec<u32>,
+    /// Every scout seat 0 fielded during the Push before: the first decision
+    /// tick it was decided on (the one after it was first met), its unit id,
+    /// and whether that decision sent it off (its destination is not where it
+    /// stood).
+    fielded: Vec<(u32, u32, bool)>,
+}
+
+/// One decision tick of a Push, with where seat 0's living scouts stood and
+/// were sent.
+type Decision = (u32, Vec<([Fx; 3], [Fx; 3])>);
+
+/// What [`excused`] reads of a Push: the ticks a scout of seat 0's died on,
+/// every [`Decision`], and the tick the Push ended on.
+struct Watched<'a> {
+    drops: &'a [(u32, Drop, u32)],
+    deaths: &'a [u32],
+    sent: &'a [Decision],
+    end: u32,
+}
+
+/// What [`play_push`] watches of one Push of seat 0's scouts.
+#[derive(Default)]
+struct Track {
+    /// The ticks a scout of seat 0's died on.
+    deaths: Vec<u32>,
+    /// Every decision tick.
+    sent: Vec<Decision>,
+    /// Every scout fielded in the Push: its first decision tick, unit id,
+    /// and whether that decision sent it off.
+    fielded: Vec<(u32, u32, bool)>,
+    /// The scouts met at a decision of the Push so far.
+    decided: Vec<u32>,
+    /// The scouts first met after the Push's first decision, waiting for the
+    /// decision after.
+    waiting: Vec<u32>,
+}
+
+/// Play the running Push to its end, extending `feed` with its events and
+/// keeping `track` of seat 0's scouts.
+fn play_push(runner: &mut Runner, feed: &mut Vec<Event>, track: &mut Track) {
+    loop {
+        let before = scouts_sent(runner.world());
+        let stepped = runner.step().expect("the tick runs");
+        feed.extend_from_slice(runner.events());
+        runner.clear_events();
+        if stepped.is_none() {
+            return;
+        }
+        let world = runner.world();
+        let now = world.tick().raw();
+        let after = scouts_sent(world);
+        if before
+            .iter()
+            .any(|(id, _, _)| !after.iter().any(|(held, _, _)| held == id))
+        {
+            track.deaths.push(now);
+        }
+        if world.is_decision_tick() {
+            // A scout first met after the Push's first decision was fielded
+            // in the Push: its first decision is the next one.
+            for (id, at, to) in &after {
+                if let Some(index) = track.waiting.iter().position(|held| held == id) {
+                    track.waiting.remove(index);
+                    track.fielded.push((now, *id, at != to));
+                }
+                if !track.decided.contains(id) {
+                    if !track.sent.is_empty() {
+                        track.waiting.push(*id);
+                    }
+                    track.decided.push(*id);
+                }
+            }
+            track
+                .sent
+                .push((now, after.iter().map(|(_, at, to)| (*at, *to)).collect()));
+        }
+    }
+}
+
+/// Where seat 0's living scouts stand and are sent, by unit id.
+fn scouts_sent(world: &World) -> Vec<(u32, [Fx; 3], [Fx; 3])> {
+    let units = world.units();
+    (0..units.ids().len())
+        .filter(|row| {
+            units.kinds()[*row] == UnitKind::Scout.id()
+                && units.seats()[*row] == 0
+                && units.hit_points()[*row].is_alive()
+        })
+        .map(|row| {
+            (
+                units.ids()[row],
+                units.positions()[row],
+                units.destinations()[row],
+            )
+        })
+        .collect()
 }
 
 /// The ticks a scout takes, at the latest, on the walk the router serves
@@ -281,13 +381,9 @@ fn live_scouts(world: &World, of: SeatId) -> usize {
         .count()
 }
 
-/// One committed match played by the sim alone: seat 0's Survey post twelve
-/// columns from its core toward seat 1's, two scouts, and the half of the map
-/// on seat 1's side of the cores' midpoint (across the axis the cores lie
-/// further apart on) as its probe area. At every Lull after the first, the
-/// round, the stalest sightings seat 0 holds, its living scouts, the scouts
-/// it lost and the sightings counted out of reach in the Push before.
-fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
+/// [`surveyed`]'s world: seat 0's Survey post twelve columns from its core
+/// toward seat 1's, two scouts, and the far half of the map its probe area.
+fn surveyed_world(seed: u64, seats: u32) -> World {
     let mut world = world(seed, seats, vec![180_000, 300_000, 480_000], ROUNDS);
     let mine = beacon_at(&world, core(&world, seat(0)));
     let theirs = beacon_at(&world, core(&world, seat(1)));
@@ -325,10 +421,21 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
         .expect("the probe area fits");
     scout_at(&mut world, post, post_at);
     scout_at(&mut world, post, post_at);
+    world
+}
 
-    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+/// One committed match played by the sim alone: seat 0's Survey post twelve
+/// columns from its core toward seat 1's, two scouts, and the half of the map
+/// on seat 1's side of the cores' midpoint (across the axis the cores lie
+/// further apart on) as its probe area. At every Lull after the first, the
+/// round, the stalest sightings seat 0 holds, its living scouts, the scouts
+/// it lost and the sightings counted out of reach in the Push before.
+fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
+    let mut runner =
+        Runner::new(surveyed_world(seed, seats)).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     let mut lulls = Vec::new();
+    let mut track = Track::default();
     let window = window();
     for round in 1..=ROUNDS {
         if round > 1 {
@@ -341,17 +448,23 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
                 })
                 .count();
             feed.clear();
-            let drops = runner
+            let drops: Vec<(u32, Drop, u32)> = runner
                 .world_mut()
                 .scratch_mut()
                 .survey_drops()
                 .iter()
-                .filter(|(who, _, _)| *who == 0)
-                .map(|(_, asset, why)| (*asset, *why))
+                .filter(|(who, _, _, _)| *who == 0)
+                .map(|(_, asset, why, at)| (*asset, *why, *at))
                 .collect();
             let world = runner.world();
             let table = world.sightings();
             let now = world.tick().raw();
+            let watched = Watched {
+                drops: &drops,
+                deaths: &track.deaths,
+                sent: &track.sent,
+                end: now,
+            };
             let stale = (0..table.seats().len())
                 .filter(|row| table.seats()[*row] == 0 && now - table.seen_at()[*row] > window)
                 .map(|row| {
@@ -359,9 +472,11 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
                         table.kinds()[row],
                         table.assets()[row],
                         now - table.seen_at()[row],
+                        excused(world, &watched, table.assets()[row], table.places()[row]),
                     )
                 })
                 .collect();
+            let track = core::mem::take(&mut track);
             lulls.push(Lull {
                 round,
                 beacon: stalest(world, seat(0), true),
@@ -370,11 +485,13 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
                 lost,
                 stale,
                 drops,
+                deaths: track.deaths,
+                fielded: track.fielded,
             });
         }
         assert_eq!(runner.phase(), MatchPhase::Lull, "round {round}'s Lull");
         assert_eq!(runner.begin_push(), Ok(true), "round {round}'s Push");
-        play_out(&mut runner, &mut feed);
+        play_push(&mut runner, &mut feed, &mut track);
         if runner.phase() == MatchPhase::Recap {
             runner.end_recap().expect("the recap closes");
         }
@@ -385,12 +502,82 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
     lulls
 }
 
+/// Whether a stale sighting of `asset`, remembered at `place`, is excused,
+/// and how (`Ok`), or why not (`Err`), from what its Push `watched`. Excused
+/// only:
+///
+/// * when its Push dropped it as out of reach and for no other reason
+///   (`Drop::OutOfReach` alone: never listed, and no scout alone could reach
+///   it before the Lull); or
+/// * when its last drop was a scout lost (`Drop::ScoutLost`), and on the
+///   first decision after the last death before that drop either a scout of
+///   the seat set off for it (the departure tick is the proof) or no living
+///   scout of the seat, setting off then, could have reached it before the
+///   Lull on the walk the router serves (each scout's walk and the ticks
+///   left are the proof): the death came too late for any replacement,
+///   which is the loss item 173 (2) accepts.
+///
+/// Every other combination, and a sighting no drop names, is not.
+fn excused(
+    world: &World,
+    watched: &Watched<'_>,
+    asset: u32,
+    place: [Fx; 3],
+) -> Result<String, String> {
+    let mine: Vec<(Drop, u32)> = watched
+        .drops
+        .iter()
+        .filter(|(dropped, _, _)| *dropped == asset)
+        .map(|(_, why, at)| (*why, *at))
+        .collect();
+    if !mine.is_empty() && mine.iter().all(|(why, _)| *why == Drop::OutOfReach) {
+        return Ok("out of reach alone".to_owned());
+    }
+    let Some((Drop::ScoutLost, at)) = mine.iter().max_by_key(|(_, at)| *at).copied() else {
+        return Err(format!("dropped as {mine:?}"));
+    };
+    let Some(death) = watched
+        .deaths
+        .iter()
+        .copied()
+        .filter(|died| *died <= at)
+        .max()
+    else {
+        return Err(format!(
+            "a scout lost on {at} with no death before it: {mine:?}"
+        ));
+    };
+    let Some((tick, scouts)) = watched.sent.iter().find(|(tick, _)| *tick > death) else {
+        return Err(format!(
+            "a scout lost on {death}, and no decision after it: {mine:?}"
+        ));
+    };
+    if scouts.iter().any(|(_, to)| *to == place) {
+        return Ok(format!(
+            "a scout lost on {death}, the replacement set off on {tick}"
+        ));
+    }
+    let left = watched.end - tick;
+    let walks: Vec<u32> = scouts
+        .iter()
+        .map(|(from, _)| served_ticks(world, *from, place))
+        .collect();
+    if walks.iter().all(|walk| *walk > left) {
+        return Ok(format!(
+            "a scout lost on {death}; on {tick}, {left} ticks before the Lull, no scout could reach it (walks {walks:?})"
+        ));
+    }
+    Err(format!(
+        "a scout lost on {death}, and on {tick}, {left} ticks before the Lull, no scout set off though one could (walks {walks:?}): {mine:?}"
+    ))
+}
+
 /// The property: on the committed seeds, at every Lull after seat 0 first
 /// holds an enemy beacon's sighting, while one of its Survey scouts is alive,
-/// every sighting of any kind it holds is inside reach memory, but for a
-/// sighting the Push before dropped as out of reach (`Drop::OutOfReach`: no
-/// scout alone could reach it before the Lull), the one named exception. A
-/// stale sighting with any other reason, or none, fails.
+/// every sighting of any kind it holds is inside reach memory, but for one
+/// [`excused`] names: dropped as out of reach alone, or a scout lost with its
+/// replacement's departure shown or the death too late for any replacement.
+/// Any other stale sighting fails.
 #[test]
 fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
     let mut fresh: Vec<String> = Vec::new();
@@ -407,7 +594,7 @@ fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
             };
             held = true;
             let any = lull.any.unwrap_or(age);
-            let line = format!(
+            let mut line = format!(
                 "seed {seed:#x}/{seats}, round {}'s Lull: stalest enemy beacon {} ms, stalest of any kind {} ms, {} scouts alive, {} lost",
                 lull.round,
                 age * 50,
@@ -418,23 +605,15 @@ fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
             if lull.scouts == 0 {
                 continue;
             }
-            let unexcused: Vec<String> = lull
-                .stale
-                .iter()
-                .filter(|(_, asset, _)| !lull.drops.contains(&(*asset, Drop::OutOfReach)))
-                .map(|(kind, asset, age)| {
-                    let why: Vec<Drop> = lull
-                        .drops
-                        .iter()
-                        .filter(|(dropped, _)| dropped == asset)
-                        .map(|(_, why)| *why)
-                        .collect();
-                    format!(
-                        "kind {kind} asset {asset} {} ms, dropped as {why:?}",
-                        age * 50
-                    )
-                })
-                .collect();
+            let mut unexcused: Vec<String> = Vec::new();
+            for (kind, asset, age, verdict) in &lull.stale {
+                match verdict {
+                    Ok(how) => write!(line, "; asset {asset} stale, {how}").expect("a String"),
+                    Err(why) => {
+                        unexcused.push(format!("kind {kind} asset {asset} {} ms: {why}", age * 50));
+                    }
+                }
+            }
             if unexcused.is_empty() {
                 fresh.push(line);
             } else {
@@ -442,11 +621,74 @@ fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
             }
         }
     }
-    eprintln!("fresh: {fresh:#?}\nstale: {stale:#?}");
+    eprintln!(
+        "fresh: {fresh:#?}
+stale: {stale:#?}"
+    );
     assert!(stale.is_empty(), "a held sighting went stale: {stale:#?}");
     assert!(
         fresh.len() >= 5,
         "enough Lulls follow a first sighting to make the property mean something: {fresh:#?}"
+    );
+}
+
+/// Review 3's and 4's seed 29 with two seats, scripted (fix pass 4, item
+/// 3): seat 1's commander, sighted at column (359, 22) behind seat 1's core,
+/// in round 2's Push of five minutes. Its outcome on this head, exactly: the
+/// three scouts seat 0 loses at the core (54 s, 271 s and 286 s into the
+/// Push), a replacement after each, sent off on the first decision it is
+/// decided on, and the commander's sighting 245 s old at round 3's Lull, last
+/// dropped as a scout lost: on the decision after the third death, 13 s
+/// before the Lull, neither living scout could reach it on the walk the
+/// router serves (159 s and 174 s). Rounds 2 and 4 hold it fresh.
+#[test]
+fn seed_29_loses_the_commander_behind_the_core_to_its_third_scout() {
+    let lulls = surveyed(29, 2);
+    let at = |round: u32| {
+        lulls
+            .iter()
+            .find(|lull| lull.round == round)
+            .unwrap_or_else(|| panic!("round {round}'s Lull"))
+    };
+    for lull in &lulls {
+        eprintln!(
+            "round {}: stale {:?}, deaths {:?}, fielded {:?}, drops {:?}",
+            lull.round, lull.stale, lull.deaths, lull.fielded, lull.drops
+        );
+    }
+    let third = at(3);
+    assert_eq!(
+        third.deaths,
+        vec![4699, 9037, 9337],
+        "the three deaths at the core"
+    );
+    assert_eq!(
+        third.fielded,
+        vec![(4706, 4104, true), (9046, 8200, true), (9346, 4105, true)],
+        "a replacement after each death, sent off on its first decision"
+    );
+    assert_eq!(
+        third.stale.len(),
+        1,
+        "one stale sighting: {:?}",
+        third.stale
+    );
+    let (kind, asset, age, verdict) = &third.stale[0];
+    assert_eq!(
+        (*kind, *asset, *age),
+        (AssetKind::Commander.id(), 4, 4904),
+        "the commander, 245 s old"
+    );
+    let how = verdict
+        .as_ref()
+        .unwrap_or_else(|why| panic!("not excused: {why}"));
+    assert!(
+        how == "a scout lost on 9337; on 9341, 259 ticks before the Lull, no scout could reach it (walks [3182, 3474])",
+        "{how}"
+    );
+    assert!(
+        at(2).stale.is_empty() && at(4).stale.is_empty(),
+        "rounds 2 and 4 fresh"
     );
 }
 
@@ -853,8 +1095,8 @@ fn a_sighting_no_walk_reaches_is_counted() {
 /// unarmed enemy beacon at each of `offsets` from the centre, each sighted on
 /// the Push's first decision by a scout that is then lost. One Push of
 /// `push_ms`. Each beacon sighting's age at the Lull, in ticks, in the order
-/// of `offsets`, and the world's `survey_out_of_reach` count.
-fn serial(world: World, scouts: usize, offsets: &[(i32, i32)]) -> (Vec<u32>, u64) {
+/// of `offsets`, and the Push's [`Drops`].
+fn serial(world: World, scouts: usize, offsets: &[(i32, i32)]) -> (Vec<u32>, Drops) {
     let mut world = world;
     let [last_x, last_y] = last_column(&world);
     let (cx, cy) = (last_x.div_euclid(2), last_y.div_euclid(2));
@@ -896,12 +1138,43 @@ fn serial(world: World, scouts: usize, offsets: &[(i32, i32)]) -> (Vec<u32>, u64
             now - seen
         })
         .collect();
-    let out_of_reach = runner
-        .world_mut()
-        .scratch_mut()
-        .survey_out_of_reach()
-        .unwrap();
-    (ages, out_of_reach)
+    let scratch = runner.world_mut().scratch_mut();
+    let counted = [
+        scratch.survey_under_threat().unwrap(),
+        scratch.survey_scout_lost().unwrap(),
+        scratch.survey_out_of_reach().unwrap(),
+        scratch.survey_crowded_out().unwrap(),
+        scratch.survey_drops_unlogged().unwrap(),
+    ]
+    .iter()
+    .sum();
+    let logged = scratch
+        .survey_drops()
+        .iter()
+        .filter(|(who, _, _, _)| *who == 0)
+        .map(|(_, asset, why, _)| (*asset, *why))
+        .collect();
+    let assets = beacons
+        .iter()
+        .map(|beacon| AssetId::of_beacon(*beacon).unwrap().raw())
+        .collect();
+    (
+        ages,
+        Drops {
+            assets,
+            logged,
+            counted,
+        },
+    )
+}
+
+/// One Push's Survey drops of seat 0's: the beacons' asset ids in the order
+/// of the offsets, the drop log, (asset id, reason) once each, and the sum
+/// of the reason tallies.
+struct Drops {
+    assets: Vec<u32>,
+    logged: Vec<(u32, Drop)>,
+    counted: u64,
 }
 
 /// One scout and two beacons a hundred columns either side of its post, in
@@ -910,18 +1183,22 @@ fn serial(world: World, scouts: usize, offsets: &[(i32, i32)]) -> (Vec<u32>, u64
 /// the first, left for it late, and had seven seconds left for the second).
 #[test]
 fn one_scout_refreshes_two_sightings_in_turn() {
-    let (ages, out_of_reach) = serial(sighted_world(24, vec![600_000]), 1, &[(-100, 0), (100, 0)]);
+    let (ages, drops) = serial(sighted_world(24, vec![600_000]), 1, &[(-100, 0), (100, 0)]);
     assert!(
         ages.iter().all(|age| *age <= window()),
         "every sighting fresh at the Lull: ages {ages:?} ticks"
     );
-    assert_eq!(out_of_reach, 0, "every sighting fits a list");
+    assert_eq!(
+        drops.counted, 0,
+        "every sighting fits a list: {:?}",
+        drops.logged
+    );
 }
 
 /// Two scouts and three beacons: the same, with the work shared.
 #[test]
 fn two_scouts_refresh_three_sightings() {
-    let (ages, out_of_reach) = serial(
+    let (ages, drops) = serial(
         sighted_world(24, vec![600_000]),
         2,
         &[(-100, 0), (100, 0), (0, 120)],
@@ -930,7 +1207,11 @@ fn two_scouts_refresh_three_sightings() {
         ages.iter().all(|age| *age <= window()),
         "every sighting fresh at the Lull: ages {ages:?} ticks"
     );
-    assert_eq!(out_of_reach, 0, "every sighting fits a list");
+    assert_eq!(
+        drops.counted, 0,
+        "every sighting fits a list: {:?}",
+        drops.logged
+    );
 }
 
 /// Three seats' worth of sightings and two scouts: the two enemy cores and a
@@ -1000,26 +1281,38 @@ fn two_scouts_refresh_both_enemy_cores_and_a_forward_beacon() {
     );
 }
 
-/// A sighting no list reaches before the Lull is counted under its own
-/// reason (`Scratch::survey_out_of_reach`), never silently stale: one scout,
-/// three beacons spread far, in a Push of four minutes.
+/// A sighting no list reaches before the Lull is counted under a reason
+/// (`survey::Drop`), never silently stale: one scout, three beacons spread
+/// far, in a Push of four minutes. Each stale sighting is in the drop log,
+/// and the tallies count each logged (asset, reason) once a Push, not once a
+/// decision.
 #[test]
 fn a_sighting_no_list_reaches_is_counted() {
-    let (ages, out_of_reach) = serial(
-        sighted_world(24, vec![240_000]),
-        1,
-        &[(-150, 0), (150, 0), (0, -150)],
-    );
-    let stale = ages.iter().filter(|age| **age > window()).count();
-    assert!(stale > 0, "the arrangement leaves one stale: ages {ages:?}");
+    let world = sighted_world(24, vec![240_000]);
+    let (ages, drops) = serial(world, 1, &[(-150, 0), (150, 0), (0, -150)]);
+    let window = window();
+    let stale: Vec<usize> = (0..ages.len())
+        .filter(|index| ages[*index] > window)
+        .collect();
     assert!(
-        out_of_reach > 0,
-        "a stale sighting is counted as out of reach: ages {ages:?}"
+        !stale.is_empty(),
+        "the arrangement leaves one stale: ages {ages:?}"
     );
-    assert!(
-        out_of_reach <= 3,
-        "each sighting is counted once a Push, not once a decision: {out_of_reach}"
+    for index in &stale {
+        let asset = drops.assets[*index];
+        assert!(
+            drops.logged.iter().any(|(dropped, _)| *dropped == asset),
+            "stale sighting {index} is counted under a reason: ages {ages:?}, drops {:?}",
+            drops.logged
+        );
+    }
+    assert_eq!(
+        drops.counted,
+        u64::try_from(drops.logged.len()).unwrap(),
+        "each (sighting, reason) is counted once a Push, not once a decision: {:?}",
+        drops.logged
     );
+    eprintln!("ages {ages:?}, drops {:?}", drops.logged);
 }
 
 /// Review 3's `star4-60`: one scout, four beacons sixty columns out on the

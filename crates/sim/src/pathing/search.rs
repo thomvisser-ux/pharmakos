@@ -213,17 +213,12 @@ pub struct Scratch {
     pub(crate) survey_out_of_reach: Tally,
     pub(crate) survey_scout_lost: Tally,
     pub(crate) survey_crowded_out: Tally,
+    pub(crate) survey_under_threat: Tally,
     pub(crate) survey_drops_unlogged: Tally,
-    /// The Push the drop log is for: its first tick.
-    survey_drop_push: Option<u32>,
-    /// Every Survey drop of the Push, once each: (seat, asset, reason).
-    survey_drop_log: Vec<(u8, u32, crate::survey::Drop)>,
+    /// What naming a Survey drop's reason remembers of the running Push, and
+    /// its drop log ([`crate::survey::Memory`]).
+    pub(crate) survey: crate::survey::Memory,
 }
-
-/// The most Survey drops one Push logs: three seats, the sighting table's
-/// share of 64 each, three reasons. Reserved when the scratch is made, so a
-/// drop allocates nothing.
-const SURVEY_DROP_ROOM: usize = 3 * 64 * 3;
 
 /// A diagnostic count that never reads wrong: it counts up by a checked add,
 /// and a count that would pass `u64::MAX` becomes [`Tally::Overflowed`], which
@@ -344,9 +339,9 @@ impl Scratch {
             survey_out_of_reach: Tally::ZERO,
             survey_scout_lost: Tally::ZERO,
             survey_crowded_out: Tally::ZERO,
+            survey_under_threat: Tally::ZERO,
             survey_drops_unlogged: Tally::ZERO,
-            survey_drop_push: None,
-            survey_drop_log: Vec::with_capacity(SURVEY_DROP_ROOM),
+            survey: crate::survey::Memory::new(),
         })
     }
 
@@ -529,9 +524,21 @@ impl Scratch {
         self.survey_crowded_out.read()
     }
 
-    /// Survey drops of a Push past the log's room ([`SURVEY_DROP_ROOM`]):
-    /// counted here instead of under their reason, which would count them
-    /// again on every decision.
+    /// Needed Survey sightings dropped because a threat the seat sees now
+    /// covers them since the last reset, each once a Push
+    /// (`crate::survey::Drop::UnderThreat`).
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_under_threat(&self) -> Result<u64, TallyOverflow> {
+        self.survey_under_threat.read()
+    }
+
+    /// Survey drops, listings or scouts of a Push past the room
+    /// [`crate::survey::Memory`] reserves: counted here, so a drop whose
+    /// reason the memory could not name is never silent, and the drop is not
+    /// counted again on every decision.
     ///
     /// # Errors
     ///
@@ -540,39 +547,33 @@ impl Scratch {
         self.survey_drops_unlogged.read()
     }
 
-    /// The running Push's Survey drops, once each: the seat, the sighting's
-    /// asset id and the reason. Emptied when a Push's first drop is logged.
+    /// The running Push's Survey drops, once each for every seat, asset and
+    /// reason: the seat, the sighting's asset id, the reason and the decision
+    /// tick it was last dropped on. Emptied on the first Survey decision of
+    /// every Push, so a Push with no drop reads an empty log.
     #[must_use]
-    pub fn survey_drops(&self) -> &[(u8, u32, crate::survey::Drop)] {
-        &self.survey_drop_log
+    pub fn survey_drops(&self) -> &[(u8, u32, crate::survey::Drop, u32)] {
+        self.survey.log()
     }
 
-    /// Log a Survey drop of the Push that began on tick `push`, once a Push
-    /// for each seat, asset and reason, and count it under its reason.
+    /// Log a Survey drop of the running Push on decision tick `tick`, once a
+    /// Push for each seat, asset and reason, and count it under its reason.
     pub(crate) fn survey_drop(
         &mut self,
-        push: u32,
         seat: u8,
         asset: u32,
         reason: crate::survey::Drop,
+        tick: u32,
     ) {
-        if self.survey_drop_push != Some(push) {
-            self.survey_drop_log.clear();
-            self.survey_drop_push = Some(push);
-        }
-        let drop = (seat, asset, reason);
-        if self.survey_drop_log.contains(&drop) {
-            return;
-        }
-        if self.survey_drop_log.len() >= SURVEY_DROP_ROOM {
-            self.survey_drops_unlogged.bump();
-            return;
-        }
-        self.survey_drop_log.push(drop);
-        match reason {
-            crate::survey::Drop::OutOfReach => self.survey_out_of_reach.bump(),
-            crate::survey::Drop::ScoutLost => self.survey_scout_lost.bump(),
-            crate::survey::Drop::CrowdedOut => self.survey_crowded_out.bump(),
+        match self.survey.log_drop(seat, asset, reason, tick) {
+            Ok(false) => {}
+            Ok(true) => match reason {
+                crate::survey::Drop::OutOfReach => self.survey_out_of_reach.bump(),
+                crate::survey::Drop::ScoutLost => self.survey_scout_lost.bump(),
+                crate::survey::Drop::CrowdedOut => self.survey_crowded_out.bump(),
+                crate::survey::Drop::UnderThreat => self.survey_under_threat.bump(),
+            },
+            Err(crate::survey::Full) => self.survey_drops_unlogged.bump(),
         }
     }
 
@@ -601,9 +602,9 @@ impl Scratch {
         self.survey_out_of_reach = Tally::ZERO;
         self.survey_scout_lost = Tally::ZERO;
         self.survey_crowded_out = Tally::ZERO;
+        self.survey_under_threat = Tally::ZERO;
         self.survey_drops_unlogged = Tally::ZERO;
-        self.survey_drop_push = None;
-        self.survey_drop_log.clear();
+        self.survey.clear();
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the
