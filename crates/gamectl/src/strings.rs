@@ -514,6 +514,7 @@ pub fn verify_footer_preset(preset: &str, seed: u64, seats: u32, seat: u8) -> St
 /// build's gateway.
 #[must_use]
 pub fn lobby_line_refused(why: &str) -> String {
+    let why = pharmakos_proto::json::grammar::escaped(why);
     format!(
         "{BINARY} verify --preset: the lobby's config line this build carries is one its own \
          gateway refuses: {why}"
@@ -523,6 +524,7 @@ pub fn lobby_line_refused(why: &str) -> String {
 /// The lobby's match would not open, or the gateway refused a host's call.
 #[must_use]
 pub fn lobby_match_refused(why: &str) -> String {
+    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("{BINARY} verify --preset: the lobby's match would not open here: {why}")
 }
 
@@ -547,6 +549,7 @@ pub fn verify_preset_too_long(path: &str, size: Option<u64>, read: usize, chars:
 /// would: the answer, not an error.
 #[must_use]
 pub fn lobby_text_refused(why: &str) -> String {
+    let why = pharmakos_proto::json::grammar::escaped(why);
     format!(
         "{BINARY} verify --preset: the gateway refuses this playbook before verifying it, as \
          the lobby's match would: {why}"
@@ -556,6 +559,7 @@ pub fn lobby_text_refused(why: &str) -> String {
 /// The gateway's `verify_plan` answer is not a report this build reads.
 #[must_use]
 pub fn lobby_answer_unread(why: &str) -> String {
+    let why = pharmakos_proto::json::grammar::escaped(why);
     format!(
         "{BINARY} verify --preset: the gateway's `verify_plan` answer is not a report this \
          build reads: {why}"
