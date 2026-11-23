@@ -389,9 +389,57 @@ pub(crate) struct Candidate {
     pub(crate) cost_dollars: i64,
     /// Balanced utility, in points.
     pub(crate) utility: i64,
-    /// Utility per second of `time_ms`, times 1 000.
-    pub(crate) rate: i64,
+    /// Utility per second, exactly ([`Rate`]): what the ranking orders by.
+    pub(crate) rate: Rate,
 }
+
+/// A candidate's utility per unit of time, kept as the fraction it is --
+/// `points` over `per_ms` game milliseconds, `per_ms` above zero -- so two
+/// rates compare exactly, by cross-multiplication (S3's `opr3`, fix pass 3,
+/// item 2): a rate divided down to whole points a second tied 140 points in
+/// 18 s with 240 in 30 s, and the tie went to the lower id, so the lower rate
+/// could be funded first. Each product is of two `i64`s, which an `i128`
+/// always holds, so the comparison never overflows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Rate {
+    points: i64,
+    per_ms: i64,
+}
+
+impl Rate {
+    /// `points` over `per_ms`; `None` when `per_ms` is not above zero, which
+    /// no candidate's time is ([`Tuning::read`] refuses every interface time
+    /// at zero).
+    pub(crate) const fn new(points: i64, per_ms: i64) -> Option<Rate> {
+        if per_ms > 0 {
+            Some(Rate { points, per_ms })
+        } else {
+            None
+        }
+    }
+}
+
+impl Ord for Rate {
+    fn cmp(&self, other: &Rate) -> std::cmp::Ordering {
+        let mine = i128::from(self.points) * i128::from(other.per_ms);
+        let theirs = i128::from(other.points) * i128::from(self.per_ms);
+        mine.cmp(&theirs)
+    }
+}
+
+impl PartialOrd for Rate {
+    fn partial_cmp(&self, other: &Rate) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Rate {
+    fn eq(&self, other: &Rate) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for Rate {}
 
 /// The whole-voxel squared distance between two voxels, or `None` when it
 /// does not fit: a distance that large is within no radius.
@@ -1738,7 +1786,7 @@ fn score(
         .checked_add(w.capability.checked_mul(capability)?)?
         .checked_add(w.attack.checked_mul(attack)?)?
         .checked_sub(w.risk.checked_mul(risk)?)?;
-    let rate = utility.checked_mul(1_000)?.checked_div(rate_ms)?;
+    let rate = Rate::new(utility, rate_ms)?;
     Some(Candidate {
         id,
         goal,

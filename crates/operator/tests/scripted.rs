@@ -3945,3 +3945,101 @@ fn a_begun_chain_whose_stone_does_not_fit_weighs_the_rest() {
         played.why
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fix pass 3: exact rates
+// ---------------------------------------------------------------------------
+
+/// A vent at `[x, 32]` whose site is four voxels west of it, its travel the
+/// scripted walk from the core to that site.
+fn vent_at(grade: &'static str, x: i32) -> Feature {
+    let mut vent = Feature::new("vent", grade, [x, 32]);
+    vent.travel_ms = Some(i64::from((x - 4 - 32).abs()) * 500);
+    vent.site = Some([x - 4, 32, GROUND]);
+    vent
+}
+
+/// The review's probe (fix pass 3, item 2): a lean vent beside the core, 140
+/// points in 17.5 s, and a standard vent 240 points in 29.5 s, with $160 for
+/// one. The standard vent's rate is the higher (8.14 against 8.0 points a
+/// second), and a rate divided down to whole points a second tied them at 8,
+/// so the lean one went first on its lower id. Compared exactly, the standard
+/// vent is funded.
+#[test]
+fn the_higher_rate_is_funded_however_close() {
+    let mut world = Script::new(0);
+    world.treasury = 160;
+    world.features.push(vent_at("lean", 36));
+    world.features.push(vent_at("standard", 60));
+    let (script, played) = play(world);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(ops.contains("vent_60_32"), "{} -- {ops}", played.why);
+    assert!(!ops.contains("vent_36_32"), "{} -- {ops}", played.why);
+}
+
+/// The funding order is the exact rate order (fix pass 3, item 2): over
+/// generated worlds of vents at random grades and distances, with the
+/// treasury for one, the vent composed is the one of the highest utility per
+/// second by exact cross-multiplication of its points and its time, ties to
+/// the lowest id (the nearest, then the name).
+#[test]
+fn the_funding_order_is_the_exact_rate_order() {
+    let easy = Easy::new(&rules_json()).expect("the rules text reads");
+    let mut seed: u64 = 0x0005_eed0;
+    let mut next = |below: u64| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        i64::try_from((seed >> 33) % below).expect("small")
+    };
+    let mut checked = 0;
+    for _ in 0..200 {
+        let mut world = Script::new(0);
+        world.treasury = 160;
+        let mut vents: Vec<(i64, i64, String, i64)> = Vec::new();
+        for _ in 0..3 {
+            let x = i32::try_from(37 + next(28)).expect("a column");
+            let (grade, points) = *[("lean", 140_i64), ("standard", 240), ("rich", 340)]
+                .get(usize::try_from(next(3)).expect("an index"))
+                .expect("a grade");
+            let vent = vent_at(grade, x);
+            if world.features.iter().any(|held| held.id == vent.id) {
+                continue;
+            }
+            let walk = vent.travel_ms.expect("a travel");
+            vents.push((points, walk, vent.id.clone(), walk));
+            world.features.push(vent);
+        }
+        let (script, played) = play(world);
+        if played.submitted != Submitted::Own {
+            continue;
+        }
+        let ops = composing_ops(&script.transcript);
+        let Some(on_site) = template("hold_and_build")
+            .and_then(|(text, _)| read(&strip_comments(&text)).ok())
+            .and_then(|body| pointer_get(&body, "/declarative/route/0").cloned())
+            .and_then(|step| easy.on_site_ms(&step))
+        else {
+            panic!("Hold & Build's place step prices");
+        };
+        // The best by exact rate, ties to the nearest, then the name.
+        let best = vents
+            .iter()
+            .max_by(|a, b| {
+                let (ta, tb) = (i128::from(a.1 + on_site), i128::from(b.1 + on_site));
+                (i128::from(a.0) * tb)
+                    .cmp(&(i128::from(b.0) * ta))
+                    .then_with(|| b.3.cmp(&a.3))
+                    .then_with(|| b.2.cmp(&a.2))
+            })
+            .expect("a vent");
+        let written = compact(&Json::Array(ops));
+        assert!(
+            written.contains(&best.2),
+            "{vents:?}: {} -- {written}",
+            played.why
+        );
+        checked += 1;
+    }
+    assert!(checked > 100, "{checked} worlds composed");
+}

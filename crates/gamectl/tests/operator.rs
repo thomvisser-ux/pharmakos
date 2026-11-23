@@ -1589,12 +1589,13 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
     }
     eprintln!("Probation's seed, the stones (round, seat, toward): {stones:?}");
     // A named expectation, each round of each seat's stone chain (fix pass
-    // 2, item 2). Both seats place the Generator on their start vent in round
-    // 1. Seat 0 walks one stone toward the rich vent `vent_232_96` in round 2,
-    // the one stone the known positions say it needs, and in round 3 places
-    // the Build beacon covering it, the goal its stone served. Seat 1 places a
-    // Survey post in round 2 and has nothing worth its treasury in round 3.
-    let wanted: Vec<(String, u8, String)> = [("probation/round-2", 0, "vent_232_96")]
+    // 3, item 2: rates compared exactly). Both seats place the Generator on
+    // their start vent in round 1. Seat 0 walks one stone toward the rich seam
+    // `seam_190_124` in round 2, and in round 3 the stone's sphere brings two
+    // vents into reach, which it covers, the standard `vent_212_109` and one
+    // more; the seam is not yet in reach. Seat 1 places a Survey post in round
+    // 2 and has nothing worth its treasury in round 3.
+    let wanted: Vec<(String, u8, String)> = [("probation/round-2", 0, "seam_190_124")]
         .into_iter()
         .map(|(round, seat, feature)| (round.to_owned(), seat, feature.to_owned()))
         .collect();
@@ -1604,8 +1605,8 @@ fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
             && row.seat == 0
             && row
                 .note
-                .contains("A Build beacon covering the rich heat vent vent_232_96")),
-        "seat 0's stone is followed by the goal it served: {rows:#?}"
+                .contains("A Build beacon covering the standard heat vent vent_212_109")),
+        "seat 0's stone opens the ground its round 3 builds on: {rows:#?}"
     );
     assert!(
         rows.iter().all(|row| row.seal != Seal::NotEasy),
@@ -1711,7 +1712,7 @@ const SURVEY_MATCHES: [(u64, u32); 5] = [
 /// `(Survey posts sealed in rounds 1 and 2, of them finding an enemy beacon
 /// by the end of the next round's Push)` on [`SURVEY_MATCHES`] over three
 /// rounds.
-const SURVEY_POSTS: (usize, usize) = (12, 11);
+const SURVEY_POSTS: (usize, usize) = (11, 10);
 
 /// Spec section 14's Survey post through the real gateway (S3's plan,
 /// decision 3), looking over the half of the ground away from the seat's core
