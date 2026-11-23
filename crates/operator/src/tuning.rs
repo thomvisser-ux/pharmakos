@@ -25,9 +25,16 @@
 //! key-core (decisions-log items 90 and 113 (5); `crates/sim/src/power.rs`),
 //! which S1's plan, decision 14 (ruled by item 128), made the reading of the
 //! register's S1-14 rather than a guess.
+//!
+//! A fielded unit draws `power.kw_per_unit`, the row the sim's grid
+//! (`PowerRules::per_unit`) and the verifier's projection charge every unit
+//! at, so the scouts a guard post or a Survey post orders are charged at that
+//! row (S3's `opr3`, fix pass 2, item 4). `units.scout.draw_kw` is **not
+//! read**: no grid charges a scout at it.
 
 use pharmakos_proto::gp::v1::rules_table::{
-    StructureKind as StructureRow, Structures, UnitKind as UnitRow, Units, Weapon,
+    Commander, Locomotion, StructureKind as StructureRow, Structures, UnitKind as UnitRow, Units,
+    Weapon,
 };
 use pharmakos_proto::gp::v1::{ByRichness, RulesTable};
 
@@ -92,6 +99,8 @@ impl Richness {
 pub(crate) struct Tuning {
     /// `beacon.sphere_radius_voxels`.
     pub(crate) sphere_radius_voxels: i64,
+    /// Spec section 5's interface rates, `interface_times` ([`Times`]).
+    pub(crate) times: Times,
     /// `structures.beacon.cost_dollars`.
     pub(crate) beacon_cost_dollars: i64,
     /// What a tap goal spends, whole $: `structures.generator.cost_dollars`
@@ -110,23 +119,6 @@ pub(crate) struct Tuning {
     ore_yield_per_voxel_dollars: ByRichness,
     /// `economy.seam_voxels`.
     pub(crate) seam_voxels: i64,
-    /// `interface_times.edit_settings_base_ms`: a one-field settings row,
-    /// which is what the core's dig depth is ([`crate::compose`]'s
-    /// `deepen_core`).
-    pub(crate) edit_settings_base_ms: i64,
-    /// `interface_times.build_target_ms`: one Build target, its own row since
-    /// S1's plan, decision 15 (decisions-log item 128 (3) (g)), whether it is
-    /// a placed beacon's initial target or an `add_build_target` row.
-    pub(crate) build_target_ms: i64,
-    /// `interface_times.place_beacon_deploy_ms`.
-    pub(crate) place_beacon_deploy_ms: i64,
-    /// `interface_times.set_priority_ms`: the priority row of a placed
-    /// beacon's `initial`.
-    pub(crate) set_priority_ms: i64,
-    /// `interface_times.edit_settings_max_ms`: the most one settings row
-    /// costs, which is what the guard post's Defend row is costed at, an upper
-    /// bound ([`crate::candidates`]).
-    pub(crate) edit_settings_max_ms: i64,
     /// What a guard goal spends, whole $: the Defend beacon and the one
     /// picket scout the Defend the Core template fields
     /// (`structures.beacon.cost_dollars` plus `units.scout.cost_dollars`).
@@ -141,6 +133,36 @@ pub(crate) struct Tuning {
     /// `verifier.reach_memory_ms`: how long a sighting stays fresh, the
     /// window an Attack target's sighting must fall inside (E0418).
     pub(crate) reach_memory_ms: i64,
+    /// What a Survey post spends, whole $: its beacon and the scouts it
+    /// fields (`structures.beacon.cost_dollars` plus
+    /// [`crate::easy::SURVEY_SCOUT_COUNT`] `units.scout.cost_dollars`).
+    pub(crate) survey_cost_dollars: i64,
+    /// What a Survey post's scouts draw once fielded, whole kW:
+    /// [`crate::easy::SURVEY_SCOUT_COUNT`] times `power.kw_per_unit` (a placed
+    /// beacon itself is net zero).
+    pub(crate) survey_draw_kw: i64,
+    /// What a guard post's one picket scout draws once fielded, whole kW
+    /// (`power.kw_per_unit`; the Defend the Core template's
+    /// `picket_scouts: 1`, as [`Tuning::guard_cost_dollars`] counts it).
+    pub(crate) guard_draw_kw: i64,
+    /// `structures.resonance_spire.cost_dollars`: what queueing the Spire
+    /// takes from the treasury when the row commits.
+    pub(crate) spire_cost_dollars: i64,
+    /// `structures.resonance_spire.draw_kw`: what the Spire draws once it
+    /// stands.
+    pub(crate) spire_draw_kw: i64,
+    /// The travel estimate's own allowance for the wait before a walk starts,
+    /// game milliseconds ([`walk_allowance_ms`]): what a composed step's
+    /// timeout adds to its priced walk (S3's `opr3`, fix pass 2, item 1).
+    pub(crate) walk_allowance_ms: i64,
+    /// The least cost of one step on the ground: the lower of
+    /// `locomotion.step_cost_cardinal` and `step_cost_diagonal`, each step
+    /// moving at most one voxel on each axis. With
+    /// [`Tuning::commander_cost_per_second`], the floor under a walk
+    /// ([`crate::candidates`]'s `walk_floor_ms`).
+    pub(crate) step_cost_min: i64,
+    /// `commander.cost_per_second`, the row the sim walks the commander at.
+    pub(crate) commander_cost_per_second: i64,
     /// Each armed kind's threat (S2's plan, decision 12): its weapon's damage
     /// per second, in thousandths of a hit point per second, as the sim's own
     /// threat model computes it from the same row.
@@ -250,6 +272,187 @@ fn attack_rows(
     Ok((raid_cost_dollars, reach_memory_ms))
 }
 
+/// The four route prices, a tap's, a Generator's, a guard post's and a Survey
+/// post's (its beacon and [`crate::easy::SURVEY_SCOUT_COUNT`] scouts), summed
+/// once: rows are `u32`, so the sums fit an `i64`, and a sum that did not would
+/// be a table refused rather than a price saturated.
+///
+/// # Errors
+///
+/// [`RulesError`] for a price that does not fit.
+fn route_prices(
+    generator: u32,
+    build_drone: u32,
+    beacon: u32,
+    scout: u32,
+) -> Result<(i64, i64, i64, i64), RulesError> {
+    let too_dear = || {
+        RulesError(String::from(
+            "a route's price does not fit a whole $ figure",
+        ))
+    };
+    let tap = i64::from(generator)
+        .checked_add(i64::from(build_drone))
+        .ok_or_else(too_dear)?;
+    let vent = tap.checked_add(i64::from(beacon)).ok_or_else(too_dear)?;
+    let guard = i64::from(beacon)
+        .checked_add(i64::from(scout))
+        .ok_or_else(too_dear)?;
+    let survey = i64::from(scout)
+        .checked_mul(i64::from(crate::easy::SURVEY_SCOUT_COUNT))
+        .and_then(|scouts| scouts.checked_add(i64::from(beacon)))
+        .ok_or_else(too_dear)?;
+    Ok((tap, vent, guard, survey))
+}
+
+/// What a Survey post's [`crate::easy::SURVEY_SCOUT_COUNT`] scouts draw,
+/// whole kW, at `power.kw_per_unit` each.
+///
+/// # Errors
+///
+/// [`RulesError`] for a draw that does not fit.
+fn survey_draw(kw_per_unit: u32) -> Result<i64, RulesError> {
+    i64::from(kw_per_unit)
+        .checked_mul(i64::from(crate::easy::SURVEY_SCOUT_COUNT))
+        .ok_or_else(|| RulesError(String::from("a Survey post's draw does not fit")))
+}
+
+/// Spec section 5's interface rates, read out of `interface_times` once:
+/// what [`crate::price`] prices every composed step with. A rate whose zero
+/// means a row costs nothing at all -- the handshake, a settings edit's base
+/// and cap, a priority row, a Build target, a queued structure, the deploy --
+/// is refused at zero or below; the per-field step, the switch and the
+/// recycle are refused below zero only, as the verifier's rate card reads
+/// them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Times {
+    /// `visit_handshake_ms`.
+    pub(crate) visit_handshake: i64,
+    /// `set_priority_ms`.
+    pub(crate) set_priority: i64,
+    /// `edit_settings_base_ms`.
+    pub(crate) edit_settings_base: i64,
+    /// `edit_settings_per_field_ms`.
+    pub(crate) edit_settings_per_field: i64,
+    /// `edit_settings_max_ms`.
+    pub(crate) edit_settings_max: i64,
+    /// `build_target_ms`.
+    pub(crate) build_target: i64,
+    /// `queue_structure_ms`.
+    pub(crate) queue_structure: i64,
+    /// `switch_mandate_ms`.
+    pub(crate) switch_mandate: i64,
+    /// `recycle_ms`.
+    pub(crate) recycle: i64,
+    /// `place_beacon_deploy_ms`.
+    pub(crate) place_beacon_deploy: i64,
+}
+
+impl Times {
+    /// # Errors
+    ///
+    /// [`RulesError`] for a rate refused as the type's docs say.
+    fn read(
+        times: &pharmakos_proto::gp::v1::rules_table::InterfaceTimes,
+    ) -> Result<Times, RulesError> {
+        let rate = |name: &str, value: i32, positive: bool| {
+            let value = i64::from(value);
+            if value > 0 || (!positive && value == 0) {
+                Ok(value)
+            } else {
+                Err(RulesError(format!(
+                    "the rules text has no `interface_times.{name}` row"
+                )))
+            }
+        };
+        Ok(Times {
+            visit_handshake: rate("visit_handshake_ms", times.visit_handshake_ms, true)?,
+            set_priority: rate("set_priority_ms", times.set_priority_ms, true)?,
+            edit_settings_base: rate("edit_settings_base_ms", times.edit_settings_base_ms, true)?,
+            edit_settings_per_field: rate(
+                "edit_settings_per_field_ms",
+                times.edit_settings_per_field_ms,
+                false,
+            )?,
+            edit_settings_max: rate("edit_settings_max_ms", times.edit_settings_max_ms, true)?,
+            build_target: rate("build_target_ms", times.build_target_ms, true)?,
+            queue_structure: rate("queue_structure_ms", times.queue_structure_ms, true)?,
+            switch_mandate: rate("switch_mandate_ms", times.switch_mandate_ms, false)?,
+            recycle: rate("recycle_ms", times.recycle_ms, false)?,
+            place_beacon_deploy: rate(
+                "place_beacon_deploy_ms",
+                times.place_beacon_deploy_ms,
+                true,
+            )?,
+        })
+    }
+}
+
+/// The most rows any world's router holds: the sim's `ids::ROOM_LIMIT`, which
+/// a world's unit ceiling never passes (`pathing::estimate::ROOM_ROWS`, the
+/// bound the estimate uses for a caller that holds a rules table and no world).
+/// The operator depends on `pharmakos-proto` alone, so it restates the figure;
+/// `crates/gamectl/tests/ladder.rs` holds it to the sim's.
+const ROUTER_ROWS_MAX: i64 = 4_095;
+
+/// Game milliseconds a sim tick lasts: the sim's `math::quantity::MS_PER_TICK`
+/// (its 20 Hz fixed tick), restated as [`ROUTER_ROWS_MAX`] is and held to the
+/// sim's by the same test.
+const MS_PER_TICK: i64 = 50;
+
+/// The travel estimate's own allowance for the wait before a walk starts, game
+/// milliseconds: what the estimate promises to count from (it is never
+/// optimistic **from the tick that serves the route**, the owner's reading of
+/// item 57, approved 2026-11-21) leaves out the first ask's wait in the repath
+/// queue, and that wait is bounded by the queue's own rule: one tick of
+/// rounding plus every row the router can hold served `repath_cap_per_tick` a
+/// tick, `(rows - 1) / cap + 1` ticks (`pathing::estimate::link_ticks`, the
+/// allowance the estimate itself adds per extra route), at [`ROUTER_ROWS_MAX`]
+/// rows, the bound every world keeps. A derived bound, not a rules row and not
+/// a guess: no step of Easy's times out on the wait the estimate leaves out.
+///
+/// # Errors
+///
+/// [`RulesError`] for a repath cap that is not positive (the sim refuses one).
+fn walk_allowance_ms(repath_cap_per_tick: u32) -> Result<i64, RulesError> {
+    let cap = i64::from(repath_cap_per_tick);
+    if cap <= 0 {
+        return Err(RulesError(String::from(
+            "the rules text has no `locomotion.repath_cap_per_tick` row",
+        )));
+    }
+    ROUTER_ROWS_MAX
+        .checked_sub(1)
+        .and_then(|rows| rows.checked_div(cap))
+        .and_then(|ticks| ticks.checked_add(1))
+        .and_then(|ticks| ticks.checked_mul(MS_PER_TICK))
+        .ok_or_else(|| RulesError(String::from("the walk's allowance does not fit")))
+}
+
+/// The rows queueing the Resonance Spire reads: its price and draw, which a
+/// table may state as zero.
+struct SpireRows {
+    cost_dollars: i64,
+    draw_kw: i64,
+}
+
+impl SpireRows {
+    /// # Errors
+    ///
+    /// [`RulesError`] for an absent Spire row or a time that is not positive.
+    fn read(row: Option<StructureRow>) -> Result<SpireRows, RulesError> {
+        let row = row.ok_or_else(|| {
+            RulesError(String::from(
+                "the rules text has no `structures.resonance_spire` row",
+            ))
+        })?;
+        Ok(SpireRows {
+            cost_dollars: i64::from(row.cost_dollars),
+            draw_kw: i64::from(row.draw_kw),
+        })
+    }
+}
+
 impl Tuning {
     /// Read the rows from the rules text.
     ///
@@ -276,11 +479,16 @@ impl Tuning {
             .interface_times
             .ok_or_else(|| missing("interface_times"))?;
         let units = table.units.ok_or_else(|| missing("units"))?;
+        let locomotion = table.locomotion.ok_or_else(|| missing("locomotion"))?;
+        let commander = table.commander.ok_or_else(|| missing("commander"))?;
+        let (step_cost_min, commander_cost_per_second) = walking(&locomotion, &commander)?;
         let threats = Threats::read(&units, &structures)?;
         let build_drone = units
             .build_drone
             .ok_or_else(|| missing("units.build_drone"))?;
         let scout = units.scout.ok_or_else(|| missing("units.scout"))?;
+        let spire = SpireRows::read(structures.resonance_spire)?;
+        let rates = Times::read(&times)?;
         // Zero (or, for a time, below it) where zero means nothing: refused.
         for (row, value) in [
             (
@@ -296,48 +504,18 @@ impl Tuning {
                 i64::from(generator_row.cost_dollars),
             ),
             ("economy.seam_voxels", i64::from(economy.seam_voxels)),
-            (
-                "interface_times.edit_settings_base_ms",
-                i64::from(times.edit_settings_base_ms),
-            ),
-            (
-                "interface_times.edit_settings_max_ms",
-                i64::from(times.edit_settings_max_ms),
-            ),
-            (
-                "interface_times.set_priority_ms",
-                i64::from(times.set_priority_ms),
-            ),
-            (
-                "interface_times.place_beacon_deploy_ms",
-                i64::from(times.place_beacon_deploy_ms),
-            ),
-            (
-                "interface_times.build_target_ms",
-                i64::from(times.build_target_ms),
-            ),
         ] {
             if value <= 0 {
                 return Err(missing(row));
             }
         }
-        // The three route prices, summed once here: rows are `u32`, so the
-        // sums fit an `i64`, and a sum that did not would be a table refused
-        // rather than a price saturated.
-        let too_dear = || {
-            RulesError(String::from(
-                "a route's price does not fit a whole $ figure",
-            ))
-        };
-        let tap_cost_dollars = i64::from(generator_row.cost_dollars)
-            .checked_add(i64::from(build_drone.cost_dollars))
-            .ok_or_else(too_dear)?;
-        let vent_cost_dollars = tap_cost_dollars
-            .checked_add(i64::from(beacon_row.cost_dollars))
-            .ok_or_else(too_dear)?;
-        let guard_cost_dollars = i64::from(beacon_row.cost_dollars)
-            .checked_add(i64::from(scout.cost_dollars))
-            .ok_or_else(too_dear)?;
+        let (tap_cost_dollars, vent_cost_dollars, guard_cost_dollars, survey_cost_dollars) =
+            route_prices(
+                generator_row.cost_dollars,
+                build_drone.cost_dollars,
+                beacon_row.cost_dollars,
+                scout.cost_dollars,
+            )?;
         let (raid_cost_dollars, reach_memory_ms) =
             attack_rows(&table, units.raider, beacon_row.cost_dollars)?;
         Ok(Tuning {
@@ -346,6 +524,9 @@ impl Tuning {
             reach_memory_ms,
             vent_cost_dollars,
             guard_cost_dollars,
+            survey_cost_dollars,
+            survey_draw_kw: survey_draw(power.kw_per_unit)?,
+            guard_draw_kw: i64::from(power.kw_per_unit),
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
             beacon_cost_dollars: i64::from(beacon_row.cost_dollars),
             generator_output_kw: power
@@ -355,11 +536,12 @@ impl Tuning {
                 .ore_yield_per_voxel_dollars
                 .ok_or_else(|| missing("economy.ore_yield_per_voxel_dollars"))?,
             seam_voxels: i64::from(economy.seam_voxels),
-            edit_settings_base_ms: i64::from(times.edit_settings_base_ms),
-            edit_settings_max_ms: i64::from(times.edit_settings_max_ms),
-            set_priority_ms: i64::from(times.set_priority_ms),
-            place_beacon_deploy_ms: i64::from(times.place_beacon_deploy_ms),
-            build_target_ms: i64::from(times.build_target_ms),
+            spire_cost_dollars: spire.cost_dollars,
+            spire_draw_kw: spire.draw_kw,
+            walk_allowance_ms: walk_allowance_ms(locomotion.repath_cap_per_tick)?,
+            step_cost_min,
+            commander_cost_per_second,
+            times: rates,
             threats,
         })
     }
@@ -402,6 +584,37 @@ impl Tuning {
     }
 }
 
+/// The least step cost and the commander's walking speed, the walk floor's
+/// two rows ([`Tuning::step_cost_min`]).
+///
+/// # Errors
+///
+/// [`RulesError`] naming the row, when a step cost or the speed is zero:
+/// each step cost is checked by its own row before the least is taken, so a
+/// zero diagonal is named as the diagonal (fix pass 4, item 5).
+fn walking(locomotion: &Locomotion, commander: &Commander) -> Result<(i64, i64), RulesError> {
+    let cost_per_second = i64::from(commander.cost_per_second);
+    for (row, value) in [
+        (
+            "locomotion.step_cost_cardinal",
+            i64::from(locomotion.step_cost_cardinal),
+        ),
+        (
+            "locomotion.step_cost_diagonal",
+            i64::from(locomotion.step_cost_diagonal),
+        ),
+        ("commander.cost_per_second", cost_per_second),
+    ] {
+        if value <= 0 {
+            return Err(RulesError(format!("the rules text has no `{row}` row")));
+        }
+    }
+    let least = locomotion
+        .step_cost_cardinal
+        .min(locomotion.step_cost_diagonal);
+    Ok((i64::from(least), cost_per_second))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,7 +639,7 @@ mod tests {
                 "\"seam_voxels\": 0",
             ),
             (
-                "interface_times.edit_settings_base_ms",
+                "interface_times.edit_settings_base",
                 "\"edit_settings_base_ms\": 2000",
                 "\"edit_settings_base_ms\": 0",
             ),
@@ -434,6 +647,17 @@ mod tests {
                 "verifier.reach_memory_ms",
                 "\"reach_memory_ms\": 180000",
                 "\"reach_memory_ms\": 0",
+            ),
+            // Fix pass 4, item 5: each step cost by its own row.
+            (
+                "locomotion.step_cost_cardinal",
+                "\"step_cost_cardinal\": 10",
+                "\"step_cost_cardinal\": 0",
+            ),
+            (
+                "locomotion.step_cost_diagonal",
+                "\"step_cost_diagonal\": 14",
+                "\"step_cost_diagonal\": 0",
             ),
         ] {
             let text = committed();

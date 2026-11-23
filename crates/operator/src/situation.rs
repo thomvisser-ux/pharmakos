@@ -11,8 +11,10 @@
 //! shows of another seat's assets, each by what it is, so the threat model
 //! can weigh it by its weapon's row (S2's plan, decision 12); the segment
 //! feed the Lull still holds says whether the seat's commander died in the
-//! last Push (decision 35); capabilities have no method until S4, so there is
-//! nothing to read for them.
+//! last Push (decision 35); and capabilities are the briefing's
+//! `licences_held` since S3 (decisions-log item 153 (3)), whose one licence,
+//! the Resonance Spire's, is read with the core's sphere radius and the
+//! seat's own Spire in the view ([`crate::compose::spire`]).
 //!
 //! Every member is read **typed** ([`crate::wire`]'s readers): absent is
 //! proto3's default, and a member of the wrong shape refuses the round's read
@@ -75,6 +77,12 @@ pub(crate) struct Beacon {
     /// it (`BeaconSummary.sighting_age_ms`, 0 in live vision); `None` on an
     /// own beacon, which the seat never sights.
     pub(crate) sighting_age_ms: Option<i64>,
+    /// Own beacons only: its sphere's radius now, whole voxels, as the sim's
+    /// one radius function answers it (`BeaconSummary.sphere_radius_voxels`,
+    /// S3's plan, E3): the rules table's base, grown while a finished
+    /// Resonance Spire stands on the beacon. `None` for another seat's
+    /// beacon, whose radius is on no wire.
+    pub(crate) sphere_radius_voxels: Option<i64>,
 }
 
 /// A Quartermaster priority, in the brownout order's sense: the lowest sheds
@@ -291,10 +299,42 @@ pub(crate) enum LastPush {
     Survived,
     /// A `commander_died` line names this seat's commander.
     Died,
-    /// Some commander died where this seat could see, and the lines naming
-    /// whose were not all reached within [`PAGES_MAX`] pages. Easy then adds
-    /// no guard, and its "why" says the feed was not read to its end.
-    Unread,
+    /// Not known, for this reason. Easy then adds no guard for a death, and
+    /// its "why" says why it could not tell.
+    Unread(PushUnread),
+}
+
+/// Why the last Push's lines are not all known to a Lull (fix pass 4, items
+/// 2 and 3): one state for a death and for a failed step.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PushUnread {
+    /// The Lull's feed does not show the last Push at all: a Lull resumed
+    /// from a save opens with an empty feed, and the save does not carry the
+    /// last Push's outcomes.
+    ///
+    /// PLACEHOLDER: a resumed Lull reads the last Push's deaths and failed steps as unread until the save carries them, approved by the owner on 2026-11-23 — lane opsave, S3
+    Resumed,
+    /// The lines were not all reached within [`PAGES_MAX`] pages.
+    PastPages,
+}
+
+/// The route steps of the seat's own that failed in the last Push, by index
+/// from 0, read from its own feed lines (a rule body's steps are numbered in
+/// their body and are left out).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum FailedSteps {
+    /// Not asked for: an advisor does not read them.
+    NotRead,
+    /// Read to the end: these, none when none failed or there was no Push.
+    Known(Vec<usize>),
+    /// Not all known: these were seen, and the rest are not known, for this
+    /// reason.
+    Unread {
+        /// The failed steps that were seen.
+        seen: Vec<usize>,
+        /// Why the rest are not known.
+        why: PushUnread,
+    },
 }
 
 /// Everything the fixed reads told the operator.
@@ -309,6 +349,9 @@ pub(crate) struct Situation {
     /// The match seed, as `get_map_summary` spells it: empty for a seat's
     /// token, which is told none from S3 (S3's plan, E18).
     pub(crate) match_seed: String,
+    /// The map's extent in voxels on each axis, `get_map_summary.size`: what
+    /// a Survey post's one probe area spans ([`crate::compose`]).
+    pub(crate) map_size: [i32; 3],
     /// Every beacon the seat is shown, ascending by id.
     pub(crate) beacons: Vec<Beacon>,
     /// The seat's own economy.
@@ -321,11 +364,22 @@ pub(crate) struct Situation {
     pub(crate) enemies: Vec<Enemy>,
     /// Whether the seat's commander died in the last Push.
     pub(crate) last_push: LastPush,
+    /// The route steps of the seat's own that failed in the last Push
+    /// ([`read_last_push`]).
+    pub(crate) failed_steps: FailedSteps,
     /// The template ids the library lists, ascending.
     pub(crate) templates: Vec<String>,
     /// False when `get_view` did not reach its complete page within
     /// [`PAGES_MAX`] pages: the entity list was then never read.
     pub(crate) view_complete: bool,
+    /// True when the briefing's `licences_held` holds the Resonance Spire's
+    /// licence (decisions-log item 153 (3); S3's plan, E2).
+    pub(crate) spire_licensed: bool,
+    /// True when the view shows a Resonance Spire of the seat's own, finished
+    /// or still going up: a queued Spire stands as a structure from the
+    /// moment it is queued (`crates/sim/src/world.rs`' `queue_capability`).
+    /// Meaningful only when [`Situation::view_complete`].
+    pub(crate) own_spire_seen: bool,
 }
 
 impl Situation {
@@ -347,7 +401,11 @@ impl Situation {
     /// the shape the schema gives it, a feature row or an entity that does not
     /// read, or a `commander_died` line that does not say whose: a round the
     /// operator cannot read is a round it does not plan.
-    pub(crate) fn read(wire: &mut Wire<'_, '_>, seat: u8) -> Result<Situation, Refused> {
+    pub(crate) fn read(
+        wire: &mut Wire<'_, '_>,
+        seat: u8,
+        steps: Steps,
+    ) -> Result<Situation, Refused> {
         let own = format!("seat.{seat}");
 
         let answer = wire.call("get_status", object(vec![]))?;
@@ -368,6 +426,7 @@ impl Situation {
             0 => int_of(status, "segment_length_ms").map_err(at("get_status"))?,
             found => found,
         };
+        let spire_licensed = read_licences(&briefing)?;
 
         let beacons = read_beacons(wire, &own)?;
 
@@ -382,6 +441,7 @@ impl Situation {
         let match_seed = text_of(&map, "match_seed")
             .map_err(at("get_map_summary"))?
             .to_owned();
+        let map_size = map_size_of(&map)?;
         let features = array_of(&map, "features")
             .map_err(at("get_map_summary"))?
             .iter()
@@ -389,7 +449,7 @@ impl Situation {
             .collect::<Result<Vec<Feature>, Refused>>()?;
 
         let seen = read_view(wire, &own)?;
-        let last_push = read_last_push(wire, seat)?;
+        let (last_push, failed_steps) = read_last_push(wire, seat, round, steps)?;
         let templates = read_templates(wire)?;
 
         Ok(Situation {
@@ -397,16 +457,40 @@ impl Situation {
             round,
             segment_ms,
             match_seed,
+            map_size,
             beacons,
             economy,
             features,
             commander: seen.commander,
             enemies: seen.enemies,
             last_push,
+            failed_steps,
             templates,
             view_complete: seen.complete,
+            spire_licensed,
+            own_spire_seen: seen.own_spire,
         })
     }
+}
+
+/// The map's extent, `get_map_summary.size`.
+///
+/// # Errors
+///
+/// `MALFORMED` for a size that does not read or has an axis of no voxels: a
+/// map with no extent is not one the operator can lay a probe area over.
+fn map_size_of(map: &Json) -> Result<[i32; 3], Refused> {
+    let size = map
+        .get("size")
+        .ok_or_else(|| malformed("get_map_summary", "the answer carries no map size"))?;
+    let size = voxel(size).map_err(|misread| misread.refused("get_map_summary"))?;
+    if size.iter().any(|axis| *axis <= 0) {
+        return Err(malformed(
+            "get_map_summary",
+            "a map size with an axis of no voxels",
+        ));
+    }
+    Ok(size)
 }
 
 /// One `gp.api.v1.MapFeature`, read.
@@ -449,7 +533,27 @@ fn feature_of(row: &Json) -> Result<Feature, Refused> {
             )
         })
     };
+    // Both members are the gateway's answer in a Lull, the one phase the
+    // operator plans in, and `travel_ms` stands only beside `reachable:
+    // true` (`gateway.proto`'s `MapFeature`). Outside a Lull both are left
+    // out (lane `mapw`): an absent `reachable` is withheld, not unreachable,
+    // and an absent figure beside `reachable: true` is no walk of 0 ms, so
+    // either is a row refused rather than read as a default.
+    if row.get("reachable").is_none() {
+        return Err(malformed(
+            "get_map_summary",
+            &format!("feature `{id}` carries no `reachable`: its travel is withheld"),
+        ));
+    }
     let reachable = bool_of(row, "reachable").map_err(misread)?;
+    if reachable != row.get("travel_ms").is_some() {
+        return Err(malformed(
+            "get_map_summary",
+            &format!(
+                "feature `{id}`'s `travel_ms` does not stand exactly beside `reachable: true`"
+            ),
+        ));
+    }
     let travel_ms = int_of(row, "travel_ms").map_err(misread)?;
     Ok(Feature {
         id: id.to_owned(),
@@ -458,10 +562,35 @@ fn feature_of(row: &Json) -> Result<Feature, Refused> {
         anchor: [axis("x")?, axis("y")?],
         live: bool_of(row, "live").map_err(misread)?,
         covered: bool_of(row, "covered").map_err(misread)?,
-        // `travel_ms` "is then 0 and means nothing" (`gateway.proto`): read as
-        // absent, never as a free walk.
         travel_ms: reachable.then_some(travel_ms),
     })
+}
+
+/// Whether the briefing's `licences_held` holds the Resonance Spire's
+/// licence. Each value is a `gp.v1.Licence` in the wire's lower case,
+/// translated by [`Wire::enum_name`]; the member is left out while the seat
+/// holds none, which reads as proto3's empty list.
+///
+/// # Errors
+///
+/// `MALFORMED` for a member that is not a list of licence names the schema
+/// knows: a licence the operator cannot read is not one it may guess at.
+fn read_licences(briefing: &Json) -> Result<bool, Refused> {
+    let mut spire = false;
+    for held in
+        array_of(briefing, "licences_held").map_err(|misread| misread.refused("get_briefing"))?
+    {
+        let name = Wire::enum_name("gp.v1.Licence", Some(held)).ok_or_else(|| {
+            malformed(
+                "get_briefing",
+                "a held licence that is no licence the schema names",
+            )
+        })?;
+        if name == pharmakos_proto::gp::v1::Licence::ResonanceSpire.as_str_name() {
+            spire = true;
+        }
+    }
+    Ok(spire)
 }
 
 /// Every beacon `list_beacons` shows, ascending by id, at most
@@ -502,6 +631,21 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
                 }
                 Some(age)
             };
+            // An own beacon's sphere radius, which the gateway always writes:
+            // a radius of zero or less is no sphere, and an answer the
+            // operator cannot plan a reach around.
+            let sphere_radius_voxels = if mine {
+                let radius = int_of(row, "sphere_radius_voxels").map_err(misread)?;
+                if radius <= 0 {
+                    return Err(malformed(
+                        "list_beacons",
+                        "an own beacon with no sphere radius",
+                    ));
+                }
+                Some(radius)
+            } else {
+                None
+            };
             let priority = Wire::enum_name(
                 "gp.v1.InterfaceRow.QuartermasterPriority",
                 row.get("priority"),
@@ -517,6 +661,7 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
                 powered: mine && bool_of(row, "powered").map_err(misread)?,
                 priority: if mine { priority } else { None },
                 sighting_age_ms,
+                sphere_radius_voxels,
             });
         }
         text_of(&page, "next_cursor")
@@ -536,6 +681,7 @@ struct Seen {
     complete: bool,
     commander: Option<[i32; 3]>,
     enemies: Vec<Enemy>,
+    own_spire: bool,
 }
 
 /// Read the view to its complete page, which is the one that carries the
@@ -550,6 +696,7 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
         complete: false,
         commander: None,
         enemies: Vec::new(),
+        own_spire: false,
     };
     let mut cursor = String::new();
     for _ in 0..PAGES_MAX {
@@ -566,6 +713,9 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
                 let subtype = text_of(entity, "subtype").map_err(misread)?;
                 let owner = text_of(entity, "owner").map_err(misread)?;
                 if owner == own {
+                    if kind.as_deref() == Some("STRUCTURE") && subtype == "resonance_spire" {
+                        seen.own_spire = true;
+                    }
                     if kind.as_deref() == Some("UNIT") && subtype == "commander" {
                         // The least position when the view shows two, so the
                         // answer does not hang on the order of the list.
@@ -600,86 +750,200 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
     Ok(seen)
 }
 
-/// Whether this seat's commander died in the last Push, from the segment
-/// feed the Lull still holds: the Push's own (the gateway starts a new feed
-/// when the next Push begins).
+/// Whether [`Situation::read`] reads the seat's own failed route steps from
+/// the last Push's feed: a built-in seat does, to notice a stone that failed
+/// ([`crate::easy`]); an advisor does not, since it composes no stone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Steps {
+    /// Read them.
+    Read,
+    /// Do not ask: [`FailedSteps::NotRead`].
+    Skip,
+}
+
+/// One seat's own step lines, read in the feed's order: the route step
+/// running, and whether a rule's body is (its steps are numbered in its body).
+#[derive(Clone, Copy, Default)]
+struct Running {
+    step: Option<usize>,
+    in_rule: bool,
+}
+
+/// `Step N started.`, the gateway's own words: the step's index from 0.
+///
+/// # Errors
+///
+/// `MALFORMED` for a line that does not read so: a step the operator cannot
+/// number is not taken for another one.
+fn started_index(text: &str) -> Result<usize, Refused> {
+    let unread = || {
+        malformed(
+            "get_segment_feed",
+            "a `step_started` line that names no step",
+        )
+    };
+    let number = text
+        .strip_prefix("Step ")
+        .and_then(|rest| rest.strip_suffix(" started."))
+        .ok_or_else(unread)?;
+    number
+        .parse::<usize>()
+        .map_err(|_| unread())?
+        .checked_sub(1)
+        .ok_or_else(unread)
+}
+
+/// Whether this seat's commander died in the last Push, and which of its own
+/// route steps failed in it, from the segment feed the Lull still holds: the
+/// Push's own (the gateway starts a new feed when the next Push begins).
 ///
 /// The feed's digests count every kind over the whole segment, so the first
-/// page says whether any commander died where this seat could see; only then
-/// are the lines read, at most [`PAGES_MAX`] pages, for the one that names
-/// this seat. A line says whose commander it was in its words alone, since a
-/// feed event carries no seat field until its per-kind payload (`gateway.
-/// proto`'s `Event`, held to after S4), so the words are read strictly: the
-/// gateway's one string table writes "The commander of seat N died." and a
-/// line that does not read so is refused, never taken for another seat's.
+/// page says whether it shows the last Push at all (its `segment_ended`,
+/// which every seat is shown), whether any commander died where this seat
+/// could see and how many of the seat's own steps failed (a step's lines are
+/// told to its seat alone); only then are the lines read, at most
+/// [`PAGES_MAX`] pages. A line says whose commander it was in its words
+/// alone, since a feed event carries no seat field until its per-kind
+/// payload (`gateway.proto`'s `Event`, held to after S4), so the words are
+/// read strictly: the gateway's one string table writes "The commander of
+/// seat N died." and a line that does not read so is refused, never taken
+/// for another seat's. A failed step is the one whose `step_started` line
+/// came last outside a rule's body (`rule_fired` to `rule_ended`).
 ///
-/// A Lull resumed from a save opens with a fresh, empty feed (the save holds
-/// no recap events, as the gateway resumes one), so there it reads as
-/// [`LastPush::Survived`] and the guard a death would add is not added.
-///
-/// PLACEHOLDER: a resumed Lull forgets the last Push's death, which no seat-facing field carries — owner, S3, with `get_reports` or the feed's per-kind payload
+/// What is not known is said, never read as "nothing happened": in a Lull
+/// after the first whose feed shows no Push (one resumed from a save, whose
+/// feed is empty) both the death and the failed steps are
+/// [`PushUnread::Resumed`]; deaths or failures past the pages read are
+/// [`PushUnread::PastPages`], with the failed steps that were seen kept.
 ///
 /// # Errors
 ///
 /// The refusal, and `MALFORMED` for an answer that does not read.
-fn read_last_push(wire: &mut Wire<'_, '_>, seat: u8) -> Result<LastPush, Refused> {
+fn read_last_push(
+    wire: &mut Wire<'_, '_>,
+    seat: u8,
+    round: u32,
+    steps: Steps,
+) -> Result<(LastPush, FailedSteps), Refused> {
     let misread = |misread: Misread| misread.refused("get_segment_feed");
     // The fullest page the detail ladder serves (256 events), so the bound
     // reaches as far into a busy Push as the page count allows.
     let feed = |cursor: &str| object(vec![("cursor", string(cursor)), ("detail", string("full"))]);
     let mut page = wire.call("get_segment_feed", feed(""))?;
-    let deaths = deaths_counted(&page).map_err(misread)?;
-    if deaths == 0 {
-        return Ok(LastPush::Survived);
+    let shown = counted(&page, SEGMENT_ENDED).map_err(misread)? > 0;
+    let failed_of = |seen: Vec<usize>, unread: Option<PushUnread>| match (steps, unread) {
+        (Steps::Skip, _) => FailedSteps::NotRead,
+        (Steps::Read, None) => FailedSteps::Known(seen),
+        (Steps::Read, Some(why)) => FailedSteps::Unread { seen, why },
+    };
+    if !shown {
+        // No Push is shown: before the first round's Push there was none,
+        // and after it the feed was not kept (a resumed Lull).
+        return Ok(if round > 1 {
+            (
+                LastPush::Unread(PushUnread::Resumed),
+                failed_of(Vec::new(), Some(PushUnread::Resumed)),
+            )
+        } else {
+            (LastPush::Survived, failed_of(Vec::new(), None))
+        });
     }
-    let mut seen: u64 = 0;
-    for read in 1..=PAGES_MAX {
-        for event in array_of(&page, "events").map_err(misread)? {
-            if text_of(event, "kind").map_err(misread)? != COMMANDER_DIED {
-                continue;
+    let deaths = counted(&page, COMMANDER_DIED).map_err(misread)?;
+    let failures = match steps {
+        Steps::Read => counted(&page, STEP_FAILED).map_err(misread)?,
+        Steps::Skip => 0,
+    };
+    let mut died = false;
+    let mut failed: Vec<usize> = Vec::new();
+    let (mut deaths_seen, mut failures_seen) = (0_u64, 0_u64);
+    let more = |seen: u64, of: u64| seen < of;
+    if deaths > 0 || failures > 0 {
+        let mut running = Running::default();
+        for read in 1..=PAGES_MAX {
+            for event in array_of(&page, "events").map_err(misread)? {
+                let kind = text_of(event, "kind").map_err(misread)?;
+                let text = text_of(event, "text").map_err(misread)?;
+                let one = |seen: u64| {
+                    seen.checked_add(1).ok_or_else(|| {
+                        malformed("get_segment_feed", "a count of lines that does not fit")
+                    })
+                };
+                match kind {
+                    COMMANDER_DIED => {
+                        if whose_commander_died(text)? == seat {
+                            died = true;
+                        }
+                        deaths_seen = one(deaths_seen)?;
+                    }
+                    "rule_fired" if steps == Steps::Read => running.in_rule = true,
+                    "rule_ended" if steps == Steps::Read => running.in_rule = false,
+                    "step_started" if steps == Steps::Read && !running.in_rule => {
+                        running.step = Some(started_index(text)?);
+                    }
+                    STEP_FAILED if steps == Steps::Read => {
+                        if !running.in_rule
+                            && let Some(index) = running.step
+                            && !failed.contains(&index)
+                        {
+                            failed.push(index);
+                        }
+                        failures_seen = one(failures_seen)?;
+                    }
+                    _ => {}
+                }
             }
-            if whose_commander_died(text_of(event, "text").map_err(misread)?)? == seat {
-                return Ok(LastPush::Died);
+            let deaths_left = !died && more(deaths_seen, deaths);
+            if !deaths_left && !more(failures_seen, failures) {
+                break;
             }
-            seen = seen.checked_add(1).ok_or_else(|| {
-                malformed("get_segment_feed", "a count of lines that does not fit")
-            })?;
+            let cursor = text_of(&page, "next_cursor").map_err(misread)?.to_owned();
+            if cursor.is_empty() || read == PAGES_MAX {
+                break;
+            }
+            page = wire.call("get_segment_feed", feed(&cursor))?;
         }
-        if seen >= deaths {
-            return Ok(LastPush::Survived);
-        }
-        let cursor = text_of(&page, "next_cursor").map_err(misread)?.to_owned();
-        if cursor.is_empty() || read == PAGES_MAX {
-            break;
-        }
-        page = wire.call("get_segment_feed", feed(&cursor))?;
     }
-    Ok(LastPush::Unread)
+    let last_push = if died {
+        LastPush::Died
+    } else if more(deaths_seen, deaths) {
+        LastPush::Unread(PushUnread::PastPages)
+    } else {
+        LastPush::Survived
+    };
+    failed.sort_unstable();
+    let unread = more(failures_seen, failures).then_some(PushUnread::PastPages);
+    Ok((last_push, failed_of(failed, unread)))
 }
 
-/// How many `commander_died` lines the feed's digests count over the whole
-/// segment.
+/// The feed's kind for a segment's end, the gateway's `segment_ended`: a
+/// line every seat is shown, so a feed that counts none shows no Push.
+const SEGMENT_ENDED: &str = "segment_ended";
+
+/// The feed's kind for a step's failure, the gateway's `step_failed`.
+const STEP_FAILED: &str = "step_failed";
+
+/// How many lines of `kind` the feed's digests count over the whole segment.
 ///
 /// # Errors
 ///
 /// [`Misread`] for a digest that does not read, or a sum that does not fit.
-fn deaths_counted(page: &Json) -> Result<u64, Misread> {
-    let mut deaths: u64 = 0;
+fn counted(page: &Json, kind: &str) -> Result<u64, Misread> {
+    let mut total: u64 = 0;
     for digest in array_of(page, "digests")? {
         for count in array_of(digest, "counts")? {
-            if text_of(count, "kind")? == COMMANDER_DIED {
+            if text_of(count, "kind")? == kind {
                 let counted = u64::try_from(int_of(count, "count")?).map_err(|_| Misread {
                     key: String::from("count"),
                     wanted: "a count of zero or more",
                 })?;
-                deaths = deaths.checked_add(counted).ok_or_else(|| Misread {
+                total = total.checked_add(counted).ok_or_else(|| Misread {
                     key: String::from("count"),
                     wanted: "a count whose sum fits",
                 })?;
             }
         }
     }
-    Ok(deaths)
+    Ok(total)
 }
 
 /// The template ids the library lists, ascending.
