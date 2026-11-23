@@ -173,6 +173,65 @@ pub const fn structure_subtype(kind: StructureKind) -> &'static str {
     pharmakos_plan_core::vocabulary::blueprint_id(kind)
 }
 
+/// A primitive look's shape (`gp.api.v1.ViewEntity.Look.Shape`; S3's `probw`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Shape {
+    /// A plain block.
+    Block,
+    /// A narrow upright.
+    Tower,
+    /// A low bowl.
+    Dish,
+    /// A flat box filling its size: a wall.
+    Slab,
+}
+
+impl Shape {
+    /// The value's name in `gateway.proto`, which the wire lower-cases
+    /// (decisions-log item 80).
+    #[must_use]
+    pub const fn proto_name(self) -> &'static str {
+        match self {
+            Shape::Block => "BLOCK",
+            Shape::Tower => "TOWER",
+            Shape::Dish => "DISH",
+            Shape::Slab => "SLAB",
+        }
+    }
+}
+
+/// The full name of the shape enum, for its lower-case wire spelling.
+pub const SHAPE_ENUM: &str = "gp.api.v1.ViewEntity.Look.Shape";
+
+/// How a structure kind is drawn: one row per kind of the sim's, in a `match`
+/// the compiler holds exhaustive, so a new kind is a compile error here
+/// rather than a structure drawn as nothing (S3's `probw`). The shape is
+/// presentation (client-wire-rulings, `fixq` 2), chosen here once; the size is
+/// never a number of this crate's, it is [`STRUCTURE_SIZE`] or a wall's box.
+#[must_use]
+pub const fn structure_shape(kind: StructureKind) -> Shape {
+    match kind {
+        StructureKind::Generator => Shape::Block,
+        StructureKind::Autocannon | StructureKind::SurveyPost | StructureKind::ResonanceSpire => {
+            Shape::Tower
+        }
+        StructureKind::Mortar => Shape::Dish,
+        StructureKind::Wall => Shape::Slab,
+    }
+}
+
+/// A structure's size in whole voxels, `[x, y, z]`, as the sim gives it: a
+/// structure stands on **one column** (spec section 5; `pharmakos_sim::footing`,
+/// "A structure and a beacon each stand on one column"; and
+/// `pharmakos_sim::targeting::Ground::structure_on`, one structure per voxel)
+/// at its standing point, the voxel above the column's top solid voxel
+/// (`pharmakos_sim::power`'s `vent_under`). The sim gives no structure a
+/// height, so it is that one voxel. A wall, which is voxels, is its box
+/// instead (`crate::surface::watch`).
+///
+/// PLACEHOLDER: one voxel as every structure kind's look size — owner, at S3's demo (a size per kind is a rules-table row, `proto/gp/v1`, and moves the rules hash).
+pub const STRUCTURE_SIZE: [u32; 3] = [1, 1, 1];
+
 /// A seat as `gp.api.v1.ViewEntity.owner` spells it: `seat.0`.
 ///
 /// The same spelling [`crate::token::Subject::render`] writes into the audit

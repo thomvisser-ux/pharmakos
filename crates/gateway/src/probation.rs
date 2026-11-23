@@ -215,6 +215,30 @@ mod tests {
         assert!(!Preset::Custom.untimed_lulls());
     }
 
+    /// `get_status` writes a preset in [`Preset::name`]'s spelling, so that
+    /// spelling must be the lower-case wire name of `gp.api.v1.Preset`'s own
+    /// value, and every value but the unspecified one must be a preset (S3's
+    /// `probw`): one spelling for the config line, a save and the wire.
+    #[test]
+    fn a_presets_name_is_its_wire_name_and_every_wire_value_is_a_preset() {
+        const ENUM: &str = "gp.api.v1.Preset";
+        let declared = pharmakos_proto::descriptor::schema()
+            .enumeration(ENUM)
+            .expect("gateway.proto declares the preset enum");
+        let mut named: Vec<String> = Vec::new();
+        for value in &declared.values {
+            if value.name == "PRESET_UNSPECIFIED" {
+                continue;
+            }
+            let wire = pharmakos_proto::scope::wire_name(ENUM, &value.name);
+            let preset = Preset::parse(&wire).expect("every declared value is a preset");
+            assert_eq!(preset.name(), wire);
+            named.push(wire);
+        }
+        named.sort();
+        assert_eq!(named, ["custom", "probation"]);
+    }
+
     #[test]
     fn a_memo_reads_back_as_it_is_spelt() {
         for memo in Memo::ALL {

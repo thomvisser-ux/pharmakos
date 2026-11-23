@@ -74,6 +74,7 @@ fn entity(id: String, kind: view_entity::Kind, owner: &str, at: [i32; 3]) -> Vie
         hp: Some(80),
         max_hp: Some(120),
         heading: Some(12_000),
+        ..ViewEntity::default()
     }
 }
 

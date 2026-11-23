@@ -224,6 +224,64 @@ pub fn result(response: &Json, what: &str) -> Json {
     })
 }
 
+/// A result as canonical proto JSON of the message `full_name`, as a client
+/// reads it: the `_status` footer stripped and every enum value translated
+/// back from the gateway's lower-case spelling (decisions-log items 80 and
+/// 110), ready for `pharmakos_proto::json::decode_json`, which refuses a key
+/// or a value the schema does not declare.
+#[must_use]
+pub fn canonical_answer(full_name: &str, answer: &Json) -> Json {
+    let Json::Object(entries) = answer else {
+        panic!("a result is an object: {answer:?}");
+    };
+    let stripped = Json::Object(
+        entries
+            .iter()
+            .filter(|(key, _)| key != "_status")
+            .cloned()
+            .collect(),
+    );
+    canonical_enums(full_name, &stripped)
+}
+
+/// `value`, read as the message `full_name`, with every enum field spelt as
+/// the schema spells it (the client's `enums::canonical`, restated for the
+/// tests of the crate that writes the spelling).
+fn canonical_enums(full_name: &str, value: &Json) -> Json {
+    use pharmakos_proto::descriptor::{self, ScalarKind};
+    let (Some(message), Json::Object(entries)) = (descriptor::schema().message(full_name), value)
+    else {
+        return value.clone();
+    };
+    let one = |kind: ScalarKind, type_name: &str, item: &Json| match (kind, item) {
+        (ScalarKind::Enum, Json::String(wire)) => Json::String(
+            pharmakos_proto::scope::from_wire_name(type_name, wire).unwrap_or_else(|| wire.clone()),
+        ),
+        (ScalarKind::Message, Json::Object(_)) => canonical_enums(type_name, item),
+        _ => item.clone(),
+    };
+    Json::Object(
+        entries
+            .iter()
+            .map(|(key, entry)| {
+                let converted = match message.field_by_name(key) {
+                    Some(field) => match entry {
+                        Json::Array(items) if field.repeated => Json::Array(
+                            items
+                                .iter()
+                                .map(|item| one(field.kind, &field.type_name, item))
+                                .collect(),
+                        ),
+                        other => one(field.kind, &field.type_name, other),
+                    },
+                    None => entry.clone(),
+                };
+                (key.clone(), converted)
+            })
+            .collect(),
+    )
+}
+
 /// The closed-set code a refusal came back with.
 #[must_use]
 pub fn code(response: &Json) -> String {

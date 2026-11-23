@@ -73,6 +73,7 @@ use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::said;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelStore;
+use std::collections::BTreeSet;
 
 use crate::error::Error;
 use crate::feed::ViewCursor;
@@ -151,6 +152,15 @@ struct ViewerState {
     structures: Vec<(u64, String)>,
     /// The wrecks this viewer has been shown, by wreck id.
     wrecks: Vec<(u64, String)>,
+    /// The walls this viewer has been shown by an own wall target's key
+    /// (S3's `probw`): the viewer's own walls, or any for a no-fog spectator.
+    walls: Vec<(WallKey, String)>,
+    /// The walls this viewer was last shown as groups of wall voxels, each
+    /// with the voxels it was shown with ([`ViewFeed::wall_group_handles`]).
+    wall_groups: Vec<ShownWall>,
+    /// How many wall handles this viewer has been given, of both kinds, so no
+    /// number is minted twice.
+    walls_minted: u64,
     /// The shells in flight this viewer has been shown, by their key; a shell
     /// that has landed is forgotten ([`ViewFeed::forget_landed_shells`]).
     shells: Vec<(ShellKey, String)>,
@@ -178,6 +188,9 @@ impl ViewerState {
             units: Vec::new(),
             structures: Vec::new(),
             wrecks: Vec::new(),
+            walls: Vec::new(),
+            wall_groups: Vec::new(),
+            walls_minted: 0,
             shells: Vec::new(),
             shells_minted: 0,
             beacons: Vec::new(),
@@ -221,6 +234,32 @@ pub struct ViewFeed {
     modified: Vec<u32>,
     modified_flag: Vec<bool>,
     viewers: Vec<ViewerState>,
+    /// Every standing wall voxel of the world, read once per world tick and
+    /// shared by every viewer's walls in that tick ([`ViewFeed::standing_walls`]),
+    /// keyed by the view's id and the world's tick.
+    standing_walls: Option<StandingWalls>,
+    /// How many times the world's modified chunks were read for wall voxels:
+    /// counted work, for the cost of the view (S3's `probw`).
+    wall_scans: u64,
+}
+
+/// The standing wall voxels of one world tick of one view.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct StandingWalls {
+    view_id: u64,
+    tick: u32,
+    voxels: Vec<(u8, [i32; 3])>,
+}
+
+/// A wall a viewer was last shown as a group of wall voxels: its handle and
+/// the handle's number, the seat whose material the voxels are, and the
+/// voxels.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct ShownWall {
+    number: u64,
+    handle: String,
+    seat: u8,
+    voxels: BTreeSet<[i32; 3]>,
 }
 
 impl ViewFeed {
@@ -237,6 +276,8 @@ impl ViewFeed {
             modified: Vec::new(),
             modified_flag: Vec::new(),
             viewers: Vec::new(),
+            standing_walls: None,
+            wall_scans: 0,
         }
     }
 
@@ -678,6 +719,136 @@ impl ViewFeed {
         }
     }
 
+    /// This viewer's opaque handle for one of its own wall targets (or any,
+    /// for a no-fog spectator), `l_N`, minted on first sight (S3's `probw`).
+    /// A wall is voxels and has no id in any table, so it is keyed by what
+    /// makes the target one wall ([`WallKey`]), which only its own seat is
+    /// told; the number counts the walls this viewer has been shown.
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn wall_handle(&mut self, viewer: Viewer, key: WallKey) -> Result<String, Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        if let Some((_, handle)) = state.walls.iter().find(|(held, _)| *held == key) {
+            return Ok(handle.clone());
+        }
+        let (_, handle) = mint_wall(state)?;
+        state.walls.push((key, handle.clone()));
+        Ok(handle)
+    }
+
+    /// This viewer's handles for `groups`, walls it is shown as groups of the
+    /// wall voxels it sees, each `(seat, voxels)`, in order (S3's `probw`).
+    ///
+    /// Keyed by what **this viewer** has seen and nothing of the owner's, and
+    /// within one seat's material only: a group takes the **lowest-numbered**
+    /// handle among the groups of its seat this viewer was last shown that
+    /// share a voxel with it and that no earlier group of this answer took;
+    /// otherwise it is given a new `l_N`. The groups come in the order of
+    /// their least voxel, so:
+    ///
+    /// * two walls that **join** keep the lower of their two handles, and the
+    ///   other is never given again to this viewer (numbers only grow);
+    /// * a wall that **splits** keeps its handle on the part holding its least
+    ///   voxel, and every other part takes a new one;
+    /// * a wall this viewer **stops seeing** is forgotten, and takes a new
+    ///   handle when it is seen again;
+    /// * a voxel position that turns into another seat's wall never carries
+    ///   the first seat's handle;
+    /// * no handle is given twice in one answer.
+    ///
+    /// The groups are then what this viewer was last shown.
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn wall_group_handles(
+        &mut self,
+        viewer: Viewer,
+        groups: &[(u8, BTreeSet<[i32; 3]>)],
+    ) -> Result<Vec<String>, Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        let mut last: Vec<Option<ShownWall>> = core::mem::take(&mut state.wall_groups)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut handles: Vec<String> = Vec::with_capacity(groups.len());
+        let mut shown: Vec<ShownWall> = Vec::with_capacity(groups.len());
+        for (seat, group) in groups {
+            let carried = last
+                .iter()
+                .enumerate()
+                .filter_map(|(at, slot)| {
+                    slot.as_ref()
+                        .filter(|held| held.seat == *seat && !held.voxels.is_disjoint(group))
+                        .map(|held| (held.number, at))
+                })
+                .min()
+                .and_then(|(_, at)| last.get_mut(at).and_then(Option::take));
+            let (number, handle) = match carried {
+                Some(held) => (held.number, held.handle),
+                None => mint_wall(state)?,
+            };
+            handles.push(handle.clone());
+            shown.push(ShownWall {
+                number,
+                handle,
+                seat: *seat,
+                voxels: group.clone(),
+            });
+        }
+        state.wall_groups = shown;
+        Ok(handles)
+    }
+
+    /// Every standing wall voxel of `world`, `(builder seat, voxel)`,
+    /// ascending: read from the chunks written since generation (the
+    /// generator lays no wall) once per world tick of this view, and shared
+    /// by every viewer's walls in that tick, since a wall voxel changes only
+    /// when the world steps and a restore attaches a new view (S3's `probw`).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a chunk the store lists as
+    /// modified and does not hold, or a voxel past `i32`'s coordinates.
+    pub fn standing_walls(
+        &mut self,
+        world: &pharmakos_sim::world::World,
+    ) -> Result<Vec<(u8, [i32; 3])>, Error> {
+        let tick = world.tick().raw();
+        if let Some(held) = self
+            .standing_walls
+            .as_ref()
+            .filter(|held| held.view_id == self.view_id && held.tick == tick)
+        {
+            return Ok(held.voxels.clone());
+        }
+        let voxels = scan_standing_walls(world)?;
+        self.wall_scans = self.wall_scans.checked_add(1).ok_or_else(|| {
+            Error::internal("the view feed has read wall voxels more times than u64 counts")
+        })?;
+        self.standing_walls = Some(StandingWalls {
+            view_id: self.view_id,
+            tick,
+            voxels: voxels.clone(),
+        });
+        Ok(voxels)
+    }
+
+    /// How many times the world's modified chunks have been read for wall
+    /// voxels: counted work, read by the cost tests.
+    #[must_use]
+    pub const fn wall_scans(&self) -> u64 {
+        self.wall_scans
+    }
+
     /// This viewer's opaque handle for a structure. As [`ViewFeed::unit_handle`].
     ///
     /// # Errors
@@ -988,6 +1159,81 @@ pub struct ShellKey {
     pub lands_at: u32,
     /// The point it was aimed at, raw Q16.16.
     pub aim: [i32; 3],
+}
+
+/// What makes one of the owner's wall targets one wall: the seat, its box of
+/// columns and its top. A Build target's row moves as the table keeps its
+/// `(beacon, kind)` order, so the row is not the key, and neither is the
+/// beacon: targets of one seat with one box and one top are one wall of
+/// voxels, whichever beacons wrote them. Read only for the owner and a no-fog
+/// spectator.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WallKey {
+    /// The seat whose wall it is: two of its beacons whose targets give one
+    /// box and one top are one wall, and either target dropped leaves the
+    /// key as it was.
+    pub seat: u8,
+    /// The box's lowest column, `[x, y]`.
+    pub min: [i16; 2],
+    /// The box's highest column, `[x, y]`.
+    pub max: [i16; 2],
+    /// The highest voxel the box fills.
+    pub top: i16,
+}
+
+/// A new wall handle for this viewer, `l_N`, counting every wall handle it
+/// has been given of either kind, so none is minted twice.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] past `u64`'s count.
+fn mint_wall(state: &mut ViewerState) -> Result<(u64, String), Error> {
+    let number = state.walls_minted.checked_add(1).ok_or_else(|| {
+        Error::internal("this viewer has been given more wall handles than u64 counts")
+    })?;
+    state.walls_minted = number;
+    Ok((number, format!("l_{number}")))
+}
+
+/// Every standing wall voxel of `world`, `(builder seat, voxel)`, ascending
+/// by seat and then voxel, read from the modified chunks.
+///
+/// # Errors
+///
+/// As [`ViewFeed::standing_walls`].
+fn scan_standing_walls(world: &pharmakos_sim::world::World) -> Result<Vec<(u8, [i32; 3])>, Error> {
+    let voxels = world.voxels();
+    let edge = pharmakos_sim::voxels::CHUNK_EDGE_I32;
+    let off_the_map =
+        || Error::internal("a modified chunk's voxel lies past the map's coordinates");
+    let mut out: Vec<(u8, [i32; 3])> = Vec::new();
+    for chunk in voxels.modified_indices() {
+        let (Some([ox, oy, oz]), Some(bytes)) =
+            (voxels.chunk_origin(chunk), voxels.chunk_bytes(chunk))
+        else {
+            return Err(Error::internal(said!(
+                "the voxel store lists chunk {} as modified and holds no such chunk",
+                chunk
+            )));
+        };
+        for (index, byte) in (0_i32..).zip(bytes.iter()) {
+            let Some((seat, _)) = pharmakos_sim::voxels::Material::from_raw(*byte).wall_of() else {
+                continue;
+            };
+            let (x, rest) = (index.rem_euclid(edge), index.div_euclid(edge));
+            let (y, z) = (rest.rem_euclid(edge), rest.div_euclid(edge));
+            out.push((
+                seat.raw(),
+                [
+                    ox.checked_add(x).ok_or_else(off_the_map)?,
+                    oy.checked_add(y).ok_or_else(off_the_map)?,
+                    oz.checked_add(z).ok_or_else(off_the_map)?,
+                ],
+            ));
+        }
+    }
+    out.sort_unstable();
+    Ok(out)
 }
 
 /// This viewer's slot, made on first sight of it.
@@ -1447,5 +1693,94 @@ mod tests {
         assert_eq!(page.next.to_seq, started);
         assert_eq!(page.next.index, 0);
         assert!(!page.next.is_keyframe());
+    }
+}
+
+#[cfg(test)]
+mod wall_handles {
+    use super::{ViewFeed, WallKey};
+    use crate::fog::Viewer;
+    use pharmakos_sim::tables::SeatId;
+    use std::collections::BTreeSet;
+
+    /// The voxels `x = from..=to` of one row.
+    fn row(from: i32, to: i32) -> BTreeSet<[i32; 3]> {
+        (from..=to).map(|x| [x, 0, 0]).collect()
+    }
+
+    /// One answer's handles for `groups`, every group of seat 0's material.
+    fn shown(feed: &mut ViewFeed, viewer: Viewer, groups: &[BTreeSet<[i32; 3]>]) -> Vec<String> {
+        let tagged: Vec<(u8, BTreeSet<[i32; 3]>)> =
+            groups.iter().map(|group| (0, group.clone())).collect();
+        feed.wall_group_handles(viewer, &tagged).expect("handles")
+    }
+
+    /// S3's `probw`, its last pass (item 2): two walls a viewer sees that join
+    /// keep the lower of their handles, whichever it was shown first; the
+    /// freed handle is never given again; a split keeps the handle on the part
+    /// holding the least voxel and gives the rest new ones; a wall seen again
+    /// after it was lost takes a new handle; and no handle is given twice in
+    /// one answer.
+    #[test]
+    fn a_wall_handle_survives_joins_splits_and_loss_by_the_stated_rule() {
+        let viewer = Viewer::Seat(SeatId::new(1));
+        let mut feed = ViewFeed::new();
+        assert_eq!(shown(&mut feed, viewer, &[row(8, 10)]), ["l_1"]);
+        // A second wall, west of the first and lower in the grouping order.
+        assert_eq!(
+            shown(&mut feed, viewer, &[row(0, 2), row(8, 10)]),
+            ["l_2", "l_1"]
+        );
+        // The gap is filled: the joined wall keeps the lower handle, l_1.
+        assert_eq!(shown(&mut feed, viewer, &[row(0, 10)]), ["l_1"]);
+        // Shot through: the part holding the least voxel keeps l_1; the other
+        // takes a new handle, never the freed l_2.
+        assert_eq!(
+            shown(&mut feed, viewer, &[row(0, 4), row(6, 10)]),
+            ["l_1", "l_3"]
+        );
+        // Two groups of one answer that share the one wall last shown: the
+        // first takes it, the second a new handle.
+        assert_eq!(
+            shown(&mut feed, viewer, &[row(0, 1), row(3, 4)]),
+            ["l_1", "l_4"]
+        );
+        // Lost, then seen again: a new handle.
+        assert_eq!(shown(&mut feed, viewer, &[]), Vec::<String>::new());
+        assert_eq!(shown(&mut feed, viewer, &[row(0, 4)]), ["l_5"]);
+        // Another viewer counts its own.
+        assert_eq!(
+            shown(&mut feed, Viewer::Seat(SeatId::new(2)), &[row(0, 4)]),
+            ["l_1"]
+        );
+        // An own target's handle comes from the same count.
+        let key = WallKey {
+            seat: 1,
+            min: [0, 0],
+            max: [1, 1],
+            top: 3,
+        };
+        assert_eq!(feed.wall_handle(viewer, key).expect("a handle"), "l_6");
+    }
+
+    /// S3's `probw`, its last pass (item 3): a handle is carried within one
+    /// seat's material only. The same positions shown as another seat's wall
+    /// take a new handle, and two seats' groups in one answer never share one.
+    #[test]
+    fn a_wall_handle_never_crosses_from_one_seats_wall_to_anothers() {
+        let viewer = Viewer::Seat(SeatId::new(2));
+        let mut feed = ViewFeed::new();
+        let first = feed
+            .wall_group_handles(viewer, &[(0, row(0, 4))])
+            .expect("handles");
+        assert_eq!(first, ["l_1"]);
+        let rebuilt = feed
+            .wall_group_handles(viewer, &[(1, row(0, 4))])
+            .expect("handles");
+        assert_eq!(rebuilt, ["l_2"], "seat 1's wall where seat 0's stood");
+        let both = feed
+            .wall_group_handles(viewer, &[(0, row(0, 2)), (1, row(3, 4))])
+            .expect("handles");
+        assert_eq!(both, ["l_3", "l_2"]);
     }
 }
