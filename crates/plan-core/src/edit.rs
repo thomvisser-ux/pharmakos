@@ -357,7 +357,11 @@ pub fn new_rule(playbook_jsonc: &str, rules: &RulesTable) -> Result<NewRule, New
         ),
     ]);
     // The deepest container the file holds: the rules list, the declarative
-    // block, or neither.
+    // block, or neither. Only an append to rules already written is styled.
+    let appended = playbook
+        .declarative
+        .as_ref()
+        .is_some_and(|body| !body.handlers.is_empty());
     let (at, value) = match playbook.declarative.as_ref() {
         Some(body) if !body.handlers.is_empty() => (String::from("/declarative/handlers/-"), rule),
         Some(_) => (
@@ -384,15 +388,83 @@ pub fn new_rule(playbook_jsonc: &str, rules: &RulesTable) -> Result<NewRule, New
             ),
             (String::from("value"), value),
         ])]);
-    let (patched, inverse) =
-        crate::patch_text(playbook_jsonc, &pharmakos_proto::json::write(&patch))
-            .map_err(NewRuleError::Refused)?;
+    let (patched, inverse) = styled(playbook_jsonc, &patch, appended)?;
     Ok(NewRule {
         playbook_jsonc: patched,
         inverse_json_patch: inverse,
         pointer: format!("/declarative/handlers/{count}"),
         id,
     })
+}
+
+/// `patch` (one `add` of a rule) applied to `playbook_jsonc` through the patch
+/// module's own door; then, for an append to the rules already written
+/// (`appended`), the new rule written in the file's own style
+/// ([`crate::jsonc::Node::style_appended_item`]), whose undo is the rules
+/// list as it was written, swapped back whole, and checked to give the file
+/// back byte for byte.
+///
+/// # Errors
+///
+/// [`NewRuleError::Refused`] for the patch's refusal, and for an undo that
+/// would not give the file back, which never happens.
+fn styled(
+    playbook_jsonc: &str,
+    patch: &pharmakos_proto::json::Json,
+    appended: bool,
+) -> Result<Patched, NewRuleError> {
+    let refused = NewRuleError::Refused;
+    let document = crate::Document::parse(playbook_jsonc).map_err(refused)?;
+    let forward = crate::Patch::from_json(patch).map_err(refused)?;
+    let (mut patched, inverse) = crate::patch::apply(&document, &forward).map_err(refused)?;
+    if !appended {
+        return Ok((patched.to_text(), inverse.to_text()));
+    }
+    let rules = "/declarative/handlers";
+    let before = node_at(&document, rules)?.written();
+    if !node_mut_at(&mut patched, rules)?.style_appended_item() {
+        return Ok((patched.to_text(), inverse.to_text()));
+    }
+    let undo = crate::Patch::undo(vec![crate::patch::Undo {
+        path: String::from(rules),
+        step: crate::patch::UndoStep::Swap { written: before },
+    }]);
+    let (undone, _) = crate::patch::apply(&patched, &undo).map_err(refused)?;
+    if undone.to_text() != playbook_jsonc {
+        return Err(NewRuleError::Refused(Error::at(
+            rules,
+            s::NEW_RULE_UNDO_INEXACT,
+        )));
+    }
+    Ok((patched.to_text(), undo.to_text()))
+}
+
+/// The node at `pointer`, a path every playbook with rules spells one way.
+fn node_at<'a>(
+    document: &'a crate::Document,
+    pointer: &str,
+) -> Result<&'a crate::jsonc::Node, NewRuleError> {
+    let mut node = document.root();
+    for token in split_pointer(pointer).map_err(NewRuleError::Refused)? {
+        node = node
+            .lookup(&token)
+            .map_err(|_| NewRuleError::Refused(Error::at(pointer, s::NEW_RULE_UNDO_INEXACT)))?;
+    }
+    Ok(node)
+}
+
+/// [`node_at`], mutably.
+fn node_mut_at<'a>(
+    document: &'a mut crate::Document,
+    pointer: &str,
+) -> Result<&'a mut crate::jsonc::Node, NewRuleError> {
+    let mut node = document.root_mut();
+    for token in split_pointer(pointer).map_err(NewRuleError::Refused)? {
+        node = node
+            .lookup_mut(&token)
+            .map_err(|_| NewRuleError::Refused(Error::at(pointer, s::NEW_RULE_UNDO_INEXACT)))?;
+    }
+    Ok(node)
 }
 
 /// A refusal of [`new_rule`] in the player's words.

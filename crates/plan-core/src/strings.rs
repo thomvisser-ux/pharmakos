@@ -642,6 +642,10 @@ pub const RENDER_CHIP_NOT_A_NUMBER: &str =
 pub const TYPED_NO_NUMBER_HERE: &str = "nothing at this place in the playbook takes a typed number";
 /// `set_value_text` with nothing typed.
 pub const TYPED_EMPTY: &str = "nothing was typed";
+/// `new_rule` unable to write its rule in the file's style with an exact undo,
+/// which never happens.
+pub const NEW_RULE_UNDO_INEXACT: &str =
+    "the new rule could not be written with an undo that gives the file back";
 /// `new_rule` finding no free id, which one past the count always gives.
 pub const NEW_RULE_NO_ID: &str = "no free rule id was found, which never happens";
 

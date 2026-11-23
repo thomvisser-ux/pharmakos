@@ -419,3 +419,36 @@ fn a_point_is_read_only_in_a_unit_with_a_fraction() {
     let (patched, _) = typed(ONE_RULE, "/declarative/route/0/hold/ms", "2.0").expect("seconds");
     assert!(patched.contains("\"ms\": 2000"), "{patched}");
 }
+
+/// Review fix pass 1, item 7: the new rule is written in the file's own
+/// style: the comma follows the last rule, the new rule stands on a line of
+/// its own at the last rule's indentation, and the bracket keeps its line;
+/// comments survive and the undo gives the file back. On a hand-written file
+/// and on one that spells its members in camelCase.
+#[test]
+fn a_new_rule_is_written_in_the_files_own_style() {
+    let camel = ONE_RULE
+        .replace("\"cooldown_ms\"", "\"cooldownMs\"")
+        .replace("\"max_fires\"", "\"maxFires\"");
+    for (case, text) in [("hand-written", ONE_RULE.to_owned()), ("camelCase", camel)] {
+        let made = new_rule(&text, &rules()).expect("a rule");
+        let patched = &made.playbook_jsonc;
+        assert!(
+            patched.contains("\"max_fires\": 3},\n      {\"id\":\"rule_2\"")
+                || patched.contains("\"maxFires\": 3},\n      {\"id\":\"rule_2\""),
+            "{case}: the comma follows the last rule and the new one has its own line:\n{patched}"
+        );
+        assert!(
+            !patched.contains("\n    ,"),
+            "{case}: no leading-comma line:\n{patched}"
+        );
+        assert!(
+            patched.contains("}\n    ]\n  },"),
+            "{case}: the bracket keeps its line:\n{patched}"
+        );
+        assert!(patched.contains("// The rule the tests edit."), "{case}");
+        decode_jsonc(patched).expect("a canonical form");
+        let (undone, _) = patch_text(patched, &made.inverse_json_patch).expect("the undo");
+        assert_eq!(undone, text, "{case}: the undo gives the file back");
+    }
+}
