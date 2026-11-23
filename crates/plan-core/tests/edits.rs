@@ -382,3 +382,23 @@ fn a_pointer_naming_no_field_takes_no_number_and_a_bare_count_has_no_trailing_sp
         "`0` is below the least this takes, 0.001 s"
     );
 }
+
+/// Review fix pass 1, item 3: a `uint32` field takes a value past `i32::MAX`
+/// and up to `u32::MAX`, and refuses one past that (the reviewer's mutant
+/// M07 read a `uint32` as an `int32`).
+#[test]
+fn a_uint32_field_takes_its_whole_range() {
+    let near = ONE_RULE.replace(
+        r#"{"cmdr_hp_pct": {"cmp": "LE"}}"#,
+        r#"{"enemy_units_near": {"near": {"safest": {}}, "radius_voxels": 24, "count": {"op": "GE", "value": 1}, "freshness": {"kind": "VISIBLE_NOW"}}}"#,
+    );
+    let radius = "/declarative/handlers/0/when/enemy_units_near/radius_voxels";
+    let (patched, _) = typed(&near, radius, "4294967295").expect("a uint32's most");
+    assert!(patched.contains("4294967295"), "{patched}");
+    let (patched, _) = typed(&near, radius, "3000000000").expect("past an int32");
+    assert!(patched.contains("3000000000"), "{patched}");
+    assert_eq!(
+        typed(&near, radius, "4294967296"),
+        Err(SetValueError::DoesNotFit)
+    );
+}

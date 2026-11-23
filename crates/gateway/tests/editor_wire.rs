@@ -493,6 +493,19 @@ fn compose_wall_box_refuses_in_its_words() {
     );
     let refused = call_in_lull(&mut surface, &token, &mut left, "compose_wall_box", &past);
     assert_eq!(code(&refused), "INVALID_ARGUMENT", "{refused:?}");
+    // A voxel is exactly `x`, `y` and `z` (review fix pass 1, item 3; the
+    // reviewer's mutant M08): a fourth member, or one missing, is refused.
+    let voxel = format!("{{\"x\":{cx},\"y\":{cy},\"z\":{cz}}}");
+    for odd in [
+        format!("{{\"x\":{cx},\"y\":{cy},\"z\":{cz},\"w\":0}}"),
+        format!("{{\"x\":{cx},\"y\":{cy}}}"),
+    ] {
+        let params = compose("b_00", [cx, cy, cz], [cx + 1, cy, cz]).replacen(&voxel, &odd, 1);
+        assert_ne!(params, compose("b_00", [cx, cy, cz], [cx + 1, cy, cz]));
+        let refused = call_in_lull(&mut surface, &token, &mut left, "compose_wall_box", &params);
+        assert_eq!(code(&refused), "INVALID_ARGUMENT", "{odd}: {refused:?}");
+        assert!(message(&refused).contains("is a voxel"), "{odd}");
+    }
 }
 
 /// Item 4: a beacon that is not the caller's own, a foreign handle and a name
