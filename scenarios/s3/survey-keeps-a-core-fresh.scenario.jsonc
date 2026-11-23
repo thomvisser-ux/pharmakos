@@ -3,8 +3,8 @@
 //
 // Lane `srvy` (PR #210, fix pass 1): Survey's scouts refresh the sightings
 // their seat holds before the next Lull (spec section 6's Survey row;
-// decisions-log item 13; decisions-log, the item recording 2026-11-22's Survey
-// ruling: the sentence binds the sightings a seat already holds), across Pushes
+// decisions-log item 13; item 173 (1): the sentence binds the sightings a seat
+// already holds), across Pushes
 // longer than the reach window (`verifier.reach_memory_ms`, 180 s), on the
 // golden seed, in three rounds of 300 s, 480 s and 480 s.
 //
@@ -17,13 +17,14 @@
 // A scout scanning the corner finds seat 1's core (`enemy_beacon_found`,
 // tick 4666 in round 1). From then on the seat holds that sighting, and in
 // each Push a scout leaves the scan for it: the first refresh is tick 7691 in
-// round 2, and the chain carries every later one (ticks 8916 and 15231 in
-// round 2, 18646, 22161 and 23646 in round 3), so the sighting's age at round
-// 2's Lull is 66.7 s, at round 3's 18.5 s and at the match's end 77.7 s, each
-// inside the window although each Push after the first is longer than it.
+// round 2, and the chain carries every later one (ticks 13801 and 15291 in
+// round 2, 17456, 21481, 22966 and 24786 in round 3), so the sighting's age at
+// round 2's Lull is 66.7 s, at round 3's 15.5 s and at the match's end 20.7 s,
+// each inside the window although each Push after the first is longer than
+// it.
 // The core's autocannon reaches as far as a scout sees (24), so a refresh
-// costs scouts, which the beacon fields again (the owner's answer of
-// 2026-11-23, "Refresh wins, accept losses").
+// costs scouts, which the beacon fields again (decisions-log item 173 (2),
+// "Refresh wins, accept losses").
 //
 // What a scenario cannot assert, said here so nobody reads it into the file:
 // `event_fired` holds from an event's first occurrence on and has no value
