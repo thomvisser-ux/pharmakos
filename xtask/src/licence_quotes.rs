@@ -1345,6 +1345,42 @@ mod tests {
         assert_eq!(read, vec![s("a/y.rs")]);
     }
 
+    #[test]
+    fn a_library_file_is_not_held_to_the_converse() {
+        // `library/` is the text quoted, not a file that quotes it: one of its files carrying
+        // the combined form and quoting nothing (a short title only) is not this check's miss.
+        let library = format!("{{\"note\": \"{SENTENCE}\"}}\n");
+        let outcome = run(
+            &[
+                ("library/t.jsonc", &library),
+                ("library/u.jsonc", "{\"title\": \"Hold\"}\n"),
+            ],
+            &[
+                ("library/t.jsonc", &[LIBRARY]),
+                ("library/u.jsonc", &[COMBINED]),
+            ],
+        );
+        assert_eq!(outcome.map(|o| o.misses), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn misses_are_listed_in_the_tracked_order() {
+        let library = sentence_library();
+        let mut files = as_refs(&library);
+        files.extend([("a/one.rs", "// nothing\n"), ("b/two.rs", "// nothing\n")]);
+        let found = run(
+            &files,
+            &[("a/one.rs", &[COMBINED]), ("b/two.rs", &[COMBINED])],
+        );
+        assert_eq!(
+            found.map(|o| o.misses),
+            Ok(vec![
+                unquoted_line("a/one.rs", &[COMBINED]),
+                unquoted_line("b/two.rs", &[COMBINED]),
+            ])
+        );
+    }
+
     /// An outcome that passes every count of the positive control, with `known` quoting the
     /// library (`quoting`) and carrying the combined expression (`combined`) as given.
     fn counted(quoting: &[&str], combined: &[&str]) -> Outcome {
