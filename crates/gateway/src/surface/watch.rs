@@ -578,8 +578,11 @@ fn visible_structures<V: Vision>(
 ///   plan's decision 5; the owner's "Own seat only", decisions-log item 168
 ///   (11)). The seen voxels of each seat are grouped by face contact into
 ///   walls ([`wall_groups`]), each listed once, as the box around its voxels,
-///   its handle carried over from the group this viewer was last shown that
-///   shares a voxel with it ([`ViewFeed::wall_group_handles`]). So nothing in
+///   its handle carried over, within that seat's material, from the
+///   lowest-numbered group this viewer was last shown that shares a voxel
+///   with it ([`ViewFeed::wall_group_handles`]: a join keeps the lower
+///   handle, a split keeps it on the part holding the least voxel). So
+///   nothing in
 ///   the answer changes when the owner changes its settings and the voxels
 ///   the viewer sees do not. What the viewer can still infer is what its eyes
 ///   give it: a wall it sees crumble, grow or split, and how many separate
@@ -603,37 +606,14 @@ fn visible_walls<V: Vision>(
     out: &mut Vec<Json>,
 ) -> Result<(), Error> {
     let title = titles.structure(StructureKind::Wall)?;
-    let standing = standing_wall_voxels(world)?;
+    let standing = views.standing_walls(world)?;
     let mut targets_of: Vec<(u8, Vec<WallTarget>)> = Vec::new();
     let mut groups: Vec<(u8, BTreeSet<[i32; 3]>)> = Vec::new();
     for seat in seats_of(&standing) {
-        let theirs = standing
-            .iter()
-            .filter(|(owner, _)| *owner == seat)
-            .map(|(_, at)| *at);
+        let theirs = of_seat(&standing, seat).into_iter();
         if private_to(viewer, Some(seat)) {
-            let boxes = wall_targets(world, seat)?;
-            let mut held: Vec<WallTarget> = Vec::new();
-            let mut covered: BTreeSet<[i32; 3]> = BTreeSet::new();
-            for (key, low, high) in boxes {
-                let inside: Vec<[i32; 3]> = theirs
-                    .clone()
-                    .filter(|[x, y, z]| {
-                        let ([lx, ly, _], [hx, hy, top]) = (low, high);
-                        (lx..=hx).contains(x) && (ly..=hy).contains(y) && *z <= top
-                    })
-                    .collect();
-                covered.extend(inside.iter().copied());
-                let Some(lowest) = inside.iter().map(|[_, _, z]| *z).min() else {
-                    continue;
-                };
-                if held.iter().any(|(listed, _, _)| *listed == key) {
-                    continue;
-                }
-                let [lx, ly, _] = low;
-                held.push((key, [lx, ly, lowest], high));
-            }
-            let orphans: BTreeSet<[i32; 3]> = theirs.filter(|at| !covered.contains(at)).collect();
+            let mine: BTreeSet<[i32; 3]> = theirs.collect();
+            let (held, orphans) = own_walls(wall_targets(world, seat)?, &mine);
             targets_of.push((seat, held));
             groups.extend(wall_groups(&orphans).into_iter().map(|group| (seat, group)));
         } else {
@@ -655,8 +635,7 @@ fn visible_walls<V: Vision>(
             groups.extend(wall_groups(&seen).into_iter().map(|group| (seat, group)));
         }
     }
-    let sets: Vec<BTreeSet<[i32; 3]>> = groups.iter().map(|(_, group)| group.clone()).collect();
-    let mut group_handles = views.wall_group_handles(viewer, &sets)?.into_iter();
+    let mut group_handles = views.wall_group_handles(viewer, &groups)?.into_iter();
     let mut pending = groups.into_iter().peekable();
     for seat in seats_of(&standing) {
         if let Some((_, held)) = targets_of.iter().find(|(owner, _)| *owner == seat) {
@@ -725,40 +704,15 @@ fn wall_entity(
     ))
 }
 
-/// Every standing wall voxel of the world, `(builder seat, voxel)`, ascending
-/// by seat and then voxel. Only a chunk written since generation can hold one
-/// (the generator lays no wall), so only the modified chunks are read.
-fn standing_wall_voxels(world: &World) -> Result<Vec<(u8, [i32; 3])>, Error> {
-    let voxels = world.voxels();
-    let edge = pharmakos_sim::voxels::CHUNK_EDGE_I32;
-    let off_the_map =
-        || Error::internal("a modified chunk's voxel lies past the map's coordinates");
-    let mut out: Vec<(u8, [i32; 3])> = Vec::new();
-    for chunk in voxels.modified_indices() {
-        let (Some([ox, oy, oz]), Some(bytes)) =
-            (voxels.chunk_origin(chunk), voxels.chunk_bytes(chunk))
-        else {
-            return Err(Error::internal(said!(
-                "the voxel store lists chunk {} as modified and holds no such chunk",
-                chunk
-            )));
-        };
-        for (index, byte) in (0_i32..).zip(bytes.iter()) {
-            let Some((seat, _)) = pharmakos_sim::voxels::Material::from_raw(*byte).wall_of() else {
-                continue;
-            };
-            let (x, rest) = (index.rem_euclid(edge), index.div_euclid(edge));
-            let (y, z) = (rest.rem_euclid(edge), rest.div_euclid(edge));
-            let at = [
-                ox.checked_add(x).ok_or_else(off_the_map)?,
-                oy.checked_add(y).ok_or_else(off_the_map)?,
-                oz.checked_add(z).ok_or_else(off_the_map)?,
-            ];
-            out.push((seat.raw(), at));
-        }
-    }
-    out.sort_unstable();
-    Ok(out)
+/// The wall voxels of `seat`'s material in `standing`: walls are grouped one
+/// seat at a time, so one seat's voxels and another's that touch are never one
+/// wall, and a handle never crosses between them.
+fn of_seat(standing: &[(u8, [i32; 3])], seat: u8) -> BTreeSet<[i32; 3]> {
+    standing
+        .iter()
+        .filter(|(owner, _)| *owner == seat)
+        .map(|(_, at)| *at)
+        .collect()
 }
 
 /// The seats `standing` holds a voxel of, ascending, each once.
@@ -810,7 +764,7 @@ fn wall_targets(world: &World, seat: u8) -> Result<Vec<WallTarget>, Error> {
         let [hx, hy] = area.max_column();
         out.push((
             WallKey {
-                beacon: beacon.raw(),
+                seat,
                 min: [lx, ly],
                 max: [hx, hy],
                 top,
@@ -820,6 +774,39 @@ fn wall_targets(world: &World, seat: u8) -> Result<Vec<WallTarget>, Error> {
         ));
     }
     Ok(out)
+}
+
+/// The owner's reading of its own walls (or a no-fog spectator's of any
+/// seat's): of `targets`, each one with a voxel of `mine` standing in its box,
+/// at its lowest standing voxel, two targets with one key listed once -- the
+/// key is the seat, the box and the top, not the beacon, so two of the seat's
+/// beacons writing one box are one wall and dropping either target leaves its
+/// key as it was -- and every voxel of `mine` no listed box holds, to be
+/// grouped. Pure: a function of the targets and the voxels.
+fn own_walls(
+    targets: Vec<WallTarget>,
+    mine: &BTreeSet<[i32; 3]>,
+) -> (Vec<WallTarget>, BTreeSet<[i32; 3]>) {
+    let mut held: Vec<WallTarget> = Vec::new();
+    let mut covered: BTreeSet<[i32; 3]> = BTreeSet::new();
+    for (key, low, high) in targets {
+        let ([lx, ly, _], [hx, hy, top]) = (low, high);
+        let inside: Vec<[i32; 3]> = mine
+            .iter()
+            .filter(|[x, y, z]| (lx..=hx).contains(x) && (ly..=hy).contains(y) && *z <= top)
+            .copied()
+            .collect();
+        covered.extend(inside.iter().copied());
+        let Some(lowest) = inside.iter().map(|[_, _, z]| *z).min() else {
+            continue;
+        };
+        if held.iter().any(|(listed, _, _)| *listed == key) {
+            continue;
+        }
+        held.push((key, [lx, ly, lowest], high));
+    }
+    let orphans = mine.difference(&covered).copied().collect();
+    (held, orphans)
 }
 
 /// `voxels` grouped into walls by face contact (two voxels sharing a face are
@@ -1184,6 +1171,65 @@ mod tests {
             "Mortar, going up",
             "the gateway's going-up words"
         );
+    }
+
+    /// S3's `probw`, its last pass (item 6): two of the owner's beacons whose
+    /// wall targets give one box and one top are one wall, under a key that
+    /// does not name a beacon, so dropping either target leaves the wall and
+    /// its key exactly as they were; and the owner's own voxels no box holds
+    /// are left to be grouped.
+    #[test]
+    fn two_beacons_writing_one_box_are_one_wall_with_a_stable_key() {
+        use super::own_walls;
+        use crate::viewfeed::WallKey;
+        use std::collections::BTreeSet;
+        let key = WallKey {
+            seat: 0,
+            min: [357, 32],
+            max: [360, 32],
+            top: 37,
+        };
+        let target = (key, [357, 32, 0], [360, 32, 37]);
+        let mine: BTreeSet<[i32; 3]> = [[357, 32, 36], [358, 32, 36], [358, 32, 37], [400, 9, 30]]
+            .into_iter()
+            .collect();
+        let (both, orphans) = own_walls(vec![target, target], &mine);
+        assert_eq!(both, vec![(key, [357, 32, 36], [360, 32, 37])], "one wall");
+        assert_eq!(
+            orphans,
+            [[400, 9, 30]].into_iter().collect(),
+            "the rest is grouped"
+        );
+        let (either, _) = own_walls(vec![target], &mine);
+        assert_eq!(
+            either, both,
+            "either beacon's target dropped: the same wall and key"
+        );
+        let (none, all) = own_walls(Vec::new(), &mine);
+        assert!(none.is_empty());
+        assert_eq!(all, mine, "with no target, every voxel is grouped");
+    }
+
+    /// S3's `probw`, its last pass (item 3): a viewer's own wall voxels and
+    /// another seat's that touch them are two walls, one per seat's material.
+    #[test]
+    fn touching_walls_of_two_seats_are_two_walls() {
+        use super::{of_seat, seats_of, wall_groups};
+        let standing = [
+            (0, [10, 0, 0]),
+            (0, [11, 0, 0]),
+            (1, [12, 0, 0]),
+            (1, [13, 0, 0]),
+        ];
+        let groups: Vec<(u8, usize)> = seats_of(&standing)
+            .into_iter()
+            .flat_map(|seat| {
+                wall_groups(&of_seat(&standing, seat))
+                    .into_iter()
+                    .map(move |group| (seat, group.len()))
+            })
+            .collect();
+        assert_eq!(groups, [(0, 2), (1, 2)]);
     }
 
     /// Who is told an asset's private facts: its own seat, and a no-fog

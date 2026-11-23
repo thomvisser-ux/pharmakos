@@ -2612,3 +2612,39 @@ fn resumed_from(saved: &pharmakos_gateway::save::SavedMatch) -> Surface {
     )
     .expect("a Lull resumes")
 }
+
+/// S3's `probw`, its last pass (item 4): the standing wall voxels are read
+/// once per world tick and shared by every viewer's walls in that tick: three
+/// viewers each reading a keyframe twice in one tick cost one scan of the
+/// modified chunks (before this pass, six), and the next tick one more.
+#[test]
+fn the_wall_voxels_are_read_once_a_tick_for_every_viewer() {
+    let mut surface = base_kit(FogPolicy::fogged(), true);
+    step(&mut surface, 600);
+    assert!(!wall_voxels(&surface).is_empty(), "a wall stands");
+    let tokens = [
+        seat_token(&mut surface, 0),
+        seat_token(&mut surface, 1),
+        spectator_token(&mut surface, true),
+    ];
+    let before = surface.views().wall_scans();
+    for token in &tokens {
+        for _ in 0..2 {
+            let _ = Watcher::new(token.clone()).live(&mut surface);
+        }
+    }
+    assert_eq!(
+        surface.views().wall_scans() - before,
+        1,
+        "one scan for six views"
+    );
+    step(&mut surface, 1);
+    for token in &tokens {
+        let _ = Watcher::new(token.clone()).live(&mut surface);
+    }
+    assert_eq!(
+        surface.views().wall_scans() - before,
+        2,
+        "one more for the next tick"
+    );
+}
