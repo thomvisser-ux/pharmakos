@@ -50,7 +50,7 @@
 //! |---|---|
 //! | here | `get_status`, `wait_for`, `save_notes`, `set_ready`, `get_segment_feed` |
 //! | [`knowledge`] | `get_briefing`, `get_recap`, `list_beacons`, `get_beacon`, `get_map_summary`, `get_economy_forecast`, `estimate_route` |
-//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `resolve_refs`, `submit_plan` |
+//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `resolve_refs`, `set_value_text`, `new_rule`, `submit_plan` |
 //! | [`watch`] | `get_view` |
 //! | [`control`] | `end_lull`, `advance_push`, `end_recap`, `report_host_clock` |
 //!
@@ -3429,6 +3429,8 @@ impl Surface {
             Method::GetDraft => self.get_draft(subject, request),
             Method::GetSafePlan => self.get_safe_plan(subject),
             Method::ResolveRefs => self.resolve_refs(subject, request),
+            Method::SetValueText => self.set_value_text(subject, request),
+            Method::NewRule => self.new_rule(request),
             Method::SubmitPlan => self.submit_plan(subject, request),
 
             // The view.

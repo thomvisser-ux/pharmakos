@@ -26,7 +26,10 @@
                 ]
               }
             },
-            "value_json": "{\"covering\":{\"feature_id\":\"vent_324_16\"}}"
+            "value_json": "{\"covering\":{\"feature_id\":\"vent_324_16\"}}",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/route/0/timeout_ms",
@@ -36,10 +39,14 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "60000"
+            "value_json": "60000",
+            "value_text": "60",
+            "outside": false,
+            "pick_op": "replace"
           }
         ],
         "slots": [
@@ -66,10 +73,14 @@
             "shape": {
               "integer": {
                 "min": 1,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "16100"
+            "value_json": "16100",
+            "value_text": "16.1",
+            "outside": false,
+            "pick_op": "replace"
           }
         ],
         "slots": [
@@ -102,10 +113,21 @@
                   "\"NE\"",
                   "\"GE\"",
                   "\"GT\""
+                ],
+                "titles": [
+                  "below",
+                  "at or below",
+                  "exactly",
+                  "anything but",
+                  "at or above",
+                  "above"
                 ]
               }
             },
-            "value_json": "\"LE\""
+            "value_json": "\"LE\"",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct",
@@ -116,10 +138,14 @@
               "integer": {
                 "min": 0,
                 "max": 100,
-                "unit": "%"
+                "unit": "%",
+                "display_unit": "%"
               }
             },
-            "value_json": "40"
+            "value_json": "40",
+            "value_text": "40",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/handlers/0/when/all/items/1/cmdr_took_damage_within/ms",
@@ -129,10 +155,14 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "3000"
+            "value_json": "3000",
+            "value_text": "3",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/handlers/0/body/0/move/to",
@@ -149,7 +179,10 @@
                 ]
               }
             },
-            "value_json": "{\"safest\":{}}"
+            "value_json": "{\"safest\":{}}",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/handlers/0/body/1/hold/ms",
@@ -159,10 +192,14 @@
             "shape": {
               "integer": {
                 "min": 1,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "8000"
+            "value_json": "8000",
+            "value_text": "8",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/handlers/0/max_fires",
@@ -173,10 +210,14 @@
               "integer": {
                 "min": 1,
                 "max": 8,
-                "unit": ""
+                "unit": "",
+                "display_unit": ""
               }
             },
-            "value_json": "3"
+            "value_json": "3",
+            "value_text": "3",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/handlers/0/cooldown_ms",
@@ -186,10 +227,14 @@
             "shape": {
               "integer": {
                 "min": 5000,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "30000"
+            "value_json": "30000",
+            "value_text": "30",
+            "outside": false,
+            "pick_op": "replace"
           }
         ],
         "slots": [

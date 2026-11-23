@@ -1,0 +1,54 @@
+/declarative/route/0  lines 4+1
+  4:20-23 "0 s"
+    /declarative/route/0/hold/ms
+    integer 1.. ms, shown in s
+    = 0 (typed 0), outside, add
+/declarative/handlers/0  lines 7+4
+  7:35-46 "at or below"
+    /declarative/handlers/0/when/all/items/0/cmdr_hp_pct/cmp
+    choice "LT" (below) | "LE" (at or below) | "EQ" (exactly) | "NE" (anything but) | "GE" (at or above) | "GT" (above)
+    = "LE", replace
+  7:47-48 "0"
+    /declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct
+    integer 0..100 %
+    = 0 (typed 0), add
+  7:77-96 "compared somehow to"
+    /declarative/handlers/0/when/all/items/1/segment_elapsed/ms/op
+    choice "LT" (below) | "LE" (at or below) | "EQ" (exactly) | "NE" (anything but) | "GE" (at or above) | "GT" (above)
+    = "OP_UNSPECIFIED", outside, add
+  7:97-100 "0 s"
+    /declarative/handlers/0/when/all/items/1/segment_elapsed/ms/value
+    integer .. ms, shown in s
+    = 0 (typed 0), add
+  7:105-126 "the safest own beacon"
+    /declarative/handlers/0/when/all/items/2/beacon_has_structure/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
+    = {"safest":{}}, replace
+  7:142-177 "structure of no kind the file names"
+    /declarative/handlers/0/when/all/items/2/beacon_has_structure/blueprint_id
+    choice "generator" (Generator) | "autocannon" (Autocannon) | "mortar" (Mortar) | "resonance_spire" (Resonance Spire)
+    = "", outside, add
+  7:182-203 "the safest own beacon"
+    /declarative/handlers/0/when/all/items/3/beacon_powered/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
+    = {"safest":{}}, replace
+  7:207-214 "dormant"
+    /declarative/handlers/0/when/all/items/3/beacon_powered/powered
+    choice true (yes) | false (no)
+    = false, add
+  7:224-226 """"
+    /declarative/handlers/0/when/all/items/4/rule_fired/handler_id
+    reference HANDLER_ID []
+    = "", add
+  8:22-25 "1 s"
+    /declarative/handlers/0/body/0/hold/ms
+    integer 1.. ms, shown in s
+    = 1000 (typed 1), replace
+  10:18-19 "0"
+    /declarative/handlers/0/max_fires
+    integer 1..8
+    = 0 (typed 0), outside, add
+  10:52-55 "0 s"
+    /declarative/handlers/0/cooldown_ms
+    integer 5000.. ms, shown in s
+    = 0 (typed 0), outside, add

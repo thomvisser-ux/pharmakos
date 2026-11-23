@@ -2,156 +2,156 @@
   4:30-133 "a site toward the nearest heat vent you do not cover yet (nearest by travel, read when the step starts)"
     /declarative/route/0/place_beacon/at
     reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
-    = {"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}
+    = {"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}, replace
 /declarative/route/1  lines 5+1
   5:30-63 "a site toward Heat vent (120, 88)"
     /declarative/route/1/place_beacon/at
     reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
-    = {"toward":{"feature":{"feature_id":"vent_120_88"}}}
+    = {"toward":{"feature":{"feature_id":"vent_120_88"}}}, replace
 /declarative/handlers/0  lines 8+4
   8:17-30 "beacon "b_00""
     /declarative/handlers/0/when/all/items/0/beacon_units_by_role/beacon
     reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
-    = {"beacon_id":"b_00"}
+    = {"beacon_id":"b_00"}, replace
   8:35-46 "at or above"
     /declarative/handlers/0/when/all/items/0/beacon_units_by_role/count/op
-    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
-    = "GE"
+    choice "LT" (below) | "LE" (at or below) | "EQ" (exactly) | "NE" (anything but) | "GE" (at or above) | "GT" (above)
+    = "GE", replace
   8:47-48 "2"
     /declarative/handlers/0/when/all/items/0/beacon_units_by_role/count/value
     integer ..
-    = 2
+    = 2 (typed 2), replace
   8:49-55 "scouts"
     /declarative/handlers/0/when/all/items/0/beacon_units_by_role/role
-    choice "BUILD_DRONE" | "MINING_DRONE" | "REPAIR_DRONE" | "RAIDER" | "SCOUT"
-    = "SCOUT"
+    choice "BUILD_DRONE" (build drones) | "MINING_DRONE" (mining drones) | "REPAIR_DRONE" (repair drones) | "RAIDER" (raiders) | "SCOUT" (scouts)
+    = "SCOUT", replace
   8:60-73 "beacon "b_00""
     /declarative/handlers/0/when/all/items/1/beacon_mandate/beacon
     reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
-    = {"beacon_id":"b_00"}
+    = {"beacon_id":"b_00"}, replace
   8:82-87 "Build"
     /declarative/handlers/0/when/all/items/1/beacon_mandate/mandate
-    choice "BUILD" | "DEFEND" | "ATTACK" | "SURVEY" | "MINE"
-    = "BUILD"
+    choice "BUILD" (Build) | "DEFEND" (Defend) | "ATTACK" (Attack) | "SURVEY" (Survey) | "MINE" (Mine)
+    = "BUILD", replace
   8:92-113 "the safest own beacon"
     /declarative/handlers/0/when/all/items/2/beacon_has_structure/beacon
     reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
-    = {"safest":{}}
+    = {"safest":{}}, replace
   8:129-138 "generator"
     /declarative/handlers/0/when/all/items/2/beacon_has_structure/blueprint_id
-    choice "generator" | "autocannon" | "mortar" | "resonance_spire"
-    = "generator"
+    choice "generator" (Generator) | "autocannon" (Autocannon) | "mortar" (Mortar) | "resonance_spire" (Resonance Spire)
+    = "generator", replace
   9:26-29 "1 s"
     /declarative/handlers/0/body/0/hold/ms
-    integer 1.. ms
-    = 1000
+    integer 1.. ms, shown in s
+    = 1000 (typed 1), replace
   11:18-19 "1"
     /declarative/handlers/0/max_fires
     integer 1..8
-    = 1
+    = 1 (typed 1), replace
   11:51-54 "5 s"
     /declarative/handlers/0/cooldown_ms
-    integer 5000.. ms
-    = 5000
+    integer 5000.. ms, shown in s
+    = 5000 (typed 5), replace
 /declarative/handlers/1  lines 12+4
   12:37-48 "at or above"
     /declarative/handlers/1/when/any/items/0/enemy_units_near/count/op
-    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
-    = "GE"
+    choice "LT" (below) | "LE" (at or below) | "EQ" (exactly) | "NE" (anything but) | "GE" (at or above) | "GT" (above)
+    = "GE", replace
   12:49-50 "3"
     /declarative/handlers/1/when/any/items/0/enemy_units_near/count/value
     integer ..
-    = 3
+    = 3 (typed 3), replace
   12:70-72 "24"
     /declarative/handlers/1/when/any/items/0/enemy_units_near/radius_voxels
     integer 1.. voxels
-    = 24
+    = 24 (typed 24), replace
   12:83-99 "voxel 90, 12, 11"
     /declarative/handlers/1/when/any/items/0/enemy_units_near/near
     reference LOCATION [voxel, beacon_anchor, safest]
-    = {"voxel":{"x":90,"y":12,"z":11}}
+    = {"voxel":{"x":90,"y":12,"z":11}}, replace
   12:101-113 "in sight now"
     /declarative/handlers/1/when/any/items/0/enemy_units_near/freshness/kind
-    choice "VISIBLE_NOW" | "KNOWN_WITHIN"
-    = "VISIBLE_NOW"
+    choice "VISIBLE_NOW" (in sight now) | "KNOWN_WITHIN" (seen within a window)
+    = "VISIBLE_NOW", replace
   12:152-168 "seen in the last"
     /declarative/handlers/1/when/any/items/1/enemy_beacon_known/freshness/kind
-    choice "VISIBLE_NOW" | "KNOWN_WITHIN"
-    = "KNOWN_WITHIN"
+    choice "VISIBLE_NOW" (in sight now) | "KNOWN_WITHIN" (seen within a window)
+    = "KNOWN_WITHIN", replace
   12:169-173 "30 s"
     /declarative/handlers/1/when/any/items/1/enemy_beacon_known/freshness/known_within_ms
-    integer 1.. ms
-    = 30000
+    integer 1.. ms, shown in s
+    = 30000 (typed 30), replace
   12:204-210 "mortar"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/blueprint_id
-    choice "generator" | "autocannon" | "mortar" | "resonance_spire"
-    = "mortar"
+    choice "generator" (Generator) | "autocannon" (Autocannon) | "mortar" (Mortar) | "resonance_spire" (Resonance Spire)
+    = "mortar", replace
   12:218-220 "16"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/radius_voxels
     integer 1.. voxels
-    = 16
+    = 16 (typed 16), replace
   12:231-252 "the safest own beacon"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/near
     reference LOCATION [voxel, beacon_anchor, safest]
-    = {"safest":{}}
+    = {"safest":{}}, replace
   12:254-266 "in sight now"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/freshness/kind
-    choice "VISIBLE_NOW" | "KNOWN_WITHIN"
-    = "VISIBLE_NOW"
+    choice "VISIBLE_NOW" (in sight now) | "KNOWN_WITHIN" (seen within a window)
+    = "VISIBLE_NOW", replace
   12:314-316 "16"
     /declarative/handlers/1/when/any/items/3/enemy_structure_near/radius_voxels
     integer 1.. voxels
-    = 16
+    = 16 (typed 16), replace
   12:327-348 "the safest own beacon"
     /declarative/handlers/1/when/any/items/3/enemy_structure_near/near
     reference LOCATION [voxel, beacon_anchor, safest]
-    = {"safest":{}}
+    = {"safest":{}}, replace
   12:350-366 "seen in the last"
     /declarative/handlers/1/when/any/items/3/enemy_structure_near/freshness/kind
-    choice "VISIBLE_NOW" | "KNOWN_WITHIN"
-    = "KNOWN_WITHIN"
+    choice "VISIBLE_NOW" (in sight now) | "KNOWN_WITHIN" (seen within a window)
+    = "KNOWN_WITHIN", replace
   12:367-371 "1:00"
     /declarative/handlers/1/when/any/items/3/enemy_structure_near/freshness/known_within_ms
-    integer 1.. ms
-    = 60000
+    integer 1.. ms, shown in s
+    = 60000 (typed 60), replace
   13:28-31 "1 s"
     /declarative/handlers/1/body/0/hold/ms
-    integer 1.. ms
-    = 1000
+    integer 1.. ms, shown in s
+    = 1000 (typed 1), replace
   15:18-19 "1"
     /declarative/handlers/1/max_fires
     integer 1..8
-    = 1
+    = 1 (typed 1), replace
   15:51-54 "5 s"
     /declarative/handlers/1/cooldown_ms
-    integer 5000.. ms
-    = 5000
+    integer 5000.. ms, shown in s
+    = 5000 (typed 5), replace
 /declarative/handlers/2  lines 16+4
   16:39-50 "at or above"
     /declarative/handlers/2/when/all/items/0/kw_supply/kw/op
-    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
-    = "GE"
+    choice "LT" (below) | "LE" (at or below) | "EQ" (exactly) | "NE" (anything but) | "GE" (at or above) | "GT" (above)
+    = "GE", replace
   16:51-53 "40"
     /declarative/handlers/2/when/all/items/0/kw_supply/kw/value
     integer .. kW
-    = 40
+    = 40 (typed 40), replace
   16:80-85 "below"
     /declarative/handlers/2/when/all/items/1/kw_draw/kw/op
-    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
-    = "LT"
+    choice "LT" (below) | "LE" (at or below) | "EQ" (exactly) | "NE" (anything but) | "GE" (at or above) | "GT" (above)
+    = "LT", replace
   16:86-88 "30"
     /declarative/handlers/2/when/all/items/1/kw_draw/kw/value
     integer .. kW
-    = 30
+    = 30 (typed 30), replace
   17:27-30 "1 s"
     /declarative/handlers/2/body/0/hold/ms
-    integer 1.. ms
-    = 1000
+    integer 1.. ms, shown in s
+    = 1000 (typed 1), replace
   19:18-19 "1"
     /declarative/handlers/2/max_fires
     integer 1..8
-    = 1
+    = 1 (typed 1), replace
   19:51-54 "5 s"
     /declarative/handlers/2/cooldown_ms
-    integer 5000.. ms
-    = 5000
+    integer 5000.. ms, shown in s
+    = 5000 (typed 5), replace

@@ -599,6 +599,16 @@ pub const STEP_TITLE_HOLD: &str = "Hold";
 /// The `broadcast` step.
 pub const STEP_TITLE_BROADCAST: &str = "Broadcast";
 
+/// A blueprint id this build does not know, before the id as written.
+pub const FEATURE_NOUN_BLUEPRINT: &str = "blueprint";
+
+/// The `all` group.
+pub const GROUP_ALL: &str = "All of these";
+/// The `any` group.
+pub const GROUP_ANY: &str = "Any of these";
+/// The `not` group.
+pub const GROUP_NOT: &str = "Not this";
+
 /// A blueprint parameter.
 pub const VOCABULARY_STRUCTURE: &str = "Structure";
 
@@ -622,3 +632,57 @@ pub const RENDER_COUNT_PAST_RANGE: &str =
 /// A rules-table bound past what a chip's `int32` bound holds (E22).
 pub const RENDER_BOUND_PAST_RANGE: &str =
     "the rules table bounds a value past what a chip's bound holds";
+
+/// A chip of an integer shape whose value this crate wrote as something
+/// other than a whole number: this crate disagreeing with itself.
+pub const RENDER_CHIP_NOT_A_NUMBER: &str =
+    "the rendering wrote a number chip whose value is not a whole number";
+
+/// `set_value_text` at a pointer where no number is typed.
+pub const TYPED_NO_NUMBER_HERE: &str = "nothing at this place in the playbook takes a typed number";
+/// `set_value_text` with nothing typed.
+pub const TYPED_EMPTY: &str = "nothing was typed";
+/// `new_rule` finding no free id, which one past the count always gives.
+pub const NEW_RULE_NO_ID: &str = "no free rule id was found, which never happens";
+
+// --- A choice's values in words (`gp.api.v1.EnumShape.titles`) -------------
+//
+// Where the prose already has the word for a value (a comparison, a role, a
+// writ, a pursuit, a priority), the title is that word, so a chip's words and
+// the title a menu offers for its value are one string. The rest are written
+// here, once.
+
+/// `true`, in a choice between two.
+pub const CHOICE_TRUE: &str = "yes";
+/// `false`, in a choice between two.
+pub const CHOICE_FALSE: &str = "no";
+/// `Freshness.Kind.KNOWN_WITHIN`.
+pub const CHOICE_KNOWN_WITHIN: &str = "seen within a window";
+/// `MandateSettings.Roe.HOLD_FIRE`.
+pub const CHOICE_HOLD_FIRE: &str = "hold fire";
+/// `MandateSettings.Roe.RETURN_FIRE`.
+pub const CHOICE_RETURN_FIRE: &str = "return fire";
+/// `MandateSettings.Roe.FREE_FIRE`.
+pub const CHOICE_FREE_FIRE: &str = "fire freely";
+/// `BuildSettings.Terraform.NONE`.
+pub const CHOICE_TERRAFORM_NONE: &str = "leave the ground as it is";
+/// `BuildSettings.Terraform.FILL`.
+pub const CHOICE_TERRAFORM_FILL: &str = "fill hollows";
+/// `BuildSettings.Terraform.DIG`.
+pub const CHOICE_TERRAFORM_DIG: &str = "dig out rises";
+/// `BuildSettings.Terraform.BOTH`.
+pub const CHOICE_TERRAFORM_BOTH: &str = "fill and dig";
+/// `AttackSettings.AfterAction.REGROUP_AT_STAGING`.
+pub const CHOICE_AFTER_REGROUP: &str = "regroup at the staging point";
+/// `AttackSettings.AfterAction.RETURN_HOME`.
+pub const CHOICE_AFTER_HOME: &str = "return home";
+/// `MineSettings.SeamChoice.RICHEST`.
+pub const CHOICE_SEAM_RICHEST: &str = "the richest seam";
+/// `MineSettings.SeamChoice.NEAREST`.
+pub const CHOICE_SEAM_NEAREST: &str = "the nearest seam";
+/// `MineSettings.SeamChoice.SAFEST`.
+pub const CHOICE_SEAM_SAFEST: &str = "the safest seam";
+/// `MoveStep.Pace.DIRECT`.
+pub const CHOICE_PACE_DIRECT: &str = "directly";
+/// `MoveStep.Pace.AVOID_KNOWN_THREATS`.
+pub const CHOICE_PACE_AVOID: &str = "avoiding known threats";

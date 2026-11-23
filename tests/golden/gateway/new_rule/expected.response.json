@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "playbook_jsonc": "{\n  \"schema_version\": {\"major\": 1},\n  \"meta\": {\"title\": \"Editor wire\", \"author_kind\": \"HUMAN\"},\n  \"declarative\": {\n    \"route\": [{\"label\": \"wait\", \"hold\": {\"ms\": 90000}}],\n    \"handlers\": [\n      // The rule.\n      {\"id\": \"flee\", \"when\": {\"cmdr_hp_pct\": {\"cmp\": \"LE\"}},\n       \"body\": [{\"label\": \"rest\", \"hold\": {\"ms\": 8000}}],\n       \"resume\": \"CONTINUE\", \"cooldown_ms\": 30000, \"max_fires\": 3}\n    ,{\"id\":\"rule_2\",\"resume\":\"CONTINUE\",\"max_fires\":1,\"cooldown_ms\":5000}]\n  },\n  \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n  \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n  \"kind\": \"PLAYBOOK\"\n}\n",
+    "inverse_json_patch": "[\n  {\n    \"op\": \"remove\",\n    \"path\": \"/declarative/handlers/1\",\n    \"undo\": {}\n  }\n]\n",
+    "rule_pointer": "/declarative/handlers/1",
+    "rule_id": "rule_2",
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 599950,
+      "segment_length_ms": 1000,
+      "round": 1
+    }
+  }
+}

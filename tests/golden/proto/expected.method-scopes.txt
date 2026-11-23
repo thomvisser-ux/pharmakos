@@ -30,6 +30,8 @@ list_drafts              plan
 get_safe_plan            plan
 get_draft                plan
 resolve_refs             plan
+set_value_text           plan
+new_rule                 plan
 submit_plan              plan.submit
 set_ready                plan.submit
 get_segment_feed         observe

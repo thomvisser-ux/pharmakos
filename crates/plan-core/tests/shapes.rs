@@ -353,8 +353,8 @@ fn agrees(what: &str, text: &str, pointer: &str, shape: &Shape) -> Vec<String> {
                 }
             }
         }
-        Shape::Choice { values } => {
-            for value in values {
+        Shape::Choice { options } => {
+            for value in options.iter().map(|option| &option.json) {
                 if refused_with(value) {
                     wrong.push(format!("{what}: {pointer} refuses the choice {value}"));
                 }
@@ -826,7 +826,9 @@ fn a_structure_predicate_names_what_can_stand_on_all_three_sides() {
             .map_or_else(
                 || panic!("{name} offers a blueprint"),
                 |parameter| match &parameter.shape {
-                    Shape::Choice { values } => values.clone(),
+                    Shape::Choice { options } => {
+                        options.iter().map(|option| option.json.clone()).collect()
+                    }
                     other => panic!("{name}'s blueprint is a choice, not {other:?}"),
                 },
             );

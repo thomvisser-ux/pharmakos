@@ -491,6 +491,8 @@ fn rendered_cases() -> Vec<(&'static str, String)> {
         ("cover_the_nearest_vent", cover_the_nearest_vent()),
         ("defend_and_attack", defend_and_attack()),
         ("predicates_and_toward", case("predicates_and_toward")),
+        // S3's `fixq`: values at their defaults, chipped, some outside.
+        ("defaults", case("defaults")),
     ]
 }
 
@@ -499,14 +501,24 @@ fn shape_text(shape: &Shape) -> String {
     let bound = |value: Option<i32>| value.map_or_else(String::new, |value| value.to_string());
     match shape {
         Shape::Integer { min, max, unit } => {
+            let shown = pharmakos_plan_core::shape::display_unit(unit);
             let unit = if unit.is_empty() {
                 String::new()
-            } else {
+            } else if shown == *unit {
                 format!(" {unit}")
+            } else {
+                format!(" {unit}, shown in {shown}")
             };
             format!("integer {}..{}{unit}", bound(*min), bound(*max))
         }
-        Shape::Choice { values } => format!("choice {}", values.join(" | ")),
+        Shape::Choice { options } => format!(
+            "choice {}",
+            options
+                .iter()
+                .map(|option| format!("{} ({})", option.json, option.title))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        ),
         Shape::Reference { kind, arms } => {
             format!("reference {} [{}]", kind.proto_name(), arms.join(", "))
         }
@@ -544,13 +556,22 @@ fn chips_text(rendering: &Rendering) -> String {
                 .collect();
             let _ = write!(
                 out,
-                "  {}:{}-{} \"{marked}\"\n    {}\n    {}\n    = {}\n",
+                "  {}:{}-{} \"{marked}\"\n    {}\n    {}\n    = {}{}{}, {}\n",
                 chip.line,
                 chip.start,
                 chip.end,
                 chip.pointer,
                 shape_text(&chip.shape),
-                chip.value_json
+                chip.value_json,
+                // S3's `fixq`: the value as typed, whether it is outside its
+                // shape, and the op an edit sends.
+                if chip.value_text.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (typed {})", chip.value_text)
+                },
+                if chip.outside { ", outside" } else { "" },
+                chip.pick.proto_name().to_lowercase()
             );
         }
     }
@@ -631,22 +652,42 @@ fn assert_chips_hold(case: &str, rendering: &Rendering, canonical_json: &str) {
                 chip.pointer
             );
             last = (chip.line, chip.end);
-            let held = at_pointer(&document, &chip.pointer)
-                .unwrap_or_else(|| panic!("{case}: the file holds nothing at {}", chip.pointer));
             let value = pharmakos_proto::json::read(&chip.value_json)
                 .unwrap_or_else(|error| panic!("{case}: {} is not JSON: {error:?}", chip.pointer));
-            assert_eq!(
-                &value, held,
-                "{case}: {}'s value is not the file's",
-                chip.pointer
-            );
-            if let Shape::Choice { values } = &chip.shape {
-                assert!(
-                    values.contains(&chip.value_json),
-                    "{case}: {} holds {}, which its choices do not list",
+            // A chip the file writes is the file's value, and its edit
+            // replaces it; a chip at its default (S3's `fixq`, item 11) adds,
+            // and the file holds that default or nothing there.
+            match (at_pointer(&document, &chip.pointer), chip.pick) {
+                (Some(held), _) => assert_eq!(
+                    &value, held,
+                    "{case}: {}'s value is not the file's",
+                    chip.pointer
+                ),
+                (None, PickOp::Add) => {}
+                (None, PickOp::Replace) => {
+                    panic!("{case}: the file holds nothing at {}", chip.pointer)
+                }
+            }
+            // `outside` is exactly a choice's value not listed, or an
+            // integer past a bound (S3's `fixq`, item 14).
+            match &chip.shape {
+                Shape::Choice { options } => assert_eq!(
+                    chip.outside,
+                    !options.iter().any(|option| option.json == chip.value_json),
+                    "{case}: {} holds {}, and says outside {}",
                     chip.pointer,
-                    chip.value_json
-                );
+                    chip.value_json,
+                    chip.outside
+                ),
+                Shape::Integer { min, max, .. } => {
+                    let number: i64 = chip.value_json.parse().unwrap_or_else(|error| {
+                        panic!("{case}: {} is no number: {error:?}", chip.pointer)
+                    });
+                    let past = min.is_some_and(|min| number < i64::from(min))
+                        || max.is_some_and(|max| number > i64::from(max));
+                    assert_eq!(chip.outside, past, "{case}: {}", chip.pointer);
+                }
+                Shape::Reference { .. } => assert!(!chip.outside, "{case}: {}", chip.pointer),
             }
         }
     }
@@ -868,10 +909,12 @@ fn diagnosed_paths(text: &str) -> Vec<String> {
 }
 
 /// `text` with the value at `pointer` replaced by `value`.
-fn replaced(text: &str, pointer: &str, value: i64) -> String {
-    let patch = format!(r#"[{{"op":"replace","path":"{pointer}","value":{value}}}]"#);
+fn replaced(text: &str, pointer: &str, op: PickOp, value: i64) -> String {
+    // The chip's own op (S3's `fixq`): `add` for one at its default.
+    let op = op.proto_name().to_lowercase();
+    let patch = format!(r#"[{{"op":"{op}","path":"{pointer}","value":{value}}}]"#);
     patch_text(text, &patch)
-        .unwrap_or_else(|error| panic!("{pointer} takes a replace: {error}"))
+        .unwrap_or_else(|error| panic!("{pointer} takes an {op}: {error}"))
         .0
 }
 
@@ -892,7 +935,7 @@ fn an_integer_chips_bounds_are_the_verifiers() {
                 continue;
             };
             let flagged = |value: i64| {
-                diagnosed_paths(&replaced(&canonical.text, &chip.pointer, value))
+                diagnosed_paths(&replaced(&canonical.text, &chip.pointer, chip.pick, value))
                     .contains(&chip.pointer)
             };
             match min {

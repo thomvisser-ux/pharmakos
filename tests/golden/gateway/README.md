@@ -31,9 +31,10 @@ next two are S1's targeting surfaces (task `tgtw`), the next three are S1's
 economy surfaces (task `econ`), four more are the demo cases of S2's
 two templates (Defend the Core, Raid an Enemy Beacon), `sighting_verify` is
 S3's `gwr`'s, and the last three are S3's `gwu`'s: the answers the client's
-picker and Visit & change fixtures are byte copies of.
+picker and Visit & change fixtures are byte copies of. The last four are S3's
+`fixq`'s: the editor's two new planning edits, `set_value_text` and `new_rule`.
 
-## The thirty-two cases
+## The thirty-six cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -69,6 +70,10 @@ picker and Visit & change fixtures are byte copies of.
 | `get_vocabulary/` | `expected.response.json` | Seat 0's `get_vocabulary` as its first call in the opening Lull of `tests/methods.rs`' golden match: every family, predicate, step, mandate and blueprint with its locks, the Resonance Spire locked — **the fixture `ed3b` part 2's picker copies** |
 | `get_beacon_core/` | `expected.response.json` | Seat 0's `get_beacon` of its opening core, `b_00`, in the same Lull: its summary, prose, writ and settings rows |
 | `get_beacon_build/` | `expected.response.json` | The same of a Build core holding one target of each way a target is written (`four_targets`: a wall with its box, `on` a named feature, `on` the nearest vent, a voxel) — with the core's, **the fixtures `ed3b` part 2's Visit & change rows copy** |
+| `set_value_text/` | `expected.response.json` | Seat 0's `set_value_text` of "1.5" at a hold's `ms` chip, in `tests/editor_wire.rs`' opening Lull: the file with 1500 written and its undo (S3's `fixq`) |
+| `set_value_text_refused/` | `expected.response.json` | The same call with "abc": its refusal in the gateway's words, the typed text quoted |
+| `set_value_text_past_bound/` | `expected.response.json` | The same call with "140" at a percentage chip: its refusal, naming the most it takes in its display unit |
+| `new_rule/` | `expected.response.json` | Seat 0's `new_rule` on the same playbook: the rule added at the end with its fresh id, the rules table's least cooldown and no `when`, its undo, pointer and id |
 
 ## What a diff means, case by case
 

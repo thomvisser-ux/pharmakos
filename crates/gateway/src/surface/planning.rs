@@ -19,6 +19,12 @@
 //! snapshot's bytes and the rules table, and that is all
 //! (AGENTS.md section 3 rule 2; `tests/confinement.rs`).
 //!
+//! S3's `fixq` adds two more of the same kind, text in and text out:
+//! `set_value_text` reads a typed value in its chip's display unit and writes
+//! it, and `new_rule` adds an empty rule. Each renders or decodes the file
+//! against the frozen snapshot and the rules table and patches it through
+//! `patch_plan`'s own door; neither holds a runner.
+//!
 //! `resolve_refs`, S1's fifth, is the one that ranks: "nearest" is ranked where
 //! the pathing graph is, and for a preview that is here. It reads the frozen
 //! world through the sim's own resolver, borrowed read-only
@@ -190,6 +196,11 @@ impl Surface {
             (String::from("mandates"), entries(&words.mandates)),
             (String::from("steps"), entries(&words.steps)),
             (String::from("blueprints"), entries(&words.blueprints)),
+            (
+                String::from("queue_blueprints"),
+                entries(&words.queue_blueprints),
+            ),
+            (String::from("groups"), entries(&words.groups)),
         ]))
     }
 
@@ -540,6 +551,85 @@ impl Surface {
         ]))
     }
 
+    /// `set_value_text`: a value as the player typed it, in its shape's
+    /// display unit, written at a chip's pointer and answered as `patch_plan`
+    /// answers (S3's `fixq`, item 7). The reading, the conversion from
+    /// seconds and the patch are plan-core's
+    /// ([`pharmakos_plan_core::edit::set_value_text`]); the shape it reads is
+    /// the one `render_plan` answers for the same file, so the frozen snapshot
+    /// is read as `render_plan` reads it, and nothing is stepped.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for every refusal, in plan-core's
+    /// words with the typed text quoted.
+    pub(super) fn set_value_text(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
+        let seat = Surface::seat_of(subject, "a value to type")?;
+        let playbook = playbook_param(request)?;
+        let pointer = request
+            .string_param("pointer")?
+            .ok_or_else(|| Error::invalid("`pointer` names the value: a chip's pointer"))?;
+        let typed = request
+            .string_param("typed")?
+            .ok_or_else(|| Error::invalid("`typed` is the value as the player typed it"))?;
+        let host = self.host()?;
+        let context = pharmakos_plan_core::PlanContext::from_snapshot(
+            host.runner().frozen().snapshot(),
+            seat.raw(),
+        )
+        .map_err(|error| Error::internal(error.shown()))?;
+        let (patched, inverse) = pharmakos_plan_core::edit::set_value_text(
+            playbook,
+            pointer,
+            typed,
+            &context,
+            host.rules(),
+        )
+        .map_err(|error| {
+            Error::invalid(pharmakos_plan_core::edit::set_value_words(&error, typed))
+        })?;
+        undo_travels(&patched, &inverse)?;
+        Ok(Json::Object(vec![
+            (String::from("playbook_jsonc"), Json::String(patched)),
+            (String::from("inverse_json_patch"), Json::String(inverse)),
+        ]))
+    }
+
+    /// `new_rule`: an empty rule added at the end of the playbook's rules,
+    /// with a fresh id, answered as `patch_plan` answers, and the new rule's
+    /// pointer and id beside it (S3's `fixq`, item 8). The rule is
+    /// plan-core's ([`pharmakos_plan_core::edit::new_rule`]), its cooldown the
+    /// rules table's least; nothing is read from the world and nothing is
+    /// stepped.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a file with no canonical form
+    /// and for one already holding the most rules a playbook may, in
+    /// plan-core's words.
+    pub(super) fn new_rule(&self, request: &Request) -> Result<Json, Error> {
+        let playbook = playbook_param(request)?;
+        let made = pharmakos_plan_core::edit::new_rule(playbook, self.host()?.rules())
+            .map_err(|error| Error::invalid(pharmakos_plan_core::edit::new_rule_words(&error)))?;
+        undo_travels(&made.playbook_jsonc, &made.inverse_json_patch)?;
+        Ok(Json::Object(vec![
+            (
+                String::from("playbook_jsonc"),
+                Json::String(made.playbook_jsonc),
+            ),
+            (
+                String::from("inverse_json_patch"),
+                Json::String(made.inverse_json_patch),
+            ),
+            (String::from("rule_pointer"), Json::String(made.pointer)),
+            (String::from("rule_id"), Json::String(made.id)),
+        ]))
+    }
+
     /// `save_draft`: keep a playbook, privately, for this seat.
     ///
     /// A draft never leaves the gateway for anybody but its seat (spec section
@@ -768,7 +858,12 @@ impl Surface {
         )?;
         Ok(Json::Object(vec![(
             String::from("refs"),
-            Json::Array(resolved.iter().map(resolved_json).collect()),
+            Json::Array(
+                resolved
+                    .iter()
+                    .map(resolved_json)
+                    .collect::<Result<Vec<Json>, Error>>()?,
+            ),
         )]))
     }
 
@@ -1222,12 +1317,29 @@ fn is_draft_id(text: &str) -> bool {
 /// reference that reads nothing, or reads a named pick the origin cannot
 /// reach, is `reachable: false` **with no `travel_ms` at all**, so no reader
 /// can take the 0 a magic value once stood for as a feature at the origin.
-fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
+///
+/// Every travel written carries its `travel_text` beside it, plan-core's
+/// rendering of the figure as `estimate_route` renders a leg's (S3's `fixq`,
+/// item 12), so the chip does no time maths.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a travel the rendering refuses (one
+/// below zero), never drawn as a clamped figure.
+fn resolved_json(resolved: &crate::targeting::Resolved) -> Result<Json, Error> {
+    let text = |ms: pharmakos_sim::math::quantity::Ms| {
+        pharmakos_plan_core::travel::whole_seconds(ms).map_err(|error| {
+            Error::internal(said!(
+                "a reference's travel has no rendering: {}",
+                Said::engine_error(&error)
+            ))
+        })
+    };
     let candidates: Vec<Json> = resolved
         .candidates
         .iter()
         .map(|candidate| {
-            Json::Object(vec![
+            Ok(Json::Object(vec![
                 (
                     String::from("feature_id"),
                     Json::String(candidate.feature_id.clone()),
@@ -1236,9 +1348,13 @@ fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
                     String::from("travel_ms"),
                     Json::Number(candidate.travel_ms.raw().to_string()),
                 ),
-            ])
+                (
+                    String::from("travel_text"),
+                    Json::String(text(candidate.travel_ms)?),
+                ),
+            ]))
         })
-        .collect();
+        .collect::<Result<Vec<Json>, Error>>()?;
     let mut entries = vec![
         (
             String::from("pointer"),
@@ -1273,7 +1389,10 @@ fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
             Json::Bool(resolved.travel_ms.is_some()),
         ),
     ]);
-    Json::Object(entries)
+    if let Some(travel) = resolved.travel_ms {
+        entries.push((String::from("travel_text"), Json::String(text(travel)?)));
+    }
+    Ok(Json::Object(entries))
 }
 
 /// One `gp.api.v1.VerifyReport` as JSON.
@@ -1435,6 +1554,17 @@ fn vocabulary_entry(entry: &pharmakos_plan_core::vocabulary::Entry) -> Json {
     if let Some(locked) = &entry.locked {
         fields.push((String::from("locked"), Json::String(locked.clone())));
     }
+    // Only on a Build target's blueprint entry, lower case (decisions-log item
+    // 80); proto3 leaves the unspecified zero out everywhere else.
+    if let Some(anchor) = entry.anchor_shape {
+        fields.push((
+            String::from("anchor_shape"),
+            Json::String(pharmakos_proto::scope::wire_name(
+                "gp.api.v1.VocabularyEntry.AnchorShape",
+                anchor.proto_name(),
+            )),
+        ));
+    }
     Json::Object(fields)
 }
 
@@ -1460,6 +1590,20 @@ fn rendered_rule(rule: &pharmakos_plan_core::RenderedRule) -> Json {
                             (
                                 String::from("value_json"),
                                 Json::String(chip.value_json.clone()),
+                            ),
+                            // S3's `fixq`: every field written, the empty text
+                            // of a choice or a reference and `false` included.
+                            (
+                                String::from("value_text"),
+                                Json::String(chip.value_text.clone()),
+                            ),
+                            (String::from("outside"), Json::Bool(chip.outside)),
+                            (
+                                String::from("pick_op"),
+                                Json::String(pharmakos_proto::scope::wire_name(
+                                    "gp.api.v1.ConditionSlot.PickOp",
+                                    chip.pick.proto_name(),
+                                )),
                             ),
                         ])
                     })
@@ -1535,11 +1679,15 @@ mod tests {
     /// travel beside `reachable: true`, a 0 included.
     #[test]
     fn an_unreachable_pick_says_so() {
-        let unreachable = resolved_json(&named(None, Vec::new()));
+        let unreachable = resolved_json(&named(None, Vec::new())).expect("written");
         assert_eq!(unreachable.get("reachable"), Some(&Json::Bool(false)));
         assert!(
             unreachable.get("travel_ms").is_none(),
             "no travel is written for a pick nothing reaches: {unreachable:?}"
+        );
+        assert!(
+            unreachable.get("travel_text").is_none(),
+            "and no text for one (S3's `fixq`): {unreachable:?}"
         );
         assert_eq!(
             unreachable.get("feature_id"),
@@ -1553,12 +1701,28 @@ mod tests {
                 feature_id: String::from("vent_120_88"),
                 travel_ms: Ms::ZERO,
             }],
-        ));
+        ))
+        .expect("written");
         assert_eq!(underfoot.get("reachable"), Some(&Json::Bool(true)));
         assert_eq!(
             underfoot.get("travel_ms"),
             Some(&Json::Number(String::from("0"))),
             "a feature at the origin is reached in no time, and says so"
+        );
+        // S3's `fixq`, item 12: the figure as the player reads it, beside the
+        // pick's travel and each candidate's.
+        assert_eq!(
+            underfoot.get("travel_text"),
+            Some(&Json::String(String::from("0 s")))
+        );
+        let Some(Json::Array(candidates)) = underfoot.get("candidates") else {
+            panic!("candidates: {underfoot:?}");
+        };
+        assert_eq!(
+            candidates
+                .first()
+                .and_then(|candidate| candidate.get("travel_text")),
+            Some(&Json::String(String::from("0 s")))
         );
     }
 }

@@ -749,13 +749,20 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
     // `get_draft` joined the list with T17 (decisions-log item 112 (5)): the
     // advisor never reads a seat's drafts, one at a time any more than all
     // at once.
-    const REFUSED: [(&str, &str); 6] = [
+    // S3's `fixq`: the editor's two new planning edits are not on the
+    // advisor's allow-list either; the operator calls neither.
+    const REFUSED: [(&str, &str); 8] = [
         ("save_notes", r#"{"notes":"written by the operator"}"#),
         ("save_draft", r#"{"label":"x","playbook_jsonc":"{}"}"#),
         ("list_drafts", "{}"),
         ("get_draft", r#"{"draft_id":"carried"}"#),
         ("submit_plan", r#"{"playbook_jsonc":"{}"}"#),
         ("set_ready", r#"{"ready":true}"#),
+        (
+            "set_value_text",
+            r#"{"playbook_jsonc":"{}","pointer":"/x","typed":"3"}"#,
+        ),
+        ("new_rule", r#"{"playbook_jsonc":"{}"}"#),
     ];
     let mut surface = hosted();
     let before = surface

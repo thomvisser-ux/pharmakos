@@ -2522,10 +2522,80 @@ fn beacon_detail(
     if mandate == MandateKind::Build {
         let targets = build_targets(world, id)?;
         if !targets.is_empty() {
+            // One sentence per target, in its order, from plan-core's words
+            // for a Build target (S3's `fixq`, item 6), read off the target
+            // as the wire carries it, so the sentence and the JSON beside it
+            // cannot say two things.
+            let lines = targets
+                .iter()
+                .map(|target| {
+                    let canonical = canonical_enums("gp.v1.BuildTarget", target)?;
+                    pharmakos_proto::json::decode_json::<pharmakos_proto::gp::v1::BuildTarget>(
+                        &canonical,
+                    )
+                    .map(|target| Json::String(pharmakos_plan_core::render::target_line(&target)))
+                    .map_err(|error| {
+                        Error::internal(said!(
+                            "a Build target this gateway wrote does not decode: {}",
+                            pharmakos_proto::json::grammar::Said::engine_error(&error)
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<Json>, Error>>()?;
             out.push((String::from("build_targets"), Json::Array(targets)));
+            out.push((String::from("build_target_lines"), Json::Array(lines)));
         }
     }
     Ok(out)
+}
+
+/// `value`, read as the message `full_name`, with every enum value this
+/// gateway spelt lower case on the wire (decisions-log item 80) spelt back as
+/// the schema spells it, so a message this gateway wrote decodes (S3's
+/// `fixq`: `get_beacon`'s target lines read the targets as written).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for an enum value the schema does not
+/// name: this gateway writing a spelling it cannot read back.
+fn canonical_enums(full_name: &str, value: &Json) -> Result<Json, Error> {
+    use pharmakos_proto::descriptor::{self, ScalarKind};
+    let (Some(message), Json::Object(entries)) = (descriptor::schema().message(full_name), value)
+    else {
+        return Ok(value.clone());
+    };
+    let one = |kind: ScalarKind, type_name: &str, item: &Json| match (kind, item) {
+        (ScalarKind::Enum, Json::String(wire)) => {
+            pharmakos_proto::scope::from_wire_name(type_name, wire)
+                .map(Json::String)
+                .ok_or_else(|| {
+                    Error::internal(said!(
+                        "this gateway wrote {} for {}, which the schema does not name",
+                        pharmakos_proto::json::grammar::quoted(wire),
+                        pharmakos_proto::json::grammar::quoted(type_name)
+                    ))
+                })
+        }
+        (ScalarKind::Message, Json::Object(_)) => canonical_enums(type_name, item),
+        _ => Ok(item.clone()),
+    };
+    let mut out = Vec::with_capacity(entries.len());
+    for (key, entry) in entries {
+        let converted = match message.field_by_name(key) {
+            Some(field) => match entry {
+                Json::Array(items) if field.repeated => Json::Array(
+                    items
+                        .iter()
+                        .map(|item| one(field.kind, &field.type_name, item))
+                        .collect::<Result<Vec<Json>, Error>>()?,
+                ),
+                other => one(field.kind, &field.type_name, other)?,
+            },
+            None => entry.clone(),
+        };
+        out.push((key.clone(), converted));
+    }
+    Ok(Json::Object(out))
 }
 
 /// A Build beacon's settings rows.
@@ -2765,6 +2835,21 @@ impl Settings {
         } else {
             format!("/{arm}{field}")
         };
+        // An integer's value as it is shown and typed, in its display unit,
+        // as a chip's `value_text` is (S3's `fixq`); empty for any other.
+        let value_text = match &parameter.shape {
+            pharmakos_plan_core::shape::Shape::Integer { unit, .. } => {
+                let value: i64 = value_json.parse().map_err(|_| {
+                    Error::internal(said!(
+                        "the setting `{}` holds a number this gateway cannot read",
+                        pharmakos_proto::json::grammar::quoted(&pointer)
+                    ))
+                })?;
+                pharmakos_plan_core::shape::shown_text(unit, value)
+            }
+            pharmakos_plan_core::shape::Shape::Choice { .. }
+            | pharmakos_plan_core::shape::Shape::Reference { .. } => String::new(),
+        };
         self.rows.push(Json::Object(vec![
             (String::from("pointer"), Json::String(pointer)),
             (
@@ -2773,6 +2858,7 @@ impl Settings {
             ),
             (String::from("value_json"), Json::String(value_json)),
             (String::from("shape"), view::value_shape(&parameter.shape)),
+            (String::from("value_text"), Json::String(value_text)),
         ]));
         Ok(())
     }

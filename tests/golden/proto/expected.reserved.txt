@@ -13,7 +13,7 @@ gp.api.v1.FilledParameter
   numbers: 5-15
 
 gp.api.v1.GetBeaconResponse
-  numbers: 6-15
+  numbers: 7-15
 
 gp.api.v1.GetBriefingResponse
   numbers: 6-15
