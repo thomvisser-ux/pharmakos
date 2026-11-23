@@ -3323,10 +3323,7 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     let to_play = valid.iter().filter(|item| !item.nightly).count();
     // On a shard, every file is validated above and only the shard's part is
     // played, keyed by its relative path (`scenario_shard_key`).
-    let mine = |item: &scenario::Scenario| {
-        ctx.shard
-            .is_none_or(|shard| shard.holds("scenario", &scenario_shard_key(&item.relative)))
-    };
+    let mine = |item: &scenario::Scenario| scenario_on_shard(ctx.shard, &item.relative);
     for item in valid.iter().filter(|item| !item.nightly) {
         if !played.iter().any(|path| path.ends_with(&item.relative)) {
             return Err(format!(
@@ -3368,6 +3365,13 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
         "{part}{ran} scenario(s) pass on their event and hash assertions; {arms} nightly arm(s) \
          valid, played by the nightly workflow and not here"
     )))
+}
+
+/// Whether the scenario at `relative` is played on `shard` (every one
+/// without `--shard`): the scenario step's part of the split, keyed by
+/// [`scenario_shard_key`].
+fn scenario_on_shard(shard: Option<shard::Shard>, relative: &Path) -> bool {
+    shard.is_none_or(|shard| shard.holds("scenario", &scenario_shard_key(relative)))
 }
 
 /// A scenario's relative path with forward slashes: its name on a command
@@ -7365,53 +7369,105 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
     }
 
+    /// The split spreads by name, through the paths the steps themselves
+    /// take: `shard_part` for `test` and `test-research` (with each unit's
+    /// own key, its name included), and `scenario_on_shard` for `scenario`,
+    /// all under the committed `SPLIT_SALT`. Each step's pinned units lie on
+    /// all three shards, so a key that lost its name, a step hashed without
+    /// the salt, or a split that stopped spreading moves one of them.
+    /// Expected values: the committed split at 3 shards; a new salt or a
+    /// renamed unit moves them, and this table moves in the same commit.
+    #[test]
+    fn named_units_fall_where_the_salted_hash_puts_them() {
+        let total = 3_u32;
+        let shard_of = |index: u32| match shard::Shard::parse(&format!("{index}/{total}")) {
+            Ok(shard) => shard,
+            Err(error) => panic!("{error}"),
+        };
+        let unit = |key: &str| match key {
+            "lib" => shard::Unit::Lib,
+            "doc" => shard::Unit::Doc,
+            other => match other.split_once(':') {
+                Some(("bin", name)) => shard::Unit::Bin(name.to_owned()),
+                Some(("test", name)) => shard::Unit::Test(name.to_owned()),
+                _ => panic!("`{other}` is not a unit key"),
+            },
+        };
+        let pinned: [(&str, &[(&str, u32)]); 2] = [
+            (
+                "test",
+                &[
+                    ("test:advice", 1),
+                    ("test:attack", 1),
+                    ("bin:determinism", 2),
+                    ("test:allocations", 2),
+                    ("lib", 3),
+                    ("bin:xtask", 3),
+                ],
+            ),
+            (
+                "test-research",
+                &[
+                    ("test:allocations", 1),
+                    ("test:build", 1),
+                    ("lib", 2),
+                    ("bin:determinism", 2),
+                    ("test:audit", 3),
+                    ("test:combat", 3),
+                ],
+            ),
+        ];
+        for (step, cases) in pinned {
+            let all: Vec<shard::Unit> = cases.iter().map(|(key, _)| unit(key)).collect();
+            for (key, expected) in cases {
+                let found: Vec<u32> = (1..=total)
+                    .filter(|index| shard_part(shard_of(*index), step, &all).contains(&unit(key)))
+                    .collect();
+                assert_eq!(found, vec![*expected], "{step}/{key}");
+            }
+        }
+        for (relative, expected) in [
+            ("scenarios/s1/brownout-by-recycle.scenario.jsonc", 1),
+            ("scenarios/s1/cover-nearest-vent.scenario.jsonc", 1),
+            ("scenarios/s2/guards-escort-the-commander.scenario.jsonc", 2),
+            ("scenarios/s2/mortar-breaks-wall.scenario.jsonc", 2),
+            ("scenarios/s1/round-limit-audit.scenario.jsonc", 3),
+            ("scenarios/s2/base-kit-at-the-core.scenario.jsonc", 3),
+        ] {
+            let path: PathBuf = relative.split('/').collect();
+            let found: Vec<u32> = (1..=total)
+                .filter(|index| scenario_on_shard(Some(shard_of(*index)), &path))
+                .collect();
+            assert_eq!(found, vec![expected], "{relative}");
+            assert!(scenario_on_shard(None, &path), "{relative} unsharded");
+        }
+    }
+
     /// The leg job's half of the split: the `cargo xtask ci (<os>)` job, the
     /// required check, reads a report from every shard 1 to `CI_SHARDS` and
-    /// counts as failed a shard that sent none, one that failed, and, off the
-    /// fast path, one that did not run and pass its suite; and the job fails on
-    /// any failed shard. This pins the lines that do it, in order, so that
-    /// narrowing the loop or dropping a check is red here. It reads the
-    /// script's text rather than running it: xtask takes no dependencies, and
-    /// on Windows a bare `bash` can resolve to WSL's launcher rather than Git
-    /// Bash, so a test that spawned one would not test the same thing on every
-    /// machine.
+    /// counts as failed a shard that sent none, one that named another split,
+    /// one that failed, and, off the fast path, one that did not run and pass
+    /// its suite; a shard that ran the suite takes the leg off the fast path;
+    /// and the job's last step, which always runs, fails on any failed shard.
+    /// This pins the lines that do it, in order, so that narrowing the loop,
+    /// dropping or inverting a check, or letting the last step be skipped is
+    /// red here, while a comment or a blank line between them is not. It reads
+    /// the script's text rather than running it: xtask takes no dependencies,
+    /// and on Windows a bare `bash` can resolve to WSL's launcher rather than
+    /// Git Bash, so a test that spawned one would not test the same thing on
+    /// every machine.
     #[test]
     fn the_leg_job_requires_every_shards_report() {
         let ci = include_str!("../../.github/workflows/ci.yml");
-        let lines: Vec<&str> = ci.lines().map(str::trim).collect();
-        let Some(start) = lines
-            .iter()
-            .position(|line| *line == "- name: Read every shard's report")
-        else {
-            panic!("ci.yml has no `Read every shard's report` step");
-        };
-        let Some(rest) = lines.get(start..).and_then(|tail| tail.get(1..)) else {
-            panic!("the step's name is ci.yml's last line");
-        };
-        // To the next step, or to the end of the file when it is the last.
-        let end = rest
-            .iter()
-            .position(|line| line.starts_with("- name: "))
-            .unwrap_or(rest.len());
-        let Some(script) = rest.get(..end) else {
-            panic!("the step's lines end past the file");
-        };
-        // A run of consecutive lines; a leading `~` matches a substring.
-        let has_run = |wanted: &[&str]| {
-            script.windows(wanted.len()).any(|window| {
-                window
-                    .iter()
-                    .zip(wanted)
-                    .all(|(line, want)| match want.strip_prefix('~') {
-                        Some(part) => line.contains(part),
-                        None => line == want,
-                    })
-            })
-        };
+        let report_step = step_lines(ci, "Read every shard's report");
         let every_shard = r#"for n in $(seq 1 "${CI_SHARDS}"); do"#;
         let report = r#"report="shards/shard-${{ matrix.os }}-${n}/status.txt""#;
         let failed = r#"failed="${failed} ${n}""#;
         for (what, wanted) in [
+            (
+                "the step starts from no failure, on the fast path until a shard says otherwise",
+                vec![r#"failed="""#, "prose=true", r#"prose_shards="""#],
+            ),
             (
                 "a shard with no report fails",
                 vec![
@@ -7420,6 +7476,8 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                     r#"if [ ! -f "$report" ]; then"#,
                     "~sent no report",
                     failed,
+                    "prose=false",
+                    "continue",
                 ],
             ),
             (
@@ -7439,8 +7497,20 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                 ],
             ),
             (
+                "a shard that did not answer prose takes the leg off the fast path",
+                vec![
+                    r#"if grep -qx 'prose_only=true' "$report"; then"#,
+                    r#"prose_shards="${prose_shards} ${n}""#,
+                    "else",
+                    "prose=false",
+                    "fi",
+                    "done",
+                ],
+            ),
+            (
                 "off the fast path, a shard that did not run and pass its suite fails",
                 vec![
+                    r#"if [ "$prose" = "false" ]; then"#,
                     every_shard,
                     report,
                     r#"[ -f "$report" ] || continue"#,
@@ -7450,24 +7520,76 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                 ],
             ),
             (
-                "the failed shards are the step's output",
-                vec![r#"echo "failed=${failed}" >> "$GITHUB_OUTPUT""#],
+                "the fast path and the failed shards are the step's outputs",
+                vec![
+                    r#"echo "prose_only=${prose}" >> "$GITHUB_OUTPUT""#,
+                    r#"echo "failed=${failed}" >> "$GITHUB_OUTPUT""#,
+                ],
             ),
         ] {
-            assert!(has_run(&wanted), "the leg job's report check: {what}");
+            assert!(
+                has_run(&report_step, &wanted),
+                "the leg job's report check: {what}"
+            );
         }
-        let fails_on_any: Vec<&&str> = lines
-            .iter()
-            .filter(|line| {
-                **line
-                    == r#"if [ "${{ steps.shards.outcome }}" != "success" ] || [ -n "${{ steps.shards.outputs.failed }}" ]; then"#
-            })
-            .collect();
-        assert_eq!(
-            fails_on_any.len(),
-            1,
-            "the leg job fails once on any failed shard, in the steps every leg shares"
+        let last_step = step_lines(ci, "Every shard of this leg passed");
+        assert!(
+            has_run(
+                &last_step,
+                &[
+                    "if: always()",
+                    "shell: bash",
+                    "run: |",
+                    r#"if [ "${{ steps.shards.outcome }}" != "success" ] || [ -n "${{ steps.shards.outputs.failed }}" ]; then"#,
+                    "~did not pass, or their reports could not be read",
+                    "exit 1",
+                    "fi",
+                ],
+            ),
+            "the leg job's last step always runs and fails on any failed shard"
         );
+    }
+
+    /// The lines of the one ci.yml step named `name`, from its `- name:` line
+    /// to the next step's (or the file's end), trimmed, without blank lines
+    /// and without lines that are only a comment.
+    fn step_lines<'a>(ci: &'a str, name: &str) -> Vec<&'a str> {
+        let heading = format!("- name: {name}");
+        let lines: Vec<&str> = ci.lines().map(str::trim).collect();
+        let starts: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == heading)
+            .map(|(index, _)| index)
+            .collect();
+        let [start] = starts.as_slice() else {
+            panic!(
+                "ci.yml has {} step(s) named `{name}`, not one",
+                starts.len()
+            );
+        };
+        let Some(rest) = lines.get(*start..).and_then(|tail| tail.get(1..)) else {
+            panic!("the step `{name}` is ci.yml's last line");
+        };
+        rest.iter()
+            .take_while(|line| !line.starts_with("- name: "))
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .copied()
+            .collect()
+    }
+
+    /// Whether `lines` holds `wanted` as consecutive lines; a leading `~` in
+    /// `wanted` matches a substring.
+    fn has_run(lines: &[&str], wanted: &[&str]) -> bool {
+        lines.windows(wanted.len()).any(|window| {
+            window
+                .iter()
+                .zip(wanted)
+                .all(|(line, want)| match want.strip_prefix('~') {
+                    Some(part) => line.contains(part),
+                    None => line == want,
+                })
+        })
     }
 
     #[test]
