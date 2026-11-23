@@ -37,8 +37,11 @@
 //! is standing on (`tick()`), the phase a refused `begin_push` was in and
 //! whether a match played to its end has ended (`phase()`), the round a seal
 //! belongs to, a refusal is named in and a nightly match reached (`round()`),
-//! how the match ended (`outcome()`), and on a shared win the final audit's
-//! tied seats (`audit::final_audit(host.world())`, a pure read). `Host::runner`
+//! how the match ended (`outcome()`), on a shared win the final audit's
+//! tied seats (`audit::final_audit(host.world())`, a pure read), and after
+//! every tick and at every Lull the Attack table's rows
+//! (`host.world().attack().rows()`), for the hunts a nightly result counts
+//! ([`Hunts`]), because the feed's `attack_launched` names no beacon. `Host::runner`
 //! hands out a `&Runner` and `Host::world` a `&World`, and every stepping
 //! method needs `&mut`, so the reach cannot become a second way to play a
 //! match; if `Surface` gains accessors for these, this file should take them
@@ -84,6 +87,7 @@
 //! PLACEHOLDER: a `builtin` seat plays Easy — owner, S5, with the `operator`
 //! scenario key that would name another difficulty.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -94,6 +98,8 @@ use pharmakos_gateway::serve;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
+use pharmakos_sim::World;
+use pharmakos_sim::attack::{Aim, NEVER, Phase as AttackPhase};
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchPhase, MatchSettings};
@@ -136,6 +142,63 @@ pub struct Fired {
     pub kind: String,
     /// Whose it was, when it was anybody's.
     pub seat: Option<u8>,
+    /// The round the match was in when the event was read off the feed,
+    /// counted from 1: the runner's own count of the segments it opened, held
+    /// equal to the sim's round at every Lull ([`play_until`] refuses a run
+    /// where the two disagree). A Push's events are its round's; what a recap
+    /// and the next Lull's opening leave on the feed is read in the Lull it
+    /// opened, so it carries that round.
+    pub round: u32,
+}
+
+/// The hunts a run's seats filed, and the ones that launched (S3's plan, E14:
+/// "the nightly result does not count hunts that never launched",
+/// decisions-log item 150 (2)).
+///
+/// A **hunt** is an Attack beacon whose target is the enemy commander
+/// ([`Aim::Commander`]); it is **filed** once its row has been seen in the
+/// Attack table with that aim, and **launched** once the row has been seen
+/// launched: on its way or fighting ([`AttackPhase::Launched`]), walking home
+/// after it ([`AttackPhase::Returning`]), stamped with a launch tick, or with a
+/// wave counted this segment. Read after every tick and at every Lull, so a
+/// launch is seen on the tick it happens even if the attack ends on the next
+/// one, and a row that `end()` reset still counts through `waves_used`.
+///
+/// Read from the world rather than the feed because the feed's
+/// `attack_launched` names no beacon (`crates/gateway/src/feed.rs`: a kind, a
+/// time, an audience, a text and a memo), so the feed cannot say *which*
+/// Attack beacon launched. The read is the Attack table's rows, through
+/// `Host::world()`, whose every method that writes needs `&mut`.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Hunts {
+    /// Every hunt's beacon seen filed, by its id's raw value (row and
+    /// generation, so a rebuilt beacon is a new hunt).
+    pub filed: BTreeSet<u32>,
+    /// Every hunt's beacon seen launched.
+    pub launched: BTreeSet<u32>,
+}
+
+impl Hunts {
+    /// How many filed hunts never launched.
+    #[must_use]
+    pub fn unlaunched(&self) -> usize {
+        self.filed.difference(&self.launched).count()
+    }
+
+    /// Read the Attack table once.
+    fn read(&mut self, world: &World) {
+        for row in world.attack().rows() {
+            if !matches!(row.settings.aim, Aim::Commander(_)) {
+                continue;
+            }
+            let beacon = row.beacon.raw();
+            self.filed.insert(beacon);
+            if row.phase != AttackPhase::Gathering || row.launched_at != NEVER || row.waves_used > 0
+            {
+                self.launched.insert(beacon);
+            }
+        }
+    }
 }
 
 /// What one run produced.
@@ -157,6 +220,8 @@ pub struct Played {
     pub notes: Vec<String>,
     /// The rules table the match ran under.
     pub rules_hash: u64,
+    /// The hunts the seats filed and launched over the whole run.
+    pub hunts: Hunts,
 }
 
 impl Played {
@@ -312,16 +377,19 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
         segments: Vec::with_capacity(scenario.segments.len()),
         notes: Vec::new(),
         rules_hash,
+        hunts: Hunts::default(),
     };
     let mut seen = 0_usize;
     let mut index = 0_usize;
 
     loop {
+        // The round this Lull opens: the runner's own count, held to the sim's.
+        let opened = round_of(&surface, index)?;
         // Whatever the last phase left on the feed, dated at the tick the match
         // is standing on. A Lull consumes no sim tick, so that is the tick
         // every line of it belongs to.
         let standing = surface_tick(&surface)?;
-        drain(&surface, &mut seen, standing, &mut played.events)?;
+        drain(&surface, &mut seen, standing, opened, &mut played)?;
 
         // The `builtin` seats plan first, then the playbook seats submit: the
         // order `gamectl host` has, whose surface thread plans its in-process
@@ -353,8 +421,8 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
             )));
         }
         seen = 0;
-        drain(&surface, &mut seen, anchor, &mut played.events)?;
-        let ticks = play_push(&mut surface, &mut seen, &mut played)?;
+        drain(&surface, &mut seen, anchor, opened, &mut played)?;
+        let ticks = play_push(&mut surface, &mut seen, opened, &mut played)?;
         if let Until::Segments = until {
             let wanted = scenario
                 .segments
@@ -400,6 +468,32 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
     Ok(played)
 }
 
+/// The round segment `index` plays, counted from 1, from the runner's own
+/// count of the segments it has opened, and the sim's round held to it: an
+/// event's round is never inferred from its tick, and the two counts cannot
+/// drift apart in silence.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] for an index past a `u32`'s rounds, which the sim's
+/// `u32` round count would have refused first, and for a match standing in
+/// another round than the one this runner opened.
+fn round_of(surface: &Surface, index: usize) -> Result<u32, Failure> {
+    let opened = u32::try_from(index)
+        .ok()
+        .and_then(|index| index.checked_add(1))
+        .ok_or_else(|| Failure::internal(format!("segment {index} is past a u32's rounds")))?;
+    let sim_round = round(surface)?;
+    if sim_round == opened {
+        Ok(opened)
+    } else {
+        Err(Failure::internal(format!(
+            "this runner opened its segment {index} as round {opened} and the match is in round \
+             {sim_round}"
+        )))
+    }
+}
+
 /// Seal every `playbook` seat's file for the Lull the match stands in.
 ///
 /// A seat the verifier refuses goes through the harness door with a note, as
@@ -430,12 +524,17 @@ fn seal_all(
 
 /// Step the open Push to its segment's end, writing the chain and the
 /// events, and say how many ticks it played.
-fn play_push(surface: &mut Surface, seen: &mut usize, played: &mut Played) -> Result<u32, Failure> {
+fn play_push(
+    surface: &mut Surface,
+    seen: &mut usize,
+    round: u32,
+    played: &mut Played,
+) -> Result<u32, Failure> {
     let mut ticks = 0_u32;
     while let Some(report) = surface.step().map_err(internal)? {
         let tick = report.tick.raw();
         let _ = writeln!(played.chain, "{tick}\t{}", pharmakos_sim::hex(report.hash));
-        drain(surface, seen, tick, &mut played.events)?;
+        drain(surface, seen, tick, round, played)?;
         ticks = ticks
             .checked_add(1)
             .ok_or_else(|| Failure::internal("a segment of more ticks than a u32 counts"))?;
@@ -899,7 +998,8 @@ fn report_hash_of(result: Option<&Json>) -> Result<Vec<u8>, Failure> {
 // Reading what happened
 // ---------------------------------------------------------------------------
 
-/// Copy the feed's new lines into the record, dated at `tick`.
+/// Copy the feed's new lines into the record, dated at `tick` and in
+/// `round`, and read the hunts ([`Hunts`]) from the world as it stands.
 ///
 /// The **feed**, not the sim's bus: `Surface::step` drains the bus onto the
 /// feed as part of stepping, which is the point of hosting through the surface
@@ -910,8 +1010,11 @@ fn drain(
     surface: &Surface,
     seen: &mut usize,
     tick: u32,
-    into: &mut Vec<Fired>,
+    round: u32,
+    played: &mut Played,
 ) -> Result<(), Failure> {
+    played.hunts.read(surface.host().map_err(internal)?.world());
+    let into = &mut played.events;
     let events = surface.feed().events();
     // The feed only grows within a segment, and `seen` restarts at zero when
     // `begin_push` opens a fresh one, so a feed shorter than what was read is
@@ -926,6 +1029,7 @@ fn drain(
     for event in fresh {
         into.push(Fired {
             tick,
+            round,
             kind: event.kind.name().to_owned(),
             seat: match event.audience {
                 Audience::Private(seat) => Some(seat.raw()),

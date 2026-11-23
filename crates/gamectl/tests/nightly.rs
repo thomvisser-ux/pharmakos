@@ -118,8 +118,8 @@ fn the_arms_are_the_whole_set() {
 }
 
 /// The arm's own scenario with the arm on `arm_seat` and Easy on the other,
-/// cut to its first round, as the nightly would seat it.
-fn one_round(arm: &str, arm_seat: u8) -> scenario::Scenario {
+/// cut to its first `count` rounds, as the nightly would seat it.
+fn rounds(arm: &str, arm_seat: u8, count: usize) -> scenario::Scenario {
     let loaded = scenario::load(&root(), Path::new(arm)).expect("a valid arm");
     let playbook = loaded
         .seats
@@ -141,7 +141,12 @@ fn one_round(arm: &str, arm_seat: u8) -> scenario::Scenario {
         })
         .collect();
     let mut cut = scenario::Scenario { seats, ..loaded };
-    cut.segments.truncate(1);
+    assert!(
+        cut.segments.len() >= count,
+        "{arm} lists {} segments, fewer than the {count} rounds asked for",
+        cut.segments.len()
+    );
+    cut.segments.truncate(count);
     cut
 }
 
@@ -172,7 +177,7 @@ fn qualifies_and_plays_a_round_through_the_door(arm: &str) {
         .map(|seat| seat.seat)
         .expect("an arm seats a playbook");
     for arm_seat in [0_u8, 1] {
-        let cut = one_round(arm, arm_seat);
+        let cut = rounds(arm, arm_seat, 1);
         let played = run::play(&root(), &cut)
             .unwrap_or_else(|failure| panic!("{arm} on seat {arm_seat}: {}", failure.message));
         if arm_seat == own_seat {
@@ -199,6 +204,20 @@ fn qualifies_and_plays_a_round_through_the_door(arm: &str) {
                 "{arm} with the arm on seat {arm_seat}: seat {seat} sealed nothing"
             );
         }
+        // Every event carries the round it was read in, and one round was
+        // played.
+        assert!(
+            played.events.iter().all(|fired| fired.round == 1),
+            "{arm} on seat {arm_seat}: an event outside round 1"
+        );
+        // The hunts' count reads the Attack table: the Hunter's Attack beacon
+        // aims at the enemy commander, the other arms' at none.
+        assert_eq!(
+            played.hunts.filed.is_empty(),
+            arm != HUNTER,
+            "{arm} on seat {arm_seat}: hunts filed {:?}",
+            played.hunts
+        );
     }
 }
 

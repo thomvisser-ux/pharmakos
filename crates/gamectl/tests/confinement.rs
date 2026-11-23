@@ -150,7 +150,9 @@ fn every_module_is_checked() {
 /// (`phase()`), the round a seal belongs to, a refusal is named in and a
 /// nightly match reached (`round()`) and how the match ended (`outcome()`),
 /// and `Host::world()` for the final audit's tied seats on a shared win
-/// (`audit::final_audit`, a pure read). `.runner()` is deliberately **not** a
+/// (`audit::final_audit`, a pure read) and for the Attack table's rows
+/// (`attack().rows()`), which the nightly result's hunt count reads after
+/// every tick (S3's `nite3`). `.runner()` is deliberately **not** a
 /// needle, because the guard is against *driving* a `Runner`, not against
 /// naming one — and `Host::runner` hands out a `&Runner` and `Host::world` a
 /// `&World`, whose every stepping method needs `&mut`, so the reach cannot
