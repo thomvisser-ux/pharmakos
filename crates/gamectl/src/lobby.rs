@@ -135,10 +135,7 @@ pub fn verify(
         ),
         (
             String::from("depth"),
-            Json::String(String::from(match depth {
-                Depth::Quick => "quick",
-                Depth::Unspecified | Depth::Full => "full",
-            })),
+            Json::String(String::from(wire_depth(depth)?)),
         ),
     ]));
     let request = pharmakos_gateway::rpc::parse(&format!(
@@ -153,6 +150,24 @@ pub fn verify(
     })?;
     let answer = surface.call(Some(&token), &request, &Blind);
     report_of(&answer)
+}
+
+/// How `verify_plan` spells a depth on the wire.
+///
+/// # Errors
+///
+/// [`crate::exit::Exit::Internal`] for an unspecified depth: the command line
+/// always names one (FULL by default), so an unspecified one is this build
+/// disagreeing with itself, never a depth to send as `full` (fix pass 1 of
+/// #219, item 9).
+fn wire_depth(depth: Depth) -> Result<&'static str, Failure> {
+    match depth {
+        Depth::Quick => Ok("quick"),
+        Depth::Full => Ok("full"),
+        Depth::Unspecified => Err(Failure::internal(
+            "a preset verification was asked for at no depth, which the command line never asks",
+        )),
+    }
 }
 
 /// Open the lobby's match in its opening Lull, as `serve` opens one.
@@ -351,6 +366,15 @@ mod tests {
         assert_eq!(config.seats, 2);
         assert_eq!(config.human_seat, Some(0));
         assert_eq!(config.preset.name(), "probation");
+    }
+
+    #[test]
+    fn an_unspecified_depth_is_refused_not_sent_as_full() {
+        use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+        assert_eq!(super::wire_depth(Depth::Quick), Ok("quick"));
+        assert_eq!(super::wire_depth(Depth::Full), Ok("full"));
+        let refused = super::wire_depth(Depth::Unspecified).expect_err("refused");
+        assert_eq!(refused.code, crate::exit::Exit::Internal);
     }
 
     #[test]
