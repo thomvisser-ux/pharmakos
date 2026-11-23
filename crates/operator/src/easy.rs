@@ -412,6 +412,10 @@ pub struct Played {
     /// `NOT_FOUND` (which is its answer that nothing answers a waypoint): the
     /// goal it weighed was dropped, and here is why.
     pub estimates_refused: Vec<Refused>,
+    /// How many of the candidates it weighed the round's budget would have
+    /// funded on their own (fix pass 3, item 1): a round that sealed its safe
+    /// playbook with this above zero had a goal it should have composed.
+    pub fundable: usize,
 }
 
 /// One suggested value for one declared template parameter.
@@ -527,6 +531,7 @@ impl Easy {
             why: String::new(),
             refused: None,
             estimates_refused: Vec::new(),
+            fundable: 0,
         };
         match Situation::read(&mut wire, seat) {
             Ok(situation) => {
@@ -557,6 +562,7 @@ impl Easy {
         let weighed = candidates::evaluate(wire, situation, &self.tuning, &declared, goals, true);
         round.estimates_refused.clone_from(&weighed.refused);
         let evaluated = weighed.candidates;
+        round.fundable = compose::fundable(situation, &self.tuning, &evaluated, &declared);
         // No share to fill (a segment length past the arithmetic) is no goal:
         // the composition then fails and the safe playbook is submitted.
         let spire = compose::spire(situation, &self.tuning);

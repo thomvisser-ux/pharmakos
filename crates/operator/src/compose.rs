@@ -310,6 +310,36 @@ struct Funded<'a> {
     goals: Vec<Candidate>,
 }
 
+/// How many of the evaluated candidates the round's budget would fund on
+/// their own: each one funded alone, by the same rules as the round (its
+/// worth above zero, its time, price and draw within the budget, its timeout
+/// within the segment). What a round that seals its safe playbook is held
+/// to: zero (S3's `opr3`, fix pass 3, item 1).
+pub(crate) fn fundable(
+    situation: &Situation,
+    tuning: &Tuning,
+    evaluated: &[Candidate],
+    declared: &[Declared],
+) -> usize {
+    let Some(fill) = fill_ms(situation) else {
+        return 0;
+    };
+    evaluated
+        .iter()
+        .filter(|candidate| {
+            fund(
+                situation,
+                tuning,
+                declared,
+                std::slice::from_ref(*candidate),
+                None,
+                fill,
+            )
+            .is_some_and(|funded| funded.post.is_some() || !funded.goals.is_empty())
+        })
+        .count()
+}
+
 /// Fund the round from one budget (module docs, "One ranking"): the guard
 /// post after the commander's death and the Spire first, as ruled, then the
 /// top-k of the rest in rank order. `None` when the headroom does not fit the

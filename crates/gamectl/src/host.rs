@@ -301,6 +301,7 @@ mod tests {
             why: String::new(),
             refused,
             estimates_refused,
+            fundable: 0,
         }
     }
 

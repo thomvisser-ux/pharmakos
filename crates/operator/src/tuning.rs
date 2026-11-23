@@ -154,6 +154,14 @@ pub(crate) struct Tuning {
     /// game milliseconds ([`walk_allowance_ms`]): what a composed step's
     /// timeout adds to its priced walk (S3's `opr3`, fix pass 2, item 1).
     pub(crate) walk_allowance_ms: i64,
+    /// The least cost of one step on the ground: the lower of
+    /// `locomotion.step_cost_cardinal` and `step_cost_diagonal`, each step
+    /// moving at most one voxel on each axis. With
+    /// [`Tuning::commander_cost_per_second`], the floor under a walk
+    /// ([`crate::candidates`]'s `walk_floor_ms`).
+    pub(crate) step_cost_min: i64,
+    /// `commander.cost_per_second`, the row the sim walks the commander at.
+    pub(crate) commander_cost_per_second: i64,
     /// Each armed kind's threat (S2's plan, decision 12): its weapon's damage
     /// per second, in thousandths of a hit point per second, as the sim's own
     /// threat model computes it from the same row.
@@ -471,6 +479,21 @@ impl Tuning {
             .ok_or_else(|| missing("interface_times"))?;
         let units = table.units.ok_or_else(|| missing("units"))?;
         let locomotion = table.locomotion.ok_or_else(|| missing("locomotion"))?;
+        let commander = table.commander.ok_or_else(|| missing("commander"))?;
+        let step_cost_min = i64::from(
+            locomotion
+                .step_cost_cardinal
+                .min(locomotion.step_cost_diagonal),
+        );
+        let commander_cost_per_second = i64::from(commander.cost_per_second);
+        for (row, value) in [
+            ("locomotion.step_cost_cardinal", step_cost_min),
+            ("commander.cost_per_second", commander_cost_per_second),
+        ] {
+            if value <= 0 {
+                return Err(missing(row));
+            }
+        }
         let threats = Threats::read(&units, &structures)?;
         let build_drone = units
             .build_drone
@@ -528,6 +551,8 @@ impl Tuning {
             spire_cost_dollars: spire.cost_dollars,
             spire_draw_kw: spire.draw_kw,
             walk_allowance_ms: walk_allowance_ms(locomotion.repath_cap_per_tick)?,
+            step_cost_min,
+            commander_cost_per_second,
             times: rates,
             threats,
         })
