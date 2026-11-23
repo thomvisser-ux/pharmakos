@@ -60,8 +60,9 @@
 //! further than the served goal is, always outranks a stone: it pays no stone
 //! and waits no round.
 //!
-//! A chain once begun is **continued** until its feature is covered or a
-//! `toward` toward it is refused ([`chain_feature`]): no memory is kept
+//! A chain once begun is **continued** until its feature is covered or shown
+//! out of reach -- a `toward` toward it refused, or a stone no round's share
+//! carries or worth nothing ([`chain_feature`]): no memory is kept
 //! between rounds (the operator holds none, and keeps none through the
 //! gateway), so the chain is read off the view. A stone is an own beacon,
 //! not the core, whose sphere holds no live feature's anchor; the feature a
@@ -69,7 +70,7 @@
 //! it closed the most (the sim stands a stone where the spheres reach
 //! furthest toward its feature, so its own sphere's radius is all of that
 //! gap closed). While a far feature is a begun chain's, only its stone is
-//! weighed; a refused `toward` toward it weighs the rest.
+//! weighed; a feature out of reach weighs the rest.
 //!
 //! **No site is computed here.** Each placement's one estimate is
 //! `estimate_route` from the commander, by way of the core when the seat has
@@ -1099,7 +1100,9 @@ pub(crate) fn evaluate(
         }
     }
     // A chain begun is continued (module docs): its stone is weighed alone,
-    // and the rest only when a `toward` toward its feature is refused.
+    // and the rest only when its feature is shown out of reach this round --
+    // a `toward` toward it refused, or a stone that no round's share could
+    // carry or that is worth nothing.
     let far = first(far, STONE_TARGETS_MAX);
     let chain = chain_feature(situation, &far);
     let (begun, rest): (Vec<_>, Vec<_>) = far
@@ -1107,7 +1110,16 @@ pub(crate) fn evaluate(
         .partition(|(_, goal)| chain.as_deref() == Some(goal.feature()));
     let weighed = out.candidates.len();
     out.stones(wire, situation, tuning, declared, commander, begun);
-    if out.candidates.len() == weighed {
+    let continued = match crate::compose::fill_ms(situation) {
+        Some(fill) => out
+            .candidates
+            .get(weighed..)
+            .into_iter()
+            .flatten()
+            .any(|stone| stone.utility > 0 && stone.time_ms <= fill),
+        None => false,
+    };
+    if !continued {
         out.stones(wire, situation, tuning, declared, commander, rest);
     }
     out
