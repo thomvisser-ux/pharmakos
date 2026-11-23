@@ -3681,6 +3681,96 @@ fn no_composed_placement_times_out_before_its_own_price() {
 // Fix pass 2: one ranking
 // ---------------------------------------------------------------------------
 
+/// A world of the reviewer's probe (fix pass 2, item 3): a 60 s segment, so
+/// a 42 s share; the starting seam covered beside the core; three stones
+/// toward rich seams whose site is at `y`; and a near lean vent.
+fn crowded(y: i32) -> Script {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.segment_ms = 60_000;
+    world.remaining_ms = 60_000;
+    let mut start = Feature::new("seam", "standard", [36, 34]);
+    start.covered = true;
+    start.travel_ms = Some(3_000);
+    world.features.push(start);
+    for x in [2, 4, 6] {
+        let mut seam = Feature::new("seam", "rich", [x, 63]);
+        seam.site = None;
+        seam.stone = Some([x, y, GROUND]);
+        world.features.push(seam);
+    }
+    let mut vent = Feature::new("vent", "lean", [40, 32]);
+    vent.site = Some([36, 32, GROUND]);
+    world.features.push(vent);
+    world
+}
+
+/// The top-k cuts against what is funded ahead of the ranking, not the whole
+/// share (fix pass 2, item 3): in the round after the commander's death the
+/// guard post is funded first, and stones that fit the 42 s share but not
+/// what the guard leaves of it are no goals this round, so they never crowd
+/// out the near vent, which fits: Easy composes the guard and the vent.
+#[test]
+fn goals_that_do_not_fit_what_the_guard_leaves_do_not_crowd_out_one_that_does() {
+    for y in [44_i32, 48, 52, 56] {
+        let mut world = crowded(y);
+        world.round = 2;
+        world.feed_deaths = vec![0];
+        let (script, played) = play(world);
+        let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+        assert!(
+            ops.contains("place_guard"),
+            "y {y}: {} -- {ops}",
+            played.why
+        );
+        assert!(ops.contains("vent_40_32"), "y {y}: {} -- {ops}", played.why);
+        assert!(!ops.contains("toward"), "y {y}: {} -- {ops}", played.why);
+    }
+}
+
+/// The reviewer's probe itself (fix pass 2, items 2 and 3), a Survey post due
+/// or not: the post is ranked with the goals, worth the raid it buys, so it
+/// never takes the share ahead of them and the round is never the post alone.
+/// Each round composes its best goal by utility per second that fits: with a
+/// fresh sighting, the raid on it (and no post is due); else the stone where
+/// its site is near enough to fit the share (its served Mine is worth more
+/// per second than the lean vent's Generator), the vent where the stone no
+/// longer fits.
+#[test]
+fn a_due_survey_post_never_crowds_out_the_goals() {
+    for y in [40_i32, 44, 48, 52, 56, 60, 64, 68] {
+        for fresh in [false, true] {
+            let mut world = crowded(y);
+            if fresh {
+                world.beacons.push(Beacon {
+                    id: String::from("e_01"),
+                    at: [60, 60, GROUND],
+                    owner: 1,
+                    core: false,
+                    powered: false,
+                    priority: "",
+                });
+                world.sighting_ages.insert(String::from("e_01"), 0);
+            }
+            let (script, played) = play(world);
+            let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+            eprintln!(
+                "y {y} fresh {fresh}: vent {} stone {} raid {} survey {}",
+                ops.contains("vent_40_32"),
+                ops.contains("toward"),
+                ops.contains("\"e_01\""),
+                ops.contains("survey_post")
+            );
+            let goal = if fresh {
+                ops.contains("\"e_01\"")
+            } else {
+                ops.contains("vent_40_32") || ops.contains("toward")
+            };
+            assert!(goal, "y {y}, fresh {fresh}: {} -- {ops}", played.why);
+        }
+    }
+}
+
 /// A goal placeable now outranks a stone toward a feature of the same worth
 /// (fix pass 2, item 2): two rich seams, one with a site the seat's spheres
 /// allow, a 20 s walk away, and one no site covers whose stone is an 8 s
