@@ -556,3 +556,69 @@ fn compose_wall_box_answers_only_about_the_callers_own_beacons() {
     );
     let _ = result(&own, "seat 1's own core composes");
 }
+
+/// Review fix pass 1, item 5: a beacon of the seat's own that is dead while
+/// the table still holds its row names no beacon to `compose_wall_box`,
+/// exactly as to `get_beacon`: one `NOT_FOUND`, worded as for a name that
+/// names nothing. A seat's core is the row the sim never frees (and any
+/// beacon's row is held while kill credit is owed), so the probe kills seat
+/// 0's core in a three-seat match and asks in the next Lull.
+#[test]
+fn compose_wall_box_answers_a_dead_beacon_as_get_beacon_does() {
+    use pharmakos_sim::math::quantity::Damage;
+    use pharmakos_sim::tables::SeatId;
+    use pharmakos_sim::world::{DamageOrder, DamageTarget};
+
+    let mut surface = hosted(3, SEGMENT_MS, 3);
+    let (core, [cx, cy, cz]) = support::core_beacon(&surface, 0);
+    assert!(surface.begin_push().expect("the Push begins"));
+    surface
+        .host_mut()
+        .expect("hosted")
+        .file_damage(DamageOrder {
+            target: DamageTarget::Beacon(core),
+            amount: Damage::new(i64::from(i32::MAX)).expect("a positive amount"),
+            by: SeatId::new(1),
+            source: None,
+        })
+        .expect("the damage queue takes the order");
+    let _ = support::step(&mut surface, 1_000);
+    while !surface.end_recap().expect("the recap closes") {
+        let _ = support::step(&mut surface, 1);
+    }
+    let mut left = FIRST_LULL_MS;
+    let token = seat_token(&mut surface, 0);
+    let (alive, held) = {
+        let beacons = surface.host().expect("hosted").world().beacons();
+        let row = beacons.row_of_ordinal(SeatId::new(0), 0);
+        (
+            row.and_then(|row| beacons.hit_points().get(row).copied())
+                .is_some_and(pharmakos_sim::math::quantity::Hp::is_alive),
+            row.is_some(),
+        )
+    };
+    assert!(!alive, "the core is dead");
+    assert!(held, "its row is still held in the Lull");
+    let mut answers = Vec::new();
+    for name in ["b_00", "b_09"] {
+        let built = call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "compose_wall_box",
+            &compose(name, [cx + 2, cy, cz], [cx + 3, cy, cz]),
+        );
+        let seen = call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "get_beacon",
+            &format!("{{\"beacon_id\":{}}}", quote(name)),
+        );
+        assert_eq!(code(&built), "NOT_FOUND", "{name}: {built:?}");
+        assert_eq!(code(&seen), "NOT_FOUND", "{name}: {seen:?}");
+        answers.push(message(&built).replace(name, "NAME"));
+    }
+    answers.dedup();
+    assert_eq!(answers.len(), 1, "{answers:?}");
+}

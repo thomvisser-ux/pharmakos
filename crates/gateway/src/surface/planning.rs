@@ -669,10 +669,11 @@ impl Surface {
     /// seat's own; `INVALID_ARGUMENT` for a blueprint that fills no box, a
     /// corner past the map's coordinates, no ground under a column, or a box
     /// outside the beacon's sphere.
-    pub(super) fn compose_wall_box(
+    pub(super) fn compose_wall_box<V: crate::fog::Vision>(
         &self,
         subject: crate::token::Subject,
         request: &Request,
+        vision: &V,
     ) -> Result<Json, Error> {
         if !self.time.planning_open() {
             return Err(Error::phase_closed(said!(
@@ -708,13 +709,11 @@ impl Surface {
             ))
         };
         // Own beacons only, and one refusal for every name that is not one.
-        let row = match pharmakos_sim::tables::parse_beacon_name(wanted) {
-            Some(pharmakos_sim::tables::BeaconName::Own(ordinal)) => world
-                .beacons()
-                .row_of_ordinal(seat, ordinal)
-                .ok_or_else(absent)?,
-            Some(pharmakos_sim::tables::BeaconName::Foreign(_)) | None => return Err(absent()),
-        };
+        // Read as `get_beacon` reads a name, and standing: one refusal for
+        // every name that is not one of the seat's own living beacons.
+        let row = self
+            .own_standing_beacon(seat, vision, wanted)?
+            .ok_or_else(absent)?;
         let beacon = pharmakos_sim::tables::BeaconId::new(
             world.beacons().ids().get(row).copied().ok_or_else(|| {
                 Error::internal(said!("the beacon table has no id in row {}", row))

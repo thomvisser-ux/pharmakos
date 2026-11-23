@@ -1983,6 +1983,35 @@ impl Surface {
     ///
     /// [`crate::error::Code::Internal`] when no match is hosted or the row
     /// lacks a column.
+    /// The row of `seat`'s own beacon `wanted` names, read as `get_beacon`
+    /// reads a name (the view feed's [`crate::viewfeed`] `beacon_row`, then
+    /// the standing beacon of that row, [`Surface::live_beacon`]), or `None`
+    /// for every name that is not one of the seat's own **standing** beacons:
+    /// another seat's, a foreign handle, a dead beacon whose row the table
+    /// still holds (a core, or kill credit owed), a name that names nothing.
+    /// One answer for all of them, as `get_beacon`'s `NOT_FOUND` is one (S3's
+    /// `fixq`, review fix pass 1, item 5).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::live_beacon`].
+    pub(super) fn own_standing_beacon<V: Vision>(
+        &self,
+        seat: SeatId,
+        vision: &V,
+        wanted: &str,
+    ) -> Result<Option<usize>, Error> {
+        let viewer = Viewer::Seat(seat);
+        let world = self.host()?.world();
+        let Some(row) = self.views.beacon_row(viewer, world, wanted) else {
+            return Ok(None);
+        };
+        Ok(match self.live_beacon(viewer, vision, row)? {
+            Some((_, _, _, Seen::Own { row: own })) if own == row => Some(row),
+            Some(_) | None => None,
+        })
+    }
+
     fn live_beacon<V: Vision>(
         &self,
         viewer: Viewer,

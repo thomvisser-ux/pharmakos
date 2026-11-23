@@ -3431,7 +3431,7 @@ impl Surface {
             Method::ResolveRefs => self.resolve_refs(subject, request),
             Method::SetValueText => self.set_value_text(subject, request),
             Method::NewRule => self.new_rule(request),
-            Method::ComposeWallBox => self.compose_wall_box(subject, request),
+            Method::ComposeWallBox => self.compose_wall_box(subject, request, vision),
             Method::SubmitPlan => self.submit_plan(subject, request),
 
             // The view.
@@ -6698,7 +6698,11 @@ mod tests {
             ("new_rule", surface.new_rule(&request("new_rule", "{}"))),
             (
                 "compose_wall_box",
-                surface.compose_wall_box(seat, &request("compose_wall_box", "{}")),
+                surface.compose_wall_box(
+                    seat,
+                    &request("compose_wall_box", "{}"),
+                    &crate::fog::Blind,
+                ),
             ),
         ];
         for (method, answer) in refusals {

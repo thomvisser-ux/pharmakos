@@ -2646,7 +2646,7 @@ fn compose_wall_box_reads_the_frozen_world_and_steps_nothing() {
     let mut body: Vec<String> = Vec::new();
     for (opening, closing) in [
         (
-            "pub(super) fn compose_wall_box(",
+            "pub(super) fn compose_wall_box<",
             "
     }
 ",
