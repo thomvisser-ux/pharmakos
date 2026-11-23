@@ -81,7 +81,8 @@ breaking:
     # One rule, one file, one held range, one number taken by the field it was
     # held for and the rest held again. This replaces `probw`'s block, whose
     # discharge (`ViewEntity` 9, `building`) is on main and inert. Every other
-    # new number in this change (the `Method` values 59 and 62, the
+    # new number in this change (the `Method` values 59, 62 and 63, the
+    # `ComposeWallBox*` messages, the
     # `SetValueText*` and `NewRule*` messages, `GetVocabularyResponse` 5 and 6,
     # `VocabularyEntry` 6 and its `AnchorShape` enum, `IntegerShape` 4,
     # `EnumShape` 2, `Chip` 7 to 9, `BeaconSettingRow` 5, `ResolvedRef` 8,

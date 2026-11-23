@@ -553,7 +553,14 @@ fn ground_top(world: &World, x: i32, y: i32) -> Option<i32> {
 /// voxel that is no wall's, found by stepping down through wall voxels from the
 /// top, so a wall already filled reads the ground it was filled on and a row
 /// that names it again checks the same box against the same ground.
-fn ground_under_walls(world: &World, x: i32, y: i32) -> Option<i32> {
+///
+/// Public for one reader outside the sim: the gateway's `compose_wall_box`
+/// (S3's `fixq`), a planning read over the frozen world in a Lull that sizes
+/// a wall's box against the ground [`check_wall`] judges it by, so the two
+/// cannot disagree. It reads voxels and the pathing surface and steps
+/// nothing.
+#[must_use]
+pub fn ground_under_walls(world: &World, x: i32, y: i32) -> Option<i32> {
     let mut z = ground_top(world, x, y)?;
     while world
         .voxels()

@@ -276,6 +276,14 @@ enum Method {
   // block's last free one; a number names a method and orders nothing.
   METHOD_NEW_RULE = 62 [(required_scope) = SCOPE_PLAN];
 
+  // "compose_wall_box" — a wall's Build target from two map clicks: the box
+  // over the two corners' columns, its top the rules' minimum wall height over
+  // the frozen ground, judged by the sim's own wall check against the beacon's
+  // sphere (S3's `fixq`). PHASE_CLOSED outside a Lull: it reads the frozen
+  // planning world, the true ground (fog over terrain is S4's), and steps
+  // nothing (AGENTS.md section 3 rule 2). The calling seat's own beacons only.
+  METHOD_COMPOSE_WALL_BOX = 63 [(required_scope) = SCOPE_PLAN];
+
   // --- Commit --------------------------------------------------------------
 
   // "submit_plan" — always runs FULL. The latest verified submission replaces
@@ -1994,6 +2002,35 @@ message NewRuleResponse {
 
   // Its id.
   string rule_id = 4;
+}
+
+// A wall's box from two map clicks (S3's `fixq`).
+message ComposeWallBoxRequest {
+  // One of the calling seat's own beacons, the one whose Build mandate will
+  // hold the wall: "b_00". Another seat's beacon, a foreign handle and a name
+  // that names nothing are one NOT_FOUND alike.
+  string beacon_id = 1;
+
+  // A blueprint whose VocabularyEntry.anchor_shape is BOX: "wall". Any other
+  // is refused.
+  string blueprint_id = 2;
+
+  // The two clicked voxels, in either order. Only their columns are read: the
+  // box spans every column between them, inclusive.
+  gp.v1.Voxel corner_a = 3;
+  gp.v1.Voxel corner_b = 4;
+}
+
+// The Build target an `add_build_target` row writes as it is. Its `wall_box`
+// spans the corners' columns; `min.z` is the lowest ground under walls among
+// them, and `max.z` the highest plus the rules' `wall_min_height_voxels`; its
+// `anchor` is the box's lowest corner, a voxel inside it. The box is one the
+// sim's wall check takes against the beacon's sphere and the frozen ground at
+// the time of the call. Refusals, INVALID_ARGUMENT in the gateway's words:
+// "no ground here" (a column off the map or with no ground, a corner past the
+// map's coordinates) and "outside the sphere".
+message ComposeWallBoxResponse {
+  gp.v1.BuildTarget target = 1;
 }
 
 // What the operator would file on a timeout, so a seat can see the cost of one

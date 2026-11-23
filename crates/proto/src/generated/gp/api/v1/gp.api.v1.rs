@@ -2371,6 +2371,46 @@ impl ::prost::Name for NewRuleResponse {
 const NAME: &'static str = "NewRuleResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.NewRuleResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.NewRuleResponse".into() }}
+/// A wall's box from two map clicks (S3's `fixq`).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ComposeWallBoxRequest {
+    /// One of the calling seat's own beacons, the one whose Build mandate will
+    /// hold the wall: "b_00". Another seat's beacon, a foreign handle and a name
+    /// that names nothing are one NOT_FOUND alike.
+    #[prost(string, tag="1")]
+    pub beacon_id: ::prost::alloc::string::String,
+    /// A blueprint whose VocabularyEntry.anchor_shape is BOX: "wall". Any other
+    /// is refused.
+    #[prost(string, tag="2")]
+    pub blueprint_id: ::prost::alloc::string::String,
+    /// The two clicked voxels, in either order. Only their columns are read: the
+    /// box spans every column between them, inclusive.
+    #[prost(message, optional, tag="3")]
+    pub corner_a: ::core::option::Option<super::super::v1::Voxel>,
+    #[prost(message, optional, tag="4")]
+    pub corner_b: ::core::option::Option<super::super::v1::Voxel>,
+}
+impl ::prost::Name for ComposeWallBoxRequest {
+const NAME: &'static str = "ComposeWallBoxRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ComposeWallBoxRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ComposeWallBoxRequest".into() }}
+/// The Build target an `add_build_target` row writes as it is. Its `wall_box`
+/// spans the corners' columns; `min.z` is the lowest ground under walls among
+/// them, and `max.z` the highest plus the rules' `wall_min_height_voxels`; its
+/// `anchor` is the box's lowest corner, a voxel inside it. The box is one the
+/// sim's wall check takes against the beacon's sphere and the frozen ground at
+/// the time of the call. Refusals, INVALID_ARGUMENT in the gateway's words:
+/// "no ground here" (a column off the map or with no ground, a corner past the
+/// map's coordinates) and "outside the sphere".
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ComposeWallBoxResponse {
+    #[prost(message, optional, tag="1")]
+    pub target: ::core::option::Option<super::super::v1::BuildTarget>,
+}
+impl ::prost::Name for ComposeWallBoxResponse {
+const NAME: &'static str = "ComposeWallBoxResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ComposeWallBoxResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ComposeWallBoxResponse".into() }}
 /// What the operator would file on a timeout, so a seat can see the cost of one
 /// (spec section 14). Always qualifies.
 ///
@@ -3257,6 +3297,13 @@ pub enum Method {
     /// past the commit block's 60 and 61 only because 59 was the planning
     /// block's last free one; a number names a method and orders nothing.
     NewRule = 62,
+    /// "compose_wall_box" — a wall's Build target from two map clicks: the box
+    /// over the two corners' columns, its top the rules' minimum wall height over
+    /// the frozen ground, judged by the sim's own wall check against the beacon's
+    /// sphere (S3's `fixq`). PHASE_CLOSED outside a Lull: it reads the frozen
+    /// planning world, the true ground (fog over terrain is S4's), and steps
+    /// nothing (AGENTS.md section 3 rule 2). The calling seat's own beacons only.
+    ComposeWallBox = 63,
     // --- Commit --------------------------------------------------------------
 
     /// "submit_plan" — always runs FULL. The latest verified submission replaces
@@ -3338,6 +3385,7 @@ impl Method {
             Self::ResolveRefs => "METHOD_RESOLVE_REFS",
             Self::SetValueText => "METHOD_SET_VALUE_TEXT",
             Self::NewRule => "METHOD_NEW_RULE",
+            Self::ComposeWallBox => "METHOD_COMPOSE_WALL_BOX",
             Self::SubmitPlan => "METHOD_SUBMIT_PLAN",
             Self::SetReady => "METHOD_SET_READY",
             Self::GetSegmentFeed => "METHOD_GET_SEGMENT_FEED",
@@ -3380,6 +3428,7 @@ impl Method {
             "METHOD_RESOLVE_REFS" => Some(Self::ResolveRefs),
             "METHOD_SET_VALUE_TEXT" => Some(Self::SetValueText),
             "METHOD_NEW_RULE" => Some(Self::NewRule),
+            "METHOD_COMPOSE_WALL_BOX" => Some(Self::ComposeWallBox),
             "METHOD_SUBMIT_PLAN" => Some(Self::SubmitPlan),
             "METHOD_SET_READY" => Some(Self::SetReady),
             "METHOD_GET_SEGMENT_FEED" => Some(Self::GetSegmentFeed),

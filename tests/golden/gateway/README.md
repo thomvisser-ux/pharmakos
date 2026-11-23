@@ -31,10 +31,11 @@ next two are S1's targeting surfaces (task `tgtw`), the next three are S1's
 economy surfaces (task `econ`), four more are the demo cases of S2's
 two templates (Defend the Core, Raid an Enemy Beacon), `sighting_verify` is
 S3's `gwr`'s, and the last three are S3's `gwu`'s: the answers the client's
-picker and Visit & change fixtures are byte copies of. The last four are S3's
-`fixq`'s: the editor's two new planning edits, `set_value_text` and `new_rule`.
+picker and Visit & change fixtures are byte copies of. The last five are S3's
+`fixq`'s: the editor's planning edits `set_value_text`, `new_rule` and
+`compose_wall_box`.
 
-## The thirty-six cases
+## The thirty-seven cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -74,6 +75,7 @@ picker and Visit & change fixtures are byte copies of. The last four are S3's
 | `set_value_text_refused/` | `expected.response.json` | The same call with "abc": its refusal in the gateway's words, the typed text quoted |
 | `set_value_text_past_bound/` | `expected.response.json` | The same call with "140" at a percentage chip: its refusal, naming the most it takes in its display unit |
 | `new_rule/` | `expected.response.json` | Seat 0's `new_rule` on the same playbook: the rule added at the end with its fresh id, the rules table's least cooldown and no `when`, its undo, pointer and id |
+| `compose_wall_box/` | `expected.response.json` | Seat 0's `compose_wall_box` near its core in `tests/editor_wire.rs`' opening Lull: the wall's Build target, its box over the corners' columns from the lowest ground to the rules' least wall height over the highest, its anchor the box's lowest corner |
 
 ## What a diff means, case by case
 

@@ -238,6 +238,12 @@ fn the_new_planning_methods_are_closed_in_a_push() {
     for (method, params) in [
         ("set_value_text", set_value(HOLD, "3")),
         (
+            "compose_wall_box",
+            String::from(
+                r#"{"beacon_id":"b_00","blueprint_id":"wall","corner_a":{"x":1,"y":1,"z":1},"corner_b":{"x":2,"y":1,"z":1}}"#,
+            ),
+        ),
+        (
             "new_rule",
             format!("{{\"playbook_jsonc\":{}}}", quote(ONE_RULE)),
         ),
@@ -323,4 +329,217 @@ fn the_vocabulary_lists_each_slots_blueprints_the_groups_and_titles() {
         }
     }
     assert!(choices > 10, "{choices} choices");
+}
+
+fn compose(beacon: &str, a: [i32; 3], b: [i32; 3]) -> String {
+    let voxel = |[x, y, z]: [i32; 3]| format!("{{\"x\":{x},\"y\":{y},\"z\":{z}}}");
+    format!(
+        "{{\"beacon_id\":{},\"blueprint_id\":\"wall\",\"corner_a\":{},\"corner_b\":{}}}",
+        quote(beacon),
+        voxel(a),
+        voxel(b)
+    )
+}
+
+fn number(value: &Json, path: &[&str]) -> i64 {
+    let mut here = value.clone();
+    for key in path {
+        here = here
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| panic!("{key} in {value:?}"));
+    }
+    match here {
+        Json::Number(text) => text.parse().expect("a whole number"),
+        other => panic!("{path:?} is a number, and it is {other:?}"),
+    }
+}
+
+/// Item 4: two corners near seat 0's core compose a wall's Build target whose
+/// box the sim's own wall check takes: the corners' columns, the floor at the
+/// lowest ground, the top the rules' least wall height over the highest, the
+/// anchor the lowest corner. A golden. Refused, in words: outside the
+/// sphere, a blueprint that fills no box, a voxel that is no voxel.
+#[test]
+fn compose_wall_box_answers_a_box_the_wall_check_takes() {
+    let mut surface = hosted(2, SEGMENT_MS, 3);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let (_, [cx, cy, cz]) = support::core_beacon(&surface, 0);
+    let response = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "compose_wall_box",
+        &compose("b_00", [cx + 5, cy + 2, cz], [cx + 2, cy + 3, cz]),
+    );
+    let target = result(&response, "compose_wall_box")
+        .get("target")
+        .cloned()
+        .expect("a target");
+    assert_eq!(text_of(&target, "blueprint_id"), "wall");
+    assert_eq!(
+        number(&target, &["wall_box", "min", "x"]),
+        i64::from(cx + 2)
+    );
+    assert_eq!(
+        number(&target, &["wall_box", "min", "y"]),
+        i64::from(cy + 2)
+    );
+    assert_eq!(
+        number(&target, &["wall_box", "max", "x"]),
+        i64::from(cx + 5)
+    );
+    assert_eq!(
+        number(&target, &["wall_box", "max", "y"]),
+        i64::from(cy + 3)
+    );
+    let height = i64::from(support::rules().site().wall_min_height_voxels);
+    let (floor, top) = (
+        number(&target, &["wall_box", "min", "z"]),
+        number(&target, &["wall_box", "max", "z"]),
+    );
+    assert!(top - floor >= height, "{floor}..{top}");
+    assert_eq!(
+        target.get("anchor").and_then(|a| a.get("voxel")),
+        target.get("wall_box").and_then(|b| b.get("min"))
+    );
+    support::write_golden(
+        "compose_wall_box",
+        &pharmakos_gateway::rpc::render(&response),
+    );
+
+    // The target, written into a row as the editor writes it, draws none of
+    // the verifier's wall refusals.
+    let row = pharmakos_proto::json::write(&target);
+    let playbook = ONE_RULE.replace(
+        r#"[{"label": "wait", "hold": {"ms": 90000}}]"#,
+        &format!(
+            r#"[{{"label": "wall", "interface": {{"beacon": {{"beacon_id": "b_00"}}, "rows": [{{"add_build_target": {{"target": {row}}}}}]}}}}]"#
+        ),
+    );
+    assert_ne!(playbook, ONE_RULE);
+    let report = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "verify_plan",
+            &format!(
+                "{{\"playbook_jsonc\":{},\"depth\":\"full\"}}",
+                quote(&playbook)
+            ),
+        ),
+        "verify_plan",
+    );
+    let codes: Vec<String> = array_of(report.get("report").expect("a report"), "diagnostics")
+        .iter()
+        .map(|diagnostic| text_of(diagnostic, "code"))
+        .collect();
+    for wall in ["E0417", "E0509", "E0510", "E0511", "E0512", "E0406"] {
+        assert!(
+            !codes.iter().any(|code| code == wall),
+            "{wall} in {codes:?}"
+        );
+    }
+}
+
+/// Item 4's refusals, in words: a box outside the sphere (past its edge, far
+/// beyond it, at the ends of `i32`), a blueprint that fills no box, and a
+/// coordinate that is no `int32`.
+#[test]
+fn compose_wall_box_refuses_in_its_words() {
+    let mut surface = hosted(2, SEGMENT_MS, 3);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let (_, [cx, cy, cz]) = support::core_beacon(&surface, 0);
+    // A box reaching past the sphere, and one far beyond it.
+    let radius = support::sphere_radius(&surface);
+    for far in [
+        [cx + radius, cy, cz],
+        [cx + radius + 40, cy, cz],
+        [i32::MAX, i32::MIN, 0],
+    ] {
+        let refused = call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "compose_wall_box",
+            &compose("b_00", [cx, cy, cz], far),
+        );
+        assert_eq!(code(&refused), "INVALID_ARGUMENT", "{far:?}");
+        assert!(
+            message(&refused).starts_with("outside the sphere"),
+            "{far:?}: {}",
+            message(&refused)
+        );
+    }
+
+    // Only a box-filling blueprint, and a voxel of three whole numbers.
+    let generator =
+        compose("b_00", [cx, cy, cz], [cx + 1, cy, cz]).replace("\"wall\"", "\"generator\"");
+    let refused = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "compose_wall_box",
+        &generator,
+    );
+    assert_eq!(code(&refused), "INVALID_ARGUMENT");
+    let past = compose("b_00", [cx, cy, cz], [cx, cy, cz]).replacen(
+        &format!("\"x\":{cx}"),
+        "\"x\":3000000000",
+        1,
+    );
+    let refused = call_in_lull(&mut surface, &token, &mut left, "compose_wall_box", &past);
+    assert_eq!(code(&refused), "INVALID_ARGUMENT", "{refused:?}");
+}
+
+/// Item 4: a beacon that is not the caller's own, a foreign handle and a name
+/// that names nothing are one `NOT_FOUND`, worded alike; the other seat's own
+/// `b_00` is its own beacon and composes for it alone.
+#[test]
+fn compose_wall_box_answers_only_about_the_callers_own_beacons() {
+    let mut surface = hosted(2, SEGMENT_MS, 3);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let (_, [cx, cy, cz]) = support::core_beacon(&surface, 0);
+    let (_, [ox, oy, oz]) = support::core_beacon(&surface, 1);
+    // Seat 1's core, asked about by seat 0: as `b_00` it names seat 0's own
+    // core, far from those corners; as a handle or an unknown name, nothing.
+    let near_theirs = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "compose_wall_box",
+        &compose("b_00", [ox + 1, oy, oz], [ox + 2, oy, oz]),
+    );
+    assert_eq!(
+        code(&near_theirs),
+        "INVALID_ARGUMENT",
+        "seat 0's own sphere is not there"
+    );
+    let mut words = Vec::new();
+    for name in ["e_01", "e_00", "b_09", "b_", "x"] {
+        let refused = call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "compose_wall_box",
+            &compose(name, [cx + 1, cy, cz], [cx + 2, cy, cz]),
+        );
+        assert_eq!(code(&refused), "NOT_FOUND", "{name}");
+        words.push(message(&refused).replace(name, "NAME"));
+    }
+    words.dedup();
+    assert_eq!(words.len(), 1, "one refusal for every name: {words:?}");
+    let theirs = seat_token(&mut surface, 1);
+    let own = call_in_lull(
+        &mut surface,
+        &theirs,
+        &mut left,
+        "compose_wall_box",
+        &compose("b_00", [ox + 2, oy + 2, oz], [ox + 3, oy + 2, oz]),
+    );
+    let _ = result(&own, "seat 1's own core composes");
 }

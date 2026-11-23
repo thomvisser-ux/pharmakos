@@ -630,6 +630,93 @@ impl Surface {
         ]))
     }
 
+    /// `compose_wall_box`: a wall's Build target from two map clicks (S3's
+    /// `fixq`, item 4). The box spans the two corners' columns; its floor is
+    /// the lowest ground under walls among them and its top the highest plus
+    /// the rules' `materials.wall_min_height_voxels`, read with the sim's own
+    /// [`pharmakos_sim::site::ground_under_walls`], and the box is then judged
+    /// by the sim's own [`pharmakos_sim::site::check_wall`] against the
+    /// beacon's sphere, so the answer is a box the row commits, or a refusal
+    /// in words. Its anchor is the box's lowest corner.
+    ///
+    /// **Only in a Lull**, as `estimate_route`: the hosted world is the frozen
+    /// planning world only then, and the read is the TRUE ground there (fog
+    /// over terrain is S4's, decisions-log item 168 (10)), as
+    /// `get_map_summary`'s travel is. It reveals no ground the client's own
+    /// view could not show. **Own beacons only**: another seat's beacon, a
+    /// foreign handle and an unknown name answer one `NOT_FOUND` alike. Nothing
+    /// is stepped.
+    ///
+    /// # Errors
+    ///
+    /// `PHASE_CLOSED` outside a Lull; `NOT_FOUND` for a beacon that is not the
+    /// seat's own; `INVALID_ARGUMENT` for a blueprint that fills no box, a
+    /// corner past the map's coordinates, no ground under a column, or a box
+    /// outside the beacon's sphere.
+    pub(super) fn compose_wall_box(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
+        if !self.time.planning_open() {
+            return Err(Error::phase_closed(said!(
+                "`compose_wall_box` reads the frozen planning world, which is open only in a \
+                 Lull: ask in a Lull"
+            )));
+        }
+        let seat = Surface::seat_of(subject, "a wall to compose")?;
+        let wanted = request
+            .string_param("beacon_id")?
+            .ok_or_else(|| Error::invalid("`beacon_id` names one of your beacons, as in `b_04`"))?;
+        let blueprint = request.string_param("blueprint_id")?.ok_or_else(|| {
+            Error::invalid("`blueprint_id` names the blueprint that fills the box: `wall`")
+        })?;
+        let boxed = pharmakos_plan_core::vocabulary::blueprints_by_slot()
+            .into_iter()
+            .find(|kind| kind.id == blueprint)
+            .is_some_and(|kind| kind.anchor == pharmakos_plan_core::vocabulary::AnchorShape::Box);
+        if !boxed {
+            return Err(Error::invalid(said!(
+                "`{}` fills no box: only a wall does",
+                pharmakos_proto::json::grammar::quoted(blueprint)
+            )));
+        }
+        let corner_a = corner_of(request, "corner_a")?;
+        let corner_b = corner_of(request, "corner_b")?;
+        let host = self.host()?;
+        let world = host.world();
+        let absent = || {
+            Error::not_found(said!(
+                "no beacon `{}` of yours here",
+                pharmakos_proto::json::grammar::quoted(wanted)
+            ))
+        };
+        // Own beacons only, and one refusal for every name that is not one.
+        let row = match pharmakos_sim::tables::parse_beacon_name(wanted) {
+            Some(pharmakos_sim::tables::BeaconName::Own(ordinal)) => world
+                .beacons()
+                .row_of_ordinal(seat, ordinal)
+                .ok_or_else(absent)?,
+            Some(pharmakos_sim::tables::BeaconName::Foreign(_)) | None => return Err(absent()),
+        };
+        let beacon = pharmakos_sim::tables::BeaconId::new(
+            world.beacons().ids().get(row).copied().ok_or_else(|| {
+                Error::internal(said!("the beacon table has no id in row {}", row))
+            })?,
+        );
+        let centre = world
+            .beacons()
+            .positions()
+            .get(row)
+            .copied()
+            .ok_or_else(|| {
+                Error::internal(said!("the beacon table has no position in row {}", row))
+            })?;
+        let height = i32::from(host.rules().site().wall_min_height_voxels);
+        let wall = sized_wall(world, beacon, centre, corner_a, corner_b, height)?;
+        Ok(wall_target_json(blueprint, &wall))
+    }
+
     /// `save_draft`: keep a playbook, privately, for this seat.
     ///
     /// A draft never leaves the gateway for anybody but its seat (spec section
@@ -1306,6 +1393,189 @@ fn is_draft_id(text: &str) -> bool {
         })
 }
 
+/// A wall's box sized over the columns between `corner_a` and `corner_b`
+/// (`compose_wall_box`): floor the lowest ground under walls, top the highest
+/// plus `height`, then judged by the sim's own wall check against `beacon`'s
+/// sphere, whose centre is `centre`. The work is bounded by the sphere before
+/// a column is read.
+///
+/// # Errors
+///
+/// `INVALID_ARGUMENT` in the gateway's words: outside the sphere, or no
+/// ground here.
+fn sized_wall(
+    world: &pharmakos_sim::world::World,
+    beacon: pharmakos_sim::tables::BeaconId,
+    centre: [pharmakos_sim::math::fixed::Fx; 3],
+    corner_a: [i32; 3],
+    corner_b: [i32; 3],
+    height: i32,
+) -> Result<SizedWall, Error> {
+    let outside = || Error::invalid(crate::strings::WALL_BOX_OUTSIDE_SPHERE);
+    // Before any column is read: a column further from the beacon than its
+    // sphere's radius, and a voxel more, cannot hold the wall, so the work
+    // is bounded by the sphere and never by the box the client sent.
+    let reach = world
+        .ground()
+        .radius_of(Some(beacon))
+        .floor_voxels()
+        .checked_add(1)
+        .ok_or_else(outside)?;
+    let near = |corner: [i32; 3]| {
+        let off = |at: i32, middle: i32| {
+            at.checked_sub(middle)
+                .and_then(i32::checked_abs)
+                .is_some_and(|off| off <= reach)
+        };
+        off(corner[0], centre[0].floor_voxels()) && off(corner[1], centre[1].floor_voxels())
+    };
+    if !near(corner_a) || !near(corner_b) {
+        return Err(outside());
+    }
+    let low = [corner_a[0].min(corner_b[0]), corner_a[1].min(corner_b[1])];
+    let high = [corner_a[0].max(corner_b[0]), corner_a[1].max(corner_b[1])];
+    let column = |at: i32| {
+        i16::try_from(at).map_err(|_| Error::invalid(crate::strings::WALL_BOX_OFF_THE_MAP))
+    };
+    let columns = pharmakos_sim::tables::ColumnBox::new(
+        [column(low[0])?, column(low[1])?],
+        [column(high[0])?, column(high[1])?],
+    )
+    .ok_or_else(|| Error::internal(said!("an ordered box of columns was refused")))?;
+    let mut grounds = Vec::new();
+    for y in low[1]..=high[1] {
+        for x in low[0]..=high[0] {
+            grounds.push(
+                pharmakos_sim::site::ground_under_walls(world, x, y).ok_or_else(|| {
+                    Error::invalid(said!(
+                        "no ground here: column {}, {} is off the map or holds no ground",
+                        x,
+                        y
+                    ))
+                })?,
+            );
+        }
+    }
+    let (floor, summit) = ground_span(&grounds)
+        .ok_or_else(|| Error::internal(said!("a box of columns held no column")))?;
+    let top = summit
+        .checked_add(height)
+        .ok_or_else(|| Error::invalid(crate::strings::WALL_BOX_OFF_THE_MAP))?;
+    let wall = pharmakos_sim::site::WallBox {
+        columns,
+        floor: i16::try_from(floor)
+            .map_err(|_| Error::invalid(crate::strings::WALL_BOX_OFF_THE_MAP))?,
+        top: i16::try_from(top)
+            .map_err(|_| Error::invalid(crate::strings::WALL_BOX_OFF_THE_MAP))?,
+    };
+    pharmakos_sim::site::check_wall(world, beacon, wall, &()).map_err(|refused| match refused {
+        pharmakos_sim::site::WallRefused::OutsideSphere => outside(),
+        pharmakos_sim::site::WallRefused::OffTheGround
+        | pharmakos_sim::site::WallRefused::TooLow => Error::internal(said!(
+            "a box sized to the ground was refused by the ground's own check"
+        )),
+    })?;
+    Ok(SizedWall {
+        low,
+        high,
+        floor,
+        top,
+    })
+}
+
+/// A box [`sized_wall`] sized: its lowest and highest columns, its floor and
+/// its top.
+struct SizedWall {
+    low: [i32; 2],
+    high: [i32; 2],
+    floor: i32,
+    top: i32,
+}
+
+/// The `ComposeWallBoxResponse` for `wall`: its Build target, anchored on the
+/// box's lowest corner.
+fn wall_target_json(blueprint: &str, wall: &SizedWall) -> Json {
+    let SizedWall {
+        low,
+        high,
+        floor,
+        top,
+    } = *wall;
+    let voxel = |x: i32, y: i32, z: i32| {
+        Json::Object(vec![
+            (String::from("x"), Json::Number(x.to_string())),
+            (String::from("y"), Json::Number(y.to_string())),
+            (String::from("z"), Json::Number(z.to_string())),
+        ])
+    };
+    Json::Object(vec![(
+        String::from("target"),
+        Json::Object(vec![
+            (
+                String::from("blueprint_id"),
+                Json::String(blueprint.to_owned()),
+            ),
+            (
+                String::from("anchor"),
+                Json::Object(vec![(String::from("voxel"), voxel(low[0], low[1], floor))]),
+            ),
+            (
+                String::from("wall_box"),
+                Json::Object(vec![
+                    (String::from("min"), voxel(low[0], low[1], floor)),
+                    (String::from("max"), voxel(high[0], high[1], top)),
+                ]),
+            ),
+        ]),
+    )])
+}
+
+/// The lowest and the highest of `grounds`, a wall box's floor and the
+/// ground its top stands over; `None` for no column.
+fn ground_span(grounds: &[i32]) -> Option<(i32, i32)> {
+    let mut span: Option<(i32, i32)> = None;
+    for &ground in grounds {
+        span = Some(match span {
+            None => (ground, ground),
+            Some((lowest, highest)) => (
+                if ground < lowest { ground } else { lowest },
+                if ground > highest { ground } else { highest },
+            ),
+        });
+    }
+    span
+}
+
+/// The `gp.v1.Voxel` parameter `name` as `[x, y, z]`, each a whole number
+/// in `int32`.
+///
+/// # Errors
+///
+/// `INVALID_ARGUMENT` for a parameter that is absent, not an object of the
+/// three, or holds a coordinate that is no `int32`.
+fn corner_of(request: &Request, name: &str) -> Result<[i32; 3], Error> {
+    let refused = || {
+        Error::invalid(said!(
+            "`{}` is a voxel: an object of exactly `x`, `y` and `z`, each a whole number",
+            pharmakos_proto::json::grammar::quoted(name)
+        ))
+    };
+    let Some(Json::Object(members)) = request.param(name) else {
+        return Err(refused());
+    };
+    let mut out = [0_i32; 3];
+    for (slot, axis) in out.iter_mut().zip(["x", "y", "z"]) {
+        let Some((_, Json::Number(text))) = members.iter().find(|(key, _)| key == axis) else {
+            return Err(refused());
+        };
+        *slot = text.parse::<i32>().map_err(|_| refused())?;
+    }
+    if members.len() != 3 {
+        return Err(refused());
+    }
+    Ok(out)
+}
+
 /// One `gp.api.v1.ResolvedRef` as JSON: every field, the defaults included,
 /// as `estimate_route`'s legs are written, except `travel_ms`. `failure` is
 /// the step failure's name as the segment feed spells it, and empty when the
@@ -1677,6 +1947,16 @@ mod tests {
     /// and writes no `travel_ms` at all, rather than the 0 a magic value once
     /// stood for (decisions-log item 133 (3) (i)); a reachable one writes its
     /// travel beside `reachable: true`, a 0 included.
+    /// `compose_wall_box`'s floor is the lowest ground and its top stands
+    /// over the highest, whatever the order the columns come in.
+    #[test]
+    fn a_wall_box_spans_the_lowest_and_the_highest_ground() {
+        assert_eq!(super::ground_span(&[]), None);
+        assert_eq!(super::ground_span(&[7]), Some((7, 7)));
+        assert_eq!(super::ground_span(&[9, 4, 12, 4, 6]), Some((4, 12)));
+        assert_eq!(super::ground_span(&[-3, 0]), Some((-3, 0)));
+    }
+
     #[test]
     fn an_unreachable_pick_says_so() {
         let unreachable = resolved_json(&named(None, Vec::new())).expect("written");

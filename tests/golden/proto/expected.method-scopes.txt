@@ -32,6 +32,7 @@ get_draft                plan
 resolve_refs             plan
 set_value_text           plan
 new_rule                 plan
+compose_wall_box         plan
 submit_plan              plan.submit
 set_ready                plan.submit
 get_segment_feed         observe

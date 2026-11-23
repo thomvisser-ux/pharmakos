@@ -751,7 +751,7 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
     // at once.
     // S3's `fixq`: the editor's two new planning edits are not on the
     // advisor's allow-list either; the operator calls neither.
-    const REFUSED: [(&str, &str); 8] = [
+    const REFUSED: [(&str, &str); 9] = [
         ("save_notes", r#"{"notes":"written by the operator"}"#),
         ("save_draft", r#"{"label":"x","playbook_jsonc":"{}"}"#),
         ("list_drafts", "{}"),
@@ -763,6 +763,10 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
             r#"{"playbook_jsonc":"{}","pointer":"/x","typed":"3"}"#,
         ),
         ("new_rule", r#"{"playbook_jsonc":"{}"}"#),
+        (
+            "compose_wall_box",
+            r#"{"beacon_id":"b_00","blueprint_id":"wall","corner_a":{"x":1,"y":1,"z":1},"corner_b":{"x":2,"y":1,"z":1}}"#,
+        ),
     ];
     let mut surface = hosted();
     let before = surface

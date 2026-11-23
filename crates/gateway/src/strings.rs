@@ -1073,6 +1073,13 @@ fn capitalise(text: &str) -> String {
     }
 }
 
+/// `compose_wall_box`: a box any of whose voxels lies outside the beacon's
+/// sphere, building's only range (S3's `fixq`).
+pub const WALL_BOX_OUTSIDE_SPHERE: &str =
+    "outside the sphere: a wall is built only inside the sphere of the beacon that holds it";
+/// `compose_wall_box`: a corner, or the box's top, past the map's coordinates.
+pub const WALL_BOX_OFF_THE_MAP: &str = "no ground here: the box reaches past the map";
+
 #[cfg(test)]
 mod tests {
     use super::{
