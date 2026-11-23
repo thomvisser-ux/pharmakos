@@ -3199,3 +3199,28 @@ fn the_probation_fixtures_are_the_gateways_goldens() {
         assert!(read(script).contains(fixture), "{script} draws {fixture}");
     }
 }
+
+/// A template list the door shut before is said in the checks' own words, never left on
+/// "Reading the templates..." (prob's fix pass 1, review item 7).
+#[test]
+fn a_template_list_that_will_not_come_says_why() {
+    let editor = read("scripts/editor.gd");
+    let draw = gd_function(&editor, "_draw_templates");
+    let shut = draw
+        .iter()
+        .position(|line| line.contains("elif shut != \"\":"))
+        .expect("the shut door's branch");
+    let waiting = draw
+        .iter()
+        .position(|line| line.contains("templates_waiting"))
+        .expect("the waiting words");
+    assert!(
+        shut < waiting,
+        "the shut door is said before any waiting: {draw:?}"
+    );
+    assert!(
+        draw.iter()
+            .any(|line| line.contains("Strings.text(\"unchecked_\" + shut")),
+        "{draw:?}"
+    );
+}

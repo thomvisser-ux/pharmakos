@@ -3376,6 +3376,18 @@ impl Editor {
         self.templates_failed.as_ref()
     }
 
+    /// Why this Lull's template list will not come although nothing refused it: the door is
+    /// shut ([`Unchecked::Closed`]), so the read is not sent, as a check's is not. `None` once
+    /// the list came, when its read failed (that is [`Editor::templates_failed`]'s to say), and
+    /// while it is on its way in an open Lull.
+    #[must_use]
+    pub fn templates_unchecked(&self) -> Option<Unchecked> {
+        if self.known.templates || self.templates_failed.is_some() {
+            return None;
+        }
+        (self.door != Door::Open).then_some(Unchecked::Closed(self.door))
+    }
+
     /// The wizard, when it is open.
     #[must_use]
     pub const fn wizard(&self) -> Option<&Wizard> {
@@ -6651,6 +6663,35 @@ mod tests {
             editor.answered(Ok(&answer)).expect("reads");
         }
         panic!("the editor never asked for the template list");
+    }
+
+    /// A template list the door shut before (a Push, a recap, Ready) will not come: the panel
+    /// says why, in the checks' own words, rather than "Reading the templates..." for the rest
+    /// of the Lull (prob's fix pass 1, review item 7).
+    #[test]
+    fn a_template_list_the_door_shut_before_says_why_it_will_not_come() {
+        let mut editor = Editor::new("seat.0");
+        editor.lull_opened(1);
+        assert_eq!(
+            editor.templates_unchecked(),
+            None,
+            "on its way in an open Lull"
+        );
+        editor.set_door(Door::Push);
+        assert!(!editor.templates_known());
+        assert_eq!(
+            editor.templates_unchecked(),
+            Some(Unchecked::Closed(Door::Push))
+        );
+        // A list that came is no list owed, whatever the door; a failed read says its own why.
+        let mut read_one = Editor::new("seat.0");
+        read_one.lull_opened(1);
+        until_templates(&mut read_one);
+        read_one
+            .answered(Ok(&read(r#"{"templates":[]}"#)))
+            .expect("reads");
+        read_one.set_door(Door::Ready);
+        assert_eq!(read_one.templates_unchecked(), None);
     }
 
     /// The template list is asked at every Lull's opening and replaced whole (S3's `prob`):

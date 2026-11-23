@@ -972,7 +972,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_drafts(state.get("drafts", []))
 	_draw_route(state.get("route", {}), state.get("has_text", false), unchecked_text(state, "route"))
 	_draw_ghost(state.get("ghost", {}))
-	_draw_templates(state.get("templates", []), state.get("templates_known", false), state.get("templates_read", {}))
+	_draw_templates(state.get("templates", []), state.get("templates_known", false), state.get("templates_read", {}), state.get("templates_unchecked", {}))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
 	_draw_rules(state, unchecked_text(state, "prose"))
 	_draw_number_field(state.get("field", {}))
@@ -1219,10 +1219,12 @@ func size_rect() -> Rect2:
 ## (`guided`, S3's plan, decision 5) the words "Start here" and the gateway's own sentence under
 ## it (`guided_reason`), drawn as sent. Which template is marked, and why, are the gateway's;
 ## nothing here names one. `known` false is a list not read yet this Lull; `read` says why it did
-## not come, when it did not (`failed`, `detail`).
-func _draw_templates(templates: Array, known: bool, read: Dictionary) -> void:
+## not come, when it did not (`failed`, `detail`); `unchecked` why it will not come, the door
+## being shut (`key`, in the checks' own words), so no "Reading..." waits on a shut door.
+func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked: Dictionary) -> void:
 	var failed := String(read.get("failed", ""))
-	var drawn := var_to_str([templates, known, failed, read.get("detail", "")])
+	var shut := String(unchecked.get("key", ""))
+	var drawn := var_to_str([templates, known, failed, read.get("detail", ""), shut])
 	if drawn == _templates_drawn:
 		return
 	_templates_drawn = drawn
@@ -1234,6 +1236,8 @@ func _draw_templates(templates: Array, known: bool, read: Dictionary) -> void:
 		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		if failed != "":
 			none.text = Strings.text("templates_" + failed, {"detail": read.get("detail", "")})
+		elif shut != "":
+			none.text = Strings.text("unchecked_" + shut, {"detail": unchecked.get("detail", "")})
 		elif not known:
 			none.text = Strings.text("templates_waiting")
 		else:

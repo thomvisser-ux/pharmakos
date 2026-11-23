@@ -212,18 +212,17 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     // key "" while the check is on its way (finding K; a refusal is its own check's).
     let mut unchecked = VarDictionary::new();
     for check in Check::ALL {
-        let (key, detail) = match editor.unchecked(check) {
-            None => (String::new(), String::new()),
-            Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
-            Some(Unchecked::Unreadable(said)) => ("unreadable".to_owned(), said),
-            Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
-        };
-        let mut why = VarDictionary::new();
-        why.set(&"key".to_variant(), &key.to_variant());
-        why.set(&"detail".to_variant(), &detail.to_variant());
-        unchecked.set(&check.name().to_variant(), &why.to_variant());
+        unchecked.set(
+            &check.name().to_variant(),
+            &unchecked_dictionary(editor.unchecked(check)).to_variant(),
+        );
     }
     put("unchecked", unchecked.to_variant());
+    // Why the template list will not come, in the checks' words (`{key, detail}`).
+    put(
+        "templates_unchecked",
+        unchecked_dictionary(editor.templates_unchecked()).to_variant(),
+    );
     put("seal", editor.seal_line().name().to_variant());
     put("filed", editor.filed().to_variant());
     put("file", text_or_empty(editor.file()).to_variant());
@@ -498,6 +497,21 @@ pub(crate) fn vocabulary_dictionary(
     out.set(&"families".to_variant(), &families.to_variant());
     out.set(&"mandates".to_variant(), &mandates.to_variant());
     out.set(&"blueprints".to_variant(), &blueprints.to_variant());
+    out
+}
+
+/// Why something the panel waits for will not come, as `{key, detail}`: `key` is `refused`,
+/// `unreadable` or the shut door's name, and `""` while it is on its way.
+fn unchecked_dictionary(why: Option<Unchecked>) -> VarDictionary {
+    let (key, detail) = match why {
+        None => (String::new(), String::new()),
+        Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
+        Some(Unchecked::Unreadable(said)) => ("unreadable".to_owned(), said),
+        Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
+    };
+    let mut out = VarDictionary::new();
+    out.set(&"key".to_variant(), &key.to_variant());
+    out.set(&"detail".to_variant(), &detail.to_variant());
     out
 }
 
