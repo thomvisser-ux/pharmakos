@@ -2932,6 +2932,12 @@ fn the_new_match_button_names_the_preset_it_writes_from_the_one_constant() {
         "a preset is named by its wire name's row: {name:?}"
     );
     assert!(string_row(&strings, "lobby_new_match").contains("{preset}"));
+    // The shipped smoke check presses the button by the lobby's own words, so the two never
+    // drift apart (the package's smoke run found the old fixed label missing).
+    assert!(
+        read("scripts/smoke_check.gd").contains("_chooser_button(Lobby.new_match_text())"),
+        "the smoke check finds New match by the lobby's label"
+    );
     for preset in pharmakos_client_gdext::rig::MatchPreset::ALL {
         let row = string_row(&strings, &format!("preset_{}", preset.name()));
         assert!(
