@@ -200,21 +200,294 @@ fn nothing_here_drives_a_match_except_through_the_gateway() {
 /// so neither the platform's main-thread size (1 MiB on Windows) nor
 /// `RUST_MIN_STACK` decides how deep a player's text may be read, and no
 /// other source makes a thread any other way.
+///
+/// The gateway's guard, as `probw` left it (`crates/gateway/tests/
+/// confinement.rs`; S3's `nite3`): an allow-list over the whole of each
+/// file's shipped text, not a list of banned spellings read a line at a
+/// time. Any whole-word `thread` in the shipped code, outside every string,
+/// byte string, raw string (`r#"..."#`, `br#"..."#`) and character literal
+/// and every line and block comment, each of which may span lines, is
+/// refused unless it is written `thread::JoinHandle`, the handle
+/// `player_text_thread`'s builder answers and `main` joins. So
+/// `std::thread::scope`, an imported `Builder`, a braced import over several
+/// lines, a renamed module, a spaced path, a local binding named `thread`,
+/// and a spawn after a literal or a comment that ends on its line are all
+/// refused, and a spawn written inside a string or a comment is not code.
 #[test]
 fn the_command_runs_on_the_stated_stack() {
     let main = source("src/main.rs");
     assert!(
-        main.contains("player_text_thread("),
-        "src/main.rs starts the command on player_text_thread"
+        code_only(&main).contains("player_text_thread("),
+        "src/main.rs starts the command on player_text_thread, in code"
     );
+    let mut findings: Vec<String> = Vec::new();
     for relative in SOURCES {
         let text = source(relative);
-        for needle in ["thread::spawn", "thread::Builder"] {
-            assert!(
-                !text.contains(needle),
-                "{relative} names `{needle}`: a thread on a stack this crate did not state"
-            );
+        // The shipped code: everything before the first test module, read
+        // whole, so a literal or a comment that spans lines is read as one.
+        let shipped = text
+            .find("#[cfg(test)]")
+            .and_then(|index| text.get(..index))
+            .unwrap_or(&text);
+        for (number, why) in thread_offences(shipped) {
+            let line = shipped.lines().nth(number.saturating_sub(1)).unwrap_or("");
+            findings.push(format!("{relative}:{number}: {why}\n    {}", line.trim()));
         }
+    }
+    assert!(
+        findings.is_empty(),
+        "every thread gamectl makes is made by player_text_thread:\n{}",
+        findings.join("\n")
+    );
+}
+
+/// Every way round the stack a review of the gateway's guard found, each a
+/// line the guard must refuse, and the spellings it must let through.
+#[test]
+fn the_thread_guard_refuses_every_way_round_the_stack() {
+    for text in [
+        "    let handle = std::thread::spawn(move || run());",
+        "    thread::spawn(move || run());",
+        "    let built = std::thread::Builder::new().stack_size(1);",
+        "    std::thread::scope(|s| { s.spawn(|| run()); });",
+        "    thread::scope(|s| { s.spawn(|| run()); });",
+        "use std::thread::Builder;",
+        "use std::thread::{Builder, JoinHandle};",
+        "use std::thread;",
+        "use std::{fs, thread};",
+        "use std::thread as t;",
+        "    let _ = ::std::thread::available_parallelism();",
+        // The first review of #212: lines of a braced `use` written over
+        // several lines, a character literal that holds a quote, a spaced
+        // path.
+        "use std::{\n    fs,\n    thread as t,\n};",
+        "use std::{\n    fs,\n    thread,\n};",
+        "    let q = '\"'; std::thread::spawn(f);",
+        "    std::thread\t::spawn(f);",
+        "    let q = '\\''; thread::spawn(f);",
+        "    let thread = player_text_thread(\"x\");",
+        "    let s = r#\"a \" quote\"#; std::thread::spawn(f);",
+        // The second review: a block comment holding a quote, the end of a
+        // string that began on an earlier line, byte and byte raw strings.
+        "    /* \" */ std::thread::spawn(f);",
+        "    let s = \"a\nline\"; std::thread::spawn(f);",
+        "    let s = br#\"a \" b\"#; std::thread::spawn(f);",
+        "    let s = b\"x\"; std::thread::spawn(f);",
+        "    let c = b'\"'; std::thread::spawn(f);",
+        "    /* one /* nested */ still */ std::thread::spawn(f);",
+    ] {
+        assert!(
+            thread_offence(text).is_some(),
+            "the guard let through: {text}"
+        );
+    }
+    for text in [
+        "use std::thread::JoinHandle;",
+        "    let mut threads: Vec<JoinHandle<()>> = Vec::new();",
+        "    let work = pharmakos_plan_core::stack::player_text_thread(\"gamectl\")",
+        "    let outcome = match work.map(std::thread::JoinHandle::join) {",
+        "    threads.push(accepter);",
+        ") -> Result<std::thread::JoinHandle<()>, Error> {",
+        "                \"this host could not start a connection thread: {}\",",
+        "    \"a \\\"quoted\\\" thread\" ; let threads = 1;",
+        "    let s = r#\"a thread\"#; // the surface thread",
+        "fn f<'a>(x: &'a str) -> &'a str { x }",
+        // A spawn faked inside a comment or a literal is not code.
+        "    /* std::thread::spawn(f); */",
+        "    /*\n    std::thread::spawn(f);\n    */",
+        "    let s = \"\n    std::thread::spawn(f);\n\";",
+        "    let s = br#\"\n    std::thread::spawn(f);\n\"#;",
+        "    let s = b\"std::thread::spawn(f)\";",
+    ] {
+        assert_eq!(thread_offence(text), None, "the guard refused: {text}");
+    }
+}
+
+/// Why a piece of text names `thread` other than as the stated stack's
+/// handle: each finding's line, counting from 1, and its reason. The
+/// gateway's guard, copied: two crates' tests cannot share a helper, and the
+/// two are held to the same cases.
+fn thread_offences(text: &str) -> Vec<(usize, &'static str)> {
+    let code = code_only(text);
+    let mut out = Vec::new();
+    for (number, line) in code.lines().enumerate() {
+        let mut from = 0_usize;
+        while let Some(offset) = line.get(from..).and_then(|rest| find_word(rest, "thread")) {
+            let start = from.saturating_add(offset);
+            let end = start.saturating_add("thread".len());
+            if !line.get(end..).unwrap_or("").starts_with("::JoinHandle") {
+                out.push((
+                    number.saturating_add(1),
+                    "names `thread` other than as `thread::JoinHandle`: make every thread with \
+                     player_text_thread",
+                ));
+                break;
+            }
+            from = end;
+        }
+    }
+    out
+}
+
+/// [`thread_offences`] of one piece of text, its first finding.
+fn thread_offence(text: &str) -> Option<&'static str> {
+    thread_offences(text).first().map(|(_, why)| *why)
+}
+
+/// The byte offset of the first whole-word `word` in `text`: one with no
+/// letter, digit or underscore on either side.
+fn find_word(text: &str, word: &str) -> Option<usize> {
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let bytes = text.as_bytes();
+    let mut from = 0_usize;
+    while let Some(offset) = text.get(from..).and_then(|rest| rest.find(word)) {
+        let start = from.saturating_add(offset);
+        let end = start.saturating_add(word.len());
+        let before = start
+            .checked_sub(1)
+            .and_then(|index| bytes.get(index))
+            .copied()
+            .is_some_and(is_word);
+        let after = bytes.get(end).copied().is_some_and(is_word);
+        if !before && !after {
+            return Some(start);
+        }
+        from = start.saturating_add(1);
+    }
+    None
+}
+
+/// `text`'s code, line for line: every literal (string, byte string, raw and
+/// byte raw string, character and byte character) reduced to an empty pair
+/// of quotes and every comment (line, and block, nested) removed, each
+/// keeping the newlines it spans so a finding names its line. A lifetime
+/// (`'a`) is not a literal and is kept. An unterminated literal or comment
+/// runs to the end of the text, as the compiler would read it.
+fn code_only(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let at_char = |index: usize| chars.get(index).copied();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0_usize;
+    while let Some(c) = at_char(at) {
+        let next = at_char(at.saturating_add(1));
+        let word_before = at
+            .checked_sub(1)
+            .and_then(at_char)
+            .is_some_and(|before| before.is_alphanumeric() || before == '_');
+        let skipped = if c == '/' && next == Some('/') {
+            Some((line_comment_end(&chars, at), ""))
+        } else if c == '/' && next == Some('*') {
+            Some((block_comment_end(&chars, at), ""))
+        } else if word_before {
+            None
+        } else {
+            literal_end(&chars, at)
+        };
+        if let Some((end, kept)) = skipped {
+            out.push_str(kept);
+            for index in at..end {
+                if at_char(index) == Some('\n') {
+                    out.push('\n');
+                }
+            }
+            at = end;
+        } else {
+            out.push(c);
+            at = at.saturating_add(1);
+        }
+    }
+    out
+}
+
+/// Where the line comment starting at `at` ends: at its newline, kept.
+fn line_comment_end(chars: &[char], at: usize) -> usize {
+    let mut end = at;
+    while chars.get(end).is_some_and(|c| *c != '\n') {
+        end = end.saturating_add(1);
+    }
+    end
+}
+
+/// One past the end of the block comment starting at `at`, nested comments
+/// included; the text's end for one never closed.
+fn block_comment_end(chars: &[char], at: usize) -> usize {
+    let mut end = at;
+    let mut depth = 0_usize;
+    loop {
+        match (chars.get(end), chars.get(end.saturating_add(1))) {
+            (None, _) => return end,
+            (Some('/'), Some('*')) => {
+                depth = depth.saturating_add(1);
+                end = end.saturating_add(2);
+            }
+            (Some('*'), Some('/')) => {
+                depth = depth.saturating_sub(1);
+                end = end.saturating_add(2);
+                if depth == 0 {
+                    return end;
+                }
+            }
+            _ => end = end.saturating_add(1),
+        }
+    }
+}
+
+/// The literal starting at `at`, if one does: one past its end, and what
+/// stands in for it (an empty pair of its quotes). A string, byte string,
+/// raw or byte raw string, character or byte character; `None` for anything
+/// else, a lifetime included.
+fn literal_end(chars: &[char], at: usize) -> Option<(usize, &'static str)> {
+    let at_char = |index: usize| chars.get(index).copied();
+    let c = at_char(at)?;
+    let next = at_char(at.saturating_add(1));
+    let (prefix, raw) = match (c, next) {
+        ('b', Some('r')) => (2, true),
+        ('r', _) => (1, true),
+        ('b', Some('"' | '\'')) => (1, false),
+        _ => (0, false),
+    };
+    if raw {
+        let mut hashes = 0_usize;
+        while at_char(at.saturating_add(prefix).saturating_add(hashes)) == Some('#') {
+            hashes = hashes.saturating_add(1);
+        }
+        let open = at.saturating_add(prefix).saturating_add(hashes);
+        if at_char(open) != Some('"') {
+            return None;
+        }
+        let mut close = open.saturating_add(1);
+        while let Some(c) = at_char(close) {
+            if c == '"' && (1..=hashes).all(|k| at_char(close.saturating_add(k)) == Some('#')) {
+                return Some((close.saturating_add(1).saturating_add(hashes), "\"\""));
+            }
+            close = close.saturating_add(1);
+        }
+        return Some((close, "\"\""));
+    }
+    let quote = at.saturating_add(prefix);
+    match at_char(quote) {
+        Some('"') => {
+            let mut close = quote.saturating_add(1);
+            while let Some(c) = at_char(close) {
+                match c {
+                    '\\' => close = close.saturating_add(2),
+                    '"' => return Some((close.saturating_add(1), "\"\"")),
+                    _ => close = close.saturating_add(1),
+                }
+            }
+            Some((close, "\"\""))
+        }
+        Some('\'') => {
+            // A character literal: one character or one escape, then a quote.
+            let close = if at_char(quote.saturating_add(1)) == Some('\\') {
+                (quote.saturating_add(3)..quote.saturating_add(12))
+                    .find(|i| at_char(*i) == Some('\''))
+            } else {
+                (at_char(quote.saturating_add(2)) == Some('\'')).then_some(quote.saturating_add(2))
+            };
+            close.map(|close| (close.saturating_add(1), "''"))
+        }
+        _ => None,
     }
 }
 
