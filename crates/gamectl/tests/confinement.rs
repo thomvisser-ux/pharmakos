@@ -107,6 +107,12 @@ fn source(relative: &str) -> String {
         .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
 }
 
+/// `SOURCES` is the crate, exactly (fix pass 1 of #219, item 2): every listed
+/// file exists; every module any listed file declares with a file of its own
+/// (`mod name;`, `pub` or not, at any depth) is listed; every `.rs` file under
+/// `src/` is listed; and every listed file but the two roots is declared by
+/// one. The review's probe T15, `mod sneak;` with a spawn in `src/sneak.rs`,
+/// was read by no scan while only `pub mod` lines in `lib.rs` were checked.
 #[test]
 fn every_module_is_checked() {
     for relative in SOURCES {
@@ -115,22 +121,96 @@ fn every_module_is_checked() {
             "{relative} is on the list and is not in the crate"
         );
     }
-    // And the list is the whole of `mod`: a module declared in lib.rs and
-    // missing from SOURCES would be unchecked.
-    let lib = source("src/lib.rs");
-    for line in lib.lines() {
-        let Some(name) = line
-            .strip_prefix("pub mod ")
-            .and_then(|rest| rest.strip_suffix(';'))
-        else {
-            continue;
-        };
-        let file = format!("src/{name}.rs");
+    let mut declared: Vec<String> = Vec::new();
+    for relative in SOURCES {
+        for name in file_modules(&code_only(&source(relative))) {
+            let file = module_file(relative, &name);
+            assert!(
+                SOURCES.contains(&file.as_str()),
+                "{relative} declares `mod {name};` and {file} is not on this file's list"
+            );
+            declared.push(file);
+        }
+    }
+    for relative in SOURCES {
+        if *relative != "src/lib.rs" && *relative != "src/main.rs" {
+            assert!(
+                declared.iter().any(|file| file == relative),
+                "{relative} is on the list and no module declares it"
+            );
+        }
+    }
+    for file in rust_files_under_src() {
         assert!(
             SOURCES.contains(&file.as_str()),
-            "`pub mod {name};` is declared and {file} is not on this file's list"
+            "{file} is in the crate and not on this file's list, so no scan reads it"
         );
     }
+}
+
+#[test]
+fn the_module_reader_finds_every_spelling() {
+    let code = code_only(
+        "mod a;\npub mod b;\npub(crate) mod c ;\n#[cfg(test)]\nmod d;\nmod inline { fn f() {} }\n\
+         // mod e;\nconst S: &str = \"mod f;\";\nfn g() { let model = 1; }\n",
+    );
+    assert_eq!(file_modules(&code), vec!["a", "b", "c", "d"]);
+    assert_eq!(module_file("src/lib.rs", "a"), "src/a.rs");
+    assert_eq!(module_file("src/scenario.rs", "run"), "src/scenario/run.rs");
+}
+
+/// The modules `code` (already [`code_only`]) declares with a file of their
+/// own: a whole-word `mod`, a name, and `;`.
+fn file_modules(code: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut from = 0_usize;
+    while let Some(offset) = code.get(from..).and_then(|rest| find_word(rest, "mod")) {
+        let start = from.saturating_add(offset).saturating_add("mod".len());
+        let rest = code.get(start..).unwrap_or("");
+        let trimmed = rest.trim_start();
+        let name: String = trimmed
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        let after = trimmed.get(name.len()..).unwrap_or("").trim_start();
+        if !name.is_empty() && after.starts_with(';') {
+            found.push(name);
+        }
+        from = start;
+    }
+    found
+}
+
+/// The file `mod name;` in `relative` names: beside a crate root, or in the
+/// declaring file's own folder.
+fn module_file(relative: &str, name: &str) -> String {
+    match relative {
+        "src/lib.rs" | "src/main.rs" => format!("src/{name}.rs"),
+        other => format!("{}/{name}.rs", other.trim_end_matches(".rs")),
+    }
+}
+
+/// Every `.rs` file under `src/`, as a path from the crate root, sorted.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected and sorted before use, which is what happens below"
+)]
+fn rust_files_under_src() -> Vec<String> {
+    let mut stack = vec![crate_root().join("src")];
+    let mut found = Vec::new();
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("src is readable") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let relative = path.strip_prefix(crate_root()).expect("under the crate");
+                found.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 /// Decisions-log item 106 (3): "the crate map gives `gamectl` no edge to the
