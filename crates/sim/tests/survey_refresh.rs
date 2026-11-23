@@ -37,7 +37,7 @@ use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::runner::{MatchPhase, Runner};
 use pharmakos_sim::seams::MandateKind;
-use pharmakos_sim::survey::{REFRESH_INTERVAL, REPRICE_DECISIONS};
+use pharmakos_sim::survey::{Drop, REFRESH_INTERVAL, REPRICE_DECISIONS};
 use pharmakos_sim::tables::{
     AreaKind, BeaconId, ColumnBox, PRIORITY_NORMAL, SeatId, UnitId, UnitKind,
 };
@@ -52,14 +52,18 @@ const SEED: u64 = 0x00F1_2E00_C0DE_0001;
 /// The committed seeds and seat counts: Probation's seed 20 with two seats,
 /// and the determinism and scenario seeds with two and three; and seed 2 with
 /// three seats, where PR #210's first review found a scout displaced from a
-/// sighting it had walked toward for minutes (fix pass 1, item 1).
-const COMMITTED: [(u64, u32); 6] = [
+/// sighting it had walked toward for minutes (fix pass 1, item 1); and seed
+/// 29 with two seats, where review 3 found the commander's sighting two
+/// columns behind seat 1's core left 725 s old after the scout that renewed
+/// the core was killed (fix pass 3, item 2).
+const COMMITTED: [(u64, u32); 7] = [
     (20, 2),
     (0x0102_0304_0506_0708, 2),
     (0x0102_0304_0506_0708, 3),
     (0x0000_0000_CA5C_ADED, 2),
     (0x0000_0000_CA5C_ADED, 3),
     (2, 3),
+    (29, 2),
 ];
 
 /// The rounds the property plays: the ladder's three lengths and one more.
@@ -231,9 +235,12 @@ struct Lull {
     scouts: usize,
     /// The scouts it lost in the Push before.
     lost: usize,
-    /// The sightings counted out of reach in the Push before
-    /// (`Scratch::survey_out_of_reach`).
-    out_of_reach: u64,
+    /// Every sighting of any kind seat 0 holds past reach memory: its kind,
+    /// asset id and age in ticks.
+    stale: Vec<(u8, u32, u32)>,
+    /// Seat 0's Survey drops of the Push before, once each
+    /// (`Scratch::survey_drops`): the asset id and the reason.
+    drops: Vec<(u32, Drop)>,
 }
 
 /// The ticks a scout takes, at the latest, on the walk the router serves
@@ -322,7 +329,7 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
     let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     let mut lulls = Vec::new();
-    let mut counted = 0;
+    let window = window();
     for round in 1..=ROUNDS {
         if round > 1 {
             let lost = feed
@@ -334,20 +341,36 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
                 })
                 .count();
             feed.clear();
-            let now = runner
+            let drops = runner
                 .world_mut()
                 .scratch_mut()
-                .survey_out_of_reach()
-                .unwrap();
+                .survey_drops()
+                .iter()
+                .filter(|(who, _, _)| *who == 0)
+                .map(|(_, asset, why)| (*asset, *why))
+                .collect();
+            let world = runner.world();
+            let table = world.sightings();
+            let now = world.tick().raw();
+            let stale = (0..table.seats().len())
+                .filter(|row| table.seats()[*row] == 0 && now - table.seen_at()[*row] > window)
+                .map(|row| {
+                    (
+                        table.kinds()[row],
+                        table.assets()[row],
+                        now - table.seen_at()[row],
+                    )
+                })
+                .collect();
             lulls.push(Lull {
                 round,
-                beacon: stalest(runner.world(), seat(0), true),
-                any: stalest(runner.world(), seat(0), false),
-                scouts: live_scouts(runner.world(), seat(0)),
+                beacon: stalest(world, seat(0), true),
+                any: stalest(world, seat(0), false),
+                scouts: live_scouts(world, seat(0)),
                 lost,
-                out_of_reach: now - counted,
+                stale,
+                drops,
             });
-            counted = now;
         }
         assert_eq!(runner.phase(), MatchPhase::Lull, "round {round}'s Lull");
         assert_eq!(runner.begin_push(), Ok(true), "round {round}'s Push");
@@ -364,13 +387,12 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
 
 /// The property: on the committed seeds, at every Lull after seat 0 first
 /// holds an enemy beacon's sighting, while one of its Survey scouts is alive,
-/// every enemy-beacon sighting it holds is inside reach memory; and every
-/// sighting of any kind it holds is too, unless the Push before counted a
-/// sighting no list could reach before the Lull
-/// (`Scratch::survey_out_of_reach`), the one named exception.
+/// every sighting of any kind it holds is inside reach memory, but for a
+/// sighting the Push before dropped as out of reach (`Drop::OutOfReach`: no
+/// scout alone could reach it before the Lull), the one named exception. A
+/// stale sighting with any other reason, or none, fails.
 #[test]
 fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
-    let window = window();
     let mut fresh: Vec<String> = Vec::new();
     let mut stale: Vec<String> = Vec::new();
     for (seed, seats) in COMMITTED {
@@ -386,21 +408,37 @@ fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
             held = true;
             let any = lull.any.unwrap_or(age);
             let line = format!(
-                "seed {seed:#x}/{seats}, round {}'s Lull: stalest enemy beacon {} ms, stalest of any kind {} ms, {} scouts alive, {} lost, {} out of reach in the Push",
+                "seed {seed:#x}/{seats}, round {}'s Lull: stalest enemy beacon {} ms, stalest of any kind {} ms, {} scouts alive, {} lost",
                 lull.round,
                 age * 50,
                 any * 50,
                 lull.scouts,
                 lull.lost,
-                lull.out_of_reach
             );
             if lull.scouts == 0 {
                 continue;
             }
-            if age <= window && (any <= window || lull.out_of_reach > 0) {
+            let unexcused: Vec<String> = lull
+                .stale
+                .iter()
+                .filter(|(_, asset, _)| !lull.drops.contains(&(*asset, Drop::OutOfReach)))
+                .map(|(kind, asset, age)| {
+                    let why: Vec<Drop> = lull
+                        .drops
+                        .iter()
+                        .filter(|(dropped, _)| dropped == asset)
+                        .map(|(_, why)| *why)
+                        .collect();
+                    format!(
+                        "kind {kind} asset {asset} {} ms, dropped as {why:?}",
+                        age * 50
+                    )
+                })
+                .collect();
+            if unexcused.is_empty() {
                 fresh.push(line);
             } else {
-                stale.push(line);
+                stale.push(format!("{line}: {unexcused:?}"));
             }
         }
     }
@@ -977,5 +1015,25 @@ fn a_sighting_no_list_reaches_is_counted() {
     assert!(
         out_of_reach > 0,
         "a stale sighting is counted as out of reach: ages {ages:?}"
+    );
+    assert!(
+        out_of_reach <= 3,
+        "each sighting is counted once a Push, not once a decision: {out_of_reach}"
+    );
+}
+
+/// Review 3's `star4-60`: one scout, four beacons sixty columns out on the
+/// four compass points. The rank order's tour (192 s) does not fit the
+/// window; a circular one does, and the insertion finds it.
+#[test]
+fn a_star_of_four_is_toured_round() {
+    let (ages, _) = serial(
+        sighted_world(24, vec![600_000]),
+        1,
+        &[(-60, 0), (60, 0), (0, 60), (0, -60)],
+    );
+    assert!(
+        ages.iter().all(|age| *age <= window()),
+        "every sighting fresh at the Lull: ages {ages:?} ticks"
     );
 }

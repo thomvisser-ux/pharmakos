@@ -210,7 +210,7 @@ pub struct Ground<'a> {
 /// The nodes `scratch`'s searches have popped since its counters were last
 /// reset: the grid and endpoint pops (`expansions`, of which the endpoint
 /// sweeps' are a part, so they are not added again) and the abstract pops.
-fn popped(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
+pub(crate) fn popped(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
     let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
     scratch
         .expansions()

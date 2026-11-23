@@ -285,14 +285,16 @@ impl UnitTally {
     }
 }
 
-/// Where a read-only scan reports the rows it reads, so that the same scan is
-/// charged when a decision runs it and costs nothing to count when anything
-/// else does.
+/// Where a read-only scan reports the counted work it does, so that the
+/// same scan is charged when a decision runs it and costs nothing to count
+/// when anything else does: the rows it reads ([`Meter::rows`]), and units of
+/// work measured another way, such as a search's pops, which can be
+/// unreadable ([`Meter::measured`]).
 ///
 /// A decision's caller passes the world's decision tally
-/// ([`UnitTally`], one unit a row read); every other caller passes `()`,
-/// which counts nothing. A meter never changes what the scan decides or
-/// returns: it only hears how many rows were read.
+/// ([`UnitTally`], one unit a row read, and each measured unit); every other
+/// caller passes `()`, which counts nothing. A meter never changes what the
+/// scan decides or returns: it only hears counts.
 pub trait Meter {
     /// `rows` more rows read.
     fn rows(&self, rows: usize);

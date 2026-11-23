@@ -297,7 +297,7 @@ const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
 /// what falls out is what was about to leave `verifier.reach_memory_ms`
 /// anyway. The owner settles it with the reach window and the briefing's
 /// detail budget (owner, at S3).
-const SIGHTINGS_PER_SEAT: u32 = 64;
+pub(crate) const SIGHTINGS_PER_SEAT: u32 = 64;
 
 /// How many Attack avoid areas the world reserves room for, so committing an
 /// avoid list allocates nothing inside a tick until the reserve is spent:
