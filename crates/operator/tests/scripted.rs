@@ -197,6 +197,10 @@ struct Script {
     /// Whether the feed shows the last Push: its digest counts the Push's
     /// `segment_ended`.
     push: Push,
+    /// Failures of the seat's own steps the digest counts beyond
+    /// `feed_steps`' lines, which no page serves: lines past what a round
+    /// reads.
+    unserved_failures: i64,
     /// The seat's own drafts, by id: the round each is stamped with, its
     /// text.
     drafts: BTreeMap<String, (u32, String)>,
@@ -270,6 +274,7 @@ impl Script {
             feed_deaths: Vec::new(),
             feed_steps: Vec::new(),
             push: Push::Shown,
+            unserved_failures: 0,
             drafts: BTreeMap::new(),
             refuse_draft: None,
             defend_post: None,
@@ -591,7 +596,8 @@ impl Script {
                 .filter(|(kind, _)| *kind == "step_failed")
                 .count(),
         )
-        .unwrap();
+        .unwrap()
+            + self.unserved_failures;
         if failed > 0 {
             counts.push(obj(vec![
                 ("kind", Json::String(String::from("step_failed"))),
@@ -4468,5 +4474,48 @@ fn a_lull_whose_feed_shows_no_push_reads_it_as_unread() {
         !played.why.contains("not in this Lull's feed"),
         "{}",
         played.why
+    );
+}
+
+/// Failures past the lines a round reads are the same typed state as a
+/// resumed Lull's (fix pass 4, item 3): the digest counts two failed steps
+/// of the seat's own and the pages serve one, the stone it names is left
+/// out, and the round says the rest were not read, never "only one failed".
+#[test]
+fn failures_past_the_pages_read_are_unread_with_the_ones_seen() {
+    let mut world = a_stone_failed_last_round();
+    world.unserved_failures = 1;
+    let (script, played) = play(world);
+    assert_eq!(
+        played.failed_stones,
+        FailedStones::Unread {
+            known: vec![String::from("vent_56_32")],
+            why: StonesUnread::Push(PushUnread::PastPages),
+        }
+    );
+    assert_eq!(
+        towards(&script.transcript, "vent_56_32"),
+        0,
+        "{}",
+        played.why
+    );
+    assert!(
+        played
+            .why
+            .contains(&format!("not all read within {PAGES_MAX} pages")),
+        "{}",
+        played.why
+    );
+    // Paged to the bound, no line is reached at all: nothing is known, and
+    // it is said.
+    let mut bound = a_stone_failed_last_round();
+    bound.paging = Paging::ToTheBound;
+    let (_, played) = play(bound);
+    assert_eq!(
+        played.failed_stones,
+        FailedStones::Unread {
+            known: Vec::new(),
+            why: StonesUnread::Push(PushUnread::PastPages),
+        }
     );
 }

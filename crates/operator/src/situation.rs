@@ -813,9 +813,8 @@ fn started_index(text: &str) -> Result<usize, Refused> {
 /// What is not known is said, never read as "nothing happened": in a Lull
 /// after the first whose feed shows no Push (one resumed from a save, whose
 /// feed is empty) both the death and the failed steps are
-/// [`PushUnread::Resumed`]; deaths past the pages read are
-/// [`PushUnread::PastPages`]. Failures past the pages read are not known, and
-/// none is reported for them.
+/// [`PushUnread::Resumed`]; deaths or failures past the pages read are
+/// [`PushUnread::PastPages`], with the failed steps that were seen kept.
 ///
 /// # Errors
 ///
@@ -912,7 +911,8 @@ fn read_last_push(
         LastPush::Survived
     };
     failed.sort_unstable();
-    Ok((last_push, failed_of(failed, None)))
+    let unread = more(failures_seen, failures).then_some(PushUnread::PastPages);
+    Ok((last_push, failed_of(failed, unread)))
 }
 
 /// The feed's kind for a segment's end, the gateway's `segment_ended`: a
