@@ -31,11 +31,12 @@ next two are S1's targeting surfaces (task `tgtw`), the next three are S1's
 economy surfaces (task `econ`), four more are the demo cases of S2's
 two templates (Defend the Core, Raid an Enemy Beacon), `sighting_verify` is
 S3's `gwr`'s, and the last three are S3's `gwu`'s: the answers the client's
-picker and Visit & change fixtures are byte copies of. The last five are S3's
-`fixq`'s: the editor's planning edits `set_value_text`, `new_rule` and
-`compose_wall_box`.
+picker and Visit & change fixtures are byte copies of. The next six are S3's
+`probw`'s: the match's frame and the view's look on the wire (decisions-log
+item 178 (5)). The last five are S3's `fixq`'s: the editor's planning edits
+`set_value_text`, `new_rule` and `compose_wall_box`.
 
-## The thirty-seven cases
+## The forty-three cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -71,6 +72,12 @@ picker and Visit & change fixtures are byte copies of. The last five are S3's
 | `get_vocabulary/` | `expected.response.json` | Seat 0's `get_vocabulary` as its first call in the opening Lull of `tests/methods.rs`' golden match: every family, predicate, step, mandate and blueprint with its locks, the Resonance Spire locked — **the fixture `ed3b` part 2's picker copies** |
 | `get_beacon_core/` | `expected.response.json` | Seat 0's `get_beacon` of its opening core, `b_00`, in the same Lull: its summary, prose, writ and settings rows |
 | `get_beacon_build/` | `expected.response.json` | The same of a Build core holding one target of each way a target is written (`four_targets`: a wall with its box, `on` a named feature, `on` the nearest vent, a voxel) — with the core's, **the fixtures `ed3b` part 2's Visit & change rows copy** |
+| `list_templates_guided/` | `expected.response.json` | The human seat's `list_templates` in a Probation match's first Lull (`tests/probation.rs`): the advisor's start marked `guided_pick` with its reason, on that one entry (S3's `probw`) |
+| `feed_ledger_memo/` | `expected.response.json` | Seat 0's first `get_segment_feed` page that carries a `ledger_memo` line, in a Probation match where seat 0 earns the Resonance Spire's licence: the line and its typed payload (S3's plan, E5) |
+| `recap_probation_round/` | `expected.response.json` | Seat 0's `get_recap` in that match's round 1 recap: its settlement line, its licence line and its prose |
+| `recap_probation_ended/` | `expected.response.json` | Each seat's `get_recap` at the match's end, round 3 of 3: the recap's sentence naming every award that stands, with the seat and the round |
+| `get_status_probation/` | `expected.response.json` | A seat's `get_status` in a Probation Lull it has sealed: the footer untimed by rule, the preset and the seal (`sealed_this_round`) |
+| `view_built/` | `expected.keyframe.jsonl` | Seat 0's keyframe on `tests/view.rs`' built scene, one served `GetViewResponse` a line as `view_keyframe` is: a grown ring, a standing Resonance Spire and autocannon, a mortar going up, an own wall with voxels standing, and a Survey post of seat 1's in live vision: every `ViewEntity` field `probw` added |
 | `set_value_text/` | `expected.response.json` | Seat 0's `set_value_text` of "1.5" at a hold's `ms` chip, in `tests/editor_wire.rs`' opening Lull: the file with 1500 written and its undo (S3's `fixq`) |
 | `set_value_text_refused/` | `expected.response.json` | The same call with "abc": its refusal in the gateway's words, the typed text quoted |
 | `set_value_text_past_bound/` | `expected.response.json` | The same call with "140" at a percentage chip: its refusal, naming the most it takes in its display unit |
