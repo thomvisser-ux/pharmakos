@@ -417,6 +417,24 @@ least served walk
 No other chain moved: `resonance-spire` and `spire-lost` place no stone by
 `toward`, and the determinism chain places none either.
 
+**S3's `srvy` added `survey-keeps-a-core-fresh`** (`scenarios/s3/`): three
+rounds of 300 s, 480 s and 480 s on the golden seed. Seat 0 seals a Survey
+beacon beside its core with two scouts and one probe area over seat 1's corner
+of the map, more ground than two scouts scan in the match; seat 1 holds on its
+safe playbook. A scout finds seat 1's core at tick 4666, and in every later
+Push a scout leaves the scan and renews its sighting (first at tick 7691), so
+seat 0 holds it at 66.7 s old at round 2's Lull, 18.5 s at round 3's and
+77.7 s at the match's end, inside the 180 s reach window although each Push
+after the first is longer than it. It is the first committed chain whose
+scouts re-check a sighting: the rules are `crates/sim/src/survey.rs`'s refresh
+pass (a held sighting stays due past the reach window; a seat's scouts are
+assigned the due sightings together, a scout walking to one keeping it; a free
+scout leaves the scan when the walk the router serves to its sighting no
+longer leaves time). `event_fired` holds from an event's first occurrence, so
+the refresh in each Push and each Lull's age are the chain's, and
+`crates/sim/tests/survey_refresh.rs` asserts the age at every Lull on the
+committed seeds.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own
