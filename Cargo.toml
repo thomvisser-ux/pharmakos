@@ -162,8 +162,9 @@ overflow-checks = true
 # 50 times slower than optimised, which held CI's shards at 35 to 54 of 90 minutes. This
 # takes decisions-log item 116 (6)(f)'s profile question ahead of its 75-minute threshold
 # (no healthy leg had reached 75; the margin was thin, and this removes the cost at its
-# cause), by the main session's ruling, which the owner can veto; the decisions-log item
-# that records this change says so. A package table changes only the optimisation: debug
+# cause), on the main session's ruling (item 165 (1)), and the owner ratified the change
+# on 2026-11-21 (item 168 (1)), which closed item 119 (5)'s reservation for these tables.
+# A package table changes only the optimisation: debug
 # assertions and overflow checks are inherited from [profile.dev], on, and [profile.test]
 # inherits all of it. Optimisation moves no hash: the sim has no floats, and the same
 # chains are produced at `release-checked`.

@@ -140,7 +140,9 @@ pub(crate) fn check_endings(golden_root: &Path) -> Result<(), String> {
         if bytes.is_empty() || std::str::from_utf8(&bytes).is_err() {
             continue;
         }
-        let relative = path.strip_prefix(golden_root).unwrap_or(path);
+        let relative = path
+            .strip_prefix(golden_root)
+            .map_err(|error| format!("path outside the golden root: {error}"))?;
         if bytes.contains(&b'\r') {
             failures.push(format!(
                 "{}: contains a carriage return. Goldens are byte-compared across Windows, Linux \
@@ -191,9 +193,16 @@ pub(crate) fn compare_tree(
     check_endings(golden_root)?;
 
     let mut failures: Vec<String> = Vec::new();
-    let expected_files: Vec<PathBuf> = files
+    // Each committed golden with the suffix its fresh output carries:
+    // `expected.<suffix>` is compared with `actual.<suffix>`.
+    let expected_files: Vec<(PathBuf, String)> = files
         .into_iter()
-        .filter(|path| crate::file_name(path).starts_with("expected."))
+        .filter_map(|path| {
+            let suffix = crate::file_name(&path)?
+                .strip_prefix("expected.")?
+                .to_owned();
+            Some((path, suffix))
+        })
         .collect();
 
     let mut areas: Vec<String> = Vec::new();
@@ -201,7 +210,7 @@ pub(crate) fn compare_tree(
     let mut matched: usize = 0;
     let mut deferred: usize = 0;
 
-    for expected_path in &expected_files {
+    for (expected_path, suffix) in &expected_files {
         let relative = expected_path
             .strip_prefix(golden_root)
             .map_err(|error| format!("path outside the golden root: {error}"))?;
@@ -234,8 +243,6 @@ pub(crate) fn compare_tree(
             continue;
         }
 
-        let name = crate::file_name(expected_path);
-        let suffix = name.strip_prefix("expected.").unwrap_or("out");
         let actual_path = actual_root
             .join(relative)
             .with_file_name(format!("actual.{suffix}"));
@@ -303,7 +310,7 @@ pub(crate) fn has_goldens(golden_root: &Path) -> Result<bool, String> {
     crate::walk(golden_root, &mut files)
         .map_err(|error| format!("reading {}: {error}", golden_root.display()))?;
     Ok(files.iter().any(|path| {
-        if !crate::file_name(path).starts_with("expected.") {
+        if !crate::file_name(path).is_some_and(|name| name.starts_with("expected.")) {
             return false;
         }
         match path.strip_prefix(golden_root) {

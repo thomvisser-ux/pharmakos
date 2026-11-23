@@ -12,6 +12,13 @@
 //! measured at. `crates/proto`'s differential tests hold the canonical texts
 //! the two hash equal on generated playbooks.
 //!
+//! Since S3's `fpstream`, `plan_fingerprint_of` hashes its text in pieces as
+//! the codec writes it, and never holds it whole. So every fingerprint here
+//! is also held to [`reference`], the computation as it was before: the whole
+//! text in one buffer and one call of the one-shot digest. The reference
+//! lives in tests only (one fingerprint function ships), and the golden
+//! playbooks under `tests/golden` join the corpus.
+//!
 //! The tests live here, beside the fingerprint's one caller in the decode
 //! stage, because the sim's source is held to its tick's rules (no `expect`,
 //! no `read_dir`) by `crates/sim/tests/confinement.rs`.
@@ -21,18 +28,79 @@
     reason = "clippy.toml sets allow-expect-in-tests, but that configuration only recognises               #[test] functions and #[cfg(test)] modules, not an integration test's helper               functions. A panic is this file's failure report."
 )]
 
+use pharmakos_proto::fingerprint::{PLAN_FINGERPRINT_DOMAIN, canonical_input};
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json;
+use pharmakos_sim::encoding::digest;
 use pharmakos_sim::hash::{plan_fingerprint, plan_fingerprint_of};
 
-/// Both fingerprints of one document, which must agree; `None` when the
-/// document is not a playbook.
+/// The fingerprint as it was computed before S3's `fpstream`, kept here as
+/// the reference and nowhere in shipped code: the playbook's canonical text
+/// written whole ([`canonical_input`]), the domain put before it in one
+/// buffer, and one call of the one-shot digest over that buffer.
+fn reference(playbook: &Playbook) -> u64 {
+    let canonical = canonical_input(playbook).expect("a decoded playbook writes");
+    let mut bytes = PLAN_FINGERPRINT_DOMAIN.to_vec();
+    bytes.extend_from_slice(&canonical);
+    digest(&bytes)
+}
+
+/// Both fingerprints of one document, which must agree with each other and
+/// with the whole-buffer [`reference`]; `None` when the document is not a
+/// playbook.
 fn both(text: &str) -> Option<(u64, u64)> {
     let decoded = json::decode_encoded::<Playbook>(text).ok()?;
     let old = plan_fingerprint(decoded.message()).expect("a decoded playbook writes");
     let new = plan_fingerprint_of(&decoded).expect("its bytes write");
     assert_eq!(new, old, "the two fingerprints of {text}");
+    assert_eq!(
+        new,
+        reference(decoded.message()),
+        "the streamed fingerprint and the whole-buffer reference of {text}"
+    );
     Some((old, new))
+}
+
+/// Every committed playbook in plain JSON outside the verifier's cases: the
+/// golden playbooks under `tests/golden`. The JSONC files (the template
+/// library, the scenarios, the example) are read through plan-core's JSONC
+/// decode in `crates/plan-core/tests/fingerprint.rs`.
+#[test]
+fn every_golden_playbook_has_one_fingerprint_three_ways() {
+    let mut stack = vec![root().join("tests").join("golden")];
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    while let Some(dir) = stack.pop() {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the listing is collected and sorted before use, which is clippy.toml's \
+                      sanctioned use of read_dir"
+        )]
+        let entries = std::fs::read_dir(&dir).expect("a golden folder");
+        for entry in entries {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "playbook.json" || name.ends_with(".playbook.json"))
+            {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    let mut agreed = 0_usize;
+    for path in &paths {
+        let text = std::fs::read_to_string(path).expect("a golden playbook");
+        assert!(
+            both(&text).is_some(),
+            "{}: a committed golden playbook that does not decode",
+            path.display()
+        );
+        agreed = agreed.saturating_add(1);
+    }
+    assert!(agreed >= 6, "only {agreed} golden playbooks found");
 }
 
 fn root() -> std::path::PathBuf {
@@ -194,6 +262,42 @@ fn a_long_single_string_playbook_has_one_fingerprint_both_ways() {
             );
         }
     }
+}
+
+/// Strings of two-, three- and four-byte characters longer than one of the
+/// codec's string pieces (1,365 bytes) and than its gathering buffer (8,192
+/// bytes), shifted by an ASCII prefix of 0 to 3 bytes so a character
+/// straddles every place a piece or the buffer could end (S3's `fpstream`,
+/// fix pass 1: a cut that split a character, or replaced the halves, moves
+/// the fingerprint, and the reference catches it).
+#[test]
+fn a_long_string_of_wide_characters_has_one_fingerprint_three_ways() {
+    let mut agreed = 0_usize;
+    for wide in ['\u{e9}', '\u{20ac}', '\u{1f600}'] {
+        for prefix in 0..4_usize {
+            for bytes in [1_365_usize, 1_366, 2_731, 8_192, 8_193, 20_000] {
+                let count = bytes
+                    .checked_div(wide.len_utf8())
+                    .expect("a character is at least one byte")
+                    .saturating_add(1);
+                let title: String = "a"
+                    .repeat(prefix)
+                    .chars()
+                    .chain(core::iter::repeat_n(wide, count))
+                    .collect();
+                let text = format!(
+                    r#"{{"meta":{{"title":"{title}","note":"\n{title}"}},"kind":"PLAYBOOK"}}"#
+                );
+                assert!(
+                    both(&text).is_some(),
+                    "{} bytes of {wide:?} after {prefix} of ASCII",
+                    title.len()
+                );
+                agreed = agreed.saturating_add(1);
+            }
+        }
+    }
+    assert_eq!(agreed, 72);
 }
 
 /// splitmix64, for the stamps the variants below carry: seeded, and the same
