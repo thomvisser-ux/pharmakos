@@ -436,6 +436,12 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "cli.rs",
+        "format: options.format.unwrap_or(Format::Text),",
+        "the documented default: `verify --format text`, the report for a person (`OPTIONS`' row \
+         says so)",
+    ),
+    (
+        "cli.rs",
         "part: part.unwrap_or_default(),",
         "the documented default: no `--part` is the whole playbook, which `schema::run` reads \
          as the empty name",

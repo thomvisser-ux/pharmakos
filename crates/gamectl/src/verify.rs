@@ -37,6 +37,7 @@ use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 
+use crate::cli::Format;
 use crate::exit::{Exit, Failure};
 use crate::rules;
 use crate::seat;
@@ -89,7 +90,13 @@ impl Preset {
 /// playbook that does not qualify, [`Exit::Internal`] when the rules table is
 /// missing a block the checks read, or, under a preset, when the lobby's match
 /// will not open or the gateway's answer is not a report.
-pub fn run(root: &Path, path: &Path, depth: Depth, view: View) -> Result<String, Failure> {
+pub fn run(
+    root: &Path,
+    path: &Path,
+    depth: Depth,
+    view: View,
+    format: Format,
+) -> Result<String, Failure> {
     let display = crate::display(path);
     let text = read_bounded(&root.join(path)).map_err(|error| {
         Failure::input(strings::unreadable(
@@ -119,12 +126,78 @@ pub fn run(root: &Path, path: &Path, depth: Depth, view: View) -> Result<String,
         }
     };
 
-    let rendered = render_against(&display, &report, &shown);
-    if report.qualifies {
-        Ok(rendered)
-    } else {
-        Err(Failure::new(Exit::Failed, rendered))
+    match format {
+        Format::Text => {
+            let rendered = render_against(&display, &report, &shown);
+            if report.qualifies {
+                Ok(rendered)
+            } else {
+                Err(Failure::new(Exit::Failed, rendered))
+            }
+        }
+        // The report as data, on standard output whatever the answer: exit
+        // 3 still says it does not qualify, and standard error stays empty.
+        Format::Json => {
+            let json = json_of(&report)?;
+            if report.qualifies {
+                Ok(json)
+            } else {
+                Err(Failure::answered(Exit::Failed, json))
+            }
+        }
     }
+}
+
+/// The report as the verifier's own JSON: canonical `gp.api.v1.VerifyReport`,
+/// laid out as the verifier's goldens are (`pharmakos_proto::json::encode`),
+/// with every character the human report escapes
+/// ([`pharmakos_proto::json::grammar::HIDDEN`]: a control, a direction mark
+/// such as U+202E, an invisible) written as a JSON `\uXXXX` escape. The two
+/// are the same document to a JSON reader, and the escaped one cannot drive or
+/// reorder a terminal it is printed on.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] when the report does not encode, which would be this
+/// build's report and its own schema disagreeing.
+pub fn json_of(report: &VerifyReport) -> Result<String, Failure> {
+    let text = pharmakos_proto::json::encode(report).map_err(|error| {
+        Failure::internal(format!(
+            "this build's report does not encode as JSON: {error}"
+        ))
+    })?;
+    Ok(escape_hidden(&text))
+}
+
+/// `json`, a document `pharmakos_proto::json` wrote, with every
+/// [`pharmakos_proto::json::grammar::HIDDEN`] character written as `\uXXXX`,
+/// a UTF-16 unit at a time, except the layout's own line feeds, carriage
+/// returns and tabs.
+///
+/// Exact on such a document. Outside its strings it is punctuation, digits,
+/// the literals and the layout's whitespace; inside them the writer has
+/// already escaped every C0 control, so a raw line feed, carriage return or
+/// tab is always layout, and every other hidden character stands inside a
+/// string, where the escape reads back as the same character.
+#[must_use]
+pub fn escape_hidden(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for character in json.chars() {
+        if is_hidden(character) && !matches!(character, '\n' | '\r' | '\t') {
+            for unit in character.encode_utf16(&mut [0; 2]) {
+                let _ = write!(out, "\\u{unit:04x}");
+            }
+        } else {
+            out.push(character);
+        }
+    }
+    out
+}
+
+fn is_hidden(character: char) -> bool {
+    pharmakos_proto::json::grammar::HIDDEN
+        .iter()
+        .any(|(low, high)| (*low..=*high).contains(&character))
 }
 
 /// The report against the reference seat view.

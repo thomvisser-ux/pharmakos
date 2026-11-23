@@ -90,10 +90,21 @@ where
             out,
             err: String::new(),
         },
+        // A failure is said on standard error; one that carries its answer
+        // as data (`Failure::answered`) puts that on standard output and says
+        // nothing on standard error.
         Err(failure) => Outcome {
             code: failure.code,
-            out: String::new(),
-            err: with_newline(failure.message),
+            out: if failure.output.is_empty() {
+                String::new()
+            } else {
+                with_newline(failure.output)
+            },
+            err: if failure.message.is_empty() {
+                String::new()
+            } else {
+                with_newline(failure.message)
+            },
         },
     }
 }
@@ -108,7 +119,12 @@ fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
         Command::Host => return host::run(root),
         Command::Help => Ok(strings::help()),
         Command::Version => Ok(strings::version()),
-        Command::Verify { path, depth, view } => verify::run(root, path, *depth, *view),
+        Command::Verify {
+            path,
+            depth,
+            view,
+            format,
+        } => verify::run(root, path, *depth, *view, *format),
         Command::Schema { part } => schema::run(part),
         Command::Docs => docs::run(),
         Command::ScenarioRun { path, options } => scenario::run::command(root, path, options),

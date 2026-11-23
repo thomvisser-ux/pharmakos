@@ -313,11 +313,13 @@ pub fn bad_depth(given: &str) -> String {
 /// unknown key in a scenario file is an error, and a flag that does nothing is
 /// the third way of typing something that will not happen.
 #[must_use]
-pub fn flag_elsewhere(command: &str, flag: &str, owner: &str) -> String {
+pub fn flag_elsewhere(command: &str, flag: &str, owners: &[&str]) -> String {
+    let owners: Vec<String> = owners.iter().map(|owner| format!("`{owner}`'s")).collect();
     format!(
-        "{BINARY} {command}: `{flag}` is `{owner}`'s option and does nothing here. It is refused \
+        "{BINARY} {command}: `{flag}` is {} option and does nothing here. It is refused \
          rather than ignored, so that a command line that reads as though it asked for something \
-         never quietly did not."
+         never quietly did not.",
+        owners.join(" or ")
     )
 }
 

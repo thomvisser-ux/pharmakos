@@ -154,6 +154,14 @@ pub const OPTIONS: &[OptionRow] = &[
                 this preset, through the gateway, instead of the reference view",
     },
     OptionRow {
+        spelling: "    --format <text|json>",
+        flag: "--format",
+        command: "verify",
+        about: "how verify writes its report: text for a person, or json, the verifier's own \
+                report as one JSON object on standard output whatever the answer (default: \
+                text)",
+    },
+    OptionRow {
         spelling: "    --operator <easy>",
         flag: "--operator",
         command: "scenario",
@@ -215,13 +223,17 @@ impl Operator {
     }
 }
 
-/// How a run over a seed file writes its result (`--format`).
+/// How a command writes its answer (`--format`): `verify`'s report, or the
+/// result of a run over a seed file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Format {
-    /// One line per seed and a summary, for a person.
+    /// For a person: `verify`'s report as lines, a run's result as a line
+    /// per seed and a summary.
     Text,
-    /// One JSON document, `pharmakos.nightly-result.v1`, for the nightly
-    /// workflow's alarm band and for diffing nights.
+    /// For a program: `verify`'s report as the verifier's own
+    /// `gp.api.v1.VerifyReport` JSON, or a run's result as one document,
+    /// `pharmakos.nightly-result.v1`, for the nightly workflow's alarm band
+    /// and for diffing nights.
     Json,
 }
 
@@ -270,6 +282,8 @@ pub enum Command {
         /// The seat view it is verified against: the reference view unless
         /// `--preset` names the lobby's match.
         view: View,
+        /// `--format`: text unless `json` is asked for.
+        format: Format,
     },
     /// Print the generated JSON Schema for one part of `gp.v1`.
     Schema {
@@ -478,6 +492,8 @@ fn command_of(
                     Some(preset) => View::Preset(preset),
                     None => View::Reference,
                 },
+                // Text by default: the report for a person.
+                format: options.format.unwrap_or(Format::Text),
             })
         }
         "schema" => {
@@ -555,16 +571,21 @@ fn flags_belong_to(command: &str, given: &[(&str, bool)]) -> Result<(), Failure>
         if !given {
             continue;
         }
-        let owner = OPTIONS
+        // A flag has a row for each command that reads it (`--format` is
+        // `verify`'s and `scenario`'s).
+        let owners: Vec<&str> = OPTIONS
             .iter()
-            .find(|row| row.flag == flag)
+            .filter(|row| row.flag == flag)
             .map(|row| row.command)
-            .ok_or_else(|| {
-                Failure::internal(format!("`{flag}` is parsed and has no options row"))
-            })?;
-        if command != owner {
+            .collect();
+        if owners.is_empty() {
+            return Err(Failure::internal(format!(
+                "`{flag}` is parsed and has no options row"
+            )));
+        }
+        if !owners.contains(&command) {
             return Err(Failure::usage(strings::flag_elsewhere(
-                command, flag, owner,
+                command, flag, &owners,
             )));
         }
     }
@@ -598,7 +619,7 @@ fn no_operands(command: &str, rest: &[OsString]) -> Result<(), Failure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{COMMANDS, Command, parse};
+    use super::{COMMANDS, Command, Format, parse};
     use crate::exit::Exit;
     use crate::verify::{Preset, View};
     use pharmakos_proto::gp::api::v1::verify_plan::Depth;
@@ -676,6 +697,7 @@ mod tests {
                 path: "a.jsonc".into(),
                 depth: Depth::Quick,
                 view: View::Reference,
+                format: Format::Text,
             })
         );
         assert_eq!(
@@ -698,6 +720,7 @@ mod tests {
                 path: "a.jsonc".into(),
                 depth: Depth::Full,
                 view: View::Preset(Preset::Probation),
+                format: Format::Text,
             })
         );
         let error = parse(["verify", "--preset", "custom", "a.jsonc"], Path::new("."))
@@ -712,8 +735,29 @@ mod tests {
     }
 
     #[test]
+    fn format_reaches_verify_and_scenario_run_and_nothing_else() {
+        assert_eq!(
+            parsed(&["verify", "--format", "json", "a.jsonc"]),
+            Ok(Command::Verify {
+                path: "a.jsonc".into(),
+                depth: Depth::Full,
+                view: View::Reference,
+                format: Format::Json,
+            })
+        );
+        let error = parse(["docs", "--format", "json"], Path::new("."))
+            .expect_err("docs reads no --format");
+        assert_eq!(error.code, Exit::Usage);
+        assert!(
+            error.message.contains("`verify`'s or `scenario`'s"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
     fn the_nightly_flags_reach_scenario_run() {
-        use super::{Format, Operator, RunOptions};
+        use super::{Operator, RunOptions};
         assert_eq!(
             parsed(&[
                 "scenario",

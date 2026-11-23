@@ -559,3 +559,145 @@ fn the_preset_s_match_is_the_one_the_lobby_opens() {
         "the Probation seed the sim pins"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `--format json`: the report as the verifier's own JSON
+// ---------------------------------------------------------------------------
+
+/// A committed verifier golden's document: the encoder's text, which ends in
+/// one line feed. The verifier's producer writes a second one after it
+/// (`report_text` in `crates/verifier/tests/verifier.rs`); a command's output
+/// ends in exactly one, as every message of this binary does.
+fn verifier_golden(case: &str) -> String {
+    let path = root()
+        .join("tests/golden/verifier")
+        .join(case)
+        .join("expected.report.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
+        .replace("\r\n", "\n");
+    text.strip_suffix('\n')
+        .unwrap_or_else(|| panic!("{} ends in its producer's line feed", path.display()))
+        .to_owned()
+}
+
+/// The JSON report is the verifier's own `gp.api.v1.VerifyReport`: for the
+/// spec's worked example, whose `.jsonc` canonicalises to the verifier's own
+/// case bytes (the test above), it is byte for byte the golden the verifier
+/// commits, one object on standard output and nothing on standard error.
+#[test]
+fn the_json_report_is_the_verifier_s_own_golden_byte_for_byte() {
+    let outcome = gamectl(&[
+        "verify",
+        "--format",
+        "json",
+        "examples/playbooks/expand_east.jsonc",
+    ]);
+    assert_eq!(outcome.code, Exit::Ok, "{}", said(&outcome));
+    assert!(outcome.err.is_empty(), "{}", outcome.err);
+    assert_eq!(outcome.out, verifier_golden("expand_east"));
+}
+
+/// A playbook that does not qualify is still the answer: exit 3, the report
+/// as one JSON object on standard output (proto3 JSON leaves `qualifies:
+/// false` out), and nothing on standard error.
+#[test]
+fn a_refused_playbook_s_json_report_is_on_standard_output() {
+    let outcome = gamectl(&[
+        "verify",
+        "--format",
+        "json",
+        "crates/verifier/tests/cases/e0102_empty_route.json",
+    ]);
+    assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
+    assert!(outcome.err.is_empty(), "{}", outcome.err);
+    let parsed = json::read(&outcome.out).expect("one JSON document");
+    assert!(matches!(parsed, Json::Object(_)), "one object");
+    assert_eq!(parsed.get("qualifies"), None, "{}", outcome.out);
+    assert!(
+        outcome.out.contains("\"code\": \"E0102\""),
+        "{}",
+        outcome.out
+    );
+    assert!(outcome.out.ends_with("}\n"), "{:?}", outcome.out);
+}
+
+/// The JSON names what the human report names: the same `report_hash`,
+/// under the reference view and under the preset.
+#[test]
+fn the_json_report_carries_the_text_report_s_hash() {
+    for view in [&[][..], &["--preset", "probation"]] {
+        let mut text_args = vec!["verify"];
+        text_args.extend_from_slice(view);
+        text_args.push(NAMES_B_00);
+        let mut json_args = text_args.clone();
+        json_args.splice(1..1, ["--format", "json"]);
+        let text = gamectl(&text_args);
+        let json_outcome = gamectl(&json_args);
+        assert_eq!(text.code, json_outcome.code, "{view:?}");
+        let shown = report_lines(&text)
+            .iter()
+            .find_map(|line| {
+                line.trim_start()
+                    .strip_prefix("report_hash  ")
+                    .map(str::to_owned)
+            })
+            .expect("a report_hash line");
+        let parsed = json::read(&json_outcome.out).expect("one JSON document");
+        let Some(Json::String(encoded)) = parsed.get("report_hash") else {
+            panic!("{view:?}: a report_hash: {}", json_outcome.out);
+        };
+        let bytes = json::base64::decode(encoded).expect("base64");
+        let mut hex = String::new();
+        for byte in &bytes {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        assert_eq!(hex, shown, "{view:?}");
+    }
+}
+
+/// Every string in the JSON goes through the human report's escaping: a key
+/// the player wrote with U+202E and U+200B in it, which the verifier's
+/// pointer carries as it is, is written `\u202e` and `\u200b`, never raw.
+#[test]
+fn the_json_report_escapes_what_the_text_report_escapes() {
+    let text = "{\"kind\":\"PLAYBOOK\",\"a\u{202E}b\u{200B}c\":1}";
+    let path = scratch_file("nite3_hostile_key.json", text.as_bytes());
+    let shown = path.to_str().expect("a UTF-8 scratch path");
+    let outcome = gamectl(&["verify", "--format", "json", shown]);
+    assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
+    assert!(
+        !outcome.out.contains('\u{202E}') && !outcome.out.contains('\u{200B}'),
+        "printed raw: {:?}",
+        outcome.out
+    );
+    assert!(
+        outcome.out.contains("\\u202e") && outcome.out.contains("\\u200b"),
+        "{}",
+        outcome.out
+    );
+    let parsed = json::read(&outcome.out).expect("still one JSON document");
+    let Some(Json::Array(diagnostics)) = parsed.get("diagnostics") else {
+        panic!("diagnostics: {}", outcome.out);
+    };
+    assert!(
+        diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.get("path"),
+            Some(Json::String(path)) if path.contains('\u{202E}')
+        )),
+        "the escape reads back as the player's own character: {}",
+        outcome.out
+    );
+}
+
+#[test]
+fn the_hidden_escape_writes_utf16_units() {
+    assert_eq!(
+        pharmakos_gamectl::verify::escape_hidden("\"a\u{202E}b\u{E0001}c\""),
+        "\"a\\u202eb\\udb40\\udc01c\""
+    );
+    assert_eq!(
+        pharmakos_gamectl::verify::escape_hidden("plain \u{e9}"),
+        "plain \u{e9}"
+    );
+}
