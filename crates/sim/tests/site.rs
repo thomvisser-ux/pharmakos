@@ -503,7 +503,7 @@ fn a_wall_has_no_air_under_it() {
         floor: i16::try_from(low).unwrap(),
         top: i16::try_from(high + 2).unwrap(),
     };
-    site::check_wall(&world, beacon, wall).expect("the box stands");
+    site::check_wall(&world, beacon, wall, &()).expect("the box stands");
     world
         .add_wall_target(beacon, point([lx, y, high + 1]), wall)
         .expect("room for a wall");

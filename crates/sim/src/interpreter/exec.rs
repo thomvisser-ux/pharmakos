@@ -1375,7 +1375,7 @@ fn commit_row(
                 // written: the verifier sees no terrain (decisions-log item 146
                 // (4)), so these halves of its checks are the sim's.
                 if let Some(wall) = target.wall {
-                    crate::site::check_wall(world, beacon, wall)?;
+                    crate::site::check_wall(world, beacon, wall, world.decision_meter())?;
                 }
                 world
                     .add_bound_target(
@@ -2138,7 +2138,7 @@ fn walls_stand(world: &World, beacon: BeaconId, spec: &Row) -> Result<(), StepFa
         return Ok(());
     };
     for wall in targets.iter().filter_map(|target| target.wall) {
-        crate::site::check_wall(world, beacon, wall)?;
+        crate::site::check_wall(world, beacon, wall, world.decision_meter())?;
     }
     Ok(())
 }

@@ -386,10 +386,18 @@ pub enum WallRefused {
 /// inside the beacon's sphere, which, being convex, then holds the voxels
 /// between. A column off the map, or one with no ground, is off the ground.
 ///
+/// Reports each column it checks to `meter` ([`crate::seams::Meter`]): a
+/// decision committing the row passes its tally, any other caller `()`.
+///
 /// # Errors
 ///
 /// The first [`WallRefused`] a column meets, in `(y, x)` order.
-pub fn check_wall(world: &World, beacon: BeaconId, wall: WallBox) -> Result<(), WallRefused> {
+pub fn check_wall<M: crate::seams::Meter + ?Sized>(
+    world: &World,
+    beacon: BeaconId,
+    wall: WallBox,
+    meter: &M,
+) -> Result<(), WallRefused> {
     let rows = world.rules().site();
     let sphere = crate::mandate::Sphere::of(world, beacon);
     let [lx, ly] = wall.columns.min_column();
@@ -397,9 +405,7 @@ pub fn check_wall(world: &World, beacon: BeaconId, wall: WallBox) -> Result<(), 
     let top = i32::from(wall.top);
     for y in i32::from(ly)..=i32::from(hy) {
         for x in i32::from(lx)..=i32::from(hx) {
-            // One decision unit a column checked: every caller is a decision
-            // committing a row (lane `dunit`).
-            crate::seams::Meter::rows(world.decision_meter(), 1);
+            meter.rows(1);
             let ground = ground_under_walls(world, x, y).ok_or(WallRefused::OffTheGround)?;
             if ground < i32::from(wall.floor) {
                 return Err(WallRefused::OffTheGround);
