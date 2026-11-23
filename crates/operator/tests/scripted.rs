@@ -4081,3 +4081,32 @@ fn stones_that_fit_the_share_but_not_what_the_guard_leaves_never_crowd_out_the_v
     assert!(ops.contains("vent_36_32"), "{} -- {ops}", played.why);
     assert!(!ops.contains("toward"), "{} -- {ops}", played.why);
 }
+
+/// A step whose timeout is longer than the segment is not composed (fix pass
+/// 3, item 4): in a 40 s segment, so a 28 s share, a vent 27.5 s of route
+/// away fits the share, but its timeout (its walk, its on-site time and the
+/// estimate's 12.8 s allowance, 40.3 s) is past the segment, so it could not
+/// finish in the round and is not composed.
+#[test]
+fn a_step_whose_timeout_is_past_the_segment_is_not_composed() {
+    let mut world = Script::new(0);
+    world.treasury = 1_000;
+    world.segment_ms = 40_000;
+    world.remaining_ms = 40_000;
+    world.features.push(vent_at("lean", 56));
+    let (script, played) = play(world);
+    let composed = script
+        .transcript
+        .iter()
+        .any(|line| line.starts_with("patch_plan ") && line.contains("vent_56_32"));
+    assert!(!composed, "{}", played.why);
+    // The same vent in a segment long enough for its timeout is composed.
+    let mut long = Script::new(0);
+    long.treasury = 1_000;
+    long.segment_ms = 41_000;
+    long.remaining_ms = 41_000;
+    long.features.push(vent_at("lean", 56));
+    let (script, played) = play(long);
+    let ops = compact(&Json::Array(composing_ops(&script.transcript)));
+    assert!(ops.contains("vent_56_32"), "{} -- {ops}", played.why);
+}
