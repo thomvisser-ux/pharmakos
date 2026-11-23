@@ -11,6 +11,11 @@
 //! * every arm's playbook **qualifies**, and each arm plays **one round on its
 //!   own seed** through `submit_plan`, with no refusal and its event
 //!   assertions held, from each of the two seats the nightly puts it on;
+//! * the Rusher plays **two rounds** on its own seed from each seat and
+//!   launches its raid in round 2 (S3's `nite3`; decisions-log item 151 (4)),
+//!   so its band cannot turn into a floor between two nights without a red
+//!   pull request, and each night's result counts every seat's launches per
+//!   round and the hunts that never launched (E14);
 //! * the result's shape is pinned by a golden, a two-seed run of the result
 //!   fixture (`tests/golden/scenarios/nightly-result/expected.result.json`),
 //!   which this file produces for the `golden` step;
@@ -217,6 +222,55 @@ fn qualifies_and_plays_a_round_through_the_door(arm: &str) {
             arm != HUNTER,
             "{arm} on seat {arm_seat}: hunts filed {:?}",
             played.hunts
+        );
+    }
+}
+
+/// The Rusher's guard (S3's plan, task `nite3`; decisions-log item 151 (4)):
+/// the arm launches its raid in round 2 on its own seed, from each of the two
+/// seats the nightly puts it on. Its band reads "an early raid on the nearest
+/// known enemy beacon, launched in round 2" only while that holds
+/// (`scenarios/nightly/README.md`), so a change to the scouts' vision, the
+/// spawn layout, Survey or the Attack mandate that stops the launch is red
+/// here, on the pull request, rather than a floor a night later. It asserts
+/// the launch, not its absence from round 1.
+#[test]
+fn rusher_launches_in_round_two_on_its_own_seed() {
+    for arm_seat in [0_u8, 1] {
+        let cut = rounds(RUSHER, arm_seat, 2);
+        let played = run::play(&root(), &cut)
+            .unwrap_or_else(|failure| panic!("rusher on seat {arm_seat}: {}", failure.message));
+        assert_eq!(played.segments.len(), 2, "two rounds played");
+        // Each event's round is the segment it was read in: round 1 is ticks
+        // 1 to 3 600, round 2 the 6 000 after it, and the Lull between them
+        // stands on tick 3 600.
+        let first = played.segments.first().copied().expect("round 1");
+        for fired in &played.events {
+            let inside = match fired.round {
+                1 => fired.tick <= first,
+                2 => fired.tick >= first,
+                _ => false,
+            };
+            assert!(
+                inside,
+                "rusher on seat {arm_seat}: {fired:?} is not in its round"
+            );
+        }
+        let launches: Vec<(u32, u32)> = played
+            .events
+            .iter()
+            .filter(|fired| fired.kind == "attack_launched" && fired.seat == Some(arm_seat))
+            .map(|fired| (fired.round, fired.tick))
+            .collect();
+        assert!(
+            launches.iter().any(|(round, _)| *round == 2),
+            "the Rusher on seat {arm_seat} did not launch in round 2 of its own seed {}: {}",
+            cut.source,
+            match launches.first() {
+                Some((round, tick)) =>
+                    format!("its first launch was in round {round}, tick {tick}"),
+                None => String::from("it launched in neither round"),
+            }
         );
     }
 }
