@@ -250,11 +250,13 @@ impl UnitTally {
         }
     }
 
-    /// Leave the tally [`Unmeasured::Overflowed`] at its next charge, whatever
-    /// that charge is, even after a [`UnitTally::reset`] in between: a seam
-    /// for the tests that prove a measurement is not state, by faulting the
-    /// tally inside a decision (after the decision's own reset) and showing
-    /// that the match plays the same. Nothing in the sim arms it.
+    /// **A test seam: the sim never calls it.** Leave the tally
+    /// [`Unmeasured::Overflowed`] at its next charge, whatever that charge
+    /// is, even after a [`UnitTally::reset`] in between, so a test can fault
+    /// the tally inside a decision (after the decision's own reset) and show
+    /// that the match plays the same (`tests/nearest.rs`'s
+    /// `decision_units_never_reach_the_state_hash`).
+    #[doc(hidden)]
     pub fn fault_next_charge(&self) {
         self.armed
             .store(true, core::sync::atomic::Ordering::Relaxed);
@@ -263,9 +265,11 @@ impl UnitTally {
     /// Whether an armed fault fired on this charge: it leaves the tally
     /// unmeasured and disarms.
     fn fire_armed(&self) -> bool {
-        if self
-            .armed
-            .swap(false, core::sync::atomic::Ordering::Relaxed)
+        // A plain load on every charge; the swap only once a test armed it.
+        if self.armed.load(core::sync::atomic::Ordering::Relaxed)
+            && self
+                .armed
+                .swap(false, core::sync::atomic::Ordering::Relaxed)
         {
             self.fail(Unmeasured::Overflowed);
             return true;
