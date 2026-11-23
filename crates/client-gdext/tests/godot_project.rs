@@ -2979,34 +2979,26 @@ fn the_new_match_button_names_the_preset_it_writes_from_the_one_constant() {
     );
 }
 
-/// A refused Resume, whatever its cause, shows the host's refusal as it came and offers the
-/// chooser again with New match and no Resume (S3's plan, E6). The lobby reads nothing but
-/// "a Resume was refused before an announce": no word of the refusal and no field of the line.
-/// The host that refused is let go through `host_link.gd`'s `reset`, so New match starts
-/// another; the remembered line stays until New match announces.
+/// Any failure the link reports - a refused Resume before its announce, or a match, resumed
+/// or new, that fails after its announce - is shown as it came, and the chooser comes back
+/// with New match (and Resume when a line is remembered and the failure was not that line's
+/// refused Resume), so the words on screen always name a button that is there (S3's plan, E6;
+/// prob's fix pass 1). The lobby reads no word of the refusal and no field of the line, lets
+/// the host go through `host_link.gd`'s `reset` (deferred, never from inside the link's own
+/// signal), and the remembered line stays until New match announces.
 #[test]
-fn a_refused_resume_shows_the_refusal_and_offers_new_match_only() {
+fn a_failure_shows_the_refusal_and_offers_the_chooser_again() {
     let lobby = read("scripts/lobby.gd");
     let failed = gd_function(&lobby, "_on_failed");
-    let branch = failed
+    let shown = failed
         .iter()
-        .position(|line| line.trim() == "if _resuming and not _announced:")
-        .expect("_on_failed branches on a refused Resume");
-    assert!(
-        failed
-            .iter()
-            .take(branch)
-            .any(|line| line.contains(r#"Strings.text(key, {"reason": reason})"#)),
-        "the refusal is shown as it came, first: {failed:?}"
-    );
-    assert!(
-        failed
-            .iter()
-            .skip(branch)
-            .take(4)
-            .any(|line| line.trim() == "_offer_new_match_only()"),
-        "{failed:?}"
-    );
+        .position(|line| line.contains(r#"Strings.text(key, {"reason": reason})"#))
+        .expect("the failure is shown as it came");
+    let offered = failed
+        .iter()
+        .position(|line| line.trim() == "_offer_chooser(not _resuming)")
+        .expect("every failure offers the chooser, without Resume after a refused one");
+    assert!(shown < offered, "{failed:?}");
     for line in &failed {
         let code = line.trim();
         assert!(
@@ -3014,17 +3006,20 @@ fn a_refused_resume_shows_the_refusal_and_offers_new_match_only() {
             "the lobby reads no word of the refusal: {code}"
         );
     }
-    let offer = gd_function(&lobby, "_offer_new_match_only");
+    let offer = gd_function(&lobby, "_offer_chooser");
     for needle in [
-        "link.reset()",
+        "link.reset.call_deferred()",
         "_started = false",
         "_resuming = false",
-        "_resume_button.visible = false",
+        "_announced = false",
+        "_strip.visible = false",
+        "editor.visible = false",
+        r#"_resume_button.visible = resume_too and remembered_line() != """#,
         "_chooser.visible = true",
     ] {
         assert!(
             offer.iter().any(|line| line.trim().ends_with(needle)),
-            "`{needle}` in _offer_new_match_only: {offer:?}"
+            "`{needle}` in _offer_chooser: {offer:?}"
         );
     }
     assert!(

@@ -422,6 +422,10 @@ func _read_announce() -> void:
 	_tokens = [fields[2], fields[3]]
 	for link in [ADMIN, SEAT]:
 		_connect(link)
+		# A connection that could not be opened ended the link (and may have reset it from
+		# the failure's handler): nothing runs on, and no announce follows a failure.
+		if _done:
+			return
 	announced.emit(fields[1])
 
 
@@ -431,7 +435,9 @@ func _connect(link: int) -> void:
 	peer.handshake_headers = PackedStringArray(["Authorization: Bearer " + String(_tokens[link])])
 	var error := peer.connect_to_url("ws://127.0.0.1:%d/" % _port)
 	if error != OK:
+		_done = true
 		failed.emit("could not open connection %d" % link)
+		return
 	_peers[link] = peer
 	_open[link] = false
 

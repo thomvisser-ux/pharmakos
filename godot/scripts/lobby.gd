@@ -48,6 +48,13 @@
 #     match and no Resume. It reads nothing but "a Resume was refused": it parses no word of
 #     the refusal and counts no field of the line. The remembered line stays until New match
 #     announces and overwrites it, so a refusal this client cannot type loses no match.
+#   * A MATCH THAT FAILS (prob's fix pass 1): any failure the link reports - before the host
+#     announced or after, of a new match or a resumed one - is shown as it came, and the lobby
+#     lets the host go and offers the chooser again, with New match, and Resume when a line is
+#     remembered and the failure was not that line's refused Resume. So the words on screen
+#     always name a button that is there, and the chooser and the watch strip are never shown
+#     together. `_resuming` means "a Resume was asked and no announce has come": it is cleared
+#     on the announce.
 # The New match button names the preset it will ask for (HostLink.PRESET, through the string
 # table's `preset_<name>` rows), and once a match is announced the status line names the
 # preset the gateway says it hosts (`get_status`'s `preset`, read by the bridge's rig) through
@@ -103,13 +110,12 @@ var _ready_help: Label
 var _events: Label
 var _rows: Array[String] = []
 var _follow: Button
-var _failed := false
 var _started := false
 var _resuming := false
 ## The six-field line written to the host, remembered once it announces.
 var _line := ""
 var _chooser: HBoxContainer
-## The chooser's Resume button, or null when no line was remembered at launch.
+## The chooser's Resume button, shown only while a line is remembered.
 var _resume_button: Button = null
 ## Whether the host announced a match: a failure before it is a refused start.
 var _announced := false
@@ -184,7 +190,7 @@ func _forget() -> void:
 
 func _process(_delta: float) -> void:
 	link.pump()
-	if _failed or not _started:
+	if not _started:
 		return
 	var state: Dictionary = vista.bridge.watch_state()
 	if state.is_empty():
@@ -327,6 +333,9 @@ func _input(event: InputEvent) -> void:
 
 func _on_announced(_match_id: String) -> void:
 	_announced = true
+	# The Resume that was asked has been answered: from here a failure is the match's, not a
+	# refused Resume's.
+	_resuming = false
 	_status.text = Strings.text("lobby_connected")
 	_strip.visible = true
 	editor.visible = true
@@ -337,23 +346,26 @@ func _on_failed(reason: String) -> void:
 	# A refusal is shown as the host wrote it (host_link.gd hands over its standard error).
 	var key := "lobby_resumed_failed" if _resuming else "lobby_failed"
 	_status.text = Strings.text(key, {"reason": reason})
-	if _resuming and not _announced:
-		# A refused Resume, whatever its cause: the chooser again, with New match and no
-		# Resume. The refusal's words are shown and never read; the remembered line stays.
-		_offer_new_match_only()
-		return
-	_failed = true
+	# A refused Resume, whatever its cause, offers New match and no Resume; any other failure
+	# offers Resume too when a line is remembered. The words are shown and never read; the
+	# remembered line stays.
+	_offer_chooser(not _resuming)
 
 
-## After a refused Resume: the link let go of the host that refused (host_link.gd's `reset`),
-## and the chooser shown again with New match and no Resume, so New match starts afresh.
-func _offer_new_match_only() -> void:
-	link.reset()
+## After a failure: the link lets go of the host (host_link.gd's `reset`, deferred, so the link
+## is not reset from inside its own signal), the match's controls are hidden, and the chooser
+## is shown again with New match, and with Resume when `resume_too` and a line is remembered.
+func _offer_chooser(resume_too: bool) -> void:
+	link.reset.call_deferred()
 	_started = false
 	_resuming = false
+	_announced = false
 	_line = ""
-	if _resume_button != null:
-		_resume_button.visible = false
+	_strip.visible = false
+	_ready_help.visible = false
+	_recap.visible = false
+	editor.visible = false
+	_resume_button.visible = resume_too and remembered_line() != ""
 	_chooser.visible = true
 
 
@@ -403,8 +415,8 @@ func _build_ui() -> void:
 	_chooser.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(_chooser)
 	_button(_chooser, new_match_text(), new_match)
-	if remembered_line() != "":
-		_resume_button = _button(_chooser, Strings.text("lobby_resume"), resume_match)
+	_resume_button = _button(_chooser, Strings.text("lobby_resume"), resume_match)
+	_resume_button.visible = remembered_line() != ""
 	_button(_chooser, Strings.text("lobby_about"), _show_about)
 	var buttons := HBoxContainer.new()
 	buttons.mouse_filter = Control.MOUSE_FILTER_IGNORE
