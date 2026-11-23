@@ -34,15 +34,20 @@
 //!   `research` feature;
 //! * `scenario`: each played scenario file, by its relative path.
 //!
-//! A unit falls to shard `fnv1a64("<step>/<key>") % M + 1` ([`Shard::holds`]).
-//! The hash is a function of the name alone, so the split is the same on every
-//! machine and every run, a new test moves no other test, and every unit falls
-//! to exactly one shard; `every_unit_falls_to_exactly_one_shard` and main.rs's
+//! A unit falls to shard `fnv1a64("<salt>/<step>/<key>") % M + 1`
+//! ([`Shard::holds`], with [`SPLIT_SALT`] as the salt). The hash is a function
+//! of the name alone, so the split is the same on every machine and every run,
+//! a new test moves no other test, and every unit falls to exactly one shard;
+//! `every_unit_falls_to_exactly_one_shard` and main.rs's
 //! `the_shards_of_the_real_workspace_are_the_unsharded_set` hold that. The
-//! split is not balanced by measured times, on purpose: a timing table would be
-//! one more thing to keep current, and a stale one would still be balanced
-//! wrongly. The pull request that introduced this states what the split cost
-//! per shard on each operating system.
+//! split keeps no timing table: a table would be one more thing to keep
+//! current, and a stale one would still be balanced wrongly. Timing enters in
+//! one place only, the short list [`HEAVY_UNITS`] of the few units that carry
+//! most of a leg's time, and through it the salt: the smallest one for which
+//! those units fall to different shards at CI's count (main.rs's
+//! `the_heavy_units_fall_apart_on_ci`). Every other unit falls where the hash
+//! puts it. The pull requests that introduced the split and the salt state
+//! what each shard cost on each operating system.
 //!
 //! # What is refused
 //!
@@ -63,6 +68,32 @@ pub(crate) const SHARDED_STEPS: &[&str] = &["test", "test-research", "scenario"]
 /// The steps that run on no shard, because they read every shard's outputs.
 /// CI runs them after merging the shards (`cargo xtask golden`).
 pub(crate) const MERGED_STEPS: &[&str] = &["golden"];
+
+/// The units that carry most of a leg's test time, heaviest first, as `(step,
+/// key)`: on windows-latest's runs of 2026-11-23, `test`'s `lib` took 491 s
+/// (456 s of it pharmakos-plan-core's unit tests), `test`'s
+/// `test:allocations` 252 s and `test-research`'s `test:allocations` 122 s,
+/// and every other unit 33 s or less. `the_heavy_units_fall_apart_on_ci`
+/// (main.rs) holds [`SPLIT_SALT`] to its rule over them: at CI's shard count
+/// each falls to a shard of its own, and the heaviest not to shard 1, which
+/// also runs every step that is not sharded.
+// PLACEHOLDER: which units are heavy, read from CI's step timings — main session, when a unit's cost moves
+#[cfg(test)]
+pub(crate) const HEAVY_UNITS: &[(&str, &str)] = &[
+    ("test", "lib"),
+    ("test", "test:allocations"),
+    ("test-research", "test:allocations"),
+];
+
+/// Hashed in front of every unit's name ([`Shard::holds`]). It is the smallest
+/// salt, counting from 0, for which [`HEAVY_UNITS`] fall apart at CI's shard
+/// count by the rule `the_heavy_units_fall_apart_on_ci` checks; without a
+/// salt, `lib` and `test`'s `test:allocations` both fell to shard 2 of 3,
+/// which made windows-latest's shard 2 a 20-minute job while its others took
+/// 5 to 9. A new salt moves every unit at once, so it changes only with
+/// [`HEAVY_UNITS`] or the shard count.
+// PLACEHOLDER: the split's salt, chosen from CI's step timings through HEAVY_UNITS — main session, when a unit's cost moves
+pub(crate) const SPLIT_SALT: u32 = 0;
 
 /// One of M shards: `index` is 1-based and never above `total`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,7 +207,13 @@ impl Shard {
 
     /// Whether the unit `key` of `step` falls to this shard.
     pub(crate) fn holds(self, step: &str, key: &str) -> bool {
-        let hash = fnv1a64(format!("{step}/{key}").as_bytes());
+        self.holds_salted(SPLIT_SALT, step, key)
+    }
+
+    /// [`Shard::holds`] under `salt` in place of [`SPLIT_SALT`]: how the
+    /// split's test shows that no smaller salt meets its rule.
+    pub(crate) fn holds_salted(self, salt: u32, step: &str, key: &str) -> bool {
+        let hash = fnv1a64(format!("{salt}/{step}/{key}").as_bytes());
         let total = NonZeroU64::from(self.total);
         // `index` is 1-based and at most `total`, so `index - 1` cannot wrap.
         hash % total == u64::from(self.index.get().wrapping_sub(1))
@@ -413,6 +450,15 @@ mod tests {
                         .filter(|index| shard(&format!("{index}/{total}")).holds(step, key))
                         .count();
                     assert_eq!(holders, 1, "{step}/{key} over {total} shard(s)");
+                    // Under any salt, too: the salt only relabels the units.
+                    for salt in 0..4_u32 {
+                        let holders = (1..=total)
+                            .filter(|index| {
+                                shard(&format!("{index}/{total}")).holds_salted(salt, step, key)
+                            })
+                            .count();
+                        assert_eq!(holders, 1, "{step}/{key} over {total}, salt {salt}");
+                    }
                 }
             }
         }
