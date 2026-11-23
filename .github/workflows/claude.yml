@@ -19,9 +19,9 @@
 # action checks out the head it is asked about and Claude's commands would run that code with
 # the tokens above in reach; the Bash tools are exact commands, since a prefix rule such as
 # `cargo test:*` also admits `--config` and so any shell; the session's permission mode is
-# pinned to acceptEdits, so a call no allow rule covers is denied rather than left to auto
-# mode's review (see `claude_args`); subprocesses get a scrubbed environment; and Claude
-# reads only the owner's comments and its own.
+# pinned to acceptEdits, so a call that neither an allow rule nor that mode's built-in set
+# covers is denied rather than left to auto mode's review (see `claude_args`); subprocesses
+# get a scrubbed environment; and Claude reads only the owner's comments and its own.
 #
 # DCO: the owner decided that commits made here are signed off as the owner, because only the
 # owner can trigger a run — the same footing as the owner's local Claude Code sessions. The
@@ -160,13 +160,22 @@ jobs:
           # v1.0.273 the action starts a tag-mode session in auto mode unless one of a few
           # inputs is set (src/modes/permission-mode.ts, defaultsToAutoMode), and auto mode lets
           # a safety review run calls no allow rule covers: a review, not a boundary. In
-          # acceptEdits, file edits inside the workspace are allowed and any other call no rule
-          # covers is denied, which is the mode the action itself passed at v1.0.270. The action
-          # appends these arguments after its own and the last --permission-mode wins
+          # acceptEdits, inside the workspace, Claude Code allows file edits, its built-in
+          # filesystem commands (mkdir, touch, rm, rmdir, mv, cp and sed, most of them also
+          # behind a safe prefix such as `timeout` or `nohup`) and its read-only Bash commands,
+          # none of which the exact-command list names; any other call no rule covers asks,
+          # and a run with no one to ask denies it (the action's comment in
+          # src/modes/tag/index.ts). That was already so at v1.0.270, where the action passed
+          # acceptEdits itself, and it adds nothing material: the allowed cargo commands
+          # already build and run code the session can edit. The action appends these
+          # arguments after its own and the last --permission-mode wins
           # (src/modes/tag/index.ts; base-action/src/parse-sdk-options.ts overwrites a repeated
           # flag), and its docs/usage.md names this line as the opt-out for a workflow that
-          # relies on --allowedTools as a strict list. Re-check all of this at every bump of
-          # the action. Keep comments out of the block below: it is passed as text.
+          # relies on --allowedTools as a strict list. From v1.0.277 the action also adds a
+          # --disallowedTools of its own before these arguments when the workflow has deny
+          # rules (this one has none); these arguments still come last. Re-check all of this
+          # at every bump of the action. Keep comments out of the block below: it is passed
+          # as text.
           claude_args: |
             --permission-mode acceptEdits
             --allowedTools "Bash(cargo fmt --all),Bash(cargo check --workspace --all-targets),Bash(cargo xtask ci --quick)"
@@ -177,15 +186,17 @@ jobs:
       # v1.0.270 and at v1.0.277) is gated on `allowed_non_write_users`, which this workflow
       # does not set, so none of it runs. A subprocess of Claude's that writes the runner's
       # $GITHUB_ENV or $GITHUB_PATH file could otherwise steer every later step. At v1.0.270
-      # nothing else guards those files. From v1.0.277 the action, whatever its inputs,
-      # snapshots $GITHUB_ENV, $GITHUB_PATH and git's config files before the session and
+      # nothing else guards those files. From v1.0.273 (so at v1.0.277) the action, whatever
+      # its inputs, snapshots $GITHUB_ENV, $GITHUB_PATH and git's config files before the
+      # session and
       # writes them back when it ends, inside "Run Claude Code Action", so the session's
       # writes to them never reach a later step, its own post steps included
       # (src/github/operations/session-guard.ts, snapshotSessionFiles, called from
-      # src/entrypoints/run.ts). The action says that guard is not a sandbox: code running as
-      # the runner's user can stop the action before it restores anything, so this step stays
-      # at both pins. What a workflow can copy is the re-prepend and reset, after the action
-      # and `if: always()`:
+      # src/entrypoints/run.ts), and its "Revoke app token" step runs `curl -q`, which skips a
+      # ~/.curlrc the session could write. The action says that guard is not a sandbox: code
+      # running as the runner's user can stop the action before it restores anything, so this
+      # step stays at both pins. What a workflow can copy is the re-prepend and reset, after
+      # the action and `if: always()`:
       # this step puts /usr/bin and /bin first again and clears BASH_ENV, LD_PRELOAD,
       # LD_LIBRARY_PATH and the DYLD_* variables, as the action's step does, for the steps
       # that follow it, which here are the checkout's post step (its `token` input is the
@@ -193,10 +204,14 @@ jobs:
       # "Run Claude Code Action" ("Post buffered inline comments", which holds the App
       # token, and "Revoke app token") run inside the action before any step here can, and
       # the bun pin copies bun into the action's own folder after the action's own Install
-      # Bun step. At v1.0.270 those two stay open. At v1.0.277 the session guard above
+      # Bun step. At v1.0.270 those two stay open. From v1.0.273 the session guard above
       # closes the $GITHUB_ENV and $GITHUB_PATH route to them for a session that writes only
       # through its tools, and neither is closed against code that stops the action before
-      # it restores; both close fully only when the action runs its hardening without
+      # it restores. That is not this workflow's case: its own allow rules run code the
+      # session can edit (`cargo xtask ci --quick` builds and runs xtask and the workspace's
+      # tests, and `cargo check` runs any build script or `.cargo/config.toml` wrapper the
+      # session adds), so here the guard is defence in depth and this step is the
+      # workflow's own guard for the steps after it. Both close fully only when the action runs its hardening without
       # `allowed_non_write_users`, or this workflow finds a way to set it that does not
       # widen who can start a run. The pre-run "Prepend" step is not copied: a PATH entry
       # written before the run cannot outrank one written during it.
