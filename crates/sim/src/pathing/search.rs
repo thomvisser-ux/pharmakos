@@ -210,6 +210,7 @@ pub struct Scratch {
     pub(crate) stalled: Tally,
     pub(crate) reach_faults: Tally,
     pub(crate) survey_unserved: Tally,
+    pub(crate) survey_out_of_reach: Tally,
 }
 
 /// A diagnostic count that never reads wrong: it counts up by a checked add,
@@ -328,6 +329,7 @@ impl Scratch {
             stalled: Tally::ZERO,
             reach_faults: Tally::ZERO,
             survey_unserved: Tally::ZERO,
+            survey_out_of_reach: Tally::ZERO,
         })
     }
 
@@ -473,6 +475,20 @@ impl Scratch {
         self.survey_unserved.read()
     }
 
+    /// Survey re-checks no scout's list reaches before the Lull since the
+    /// last reset (`crate::survey`'s queues): a sighting that would be out of
+    /// the reach window at the Lull, which no list of the seat's scouts,
+    /// extended with it, can walk to in the time the Push has left, even at
+    /// the octile bound. It is left out of every list on that decision and
+    /// counted here, never silently stale.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_out_of_reach(&self) -> Result<u64, TallyOverflow> {
+        self.survey_out_of_reach.read()
+    }
+
     /// Grid-optimum searches that met a [`crate::pathing::reach::ReachError`]
     /// since the last reset: a `toward` with no stone for it, counted here so
     /// the miss is read, never silent. Nothing hands the search a column it
@@ -495,6 +511,7 @@ impl Scratch {
         self.stalled = Tally::ZERO;
         self.reach_faults = Tally::ZERO;
         self.survey_unserved = Tally::ZERO;
+        self.survey_out_of_reach = Tally::ZERO;
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the

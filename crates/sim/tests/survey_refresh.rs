@@ -4,9 +4,8 @@
 //! Lane `srvy`: Survey's scouts refresh the sightings their seat holds before
 //! the next Lull (spec section 6's Survey row, "They refresh those sightings
 //! before the next Lull, so the playbook is written on fresh knowledge";
-//! decisions-log item 13; the owner's reading of 2026-11-22, that the
-//! sentence binds the refresh of sightings a seat already holds, not a first
-//! discovery).
+//! decisions-log item 13; item 173 (1): the sentence binds the refresh of
+//! sightings a seat already holds, not a first discovery).
 //!
 //! Two causes kept a held sighting stale, and each has a test of its own:
 //!
@@ -207,17 +206,34 @@ fn going(world: &World, unit: UnitId) -> [Fx; 3] {
     world.units().destinations()[row.index()]
 }
 
-/// The age in ticks of the stalest enemy-beacon sighting `of` holds, or
-/// `None` when it holds none.
-fn stalest_beacon(world: &World, of: SeatId) -> Option<u32> {
+/// The age in ticks of the stalest sighting `of` holds, enemy beacons only
+/// when `beacons`, or `None` when it holds none.
+fn stalest(world: &World, of: SeatId, beacons: bool) -> Option<u32> {
     let table = world.sightings();
     let now = world.tick().raw();
     (0..table.seats().len())
         .filter(|row| {
-            table.seats()[*row] == of.raw() && table.kinds()[*row] == AssetKind::Beacon.id()
+            table.seats()[*row] == of.raw()
+                && (!beacons || table.kinds()[*row] == AssetKind::Beacon.id())
         })
         .map(|row| now - table.seen_at()[row])
         .max()
+}
+
+/// One Lull of [`surveyed`]'s match.
+struct Lull {
+    round: u32,
+    /// The stalest enemy-beacon sighting seat 0 holds, in ticks.
+    beacon: Option<u32>,
+    /// The stalest sighting of any kind seat 0 holds, in ticks.
+    any: Option<u32>,
+    /// Seat 0's living Survey scouts.
+    scouts: usize,
+    /// The scouts it lost in the Push before.
+    lost: usize,
+    /// The sightings counted out of reach in the Push before
+    /// (`Scratch::survey_out_of_reach`).
+    out_of_reach: u64,
 }
 
 /// The ticks a scout takes, at the latest, on the walk the router serves
@@ -262,9 +278,9 @@ fn live_scouts(world: &World, of: SeatId) -> usize {
 /// columns from its core toward seat 1's, two scouts, and the half of the map
 /// on seat 1's side of the cores' midpoint (across the axis the cores lie
 /// further apart on) as its probe area. At every Lull after the first, the
-/// round, the stalest enemy-beacon sighting seat 0 holds (in ticks), its
-/// living scouts and the scouts it lost in the Push before.
-fn surveyed(seed: u64, seats: u32) -> Vec<(u32, Option<u32>, usize, usize)> {
+/// round, the stalest sightings seat 0 holds, its living scouts, the scouts
+/// it lost and the sightings counted out of reach in the Push before.
+fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
     let mut world = world(seed, seats, vec![180_000, 300_000, 480_000], ROUNDS);
     let mine = beacon_at(&world, core(&world, seat(0)));
     let theirs = beacon_at(&world, core(&world, seat(1)));
@@ -306,6 +322,7 @@ fn surveyed(seed: u64, seats: u32) -> Vec<(u32, Option<u32>, usize, usize)> {
     let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     let mut lulls = Vec::new();
+    let mut counted = 0;
     for round in 1..=ROUNDS {
         if round > 1 {
             let lost = feed
@@ -317,12 +334,20 @@ fn surveyed(seed: u64, seats: u32) -> Vec<(u32, Option<u32>, usize, usize)> {
                 })
                 .count();
             feed.clear();
-            lulls.push((
+            let now = runner
+                .world_mut()
+                .scratch_mut()
+                .survey_out_of_reach()
+                .unwrap();
+            lulls.push(Lull {
                 round,
-                stalest_beacon(runner.world(), seat(0)),
-                live_scouts(runner.world(), seat(0)),
+                beacon: stalest(runner.world(), seat(0), true),
+                any: stalest(runner.world(), seat(0), false),
+                scouts: live_scouts(runner.world(), seat(0)),
                 lost,
-            ));
+                out_of_reach: now - counted,
+            });
+            counted = now;
         }
         assert_eq!(runner.phase(), MatchPhase::Lull, "round {round}'s Lull");
         assert_eq!(runner.begin_push(), Ok(true), "round {round}'s Push");
@@ -339,7 +364,10 @@ fn surveyed(seed: u64, seats: u32) -> Vec<(u32, Option<u32>, usize, usize)> {
 
 /// The property: on the committed seeds, at every Lull after seat 0 first
 /// holds an enemy beacon's sighting, while one of its Survey scouts is alive,
-/// every enemy-beacon sighting it holds is inside reach memory.
+/// every enemy-beacon sighting it holds is inside reach memory; and every
+/// sighting of any kind it holds is too, unless the Push before counted a
+/// sighting no list could reach before the Lull
+/// (`Scratch::survey_out_of_reach`), the one named exception.
 #[test]
 fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
     let window = window();
@@ -347,8 +375,8 @@ fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
     let mut stale: Vec<String> = Vec::new();
     for (seed, seats) in COMMITTED {
         let mut held = false;
-        for (round, stalest, scouts, lost) in surveyed(seed, seats) {
-            let Some(age) = stalest else {
+        for lull in surveyed(seed, seats) {
+            let Some(age) = lull.beacon else {
                 assert!(
                     !held,
                     "seed {seed:#x}/{seats}: a held sighting is only ever forgotten by a re-check that finds the beacon gone, and no beacon of seat 1's is destroyed here"
@@ -356,14 +384,20 @@ fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
                 continue;
             };
             held = true;
+            let any = lull.any.unwrap_or(age);
             let line = format!(
-                "seed {seed:#x}/{seats}, round {round}'s Lull: stalest enemy beacon {} ms, {scouts} scouts alive, {lost} lost in the Push",
-                age * 50
+                "seed {seed:#x}/{seats}, round {}'s Lull: stalest enemy beacon {} ms, stalest of any kind {} ms, {} scouts alive, {} lost, {} out of reach in the Push",
+                lull.round,
+                age * 50,
+                any * 50,
+                lull.scouts,
+                lull.lost,
+                lull.out_of_reach
             );
-            if scouts == 0 {
+            if lull.scouts == 0 {
                 continue;
             }
-            if age <= window {
+            if age <= window && (any <= window || lull.out_of_reach > 0) {
                 fresh.push(line);
             } else {
                 stale.push(line);
@@ -774,4 +808,174 @@ fn a_sighting_no_walk_reaches_is_counted() {
     let after = runner.world_mut().scratch_mut().survey_unserved().unwrap();
     assert_ne!(going(runner.world(), scout), place, "no walk reaches it");
     assert!(after > before, "the drop is counted: {before} then {after}");
+}
+
+/// `scouts` Survey scouts at the map's centre with a probe strip along the
+/// south edge (always something to scan, far from the sightings), and one
+/// unarmed enemy beacon at each of `offsets` from the centre, each sighted on
+/// the Push's first decision by a scout that is then lost. One Push of
+/// `push_ms`. Each beacon sighting's age at the Lull, in ticks, in the order
+/// of `offsets`, and the world's `survey_out_of_reach` count.
+fn serial(world: World, scouts: usize, offsets: &[(i32, i32)]) -> (Vec<u32>, u64) {
+    let mut world = world;
+    let [last_x, last_y] = last_column(&world);
+    let (cx, cy) = (last_x.div_euclid(2), last_y.div_euclid(2));
+    let field = world.standing_point([cx, cy, 0]);
+    let post = survey_post(&mut world, field);
+    let strip_at = world.standing_point([cx, 8, 0]);
+    world
+        .add_area(post, AreaKind::Probe, strip_at, boxed(0, 0, last_x, 40))
+        .expect("the probe area fits");
+    let mut beacons = Vec::new();
+    let mut lost = Vec::new();
+    for (dx, dy) in offsets {
+        let at = world.standing_point([cx + dx, cy + dy, 0]);
+        let owner = seat(1);
+        beacons.push(
+            world
+                .place_beacon_directly(owner, at, MandateKind::None, PRIORITY_NORMAL)
+                .expect("a beacon"),
+        );
+        lost.push(scout_at(&mut world, post, at));
+    }
+    for _ in 0..scouts {
+        scout_at(&mut world, post, field);
+    }
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(runner.begin_push(), Ok(true));
+    let mut feed = Vec::new();
+    play(&mut runner, 10, &mut feed);
+    for unit in lost {
+        kill(&mut runner, unit);
+    }
+    play_out(&mut runner, &mut feed);
+    let now = runner.world().tick().raw();
+    let ages = beacons
+        .iter()
+        .map(|beacon| {
+            let (_, seen) =
+                remembered(runner.world(), AssetId::of_beacon(*beacon).unwrap()).expect("held");
+            now - seen
+        })
+        .collect();
+    let out_of_reach = runner
+        .world_mut()
+        .scratch_mut()
+        .survey_out_of_reach()
+        .unwrap();
+    (ages, out_of_reach)
+}
+
+/// One scout and two beacons a hundred columns either side of its post, in
+/// one Push of ten minutes: visiting one then the other fits easily, so both
+/// are fresh at the Lull (PR #210's second review: the scout answered for
+/// the first, left for it late, and had seven seconds left for the second).
+#[test]
+fn one_scout_refreshes_two_sightings_in_turn() {
+    let (ages, out_of_reach) = serial(sighted_world(24, vec![600_000]), 1, &[(-100, 0), (100, 0)]);
+    assert!(
+        ages.iter().all(|age| *age <= window()),
+        "every sighting fresh at the Lull: ages {ages:?} ticks"
+    );
+    assert_eq!(out_of_reach, 0, "every sighting fits a list");
+}
+
+/// Two scouts and three beacons: the same, with the work shared.
+#[test]
+fn two_scouts_refresh_three_sightings() {
+    let (ages, out_of_reach) = serial(
+        sighted_world(24, vec![600_000]),
+        2,
+        &[(-100, 0), (100, 0), (0, 120)],
+    );
+    assert!(
+        ages.iter().all(|age| *age <= window()),
+        "every sighting fresh at the Lull: ages {ages:?} ticks"
+    );
+    assert_eq!(out_of_reach, 0, "every sighting fits a list");
+}
+
+/// Three seats' worth of sightings and two scouts: the two enemy cores and a
+/// forward beacon of seat 1's, each sighted on the Push's first decision by a
+/// scout then lost, in one Push of eight minutes. The cores' autocannons
+/// reach as far as a scout sees, so a refresh costs the scout, and the post
+/// fields another (decisions-log item 173 (2)); every sighting is fresh at
+/// the Lull.
+#[test]
+fn two_scouts_refresh_both_enemy_cores_and_a_forward_beacon() {
+    let mut world = World::new(&WorldConfig {
+        match_seed: SEED,
+        seats: 3,
+        rules: rules(),
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![480_000],
+            round_limit: 1,
+        },
+    })
+    .unwrap_or_else(|error| panic!("generating the world: {error}"));
+    let [last_x, last_y] = last_column(&world);
+    let (cx, cy) = (last_x.div_euclid(2), last_y.div_euclid(2));
+    let field = world.standing_point([cx, cy, 0]);
+    let post = survey_post(&mut world, field);
+    world.set_scouts(post, 2);
+    let strip_at = world.standing_point([cx, 8, 0]);
+    world
+        .add_area(post, AreaKind::Probe, strip_at, boxed(0, 0, last_x, 40))
+        .expect("the probe area fits");
+    let one = beacon_at(&world, core(&world, seat(1)));
+    let two = beacon_at(&world, core(&world, seat(2)));
+    let forward_at = world.standing_point([
+        i32::midpoint(cx, column(one)[0]),
+        i32::midpoint(cy, column(one)[1]),
+        0,
+    ]);
+    let forward = world
+        .place_beacon_directly(seat(1), forward_at, MandateKind::None, PRIORITY_NORMAL)
+        .expect("a beacon");
+    let mut lost = Vec::new();
+    for at in [one, two, forward_at] {
+        lost.push(scout_at(&mut world, post, at));
+    }
+    scout_at(&mut world, post, field);
+    scout_at(&mut world, post, field);
+    let assets = [
+        AssetId::of_beacon(core(&world, seat(1))).unwrap(),
+        AssetId::of_beacon(core(&world, seat(2))).unwrap(),
+        AssetId::of_beacon(forward).unwrap(),
+    ];
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(runner.begin_push(), Ok(true));
+    let mut feed = Vec::new();
+    play(&mut runner, 10, &mut feed);
+    for unit in lost {
+        kill(&mut runner, unit);
+    }
+    play_out(&mut runner, &mut feed);
+    let now = runner.world().tick().raw();
+    let ages: Vec<u32> = assets
+        .iter()
+        .map(|asset| now - remembered(runner.world(), *asset).expect("held").1)
+        .collect();
+    assert!(
+        ages.iter().all(|age| *age <= window()),
+        "every sighting fresh at the Lull: ages {ages:?} ticks"
+    );
+}
+
+/// A sighting no list reaches before the Lull is counted under its own
+/// reason (`Scratch::survey_out_of_reach`), never silently stale: one scout,
+/// three beacons spread far, in a Push of four minutes.
+#[test]
+fn a_sighting_no_list_reaches_is_counted() {
+    let (ages, out_of_reach) = serial(
+        sighted_world(24, vec![240_000]),
+        1,
+        &[(-150, 0), (150, 0), (0, -150)],
+    );
+    let stale = ages.iter().filter(|age| **age > window()).count();
+    assert!(stale > 0, "the arrangement leaves one stale: ages {ages:?}");
+    assert!(
+        out_of_reach > 0,
+        "a stale sighting is counted as out of reach: ages {ages:?}"
+    );
 }
