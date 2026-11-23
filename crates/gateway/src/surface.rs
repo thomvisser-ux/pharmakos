@@ -6681,6 +6681,37 @@ mod tests {
         );
     }
 
+    /// S3's `fixq` (review fix pass 1, item 1): each of the editor's three new
+    /// planning handlers holds its own phase gate, reached without the
+    /// dispatcher, and answers before it parses anything: none of these
+    /// requests is even well formed.
+    #[test]
+    fn the_editor_planning_handlers_close_their_own_doors_in_a_push() {
+        let mut surface = hosted();
+        assert!(surface.begin_push().expect("the Push begins"));
+        let seat = Subject::Seat(SeatId::new(0));
+        let refusals = [
+            (
+                "set_value_text",
+                surface.set_value_text(seat, &request("set_value_text", "{}")),
+            ),
+            ("new_rule", surface.new_rule(&request("new_rule", "{}"))),
+            (
+                "compose_wall_box",
+                surface.compose_wall_box(seat, &request("compose_wall_box", "{}")),
+            ),
+        ];
+        for (method, answer) in refusals {
+            let error = answer.expect_err(method);
+            assert_eq!(error.code(), Code::PhaseClosed, "{method}");
+            assert!(
+                error.message().contains(&format!("`{method}`")),
+                "{method}'s own refusal: {}",
+                error.message()
+            );
+        }
+    }
+
     /// S3's `mapw`: outside a Lull `get_map_summary` withholds its travel
     /// times **and prices no walk** -- the sim's own walk tally on the
     /// scratch the features are priced in does not move -- in a Push, a recap

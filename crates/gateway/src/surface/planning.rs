@@ -561,13 +561,21 @@ impl Surface {
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::InvalidArgument`] for every refusal, in plan-core's
-    /// words with the typed text quoted.
+    /// [`crate::error::Code::PhaseClosed`] outside a Lull, before anything is
+    /// parsed; [`crate::error::Code::InvalidArgument`] for every other refusal,
+    /// in plan-core's words with the typed text quoted.
     pub(super) fn set_value_text(
         &self,
         subject: crate::token::Subject,
         request: &Request,
     ) -> Result<Json, Error> {
+        // Its own gate, before anything is parsed, beside the dispatcher's
+        // planning door: the shape it reads is the frozen snapshot's.
+        if !self.time.planning_open() {
+            return Err(Error::phase_closed(said!(
+                "`set_value_text` reads the frozen planning snapshot, which is open only in a                  Lull: ask in a Lull"
+            )));
+        }
         let seat = Surface::seat_of(subject, "a value to type")?;
         let playbook = playbook_param(request)?;
         let pointer = request
@@ -608,10 +616,18 @@ impl Surface {
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::InvalidArgument`] for a file with no canonical form
+    /// [`crate::error::Code::PhaseClosed`] outside a Lull, before anything is
+    /// parsed; [`crate::error::Code::InvalidArgument`] for a file with no canonical form
     /// and for one already holding the most rules a playbook may, in
     /// plan-core's words.
     pub(super) fn new_rule(&self, request: &Request) -> Result<Json, Error> {
+        // Its own gate, before anything is parsed, beside the dispatcher's
+        // planning door: a planning edit, open only in a Lull.
+        if !self.time.planning_open() {
+            return Err(Error::phase_closed(said!(
+                "`new_rule` is a planning edit, open only in a Lull: ask in a Lull"
+            )));
+        }
         let playbook = playbook_param(request)?;
         let made = pharmakos_plan_core::edit::new_rule(playbook, self.host()?.rules())
             .map_err(|error| Error::invalid(pharmakos_plan_core::edit::new_rule_words(&error)))?;
