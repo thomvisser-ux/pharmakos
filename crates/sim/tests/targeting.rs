@@ -1400,6 +1400,50 @@ fn a_committed_wall_counts_the_columns_it_checks() {
     );
 }
 
+/// A Defend protect list's beacon is pinned as its row commits, inside the
+/// decision: a `safest` pick ranks the seat's beacons (one unit a beacon
+/// row) and reads each own living beacon's threat scan, all of it charged to
+/// the decision (lane `dunit`, fix pass 1). Before the pass the commit read
+/// it through a board that charged nothing.
+#[test]
+fn a_committed_protect_list_counts_the_ranking_it_reads() {
+    let wait = concat!(
+        r#"{"label":"after","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
+        r#""timeout_ms":600000}"#
+    );
+    let route = concat!(
+        r#"{"label":"defend","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate":{"defend":{"#,
+        r#""protect":[{"beacon":{"safest":{}}}],"engagement_radius_pct":100,"pursue":"SPHERE_EDGE"}}}]},"#,
+        r#""timeout_ms":120000}"#
+    );
+    let mut runner = open(world_at(SEED, 2, &[180_000]), &format!("{route},{wait}"));
+    // Each new figure, with the count the same decision's protect pick
+    // should charge, taken from the world it ran on.
+    let mut seen: Vec<(u64, u64)> = Vec::new();
+    let _ = play(&mut runner, 1_200, |world, _| {
+        let value = world.decision_work(0).expect("seat 0").expect("measured");
+        let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
+        let own = u64::try_from(own_beacons(world).len()).unwrap();
+        let pick = beacon_rows + own * threat_scan_rows(world, SeatId::new(SEAT));
+        if seen.last().map(|(units, _)| *units) != Some(value) {
+            seen.push((value, pick));
+        }
+    });
+    println!("protect: {seen:?}");
+    let units: Vec<u64> = seen.iter().map(|(units, _)| *units).collect();
+    // The first decision is the core's seam choice. The switch to Defend
+    // releases the seam, so the commit's decision makes the same choice
+    // again beside the pick.
+    let seam = *units.first().expect("a first decision");
+    let pick = seen.get(2).map(|(_, pick)| *pick).expect("a commit");
+    assert!(pick > 0, "the pick ranks and scans");
+    assert_eq!(
+        units,
+        vec![seam, 0, seam + pick, 1],
+        "the seam choice; nothing while the commander walks and interfaces; at the commit the pick and the seam chosen again; then the wait one node a decision"
+    );
+}
+
 #[test]
 fn the_decision_tick_counts_its_evaluation_units() {
     // P1's counted half (S1's plan, section 5): one evaluation unit per

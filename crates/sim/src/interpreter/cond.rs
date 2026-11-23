@@ -868,15 +868,19 @@ fn resolve_on<B: Board>(board: &B, spec: BeaconSpec) -> Option<BeaconId> {
     }
 }
 
-/// Resolve a beacon reference for `seat` against the live world, outside a
-/// decision: a Defend protect list's beacon, pinned when its row commits
-/// (S2's `dfnd`). The same catalogue [`resolve_beacon`] answers with.
-pub(crate) fn resolve_beacon_for(
+/// Resolve a beacon reference for `seat` against the live world, without a
+/// decision's view: a Defend protect list's beacon, pinned when its row
+/// commits (S2's `dfnd`). The same catalogue [`resolve_beacon`] answers
+/// with. The ranking's candidates and the scans it asks report to `meter`
+/// ([`crate::seams::Meter`]): a commit inside a decision passes the decision
+/// tally, any other caller `()`.
+pub(crate) fn resolve_beacon_for<M: crate::seams::Meter + ?Sized>(
     world: &World,
     seat: SeatId,
     spec: BeaconSpec,
+    meter: &M,
 ) -> Option<BeaconId> {
-    resolve_on(&SeatBoard { world, seat }, spec)
+    resolve_on(&SeatBoard { world, seat, meter }, spec)
 }
 
 /// Resolve a beacon reference for `seat` against the live world, as a decision
@@ -884,7 +888,7 @@ pub(crate) fn resolve_beacon_for(
 /// commit, offered to a host and to tests. It reads, it never steps.
 #[must_use]
 pub fn resolve_beacon_now(world: &World, seat: SeatId, spec: BeaconSpec) -> Option<BeaconId> {
-    resolve_beacon_for(world, seat, spec)
+    resolve_beacon_for(world, seat, spec, &())
 }
 
 /// Whether `beacon` took damage within the last `within_ms` game milliseconds:
@@ -898,13 +902,15 @@ pub fn beacon_under_attack(world: &World, beacon: BeaconId, within_ms: i32) -> b
         .is_ok_and(|row| under_attack(world, row.index(), within_ms))
 }
 
-/// One seat's view of the live world, for a selector read outside a decision.
-struct SeatBoard<'a> {
+/// One seat's view of the live world, for a selector read without a
+/// decision's view, its work reported to `meter`.
+struct SeatBoard<'a, M: crate::seams::Meter + ?Sized> {
     world: &'a World,
     seat: SeatId,
+    meter: &'a M,
 }
 
-impl Board for SeatBoard<'_> {
+impl<M: crate::seams::Meter + ?Sized> Board for SeatBoard<'_, M> {
     fn seat(&self) -> SeatId {
         self.seat
     }
@@ -936,13 +942,16 @@ impl Board for SeatBoard<'_> {
         live_commander(self.world, self.seat).map(|(at, _)| at)
     }
     fn row_threat(&self, row: usize) -> u64 {
-        live_row_threat(self.world, self.seat, row, &())
+        live_row_threat(self.world, self.seat, row, self.meter)
     }
     fn row_repairs(&self, row: usize) -> bool {
-        live_row_repairs(self.world, self.seat, row, &())
+        live_row_repairs(self.world, self.seat, row, self.meter)
     }
     fn commander_wounded(&self) -> bool {
         live_commander_wounded(self.world, self.seat)
+    }
+    fn charge(&self, units: u32) {
+        self.meter.rows(crate::math::index::row(units));
     }
 }
 

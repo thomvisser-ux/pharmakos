@@ -1558,8 +1558,9 @@ fn resolve_protected(
         match entry {
             crate::defend::Protect::Commander => escort = true,
             crate::defend::Protect::Beacon(spec) => {
-                let beacon = super::cond::resolve_beacon_for(world, seat, *spec)
-                    .ok_or(StepFailure::NoTarget)?;
+                let beacon =
+                    super::cond::resolve_beacon_for(world, seat, *spec, world.decision_meter())
+                        .ok_or(StepFailure::NoTarget)?;
                 if !beacons.contains(&beacon) {
                     beacons.push(beacon);
                 }
