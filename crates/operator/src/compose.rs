@@ -92,7 +92,7 @@ use pharmakos_proto::json::Json;
 use crate::candidates::{Candidate, Goal, NoVent, RaidTarget, core_threat, route_index, tap_step};
 use crate::easy::{CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT, SAFE_PLAYBOOK};
 use crate::playbook::{Declared, op, pointer_get, with_member, with_pointer};
-use crate::situation::{Kind, LastPush, Situation};
+use crate::situation::{Kind, LastPush, PushUnread, Situation};
 use crate::tuning::Tuning;
 use crate::wire::{number, object, string, voxel_json};
 
@@ -1076,11 +1076,18 @@ pub(crate) fn seed_note(situation: &Situation) -> String {
 
 /// A "why" with the seed line in front of it: every "why" Easy gives, for a
 /// plan it seals and for each suggestion, records the seed (decision C15),
-/// and says so when the last Push's feed was not read far enough to tell
-/// whether the commander died, which is why no guard post was added for it.
+/// and says so when the last Push's feed could not tell whether the
+/// commander died, which is why no guard post was added for it: the feed was
+/// not read far enough, or it shows no Push (a resumed Lull).
 pub(crate) fn with_seed(situation: &Situation, why: &str) -> String {
     match situation.last_push {
-        LastPush::Unread => format!(
+        LastPush::Unread(PushUnread::Resumed) => format!(
+            "{} {why} (The last Push is not in this Lull's feed, as in a Lull resumed from a \
+             save, so whether your commander died in it is not known, and no guard post was \
+             added for it.)",
+            seed_note(situation)
+        ),
+        LastPush::Unread(PushUnread::PastPages) => format!(
             "{} {why} (A commander died where you could see in the last Push, and the feed was \
              not read within {} pages far enough to say whose, so no guard post was added for \
              it.)",
@@ -1161,7 +1168,7 @@ pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String 
 pub(crate) fn guard_reason(situation: &Situation, tuning: &Tuning) -> String {
     let died = match situation.last_push {
         LastPush::Died => Some("your commander died in the last Push"),
-        LastPush::Survived | LastPush::Unread => None,
+        LastPush::Survived | LastPush::Unread(_) => None,
     };
     let threat = core_threat(situation, tuning)
         .filter(|threat| *threat > 0)
@@ -1176,9 +1183,13 @@ pub(crate) fn guard_reason(situation: &Situation, tuning: &Tuning) -> String {
         (Some(died), None) => format!("It guards because {died}."),
         (None, Some(threat)) => format!("It guards because {threat}."),
         (None, None) => match situation.last_push {
-            LastPush::Unread => String::from(
+            LastPush::Unread(PushUnread::PastPages) => String::from(
                 "No threat is in sight inside your core's sphere, and the last Push's feed was not \
                  read far enough to say whether your commander died.",
+            ),
+            LastPush::Unread(PushUnread::Resumed) => String::from(
+                "No threat is in sight inside your core's sphere, and the last Push is not in \
+                 this Lull's feed to say whether your commander died.",
             ),
             LastPush::Survived | LastPush::Died => String::from(
                 "No threat is in sight inside your core's sphere and your commander did not die \

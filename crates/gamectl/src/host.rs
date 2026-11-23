@@ -48,12 +48,16 @@
 //! A built-in seat's round says on standard error what the gateway refused it
 //! (S3's `opr3`, fix pass 2, item 5): the refusal that kept the round from
 //! being read, every route estimate refused for another reason than
-//! `NOT_FOUND`, each of which dropped the goal it weighed, and a refusal of
-//! keeping its seal as its own draft or of reading last round's back. One line a round,
+//! `NOT_FOUND`, each of which dropped the goal it weighed, and why last
+//! round's failed stones were not all known when they were not
+//! (`Played::failed_stones`). One line a round,
 //! and none for a round with nothing refused ([`refusals_said`]). A line
 //! standard error would not take is not dropped silently: it is counted by
-//! its reason ([`Unsaid`]), and the next line that is written says how many
-//! went unwritten before it. Standard error is the only door this command
+//! its reason ([`Unsaid`], with `checked_add`, a count past `u64::MAX` said
+//! as more than it), the next line that is written says how many went
+//! unwritten before it, and what is still unsaid when the host ends is said
+//! once by its last line ([`say_unsaid_at_close`]) or in the message of the
+//! failure it ended on ([`with_unsaid`]). Standard error is the only door this command
 //! has besides the announce line: the host's other counters (the dropped
 //! connections) are the gateway's, which `serve.rs` writes into the audit log
 //! it closes, and no seam takes a count of this crate's there. Returning the
@@ -88,7 +92,7 @@ use pharmakos_gateway::Code;
 use pharmakos_gateway::advice::{Advice, StartHere, SuggestedValue, Suggestion};
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::serve::{self, Advisor, BuiltInSeat, Operators, Setup};
-use pharmakos_operator::{Easy, Played, RulesError};
+use pharmakos_operator::{Easy, FailedStones, Played, PushUnread, RulesError, StonesUnread};
 use pharmakos_proto::json::Json;
 
 use crate::exit::Failure;
@@ -138,57 +142,163 @@ impl UnsaidReason {
     }
 }
 
+/// How many lines are unwritten for one reason: exactly a count, or more than
+/// the largest count a `u64` holds, which is said as such and never wrapped
+/// back to zero (fix pass 4, item 4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tally {
+    /// Exactly this many.
+    Exactly(u64),
+    /// More than this many, `u64::MAX`.
+    MoreThan(u64),
+}
+
+impl Tally {
+    /// True when nothing is unwritten.
+    const fn is_zero(self) -> bool {
+        matches!(self, Tally::Exactly(0))
+    }
+
+    /// The tally in a line's words: the count, or "more than" it.
+    fn words(self) -> String {
+        match self {
+            Tally::Exactly(count) => count.to_string(),
+            Tally::MoreThan(count) => format!("more than {count}"),
+        }
+    }
+}
+
 /// The lines a host's built-in seats could not write to standard error, by
 /// reason, since the last line that was written: shared by every seat of the
-/// host, and said by the next line that is written ([`EasySeat`]).
+/// host, said by the next line that is written ([`EasySeat`]) and, for what
+/// is still unsaid when the host ends, by its last line
+/// ([`say_unsaid_at_close`], [`with_unsaid`]).
 #[derive(Debug, Default)]
 pub struct Unsaid {
     broken_pipe: std::sync::atomic::AtomicU64,
     other: std::sync::atomic::AtomicU64,
+    /// Set when a reason's count would have gone past `u64::MAX`.
+    broken_pipe_past: std::sync::atomic::AtomicBool,
+    other_past: std::sync::atomic::AtomicBool,
 }
 
 impl Unsaid {
-    const fn counter(&self, reason: UnsaidReason) -> &std::sync::atomic::AtomicU64 {
+    const fn counter(
+        &self,
+        reason: UnsaidReason,
+    ) -> (
+        &std::sync::atomic::AtomicU64,
+        &std::sync::atomic::AtomicBool,
+    ) {
         match reason {
-            UnsaidReason::BrokenPipe => &self.broken_pipe,
-            UnsaidReason::Other => &self.other,
+            UnsaidReason::BrokenPipe => (&self.broken_pipe, &self.broken_pipe_past),
+            UnsaidReason::Other => (&self.other, &self.other_past),
         }
     }
 
-    /// Count one line not written for `reason`. A host that fails `u64::MAX`
-    /// writes wraps rather than panics; at one a round that is never.
+    /// Add `more` lines to `reason`'s count with `checked_add`: a sum past
+    /// `u64::MAX` leaves the count at its largest and marks it
+    /// [`Tally::MoreThan`].
+    fn add(&self, reason: UnsaidReason, more: u64) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (count, past) = self.counter(reason);
+        if count
+            .fetch_update(SeqCst, SeqCst, |held| held.checked_add(more))
+            .is_err()
+        {
+            count.store(u64::MAX, SeqCst);
+            past.store(true, SeqCst);
+        }
+    }
+
+    /// Count one line not written for `reason`.
     pub fn count(&self, reason: UnsaidReason) {
-        self.counter(reason)
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.add(reason, 1);
     }
 
     /// How many lines are unwritten for `reason`.
     #[must_use]
-    pub fn of(&self, reason: UnsaidReason) -> u64 {
-        self.counter(reason)
-            .load(std::sync::atomic::Ordering::SeqCst)
+    pub fn of(&self, reason: UnsaidReason) -> Tally {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (count, past) = self.counter(reason);
+        let held = count.load(SeqCst);
+        if past.load(SeqCst) {
+            Tally::MoreThan(held)
+        } else {
+            Tally::Exactly(held)
+        }
     }
 
     /// Take the counts, leaving zero: what the next written line says.
-    fn take(&self) -> Vec<(UnsaidReason, u64)> {
+    fn take(&self) -> Vec<(UnsaidReason, Tally)> {
+        use std::sync::atomic::Ordering::SeqCst;
         UnsaidReason::ALL
             .iter()
             .map(|reason| {
-                (
-                    *reason,
-                    self.counter(*reason)
-                        .swap(0, std::sync::atomic::Ordering::SeqCst),
-                )
+                let (count, past) = self.counter(*reason);
+                let held = count.swap(0, SeqCst);
+                let tally = if past.swap(false, SeqCst) {
+                    Tally::MoreThan(held)
+                } else {
+                    Tally::Exactly(held)
+                };
+                (*reason, tally)
             })
             .collect()
     }
 
     /// Put taken counts back, for a line that was not written either.
-    fn restore(&self, taken: &[(UnsaidReason, u64)]) {
-        for (reason, count) in taken {
-            self.counter(*reason)
-                .fetch_add(*count, std::sync::atomic::Ordering::SeqCst);
+    fn restore(&self, taken: &[(UnsaidReason, Tally)]) {
+        for (reason, tally) in taken {
+            match tally {
+                Tally::Exactly(count) => self.add(*reason, *count),
+                Tally::MoreThan(_) => {
+                    self.add(*reason, u64::MAX);
+                    self.counter(*reason)
+                        .1
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
         }
+    }
+
+    /// The taken counts that are above zero, in a line's words; empty when
+    /// none is.
+    fn said(taken: &[(UnsaidReason, Tally)]) -> Vec<(&'static str, String)> {
+        taken
+            .iter()
+            .filter(|(_, tally)| !tally.is_zero())
+            .map(|(reason, tally)| (reason.name(), tally.words()))
+            .collect()
+    }
+}
+
+/// The host's last line, for the counts still unsaid when it ends (fix pass
+/// 4, item 4): written once, and nothing when there are none. A last line
+/// standard error does not take either is counted like any other, and the
+/// process then ends with no door left to say it through, as `main.rs` says
+/// of standard error itself.
+pub fn say_unsaid_at_close(said: &mut dyn Write, unsaid: &Unsaid) {
+    let taken = unsaid.take();
+    let earlier = Unsaid::said(&taken);
+    if earlier.is_empty() {
+        return;
+    }
+    if let Err(error) = writeln!(said, "{}", strings::operator_unsaid_at_close(&earlier)) {
+        unsaid.restore(&taken);
+        unsaid.count(UnsaidReason::of(&error));
+    }
+}
+
+/// A failure's message the host ends on, with the counts still unsaid after
+/// it (fix pass 4, item 4): `main.rs` writes it to standard error.
+#[must_use]
+pub fn with_unsaid(message: String, unsaid: &Unsaid) -> String {
+    let earlier = Unsaid::said(&unsaid.take());
+    if earlier.is_empty() {
+        message
+    } else {
+        format!("{message} {}", strings::operator_unsaid(&earlier))
     }
 }
 
@@ -209,10 +319,12 @@ impl EasyOperators {
     }
 
     /// The lines this host's built-in seats could not write, by reason, not
-    /// yet said by a line that was.
+    /// yet said by a line that was: shared with every seat it builds, and
+    /// held by [`run`] past the factory's hand-over so the host's last line
+    /// can say them.
     #[must_use]
-    pub fn unsaid(&self) -> &Unsaid {
-        &self.unsaid
+    pub fn unsaid(&self) -> std::sync::Arc<Unsaid> {
+        std::sync::Arc::clone(&self.unsaid)
     }
 }
 
@@ -256,11 +368,7 @@ impl EasySeat {
     /// kept for the next (the module docs).
     fn say(&mut self, line: &str) {
         let taken = self.unsaid.take();
-        let earlier: Vec<(&str, u64)> = taken
-            .iter()
-            .filter(|(_, count)| *count > 0)
-            .map(|(reason, count)| (reason.name(), *count))
-            .collect();
+        let earlier = Unsaid::said(&taken);
         let written = if earlier.is_empty() {
             writeln!(self.said, "{line}")
         } else {
@@ -288,11 +396,27 @@ pub fn refusals_said(seat: u8, played: &Played) -> Option<String> {
         .collect();
     let estimates =
         (!estimates.is_empty()).then(|| strings::operator_estimates_refused(&estimates));
-    let drafts = played.drafts_refused.iter().map(|refused| {
-        strings::operator_draft_refused(&refused.method, &refused.code, &refused.message)
-    });
-    let said: Vec<String> = read.into_iter().chain(estimates).chain(drafts).collect();
+    let stones = stones_unread(&played.failed_stones);
+    let said: Vec<String> = read.into_iter().chain(estimates).chain(stones).collect();
     (!said.is_empty()).then(|| strings::operator_round(seat, played.round, &said.join(" ")))
+}
+
+/// Why last round's failed stones were not all known, when they were not.
+fn stones_unread(stones: &FailedStones) -> Option<String> {
+    let FailedStones::Unread { why, .. } = stones else {
+        return None;
+    };
+    Some(match why {
+        StonesUnread::Push(PushUnread::Resumed) => strings::operator_push_not_in_feed(),
+        StonesUnread::Push(PushUnread::PastPages) => {
+            strings::operator_failures_past_pages(pharmakos_operator::easy::PAGES_MAX)
+        }
+        StonesUnread::NoCarriedSeal => strings::operator_no_carried_seal(),
+        StonesUnread::CarriedOfRound(round) => strings::operator_carried_of_round(*round),
+        StonesUnread::CarriedUnread(refused) => {
+            strings::operator_carried_unread(&refused.method, &refused.code, &refused.message)
+        }
+    })
 }
 
 /// Easy advising a seat.
@@ -382,6 +506,7 @@ pub fn run(root: &Path) -> Result<String, Failure> {
             &error.to_string(),
         ))
     })?;
+    let unsaid = operators.unsaid();
     let setup = Setup {
         rules_json,
         // A path, not a check: the gateway reads the folder on every
@@ -392,14 +517,18 @@ pub fn run(root: &Path) -> Result<String, Failure> {
         // plays and advises the human's (T18).
         operators: Box::new(operators),
     };
-    serve::run(setup, std::io::stdin().lock(), std::io::stdout().lock()).map_err(|error| {
-        let message = strings::host_refused(&error.to_string());
+    let served = serve::run(setup, std::io::stdin().lock(), std::io::stdout().lock());
+    // The host has ended: what its seats could not write is said once, in
+    // the message of the failure it ended on or in a last line of its own.
+    served.map_err(|error| {
+        let message = with_unsaid(strings::host_refused(&error.to_string()), &unsaid);
         if error.code() == Code::InvalidArgument {
             Failure::input(message)
         } else {
             Failure::internal(message)
         }
     })?;
+    say_unsaid_at_close(&mut std::io::stderr(), &unsaid);
     // Nothing more goes to standard output: the announce line was the whole of
     // what this command writes there.
     Ok(String::new())
@@ -433,7 +562,7 @@ mod tests {
             refused,
             estimates_refused,
             fundable: 0,
-            drafts_refused: Vec::new(),
+            failed_stones: FailedStones::None,
         }
     }
 
@@ -462,6 +591,29 @@ mod tests {
             said.contains("INTERNAL (the router broke a chain)"),
             "{said}"
         );
+    }
+
+    /// Failed stones not all known are said, each with its cause (fix pass
+    /// 4, items 1 and 2).
+    #[test]
+    fn failed_stones_not_all_known_are_said() {
+        let mut resumed = played(None, Vec::new());
+        resumed.failed_stones = FailedStones::Unread {
+            known: Vec::new(),
+            why: StonesUnread::Push(PushUnread::Resumed),
+        };
+        let said = refusals_said(0, &resumed).expect("a line");
+        assert!(said.contains("not in this Lull's feed"), "{said}");
+        let mut none_carried = played(None, Vec::new());
+        none_carried.failed_stones = FailedStones::Unread {
+            known: Vec::new(),
+            why: StonesUnread::NoCarriedSeal,
+        };
+        let said = refusals_said(0, &none_carried).expect("a line");
+        assert!(said.contains("carried no seal"), "{said}");
+        let mut known = played(None, Vec::new());
+        known.failed_stones = FailedStones::Known(vec![String::from("seam_1_2")]);
+        assert_eq!(refusals_said(0, &known), None);
     }
 
     #[test]
@@ -552,11 +704,11 @@ mod tests {
         };
         seat.say("first");
         seat.say("second");
-        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), 2);
+        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), Tally::Exactly(2));
         seat.said = Box::new(Refusing(std::io::ErrorKind::WriteZero));
         seat.say("third");
-        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), 2);
-        assert_eq!(unsaid.of(UnsaidReason::Other), 1);
+        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), Tally::Exactly(2));
+        assert_eq!(unsaid.of(UnsaidReason::Other), Tally::Exactly(1));
         let heard = Heard::default();
         seat.said = Box::new(heard.clone());
         seat.say("fourth");
@@ -564,7 +716,65 @@ mod tests {
         assert!(text.starts_with("fourth "), "{text}");
         assert!(text.contains("broken_pipe 2"), "{text}");
         assert!(text.contains("other 1"), "{text}");
-        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), 0);
-        assert_eq!(unsaid.of(UnsaidReason::Other), 0);
+        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), Tally::Exactly(0));
+        assert_eq!(unsaid.of(UnsaidReason::Other), Tally::Exactly(0));
+    }
+
+    /// The counts still unsaid when the host ends are said once, by the
+    /// host's last line, and nothing is said when there are none (fix pass
+    /// 4, item 4); a failure the host ends on carries them in its message.
+    #[test]
+    fn the_counts_unsaid_at_the_end_are_said_once() {
+        let unsaid = Unsaid::default();
+        let heard = Heard::default();
+        say_unsaid_at_close(&mut heard.clone(), &unsaid);
+        assert!(heard.0.lock().expect("the buffer").is_empty());
+        unsaid.count(UnsaidReason::BrokenPipe);
+        unsaid.count(UnsaidReason::Other);
+        unsaid.count(UnsaidReason::Other);
+        say_unsaid_at_close(&mut heard.clone(), &unsaid);
+        let text = String::from_utf8(heard.0.lock().expect("the buffer").clone()).expect("UTF-8");
+        assert!(text.contains("broken_pipe 1, other 2"), "{text}");
+        assert!(text.ends_with('\n'), "{text}");
+        assert_eq!(unsaid.of(UnsaidReason::Other), Tally::Exactly(0));
+        // A failure the host ends on says them in its own message.
+        unsaid.count(UnsaidReason::Other);
+        let message = with_unsaid(String::from("The host failed."), &unsaid);
+        assert!(message.starts_with("The host failed. "), "{message}");
+        assert!(message.contains("other 1"), "{message}");
+        assert_eq!(
+            with_unsaid(String::from("The host failed."), &unsaid),
+            "The host failed."
+        );
+        // The last line refused too: counted, for nobody, and not dropped
+        // from the tally.
+        unsaid.count(UnsaidReason::BrokenPipe);
+        say_unsaid_at_close(&mut Refusing(std::io::ErrorKind::BrokenPipe), &unsaid);
+        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), Tally::Exactly(2));
+    }
+
+    /// A count past `u64::MAX` is said as more than it, never wrapped back to
+    /// zero (fix pass 4, item 4).
+    #[test]
+    fn a_count_past_the_largest_is_said_as_more_than_it() {
+        let unsaid = Unsaid::default();
+        unsaid
+            .broken_pipe
+            .store(u64::MAX, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            unsaid.of(UnsaidReason::BrokenPipe),
+            Tally::Exactly(u64::MAX)
+        );
+        unsaid.count(UnsaidReason::BrokenPipe);
+        assert_eq!(
+            unsaid.of(UnsaidReason::BrokenPipe),
+            Tally::MoreThan(u64::MAX)
+        );
+        let message = with_unsaid(String::from("Done."), &unsaid);
+        assert!(
+            message.contains("broken_pipe more than 18446744073709551615"),
+            "{message}"
+        );
+        assert_eq!(unsaid.of(UnsaidReason::BrokenPipe), Tally::Exactly(0));
     }
 }

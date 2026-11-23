@@ -33,7 +33,8 @@
 //! read**: no grid charges a scout at it.
 
 use pharmakos_proto::gp::v1::rules_table::{
-    StructureKind as StructureRow, Structures, UnitKind as UnitRow, Units, Weapon,
+    Commander, Locomotion, StructureKind as StructureRow, Structures, UnitKind as UnitRow, Units,
+    Weapon,
 };
 use pharmakos_proto::gp::v1::{ByRichness, RulesTable};
 
@@ -455,20 +456,7 @@ impl Tuning {
         let units = table.units.ok_or_else(|| missing("units"))?;
         let locomotion = table.locomotion.ok_or_else(|| missing("locomotion"))?;
         let commander = table.commander.ok_or_else(|| missing("commander"))?;
-        let step_cost_min = i64::from(
-            locomotion
-                .step_cost_cardinal
-                .min(locomotion.step_cost_diagonal),
-        );
-        let commander_cost_per_second = i64::from(commander.cost_per_second);
-        for (row, value) in [
-            ("locomotion.step_cost_cardinal", step_cost_min),
-            ("commander.cost_per_second", commander_cost_per_second),
-        ] {
-            if value <= 0 {
-                return Err(missing(row));
-            }
-        }
+        let (step_cost_min, commander_cost_per_second) = walking(&locomotion, &commander)?;
         let threats = Threats::read(&units, &structures)?;
         let build_drone = units
             .build_drone
@@ -568,6 +556,37 @@ impl Tuning {
     }
 }
 
+/// The least step cost and the commander's walking speed, the walk floor's
+/// two rows ([`Tuning::step_cost_min`]).
+///
+/// # Errors
+///
+/// [`RulesError`] naming the row, when a step cost or the speed is zero:
+/// each step cost is checked by its own row before the least is taken, so a
+/// zero diagonal is named as the diagonal (fix pass 4, item 5).
+fn walking(locomotion: &Locomotion, commander: &Commander) -> Result<(i64, i64), RulesError> {
+    let cost_per_second = i64::from(commander.cost_per_second);
+    for (row, value) in [
+        (
+            "locomotion.step_cost_cardinal",
+            i64::from(locomotion.step_cost_cardinal),
+        ),
+        (
+            "locomotion.step_cost_diagonal",
+            i64::from(locomotion.step_cost_diagonal),
+        ),
+        ("commander.cost_per_second", cost_per_second),
+    ] {
+        if value <= 0 {
+            return Err(RulesError(format!("the rules text has no `{row}` row")));
+        }
+    }
+    let least = locomotion
+        .step_cost_cardinal
+        .min(locomotion.step_cost_diagonal);
+    Ok((i64::from(least), cost_per_second))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,6 +619,17 @@ mod tests {
                 "verifier.reach_memory_ms",
                 "\"reach_memory_ms\": 180000",
                 "\"reach_memory_ms\": 0",
+            ),
+            // Fix pass 4, item 5: each step cost by its own row.
+            (
+                "locomotion.step_cost_cardinal",
+                "\"step_cost_cardinal\": 10",
+                "\"step_cost_cardinal\": 0",
+            ),
+            (
+                "locomotion.step_cost_diagonal",
+                "\"step_cost_diagonal\": 14",
+                "\"step_cost_diagonal\": 0",
             ),
         ] {
             let text = committed();

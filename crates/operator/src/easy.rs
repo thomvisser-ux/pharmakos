@@ -25,6 +25,28 @@
 //! kW ratings, yields, interface times, the sphere radius -- comes from the
 //! rules text ([`crate::tuning`]).
 //!
+//! # What the last Push says, and what it cannot
+//!
+//! A built-in seat reads two things from the last Push's feed: whether its
+//! commander died (decision 35's guard) and which of its own route steps
+//! failed, which it reads against last round's own seal as the gateway
+//! carried it into the Lull ([`CARRIED_DRAFT_ID`]) to leave out a stone that
+//! failed. What the feed cannot show is one typed state,
+//! `PushUnread`, never "nothing happened":
+//!
+//! * a Lull after the first whose feed shows no Push, as a Lull resumed from
+//!   a save opens with an empty feed ([`PushUnread::Resumed`]);
+//! * lines past the [`PAGES_MAX`] pages a round reads
+//!   ([`PushUnread::PastPages`]).
+//!
+//! Under it Easy adds no guard post for a death it cannot see, leaves out the
+//! stones it knows failed, and weighs every other stone as if it had not
+//! failed; its "why" says which, and so does `gamectl host`'s standard error
+//! ([`Played::failed_stones`]). A resumed Lull may therefore seal another
+//! stone than the unresumed one would: the save does not carry the last
+//! Push's outcomes yet, which is lane `opsave`'s (the PLACEHOLDER on
+//! [`PushUnread::Resumed`]).
+//!
 //! # The call budget, derived
 //!
 //! The budget is in **evaluation units** (spec section 14; decision C6), and
@@ -63,7 +85,8 @@ use crate::candidates::{self, Candidate};
 use crate::compose::{self, Composed};
 use crate::playbook::{self, Declared};
 use crate::safe::{self, SafePlan};
-use crate::situation::{Kind, Situation, Steps};
+pub use crate::situation::PushUnread;
+use crate::situation::{FailedSteps, Kind, Situation, Steps};
 use crate::tuning::{RulesError, Tuning};
 use crate::wire::{
     Call, Misread, Refused, Wire, array_of, bool_of, compact, int_of, malformed, object, string,
@@ -329,18 +352,22 @@ pub const SAFE_CALLS: u32 = SAFE_ESTIMATES + 1 + 1;
 /// The commit: two submits at most, and `set_ready`.
 pub const COMMIT_CALLS: u32 = 2 + 1;
 
-/// The last seal: one `get_draft` and one `save_draft` (fix pass 3, item 6).
-/// A built-in seat keeps its own seal as its own draft, under
-/// [`LAST_SEAL_DRAFT_ID`], so the next Lull can say which of its steps the
-/// feed's failed-step lines name -- the feed numbers a step and does not say
-/// what it was. State kept through the gateway, the seat's own and nobody
-/// else's (a draft never leaves the gateway for another seat); the notebook
-/// is never touched. The advisor neither reads nor writes drafts.
-pub const LAST_SEAL_CALLS: u32 = 2;
+/// The last seal: one `get_draft` of the gateway's carried draft (fix pass 3,
+/// item 6, and fix pass 4, item 1). The feed numbers a failed step and does
+/// not say what it was, so a built-in seat reads last round's own seal back
+/// from the draft the gateway carries into every Lull for every seat
+/// ([`CARRIED_DRAFT_ID`]: the gateway's draft continuity, spec section 13,
+/// which copies the seat's own seal, never one the gateway filed, stamped
+/// with the new round).
+/// The seat writes nothing for it: it writes nothing but its own seal, and
+/// the notebook is never read. The advisor reads no draft.
+pub const LAST_SEAL_CALLS: u32 = 1;
 
-/// The draft id a built-in seat keeps its last own seal under: one draft,
-/// saved over every round.
-pub const LAST_SEAL_DRAFT_ID: &str = "easy-last-seal";
+/// The id of the draft the gateway carries last round's own seal into a Lull
+/// under: the gateway's own id for it, restated here because the operator
+/// names nothing of the gateway's (AGENTS.md section 3, rule 3), and held to
+/// the gateway's by `crates/gamectl/tests/operator.rs`.
+pub const CARRIED_DRAFT_ID: &str = "carried";
 
 /// The most calls a built-in seat's round makes, derived term by term (see
 /// the module docs).
@@ -409,10 +436,59 @@ pub struct Played {
     /// funded on their own (fix pass 3, item 1): a round that sealed its safe
     /// playbook with this above zero had a goal it should have composed.
     pub fundable: usize,
-    /// Every refusal of keeping the seal as the seat's own draft, or of
-    /// reading last round's back, other than `NOT_FOUND` for a draft not
-    /// saved yet (fix pass 3, item 6).
-    pub drafts_refused: Vec<Refused>,
+    /// Which of last round's stones failed, as far as the round could tell
+    /// (fix pass 3, item 6; fix pass 4): the ones it knows are not weighed
+    /// again this round.
+    pub failed_stones: FailedStones,
+}
+
+/// Which of last round's stones failed, read from the last Push's feed and
+/// the seal the gateway carried into this Lull ([`CARRIED_DRAFT_ID`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum FailedStones {
+    /// No route step of the seat's own failed in the last Push, or there was
+    /// no Push before this Lull, or the round was not read.
+    None,
+    /// Steps failed, and these are the far features of those that were
+    /// stones (none, when no failed step was a stone).
+    Known(Vec<String>),
+    /// Not all known: the far features of the failed stones that are known,
+    /// and why the rest are not. Easy leaves the known ones out and weighs
+    /// every other stone as if it had not failed, and its "why" says so: in
+    /// a resumed Lull, whose feed shows no Push, that is every stone.
+    Unread {
+        /// The failed stones' far features that are known.
+        known: Vec<String>,
+        /// Why the rest are not.
+        why: StonesUnread,
+    },
+}
+
+impl FailedStones {
+    /// The far features this round does not weigh a stone toward.
+    #[must_use]
+    pub fn known(&self) -> &[String] {
+        match self {
+            FailedStones::None => &[],
+            FailedStones::Known(known) | FailedStones::Unread { known, .. } => known,
+        }
+    }
+}
+
+/// Why the failed stones of last round are not all known.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum StonesUnread {
+    /// The last Push's failed steps are not all known to this Lull
+    /// ([`PushUnread`]).
+    Push(PushUnread),
+    /// Steps failed, and the gateway carried no seal of the seat's own into
+    /// this Lull (it filed the safe playbook for the seat, or the seat sealed
+    /// nothing), so the steps cannot be named.
+    NoCarriedSeal,
+    /// The carried draft is stamped with another round than this Lull's.
+    CarriedOfRound(i64),
+    /// `get_draft` refused the carried draft, or its answer does not read.
+    CarriedUnread(Refused),
 }
 
 /// One suggested value for one declared template parameter.
@@ -529,7 +605,7 @@ impl Easy {
             refused: None,
             estimates_refused: Vec::new(),
             fundable: 0,
-            drafts_refused: Vec::new(),
+            failed_stones: FailedStones::None,
         };
         match Situation::read(&mut wire, seat, Steps::Read) {
             Ok(situation) => {
@@ -556,14 +632,14 @@ impl Easy {
         // Declared before the estimates, since every candidate is priced from
         // the step it is composed as ([`crate::price`]).
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
-        let failed = failed_stones(wire, situation, &mut round.drafts_refused);
+        round.failed_stones = failed_stones(wire, situation);
         let weighed = candidates::evaluate(
             wire,
             situation,
             &self.tuning,
             &declared,
             goals,
-            Some(&failed),
+            Some(round.failed_stones.known()),
         );
         round.estimates_refused.clone_from(&weighed.refused);
         let evaluated = weighed.candidates;
@@ -582,8 +658,10 @@ impl Easy {
             && submit(wire, &text)
         {
             round.submitted = Submitted::Own;
-            round.why = compose::with_seed(situation, &composed.why);
-            keep_seal(wire, &text, &mut round.drafts_refused);
+            round.why = with_stones(
+                compose::with_seed(situation, &composed.why),
+                &round.failed_stones,
+            );
             round.playbook_jsonc = Some(text);
             return;
         }
@@ -593,7 +671,10 @@ impl Easy {
             && submit(wire, &safe.jsonc)
         {
             round.submitted = Submitted::Safe;
-            round.why = compose::with_seed(situation, &safe::why_safe(situation, Some(&safe)));
+            round.why = with_stones(
+                compose::with_seed(situation, &safe::why_safe(situation, Some(&safe))),
+                &round.failed_stones,
+            );
             round.playbook_jsonc = Some(safe.jsonc);
         }
     }
@@ -602,7 +683,7 @@ impl Easy {
     pub fn advise(&mut self, seat: u8, call: &mut Call<'_>) -> Advice {
         let mut wire = Wire::new(call);
         let mut advice = Advice::default();
-        let read = Situation::read(&mut wire, seat, Steps::Unread);
+        let read = Situation::read(&mut wire, seat, Steps::Skip);
         if let Err(refused) = &read {
             advice.refused = Some(refused.clone());
         }
@@ -740,95 +821,140 @@ fn patched_text(wire: &mut Wire<'_, '_>, text: &str, json_patch: &str) -> Option
     (!out.is_empty()).then(|| out.to_owned())
 }
 
-/// Submit, and say whether it was accepted: a refusal, and an answer that
-/// does not read, are not an acceptance.
-/// Keep this round's own seal as the seat's own draft ([`LAST_SEAL_CALLS`]),
-/// saved over last round's; a refusal is kept with the round's.
-fn keep_seal(wire: &mut Wire<'_, '_>, text: &str, refused: &mut Vec<Refused>) {
-    let params = object(vec![
-        ("draft_id", string(LAST_SEAL_DRAFT_ID)),
-        ("label", string("Easy's last seal")),
-        ("playbook_jsonc", string(text)),
-    ]);
-    if let Err(refusal) = wire.call("save_draft", params) {
-        refused.push(refusal);
+/// The far features of last round's stones that failed (fix pass 3, item 6;
+/// fix pass 4, items 1 to 3): the seat's own route steps the last Push's
+/// feed says failed ([`Situation::failed_steps`]), read against last round's
+/// own seal as the gateway carried it into this Lull ([`stones_at`]). No call
+/// when no step is known to have failed. Failed steps not all known (a
+/// resumed Lull, or failures past the pages read) are
+/// [`FailedStones::Unread`] with the stones that are known, never "nothing
+/// failed".
+fn failed_stones(wire: &mut Wire<'_, '_>, situation: &Situation) -> FailedStones {
+    let unread = |known: Vec<String>, why: StonesUnread| FailedStones::Unread { known, why };
+    match &situation.failed_steps {
+        FailedSteps::NotRead => FailedStones::None,
+        FailedSteps::Known(seen) if seen.is_empty() => FailedStones::None,
+        FailedSteps::Known(seen) => match stones_at(wire, situation, seen) {
+            Ok(known) => FailedStones::Known(known),
+            Err(why) => unread(Vec::new(), why),
+        },
+        FailedSteps::Unread { seen, why } if seen.is_empty() => {
+            unread(Vec::new(), StonesUnread::Push(*why))
+        }
+        FailedSteps::Unread { seen, why } => match stones_at(wire, situation, seen) {
+            Ok(known) => unread(known, StonesUnread::Push(*why)),
+            Err(carried) => unread(Vec::new(), carried),
+        },
     }
 }
 
-/// The far features of last round's stones that failed (fix pass 3, item 6):
-/// the seat's own route steps the last Push's feed says failed
-/// ([`Situation::failed_steps`]), read against last round's seal as the seat
-/// kept it ([`keep_seal`]), each one a `toward` placement naming its feature.
-/// No call when no step failed; a draft not saved yet (`NOT_FOUND`) or one
-/// from another round says nothing, and any other refusal, or a draft that
-/// does not read, is kept with the round's.
-fn failed_stones(
+/// The far features of the stones among `steps`, read from last round's own
+/// seal as the gateway carried it into this Lull ([`CARRIED_DRAFT_ID`]), each
+/// one a `toward` placement naming its feature.
+///
+/// # Errors
+///
+/// The [`StonesUnread`] cause when the carried draft is absent (`NOT_FOUND`),
+/// stamped with another round, refused, or does not read, or a step is past
+/// its route.
+fn stones_at(
     wire: &mut Wire<'_, '_>,
     situation: &Situation,
-    refused: &mut Vec<Refused>,
-) -> Vec<String> {
-    if situation.failed_steps.is_empty() {
-        return Vec::new();
-    }
+    steps: &[usize],
+) -> Result<Vec<String>, StonesUnread> {
     let answer = match wire.call(
         "get_draft",
-        object(vec![("draft_id", string(LAST_SEAL_DRAFT_ID))]),
+        object(vec![("draft_id", string(CARRIED_DRAFT_ID))]),
     ) {
         Ok(answer) => answer,
-        Err(refusal) if refusal.code == "NOT_FOUND" => return Vec::new(),
-        Err(refusal) => {
-            refused.push(refusal);
-            return Vec::new();
-        }
+        Err(refusal) if refusal.code == "NOT_FOUND" => return Err(StonesUnread::NoCarriedSeal),
+        Err(refusal) => return Err(StonesUnread::CarriedUnread(refusal)),
     };
-    // A draft of another round's seal says nothing of last round's steps.
-    let last_round = situation.round.checked_sub(1).map(i64::from);
+    // The gateway stamps the carried draft with the round it is carried into.
     match int_of(&answer, "round") {
-        Ok(round) if Some(round) == last_round => {}
-        Ok(_) => return Vec::new(),
-        Err(misread) => {
-            refused.push(misread.refused("get_draft"));
-            return Vec::new();
-        }
+        Ok(round) if round == i64::from(situation.round) => {}
+        Ok(round) => return Err(StonesUnread::CarriedOfRound(round)),
+        Err(misread) => return Err(StonesUnread::CarriedUnread(misread.refused("get_draft"))),
     }
     let read = text_of(&answer, "playbook_jsonc")
         .map_err(|misread| misread.refused("get_draft"))
         .and_then(|jsonc| {
             pharmakos_proto::json::read(&crate::wire::strip_comments(jsonc))
-                .map_err(|_| malformed("get_draft", "the kept seal does not read"))
+                .map_err(|_| malformed("get_draft", "the carried seal does not read"))
         });
-    let body = match read {
-        Ok(body) => body,
-        Err(refusal) => {
-            refused.push(refusal);
-            return Vec::new();
-        }
-    };
+    let body = read.map_err(StonesUnread::CarriedUnread)?;
     let Some(Json::Array(route)) = body
         .get("declarative")
         .and_then(|declarative| declarative.get("route"))
     else {
-        return Vec::new();
+        return Err(StonesUnread::CarriedUnread(malformed(
+            "get_draft",
+            "the carried seal has no route",
+        )));
     };
-    situation
-        .failed_steps
-        .iter()
-        .filter_map(|index| route.get(*index))
-        .filter_map(|step| {
-            match step
-                .get("place_beacon")?
-                .get("at")?
-                .get("toward")?
-                .get("feature")?
-                .get("feature_id")?
-            {
-                Json::String(feature) => Some(feature.clone()),
-                _ => None,
-            }
-        })
-        .collect()
+    let mut known: Vec<String> = Vec::new();
+    for index in steps {
+        let Some(step) = route.get(*index) else {
+            return Err(StonesUnread::CarriedUnread(malformed(
+                "get_draft",
+                "a failed step past the carried seal's route",
+            )));
+        };
+        if let Some(Json::String(feature)) = step
+            .get("place_beacon")
+            .and_then(|place| place.get("at"))
+            .and_then(|at| at.get("toward"))
+            .and_then(|toward| toward.get("feature"))
+            .and_then(|feature| feature.get("feature_id"))
+        {
+            known.push(feature.clone());
+        }
+    }
+    Ok(known)
 }
 
+/// A round's "why" with a sentence after it when last round's failed stones
+/// were not all known: which stones it left out, and why the rest could not
+/// be told.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+fn with_stones(why: String, stones: &FailedStones) -> String {
+    let FailedStones::Unread { known, why: unread } = stones else {
+        return why;
+    };
+    let cause = match unread {
+        StonesUnread::Push(PushUnread::Resumed) => String::from(
+            "the last Push is not in this Lull's feed (a Lull resumed from a save opens with an \
+             empty one)",
+        ),
+        StonesUnread::Push(PushUnread::PastPages) => {
+            format!("the feed's failed steps were not all read within {PAGES_MAX} pages")
+        }
+        StonesUnread::NoCarriedSeal => String::from(
+            "steps failed and the gateway carried no seal of this seat's own into this Lull to \
+             name them",
+        ),
+        StonesUnread::CarriedOfRound(round) => {
+            format!("steps failed and the carried seal is stamped with round {round}, not this one")
+        }
+        StonesUnread::CarriedUnread(refused) => format!(
+            "steps failed and the carried seal could not be read ({} {}: {})",
+            refused.method, refused.code, refused.message
+        ),
+    };
+    let left_out = if known.is_empty() {
+        String::new()
+    } else {
+        format!(" Easy left out the stones toward {}.", known.join(", "))
+    };
+    format!(
+        "{why} (Which of last round's stones failed is not all known, because {cause}, so \
+         every stone not known to have failed was weighed.{left_out})"
+    )
+}
+
+/// Submit, and say whether it was accepted: a refusal, and an answer that
+/// does not read, are not an acceptance.
 fn submit(wire: &mut Wire<'_, '_>, text: &str) -> bool {
     wire.call(
         "submit_plan",

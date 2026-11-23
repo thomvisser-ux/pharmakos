@@ -1626,7 +1626,7 @@ fn guard_defence(situation: &Situation, tuning: &Tuning) -> Option<i64> {
         .checked_div(1_000)?;
     let from_death = match situation.last_push {
         LastPush::Died => COMMANDER_DIED_POINTS,
-        LastPush::Survived | LastPush::Unread => 0,
+        LastPush::Survived | LastPush::Unread(_) => 0,
     };
     from_threat.checked_add(from_death)
 }

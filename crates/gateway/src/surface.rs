@@ -3118,6 +3118,47 @@ impl Surface {
         &self.fog
     }
 
+    /// `get_status`: the footer, the match's preset and, for a seat, whether it
+    /// holds a seal of the current round (`gp.api.v1.GetStatusResponse`; S3's
+    /// `probw`).
+    ///
+    /// The preset is written in [`Preset::name`]'s spelling, the config line's
+    /// and a save's, which is the lower-case wire name of `gp.api.v1.Preset`
+    /// (`crate::probation`'s tests hold the two equal); with no match hosted it
+    /// is left out, `PRESET_UNSPECIFIED`. The seal is the test
+    /// [`Surface::begin_push`]'s filing applies, a seal whose round is the
+    /// match's round, whoever filed it; it is told to that seat only, true or
+    /// false, and left out for every token that is not a seat.
+    ///
+    /// The built-in operator advising a seat calls through that seat's own,
+    /// narrower token ([`crate::serve::ADVISOR_METHODS`]), on which
+    /// `get_status` already stands: so it is told **its own seat's** value,
+    /// which is that seat's own knowledge and the same thing the seat's token
+    /// is told, and nothing about any other seat (S3's `probw`, its last pass;
+    /// `an_advisor_is_told_its_own_seats_seal_and_no_other`).
+    fn get_status(&self, subject: Subject) -> Json {
+        let mut entries = vec![(String::from("status"), self.time.footer())];
+        let Some(host) = self.host.as_ref() else {
+            return Json::Object(entries);
+        };
+        entries.push((
+            String::from("preset"),
+            Json::String(String::from(self.preset.name())),
+        ));
+        let round = host.runner().round();
+        if let Some(seat) = subject.seat() {
+            let sealed = self.seats.iter().any(|slot| {
+                slot.seat == seat
+                    && slot
+                        .sealed
+                        .as_ref()
+                        .is_some_and(|sealed| sealed.round == round)
+            });
+            entries.push((String::from("sealed_this_round"), Json::Bool(sealed)));
+        }
+        Json::Object(entries)
+    }
+
     /// One seat's private state, if `subject` is that seat.
     ///
     /// # Errors
@@ -3360,10 +3401,7 @@ impl Surface {
         vision: &V,
     ) -> Result<Json, Error> {
         match method {
-            Method::GetStatus => Ok(Json::Object(vec![(
-                String::from("status"),
-                self.time.footer(),
-            )])),
+            Method::GetStatus => Ok(self.get_status(subject)),
             Method::WaitFor => self.wait_for(subject, held, request),
             Method::GetSegmentFeed => self.segment_feed(subject, held, request),
             Method::SaveNotes => self.save_notes(subject, request),

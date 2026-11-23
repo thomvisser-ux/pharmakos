@@ -181,7 +181,7 @@ pub fn operator_read_refused(method: &str, code: &str, message: &str) -> String 
 /// The tail of a built-in seat's line that follows lines standard error did
 /// not take: how many, by reason.
 #[must_use]
-pub fn operator_unsaid(earlier: &[(&str, u64)]) -> String {
+pub fn operator_unsaid(earlier: &[(&str, String)]) -> String {
     let each: Vec<String> = earlier
         .iter()
         .map(|(reason, count)| format!("{reason} {count}"))
@@ -189,12 +189,65 @@ pub fn operator_unsaid(earlier: &[(&str, u64)]) -> String {
     format!("(Earlier lines not written: {}.)", each.join(", "))
 }
 
-/// A refusal of keeping a built-in seat's seal as its own draft, or of
-/// reading last round's back.
+/// `gamectl host`'s last line, for the built-in seats' lines standard error
+/// did not take and no later line said: how many, by reason.
 #[must_use]
-pub fn operator_draft_refused(method: &str, code: &str, message: &str) -> String {
+pub fn operator_unsaid_at_close(earlier: &[(&str, String)]) -> String {
+    let each: Vec<String> = earlier
+        .iter()
+        .map(|(reason, count)| format!("{reason} {count}"))
+        .collect();
     format!(
-        "The gateway refused {method} with {code} ({message}), so the seat's last seal is not kept to say which of its steps failed."
+        "The match host ended with built-in seats' lines not written: {}.",
+        each.join(", ")
+    )
+}
+
+/// A built-in seat's Lull shows no Push in its feed (one resumed from a save),
+/// so which of its stones failed is not known.
+#[must_use]
+pub fn operator_push_not_in_feed() -> String {
+    String::from(
+        "The last Push is not in this Lull's feed (a Lull resumed from a save opens with an \
+         empty one), so whether a stone failed in it is not known and every stone was weighed.",
+    )
+}
+
+/// A built-in seat's failed steps were not all read within the pages a round
+/// reads.
+#[must_use]
+pub fn operator_failures_past_pages(pages: u32) -> String {
+    format!(
+        "The last Push's failed steps were not all read within {pages} pages, so a stone whose \
+         failure was not read was weighed."
+    )
+}
+
+/// A built-in seat's steps failed in the last Push, and the gateway carried
+/// no seal of its own into the Lull to say which were stones.
+#[must_use]
+pub fn operator_no_carried_seal() -> String {
+    String::from(
+        "Steps failed in the last Push, and the gateway carried no seal of the seat's own into \
+         this Lull, so which were stones is not known and every stone was weighed.",
+    )
+}
+
+/// A built-in seat's carried seal is stamped with another round.
+#[must_use]
+pub fn operator_carried_of_round(round: i64) -> String {
+    format!(
+        "Steps failed in the last Push, and the seal the gateway carried is stamped with round \
+         {round}, so which were stones is not known and every stone was weighed."
+    )
+}
+
+/// A built-in seat's carried seal was refused or does not read.
+#[must_use]
+pub fn operator_carried_unread(method: &str, code: &str, message: &str) -> String {
+    format!(
+        "The gateway refused {method} with {code} ({message}), so which of the last Push's \
+         failed steps were stones is not known and every stone was weighed."
     )
 }
 
