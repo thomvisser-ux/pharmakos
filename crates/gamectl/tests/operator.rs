@@ -58,10 +58,10 @@ use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::serve::InProcessSeats;
 use pharmakos_gateway::surface::{InProcess, Surface};
 use pharmakos_gateway::token::{Subject, Token};
-use pharmakos_operator::Easy;
 use pharmakos_operator::easy::{
     EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, SAFE_MAX_RAISED, SAFE_REACH_MS,
 };
+use pharmakos_operator::{Easy, FailedStones, PushUnread, StonesUnread, Submitted};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
@@ -69,13 +69,20 @@ use pharmakos_sim::tables::SeatId;
 /// The determinism golden's seed.
 const SEED: u64 = pharmakos_sim::DETERMINISM_MATCH_SEED;
 
+/// Probation's own seed (`PROBATION_SEED` in
+/// `crates/sim/tests/probation_seed.rs`; decisions-log item 156 (1)).
+const PROBATION_SEED: u64 = 20;
+
 /// The scenario files' seed, the second golden seed.
 const SCENARIO_SEED: u64 = 0x0000_0000_ca5c_aded;
 
-/// The corpus's Push length: long enough for a commander to walk to a seam,
-/// place a beacon and walk back (spec section 5's 12 s deploy), short enough
-/// to step in a test.
-const SEGMENT_MS: i32 = 60_000;
+/// The corpus's Push length: long enough for a commander to walk to a vent
+/// and place a Build beacon with its initial settings at the prices the
+/// verifier charges (S3's `opr3`, fix pass 1: at 60 s the 42 s share no longer
+/// held the starting vents' 40 s routes once the core visit's handshake and
+/// the initial-settings row were priced), short enough to step in a test: the
+/// `against-easy` scenario's own 80 s.
+const SEGMENT_MS: i32 = 80_000;
 
 // ---------------------------------------------------------------------------
 // Hosting
@@ -271,7 +278,8 @@ struct Row {
     /// Easy composed a plan this round: it called `patch_plan` at least once
     /// (the composition), which only its own plan's path does.
     composed: bool,
-    /// The `patch_plan` and `verify_plan` calls the built-in seat made.
+    /// The `patch_plan` and FULL `verify_plan` calls the built-in seat made
+    /// (the tap probe's QUICK verify left out).
     patches: u32,
     verifies: u32,
     /// Calls the built-in seat made this round.
@@ -580,7 +588,12 @@ fn visit(
             },
             composed: count(methods, "patch_plan") > 0,
             patches: count(methods, "patch_plan"),
-            verifies: count(methods, "verify_plan"),
+            // The tap probe's QUICK `verify_plan` rides its `resolve_refs`
+            // (`crates/operator/src/candidates.rs`' `probe`); every other one
+            // is the composition's FULL verify or a repair's.
+            verifies: count(methods, "verify_plan")
+                .checked_sub(count(methods, "resolve_refs"))
+                .expect("every tap probe's `resolve_refs` rides one QUICK `verify_plan`"),
             note,
             calls: u32::try_from(methods.len()).expect("counted"),
             safe_qualifies,
@@ -737,17 +750,16 @@ fn easy_passes_the_verifier_on_every_snapshot_of_the_corpus() {
         assert!(row.advisor_calls <= EASY_ADVISOR_CALL_BUDGET, "{row:#?}");
     }
     // What it chose, said so a reader of a red build can see it: on the
-    // determinism seed seat 0's starting vent is inside its route share, so
-    // in round one it places a Build beacon covering that vent, by name
-    // (S1's targeting: Easy emits names), and a seat with nothing it does not
-    // cover yet inside its share seals its safe playbook. The starting seam is
-    // covered by the core from the first tick and is the core's to work.
+    // determinism seed each seat's round one places a Build beacon on its
+    // start vent with a Generator on it, by the vent's name, ranked above a
+    // Survey post, which is worth the raid it buys (S3's `opr3`, fix pass 2,
+    // item 2).
     assert!(
-        rows.iter().any(|row| {
-            row.snapshot == "three-rounds/round-1"
-                && row.note.contains("covering the")
-                && row.note.contains("vent_")
-        }),
+        rows.iter()
+            .filter(|row| row.snapshot == "three-rounds/round-1")
+            .all(|row| row
+                .note
+                .contains("A Build beacon covering the lean heat vent vent_")),
         "{rows:#?}"
     );
 }
@@ -786,24 +798,19 @@ fn the_safe_playbook_always_qualifies() {
 /// `(snapshot, seat)`: a named expectation, so a row that starts or stops
 /// raising says which seat, round and beacon moved, and the mechanism.
 ///
-/// On the committed rules nothing is dark and the draw never outruns the
-/// supply, so no row there is short. The power-short match's core is shed at
-/// the Push's first settle (1 kW of surplus against the starting force's
-/// 4 kW) and never revived, so from round 2 on its seats are short. Seat 0
-/// placed `b_01` in round 1, a Build beacon covering its starting vent, which
-/// is lit (a placed beacon adds no draw): in round 2's Lull it is the seat's
-/// one beacon at risk (decision 14: lit and next in the shed order, since a
-/// raise relights), within reach, so it is raised to HIGH; in round 3 it is
-/// HIGH already and nothing is raised.
-///
-/// Seat 1 does the same since lane `p3fix` (near pairs are priced at the
-/// served route): Easy's round-1 plan for it, costed on the exact prices,
-/// now places its own `b_01` (on the abstract prices it held no lit `b_01`
-/// in round 2); so in round 2 that `b_01` is its one beacon at risk,
-/// within reach, and is raised to HIGH, and in round 3 it is HIGH already.
+/// The power-short match's core is shed at the Push's first settle and never
+/// revived, so from round 2 on its seats are short. Each seat's round-1 seal
+/// places a lit non-core beacon (the Build beacon on its start vent since S3's
+/// `opr3`, fix pass 2, item 2), which in round 2's Lull is its one beacon at
+/// risk (decision 14: lit and next in the shed order, since a raise
+/// relights), within reach, and is raised to HIGH. In round 3 seat 0's
+/// beacon is HIGH already and nothing more of its is at risk; seat 1's
+/// round-2 seal placed a stepping stone (fix pass 3, item 1: a stone is
+/// charged its own price), a second lit beacon, which round 3 raises.
 const ROWS_THAT_RAISE: &[(&str, u8)] = &[
     ("three-rounds-power-short/round-2", 0),
     ("three-rounds-power-short/round-2", 1),
+    ("three-rounds-power-short/round-3", 1),
 ];
 
 /// Decisions-log item 128 (S1's plan, decision 14; the register's S1-21),
@@ -916,22 +923,17 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 }
 
 /// The corpus rows on the committed rules whose seat's supply shows a
-/// Generator. At seed `0102...` every seat seals Hold & Build in round 1
-/// (`tests/golden/operator/seed-0102030405060708/expected.seat-0.jsonc`,
-/// `expected.seat-1.jsonc` and `expected.seat-2.jsonc`): a Build beacon on a
-/// lean vent with a Generator as its first target, `vent_52_335`,
-/// `vent_351_323` and `vent_171_51`, at 40 s, 40 s and 41 s of route from the
-/// core, each inside Easy's 42 s share (70 % of the 60 s segment). Each fits
-/// since the core's `deepen_core` step is paid out of the hold rather than out
-/// of the visit goals' share, and each hold, with nothing left for it, is
-/// taken out. Seats 0 and 2 show the Generator on their vents by round 3, and
-/// seat 1 from round 2.
-///
-/// Seat 1's Hold & Build is lane `p3fix`'s (near pairs are priced at the
-/// served route): on the abstract prices its route did not fit the share and
-/// the seat sealed the safe playbook in every round.
+/// Generator: every seat of the three-round match from round 2 on, each the
+/// Generator its round-1 seal put on its lean start vent (S3's `opr3`, fix
+/// pass 2, item 2: one ranking, a stone discounted by the stones and rounds
+/// its chain still needs and a Survey post worth the raid it buys, so the
+/// seat's first Generator ranks first, as it did before the stones). The
+/// scenario's own Generator is
+/// `the_scenario_generator_raises_supply_by_exactly_the_lean_vent`'s.
 const GENERATOR_ROWS: &[(&str, u8)] = &[
+    ("three-rounds/round-2", 0),
     ("three-rounds/round-2", 1),
+    ("three-rounds/round-2", 2),
     ("three-rounds/round-3", 0),
     ("three-rounds/round-3", 1),
     ("three-rounds/round-3", 2),
@@ -1214,6 +1216,14 @@ fn easy_fits_the_in_process_limits() {
         assert!(EASY_CALL_BUDGET <= IN_PROCESS_LIMITS.per_tick);
         assert!(EASY_ADVISOR_CALL_BUDGET <= IN_PROCESS_LIMITS.per_tick);
         assert!(EASY_CALL_BUDGET <= IN_PROCESS_LIMITS.per_window);
+        // The derivation's sums, pinned (`crates/operator/src/easy.rs`' table):
+        // 20 fixed reads, 2 tap probe, 1 guard probe, 1 raid probe, 1 Survey
+        // probe, 30 candidates, 30 stepping stones, 5 templates, 1
+        // composition, 9 verifies, 6 for the safe playbook, 3 to commit and 1
+        // for the last seal; the advisor's the same less the Survey probe, the
+        // stones, the composition, the verifies, the commit and the last seal.
+        assert!(EASY_CALL_BUDGET == 110);
+        assert!(EASY_ADVISOR_CALL_BUDGET == 65);
     }
 }
 
@@ -1505,4 +1515,889 @@ fn a_suggested_raid_qualifies_through_the_real_verifier() {
             target.value
         );
     }
+}
+
+/// Probation's own seed (decisions-log items 154 (1) and 156 (1)): its rich
+/// features lie beyond the first sphere, which no `covering` site reaches, so
+/// Easy reaches toward them with stepping stones (S3's `opr3`; the register's
+/// S5-04), each worth the goal it serves discounted by the stones and rounds
+/// its chain still needs (fix pass 2, item 2), in its own seal, verified by
+/// the real gateway.
+#[test]
+fn easy_reaches_past_its_first_sphere_with_a_stone_on_probations_seed() {
+    let rules = rules_json();
+    // Hosted as the lobby hosts Probation: two seats and the rules table's own
+    // segment ladder, every seat Easy here.
+    let host = Host::open_from(
+        &rules,
+        PROBATION_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 3,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut surface = Surface::new(
+        &match_id("probation-stones"),
+        PROBATION_SEED,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    let mut easy = all_built_in(&mut surface, 2, &rules);
+    let mut rows: Vec<Row> = Vec::new();
+    for round in 1..=3 {
+        rows.extend(visit(
+            &format!("probation/round-{round}"),
+            &mut surface,
+            2,
+            &rules,
+            &mut easy,
+        ));
+        assert!(surface.begin_push().expect("the Push opens"));
+        while let Some(report) = surface.step().expect("a tick") {
+            if report.segment_ended {
+                break;
+            }
+        }
+        surface.end_recap().expect("the recap closes");
+        if round < 3 {
+            surface.open_lull().expect("the next Lull");
+        }
+    }
+    // (round, seat, the far feature) of every stone, read from the seal's
+    // note, and every placement covering a feature a stone walked toward.
+    let toward = |row: &Row| {
+        row.note
+            .split("A stepping-stone beacon toward the ")
+            .nth(1)
+            .and_then(|rest| rest.split(',').next())
+            .and_then(|words| words.split(' ').next_back())
+            .map(str::to_owned)
+    };
+    let stones: Vec<(String, u8, String)> = rows
+        .iter()
+        .filter(|row| row.seal == Seal::Own)
+        .filter_map(|row| toward(row).map(|feature| (row.snapshot.clone(), row.seat, feature)))
+        .collect();
+    for row in &rows {
+        eprintln!("{} seat {}: {}", row.snapshot, row.seat, row.note);
+    }
+    eprintln!("Probation's seed, the stones (round, seat, toward): {stones:?}");
+    // A named expectation, each round of each seat's stone chain (fix pass
+    // 3, items 1 and 2: a stone charged its own price, rates compared
+    // exactly). Both seats place the Generator on their start vent in round
+    // 1. Seat 0 walks one stone toward the rich seam `seam_190_124` in round
+    // 2, and in round 3 the stone's sphere brings two vents into reach, which
+    // it covers, the standard `vent_212_109` and one more; the seam is not yet
+    // in reach. Seat 1, which sealed its safe playbook here before item 1,
+    // walks stones toward the rich seam `seam_163_202` in rounds 2 and 3.
+    let wanted: Vec<(String, u8, String)> = [
+        ("probation/round-2", 0, "seam_190_124"),
+        ("probation/round-2", 1, "seam_163_202"),
+        ("probation/round-3", 1, "seam_163_202"),
+    ]
+    .into_iter()
+    .map(|(round, seat, feature)| (round.to_owned(), seat, feature.to_owned()))
+    .collect();
+    assert_eq!(stones, wanted, "{rows:#?}");
+    assert!(
+        rows.iter().any(|row| row.snapshot == "probation/round-3"
+            && row.seat == 0
+            && row
+                .note
+                .contains("A Build beacon covering the standard heat vent vent_212_109")),
+        "seat 0's stone opens the ground its round 3 builds on: {rows:#?}"
+    );
+    assert!(
+        rows.iter().all(|row| row.seal != Seal::NotEasy),
+        "every seal is Easy's own, the verifier's accepted: {rows:#?}"
+    );
+}
+
+/// One hosted match on the committed seeds for the Survey post's tests:
+/// every seat Easy, the rules table's own ladder, `rounds` rounds. Per seat,
+/// the rounds whose seal places a Survey post, the round of its first
+/// `enemy_beacon_found`.
+struct Surveyed {
+    posts: Vec<(u32, u8)>,
+    first_found: Vec<(u8, u32)>,
+}
+
+fn survey_match(seed: u64, seats: u32, rounds: u32) -> Surveyed {
+    use pharmakos_gateway::fog::Audience;
+    let rules = rules_json();
+    let host = Host::open_from(
+        &rules,
+        seed,
+        seats,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: rounds,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut surface = Surface::new(
+        &match_id(&format!("survey-{seed:x}-{seats}-{rounds}")),
+        seed,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(seats),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    let mut easy = all_built_in(&mut surface, seats, &rules);
+    let mut out = Surveyed {
+        posts: Vec::new(),
+        first_found: Vec::new(),
+    };
+    for round in 1..=rounds {
+        for row in visit(
+            &format!("survey-{seed:x}/round-{round}"),
+            &mut surface,
+            seats,
+            &rules,
+            &mut easy,
+        ) {
+            if row.seal == Seal::Own && row.note.contains("A Survey beacon beside the core") {
+                out.posts.push((round, row.seat));
+            }
+        }
+        assert!(surface.begin_push().expect("the Push opens"));
+        let mut read = 0_usize;
+        while let Some(report) = surface.step().expect("a tick") {
+            let events = surface.feed().events();
+            if events.len() < read {
+                read = 0;
+            }
+            for event in events.get(read..).unwrap_or_default() {
+                if event.kind.to_string() != "enemy_beacon_found" {
+                    continue;
+                }
+                let owner = match event.audience {
+                    Audience::Private(seat) => Some(seat),
+                    Audience::World { owner, .. } => owner,
+                    Audience::Public => None,
+                };
+                if let Some(seat) = owner
+                    && !out.first_found.iter().any(|(held, _)| *held == seat.raw())
+                {
+                    out.first_found.push((seat.raw(), round));
+                }
+            }
+            read = events.len();
+            if report.segment_ended {
+                break;
+            }
+        }
+        surface.end_recap().expect("the recap closes");
+        if round < rounds {
+            surface.open_lull().expect("the next Lull");
+        }
+    }
+    out
+}
+
+/// The committed seeds the Survey post is measured on, as `(seed, seats)`.
+const SURVEY_MATCHES: [(u64, u32); 5] = [
+    (PROBATION_SEED, 2),
+    (SEED, 2),
+    (SEED, 3),
+    (SCENARIO_SEED, 2),
+    (SCENARIO_SEED, 3),
+];
+
+/// `(Survey posts sealed in rounds 1 to 4, of them finding an enemy beacon
+/// by the end of the next round's Push)` on [`SURVEY_MATCHES`] over five
+/// rounds.
+const SURVEY_POSTS: (usize, usize) = (11, 9);
+
+/// Spec section 14's Survey post through the real gateway (S3's plan,
+/// decision 3), looking over the half of the ground away from the seat's core
+/// and **ranked** with every other candidate, worth the raid it buys (fix pass
+/// 2, item 2): so it goes up once the seat's first Generator is placed and the
+/// treasury carries it, not ahead of it, and since fix pass 3 a stone charged
+/// its own price outranks it while far features are left to reach (the posts
+/// now go up in round 4, 11 of 12 seats). On the
+/// committed seeds, every seat Easy, over five rounds: how many seats seal a
+/// post in rounds 1 to 4, and how many of those have their scouts find an
+/// enemy beacon by the end of the next round's Push. A named expectation with
+/// its counts; a change says which seat and seed moved.
+///
+/// The owner's reading of the spec's "refresh those sightings before the next
+/// Lull" (2026-11-22, "Refresh only (Recommended)"): it covers sightings
+/// already held, and a first discovery may take longer, so this test pins
+/// what a first discovery takes and does not require it inside one Push.
+#[test]
+fn survey_posts_go_up_once_the_first_generator_stands() {
+    let mut posted = 0_usize;
+    let mut found = 0_usize;
+    for (seed, seats) in SURVEY_MATCHES {
+        let surveyed = survey_match(seed, seats, 5);
+        eprintln!(
+            "seed {seed:#x}/{seats}: posts (round, seat) {:?}; first enemy found (seat, round) {:?}",
+            surveyed.posts, surveyed.first_found
+        );
+        for &(round, seat) in surveyed.posts.iter().filter(|(round, _)| *round <= 4) {
+            posted = posted.checked_add(1).expect("a count");
+            if surveyed
+                .first_found
+                .iter()
+                .any(|&(held, by)| held == seat && by <= round + 1)
+            {
+                found = found.checked_add(1).expect("a count");
+            }
+        }
+    }
+    eprintln!(
+        "Survey posts in rounds 1 to 4: {posted}, finding the enemy by the next round: {found}"
+    );
+    assert_eq!((posted, found), SURVEY_POSTS, "the named expectation moved");
+}
+
+/// The Resonance Spire through the real verifier and the sim (fix pass 1,
+/// item 4). No hosted seat of Easy's earns the licence within the suite's
+/// rounds, so seat 0 earns it as `scenarios/s3/toward-stepping-stone` does:
+/// on Probation's seed it seals that scenario's playbook in rounds 1 and 2
+/// (a beacon on its start vent, then a stone toward the second vent and a
+/// beacon on it), and round 2's settlement awards the licence. From round 3
+/// Easy plays seat 0 through the seat's own token: its round-3 seal queues
+/// the Spire at the core and the real verifier accepts it, the sim queues the
+/// structure exactly once in that Push, and round 4's seal queues none.
+fn spire_match(rules: &str) -> SpireMatch {
+    let spire_draw_kw = rules_row(rules, &["structures", "resonance_spire", "draw_kw"]);
+    let kw_per_unit = rules_row(rules, &["power", "kw_per_unit"]);
+    let rules = rules.to_owned();
+    let host = Host::open_from(
+        &rules,
+        PROBATION_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 4,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut surface = Surface::new(
+        &match_id("hosted-spire"),
+        PROBATION_SEED,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
+    let mut seats = InProcessSeats::open(&mut surface, &seat_ids(2), Some(0), &mut factory)
+        .expect("in-process seats");
+    let token = in_process_token(&mut surface, 0);
+    let stone_playbook =
+        std::fs::read_to_string(root().join("scenarios/s3/toward-stepping-stone.playbook.jsonc"))
+            .expect("the scenario's playbook");
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    let mut queued: Vec<usize> = Vec::new();
+    let mut headrooms: Vec<i64> = Vec::new();
+    let mut sealed_texts: Vec<String> = Vec::new();
+    for round in 1..=4_u32 {
+        seats.plan(&mut surface);
+        if round <= 2 {
+            let submitted = result(
+                &call(
+                    &mut surface,
+                    &token,
+                    "submit_plan",
+                    Json::Object(vec![(
+                        String::from("playbook_jsonc"),
+                        Json::String(stone_playbook.clone()),
+                    )]),
+                ),
+                "submit_plan",
+            );
+            assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
+        } else {
+            let forecast = result(
+                &call(&mut surface, &token, "get_economy_forecast", params("{}")),
+                "get_economy_forecast",
+            );
+            headrooms.push(number(&forecast, "headroom_kw_now"));
+            let played = {
+                let mut bridged =
+                    |method: &str, params: Json| call(&mut surface, &token, method, params);
+                easy.play(0, &mut bridged)
+            };
+            assert_eq!(
+                played.submitted,
+                pharmakos_operator::Submitted::Own,
+                "round {round}: {}",
+                played.why
+            );
+            sealed_texts.push(played.playbook_jsonc.unwrap_or_default());
+        }
+        assert!(surface.begin_push().expect("the Push opens"));
+        while let Some(report) = surface.step().expect("a tick") {
+            if report.segment_ended {
+                break;
+            }
+        }
+        // Seat 0's Resonance Spires, standing or going up, as the sim's table
+        // holds them after the Push.
+        let spires =
+            pharmakos_sim::spire::facts_of(surface.host().expect("hosted").world().structures())
+                .filter(|facts| {
+                    !facts.free
+                        && facts.alive
+                        && facts.seat == 0
+                        && facts.kind == pharmakos_sim::tables::StructureKind::ResonanceSpire.id()
+                })
+                .count();
+        queued.push(spires);
+        surface.end_recap().expect("the recap closes");
+        if round < 4 {
+            surface.open_lull().expect("the next Lull");
+        }
+    }
+    SpireMatch {
+        sealed_texts,
+        headrooms,
+        queued,
+        spire_draw_kw,
+        kw_per_unit,
+    }
+}
+
+/// What [`spire_match`] saw: Easy's seals for seat 0 in rounds 3 and 4, the
+/// headroom the forecast showed before each, and seat 0's Spires after each
+/// Push.
+struct SpireMatch {
+    sealed_texts: Vec<String>,
+    headrooms: Vec<i64>,
+    queued: Vec<usize>,
+    spire_draw_kw: i64,
+    kw_per_unit: i64,
+}
+
+impl SpireMatch {
+    /// The new draw a seal adds, at the rows every grid charges (fix pass 2,
+    /// item 4): the Spire's own `draw_kw`, and each scout the seal orders (a
+    /// Survey post's `scout_count`, a guard's `picket_scouts`) at
+    /// `power.kw_per_unit`.
+    fn drawn(&self, seal: &str) -> i64 {
+        i64::from(seal.contains("queue_spire")) * self.spire_draw_kw
+            + scouts_ordered(seal) * self.kw_per_unit
+    }
+}
+
+/// Every `scout_count` and `picket_scouts` a sealed playbook sets, summed.
+fn scouts_ordered(seal: &str) -> i64 {
+    fn set(value: &Json) -> i64 {
+        match value {
+            Json::Object(members) => members
+                .iter()
+                .map(|(key, held)| match (key.as_str(), held) {
+                    ("scout_count" | "picket_scouts", Json::Number(lexeme)) => {
+                        lexeme.parse::<i64>().expect("a count")
+                    }
+                    _ => set(held),
+                })
+                .sum(),
+            Json::Array(items) => items.iter().map(set).sum(),
+            _ => 0,
+        }
+    }
+    set(&pharmakos_plan_core::Document::parse(seal)
+        .expect("a sealed playbook reads")
+        .to_json())
+}
+
+/// A whole-number row of a rules text, by its path of keys.
+fn rules_row(rules: &str, path: &[&str]) -> i64 {
+    let table = params(rules);
+    let row = path
+        .iter()
+        .try_fold(&table, |at, key| at.get(key))
+        .unwrap_or_else(|| panic!("the rules text has no `{}` row", path.join(".")));
+    match row {
+        Json::Number(lexeme) => lexeme.parse().expect("a whole number"),
+        other => panic!("`{}` is no number: {other:?}", path.join(".")),
+    }
+}
+
+#[test]
+fn easy_queues_the_spire_once_through_the_real_verifier_and_the_sim() {
+    let spire = spire_match(&rules_json());
+    let SpireMatch {
+        sealed_texts,
+        headrooms,
+        queued,
+        ..
+    } = &spire;
+    let [third, fourth] = sealed_texts.as_slice() else {
+        panic!("Easy sealed rounds 3 and 4: {sealed_texts:#?}");
+    };
+    // One kW budget (fix pass 1, item 1): what the seal adds -- the Spire's
+    // draw, and the scouts a Survey post and a guard's picket order, at the
+    // rules rows -- is never more than the headroom the forecast showed, and
+    // the real verifier accepted it.
+    for (seal, headroom) in sealed_texts.iter().zip(headrooms) {
+        eprintln!(
+            "headroom {headroom} kW: Spire {}, Survey post {}, guard {}",
+            seal.contains("queue_spire"),
+            seal.contains("survey_post"),
+            seal.contains("place_guard")
+        );
+        let drawn = spire.drawn(seal);
+        assert!(
+            drawn <= *headroom,
+            "{drawn} kW of new draw against {headroom} kW: {seal}"
+        );
+    }
+    assert!(
+        third.contains("queue_spire"),
+        "round 3 queues the Spire: {third}"
+    );
+    assert!(
+        !fourth.contains("queue_spire"),
+        "round 4 queues none: {fourth}"
+    );
+    assert_eq!(
+        queued.as_slice(),
+        [0, 0, 1, 1],
+        "seat 0's Spires after each Push: none, then the one queued in round 3, and no second"
+    );
+}
+
+/// The kW budget at its margin through the real verifier (fix pass 1, item
+/// 1): the same match on a rules text whose Spire draws all of round 3's
+/// headroom but 1 kW. Easy still queues it, nothing else it adds draws past
+/// the 1 kW left, and the real verifier accepts the seal (no E0601). The
+/// scripted `one_kw_budget_never_composes_more_draw_than_the_headroom`
+/// sweeps every headroom with the Spire, the Survey post and the guard.
+#[test]
+fn a_spire_at_the_margin_of_the_headroom_verifies_clean_through_the_real_verifier() {
+    let base = rules_json();
+    let probe = spire_match(&base);
+    let headroom = *probe.headrooms.first().expect("round 3's headroom");
+    let draw = headroom.checked_sub(1).expect("a draw");
+    let row = "\"resonance_spire\": {\n      \"cost_dollars\": 120,\n      \"hp\": 500,\n      \"draw_kw\": 3,";
+    let tight = base.replace(
+        row,
+        &row.replace("\"draw_kw\": 3,", &format!("\"draw_kw\": {draw},")),
+    );
+    assert_ne!(tight, base, "the rules text carries the Spire's row");
+    let tight_match = spire_match(&tight);
+    let third = tight_match.sealed_texts.first().expect("round 3's seal");
+    let tight_headroom = *tight_match.headrooms.first().expect("round 3's headroom");
+    assert!(third.contains("queue_spire"), "the Spire fits: {third}");
+    assert!(
+        tight_match.drawn(third) <= tight_headroom,
+        "{} kW against {tight_headroom} kW",
+        tight_match.drawn(third)
+    );
+}
+
+/// A playbook whose one step is a stone toward `seam_190_124` with a timeout
+/// of `timeout_ms`, for [`failed_stone_match`].
+fn timed_stone_playbook(timeout_ms: i64) -> String {
+    format!(
+        r#"{{
+  "schema_version": {{"major": 1, "minor": 0}},
+  "meta": {{"title": "A stone that times out", "author_kind": "HUMAN"}},
+  "kind": "PLAYBOOK",
+  "declarative": {{
+    "route": [
+      {{"label": "stone",
+        "place_beacon": {{"at": {{"toward": {{"feature": {{"feature_id": "seam_190_124"}}}}}}}},
+        "timeout_ms": {timeout_ms}, "on_fail": {{"action": "SKIP"}}}}
+    ],
+    "handlers": []
+  }},
+  "on_death": {{"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2}},
+  "fallback": {{"hold": {{"at": {{"safest": {{}}}}}}}}
+}}
+"#
+    )
+}
+
+/// A Probation match, two seats, three rounds, opened to its first Lull, with
+/// seat 1 as Easy's built-in seat and seat 0 advised: what the failed-stone
+/// tests play seat 0 in.
+fn failed_stone_surface(name: &str, rules: &str) -> (Surface, InProcessSeats) {
+    let host = Host::open_from(
+        rules,
+        PROBATION_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 3,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(rules).expect("a rules table");
+    let mut surface = Surface::new(
+        &match_id(name),
+        PROBATION_SEED,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    let mut factory = EasyOperators::new(rules).expect("the operator reads the rules text");
+    let seats = InProcessSeats::open(&mut surface, &seat_ids(2), Some(0), &mut factory)
+        .expect("in-process seats");
+    (surface, seats)
+}
+
+/// Play the Push after the seals to its end, close its recap and open the
+/// next Lull.
+fn play_to_next_lull(surface: &mut Surface) {
+    assert!(surface.begin_push().expect("the Push opens"));
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    surface.end_recap().expect("the recap closes");
+    surface.open_lull().expect("the next Lull");
+}
+
+/// Easy plays seat 0's round through the seat's own token, every
+/// `submit_plan` passed through `submitted` on its way: the `toward`
+/// features of its estimates, in order, and its round.
+fn easy_plays_seat_zero(
+    surface: &mut Surface,
+    easy: &mut Easy,
+    submitted: &dyn Fn(&str) -> String,
+) -> (Vec<String>, pharmakos_operator::Played) {
+    let token = in_process_token(surface, 0);
+    let mut toward: Vec<String> = Vec::new();
+    let played = {
+        let mut bridged = |method: &str, params: Json| {
+            if method == "estimate_route"
+                && let Some(Json::Array(waypoints)) = params.get("waypoints")
+                && let Some(Json::String(feature)) = waypoints
+                    .last()
+                    .and_then(|last| last.get("toward"))
+                    .and_then(|toward| toward.get("feature"))
+                    .and_then(|feature| feature.get("feature_id"))
+            {
+                toward.push(feature.clone());
+            }
+            let params = match (method, params.get("playbook_jsonc")) {
+                ("submit_plan", Some(Json::String(text))) => Json::Object(vec![(
+                    String::from("playbook_jsonc"),
+                    Json::String(submitted(text)),
+                )]),
+                _ => params,
+            };
+            call(surface, &token, method, params)
+        };
+        easy.play(0, &mut bridged)
+    };
+    (toward, played)
+}
+
+/// The seal with every stone step's `timeout_ms` set to `ms`: Easy's own
+/// labels (`stone`, `stone_2`, ...) and its compact step spelling.
+fn stones_timed_to(text: &str, ms: i64) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("\"label\":\"stone") {
+        let (head, tail) = rest.split_at(at);
+        out.push_str(head);
+        let key = "\"timeout_ms\":";
+        let start = tail.find(key).expect("a stone step has a timeout") + key.len();
+        let digits = tail
+            .get(start..)
+            .expect("the timeout")
+            .bytes()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        out.push_str(tail.get(..start).expect("up to the timeout"));
+        out.push_str(&ms.to_string());
+        rest = tail.get(start + digits..).expect("after the timeout");
+    }
+    out.push_str(rest);
+    out
+}
+
+/// One Probation match in which Easy itself seals a stone and that stone
+/// fails (fix pass 4, item 1): Easy plays seat 0 in rounds 1 to 3 through the
+/// seat's own token. Round 2's seal places a stone toward `seam_190_124` (the
+/// Probation table's stones); with `stone_ms` set, its timeout is cut to that
+/// on the way to `submit_plan`, so it fails `timeout` in round 2's Push. No
+/// test writes a draft: what round 3 reads back is the gateway's carried
+/// draft. Answers round 2's seal, and round 3's `toward` estimates and round.
+fn easy_seals_a_stone(stone_ms: Option<i64>) -> (String, Vec<String>, pharmakos_operator::Played) {
+    let rules = rules_json();
+    let name = match stone_ms {
+        Some(ms) => format!("easy-stone-{ms}"),
+        None => String::from("easy-stone-as-composed"),
+    };
+    let (mut surface, mut seats) = failed_stone_surface(&name, &rules);
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    let as_composed = |text: &str| text.to_owned();
+    // Round 1: the start vent's Generator.
+    seats.plan(&mut surface);
+    let (_, first) = easy_plays_seat_zero(&mut surface, &mut easy, &as_composed);
+    assert_eq!(first.submitted, Submitted::Own, "{}", first.why);
+    play_to_next_lull(&mut surface);
+    // Round 2: the stone, its timeout cut when asked.
+    seats.plan(&mut surface);
+    let cut = |text: &str| stone_ms.map_or_else(|| text.to_owned(), |ms| stones_timed_to(text, ms));
+    let (_, second) = easy_plays_seat_zero(&mut surface, &mut easy, &cut);
+    assert_eq!(second.submitted, Submitted::Own, "{}", second.why);
+    let sealed = surface
+        .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
+        .expect("its own")
+        .sealed
+        .as_ref()
+        .expect("round 2's seal")
+        .playbook_jsonc
+        .clone();
+    assert!(
+        sealed.contains("\"toward\":{\"feature\":{\"feature_id\":\"seam_190_124\"}}"),
+        "{sealed}"
+    );
+    play_to_next_lull(&mut surface);
+    // Round 3: what Easy weighs.
+    seats.plan(&mut surface);
+    let (toward, third) = easy_plays_seat_zero(&mut surface, &mut easy, &as_composed);
+    let drafts = surface
+        .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
+        .expect("its own")
+        .drafts
+        .iter()
+        .map(|draft| draft.draft_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        drafts,
+        [pharmakos_operator::easy::CARRIED_DRAFT_ID],
+        "the seat's only draft is the one the gateway carried"
+    );
+    (sealed, toward, third)
+}
+
+/// A stone Easy itself sealed, which failed, is not weighed again unchanged
+/// (fix pass 4, item 1): round 3 reads the failed step from its feed and the
+/// stone from the gateway's carried draft, and makes no `toward` estimate for
+/// `seam_190_124`. Its control, with the timeout Easy composed, places the
+/// stone, and round 3 says no stone failed and weighs the seam's chain.
+#[test]
+fn a_stone_easy_sealed_that_failed_is_not_weighed_again() {
+    let (sealed, toward, played) = easy_seals_a_stone(Some(1_000));
+    eprintln!("timed out: toward {toward:?}; {}", played.why);
+    assert!(sealed.contains("\"timeout_ms\":1000"), "{sealed}");
+    assert_eq!(
+        played.failed_stones,
+        FailedStones::Known(vec![String::from("seam_190_124")]),
+        "{}",
+        played.why
+    );
+    assert!(
+        !toward.iter().any(|feature| feature == "seam_190_124"),
+        "{toward:?}"
+    );
+    let (_, toward, played) = easy_seals_a_stone(None);
+    eprintln!("placed: toward {toward:?}; {}", played.why);
+    assert!(
+        toward.iter().any(|feature| feature == "seam_190_124"),
+        "{toward:?}"
+    );
+    assert!(
+        played.failed_stones.known().is_empty()
+            && !matches!(played.failed_stones, FailedStones::Unread { .. }),
+        "{:?}",
+        played.failed_stones
+    );
+}
+
+/// The operator's restatement of the gateway's carried draft id is the
+/// gateway's.
+#[test]
+fn the_carried_draft_id_is_the_gateways() {
+    assert_eq!(
+        pharmakos_operator::easy::CARRIED_DRAFT_ID,
+        pharmakos_gateway::surface::CARRIED_DRAFT_ID
+    );
+}
+
+/// One Probation match for a failed stone a person sealed (fix pass 3, item
+/// 6): seat 1 is Easy's built-in seat; seat 0 seals, in round 1, a playbook
+/// whose one step is a stone toward `seam_190_124` with a timeout of
+/// `timeout_ms`. The gateway carries that seal into round 2 as the seat's
+/// draft, as it carries every seat's own seal. In round 2 Easy plays seat 0
+/// through the seat's own token: the `toward` waypoints of its estimates, by
+/// feature, and its round are what it answers.
+fn failed_stone_match(timeout_ms: i64) -> (Vec<String>, pharmakos_operator::Played) {
+    let rules = rules_json();
+    let (mut surface, mut seats) =
+        failed_stone_surface(&format!("failed-stone-{timeout_ms}"), &rules);
+    let stone = timed_stone_playbook(timeout_ms);
+    // Round 1: seat 0 seals the stone.
+    seats.plan(&mut surface);
+    let token = in_process_token(&mut surface, 0);
+    let submitted = result(
+        &call(
+            &mut surface,
+            &token,
+            "submit_plan",
+            Json::Object(vec![(String::from("playbook_jsonc"), Json::String(stone))]),
+        ),
+        "submit_plan",
+    );
+    assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
+    play_to_next_lull(&mut surface);
+    // Round 2: Easy plays seat 0 through its own token.
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    easy_plays_seat_zero(&mut surface, &mut easy, &|text: &str| text.to_owned())
+}
+
+/// A stone that failed last round is not weighed again (fix pass 3, item 6),
+/// hosted: a stone toward `seam_190_124` with a 1 s timeout fails `timeout`
+/// in round 1's Push, and round 2's Easy, reading its own feed and the
+/// gateway's carried draft, weighs no stone toward that seam. With a timeout
+/// the walk fits, the stone places, and round 2 weighs the chain's next
+/// stone toward it.
+#[test]
+fn a_stone_made_to_time_out_is_not_weighed_again() {
+    let (toward, played) = failed_stone_match(1_000);
+    eprintln!("timed out: toward {toward:?}; {}", played.why);
+    assert!(
+        !toward.iter().any(|feature| feature == "seam_190_124"),
+        "{toward:?}"
+    );
+    assert_eq!(
+        played.failed_stones,
+        FailedStones::Known(vec![String::from("seam_190_124")]),
+        "{}",
+        played.why
+    );
+    let (toward, played) = failed_stone_match(240_000);
+    eprintln!("placed: toward {toward:?}; {}", played.why);
+    assert!(
+        toward.iter().any(|feature| feature == "seam_190_124"),
+        "{toward:?}"
+    );
+    assert_eq!(played.failed_stones, FailedStones::None, "{}", played.why);
+}
+
+/// Round 2 of [`failed_stone_match`]'s match twice from one save (fix pass 4,
+/// item 2): its Lull saved, Easy plays seat 0 on the live surface, then on a
+/// fresh surface resumed from the save. Answers the live round and the
+/// resumed one.
+fn round_two_live_and_resumed() -> (pharmakos_operator::Played, pharmakos_operator::Played) {
+    let rules = rules_json();
+    let name = "resumed-stone";
+    let (mut surface, mut seats) = failed_stone_surface(name, &rules);
+    seats.plan(&mut surface);
+    let token = in_process_token(&mut surface, 0);
+    let submitted = result(
+        &call(
+            &mut surface,
+            &token,
+            "submit_plan",
+            Json::Object(vec![(
+                String::from("playbook_jsonc"),
+                Json::String(timed_stone_playbook(1_000)),
+            )]),
+        ),
+        "submit_plan",
+    );
+    assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
+    play_to_next_lull(&mut surface);
+    let saved = surface.lull_save().expect("a Lull saves");
+    let as_composed = |text: &str| text.to_owned();
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    let (_, live) = easy_plays_seat_zero(&mut surface, &mut easy, &as_composed);
+    let host = Host::open_from(
+        &rules,
+        PROBATION_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 3,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut resumed = Surface::new(
+        &match_id(name),
+        PROBATION_SEED,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface")
+    .resume(
+        host,
+        &saved,
+        pharmakos_gateway::save::Continuation {
+            generation: 1,
+            last_tick: 0,
+        },
+    )
+    .expect("the Lull resumes");
+    let mut easy = Easy::new(&rules).expect("the rules text");
+    let (_, again) = easy_plays_seat_zero(&mut resumed, &mut easy, &as_composed);
+    (live, again)
+}
+
+/// A resumed Lull reads the last Push as unread, and says so (fix pass 4,
+/// item 2): the live round knows its stone toward `seam_190_124` failed; the
+/// same round resumed from a save, whose feed shows no Push, knows nothing of
+/// it, and its round says so in a typed state and in its "why", never as
+/// "nothing failed".
+#[test]
+fn a_resumed_lull_reads_the_last_push_as_unread() {
+    let (live, resumed) = round_two_live_and_resumed();
+    assert_eq!(
+        live.failed_stones,
+        FailedStones::Known(vec![String::from("seam_190_124")]),
+        "{}",
+        live.why
+    );
+    assert_eq!(
+        resumed.failed_stones,
+        FailedStones::Unread {
+            known: Vec::new(),
+            why: StonesUnread::Push(PushUnread::Resumed),
+        },
+        "{}",
+        resumed.why
+    );
+    assert!(
+        resumed.why.contains("not in this Lull's feed"),
+        "{}",
+        resumed.why
+    );
+}
+
+/// The review's probe P1(b) (fix pass 4, item 2): a resumed Lull seals what
+/// the unresumed one does. It cannot until the save carries the last Push's
+/// step outcomes and deaths, which the owner approved on 2026-11-23 and lane
+/// `opsave` builds; this is the red test that lane turns green.
+#[test]
+#[ignore = "red until lane opsave: the save carries the last Push's step outcomes and deaths (owner, 2026-11-23)"]
+fn a_resumed_lull_seals_what_the_unresumed_one_does() {
+    let (live, resumed) = round_two_live_and_resumed();
+    assert_eq!(
+        live.playbook_jsonc, resumed.playbook_jsonc,
+        "a resumed Lull seals what the unresumed one does"
+    );
 }

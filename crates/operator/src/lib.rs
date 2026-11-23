@@ -55,16 +55,25 @@
 //!
 //! # What Easy does not do yet
 //!
-//! Spec section 14's Survey post, chatter and target spread are not built at
-//! Easy (decisions-log item 111, section A6). Its Defend guard is: S2's plan,
+//! Spec section 14's chatter and target spread are not built at Easy
+//! (decisions-log item 111, section A6). Its Survey post is, from S3 (S3's
+//! plan, decision 3): when it holds no sighting of an enemy beacon inside the
+//! reach window, the trigger as the spec words it, it weighs a Survey beacon
+//! beside its core whose scouts look over the half of the ground away from
+//! it, ranked with its goals and worth the raid it buys (S3's `opr3`, fix pass
+//! 2), so a raid has a fresh target in a later Lull. Its Defend guard is: S2's plan,
 //! decision 35, moved it from S5 to S2, and `oprd` built it (a guard post in
 //! the round after a Push in which the commander died, scored by decision
 //! 12's threat model; [`easy`]'s Defend the Core). So are its raids, S2's
 //! `opra`: an Attack beacon beside the core raiding the nearest fixed target
 //! the seat knows of, an enemy beacon or an enemy commander in sight, scored
-//! alike (Raid an Enemy Beacon).
+//! alike (Raid an Enemy Beacon). And from S3 it queues the Resonance Spire
+//! at its core once its seat holds the licence, funded ahead of the round's
+//! ranked goals (S3's plan, `opr3`; [`easy`]'s plan), and it
+//! reaches past its first sphere with stepping stones placed `toward` a
+//! feature no site of its spheres covers (the register's S5-04).
 //!
-//! PLACEHOLDER: Easy's Survey post, chatter and target spread — owner, S5, with Normal and Hard
+//! PLACEHOLDER: Easy's chatter and target spread — owner, S5, with Normal and Hard
 
 pub mod easy;
 pub mod wire;
@@ -72,12 +81,49 @@ pub mod wire;
 mod candidates;
 mod compose;
 mod playbook;
+mod price;
 mod safe;
 mod situation;
 mod tuning;
 
 pub use compose::START_HERE_WHY;
-pub use easy::{Advice, Easy, Played, StartHere, Submitted, SuggestedValue, Suggestion};
+
+/// The steps Easy writes into a route outside a template's own, as it writes
+/// them, so a test outside this crate can price them through the verifier
+/// and hold the operator's price to it (`crates/gamectl/tests/pricing.rs`;
+/// [`Easy::on_site_ms`]).
+pub mod steps {
+    use pharmakos_proto::json::Json;
+
+    /// A tap: a Generator `on` a named vent added to a beacon's Build list.
+    #[must_use]
+    pub fn tap(beacon: &str, vent: &str) -> Json {
+        crate::candidates::tap_step("add_generator", beacon, vent)
+    }
+
+    /// The core's dig depth.
+    #[must_use]
+    pub fn deepen_core(core: &str) -> Json {
+        crate::compose::deepen_core(core)
+    }
+
+    /// The Resonance Spire queued at the core.
+    #[must_use]
+    pub fn spire(core: &str) -> Json {
+        crate::compose::spire_step(core)
+    }
+
+    /// A stepping stone `toward` a named feature, with a timeout.
+    #[must_use]
+    pub fn stone(feature: &str, timeout_ms: i64) -> Json {
+        crate::compose::stone_step("stone", feature, Some(timeout_ms))
+    }
+}
+pub use easy::{
+    Advice, Easy, FailedStones, Played, StartHere, StonesUnread, Submitted, SuggestedValue,
+    Suggestion,
+};
+pub use situation::PushUnread;
 pub use tuning::RulesError;
 pub use wire::{Call, Refused};
 

@@ -162,6 +162,113 @@ pub fn host_on_a_terminal() -> String {
     )
 }
 
+/// `gamectl host`'s line for a built-in seat's round with something refused
+/// (`crate::host::refusals_said`): the seat, the round, and what was refused.
+#[must_use]
+pub fn operator_round(seat: u8, round: u32, what: &str) -> String {
+    format!("Easy, seat {seat}, round {round}: {what}")
+}
+
+/// The refusal that kept a built-in seat's round from being read.
+#[must_use]
+pub fn operator_read_refused(method: &str, code: &str, message: &str) -> String {
+    format!(
+        "the round was not read, because the gateway refused {method} with {code} ({message}), \
+         so it planned nothing."
+    )
+}
+
+/// The tail of a built-in seat's line that follows lines standard error did
+/// not take: how many, by reason.
+#[must_use]
+pub fn operator_unsaid(earlier: &[(&str, String)]) -> String {
+    let each: Vec<String> = earlier
+        .iter()
+        .map(|(reason, count)| format!("{reason} {count}"))
+        .collect();
+    format!("(Earlier lines not written: {}.)", each.join(", "))
+}
+
+/// `gamectl host`'s last line, for the built-in seats' lines standard error
+/// did not take and no later line said: how many, by reason.
+#[must_use]
+pub fn operator_unsaid_at_close(earlier: &[(&str, String)]) -> String {
+    let each: Vec<String> = earlier
+        .iter()
+        .map(|(reason, count)| format!("{reason} {count}"))
+        .collect();
+    format!(
+        "The match host ended with built-in seats' lines not written: {}.",
+        each.join(", ")
+    )
+}
+
+/// A built-in seat's Lull shows no Push in its feed (one resumed from a save),
+/// so which of its stones failed is not known.
+#[must_use]
+pub fn operator_push_not_in_feed() -> String {
+    String::from(
+        "The last Push is not in this Lull's feed (a Lull resumed from a save opens with an \
+         empty one), so whether a stone failed in it is not known and every stone was weighed.",
+    )
+}
+
+/// A built-in seat's failed steps were not all read within the pages a round
+/// reads.
+#[must_use]
+pub fn operator_failures_past_pages(pages: u32) -> String {
+    format!(
+        "The last Push's failed steps were not all read within {pages} pages, so a stone whose \
+         failure was not read was weighed."
+    )
+}
+
+/// A built-in seat's steps failed in the last Push, and the gateway carried
+/// no seal of its own into the Lull to say which were stones.
+#[must_use]
+pub fn operator_no_carried_seal() -> String {
+    String::from(
+        "Steps failed in the last Push, and the gateway carried no seal of the seat's own into \
+         this Lull, so which were stones is not known and every stone was weighed.",
+    )
+}
+
+/// A built-in seat's carried seal is stamped with another round.
+#[must_use]
+pub fn operator_carried_of_round(round: i64) -> String {
+    format!(
+        "Steps failed in the last Push, and the seal the gateway carried is stamped with round \
+         {round}, so which were stones is not known and every stone was weighed."
+    )
+}
+
+/// A built-in seat's carried seal was refused or does not read.
+#[must_use]
+pub fn operator_carried_unread(method: &str, code: &str, message: &str) -> String {
+    format!(
+        "The gateway refused {method} with {code} ({message}), so which of the last Push's \
+         failed steps were stones is not known and every stone was weighed."
+    )
+}
+
+/// The route estimates a built-in seat's round had refused for another reason
+/// than `NOT_FOUND`, each as its code and message.
+#[must_use]
+pub fn operator_estimates_refused(refused: &[(&str, &str)]) -> String {
+    let each: Vec<String> = refused
+        .iter()
+        .map(|(code, message)| format!("{code} ({message})"))
+        .collect();
+    let count = match refused.len() {
+        1 => String::from("1 route estimate was"),
+        many => format!("{many} route estimates were"),
+    };
+    format!(
+        "{count} refused, each dropping the goal it weighed: {}.",
+        each.join("; ")
+    )
+}
+
 /// `gamectl host` could not start or keep its match.
 #[must_use]
 pub fn host_refused(why: &str) -> String {

@@ -56,10 +56,14 @@
         // of yours inside the sphere is repaired once it falls below half its
         // hit points, and an omitted threshold would mean never (S2's plan,
         // decision 38).
-        // PLACEHOLDER: the repair threshold, 50, a proposal — owner, at S2's demo
+        // PLACEHOLDER: the repair threshold, 50, a proposal — owner, at S3's demo
+        // Why: the two settings an omitted value would leave to the reader,
+        // written as they read (S1's demo, finding L): the beacon answers fire
+        // and starts none, and its mandate reshapes no terrain to place a
+        // target.
         "initial": {"mandate": {"build": {"targets": [
           {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
-        ], "repair_threshold_pct": 50}}}},
+        ], "repair_threshold_pct": 50, "terraform": "NONE"}, "roe": "RETURN_FIRE"}}},
        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
       {"label": "hold", "hold": {"ms": 30000}}
     ],
