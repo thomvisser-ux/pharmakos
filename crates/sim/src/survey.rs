@@ -1105,10 +1105,10 @@ pub enum Drop {
     /// what keeps every list from it on this decision.
     UnderThreat,
     /// It was listed, and fitted, at an earlier decision of this Push, and a
-    /// scout of the seat has died since, where the sighting's remembered gun
-    /// reaches or within a scout's vision of it, or anywhere while the seat
-    /// is short of the scouts its beacons field: the death took the time to
-    /// reach it. Tested before reach, so a miss that follows a death is never
+    /// scout of the seat has died since: the one whose list held it, or one
+    /// where the sighting's remembered gun reaches or within a scout's vision
+    /// of it, or any while the seat is short of the scouts its beacons field:
+    /// the death took the time to reach it. Tested before reach, so a miss that follows a death is never
     /// put down to distance.
     ScoutLost,
     /// It was never listed and fitting this Push, and no scout of the seat,
@@ -1159,14 +1159,15 @@ pub(crate) struct Memory {
     push: Option<u32>,
     /// (seat, asset, reason, the last decision tick it was dropped on).
     log: Vec<(u8, u32, Drop, u32)>,
-    /// (seat, asset, the last decision tick it was listed and fitting).
-    listed: Vec<(u8, u32, u32)>,
+    /// (seat, asset, the last decision tick it was listed and fitting, the
+    /// unit id of the scout whose list held it then).
+    listed: Vec<(u8, u32, u32, u32)>,
     /// (seat, unit id, where it stood at the last decision) of every living
     /// scout a decision decided.
     scouts: Vec<(u8, u32, [Fx; 3])>,
     /// (seat, the decision tick a scout of it was found dead on, where it
-    /// stood at the decision before).
-    deaths: Vec<(u8, u32, [Fx; 3])>,
+    /// stood at the decision before, its unit id).
+    deaths: Vec<(u8, u32, [Fx; 3], u32)>,
 }
 
 impl Memory {
@@ -1230,38 +1231,39 @@ impl Memory {
     }
 
     /// `seat`'s sighting of `asset` is listed and fitting on decision tick
-    /// `tick`.
-    fn listed(&mut self, seat: u8, asset: u32, tick: u32) -> Result<(), Full> {
+    /// `tick`, in the list of the scout `owner` (its unit id).
+    fn listed(&mut self, seat: u8, asset: u32, tick: u32, owner: u32) -> Result<(), Full> {
         if let Some(held) = self
             .listed
             .iter_mut()
-            .find(|(who, what, _)| (*who, *what) == (seat, asset))
+            .find(|(who, what, _, _)| (*who, *what) == (seat, asset))
         {
             held.2 = tick;
+            held.3 = owner;
             return Ok(());
         }
         if self.listed.len() >= SEAT_ROOM {
             return Err(Full);
         }
-        self.listed.push((seat, asset, tick));
+        self.listed.push((seat, asset, tick, owner));
         Ok(())
     }
 
     /// The last decision tick of this Push `seat`'s sighting of `asset` was
-    /// listed and fitting on.
-    fn listed_at(&self, seat: u8, asset: u32) -> Option<u32> {
+    /// listed and fitting on, and the unit id of the scout whose list held it.
+    fn listed_at(&self, seat: u8, asset: u32) -> Option<(u32, u32)> {
         self.listed
             .iter()
-            .find(|(who, what, _)| (*who, *what) == (seat, asset))
-            .map(|(_, _, at)| *at)
+            .find(|(who, what, _, _)| (*who, *what) == (seat, asset))
+            .map(|(_, _, at, owner)| (*at, *owner))
     }
 
     /// Whether a scout of `seat` was found dead on a decision after tick
-    /// `tick`, having stood where `at` holds.
-    fn died_after(&self, seat: u8, tick: u32, at: impl Fn([Fx; 3]) -> bool) -> bool {
+    /// `tick`, its place and unit id such that `which` holds.
+    fn died_after(&self, seat: u8, tick: u32, which: impl Fn([Fx; 3], u32) -> bool) -> bool {
         self.deaths
             .iter()
-            .any(|(who, when, place)| *who == seat && *when > tick && at(*place))
+            .any(|(who, when, place, unit)| *who == seat && *when > tick && which(*place, *unit))
     }
 
     /// Keep `unit`, a scout of `seat`'s a decision decides, standing at
@@ -1297,7 +1299,7 @@ impl Memory {
         if self.deaths.len() >= SEAT_ROOM {
             return Err(Full);
         }
-        self.deaths.push((seat, tick, place));
+        self.deaths.push((seat, tick, place, unit));
         Ok(())
     }
 }
@@ -1305,10 +1307,10 @@ impl Memory {
 /// The reason a needed sighting of `seat`'s, `asset` at `place`, is dropped
 /// on this decision, where no threat the seat sees covers it
 /// ([`drop_threatened`] names those): a scout lost when it was listed and
-/// fitting earlier this
-/// Push and a scout of the seat has died since, either where the sighting's
-/// remembered gun reaches or within a scout's vision of the sighting, or
-/// anywhere while the seat is short of the scouts its beacons field; out of
+/// fitting earlier this Push and a scout of the seat has died since: the
+/// scout whose list held it then, or one that died where the sighting's
+/// remembered gun reaches or within a scout's vision of the sighting, or any
+/// scout while the seat is short of the scouts its beacons field; out of
 /// reach when it was never listed this Push and no scout alone reaches it
 /// (`alone_reaches` false); crowded out otherwise.
 #[allow(
@@ -1331,9 +1333,10 @@ fn drop_reason<M: crate::seams::Meter + ?Sized>(
     let short = short_of_scouts(world, seat, members, meter);
     let memory = &world.scratch_mut().survey;
     let listed = memory.listed_at(seat.raw(), asset);
-    let lost = listed.is_some_and(|at| {
-        memory.died_after(seat.raw(), at, |died| {
-            short
+    let lost = listed.is_some_and(|(at, owner)| {
+        memory.died_after(seat.raw(), at, |died, unit| {
+            unit == owner
+                || short
                 || Sq::between(place, died) <= sight
                 || gun.is_some_and(|(_, gun, reach)| Sq::between(gun, died) <= reach)
         })
@@ -1481,11 +1484,14 @@ fn note_listed(world: &mut World, seat: SeatId, lists: &Lists) {
             || world.units().positions().get(owner).is_some_and(|at| {
                 bound_ticks(world, *at, entry.due.place).saturating_add(link) <= left
             });
+        let Some(unit) = world.units().ids().get(owner).copied() else {
+            continue;
+        };
         if fits
             && world
                 .scratch_mut()
                 .survey
-                .listed(seat.raw(), entry.due.asset, tick)
+                .listed(seat.raw(), entry.due.asset, tick, unit)
                 .is_err()
         {
             world.scratch_mut().survey_drops_unlogged.bump();
@@ -1531,8 +1537,9 @@ fn note_listed(world: &mut World, seat: SeatId, lists: &Lists) {
 ///    dropped for this decision under the [`Drop`] reason that names its
 ///    cause, in this order: under a threat the seat sees now (it was never
 ///    offered: decision 12); a scout lost, when it was listed and fitting
-///    earlier this Push and a scout of the seat has died since, under its
-///    gun or in sight of it, or anywhere while the seat is short of scouts;
+///    earlier this Push and a scout of the seat has died since: the one
+///    whose list held it, one under its gun or in sight of it, or any while
+///    the seat is short of scouts;
 ///    out of reach, when it was never listed this Push and no scout alone
 ///    reaches it before the Lull; crowded out otherwise.
 /// 4. **Departure.** In ascending unit row, a scout with a list walks to its
@@ -3153,6 +3160,134 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{error:?}")),
             1,
             "once"
+        );
+    }
+
+    /// Two scouts, 90 s left: the near one at the post, the far one 180
+    /// columns west; a needed unit sighting a hundred columns east with no
+    /// remembered gun near it. Step until the near scout is sent to it; the
+    /// runner, the unit rows of the near and far scouts, and the sighting.
+    fn carried(cx_dx: i32) -> (Runner, usize, usize, AssetId) {
+        let (mut runner, cx, cy) = late_in_the_push(2, 90);
+        let rows = scout_rows(&runner);
+        let (Some(near), Some(far)) = (rows.first().copied(), rows.get(1).copied()) else {
+            panic!("two scouts: {rows:?}");
+        };
+        let far_id = runner
+            .world()
+            .units()
+            .ids()
+            .get(far)
+            .copied()
+            .unwrap_or_else(|| panic!("the far scout's id"));
+        let west = runner.world().standing_point([cx - 180, cy, 0]);
+        assert!(
+            runner
+                .world_mut()
+                .place_unit_directly(crate::tables::UnitId::new(far_id), west),
+            "the far scout"
+        );
+        let target = unit_id(951);
+        sighted(&mut runner, AssetKind::Unit, target, [cx + cx_dx, cy], 100);
+        let place = place_of(&runner, target);
+        for _ in 0..1_800 {
+            step(&mut runner);
+            if runner.world().units().destinations().get(near).copied() == Some(place) {
+                return (runner, near, far, target);
+            }
+        }
+        panic!("the near scout was never sent to the sighting");
+    }
+
+    /// Step until seat 0 drops `target`; its drops then.
+    fn until_dropped(runner: &mut Runner, target: AssetId) -> Vec<super::Drop> {
+        for _ in 0..40 {
+            step(runner);
+            let dropped = drops_of(runner, target);
+            if !dropped.is_empty() {
+                return dropped;
+            }
+        }
+        Vec::new()
+    }
+
+    /// The scout carrying a needed sighting is killed at the start of its
+    /// walk, far from the sighting and from any remembered gun, and nobody
+    /// else reaches it alone: a scout lost, because the dead scout's list
+    /// held it.
+    #[test]
+    fn a_miss_after_its_scout_dies_anywhere_is_a_scout_lost() {
+        let (mut runner, near, _, target) = carried(100);
+        while !runner.world().is_decision_tick() {
+            step(&mut runner);
+        }
+        kill_row(&mut runner, near);
+        assert_eq!(
+            until_dropped(&mut runner, target),
+            vec![super::Drop::ScoutLost],
+            "the scout carrying it died"
+        );
+    }
+
+    /// The scout carrying a needed sighting lives, but is carried off where
+    /// it can no longer reach it, while another scout dies far from it: the
+    /// death took nothing from this sighting, so it is crowded out, not a
+    /// scout lost.
+    #[test]
+    fn an_unrelated_death_is_not_a_scout_lost() {
+        let (mut runner, near, far, target) = carried(100);
+        while !runner.world().is_decision_tick() {
+            step(&mut runner);
+        }
+        let near_id = runner
+            .world()
+            .units()
+            .ids()
+            .get(near)
+            .copied()
+            .unwrap_or_else(|| panic!("the near scout's id"));
+        let at = runner
+            .world()
+            .units()
+            .positions()
+            .get(far)
+            .copied()
+            .unwrap_or_else(|| panic!("the far scout"));
+        assert!(
+            runner
+                .world_mut()
+                .place_unit_directly(crate::tables::UnitId::new(near_id), at),
+            "the near scout carried off"
+        );
+        kill_row(&mut runner, far);
+        assert_eq!(
+            until_dropped(&mut runner, target),
+            vec![super::Drop::CrowdedOut],
+            "listed, its scout alive, and the death elsewhere"
+        );
+    }
+
+    /// One scout, 30 s left, and a needed beacon sighting 150 columns east (a
+    /// 75 s walk): it is never listed, and no scout alone reaches it, so it is
+    /// out of reach, counted once.
+    #[test]
+    fn a_sighting_never_listed_and_beyond_reach_is_out_of_reach() {
+        let (mut runner, cx, cy) = late_in_the_push(1, 30);
+        let target = beacon_id(901);
+        sighted(&mut runner, AssetKind::Beacon, target, [cx + 150, cy], 160);
+        let dropped = until_dropped(&mut runner, target);
+        for _ in 0..20 {
+            step(&mut runner);
+        }
+        assert_eq!(dropped, vec![super::Drop::OutOfReach]);
+        assert_eq!(
+            runner
+                .world_mut()
+                .scratch_mut()
+                .survey_out_of_reach()
+                .unwrap_or_else(|error| panic!("{error:?}")),
+            1,
+            "counted once, over several decisions"
         );
     }
 }
