@@ -2324,6 +2324,7 @@ fn the_s2_gateway_wire_round_trips_in_its_documented_spellings() {
             hp: Some(0),
             max_hp: Some(60),
             heading: Some(16_384),
+            ..ViewEntity::default()
         },
         concat!(
             r#"{"id":"u_3","kind":"UNIT","subtype":"raider","owner":"seat.0","#,
@@ -2655,5 +2656,59 @@ fn a_map_features_travel_states_round_trip() {
     assert!(
         !text.contains("reachable") && !text.contains("travel_ms"),
         "a withheld feature writes neither travel member: {text}"
+    );
+}
+
+#[test]
+fn the_probw_view_and_status_fields_round_trip_in_their_documented_spellings() {
+    // S3's `probw`: `ViewEntity.building` (the discharged 9), the sphere, the
+    // look and the title; `GetStatusResponse.preset` and `sealed_this_round`.
+    use gp_api::view_entity::{Kind, Look, look::Shape};
+    use gp_api::{GetStatusResponse, Preset, ViewEntity};
+
+    round_trips(
+        &ViewEntity {
+            id: "s_2".to_owned(),
+            kind: Kind::Structure.into(),
+            subtype: "mortar".to_owned(),
+            owner: "seat.0".to_owned(),
+            hp: Some(40),
+            max_hp: Some(500),
+            building: Some(true),
+            look: Some(Look {
+                shape: Shape::Dish.into(),
+                x: 1,
+                y: 1,
+                z: 1,
+            }),
+            title: "Mortar, going up".to_owned(),
+            ..ViewEntity::default()
+        },
+        concat!(
+            r#"{"id":"s_2","kind":"STRUCTURE","subtype":"mortar","owner":"seat.0","hp":40,"#,
+            r#""max_hp":500,"building":true,"look":{"shape":"DISH","x":1,"y":1,"z":1},"#,
+            r#""title":"Mortar, going up"}"#
+        ),
+        &["building", "look", "shape", "title"],
+    );
+    round_trips(
+        &ViewEntity {
+            id: "b_00".to_owned(),
+            kind: Kind::Beacon.into(),
+            sphere_radius_voxels: Some(24),
+            title: "Beacon".to_owned(),
+            ..ViewEntity::default()
+        },
+        r#"{"id":"b_00","kind":"BEACON","sphere_radius_voxels":24,"title":"Beacon"}"#,
+        &["sphere_radius_voxels"],
+    );
+    round_trips(
+        &GetStatusResponse {
+            preset: Preset::Probation.into(),
+            sealed_this_round: Some(true),
+            ..GetStatusResponse::default()
+        },
+        r#"{"preset":"PROBATION","sealed_this_round":true}"#,
+        &["preset", "sealed_this_round"],
     );
 }

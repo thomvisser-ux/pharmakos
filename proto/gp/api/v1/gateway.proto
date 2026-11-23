@@ -531,6 +531,40 @@ message GetStatusRequest {}
 
 message GetStatusResponse {
   Status status = 1;
+
+  // The preset the hosted match is played under, spelt as the config line
+  // spells it: "custom" or "probation" (lower case on the JSON-RPC wire, as
+  // every enum this surface answers with is; decisions-log item 80). Told to
+  // every caller, since a preset is the match's frame and no seat's secret;
+  // PRESET_UNSPECIFIED (absent) only when no match is hosted. A client reads
+  // it rather than remembering what it launched, so a resumed client knows
+  // (S3's `probw`). What a preset does is the gateway's: a client starts no
+  // countdown from this field, `Status.untimed_by_rule` says that.
+  Preset preset = 2;
+
+  // For a seat: whether it holds a seal of the current round -- its own
+  // accepted `submit_plan`, or the safe playbook the gateway filed for it --
+  // true from the moment it is held until the next round's Lull opens, and
+  // false otherwise. A later refused submission leaves the seal it held.
+  // ABSENT for every token that is not a seat (an admin, a spectator), since
+  // whether a seat has sealed is that seat's own to know: explicit presence
+  // (proto3 `optional`), so "not told" is never written as a false (S3's
+  // `probw`, its review's fix pass 1).
+  optional bool sealed_this_round = 3;
+}
+
+// The preset a match is played under (S3's plan, E7; the config line's
+// `preset`). Top level because the config line, a save and this method share
+// the one spelling.
+enum Preset {
+  PRESET_UNSPECIFIED = 0;
+
+  // Any match the preset changes nothing about.
+  CUSTOM = 1;
+
+  // The newcomer's first match: untimed Lulls, the Ledger's memos and the
+  // guided first pick (spec section 3; S3's plan, decisions 4, 5 and 13).
+  PROBATION = 2;
 }
 
 // Long poll. Returns when the trigger fires or the timeout elapses; a timeout
@@ -996,11 +1030,12 @@ message MapFeature {
   // * reached: `reachable` is true and `travel_ms` is set;
   // * unreachable: `reachable` is false and `travel_ms` is absent;
   // * withheld: both are absent. That is every feature outside a Lull (a
-  //   Push, a recap, the lobby, an ended match), and every feature for a
-  //   caller that is no seat. In a Push the hosted world is the live one,
-  //   unfogged, and a recap's is the Push's end state, so a time there
-  //   would tell the seat about terrain it cannot see (the owner's ruling
-  //   of 2026-11-21, "Omit them in a Push"; S3's `mapw`).
+  //   Push, a recap, an ended match), and every feature for a caller that is
+  //   no seat. In a Push the hosted world is the live one, unfogged, and a
+  //   recap's is the Push's end state, so a time there would tell the seat
+  //   about terrain it cannot see (the owner's ruling of 2026-11-21, "Omit
+  //   them in a Push"; S3's `mapw`). In the lobby no match is hosted and the
+  //   call itself refuses, so no feature is listed to withhold anything from.
   //
   // Both are `optional` (proto3 explicit presence) so that "not told" is its
   // own state on the wire and never a 0 or a false.
@@ -1950,8 +1985,10 @@ message GetViewRequest {
 // total, no count of what was withheld and no "hidden" marker anywhere in this
 // message, because a count of what a seat cannot see is a fog leak by
 // arithmetic (decisions-log item 26). Nothing here carries a destination, a
-// route, a step or rule index, a mandate, a treasury, a score, a hit point or
-// a power state.
+// route, a step or rule index, a mandate, a treasury, a score or a power state.
+// What an entity does carry, and to whom, is ViewEntity's: from S2 its hit
+// points and heading in live vision, and from S3 its name and look, and a
+// beacon's sphere and a structure going up on the viewer's own assets only.
 message GetViewResponse {
   // Game milliseconds since the start of the current segment — the same epoch
   // Event.at_ms has, so a recording can interleave view frames and feed events
@@ -2069,22 +2106,44 @@ message ViewChunk {
 
 // One thing standing on the terrain, as this viewer may see it.
 //
-// WHERE IT IS AND WHAT IT IS, and, from S2, its hit points and heading. What
-// a seat sees of ANOTHER seat's asset is S2's plan's decision 5, ruled by
+// WHERE IT IS AND WHAT IT IS, and, from S2, its hit points and heading; from
+// S3 (`probw`), its name in the player's words, a structure's look, and, on
+// the viewer's own assets only, a beacon's sphere and a structure going up.
+// What a seat sees of ANOTHER seat's asset is S2's plan's decision 5, ruled by
 // decisions-log item 144 (11) (the register's S2-11): in live vision, its
 // kind, position, heading and exact HP. This list is live vision only (an id
 // absent from it is gone or no longer visible), so a remembered asset is not
-// here: its age is BeaconSummary.sighting_age_ms. Power state and build
-// progress are never shown for another seat's asset.
+// here: its age is BeaconSummary.sighting_age_ms. Power state, build progress
+// and a sphere's radius are never shown for another seat's asset (the owner's
+// "Own seat only", decisions-log item 168 (11)); a spectator holding
+// `spectate.nofog` is shown them on every asset.
+//
+// A WALL is voxels, not a row of the sim's: it is listed here as a `structure`
+// whose subtype is `wall`, with no hit points of its own (S3's `probw`). The
+// viewer's OWN walls (and every wall, for a `spectate.nofog` spectator) are one
+// entity per wall Build target with a voxel standing in its box, drawn as its
+// box, plus one per group of standing wall voxels no target's box holds (a wall
+// whose target was dropped still stands). ANOTHER seat's walls are derived
+// from the wall voxels this viewer sees and nothing else: the seen voxels of
+// each seat, grouped by face contact, one entity per group, each drawn as the
+// box around its voxels. Nothing of that seat's Build settings (its targets,
+// boxes and tops) or build progress reaches the answer, so it does not change
+// when that seat's settings do and the voxels seen do not; what a viewer can
+// still infer is what it sees: a wall crumble, grow or split, and how many
+// separate walls it sees.
 message ViewEntity {
   // OPAQUE, and scoped to the viewer this answer was built for. A seat's own
   // beacon is `b_NN`, which is already public through list_beacons and is what
   // a playbook names. Another seat's beacon is `e_NN`, this viewer's handle for
   // it, or `v_N` until the viewer holds one: `v_N` names it to get_view alone,
   // and the beacon takes its `e_NN` at the next Lull. A unit is `u_N`, a
-  // structure `s_N`, a wreck or a ruin `w_N` and a shell `p_N`: each a handle
-  // this viewer was given in the order it first saw the thing, because a dense
-  // table row id would be a count of everything the match has ever made.
+  // structure `s_N` (which a ruin keeps when the structure turns into one), a
+  // wall `l_N`, a wreck `w_N` and a shell `p_N`: each a handle this viewer was
+  // given in the order it first saw the thing, because a dense table row id
+  // would be a count of everything the match has ever made. A wall grouped
+  // from the voxels a viewer sees keeps its `l_N` while the viewer keeps
+  // seeing any of it from one answer to the next. Ids are unique within an
+  // answer.
   //
   // It is stable for one viewer for as long as the match is attached, and it
   // means nothing to any other viewer or to any other method — except a `b_NN`
@@ -2104,7 +2163,8 @@ message ViewEntity {
   string owner = 4;
 
   // Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
-  // positions are a recording's concern and are held at 9 to 15.
+  // positions are a recording's concern and are held at 10 to 15. A wall
+  // stands at its look's lowest corner (`Look`).
   //
   // PLACEHOLDER: whole-voxel positions — owner, S7, with the recording
   // format. Whole voxels are enough for a camera and are not enough for a
@@ -2113,7 +2173,8 @@ message ViewEntity {
 
   // Hit points now, whole HP, on everything that has them: a unit, a
   // structure or a beacon, the viewer's own or another seat's in live vision
-  // alike. Unset on a shell, a wreck and a ruin, which have none.
+  // alike, a structure going up included. Unset on a shell, a wreck, a ruin
+  // and a wall, which have none.
   optional uint32 hp = 6;
 
   // Its maximum hit points, whole HP, present exactly when `hp` is, so a
@@ -2125,11 +2186,80 @@ message ViewEntity {
   // has no heading of its own.
   optional uint32 heading = 8;
 
-  // RESERVED — a seat's OWN assets' power state and build progress, which no
-  // client draws yet and another seat's assets never carry (S2's plan's decision 5), and
-  // sub-voxel position (S7, with recordings). Each returns with the proto
-  // pull request of the lane that draws it.
-  reserved 9 to 15;
+  // True while a structure is going up: from the tick its construction begins
+  // until it reaches full hit points, which is when the sim finishes it. Absent
+  // once it stands, and on everything that is not a structure. The sim keeps
+  // no fraction of progress; `hp` over `max_hp` says how far it has risen. The
+  // number held for build progress, discharged by S3's `probw`.
+  //
+  // OWN STRUCTURES ONLY, and every structure for a `spectate.nofog` spectator:
+  // another seat's structure going up never carries it (S2's plan's decision
+  // 5; the owner's "Own seat only", decisions-log item 168 (11)), so it is
+  // drawn and named as standing, its hit points still shown in live vision
+  // (item 148 (3) (b)).
+  optional bool building = 9;
+
+  // RESERVED — a seat's OWN assets' power state, which no client draws yet and
+  // another seat's assets never carry (S2's plan's decision 5), and sub-voxel
+  // position (S7, with recordings). Each returns with the proto pull request
+  // of the lane that draws it.
+  reserved 10 to 15;
+
+  // A beacon's sphere of authority now, in whole voxels, so a client draws the
+  // ring it never computes, for the whole of a Push as much as in a Lull: the
+  // rules table's base, plus the Resonance Spire's bonus while a finished
+  // Spire stands on this beacon (the sim's one function, as
+  // BeaconSummary.sphere_radius_voxels reads it; S3's `probw`).
+  //
+  // OWN BEACONS ONLY, and every beacon for a `spectate.nofog` spectator: unset
+  // on another seat's beacon, because a radius would show whether its Spire
+  // stands (S2's plan's decision 5), and on everything that is not a beacon.
+  optional uint32 sphere_radius_voxels = 16;
+
+  // How a structure or a wall is drawn: a primitive shape and its size, set on
+  // every structure, ruin and wall a viewer is shown (a look shows nothing the
+  // entity's presence and subtype do not), and unset on everything else.
+  Look look = 17;
+
+  // Its name in the player's words, from the gateway's one string table, so a
+  // client names nothing from `subtype` (which stays, as the id): "Autocannon",
+  // "Resonance Spire", "Wall", "Mining drone", "Beacon". While `building` is
+  // set it is the gateway's going-up words, "Mortar, going up", so it says so
+  // exactly where `building` does and nowhere else; a ruin's is "Mortar,
+  // ruined".
+  string title = 18;
+
+  // A primitive look (S3's `probw`; client-wire-rulings, `fixq` 2: presentation
+  // of what the view already says, with no art asset).
+  message Look {
+    // One per structure kind, from one gateway table the compiler holds
+    // exhaustive over the sim's kinds. Lower case on the JSON-RPC wire:
+    // "tower" (decisions-log item 80).
+    Shape shape = 1;
+
+    // Its size in whole voxels, x east, y north, z up, measured from `at`. A
+    // structure stands on one column (spec section 5; the sim's footings and
+    // its one-structure-per-voxel rule) and is given no height by the sim, so
+    // it is 1 by 1 by 1, the voxel it stands in. The viewer's own wall target
+    // (any, for a no-fog spectator) is its box: its columns across, and from
+    // its lowest standing voxel up to the top it is filled to. A wall grouped
+    // from voxels is the box around its voxels.
+    uint32 x = 2;
+    uint32 y = 3;
+    uint32 z = 4;
+
+    enum Shape {
+      SHAPE_UNSPECIFIED = 0;
+      // A plain block: the Generator.
+      BLOCK = 1;
+      // A narrow upright: the autocannon, the Survey post, the Resonance Spire.
+      TOWER = 2;
+      // A low bowl: the mortar.
+      DISH = 3;
+      // A flat box filling its size: a wall.
+      SLAB = 4;
+    }
+  }
 
   enum Kind {
     KIND_UNSPECIFIED = 0;

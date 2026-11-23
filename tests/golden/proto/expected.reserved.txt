@@ -31,7 +31,7 @@ gp.api.v1.ViewChunk
   numbers: 3-15
 
 gp.api.v1.ViewEntity
-  numbers: 9-15
+  numbers: 10-15
 
 gp.api.v1.WhatIf
   numbers: 1-15

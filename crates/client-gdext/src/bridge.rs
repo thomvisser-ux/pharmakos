@@ -2068,6 +2068,7 @@ fn round_trip_status() -> Result<(), BridgeError> {
             round: 1,
             ..Default::default()
         }),
+        ..GetStatusResponse::default()
     };
     let text = json::encode(&response)?;
     let decoded = api::decode_result("get_status", &text)?;

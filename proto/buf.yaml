@@ -76,3 +76,24 @@ breaking:
   # discharging nothing, deletes it. When no `ignore_only:` key follows, the
   # last proto change discharged nothing. The pull request that adds or deletes
   # a block names it.
+  ignore_only:
+    # S3's `probw` (client-wire-rulings; AGENTS.md section 5). One rule, one
+    # file, one held range, one number taken by the field it was held for and
+    # the rest held again. Every other new number (`ViewEntity` 16 to 18, the
+    # `ViewEntity.Look` message, `GetStatusResponse` 2 and 3, the `Preset`
+    # enum) comes from no `reserved` statement, so it discharges nothing.
+    #
+    # gp/api/v1/gateway.proto, `ViewEntity`:
+    #   * 9-15 were held for an own asset's power state and build progress,
+    #     and sub-voxel position. 9 takes `building`, the one fact of build
+    #     progress the sim keeps (a structure is going up until its hit points
+    #     reach their maximum); 10-15 stay held, for power state and sub-voxel
+    #     position.
+    #
+    # buf sees the old range go away and cannot tell a discharge from an
+    # un-reservation; tests/golden/proto/expected.reserved.txt shows the
+    # narrowing, which is the reviewable half. Inert once this change is on
+    # main. The next proto pull request replaces this block with its own, or
+    # deletes it if it discharges nothing.
+    RESERVED_MESSAGE_NO_DELETE:
+      - gp/api/v1/gateway.proto

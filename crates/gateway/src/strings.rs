@@ -242,14 +242,62 @@ fn licence_name(value: i64) -> String {
     }
 }
 
-/// A licence's name in the player's words, or `None` for the enum's
-/// unspecified zero, which names no licence.
+/// A licence's name in the player's words: the title of the structure the
+/// licence lets a seat queue, as plan-core's blueprint list spells it (the
+/// vocabulary's and the view's one spelling, so the recap, the feed and the
+/// view cannot name one structure two ways; the review of #212). `None` for
+/// the enum's unspecified zero, and for any licence no blueprint names.
 #[must_use]
-pub const fn licence_title(licence: pharmakos_proto::gp::v1::Licence) -> Option<&'static str> {
-    match licence {
-        pharmakos_proto::gp::v1::Licence::ResonanceSpire => Some("Resonance Spire"),
-        pharmakos_proto::gp::v1::Licence::Unspecified => None,
+pub fn licence_title(licence: pharmakos_proto::gp::v1::Licence) -> Option<&'static str> {
+    pharmakos_plan_core::vocabulary::blueprints_by_slot()
+        .into_iter()
+        .find(|blueprint| blueprint.licence == Some(licence))
+        .map(|blueprint| blueprint.title)
+}
+
+// ---------------------------------------------------------------------------
+// The view's names (`gp.api.v1.ViewEntity.title`; S3's `probw`). The
+// gateway's final words, read by the owner at S3's demo with every other
+// string. A structure's and a wall's name is plan-core's blueprint title, the
+// one the vocabulary shows a player, so it is spelt there once and not here.
+// ---------------------------------------------------------------------------
+
+/// A beacon, whoever owns it: its mandate is never shown for another seat's,
+/// and a seat reads its own beacons' mandates from `list_beacons`.
+pub const VIEW_BEACON: &str = "Beacon";
+/// A mortar shell in flight.
+pub const VIEW_SHELL: &str = "Mortar shell";
+/// What a dead unit or structure leaves.
+pub const VIEW_WRECK: &str = "Wreck";
+
+/// A unit kind's name in the player's words, for the view. Exhaustive over
+/// the sim's kinds, so a new kind is a compile error here.
+#[must_use]
+pub const fn unit_title(kind: pharmakos_sim::tables::UnitKind) -> &'static str {
+    use pharmakos_sim::tables::UnitKind;
+    match kind {
+        UnitKind::Commander => "Commander",
+        UnitKind::BuildDrone => "Build drone",
+        UnitKind::MiningDrone => "Mining drone",
+        UnitKind::RepairDrone => "Repair drone",
+        UnitKind::Raider => "Raider",
+        UnitKind::Scout => "Scout",
     }
+}
+
+/// A structure going up, in the view: "Mortar, going up". Told only where
+/// `ViewEntity.building` is (the owner's "Own seat only", decisions-log item
+/// 168 (11)).
+#[must_use]
+pub fn going_up(title: &str) -> String {
+    format!("{title}, going up")
+}
+
+/// A ruin, in the view: "Mortar, ruined". A ruin is nobody's, so its name
+/// says what it was and nothing of whose.
+#[must_use]
+pub fn ruined(title: &str) -> String {
+    format!("{title}, ruined")
 }
 
 /// The recap's licence line for the calling seat's own awards at this
@@ -262,6 +310,32 @@ pub fn licences_awarded(titles: &[&str]) -> Option<String> {
         None => None,
         Some((last, [])) => Some(format!("Licence awarded: {last}.")),
         Some((last, rest)) => Some(format!("Licences awarded: {} and {last}.", rest.join(", "))),
+    }
+}
+
+/// The final recap's sentence naming every licence award that stands at the
+/// match's end, each with its seat and the round it was awarded in, as the
+/// recap's other sentences name a seat ("seat 0"): "The licences that stand at
+/// the match's end: seat 0's Resonance Spire, from round 2; seat 1's Resonance
+/// Spire, from round 3." (S3's `probw`, item 6; the gateway's final words,
+/// read by the owner at S3's demo with every other string). `awards` is
+/// `(seat, title, round)` in the order the recap lists them. `None` when no
+/// award stands: the recap says nothing then.
+#[must_use]
+pub fn licences_standing(awards: &[(u8, &str, u32)]) -> Option<String> {
+    let named: Vec<String> = awards
+        .iter()
+        .map(|(seat, title, round)| format!("seat {seat}'s {title}, from round {round}"))
+        .collect();
+    match named.as_slice() {
+        [] => None,
+        [one] => Some(format!(
+            "The licence that stands at the match's end: {one}."
+        )),
+        many => Some(format!(
+            "The licences that stand at the match's end: {}.",
+            many.join("; ")
+        )),
     }
 }
 
@@ -1175,6 +1249,48 @@ mod tests {
         assert_eq!(
             super::licence_title(pharmakos_proto::gp::v1::Licence::Unspecified),
             None
+        );
+    }
+
+    /// The review of #212 (its mutant M11): a licence is named by the title of
+    /// the structure it unlocks, from plan-core's one table, so renaming the
+    /// blueprint renames the licence everywhere the recap and the feed say it.
+    #[test]
+    fn a_licence_is_named_by_its_structures_blueprint_title() {
+        let spire = pharmakos_plan_core::vocabulary::blueprints_by_slot()
+            .into_iter()
+            .find(|blueprint| {
+                blueprint.kind == pharmakos_sim::tables::StructureKind::ResonanceSpire
+            })
+            .expect("plan-core lists the Spire");
+        assert_eq!(
+            super::licence_title(pharmakos_proto::gp::v1::Licence::ResonanceSpire),
+            Some(spire.title)
+        );
+        assert_eq!(
+            super::licences_awarded(&[spire.title]).as_deref(),
+            Some(format!("Licence awarded: {}.", spire.title).as_str())
+        );
+    }
+
+    /// S3's `probw`, item 6: the final recap's sentence of the awards that
+    /// stand, for none, one and two.
+    #[test]
+    fn the_match_ends_sentence_names_every_award_that_stands() {
+        assert_eq!(super::licences_standing(&[]), None);
+        assert_eq!(
+            super::licences_standing(&[(0, "Resonance Spire", 2)]).as_deref(),
+            Some(
+                "The licence that stands at the match's end: seat 0's Resonance Spire, from round 2."
+            )
+        );
+        assert_eq!(
+            super::licences_standing(&[(0, "Resonance Spire", 2), (1, "Resonance Spire", 3)])
+                .as_deref(),
+            Some(
+                "The licences that stand at the match's end: seat 0's Resonance Spire, from \
+                 round 2; seat 1's Resonance Spire, from round 3."
+            )
         );
     }
 
