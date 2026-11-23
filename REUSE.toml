@@ -262,19 +262,31 @@ SPDX-License-Identifier = "GPL-3.0-or-later AND (MIT OR Apache-2.0)"
 # file instantiated from library/, permissive as that area is. Its other three files
 # are the game's outputs: the gateway's instantiate_template answer
 # (expected.parameters.json), the verifier's report (expected.report.json) and the
-# renderer's prose (expected.prose.txt), which quote the template's strings. They
-# take the render goldens' two licences, as the block above does and for the same
-# reason (decisions-log item 136). AFTER the tests/golden/operator/** block, so it
-# wins.
+# renderer's prose (expected.prose.txt). The answer and the prose quote the template's
+# strings, so they take the render goldens' two licences, as the block above does and
+# for the same reason (decisions-log item 136). AFTER the tests/golden/operator/**
+# block, so it wins.
 [[annotations]]
 path = [
     "tests/golden/operator/wizard/*/expected.parameters.json",
-    "tests/golden/operator/wizard/*/expected.report.json",
     "tests/golden/operator/wizard/*/expected.prose.txt",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later AND (MIT OR Apache-2.0)"
+
+# The verifier's report (expected.report.json) is the game's output and quotes no
+# template: its strings are the verifier's diagnostic catalogue, with the playbook's
+# JSON Pointers. So it carries the game's licence alone, and not the permissive area's
+# (item 136 gave it the combined form with the other two; the `reuse` step's
+# `licence_quotes` check fails a file that carries the combined form and quotes
+# nothing, decisions-log item 164 (3a)). AFTER the tests/golden/operator/** block, so it
+# wins.
+[[annotations]]
+path = ["tests/golden/operator/wizard/*/expected.report.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
 
 # --- The rules table -------------------------------------------------------
 # rules/rules.v1.json is the canonical JSON of one gp.v1.RulesTable
