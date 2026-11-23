@@ -144,7 +144,7 @@ pub struct Fired {
     pub seat: Option<u8>,
     /// The round the match was in when the event was read off the feed,
     /// counted from 1: the runner's own count of the segments it opened, held
-    /// equal to the sim's round at every Lull ([`play_until`] refuses a run
+    /// equal to the sim's round at every Lull (`play_until` refuses a run
     /// where the two disagree). A Push's events are its round's; what a recap
     /// and the next Lull's opening leave on the feed is read in the Lull it
     /// opened, so it carries that round.
@@ -229,7 +229,7 @@ impl Played {
     ///
     /// # Errors
     ///
-    /// [`Exit::Internal`] for a total past a `u32`: [`play_push`] counts each
+    /// [`Exit::Internal`] for a total past a `u32`: `play_push` counts each
     /// segment in a `u32`, and the sum of several is refused rather than
     /// saturated.
     pub fn ticks(&self) -> Result<u32, Failure> {

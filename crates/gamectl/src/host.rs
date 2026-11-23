@@ -174,7 +174,7 @@ impl Tally {
 
 /// The lines a host's built-in seats could not write to standard error, by
 /// reason, since the last line that was written: shared by every seat of the
-/// host, said by the next line that is written ([`EasySeat`]) and, for what
+/// host, said by the next line that is written (`EasySeat`) and, for what
 /// is still unsaid when the host ends, by its last line
 /// ([`say_unsaid_at_close`], [`with_unsaid`]).
 #[derive(Debug, Default)]
