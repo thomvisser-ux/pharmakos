@@ -101,12 +101,16 @@ use crate::{rules, strings};
 /// The built-in operator's factory: Easy for every seat, as a built-in seat
 /// or as an advisor (see the module docs).
 ///
-/// It holds the public rules text and the count of lines its seats could not
-/// write ([`Unsaid`]), and builds a fresh [`Easy`] from the text for every
-/// seat it is asked about.
+/// It holds one [`Easy`], read once from the public rules text, and the count
+/// of lines its seats could not write ([`Unsaid`]), and hands every seat it
+/// is asked about a fresh copy of that `Easy`. An `Easy` is its tuning rows
+/// and nothing else, so a copy carries no state from one seat to the next,
+/// and nothing about a seat can fail once the text has been read (S3's plan,
+/// E22: the earlier factory re-read the text for every seat and swallowed a
+/// refusal it had already ruled out as `None`).
 #[derive(Clone, Debug)]
 pub struct EasyOperators {
-    rules_json: String,
+    easy: Easy,
     unsaid: std::sync::Arc<Unsaid>,
 }
 
@@ -311,9 +315,8 @@ impl EasyOperators {
     /// [`RulesError`] when the operator cannot read its rows from the text,
     /// said once here rather than once per seat.
     pub fn new(rules_json: &str) -> Result<EasyOperators, RulesError> {
-        let _checked = Easy::new(rules_json)?;
         Ok(EasyOperators {
-            rules_json: rules_json.to_owned(),
+            easy: Easy::new(rules_json)?,
             unsaid: std::sync::Arc::default(),
         })
     }
@@ -329,18 +332,19 @@ impl EasyOperators {
 }
 
 impl Operators for EasyOperators {
+    // `Option` is the gateway's trait (`serve::Operators`); this factory
+    // always answers, because the one way it could fail, a rules text Easy
+    // cannot read, was refused when it was made.
     fn built_in(&mut self, _seat: u8) -> Option<Box<dyn BuiltInSeat>> {
-        let easy = Easy::new(&self.rules_json).ok()?;
         Some(Box::new(EasySeat {
-            easy,
+            easy: self.easy.clone(),
             said: Box::new(std::io::stderr()),
             unsaid: std::sync::Arc::clone(&self.unsaid),
         }))
     }
 
     fn advisor(&mut self, _seat: u8) -> Option<Box<dyn Advisor>> {
-        let easy = Easy::new(&self.rules_json).ok()?;
-        Some(Box::new(EasyAdvisor(easy)))
+        Some(Box::new(EasyAdvisor(self.easy.clone())))
     }
 }
 
@@ -541,6 +545,24 @@ mod tests {
     use pharmakos_operator::{Refused, Submitted};
 
     use super::*;
+
+    /// E22: the factory reads the rules text once and answers for every seat
+    /// it is asked about, as a built-in seat and as an advisor, with no
+    /// refusal left to swallow.
+    #[test]
+    fn the_factory_answers_for_every_seat_from_one_reading() {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let text = std::fs::read_to_string(root.join(rules::RULES_PATH)).expect("the rules");
+        let mut factory = EasyOperators::new(&text).expect("the committed rules");
+        for seat in [0_u8, 1, 2] {
+            assert!(factory.built_in(seat).is_some(), "seat {seat}");
+            assert!(factory.advisor(seat).is_some(), "seat {seat}");
+        }
+        assert!(
+            EasyOperators::new("{}").is_err(),
+            "a text Easy cannot read is refused once"
+        );
+    }
 
     fn refused(method: &str, code: &str, message: &str) -> Refused {
         Refused {

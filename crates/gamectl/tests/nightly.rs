@@ -315,7 +315,10 @@ fn a_two_seed_run_writes_the_committed_result() {
     let actual = pharmakos_gamectl::actual_for(RESULT_GOLDEN).expect("a target directory");
     std::fs::create_dir_all(actual.parent().expect("a parent")).expect("the golden's directory");
     std::fs::write(&actual, outcome.out.as_bytes()).expect("the fresh result");
-    let committed = std::fs::read_to_string(root().join(RESULT_GOLDEN)).unwrap_or_default();
+    // A golden that is not there is a red test naming it, never an empty
+    // text compared with the fresh one (E22).
+    let committed = std::fs::read_to_string(root().join(RESULT_GOLDEN))
+        .unwrap_or_else(|error| panic!("reading {RESULT_GOLDEN}: {error}"));
     assert_eq!(
         committed.replace("\r\n", "\n"),
         outcome.out,

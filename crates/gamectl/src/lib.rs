@@ -152,6 +152,57 @@ pub fn display(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// Why there is no target directory to write a fresh output to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TargetDirError {
+    /// The operating system would not say where this executable is.
+    NoExecutablePath(std::io::ErrorKind),
+    /// The executable's path has no folder above its profile's folder.
+    TooShallow,
+}
+
+impl std::fmt::Display for TargetDirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TargetDirError::NoExecutablePath(kind) => write!(
+                f,
+                "the operating system would not say where this executable is ({kind})"
+            ),
+            TargetDirError::TooShallow => f.write_str(
+                "this executable's path has no folder above its profile's, so there is no \
+                 target directory beside it",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TargetDirError {}
+
+/// Why a committed golden has no fresh output path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ActualError {
+    /// The path is not `tests/golden/<area>/<case>/expected.<ext>`, which the
+    /// scenario format refuses, so the caller did not read the file through
+    /// [`scenario::load`].
+    NotAGolden,
+    /// There is no target directory to put it in.
+    NoTargetDir(TargetDirError),
+}
+
+impl std::fmt::Display for ActualError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActualError::NotAGolden => f.write_str(
+                "it is not a path `tests/golden/<area>/<case>/expected.<ext>`, which the \
+                 scenario format refuses",
+            ),
+            ActualError::NoTargetDir(why) => write!(f, "{why}"),
+        }
+    }
+}
+
+impl std::error::Error for ActualError {}
+
 /// Cargo's target directory, worked out from this executable's own location.
 ///
 /// Two shapes, because this code runs in both: `<target>/<profile>/gamectl` when
@@ -159,22 +210,28 @@ pub fn display(path: &Path) -> String {
 /// integration test. The `deps` component is what tells them apart, which is
 /// more honest than counting parents and hoping.
 ///
-/// `None` only when the executable's path cannot be read or has no grandparent
-/// folder. A packaged build is not an exception: `<dir>/Pharmakos/gamectl`
-/// answers `<dir>`, so its fresh outputs land in `<dir>/golden/`, beside the
-/// extracted folder and outside it, which `cargo xtask package`'s replay relies
-/// on. A caller treats `None` as "there is nowhere to write a fresh output",
-/// never as a silent success.
-#[must_use]
-pub fn target_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let profile = exe.parent()?;
+/// A packaged build is not an exception: `<dir>/Pharmakos/gamectl` answers
+/// `<dir>`, so its fresh outputs land in `<dir>/golden/`, beside the extracted
+/// folder and outside it, which `cargo xtask package`'s replay relies on.
+///
+/// # Errors
+///
+/// [`TargetDirError`] when the executable's path cannot be read or has no
+/// grandparent folder (S3's plan, E22: this was an `Option` whose `None` a
+/// caller printed as a label and went on without writing).
+pub fn target_dir() -> Result<PathBuf, TargetDirError> {
+    let exe =
+        std::env::current_exe().map_err(|error| TargetDirError::NoExecutablePath(error.kind()))?;
+    let profile = exe.parent().ok_or(TargetDirError::TooShallow)?;
     let profile = if profile.file_name() == Some(std::ffi::OsStr::new("deps")) {
-        profile.parent()?
+        profile.parent().ok_or(TargetDirError::TooShallow)?
     } else {
         profile
     };
-    Some(profile.parent()?.to_path_buf())
+    Ok(profile
+        .parent()
+        .ok_or(TargetDirError::TooShallow)?
+        .to_path_buf())
 }
 
 /// Where the fresh output for a committed golden goes.
@@ -184,27 +241,33 @@ pub fn target_dir() -> Option<PathBuf> {
 /// `<target>/golden/<area>/<case>/actual.<ext>`, and `<target>` honours
 /// `CARGO_TARGET_DIR` because it is read from where the binary actually is.
 ///
-/// `None` when [`target_dir`] is `None`, or when `golden` is not a path under
-/// `tests/golden/` — which the scenario format refuses, so the second case is
-/// a caller that did not read the file through [`scenario::load`].
-#[must_use]
-pub fn actual_for(golden: &str) -> Option<PathBuf> {
-    let relative = golden.strip_prefix("tests/golden/")?;
-    let (directory, file) = relative.rsplit_once('/')?;
+/// # Errors
+///
+/// [`ActualError::NotAGolden`] when `golden` is not a path under
+/// `tests/golden/` of that shape, and [`ActualError::NoTargetDir`] when
+/// [`target_dir`] has none.
+pub fn actual_for(golden: &str) -> Result<PathBuf, ActualError> {
+    let relative = golden
+        .strip_prefix("tests/golden/")
+        .ok_or(ActualError::NotAGolden)?;
+    let (directory, file) = relative.rsplit_once('/').ok_or(ActualError::NotAGolden)?;
     let fresh = file
         .strip_prefix("expected.")
-        .map(|suffix| format!("actual.{suffix}"))?;
-    let mut path = target_dir()?.join("golden");
+        .map(|suffix| format!("actual.{suffix}"))
+        .ok_or(ActualError::NotAGolden)?;
+    let mut path = target_dir()
+        .map_err(ActualError::NoTargetDir)?
+        .join("golden");
     for part in directory.split('/') {
         path.push(part);
     }
     path.push(fresh);
-    Some(path)
+    Ok(path)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{actual_for, display, run};
+    use super::{ActualError, actual_for, display, run};
     use crate::exit::Exit;
     use std::path::Path;
 
@@ -217,7 +280,17 @@ mod tests {
             printed.ends_with("golden/scenarios/expand-east-segment/actual.hashes.txt"),
             "{printed}"
         );
-        assert_eq!(actual_for("somewhere/else/expected.hashes.txt"), None);
+        for not_a_golden in [
+            "somewhere/else/expected.hashes.txt",
+            "tests/golden/expected.hashes.txt",
+            "tests/golden/scenarios/x/actual.hashes.txt",
+        ] {
+            assert_eq!(
+                actual_for(not_a_golden),
+                Err(ActualError::NotAGolden),
+                "{not_a_golden}"
+            );
+        }
     }
 
     #[test]

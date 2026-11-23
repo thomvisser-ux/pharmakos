@@ -620,6 +620,16 @@ pub fn scenario_invalid(path: &str, problems: &[(String, String)]) -> String {
     text
 }
 
+/// A scenario whose segments add up to more ticks than a `u32` counts.
+#[must_use]
+pub fn scenario_too_long(source: &str) -> String {
+    let source = pharmakos_proto::json::grammar::escaped(source);
+    format!(
+        "{BINARY} scenario run: `{source}` lists segments that add up to more ticks than this \
+         runner counts (a u32)."
+    )
+}
+
 /// The heading a run prints before its assertions.
 #[must_use]
 pub fn scenario_heading(name: &str, seats: usize, ticks: u32, rules_hash: &str) -> String {
@@ -682,6 +692,16 @@ pub fn scenario_event_late(event: &str, seat: Option<u8>, first: u32, by_tick: u
 pub fn scenario_hash_chain(golden: &str) -> String {
     let golden = pharmakos_proto::json::grammar::escaped(golden);
     format!("the per-tick chain equals `{golden}`")
+}
+
+/// A run whose fresh chain has nowhere to be written.
+#[must_use]
+pub fn scenario_chain_unwritable(golden: &str, why: &str) -> String {
+    let golden = pharmakos_proto::json::grammar::escaped(golden);
+    format!(
+        "{BINARY} scenario run: this run's chain for `{golden}` has nowhere to be written, so \
+         the `golden` step could not compare it: {why}"
+    )
 }
 
 /// The chain golden is not committed yet.

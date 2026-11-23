@@ -227,8 +227,9 @@ fn read_seeds(root: &Path, relative: &Path, shown: &str) -> Result<Vec<Listed>, 
     // at most the cap to refuse: the decoder sees the extra byte and says the
     // file is too large.
     let limit = u64::try_from(seeds::MAX_FILE_BYTES)
-        .map_err(|_| Failure::internal("the seed file's cap does not fit a u64"))?
-        .saturating_add(1);
+        .ok()
+        .and_then(|cap| cap.checked_add(1))
+        .ok_or_else(|| Failure::internal("the seed file's cap and one byte do not fit a u64"))?;
     let mut bytes = Vec::new();
     std::fs::File::open(&path)
         .map_err(unreadable)?
@@ -242,17 +243,14 @@ fn read_seeds(root: &Path, relative: &Path, shown: &str) -> Result<Vec<Listed>, 
 /// The arm's playbook: the file's one `playbook` seat, beside its one
 /// `builtin` seat.
 fn arm_of(scenario: &Scenario) -> Result<String, Failure> {
-    let mut arm = None;
-    let mut builtin = 0_usize;
-    for seat in &scenario.seats {
-        match &seat.kind {
-            SeatKind::Playbook(relative) if arm.is_none() => arm = Some(relative.clone()),
-            SeatKind::Builtin => builtin = builtin.saturating_add(1),
-            _ => return Err(Failure::input(strings::nightly_layout(&scenario.source))),
-        }
-    }
-    match arm {
-        Some(arm) if builtin == 1 && scenario.seats.len() == 2 => Ok(arm),
+    // Exactly two seats, one `playbook` and one `builtin`, in either order:
+    // matched on the whole list, so nothing is counted.
+    match scenario.seats.as_slice() {
+        [first, second] => match (&first.kind, &second.kind) {
+            (SeatKind::Playbook(arm), SeatKind::Builtin)
+            | (SeatKind::Builtin, SeatKind::Playbook(arm)) => Ok(arm.clone()),
+            _ => Err(Failure::input(strings::nightly_layout(&scenario.source))),
+        },
         _ => Err(Failure::input(strings::nightly_layout(&scenario.source))),
     }
 }
@@ -539,7 +537,8 @@ fn write_result(path: &Path, rendered: &str) -> Result<(), Failure> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArmOutcome, NightlyResult, SeedResult, launches_of, render_json, render_text, summarise,
+        ArmOutcome, NightlyResult, SeedResult, arm_of, launches_of, render_json, render_text,
+        summarise,
     };
     use crate::cli::Operator;
     use crate::exit::Exit;
@@ -682,6 +681,37 @@ mod tests {
             lines.get(3).copied(),
             Some("arm_wins 1, shared 0, losses 1 of 2 seed(s): win_rate_percent 50")
         );
+    }
+
+    /// An arm is exactly one `playbook` seat and one `builtin` seat, in
+    /// either order, read from the list's shape rather than counted (E22).
+    #[test]
+    fn an_arm_is_one_playbook_seat_and_one_builtin_seat() {
+        use crate::scenario::{Seat, SeatKind};
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let source = root.join("scenarios/nightly/rusher.scenario.jsonc");
+        let mut arm = crate::scenario::load(root, &source).expect("the Rusher");
+        let playbook = |seat| Seat {
+            seat,
+            kind: SeatKind::Playbook(String::from("p.jsonc")),
+        };
+        let builtin = |seat| Seat {
+            seat,
+            kind: SeatKind::Builtin,
+        };
+        for (seats, wanted) in [
+            (vec![playbook(0), builtin(1)], true),
+            (vec![builtin(0), playbook(1)], true),
+            (vec![playbook(0), playbook(1)], false),
+            (vec![builtin(0), builtin(1)], false),
+            (vec![playbook(0)], false),
+            (vec![playbook(0), builtin(1), builtin(2)], false),
+        ] {
+            arm.seats = seats;
+            assert_eq!(arm_of(&arm).is_ok(), wanted, "{:?}", arm.seats);
+        }
+        arm.seats = vec![builtin(0), playbook(1)];
+        assert_eq!(arm_of(&arm).ok().as_deref(), Some("p.jsonc"));
     }
 
     /// A launch the count cannot place is the sim, the gateway and this

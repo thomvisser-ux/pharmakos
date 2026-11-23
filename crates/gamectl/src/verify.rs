@@ -128,7 +128,7 @@ pub fn run(
 
     match format {
         Format::Text => {
-            let rendered = render_against(&display, &report, &shown);
+            let rendered = render_against(&display, &report, &shown)?;
             if report.qualifies {
                 Ok(rendered)
             } else {
@@ -268,21 +268,25 @@ pub(crate) fn read_bounded(path: &Path) -> std::io::Result<Option<String>> {
 
 /// The report as a person reads it, against the reference seat view.
 ///
-/// Public because `seat doctor` renders one too, and because the shape of this
-/// output is the thing `tests/verify.rs` reads `report_hash` out of.
-#[must_use]
-pub fn render(display: &str, report: &VerifyReport) -> String {
+/// Public because the shape of this output is the thing `tests/verify.rs`
+/// reads `report_hash` out of.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] for a report whose depth or a diagnostic's severity the
+/// schema does not name.
+pub fn render(display: &str, report: &VerifyReport) -> Result<String, Failure> {
     render_against(display, report, &Shown::Reference)
 }
 
-fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> String {
+fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> Result<String, Failure> {
     let view = match shown {
         Shown::Reference => strings::verify_view_reference(),
         Shown::Preset {
             preset, seed, seat, ..
         } => strings::verify_view_preset(preset.shown(), *seed, *seat),
     };
-    let mut text = strings::verify_heading(display, depth_name(report.depth), &view);
+    let mut text = strings::verify_heading(display, depth_name(report.depth)?, &view);
     text.push('\n');
     let errors = report
         .diagnostics
@@ -308,7 +312,7 @@ fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> String
             text,
             "{}",
             strings::verify_diagnostic(
-                severity_name(diagnostic.severity),
+                severity_name(diagnostic.severity)?,
                 &diagnostic.code,
                 &diagnostic.path,
                 &diagnostic.message,
@@ -336,7 +340,7 @@ fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> String
         } => strings::verify_footer_preset(preset.shown(), *seed, *seats, *seat),
     };
     let _ = writeln!(text, "{footer}");
-    text
+    Ok(text)
 }
 
 /// `report_hash` and `rules_hash` are bytes on the wire; a person reads hex.
@@ -349,22 +353,82 @@ pub fn hex(bytes: &[u8]) -> String {
     text
 }
 
-fn depth_name(depth: i32) -> &'static str {
-    if depth == i32::from(Depth::Quick) {
-        "QUICK"
-    } else {
-        "FULL"
+/// How the heading names a report's depth.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] for a depth the report's schema does not name, or one
+/// left unspecified: every report the verifier makes says which depth made
+/// it, so either is the wire's shape having moved (S3's plan, E22; the
+/// earlier version printed every such report as `FULL`).
+fn depth_name(depth: i32) -> Result<&'static str, Failure> {
+    match Depth::try_from(depth) {
+        Ok(Depth::Quick) => Ok("QUICK"),
+        Ok(Depth::Full) => Ok("FULL"),
+        Ok(Depth::Unspecified) | Err(_) => Err(Failure::internal(format!(
+            "a report whose depth is {depth}, which is neither QUICK nor FULL"
+        ))),
     }
 }
 
-fn severity_name(severity: i32) -> &'static str {
-    if severity == i32::from(Severity::Error) {
-        "error"
-    } else if severity == i32::from(Severity::Warning) {
-        "warning"
-    } else if severity == i32::from(Severity::Info) {
-        "info"
-    } else {
-        "?"
+/// How a diagnostic's line names its severity.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] for a severity the schema does not name, or one left
+/// unspecified: the wire's shape having moved, refused rather than printed as
+/// `?` (S3's plan, E22).
+fn severity_name(severity: i32) -> Result<&'static str, Failure> {
+    match Severity::try_from(severity) {
+        Ok(Severity::Error) => Ok("error"),
+        Ok(Severity::Warning) => Ok("warning"),
+        Ok(Severity::Info) => Ok("info"),
+        Ok(Severity::Unspecified) | Err(_) => Err(Failure::internal(format!(
+            "a diagnostic whose severity is {severity}, which is none of error, warning and info"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{depth_name, render, severity_name};
+    use crate::exit::Exit;
+    use pharmakos_proto::gp::api::v1::diagnostic::Severity;
+    use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+    use pharmakos_proto::gp::api::v1::{Diagnostic, VerifyReport};
+
+    /// E22: a depth or a severity the schema does not name, or left
+    /// unspecified, is refused rather than printed as `FULL` or `?`.
+    #[test]
+    fn an_unnamed_depth_or_severity_is_refused() {
+        assert_eq!(depth_name(i32::from(Depth::Quick)), Ok("QUICK"));
+        assert_eq!(depth_name(i32::from(Depth::Full)), Ok("FULL"));
+        for depth in [i32::from(Depth::Unspecified), 99] {
+            let refused = depth_name(depth).expect_err("refused");
+            assert_eq!(refused.code, Exit::Internal);
+        }
+        assert_eq!(severity_name(i32::from(Severity::Error)), Ok("error"));
+        assert_eq!(severity_name(i32::from(Severity::Warning)), Ok("warning"));
+        assert_eq!(severity_name(i32::from(Severity::Info)), Ok("info"));
+        for severity in [i32::from(Severity::Unspecified), -1, 99] {
+            let refused = severity_name(severity).expect_err("refused");
+            assert_eq!(refused.code, Exit::Internal);
+        }
+        let report = VerifyReport {
+            depth: i32::from(Depth::Full),
+            diagnostics: vec![Diagnostic {
+                code: String::from("E0001"),
+                severity: 99,
+                ..Diagnostic::default()
+            }],
+            ..VerifyReport::default()
+        };
+        let refused = render("a.jsonc", &report).expect_err("a severity of 99 is refused");
+        assert!(refused.message.contains("99"), "{}", refused.message);
+        let unspecified = VerifyReport::default();
+        assert!(
+            render("a.jsonc", &unspecified).is_err(),
+            "a report with no depth"
+        );
     }
 }

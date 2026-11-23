@@ -226,12 +226,18 @@ pub struct Played {
 
 impl Played {
     /// How many ticks were played in total.
-    #[must_use]
-    pub fn ticks(&self) -> u32 {
-        self.segments
-            .iter()
-            .copied()
-            .fold(0_u32, u32::saturating_add)
+    ///
+    /// # Errors
+    ///
+    /// [`Exit::Internal`] for a total past a `u32`: [`play_push`] counts each
+    /// segment in a `u32`, and the sum of several is refused rather than
+    /// saturated.
+    pub fn ticks(&self) -> Result<u32, Failure> {
+        self.segments.iter().try_fold(0_u32, |total, ticks| {
+            total
+                .checked_add(*ticks)
+                .ok_or_else(|| Failure::internal("a run of more ticks than a u32 counts"))
+        })
     }
 }
 
@@ -365,7 +371,9 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
     // way. Reviewed finding, wave 5. Computed in `u64` and capped there, so the
     // conversion is from a number below the cap and the sweep of S2's E7
     // leaves no fallback in it.
-    let reserve = u64::from(scenario.ticks())
+    // `saturating_mul` and `min` are exact here: a product past `u64::MAX`
+    // is past the cap, which is what the reservation is held to either way.
+    let reserve = u64::from(scenario.ticks()?)
         .saturating_mul(24)
         .min(CHAIN_RESERVE_CAP);
     let mut played = Played {
@@ -439,7 +447,7 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
 
         surface.end_recap().map_err(internal)?;
         let more = match &mut until {
-            Until::Segments => index.saturating_add(1) < scenario.segments.len(),
+            Until::Segments => next_index(index)? < scenario.segments.len(),
             Until::MatchEnd(ending) => {
                 if phase(&surface)? == MatchPhase::Ended {
                     **ending = Some(ending_of(&surface)?);
@@ -463,9 +471,21 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
             .set_phase_remaining_ms(whole_lull(&surface)?)
             .map_err(internal)?;
         surface.open_lull().map_err(internal)?;
-        index = index.saturating_add(1);
+        index = next_index(index)?;
     }
     Ok(played)
+}
+
+/// The segment after `index`.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] past a `usize`, which a run bounded by its round limit
+/// never reaches.
+fn next_index(index: usize) -> Result<usize, Failure> {
+    index
+        .checked_add(1)
+        .ok_or_else(|| Failure::internal("a segment index past a usize"))
 }
 
 /// The round segment `index` plays, counted from 1, from the runner's own
@@ -1103,7 +1123,7 @@ pub fn check(
     let mut text = strings::scenario_heading(
         &scenario.name,
         scenario.seats.len(),
-        played.ticks(),
+        played.ticks()?,
         &crate::verify::hex(&played.rules_hash.to_be_bytes()),
     );
     text.push('\n');
@@ -1135,7 +1155,9 @@ pub fn check(
                 let _ = writeln!(text, "{}", strings::scenario_assertion_ok(index, &what));
             }
             Err(why) => {
-                failed = failed.saturating_add(1);
+                failed = failed.checked_add(1).ok_or_else(|| {
+                    Failure::internal("more failed assertions than a usize counts")
+                })?;
                 let _ = writeln!(
                     text,
                     "{}",
@@ -1186,17 +1208,42 @@ fn hash_chain_equals(
     golden: &str,
     played: &Played,
 ) -> Result<Result<(), String>, Failure> {
-    let actual_path = crate::actual_for(golden);
-    let written = match &actual_path {
-        Some(path) => {
-            write_actual(path, &played.chain)?;
-            crate::display(path)
+    // A golden under `tests/golden/` has its fresh chain written beside the
+    // target directory's copy, where the `golden` step compares it; with no
+    // target directory the run cannot be checked there, and says so. A
+    // golden outside `tests/golden/` has no fresh path by the convention
+    // (`crate::actual_for`), which the scenario format refuses and the
+    // harness's own tests use to compare a doctored chain without writing it
+    // where the `golden` step reads (T20's items 11 and 12): compared, and
+    // not written.
+    let written = match crate::actual_for(golden) {
+        Ok(path) => {
+            write_actual(&path, &played.chain)?;
+            crate::display(&path)
         }
-        None => String::from("<no target directory to write it to>"),
+        Err(crate::ActualError::NotAGolden) => String::from("<nowhere: not under tests/golden/>"),
+        Err(error @ crate::ActualError::NoTargetDir(_)) => {
+            return Err(Failure::internal(strings::scenario_chain_unwritable(
+                golden,
+                &error.to_string(),
+            )));
+        }
     };
 
-    let Ok(committed) = std::fs::read_to_string(root.join(golden)) else {
-        return Ok(Err(strings::scenario_chain_missing(golden, &written)));
+    // Not there is the assertion's answer; any other failure to read the
+    // committed chain is the file, said with its error.
+    let committed = match std::fs::read_to_string(root.join(golden)) {
+        Ok(committed) => committed,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Err(strings::scenario_chain_missing(golden, &written)));
+        }
+        Err(error) => {
+            return Err(Failure::input(strings::unreadable(
+                "committed chain",
+                golden,
+                &error.to_string(),
+            )));
+        }
     };
     // The committed file is byte-compared, and `.gitattributes` marks
     // tests/golden/** as `-text` so git will not normalise it. A CRLF copy is
@@ -1214,9 +1261,15 @@ fn hash_chain_equals(
         .zip(&actual)
         .position(|(left, right)| left != right)
         .unwrap_or_else(|| expected.len().min(actual.len()));
+    // The line number shown, from 1. `at` is at most the shorter chain's
+    // length, a count of lines held in memory, so one past it is refused only
+    // if a usize could not count them.
+    let line = at
+        .checked_add(1)
+        .ok_or_else(|| Failure::internal("a chain of more lines than a usize counts"))?;
     Ok(Err(strings::scenario_chain_moved(
         golden,
-        at.saturating_add(1),
+        line,
         // A chain shorter than the other has no line at `at`, and
         // the message says which side ended there.
         expected.get(at).copied().unwrap_or("<end of file>"),
@@ -1243,8 +1296,56 @@ fn write_actual(path: &Path, chain: &str) -> Result<(), Failure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{open, whole_lull};
+    use super::{Hunts, Played, hash_chain_equals, next_index, open, whole_lull};
+    use crate::exit::Exit;
     use std::path::Path;
+
+    fn played(segments: Vec<u32>) -> Played {
+        Played {
+            chain: String::new(),
+            events: Vec::new(),
+            segments,
+            notes: Vec::new(),
+            rules_hash: 0,
+            hunts: Hunts::default(),
+        }
+    }
+
+    /// E22: the total of a run's segments is refused past a `u32`, never
+    /// saturated, and so is a segment index past a `usize`.
+    #[test]
+    fn a_count_past_its_type_is_refused() {
+        assert_eq!(played(vec![3_600, 6_000]).ticks(), Ok(9_600));
+        let refused = played(vec![u32::MAX, 1]).ticks().expect_err("past a u32");
+        assert_eq!(refused.code, Exit::Internal);
+        assert_eq!(next_index(4), Ok(5));
+        assert_eq!(
+            next_index(usize::MAX).map_err(|failure| failure.code),
+            Err(Exit::Internal)
+        );
+    }
+
+    /// A committed chain that is there and cannot be read is the file's
+    /// fault, said with its error, not a chain that is missing (E22).
+    #[test]
+    fn a_committed_chain_that_cannot_be_read_is_an_input_error() {
+        let folder = crate::target_dir()
+            .expect("a target directory")
+            .join("scratch")
+            .join("nite3-unreadable-chain");
+        let golden = "tests/golden/scenarios/nite3-unreadable/expected.hashes.txt";
+        // A folder where the chain's file should be: there, and not a file.
+        std::fs::create_dir_all(folder.join(golden)).expect("a scratch folder");
+        let refused = hash_chain_equals(&folder, golden, &played(vec![1])).expect_err("refused");
+        assert_eq!(refused.code, Exit::Input, "{}", refused.message);
+        // And one that is not there is the assertion's own answer.
+        let missing = "tests/golden/scenarios/nite3-missing/expected.hashes.txt";
+        let answer = hash_chain_equals(&folder, missing, &played(vec![1])).expect("an answer");
+        assert!(
+            answer.is_err_and(|why| why.contains("nothing is committed")),
+            "a missing chain is a failed assertion"
+        );
+    }
 
     /// The workspace root: this crate is `<root>/crates/gamectl`.
     fn root() -> &'static Path {
