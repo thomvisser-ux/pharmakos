@@ -507,11 +507,18 @@ fn next_index(index: usize) -> Result<usize, Failure> {
 /// `u32` round count would have refused first, and for a match standing in
 /// another round than the one this runner opened.
 fn round_of(surface: &Surface, index: usize) -> Result<u32, Failure> {
+    held_round(index, round(surface)?)
+}
+
+/// [`round_of`]'s rule, as a pure function of the runner's segment index and
+/// the sim's round (fix pass 1 of #219, item 7): the round the index opens,
+/// counted from 1, when the sim stands in that round, and otherwise the
+/// disagreement, named.
+fn held_round(index: usize, sim_round: u32) -> Result<u32, Failure> {
     let opened = u32::try_from(index)
         .ok()
         .and_then(|index| index.checked_add(1))
         .ok_or_else(|| Failure::internal(format!("segment {index} is past a u32's rounds")))?;
-    let sim_round = round(surface)?;
     if sim_round == opened {
         Ok(opened)
     } else {
@@ -1316,6 +1323,23 @@ mod tests {
             notes: Vec::new(),
             rules_hash: 0,
             hunts: Hunts::default(),
+        }
+    }
+
+    /// Fix pass 1 of #219, item 7: the runner's round is its segment index
+    /// plus one, and a sim standing in any other round is refused, naming both.
+    #[test]
+    fn the_runner_s_round_is_held_to_the_sim_s() {
+        assert_eq!(super::held_round(0, 1), Ok(1));
+        assert_eq!(super::held_round(5, 6), Ok(6));
+        for (index, sim) in [(0, 0), (0, 2), (1, 1), (5, 7)] {
+            let refused = super::held_round(index, sim).expect_err("a disagreement");
+            assert_eq!(refused.code, Exit::Internal);
+            assert!(
+                refused.message.contains(&format!("in round {sim}")),
+                "{}",
+                refused.message
+            );
         }
     }
 
