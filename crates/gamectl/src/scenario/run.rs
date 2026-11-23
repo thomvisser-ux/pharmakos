@@ -1383,25 +1383,36 @@ mod tests {
     }
 
     /// A committed chain that is there and cannot be read is the file's
-    /// fault, said with its error, not a chain that is missing (E22).
+    /// fault, said with its error, not a chain that is missing (E22). The
+    /// goldens are outside `tests/golden/`, so the run writes no fresh
+    /// chain into the tree the `golden` step and the cross-OS artefact read
+    /// (fix pass 1 of #219, item 8).
     #[test]
     fn a_committed_chain_that_cannot_be_read_is_an_input_error() {
         let folder = crate::target_dir()
             .expect("a target directory")
             .join("scratch")
             .join("nite3-unreadable-chain");
-        let golden = "tests/golden/scenarios/nite3-unreadable/expected.hashes.txt";
+        let golden = "scratch/nite3-unreadable/expected.hashes.txt";
         // A folder where the chain's file should be: there, and not a file.
         std::fs::create_dir_all(folder.join(golden)).expect("a scratch folder");
         let refused = hash_chain_equals(&folder, golden, &played(vec![1])).expect_err("refused");
         assert_eq!(refused.code, Exit::Input, "{}", refused.message);
         // And one that is not there is the assertion's own answer.
-        let missing = "tests/golden/scenarios/nite3-missing/expected.hashes.txt";
+        let missing = "scratch/nite3-missing/expected.hashes.txt";
         let answer = hash_chain_equals(&folder, missing, &played(vec![1])).expect("an answer");
         assert!(
             answer.is_err_and(|why| why.contains("nothing is committed")),
             "a missing chain is a failed assertion"
         );
+        for written in ["nite3-unreadable", "nite3-missing"] {
+            let fresh = crate::target_dir()
+                .expect("a target directory")
+                .join("golden")
+                .join("scenarios")
+                .join(written);
+            assert!(!fresh.exists(), "{} was written", fresh.display());
+        }
     }
 
     /// The workspace root: this crate is `<root>/crates/gamectl`.
