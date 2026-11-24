@@ -33,6 +33,14 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// The most a report for the longest file may be: an eighth of the 1 MiB inbound buffer
+/// the client had when this test was written. The report's real cap is lane `vcap`'s to
+/// set (decisions-log item 183 (4)); until then the allowance stays where it was, and
+/// the client's buffer may only grow under it (`the_allowance_is_within_the_clients_buffer`).
+const REPORT_ALLOWANCE_BYTES: usize = 131_072;
+// The ruled 128 KiB, held at compile time: raising it is a ruling, not an edit (fix pass 3).
+const _: () = assert!(REPORT_ALLOWANCE_BYTES == 128 * 1024);
+
 /// The client's inbound buffer, read from the client's own source rather
 /// than written here a second time (the verifier may not depend on the
 /// walled client crate, so the line is read as text).
@@ -92,15 +100,11 @@ fn the_report_for_the_longest_file_fits_the_clients_buffer_with_room() {
     let steps = longest_route();
     assert!(!is_too_long(&steps));
     let report = report_text(&steps);
-    let budget = inbound_bytes()
-        .checked_div(8)
-        .expect("a buffer of some size");
     assert!(
-        report.len() <= budget,
-        "a report of {} bytes for the longest route, past an eighth of the client's {} \
-         byte buffer",
+        report.len() <= REPORT_ALLOWANCE_BYTES,
+        "a report of {} bytes for the longest route, past the {REPORT_ALLOWANCE_BYTES}-byte \
+         allowance",
         report.len(),
-        inbound_bytes()
     );
     // Past the size budget, no per-step note is written at all.
     assert!(
@@ -109,6 +113,21 @@ fn the_report_for_the_longest_file_fits_the_clients_buffer_with_room() {
     );
     let notes = report.matches("\"I0003\"").count();
     assert!(notes <= 1, "{notes} I0003 notes past the size budget");
+}
+
+/// The allowance is no more than an eighth of the client's inbound buffer, so the buffer can
+/// never shrink under it unseen.
+#[test]
+fn the_allowance_is_within_the_clients_buffer() {
+    let eighth = inbound_bytes()
+        .checked_div(8)
+        .expect("a buffer of some size");
+    assert!(
+        REPORT_ALLOWANCE_BYTES <= eighth,
+        "the {REPORT_ALLOWANCE_BYTES}-byte allowance is past an eighth of the client's {} \
+         byte buffer",
+        inbound_bytes()
+    );
 }
 
 #[test]
