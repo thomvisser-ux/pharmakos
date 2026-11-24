@@ -272,9 +272,11 @@ func status_line(state: Dictionary) -> String:
 		parts.append(preset)
 	# The gateway kept refusing the Lull's closing countdown at zero: the rig gave it up and
 	# ended the Lull without it, and the line says so in the gateway's words.
-	var zero_refused := String(state.get("zero_refusal", ""))
-	if zero_refused != "":
-		parts.append(Strings.text("lobby_zero_refused", {"detail": zero_refused}))
+	if state.has("zero_cause"):
+		parts.append(Strings.text("lobby_zero_" + String(state["zero_cause"]), {"detail": state.get("zero_refusal", "")}))
+	# The map view's answer was too big to read: it is held until the next phase (fix pass 5).
+	if state.get("view_held", false):
+		parts.append(Strings.text("lobby_view_held"))
 	return "  ".join(parts)
 
 
@@ -366,7 +368,7 @@ func _draw_recap(phase: String) -> void:
 	_recap.visible = shown
 	if shown:
 		if refusal != "":
-			_recap.text = Strings.text("lobby_recap_refused", {"refusal": refusal})
+			_recap.text = Strings.text("recap_failed_" + String(recap.get("refusal_cause", "refused")), {"detail": refusal})
 		else:
 			_recap.text = recap_text_of(recap)
 		_recap.accessibility_name = _recap.text

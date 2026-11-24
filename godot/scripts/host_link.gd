@@ -36,6 +36,7 @@
 extends Node
 
 const Values := preload("res://scripts/values.gd")
+const Strings := preload("res://scripts/strings.gd")
 
 ## Emitted once the host has announced itself and both connections have been started.
 signal announced(match_id: String)
@@ -125,6 +126,8 @@ var _port := 0
 var _tokens := ["", ""]
 var _peers: Array = [null, null]
 var _open := [false, false]
+## Whether the bridge has been told of each link's current close: told once per close.
+var _close_told := [false, false]
 var _done := false
 
 
@@ -394,6 +397,7 @@ func reset() -> void:
 	_port = 0
 	_peers = [null, null]
 	_open = [false, false]
+	_close_told = [false, false]
 	_done = false
 
 
@@ -490,17 +494,21 @@ func _pump_link(link: int) -> void:
 			if not answer.is_empty():
 				received.emit(answer)
 	elif state == WebSocketPeer.STATE_CLOSED and not _done:
-		# Every close is the rig's to read, one that never opened included: it classes a close on
-		# a message apart from the connection's, and keeps the reconnect budget (fix pass 4: this
-		# link counted every close against five for the match, so a few too-big answers ended a
-		# playable match). This script decides nothing from the code.
-		bridge.watch_dropped(link, peer.get_close_code())
+		# Every close is the rig's to read, once, one that never opened included; what happens next
+		# is the rig's reconnect policy (fix pass 5): this script asks it every frame and decides
+		# nothing itself, neither from the code nor from whether the host still runs.
+		if not _close_told[link]:
+			_close_told[link] = true
+			bridge.watch_dropped(link, peer.get_close_code())
 		_open[link] = false
-		if not bridge.watch_may_reconnect(link) or not host_running():
-			_done = true
-			failed.emit("connection %d closed (%d, %s) and the host is gone or will not take it back" % [link, peer.get_close_code(), peer.get_close_reason()])
-			return
-		_connect(link)
+		match bridge.watch_link_action(link):
+			"connect":
+				_close_told[link] = false
+				_connect(link)
+			"give_up":
+				_done = true
+				var why: Dictionary = bridge.watch_give_up(link)
+				failed.emit(Strings.text("link_gave_up", {"link": Strings.text("connection_" + ("admin" if link == 0 else "seat")), "attempts": why.get("attempts", 0), "code": why.get("code", -1)}))
 
 
 func _drain_stderr() -> void:

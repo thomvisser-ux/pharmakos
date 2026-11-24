@@ -38,10 +38,10 @@ const TEXT := {
 	# With a seal the gateway accepted this round (S3's `fixp`).
 	"lobby_ready_sealed": "Your seal for this round stands: Ready keeps it.",
 	"ready_failed_refused": "Ready was not taken: the gateway refused it ({detail}). Press Ready again.",
-	"ready_failed_unreadable": "Ready may not have been taken: its answer could not be read ({detail}). Press Ready again.",
+	"ready_failed_unreadable": "Ready may have been taken (its answer could not be read: {detail}); asking the gateway again.",
 	"ready_failed_too_large": "Ready was not sent: it was too large to send ({detail} bytes). Press Ready again.",
 	"ready_failed_send_failed": "Ready was not sent: the connection refused to send it (error {detail}). Press Ready again.",
-	"ready_failed_closed_on": "Ready was not taken: the connection closed on it (code {detail}). Press Ready again.",
+	"ready_failed_closed_on": "Ready may have been taken (the connection closed on it: code {detail}); asking the gateway again.",
 	"lobby_ready_asking": "Asking the gateway whether you hold a seal this round...",
 	"lobby_ready_not_told": "Not told whether you hold a seal this round: the gateway refused to say ({detail}). Ready still ends your Lull.",
 	"lobby_continue": "Continue",
@@ -72,7 +72,11 @@ const TEXT := {
 	# found nothing are its sentences (S1's plan, task `ui`) - under this heading.
 	"lobby_recap": "Recap of round {round}: {prose}",
 	# A refused get_recap: the gateway's refusal, code and message, as it came.
-	"lobby_recap_refused": "The recap could not be read: {refusal}",
+	"recap_failed_refused": "The recap was not read: the gateway refused it ({detail}).",
+	"recap_failed_unreadable": "The recap was not read: its answer could not be read ({detail}).",
+	"recap_failed_too_large": "The recap was not read: its call was too large to send ({detail} bytes).",
+	"recap_failed_send_failed": "The recap was not read: the connection refused to send its call (error {detail}).",
+	"recap_failed_closed_on": "The recap was not read: the connection closed on it (code {detail}).",
 	# Every seat's tally once the match is decided (item 145 (7)), one frame a seat, each number
 	# as the gateway counted it.
 	"lobby_recap_tallies": "Every seat's tally:",
@@ -378,6 +382,13 @@ const TEXT := {
 	"status_new_opened": "A new playbook is in the editor; the checks say what it still needs. Undo takes it back.",
 	"status_picking": "Click the map for the new value; Escape stops.",
 	"lobby_zero_refused": "The Lull ran out, and the gateway refused to be told so: {detail}",
+	"lobby_zero_unreadable": "The Lull ran out, and the gateway's answer to being told so could not be read ({detail}); asking it again.",
+	"lobby_zero_too_large": "The Lull ran out, and telling the gateway so was too large to send ({detail} bytes).",
+	"lobby_zero_send_failed": "The Lull ran out, and the connection refused to send that (error {detail}).",
+	"lobby_zero_closed_on": "The Lull ran out, and the connection closed on telling the gateway so (code {detail}).",
+	"lobby_view_held": "The map's last answer was too big for this client to read, so the map will not refresh until the next phase.",
+	"link_gave_up": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last close was code {code}.",
+	"status_call_maybe_taken": "The answer to that was lost ({detail}), so it may have been taken; reading it again from the gateway.",
 	"status_anchoring": "Click the ground where the target goes; Escape stops.",
 	# A wall's box from two clicks (S3's `fixq-c`, item 4); the box itself is the gateway's.
 	"status_wall_first": "Click the ground at one corner of the wall; Escape stops.",

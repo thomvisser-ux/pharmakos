@@ -463,13 +463,28 @@ const PACING_MODULE: &str = "pacer.rs";
 /// file, and it appears there once (`the_scheduling_sums_are_one_line_each`): any other
 /// line, the same identifier with a different computation on it included, is still an
 /// offence.
-const SCHEDULING_SUMS: &[(&str, &str)] = &[(
-    "rig.rs",
-    "self.keyframe_not_before_us = self.timing.now_us().saturating_add(KEEPALIVE_US);",
-)];
+///
+/// Fix pass 5 adds the reconnect policy's two (`rig.rs`'s `Reconnect`, connection scheduling
+/// too): when a closed link may be opened again (`retry_at_us`, the close's time plus its place
+/// in [`pharmakos_client_gdext::rig::RECONNECT_BACKOFF_US`]), and how long an open link has been
+/// up (`up_us`), which decides when its count returns.
+const SCHEDULING_SUMS: &[(&str, &str)] = &[
+    (
+        "rig.rs",
+        "self.keyframe_not_before_us = self.timing.now_us().saturating_add(KEEPALIVE_US);",
+    ),
+    (
+        "rig.rs",
+        "self.retry_at_us = wait.map(|wait| now_us.saturating_add(wait));",
+    ),
+    (
+        "rig.rs",
+        "let up_us = self.opened_at_us.map(|at| now_us.saturating_sub(at));",
+    ),
+];
 
 /// The identifier each of [`SCHEDULING_SUMS`]'s lines assigns, for the one-line check.
-const SCHEDULING_IDENTIFIERS: &[&str] = &["keyframe_not_before_us"];
+const SCHEDULING_IDENTIFIERS: &[&str] = &["keyframe_not_before_us", "retry_at_us", "up_us"];
 
 /// Whether `code`, a line of `file` in `src/`, is one of [`SCHEDULING_SUMS`], word for
 /// word once comments are stripped.

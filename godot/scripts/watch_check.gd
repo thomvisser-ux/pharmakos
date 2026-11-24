@@ -588,7 +588,10 @@ func _host_gone() -> void:
 	if not ended:
 		_failures.append("the host went away and the link never gave up")
 		return
-	print("[watch-check] the host went away (pid %d) and the link gave up: %s" % [pid, _refused_reason])
+	# The give-up is the reconnect policy's, in its own words (fix pass 5).
+	if not _refused_reason.contains("connection was given up after") or not Strings.text("link_gave_up").contains("connection was given up after"):
+		_failures.append("the host went away and the link gave up in words that are not the policy's: %s" % _refused_reason)
+	print("[watch-check] the host went away (pid %d) and the reconnect policy gave the link up: %s" % [pid, _refused_reason])
 
 ## A line remembered before the preset existed (six fields) is refused by the gateway when it
 ## is resumed, and the link then starts another host (S3's `prob`; the plan's E6): what the
@@ -1918,6 +1921,11 @@ func _closes_on_a_message() -> bool:
 	var text: PackedByteArray = vista.bridge.editor_bytes()
 	var closes := _count(_state(), "message_drops_seat")
 	for attempt in 6:
+		# Each close counts against the seat link's reconnect policy, so the next load waits until
+		# the link has stayed up with an answer and its count is back to zero (fix pass 5).
+		if not await _until(func() -> bool: return vista.bridge.watch_link_attempts(1) == 0, PUSH_WAIT):
+			_failures.append("the planning wire: the seat link never became healthy again before big load %d" % attempt)
+			return false
 		var before := _count(_editor(), "closed_on_calls")
 		if not editor.load_bytes(big):
 			_failures.append("the planning wire: big load %d was not taken to the gateway" % attempt)
@@ -1929,9 +1937,9 @@ func _closes_on_a_message() -> bool:
 		_failures.append("the planning wire: six big loads closed the seat link on a message %d times" % (_count(_state(), "message_drops_seat") - closes))
 	if vista.bridge.editor_bytes() != text:
 		_failures.append("the planning wire: a load refused on its message changed the text on screen")
-	if not vista.bridge.watch_may_reconnect(1):
-		_failures.append("the planning wire: closes on a message spent the seat link's reconnect budget")
-	print("[watch-check] the planning wire: six loads closed the seat link on their message (%s), each said: `%s`; the link open again and its budget whole" % [_state().get("closed_on", {}), Lobby.closed_on_line(_state())])
+	if vista.bridge.watch_link_action(1) == "give_up":
+		_failures.append("the planning wire: six closes on a message, each followed by a healthy spell, gave the seat link up")
+	print("[watch-check] the planning wire: six loads closed the seat link on their message (%s), each said: `%s`; the link healthy again after each" % [_state().get("closed_on", {}), Lobby.closed_on_line(_state())])
 	return true
 
 

@@ -865,6 +865,11 @@ pub(crate) fn recap_dictionary(recap: &Recap) -> VarDictionary {
     out.set(&"round".to_variant(), &i64::from(recap.round).to_variant());
     out.set(&"prose".to_variant(), &recap.prose.to_variant());
     out.set(&"refusal".to_variant(), &recap.refusal.to_variant());
+    // Its cause, for the string table's `recap_failed_<cause>` row (fix pass 5).
+    out.set(
+        &"refusal_cause".to_variant(),
+        &recap.refusal_cause.to_variant(),
+    );
     let mut tallies = VarArray::new();
     for seat in &recap.seat_tallies {
         let mut one = VarDictionary::new();

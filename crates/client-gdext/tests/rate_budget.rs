@@ -348,6 +348,6 @@ fn a_refused_closing_zero_is_retried_within_the_budget_and_then_given_up() {
     assert_eq!(gateway.rate_limited, 0, "{:?}", gateway.methods);
     assert_eq!(
         rig.zero_refusal(),
-        Some("INVALID_ARGUMENT: no countdown here")
+        Some(("refused", "INVALID_ARGUMENT: no countdown here"))
     );
 }

@@ -575,14 +575,54 @@ impl PharmakosBridge {
         }
     }
 
-    /// Whether connection `link` (0 admin, 1 seat) may be opened again after a close: the rig's
-    /// reconnect budget, which a close on a message does not spend and an answer gives back
-    /// (fix pass 4). `host_link.gd` asks this and counts nothing itself.
+    /// What `host_link.gd` does next with connection `link` (0 admin, 1 seat): `wait`,
+    /// `connect` or `give_up`, as the rig's reconnect policy says (fix pass 5). The script asks
+    /// this every frame a link is closed, and decides nothing itself.
     #[func]
-    fn watch_may_reconnect(&self, link: i64) -> bool {
-        match (self.rig.as_ref(), usize::try_from(link)) {
-            (Some(rig), Ok(link)) => rig.may_reconnect(link),
-            _ => false,
+    fn watch_link_action(&self, link: i64) -> GString {
+        let action = match (self.rig.as_ref(), usize::try_from(link)) {
+            (Some(rig), Ok(link)) => rig.link_action(link),
+            _ => None,
+        };
+        GString::from(match action {
+            Some(crate::rig::LinkAction::Wait) => "wait",
+            Some(crate::rig::LinkAction::Connect) => "connect",
+            Some(crate::rig::LinkAction::GiveUp) => "give_up",
+            // No rig, or no such link: there is nothing to open again.
+            None => "no_link",
+        })
+    }
+
+    /// Why connection `link` was given up: `attempts` (in a row, none of which stayed up) and
+    /// `code` (the last close's code, -1 for a connection lost with none); empty when it was not.
+    #[func]
+    fn watch_give_up(&self, link: i64) -> VarDictionary {
+        let mut words = VarDictionary::new();
+        if let (Some(rig), Ok(link)) = (self.rig.as_ref(), usize::try_from(link))
+            && let Some((attempts, last)) = rig.give_up(link)
+        {
+            words.set(&"attempts".to_variant(), &i64::from(attempts).to_variant());
+            let code = match last {
+                Some(crate::rig::Close::ThisMessage(code)) => i64::from(code),
+                Some(crate::rig::Close::Connection) | None => -1,
+            };
+            words.set(&"code".to_variant(), &code.to_variant());
+        }
+        words
+    }
+
+    /// Closes on connection `link` since it was last healthy (the rig's reconnect policy).
+    #[func]
+    fn watch_link_attempts(&self, link: i64) -> i64 {
+        match (
+            self.rig.as_ref(),
+            usize::try_from(link)
+                .ok()
+                .and_then(|link| self.rig.as_ref()?.link_attempts(link)),
+        ) {
+            (Some(_), Some(attempts)) => i64::from(attempts),
+            // No rig, or no such link: said as no count.
+            _ => -1,
         }
     }
 
@@ -1869,10 +1909,12 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
         &"countdowns_sent".to_variant(),
         &int_variant(rig.countdowns_sent()),
     );
-    state.set(
-        &"zero_refusal".to_variant(),
-        &text_or_empty(rig.zero_refusal()).to_variant(),
-    );
+    // A given-up zero report, with its cause for the string table's `lobby_zero_<cause>` row.
+    if let Some((cause, said)) = rig.zero_refusal() {
+        state.set(&"zero_refusal".to_variant(), &said.to_variant());
+        state.set(&"zero_cause".to_variant(), &cause.to_variant());
+    }
+    state.set(&"view_held".to_variant(), &rig.view_held().to_variant());
     state.set(&"speed".to_variant(), &i64::from(rig.speed()).to_variant());
     state.set(&"skipping".to_variant(), &rig.skipping().to_variant());
     state.set(&"all_ready".to_variant(), &rig.all_ready().to_variant());

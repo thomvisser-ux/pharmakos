@@ -1359,6 +1359,9 @@ pub struct Editor {
     refusals: u32,
     /// The editor's calls that did not complete for another cause ([`Editor::unfinished`]).
     unfinished: UnfinishedCalls,
+    /// Calls that write (a submission, the notes, a draft) whose answer was lost since the rig
+    /// last asked: the rig reads the seat's seal again ([`Editor::take_lost_write`]).
+    lost_writes: u32,
     changes: u64,
     templates: Vec<TemplateRow>,
     wizard: Option<Wizard>,
@@ -3253,6 +3256,12 @@ impl Editor {
         !self.queue.is_empty() || self.in_flight.is_some()
     }
 
+    /// Whether one of the editor's calls is in flight: what "Sending..." means.
+    #[must_use]
+    pub const fn call_in_flight(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
     /// Whether an edit is waiting or in flight.
     #[must_use]
     pub fn busy(&self) -> bool {
@@ -3312,10 +3321,21 @@ impl Editor {
         };
         self.touch();
         let check = check_of(&sent);
+        let wrote = writes(&sent).then(|| sent.clone());
         let settled = match answer {
             Ok(result) => self.settle(sent, result).map(|()| Settled::Answered),
             Err((code, message)) => Ok(self.refused(&sent, code, message)),
         };
+        // A write whose answer could not be read may have been taken; any other call's answer
+        // that could not be read is said on the status line, unless it was a check of the text,
+        // whose own line says it below (fix pass 5: a read's unreadable answer was said nowhere).
+        if let Err(error) = &settled {
+            match wrote {
+                Some(wrote) => self.write_lost(&wrote, &error.to_string()),
+                None if check.is_none() => self.say("call_unreadable", &error.to_string()),
+                None => {}
+            }
+        }
         // An answer to a check of the text on screen that this client could not read will not
         // be asked again by itself: its line says so rather than wait for ever (M4).
         if let (Err(error), Some((check, revision))) = (&settled, check)
@@ -4726,10 +4746,35 @@ impl Editor {
             Cause::Unreadable => Refuser::Unreadable,
         };
         let settled = self.refused_by(&sent, refuser, detail);
+        // A write whose answer was lost (the link closed on it, or it could not be read) may have
+        // been taken: never "nothing changed" (fix pass 5).
+        if matches!(cause, Cause::ClosedOn | Cause::Unreadable) && writes(&sent) {
+            self.write_lost(&sent, detail);
+        }
         if self.door != Door::Open {
             self.shut();
         }
         settled
+    }
+
+    /// A write's answer was lost: said as possibly taken, and what it would have changed read
+    /// again (the notebook and the briefing, the drafts; a submission's seal by the rig).
+    fn write_lost(&mut self, sent: &Sent, detail: &str) {
+        self.say("call_maybe_taken", detail);
+        self.lost_writes = self.lost_writes.saturating_add(1);
+        let reread = match sent {
+            Sent::SaveDraft => Job::Drafts,
+            _ => Job::Briefing,
+        };
+        if !self.queue.contains(&reread) {
+            self.queue.push_back(reread);
+        }
+    }
+
+    /// Whether a write's answer was lost since the last ask, and forgets it: the rig then reads
+    /// the seat's seal again.
+    pub fn take_lost_write(&mut self) -> bool {
+        std::mem::take(&mut self.lost_writes) > 0
     }
 
     /// The editor's calls that did not complete for a reason other than the gateway's
@@ -4910,6 +4955,15 @@ pub struct UnfinishedCalls {
     pub closed_on: u32,
     /// [`Cause::Unreadable`].
     pub unreadable: u32,
+}
+
+/// Whether `sent` is a call that changes something at the gateway: a submission, the notes, a
+/// draft. Every other editor call reads or computes.
+const fn writes(sent: &Sent) -> bool {
+    matches!(
+        sent,
+        Sent::Submit { .. } | Sent::Notes { .. } | Sent::SaveDraft
+    )
 }
 
 /// The string table's key for a call whose answer could not be read.

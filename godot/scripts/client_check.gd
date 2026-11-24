@@ -1950,20 +1950,24 @@ static func _worst_page() -> String:
 	return JSON.stringify(page, "  ", false) + "\n"
 
 
-## **A close on a message is said, with the connection's state** (fix pass 3, item 3): the seat
-## connection closed with 1009, as Godot closes a peer an answer overflows, is on the watch state
-## and in the lobby's status line, with "opening again"; once it is open again, the line says so.
+## **A close on a message is said, with the connection's state** (fix passes 3 to 5, item 3).
+## A 1009 with no call in flight carried nothing, so nothing is said as closed on a message; the
+## rig's reconnect policy has the link opened again at once (its first retry); and the words for a
+## close the rig did record (on the map view or an editor call, `tests` in `rig.rs`) name the code
+## and the connection's state, as the bridge's `closed_on` gives them.
 func _check_a_close_on_a_message_is_said(bridge: Node, failures: Array[String]) -> void:
 	bridge.watch_dropped(1, 1009)
-	var state: Dictionary = bridge.watch_state()
-	var closed: Dictionary = state.get("closed_on", {})
-	if String(closed.get("connection", "")) != "seat" or closed.get("code", 0) != 1009:
-		failures.append("a 1009 close on the seat connection is not on the watch state: %s" % closed)
-	var said := Lobby.closed_on_line(state)
-	if not said.contains("1009") or not said.contains(Strings.text("link_reopening")):
-		failures.append("a 1009 close is not said with the connection's state: `%s`" % said)
+	if bridge.watch_state().has("closed_on"):
+		failures.append("a 1009 close that carried no call is said as a close on a message: %s" % bridge.watch_state().get("closed_on"))
+	if String(bridge.watch_link_action(1)) != "connect":
+		failures.append("the seat link's first reconnect is not due at once: %s" % bridge.watch_link_action(1))
 	bridge.watch_opened(1)
-	said = Lobby.closed_on_line(bridge.watch_state())
+	var closed := {"connection": "seat", "code": 1009, "call": "view", "open": false}
+	var said := Lobby.closed_on_line({"closed_on": closed})
+	if not said.contains("1009") or not said.contains(Strings.text("link_reopening")) or not said.contains(Strings.text("call_word_view")):
+		failures.append("a 1009 close is not said with its code, its call and the connection's state: `%s`" % said)
+	closed["open"] = true
+	said = Lobby.closed_on_line({"closed_on": closed})
 	if not said.contains(Strings.text("link_open")):
 		failures.append("a connection open again after a close on a message is not said so: `%s`" % said)
 
