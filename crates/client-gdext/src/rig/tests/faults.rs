@@ -335,8 +335,11 @@ mod tests {
             if random.chance(15) {
                 rig.editor_mut().save_notes("notes");
             }
-            if random.chance(10) {
-                let _ = rig.editor_mut().load(br#"{"schema_version":{"major":1}}"#);
+            // One seed in five has a player who loads a new text every frame (fix pass 7, item
+            // 3); the rest load now and then.
+            if random.chance(10) || seed.checked_rem(5) == Some(0) {
+                let text = format!("// {step}\n{{\"schema_version\":{{\"major\":1}}}}");
+                let _ = rig.editor_mut().load(text.as_bytes());
             }
             if random.chance(8) {
                 let _ = rig.editor_mut().submit();
@@ -920,6 +923,63 @@ mod tests {
                 said.contains(named),
                 "a {bad:?} rig was not caught by \"{named}\": {said}"
             );
+        }
+    }
+
+    /// The most a seat link that closes on every message may be sent before it is given up: one
+    /// message an attempt, and the attempts the policy allows (fix pass 7, item 3).
+    const EVERY_MESSAGE_CLOSES_SENDS: u64 = 2 * (RECONNECTS as u64 + 1);
+
+    /// **A free close is free only on a link that has answered since it opened** (fix pass 7,
+    /// item 3; review 6's `p6_seat_closes_every_message`: a seat link closing on every message,
+    /// while the player loaded a new text every frame, made 10 653 sends over 195 s before it was
+    /// given up). The admin link answers; the seat link closes on every message it is sent, with
+    /// each of three codes, while the player loads a new text every `gap`. The seat link is given
+    /// up within [`EVERY_MESSAGE_CLOSES_SENDS`] sends.
+    #[test]
+    fn a_seat_link_closing_on_every_message_is_given_up_within_its_bound() {
+        for code in [1009_i64, 1008, 1000] {
+            for gap in [16_667_u64, 100_000, 500_000, 2_000_000] {
+                let mut rig = Rig::new();
+                let mut now = 0_u64;
+                let mut next_click = 1_000_000_u64;
+                let mut clicks = 0_u64;
+                let mut seat_sends = 0_u64;
+                let mut gave_up = false;
+                while now < 600_000_000 && !gave_up {
+                    now = now.saturating_add(16_667);
+                    for link in [ADMIN, SEAT] {
+                        if rig.links.get(link).is_some_and(|state| state.open) {
+                            continue;
+                        }
+                        match rig.link_action(link) {
+                            Some(LinkAction::Connect) => rig.opened(link),
+                            Some(LinkAction::GiveUp) => gave_up = true,
+                            Some(LinkAction::Wait) | None => {}
+                        }
+                    }
+                    if now >= next_click {
+                        clicks = clicks.saturating_add(1);
+                        let text = format!("// T{clicks}\n{{\"schema_version\":{{\"major\":1}}}}");
+                        let _ = rig.editor_mut().load(text.as_bytes());
+                        next_click = now.saturating_add(gap);
+                    }
+                    rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+                    for frame in rig.poll(now) {
+                        if frame.link == SEAT {
+                            seat_sends = seat_sends.saturating_add(1);
+                            rig.closed(SEAT, Close::of_code(code));
+                        } else {
+                            let method = method_of(&frame.text);
+                            let _ = rig.receive(ADMIN, &right(id_of(&frame.text), &method, LULL));
+                        }
+                    }
+                }
+                assert!(
+                    gave_up && seat_sends <= EVERY_MESSAGE_CLOSES_SENDS,
+                    "code {code} gap {gap}: gave up {gave_up} after {seat_sends} seat sends"
+                );
+            }
         }
     }
 

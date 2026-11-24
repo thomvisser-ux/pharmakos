@@ -697,10 +697,11 @@ impl Reconnect {
         self.last = Some(close);
     }
 
-    /// The link closed at `now_us` on the answer to a request the player made (an editor call):
-    /// the link is opened again at once and the close spends no attempt, since the rig never
-    /// sends that request again by itself (fix pass 6: six Load clicks on a file whose answer is
-    /// too big gave the seat link up).
+    /// The link closed at `now_us` on the answer to a request the player made (an editor call),
+    /// on a link that has answered since it opened: the link is opened again at once and the
+    /// close spends no attempt, since the rig never sends that request again by itself (fix pass
+    /// 6: six Load clicks on a file whose answer is too big gave the seat link up). A link that
+    /// has not answered counts the close like any other (fix pass 7).
     const fn closed_free(&mut self, now_us: u64, close: Close) {
         self.retry_at_us = Some(now_us);
         self.opened_at_us = None;
@@ -1291,7 +1292,9 @@ impl Rig {
         // exception is a close on an editor call's message: the player's request, which the rig
         // never sends again by itself and holds until it changes (fix pass 6).
         let now = self.timing.now_us();
-        if matches!(on_its_message, Some((_, Purpose::Plan))) {
+        // Free only on a link that has answered since it opened (fix pass 7, item 3): a link that
+        // closes on every message, the player's included, counts every close.
+        if matches!(on_its_message, Some((_, Purpose::Plan))) && state.reconnect.answered {
             state.reconnect.closed_free(now, close);
         } else {
             state.reconnect.closed(now, close);
