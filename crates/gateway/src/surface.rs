@@ -2834,13 +2834,52 @@ impl Surface {
     ///
     /// As [`Surface::host`]; [`crate::error::Code::PhaseClosed`] outside a
     /// Lull, because a seal is made in the Lull it is for;
-    /// [`crate::error::Code::NotFound`] for a seat the match has not got; and
-    /// as [`Surface::harness_seal`].
+    /// `INVALID_ARGUMENT` for a text past
+    /// `pharmakos_verifier::MAX_PLAYBOOK_CHARS`, the cap every way a seal is
+    /// made applies; [`crate::error::Code::NotFound`] for a seat the match has
+    /// not got; and as [`Surface::harness_seal`]. Every call is audited as
+    /// `seal by harness`, with its outcome, as `file advice` is.
     pub fn seal_by_harness(&mut self, seat: SeatId, playbook_jsonc: &str) -> Result<(), Error> {
+        let tick = self.time.tick;
+        let sealed = self.harnessed(seat, playbook_jsonc);
+        // Audited, like every other way a seal is made, with its outcome.
+        match &sealed {
+            Ok(()) => {
+                self.audit.record(
+                    tick,
+                    Some(Subject::Seat(seat)),
+                    None,
+                    "seal by harness",
+                    Outcome::Ok,
+                );
+            }
+            Err(error) => {
+                self.audit.refused(
+                    tick,
+                    Some(Subject::Seat(seat)),
+                    None,
+                    "seal by harness",
+                    error,
+                );
+            }
+        }
+        sealed
+    }
+
+    /// [`Surface::seal_by_harness`]'s seal, unaudited: the phase, the size
+    /// cap every seal's text is held to (`submit_plan`'s and an advised safe
+    /// playbook's), the seal, and its filing.
+    fn harnessed(&mut self, seat: SeatId, playbook_jsonc: &str) -> Result<(), Error> {
         if self.host()?.runner().phase() != MatchPhase::Lull {
             return Err(Error::phase_closed(
                 "a playbook is sealed during a Lull, for the round about to be played",
             ));
+        }
+        if pharmakos_verifier::is_too_long(playbook_jsonc) {
+            return Err(Error::invalid(said!(
+                "a playbook is at most {} characters, sealed by the harness or not",
+                pharmakos_verifier::MAX_PLAYBOOK_CHARS
+            )));
         }
         let round = self.host()?.runner().round();
         let unfiled = self.harness_seal(seat, playbook_jsonc)?;

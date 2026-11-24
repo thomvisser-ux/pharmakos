@@ -778,6 +778,62 @@ fn the_carried_price_is_the_projection_of_the_sealed_text() {
     );
 }
 
+/// The scenario harness's door holds a seal to the rules every other door
+/// does (S3's `fpstream`, part 2, fix pass 3): it is audited as `seal by
+/// harness` with its outcome, a text past the size cap is refused before
+/// anything reads it, and a seal it makes is filed for the round it is made in,
+/// carrying its own text's fingerprint.
+#[test]
+fn the_harness_door_is_audited_and_capped() {
+    let mut surface = new_match("m-fpstream2-harness-door");
+    let last = |surface: &mut Surface| {
+        surface
+            .audit()
+            .entries()
+            .iter()
+            .rev()
+            .find(|entry| entry.action == "seal by harness")
+            .map(|entry| (entry.subject, entry.outcome.render()))
+            .expect("the door is audited")
+    };
+    let past = "x".repeat(pharmakos_verifier::MAX_PLAYBOOK_CHARS.saturating_add(1));
+    let refused = surface
+        .seal_by_harness(SeatId::new(0), &past)
+        .expect_err("past the cap");
+    assert_eq!(
+        refused.code(),
+        pharmakos_gateway::error::Code::InvalidArgument
+    );
+    assert!(
+        refused.message().contains("at most"),
+        "{}",
+        refused.message()
+    );
+    let (subject, outcome) = last(&mut surface);
+    assert_eq!(subject, Some(Subject::Seat(SeatId::new(0))));
+    assert_ne!(outcome, "ok", "a refusal is audited as one");
+    assert!(
+        surface
+            .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
+            .expect("its own")
+            .sealed()
+            .is_none(),
+        "nothing is sealed past the cap"
+    );
+
+    let text = walk_east(&surface, 0, 4, 3);
+    surface
+        .seal_by_harness(SeatId::new(0), &text)
+        .expect("the harness seals it");
+    let (subject, outcome) = last(&mut surface);
+    assert_eq!(subject, Some(Subject::Seat(SeatId::new(0))));
+    assert_eq!(outcome, "ok");
+    let sealed = seal_of(&surface, SeatId::new(0));
+    assert_eq!(sealed.round(), surface.time().round);
+    assert!(!sealed.filed_by_the_gateway());
+    assert_eq!(sealed.plan_fingerprint(), reference(&text));
+}
+
 /// The texts the carried-price test seals: the walks, and every template in
 /// the library, each of which must instantiate.
 fn committed_texts() -> Vec<String> {
