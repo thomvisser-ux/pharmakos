@@ -432,3 +432,12 @@ existing report moved.
 `MAX_ROUTE_STEPS`, which `E0114` (new, at the end of the E01xx family) refuses at the
 257th step; the committed table's size budget refuses it as `E0110` too. No existing
 report moved.
+
+**S3's `retreat` (`VERIFIER_VERSION` 0.1.0-s3.6).** Every `report_hash` moved, for
+one of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.5` to `0.1.0-s3.6`
+(input 4), because `MandateSettings.retreat_hp_pct` carries presence (decisions-log
+item 177 (3)) and this build prices a written 0 (retreat off) as one field of its
+edit, where `0.1.0-s3.5` read it as unwritten. No committed case writes
+`retreat_hp_pct` at 0, so no report moved for that; every other byte of every
+report is as before the bump. The same two lines moved in the gateway's
+`demo_*_verify` and `sighting_verify` goldens and in the wizard's five reports.
