@@ -771,6 +771,36 @@ fn the_export_ships_the_smoke_check_and_no_other_test_file() {
     ));
 }
 
+/// **A frame reads the links' answers before the rig's poll** (fix pass 7, item 8): in
+/// `host_link.gd`'s `_pump_links`, every `_pump_link` (which reads the peer's packets) comes
+/// before `watch_outbox` (the rig's poll, whose deadline sweep would otherwise run first on a
+/// frame after a stall). The rig also sweeps at the previous poll's time, so either order keeps
+/// a waiting answer; this pins the order the comment promises.
+#[test]
+fn a_frame_reads_the_answers_before_the_rig_polls() {
+    let text = read("scripts/host_link.gd");
+    let body = gd_function(&text, "_pump_links");
+    let read_at = body
+        .iter()
+        .position(|line| line.contains("_pump_link(link)"));
+    let poll_at = body
+        .iter()
+        .position(|line| line.contains("bridge.watch_outbox()"));
+    assert!(
+        matches!((read_at, poll_at), (Some(read), Some(poll)) if read < poll),
+        "_pump_links must read every link's packets before the rig's poll: {body:?}"
+    );
+    // And the shipped pump and the watch check's attached pump both go through it.
+    for pump in ["pump", "pump_attached"] {
+        assert!(
+            gd_function(&text, pump)
+                .iter()
+                .any(|line| line.trim() == "_pump_links()"),
+            "{pump} does not pump through _pump_links"
+        );
+    }
+}
+
 /// **The idle lobby reads no pipe** (decisions-log item 117 (3)). The lobby pumps its host
 /// link every frame, also while it waits for New match; before `start()` has spawned the
 /// host there is no pipe, and reading it is a SCRIPT ERROR each frame in the editor and a

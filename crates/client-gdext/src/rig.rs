@@ -1000,6 +1000,9 @@ pub struct Rig {
     /// the message itself, with the close's code: none is sent again until the phase changes
     /// (fix pass 6). Keyed by the request, as the held view is by its argument.
     held_plans: Vec<(String, u16)>,
+    /// When the last poll came: the deadline sweep judges each call by it, so an answer that
+    /// came while the main loop stalled is read before its call can be timed out (fix pass 7).
+    last_poll_us: u64,
     /// The editor request last sent: its method and arguments.
     plan_asking: String,
     /// Why this seat's Ready did not go through, for the Ready line (`ready_failed_<name>`,
@@ -1102,6 +1105,7 @@ impl Rig {
             held_view: None,
             view_asking: String::new(),
             held_plans: Vec::new(),
+            last_poll_us: 0,
             plan_asking: String::new(),
             ready_failed: None,
             ready_resends: 0,
@@ -1335,7 +1339,12 @@ impl Rig {
         for state in &mut self.links {
             state.reconnect.tick(now_us);
         }
-        self.settle_overdue(now_us);
+        // Overdue as of the last poll, not this one (fix pass 7, item 8): a call is timed out
+        // only once a frame whose answers were read has passed its deadline, so a main loop that
+        // stalls (a laptop asleep) never times out answers waiting in the socket.
+        let swept_at = self.last_poll_us;
+        self.last_poll_us = now_us;
+        self.settle_overdue(swept_at);
         if self.phase == Phase::Lull && self.timing.clock.run_out() {
             if self.ran_out == RanOut::No {
                 self.ran_out = RanOut::Owed;
@@ -3801,6 +3810,31 @@ mod tests {
         panic!("the rig never reached the Push");
     }
 
+    /// **A stalled main loop does not time out answers already waiting** (fix pass 7, item 8;
+    /// review 6's F6: a laptop that wakes from sleep with the answers in the socket). A call is in
+    /// flight, the next poll comes 60 s later, before the frame's packets are read: nothing is
+    /// timed out, and the answer read after it settles the call.
+    #[test]
+    fn a_poll_after_a_long_stall_times_out_nothing_before_the_waiting_answers_are_read() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        let status = rig
+            .poll(1)
+            .into_iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("the admin's first call");
+        let _ = rig.poll(60_000_001);
+        assert_eq!(
+            rig.last_unfinished, None,
+            "a call was timed out across the stall"
+        );
+        assert!(!rig.link_must_close(ADMIN));
+        let _ = rig.receive(ADMIN, &served(id_of(&status), "", "lull", 1));
+        assert_eq!(rig.ledger().answered, 1);
+        assert_eq!(rig.ledger().late, 0);
+        assert_eq!(rig.phase, Phase::Lull, "the waiting answer was not applied");
+    }
+
     /// **An answer to an earlier call is never applied to the call in flight** (fix pass 7, item
     /// 2; review 6's M6 left the crate green): call N is carried by a close, call N+1 goes out on
     /// the reopened link, and an answer with N's id comes. It is dropped and counted as late,
@@ -3960,9 +3994,11 @@ mod tests {
                 .first()
                 .is_some_and(|link| link.in_flight.is_some())
         );
-        // Silent past the deadline: timed out, said, and the link owes a close.
+        // Silent past the deadline: timed out at the next poll after one past it, said, and the
+        // link owes a close.
         let late = CALL_DEADLINE_US.saturating_add(2);
         rig.poll(late);
+        rig.poll(late.saturating_add(1));
         // Both links' calls were silent: the seat's view timed out too, and both were settled.
         assert_eq!(rig.ledger().unfinished, 2);
         assert_eq!(
@@ -3971,7 +4007,7 @@ mod tests {
         );
         assert!(rig.link_must_close(ADMIN));
         assert!(
-            rig.poll(late.saturating_add(1))
+            rig.poll(late.saturating_add(2))
                 .iter()
                 .all(|frame| frame.link != ADMIN),
             "a link that owes a close sent more"
