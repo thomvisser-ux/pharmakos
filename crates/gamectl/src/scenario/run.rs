@@ -1463,6 +1463,15 @@ mod tests {
                 "seat {}: the carried fingerprint is the text's",
                 seat.seat
             );
+            // Filed for the round it is sealed in, by the harness and not by
+            // the gateway for a seat that sealed nothing.
+            assert_eq!(
+                sealed.round(),
+                surface.time().round,
+                "seat {}: the seal is for this round",
+                seat.seat
+            );
+            assert!(!sealed.filed_by_the_gateway(), "seat {}", seat.seat);
         }
         assert_eq!(harnessed, 1, "this scenario is the harness door's one");
         let saved = surface.lull_save().expect("a Lull saves");
