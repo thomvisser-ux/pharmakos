@@ -399,7 +399,8 @@ impl MatchCache {
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] when there is no save, it is
-    /// not text, or it is longer than `max_bytes`.
+    /// not text, or it is longer than `max_bytes`; [`crate::error::Code::Internal`]
+    /// for a `max_bytes` of `u64::MAX`, which leaves no byte past it to read.
     pub fn read_save(&self, max_bytes: u64) -> Result<String, Error> {
         use std::io::Read as _;
         let path = self.directory.join(SAVE_FILE);
@@ -425,8 +426,15 @@ impl MatchCache {
         }
         // Read at most one byte past the bound, so a file that grew after
         // its length was read is refused as well, and never read whole.
+        let one_past = max_bytes.checked_add(1).ok_or_else(|| {
+            Error::internal(said!(
+                "match `{}`'s save bound, {} bytes, leaves no byte past it to read",
+                pharmakos_proto::json::grammar::quoted(&self.match_id),
+                max_bytes
+            ))
+        })?;
         let mut bytes: Vec<u8> = Vec::new();
-        file.take(max_bytes.saturating_add(1))
+        file.take(one_past)
             .read_to_end(&mut bytes)
             .map_err(unread)?;
         let read = u64::try_from(bytes.len()).map_err(|_| past(max_bytes))?;
@@ -1023,6 +1031,16 @@ mod tests {
         assert_eq!(
             cache.read_save(BOUND).expect_err("not UTF-8").code(),
             Code::InvalidArgument
+        );
+        // A bound that leaves no byte past it to read is the caller's error,
+        // typed, never a read capped short of it.
+        std::fs::write(&path, "x").expect("written");
+        assert_eq!(
+            cache
+                .read_save(u64::MAX)
+                .expect_err("no byte past it")
+                .code(),
+            Code::Internal
         );
     }
 }

@@ -105,6 +105,17 @@ pub const MAX_DRAFT_LABEL_CHARS: usize = 120;
 /// limits.
 pub const MAX_DRAFTS: usize = 32;
 
+/// The most drafts one seat holds in all: [`MAX_DRAFTS`] of its own and the
+/// one carried draft ([`crate::surface::CARRIED_DRAFT_ID`]), the draft rule's
+/// whole ([`drafts_hold`]). What a save's read refuses past before it reads a
+/// draft (`crate::save`).
+pub const MAX_HELD_DRAFTS: usize = MAX_DRAFTS + 1;
+
+/// How many numbered ids `save_draft` tries when it names a draft
+/// (`d<round>-<n>`): one more than a seat's own drafts can hold, so one of
+/// them is always free.
+const DRAFT_NUMBERS: usize = MAX_DRAFTS + 1;
+
 /// Why a seat's drafts break the draft rule ([`drafts_hold`]).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum DraftsRefused {
@@ -862,8 +873,8 @@ impl Surface {
         let replacing = state.draft(&draft_id).is_some();
         if !replacing && own_drafts(&state.drafts) >= MAX_DRAFTS {
             return Err(Error::invalid(said!(
-                "this seat holds {} drafts, which is as many as it may; delete one by \
-                 saving over it",
+                "this seat holds {} drafts of its own, as many as it may, and a draft is \
+                 never deleted: save under one of their ids to replace that draft",
                 MAX_DRAFTS
             )));
         }
@@ -1254,7 +1265,7 @@ impl Surface {
     /// # Errors
     ///
     /// As [`Surface::seat_state`], and [`crate::error::Code::Internal`] when
-    /// none of the first `MAX_DRAFTS + 1` numbers is free, which holding at
+    /// none of the first [`DRAFT_NUMBERS`] numbers is free, which holding at
     /// most `MAX_DRAFTS` drafts makes impossible.
     fn next_draft_number(
         &self,
@@ -1262,9 +1273,9 @@ impl Surface {
         round: u32,
     ) -> Result<usize, Error> {
         let state = self.seat_state(crate::token::Subject::Seat(seat), seat)?;
-        // Bounded by MAX_DRAFTS + 1 by construction: at most MAX_DRAFTS ids are
-        // held, so one of the first MAX_DRAFTS + 1 candidates is free.
-        (1..=MAX_DRAFTS.saturating_add(1))
+        // Bounded by DRAFT_NUMBERS by construction: at most MAX_DRAFTS ids are
+        // held, so one of the first DRAFT_NUMBERS candidates is free.
+        (1..=DRAFT_NUMBERS)
             .find(|number| state.draft(&format!("d{round}-{number}")).is_none())
             .ok_or_else(|| {
                 Error::internal(said!(

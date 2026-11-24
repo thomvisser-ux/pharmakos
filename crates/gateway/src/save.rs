@@ -739,7 +739,7 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
         .map_err(|_| damaged("a seat number does not fit"))?;
     let listed = array_at(value, "drafts")?;
     // Its own and the carried one, at most: refused before a draft is read.
-    if listed.len() > crate::surface::planning::MAX_DRAFTS.saturating_add(1) {
+    if listed.len() > crate::surface::planning::MAX_HELD_DRAFTS {
         return Err(damaged(said!(
             "seat {} holds {} drafts, past the {} of its own and the carried one a seat may",
             seat,

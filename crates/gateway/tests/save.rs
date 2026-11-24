@@ -24,7 +24,7 @@ use pharmakos_gateway::host::{Host, Settings};
 use pharmakos_gateway::save::{Boundary, Continuation, Save, SavedMatch, Stamp};
 use pharmakos_gateway::serve::Config;
 use pharmakos_gateway::surface::Surface;
-use pharmakos_gateway::token::Subject;
+use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::Tick;
@@ -1097,8 +1097,11 @@ fn a_saved_notebook_past_its_bound_is_refused() {
     assert_eq!(refused.code(), Code::InvalidArgument);
     assert_eq!(
         refused.message(),
-        "seat 0's notebook or drafts in this save are over the bounds a seat may hold: the file \
-         is damaged"
+        format!(
+            "seat 0's notebook in this save is {} characters, past the {bound} a seat's \
+             notebook may hold: the file is damaged",
+            bound.saturating_add(1)
+        )
     );
 }
 
@@ -1147,30 +1150,37 @@ fn a_version_3_save_written_by_main_still_resumes() {
 /// One damage of a seat's saved drafts.
 type DraftsDamage = Box<dyn Fn(&mut Vec<pharmakos_gateway::surface::Draft>)>;
 
-/// The draft rule across a resume (lane `opsave`, fix pass 1; the review's
-/// hosted probe): a seat that keeps the 32 drafts of its own a seat may and
-/// seals carries its seal into the next Lull as a 33rd, the gateway's
-/// `carried` one; that Lull saves and resumes and lists all 33; a 33rd draft
-/// of its own is still refused, and so is a save under the carried id; a
-/// save holding 33 of its own, or the carried draft twice, is refused typed.
+/// The draft rule across a resume (lane `opsave`, fix passes 1 and 2; the
+/// reviews' hosted probes): a seat that keeps 31 drafts of its own and seals
+/// carries its seal into the next Lull as the gateway's `carried` draft; that
+/// Lull saves and resumes and lists 32, and the carried draft is not counted
+/// against the 32 a seat may keep: a 32nd of its own is taken, a 33rd is
+/// refused in words that say what the player can do, and so is a save under
+/// the carried id. The Lull holding 32 of its own and the carried one saves
+/// and resumes and lists all 33; a save holding 33 of its own, or the carried
+/// draft twice, is refused typed.
 #[test]
 fn a_seat_with_every_draft_and_a_seal_resumes_its_next_lull() {
     const MATCH_ID: &str = "m-opsave-drafts";
+    let max = pharmakos_gateway::surface::planning::MAX_DRAFTS;
     let mut surface = new_match(MATCH_ID);
     let token = seat_token(&mut surface, 0);
     let mut left = FIRST_LULL_MS;
     let body = walk_east(&surface, 0, 3, 0);
-    for index in 0..pharmakos_gateway::surface::planning::MAX_DRAFTS {
-        let answer = call_in_lull(
-            &mut surface,
-            &token,
-            &mut left,
+    let save_draft = |surface: &mut Surface, token: &Token, left: &mut i32, id: &str| {
+        call_in_lull(
+            surface,
+            token,
+            left,
             "save_draft",
             &format!(
-                "{{\"draft_id\":\"own-{index}\",\"playbook_jsonc\":{}}}",
+                "{{\"draft_id\":\"{id}\",\"playbook_jsonc\":{}}}",
                 quote(&body)
             ),
-        );
+        )
+    };
+    for index in 0..max.saturating_sub(1) {
+        let answer = save_draft(&mut surface, &token, &mut left, &format!("own-{index}"));
         let _ = result(&answer, "save_draft");
     }
     plan_round(&mut surface);
@@ -1179,7 +1189,7 @@ fn a_seat_with_every_draft_and_a_seal_resumes_its_next_lull() {
     close_round(&mut surface);
     let saved = surface.lull_save().expect("round 2's Lull saves");
     let held = saved.seats.first().expect("seat 0").drafts.len();
-    assert_eq!(held, 33, "32 of its own and the carried one");
+    assert_eq!(held, 32, "31 of its own and the carried one");
 
     let mut resumed = resume(MATCH_ID, &saved).expect("the Lull resumes");
     let token = seat_token(&mut resumed, 0);
@@ -1188,24 +1198,51 @@ fn a_seat_with_every_draft_and_a_seal_resumes_its_next_lull() {
         &call_in_lull(&mut resumed, &token, &mut left, "list_drafts", "{}"),
         "list_drafts",
     );
-    assert_eq!(support::array_of(&listed, "drafts").len(), 33);
-    for (id, what) in [
-        ("own-extra", "a 33rd draft of its own"),
-        ("carried", "the carried id"),
-    ] {
-        let answer = call_in_lull(
-            &mut resumed,
-            &token,
-            &mut left,
-            "save_draft",
-            &format!(
-                "{{\"draft_id\":\"{id}\",\"playbook_jsonc\":{}}}",
-                quote(&body)
-            ),
-        );
-        assert_eq!(code(&answer), "INVALID_ARGUMENT", "{what}: {answer:?}");
-    }
+    assert_eq!(support::array_of(&listed, "drafts").len(), 32);
+    // At 31 of its own beside the carried one, the 32nd of its own is taken:
+    // the carried draft is the gateway's and is not counted against the 32.
+    let last = format!("own-{}", max.saturating_sub(1));
+    let _ = result(
+        &save_draft(&mut resumed, &token, &mut left, &last),
+        "the 32nd draft of its own beside the carried one",
+    );
+    let refused = save_draft(&mut resumed, &token, &mut left, &format!("own-{max}"));
+    assert_eq!(code(&refused), "INVALID_ARGUMENT", "{refused:?}");
+    assert_eq!(
+        text_of(refused.get("error").expect("an error"), "message"),
+        format!(
+            "this seat holds {max} drafts of its own, as many as it may, and a draft is never \
+             deleted: save under one of their ids to replace that draft"
+        )
+    );
+    let carried = save_draft(&mut resumed, &token, &mut left, "carried");
+    assert_eq!(
+        code(&carried),
+        "INVALID_ARGUMENT",
+        "the carried id: {carried:?}"
+    );
+    let _ = result(
+        &save_draft(&mut resumed, &token, &mut left, "own-0"),
+        "a save over one of its own ids replaces that draft",
+    );
 
+    let saved = resumed.lull_save().expect("the full Lull saves");
+    let held = saved.seats.first().expect("seat 0").drafts.len();
+    assert_eq!(held, 33, "32 of its own and the carried one");
+    let mut again = resume(MATCH_ID, &saved).expect("the full Lull resumes");
+    let token = seat_token(&mut again, 0);
+    let mut left = FIRST_LULL_MS;
+    let listed = result(
+        &call_in_lull(&mut again, &token, &mut left, "list_drafts", "{}"),
+        "list_drafts",
+    );
+    assert_eq!(support::array_of(&listed, "drafts").len(), 33);
+    each_damage_of_the_draft_rule_is_refused(MATCH_ID, &saved);
+}
+
+/// A save holding 33 drafts of its own, or the carried draft twice, is
+/// refused typed at its read, whatever else it holds.
+fn each_damage_of_the_draft_rule_is_refused(match_id: &str, saved: &SavedMatch) {
     let cases: [(&str, DraftsDamage); 2] = [
         (
             "33 drafts of its own",
@@ -1233,7 +1270,7 @@ fn a_seat_with_every_draft_and_a_seal_resumes_its_next_lull() {
         }
         let text = Save {
             stamp: Stamp::current(rules().rules_hash()),
-            config: config_of(MATCH_ID),
+            config: config_of(match_id),
             state: damaged,
         }
         .render();

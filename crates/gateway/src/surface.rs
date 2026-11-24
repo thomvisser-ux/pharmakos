@@ -1009,9 +1009,11 @@ impl Surface {
             let characters = held.notebook.chars().count();
             if characters > notebook_bound {
                 return Err(Error::invalid(said!(
-                    "seat {}'s notebook or drafts in this save are over the bounds a seat may \
-                     hold: the file is damaged",
-                    held.seat
+                    "seat {}'s notebook in this save is {} characters, past the {} a seat's \
+                     notebook may hold: the file is damaged",
+                    held.seat,
+                    characters,
+                    notebook_bound
                 )));
             }
             // The draft rule, the one every door holds (`drafts_hold`).
