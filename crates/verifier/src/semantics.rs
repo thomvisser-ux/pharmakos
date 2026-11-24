@@ -532,12 +532,12 @@ impl Visit for Semantics<'_> {
         if settings.mandate.is_none() {
             self.out.emit(Diag::new("E0502", at));
         }
-        if let Some(mandate_settings::Mandate::Survey(survey)) = settings.mandate.as_ref() {
-            self.scouts(
-                &pointer::child(at, "survey"),
-                "scout_count",
-                survey.scout_count.unwrap_or(0),
-            );
+        // An omitted count has nothing to check; a written 0 fields no scout
+        // (decisions-log item 184 (10)).
+        if let Some(mandate_settings::Mandate::Survey(survey)) = settings.mandate.as_ref()
+            && let Some(scouts) = survey.scout_count
+        {
+            self.scouts(&pointer::child(at, "survey"), "scout_count", scouts);
         }
         match settings.mandate.as_ref() {
             Some(mandate_settings::Mandate::Defend(defend)) => {

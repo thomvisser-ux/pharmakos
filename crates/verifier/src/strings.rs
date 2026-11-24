@@ -616,6 +616,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                    or a Resonance Spire.",
     },
     Text {
+        code: "E0515",
+        message: "`clear_{list}` cannot stand {place}.",
+        beginner: "A `clear_` setting empties a list the beacon already holds, so it goes in a \
+                   Change settings row on its own: not beside entries of the same list, and \
+                   not where the beacon or its new mandate starts with no list at all.",
+    },
+    Text {
         code: "W0501",
         message: "`seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs \
                   the nearest seam no known threat's weapon reaches, and this code is retired \
@@ -928,6 +935,14 @@ pub const MY_COMMANDER: &str = "my_commander";
 pub const A_LAUNCH_CONDITION: &str = "a launch condition (`force_size` or `segment_ms`)";
 /// E0511's Fix.
 pub const FIX_DROP_ROTATION: &str = "Leave the rotation out";
+/// E0515's `{place}` beside a non-empty list of its own.
+pub const CLEAR_BESIDE_A_LIST: &str =
+    "beside entries of the same list: the row would both replace the list and empty it";
+/// E0515's `{place}` in a new beacon's or a switched mandate's settings.
+pub const CLEAR_FROM_NOTHING: &str = "where the settings start from nothing (a new beacon's or a \
+                                      switched mandate's), which hold no list to empty";
+/// E0515's Fix.
+pub const FIX_DROP_CLEAR: &str = "Leave the clear out";
 
 /// E0418's `{what}` for a beacon the view holds no sighting of.
 #[must_use]

@@ -1524,7 +1524,10 @@ fn commit_row(
                     .replace_build_targets(beacon, entries, units)
                     .map_err(|_| StepFailure::TargetsUnwritten)?;
             }
-            if !protected.is_empty() {
+            // A list the row names replaces the beacon's; an empty one is the
+            // row's `clear_*` flag, which empties it (decisions-log item 184
+            // (10)).
+            if let Some(protected) = protected {
                 world.clear_targets(beacon, TargetKind::Protected, units);
                 for (centre, area) in protected {
                     // One decision unit a box written (lane `dunit`).
@@ -1540,7 +1543,7 @@ fn commit_row(
                         .map_err(|_| StepFailure::TargetsUnwritten)?;
                 }
             }
-            if !probes.is_empty() {
+            if let Some(probes) = probes {
                 world.clear_targets(beacon, TargetKind::Probe, units);
                 for (centre, area) in probes {
                     // One decision unit a box written (lane `dunit`).
@@ -1551,8 +1554,9 @@ fn commit_row(
                 }
             }
             // A count past a byte is refused at the seal
-            // (`PlanError::ScoutsOutOfRange`), so the row carries a byte.
-            if *scouts > 0 {
+            // (`PlanError::ScoutsOutOfRange`), so the row carries a byte; a
+            // written 0 stands the scouts down (decisions-log item 184 (10)).
+            if let Some(scouts) = scouts {
                 world.set_beacon_scouts(row, *scouts);
             }
             // The Mine settings the row names, and nothing it is silent about
@@ -1701,10 +1705,12 @@ fn replaced_kinds(spec: &Row) -> ReplacedKinds {
         ..
     } = spec
     {
+        // A cleared list is a list the row names, so its rows are freed for
+        // the room test as a replaced list's are.
         for (named, kind) in [
             (!targets.is_empty(), TargetKind::Build),
-            (!protected.is_empty(), TargetKind::Protected),
-            (!probes.is_empty(), TargetKind::Probe),
+            (protected.is_some(), TargetKind::Protected),
+            (probes.is_some(), TargetKind::Probe),
         ] {
             if named {
                 kinds.push(kind);
@@ -1765,9 +1771,14 @@ where
     else {
         return Ok(());
     };
-    let areas = protected
-        .len()
-        .checked_add(probes.len())
+    // A list the row is silent about writes no area; a cleared one writes
+    // none either, and frees the beacon's rows through `replaces`.
+    let written = |list: &Option<Vec<_>>| match list {
+        Some(list) => list.len(),
+        None => 0,
+    };
+    let areas = written(protected)
+        .checked_add(written(probes))
         .ok_or(StepFailure::TargetsUnwritten)?;
     let build = if targets.is_empty() {
         None
@@ -2420,9 +2431,9 @@ mod visits {
             kind: None,
             fields: 0,
             targets,
-            protected: Vec::new(),
-            probes: Vec::new(),
-            scouts: 0,
+            protected: None,
+            probes: None,
+            scouts: None,
             mine: None,
             roe: 0,
             retreat_hp_pct: None,
@@ -2503,9 +2514,9 @@ mod visits {
             kind: None,
             fields: 0,
             targets,
-            protected: Vec::new(),
-            probes: Vec::new(),
-            scouts: 0,
+            protected: None,
+            probes: None,
+            scouts: None,
             mine: None,
             roe: 0,
             retreat_hp_pct: None,

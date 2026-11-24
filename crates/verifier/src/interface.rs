@@ -415,8 +415,10 @@ fn each<T>(list: &[T]) -> u64 {
 /// by; a field with presence counts whenever it is written, its default
 /// included (S3's plan, task `con5b`, for `repair_threshold_pct`,
 /// `rebuild_destroyed` and `flee_on_threat`; decisions-log item 177 (3) for
-/// the Common row's `retreat_hp_pct`). The mandate *type* is free (spec
-/// section 5) and is never a field.
+/// the Common row's `retreat_hp_pct`; item 184 (10) for `scout_count`,
+/// `dig_max_depth` and `pillar_spacing`). A list's `clear_*` flag, which
+/// empties the list (item 184 (10)), is one field when it is set. The mandate
+/// *type* is free (spec section 5) and is never a field.
 ///
 /// **What "one field" means for a list (S1-23, ruled).** Spec section 5 writes
 /// "2 s + 0.5 s per extra field" without saying what a field is when a setting
@@ -455,7 +457,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
                 rebuild_destroyed,
                 terraform,
                 protected_areas,
-                clear_protected_areas: _,
+                clear_protected_areas,
             } = build;
             (
                 add(&[
@@ -463,6 +465,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
                     set(rebuild_destroyed.is_some()),
                     set(*terraform != 0),
                     each(protected_areas),
+                    set(*clear_protected_areas),
                 ]),
                 each(targets),
             )
@@ -471,10 +474,14 @@ pub fn count(settings: &MandateSettings) -> Counted {
             let SurveySettings {
                 probe_areas,
                 scout_count,
-                clear_probe_areas: _,
+                clear_probe_areas,
             } = survey;
             (
-                add(&[each(probe_areas), set(scout_count.unwrap_or(0) != 0)]),
+                add(&[
+                    each(probe_areas),
+                    set(scout_count.is_some()),
+                    set(*clear_probe_areas),
+                ]),
                 0,
             )
         }
@@ -487,10 +494,10 @@ pub fn count(settings: &MandateSettings) -> Counted {
             } = mine;
             (
                 add(&[
-                    set(dig_max_depth.unwrap_or(0) != 0),
+                    set(dig_max_depth.is_some()),
                     set(flee_on_threat.is_some()),
                     set(*seam_choice != 0),
-                    set(pillar_spacing.unwrap_or(0) != 0),
+                    set(pillar_spacing.is_some()),
                 ]),
                 0,
             )
@@ -522,10 +529,11 @@ fn defend_fields(defend: &DefendSettings) -> u64 {
         engagement_radius_pct,
         pursue,
         picket_scouts,
-        clear_protect: _,
+        clear_protect,
     } = defend;
     add(&[
         each(protect),
+        set(*clear_protect),
         set(*engagement_radius_pct != 0),
         set(*pursue != 0),
         set(picket_scouts.is_some()),
@@ -544,7 +552,7 @@ fn attack_fields(attack: &AttackSettings) -> u64 {
         avoid_areas,
         breach_allowed,
         waves,
-        clear_avoid_areas: _,
+        clear_avoid_areas,
     } = attack;
     let launch_fields = match launch {
         Some(AttackLaunch {
@@ -571,6 +579,7 @@ fn attack_fields(attack: &AttackSettings) -> u64 {
         retreat_fields,
         set(*after_action != 0),
         each(avoid_areas),
+        set(*clear_avoid_areas),
         set(breach_allowed.is_some()),
         set(*waves != 0),
     ])
@@ -849,6 +858,62 @@ mod tests {
         let decoded: MineSettings =
             pharmakos_proto::json::decode(r#"{"flee_on_threat":false}"#).expect("decodes");
         assert_eq!(decoded.flee_on_threat, Some(false));
+    }
+
+    /// Decisions-log item 184 (10): `scout_count`, `dig_max_depth` and
+    /// `pillar_spacing` carry presence, so a written 0 is one field and an
+    /// omitted one none; each list's `clear_*` flag is one field when set, and
+    /// none at `false`, which the canonical form never writes. The sim's
+    /// `mandate_fields` counts the same (`crates/sim/tests/settings_presence.rs`).
+    #[test]
+    fn a_written_zero_or_a_clear_is_one_field_and_false_is_none() {
+        let fields = |text: &str| {
+            let settings: MandateSettings = pharmakos_proto::json::decode(text).expect("decodes");
+            count(&settings).fields
+        };
+        for (text, expected) in [
+            (r#"{"survey":{"scout_count":0}}"#, 1),
+            (r#"{"survey":{}}"#, 0),
+            (r#"{"mine":{"dig_max_depth":0}}"#, 1),
+            (r#"{"mine":{"pillar_spacing":0}}"#, 1),
+            (r#"{"mine":{"dig_max_depth":0,"pillar_spacing":0}}"#, 2),
+            (r#"{"mine":{}}"#, 0),
+            (r#"{"build":{"clear_protected_areas":true}}"#, 1),
+            (r#"{"build":{"clear_protected_areas":false}}"#, 0),
+            (r#"{"defend":{"clear_protect":true}}"#, 1),
+            (r#"{"attack":{"clear_avoid_areas":true}}"#, 1),
+            (
+                r#"{"survey":{"clear_probe_areas":true,"scout_count":0}}"#,
+                2,
+            ),
+        ] {
+            assert_eq!(fields(text), expected, "{text}");
+        }
+        for (message, text, kept) in [
+            ("gp.v1.SurveySettings", r#"{"scout_count":0}"#, true),
+            ("gp.v1.MineSettings", r#"{"dig_max_depth":0}"#, true),
+            ("gp.v1.MineSettings", r#"{"pillar_spacing":0}"#, true),
+            (
+                "gp.v1.BuildSettings",
+                r#"{"clear_protected_areas":true}"#,
+                true,
+            ),
+            (
+                "gp.v1.BuildSettings",
+                r#"{"clear_protected_areas":false}"#,
+                false,
+            ),
+            ("gp.v1.DefendSettings", r#"{"clear_protect":false}"#, false),
+        ] {
+            let canonical =
+                pharmakos_proto::json::canonicalise(message, text).expect("canonicalises");
+            let key = text.split('"').nth(1).expect("the key");
+            assert_eq!(
+                canonical.contains(&format!("\"{key}\"")),
+                kept,
+                "{message}: {text} canonicalises to {canonical}"
+            );
+        }
     }
 
     /// S2's `vfy2`: Defend's and Attack's fields at decision 15's rule. A

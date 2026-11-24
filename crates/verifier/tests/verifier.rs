@@ -2862,6 +2862,7 @@ const CARRIES: &[(&str, Carries)] = &[
     ("E0512", Carries::Engine),
     ("E0513", Carries::Engine),
     ("E0514", Carries::Engine),
+    ("E0515", Carries::Engine),
     ("W0501", Carries::Engine),
     (
         "W0502",

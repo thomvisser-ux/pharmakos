@@ -538,13 +538,19 @@ pub enum Row {
         /// the edit's cap.
         targets: Vec<Target>,
         /// The Build mandate's protected areas, as the box's centre in whole
-        /// voxels and its footprint ([`crate::tables::ColumnBox`]).
-        protected: Vec<([i16; 3], ColumnBox)>,
-        /// The Survey mandate's probe areas, same shape.
-        probes: Vec<([i16; 3], ColumnBox)>,
-        /// The Survey mandate's scout count, which a beacon's column holds as
-        /// a byte; a larger count is refused at the seal.
-        scouts: u8,
+        /// voxels and its footprint ([`crate::tables::ColumnBox`]), when the
+        /// row names the list: `Some` replaces the beacon's list, and
+        /// `Some` of an empty list is `clear_protected_areas`, which empties
+        /// it (decisions-log item 184 (10)); `None` leaves it alone.
+        protected: Option<Vec<([i16; 3], ColumnBox)>>,
+        /// The Survey mandate's probe areas, same shape and same reading
+        /// (`clear_probe_areas` is `Some` of an empty list).
+        probes: Option<Vec<([i16; 3], ColumnBox)>>,
+        /// The Survey mandate's scout count when the row names it, which a
+        /// beacon's column holds as a byte; a larger count is refused at the
+        /// seal. `Some(0)` stands the beacon's scouts down, and `None` writes
+        /// nothing (decisions-log item 184 (10): the field carries presence).
+        scouts: Option<u8>,
         /// The Mine mandate's settings the row writes, each only when the row
         /// names it ([`crate::mining::MineEdit`]); `None` when the row carries
         /// no Mine arm.
@@ -1403,7 +1409,7 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
                     // row that writes nothing -- no field and no Build target
                     // -- is not filed at all.
                     mandate = mandate_of(settings).unwrap_or(MandateKind::None);
-                    let row = compile_settings_row(settings, names, covering)?;
+                    let row = compile_settings_row(settings, names, covering, Carrier::Fresh)?;
                     if row.writes() {
                         rows.push(row);
                     }
@@ -1458,7 +1464,7 @@ fn compile_row(
             })
         }
         gp::v1::interface_row::Row::SetMandateSettings(settings) => {
-            compile_settings_row(settings, names, covering)
+            compile_settings_row(settings, names, covering, Carrier::Edit)
         }
         gp::v1::interface_row::Row::SetPriority(priority) => Ok(Row::Priority {
             priority: compile_priority(*priority)?,
@@ -1522,9 +1528,9 @@ fn compile_switch_settings(
                 kind: mandate_of(settings),
                 fields,
                 targets: Vec::new(),
-                protected: Vec::new(),
-                probes: Vec::new(),
-                scouts: 0,
+                protected: None,
+                probes: None,
+                scouts: None,
                 mine: None,
                 roe,
                 retreat_hp_pct,
@@ -1534,7 +1540,7 @@ fn compile_switch_settings(
             })
         }));
     }
-    let row = compile_settings_row(settings, names, covering)?;
+    let row = compile_settings_row(settings, names, covering, Carrier::Fresh)?;
     Ok(row.writes().then(|| Box::new(row)))
 }
 
@@ -1566,12 +1572,13 @@ fn compile_settings_row(
     settings: &gp::v1::MandateSettings,
     names: &Names<'_>,
     covering: bool,
+    carrier: Carrier,
 ) -> Result<Row, PlanError> {
     let mut fields: u32 = common_fields(settings);
     let mut targets: Vec<Target> = Vec::new();
-    let mut protected: Vec<([i16; 3], ColumnBox)> = Vec::new();
-    let mut probes: Vec<([i16; 3], ColumnBox)> = Vec::new();
-    let mut scouts: u8 = 0;
+    let mut protected: Option<Vec<([i16; 3], ColumnBox)>> = None;
+    let mut probes: Option<Vec<([i16; 3], ColumnBox)>> = None;
+    let mut scouts: Option<u8> = None;
     let mut mine: Option<crate::mining::MineEdit> = None;
     let mut build_edit = crate::site::BuildEdit::default();
     let mut defend_edit: Option<crate::defend::DefendEdit> = None;
@@ -1585,20 +1592,32 @@ fn compile_settings_row(
                 for target in &build.targets {
                     targets.push(compile_build_target(target, names, covering)?);
                 }
-                for area in &build.protected_areas {
-                    protected.push(compile_area(area, names)?);
-                }
+                protected = list_edit(
+                    &build.protected_areas,
+                    build.clear_protected_areas,
+                    "protected_areas",
+                    carrier,
+                    |area| compile_area(area, names),
+                )?;
                 build_edit = compile_build_settings(build)?;
             }
             gp::v1::mandate_settings::Mandate::Survey(survey) => {
-                for area in &survey.probe_areas {
-                    probes.push(compile_area(area, names)?);
-                }
-                let written = survey.scout_count.unwrap_or(0);
-                scouts = u8::try_from(written).map_err(|_| PlanError::ScoutsOutOfRange {
-                    found: written,
-                    most: u8::MAX,
-                })?;
+                probes = list_edit(
+                    &survey.probe_areas,
+                    survey.clear_probe_areas,
+                    "probe_areas",
+                    carrier,
+                    |area| compile_area(area, names),
+                )?;
+                scouts = survey
+                    .scout_count
+                    .map(|found| {
+                        u8::try_from(found).map_err(|_| PlanError::ScoutsOutOfRange {
+                            found,
+                            most: u8::MAX,
+                        })
+                    })
+                    .transpose()?;
             }
             gp::v1::mandate_settings::Mandate::Mine(settings) => {
                 mine = Some(crate::mining::MineEdit::of(settings).map_err(|value| {
@@ -1609,10 +1628,10 @@ fn compile_settings_row(
                 })?);
             }
             gp::v1::mandate_settings::Mandate::Defend(defend) => {
-                defend_edit = Some(compile_defend_settings(defend, names)?);
+                defend_edit = Some(compile_defend_settings(defend, names, carrier)?);
             }
             gp::v1::mandate_settings::Mandate::Attack(attack) => {
-                attack_edit = Some(compile_attack_settings(attack, names)?);
+                attack_edit = Some(compile_attack_settings(attack, names, carrier)?);
             }
         }
     }
@@ -1657,6 +1676,7 @@ fn compile_settings_row(
 fn compile_attack_settings(
     attack: &gp::v1::AttackSettings,
     names: &Names<'_>,
+    carrier: Carrier,
 ) -> Result<crate::attack::AttackEdit, PlanError> {
     use crate::attack::{AfterAction, Retarget, TargetSpec};
     let target = match attack.target.as_ref() {
@@ -1752,15 +1772,13 @@ fn compile_attack_settings(
             Some((pct, retreat.after_launch_ms))
         }
     };
-    let avoid = if attack.avoid_areas.is_empty() {
-        None
-    } else {
-        let mut list: Vec<ColumnBox> = Vec::with_capacity(attack.avoid_areas.len());
-        for area in &attack.avoid_areas {
-            list.push(compile_area(area, names)?.1);
-        }
-        Some(list)
-    };
+    let avoid = list_edit(
+        &attack.avoid_areas,
+        attack.clear_avoid_areas,
+        "avoid_areas",
+        carrier,
+        |area| Ok(compile_area(area, names)?.1),
+    )?;
     Ok(crate::attack::AttackEdit {
         target,
         retarget,
@@ -1788,6 +1806,7 @@ fn compile_attack_settings(
 fn compile_defend_settings(
     defend: &gp::v1::DefendSettings,
     names: &Names<'_>,
+    carrier: Carrier,
 ) -> Result<crate::defend::DefendEdit, PlanError> {
     let engagement_pct = match defend.engagement_radius_pct {
         0 => None,
@@ -1817,23 +1836,21 @@ fn compile_defend_settings(
             })?,
         ),
     };
-    let protect = if defend.protect.is_empty() {
-        None
-    } else {
-        let mut list: Vec<crate::defend::Protect> = Vec::with_capacity(defend.protect.len());
-        for entry in &defend.protect {
-            list.push(match entry.asset.as_ref() {
-                Some(gp::v1::protected_asset::Asset::MyCommander(_)) => {
-                    crate::defend::Protect::Commander
-                }
-                Some(gp::v1::protected_asset::Asset::Beacon(beacon)) => {
-                    crate::defend::Protect::Beacon(compile_beacon_ref(Some(beacon), names)?)
-                }
-                None => return Err(PlanError::MissingBlock("protected_asset.asset")),
-            });
-        }
-        Some(list)
-    };
+    let protect = list_edit(
+        &defend.protect,
+        defend.clear_protect,
+        "protect",
+        carrier,
+        |entry| match entry.asset.as_ref() {
+            Some(gp::v1::protected_asset::Asset::MyCommander(_)) => {
+                Ok(crate::defend::Protect::Commander)
+            }
+            Some(gp::v1::protected_asset::Asset::Beacon(beacon)) => Ok(
+                crate::defend::Protect::Beacon(compile_beacon_ref(Some(beacon), names)?),
+            ),
+            None => Err(PlanError::MissingBlock("protected_asset.asset")),
+        },
+    )?;
     Ok(crate::defend::DefendEdit {
         engagement_pct,
         pursue,
@@ -1928,6 +1945,55 @@ fn compile_wall_box(
         floor: lz,
         top: hz,
     })
+}
+
+/// Where a settings block stands, which says whether a list's `clear_*` flag
+/// has a list to empty (decisions-log item 184 (10)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Carrier {
+    /// A `place_beacon`'s initial settings or a `set_mandate` switch's: the
+    /// beacon's settings start from nothing, so it has no list to clear.
+    Fresh,
+    /// A `set_mandate_settings` row, which edits the settings the beacon holds.
+    Edit,
+}
+
+/// One list setting as a row writes it: `None` when the row is silent about
+/// it, `Some` of the compiled list when it names entries (which replace the
+/// beacon's), and `Some` of an empty list when its `clear` flag is set (which
+/// empties the beacon's). proto3 cannot tell an empty `repeated` field from
+/// one left out, so the flag is the only way to say "empty"
+/// (decisions-log item 184 (10)).
+///
+/// # Errors
+///
+/// [`PlanError::ClearRefused`] for a set flag beside a non-empty list or in
+/// fresh settings, and whatever `compile` refuses an entry with.
+fn list_edit<T, U>(
+    list: &[T],
+    clear: bool,
+    name: &'static str,
+    carrier: Carrier,
+    mut compile: impl FnMut(&T) -> Result<U, PlanError>,
+) -> Result<Option<Vec<U>>, PlanError> {
+    if clear {
+        let why = if carrier == Carrier::Fresh {
+            ClearRefusal::NothingToClear
+        } else if list.is_empty() {
+            return Ok(Some(Vec::new()));
+        } else {
+            ClearRefusal::BesideAList
+        };
+        return Err(PlanError::ClearRefused { list: name, why });
+    }
+    if list.is_empty() {
+        return Ok(None);
+    }
+    let mut compiled = Vec::with_capacity(list.len());
+    for entry in list {
+        compiled.push(compile(entry)?);
+    }
+    Ok(Some(compiled))
 }
 
 /// How many of the Common row's two fields a settings edit writes: `roe`
@@ -2255,8 +2321,11 @@ fn compile_feature_ref(
 /// which [`Row::duration_ms`] charges apart, outside the cap. A scalar counts
 /// when it is set to a non-default value, which is what proto3's canonical
 /// JSON keeps and so what the author wrote; a field with presence counts
-/// whenever it is written, its default included. This is the verifier's `count`,
-/// field for field, so the Push charges a visit what the editor quotes.
+/// whenever it is written, its default included (`scout_count`,
+/// `dig_max_depth` and `pillar_spacing` from decisions-log item 184 (10)),
+/// and a list's `clear_*` flag is one field when it is set. This is the
+/// verifier's `count`, field for field, so the Push charges a visit what the
+/// editor quotes.
 fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, PlanError> {
     let each = |list: usize| u32::try_from(list).map_err(|_| PlanError::RowTooLong);
     let set = |written: bool| u32::from(written);
@@ -2272,20 +2341,23 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
             set(build.rebuild_destroyed.is_some()),
             set(build.terraform != 0),
             each(build.protected_areas.len())?,
+            set(build.clear_protected_areas),
         ]),
         gp::v1::mandate_settings::Mandate::Survey(survey) => sum(&[
-            set(survey.scout_count.unwrap_or(0) != 0),
+            set(survey.scout_count.is_some()),
             each(survey.probe_areas.len())?,
+            set(survey.clear_probe_areas),
         ]),
         gp::v1::mandate_settings::Mandate::Mine(mine) => sum(&[
-            set(mine.dig_max_depth.unwrap_or(0) != 0),
+            set(mine.dig_max_depth.is_some()),
             set(mine.flee_on_threat.is_some()),
             set(mine.seam_choice != 0),
-            set(mine.pillar_spacing.unwrap_or(0) != 0),
+            set(mine.pillar_spacing.is_some()),
         ]),
         // S2's `dfnd`: the verifier's `defend_fields`, field for field.
         gp::v1::mandate_settings::Mandate::Defend(defend) => sum(&[
             each(defend.protect.len())?,
+            set(defend.clear_protect),
             set(defend.engagement_radius_pct != 0),
             set(defend.pursue != 0),
             set(defend.picket_scouts.is_some()),
@@ -2307,6 +2379,7 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
                 retreat,
                 set(attack.after_action != 0),
                 each(attack.avoid_areas.len())?,
+                set(attack.clear_avoid_areas),
                 set(attack.breach_allowed.is_some()),
                 set(attack.waves != 0),
             ])
@@ -2872,6 +2945,16 @@ fn int_compare(
     Ok((cmp, i64::from(compare.value)))
 }
 
+/// Why a list's `clear_*` flag is refused ([`PlanError::ClearRefused`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClearRefusal {
+    /// The row also names entries in the list: it says two things.
+    BesideAList,
+    /// The settings start from nothing (a `place_beacon`'s initial settings
+    /// or a `set_mandate` switch's), so there is no list to empty.
+    NothingToClear,
+}
+
 /// Why a playbook cannot be executed by this build.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum PlanError {
@@ -2979,6 +3062,17 @@ pub enum PlanError {
     RetreatOutOfRange {
         /// What the playbook wrote.
         found: u32,
+    },
+    /// A list's `clear_*` flag where it cannot stand (decisions-log item 184
+    /// (10)): beside a non-empty list of its own, which says two things, or
+    /// in a new beacon's or a switched mandate's settings, which start with
+    /// no list to clear. The verifier refuses it as E0515 at the seal.
+    ClearRefused {
+        /// The list the flag names: `protected_areas`, `protect`,
+        /// `avoid_areas` or `probe_areas`.
+        list: &'static str,
+        /// Which of the two it is.
+        why: ClearRefusal,
     },
     /// A Build target's `rotation_quarter_turns` past three.
     RotationOutOfRange {
@@ -3311,6 +3405,18 @@ impl core::fmt::Display for PlanError {
                 f,
                 "a `retreat_hp_pct` of {found} is past 100 percent of a unit's hit points"
             ),
+            PlanError::ClearRefused { list, why } => match why {
+                ClearRefusal::BesideAList => write!(
+                    f,
+                    "`clear_{list}` stands beside a `{list}` that names entries; a row either \
+                     replaces the list or empties it"
+                ),
+                ClearRefusal::NothingToClear => write!(
+                    f,
+                    "`clear_{list}` stands in settings that start from nothing, where there is \
+                     no `{list}` to empty; it belongs in a `set_mandate_settings` row"
+                ),
+            },
             PlanError::RotationOutOfRange { found } => write!(
                 f,
                 "a `rotation_quarter_turns` of {found} is past three quarter turns"

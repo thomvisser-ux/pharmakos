@@ -711,6 +711,7 @@ impl Visit for Sites<'_> {
             }
             _ => {}
         }
+        self.clears(at, settings, carrier);
         if carrier == Carrier::Edit {
             return;
         }
@@ -746,10 +747,19 @@ impl Visit for Sites<'_> {
                 if mine.seam_choice == i32::from(SeamChoice::Unspecified) {
                     self.default_note(&here, "seam_choice", "NEAREST", true);
                 }
-                if mine.pillar_spacing.unwrap_or(0) == 0 {
-                    // No Fix: proto3 writes a zero by leaving it out, so there
-                    // is no spelling of "0" for the note to go quiet on.
-                    self.default_note(&here, "pillar_spacing", strings::NO_PILLARS, false);
+                // Only an omitted spacing reads as the default: a written 0 is
+                // what the author wrote (decisions-log item 184 (10)), so it is
+                // also the Fix's spelling of the default.
+                if mine.pillar_spacing.is_none() {
+                    self.default_note_with(
+                        &here,
+                        "pillar_spacing",
+                        strings::NO_PILLARS,
+                        Some(patch_add(
+                            &pointer::child(&here, "pillar_spacing"),
+                            &number(0),
+                        )),
+                    );
                 }
             }
             _ => {}
@@ -1095,6 +1105,67 @@ impl Sites<'_> {
         self.out.emit(diag);
     }
 
+    /// `E0515`: a list's `clear_*` flag where it cannot stand (decisions-log
+    /// item 184 (10)), as the sim's compile refuses it
+    /// (`PlanError::ClearRefused`). The flag empties a list the beacon holds,
+    /// so it stands alone in a `set_mandate_settings` row: beside a non-empty
+    /// list of its own the row says two things, and in a new beacon's or a
+    /// switched mandate's settings there is no list to empty.
+    ///
+    /// Where the settings start from nothing the flag changes nothing, so its
+    /// Fix takes it out, machine-applicable. Beside a list, which of the two
+    /// the author meant is theirs to say: the Fix takes the flag out, and keeps
+    /// the list the row names, as a suggestion only.
+    fn clears(&mut self, at: &str, settings: &MandateSettings, carrier: Carrier) {
+        let (arm, list, clear, named) = match settings.mandate.as_ref() {
+            Some(mandate_settings::Mandate::Build(build)) => (
+                "build",
+                "protected_areas",
+                build.clear_protected_areas,
+                !build.protected_areas.is_empty(),
+            ),
+            Some(mandate_settings::Mandate::Defend(defend)) => (
+                "defend",
+                "protect",
+                defend.clear_protect,
+                !defend.protect.is_empty(),
+            ),
+            Some(mandate_settings::Mandate::Attack(attack)) => (
+                "attack",
+                "avoid_areas",
+                attack.clear_avoid_areas,
+                !attack.avoid_areas.is_empty(),
+            ),
+            Some(mandate_settings::Mandate::Survey(survey)) => (
+                "survey",
+                "probe_areas",
+                survey.clear_probe_areas,
+                !survey.probe_areas.is_empty(),
+            ),
+            Some(mandate_settings::Mandate::Mine(_)) | None => return,
+        };
+        if !clear {
+            return;
+        }
+        let (place, applicability) = if carrier != Carrier::Edit {
+            (
+                strings::CLEAR_FROM_NOTHING,
+                Applicability::MachineApplicable,
+            )
+        } else if named {
+            (strings::CLEAR_BESIDE_A_LIST, Applicability::MaybeIncorrect)
+        } else {
+            return;
+        };
+        let here = pointer::child(&pointer::child(at, arm), &format!("clear_{list}"));
+        self.out.emit(
+            Diag::new("E0515", here.clone())
+                .arg_word("list", list)
+                .arg("place", place)
+                .fix(strings::FIX_DROP_CLEAR, patch_remove(&here), applicability),
+        );
+    }
+
     /// One `FeatureRef` under an arm it may stand under.
     fn feature(&mut self, feature: &FeatureRef, at: &str, arm: Arm<'_>) {
         let Some(chosen) = feature.r#ref.as_ref() else {
@@ -1164,11 +1235,23 @@ impl Sites<'_> {
 
     /// `I0003`: an omitted setting and the named default it reads as.
     fn default_note(&mut self, at: &str, field: &'static str, value: &'static str, fixable: bool) {
+        let patch = fixable.then(|| patch_add_word(&pointer::child(at, field), value));
+        self.default_note_with(at, field, value, patch);
+    }
+
+    /// [`Sites::default_note`] with the Fix's patch given whole, for a
+    /// default whose spelling is not the word the note says (a number).
+    fn default_note_with(
+        &mut self,
+        at: &str,
+        field: &'static str,
+        value: &'static str,
+        patch: Option<String>,
+    ) {
         if !self.out.takes_default_note() {
             return;
         }
         let here = pointer::child(at, field);
-        let patch = fixable.then(|| patch_add_word(&here, value));
         let mut diag = Diag::new("I0003", here)
             .arg_word("field", field)
             .arg_word("value", value);
@@ -1980,5 +2063,135 @@ mod tests {
             r#"]},"timeout_ms":120000}"#
         );
         assert!(i0004_paths(edit).is_empty());
+    }
+
+    /// Every diagnostic `route` raises with `code`, as (path, fix applicability).
+    fn raised(route: &str, code: &str) -> Vec<(String, Vec<i32>)> {
+        let rules = RulesTable::load(std::path::Path::new("../../rules/rules.v1.json"))
+            .expect("the committed rules table");
+        let limits = Limits::from_rules(&rules).expect("the committed limits");
+        let mut out = Builder::default();
+        super::run(&playbook(route), &limits, &mut out);
+        out.into_diagnostics()
+            .into_iter()
+            .filter(|diagnostic| diagnostic.code == code)
+            .map(|diagnostic| {
+                let fixes = diagnostic
+                    .suggestions
+                    .iter()
+                    .map(|fix| fix.applicability)
+                    .collect();
+                (diagnostic.path, fixes)
+            })
+            .collect()
+    }
+
+    fn edit(settings: &str) -> String {
+        format!(
+            concat!(
+                r#"{{"label":"v","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":["#,
+                r#"{{"set_mandate_settings":{settings}}}"#,
+                r#"]}},"timeout_ms":120000}}"#
+            ),
+            settings = settings
+        )
+    }
+
+    const AREA: &str = r#"{"min":{"x":1,"y":1,"z":1},"max":{"x":2,"y":2,"z":2}}"#;
+
+    /// Decisions-log item 184 (10): a lone clear in an edit row is legal;
+    /// beside entries of its own list it is `E0515` with a suggestion, and
+    /// in a new beacon's or a switch's settings `E0515` with a
+    /// machine-applicable Fix, at every one of the four lists.
+    #[test]
+    fn a_clear_stands_alone_in_an_edit_row_and_nowhere_else() {
+        use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
+        let maybe = i32::from(Applicability::MaybeIncorrect);
+        let machine = i32::from(Applicability::MachineApplicable);
+        for (arm, list, entry) in [
+            ("build", "protected_areas", AREA),
+            ("survey", "probe_areas", AREA),
+            ("defend", "protect", r#"{"my_commander":{}}"#),
+            ("attack", "avoid_areas", AREA),
+        ] {
+            let lone = format!(r#"{{"{arm}":{{"clear_{list}":true}}}}"#);
+            assert!(raised(&edit(&lone), "E0515").is_empty(), "{lone}");
+            let both = format!(r#"{{"{arm}":{{"clear_{list}":true,"{list}":[{entry}]}}}}"#);
+            assert_eq!(
+                raised(&edit(&both), "E0515"),
+                vec![(
+                    format!(
+                        "/declarative/route/0/interface/rows/0/set_mandate_settings/{arm}/clear_{list}"
+                    ),
+                    vec![maybe]
+                )],
+                "{both}"
+            );
+            let switch = format!(
+                concat!(
+                    r#"{{"label":"v","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":["#,
+                    r#"{{"set_mandate":{lone}}}"#,
+                    r#"]}},"timeout_ms":120000}}"#
+                ),
+                lone = lone
+            );
+            assert_eq!(
+                raised(&switch, "E0515"),
+                vec![(
+                    format!("/declarative/route/0/interface/rows/0/set_mandate/{arm}/clear_{list}"),
+                    vec![machine]
+                )],
+                "{switch}"
+            );
+        }
+        let placed = placed(r#"{"clear_protected_areas":true}"#);
+        assert_eq!(
+            raised(&placed, "E0515"),
+            vec![(
+                "/declarative/route/0/place_beacon/initial/mandate/build/clear_protected_areas"
+                    .to_owned(),
+                vec![machine]
+            )]
+        );
+    }
+
+    /// Decisions-log item 184 (10): only an omitted `pillar_spacing` is
+    /// noted as reading 0, and its Fix writes the 0 now that a written 0 is
+    /// told apart from an omitted one.
+    #[test]
+    fn only_an_omitted_pillar_spacing_is_noted_and_its_fix_writes_zero() {
+        let mine = |settings: &str| {
+            format!(
+                concat!(
+                    r#"{{"label":"p","place_beacon":{{"at":{{"voxel":{{"x":96,"y":11,"z":62}}}},"#,
+                    r#""initial":{{"mandate":{{"roe":"RETURN_FIRE","mine":{settings}}}}}}}}}"#
+                ),
+                settings = settings
+            )
+        };
+        let at = "/declarative/route/0/place_beacon/initial/mandate/mine/pillar_spacing";
+        let notes = |route: &str| {
+            let rules = RulesTable::load(std::path::Path::new("../../rules/rules.v1.json"))
+                .expect("the committed rules table");
+            let limits = Limits::from_rules(&rules).expect("the committed limits");
+            let mut out = Builder::default();
+            super::run(&playbook(route), &limits, &mut out);
+            out.into_diagnostics()
+                .into_iter()
+                .filter(|diagnostic| diagnostic.code == "I0003" && diagnostic.path == at)
+                .map(|diagnostic| {
+                    diagnostic
+                        .suggestions
+                        .iter()
+                        .map(|fix| fix.json_patch.clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            notes(&mine(r#"{"seam_choice":"NEAREST"}"#)),
+            vec![vec![format!(r#"[{{"op":"add","path":"{at}","value":0}}]"#)]]
+        );
+        assert!(notes(&mine(r#"{"seam_choice":"NEAREST","pillar_spacing":0}"#)).is_empty());
     }
 }

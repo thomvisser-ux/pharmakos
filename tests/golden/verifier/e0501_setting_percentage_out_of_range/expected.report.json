@@ -48,7 +48,14 @@
       "severity": "INFO",
       "path": "/declarative/route/0/place_beacon/initial/mandate/mine/pillar_spacing",
       "message": "`pillar_spacing` is omitted and reads as 0, no pillars.",
-      "beginner": "A setting left out takes its named default."
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/mine/pillar_spacing\",\"value\":0}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
     },
     {
       "code": "E0501",

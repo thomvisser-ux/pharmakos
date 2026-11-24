@@ -181,17 +181,18 @@ pub struct MineSettings {
 ///
 /// One `Option` per setting, because an **edit** writes only the settings it
 /// names (`set_mandate_settings`: "changes settings within the current
-/// mandate"), and proto3 cannot tell an omitted scalar from its zero: a zero
-/// here is a setting the row is silent about, and is left alone. The one
-/// exception is `flee_on_threat`, which carries presence (S3's plan, task
-/// `con5b`), so a written `false` is an edit like any other. A mandate
-/// switch and a new beacon start from [`MineSettings::default`] first, which
-/// is how an omitted setting there reads as its default.
+/// mandate"). Three of the four carry presence on the wire (`flee_on_threat`
+/// from S3's plan, task `con5b`; `dig_max_depth` and `pillar_spacing` from
+/// decisions-log item 184 (10)), so a written 0 or `false` is an edit like
+/// any other; `seam_choice` is a proto3 enum whose zero names no choice, so
+/// its zero is a setting the row is silent about. A mandate switch and a new
+/// beacon start from [`MineSettings::default`] first, which is how an
+/// omitted setting there reads as its default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct MineEdit {
-    /// `dig_max_depth`, when the row writes a non-zero one.
+    /// `dig_max_depth`, when the row writes it, 0 included.
     pub dig_max_depth: Option<u32>,
-    /// `pillar_spacing`, when the row writes a non-zero one.
+    /// `pillar_spacing`, when the row writes it, 0 included.
     pub pillar_spacing: Option<u32>,
     /// `seam_choice`, when the row writes one.
     pub seam_choice: Option<SeamChoice>,
@@ -207,8 +208,8 @@ impl MineEdit {
     /// The `seam_choice` value, when the schema does not define it.
     pub fn of(message: &gp::v1::MineSettings) -> Result<MineEdit, i32> {
         Ok(MineEdit {
-            dig_max_depth: message.dig_max_depth.filter(|depth| *depth != 0),
-            pillar_spacing: message.pillar_spacing.filter(|spacing| *spacing != 0),
+            dig_max_depth: message.dig_max_depth,
+            pillar_spacing: message.pillar_spacing,
             seam_choice: SeamChoice::from_wire(message.seam_choice)?,
             flee_on_threat: message.flee_on_threat,
         })

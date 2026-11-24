@@ -65,7 +65,10 @@
 //! `I0007` (the count of `I0003` notes past [`crate::MAX_DEFAULT_NOTES`]) at
 //! the end of the information codes. S3's `fpstream` (part 2) adds `E0030` (the
 //! verifier could not take a decoded playbook's plan fingerprint: its own
-//! fault, not the file's) at the end of the decode family.
+//! fault, not the file's) at the end of the decode family. S3's `presence7`
+//! (decisions-log item 184 (10)) adds `E0515` (a list's `clear_*` flag beside
+//! entries of its own list, or in settings that start from nothing) at the end
+//! of the settings family.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -914,6 +917,15 @@ pub const CATALOGUE: &[Entry] = &[
     // can be (a wall, a Survey post), which could never be true.
     Entry {
         code: "E0514",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S3's `presence7` (decisions-log item 184 (10)): a list's `clear_*` flag
+    // beside a non-empty list of its own, or in settings that start from
+    // nothing, which the sim's compile refuses (`PlanError::ClearRefused`).
+    Entry {
+        code: "E0515",
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),

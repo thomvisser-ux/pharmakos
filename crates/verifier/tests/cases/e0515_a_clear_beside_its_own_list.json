@@ -1,0 +1,58 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "case",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "s1",
+        "interface": {
+          "beacon": {
+            "beacon_id": "b_02"
+          },
+          "rows": [
+            {
+              "set_mandate_settings": {
+                "survey": {
+                  "probe_areas": [
+                    {
+                      "min": {
+                        "x": 90,
+                        "y": 10,
+                        "z": 60
+                      },
+                      "max": {
+                        "x": 94,
+                        "y": 14,
+                        "z": 64
+                      }
+                    }
+                  ],
+                  "clear_probe_areas": true
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}
