@@ -553,9 +553,10 @@ pub enum Row {
         /// when the row does not name it, which writes nothing (S2's `fire`;
         /// decision 4: an unset `roe` reads as `RETURN_FIRE`).
         roe: u8,
-        /// The Common row's `retreat_hp_pct`; `0` when the row does not name
-        /// it, which writes nothing.
-        retreat_hp_pct: u8,
+        /// The Common row's `retreat_hp_pct` when the row names it, 0 to 100:
+        /// `Some(0)` turns the beacon's retreat off, and `None` writes nothing
+        /// (decisions-log item 177 (3): the field carries presence).
+        retreat_hp_pct: Option<u8>,
         /// The Build mandate's `repair_threshold_pct`, `rebuild_destroyed` and
         /// `terraform`, each only when the row names it (S2's `site`).
         build: crate::site::BuildEdit,
@@ -1514,7 +1515,7 @@ fn compile_switch_settings(
         _ => false,
     };
     if empty_s2_arm {
-        let fields = u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct != 0);
+        let fields = common_fields(settings);
         let (roe, retreat_hp_pct) = compile_common(settings)?;
         return Ok((fields > 0).then(|| {
             Box::new(Row::Settings {
@@ -1566,7 +1567,7 @@ fn compile_settings_row(
     names: &Names<'_>,
     covering: bool,
 ) -> Result<Row, PlanError> {
-    let mut fields: u32 = u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct != 0);
+    let mut fields: u32 = common_fields(settings);
     let mut targets: Vec<Target> = Vec::new();
     let mut protected: Vec<([i16; 3], ColumnBox)> = Vec::new();
     let mut probes: Vec<([i16; 3], ColumnBox)> = Vec::new();
@@ -1929,28 +1930,39 @@ fn compile_wall_box(
     })
 }
 
+/// How many of the Common row's two fields a settings edit writes: `roe`
+/// when it names a value (its wire 0 is `ROE_UNSPECIFIED`, which names none),
+/// and `retreat_hp_pct` whenever it is present, a written 0 included
+/// (decisions-log item 177 (3)). The verifier's `interface::count` and the
+/// operator's price count the same.
+fn common_fields(settings: &gp::v1::MandateSettings) -> u32 {
+    u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct.is_some())
+}
+
 /// The Common row's two fields as a beacon holds them (S2's `fire`; decision
 /// 4): `roe`'s wire value, refused when it is one this build does not name,
-/// and `retreat_hp_pct` as a byte, refused past 100.
+/// and `retreat_hp_pct`, when the row writes it, as a byte, refused past 100.
 ///
 /// # Errors
 ///
 /// [`PlanError::UnknownEnum`] for a `roe` this build does not name, and
 /// [`PlanError::RetreatOutOfRange`] for a `retreat_hp_pct` past 100.
-fn compile_common(settings: &gp::v1::MandateSettings) -> Result<(u8, u8), PlanError> {
+fn compile_common(settings: &gp::v1::MandateSettings) -> Result<(u8, Option<u8>), PlanError> {
     let unknown = PlanError::UnknownEnum {
         field: "roe",
         value: settings.roe,
     };
     let roe = gp::v1::mandate_settings::Roe::try_from(settings.roe).map_err(|_| unknown.clone())?;
     let roe = u8::try_from(i32::from(roe)).map_err(|_| unknown)?;
-    let refused = PlanError::RetreatOutOfRange {
-        found: settings.retreat_hp_pct,
-    };
-    let retreat_hp_pct = u8::try_from(settings.retreat_hp_pct)
-        .ok()
-        .filter(|pct| *pct <= 100)
-        .ok_or(refused)?;
+    let retreat_hp_pct = settings
+        .retreat_hp_pct
+        .map(|written| {
+            u8::try_from(written)
+                .ok()
+                .filter(|pct| *pct <= 100)
+                .ok_or(PlanError::RetreatOutOfRange { found: written })
+        })
+        .transpose()?;
     Ok((roe, retreat_hp_pct))
 }
 

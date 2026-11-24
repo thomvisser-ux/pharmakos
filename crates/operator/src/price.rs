@@ -98,13 +98,23 @@ fn initial_ms(initial: &InitialSettings, tuning: &Tuning) -> Option<i64> {
 /// target at its own.
 fn settings_ms(settings: &MandateSettings, tuning: &Tuning) -> Option<i64> {
     let (fields, targets) = count(settings)?;
-    let edit = match fields.checked_sub(1) {
-        None => 0,
-        Some(extra) => tuning
+    // No field, no edit: `fields` is signed, so `checked_sub(1)` alone would
+    // read 0 as one field less than the base (the verifier's
+    // `Rates::edit_settings`, over an unsigned count, answers 0).
+    // A count is a sum of lengths and ones, never negative.
+    let edit = match fields {
+        0 => 0,
+        1.. => tuning
             .times
             .edit_settings_base
-            .checked_add(tuning.times.edit_settings_per_field.checked_mul(extra)?)?
+            .checked_add(
+                tuning
+                    .times
+                    .edit_settings_per_field
+                    .checked_mul(fields.checked_sub(1)?)?,
+            )?
             .min(tuning.times.edit_settings_max),
+        _ => return None,
     };
     edit.checked_add(tuning.times.build_target.checked_mul(targets)?)
 }
@@ -134,7 +144,7 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
         retreat_hp_pct,
         mandate,
     } = settings;
-    let common = add(&[set(*roe != 0), set(*retreat_hp_pct != 0)])?;
+    let common = add(&[set(*roe != 0), set(retreat_hp_pct.is_some())])?;
     let (fields, targets) = match mandate {
         Some(mandate_settings::Mandate::Build(build)) => {
             let BuildSettings {
@@ -242,4 +252,65 @@ fn attack_fields(attack: &AttackSettings) -> Option<i64> {
         set(breach_allowed.is_some()),
         set(*waves != 0),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tuning() -> Tuning {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/rules.v1.json");
+        Tuning::read(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// A visit to `b_00` with one `set_mandate_settings` row, as the JSON a
+    /// composed step is priced from.
+    fn visit(settings: &str) -> Json {
+        let text = format!(
+            r#"{{"label":"visit","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{{"set_mandate_settings":{settings}}}]}},"timeout_ms":120000}}"#
+        );
+        let step: Step = pharmakos_proto::json::decode(&text).unwrap();
+        pharmakos_proto::json::encode_json(&step).unwrap()
+    }
+
+    /// Decisions-log item 177 (3): `retreat_hp_pct` has presence, so a
+    /// written 0 is one field of the edit, as the verifier's `count` and the
+    /// sim's compile charge it, and an omitted one is none.
+    #[test]
+    fn a_written_zero_retreat_is_one_field() {
+        let tuning = tuning();
+        let handshake = tuning.times.visit_handshake;
+        let base = tuning.times.edit_settings_base;
+        assert_eq!(
+            step_ms(&visit(r#"{"retreat_hp_pct":0}"#), &tuning),
+            Some(handshake + base)
+        );
+        assert_eq!(
+            step_ms(&visit(r#"{"retreat_hp_pct":40}"#), &tuning),
+            Some(handshake + base)
+        );
+        assert_eq!(
+            step_ms(&visit(r#"{"roe":"HOLD_FIRE"}"#), &tuning),
+            Some(handshake + base),
+            "an omitted threshold is no field"
+        );
+        assert_eq!(
+            step_ms(&visit(r#"{"roe":"HOLD_FIRE","retreat_hp_pct":0}"#), &tuning),
+            Some(handshake + base + tuning.times.edit_settings_per_field)
+        );
+    }
+
+    /// An edit that writes no field costs nothing beyond the visit, as the
+    /// verifier's `Rates::edit_settings` prices it. The count is signed here,
+    /// so `checked_sub(1)` on 0 is -1, not `None`: such an edit was priced at
+    /// the base rate less one field.
+    #[test]
+    fn an_edit_that_writes_no_field_costs_nothing() {
+        let tuning = tuning();
+        assert_eq!(
+            step_ms(&visit("{}"), &tuning),
+            Some(tuning.times.visit_handshake)
+        );
+    }
 }

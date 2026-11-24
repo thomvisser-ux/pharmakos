@@ -391,8 +391,12 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// verifier's: the sim's loader refuses a table whose rates let a row run
 /// past the sim's `i32` (`RulesError::RowPastTheSim`, S3's `p3fix`, which
 /// retired the verifier's own `RulesGap::RowPastTheSim`), and the verifier
-/// is only ever handed a table the loader took.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.5";
+/// is only ever handed a table the loader took. `0.1.0-s3.6` from S3's
+/// `retreat` (decisions-log item 177 (3)): `MandateSettings.retreat_hp_pct`
+/// carries presence, so this build prices a written 0 (retreat off) as one
+/// field of its edit, where `0.1.0-s3.5` read it as unwritten, and its reports
+/// are not comparable with `0.1.0-s3.5`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.6";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
