@@ -2032,9 +2032,16 @@ impl Rig {
                     &said,
                 ))
             }
-            Unfinished::Held(_) => Ok(self
-                .editor
-                .unfinished(crate::editor::Cause::AnswerTooLarge, &said)),
+            // A held request is said by the close that held it (fix pass 7, item 5): an answer
+            // too large for this client for 1009, the close on the message otherwise.
+            Unfinished::Held(code) => Ok(self.editor.unfinished(
+                if *code == 1009 {
+                    crate::editor::Cause::AnswerTooLarge
+                } else {
+                    crate::editor::Cause::ClosedOn
+                },
+                &said,
+            )),
             Unfinished::TimedOut => Ok(self
                 .editor
                 .unfinished(crate::editor::Cause::TimedOut, &said)),
@@ -3442,6 +3449,48 @@ mod tests {
             );
         }
         assert_eq!(sent_loads, 1, "the same text was sent again unchanged");
+    }
+
+    /// **A held request is said by the close that held it** (fix pass 7, item 5; review 6's F3):
+    /// a load whose answer closed the link with 1008 is said as a close on the message, on the
+    /// first close and on every held click after, not as an answer too large (1009's words).
+    #[test]
+    fn a_held_request_is_said_by_its_own_close_code() {
+        for (code, key) in [
+            (1008_u16, "call_closed_on"),
+            (1009, "call_answer_too_large"),
+        ] {
+            let mut rig = editing();
+            let text = br#"{"schema_version":{"major":1},"meta":{"title":"closes the link"}}"#;
+            let mut now = rig.timing.now_us();
+            for click in 0..3 {
+                assert!(rig.editor_mut().load(text), "click {click} was not taken");
+                for _ in 0..10 {
+                    now += 50_000;
+                    rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+                    if rig.link_action(SEAT) == Some(LinkAction::Connect) {
+                        rig.opened(SEAT);
+                    }
+                    for frame in rig.poll(now) {
+                        if frame.link == SEAT && frame.text.contains("closes the link") {
+                            rig.closed(SEAT, Close::ThisMessage(code));
+                        } else {
+                            let body = if method_of(&frame) == "get_view" {
+                                r#"{"next_cursor":"c9","complete":true}"#
+                            } else {
+                                "{}"
+                            };
+                            let _ = rig.receive(frame.link, &answer(id_of(&frame), body, "lull"));
+                        }
+                    }
+                }
+                assert_eq!(
+                    rig.editor().status().key,
+                    key,
+                    "code {code} click {click}: the editor's line"
+                );
+            }
+        }
     }
 
     /// The seat's first poll after it opens: the keyframe, sent and in flight.

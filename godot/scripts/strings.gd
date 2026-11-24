@@ -313,11 +313,11 @@ const TEXT := {
 	"call_word_recap": "recap",
 	# A connection closed on a call itself (close code 1009 and its kin): that call
 	# is not sent again, and the line says so.
-	"unchecked_closed_on": "Not checked: the connection closed on this check (code {detail}: too big for one side to read, or unreadable); it is not sent again.",
-	"status_call_answer_too_large": "The gateway's answer to this is too large for this client to read (code {detail}), so nothing changed; shorten the file. It is not sent again until the text changes.",
+	"unchecked_closed_on": "Not checked: the connection closed on this check (code {detail}: too big for one side to read, or unreadable); it is not sent again until the text changes or the next phase.",
+	"status_call_answer_too_large": "The gateway's answer to this is too large for this client to read (code {detail}), so nothing changed; shorten the file. It is not sent again until the text changes or the next phase.",
 	"status_call_timed_out": "No answer to that came in time, so nothing changed here; the connection is opened again.",
 	"status_call_unreadable": "The gateway's answer to that could not be read ({detail}); nothing changed, and it is not sent again.",
-	"status_call_closed_on": "The connection closed on that (code {detail}: too big for one side to read, or unreadable); it is not sent again, and nothing changed.",
+	"status_call_closed_on": "The connection closed on that (code {detail}: too big for one side to read, or unreadable), and nothing changed; it is not sent again until the text changes or the next phase.",
 	"templates_closed_on": "The connection closed on the template list (code {detail}).",
 	"vocabulary_closed_on": "The connection closed on the words to pick from (code {detail}).",
 	"menu_detail_closed_on": "The connection closed on this beacon's detail (code {detail}).",
