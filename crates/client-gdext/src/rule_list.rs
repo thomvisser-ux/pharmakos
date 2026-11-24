@@ -16,11 +16,12 @@
 //! `replace` at the chip's pointer, a `move` of one rule onto another's place), and the
 //! patched text is `patch_plan`'s answer.
 //!
-//! One shape is drawn but not edited here, a gap in the wire rather than a choice of the
-//! client's (the owner's ruling of 2026-11-15, decisions-log item 160: the player is never
-//! asked for milliseconds): an integer whose unit is `ms`. The sentence shows the gateway's own rendering (`2:00`), and a number field would ask
-//! the player for raw milliseconds, which the client may not convert. It waits on a display
-//! unit from the wire ([`ReadOnly::Milliseconds`]).
+//! A number is shown and typed in its shape's display unit, seconds for a duration (the owner's
+//! ruling of 2026-11-15, decisions-log item 160, kept by the gateway converting; S3's `fixq`): the
+//! field pre-fills with the chip's `value_text` and sends what was typed to `set_value_text`, so
+//! the client reads, converts and compares no number. Whether a value lies outside its shape is
+//! the chip's `outside`, as sent; a choice is drawn by its `titles` and writes its value as sent;
+//! every chip's edit is the op its `pick_op` names (`add` for a value at its proto3 default).
 //!
 //! A reference to a step label or a rule id is picked from the playbook, not from the map
 //! (part 2, [`ChipEditor::Name`]): from the labels or rule ids the player's own file holds, in
@@ -44,19 +45,13 @@ use crate::view::split_footer;
 /// reading of the verifier's catalogue, as `editor::DORMANT_CODES` is the checkbox's.
 pub const CONFLICT_CODE: &str = "W0702";
 
-/// The unit whose integers the rule list does not edit: a duration, which the gateway renders
-/// for reading and which a number field would ask for in raw game milliseconds.
-const MILLISECONDS: &str = "ms";
-
 /// Why a chip is drawn and not edited.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReadOnly {
-    /// An integer in milliseconds: it waits on a typed unit hint from the wire.
-    Milliseconds,
     /// A chip whose shape the gateway left unset, or set to a kind this build does not know.
     NoShape,
-    /// A value that does not fit the shape sent with it (an integer shape holding no integer):
-    /// drawn as it came, with the reason, and not edited.
+    /// A value that does not fit the shape sent with it (a choice whose titles do not pair with
+    /// its values): drawn as it came, with the reason, and not edited.
     Unreadable,
 }
 
@@ -65,7 +60,6 @@ impl ReadOnly {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Milliseconds => "ms",
             Self::NoShape => "no_shape",
             Self::Unreadable => "unreadable",
         }
@@ -119,21 +113,25 @@ impl NameKind {
 /// A chip's editor, by the shape the gateway sent.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ChipEditor {
-    /// A whole number, within the bounds sent (an unset bound is one nothing sets), in `unit`.
+    /// A number, typed as text in `display_unit` and read by the gateway (`set_value_text`).
     Number {
-        /// The lowest value, as sent.
+        /// The lowest value, as sent, in `unit` (an unset bound is one nothing sets).
         min: Option<i32>,
-        /// The highest value, as sent.
+        /// The highest value, as sent, in `unit`.
         max: Option<i32>,
-        /// The unit drawn beside the field, as sent.
+        /// The unit the value is held in and the bounds are in, as sent.
         unit: String,
-        /// The value now, from `value_json`.
-        now: i64,
+        /// The unit it is shown and typed in, as sent: `s` for an `ms` value.
+        display_unit: String,
+        /// The value now in `display_unit`, as sent: what the field pre-fills with.
+        value_text: String,
     },
-    /// A closed list: each value the JSON text to write, as sent.
+    /// A closed list: each value the JSON text to write, and its title, as sent.
     Choice {
         /// The values, in the gateway's order.
         values: Vec<String>,
+        /// Each value in the player's words, one per value, in the same order.
+        titles: Vec<String>,
     },
     /// A reference picked on the map, within the arms the gateway names.
     Pick {
@@ -163,25 +161,13 @@ pub struct RuleChip {
     pub value_json: String,
     /// Its editor.
     pub editor: ChipEditor,
-}
-
-impl RuleChip {
-    /// Whether a number chip's value, as the file holds it, lies outside the bounds the
-    /// gateway sent: the field then shows it as it is and says so, never clamping it into
-    /// range (L1). `false` for any other chip, and against a bound the gateway left unset.
-    #[must_use]
-    pub fn outside_bounds(&self) -> bool {
-        match &self.editor {
-            ChipEditor::Number { min, max, now, .. } => {
-                min.is_some_and(|min| *now < i64::from(min))
-                    || max.is_some_and(|max| *now > i64::from(max))
-            }
-            ChipEditor::Choice { .. }
-            | ChipEditor::Pick { .. }
-            | ChipEditor::Name(_)
-            | ChipEditor::ReadOnly(_) => false,
-        }
-    }
+    /// Whether the value now lies outside its shape, as the gateway said (`Chip.outside`): the
+    /// field then shows it as it is and says so. The client compares nothing.
+    pub outside: bool,
+    /// The op an edit of this chip sends at its pointer, as the gateway named it
+    /// (`Chip.pick_op`): `replace` for a value the file writes, `add` for one at its proto3
+    /// default. [`SlotOp::None`] for an op this build does not know, and then no edit goes out.
+    pub op: SlotOp,
 }
 
 /// One rule or route step of the rendering.
@@ -456,6 +442,8 @@ fn rule_chip(chip: &Chip, lines: &[String]) -> Result<RuleChip, BridgeError> {
         text,
         value_json: chip.value_json.clone(),
         editor: editor_of(chip)?,
+        outside: chip.outside,
+        op: op_of(chip.pick_op),
     })
 }
 
@@ -464,27 +452,33 @@ fn rule_chip(chip: &Chip, lines: &[String]) -> Result<RuleChip, BridgeError> {
 ///
 /// # Errors
 ///
-/// [`BridgeError::Rpc`] for an integer shape whose value is not an integer.
+/// [`BridgeError::Rpc`] for a choice whose titles do not pair with its values, one for one.
 pub(crate) fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
     let Some(shape) = chip.shape.as_ref().and_then(|shape| shape.shape.as_ref()) else {
         return Ok(ChipEditor::ReadOnly(ReadOnly::NoShape));
     };
     Ok(match shape {
-        Shape::Integer(integer) if integer.unit == MILLISECONDS => {
-            ChipEditor::ReadOnly(ReadOnly::Milliseconds)
-        }
-        Shape::Integer(integer) => {
-            let now = integer_of(&chip.pointer, &chip.value_json)?;
-            ChipEditor::Number {
-                min: integer.min,
-                max: integer.max,
-                unit: integer.unit.clone(),
-                now,
+        Shape::Integer(integer) => ChipEditor::Number {
+            min: integer.min,
+            max: integer.max,
+            unit: integer.unit.clone(),
+            display_unit: integer.display_unit.clone(),
+            value_text: chip.value_text.clone(),
+        },
+        Shape::Choice(choice) => {
+            if choice.titles.len() != choice.values.len() {
+                return Err(BridgeError::Rpc(format!(
+                    "the choice at {} names {} values and {} titles",
+                    chip.pointer,
+                    choice.values.len(),
+                    choice.titles.len()
+                )));
+            }
+            ChipEditor::Choice {
+                values: choice.values.clone(),
+                titles: choice.titles.clone(),
             }
         }
-        Shape::Choice(choice) => ChipEditor::Choice {
-            values: choice.values.clone(),
-        },
         Shape::Reference(reference) => {
             let kind = match Kind::try_from(reference.kind) {
                 Ok(Kind::Beacon) => PickKind::Beacon,
@@ -504,16 +498,12 @@ pub(crate) fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
     })
 }
 
-/// An integer chip's value now. A value at its proto3 default is absent from the file and
-/// has no chip (`render.rs`), so a chip always carries one.
-fn integer_of(pointer: &str, value_json: &str) -> Result<i64, BridgeError> {
-    match json::read(value_json) {
-        Ok(Json::Number(number)) => number
-            .parse::<i64>()
-            .map_err(|_| BridgeError::Rpc(format!("the chip {pointer} holds {value_json}"))),
-        _ => Err(BridgeError::Rpc(format!(
-            "the integer chip {pointer} holds {value_json}, which is not an integer"
-        ))),
+/// The op a wire `PickOp` names; [`SlotOp::None`] for unset or unknown, so no edit is guessed.
+pub(crate) fn op_of(pick_op: i32) -> SlotOp {
+    match PickOp::try_from(pick_op) {
+        Ok(PickOp::Add) => SlotOp::Add,
+        Ok(PickOp::Replace) => SlotOp::Replace,
+        Ok(PickOp::Unspecified) | Err(_) => SlotOp::None,
     }
 }
 
@@ -636,8 +626,32 @@ fn by_name(key: &str, value: &str) -> Json {
 /// The RFC 6902 patch that writes `value` at `pointer`: one chip's edit.
 #[must_use]
 pub fn replace_patch(pointer: &str, value: Json) -> String {
+    op_patch("replace", pointer, value)
+}
+
+/// The RFC 6902 patch a chip's edit sends: `value` written at `pointer` with the op the gateway
+/// named for the chip ([`RuleChip::op`]); `None` for no op, which sends nothing.
+#[must_use]
+pub fn chip_patch(op: SlotOp, pointer: &str, value: Json) -> Option<String> {
+    match op {
+        SlotOp::Add => Some(op_patch("add", pointer, value)),
+        SlotOp::Replace => Some(op_patch("replace", pointer, value)),
+        SlotOp::None => None,
+    }
+}
+
+/// The RFC 6902 patch that removes the rule or step at `pointer`: Remove on the rule list.
+#[must_use]
+pub fn remove_patch(pointer: &str) -> String {
     json::write(&Json::Array(vec![Json::Object(vec![
-        ("op".to_owned(), Json::String("replace".to_owned())),
+        ("op".to_owned(), Json::String("remove".to_owned())),
+        ("path".to_owned(), Json::String(pointer.to_owned())),
+    ])]))
+}
+
+fn op_patch(op: &str, pointer: &str, value: Json) -> String {
+    json::write(&Json::Array(vec![Json::Object(vec![
+        ("op".to_owned(), Json::String(op.to_owned())),
         ("path".to_owned(), Json::String(pointer.to_owned())),
         ("value".to_owned(), value),
     ])]))
@@ -703,9 +717,12 @@ mod tests {
                     "\"LOW\"".to_owned(),
                     "\"NORMAL\"".to_owned(),
                     "\"HIGH\"".to_owned()
-                ]
+                ],
+                titles: vec!["low".to_owned(), "normal".to_owned(), "high".to_owned()]
             }
         );
+        assert_eq!(chip.op, SlotOp::Replace, "the op is the gateway's");
+        assert!(!chip.outside);
         assert!(
             list.segments
                 .get(5)
@@ -716,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn each_shape_gets_its_editor_and_milliseconds_stay_the_gateways_text() {
+    fn each_shape_gets_its_editor_and_a_duration_is_typed_in_seconds() {
         let list = golden();
         let by = |suffix: &str| {
             list.chips
@@ -732,12 +749,21 @@ mod tests {
                 min: Some(0),
                 max: Some(100),
                 unit: "%".to_owned(),
-                now: 40
+                display_unit: "%".to_owned(),
+                value_text: "40".to_owned(),
             }
         );
+        // A duration is a number like any other, shown and typed in the gateway's seconds
+        // (S3's `fixq-c`, item 7): it was drawn read-only while the wire had no display unit.
         assert_eq!(
             by("/route/0/timeout_ms"),
-            ChipEditor::ReadOnly(ReadOnly::Milliseconds)
+            ChipEditor::Number {
+                min: Some(0),
+                max: None,
+                unit: "ms".to_owned(),
+                display_unit: "s".to_owned(),
+                value_text: "120".to_owned(),
+            }
         );
         assert_eq!(
             by("/route/1/move/to"),
@@ -783,63 +809,60 @@ mod tests {
         assert!(rule_list_of(&json::read(bad_rule).expect("json")).is_err());
     }
 
-    /// A number the file holds outside the bounds sent is said to be outside them, at each
-    /// end, and a bound the gateway left unset bounds nothing.
+    /// Whether a value lies outside its shape is the gateway's `outside`, carried as sent, and the
+    /// op a chip's edit sends is its `pick_op`: `add` for a value at its proto3 default, and no op
+    /// for one this build does not know (S3's `fixq-c`, items 11 and 14). A choice whose titles do
+    /// not pair with its values is refused whole. Nothing here compares a value with a bound.
     #[test]
-    fn a_number_outside_the_bounds_sent_is_said_to_be() {
-        let chip = |min: Option<i32>, max: Option<i32>, now: i64| RuleChip {
-            pointer: "/a".to_owned(),
-            line: 0,
-            start: 0,
-            text: "x".to_owned(),
-            value_json: now.to_string(),
-            editor: ChipEditor::Number {
-                min,
-                max,
-                unit: String::new(),
-                now,
-            },
-        };
-        assert!(!chip(Some(0), Some(100), 40).outside_bounds());
-        assert!(!chip(Some(0), Some(100), 100).outside_bounds());
-        assert!(chip(Some(0), Some(100), 140).outside_bounds());
-        assert!(chip(Some(10), None, 5).outside_bounds());
-        assert!(!chip(None, None, -5).outside_bounds());
-    }
-
-    /// A whole number outside `i32` is a number chip like any other (S3's `fixp`): the value
-    /// field holds text, not a float, so nothing rounds it, and the gateway judges it.
-    #[test]
-    fn a_number_outside_i32_is_edited_like_any_other() {
-        let answer = |value: &str| {
+    fn outside_and_the_op_are_the_gateways_and_a_choice_pairs_its_titles() {
+        let answer = |chip: &str| {
             json::read(&format!(
-                r#"{{"prose":"Route\n  1. go: wait 12 ticks.\n","rules":[{{"pointer":"/declarative/route/0","line":1,"line_count":1,"chips":[{{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{{"integer":{{"min":0}}}},"value_json":"{value}"}}]}}]}}"#
+                r#"{{"prose":"Route\n  1. go: wait 12 ticks.\n","rules":[{{"pointer":"/declarative/route/0","line":1,"line_count":1,"chips":[{chip}]}}]}}"#
             ))
             .expect("json")
         };
-        let editor = |value: &str| {
-            rule_list_of(&answer(value))
+        let read = |chip: &str| {
+            rule_list_of(&answer(chip))
                 .expect("reads")
                 .chips
                 .first()
-                .map(|chip| chip.editor.clone())
+                .cloned()
                 .expect("a chip")
         };
-        assert!(matches!(editor("2147483647"), ChipEditor::Number { .. }));
-        assert!(matches!(
-            editor("4503599627370497"),
-            ChipEditor::Number {
-                now: 4_503_599_627_370_497,
-                ..
-            }
-        ));
-        assert!(matches!(
-            editor("-2147483649"),
-            ChipEditor::Number {
-                now: -2_147_483_649,
-                ..
-            }
-        ));
+        let past = read(
+            r#"{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{"integer":{"max":5}},"value_json":"12","value_text":"12","outside":true,"pick_op":"replace"}"#,
+        );
+        assert!(past.outside, "the gateway's word, carried");
+        let inside = read(
+            r#"{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{"integer":{"max":5}},"value_json":"12","value_text":"12","pick_op":"replace"}"#,
+        );
+        assert!(!inside.outside, "no comparison of the client's own");
+        let default = read(
+            r#"{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{"integer":{}},"value_json":"0","value_text":"0","pick_op":"add"}"#,
+        );
+        assert_eq!(default.op, SlotOp::Add);
+        let unknown = read(
+            r#"{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{"integer":{}},"value_json":"0","value_text":"0"}"#,
+        );
+        assert_eq!(unknown.op, SlotOp::None);
+        assert!(
+            rule_list_of(&answer(
+                r#"{"pointer":"/a","line":1,"start":16,"end":18,"shape":{"choice":{"values":["\"A\"","\"B\""],"titles":["a"]}},"value_json":"\"A\"","pick_op":"replace"}"#
+            ))
+            .is_err(),
+            "a title short"
+        );
+        let compact = |patch: &str| json::read(patch).map(|value| json::write(&value));
+        assert_eq!(
+            chip_patch(SlotOp::Add, "/a", Json::Number("3".to_owned()))
+                .map(|patch| compact(&patch)),
+            Some(compact(r#"[{"op":"add","path":"/a","value":3}]"#))
+        );
+        assert_eq!(chip_patch(SlotOp::None, "/a", Json::Null), None);
+        assert_eq!(
+            compact(&remove_patch("/declarative/handlers/1")),
+            compact(r#"[{"op":"remove","path":"/declarative/handlers/1"}]"#)
+        );
     }
 
     /// A slot takes a pick only when it is empty or a leaf with an op the gateway named: the

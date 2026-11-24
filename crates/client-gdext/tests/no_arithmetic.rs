@@ -463,13 +463,51 @@ const PACING_MODULE: &str = "pacer.rs";
 /// file, and it appears there once (`the_scheduling_sums_are_one_line_each`): any other
 /// line, the same identifier with a different computation on it included, is still an
 /// offence.
-const SCHEDULING_SUMS: &[(&str, &str)] = &[(
-    "rig.rs",
-    "self.keyframe_not_before_us = self.timing.now_us().saturating_add(KEEPALIVE_US);",
-)];
+///
+/// Fix pass 5 adds the reconnect policy's two (`rig.rs`'s `Reconnect`, connection scheduling
+/// too): when a closed link may be opened again (`retry_at_us`, the close's time plus its place
+/// in [`pharmakos_client_gdext::rig::RECONNECT_BACKOFF_US`]), and how long an open link has been
+/// up (`up_us`), which decides when its count returns.
+const SCHEDULING_SUMS: &[(&str, &str)] = &[
+    (
+        "rig.rs",
+        "self.keyframe_not_before_us = self.timing.now_us().saturating_add(KEEPALIVE_US);",
+    ),
+    (
+        "rig.rs",
+        "self.retry_at_us = wait.map(|wait| now_us.saturating_add(wait));",
+    ),
+    (
+        "rig.rs",
+        "let up_us = self.opened_at_us.map(|at| now_us.saturating_sub(at));",
+    ),
+    // Fix pass 6: when a Ready whose answer was lost is sent again (the keep-alive's spacing),
+    // and how long a call in flight has waited, for its deadline.
+    (
+        "rig.rs",
+        "self.ready_resend_at = Some(self.timing.now_us().saturating_add(KEEPALIVE_US));",
+    ),
+    (
+        "rig.rs",
+        "let waited_us = now_us.saturating_sub(state.in_flight_since);",
+    ),
+    // Fix pass 7: how long a connection has been in its state, for its connect deadline and
+    // close grace.
+    (
+        "rig.rs",
+        "let lasted_us = now.saturating_sub(link_state.transport_since);",
+    ),
+];
 
 /// The identifier each of [`SCHEDULING_SUMS`]'s lines assigns, for the one-line check.
-const SCHEDULING_IDENTIFIERS: &[&str] = &["keyframe_not_before_us"];
+const SCHEDULING_IDENTIFIERS: &[&str] = &[
+    "keyframe_not_before_us",
+    "retry_at_us",
+    "up_us",
+    "ready_resend_at",
+    "waited_us",
+    "lasted_us",
+];
 
 /// Whether `code`, a line of `file` in `src/`, is one of [`SCHEDULING_SUMS`], word for
 /// word once comments are stripped.
@@ -1117,4 +1155,774 @@ fn no_script_reads_a_clock_but_the_id_helper_and_the_checks_waits() {
          host_link.gd's match_id is the one read that names a match:\n{}",
         found.join("\n")
     );
+}
+
+/// One family of composition the gateway now answers (S3's `fixq-c`): where it is banned, and
+/// the source text that would bring it back.
+struct Composed {
+    /// What the family is, for the failure.
+    family: &'static str,
+    /// Whether a file is held to it: by its name.
+    applies: fn(&str) -> bool,
+    /// Code that composes it, any one of which fails the file.
+    banned: &'static [&'static str],
+}
+
+fn extension_is(name: &str, wanted: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(wanted))
+}
+
+fn shipped_rust(name: &str) -> bool {
+    extension_is(name, "rs")
+}
+
+fn shipped_gdscript(name: &str) -> bool {
+    extension_is(name, "gd")
+        && !Path::new(name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem.ends_with("_check"))
+}
+
+/// The sources a value the player types passes through: the editor, its rule list and
+/// vocabulary, the state it hands GDScript, and the bridge. Elsewhere a number is the wire's,
+/// read as the gateway wrote it (a lax read of the player's file, a footer's count).
+fn typed_rust(name: &str) -> bool {
+    [
+        "editor.rs",
+        "rule_list.rs",
+        "vocabulary.rs",
+        "editor_view.rs",
+        "bridge.rs",
+    ]
+    .contains(&name)
+}
+
+/// The scripts a value the player types passes through: the panel, its value field, the rule
+/// list, the picker and the wizard's pages.
+fn typed_gdscript(name: &str) -> bool {
+    [
+        "editor.gd",
+        "value_field.gd",
+        "rule_list.gd",
+        "condition_picker.gd",
+        "wizard.gd",
+    ]
+    .contains(&name)
+}
+
+/// **The compositions the gateway now answers stay the gateway's** (S3's `fixq-c`, AGENTS.md
+/// section 3 rule 4): a typed number is read by `set_value_text`, a duration is shown in the
+/// display unit the gateway sends, a value outside its shape is the chip's `outside`, a choice is
+/// drawn by its `titles`, a Build target by its `build_target_lines`, a travel by its
+/// `travel_text`, the Queue by its own `queue_blueprints`, and this seat's seal by `get_status`.
+/// Each family's code, put back into any shipped Rust source or GDScript (the checks' own stand-in
+/// gateway excepted), fails here.
+const COMPOSED: &[Composed] = &[
+    Composed {
+        family: "a typed number read by the client",
+        applies: shipped_rust,
+        banned: &["typed_integer(", "NotAnInteger"],
+    },
+    Composed {
+        family: "a typed number read by the client",
+        applies: typed_rust,
+        banned: &[
+            ".parse::<i64>",
+            ".parse::<i32>",
+            ".parse::<u32>",
+            ".parse::<f64>",
+        ],
+    },
+    Composed {
+        family: "a typed number read by the client",
+        applies: typed_gdscript,
+        banned: &[
+            ".to_int()",
+            ".to_float()",
+            ".is_valid_int()",
+            ".is_valid_float()",
+            // A field's text read as a number by GDScript's `int()`/`float()` casts (fix pass 1,
+            // mutant GC: `int(text) > int(max)` in the field's Send survived): the bound and the
+            // value are the gateway's to read.
+            "int(text",
+            "float(text",
+            "int(field",
+            "float(field",
+            "int(typed",
+            "float(typed",
+            "int(_number_field",
+            "float(_number_field",
+            "int(value_text",
+            "float(value_text",
+        ],
+    },
+    Composed {
+        family: "a duration's unit judged by the client",
+        applies: shipped_rust,
+        banned: &[
+            "== MILLISECONDS",
+            "unit == \"ms\"",
+            "ReadOnly::Milliseconds",
+        ],
+    },
+    Composed {
+        family: "a value compared with its bounds by the client",
+        applies: shipped_rust,
+        banned: &["outside_bounds", "< i64::from(min)", "> i64::from(max)"],
+    },
+    Composed {
+        family: "a travel time drawn from milliseconds",
+        applies: shipped_gdscript,
+        banned: &["travel_ms"],
+    },
+    Composed {
+        family: "a choice or an anchor drawn as its JSON",
+        applies: shipped_gdscript,
+        banned: &[
+            "add_radio_check_item(values[which], which)",
+            "{\"value\": listed[value]}",
+            "\"anchor\": targets[which]",
+        ],
+    },
+    Composed {
+        family: "a choice or an anchor drawn as its JSON",
+        applies: shipped_rust,
+        banned: &["anchor_text"],
+    },
+    Composed {
+        family: "the Queue drawn from Add a build target's list",
+        applies: shipped_gdscript,
+        banned: &["[\"queue\", \"blueprints\""],
+    },
+    Composed {
+        family: "a seal kept by the client beside the gateway's",
+        applies: shipped_rust,
+        banned: &["sealed_round"],
+    },
+];
+
+/// The lines of `text` that compose what a family bans, with comment lines left out.
+fn composing(text: &str, family: &Composed) -> Vec<String> {
+    text.lines()
+        .filter(|line| {
+            let code = line.trim_start();
+            !(code.starts_with("//") || code.starts_with('#'))
+        })
+        .filter(|line| family.banned.iter().any(|banned| line.contains(banned)))
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_compositions_the_gateway_answers_stay_the_gateways() {
+    let mut found: Vec<String> = Vec::new();
+    for file in sources() {
+        let name = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a file name")
+            .to_owned();
+        let text = fs::read_to_string(&file).expect("a source reads");
+        // A unit-test module drives the editor as the gateway would, and is not shipped.
+        let shipped = text.split("#[cfg(test)]").next().unwrap_or_default();
+        for family in COMPOSED.iter().filter(|family| (family.applies)(&name)) {
+            for line in composing(shipped, family) {
+                found.push(format!("{name}: {}: {line}", family.family));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "the client composes again what the gateway answers (AGENTS.md section 3 rule 4; S3's \
+         fixq-c): {found:#?}"
+    );
+}
+
+/// The scan catches each family's code, a mutant per family, and not its comment.
+#[test]
+fn the_composition_scan_catches_each_family() {
+    let mutants: &[(&str, &str)] = &[
+        ("x.rs", "    let digits = typed_integer(text)?;"),
+        ("editor.rs", "    let now: i64 = text.parse::<i64>()?;"),
+        ("value_field.gd", "\tvar typed := field.text.to_int()"),
+        (
+            "editor.gd",
+            "\tif int(text) > int(_number_chip.get(\"max\", 0)):",
+        ),
+        (
+            "editor.gd",
+            "\tif float(text) > float(_number_chip.get(\"max\", 0)):",
+        ),
+        ("value_field.gd", "\tvar n := int(field.text)"),
+        (
+            "x.rs",
+            "        Shape::Integer(integer) if integer.unit == \"ms\" => {",
+        ),
+        ("x.rs", "    if chip.outside_bounds() {"),
+        ("x.gd", "\t\"ms\": now.get(\"travel_ms\", 0)"),
+        (
+            "x.gd",
+            "\t\t_choice_menu.add_radio_check_item(values[which], which)",
+        ),
+        ("x.rs", "    anchor_text: compact(&anchor),"),
+        (
+            "x.gd",
+            "const LISTS := {33: [\"queue\", \"blueprints\", \"menu_queue\"]}",
+        ),
+        ("x.rs", "    sealed_round: Option<u32>,"),
+    ];
+    for (name, line) in mutants {
+        let caught = COMPOSED
+            .iter()
+            .filter(|family| (family.applies)(name))
+            .any(|family| !composing(line, family).is_empty());
+        assert!(caught, "{name}: {line}");
+    }
+    for (name, line) in [
+        ("x.rs", "// typed_integer( once lived here"),
+        ("x.gd", "# travel_ms is the gateway's"),
+        ("watch_check.gd", "\tif not typed.is_valid_int():"),
+    ] {
+        let caught = COMPOSED
+            .iter()
+            .filter(|family| (family.applies)(name))
+            .any(|family| !composing(line, family).is_empty());
+        assert!(!caught, "{name}: {line}");
+    }
+}
+
+/// The scripts a value the player types passes through, by file name, for the conversion ban.
+const TYPED_SCRIPTS: &[&str] = &[
+    "editor.gd",
+    "value_field.gd",
+    "rule_list.gd",
+    "condition_picker.gd",
+    "wizard.gd",
+];
+
+/// Conversions from text or a variant to a number, banned outright in [`TYPED_SCRIPTS`] (S3's
+/// `fixq-c`, fix pass 2: the first ban matched variable-name prefixes, so `int(raw)` passed).
+/// Each is matched as a whole word, whatever its argument is called.
+const CONVERSIONS: &[&str] = &[
+    "int(",
+    "float(",
+    "str_to_var(",
+    "type_convert(",
+    "Expression",
+    ".hex_to_int",
+    ".bin_to_int",
+    ".to_int(",
+    ".to_float(",
+    ".is_valid_int",
+    ".is_valid_float",
+    // Fix pass 4 (review 3): the conversions the first list left out.
+    "bytes_to_var(",
+    " as int",
+    " as float",
+    "JSON.parse(",
+    "JSON.parse_string(",
+    ".parse(",
+];
+
+/// The exact lines in [`TYPED_SCRIPTS`] that convert something that is not typed text, each with
+/// why: every one reads an index, a rendering id or a count the bridge sent (or a layout size
+/// this script owns), never the text of a field.
+const CONVERSIONS_KEPT: &[(&str, &str, &str)] = &[
+    (
+        "editor.gd",
+        r#"var rendered := int(state.get("rules_rendering", -1))"#,
+        "the bridge's rendering id; `rules_rendering` is always put (editor_view.rs, put_rule_list)",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_choose_name(int(_name_chip.get("index", -1)), int(_name_chip.get("revision", -1)), String(_name_chip.get("pointer", "")), which)"#,
+        "a chip's index and rendering; `_name_chip` is built in `_on_rule_chip` with both keys",
+    ),
+    (
+        "editor.gd",
+        r#"var slot := int(_picker_slot.get("slot", -1))"#,
+        "a slot's index; `_picker_slot` is built in `open_condition_picker` with `slot` and `revision`",
+    ),
+    (
+        "editor.gd",
+        r#"var revision := int(_picker_slot.get("revision", -1))"#,
+        "a rendering id; `_picker_slot` is built in `open_condition_picker` with `slot` and `revision`",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_choose_group(slot, pointer, revision, int(picked["group"]))"#,
+        "a group's index in the picker's own tree",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_choose_predicate(slot, pointer, revision, int(picked["family"]), int(picked["entry"]))"#,
+        "a family's and an entry's index in the picker's own tree",
+    ),
+    (
+        "editor.gd",
+        r#"_visit_menu.add_radio_check_item(Strings.text("menu_priority_" + String(row[1])), int(row[0]))"#,
+        "a menu item id this script owns",
+    ),
+    (
+        "editor.gd",
+        "_entry_popup.size = Vector2i(int(PANEL_WIDTH), 0)",
+        "a layout constant",
+    ),
+    (
+        "editor.gd",
+        "_entry_popup.size.x = int(PANEL_WIDTH)",
+        "a layout constant",
+    ),
+    (
+        "editor.gd",
+        "_entry_popup.popup(Rect2i(Vector2i(int(beside.end.x), int(beside.position.y)), _entry_popup.size))",
+        "a menu's pixel position",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_change_setting_number_text(String(_number_setting.get("beacon", "")), int(_number_setting.get("index", -1)), String(_number_setting.get("pointer", "")), text)"#,
+        "a setting's index; `_number_setting` is built in `_on_setting` with `index`; the typed text goes as text",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_set_number_text(int(_number_chip.get("index", -1)), int(_number_chip.get("revision", -1)), String(_number_chip.get("pointer", "")), text)"#,
+        "a chip's index and rendering; `_number_chip`, when not empty, is built in `_on_rule_chip` with both keys; the typed text goes as text",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_choose(int(_choice_chip.get("index", -1)), int(_choice_chip.get("revision", -1)), String(_choice_chip.get("pointer", "")), which)"#,
+        "a chip's index and rendering; `_choice_chip` is built in `_on_rule_chip` with both keys",
+    ),
+    (
+        "editor.gd",
+        r#"var stored := int(state.get("notes_saved", -1))"#,
+        "the bridge's count of saved characters; `notes_saved` is always put (editor_view.rs)",
+    ),
+    (
+        "rule_list.gd",
+        "row.meta_clicked.connect(func(meta: Variant) -> void: on_chip.call(int(meta)))",
+        "a chip's index, this list's own meta",
+    ),
+    (
+        "rule_list.gd",
+        r#"return editable and data is Dictionary and String(data.get("parent", "")) == parent and int(data.get("revision", -1)) == revision and int(data.get("rule", -1)) != rule,"#,
+        "a drag's rule index and rendering; this list's `_draggable` puts both on every drag",
+    ),
+    (
+        "rule_list.gd",
+        r#"on_move.call(int(data["rule"]), String(data["pointer"]), rule, pointer, int(data["revision"]))"#,
+        "a drag's rule index and rendering; this list's `_draggable` puts both on every drag",
+    ),
+    (
+        "rule_list.gd",
+        r#"if child.has_meta("line") and int(child.get_meta("rule", -1)) == rule:"#,
+        "a row's rule index; this list's `fill` sets `rule` on every row it makes",
+    ),
+];
+
+/// Whether `code` (a line with its comment and string literals blanked) calls `token` as a whole
+/// word: not as the tail of a longer identifier (`print(` is no `int(`, `Values.int_of(` no
+/// `int(`).
+fn calls_conversion(code: &str, token: &str) -> bool {
+    // A method (`.to_int(`) is a call whatever it is called on; a function (`int(`) is a call
+    // only where no identifier or `.` runs into it.
+    // A cast (` as int`) is a keyword after a value: matched with a space before it and no
+    // identifier character after it (` as integer_of` is no cast).
+    if token.starts_with(' ') {
+        return code.match_indices(token).any(|(at, _)| {
+            code.get(at.saturating_add(token.len())..)
+                .and_then(|tail| tail.chars().next())
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        });
+    }
+    if token.starts_with('.') {
+        return code.contains(token);
+    }
+    code.match_indices(token).any(|(at, _)| {
+        !code
+            .get(..at)
+            .and_then(|head| head.chars().last())
+            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    })
+}
+
+/// A GDScript line with its comment and string literals blanked, keeping the quotes.
+fn gd_code_only(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for c in line.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+                out.push('"');
+            }
+            continue;
+        }
+        match c {
+            '#' => break,
+            '"' => {
+                in_string = true;
+                out.push('"');
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The lines of `text`, in a file named `name`, that call a banned conversion and are not kept.
+fn conversions_in(name: &str, text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| {
+            let code = gd_code_only(line);
+            CONVERSIONS
+                .iter()
+                .any(|token| calls_conversion(&code, token))
+        })
+        .filter(|line| {
+            !CONVERSIONS_KEPT
+                .iter()
+                .any(|(file, kept, _)| *file == name && line.trim() == *kept)
+        })
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_typed_input_scripts_convert_nothing_they_are_not_told_to() {
+    let mut found = Vec::new();
+    let mut kept_seen = 0_usize;
+    for name in TYPED_SCRIPTS {
+        let text = fs::read_to_string(godot_root().join("scripts").join(name)).expect("reads");
+        for line in conversions_in(name, &text) {
+            found.push(format!("{name}: {line}"));
+        }
+        kept_seen += CONVERSIONS_KEPT
+            .iter()
+            .filter(|(file, kept, _)| file == name && text.lines().any(|line| line.trim() == *kept))
+            .count();
+    }
+    assert!(
+        found.is_empty(),
+        "a typed-input script converts something: {found:#?}"
+    );
+    assert_eq!(
+        kept_seen,
+        CONVERSIONS_KEPT.len(),
+        "a kept line is gone: take it off the list"
+    );
+}
+
+/// The ban catches every conversion, whatever its argument is called, and no longer word.
+#[test]
+fn the_conversion_ban_catches_each_conversion() {
+    for line in [
+        "\tif int(raw) > 100:",
+        "\tvar n = float(anything)",
+        "\tvar v = str_to_var(t)",
+        "\tvar v = type_convert(t, TYPE_INT)",
+        "\tvar e := Expression.new()",
+        "\tvar n := t.hex_to_int()",
+        "\tvar n := t.bin_to_int()",
+        "\tvar n := t.to_int()",
+        "\tvar n := t.to_float()",
+        "\tif t.is_valid_int():",
+        "\tif t.is_valid_float():",
+        "\tvar v = bytes_to_var(raw)",
+        "\tvar v = typed as int",
+        "\tvar v = typed as float",
+        "\tvar v = JSON.parse_string(field.text)",
+        "\tvar v = JSON.parse(field.text)",
+        "\tvar e := json.parse(field.text)",
+    ] {
+        assert!(!conversions_in("editor.gd", line).is_empty(), "{line}");
+    }
+    for line in [
+        "\tprint(text)",
+        "\tvar n: Variant = Values.int_of(x)",
+        "\t# int(text) once lived here",
+        "\tvar s := \"int(not code)\"",
+    ] {
+        assert!(conversions_in("editor.gd", line).is_empty(), "{line}");
+    }
+}
+
+/// Methods whose answer says whether they worked (an `Error`, a `bool`, a handle that is null on
+/// a failure), which a shipped script may never call as a bare statement (S3's `fixq-c`, fix
+/// pass 2: `host_link.gd` ignored `send_text`'s `ERR_OUT_OF_MEMORY`, and the call sat
+/// "Sending..." until the link timed out).
+const ERROR_RETURNING: &[&str] = &[
+    "send_text(",
+    "put_packet(",
+    "connect_to_url(",
+    "store_string(",
+    "store_buffer(",
+    "store_line(",
+    "store_var(",
+    "store_csv_line(",
+    "store_8(",
+    "store_16(",
+    "store_32(",
+    "store_64(",
+    "store_float(",
+    "store_double(",
+    "make_dir(",
+    "make_dir_recursive(",
+    "make_dir_absolute(",
+    "make_dir_recursive_absolute(",
+    "remove_absolute(",
+    "rename(",
+    "rename_absolute(",
+    "copy_absolute(",
+    "save_png(",
+    "create_process(",
+    "execute(",
+    "execute_with_pipe(",
+    "change_scene_to_file(",
+    "change_scene_to_packed(",
+    "reload_current_scene(",
+    "shell_open(",
+    "kill(",
+    // Fix pass 4 (review 3): the file, process and socket calls the first list left out.
+    "copy(",
+    "remove(",
+    "start(",
+    "listen(",
+    "accept_stream(",
+    "set_read_only_attribute(",
+    "set_unix_permissions(",
+    "move_to_trash(",
+];
+
+/// Whether a script is shipped: every one but the checks and the hostless shots (the smoke check
+/// ships).
+fn shipped_script(name: &str) -> bool {
+    name == "smoke_check.gd" || !(name.ends_with("_check.gd") || name.ends_with("_shot.gd"))
+}
+
+/// The lines of `text` that keep an [`ERROR_RETURNING`] call's answer in a local nobody reads
+/// after it (`var sent := peer.send_text(...)` and no later `sent`): the answer kept and still
+/// ignored (fix pass 4, review 3). A local is read when its name appears as a whole word on any
+/// later line; a name that only reappears in a later, unrelated function is a reach this scan
+/// does not make, and the review of a script is what catches it.
+fn unread_results(text: &str) -> Vec<&str> {
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let code = gd_code_only(line);
+            let declared = code.trim().strip_prefix("var ")?;
+            let name: String = declared
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let value = declared.split_once('=')?.1;
+            let calls = ERROR_RETURNING.iter().any(|method| {
+                value.match_indices(method).any(|(at, _)| {
+                    value
+                        .get(..at)
+                        .and_then(|head| head.chars().last())
+                        .is_none_or(|c| c == '.' || c.is_whitespace())
+                })
+            });
+            let read_later = lines.get(index.saturating_add(1)..).is_some_and(|rest| {
+                rest.iter()
+                    .any(|later| has_word(&gd_code_only(later), &name))
+            });
+            (calls && !name.is_empty() && !read_later).then_some(*line)
+        })
+        .collect()
+}
+
+/// Whether `code` holds `word` as a whole identifier.
+fn has_word(code: &str, word: &str) -> bool {
+    code.match_indices(word).any(|(at, _)| {
+        let before = code.get(..at).and_then(|head| head.chars().last());
+        let after = code
+            .get(at.saturating_add(word.len())..)
+            .and_then(|tail| tail.chars().next());
+        let joins = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        !joins(before) && !joins(after)
+    })
+}
+
+/// One bare call of each [`ERROR_RETURNING`] method, written out by hand rather than made from
+/// the list, so a method taken off the list is a sample the scan no longer catches (fix pass 4:
+/// removing `rename_absolute(` or `kill(` from the list once survived the self-test).
+const MUST_CATCH: &[&str] = &[
+    "\tpeer.send_text(t)",
+    "\tpeer.put_packet(b)",
+    "\tpeer.connect_to_url(u)",
+    "\tfile.store_string(t)",
+    "\tfile.store_buffer(b)",
+    "\tfile.store_line(t)",
+    "\tfile.store_var(v)",
+    "\tfile.store_csv_line(r)",
+    "\tfile.store_8(n)",
+    "\tfile.store_16(n)",
+    "\tfile.store_32(n)",
+    "\tfile.store_64(n)",
+    "\tfile.store_float(f)",
+    "\tfile.store_double(f)",
+    "\tdir.make_dir(p)",
+    "\tdir.make_dir_recursive(p)",
+    "\tDirAccess.make_dir_absolute(p)",
+    "\tDirAccess.make_dir_recursive_absolute(p)",
+    "\tDirAccess.remove_absolute(p)",
+    "\tdir.rename(a, b)",
+    "\tDirAccess.rename_absolute(a, b)",
+    "\tDirAccess.copy_absolute(a, b)",
+    "\timage.save_png(p)",
+    "\tOS.create_process(p, [])",
+    "\tOS.execute(p, [])",
+    "\tOS.execute_with_pipe(p, [])",
+    "\tget_tree().change_scene_to_file(p)",
+    "\tget_tree().change_scene_to_packed(s)",
+    "\tget_tree().reload_current_scene()",
+    "\tOS.shell_open(u)",
+    "\tOS.kill(pid)",
+    "\tdir.copy(a, b)",
+    "\tdir.remove(p)",
+    "\tthread.start(f)",
+    "\tserver.listen(0)",
+    "\tpeer.accept_stream(s)",
+    "\tFileAccess.set_read_only_attribute(p, true)",
+    "\tFileAccess.set_unix_permissions(p, 0)",
+    "\tOS.move_to_trash(p)",
+];
+
+/// Whether `line` calls an [`ERROR_RETURNING`] method through a deferral or a callable, whose
+/// answer nobody can read (`call_deferred("change_scene_to_file", ...)`,
+/// `change_scene_to_file.call_deferred(...)`; fix pass 2's sweep found `boot.gd`'s).
+fn deferred_error(line: &str) -> bool {
+    let code = gd_code_only(line);
+    ERROR_RETURNING.iter().any(|method| {
+        let name = method.trim_end_matches('(');
+        let by_name = ["call_deferred(", "callv(", ".call("]
+            .iter()
+            .any(|via| code.contains(via))
+            && line.contains(&format!("\"{name}\""));
+        let by_callable = [".call_deferred(", ".call(", ".callv("].iter().any(|via| {
+            let called = format!("{name}{via}");
+            code.match_indices(&called).any(|(at, _)| {
+                code.get(..at)
+                    .and_then(|head| head.chars().last())
+                    .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+            })
+        });
+        by_name || by_callable
+    })
+}
+
+/// The lines of `text` that call an [`ERROR_RETURNING`] method as a bare statement.
+fn ignored_errors(text: &str) -> Vec<String> {
+    const KEYWORDS: &[&str] = &[
+        "var ", "if ", "elif ", "return", "while ", "for ", "match ", "not ", "await ", "assert",
+    ];
+    text.lines()
+        .filter(|line| {
+            let code = gd_code_only(line);
+            let code = code.trim();
+            // A declaration names the method; it calls nothing.
+            if code.starts_with("func ") || code.starts_with("static func ") {
+                return false;
+            }
+            if KEYWORDS.iter().any(|keyword| code.starts_with(keyword)) {
+                return false;
+            }
+            ERROR_RETURNING.iter().any(|method| {
+                code.match_indices(method).any(|(at, _)| {
+                    let before = code.get(..at).unwrap_or_default();
+                    // The call's own name, not the tail of a longer one, and at the statement's
+                    // top level: no assignment and no parenthesis left open before it.
+                    let named = before
+                        .chars()
+                        .last()
+                        .is_none_or(|c| c == '.' || c.is_whitespace());
+                    let depth = before.matches('(').count() == before.matches(')').count();
+                    named && depth && !before.contains('=')
+                })
+            })
+        })
+        .chain(text.lines().filter(|line| deferred_error(line)))
+        .chain(unread_results(text))
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+#[test]
+fn no_shipped_script_ignores_an_error() {
+    let mut found = Vec::new();
+    for file in gdscript_everywhere() {
+        let name = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a name")
+            .to_owned();
+        if !shipped_script(&name) {
+            continue;
+        }
+        let text = fs::read_to_string(&file).expect("reads");
+        for line in ignored_errors(&text) {
+            found.push(format!("{name}: {line}"));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a shipped script ignores what a call says about its own failure: {found:#?}"
+    );
+}
+
+/// The scan catches a bare call of each kind, on any receiver, and lets a checked one by.
+#[test]
+fn the_error_scan_catches_a_bare_call() {
+    for line in [
+        "\t\t\tpeer.send_text(String(pair[1]))",
+        "\t_stdio.store_string(config_line)",
+        "\tDirAccess.remove_absolute(path)",
+        "\tget_tree().change_scene_to_file(\"res://x.tscn\")",
+        "\tOS.execute(\"x\", [])",
+        "\tget_tree().call_deferred(\"change_scene_to_file\", target)",
+        "\tget_tree().change_scene_to_file.call_deferred(target)",
+        "\tfile.store_buffer(bytes)",
+        "\tDirAccess.remove_absolute(ProjectSettings.globalize_path(REMEMBERED))",
+    ] {
+        assert!(!ignored_errors(line).is_empty(), "{line}");
+    }
+    for line in [
+        "\t\t\tvar sent := peer.send_text(String(pair[1]))\n\t\t\tif sent != OK:",
+        "\tif not _stdio.store_string(config_line):",
+        "\treturn peer.send_text(x)",
+        "\t# peer.send_text(x)",
+    ] {
+        assert!(ignored_errors(line).is_empty(), "{line}");
+    }
+    // Every method the scan is for, written out by hand, is caught; one sample a method.
+    assert_eq!(
+        MUST_CATCH.len(),
+        ERROR_RETURNING.len(),
+        "a method on the list has no hand-written sample, or a sample no method"
+    );
+    for line in MUST_CATCH {
+        assert!(!ignored_errors(line).is_empty(), "{line}");
+    }
+    // Every token the scan lists is caught, bare and kept in a local nobody reads; and a kept
+    // answer that is read is not (fix pass 4: removing a token once survived the self-test).
+    for token in ERROR_RETURNING {
+        let bare = format!("\tthing.{token}x)");
+        assert!(!ignored_errors(&bare).is_empty(), "{bare}");
+        let unread = format!("\tvar kept := thing.{token}x)\n\tprint(1)");
+        assert!(!ignored_errors(&unread).is_empty(), "{unread}");
+        let read = format!("\tvar kept := thing.{token}x)\n\tif kept != OK:");
+        assert!(ignored_errors(&read).is_empty(), "{read}");
+    }
 }

@@ -575,11 +575,127 @@ impl PharmakosBridge {
         }
     }
 
-    /// Connection `link` (0 admin, 1 seat) dropped.
+    /// What `host_link.gd` does next with connection `link` (0 admin, 1 seat): `wait`,
+    /// `connect` or `give_up`, as the rig's reconnect policy says (fix pass 5). The script asks
+    /// this every frame a link is closed, and decides nothing itself.
     #[func]
-    fn watch_dropped(&mut self, link: i64) {
+    fn watch_link_action(&self, link: i64) -> GString {
+        let action = match (self.rig.as_ref(), usize::try_from(link)) {
+            (Some(rig), Ok(link)) => rig.link_action(link),
+            _ => None,
+        };
+        GString::from(match action {
+            Some(crate::rig::LinkAction::Wait) => "wait",
+            Some(crate::rig::LinkAction::Connect) => "connect",
+            Some(crate::rig::LinkAction::GiveUp) => "give_up",
+            // No rig, or no such link: there is nothing to open again.
+            None => "no_link",
+        })
+    }
+
+    /// Why connection `link` was given up: `attempts` (in a row, none of which stayed up) and
+    /// `code` (the last close's code, -1 for a connection lost with none); empty when it was not.
+    #[func]
+    fn watch_give_up(&self, link: i64) -> VarDictionary {
+        let mut words = VarDictionary::new();
+        if let (Some(rig), Ok(link)) = (self.rig.as_ref(), usize::try_from(link))
+            && let Some((attempts, last)) = rig.give_up(link)
+        {
+            words.set(&"attempts".to_variant(), &i64::from(attempts).to_variant());
+            let code = match last {
+                Some(crate::rig::Close::ThisMessage(code)) => i64::from(code),
+                Some(crate::rig::Close::Connection) | None => -1,
+            };
+            words.set(&"code".to_variant(), &code.to_variant());
+        }
+        words
+    }
+
+    /// Connection `link`'s state as its `WebSocketPeer` reports it (`get_ready_state`), every
+    /// frame (fix pass 7). Answers whether `host_link.gd` aborts the peer now: an open link that
+    /// owes a close (a call past its deadline), a connect past its deadline, or a close past its
+    /// grace (`Rig::transport`). A state Godot does not define is said and aborted: a connection
+    /// in a state the rig cannot read is not left to hang.
+    #[func]
+    fn watch_transport(&mut self, link: i64, state: i64) -> bool {
+        match (
+            self.rig.as_mut(),
+            usize::try_from(link),
+            crate::rig::Transport::of_ready_state(state),
+        ) {
+            (Some(rig), Ok(link), Some(transport)) => {
+                self.panics
+                    .guard_or("watch_transport", true, || rig.transport(link, transport))
+            }
+            (_, _, None) => {
+                godot_error!(
+                    "[pharmakos] watch_transport: connection {link} is in state {state}, which this client cannot read; it is aborted"
+                );
+                true
+            }
+            // No rig, or no such link: there is no connection to abort.
+            _ => false,
+        }
+    }
+
+    /// Closes on connection `link` since it was last healthy (the rig's reconnect policy).
+    #[func]
+    fn watch_link_attempts(&self, link: i64) -> i64 {
+        match (
+            self.rig.as_ref(),
+            usize::try_from(link)
+                .ok()
+                .and_then(|link| self.rig.as_ref()?.link_attempts(link)),
+        ) {
+            (Some(_), Some(attempts)) => i64::from(attempts),
+            // No rig, or no such link: said as no count.
+            _ => -1,
+        }
+    }
+
+    /// The transport refused to send the frame `link` (0 admin, 1 seat) has in flight:
+    /// `WebSocketPeer.send_text` answered the error `code` (fix pass 2). The rig settles that call
+    /// as refused at once and never asks it again.
+    #[func]
+    fn watch_send_failed(&mut self, link: i64, code: i64) {
         if let (Some(rig), Ok(link)) = (self.rig.as_mut(), usize::try_from(link)) {
-            let _ = self.panics.guard("watch_dropped", || rig.dropped(link));
+            let _ = self
+                .panics
+                .guard("watch_send_failed", || rig.send_failed(link, code));
+        }
+    }
+
+    /// What each WebSocket peer must carry, as `host_link.gd` sets it on every peer it makes:
+    /// `outbound_bytes` and `inbound_bytes` (`crate::transport`), and `message_bytes`, the
+    /// gateway's message cap the rig sends nothing past, for the words that name it. Passed
+    /// through, never computed in GDScript.
+    #[func]
+    fn watch_transport_limits(&self) -> VarDictionary {
+        let mut limits = VarDictionary::new();
+        for (key, value) in [
+            ("outbound_bytes", crate::transport::OUTBOUND_BUFFER_BYTES),
+            ("inbound_bytes", crate::transport::INBOUND_BUFFER_BYTES),
+            (
+                "message_bytes",
+                pharmakos_proto::transport::MAX_MESSAGE_BYTES,
+            ),
+        ] {
+            limits.set(&key.to_variant(), &int_variant(value));
+        }
+        limits
+    }
+
+    /// Connection `link` (0 admin, 1 seat) dropped, with the WebSocket close `code` the peer
+    /// read (`WebSocketPeer.get_close_code()`, -1 for none): a code about the message itself
+    /// (1009 and its kin) settles the call in flight as refused and asks it never again
+    /// ([`crate::rig::Close`]).
+    #[func]
+    fn watch_dropped(&mut self, link: i64, code: i64) {
+        if let (Some(rig), Ok(link)) = (self.rig.as_mut(), usize::try_from(link)) {
+            let close = crate::rig::Close::of_code(code);
+            let _ = self
+                .panics
+                .guard("watch_dropped", || rig.closed(link, close));
         }
     }
 
@@ -876,6 +992,41 @@ impl PharmakosBridge {
         }
     }
 
+    /// `bytes` written to the file `path` (an absolute path) whole, by an atomic replace
+    /// (`crate::write`, S3's `fixq-c`, fix pass 5): Save and Save as..., and the lobby's remembered
+    /// line. Answers `written`, and on a failure `failure` (the string table's `write_<failure>`
+    /// row), `path`, `step`, `error` (the operating system's words) and `leftover`; on a write,
+    /// `stale` (a temporary file of ours from a stopped write, removed first) when there was one.
+    #[func]
+    fn file_write(&self, path: GString, bytes: PackedByteArray) -> VarDictionary {
+        let path = std::path::PathBuf::from(path.to_string());
+        written_dictionary(
+            crate::write::write_whole(&path, bytes.as_slice()).map(|written| {
+                written
+                    .stale_removed
+                    .map(|stale| stale.display().to_string())
+            }),
+        )
+    }
+
+    /// The names of every write failure (`crate::write::WriteFailure::NAMES`), for the check that
+    /// the string table has a `write_<name>` row for each.
+    #[func]
+    fn file_failure_names(&self) -> godot::builtin::PackedStringArray {
+        crate::write::WriteFailure::NAMES
+            .iter()
+            .map(|name| GString::from(*name))
+            .collect()
+    }
+
+    /// The file `path` (an absolute path) removed: the lobby's forgetting of an ended match.
+    /// Answers as [`Self::file_write`] does (`written` meaning it is gone, or was never there).
+    #[func]
+    fn file_remove(&self, path: GString) -> VarDictionary {
+        let path = std::path::PathBuf::from(path.to_string());
+        written_dictionary(crate::write::remove_whole(&path).map(|_| None))
+    }
+
     /// The playbook the editor holds, as the bytes Save writes; empty before a Load.
     #[func]
     fn editor_bytes(&mut self) -> PackedByteArray {
@@ -1165,6 +1316,74 @@ impl PharmakosBridge {
                 (_, _, Err(_), _) | (_, _, _, Err(_)) => {
                     refused(editor, RuleEditRefusal::NoSuchEntry)
                 }
+            }
+        })
+    }
+
+    /// The condition picker took group `which` (an index into the editor state's
+    /// `vocabulary.groups`: `all`, `any`, `not`) for condition slot `slot`, named as for
+    /// [`Self::editor_choose_predicate`]: one patch with the op the slot names (S3's `fixq`).
+    #[func]
+    fn editor_choose_group(
+        &mut self,
+        slot: i64,
+        pointer: GString,
+        rendering: i64,
+        which: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_choose_group", false, || {
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(slot),
+                u64::try_from(rendering),
+                usize::try_from(which),
+            ) {
+                (Ok(slot), Ok(rendering), Ok(which)) => editor
+                    .choose_group(slot, rendering, &pointer, which)
+                    .is_ok(),
+                (Err(_), _, _) => refused(editor, RuleEditRefusal::NoSuchSlot),
+                (_, Err(_), _) => refused(editor, RuleEditRefusal::Changed),
+                (_, _, Err(_)) => refused(editor, RuleEditRefusal::NoSuchEntry),
+            }
+        })
+    }
+
+    /// Add a rule: the gateway's `new_rule` against the text on screen (S3's `fixq`). Returns
+    /// whether it was taken; a refusal is on the status line.
+    #[func]
+    fn editor_new_rule(&mut self) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics.guard_or("editor_new_rule", false, || {
+            rig.editor_mut().new_rule().is_ok()
+        })
+    }
+
+    /// Remove rule `rule` (its index and `pointer` in the rendering `rendering` it was drawn in):
+    /// one `remove` at its pointer. Returns whether it was taken.
+    #[func]
+    fn editor_remove_rule(&mut self, rule: i64, pointer: GString, rendering: i64) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_remove_rule", false, || {
+            let editor = rig.editor_mut();
+            match (usize::try_from(rule), u64::try_from(rendering)) {
+                (Ok(index), Ok(rendering)) => editor
+                    .remove_rule(&RuleNamed {
+                        index,
+                        rendering,
+                        pointer,
+                    })
+                    .is_ok(),
+                (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchRule),
+                (_, Err(_)) => refused(editor, RuleEditRefusal::Changed),
             }
         })
     }
@@ -1717,14 +1936,27 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
         &"countdowns_sent".to_variant(),
         &int_variant(rig.countdowns_sent()),
     );
-    state.set(
-        &"zero_refusal".to_variant(),
-        &text_or_empty(rig.zero_refusal()).to_variant(),
-    );
+    // A given-up zero report, with its cause for the string table's `lobby_zero_<cause>` row.
+    if let Some((cause, said)) = rig.zero_refusal() {
+        state.set(&"zero_refusal".to_variant(), &said.to_variant());
+        state.set(&"zero_cause".to_variant(), &cause.to_variant());
+    }
+    state.set(&"view_held".to_variant(), &rig.view_held().to_variant());
     state.set(&"speed".to_variant(), &i64::from(rig.speed()).to_variant());
     state.set(&"skipping".to_variant(), &rig.skipping().to_variant());
     state.set(&"all_ready".to_variant(), &rig.all_ready().to_variant());
     let [drops_admin, drops_seat] = rig.drops();
+    let [[closed_admin, closed_seat], [unsent_admin, unsent_seat]] = rig.message_refusals();
+    for (key, count) in [
+        ("message_drops_admin", closed_admin),
+        ("message_drops_seat", closed_seat),
+        ("unsent_admin", unsent_admin),
+        ("unsent_seat", unsent_seat),
+        ("send_failures_admin", rig.send_failures()[0]),
+        ("send_failures_seat", rig.send_failures()[1]),
+    ] {
+        state.set(&key.to_variant(), &i64::from(count).to_variant());
+    }
     let [calls_admin, calls_seat] = rig.calls();
     state.set(
         &"drops_admin".to_variant(),
@@ -1753,8 +1985,63 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
         &"last_error".to_variant(),
         &text_or_empty(rig.last_error()).to_variant(),
     );
+    closed_on_into(&mut state, rig);
     status_facts_into(&mut state, rig);
     state
+}
+
+/// A write's or a removal's answer for GDScript (`file_write`, `file_remove`).
+fn written_dictionary(result: Result<Option<String>, crate::write::WriteFailure>) -> VarDictionary {
+    let mut answer = VarDictionary::new();
+    let mut put = |key: &str, value: Variant| answer.set(&key.to_variant(), &value);
+    match result {
+        Ok(stale) => {
+            put("written", true.to_variant());
+            if let Some(stale) = stale {
+                put("stale", stale.to_variant());
+            }
+        }
+        Err(failure) => {
+            // The new file is in place when only the folder's sync failed: written, with words.
+            put(
+                "written",
+                matches!(failure, crate::write::WriteFailure::SyncFolder { .. }).to_variant(),
+            );
+            put("failure", failure.name().to_variant());
+            put("path", failure.path().display().to_string().to_variant());
+            if let Some(step) = failure.step() {
+                put("step", step.to_variant());
+            }
+            if let Some(error) = failure.error() {
+                put("error", error.to_string().to_variant());
+            }
+            if let Some(leftover) = failure.leftover() {
+                put("leftover", leftover.display().to_string().to_variant());
+            }
+        }
+    }
+    answer
+}
+
+/// The last close on a message on the watch state (fix pass 3), as `closed_on`, present only
+/// when there was one: `connection` (`admin` or `seat`), `code`, `call` (the string table's
+/// `call_word_<call>`, present only when a call was in flight) and `open` (whether that
+/// connection is open now). The lobby says them; it decides nothing from them.
+fn closed_on_into(state: &mut VarDictionary, rig: &Rig) {
+    let Some(closed) = rig.closed_on_message() else {
+        return;
+    };
+    let mut entry = VarDictionary::new();
+    entry.set(&"connection".to_variant(), &closed.connection.to_variant());
+    entry.set(&"code".to_variant(), &i64::from(closed.code).to_variant());
+    if let Some(call) = closed.call {
+        entry.set(&"call".to_variant(), &call.to_variant());
+    }
+    entry.set(
+        &"open".to_variant(),
+        &rig.link_open(closed.link).to_variant(),
+    );
+    state.set(&"closed_on".to_variant(), &entry.to_variant());
 }
 
 /// `get_status`'s facts on the watch state: `preset` (the served preset's name, `none` when
@@ -1792,6 +2079,16 @@ fn status_facts_into(state: &mut VarDictionary, rig: &Rig) {
         Some(failed) => (failed.name(), failed.detail()),
     };
     state.set(&"status_failed".to_variant(), &failed.to_variant());
+    state.set(
+        &"seal_not_told".to_variant(),
+        &rig.seal_not_told().to_variant(),
+    );
+    // Why this seat's Ready did not go through (fix pass 4): the string table's
+    // `ready_failed_<name>` row and its words, present only then.
+    if let Some((name, said)) = rig.ready_failed() {
+        state.set(&"ready_failed".to_variant(), &name.to_variant());
+        state.set(&"ready_failed_detail".to_variant(), &said.to_variant());
+    }
     state.set(&"status_detail".to_variant(), &detail.to_variant());
 }
 
@@ -1836,6 +2133,22 @@ fn entity_dictionary(entity: &Entity) -> VarDictionary {
     // no ring" (another seat's beacon), never a ring of a guessed size.
     if let Some(radius) = entity.ring {
         dictionary.set(&"ring".to_variant(), &i64::from(radius.get()).to_variant());
+    }
+    // The look only where the view carried one (a structure, a wall, a ruin): `shape` by name
+    // and its size in the SIM's axes as sent; a shape this build cannot name refused the page
+    // (`view.rs`). The title and the going-up flag as sent (S3's `fixq-c`).
+    if let Some(look) = entity.look {
+        let mut drawn = VarDictionary::new();
+        drawn.set(&"shape".to_variant(), &look.shape.name().to_variant());
+        let [x, y, z] = look.size.map(|edge| i64::from(edge.get()));
+        for (key, edge) in [("x", x), ("y", y), ("z", z)] {
+            drawn.set(&key.to_variant(), &edge.to_variant());
+        }
+        dictionary.set(&"look".to_variant(), &drawn.to_variant());
+    }
+    dictionary.set(&"title".to_variant(), &entity.title.to_variant());
+    if entity.building {
+        dictionary.set(&"building".to_variant(), &true.to_variant());
     }
     dictionary
 }
