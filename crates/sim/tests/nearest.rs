@@ -1370,7 +1370,7 @@ fn the_site_listing_at_a_seats_most_beacons() {
     // dunit part 2 the units were the 37,653 columns scanned and the 14 pops
     // alone (37,667): the tests each column asks, the beacon rows, the Spire
     // tests and the `h` folds were charged nothing.
-    assert_eq!(measured, (Some([232, 94]), Ok(1_685_650), 36_513, 21, 14));
+    assert_eq!(measured, (Some([232, 94]), Ok(1_685_732), 36_513, 21, 14));
 }
 
 // ---------------------------------------------------------------------------
@@ -1844,6 +1844,16 @@ fn heuristic_reads(scratch: &Scratch) -> u64 {
     scratch.reach().evaluations().unwrap() * u64::try_from(scratch.reach().spheres().len()).unwrap()
 }
 
+/// What the directed search's bucket queue visited in `scratch`'s last grid
+/// optimum, read from the queue's own counters (whose honesty
+/// `pathing::reach`'s own tests hold to the search's keys and pops): a
+/// bucket its ring walk turned to, a column moved from a bucket into its
+/// batch, and a cell its start's reset wrote (dunit part 2).
+fn queue_reads(scratch: &Scratch) -> u64 {
+    let reach = scratch.reach();
+    reach.turns().unwrap() + reach.unlinked().unwrap() + reach.filled().unwrap()
+}
+
 /// The columns a `toward`'s site listing scans for `seat`: the disc of each
 /// of its living beacons' spheres, at each one's own radius, overlaps
 /// included. Counted from the spiral's offsets, not from the listing.
@@ -1990,7 +2000,12 @@ fn toward_named_steps(
     let index = index.unwrap();
     let (_, live) = model.is_live(index);
     let (_, measure) = model.measure_to(index, from);
-    named + live + model.legal_sites(seat, start) + measure + heuristic_reads(scratch)
+    named
+        + live
+        + model.legal_sites(seat, start)
+        + measure
+        + heuristic_reads(scratch)
+        + queue_reads(scratch)
 }
 
 /// One resolve of [`decision_units_equal_the_primitive_steps_counted`]'s
@@ -2065,6 +2080,7 @@ fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64)
                 + Steps::ranker_draws(entries, scratch.walks().unwrap(), 1)
                 + measure
                 + heuristic_reads(&scratch)
+                + queue_reads(&scratch)
         }
         Resolve::CoverName(anchor) => {
             let cover = pharmakos_sim::targeting::cover_counted(

@@ -247,6 +247,17 @@ impl Tally {
         };
     }
 
+    /// Count `events` more, all at once (a fill of that many cells).
+    pub(crate) fn add(&mut self, events: usize) {
+        *self = match (*self, u64::try_from(events)) {
+            (Tally::Count(count), Ok(events)) => match count.checked_add(events) {
+                Some(next) => Tally::Count(next),
+                None => Tally::Overflowed,
+            },
+            (Tally::Count(_), Err(_)) | (Tally::Overflowed, _) => Tally::Overflowed,
+        };
+    }
+
     /// The count, or that it overflowed.
     ///
     /// # Errors

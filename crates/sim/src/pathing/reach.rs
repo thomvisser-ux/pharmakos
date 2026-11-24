@@ -197,6 +197,17 @@ pub struct Reach {
     /// How many `h` this search computed: one a column reached, each costing
     /// one octile a sphere. Counted work, never hashed.
     evaluations: Tally,
+    /// The visits of the queue's own loops in this search (decisions-log
+    /// item 175, dunit part 2), each counted where it happens and never
+    /// hashed: a bucket the ring walk turns to ([`Reach::turns`]), a column
+    /// moved from a bucket into its sorted batch ([`Reach::unlinked`]), and a
+    /// cell a start's reset writes ([`Reach::filled`]).
+    turns: Tally,
+    unlinked: Tally,
+    filled: Tally,
+    /// How many times the queue moved to its next bucket, a measurement
+    /// beside the turns: each move turns once to the bucket it starts on.
+    advances: Tally,
     /// Whether the search in progress is directed by [`Reach::spheres`].
     directed: bool,
 }
@@ -245,6 +256,10 @@ impl Reach {
             spheres: Vec::with_capacity(SPHERE_ROOM),
             heur: vec![(0, 0); n],
             evaluations: Tally::ZERO,
+            turns: Tally::ZERO,
+            unlinked: Tally::ZERO,
+            filled: Tally::ZERO,
+            advances: Tally::ZERO,
             directed: false,
         })
     }
@@ -323,6 +338,51 @@ impl Reach {
         self.evaluations.read()
     }
 
+    /// The buckets the last search's ring walk turned to, empty or not: each
+    /// move to the next bucket reads the bucket it stands on, then each one
+    /// past it until one holds a column.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::pathing::search::TallyOverflow`] once the count passed
+    /// `u64::MAX`.
+    pub const fn turns(&self) -> Result<u64, crate::pathing::search::TallyOverflow> {
+        self.turns.read()
+    }
+
+    /// The columns the last search moved from a bucket into its sorted
+    /// batch: one each time a column's bucket is reached.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::pathing::search::TallyOverflow`] once the count passed
+    /// `u64::MAX`.
+    pub const fn unlinked(&self) -> Result<u64, crate::pathing::search::TallyOverflow> {
+        self.unlinked.read()
+    }
+
+    /// The cells the last search's start wrote to reset the queue: every
+    /// bucket of the ring, and every column's five stamps once in each
+    /// `u32::MAX` searches, when the generation wraps.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::pathing::search::TallyOverflow`] once the count passed
+    /// `u64::MAX`.
+    pub const fn filled(&self) -> Result<u64, crate::pathing::search::TallyOverflow> {
+        self.filled.read()
+    }
+
+    /// How many times the last search moved to its next bucket.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::pathing::search::TallyOverflow`] once the count passed
+    /// `u64::MAX`.
+    pub const fn advances(&self) -> Result<u64, crate::pathing::search::TallyOverflow> {
+        self.advances.read()
+    }
+
     /// Start a search from `from`, undirected: columns settle in ascending
     /// `(cost, column)`.
     ///
@@ -356,16 +416,29 @@ impl Reach {
     }
 
     fn start(&mut self, from: Node, key: i64) -> Result<(), ReachError> {
+        self.turns = Tally::ZERO;
+        self.unlinked = Tally::ZERO;
+        self.filled = Tally::ZERO;
+        self.advances = Tally::ZERO;
         if self.epoch == u32::MAX {
             self.stamp.fill(0);
             self.settled.fill(0);
             self.listed.fill(0);
             self.heur.fill((0, 0));
             self.epoch = 0;
+            for cells in [
+                self.stamp.len(),
+                self.settled.len(),
+                self.listed.len(),
+                self.heur.len(),
+            ] {
+                self.filled.add(cells);
+            }
         }
         self.epoch += 1;
         self.evaluations = Tally::ZERO;
         self.heads.fill(NONE);
+        self.filled.add(self.heads.len());
         self.sorted.clear();
         self.cursor = 0;
         self.at = key;
@@ -525,7 +598,9 @@ impl Reach {
     fn advance(&mut self) -> Result<(), ReachError> {
         self.sorted.clear();
         self.cursor = 0;
+        self.advances.bump();
         for turn in 0..=self.heads.len() {
+            self.turns.bump();
             if turn > 0 {
                 self.at += 1;
             }
@@ -537,6 +612,7 @@ impl Reach {
             }
             *self.heads.get_mut(slot).ok_or(ReachError::Slot { key })? = NONE;
             while node != NONE {
+                self.unlinked.bump();
                 let index = crate::math::index::row(node);
                 let off = ReachError::OffMap { node };
                 self.sorted.push(node);
@@ -613,5 +689,110 @@ impl Reach {
         *self.listed.get_mut(index).ok_or(off)? = 0;
         self.waiting -= 1;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Dunit part 2: the queue's visit counters are what the search did. Run
+    //! to exhaustion, every column linked into a bucket is moved into a batch
+    //! once and popped once, so the columns moved are the pops but the start's
+    //! own, which the start puts in its first batch itself; the ring
+    //! walk reads the bucket it stands on at each move and one more bucket a
+    //! key it climbs, so its turns are the moves plus the keys climbed, from
+    //! the start's key to the last; and a start writes every bucket once.
+
+    use super::Reach;
+    use crate::pathing::search::Tally;
+    use crate::pathing::surface::Node;
+
+    fn world() -> crate::world::World {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let rules = crate::rules::RulesTable::load(&path)
+            .unwrap_or_else(|error| panic!("it loads: {error:?}"));
+        crate::world::World::new(&crate::world::WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"))
+    }
+
+    fn count(tally: Result<u64, crate::pathing::search::TallyOverflow>) -> u64 {
+        tally.unwrap_or_else(|_| panic!("a count"))
+    }
+
+    /// Search from `from` to exhaustion and hold the counters to the pops
+    /// and keys: (turns, moves, columns moved, pops).
+    fn exhausted(
+        reach: &mut Reach,
+        surface: &crate::pathing::surface::Surface,
+        from: Node,
+        directed: bool,
+    ) -> (u64, u64, u64, u64) {
+        let first = if directed {
+            reach
+                .begin_toward(surface, from)
+                .unwrap_or_else(|error| panic!("a start: {error:?}"));
+            reach.reached()
+        } else {
+            reach
+                .begin(from)
+                .unwrap_or_else(|error| panic!("a start: {error:?}"));
+            0
+        };
+        let mut pops = Tally::ZERO;
+        while reach
+            .next(surface, &mut pops)
+            .unwrap_or_else(|error| panic!("a step: {error:?}"))
+            .is_some()
+        {}
+        let (turns, advances, moved, popped) = (
+            count(reach.turns()),
+            count(reach.advances()),
+            count(reach.unlinked()),
+            count(pops.read()),
+        );
+        let climbed = u64::try_from(reach.reached() - first).unwrap_or(u64::MAX);
+        assert_eq!(
+            moved + 1,
+            popped,
+            "every column moved into a batch is popped once, and the start, which a start puts in its batch itself"
+        );
+        assert_eq!(
+            turns,
+            advances + climbed,
+            "a turn a move, and one a key climbed"
+        );
+        assert_eq!(
+            count(reach.filled()),
+            u64::try_from(reach.ring_len()).unwrap_or(0),
+            "a start writes every bucket"
+        );
+        (turns, advances, moved, popped)
+    }
+
+    #[test]
+    fn the_queues_counters_are_what_the_search_did() {
+        let world = world();
+        let surface = world.surface();
+        let mut scratch =
+            crate::pathing::search::Scratch::for_map(surface, world.clusters().size())
+                .unwrap_or_else(|| panic!("a scratch for the map"));
+        let reach = &mut scratch.reach;
+        let [sx, sy, _] = surface.size();
+        let from = surface
+            .node_of(sx >> 1, sy >> 1)
+            .unwrap_or_else(|| panic!("the middle column"));
+        let undirected = exhausted(reach, surface, from, false);
+        // Directed at a sphere in a corner, as a `toward` heads for its seat's.
+        reach.clear_sites();
+        reach.add_sphere([sx >> 3, sy >> 3], 0);
+        let directed = exhausted(reach, surface, from, true);
+        println!(
+            "ring {}: undirected (turns, moves, moved, pops) {undirected:?}; directed {directed:?}",
+            reach.ring_len()
+        );
     }
 }

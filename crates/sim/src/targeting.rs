@@ -238,6 +238,24 @@ fn heuristic_folds(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
         .ok_or(crate::seams::Unmeasured::Overflowed)
 }
 
+/// What the bucket queue of the last grid optimum in `scratch` visited, by
+/// its own counters (dunit part 2): a bucket its ring walk turned to, empty
+/// or not ([`crate::pathing::reach::Reach::turns`]), a column moved from a
+/// bucket into its batch ([`crate::pathing::reach::Reach::unlinked`]), and a
+/// cell its start's reset wrote ([`crate::pathing::reach::Reach::filled`]).
+/// Each counts from the search's own start.
+fn queue_visits(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
+    let reach = scratch.reach();
+    let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
+    let turns = reach.turns().map_err(unreadable)?;
+    let unlinked = reach.unlinked().map_err(unreadable)?;
+    let filled = reach.filled().map_err(unreadable)?;
+    turns
+        .checked_add(unlinked)
+        .and_then(|sum| sum.checked_add(filled))
+        .ok_or(crate::seams::Unmeasured::Overflowed)
+}
+
 /// The nodes popped since `before` was read ([`popped`]): what the call
 /// between the two reads popped. The scratch's counters are shared with
 /// every other search the world makes, so a call is charged the change over
@@ -1209,6 +1227,7 @@ fn stone_site(
     let closest = closest_site(scratch, ground.surface, goal);
     ground.charge_pops(before, scratch);
     ground.work.add_measured(heuristic_folds(scratch));
+    ground.work.add_measured(queue_visits(scratch));
     match closest {
         Ok(Some(site)) => Sited::Stone(site, weighed),
         // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out
