@@ -16,8 +16,10 @@
 //! step with them, so the two stay one answer (S3's `vfy6`): numbers are read
 //! by RFC 8259's grammar, and a quoted integer is held to its integer grammar
 //! (follow-up B); a field written under both its `.proto` and its JSON
-//! name is refused (follow-up C); and base64 padding completes the last
-//! quantum or is refused (follow-up C, in the shared `base64` module).
+//! name is refused (follow-up C); base64 padding completes the last
+//! quantum or is refused (follow-up C, in the shared `base64` module); and
+//! `-0` is a whole zero in an unsigned field as in a signed one (S3's
+//! `retreat`, the review of PR #230).
 //!
 //! The differential tests in `super::differential` feed it and the fast codec the
 //! same generated documents and assert equal bytes or the same error. It is
@@ -1153,7 +1155,14 @@ fn unsigned(value: &Json, pointer: &str) -> Result<u64, Error> {
             ));
         }
     };
-    lexeme
+    // `-0` is a whole zero, as the fast codec reads it (the review of PR
+    // #230): the reference changes with the rule it is held to.
+    let digits = if lexeme.as_str() == "-0" {
+        "0"
+    } else {
+        lexeme.as_str()
+    };
+    digits
         .parse::<u64>()
         .ok()
         .filter(|_| is_integer_lexeme(lexeme))

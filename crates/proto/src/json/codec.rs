@@ -1642,7 +1642,15 @@ fn unsigned(value: &Json, path: &Path<'_>) -> Result<u64, Error> {
             ));
         }
     };
-    lexeme
+    // `-0` is RFC 8259's other spelling of a whole zero, which `is_zero`
+    // drops as a plain field's default; with presence it is the written 0
+    // (the review of PR #230), never a negative number.
+    let digits = if lexeme.as_str() == "-0" {
+        "0"
+    } else {
+        lexeme.as_str()
+    };
+    digits
         .parse::<u64>()
         .ok()
         .filter(|_| is_integer_lexeme(lexeme))
