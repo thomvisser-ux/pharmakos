@@ -5,6 +5,8 @@
 //! round trip, comments included, and moves the plan fingerprint, because it
 //! is a different playbook from one that leaves the field out (decisions-log
 //! item 177 (3): the field carries presence, and a written 0 is retreat off).
+//! `render_plan` says a written 0 as retreat off, with a chip at its pointer,
+//! and `set_value_text` of "0" writes the present 0.
 
 #![allow(
     clippy::expect_used,
@@ -13,9 +15,40 @@
               functions. A panic is this file's failure report."
 )]
 
-use pharmakos_plan_core::{canonicalise_text, decode_jsonc};
+use std::path::Path;
+
+use pharmakos_plan_core::edit::set_value_text;
+use pharmakos_plan_core::{
+    PickOp, PlanContext, Rendering, canonicalise_text, decode_jsonc, render,
+};
 use pharmakos_proto::gp::v1::{InterfaceRow, Playbook, interface_row, step};
 use pharmakos_sim::hash::plan_fingerprint;
+use pharmakos_sim::rules::RulesTable;
+use pharmakos_sim::snapshot::Snapshot;
+
+/// The row's `retreat_hp_pct`, as a pointer into the playbook.
+const RETREAT: &str = "/declarative/route/0/interface/rows/0/set_mandate_settings/retreat_hp_pct";
+
+fn rules() -> RulesTable {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    RulesTable::load(&root.join("rules").join("rules.v1.json")).expect("the committed rules table")
+}
+
+fn context() -> PlanContext {
+    let snapshot = Snapshot {
+        seat_id: vec![0],
+        seat_treasury: vec![200],
+        seat_supply: vec![10],
+        seat_draw: vec![2],
+        ..Snapshot::default()
+    };
+    PlanContext::from_snapshot(&snapshot, 0).expect("seat 0")
+}
+
+fn rendered(text: &str) -> Rendering {
+    let canonical = decode_jsonc(text).expect("a canonical form");
+    render(canonical.decoded().message(), &context(), &rules()).expect("a rendering")
+}
 
 /// A playbook whose one step visits the core with one `set_mandate_settings`
 /// row holding `settings`, a comment on the row's first member.
@@ -102,5 +135,83 @@ fn a_written_zero_and_an_omitted_field_are_two_playbooks() {
         plan_fingerprint(&written.playbook).expect("a fingerprint"),
         plan_fingerprint(&omitted.playbook).expect("a fingerprint"),
         "a written 0 is a different plan from one that leaves the field out"
+    );
+}
+
+#[test]
+fn render_plan_says_a_written_zero_as_retreat_off_with_its_chip() {
+    let off = rendered(&playbook(r#""retreat_hp_pct": 0"#));
+    assert!(
+        off.prose.contains("retreat off (0%)"),
+        "a written 0 is said as retreat off:
+{}",
+        off.prose
+    );
+    let chip = off
+        .rules
+        .iter()
+        .flat_map(|rule| &rule.chips)
+        .find(|chip| chip.pointer == RETREAT)
+        .expect("a chip at the written 0");
+    assert_eq!(chip.value_json, "0");
+    assert_eq!(chip.value_text, "0");
+    assert_eq!(chip.pick, PickOp::Replace);
+
+    let thirty = rendered(&playbook(r#""retreat_hp_pct": 30"#));
+    assert!(
+        thirty
+            .prose
+            .contains("units retreating below 30% of their hit points"),
+        "{}",
+        thirty.prose
+    );
+
+    let omitted = rendered(&playbook(r#""roe": "HOLD_FIRE""#));
+    assert!(
+        !omitted.prose.contains("retreat off") && !omitted.prose.contains("retreating"),
+        "{}",
+        omitted.prose
+    );
+    assert!(
+        omitted
+            .rules
+            .iter()
+            .flat_map(|rule| &rule.chips)
+            .all(|chip| chip.pointer != RETREAT),
+        "an omitted threshold has no chip"
+    );
+}
+
+#[test]
+fn a_typed_zero_writes_the_present_zero() {
+    // Unwritten: the vocabulary's shape, and an `add`.
+    let (patched, _) = set_value_text(
+        &playbook(r#""roe": "HOLD_FIRE""#),
+        RETREAT,
+        "0",
+        &context(),
+        &rules(),
+    )
+    .expect("a typed 0 is taken");
+    let decoded = decode_jsonc(&patched).expect("decodes");
+    assert_eq!(
+        retreat_of(decoded.decoded().message()),
+        Some(0),
+        "{patched}"
+    );
+    // Written: the chip's `replace`.
+    let (patched, _) = set_value_text(
+        &playbook(r#""retreat_hp_pct": 30"#),
+        RETREAT,
+        "0",
+        &context(),
+        &rules(),
+    )
+    .expect("a typed 0 is taken");
+    let decoded = decode_jsonc(&patched).expect("decodes");
+    assert_eq!(
+        retreat_of(decoded.decoded().message()),
+        Some(0),
+        "{patched}"
     );
 }
