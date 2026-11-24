@@ -35,6 +35,8 @@
 
 extends Node
 
+const Values := preload("res://scripts/values.gd")
+
 ## Emitted once the host has announced itself and both connections have been started.
 signal announced(match_id: String)
 ## Emitted when the host could not be started or has gone away.
@@ -429,12 +431,20 @@ func _read_announce() -> void:
 ## A peer sized as every connection to the gateway is: both buffers from `limits`, the
 ## bridge's `watch_transport_limits` (`crates/client-gdext/src/transport.rs`; fix pass 2:
 ## Godot's default outbound buffer, 64 KiB, refused a frame the cap allowed and the link timed
-## out). `client_check.gd` receives through a peer made here, so the check is of this path.
-static func new_peer(limits: Dictionary) -> WebSocketPeer:
+## out). Answers `peer`, or `refusal` (the words) when a size is missing or not a whole number:
+## a connection is never opened on a default size (fix pass 4). `client_check.gd` receives
+## through a peer made here, so the check is of this path.
+static func new_peer(limits: Dictionary) -> Dictionary:
+	var outbound: Variant = Values.int_of(limits.get("outbound_bytes"))
+	var inbound: Variant = Values.int_of(limits.get("inbound_bytes"))
+	if not outbound is int:
+		return {"refusal": Values.unreadable_text("outbound_bytes", outbound)}
+	if not inbound is int:
+		return {"refusal": Values.unreadable_text("inbound_bytes", inbound)}
 	var peer := WebSocketPeer.new()
-	peer.outbound_buffer_size = int(limits.get("outbound_bytes", 0))
-	peer.inbound_buffer_size = int(limits.get("inbound_bytes", 0))
-	return peer
+	peer.outbound_buffer_size = outbound
+	peer.inbound_buffer_size = inbound
+	return {"peer": peer}
 
 
 ## Every whole message `peer` holds, as text, in the order it came. Godot hands a peer only
@@ -449,7 +459,12 @@ static func packets_of(peer: WebSocketPeer) -> Array[String]:
 
 
 func _connect(link: int) -> void:
-	var peer := new_peer(bridge.watch_transport_limits())
+	var made := new_peer(bridge.watch_transport_limits())
+	if not made.has("peer"):
+		_done = true
+		failed.emit("could not open connection %d: %s" % [link, made["refusal"]])
+		return
+	var peer: WebSocketPeer = made["peer"]
 	peer.handshake_headers = PackedStringArray(["Authorization: Bearer " + String(_tokens[link])])
 	var error := peer.connect_to_url("ws://127.0.0.1:%d/" % _port)
 	if error != OK:

@@ -101,7 +101,7 @@ fn the_report_for_the_longest_file_fits_the_clients_buffer_with_room() {
     assert!(!is_too_long(&steps));
     let report = report_text(&steps);
     assert!(
-        report.len() <= REPORT_ALLOWANCE_BYTES,
+        within_allowance(&report),
         "a report of {} bytes for the longest route, past the {REPORT_ALLOWANCE_BYTES}-byte \
          allowance",
         report.len(),
@@ -113,6 +113,41 @@ fn the_report_for_the_longest_file_fits_the_clients_buffer_with_room() {
     );
     let notes = report.matches("\"I0003\"").count();
     assert!(notes <= 1, "{notes} I0003 notes past the size budget");
+}
+
+/// Whether a report is within the allowance: the test's own constant, never the buffer.
+fn within_allowance(report: &str) -> bool {
+    report.len() <= REPORT_ALLOWANCE_BYTES
+}
+
+/// **The allowance is the test's own constant, not the buffer** (fix pass 4, review 3's M7): a
+/// real report just past 128 KiB, made of the per-step `E0104` (a step with no label) that no
+/// cap touches, is past the allowance, where an eighth of the 4 MiB buffer would take it.
+#[test]
+fn a_report_just_past_the_allowance_is_past_it() {
+    let mut count = 200_usize;
+    let report = loop {
+        let steps: Vec<&str> = (0..count).map(|_| r#"{"hold":{"ms":1}}"#).collect();
+        let report = report_text(&steps.join(","));
+        if report.len() > REPORT_ALLOWANCE_BYTES {
+            break report;
+        }
+        count = count.checked_add(20).expect("fits");
+        assert!(
+            count < 5_000,
+            "no route of bare holds reached the allowance"
+        );
+    };
+    assert!(
+        report.len() < REPORT_ALLOWANCE_BYTES.checked_mul(2).expect("fits"),
+        "the report is not just past the allowance: {} bytes",
+        report.len()
+    );
+    assert!(
+        !within_allowance(&report),
+        "a {}-byte report is within the allowance",
+        report.len()
+    );
 }
 
 /// The allowance is no more than an eighth of the client's inbound buffer, so the buffer can

@@ -1380,6 +1380,13 @@ const CONVERSIONS: &[&str] = &[
     ".to_float(",
     ".is_valid_int",
     ".is_valid_float",
+    // Fix pass 4 (review 3): the conversions the first list left out.
+    "bytes_to_var(",
+    " as int",
+    " as float",
+    "JSON.parse(",
+    "JSON.parse_string(",
+    ".parse(",
 ];
 
 /// The exact lines in [`TYPED_SCRIPTS`] that convert something that is not typed text, each with
@@ -1389,22 +1396,22 @@ const CONVERSIONS_KEPT: &[(&str, &str, &str)] = &[
     (
         "editor.gd",
         r#"var rendered := int(state.get("rules_rendering", -1))"#,
-        "the bridge's rendering id",
+        "the bridge's rendering id; `rules_rendering` is always put (editor_view.rs, put_rule_list)",
     ),
     (
         "editor.gd",
         r#"bridge.editor_choose_name(int(_name_chip.get("index", -1)), int(_name_chip.get("revision", -1)), String(_name_chip.get("pointer", "")), which)"#,
-        "a chip's index and rendering, the bridge's",
+        "a chip's index and rendering; `_name_chip` is built in `_on_rule_chip` with both keys",
     ),
     (
         "editor.gd",
         r#"var slot := int(_picker_slot.get("slot", -1))"#,
-        "a slot's index, the bridge's",
+        "a slot's index; `_picker_slot` is built in `open_condition_picker` with `slot` and `revision`",
     ),
     (
         "editor.gd",
         r#"var revision := int(_picker_slot.get("revision", -1))"#,
-        "a rendering id, the bridge's",
+        "a rendering id; `_picker_slot` is built in `open_condition_picker` with `slot` and `revision`",
     ),
     (
         "editor.gd",
@@ -1439,22 +1446,22 @@ const CONVERSIONS_KEPT: &[(&str, &str, &str)] = &[
     (
         "editor.gd",
         r#"bridge.editor_change_setting_number_text(String(_number_setting.get("beacon", "")), int(_number_setting.get("index", -1)), String(_number_setting.get("pointer", "")), text)"#,
-        "a setting's index; the typed text goes as text",
+        "a setting's index; `_number_setting` is built in `_on_setting` with `index`; the typed text goes as text",
     ),
     (
         "editor.gd",
         r#"bridge.editor_set_number_text(int(_number_chip.get("index", -1)), int(_number_chip.get("revision", -1)), String(_number_chip.get("pointer", "")), text)"#,
-        "a chip's index and rendering; the typed text goes as text",
+        "a chip's index and rendering; `_number_chip`, when not empty, is built in `_on_rule_chip` with both keys; the typed text goes as text",
     ),
     (
         "editor.gd",
         r#"bridge.editor_choose(int(_choice_chip.get("index", -1)), int(_choice_chip.get("revision", -1)), String(_choice_chip.get("pointer", "")), which)"#,
-        "a chip's index and rendering",
+        "a chip's index and rendering; `_choice_chip` is built in `_on_rule_chip` with both keys",
     ),
     (
         "editor.gd",
         r#"var stored := int(state.get("notes_saved", -1))"#,
-        "the bridge's count of saved characters",
+        "the bridge's count of saved characters; `notes_saved` is always put (editor_view.rs)",
     ),
     (
         "rule_list.gd",
@@ -1464,17 +1471,17 @@ const CONVERSIONS_KEPT: &[(&str, &str, &str)] = &[
     (
         "rule_list.gd",
         r#"return editable and data is Dictionary and String(data.get("parent", "")) == parent and int(data.get("revision", -1)) == revision and int(data.get("rule", -1)) != rule,"#,
-        "a drag's rule index and rendering, this list's own",
+        "a drag's rule index and rendering; this list's `_draggable` puts both on every drag",
     ),
     (
         "rule_list.gd",
         r#"on_move.call(int(data["rule"]), String(data["pointer"]), rule, pointer, int(data["revision"]))"#,
-        "a drag's rule index and rendering, this list's own",
+        "a drag's rule index and rendering; this list's `_draggable` puts both on every drag",
     ),
     (
         "rule_list.gd",
         r#"if child.has_meta("line") and int(child.get_meta("rule", -1)) == rule:"#,
-        "a row's rule index, this list's own meta",
+        "a row's rule index; this list's `fill` sets `rule` on every row it makes",
     ),
 ];
 
@@ -1484,6 +1491,15 @@ const CONVERSIONS_KEPT: &[(&str, &str, &str)] = &[
 fn calls_conversion(code: &str, token: &str) -> bool {
     // A method (`.to_int(`) is a call whatever it is called on; a function (`int(`) is a call
     // only where no identifier or `.` runs into it.
+    // A cast (` as int`) is a keyword after a value: matched with a space before it and no
+    // identifier character after it (` as integer_of` is no cast).
+    if token.starts_with(' ') {
+        return code.match_indices(token).any(|(at, _)| {
+            code.get(at.saturating_add(token.len())..)
+                .and_then(|tail| tail.chars().next())
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        });
+    }
     if token.starts_with('.') {
         return code.contains(token);
     }
@@ -1582,6 +1598,12 @@ fn the_conversion_ban_catches_each_conversion() {
         "\tvar n := t.to_float()",
         "\tif t.is_valid_int():",
         "\tif t.is_valid_float():",
+        "\tvar v = bytes_to_var(raw)",
+        "\tvar v = typed as int",
+        "\tvar v = typed as float",
+        "\tvar v = JSON.parse_string(field.text)",
+        "\tvar v = JSON.parse(field.text)",
+        "\tvar e := json.parse(field.text)",
     ] {
         assert!(!conversions_in("editor.gd", line).is_empty(), "{line}");
     }
@@ -1631,6 +1653,15 @@ const ERROR_RETURNING: &[&str] = &[
     "reload_current_scene(",
     "shell_open(",
     "kill(",
+    // Fix pass 4 (review 3): the file, process and socket calls the first list left out.
+    "copy(",
+    "remove(",
+    "start(",
+    "listen(",
+    "accept_stream(",
+    "set_read_only_attribute(",
+    "set_unix_permissions(",
+    "move_to_trash(",
 ];
 
 /// Whether a script is shipped: every one but the checks and the hostless shots (the smoke check
@@ -1638,6 +1669,98 @@ const ERROR_RETURNING: &[&str] = &[
 fn shipped_script(name: &str) -> bool {
     name == "smoke_check.gd" || !(name.ends_with("_check.gd") || name.ends_with("_shot.gd"))
 }
+
+/// The lines of `text` that keep an [`ERROR_RETURNING`] call's answer in a local nobody reads
+/// after it (`var sent := peer.send_text(...)` and no later `sent`): the answer kept and still
+/// ignored (fix pass 4, review 3). A local is read when its name appears as a whole word on any
+/// later line; a name that only reappears in a later, unrelated function is a reach this scan
+/// does not make, and the review of a script is what catches it.
+fn unread_results(text: &str) -> Vec<&str> {
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let code = gd_code_only(line);
+            let declared = code.trim().strip_prefix("var ")?;
+            let name: String = declared
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let value = declared.split_once('=')?.1;
+            let calls = ERROR_RETURNING.iter().any(|method| {
+                value.match_indices(method).any(|(at, _)| {
+                    value
+                        .get(..at)
+                        .and_then(|head| head.chars().last())
+                        .is_none_or(|c| c == '.' || c.is_whitespace())
+                })
+            });
+            let read_later = lines.get(index.saturating_add(1)..).is_some_and(|rest| {
+                rest.iter()
+                    .any(|later| has_word(&gd_code_only(later), &name))
+            });
+            (calls && !name.is_empty() && !read_later).then_some(*line)
+        })
+        .collect()
+}
+
+/// Whether `code` holds `word` as a whole identifier.
+fn has_word(code: &str, word: &str) -> bool {
+    code.match_indices(word).any(|(at, _)| {
+        let before = code.get(..at).and_then(|head| head.chars().last());
+        let after = code
+            .get(at.saturating_add(word.len())..)
+            .and_then(|tail| tail.chars().next());
+        let joins = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        !joins(before) && !joins(after)
+    })
+}
+
+/// One bare call of each [`ERROR_RETURNING`] method, written out by hand rather than made from
+/// the list, so a method taken off the list is a sample the scan no longer catches (fix pass 4:
+/// removing `rename_absolute(` or `kill(` from the list once survived the self-test).
+const MUST_CATCH: &[&str] = &[
+    "\tpeer.send_text(t)",
+    "\tpeer.put_packet(b)",
+    "\tpeer.connect_to_url(u)",
+    "\tfile.store_string(t)",
+    "\tfile.store_buffer(b)",
+    "\tfile.store_line(t)",
+    "\tfile.store_var(v)",
+    "\tfile.store_csv_line(r)",
+    "\tfile.store_8(n)",
+    "\tfile.store_16(n)",
+    "\tfile.store_32(n)",
+    "\tfile.store_64(n)",
+    "\tfile.store_float(f)",
+    "\tfile.store_double(f)",
+    "\tdir.make_dir(p)",
+    "\tdir.make_dir_recursive(p)",
+    "\tDirAccess.make_dir_absolute(p)",
+    "\tDirAccess.make_dir_recursive_absolute(p)",
+    "\tDirAccess.remove_absolute(p)",
+    "\tdir.rename(a, b)",
+    "\tDirAccess.rename_absolute(a, b)",
+    "\tDirAccess.copy_absolute(a, b)",
+    "\timage.save_png(p)",
+    "\tOS.create_process(p, [])",
+    "\tOS.execute(p, [])",
+    "\tOS.execute_with_pipe(p, [])",
+    "\tget_tree().change_scene_to_file(p)",
+    "\tget_tree().change_scene_to_packed(s)",
+    "\tget_tree().reload_current_scene()",
+    "\tOS.shell_open(u)",
+    "\tOS.kill(pid)",
+    "\tdir.copy(a, b)",
+    "\tdir.remove(p)",
+    "\tthread.start(f)",
+    "\tserver.listen(0)",
+    "\tpeer.accept_stream(s)",
+    "\tFileAccess.set_read_only_attribute(p, true)",
+    "\tFileAccess.set_unix_permissions(p, 0)",
+    "\tOS.move_to_trash(p)",
+];
 
 /// Whether `line` calls an [`ERROR_RETURNING`] method through a deferral or a callable, whose
 /// answer nobody can read (`call_deferred("change_scene_to_file", ...)`,
@@ -1650,9 +1773,14 @@ fn deferred_error(line: &str) -> bool {
             .iter()
             .any(|via| code.contains(via))
             && line.contains(&format!("\"{name}\""));
-        let by_callable = [".call_deferred(", ".call(", ".callv("]
-            .iter()
-            .any(|via| code.contains(&format!("{name}{via}")));
+        let by_callable = [".call_deferred(", ".call(", ".callv("].iter().any(|via| {
+            let called = format!("{name}{via}");
+            code.match_indices(&called).any(|(at, _)| {
+                code.get(..at)
+                    .and_then(|head| head.chars().last())
+                    .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+            })
+        });
         by_name || by_callable
     })
 }
@@ -1688,6 +1816,7 @@ fn ignored_errors(text: &str) -> Vec<String> {
             })
         })
         .chain(text.lines().filter(|line| deferred_error(line)))
+        .chain(unread_results(text))
         .map(|line| line.trim().to_owned())
         .collect()
 }
@@ -1732,11 +1861,30 @@ fn the_error_scan_catches_a_bare_call() {
         assert!(!ignored_errors(line).is_empty(), "{line}");
     }
     for line in [
-        "\t\t\tvar sent := peer.send_text(String(pair[1]))",
+        "\t\t\tvar sent := peer.send_text(String(pair[1]))\n\t\t\tif sent != OK:",
         "\tif not _stdio.store_string(config_line):",
         "\treturn peer.send_text(x)",
         "\t# peer.send_text(x)",
     ] {
         assert!(ignored_errors(line).is_empty(), "{line}");
+    }
+    // Every method the scan is for, written out by hand, is caught; one sample a method.
+    assert_eq!(
+        MUST_CATCH.len(),
+        ERROR_RETURNING.len(),
+        "a method on the list has no hand-written sample, or a sample no method"
+    );
+    for line in MUST_CATCH {
+        assert!(!ignored_errors(line).is_empty(), "{line}");
+    }
+    // Every token the scan lists is caught, bare and kept in a local nobody reads; and a kept
+    // answer that is read is not (fix pass 4: removing a token once survived the self-test).
+    for token in ERROR_RETURNING {
+        let bare = format!("\tthing.{token}x)");
+        assert!(!ignored_errors(&bare).is_empty(), "{bare}");
+        let unread = format!("\tvar kept := thing.{token}x)\n\tprint(1)");
+        assert!(!ignored_errors(&unread).is_empty(), "{unread}");
+        let read = format!("\tvar kept := thing.{token}x)\n\tif kept != OK:");
+        assert!(ignored_errors(&read).is_empty(), "{read}");
     }
 }

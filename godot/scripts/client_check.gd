@@ -1979,6 +1979,10 @@ func _check_the_limit_is_named(bridge: Node, failures: Array[String]) -> void:
 ## closes the peer with 1009.
 func _check_the_transport(bridge: Node, failures: Array[String]) -> void:
 	var limits: Dictionary = bridge.watch_transport_limits()
+	# A missing size refuses the peer in words, never a default (fix pass 4).
+	var missing: Dictionary = HostLink.new_peer({"outbound_bytes": limits.get("outbound_bytes")})
+	if missing.has("peer") or not String(missing.get("refusal", "")).contains("inbound_bytes"):
+		failures.append("a peer with no inbound size was made: %s" % missing)
 	var page := _worst_page()
 	if page.to_utf8_buffer().size() != WORST_PAGE_BYTES:
 		failures.append("the worst view page is %d bytes here, not the %d tests/transport.rs builds" % [page.to_utf8_buffer().size(), WORST_PAGE_BYTES])
@@ -2002,7 +2006,11 @@ func _receive(limits: Dictionary, text: String) -> Dictionary:
 	var server := TCPServer.new()
 	if server.listen(0, "127.0.0.1") != OK:
 		return {"texts": [], "state": -1, "code": -1, "reason": "no local port"}
-	var client: WebSocketPeer = HostLink.new_peer(limits)
+	var made: Dictionary = HostLink.new_peer(limits)
+	if not made.has("peer"):
+		server.stop()
+		return {"texts": [], "state": -1, "code": -1, "reason": String(made.get("refusal", ""))}
+	var client: WebSocketPeer = made["peer"]
 	if client.connect_to_url("ws://127.0.0.1:%d/" % server.get_local_port()) != OK:
 		server.stop()
 		return {"texts": [], "state": -1, "code": -1, "reason": "no connection"}

@@ -18,7 +18,9 @@ use pharmakos_proto::transport::MAX_MESSAGE_BYTES;
 /// A peer's outbound buffer: one frame at the cap. Godot counts a queued message's payload, not
 /// its WebSocket header, and the rig queues at most one frame per link (a link with a call in
 /// flight sends nothing more until it is answered), so the cap itself is what a peer must hold;
-/// the watch check sends a frame of exactly the cap to a real gateway on a peer sized so.
+/// the watch check sends a frame of exactly the cap to a real gateway on a peer sized so. (Godot
+/// accepted two frames of exactly the cap back to back on a peer sized so, measured by review 3:
+/// its buffer drains as it sends. The rig never queues the second.)
 pub const OUTBOUND_BUFFER_BYTES: usize = MAX_MESSAGE_BYTES;
 
 /// A peer's inbound buffer: what the client takes of one message the gateway sends. The gateway
