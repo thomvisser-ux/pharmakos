@@ -134,7 +134,14 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    a Lull — a Push, a recap, the lobby, an ended match — the dispatcher's planning door answers
    `PHASE_CLOSED`, as for every `plan`-scoped method, and has since T9; from `econ` #92 the handler
    holds its own gate in a Push as well, before it parses anything, as defence in depth,
-   decisions-log items 133 and 135), a preview of what a step will bind and not a dry run, and
+   decisions-log items 133 and 135), a preview of what a step will bind and not a dry run;
+   `set_value_text` and `new_rule` answer from the caller's text and the rules table alone (text in,
+   text out through `patch_plan`'s own door; `set_value_text` also reads the frozen snapshot's own
+   seat row, as `render_plan` does), and `compose_wall_box` reads the true ground and the beacon's
+   sphere over the hosted world, in a Lull and for the caller's own beacon only, through the sim's
+   own `site::ground_under_walls` and `site::check_wall`, a preview and not a dry run; each of the
+   three holds its own phase gate before it parses anything, beside the dispatcher's planning door
+   (decisions-log item 187); and
    `get_map_summary`'s features (unfogged in S1, decisions-log item 130 (3) (a)) read the hosted
    world through the same resolver, their `travel_ms` and `reachable` told to a seat in a Lull only and
    withheld, both absent, in every other phase and for a caller that is no seat, with no walk priced (the owner's "Omit them in a
@@ -567,8 +574,9 @@ Review is the bottleneck, so parallelism is capped by what can be reviewed, not 
 machine can run: under the owner's delegation (CLAUDE.md) the main session reads every pull
 request and the owner reviews the stage demo.
 
-- **At most seven agents at once** (the owner's word of 2026-11-23, "raise the lane count to 7";
-  decisions-log item 183). If you were spawned as an eighth, say so and wait.
+- **At most six agents at once** (the owner's word of 2026-11-24, "lower the max lane count to 6",
+  which supersedes 2026-11-23's seven, "raise the lane count to 7"; decisions-log items 183 and
+  184). If you were spawned as a seventh, say so and wait.
 - **Each agent works in its own git worktree**, never in the owner's checkout:
 
   ```sh
@@ -586,9 +594,11 @@ request and the owner reviews the stage demo.
   signed merge and re-runs the full check. A task granted a *named place* in a
   crate it does not own (a module, or a few named lines) is granted that crate's confinement-test
   line with it wherever the test lists the crate's sources by name, and the grant says so:
-  `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` (and its twin in
-  `crates/operator/tests/confinement.rs`) fails on a `pub mod` in `src/lib.rs` that is missing
-  from its `SOURCES` (decisions-log item 110 (4)). A sweep (the no-silent-fallback rule, say) that
+  `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` fails on any `mod name;` that a
+  listed file declares, `pub` or not, at any depth, when its file is missing from `SOURCES`, and on
+  a `.rs` file under `src/` that no listed file declares; its twin in
+  `crates/operator/tests/confinement.rs` still reads only the `mod` lines of `src/lib.rs`
+  (decisions-log items 110 (4) and 185). A sweep (the no-silent-fallback rule, say) that
   reaches callers outside the lane's own crate or named place stops at that edge and says so in
   the PR; the next owner of the callers' crate carries the rest, written into that lane's section
   of the stage plan (decisions-log item 135). The one exception is a comment-only sweep: a sweep the
@@ -836,7 +846,12 @@ merge train's local check.
    which runs as an invocation of its own with the sim at opt-level 0 (decisions-log item 165). The
    sim is the one crate
    whose code the feature changes, and clippy's research pass (item 2) still compiles every
-   non-walled crate against a research sim (decisions-log items 113 (9) and 115 (5)). An unscoped
+   non-walled crate against a research sim (decisions-log items 113 (9) and 115 (5)). The
+   allocation test's tick tests (`crates/sim/tests/allocations.rs`, module `tick`) are built only
+   without `research`, since the feature gates `pub mod research;` alone and enables nothing; that
+   file's `the_research_feature_gates_the_fork_module_and_nothing_else` runs in both builds and
+   fails if that stops being true. A fork's tick is not allocation-tested until lane `forkalloc`
+   lands (decisions-log item 189). An unscoped
    run first empties `<target>/golden/`, so every `actual.*` the `golden` step reads was written by
    this run; a `--package` run empties nothing (decisions-log item 131). A check run by hand, such
    as `crates/gamectl/tests/balance.rs`'s 80-match balance report, is an `#[ignore]`d test: never a
