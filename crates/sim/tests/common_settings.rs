@@ -233,6 +233,34 @@ fn a_written_zero_in_a_new_beacons_settings_is_filed() {
 }
 
 #[test]
+fn a_mandate_switch_resets_the_threshold_and_its_row_writes_the_new_one() {
+    // Spec section 5: switching clears the old settings (`World`'s reset of
+    // the Common row on a switch). A switch that leaves the threshold out
+    // leaves it at 0; one that writes it sets it.
+    let after = visit(RETREATING, &visit_with(r#"{"set_mandate":{"mine":{}}}"#));
+    assert_eq!(
+        common_of(&after, core(&after)).retreat_hp_pct,
+        0,
+        "the switch cleared the old threshold"
+    );
+    let after = visit(
+        RETREATING,
+        &visit_with(r#"{"set_mandate":{"mine":{},"retreat_hp_pct":30}}"#),
+    );
+    assert_eq!(common_of(&after, core(&after)).retreat_hp_pct, 30);
+}
+
+#[test]
+fn a_written_100_compiles_and_is_set() {
+    // The range's top is a threshold, not a refusal: past 100 is.
+    let after = visit(
+        RETREATING,
+        &visit_with(r#"{"set_mandate_settings":{"retreat_hp_pct":100}}"#),
+    );
+    assert_eq!(common_of(&after, core(&after)).retreat_hp_pct, 100);
+}
+
+#[test]
 fn a_written_threshold_past_100_is_still_refused() {
     let route = visit_with(r#"{"set_mandate_settings":{"retreat_hp_pct":101}}"#);
     assert_eq!(
