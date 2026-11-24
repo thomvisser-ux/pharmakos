@@ -787,7 +787,7 @@ mod tests {
                     priority: 0,
                     mandate: Some(MandateSettings {
                         roe: 0,
-                        retreat_hp_pct: 0,
+                        retreat_hp_pct: None,
                         mandate: Some(mandate),
                     }),
                 }),

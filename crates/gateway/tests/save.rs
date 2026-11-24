@@ -995,7 +995,10 @@ fn save_golden(file: &str, text: &str) {
 /// its fingerprint (S3's `fpstream`, part 2), so the `plan_fingerprint` lines
 /// it holds are the ones the save writer used to recompute from each seal's
 /// text: this test failing is a fingerprint value, or the save's format,
-/// moving.
+/// moving. It was re-blessed once, when lane `retreat` (#230) moved
+/// `VERIFIER_VERSION` from `0.1.0-s3.5` to `0.1.0-s3.6`: the stamp's
+/// `verifier_version` and the two `report_hash` lines moved with it, which
+/// hashes the version, and no `plan_fingerprint` line moved.
 #[test]
 fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
     const MATCH_ID: &str = "m-fpstream2-save";
