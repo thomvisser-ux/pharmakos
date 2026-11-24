@@ -44,6 +44,8 @@ struct Recording {
     log: Vec<&'static str>,
     fail: Option<(&'static str, usize)>,
     seen: Vec<&'static str>,
+    /// The system's own rename made to fail: the source is removed just before it.
+    vanish_before_rename: bool,
 }
 
 impl Recording {
@@ -53,6 +55,7 @@ impl Recording {
             log: Vec::new(),
             fail,
             seen: Vec::new(),
+            vanish_before_rename: false,
         }
     }
 
@@ -97,6 +100,9 @@ impl Files for Recording {
     }
     fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()> {
         self.step("rename")?;
+        if self.vanish_before_rename {
+            fs::remove_file(from)?;
+        }
         self.real.rename(from, to)
     }
     fn remove(&mut self, path: &Path) -> io::Result<()> {
@@ -172,6 +178,26 @@ fn a_failed_rename_leaves_the_old_bytes_and_no_file_of_ours() {
     );
     assert_eq!(fs::read(&target).expect("reads"), b"old");
     assert!(!temp_of(&target).expect("a temp").exists());
+}
+
+/// The system's own rename failing (here: its source gone) leaves the target's old bytes: the
+/// replace is one atomic rename, never a removal of the target and then a rename.
+#[test]
+fn a_rename_that_fails_in_the_system_leaves_the_old_file() {
+    let at = folder("system_rename");
+    let target = at.join("plan.jsonc");
+    fs::write(&target, b"old").expect("the old file");
+    let mut files = Recording::new(None);
+    files.vanish_before_rename = true;
+    let failed = write_whole_with(&mut files, &target, b"new", false, true);
+    assert!(
+        matches!(failed, Err(WriteFailure::Rename { .. })),
+        "{failed:?}"
+    );
+    assert_eq!(
+        fs::read(&target).expect("the old file is still there"),
+        b"old"
+    );
 }
 
 #[test]
