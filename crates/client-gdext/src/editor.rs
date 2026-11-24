@@ -494,6 +494,14 @@ pub enum Door {
     Ended,
 }
 
+/// Whether a Ready the player pressed waits to be sent (the rig's word, [`Editor::set_ready_pressed`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum ReadyPress {
+    #[default]
+    Unpressed,
+    Waiting,
+}
+
 impl Door {
     /// The name GDScript reads, and the suffix of the string-table keys that say why the
     /// door is shut (`closed_push`, `unchecked_push`).
@@ -1421,6 +1429,10 @@ pub struct Editor {
     dormant_patch: Option<String>,
     /// Whether the editor's calls can reach the gateway now, as the rig reads it.
     door: Door,
+    /// The player pressed Ready and the rig has not sent it yet: what is queued drains, and a
+    /// new ask is refused as it will be once Ready goes (fix pass 6: a player who kept asking
+    /// held Ready back for as long as they asked).
+    ready_press: ReadyPress,
     /// The gateway's refusal of each check, `CODE: message`, and the revision it checked.
     check_refusals: CheckRefusals,
     /// The file the text on screen was opened from or last saved to; `None` when it came
@@ -3105,6 +3117,20 @@ impl Editor {
         self.size.as_ref()
     }
 
+    /// The rig says whether a pressed Ready waits to be sent: the editor then refuses new asks
+    /// while what is queued drains ahead of Ready.
+    pub fn set_ready_pressed(&mut self, pressed: bool) {
+        let press = if pressed {
+            ReadyPress::Waiting
+        } else {
+            ReadyPress::Unpressed
+        };
+        if press != self.ready_press {
+            self.ready_press = press;
+            self.touch();
+        }
+    }
+
     /// The door, as the rig last set it.
     #[must_use]
     pub const fn door(&self) -> Door {
@@ -3633,12 +3659,15 @@ impl Editor {
     }
 
     /// An ask made with the door shut: refused at once, with the reason on the status line,
-    /// rather than queued behind a door the rig will not open (finding K).
+    /// rather than queued behind a door the rig will not open (finding K). A pressed Ready
+    /// shuts it to asks as the sent Ready will.
     fn shut_to_asks(&mut self) -> bool {
-        if self.door == Door::Open {
-            return false;
-        }
-        let key = format!("closed_{}", self.door.name());
+        let door = match self.door {
+            Door::Open if self.ready_press == ReadyPress::Waiting => Door::Ready,
+            Door::Open => return false,
+            door => door,
+        };
+        let key = format!("closed_{}", door.name());
         self.say(&key, "");
         true
     }

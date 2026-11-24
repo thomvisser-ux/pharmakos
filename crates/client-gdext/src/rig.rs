@@ -1411,6 +1411,7 @@ impl Rig {
             self.ready_resend_at = None;
             if self.phase == Phase::Lull {
                 self.wants.ready = true;
+                self.sync_door();
             }
         }
         // A refused status read is asked again once the link has been quiet for the keep-alive
@@ -2138,6 +2139,9 @@ impl Rig {
         self.held_view = None;
         self.held_plans.clear();
         self.ready_failed = None;
+        // A Ready pressed and not sent was the old phase's: the next Lull's Ready is pressed
+        // afresh (fix pass 6).
+        self.wants.ready = false;
         if phase == Phase::Lull {
             self.ready_sent = false;
         }
@@ -2242,6 +2246,8 @@ impl Rig {
     fn sync_door(&mut self) {
         let door = self.door();
         self.editor.set_door(door);
+        self.editor
+            .set_ready_pressed(self.phase == Phase::Lull && self.wants.ready && !self.ready_sent);
     }
 
     /// Chooses a speed; refused when it is not one of [`crate::pacer::SPEEDS`].
@@ -2261,6 +2267,7 @@ impl Rig {
         self.ready_resend_at = None;
         if self.phase == Phase::Lull {
             self.wants.ready = true;
+            self.sync_door();
         }
     }
 
@@ -3727,6 +3734,54 @@ mod tests {
         rig.closed(ADMIN, Close::of_code(1000));
         assert!(!rig.link_must_close(ADMIN));
         assert_eq!(rig.link_attempts(ADMIN), Some(1));
+    }
+
+    /// **A player who keeps asking does not hold Ready back** (fix pass 6, found by the fault
+    /// test's longer Lull: Ready waited behind the editor's queue, and a player saving notes
+    /// every second kept that queue full for as long as the Lull ran). What was queued before
+    /// Ready was pressed still goes first; an ask after it is refused as the sent Ready will
+    /// refuse it, and Ready goes out.
+    #[test]
+    fn asks_after_ready_is_pressed_are_refused_and_ready_goes_out() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let schedule: Vec<(&str, u32)> = (0..8).map(|_| ("lull", 1)).collect();
+        let _ = drive(&mut rig, &schedule, &|_| false);
+        rig.editor_mut().save_notes("before");
+        rig.ready();
+        rig.editor_mut().save_notes("after");
+        assert_eq!(rig.editor().status().key, "closed_ready");
+        let mut now = rig.timing.now_us();
+        let mut notes = 0;
+        let mut sent = false;
+        for _ in 0..400 {
+            now += 50_000;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            // The player asks again every step: refused each time.
+            rig.editor_mut().save_notes("again");
+            for frame in rig.poll(now) {
+                match method_of(&frame).as_str() {
+                    "save_notes" => notes += 1,
+                    "set_ready" => sent = true,
+                    _ => {}
+                }
+                let _ = rig.receive(
+                    frame.link,
+                    &served(
+                        id_of(&frame),
+                        r#""next_cursor":"c9","complete":true,"#,
+                        "lull",
+                        1,
+                    ),
+                );
+            }
+            if sent {
+                break;
+            }
+        }
+        assert!(sent, "Ready never went out behind a player who kept asking");
+        assert_eq!(notes, 1, "only the ask made before Ready was sent");
     }
 
     /// **A lost Ready answer is sent again, and the line follows the answer** (fix pass 6, item 2;
