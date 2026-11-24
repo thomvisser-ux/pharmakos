@@ -2702,56 +2702,88 @@ fn wall_target_json(",
 // A seal carries the fingerprint it was made with (S3's `fpstream`, part 2)
 // ---------------------------------------------------------------------------
 
+/// The seals made in shipped code, each by the function that makes it: a
+/// submission, an advised safe playbook, the gateway's fallback, a resume and
+/// the scenario harness's door. Each holds its fingerprint in
+/// `tests/seal_work.rs`, `tests/advice.rs` or `gamectl`'s `scenario/run.rs`.
+const SEAL_MAKERS: &[(&str, &str)] = &[
+    ("gamectl/src/scenario/run.rs", "seal"),
+    ("gateway/src/surface.rs", "file_safe_playbooks"),
+    ("gateway/src/surface.rs", "qualify_safe_playbook"),
+    ("gateway/src/surface.rs", "restore_seal"),
+    ("gateway/src/surface/planning.rs", "submit_plan"),
+];
+
+/// The function a line sits in: the name after the last `fn ` at or above it.
+fn enclosing_fn(lines: &[(usize, String)], index: usize) -> String {
+    lines
+        .get(..=index)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find_map(|(_, line)| {
+            let (_, after) = line.split_once("fn ")?;
+            let name: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            (!name.is_empty() && after[name.len()..].starts_with(['(', '<'])).then_some(name)
+        })
+        .unwrap_or_default()
+}
+
 /// A seal is made only by `Sealed::new`, which takes its plan fingerprint as a
-/// required argument, and no shipped code of the gateway or `gamectl` takes a
-/// fingerprint by encoding a message again: the fingerprint is taken once,
-/// from the decode that qualified or compiled the seal, and carried
-/// (`tests/seal_work.rs` holds the counted work).
-///
-/// The field is private, so another crate cannot write a literal; this holds
-/// the gateway's own modules, which could, to the constructor as well.
+/// required argument, and only by the functions [`SEAL_MAKERS`] names. No
+/// shipped line writes a `Sealed` literal or renames the type (`Sealed as`),
+/// which would take a maker out of this search's sight. That no shipped code
+/// takes a fingerprint by encoding a message again is the compiler's: the
+/// message-encoding function is test-only (S3's `fpstream`, part 2, fix
+/// pass 1), and a field write to a seal does not compile (`Sealed`'s
+/// `compile_fail` doc test).
 #[test]
-fn a_seal_is_made_by_its_constructor_and_no_fingerprint_is_taken_twice() {
+fn a_seal_is_made_by_its_constructor_in_the_named_makers() {
     let mut files = sources();
     files.extend(sources_of("gamectl"));
-    let mut literals: Vec<String> = Vec::new();
-    let mut reencoded: Vec<String> = Vec::new();
-    let mut constructed = 0_usize;
+    let mut findings: Vec<String> = Vec::new();
+    let mut makers: Vec<(String, String)> = Vec::new();
     for path in &files {
         let text = std::fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        for (number, line) in code_lines(&text) {
+        let shown = path.display().to_string().replace('\\', "/");
+        let relative = shown
+            .split_once("/crates/")
+            .map_or(shown.as_str(), |(_, rest)| rest)
+            .replace("gateway/../", "");
+        let lines = code_lines(&text);
+        for (index, (number, line)) in lines.iter().enumerate() {
             let trimmed = line.trim();
             let declares = trimmed == "pub struct Sealed {" || trimmed == "impl Sealed {";
             // `Boundary::Sealed` is the save's boundary, a variant and not this type.
             let literal = line.contains("Sealed {") && !line.contains("Boundary::Sealed");
             if literal && !declares {
-                literals.push(format!("{}:{number}: {trimmed}", path.display()));
+                findings.push(format!("{relative}:{number}: a literal: {trimmed}"));
+            }
+            if uses(line, "Sealed") && line.contains("Sealed as ") {
+                findings.push(format!("{relative}:{number}: a renamed seal: {trimmed}"));
             }
             if line.contains("Sealed::new(") {
-                constructed = constructed.saturating_add(1);
-            }
-            if line.contains("hash::plan_fingerprint(") {
-                reencoded.push(format!("{}:{number}: {trimmed}", path.display()));
+                makers.push((relative.clone(), enclosing_fn(&lines, index)));
             }
         }
     }
     assert!(
-        literals.is_empty(),
-        "a seal is made by `Sealed::new`, which takes its fingerprint, and never by a literal:\n{}",
-        literals.join("\n")
+        findings.is_empty(),
+        "a seal is made by `Sealed::new`, which takes its fingerprint, under its own name:\n{}",
+        findings.join("\n")
     );
-    assert!(
-        reencoded.is_empty(),
-        "the plan fingerprint is taken from the decode a caller holds \
-         (`plan_fingerprint_of`), or carried on the seal, and never by encoding a message \
-         again:\n{}",
-        reencoded.join("\n")
-    );
-    // Submission, advice, the fallback, a resume and the scenario harness.
+    makers.sort();
+    let expected: Vec<(String, String)> = SEAL_MAKERS
+        .iter()
+        .map(|(file, function)| ((*file).to_owned(), (*function).to_owned()))
+        .collect();
     assert_eq!(
-        constructed, 5,
-        "one `Sealed::new` for each way a seal is made; a new one is a maker whose fingerprint \
-         `tests/seal_work.rs` must hold"
+        makers, expected,
+        "the seal makers moved; a new one is a maker whose carried fingerprint must be held to \
+         its text, and its name joins SEAL_MAKERS with that test"
     );
 }
