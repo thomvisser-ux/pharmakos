@@ -141,13 +141,9 @@ pub fn radius_voxels(
     rules: &RulesTable,
     seat: u8,
     beacon: u32,
-    mut structures: impl Iterator<Item = StructureFacts>,
+    structures: impl Iterator<Item = StructureFacts>,
 ) -> i16 {
-    if structures.any(|facts| facts.grows(seat, beacon)) {
-        rules.grown_sphere_radius_voxels()
-    } else {
-        rules.sphere_radius_voxels()
-    }
+    metered::radius_voxels(rules, seat, beacon, structures, &())
 }
 
 /// Whether a kind column holds a Resonance Spire's row, of any state: the
@@ -168,17 +164,7 @@ pub fn radius_at_row(
     structures: &StructureTable,
     row: usize,
 ) -> i16 {
-    // The fast exit: with no Spire row in the table, nothing grows, and the
-    // kind column is one byte a row, so the test costs a byte search rather
-    // than the six-column walk below (the tick asks this from per-unit and
-    // per-beacon paths).
-    if !holds_a_spire(structures.kinds()) {
-        return rules.sphere_radius_voxels();
-    }
-    match (beacons.seats().get(row), beacons.ids().get(row)) {
-        (Some(seat), Some(id)) => radius_voxels(rules, *seat, *id, facts_of(structures)),
-        _ => rules.sphere_radius_voxels(),
-    }
+    metered::radius_at_row(rules, beacons, structures, row, &())
 }
 
 /// [`radius_voxels`] for `beacon` in the live tables, read through its id's
@@ -191,9 +177,125 @@ pub fn radius_of(
     structures: &StructureTable,
     beacon: BeaconId,
 ) -> i16 {
-    match beacons.row_of(beacon) {
-        Ok(row) => radius_at_row(rules, beacons, structures, row.index()),
-        Err(_) => rules.sphere_radius_voxels(),
+    metered::radius_of(rules, beacons, structures, beacon, &())
+}
+
+/// The radius functions of the live tables, each reporting the rows it
+/// reads to a [`crate::seams::Meter`] (decisions-log item 175): one unit a
+/// kind byte the Spire test compares, up to the Spire's, and one unit a
+/// structure row the grown test reads, up to the Spire that grows the
+/// sphere. Each is its namesake above, which passes `()`, counting nothing;
+/// a decision passes its tally. A meter only hears counts: no answer
+/// changes with it. Named as their namesakes, so the readers of the sphere
+/// are the same functions (`tests/spire.rs`, `every_sphere_reader_is_named`).
+pub mod metered {
+    use super::{StructureFacts, facts_of};
+    use crate::math::fixed::Fx;
+    use crate::rules::RulesTable;
+    use crate::seams::Meter;
+    use crate::tables::BeaconId;
+    use crate::tables::{BeaconTable, StructureKind, StructureTable};
+
+    /// [`super::radius_voxels`], one unit a structure row it reads.
+    #[must_use]
+    pub fn radius_voxels<M: Meter + ?Sized>(
+        rules: &RulesTable,
+        seat: u8,
+        beacon: u32,
+        mut structures: impl Iterator<Item = StructureFacts>,
+        meter: &M,
+    ) -> i16 {
+        let mut read: usize = 0;
+        let grows = structures.any(|facts| {
+            read += 1;
+            facts.grows(seat, beacon)
+        });
+        meter.rows(read);
+        if grows {
+            rules.grown_sphere_radius_voxels()
+        } else {
+            rules.sphere_radius_voxels()
+        }
+    }
+
+    /// [`super::holds_a_spire`], one unit a kind byte it compares, up to the
+    /// first Spire's. The byte search itself is the namesake's.
+    #[must_use]
+    pub fn holds_a_spire<M: Meter + ?Sized>(kinds: &[u8], meter: &M) -> bool {
+        let spire = StructureKind::ResonanceSpire.id();
+        let holds = super::holds_a_spire(kinds);
+        meter.rows(if holds {
+            kinds
+                .iter()
+                .position(|kind| *kind == spire)
+                .map_or(kinds.len(), |at| at + 1)
+        } else {
+            kinds.len()
+        });
+        holds
+    }
+
+    /// [`super::radius_at_row`], one unit a row it reads.
+    #[must_use]
+    pub fn radius_at_row<M: Meter + ?Sized>(
+        rules: &RulesTable,
+        beacons: &BeaconTable,
+        structures: &StructureTable,
+        row: usize,
+        meter: &M,
+    ) -> i16 {
+        // The fast exit: with no Spire row in the table, nothing grows, and the
+        // kind column is one byte a row, so the test costs a byte search rather
+        // than the six-column walk below (the tick asks this from per-unit and
+        // per-beacon paths).
+        if !holds_a_spire(structures.kinds(), meter) {
+            return rules.sphere_radius_voxels();
+        }
+        match (beacons.seats().get(row), beacons.ids().get(row)) {
+            (Some(seat), Some(id)) => radius_voxels(rules, *seat, *id, facts_of(structures), meter),
+            _ => rules.sphere_radius_voxels(),
+        }
+    }
+
+    /// [`super::radius_of`], one unit a row it reads. Finding the id's row is
+    /// one read, by its index, and is not charged.
+    #[must_use]
+    pub fn radius_of<M: Meter + ?Sized>(
+        rules: &RulesTable,
+        beacons: &BeaconTable,
+        structures: &StructureTable,
+        beacon: BeaconId,
+        meter: &M,
+    ) -> i16 {
+        match beacons.row_of(beacon) {
+            Ok(row) => radius_at_row(rules, beacons, structures, row.index(), meter),
+            Err(_) => rules.sphere_radius_voxels(),
+        }
+    }
+
+    /// [`super::inside_at_row`], one unit a row it reads: none for a point
+    /// the base radius or the grown one settles alone.
+    #[must_use]
+    pub fn inside_at_row<M: Meter + ?Sized>(
+        rules: &RulesTable,
+        beacons: &BeaconTable,
+        structures: &StructureTable,
+        row: usize,
+        (centre, point): ([Fx; 3], [Fx; 3]),
+        meter: &M,
+    ) -> bool {
+        let distance = crate::math::fixed::Sq::between(centre, point);
+        if distance
+            <= crate::math::fixed::Sq::of_radius(Fx::from_voxels(rules.sphere_radius_voxels()))
+        {
+            return true;
+        }
+        if distance
+            > crate::math::fixed::Sq::of_radius(Fx::from_voxels(rules.grown_sphere_radius_voxels()))
+        {
+            return false;
+        }
+        radius_at_row(rules, beacons, structures, row, meter) == rules.grown_sphere_radius_voxels()
     }
 }
 
@@ -367,17 +469,7 @@ pub fn inside_at_row(
     centre: [Fx; 3],
     point: [Fx; 3],
 ) -> bool {
-    let distance = crate::math::fixed::Sq::between(centre, point);
-    if distance <= crate::math::fixed::Sq::of_radius(Fx::from_voxels(rules.sphere_radius_voxels()))
-    {
-        return true;
-    }
-    if distance
-        > crate::math::fixed::Sq::of_radius(Fx::from_voxels(rules.grown_sphere_radius_voxels()))
-    {
-        return false;
-    }
-    radius_at_row(rules, beacons, structures, row) == rules.grown_sphere_radius_voxels()
+    metered::inside_at_row(rules, beacons, structures, row, (centre, point), &())
 }
 
 #[cfg(test)]
@@ -493,5 +585,99 @@ mod tests {
             assert_eq!(total, 500, "from tick {start}");
         }
         assert_eq!(ticks, 1_200, "sixty seconds at 20 Hz");
+    }
+
+    /// Dunit part 2: a radius charges one unit a kind byte its Spire test
+    /// compares, up to the first Spire's, and then one a structure row its
+    /// grown test reads, up to the Spire that grows the sphere; with no Spire
+    /// row, the kind bytes alone. Counted from the tables.
+    #[test]
+    fn a_radius_charges_the_rows_it_reads() {
+        let (mut world, _) = queued();
+        let row = world
+            .beacons()
+            .seats()
+            .iter()
+            .position(|owner| *owner == 0)
+            .unwrap_or_else(|| panic!("seat 0's core"));
+        let charged = |world: &crate::world::World| {
+            let tally = crate::seams::UnitTally::new();
+            let radius = metered::radius_at_row(
+                world.rules(),
+                world.beacons(),
+                world.structures(),
+                row,
+                &tally,
+            );
+            (
+                radius,
+                tally
+                    .read()
+                    .unwrap_or_else(|error| panic!("a measured count: {error}")),
+            )
+        };
+        let rows = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+        let kinds = world.structures().kinds().to_vec();
+        let spire = StructureKind::ResonanceSpire.id();
+        let first = kinds
+            .iter()
+            .position(|kind| *kind == spire)
+            .unwrap_or_else(|| panic!("the queued Spire's row"));
+        // Going up, it grows nothing: every structure row is read.
+        assert_eq!(
+            charged(&world),
+            (
+                world.rules().sphere_radius_voxels(),
+                rows(first + 1 + kinds.len())
+            )
+        );
+        // Finished, it grows the sphere: the rows up to it are read.
+        let core = BeaconId::new(world.beacons().ids().get(row).copied().unwrap_or(0));
+        let finished = world
+            .raise_structure(
+                SeatId::new(0),
+                core,
+                StructureKind::ResonanceSpire,
+                world
+                    .beacons()
+                    .positions()
+                    .get(row)
+                    .copied()
+                    .unwrap_or([Fx::ZERO; 3]),
+            )
+            .unwrap_or_else(|| panic!("room for a finished Spire"));
+        let at = world
+            .structures()
+            .row_of(finished)
+            .unwrap_or_else(|error| panic!("a row: {error:?}"))
+            .index();
+        assert_eq!(
+            charged(&world),
+            (
+                world.rules().grown_sphere_radius_voxels(),
+                rows(first + 1 + at + 1)
+            )
+        );
+        // With no Spire row, the radius reads only the kind bytes.
+        let bare = {
+            let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+            let rules =
+                RulesTable::load(&path).unwrap_or_else(|error| panic!("it loads: {error:?}"));
+            crate::world::World::new(&crate::world::WorldConfig {
+                match_seed: 0x0000_0000_ca5c_aded,
+                seats: 2,
+                rules,
+                match_settings: crate::runner::MatchSettings::default(),
+            })
+            .unwrap_or_else(|error| panic!("a world: {error:?}"))
+        };
+        assert!(!holds_a_spire(bare.structures().kinds()));
+        assert_eq!(
+            charged(&bare),
+            (
+                bare.rules().sphere_radius_voxels(),
+                rows(bare.structures().kinds().len())
+            )
+        );
     }
 }

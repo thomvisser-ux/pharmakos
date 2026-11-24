@@ -2229,9 +2229,25 @@ impl World {
     /// owner's footing ruling of 2026-10-20; no paid edit is ever refused).
     #[must_use]
     pub(crate) fn set_queued_on(&self, x: i32, y: i32) -> bool {
-        self.edits.iter().any(
-            |edit| matches!(edit, VoxelEdit::Set { at: [ex, ey, _], .. } if *ex == x && *ey == y),
-        )
+        self.set_queued_on_metered([x, y], &())
+    }
+
+    /// [`World::set_queued_on`], one unit to `meter` a queued edit it reads,
+    /// up to the one on the column ([`crate::seams::Meter`]; decisions-log
+    /// item 175): a placement a decision makes passes the decision's tally.
+    #[must_use]
+    pub(crate) fn set_queued_on_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        [x, y]: [i32; 2],
+        meter: &M,
+    ) -> bool {
+        let mut read: usize = 0;
+        let queued = self.edits.iter().any(|edit| {
+            read += 1;
+            matches!(edit, VoxelEdit::Set { at: [ex, ey, _], .. } if *ex == x && *ey == y)
+        });
+        meter.rows(read);
+        queued
     }
 
     /// The footings as the world stands now ([`crate::footing::Footings`]).
@@ -2333,8 +2349,30 @@ impl World {
         at: [Fx; 3],
         blueprint: u8,
     ) -> Option<StructureId> {
+        let id = self.paused_at(beacon, at, blueprint, &())?;
+        self.set_built_at(beacon, at, id);
+        Some(id)
+    }
+
+    /// The half-built structure [`World::adopt_paused`] links, found without
+    /// linking it: one unit to `meter` a structure row it reads, up to that
+    /// structure, and one a target row whose link it compares
+    /// ([`crate::seams::Meter`]; decisions-log item 175). A commit a decision
+    /// makes passes the decision's tally, and then links what it found.
+    pub(crate) fn paused_at<M: crate::seams::Meter + ?Sized>(
+        &self,
+        beacon: BeaconId,
+        at: [Fx; 3],
+        blueprint: u8,
+        meter: &M,
+    ) -> Option<StructureId> {
         let column = crate::targeting::column_of(at);
-        let linked = |world: &World, id: StructureId| world.targets().built().contains(&id);
+        let linked = |world: &World, id: StructureId| {
+            let built = world.targets().built();
+            let at = built.iter().position(|held| *held == id);
+            meter.rows(at.map_or(built.len(), |at| at + 1));
+            at.is_some()
+        };
         let rows = self
             .structures
             .ids()
@@ -2349,7 +2387,9 @@ impl World {
             .zip(self.structures.positions())
             .zip(self.structures.kinds());
         let mut found = None;
+        let mut read: usize = 0;
         for ((((id, home), (building, hp)), place), kind) in rows {
+            read += 1;
             if *home == beacon
                 && *kind == blueprint
                 && *building
@@ -2360,9 +2400,8 @@ impl World {
                 break;
             }
         }
-        let id = found.filter(|id| !linked(self, *id))?;
-        self.set_built_at(beacon, at, id);
-        Some(id)
+        meter.rows(read);
+        found.filter(|id| !linked(self, *id))
     }
 }
 
@@ -2538,5 +2577,61 @@ mod tests {
             .and_then(|row| world.structures().hit_points().get(row.index()).copied())
             .is_some_and(crate::math::quantity::Hp::is_alive);
         assert!(alive, "and it was not recycled");
+    }
+
+    /// Dunit part 2: a placement's queued-edit test and a commit's search for
+    /// a paused structure charge one unit a row they read, counted here.
+    #[test]
+    fn the_write_path_scans_charge_what_they_read() {
+        let mut world = world();
+        let tally = |run: &dyn Fn(&crate::seams::UnitTally)| {
+            let tally = crate::seams::UnitTally::new();
+            run(&tally);
+            tally
+                .read()
+                .unwrap_or_else(|error| panic!("a measured count: {error}"))
+        };
+        for x in [10, 11, 12] {
+            assert!(
+                world
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: [x, 10, 3],
+                        material: crate::voxels::Material::STONE,
+                        by: None,
+                    })
+                    .is_ok()
+            );
+        }
+        let queued = world.edits.len();
+        assert!(queued >= 3, "the three edits are queued");
+        assert_eq!(
+            tally(&|meter| assert!(world.set_queued_on_metered([11, 10], meter))),
+            u64::try_from(queued - 1).unwrap_or(0),
+            "the edits up to the second's column"
+        );
+        assert_eq!(
+            tally(&|meter| assert!(!world.set_queued_on_metered([40, 40], meter))),
+            u64::try_from(queued).unwrap_or(0),
+            "every edit"
+        );
+        // No paused structure on a fresh map: every structure row is read.
+        let beacon =
+            crate::tables::BeaconId::new(world.beacons().ids().first().copied().unwrap_or(0));
+        let at = world
+            .beacons()
+            .positions()
+            .first()
+            .copied()
+            .unwrap_or([Fx::ZERO; 3]);
+        assert_eq!(
+            tally(&|meter| {
+                assert!(
+                    world
+                        .paused_at(beacon, at, StructureKind::Autocannon.id(), meter)
+                        .is_none()
+                );
+            }),
+            u64::try_from(world.structures().ids().len()).unwrap_or(0)
+        );
     }
 }
