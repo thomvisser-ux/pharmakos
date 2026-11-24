@@ -127,7 +127,7 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    is the tripwire (decisions-log item 131). Prefer depending on the sim's snapshot and knowledge
    types only; if you find yourself wanting its stepping API, the design is wrong — stop and ask.
    The gateway, which hosts the match, is held to the same rule: its planning methods
-   (`verify_plan`, `render_plan`, `patch_plan`, `instantiate_template`, `resolve_refs`) answer from
+   that answer from the frozen snapshot (`verify_plan`, `render_plan`, `patch_plan`, `instantiate_template`, `resolve_refs`) answer from
    the frozen snapshot and the rules table — `resolve_refs` ranks "nearest" through the sim's own
    resolver (`targeting::cover`, `targeting::on_vent_counted`, the `Ranker`) with a tally and
    scratch of its own, over the hosted world (the frozen world in a Lull; whenever the phase is not
@@ -595,8 +595,9 @@ request and the owner reviews the stage demo.
   crate it does not own (a module, or a few named lines) is granted that crate's confinement-test
   line with it wherever the test lists the crate's sources by name, and the grant says so:
   `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` fails on any `mod name;` that a
-  listed file declares, `pub` or not, at any depth, when its file is missing from `SOURCES`, and on
-  a `.rs` file under `src/` that no listed file declares; its twin in
+  listed file declares, `pub` or not, at any depth, when its file is missing from `SOURCES`; on a
+  `.rs` file under `src/` that is missing from `SOURCES`; and on a listed file, `lib.rs` and
+  `main.rs` apart, that no listed file declares; its twin in
   `crates/operator/tests/confinement.rs` still reads only the `mod` lines of `src/lib.rs`
   (decisions-log items 110 (4) and 185). A sweep (the no-silent-fallback rule, say) that
   reaches callers outside the lane's own crate or named place stops at that edge and says so in
