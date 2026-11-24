@@ -510,7 +510,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("an id")),
         );
         let spire = world
-            .queue_capability(seat, core, StructureKind::ResonanceSpire)
+            .queue_capability(seat, core, StructureKind::ResonanceSpire, &())
             .unwrap_or_else(|failure| panic!("queued: {failure:?}"));
         (world, spire)
     }

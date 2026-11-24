@@ -87,6 +87,10 @@ pub(crate) struct View<'a> {
     pub(crate) seat_index: usize,
     /// That seat's execution state.
     pub(crate) state: &'a PlanState,
+    /// The seat's decision tally, handed down by `phase_decision`: what
+    /// every node, row and candidate the view reads is charged to (dunit
+    /// part 2).
+    pub(crate) meter: &'a dyn crate::seams::Meter,
 }
 
 /// The row a beacon the interpreter holds an id of lives in, checked by
@@ -257,7 +261,7 @@ fn percent(value: i64, total: i64) -> i64 {
 /// 5): counted on the world's unhashed decision counter as it is reached, so a
 /// short-circuited `all` or `any` counts only what it read.
 pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
-    view.world.charge_decision(1);
+    view.meter.rows(1);
     match condition {
         Cond::All(items) => items.iter().all(|item| evaluate(view, item)),
         Cond::Any(items) => items.iter().any(|item| evaluate(view, item)),
@@ -342,7 +346,7 @@ fn units_by_role(view: &View<'_>, beacon: BeaconId, kind: UnitKind) -> i64 {
         .zip(units.kinds())
         .zip(units.hit_points())
     {
-        view.world.charge_decision(1);
+        view.meter.rows(1);
         if *home == beacon && *owner == view.seat.raw() && *unit == kind.id() && hp.is_alive() {
             // E7: rule: the count is at most the unit table's rows, a `u32`, far inside `i64`
             count = count.saturating_add(1);
@@ -363,7 +367,7 @@ fn has_structure(view: &View<'_>, beacon: BeaconId, kind: StructureKind) -> bool
         .zip(structures.hit_points())
         .zip(structures.building())
         .any(|((((home, owner), held), hp), building)| {
-            view.world.charge_decision(1);
+            view.meter.rows(1);
             *home == beacon
                 && *owner == view.seat.raw()
                 && *held == kind.id()
@@ -426,7 +430,7 @@ fn count_sightings<F: Fn(Seen) -> bool>(view: &View<'_>, fresh: Freshness, keep:
         // One unit a sighting row read, the seat's own or another's: the
         // table is shared, so every row is read to find the seat's (dunit
         // part 2).
-        view.world.charge_decision(1);
+        view.meter.rows(1);
         if *by != view.seat.raw() {
             continue;
         }
@@ -611,16 +615,16 @@ impl Board for View<'_> {
         View::commander_at(self)
     }
     fn row_threat(&self, row: usize) -> u64 {
-        live_row_threat(self.world, self.seat, row, self.world.decision_meter())
+        live_row_threat(self.world, self.seat, row, self.meter)
     }
     fn row_repairs(&self, row: usize) -> bool {
-        live_row_repairs(self.world, self.seat, row, self.world.decision_meter())
+        live_row_repairs(self.world, self.seat, row, self.meter)
     }
     fn commander_wounded(&self) -> bool {
         live_commander_wounded(self.world, self.seat)
     }
     fn charge(&self, rows: usize) {
-        crate::seams::Meter::rows(self.world.decision_meter(), rows);
+        self.meter.rows(rows);
     }
 }
 

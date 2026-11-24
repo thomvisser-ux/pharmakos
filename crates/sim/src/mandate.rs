@@ -473,16 +473,33 @@ pub(crate) fn buildable(world: &World, beacon: BeaconId, row: usize) -> bool {
 /// outside the area.
 #[must_use]
 pub(crate) fn protected(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
+    protected_metered(world, beacon, at, &())
+}
+
+/// [`protected`], reporting to `meter` one unit a target row it reads, up to
+/// and including the row that answers, or every row when none does
+/// ([`crate::seams::Meter`]; dunit part 2): a Spire's site search inside a
+/// decision passes the seat's tally.
+pub(crate) fn protected_metered(
+    world: &World,
+    beacon: BeaconId,
+    at: [Fx; 3],
+    meter: &dyn crate::seams::Meter,
+) -> bool {
     let [x, y] = crate::targeting::column_of(at);
     let targets = world.targets();
-    targets
+    let mut read: usize = 0;
+    let inside = targets
         .beacons()
         .iter()
         .zip(targets.kinds())
         .zip(targets.areas())
+        .inspect(|_| read += 1)
         .any(|((owner, kind), area)| {
             *owner == beacon && *kind == TargetKind::Protected.id() && area.contains(x, y)
-        })
+        });
+    meter.rows(read);
+    inside
 }
 
 #[cfg(test)]

@@ -300,7 +300,7 @@ impl UnitTally {
 /// ([`UnitTally`], one unit a row read, and each measured unit); every other
 /// caller passes `()`, which counts nothing. A meter never changes what the
 /// scan decides or returns: it only hears counts.
-pub trait Meter {
+pub trait Meter: core::fmt::Debug {
     /// `rows` more rows read.
     fn rows(&self, rows: usize);
 

@@ -2197,7 +2197,7 @@ fn decision_units_never_reach_the_state_hash() {
         let mut chain = Vec::new();
         for _ in 0..60 {
             if fault {
-                runner.world().ground().work.fault_next_charge();
+                runner.world().fault_next_decision_charge();
             }
             runner
                 .step()

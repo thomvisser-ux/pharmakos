@@ -115,7 +115,6 @@ use crate::pathing::estimate::{ServedWalk, WalkError, walk_cost};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
-use crate::seams::Meter as _;
 use crate::tables::{BeaconId, BeaconTable, SeatId, StructureTable, TargetTable};
 use crate::voxels::VoxelStore;
 
@@ -207,7 +206,7 @@ pub struct Ground<'a> {
     /// scans, and every row, column and Spire byte the tests on them read
     /// (`targeting::metered`) -- and one a node a search pops. The public predicates
     /// of [`Ground`] charge nothing; the resolvers charge this. Not hashed.
-    pub work: &'a crate::seams::UnitTally,
+    pub work: &'a dyn crate::seams::Meter,
 }
 
 /// The nodes `scratch`'s searches have popped since its counters were last
@@ -272,12 +271,12 @@ fn popped_since(
 impl Ground<'_> {
     /// Count `units` of evaluation work.
     fn charge(&self, units: u32) {
-        self.work.add(units);
+        self.work.rows(crate::math::index::row(units));
     }
 
     /// Charge the nodes popped since `before` ([`popped_since`]).
     fn charge_pops(&self, before: Result<u64, crate::seams::Unmeasured>, scratch: &Scratch) {
-        self.work.add_measured(popped_since(before, scratch));
+        self.work.measured(popped_since(before, scratch));
     }
 
     /// The **base** sphere radius, `beacon.sphere_radius_voxels`, which the
@@ -1226,8 +1225,8 @@ fn stone_site(
     let before = popped(scratch);
     let closest = closest_site(scratch, ground.surface, goal);
     ground.charge_pops(before, scratch);
-    ground.work.add_measured(heuristic_folds(scratch));
-    ground.work.add_measured(queue_visits(scratch));
+    ground.work.measured(heuristic_folds(scratch));
+    ground.work.measured(queue_visits(scratch));
     match closest {
         Ok(Some(site)) => Sited::Stone(site, weighed),
         // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out

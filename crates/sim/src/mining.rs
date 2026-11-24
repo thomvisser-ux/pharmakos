@@ -872,11 +872,11 @@ fn mines<M: Meter + ?Sized>(world: &World, row: usize, beacon: BeaconId, meter: 
 /// nothing. Everything it visits is counted on the decision's units (one a
 /// beacon row, the unit rows [`mines`] reads, and what the keeping
 /// [`dig_in`] and the choice [`choose_seam`] visit).
-pub(crate) fn refresh_seams(world: &mut World, seat: SeatId) {
+pub(crate) fn refresh_seams(world: &mut World, seat: SeatId, meter: &dyn Meter) {
     let count = world.beacons().ids().len();
     let mut row: usize = 0;
     while row < count {
-        world.decision_meter().rows(1);
+        meter.rows(1);
         let beacons = world.beacons();
         let owned = beacons.seats().get(row).copied() == Some(seat.raw());
         let alive = beacons
@@ -887,17 +887,17 @@ pub(crate) fn refresh_seams(world: &mut World, seat: SeatId) {
         if owned
             && alive
             && let Some(beacon) = beacon
-            && mines(world, row, beacon, world.decision_meter())
+            && mines(world, row, beacon, meter)
             && let Some(held) = world.beacons().seams().get(row).copied()
             && let Some(settings) = settings_at(world, row)
         {
             let keeps = held != NO_FEATURE
                 && usize::try_from(held)
                     .ok()
-                    .and_then(|seam| dig_in(world, row, seam, settings, world.decision_meter()))
+                    .and_then(|seam| dig_in(world, row, seam, settings, meter))
                     .is_some();
             if !keeps {
-                let chosen = choose_seam(world, row, settings);
+                let chosen = choose_seam(world, row, settings, meter);
                 if let Some(slot) = world.beacons_mut().seams_mut().get_mut(row) {
                     *slot = chosen;
                 }
@@ -913,22 +913,21 @@ pub(crate) fn refresh_seams(world: &mut World, seat: SeatId) {
 /// them by the estimator's travel from the beacon's anchor and skips the
 /// unreachable (`crate::targeting::Ranker`). `NEAREST` and `SAFEST` take the
 /// first; `RICHEST` takes the most remaining yield, ties to the nearer.
-fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
+fn choose_seam(world: &mut World, row: usize, settings: MineSettings, meter: &dyn Meter) -> u32 {
     let mut work = [false; MAX_FEATURES];
     let mut wealth = [0_i64; MAX_FEATURES];
     let features = world.features().len().min(MAX_FEATURES);
     let mut index: usize = 0;
     while index < features {
         // One unit a feature row asked, beside what its dig search visits.
-        world.decision_meter().rows(1);
-        if dig_in(world, row, index, settings, world.decision_meter()).is_some() {
+        meter.rows(1);
+        if dig_in(world, row, index, settings, meter).is_some() {
             if let Some(slot) = work.get_mut(index) {
                 *slot = true;
             }
             if settings.seam_choice == SeamChoice::Richest
                 && let Some(slot) = wealth.get_mut(index)
-                && let Some(left) =
-                    remaining_yield(world, (row, index), settings, world.decision_meter())
+                && let Some(left) = remaining_yield(world, (row, index), settings, meter)
             {
                 *slot = left;
             }
@@ -964,16 +963,11 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
             .map(crate::tables::SeatId::new)
     {
         // The scan is the seat's decision's work, one unit a row it reads.
-        crate::defend::for_each_known_threat_metered(
-            world,
-            seat,
-            world.decision_meter(),
-            |known| {
-                threats.push((known.at, Sq::of_radius(known.weapon.range())));
-            },
-        );
+        crate::defend::for_each_known_threat_metered(world, seat, meter, |known| {
+            threats.push((known.at, Sq::of_radius(known.weapon.range())));
+        });
     }
-    let (ground, scratch) = world.ground_and_scratch();
+    let (ground, scratch) = world.ground_and_scratch_metered(meter);
     let mut ranker = Ranker::new(&ground, origin, |index| {
         // E7: rule: an index the work table does not hold is no work
         work.get(index).copied().unwrap_or(false)
@@ -1426,8 +1420,8 @@ mod visits {
         let mut world = world();
         let seat = SeatId::new(0);
         // The first upkeep chooses; the second keeps what it chose.
-        world.decision_meter().reset();
-        super::refresh_seams(&mut world, seat);
+        let meter = UnitTally::new();
+        super::refresh_seams(&mut world, seat, &meter);
         let (row, settings) = core(&world);
         let held = world
             .beacons()
@@ -1436,10 +1430,9 @@ mod visits {
             .copied()
             .unwrap_or(super::NO_FEATURE);
         assert_ne!(held, super::NO_FEATURE, "the core chose a seam");
-        world.decision_meter().reset();
-        super::refresh_seams(&mut world, seat);
-        let units = world
-            .decision_meter()
+        let meter = UnitTally::new();
+        super::refresh_seams(&mut world, seat, &meter);
+        let units = meter
             .read()
             .unwrap_or_else(|error| panic!("a measured count: {error}"));
         // Every beacon row; for each of seat 0's living beacons, the unit
@@ -1567,10 +1560,9 @@ mod visits {
             );
         });
         assert!(ranking > 0, "the ranking prices a walk");
-        world.decision_meter().reset();
-        super::refresh_seams(&mut world, seat);
-        let units = world
-            .decision_meter()
+        let meter = UnitTally::new();
+        super::refresh_seams(&mut world, seat, &meter);
+        let units = meter
             .read()
             .unwrap_or_else(|error| panic!("a measured count: {error}"));
         assert_eq!(units, rows + ranking, "the choice's visits, counted");
@@ -1607,10 +1599,9 @@ mod visits {
             );
             rows += 1 + dig_in_rows(&world, row, seam, settings);
         }
-        world.decision_meter().reset();
-        super::refresh_seams(&mut world, seat);
-        let units = world
-            .decision_meter()
+        let meter = UnitTally::new();
+        super::refresh_seams(&mut world, seat, &meter);
+        let units = meter
             .read()
             .unwrap_or_else(|error| panic!("a measured count: {error}"));
         assert_eq!(units, rows, "the searches, and no ranking");

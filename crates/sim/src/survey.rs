@@ -2628,7 +2628,7 @@ mod tests {
     }
 
     /// A meter that keeps its rows and its measured units apart.
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct Counted {
         rows: core::cell::Cell<u64>,
         measured: core::cell::Cell<u64>,

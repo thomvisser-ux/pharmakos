@@ -2236,8 +2236,7 @@ impl World {
     /// owner's footing ruling of 2026-10-20; no paid edit is ever refused).
     #[must_use]
     pub(crate) fn set_queued_on(&self, x: i32, y: i32) -> bool {
-        // One unit a queued edit read, while a decision runs (dunit part 2).
-        self.set_queued_on_metered([x, y], self.decision_meter_now())
+        self.set_queued_on_metered([x, y], &())
     }
 
     /// [`World::set_queued_on`], one unit to `meter` a queued edit it reads,
@@ -2357,9 +2356,21 @@ impl World {
         at: [Fx; 3],
         blueprint: u8,
     ) -> Option<StructureId> {
-        // The search's rows, charged while a decision runs (dunit part 2).
-        let id = self.paused_at(beacon, at, blueprint, self.decision_meter_now())?;
-        self.set_built_at(beacon, at, id);
+        self.adopt_paused_metered(beacon, at, blueprint, &())
+    }
+
+    /// [`World::adopt_paused`], reporting the rows its search and its link
+    /// read to `meter` (dunit part 2): a commit a decision makes passes its
+    /// seat's tally.
+    pub(crate) fn adopt_paused_metered(
+        &mut self,
+        beacon: BeaconId,
+        at: [Fx; 3],
+        blueprint: u8,
+        meter: &dyn crate::seams::Meter,
+    ) -> Option<StructureId> {
+        let id = self.paused_at(beacon, at, blueprint, meter)?;
+        self.set_built_at(beacon, at, id, meter);
         Some(id)
     }
 
@@ -2572,7 +2583,7 @@ mod tests {
         };
         assert!(
             world
-                .replace_build_targets(core, core::iter::once(entry))
+                .replace_build_targets(core, core::iter::once(entry), &())
                 .is_ok()
         );
         assert!(
