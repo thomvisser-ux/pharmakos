@@ -54,10 +54,11 @@
 //!
 //! Beside the nanoseconds, each decision tick's **counted evaluation units**
 //! (`World::decision_work`: one a primitive step of counted work, charged
-//! where it happens -- a handler tried, a condition node evaluated, a
-//! selector candidate ranked, a feature the "nearest" ranker scans, a column
-//! a site search scans, and a node a search pops, a served walk's and a
-//! `toward`'s grid optimum's alike; `pharmakos_sim::seams::UnitTally`), summed
+//! where it happens -- a visit of each loop the decision runs, at every
+//! level down to the innermost, from a handler tried and a condition node
+//! evaluated to every row, column and cell a scan reads, and a node a search
+//! pops, a served walk's and a `toward`'s grid optimum's alike;
+//! `pharmakos_sim::seams::UnitTally`, decisions-log item 175), summed
 //! over the seats, are read after the tick: item 139 (5)'s "count carried to S3". The
 //! count is the sim's, identical on every machine and every run (a run whose
 //! count differs stops the measurement, as a differing chain does), so it is
