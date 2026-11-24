@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 use pharmakos_proto::json::{self, Json};
 
 use super::{HandedOver, blank_comments, hand_over};
-use crate::canonical::canonicalise_text;
+use crate::canonical::{Canonical, canonicalise, canonicalise_text};
 use crate::jsonc::Document;
 
 /// The JSONC chain: the canonical JSON `canonicalise_text` writes, or the
@@ -1086,22 +1086,18 @@ fn a_leading_zero_is_refused_by_both() {
     );
 }
 
-/// Every comment a text holds, with the anchor it was written against, in
-/// the order it stands in.
-fn comment_texts(text: &str) -> Vec<Spotted> {
-    Document::parse(text)
-        .map(|document| {
-            document
-                .comments()
-                .into_iter()
-                .map(|comment| Spotted {
-                    anchor: format!("{:?}", comment.anchor),
-                    pointer: comment.anchor.pointer().map(str::to_owned),
-                    text: comment.text,
-                })
-                .collect()
+/// Every comment a document holds, with the anchor it was written against,
+/// in the order it stands in.
+fn spotted(document: &Document) -> Vec<Spotted> {
+    document
+        .comments()
+        .into_iter()
+        .map(|comment| Spotted {
+            anchor: format!("{:?}", comment.anchor),
+            pointer: comment.anchor.pointer().map(str::to_owned),
+            text: comment.text,
         })
-        .expect("the canonical text parses")
+        .collect()
 }
 
 /// One comment as a text holds it: its anchor, the pointer the anchor names
@@ -1162,20 +1158,43 @@ fn same_comments(inn: &[Spotted], out: &[Spotted], relocated: &[Moved]) -> bool 
     by_anchor(inn, relocated, true) == by_anchor(out, relocated, false)
 }
 
+/// The comment-keeping canonicaliser [`Kept`] holds to its two promises:
+/// [`canonicalise`] itself, or, in the checker's own test, one broken on
+/// purpose.
+type Canonicaliser = fn(&Document) -> Result<Canonical, crate::error::Error>;
+
 /// The two promises the canonical writer makes of every text it writes
 /// (fix pass 1, item 8): every comment comes out, text for text (a comment
 /// on a written-out default is moved, never dropped), and canonicalising the
 /// canonical text gives it back unchanged.
-#[derive(Default, Debug)]
+///
+/// Each text is read once and its document shared by the canonicaliser and
+/// the comment listing, and so is the canonical text's (`pcsplit`): reading a
+/// text twice gave the same document twice, since `canonicalise_text` is
+/// `canonicalise` over `Document::parse`.
+#[derive(Debug)]
 struct Kept {
+    canonicalise: Canonicaliser,
     cases: u64,
     lost: Vec<String>,
     unstable: Vec<String>,
 }
 
 impl Kept {
+    fn new(canonicalise: Canonicaliser) -> Self {
+        Self {
+            canonicalise,
+            cases: 0,
+            lost: Vec::new(),
+            unstable: Vec::new(),
+        }
+    }
+
     fn check(&mut self, what: &str, text: &str) {
-        let Ok(once) = canonicalise_text(text) else {
+        let Ok(document) = Document::parse(text) else {
+            return;
+        };
+        let Ok(once) = (self.canonicalise)(&document) else {
             return;
         };
         self.cases += 1;
@@ -1188,13 +1207,14 @@ impl Kept {
                 to: relocation.to.clone(),
             })
             .collect();
-        if !same_comments(&comment_texts(text), &comment_texts(&once.text), &relocated) {
+        let again = Document::parse(&once.text).expect("the canonical text parses");
+        if !same_comments(&spotted(&document), &spotted(&again), &relocated) {
             self.lost.push(format!(
                 "{what}: {:?}",
                 text.chars().take(300).collect::<String>()
             ));
         }
-        match canonicalise_text(&once.text) {
+        match (self.canonicalise)(&again) {
             Ok(twice) if twice.text == once.text => {}
             _ => self.unstable.push(format!(
                 "{what}: {:?}",
@@ -1208,45 +1228,213 @@ impl Kept {
 /// smaller.
 const EVERY_BOUNDARY_UP_TO: usize = 16 * 1024;
 
-#[test]
-fn every_comment_comes_out_and_canonicalising_twice_is_once() {
-    let mut kept = Kept::default();
-    let mut texts: Vec<(String, String)> = corpus();
-    texts.extend(probes());
-    for (index, (name, text)) in texts.into_iter().enumerate() {
-        kept.check(&name, &text);
-        let start = 0xc0de_0000_u64 + u64::try_from(index).expect("an index");
-        let mut rng = Rng(start);
-        for (how, mutated) in mutations(&text, &mut rng, 24) {
-            kept.check(&format!("{name} (seed {start:#x}), {how}"), &mutated);
-        }
-        // Every comment at the first 32 boundaries, and, in a file of a
-        // playbook's size, a comment at every boundary after them, the
-        // comments taken in turn (fix pass 2, item D4: only the first 32 were
-        // spliced at before). A larger file (a report or a response golden)
-        // keeps the first 32.
-        let spots = boundaries(&text);
-        let every = text.len() <= EVERY_BOUNDARY_UP_TO;
-        for (at_index, at) in spots.iter().enumerate() {
-            if at_index >= 32 && !every {
-                break;
-            }
-            let pieces: &[&str] = if at_index < 32 {
+/// How many boundaries of every file take every one of [`COMMENTS`].
+const EVERY_COMMENT_AT: usize = 32;
+
+/// One boundary a comment is spliced at: its place in the file's
+/// [`boundaries`], its byte offset, and the comments spliced there.
+struct Splice {
+    at_index: usize,
+    at: usize,
+    comments: &'static [&'static str],
+}
+
+/// Where `text` is spliced: every comment at the first
+/// [`EVERY_COMMENT_AT`] boundaries, and, in a file of a playbook's size, a
+/// comment at every boundary after them, the comments taken in turn (fix pass
+/// 2, item D4: only the first 32 were spliced at before). A larger file (a
+/// report or a response golden) keeps the first 32.
+fn splices(text: &str) -> Vec<Splice> {
+    let every = text.len() <= EVERY_BOUNDARY_UP_TO;
+    boundaries(text)
+        .into_iter()
+        .enumerate()
+        .take_while(|(at_index, _)| *at_index < EVERY_COMMENT_AT || every)
+        .map(|(at_index, at)| Splice {
+            at_index,
+            at,
+            comments: if at_index < EVERY_COMMENT_AT {
                 &COMMENTS
             } else {
-                let turn = at_index.checked_rem(COMMENTS.len()).expect("a comment");
-                COMMENTS.get(turn..=turn).expect("a comment")
-            };
-            for comment in pieces {
-                kept.check(
-                    &format!("{name}, {comment:?} at byte {at} ({at_index})"),
-                    &with_comment(&text, *at, comment),
-                );
+                let turn = at_index % COMMENTS.len();
+                &COMMENTS[turn..=turn]
+            },
+        })
+        .collect()
+}
+
+/// How many tests the comment differential is split into (`pcsplit`): one
+/// serial test took 456 s on windows-latest, and libtest runs tests on the
+/// runner's threads.
+const GROUPS: usize = 16;
+
+/// One piece of a group's work: a run of one text's [`splices`], and, for
+/// the text's first run, the text itself and its seeded mutations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Unit {
+    /// The text's place in [`differential_texts`].
+    text: usize,
+    /// Which of the text's [`splices`] this unit makes.
+    splices: std::ops::Range<usize>,
+    /// Whether this unit also checks the text and its mutations.
+    first: bool,
+    /// Its modelled cost: bytes canonicalised.
+    cost: u64,
+}
+
+/// The texts the differential reads: every committed file, then the edge
+/// cases, in that order (each text's place seeds its mutations).
+fn differential_texts() -> Vec<(String, String)> {
+    let mut texts = corpus();
+    texts.extend(probes());
+    texts
+}
+
+/// The work split into [`GROUPS`] groups, a pure function of the texts: each
+/// text's splices are cut into runs of at most an eighth of a group's fair
+/// share of the cost, and the runs dealt, dearest first, to the group with
+/// the least so far (ties to the lowest group, then the earliest text and
+/// run), so that every group costs about the same and every splice falls in
+/// exactly one group.
+fn plan(texts: &[(String, String)]) -> Vec<Vec<Unit>> {
+    let cost_of = |text: &str, splice: &Splice| -> u64 {
+        let one: u64 = splice
+            .comments
+            .iter()
+            .map(|comment| u64::try_from(text.len() + comment.len()).expect("a length"))
+            .sum();
+        one
+    };
+    let per_text: Vec<Vec<u64>> = texts
+        .iter()
+        .map(|(_, text)| {
+            splices(text)
+                .iter()
+                .map(|splice| cost_of(text, splice))
+                .collect()
+        })
+        .collect();
+    let total: u64 = per_text.iter().flatten().sum();
+    let runs = u64::try_from(GROUPS * 8).expect("a count");
+    let run_at_most = total.checked_div(runs).expect("GROUPS is not zero").max(1);
+    let mut units: Vec<Unit> = Vec::new();
+    for (text, costs) in per_text.iter().enumerate() {
+        let mut start = 0;
+        let mut cost = 0;
+        for (index, splice_cost) in costs.iter().enumerate() {
+            if index > start && cost + splice_cost > run_at_most {
+                units.push(Unit {
+                    text,
+                    splices: start..index,
+                    first: start == 0,
+                    cost,
+                });
+                start = index;
+                cost = 0;
+            }
+            cost += splice_cost;
+        }
+        units.push(Unit {
+            text,
+            splices: start..costs.len(),
+            first: start == 0,
+            cost,
+        });
+    }
+    units.sort_by(|one, two| {
+        two.cost
+            .cmp(&one.cost)
+            .then(one.text.cmp(&two.text))
+            .then(one.splices.start.cmp(&two.splices.start))
+    });
+    let mut planned: Vec<Vec<Unit>> = vec![Vec::new(); GROUPS];
+    let mut load = [0_u64; GROUPS];
+    for unit in units {
+        let lightest = (0..GROUPS)
+            .min_by_key(|group| (load[*group], *group))
+            .expect("a group");
+        load[lightest] += unit.cost;
+        planned[lightest].push(unit);
+    }
+    for group in &mut planned {
+        group.sort_by_key(|unit| (unit.text, unit.splices.start));
+    }
+    planned
+}
+
+/// The texts, by name, and the work [`plan`] splits them into.
+type Planned = (Vec<(String, String)>, Vec<Vec<Unit>>);
+
+/// The texts and their plan. Each test makes its own, in well under a second:
+/// a static shared by the tests would be one more static behind the type
+/// door (`tests/door.rs`) for no gain worth a review.
+fn planned_texts() -> Planned {
+    let texts = differential_texts();
+    let planned = plan(&texts);
+    (texts, planned)
+}
+
+/// One group of the differential: every unit's text and mutations, and every
+/// comment at every boundary it plans, each held to [`Kept`]'s promises.
+/// What it splices is checked against the plan boundary for boundary, and
+/// each group holds more than its share of the 10 000 canonical cases the one
+/// serial test asked for, so the groups together hold more than that.
+fn kept_in_group(group: usize) {
+    let (texts, planned) = planned_texts();
+    let units = &planned[group];
+    assert!(!units.is_empty(), "group {group} has no work");
+    let mut kept = Kept::new(canonicalise);
+    // Every splice checked, and every splice the plan names: (text, boundary,
+    // comment).
+    let mut done: Vec<(usize, usize, &str)> = Vec::new();
+    let mut wanted: Vec<(usize, usize, &str)> = Vec::new();
+    for unit in units {
+        let (name, text) = &texts[unit.text];
+        if unit.first {
+            kept.check(name, text);
+            let start = 0xc0de_0000_u64 + u64::try_from(unit.text).expect("an index");
+            let mut rng = Rng(start);
+            for (how, mutated) in mutations(text, &mut rng, 24) {
+                kept.check(&format!("{name} (seed {start:#x}), {how}"), &mutated);
             }
         }
+        let list = splices(text);
+        for splice in &list[unit.splices.clone()] {
+            for comment in splice.comments {
+                kept.check(
+                    &format!(
+                        "{name}, {comment:?} at byte {} ({})",
+                        splice.at, splice.at_index
+                    ),
+                    &with_comment(text, splice.at, comment),
+                );
+                done.push((unit.text, splice.at_index, comment));
+            }
+        }
+        for splice in &list[unit.splices.clone()] {
+            wanted.extend(
+                splice
+                    .comments
+                    .iter()
+                    .map(|comment| (unit.text, splice.at_index, *comment)),
+            );
+        }
     }
-    println!("comments kept over {} canonical cases", kept.cases);
-    assert!(kept.cases > 10_000, "{}", kept.cases);
+    println!(
+        "group {group}: {} units, {} splices, comments kept over {} canonical cases",
+        units.len(),
+        done.len(),
+        kept.cases
+    );
+    assert_eq!(
+        done, wanted,
+        "group {group} splices every boundary it plans"
+    );
+    assert!(
+        kept.cases * u64::try_from(GROUPS).expect("a count") > 10_000,
+        "group {group}: {} canonical cases",
+        kept.cases
+    );
     assert!(
         kept.lost.is_empty() && kept.unstable.is_empty(),
         "{} of {} cases lost a comment, {} were not stable:\nlost: {:#?}\nunstable: {:#?}",
@@ -1255,5 +1443,168 @@ fn every_comment_comes_out_and_canonicalising_twice_is_once() {
         kept.unstable.len(),
         kept.lost.iter().take(5).collect::<Vec<_>>(),
         kept.unstable.iter().take(5).collect::<Vec<_>>()
+    );
+}
+
+/// One test per group, so that a group cannot exist without its test: the
+/// list is [`GROUP_TESTS`], and `every_boundary_of_every_text_has_a_test`
+/// holds it to `0..GROUPS`.
+macro_rules! comment_groups {
+    ($($test:ident = $group:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $test() {
+                kept_in_group($group);
+            }
+        )*
+        const GROUP_TESTS: &[usize] = &[$($group),*];
+    };
+}
+
+comment_groups!(
+    every_comment_comes_out_and_canonicalising_twice_is_once_00 = 0,
+    every_comment_comes_out_and_canonicalising_twice_is_once_01 = 1,
+    every_comment_comes_out_and_canonicalising_twice_is_once_02 = 2,
+    every_comment_comes_out_and_canonicalising_twice_is_once_03 = 3,
+    every_comment_comes_out_and_canonicalising_twice_is_once_04 = 4,
+    every_comment_comes_out_and_canonicalising_twice_is_once_05 = 5,
+    every_comment_comes_out_and_canonicalising_twice_is_once_06 = 6,
+    every_comment_comes_out_and_canonicalising_twice_is_once_07 = 7,
+    every_comment_comes_out_and_canonicalising_twice_is_once_08 = 8,
+    every_comment_comes_out_and_canonicalising_twice_is_once_09 = 9,
+    every_comment_comes_out_and_canonicalising_twice_is_once_10 = 10,
+    every_comment_comes_out_and_canonicalising_twice_is_once_11 = 11,
+    every_comment_comes_out_and_canonicalising_twice_is_once_12 = 12,
+    every_comment_comes_out_and_canonicalising_twice_is_once_13 = 13,
+    every_comment_comes_out_and_canonicalising_twice_is_once_14 = 14,
+    every_comment_comes_out_and_canonicalising_twice_is_once_15 = 15,
+);
+
+/// The plan covers the corpus as the directories list it, and the edge
+/// cases: every text has exactly one first unit, every boundary the rule
+/// names (every one in a file of a playbook's size, the first 32 in a larger
+/// one; read here from [`boundaries`] directly, not through [`splices`]) is
+/// spliced in exactly one group with the comments the rule gives it, every
+/// group has work and a test of its own.
+#[test]
+fn every_boundary_of_every_text_has_a_test() {
+    let texts = differential_texts();
+    let (shared_texts, planned) = planned_texts();
+    let names: Vec<&String> = texts.iter().map(|(name, _)| name).collect();
+    let shared: Vec<&String> = shared_texts.iter().map(|(name, _)| name).collect();
+    assert_eq!(names, shared, "the plan reads the corpus as listed");
+    assert_eq!(
+        GROUP_TESTS,
+        (0..GROUPS).collect::<Vec<_>>().as_slice(),
+        "one test per group"
+    );
+    assert_eq!(planned.len(), GROUPS);
+    let mut firsts = vec![0_usize; texts.len()];
+    let mut spliced: Vec<Vec<usize>> = vec![Vec::new(); texts.len()];
+    for (group, units) in planned.iter().enumerate() {
+        assert!(!units.is_empty(), "group {group} has no work");
+        for unit in units {
+            assert!(unit.text < texts.len(), "{unit:?}");
+            if unit.first {
+                firsts[unit.text] += 1;
+            }
+            let list = splices(&texts[unit.text].1);
+            spliced[unit.text].extend(
+                list.get(unit.splices.clone())
+                    .unwrap_or_else(|| panic!("{unit:?} past the text's splices"))
+                    .iter()
+                    .map(|splice| splice.at_index),
+            );
+        }
+    }
+    let (mut boundaries_spliced, mut cases) = (0_usize, 0_usize);
+    for (index, (name, text)) in texts.iter().enumerate() {
+        assert_eq!(firsts[index], 1, "{name}: one unit checks the text itself");
+        let spots = boundaries(text);
+        let ruled = if text.len() <= EVERY_BOUNDARY_UP_TO {
+            spots.len()
+        } else {
+            spots.len().min(EVERY_COMMENT_AT)
+        };
+        let mut seen = spliced[index].clone();
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            (0..ruled).collect::<Vec<_>>(),
+            "{name}: every boundary spliced exactly once"
+        );
+        for splice in splices(text) {
+            assert_eq!(spots.get(splice.at_index), Some(&splice.at), "{name}");
+            let comments: Vec<&str> = if splice.at_index < EVERY_COMMENT_AT {
+                COMMENTS.to_vec()
+            } else {
+                vec![COMMENTS[splice.at_index % COMMENTS.len()]]
+            };
+            assert_eq!(splice.comments, comments.as_slice(), "{name}");
+            cases += comments.len();
+        }
+        boundaries_spliced += ruled;
+    }
+    println!(
+        "{} texts, {boundaries_spliced} boundaries spliced, {cases} splice cases, in {GROUPS} \
+         groups costing {:?}",
+        texts.len(),
+        planned
+            .iter()
+            .map(|units| units.iter().map(|unit| unit.cost).sum::<u64>())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A canonicaliser that drops every empty block comment, trailing or on a
+/// line of its own, and so writes a text that is stable but has lost a
+/// comment.
+fn dropping(document: &Document) -> Result<Canonical, crate::error::Error> {
+    let mut canonical = canonicalise(document)?;
+    let mut kept = String::new();
+    let text = canonical.text.replace(" /**/", "");
+    for line in text.lines().filter(|line| line.trim() != "/**/") {
+        kept.push_str(line);
+        kept.push('\n');
+    }
+    canonical.text = kept;
+    Ok(canonical)
+}
+
+/// A canonicaliser that writes a space before a text that has none, and so
+/// writes the canonical text once differently.
+fn wavering(document: &Document) -> Result<Canonical, crate::error::Error> {
+    let mut canonical = canonicalise(document)?;
+    if !document.to_text().starts_with(' ') {
+        canonical.text.insert(0, ' ');
+    }
+    Ok(canonical)
+}
+
+/// [`Kept`] sees what it exists to see: a canonicaliser that loses a comment,
+/// and one whose second pass differs from its first, and passes the real one.
+#[test]
+fn the_comment_checker_sees_a_lost_comment_and_an_unstable_text() {
+    let text = MINIMAL.replace(",\"meta\"", ",/**/\"meta\"");
+    let mut real = Kept::new(canonicalise);
+    real.check("the real writer", &text);
+    assert_eq!(
+        (real.cases, real.lost.len(), real.unstable.len()),
+        (1, 0, 0),
+        "{real:?}"
+    );
+    let mut lossy = Kept::new(dropping);
+    lossy.check("a dropped comment", &text);
+    assert_eq!(
+        (lossy.lost.len(), lossy.unstable.len()),
+        (1, 0),
+        "{lossy:?}"
+    );
+    let mut unsteady = Kept::new(wavering);
+    unsteady.check("a wavering writer", &text);
+    assert_eq!(
+        (unsteady.lost.len(), unsteady.unstable.len()),
+        (0, 1),
+        "{unsteady:?}"
     );
 }
