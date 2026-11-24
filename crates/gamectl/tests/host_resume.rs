@@ -11,6 +11,11 @@
 //! standard input the match's config line with `resume`: it announces
 //! nothing, says on standard error that the match has ended, and exits with
 //! the refused config line's code, as any line it refuses.
+//!
+//! And `gamectl host` stops at once on a write the match needs and cannot
+//! make (fix pass 2): it says why on standard error, naming what the disk
+//! holds, and exits with the internal code while its parent still holds its
+//! standard input.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -47,9 +52,9 @@ fn root() -> PathBuf {
 }
 
 /// A folder of this test's own under the target directory, fresh.
-fn scratch() -> PathBuf {
+fn scratch(name: &str) -> PathBuf {
     let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("opsave-ended-host-{}", std::process::id()));
+        .join(format!("opsave-{name}-{}", std::process::id()));
     if base.exists() {
         std::fs::remove_dir_all(&base).expect("a stale scratch folder is removed");
     }
@@ -126,7 +131,7 @@ fn the_host_refuses_to_resume_an_ended_match_and_announces_nothing() {
     let (saved, rules_hash) = ended_save(&rules);
 
     // The private match cache, where the host looks for it.
-    let home = scratch();
+    let home = scratch("ended-host");
     let (variable, data_root) = if cfg!(target_os = "windows") {
         ("LOCALAPPDATA", home.join(pharmakos_gateway::cache::APP_DIR))
     } else if cfg!(target_os = "macos") {
@@ -199,4 +204,158 @@ fn the_host_refuses_to_resume_an_ended_match_and_announces_nothing() {
         "the refused line's exit code: {stderr}"
     );
     std::fs::remove_dir_all(&home).expect("the scratch folder is removed");
+}
+
+/// The match in its opening Lull, saved there, with the rules table's hash.
+fn opening_lull_save(rules: &str) -> (pharmakos_gateway::save::SavedMatch, u64) {
+    let host = Host::open_from(
+        rules,
+        SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: vec![SEGMENT_MS],
+            round_limit: 1,
+        },
+        None,
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(rules).expect("a rules table");
+    let rules_hash = table.rules_hash();
+    let mut surface = Surface::new(
+        LULL_MATCH_ID,
+        SEED,
+        table,
+        FogPolicy::fogged(),
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    (surface.lull_save().expect("a Lull saves"), rules_hash)
+}
+
+/// The match the stop test resumes.
+const LULL_MATCH_ID: &str = "m-opsave-stopped-host";
+
+/// `gamectl host` stops at once on a write the match needs and cannot make
+/// (lane `opsave`, fix pass 2: a boundary is durable before anyone is told,
+/// and a host that cannot make it durable says why and exits). The match's
+/// audit log, which a resume continues from, is read-only, so the host's
+/// first append to it fails: with its standard input still held open, the
+/// host says on standard error what could not be written and what the disk
+/// holds, and exits with the internal code.
+#[test]
+fn the_host_exits_at_once_when_a_write_fails_and_says_why() {
+    let rules = std::fs::read_to_string(root().join("rules").join("rules.v1.json"))
+        .expect("the rules table");
+    let config = Config {
+        match_id: LULL_MATCH_ID.to_owned(),
+        seed: SEED,
+        seats: 2,
+        human_seat: Some(0),
+        segment_lengths_ms: vec![SEGMENT_MS],
+        round_limit: 1,
+        preset: Preset::Custom,
+    };
+    let (saved, rules_hash) = opening_lull_save(&rules);
+    let home = scratch("stopped-host");
+    let (variable, data_root) = private_cache(&home);
+    let cache = MatchCache::open(
+        &data_root,
+        LULL_MATCH_ID,
+        &Header {
+            match_seed: SEED,
+            seats: 2,
+            segment_lengths_ms: vec![SEGMENT_MS],
+            round_limit: 1,
+            rules_hash,
+        },
+    )
+    .expect("a match cache");
+    cache
+        .write_save(
+            &Save {
+                stamp: Stamp::current(rules_hash),
+                config: config.clone(),
+                state: saved,
+            }
+            .render(),
+        )
+        .expect("the save is written");
+    let log = cache.directory().join("audit.log");
+    std::fs::write(&log, format!("{}\n", pharmakos_gateway::audit::HEADER)).expect("a log");
+    let mut permissions = std::fs::metadata(&log).expect("the log").permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&log, permissions.clone()).expect("read-only");
+
+    let line = ConfigLine {
+        config,
+        resume: true,
+    }
+    .render();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gamectl"))
+        .arg("host")
+        .current_dir(root())
+        .env(variable, &home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("gamectl starts");
+    // Standard input is held open for the whole wait: the host returns by
+    // itself, not because its parent let go.
+    let mut stdin = child.stdin.take().expect("its standard input");
+    stdin
+        .write_all(line.as_bytes())
+        .expect("the config line is written");
+    stdin.flush().expect("the config line is sent");
+    let mut exited = None;
+    for _ in 0..6_000 {
+        if let Some(status) = child.try_wait().expect("the child's state") {
+            exited = Some(status);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let status = exited.expect("the host exited by itself (waited a minute)");
+    drop(stdin);
+    let output = child.wait_with_output().expect("gamectl ends");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        status.code(),
+        Some(i32::from(Exit::Internal.code())),
+        "the internal exit code: {stderr}"
+    );
+    assert!(
+        stderr.contains("the audit log could not be written (")
+            && stderr.contains("; on disk is the `lull` save of round 1; this host stops"),
+        "the host says what failed and what the disk holds: {stderr}"
+    );
+    #[allow(
+        clippy::permissions_set_readonly_false,
+        reason = "the test's own file, made writable again so its folder can be removed"
+    )]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&log, permissions).expect("writable again");
+    std::fs::remove_dir_all(&home).expect("the scratch folder is removed");
+}
+
+/// The environment variable that names this platform's per-user data folder,
+/// and the private match cache's root under `home` set as it.
+fn private_cache(home: &Path) -> (&'static str, PathBuf) {
+    if cfg!(target_os = "windows") {
+        ("LOCALAPPDATA", home.join(pharmakos_gateway::cache::APP_DIR))
+    } else if cfg!(target_os = "macos") {
+        (
+            "HOME",
+            home.join("Library")
+                .join("Application Support")
+                .join(pharmakos_gateway::cache::APP_DIR),
+        )
+    } else {
+        (
+            "XDG_DATA_HOME",
+            home.join(pharmakos_gateway::cache::APP_DIR_LOWER),
+        )
+    }
 }

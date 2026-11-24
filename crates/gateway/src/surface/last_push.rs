@@ -1143,7 +1143,9 @@ mod tests {
         let error = surface.persist_end().expect_err("an order waits");
         assert_eq!(error.code(), Code::Internal);
         assert!(
-            error.message().contains("could not be saved"),
+            error
+                .message()
+                .starts_with("the `ended` save of round 1 could not be built ("),
             "{}",
             error.message()
         );
@@ -1151,5 +1153,37 @@ mod tests {
         assert_eq!(pending.unsaved, Some(error));
         assert!(pending.save.is_none());
         assert!(!surface.end_saved, "nothing was saved");
+    }
+
+    /// The end a tick reports is saved at that tick (`Surface::after_tick`),
+    /// and a save that cannot be built there is the step's own refusal as
+    /// well as the host loop's: a caller with no loop behind it (`gamectl
+    /// scenario run`, a test) is told, and nothing is swallowed (mutant N4b).
+    #[test]
+    fn a_tick_that_ends_the_match_unsaved_is_refused() {
+        let mut surface = hosted();
+        surface
+            .host_mut()
+            .expect("a match")
+            .file_damage(DamageOrder {
+                target: DamageTarget::Unit(UnitId::new(0)),
+                amount: Damage::new(1).expect("a positive amount"),
+                by: SeatId::NEUTRAL,
+                source: None,
+            })
+            .expect("an order filed");
+        let tick = surface.host().expect("a match").runner().tick();
+        let report = pharmakos_sim::runner::TickReport {
+            tick,
+            hash: 0,
+            phase: pharmakos_sim::runner::MatchPhase::Recap,
+            segment_ended: true,
+            match_ended: true,
+        };
+        let error = surface
+            .after_tick(Some(report))
+            .expect_err("the end could not be saved");
+        assert_eq!(error.code(), Code::Internal);
+        assert_eq!(surface.take_persistence().unsaved, Some(error));
     }
 }

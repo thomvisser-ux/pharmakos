@@ -1765,18 +1765,18 @@ impl Surface {
     /// Put the save of a match that has just ended in the pending slot: an
     /// `ended` save, which replaces the final round's `sealed` one on disk so
     /// a resume is refused rather than replaying the final Push
-    /// ([`Boundary::Ended`]). A save that cannot be built is an audit line, as
-    /// [`Surface::persist_push`]'s is: the match has already ended.
+    /// ([`Boundary::Ended`]).
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::Internal`] when the save cannot be built: the
-    /// match has ended and the save on disk is still the final round's
-    /// `sealed` one, which a resume would replay as a live Push. The refusal
-    /// is audited, carried to the host loop ([`Persistence::unsaved`]),
-    /// which stops serving and says it, and returned to the caller that
-    /// stepped the match.
+    /// [`crate::error::Code::Internal`] when the save cannot be built. The
+    /// match has ended in memory, and a tick cannot be un-stepped, so the
+    /// refusal is audited, carried to the host loop
+    /// ([`Persistence::unsaved`]), which answers the call that stepped the
+    /// match with it, says what the disk holds and stops, and returned to
+    /// the caller that stepped the match.
     fn persist_end(&mut self) -> Result<(), Error> {
+        let round = self.host()?.runner().round();
         match self.saved_match(Boundary::Ended) {
             Ok(saved) => {
                 self.pending.save = Some(saved);
@@ -1786,7 +1786,8 @@ impl Surface {
             Err(cause) => Err(self.unsaved(
                 "save ended",
                 said!(
-                    "the match has ended and its end could not be saved ({}): the save on disk is still the final round's `sealed` one, which a resume would replay as a live Push; this host stops serving",
+                    "the `ended` save of round {} could not be built ({})",
+                    round,
                     cause.said()
                 ),
             )),
@@ -1795,7 +1796,9 @@ impl Surface {
 
     /// A save the disk needed and could not have: audited under `action`,
     /// put where the host loop stops on it ([`Persistence::unsaved`]), and
-    /// answered as the typed refusal to return.
+    /// answered as the typed refusal to return. The words say what could
+    /// not be built and why, and nothing about the disk: the host loop reads
+    /// what the disk holds from the cache and adds it.
     fn unsaved(&mut self, action: &str, why: pharmakos_proto::json::grammar::Said) -> Error {
         let error = Error::internal(why);
         let tick = self.time.tick;
@@ -1807,12 +1810,12 @@ impl Surface {
     /// Put a beginning Push's save and seals in the pending slot, and make
     /// room for its chain.
     ///
-    /// A `sealed` save that cannot be built leaves the Lull's save on disk,
-    /// which a resume would re-plan: the refusal is audited and carried to
-    /// the host loop, which stops serving and says it ([`Surface::unsaved`]).
-    /// The Push has begun by then, so the caller that opened it is not
-    /// refused: a host with no loop behind it (a test, the walled harness)
-    /// plays on, and writes nothing to a disk.
+    /// A `sealed` save that cannot be built is audited and carried to the
+    /// host loop ([`Surface::unsaved`]), which answers the call that began
+    /// the Push with it, says what the disk holds and stops. The Push has
+    /// begun in memory by then and is not un-begun: a host with no loop
+    /// behind it (a test, the walled harness) plays on, and writes nothing
+    /// to a disk.
     fn persist_push(&mut self, round: u32) {
         self.pending.sealed = self
             .seats
@@ -1831,10 +1834,13 @@ impl Surface {
         match self.saved_match(Boundary::Sealed) {
             Ok(saved) => self.pending.save = Some(saved),
             Err(cause) => {
-                let _ = self.unsaved(
+                // Carried in `pending.unsaved`, which the host loop reads;
+                // the Push has begun and its caller is not refused.
+                let _carried = self.unsaved(
                     "save sealed",
                     said!(
-                        "the Push has begun and its seals could not be saved ({}): a resume would offer its Lull again, so this host stops serving",
+                        "the `sealed` save of round {} could not be built ({})",
+                        round,
                         cause.said()
                     ),
                 );

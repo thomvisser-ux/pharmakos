@@ -2315,13 +2315,8 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "serve.rs",
-        "self.opens.1.recv().unwrap_or(false)",
-        "a host loop that has stopped opens no session, which is the answer a refused open gets",
-    ),
-    (
-        "serve.rs",
-        "self.replies.1.recv().unwrap_or_else(|_| {",
-        "a host loop that has stopped answers with the shutting-down refusal, the same one a failed send gets",
+        "granted.recv().unwrap_or(false)",
+        "a host loop that has stopped, or stopped with the open still queued (its reply channel then closes), opens no session, which is the answer a refused open gets",
     ),
     (
         "serve.rs",
