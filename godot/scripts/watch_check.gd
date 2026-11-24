@@ -600,6 +600,45 @@ func _host_gone() -> void:
 		_failures.append("the give-up's words by code are wrong: %s | %s" % [lost, coded])
 	print("[watch-check] the host went away (pid %d) and the reconnect policy gave the link up: %s" % [pid, _refused_reason])
 
+## How long the silent-host leg may take to give the link up: six connects aborted at the connect
+## deadline (5 s) and the back-off between them (17.5 s), with room for a slow frame.
+const SILENT_WAIT := 90.0
+
+## **A host that accepts a connection and never answers is given up in words** (fix pass 7,
+## review 6's TCPServer probe): a listener takes every connection and never reads or writes it,
+## so the handshake never completes. The links are attached to it with no host process; the rig
+## has each connect aborted at its deadline, and the policy gives the link up within
+## `SILENT_WAIT`, in the policy's words. Before the fix the peer stayed connecting for ever.
+func _silent_host() -> void:
+	var server := TCPServer.new()
+	if server.listen(0, "127.0.0.1") != OK:
+		_failures.append("the silent-host leg could not listen")
+		return
+	var held: Array[StreamPeerTCP] = []
+	link.reset()
+	_refused_reason = ""
+	_expecting_refusal = true
+	link.attach(server.get_local_port(), ["silent-admin", "silent-seat"])
+	var timer := get_tree().create_timer(SILENT_WAIT)
+	while _refused_reason == "" and timer.time_left > 0.0:
+		while server.is_connection_available():
+			held.append(server.take_connection())
+		link.pump_attached()
+		await get_tree().process_frame
+	_expecting_refusal = false
+	var left := timer.time_left
+	link.reset()
+	server.stop()
+	if held.is_empty():
+		_failures.append("the silent-host leg: the listener took no connection")
+	if _refused_reason == "":
+		_failures.append("the silent-host leg: a host that never answered was not given up in %.0f s" % SILENT_WAIT)
+		return
+	if not _refused_reason.contains("connection was given up after"):
+		_failures.append("the silent-host leg gave up in words that are not the policy's: %s" % _refused_reason)
+	print("[watch-check] a host that accepts and never answers: %d connection(s) taken, given up with %.1f s of the %.0f s bound left: %s" % [held.size(), left, SILENT_WAIT, _refused_reason])
+
+
 ## A line remembered before the preset existed (six fields) is refused by the gateway when it
 ## is resumed, and the link then starts another host (S3's `prob`; the plan's E6): what the
 ## lobby's refused Resume leans on. The refusal's words are printed, never read: any refusal
@@ -1665,6 +1704,8 @@ func _finish() -> void:
 			_failures.append("the host (pid %d) was still running after its standard input closed" % pid)
 		else:
 			print("[watch-check] the host exited once its standard input closed")
+	if _failures.is_empty() and _probation:
+		await _silent_host()
 	if _failures.is_empty() and _probation:
 		var carried: Dictionary = Engine.get_meta(CARRY)
 		print("[watch-check] OK (host pids %d, %d and %d)" % [int(carried.get("first_pid", -1)), int(carried.get("resumed_pid", -1)), pid])

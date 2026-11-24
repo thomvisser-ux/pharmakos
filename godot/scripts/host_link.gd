@@ -128,6 +128,11 @@ var _peers: Array = [null, null]
 var _open := [false, false]
 ## Whether the bridge has been told of each link's current close: told once per close.
 var _close_told := [false, false]
+## Whether each link's peer was aborted (fix pass 7): read as closed from then on.
+var _aborted := [false, false]
+## Whether the links were attached to a listener with no host process (`attach`, the watch
+## check's silent-host leg); `pump_attached` pumps them.
+var _attached := false
 var _done := false
 
 
@@ -359,6 +364,30 @@ func pump() -> void:
 	if _port == 0:
 		_read_announce()
 		return
+	_pump_links()
+
+
+## Test-only (the watch check's silent-host leg, fix pass 7): opens both links to a listener on
+## `port` that the caller holds, with no host process, and a fresh watch rig. The links are then
+## pumped by `pump_attached`, through the same `_pump_link` the shipped path runs.
+func attach(port: int, tokens: Array) -> void:
+	bridge.watch_begin()
+	_attached = true
+	_port = port
+	_tokens = tokens
+	for link in [ADMIN, SEAT]:
+		_connect(link)
+
+
+## One frame of links opened by `attach`.
+func pump_attached() -> void:
+	if _done or not _attached:
+		return
+	_pump_links()
+
+
+## Both links, then the frames the rig has to send.
+func _pump_links() -> void:
 	for link in [ADMIN, SEAT]:
 		_pump_link(link)
 	for pair in bridge.watch_outbox():
@@ -398,6 +427,8 @@ func reset() -> void:
 	_peers = [null, null]
 	_open = [false, false]
 	_close_told = [false, false]
+	_aborted = [false, false]
+	_attached = false
 	_done = false
 
 
@@ -477,23 +508,32 @@ func _connect(link: int) -> void:
 		return
 	_peers[link] = peer
 	_open[link] = false
+	_aborted[link] = false
 
 
+## One frame of connection `link`. Its state goes to the rig every frame, and the rig says when
+## to abort it: an open link whose call passed its deadline, a connect past its deadline, a
+## close past its grace (fix pass 7). An abort is `close(-1)`, which waits for nothing (Godot's
+## `close(1000)` waits for the other side's echo, and a host that never answers left the peer
+## closing for ever); the link is read as closed from then on, whatever the peer says, and the
+## close is reported as a connection lost with no code. So no state lasts unreported.
 func _pump_link(link: int) -> void:
 	var peer: WebSocketPeer = _peers[link]
 	if peer == null:
 		return
-	peer.poll()
-	var state := peer.get_ready_state()
+	var state := WebSocketPeer.STATE_CLOSED
+	if not _aborted[link]:
+		peer.poll()
+		state = peer.get_ready_state()
+	if bridge.watch_transport(link, state):
+		peer.close(-1)
+		_aborted[link] = true
+		state = WebSocketPeer.STATE_CLOSED
+		bridge.watch_transport(link, state)
 	if state == WebSocketPeer.STATE_OPEN:
 		if not _open[link]:
 			_open[link] = true
 			bridge.watch_opened(link)
-		# A call on this link went past its deadline: the rig owes a close, which is made here; the
-		# rig's policy decides what follows once the close is reported (fix pass 6).
-		if bridge.watch_link_must_close(link):
-			peer.close(1000, "no answer in time")
-			return
 		for text in packets_of(peer):
 			var answer: Dictionary = bridge.watch_receive(link, text)
 			if not answer.is_empty():
@@ -504,7 +544,7 @@ func _pump_link(link: int) -> void:
 		# nothing itself, neither from the code nor from whether the host still runs.
 		if not _close_told[link]:
 			_close_told[link] = true
-			bridge.watch_dropped(link, peer.get_close_code())
+			bridge.watch_dropped(link, -1 if _aborted[link] else peer.get_close_code())
 		_open[link] = false
 		match bridge.watch_link_action(link):
 			"connect":

@@ -611,12 +611,29 @@ impl PharmakosBridge {
         words
     }
 
-    /// Whether connection `link` owes a close: a call on it went past its deadline (fix pass 6).
-    /// `host_link.gd` closes the peer when it does; the rig's policy decides the rest.
+    /// Connection `link`'s state as its `WebSocketPeer` reports it (`get_ready_state`), every
+    /// frame (fix pass 7). Answers whether `host_link.gd` aborts the peer now: an open link that
+    /// owes a close (a call past its deadline), a connect past its deadline, or a close past its
+    /// grace (`Rig::transport`). A state Godot does not define is said and aborted: a connection
+    /// in a state the rig cannot read is not left to hang.
     #[func]
-    fn watch_link_must_close(&self, link: i64) -> bool {
-        match (self.rig.as_ref(), usize::try_from(link)) {
-            (Some(rig), Ok(link)) => rig.link_must_close(link),
+    fn watch_transport(&mut self, link: i64, state: i64) -> bool {
+        match (
+            self.rig.as_mut(),
+            usize::try_from(link),
+            crate::rig::Transport::of_ready_state(state),
+        ) {
+            (Some(rig), Ok(link), Some(transport)) => {
+                self.panics
+                    .guard_or("watch_transport", true, || rig.transport(link, transport))
+            }
+            (_, _, None) => {
+                godot_error!(
+                    "[pharmakos] watch_transport: connection {link} is in state {state}, which this client cannot read; it is aborted"
+                );
+                true
+            }
+            // No rig, or no such link: there is no connection to abort.
             _ => false,
         }
     }

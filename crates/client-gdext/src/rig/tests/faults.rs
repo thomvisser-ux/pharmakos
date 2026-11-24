@@ -16,8 +16,8 @@
 #[cfg(test)]
 mod tests {
     use crate::rig::{
-        ADMIN, Close, KEEPALIVE_US, LinkAction, Phase, Purpose, RECONNECT_BACKOFF_US, RECONNECTS,
-        Rig, SEAT, SEAT_CALLS_PER_REFILL,
+        ADMIN, CLOSE_GRACE_US, CONNECT_DEADLINE_US, Close, KEEPALIVE_US, LinkAction, Phase,
+        Purpose, RECONNECT_BACKOFF_US, RECONNECTS, Rig, SEAT, SEAT_CALLS_PER_REFILL, Transport,
     };
     use std::collections::BTreeMap;
 
@@ -88,6 +88,45 @@ mod tests {
     /// Invariant 2's bound: how long a pressed Ready may wait, counting only time its link was
     /// open, before it is sent or the Ready line says why not.
     const READY_WAIT_US: u64 = super::super::CALL_DEADLINE_US + 4 * KEEPALIVE_US;
+
+    /// Invariant 2's bound on a connection's state: how long a link may stay connecting or
+    /// closing before the rig has it aborted (fix pass 7: the real peer stayed closing for ever).
+    const TRANSPORT_WAIT_US: u64 = if CONNECT_DEADLINE_US > CLOSE_GRACE_US {
+        CONNECT_DEADLINE_US
+    } else {
+        CLOSE_GRACE_US
+    } + 2 * STEP_US;
+
+    /// One link's connection as the model plays Godot's `WebSocketPeer`: its state, whether it
+    /// is stuck there until aborted (a host that accepts and never completes the handshake, or
+    /// never answers a close), and the close code it reports when it does close.
+    #[derive(Clone, Copy, Debug)]
+    struct Peer {
+        state: Transport,
+        stuck: bool,
+        code: i64,
+        since: u64,
+    }
+
+    impl Peer {
+        const fn closed(now: u64) -> Self {
+            Self {
+                state: Transport::Closed,
+                stuck: false,
+                code: -1,
+                since: now,
+            }
+        }
+
+        const fn now_in(state: Transport, stuck: bool, code: i64, now: u64) -> Self {
+            Self {
+                state,
+                stuck,
+                code,
+                since: now,
+            }
+        }
+    }
 
     /// Invariant 4's bound against a host that recovers: how long a "may have been taken" line
     /// may stand once the host answers rightly again.
@@ -204,44 +243,82 @@ mod tests {
         let mut answered_since_open: BTreeMap<usize, bool> = BTreeMap::new();
         let mut now = 0_u64;
         let mut maybe_since: Option<u64> = None;
+        let mut peers = [Peer::closed(0), Peer::closed(0)];
         for step in 0..STEPS {
             now = now.saturating_add(STEP_US);
             let footer = footer_at(step);
             let healthy = temper == Temper::Recovering && now > 10_000_000;
-            // The links, as host_link.gd drives them: the rig's policy says when to connect.
+            // The links, as host_link.gd drives them (fix pass 7): each peer's state goes to the
+            // rig every frame, the rig says when to abort it, and its policy says when to connect.
             for link in [ADMIN, SEAT] {
-                // A call past its deadline: host_link.gd closes the link (fix pass 6).
-                if rig.link_must_close(link) {
-                    rig.closed(link, Close::of_code(1000));
+                let Some(peer) = peers.get_mut(link) else {
+                    continue;
+                };
+                // A close the harness made through a fault: the peer is closed too.
+                if peer.state == Transport::Open
+                    && !rig.links.get(link).is_some_and(|state| state.open)
+                {
+                    *peer = Peer::closed(now);
                 }
-                let open = rig.links.get(link).is_some_and(|state| state.open);
-                if open {
-                    // A flapping host closes a link a second or so after it answered once.
-                    if temper == Temper::Flapping
-                        && answered_since_open.get(&link) == Some(&true)
-                        && opened_at
-                            .get(&link)
-                            .is_some_and(|at| now.saturating_sub(*at) > 1_000_000)
-                    {
-                        rig.closed(link, Close::Connection);
-                    }
+                // Invariant 2: no hang. No connection stays connecting or closing past its bound.
+                if matches!(peer.state, Transport::Connecting | Transport::Closing) {
+                    assert!(
+                        now.saturating_sub(peer.since) <= TRANSPORT_WAIT_US,
+                        "seed {seed:#x} {temper:?} step {step}: no hang: link {link} {:?} for {} us",
+                        peer.state,
+                        now.saturating_sub(peer.since)
+                    );
+                }
+                if rig.transport(link, peer.state) {
+                    // An abort closes at once (measured: 32 ms), reported with no code.
+                    *peer = Peer::closed(now);
+                    let _ = rig.transport(link, Transport::Closed);
+                    rig.closed(link, Close::of_code(-1));
                     continue;
                 }
-                match rig.link_action(link) {
-                    Some(LinkAction::Connect) => {
+                match peer.state {
+                    Transport::Open => {
+                        // A flapping host closes a link a second or so after it answered once.
+                        if temper == Temper::Flapping
+                            && answered_since_open.get(&link) == Some(&true)
+                            && opened_at
+                                .get(&link)
+                                .is_some_and(|at| now.saturating_sub(*at) > 1_000_000)
+                        {
+                            *peer = Peer::closed(now);
+                            rig.closed(link, Close::Connection);
+                        }
+                    }
+                    Transport::Connecting if !peer.stuck => {
                         if !healthy && temper != Temper::Flapping && random.chance(150) {
-                            // The host refuses the reconnect: it closes again at once.
+                            // The host refuses the connection: it closes at once.
+                            *peer = Peer::closed(now);
                             rig.closed(link, Close::Connection);
                         } else {
+                            *peer = Peer::now_in(Transport::Open, false, -1, now);
                             rig.opened(link);
                             opened_at.insert(link, now);
                             answered_since_open.insert(link, false);
                         }
                     }
-                    Some(LinkAction::GiveUp) => {
-                        watch.gave_up.get_or_insert(step);
+                    Transport::Closing if !peer.stuck => {
+                        let code = peer.code;
+                        *peer = Peer::closed(now);
+                        rig.closed(link, Close::of_code(code));
                     }
-                    Some(LinkAction::Wait) | None => {}
+                    Transport::Connecting | Transport::Closing => {}
+                    Transport::Closed => match rig.link_action(link) {
+                        Some(LinkAction::Connect) => {
+                            // A host that accepts the connection and never completes the
+                            // handshake (review 6's TCPServer probe): stuck until aborted.
+                            let stuck = !healthy && temper != Temper::Flapping && random.chance(40);
+                            *peer = Peer::now_in(Transport::Connecting, stuck, -1, now);
+                        }
+                        Some(LinkAction::GiveUp) => {
+                            watch.gave_up.get_or_insert(step);
+                        }
+                        Some(LinkAction::Wait) | None => {}
+                    },
                 }
             }
             if watch.gave_up.is_some() {
@@ -272,7 +349,10 @@ mod tests {
                 delayed.into_iter().partition(|(at, _, _)| *at <= now);
             delayed = later;
             for (_, link, text) in due {
-                if rig.links.get(link).is_some_and(|state| state.open) {
+                let peer_open = peers
+                    .get(link)
+                    .is_some_and(|peer| peer.state == Transport::Open);
+                if peer_open && rig.links.get(link).is_some_and(|state| state.open) {
                     rig.receive(link, &text);
                     answered_since_open.insert(link, true);
                     watch.unanswered.retain(|(at, _), _| *at != link);
@@ -283,6 +363,14 @@ mod tests {
                 let method = method_of(&frame.text);
                 let id = id_of(&frame.text);
                 let link = frame.link;
+                // host_link.gd sends only on an open peer: a frame for a peer stuck closing is
+                // never sent, and its call waits for the abort.
+                if peers
+                    .get(link)
+                    .is_none_or(|peer| peer.state != Transport::Open)
+                {
+                    continue;
+                }
                 let sends = watch.unanswered.entry((link, method.clone())).or_default();
                 sends.push(now);
                 sends.retain(|at| now.saturating_sub(*at) <= KEEPALIVE_US);
@@ -373,6 +461,13 @@ mod tests {
                             check_words_closed(&*rig, seed, step, &method, 1009);
                         }
                     }
+                    // A host that starts a close and never finishes it: the peer is closing, and
+                    // the rig hears of it only once the grace aborts it (fix pass 7).
+                    Fault::Close(code) if random.chance(250) => {
+                        if let Some(peer) = peers.get_mut(link) {
+                            *peer = Peer::now_in(Transport::Closing, true, code, now);
+                        }
+                    }
                     Fault::Close(code) => {
                         rig.closed(link, Close::of_code(code));
                         if rig.ledger().unfinished > ledger_before.unfinished {
@@ -406,12 +501,30 @@ mod tests {
             } else {
                 maybe_since = None;
             }
-            // Invariant 2: no hang. A pressed Ready is sent, or its line says why, within its bound
-            // of link-open time; and the editor never waits on a call that is not in flight.
+            // Invariant 2: no hang. No call stays in flight past its deadline; a pressed Ready is
+            // sent, or its line says why, within its bound of time the seat link was open with
+            // nothing in flight (a call in flight is held to its own deadline: fix pass 7); and
+            // the editor never waits on a call that is not in flight.
+            for link in [ADMIN, SEAT] {
+                if let Some(state) = rig.links.get(link)
+                    && state.in_flight.is_some()
+                {
+                    let waited = now.saturating_sub(state.in_flight_since);
+                    assert!(
+                        waited <= super::super::CALL_DEADLINE_US.saturating_add(2 * STEP_US),
+                        "seed {seed:#x} {temper:?} step {step}: no hang: a call on link {link} in \
+                         flight for {waited} us"
+                    );
+                }
+            }
             if let Some(waited) = watch.ready_waiting.as_mut() {
                 if rig.ready_failed().is_some() || rig.phase != Phase::Lull || !rig.wants_ready() {
                     watch.ready_waiting = None;
-                } else if rig.links.get(SEAT).is_some_and(|state| state.open) {
+                } else if rig
+                    .links
+                    .get(SEAT)
+                    .is_some_and(|state| state.open && state.in_flight.is_none())
+                {
                     *waited = waited.saturating_add(STEP_US);
                     assert!(
                         *waited <= READY_WAIT_US,
@@ -603,6 +716,9 @@ mod tests {
         fn link_action(&self, link: usize) -> Option<LinkAction> {
             (**self).link_action(link)
         }
+        fn transport(&mut self, link: usize, state: Transport) -> bool {
+            (**self).transport(link, state)
+        }
         fn press_ready(&mut self) {
             (**self).ready();
         }
@@ -645,6 +761,9 @@ mod tests {
         FalseCause,
         /// Settles a refused call by clearing it, past the one door (invariant 5).
         PrivateSettle,
+        /// Never has a connection aborted, so a peer stuck connecting or closing stays so
+        /// (invariant 2; fix pass 7, review 6's silent host).
+        NeverAborts,
     }
 
     struct Sabotaged {
@@ -698,6 +817,10 @@ mod tests {
                 (_, action) => action,
             }
         }
+        fn transport(&mut self, link: usize, state: Transport) -> bool {
+            let abort = self.rig.transport(link, state);
+            abort && self.bad != Bad::NeverAborts
+        }
         fn press_ready(&mut self) {
             if self.bad == Bad::Hanger {
                 self.wants = true;
@@ -741,6 +864,7 @@ mod tests {
             (Bad::NeverGivesUp, Temper::Flapping, "gives up"),
             (Bad::FalseCause, Temper::Mixed, "true words"),
             (Bad::PrivateSettle, Temper::Mixed, "one door"),
+            (Bad::NeverAborts, Temper::Mixed, "no hang"),
         ] {
             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut rig = Sabotaged {

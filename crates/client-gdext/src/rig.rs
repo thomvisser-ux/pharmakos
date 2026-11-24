@@ -572,7 +572,55 @@ struct Link {
     /// A call on this link went past its deadline: the host link closes the link, and nothing
     /// more is sent on it until it does ([`Rig::link_must_close`]).
     close_owed: bool,
+    /// The connection's state as the host link last reported it ([`Rig::transport`]), and
+    /// since when: a connect or a close that lasts past its bound is aborted.
+    transport: Transport,
+    transport_since: u64,
 }
+
+/// A connection's state as Godot's `WebSocketPeer` reports it (`get_ready_state`), which the
+/// host link hands the rig every frame ([`Rig::transport`]; fix pass 7).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Transport {
+    /// `STATE_CONNECTING`: the handshake has not completed.
+    Connecting,
+    /// `STATE_OPEN`.
+    Open,
+    /// `STATE_CLOSING`: a close was started, by either side, and the other has not answered it.
+    Closing,
+    /// `STATE_CLOSED`, or no connection yet.
+    #[default]
+    Closed,
+}
+
+impl Transport {
+    /// The state for Godot's `WebSocketPeer.State` value, or `None` for a value Godot does
+    /// not define.
+    #[must_use]
+    pub const fn of_ready_state(state: i64) -> Option<Self> {
+        match state {
+            0 => Some(Self::Connecting),
+            1 => Some(Self::Open),
+            2 => Some(Self::Closing),
+            3 => Some(Self::Closed),
+            _ => None,
+        }
+    }
+}
+
+/// How long a connection may stay connecting before the host link aborts it and the rig's
+/// policy hears of it as a failed attempt (fix pass 7: a connect that never completes hung the
+/// link for ever, as a close never answered did). A connection to a local host completes in
+/// milliseconds.
+/// PLACEHOLDER: the connect deadline, 5 s — OWNER, at hardening, with the transport's numbers.
+pub const CONNECT_DEADLINE_US: u64 = 5_000_000;
+
+/// How long a connection may stay closing, a close started by either side and not answered,
+/// before the host link aborts it (fix pass 7: Godot's `close(1000)` waits for the other side's
+/// echo, and a host that is alive and never answers left the peer closing for ever, so the
+/// policy never heard of it). A local close completes in tens of milliseconds.
+/// PLACEHOLDER: the close grace, 1 s — OWNER, at hardening, with the transport's numbers.
+pub const CLOSE_GRACE_US: u64 = 1_000_000;
 
 /// How long a call may wait for its answer before it is settled as timed out and its link is
 /// treated as failed (fix pass 6: a host that went silent, or answered with no numeric id, held
@@ -2024,6 +2072,30 @@ impl Rig {
     #[must_use]
     pub fn link_must_close(&self, link: usize) -> bool {
         self.links.get(link).is_some_and(|state| state.close_owed)
+    }
+
+    /// The host link reports link `link`'s connection `state`, every frame (fix pass 7).
+    /// Answers whether to abort the connection now: an open one that owes a close (a call past
+    /// its deadline), one connecting past [`CONNECT_DEADLINE_US`], or one closing past
+    /// [`CLOSE_GRACE_US`]. An abort closes at once, with no handshake to wait for; the host link
+    /// then reports the close as a connection lost with no code, and the policy decides what
+    /// follows. So no state of a connection can last for ever unreported.
+    pub fn transport(&mut self, link: usize, state: Transport) -> bool {
+        let now = self.timing.now_us();
+        let Some(link_state) = self.links.get_mut(link) else {
+            return false;
+        };
+        if link_state.transport != state {
+            link_state.transport = state;
+            link_state.transport_since = now;
+        }
+        let lasted_us = now.saturating_sub(link_state.transport_since);
+        match state {
+            Transport::Open => link_state.close_owed,
+            Transport::Connecting => lasted_us >= CONNECT_DEADLINE_US,
+            Transport::Closing => lasted_us >= CLOSE_GRACE_US,
+            Transport::Closed => false,
+        }
     }
 
     /// The map view's call for `cursor`, its argument remembered for a hold ([`Rig::unfinished`]).
@@ -3675,6 +3747,73 @@ mod tests {
             }
         }
         panic!("the rig never reached the Push");
+    }
+
+    /// **No state of a connection lasts unreported** (fix pass 7, review 6's silent host: a
+    /// `close(1000)` against a host that never echoed it left the peer closing for ever, and a
+    /// connect that never completes is the same hang). The host link reports each link's state
+    /// every frame; the rig has it aborted once a connect passes [`CONNECT_DEADLINE_US`], a close
+    /// passes [`CLOSE_GRACE_US`], or an open link owes a close. The abort is reported as a close
+    /// with no code, which the policy counts as an attempt.
+    #[test]
+    fn a_connect_or_a_close_that_never_completes_is_aborted_and_counted() {
+        let mut rig = Rig::new();
+        let mut now = 1_u64;
+        let _ = rig.poll(now);
+        assert!(!rig.transport(SEAT, Transport::Connecting));
+        now = now.saturating_add(CONNECT_DEADLINE_US).saturating_sub(10);
+        let _ = rig.poll(now);
+        assert!(
+            !rig.transport(SEAT, Transport::Connecting),
+            "aborted before its deadline"
+        );
+        now = now.saturating_add(20);
+        let _ = rig.poll(now);
+        assert!(
+            rig.transport(SEAT, Transport::Connecting),
+            "a connect past its deadline"
+        );
+        assert!(!rig.transport(SEAT, Transport::Closed));
+        rig.closed(SEAT, Close::of_code(-1));
+        assert_eq!(rig.link_attempts(SEAT), Some(1));
+        // Open, then closing and never closed: aborted once the grace has passed.
+        rig.opened(ADMIN);
+        assert!(!rig.transport(ADMIN, Transport::Open));
+        assert!(!rig.transport(ADMIN, Transport::Closing));
+        now = now.saturating_add(CLOSE_GRACE_US).saturating_sub(10);
+        let _ = rig.poll(now);
+        assert!(
+            !rig.transport(ADMIN, Transport::Closing),
+            "aborted before its grace"
+        );
+        now = now.saturating_add(20);
+        let _ = rig.poll(now);
+        assert!(
+            rig.transport(ADMIN, Transport::Closing),
+            "a close past its grace"
+        );
+        rig.closed(ADMIN, Close::of_code(-1));
+        // An open link that owes a close is aborted at once, not closed by a handshake.
+        rig.opened(ADMIN);
+        assert!(!rig.transport(ADMIN, Transport::Open));
+        let mut sent = false;
+        for _ in 0..20 {
+            now = now.saturating_add(1_000_000);
+            if rig.poll(now).iter().any(|frame| frame.link == ADMIN) {
+                sent = true;
+                break;
+            }
+        }
+        assert!(sent, "the admin link sent nothing");
+        let _ = rig.poll(now.saturating_add(CALL_DEADLINE_US).saturating_add(2));
+        let _ = rig.poll(now.saturating_add(CALL_DEADLINE_US).saturating_add(3));
+        assert!(
+            rig.transport(ADMIN, Transport::Open),
+            "an open link that owes a close"
+        );
+        // Godot's states, and none other.
+        assert_eq!(Transport::of_ready_state(2), Some(Transport::Closing));
+        assert_eq!(Transport::of_ready_state(4), None);
     }
 
     /// **A call has a deadline** (fix pass 6, item 5; review 5's `p_silent_and_idless`): a host

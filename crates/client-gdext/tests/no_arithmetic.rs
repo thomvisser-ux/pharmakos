@@ -491,6 +491,12 @@ const SCHEDULING_SUMS: &[(&str, &str)] = &[
         "rig.rs",
         "let waited_us = now_us.saturating_sub(state.in_flight_since);",
     ),
+    // Fix pass 7: how long a connection has been in its state, for its connect deadline and
+    // close grace.
+    (
+        "rig.rs",
+        "let lasted_us = now.saturating_sub(link_state.transport_since);",
+    ),
 ];
 
 /// The identifier each of [`SCHEDULING_SUMS`]'s lines assigns, for the one-line check.
@@ -500,6 +506,7 @@ const SCHEDULING_IDENTIFIERS: &[&str] = &[
     "up_us",
     "ready_resend_at",
     "waited_us",
+    "lasted_us",
 ];
 
 /// Whether `code`, a line of `file` in `src/`, is one of [`SCHEDULING_SUMS`], word for
