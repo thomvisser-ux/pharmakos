@@ -215,8 +215,8 @@ func _remember() -> void:
 
 ## Forgets the ended match: its file removed through the bridge. A removal that fails (a folder,
 ## a read-only file, one another program holds) is said on the status line with its cause, and
-## says to start a new match. (A Resume of an ended match is not refused by the host today:
-## reported in PR #229 for the gateway's lane, which lane `opsave` carries.)
+## says the host will refuse a Resume of it (`gamectl host` refuses an ended match in its own
+## words, lane `opsave`) and to start a new match.
 func _forget() -> void:
 	var removed: Dictionary = vista.bridge.file_remove(ProjectSettings.globalize_path(remembered))
 	_forget_failed = ""
@@ -267,6 +267,12 @@ func status_line(state: Dictionary) -> String:
 		parts.append(_forget_failed)
 	if _remembered_unreadable != "":
 		parts.append(_remembered_unreadable)
+	# The last call the gateway refused, in the rig's words (its `last_error`): a refusal a
+	# player did not ask for is said, never only logged (lane `opsave`, fix pass 2: a call
+	# answered with the host's stop, a save it could not write, is the case that needed it).
+	var refused := String(state.get("last_error", ""))
+	if refused != "":
+		parts.append(Strings.text("lobby_last_refusal", {"error": refused}))
 	var preset := preset_line(state)
 	if preset != "":
 		parts.append(preset)

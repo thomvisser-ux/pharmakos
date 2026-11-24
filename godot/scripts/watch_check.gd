@@ -141,6 +141,15 @@
 #     committed bytes; a 300 KB paste into a field is refused before it goes, with the seat
 #     connection kept up (fix pass 1), and the committed playbook is then sealed, which the
 #     carried draft of round 2 checks;
+#   * THE ENDED MATCH (lane `opsave`; `_ended_match_refused`), in the Probation stage before the
+#     lobby's own line: a one-seat match played to its end through each recap's Continue, then
+#     its line resumed through the real lobby, ends in the host's refusal ("this match has
+#     ended"), the chooser back and no host left;
+#   * THE HOST THAT CANNOT SAVE (lane `opsave`, fix pass 2; `_unsaved_host_said`): the real
+#     lobby's new match, its host keeping its private match cache in a folder of the check's
+#     own, its `save.json.partial` made a folder; Ready ends the Lull, the host answers with its
+#     typed error, says why and exits, and the lobby shows the host's words (what could not be
+#     written, what the disk holds) with the chooser back and the host gone;
 #   * across every host: the bridge caught no panic, refused no view page, the gateway
 #     refused no call (so no burst met RATE_LIMITED), entities were drawn, and every host
 #     exited once the client let go of its standard input.
@@ -530,6 +539,12 @@ func _run_probation() -> void:
 	if not await _cut_line_refused():
 		_finish()
 		return
+	if not await _ended_match_refused():
+		_finish()
+		return
+	if not await _unsaved_host_said():
+		_finish()
+		return
 	if not link.start(_gamectl, _root, _line):
 		_finish()
 		return
@@ -731,10 +746,6 @@ func _older_line_refused() -> bool:
 ## pointed at a file of the check's own holding a line cut inside its second field, offers it;
 ## Resume ends in the host's refusal in its own words, with the chooser back and no match
 ## started, never a crash or a hang. The line is not parsed here: the host reads it.
-##
-## Not checked here: an ended match's line. Resumed, the host announces the ended match rather
-## than refusing it (measured 2026-11-24 against this branch's `gamectl host`); that is reported
-## in PR #229 for the gateway's lane, and the lobby claims no refusal for it.
 func _cut_line_refused() -> bool:
 	var cut_from := HostLink.config_line(HostLink.match_id("watch-check-cut"), SEGMENT, 1, CHECK_SEED, CHECK_PRESET).strip_edges()
 	if not await _resume_refused("a line cut mid-field", cut_from.get_slice("\t", 0) + "\t" + cut_from.get_slice("\t", 1).left(4)):
@@ -748,8 +759,8 @@ func _cut_line_refused() -> bool:
 
 ## The real lobby, offered `line` from the check's own remembered file: Resume is shown, and
 ## pressing it ends in the host's refusal (`lobby_resumed_failed`), the chooser back, no match
-## started and no host left running.
-func _resume_refused(name: String, line: String) -> bool:
+## started and no host left running. `words`, when given, is what the host's refusal says.
+func _resume_refused(name: String, line: String, words: String = "") -> bool:
 	var file := FileAccess.open(ENDED_REMEMBERED, FileAccess.WRITE)
 	if file == null:
 		_failures.append("the cut-line leg could not open %s (error %d)" % [ENDED_REMEMBERED, FileAccess.get_open_error()])
@@ -776,6 +787,8 @@ func _resume_refused(name: String, line: String) -> bool:
 			_failures.append("Resume of %s neither was refused nor resumed: `%s`" % [name, lobby._status.text])
 		elif not String(lobby._status.text).begins_with(refused_prefix):
 			_failures.append("Resume of %s did not end in the host's refusal: `%s`" % [name, lobby._status.text])
+		elif words != "" and not String(lobby._status.text).contains(words):
+			_failures.append("Resume of %s was refused in other words than `%s`: `%s`" % [name, words, lobby._status.text])
 		else:
 			print("[watch-check] Resume of %s was refused by the host: %s" % [name, String(lobby._status.text).strip_edges().replace("\n", " ")])
 		var pid: int = lobby.link.host_pid()
@@ -2114,3 +2127,166 @@ func _count(answer: Dictionary, key: String) -> int:
 		return read
 	_failures.append(Values.unreadable_text(key, read))
 	return -1
+
+
+## How long the ended-match leg may take to play its one-seat match to its end.
+const ENDED_WAIT := 240.0
+
+## **An ended match is the host's to refuse** (lane `opsave`, carried from S3's `fixq-c`): a
+## one-seat match is played to its end, through each recap's Continue, then its line is resumed
+## through the real lobby, which ends in the host's refusal in its own words, the chooser back
+## and no host left. The host announced and served an ended match before.
+func _ended_match_refused() -> bool:
+	var line := HostLink.config_line(HostLink.match_id("watch-check-ended"), "1000", 1, CHECK_SEED, CHECK_PRESET)
+	if not link.start(_gamectl, _root, line):
+		_failures.append("the ended-match leg could not start its host")
+		return false
+	var pid: int = link.host_pid()
+	# One command a phase of a round: Ready in a Lull, Skip in a Push, Continue in a recap.
+	var acted := ""
+	var timer := get_tree().create_timer(ENDED_WAIT)
+	while timer.time_left > 0.0:
+		await get_tree().process_frame
+		var state := _state()
+		var phase := String(state.get("phase", ""))
+		if phase == "ended":
+			break
+		var step := "%s-%s" % [phase, state.get("round", 0)]
+		if step == acted:
+			continue
+		match phase:
+			"lull":
+				vista.bridge.watch_command("ready", 0)
+				acted = step
+			"push":
+				vista.bridge.watch_command("skip", 0)
+				acted = step
+			"recap":
+				vista.bridge.watch_command("end_recap", 0)
+				acted = step
+	if String(_state().get("phase", "")) != "ended":
+		_failures.append("the ended-match leg's one-seat match did not end in %.0f s: %s" % [ENDED_WAIT, _state()])
+		return false
+	link.quit()
+	if not await _until(func() -> bool: return not OS.is_process_running(pid), EXIT_WAIT):
+		_failures.append("the ended match's host (pid %d) was still running after its standard input closed" % pid)
+		return false
+	link.reset()
+	print("[watch-check] a one-seat match was played to its end (pid %d); resuming its line" % pid)
+	if not await _resume_refused("an ended match", line.strip_edges(), "this match has ended"):
+		return false
+	var path := ProjectSettings.globalize_path(ENDED_REMEMBERED)
+	if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+		_failures.append("the ended-match leg could not remove %s" % path)
+		return false
+	return true
+
+
+## The private match cache the unsaved-host leg points its host at: a folder of the check's own.
+const UNSAVED_DATA := "user://watch_check_data"
+## How long the unsaved-host leg may wait for the lobby to say the host stopped: the reconnect
+## policy's give-up, with room for a slow frame.
+const UNSAVED_WAIT := 90.0
+
+## **A host that cannot write a save says why and is gone** (lane `opsave`, fix pass 2): the
+## real lobby starts a new match whose host keeps its private match cache in a folder of the
+## check's own (the per-user data variable set for the child), the match's `save.json.partial`
+## is made a folder, so no save can be written, and Ready ends the Lull: the host answers with
+## its typed error, says why on its standard error and exits, and the lobby shows the host's
+## words (what could not be written and what the disk holds), with the chooser back and the
+## host process gone.
+func _unsaved_host_said() -> bool:
+	var data := ProjectSettings.globalize_path(UNSAVED_DATA)
+	if DirAccess.make_dir_recursive_absolute(data) != OK:
+		_failures.append("the unsaved-host leg could not make %s" % data)
+		return false
+	var variable := "XDG_DATA_HOME"
+	if OS.get_name() == "Windows":
+		variable = "LOCALAPPDATA"
+	elif OS.get_name() == "macOS":
+		variable = "HOME"
+	var held := OS.get_environment(variable)
+	OS.set_environment(variable, data)
+	var lobby: Node = LobbyScene.instantiate()
+	lobby.remembered = ENDED_REMEMBERED
+	add_child(lobby)
+	await get_tree().process_frame
+	lobby.new_match()
+	# The variable is the child's: set for the spawn and put back at once.
+	OS.set_environment(variable, held)
+	var ok := await _unsaved_host_lobby(lobby, data)
+	var pid: int = lobby.link.host_pid()
+	lobby.link.quit()
+	if pid >= 0 and not await _until(func() -> bool: return not OS.is_process_running(pid), EXIT_WAIT):
+		_failures.append("the unsaved-host leg's host (pid %d) was still running" % pid)
+		ok = false
+	lobby.queue_free()
+	await get_tree().process_frame
+	var path := ProjectSettings.globalize_path(ENDED_REMEMBERED)
+	if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+		_failures.append("the unsaved-host leg could not remove %s" % path)
+		ok = false
+	if not _remove_tree(data):
+		_failures.append("the unsaved-host leg could not remove %s" % data)
+		ok = false
+	return ok
+
+
+## The unsaved-host leg's lobby, once its new match is starting under `data`.
+func _unsaved_host_lobby(lobby: Node, data: String) -> bool:
+	var announced := await _until(func() -> bool: return lobby._announced and String(lobby.vista.bridge.watch_state().get("phase", "")) == "lull", START_WAIT)
+	if not announced:
+		_failures.append("the unsaved-host leg's match never reached its Lull: `%s`" % lobby._status.text)
+		return false
+	var pid: int = lobby.link.host_pid()
+	var match_id := String(lobby._line).get_slice("\t", 0)
+	var folder := _folder_named(data, match_id)
+	if folder == "":
+		_failures.append("the unsaved-host leg found no folder of match %s under %s" % [match_id, data])
+		return false
+	if DirAccess.make_dir_recursive_absolute(folder.path_join("save.json.partial")) != OK:
+		_failures.append("the unsaved-host leg could not block %s's save" % folder)
+		return false
+	lobby.vista.bridge.watch_command("ready", 0)
+	var stopped := await _until(func() -> bool: return not lobby._started and lobby._chooser.visible, UNSAVED_WAIT)
+	var said := String(lobby._status.text)
+	if not stopped:
+		_failures.append("the unsaved-host leg: the lobby did not say the host stopped in %.0f s: `%s`" % [UNSAVED_WAIT, said])
+		return false
+	if OS.is_process_running(pid):
+		_failures.append("the unsaved-host leg: the host (pid %d) is still running after the lobby said it failed" % pid)
+		return false
+	if not said.contains("save of round 1 could not be written") or not said.contains("this host stops") or not said.contains(Strings.text("link_host_exited", {"words": ""}).strip_edges()):
+		_failures.append("the unsaved-host leg: the lobby does not show the host's words: `%s`" % said)
+		return false
+	print("[watch-check] a host that could not write its save stopped (pid %d), and the lobby said: %s" % [pid, said.strip_edges().replace("\n", " ")])
+	return true
+
+
+## The folder named `name` under `root`, searched to any depth; "" when there is none.
+func _folder_named(root: String, name: String) -> String:
+	var dir := DirAccess.open(root)
+	if dir == null:
+		return ""
+	for child in dir.get_directories():
+		var path := root.path_join(child)
+		if child == name:
+			return path
+		var found := _folder_named(path, name)
+		if found != "":
+			return found
+	return ""
+
+
+## Remove `path` and everything under it; whether it is gone.
+func _remove_tree(path: String) -> bool:
+	var dir := DirAccess.open(path)
+	if dir == null:
+		return not DirAccess.dir_exists_absolute(path)
+	for child in dir.get_directories():
+		if not _remove_tree(path.path_join(child)):
+			return false
+	for file in dir.get_files():
+		if DirAccess.remove_absolute(path.path_join(file)) != OK:
+			return false
+	return DirAccess.remove_absolute(path) == OK
