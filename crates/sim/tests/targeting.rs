@@ -2301,3 +2301,40 @@ fn a_rules_table_without_a_voxel_length_sphere_does_not_load() {
     ));
 }
 
+/// Each seat's figure is its own (dunit part 2): two seats with different
+/// playbooks decide in one tick, and each seat's published figure equals
+/// that seat's decision with the other seat's playbook left unsealed. A
+/// tally carried from one seat's decision into the next would make the
+/// second seat's figure the sum of both.
+#[test]
+fn each_seats_figure_is_its_own() {
+    const HOLD: &str = r#"{"label":"pause","hold":{"ms":1000}}"#;
+    let seats: [(u8, &str); 2] = [(0, COVER), (1, HOLD)];
+    let first_decision = |sealed: &[(u8, &str)]| {
+        let mut runner =
+            Runner::new(world_at(SEED, 2, &[180_000])).unwrap_or_else(|error| panic!("{error}"));
+        for (seat, route) in sealed {
+            let plan = compile(route).unwrap_or_else(|error| panic!("compiles: {error}"));
+            runner
+                .seal_playbook(SeatId::new(*seat), plan)
+                .expect("a Lull takes a seal");
+        }
+        assert!(runner.begin_push().unwrap());
+        let _ = play(&mut runner, 1, |_, _| {});
+        [0, 1].map(|seat| {
+            runner
+                .world()
+                .decision_work(seat)
+                .expect("a seat")
+                .expect("measured")
+        })
+    };
+    let both = first_decision(&seats);
+    let [cover_alone, _] = first_decision(&seats[..1]);
+    let [_, hold_alone] = first_decision(&seats[1..]);
+    assert_ne!(
+        cover_alone, hold_alone,
+        "the two playbooks do different work, so a mixed-up figure shows"
+    );
+    assert_eq!(both, [cover_alone, hold_alone], "each seat's own decision");
+}
