@@ -1682,7 +1682,7 @@ impl Surface {
         if started {
             self.close_phase();
             self.views.bump();
-            self.persist_push(round)?;
+            self.persist_push(round);
         }
         self.sync_time();
         self.absorb_events()?;
@@ -1805,12 +1805,13 @@ impl Surface {
     /// Put a beginning Push's save and seals in the pending slot, and make
     /// room for its chain.
     ///
-    /// # Errors
-    ///
-    /// [`crate::error::Code::Internal`] when the `sealed` save cannot be built:
-    /// the save on disk is then the Lull's, which a resume would re-plan, so
-    /// the host loop stops serving and says it ([`Surface::unsaved`]).
-    fn persist_push(&mut self, round: u32) -> Result<(), Error> {
+    /// A `sealed` save that cannot be built leaves the Lull's save on disk,
+    /// which a resume would re-plan: the refusal is audited and carried to
+    /// the host loop, which stops serving and says it ([`Surface::unsaved`]).
+    /// The Push has begun by then, so the caller that opened it is not
+    /// refused: a host with no loop behind it (a test, the walled harness)
+    /// plays on, and writes nothing to a disk.
+    fn persist_push(&mut self, round: u32) {
         self.pending.sealed = self
             .seats
             .iter()
@@ -1828,13 +1829,13 @@ impl Surface {
         match self.saved_match(Boundary::Sealed) {
             Ok(saved) => self.pending.save = Some(saved),
             Err(cause) => {
-                return Err(self.unsaved(
+                let _ = self.unsaved(
                     "save sealed",
                     said!(
                         "the Push has begun and its seals could not be saved ({}): a resume would offer its Lull again, so this host stops serving",
                         cause.said()
                     ),
-                ));
+                );
             }
         }
         // Reserved once, here, so that recording the chain allocates nothing
@@ -1845,7 +1846,6 @@ impl Surface {
         self.chain.clear();
         self.chain
             .reserve(usize::try_from(ticks).unwrap_or(0).saturating_add(1));
-        Ok(())
     }
 
     /// Every seat's sealed plan, in ascending seat id.
