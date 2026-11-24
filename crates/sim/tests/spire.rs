@@ -466,7 +466,7 @@ const GROWS: &[&str] = &[
     "sim:targeting.rs::legal_sites",
     // Build's area and the drones' work reach, every physical-work path.
     "sim:mandate.rs::inside_sphere",
-    "sim:mandate.rs::of",
+    "sim:mandate.rs::counted",
     "sim:mandate.rs::buildable",
     "sim:mandate.rs::next_unfinished_target",
     "sim:mandate.rs::building_work",

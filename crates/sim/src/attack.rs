@@ -618,18 +618,42 @@ impl AttackTable {
     /// Remove `beacon`'s row and its avoid areas: a beacon that leaves the
     /// Attack writ or dies. Its planted charges stay in the world.
     pub fn close(&mut self, beacon: BeaconId) {
+        self.close_metered(beacon, &());
+    }
+
+    /// [`AttackTable::close`], one unit to `meter` an avoid area it reads:
+    /// every area ([`crate::seams::Meter`]; decisions-log item 175, dunit
+    /// part 2). Finding the row is a binary search and is not counted.
+    pub fn close_metered<M: crate::seams::Meter + ?Sized>(&mut self, beacon: BeaconId, meter: &M) {
         if let Ok(at) = self.index_of(beacon) {
             self.rows.remove(at);
         }
+        meter.rows(self.avoid.len());
         self.avoid.retain(|(by, _)| *by != beacon);
     }
 
     /// Replace `beacon`'s avoid areas with `list`, in order. Does nothing for
     /// a beacon with no row.
     pub fn set_avoid(&mut self, beacon: BeaconId, list: &[ColumnBox]) {
+        self.set_avoid_metered(beacon, list, &());
+    }
+
+    /// [`AttackTable::set_avoid`], one unit to `meter` an avoid area it reads
+    /// (every area the table held) and one an area of `list` it writes: what
+    /// an Attack commit inside a decision charges. Finding the row and the
+    /// list's place are binary searches and are not counted; the inserts'
+    /// moves are the standard library's.
+    pub fn set_avoid_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        beacon: BeaconId,
+        list: &[ColumnBox],
+        meter: &M,
+    ) {
         if self.index_of(beacon).is_err() {
             return;
         }
+        meter.rows(self.avoid.len());
+        meter.rows(list.len());
         self.avoid.retain(|(by, _)| *by != beacon);
         let mut index = self
             .avoid
@@ -2830,5 +2854,33 @@ mod tests {
             BREACH_HEAP.saturating_add(expansions) >= worst,
             "the heap holds {BREACH_HEAP} entries; a search of {expansions} expansions can hold {worst} less the {expansions} it pops"
         );
+    }
+
+    /// Dunit part 2: an avoid list's write and a row's close charge one unit
+    /// an area they read and one an area written, counted here.
+    #[test]
+    fn the_avoid_writes_charge_what_they_read() {
+        use super::AttackTable;
+        use crate::seams::UnitTally;
+        use crate::tables::BeaconId;
+        let read = |tally: &UnitTally| {
+            tally
+                .read()
+                .unwrap_or_else(|error| panic!("a measured count: {error}"))
+        };
+        let area = |x: i16| {
+            crate::tables::ColumnBox::new([x, 0], [x, 1]).unwrap_or_else(|| panic!("a box"))
+        };
+        let mut table = AttackTable::with_room(8);
+        table.open(BeaconId::new(1));
+        table.open(BeaconId::new(2));
+        table.set_avoid(BeaconId::new(1), &[area(1), area(2)]);
+        let tally = UnitTally::new();
+        table.set_avoid_metered(BeaconId::new(2), &[area(3)], &tally);
+        assert_eq!(read(&tally), 3, "the two areas held and the one written");
+        let tally = UnitTally::new();
+        table.close_metered(BeaconId::new(1), &tally);
+        assert_eq!(read(&tally), 3, "every area held");
+        assert_eq!(table.avoid().len(), 1);
     }
 }

@@ -103,16 +103,21 @@ impl WorkCounter {
 /// plan section 5; decisions-log item 33 (c)).
 ///
 /// **One unit is one primitive step of counted work, charged where the step
-/// happens** (lane `dunit`): a handler tried, a condition node evaluated, a
-/// selector candidate ranked, a feature the "nearest" ranker scans, a column
-/// a site search scans (the `covering` spiral's, the `toward` site
-/// listing's), and **a node a search pops** -- the grid and endpoint pops and
-/// the abstract pops of a served walk (`targeting::Ground::travel`) and the
-/// grid optimum's pops of a `toward` (`targeting::stone_site`), each charged
-/// as the change in the search scratch's own counters over the call. A call
-/// that pops nothing charges nothing: there is no flat charge per call. A
-/// search's heuristic is evaluated a bounded number of times per node it
-/// pushes, so the pops carry it and it is not charged again. A unit is a
+/// happens** (lane `dunit` and its part 2, decisions-log item 175): **one a
+/// visit of each loop a decision runs, at every level down to the
+/// innermost** -- a handler tried, a condition node evaluated, a selector
+/// candidate ranked, a feature row, a footprint column, a voxel of a seam's
+/// depth or a column's fall, a cell of a pit-safe flood, a beacon, unit,
+/// structure, target, sighting or edit row a scan reads (up to the row that
+/// answers, for a scan that stops there), a Spire test's kind byte or
+/// structure row, a ranker entry, a site column, a sphere an `h` folds
+/// over -- and **a node a search pops**: the grid and endpoint pops and the
+/// abstract pops of a served walk (`targeting::Ground::travel`) and the grid
+/// optimum's pops of a `toward` (`targeting::stone_site`), each charged as
+/// the change in the search scratch's own counters over the call. A call
+/// that visits nothing charges nothing: there is no flat charge per call. A
+/// read by index (an id's row, a column's node) is no loop and is not
+/// charged, nor are the standard library's sorts and moves. A unit is a
 /// count, not a cost model: no step is weighted against another, so what a
 /// unit costs in nanoseconds per kind of step is the bench's to measure.
 ///
@@ -187,6 +192,73 @@ impl core::fmt::Display for Unmeasured {
 }
 
 impl std::error::Error for Unmeasured {}
+
+/// **A test seam: the sim never arms it.** Whether a test asked that the
+/// next decision's tally be left unmeasured at its first charge
+/// ([`crate::world::World::fault_next_decision_charge`]): the world keeps
+/// this, and no tally, between decisions, so nothing outside a decision has a
+/// tally it could charge. Compares equal to every other, as a measurement
+/// does ([`UnitTally`]).
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct FaultSeam(core::sync::atomic::AtomicBool);
+
+impl FaultSeam {
+    /// Arm it.
+    pub fn arm(&self) {
+        self.0.store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether it was armed, disarming it.
+    pub fn take(&self) -> bool {
+        self.0.swap(false, core::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl Clone for FaultSeam {
+    fn clone(&self) -> FaultSeam {
+        FaultSeam(core::sync::atomic::AtomicBool::new(
+            self.0.load(core::sync::atomic::Ordering::Relaxed),
+        ))
+    }
+}
+
+impl PartialEq for FaultSeam {
+    fn eq(&self, _other: &FaultSeam) -> bool {
+        true
+    }
+}
+
+impl Eq for FaultSeam {}
+
+/// Why a seat's published decision figure ([`crate::world::World::decision_work`])
+/// holds no count (dunit part 2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoFigure {
+    /// No decision has run since this world was made or restored: there is
+    /// nothing to report yet, which is not a count of nothing.
+    NoDecisionYet,
+    /// The last decision ran, and its tally stopped being a count.
+    Unmeasured(Unmeasured),
+    /// The seat is out of the match: its decision returns before it decides
+    /// anything, so it made none. Its seam upkeep still runs, as it always
+    /// has, and what that reads is not a decision's figure.
+    Eliminated,
+}
+
+impl core::fmt::Display for NoFigure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            NoFigure::NoDecisionYet => {
+                f.write_str("no decision has run since the world was made or restored")
+            }
+            NoFigure::Unmeasured(reason) => reason.fmt(f),
+            NoFigure::Eliminated => f.write_str("the seat is eliminated, so it made no decision"),
+        }
+    }
+}
+
+impl std::error::Error for NoFigure {}
 
 impl UnitTally {
     /// A tally at zero.
@@ -291,11 +363,12 @@ impl UnitTally {
 /// work measured another way, such as a search's pops, which can be
 /// unreadable ([`Meter::measured`]).
 ///
-/// A decision's caller passes the world's decision tally
-/// ([`UnitTally`], one unit a row read, and each measured unit); every other
-/// caller passes `()`, which counts nothing. A meter never changes what the
+/// A decision passes its seat's tally, which `phase_decision` makes and
+/// hands down the decision's calls ([`UnitTally`], one unit a row read, and
+/// each measured unit); the world holds none. Every other caller passes
+/// `()`, which counts nothing. A meter never changes what the
 /// scan decides or returns: it only hears counts.
-pub trait Meter {
+pub trait Meter: core::fmt::Debug {
     /// `rows` more rows read.
     fn rows(&self, rows: usize);
 

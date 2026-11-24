@@ -225,21 +225,20 @@ pub struct Placed<Id> {
 /// # Errors
 ///
 /// [`TableFull`] when no row is free and the table is at its room.
-fn vacancy_in(ids: &[u32], free: &[bool], room: u32) -> Result<Vacancy, TableFull> {
-    for ((id, free), row) in ids.iter().zip(free).zip(crate::ids::Row::all()) {
-        if !*free {
-            continue;
-        }
-        let Ok((_, generation)) = crate::ids::unpack(*id) else {
-            continue;
-        };
-        if let Some(next) = generation.next() {
-            return Ok(Vacancy {
-                row,
-                generation: next,
-                reused: true,
-            });
-        }
+///
+/// One unit to `meter` a row it reads ([`crate::seams::Meter`];
+/// decisions-log item 175), up to the free row it hands out: a placement a
+/// decision makes passes the decision's tally, any other `()`.
+fn vacancy_in<M: crate::seams::Meter + ?Sized>(
+    (ids, free): (&[u32], &[bool]),
+    room: u32,
+    meter: &M,
+) -> Result<Vacancy, TableFull> {
+    let mut read: usize = 0;
+    let reused = vacancy_reused(ids, free, &mut read);
+    meter.rows(read);
+    if let Some(vacancy) = reused {
+        return Ok(vacancy);
     }
     let full = TableFull { room };
     let len = u32::try_from(ids.len()).map_err(|_| full)?;
@@ -252,6 +251,28 @@ fn vacancy_in(ids: &[u32], free: &[bool], room: u32) -> Result<Vacancy, TableFul
         generation: crate::ids::Generation::ZERO,
         reused: false,
     })
+}
+
+/// The first free row whose generation can go up by one, counting into
+/// `read` every row read up to it.
+fn vacancy_reused(ids: &[u32], free: &[bool], read: &mut usize) -> Option<Vacancy> {
+    for ((id, free), row) in ids.iter().zip(free).zip(crate::ids::Row::all()) {
+        *read += 1;
+        if !*free {
+            continue;
+        }
+        let Ok((_, generation)) = crate::ids::unpack(*id) else {
+            continue;
+        };
+        if let Some(next) = generation.next() {
+            return Some(Vacancy {
+                row,
+                generation: next,
+                reused: true,
+            });
+        }
+    }
+    None
 }
 
 /// The row an id names in a table whose id and free columns are `ids` and
@@ -351,7 +372,20 @@ impl UnitTable {
     ///
     /// [`TableFull`] when no row is free and the table holds `room`.
     pub fn vacancy(&self, room: u32) -> Result<Vacancy, TableFull> {
-        vacancy_in(&self.id, &self.free, room)
+        self.vacancy_metered(room, &())
+    }
+
+    /// [`UnitTable::vacancy`], one unit to `meter` a row it reads.
+    ///
+    /// # Errors
+    ///
+    /// As [`UnitTable::vacancy`].
+    pub fn vacancy_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        room: u32,
+        meter: &M,
+    ) -> Result<Vacancy, TableFull> {
+        vacancy_in((&self.id, &self.free), room, meter)
     }
 
     /// Place one unit in the next [`Vacancy`] within `room` rows, carrying
@@ -1719,7 +1753,23 @@ impl TargetTable {
         centre: [Fx; 3],
         area: ColumnBox,
     ) -> Result<(), TargetsFull> {
-        self.add_bound(
+        self.add_area_metered(beacon, kind, (centre, area), &())
+    }
+
+    /// [`TargetTable::add_area`], one unit to `meter` a row its search for
+    /// the row's place reads ([`TargetTable::add_bound_metered`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`TargetTable::add_area`].
+    pub fn add_area_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        beacon: BeaconId,
+        kind: AreaKind,
+        (centre, area): ([Fx; 3], ColumnBox),
+        meter: &M,
+    ) -> Result<(), TargetsFull> {
+        self.add_bound_metered(
             beacon,
             kind.kind(),
             0,
@@ -1727,6 +1777,7 @@ impl TargetTable {
             area,
             (u32::MAX, crate::targeting::DESCRIPTION_VOXEL),
             BuildOrder::NONE,
+            meter,
         )
     }
 
@@ -1757,18 +1808,47 @@ impl TargetTable {
         bound: (u32, u8),
         build: BuildOrder,
     ) -> Result<(), TargetsFull> {
+        self.add_bound_metered(beacon, kind, blueprint, at, area, bound, build, &())
+    }
+
+    /// [`TargetTable::add_bound`], one unit to `meter` a row its search for
+    /// the row's place reads ([`crate::seams::Meter`]; decisions-log item
+    /// 175). The columns' inserts are the standard library's moves of the
+    /// rows after it and are not counted.
+    ///
+    /// # Errors
+    ///
+    /// As [`TargetTable::add_bound`].
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "add_bound's columns and the meter its reads report to; a parameter struct would be built at its callers only to be taken apart here"
+    )]
+    pub fn add_bound_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        beacon: BeaconId,
+        kind: TargetKind,
+        blueprint: u8,
+        at: [Fx; 3],
+        area: ColumnBox,
+        bound: (u32, u8),
+        build: BuildOrder,
+        meter: &M,
+    ) -> Result<(), TargetsFull> {
         if self.count >= self.capacity {
             return Err(TargetsFull {
                 capacity: self.capacity,
             });
         }
         let key = (beacon.raw(), kind.id());
+        let mut read: usize = 0;
         let slot = self
             .beacon
             .iter()
             .zip(&self.kind)
+            .inspect(|_| read += 1)
             .position(|(here, of)| (here.raw(), *of) > key)
             .unwrap_or(self.beacon.len());
+        meter.rows(read);
         self.beacon.insert(slot, beacon);
         self.kind.insert(slot, kind.id());
         self.blueprint.insert(slot, blueprint);
@@ -1811,6 +1891,18 @@ impl TargetTable {
     /// clears the old mandate's settings and targets"), and what a recycled or
     /// destroyed beacon leaves behind — nothing.
     pub fn clear_beacon(&mut self, beacon: BeaconId) {
+        self.clear_beacon_metered(beacon, &());
+    }
+
+    /// [`TargetTable::clear_beacon`], one unit to `meter` a row it reads:
+    /// every row the table held. A removal's moves of the rows after it are
+    /// the standard library's and are not counted.
+    pub fn clear_beacon_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        beacon: BeaconId,
+        meter: &M,
+    ) {
+        meter.rows(self.beacon.len());
         let mut slot: usize = 0;
         while slot < self.beacon.len() {
             if self.beacon.get(slot).copied() == Some(beacon) {
@@ -3304,7 +3396,20 @@ impl BeaconTable {
     ///
     /// [`TableFull`] when no row is free and the table holds `room`.
     pub fn vacancy(&self, room: u32) -> Result<Vacancy, TableFull> {
-        vacancy_in(&self.id, &self.free, room)
+        self.vacancy_metered(room, &())
+    }
+
+    /// [`BeaconTable::vacancy`], one unit to `meter` a row it reads.
+    ///
+    /// # Errors
+    ///
+    /// As [`BeaconTable::vacancy`].
+    pub fn vacancy_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        room: u32,
+        meter: &M,
+    ) -> Result<Vacancy, TableFull> {
+        vacancy_in((&self.id, &self.free), room, meter)
     }
 
     /// Place one beacon in the next [`Vacancy`] within `room` rows, with
@@ -3323,7 +3428,26 @@ impl BeaconTable {
         mandate: BeaconMandate,
         start: BeaconStart,
     ) -> Result<Placed<BeaconId>, TableFull> {
-        let at = self.vacancy(room)?;
+        self.place_metered(room, seat, pos, mandate, start, &())
+    }
+
+    /// [`BeaconTable::place`], one unit to `meter` a row its vacancy search
+    /// reads ([`BeaconTable::vacancy_metered`]; decisions-log item 175, dunit
+    /// part 2): a deploy a decision makes passes the decision's tally.
+    ///
+    /// # Errors
+    ///
+    /// As [`BeaconTable::place`].
+    pub fn place_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        room: u32,
+        seat: SeatId,
+        pos: [Fx; 3],
+        mandate: BeaconMandate,
+        start: BeaconStart,
+        meter: &M,
+    ) -> Result<Placed<BeaconId>, TableFull> {
+        let at = self.vacancy_metered(room, meter)?;
         let id = BeaconId::of(at.row, at.generation);
         let row = at.row;
         let mine = crate::mining::MineSettings::default();
@@ -3442,6 +3566,18 @@ impl BeaconTable {
     /// that has not been freed. A seat's core is always one of them.
     #[must_use]
     pub fn count_of(&self, seat: SeatId) -> u32 {
+        self.count_of_metered(seat, &())
+    }
+
+    /// [`BeaconTable::count_of`], one unit to `meter` a row it reads: every
+    /// row.
+    #[must_use]
+    pub fn count_of_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        seat: SeatId,
+        meter: &M,
+    ) -> u32 {
+        meter.rows(self.seat.len());
         self.seat.iter().fold(0_u32, |sum, held| {
             if *held == seat.raw() {
                 sum.saturating_add(1)
@@ -3963,7 +4099,20 @@ impl StructureTable {
     ///
     /// [`TableFull`] when no row is free and the table holds `room`.
     pub fn vacancy(&self, room: u32) -> Result<Vacancy, TableFull> {
-        vacancy_in(&self.id, &self.free, room)
+        self.vacancy_metered(room, &())
+    }
+
+    /// [`StructureTable::vacancy`], one unit to `meter` a row it reads.
+    ///
+    /// # Errors
+    ///
+    /// As [`StructureTable::vacancy`].
+    pub fn vacancy_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        room: u32,
+        meter: &M,
+    ) -> Result<Vacancy, TableFull> {
+        vacancy_in((&self.id, &self.free), room, meter)
     }
 
     /// Place one structure in the next [`Vacancy`] within `room` rows, with
@@ -3998,7 +4147,35 @@ impl StructureTable {
         rotation: QuarterTurns,
         ready_at: u32,
     ) -> Result<Placed<StructureId>, TableFull> {
-        let at = self.vacancy(room)?;
+        self.place_metered(
+            room,
+            seat,
+            kind,
+            pos,
+            (hp, home, building, rotation, ready_at),
+            &(),
+        )
+    }
+
+    /// [`StructureTable::place`], one unit to `meter` a row its vacancy
+    /// search reads ([`StructureTable::vacancy_metered`]; decisions-log item
+    /// 175, dunit part 2): a structure a decision queues passes the
+    /// decision's tally. `start` is the hit points, home, building flag,
+    /// rotation and weapon readiness `place` takes.
+    ///
+    /// # Errors
+    ///
+    /// As [`StructureTable::place`].
+    pub fn place_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        room: u32,
+        seat: SeatId,
+        kind: StructureKind,
+        pos: [Fx; 3],
+        (hp, home, building, rotation, ready_at): (Hp, BeaconId, bool, QuarterTurns, u32),
+        meter: &M,
+    ) -> Result<Placed<StructureId>, TableFull> {
+        let at = self.vacancy_metered(room, meter)?;
         let id = StructureId::of(at.row, at.generation);
         let row = at.row;
         put(&mut self.id, row, id.raw());
@@ -4309,7 +4486,7 @@ impl WreckTable {
         salvage: Money,
         left_at: u32,
     ) -> Result<Placed<WreckId>, TableFull> {
-        let at = vacancy_in(&self.id, &self.free, room)?;
+        let at = vacancy_in((&self.id, &self.free), room, &())?;
         let id = WreckId::of(at.row, at.generation);
         let row = at.row;
         put(&mut self.id, row, id.raw());
@@ -4940,9 +5117,16 @@ impl DefendTable {
     /// Defend writ or dies. A protect entry naming it stays: a protected
     /// beacon that changes its writ is still protected.
     pub fn close(&mut self, beacon: BeaconId) {
+        self.close_metered(beacon, &());
+    }
+
+    /// [`DefendTable::close`], one unit to `meter` a protect entry it reads:
+    /// every entry. Finding the row is a binary search and is not counted.
+    pub fn close_metered<M: crate::seams::Meter + ?Sized>(&mut self, beacon: BeaconId, meter: &M) {
         if let Ok(at) = self.index_of(beacon) {
             self.rows.remove(at);
         }
+        meter.rows(self.protected.len());
         self.protected.retain(|(by, _)| *by != beacon);
     }
 
@@ -4954,9 +5138,24 @@ impl DefendTable {
     /// Replace `beacon`'s protect list's beacons with `list`, in order. Does
     /// nothing for a beacon with no row.
     pub fn set_protected(&mut self, beacon: BeaconId, list: &[BeaconId]) {
+        self.set_protected_metered(beacon, list, &());
+    }
+
+    /// [`DefendTable::set_protected`], one unit to `meter` a protect entry
+    /// it reads (every entry the table held) and one an entry of `list` it
+    /// writes. Finding the row and the list's place are binary searches and
+    /// are not counted.
+    pub fn set_protected_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        beacon: BeaconId,
+        list: &[BeaconId],
+        meter: &M,
+    ) {
         if self.index_of(beacon).is_err() {
             return;
         }
+        meter.rows(self.protected.len());
+        meter.rows(list.len());
         self.protected.retain(|(by, _)| *by != beacon);
         let at = self
             .protected
@@ -5087,5 +5286,110 @@ impl ExploredTable {
         self.rows = rows;
         self.at = at;
         true
+    }
+}
+
+#[cfg(test)]
+mod visits {
+    //! Dunit part 2: the write paths a commit or a deploy runs charge one
+    //! unit a row they read, counted here from the tables themselves.
+
+    use super::{BeaconId, BuildOrder, ColumnBox, DefendTable, TargetKind, TargetTable};
+    use crate::math::fixed::Fx;
+    use crate::seams::UnitTally;
+
+    fn read(tally: &UnitTally) -> u64 {
+        tally
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"))
+    }
+
+    fn count(n: usize) -> u64 {
+        u64::try_from(n).unwrap_or(u64::MAX)
+    }
+
+    #[test]
+    fn the_beacon_tables_scans_charge_what_they_read() {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let rules = crate::rules::RulesTable::load(&path)
+            .unwrap_or_else(|error| panic!("it loads: {error:?}"));
+        let world = crate::world::World::new(&crate::world::WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"));
+        let beacons = world.beacons();
+        // No row is free on a fresh map: every row is read.
+        assert!(beacons.frees().iter().all(|free| !*free));
+        let tally = UnitTally::new();
+        let _ = beacons.vacancy_metered(64, &tally);
+        assert_eq!(read(&tally), count(beacons.ids().len()));
+        let tally = UnitTally::new();
+        assert_eq!(
+            beacons.count_of_metered(crate::tables::SeatId::new(0), &tally),
+            1
+        );
+        assert_eq!(read(&tally), count(beacons.ids().len()));
+    }
+
+    #[test]
+    fn the_target_table_charges_what_it_reads() {
+        let mut targets = TargetTable::with_capacity(16);
+        let area = ColumnBox::new([0, 0], [1, 1]).unwrap_or_else(|| panic!("a box"));
+        let at = [Fx::ZERO; 3];
+        // Rows of beacons 1, 2 and 3; a row of beacon 2 goes after beacon
+        // 2's, so its place is found at the first row past them.
+        for beacon in [1_u32, 2, 3] {
+            targets
+                .add_bound(
+                    BeaconId::new(beacon),
+                    TargetKind::Build,
+                    0,
+                    at,
+                    area,
+                    (0, 0),
+                    BuildOrder::NONE,
+                )
+                .unwrap_or_else(|_| panic!("room"));
+        }
+        let tally = UnitTally::new();
+        targets
+            .add_bound_metered(
+                BeaconId::new(2),
+                TargetKind::Build,
+                0,
+                at,
+                area,
+                (0, 0),
+                BuildOrder::NONE,
+                &tally,
+            )
+            .unwrap_or_else(|_| panic!("room"));
+        assert_eq!(
+            read(&tally),
+            3,
+            "beacon 1's row, beacon 2's, and beacon 3's, the first past"
+        );
+        let tally = UnitTally::new();
+        targets.clear_beacon_metered(BeaconId::new(2), &tally);
+        assert_eq!(read(&tally), 4, "every row the table held");
+        assert_eq!(targets.row_count(), 2);
+    }
+
+    #[test]
+    fn the_defend_table_charges_what_it_reads() {
+        let mut defend = DefendTable::with_room(8);
+        defend.open(BeaconId::new(1));
+        defend.open(BeaconId::new(2));
+        defend.set_protected(BeaconId::new(1), &[BeaconId::new(5), BeaconId::new(6)]);
+        let tally = UnitTally::new();
+        defend.set_protected_metered(BeaconId::new(2), &[BeaconId::new(7)], &tally);
+        assert_eq!(read(&tally), 3, "the two entries held and the one written");
+        let tally = UnitTally::new();
+        defend.close_metered(BeaconId::new(1), &tally);
+        assert_eq!(read(&tally), 3, "every entry held");
+        assert_eq!(defend.protected().len(), 1);
     }
 }

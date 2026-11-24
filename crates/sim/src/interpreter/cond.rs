@@ -87,6 +87,10 @@ pub(crate) struct View<'a> {
     pub(crate) seat_index: usize,
     /// That seat's execution state.
     pub(crate) state: &'a PlanState,
+    /// The seat's decision tally, handed down by `phase_decision`: what
+    /// every node, row and candidate the view reads is charged to (dunit
+    /// part 2).
+    pub(crate) meter: &'a dyn crate::seams::Meter,
 }
 
 /// The row a beacon the interpreter holds an id of lives in, checked by
@@ -254,10 +258,11 @@ fn percent(value: i64, total: i64) -> i64 {
 /// Evaluate one condition tree.
 ///
 /// Every node evaluated is one of P1's evaluation units (S1's plan, section
-/// 5): counted on the world's unhashed decision counter as it is reached, so a
-/// short-circuited `all` or `any` counts only what it read.
+/// 5): charged to the view's meter, the deciding seat's tally that
+/// `phase_decision` hands down (unhashed, and held by no world), as it is
+/// reached, so a short-circuited `all` or `any` counts only what it read.
 pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
-    view.world.charge_decision(1);
+    view.meter.rows(1);
     match condition {
         Cond::All(items) => items.iter().all(|item| evaluate(view, item)),
         Cond::Any(items) => items.iter().any(|item| evaluate(view, item)),
@@ -342,7 +347,7 @@ fn units_by_role(view: &View<'_>, beacon: BeaconId, kind: UnitKind) -> i64 {
         .zip(units.kinds())
         .zip(units.hit_points())
     {
-        view.world.charge_decision(1);
+        view.meter.rows(1);
         if *home == beacon && *owner == view.seat.raw() && *unit == kind.id() && hp.is_alive() {
             // E7: rule: the count is at most the unit table's rows, a `u32`, far inside `i64`
             count = count.saturating_add(1);
@@ -363,7 +368,7 @@ fn has_structure(view: &View<'_>, beacon: BeaconId, kind: StructureKind) -> bool
         .zip(structures.hit_points())
         .zip(structures.building())
         .any(|((((home, owner), held), hp), building)| {
-            view.world.charge_decision(1);
+            view.meter.rows(1);
             *home == beacon
                 && *owner == view.seat.raw()
                 && *held == kind.id()
@@ -423,10 +428,13 @@ fn count_sightings<F: Fn(Seen) -> bool>(view: &View<'_>, fresh: Freshness, keep:
         .zip(table.places())
         .zip(table.seen_at());
     for (((((by, owner), kind), blueprint), at), seen) in rows {
+        // One unit a sighting row read, the seat's own or another's: the
+        // table is shared, so every row is read to find the seat's (dunit
+        // part 2).
+        view.meter.rows(1);
         if *by != view.seat.raw() {
             continue;
         }
-        view.world.charge_decision(1);
         if crate::defend::enemy(view.seat, *owner)
             && is_fresh(fresh, *seen, now)
             && keep(Seen {
@@ -522,11 +530,11 @@ pub(crate) trait Board {
     /// (decision 6).
     fn commander_wounded(&self) -> bool;
 
-    /// Count `units` of evaluation work: the live world counts a decision's
-    /// selector candidates (P1's counted half); a frozen snapshot, which no
+    /// Count `rows` beacon rows read: the live world counts a decision's
+    /// (P1's counted half, one unit a row); a frozen snapshot, which no
     /// decision reads, counts nothing.
-    fn charge(&self, units: u32) {
-        let _ = units;
+    fn charge(&self, rows: usize) {
+        let _ = rows;
     }
 
     /// Whether a row's beacon is alive.
@@ -534,11 +542,17 @@ pub(crate) trait Board {
         self.row_hp(row) > 0
     }
 
-    /// The row of `seat`'s beacon with this ordinal, alive or dead.
+    /// The row of `seat`'s beacon with this ordinal, alive or dead: one unit
+    /// a beacon row it reads, up to that row ([`Board::charge`]; dunit part
+    /// 2).
     fn row_of_ordinal(&self, seat: SeatId, ordinal: u32) -> Option<usize> {
-        (0..self.beacon_rows()).find(|row| {
+        let mut read: usize = 0;
+        let found = (0..self.beacon_rows()).find(|row| {
+            read += 1;
             self.row_seat(*row) == Some(seat.raw()) && self.row_ordinal(*row) == Some(ordinal)
-        })
+        });
+        self.charge(read);
+        found
     }
 
     /// A row's maximum hit points: `beacon.core_hp` for a seat's core, its
@@ -602,16 +616,16 @@ impl Board for View<'_> {
         View::commander_at(self)
     }
     fn row_threat(&self, row: usize) -> u64 {
-        live_row_threat(self.world, self.seat, row, self.world.decision_meter())
+        live_row_threat(self.world, self.seat, row, self.meter)
     }
     fn row_repairs(&self, row: usize) -> bool {
-        live_row_repairs(self.world, self.seat, row, self.world.decision_meter())
+        live_row_repairs(self.world, self.seat, row, self.meter)
     }
     fn commander_wounded(&self) -> bool {
         live_commander_wounded(self.world, self.seat)
     }
-    fn charge(&self, units: u32) {
-        self.world.charge_decision(units);
+    fn charge(&self, rows: usize) {
+        self.meter.rows(rows);
     }
 }
 
@@ -950,8 +964,8 @@ impl<M: crate::seams::Meter + ?Sized> Board for SeatBoard<'_, M> {
     fn commander_wounded(&self) -> bool {
         live_commander_wounded(self.world, self.seat)
     }
-    fn charge(&self, units: u32) {
-        self.meter.rows(crate::math::index::row(units));
+    fn charge(&self, rows: usize) {
+        self.meter.rows(rows);
     }
 }
 
@@ -1014,7 +1028,13 @@ fn live_row_threat<M: crate::seams::Meter + ?Sized>(
                 world,
                 seat,
                 centre,
-                world.sphere_radius_at_row(row),
+                Fx::from_voxels(crate::spire::metered::radius_at_row(
+                    world.rules(),
+                    world.beacons(),
+                    world.structures(),
+                    row,
+                    meter,
+                )),
                 meter,
             )
         })
@@ -1038,7 +1058,13 @@ fn live_row_repairs<M: crate::seams::Meter + ?Sized>(
                 world,
                 seat,
                 centre,
-                world.sphere_radius_at_row(row),
+                Fx::from_voxels(crate::spire::metered::radius_at_row(
+                    world.rules(),
+                    world.beacons(),
+                    world.structures(),
+                    row,
+                    meter,
+                )),
                 meter,
             )
         })

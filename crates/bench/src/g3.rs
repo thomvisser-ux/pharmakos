@@ -412,20 +412,22 @@ pub fn fourth_notice(line: &FourthSeat, os: &str) -> Result<String, Error> {
     Ok(format!(
         "::notice title=G3' fourth seat::a fourth, unplaced seat sealed at the size budget adds \
          {} ns to a decision tick's Decision phase on {os} (three seats {}, four {}, mean per \
-         decision tick over {} decision ticks of {} ticks, fastest of {} runs per tick); it spent \
-         {} evaluation units on its last decision{}. Decision 2: measured at three placed seats, \
-         the fourth reported apart",
+         decision tick over {} decision ticks of {} ticks, fastest of {} runs per tick); {}. \
+         Decision 2: measured at three placed seats, the fourth reported apart",
         line.cost_ns()?,
         micros(line.three_ns),
         micros(line.four_ns),
         line.decision_ticks,
         line.ticks,
         fourth::RUNS,
-        line.fourth_units,
-        if line.fourth_units == 0 {
-            " (an unplaced seat has no commander, so its playbook has nothing to run: the difference is the seat's dispatch and the runs' noise, not a playbook's cost)"
-        } else {
-            ""
+        match line.fourth_units {
+            fourth::FourthFigure::Units(0) => "it spent 0 evaluation units on its last decision (an unplaced seat has no commander, so its playbook has nothing to run: the difference is the seat's dispatch and the runs' noise, not a playbook's cost)".to_owned(),
+            fourth::FourthFigure::Units(units) => {
+                format!("it spent {units} evaluation units on its last decision")
+            }
+            fourth::FourthFigure::Eliminated => {
+                "it was eliminated, so it made no last decision to count".to_owned()
+            }
         },
     ))
 }
@@ -586,7 +588,7 @@ mod tests {
             decision_ticks: 120,
             three_ns: 300_000,
             four_ns: 412_345,
-            fourth_units: 57,
+            fourth_units: fourth::FourthFigure::Units(57),
         };
         assert_eq!(
             fourth_notice(&line, "linux").expect("a notice"),

@@ -22,12 +22,12 @@
 //! measure `estimate_route` answers in too, over the same graph
 //! ([`crate::routes`], "One graph"; S3's `p3fix`).
 //!
-//! The ground this module reads is [`World::ground`] with one field replaced:
-//! the evaluation-unit tally P1 counts a decision's work in. The world's own
-//! tally is reset before every decision, so a gateway read could not have
-//! moved a measurement, but a read that wrote nothing at all into the hosted
-//! world is the simpler thing to state, so the gateway counts into its own
-//! ([`lend`]).
+//! The ground this module reads is [`World::ground`] as the world lends it:
+//! its evaluation-unit meter is `()`, which counts nothing. P1 counts a
+//! decision's work in a tally the sim's decision phase makes and hands down
+//! to that decision alone; the world holds no tally, so a gateway read has
+//! nothing it could count into and nothing to report (dunit part 2).
+//! [`lend`] remains for callers that hand the ground a tally of their own.
 //!
 //! # The sim's filters, called
 //!
@@ -103,8 +103,10 @@ pub struct FeatureRead {
     pub covered_by: Option<u32>,
 }
 
-/// The world's resolver view, counting its work into `tally` rather than into
-/// the world's own decision counter (see the module docs).
+/// The world's resolver view, counting its work into `tally`, a tally the
+/// caller makes and reads if it wants the count. The world holds no tally of
+/// its own (see the module docs), so [`World::ground`], which counts into
+/// `()`, is the same view for a caller that reads no count.
 #[must_use]
 pub fn lend<'a>(world: &'a World, tally: &'a UnitTally) -> Ground<'a> {
     Ground {
@@ -194,8 +196,7 @@ pub fn covering_beacon(ground: &Ground<'_>, seat: SeatId, point: [Fx; 3]) -> Opt
 /// seat's coverage when there is one.
 #[must_use]
 pub fn feature_reads(world: &World, seat: Option<SeatId>) -> Vec<FeatureRead> {
-    let tally = UnitTally::new();
-    let ground = lend(world, &tally);
+    let ground = world.ground();
     let mut reads: Vec<FeatureRead> = ground
         .features
         .features()
@@ -915,8 +916,7 @@ pub fn resolve_playbook(
     playbook: &Playbook,
     plan: &Plan,
 ) -> Result<Vec<Resolved>, Error> {
-    let tally = UnitTally::new();
-    let ground = lend(world, &tally);
+    let ground = world.ground();
     let mut reader = Reader {
         world,
         ground,
