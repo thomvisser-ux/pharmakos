@@ -1229,6 +1229,72 @@ fn upkeep_rows(world: &World) -> u64 {
     rows
 }
 
+/// The footprint columns a vent's liveness reads: up to the first whose top
+/// solid voxel is still vent material (dunit part 2).
+fn vent_live_rows(world: &World, feature: usize) -> u64 {
+    let vent = world.features().get(feature).expect("the vent");
+    let surface = world.surface();
+    let mut rows = 0;
+    for column in &vent.footprint {
+        rows += 1;
+        if surface.node_of(column.x, column.y).is_some_and(|node| {
+            world
+                .voxels()
+                .get([column.x, column.y, surface.top(node)])
+                .and_then(Material::vent_richness)
+                .is_some()
+        }) {
+            break;
+        }
+    }
+    rows
+}
+
+/// The rows a deploy site's legality test reads (`site_is_legal`, dunit part
+/// 2), counted from the tables: the beacon rows up to the first of `seat`'s
+/// living spheres that holds the site, with the Spire test of each such
+/// sphere the site lies between the base and the grown radius of; then every
+/// beacon row, up to an own living beacon on the site's column.
+fn legal_site_rows(world: &World, seat: SeatId, site: [Fx; 3]) -> u64 {
+    use pharmakos_sim::math::fixed::Sq;
+    let beacons = world.beacons();
+    let rules = world.rules();
+    let base = Sq::of_radius(Fx::from_voxels(rules.sphere_radius_voxels()));
+    let grown = Sq::of_radius(Fx::from_voxels(rules.grown_sphere_radius_voxels()));
+    let rows_of = || {
+        beacons
+            .seats()
+            .iter()
+            .zip(beacons.hit_points())
+            .zip(beacons.positions())
+    };
+    let mut rows = 0_u64;
+    for ((owner, hp), at) in rows_of() {
+        rows += 1;
+        if *owner != seat.raw() || !hp.is_alive() {
+            continue;
+        }
+        let distance = Sq::between(*at, site);
+        if distance <= base {
+            break;
+        }
+        if distance <= grown {
+            rows += radius_rows(world);
+        }
+    }
+    let column = pharmakos_sim::targeting::column_of(site);
+    for ((owner, hp), at) in rows_of() {
+        rows += 1;
+        if *owner == seat.raw()
+            && hp.is_alive()
+            && pharmakos_sim::targeting::column_of(*at) == column
+        {
+            break;
+        }
+    }
+    rows
+}
+
 /// The beacon rows a `b_00` reads to find seat 0's core: every row up to the
 /// core's (dunit part 2: `row_of_ordinal` charges one a row it reads).
 fn b_00_rows(world: &World) -> u64 {
@@ -1511,8 +1577,8 @@ fn a_committed_row_counts_the_boxes_it_writes() {
     println!("boxes: {units:?}");
     assert_eq!(
         units,
-        vec![b_00_rows(&world_at(SEED, 2, &[180_000])), 0, 3, 1],
-        "the step's start finds b_00, the walk and interface charge nothing, the commit its three boxes, then the wait one node a decision"
+        vec![b_00_rows(&world_at(SEED, 2, &[180_000])) + 1, 0, 3 + 3, 1],
+        "the step's start finds b_00 and reads its one row; the walk and interface charge nothing; the commit writes its three boxes, each placed after the rows before it (0, 1 and 2 read, the protected list held none to clear); then the wait one node a decision"
     );
 }
 
@@ -1543,8 +1609,13 @@ fn a_committed_wall_counts_the_columns_it_checks() {
     assert_eq!(columns, 6, "a three-by-two box");
     assert_eq!(
         units,
-        vec![b_00_rows(&world_at(SEED, 2, &[180_000])), 0, columns, 1],
-        "the step's start finds b_00, the walk and interface charge nothing, the commit its six columns, then the wait one node a decision"
+        vec![
+            b_00_rows(&world_at(SEED, 2, &[180_000])) + 2,
+            0,
+            columns + 1,
+            1
+        ],
+        "the step's start finds b_00 and reads its row and its target; the walk and interface charge nothing; the commit checks its six columns and finds the row it wrote to make it a wall (the claim test and the place found nothing to read); then the wait one node a decision"
     );
 }
 
@@ -1589,8 +1660,13 @@ fn a_committed_protect_list_counts_the_ranking_it_reads() {
     assert!(pick > 0, "the pick ranks and scans");
     assert_eq!(
         units,
-        vec![b_00_rows(&world_at(SEED, 2, &[180_000])), 0, pick, 1],
-        "the step's start finds b_00; nothing while the commander walks and interfaces; at the commit the pick; then the wait one node a decision"
+        vec![
+            b_00_rows(&world_at(SEED, 2, &[180_000])) + 1,
+            0,
+            pick + 2,
+            1
+        ],
+        "the step's start finds b_00 and reads its row; nothing while the commander walks and interfaces; at the commit the pick, its one entry read and its one beacon written (no list held before, no target to clear); then the wait one node a decision"
     );
 }
 
@@ -1741,12 +1817,24 @@ fn a_covering_decision_counts_its_resolve_binding_and_seam_choice() {
         let _ = play(&mut runner, 1, |_, _| {});
         runner.world().decision_work(0).unwrap().expect("measured")
     };
+    // The step's start, before the binding (dunit part 2): the site's
+    // legality (its beacon rows and sphere tests), and the step's one
+    // settings row with its one target, one unit each.
+    let start = {
+        let [x, y] = cover.site;
+        let site = fixture.ground().standing(x, y).expect("the site's column");
+        legal_site_rows(&fixture, SeatId::new(SEAT), site) + 2
+    };
+    // Then the step's look at its bindings, in the same decision: the bound
+    // vent's liveness, the one binding read and its liveness again (the
+    // binding is to the same vent).
+    let look = 1 + 2 * vent_live_rows(&fixture, cover.feature);
     let mut runner = open(fixture, COVER);
     let _ = play(&mut runner, 1, |_, _| {});
     let covering = runner.world().decision_work(0).unwrap().expect("measured");
-    // The decision is the resolve, the binding and the seam choice, and
-    // nothing else.
-    assert_eq!(covering, resolve + bind + seam);
+    // The decision is the resolve, the step's start, the binding and the
+    // seam choice, and nothing else.
+    assert_eq!(covering, resolve + start + bind + look + seam);
     // Pinned exactly on the golden seed, so a change to what the resolver
     // charges shows here rather than drifting under a lower bound: one unit a
     // visit of each loop the decision runs and one a node a search pops
@@ -1756,10 +1844,10 @@ fn a_covering_decision_counts_its_resolve_binding_and_seam_choice() {
     // candidate asks, the binding and the seam's dig searches charged
     // nothing).
     println!(
-        "covering: {covering} = {resolve} for the resolve + {bind} for the binding + {seam} for the seam choice"
+        "covering: {covering} = {resolve} for the resolve + {start} for the start + {bind} for the binding + {look} for the look + {seam} for the seam choice"
     );
     assert_eq!(
-        covering, 10_919,
+        covering, 10_927,
         "a covering resolution ranks every feature, walks and searches a spiral: {covering}"
     );
 }

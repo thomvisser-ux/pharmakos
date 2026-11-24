@@ -448,6 +448,13 @@ pub struct World {
     /// [`crate::seams::UnitTally`], so the read-only half of a decision can
     /// count, and reset at every seat's decision.
     decision_units: crate::seams::UnitTally,
+    /// Whether a seat's decision is running (`phase_decision`, around each
+    /// seat's `exec::decide` and seam upkeep): the world's own write paths and
+    /// shared reads charge [`World::decision_units`] only then, so one a
+    /// decision's commit or deploy runs is counted and the same one a
+    /// program, a host or a test runs is not (dunit part 2). Never hashed,
+    /// never saved: false between ticks.
+    deciding: bool,
     /// Per seat, what its last decision tick's decision spent, as the tally
     /// read it: the count, or why it holds none. Not hashed, and
     /// `tests/determinism.rs` keeps it out of the state encoding as it keeps
@@ -1352,6 +1359,7 @@ impl World {
                 config.rules.sphere_radius_voxels(),
             )),
             decision_units: crate::seams::UnitTally::new(),
+            deciding: false,
             decision_work: vec![Ok(0); crate::math::index::row(config.seats)],
             broadphase,
             repairer: Repairer::new(clusters.cluster_count()),
@@ -1745,6 +1753,19 @@ impl World {
         self.decision_units.add(units);
     }
 
+    /// The decision tally while a seat's decision runs, and a meter that
+    /// counts nothing otherwise ([`meter_while_deciding`]): what the world's
+    /// shared reads report their rows to.
+    pub(crate) fn decision_meter_now(&self) -> &dyn crate::seams::Meter {
+        meter_while_deciding(self.deciding, &self.decision_units)
+    }
+
+    /// `rows` more rows read, charged to the decision in progress, or to
+    /// nothing outside one.
+    pub(crate) fn decision_rows(&self, rows: usize) {
+        self.decision_meter_now().rows(rows);
+    }
+
     /// The decision in progress's tally as a [`crate::seams::Meter`]: what a
     /// scan a decision runs reports the rows it reads to, one unit a row.
     pub(crate) const fn decision_meter(&self) -> &crate::seams::UnitTally {
@@ -1940,14 +1961,15 @@ impl World {
         // holds less its core, which the generator placed and no deploy paid
         // for. Since S2 the rows it holds are its live beacons (E1), so a
         // beacon that died and settled gives its place in the share back.
-        let placed = self.beacons.count_of(seat).saturating_sub(1);
+        let meter = meter_while_deciding(self.deciding, &self.decision_units);
+        let placed = self.beacons.count_of_metered(seat, meter).saturating_sub(1);
         if placed >= room_per_seat(BEACON_TABLE_ROOM, self.seats.len()) {
             return Err(PlaceRefused::ShareFull);
         }
         // The table's room is checked before the ordinal is taken, so a refused
         // deploy spends no name.
         self.beacons
-            .vacancy(self.beacon_limit)
+            .vacancy_metered(self.beacon_limit, meter)
             .map_err(|_| PlaceRefused::TableFull)?;
         let ordinal = self
             .seats
@@ -1958,7 +1980,7 @@ impl World {
         let hp = self.rules.beacon_row().hp;
         let placed = self
             .beacons
-            .place(
+            .place_metered(
                 self.beacon_limit,
                 seat,
                 at,
@@ -1973,6 +1995,7 @@ impl World {
                     // A placed beacon carries no weapon; only a core fires.
                     ready_at: 0,
                 },
+                meter_while_deciding(self.deciding, &self.decision_units),
             )
             .map_err(|_| PlaceRefused::TableFull)?;
         let row = placed.id.row().map_err(|_| PlaceRefused::NoRow)?;
@@ -2026,17 +2049,18 @@ impl World {
         self.set_build_settings(row, crate::site::BuildSettings::DEFAULT);
         self.return_site_funds(row);
         if let Some(id) = id {
-            self.targets.clear_beacon(BeaconId::new(id));
+            let meter = meter_while_deciding(self.deciding, &self.decision_units);
+            self.targets.clear_beacon_metered(BeaconId::new(id), meter);
             // Defend's settings and state are the old writ's too (S2's
             // `dfnd`): a beacon leaving Defend loses its row, and one taking
             // it starts from a fresh one.
-            self.defend.close(BeaconId::new(id));
+            self.defend.close_metered(BeaconId::new(id), meter);
             if mandate == MandateKind::Defend {
                 self.defend.open(BeaconId::new(id));
             }
             // So are Attack's (S2's `atk`); a planted charge stays in the
             // world.
-            self.attack.close(BeaconId::new(id));
+            self.attack.close_metered(BeaconId::new(id), meter);
             if mandate == MandateKind::Attack {
                 self.attack.open(BeaconId::new(id));
             }
@@ -2098,7 +2122,11 @@ impl World {
         }
         if let Some((escort, beacons)) = protect {
             row.settings.escort = *escort;
-            self.defend.set_protected(beacon, beacons);
+            self.defend.set_protected_metered(
+                beacon,
+                beacons,
+                meter_while_deciding(self.deciding, &self.decision_units),
+            );
         }
     }
 
@@ -2151,7 +2179,11 @@ impl World {
             settings.waves = waves;
         }
         if let Some(list) = edit.avoid.as_ref() {
-            self.attack.set_avoid(beacon, list);
+            self.attack.set_avoid_metered(
+                beacon,
+                list,
+                meter_while_deciding(self.deciding, &self.decision_units),
+            );
             self.reserve_route_zones();
         }
     }
@@ -2258,7 +2290,14 @@ impl World {
         let Some(seat) = self.beacons.seats().get(row.index()).copied() else {
             return false;
         };
-        crate::spire::facts_of(&self.structures).any(|facts| facts.stands(seat, beacon.raw()))
+        let mut read: usize = 0;
+        let stands = crate::spire::facts_of(&self.structures).any(|facts| {
+            read += 1;
+            facts.stands(seat, beacon.raw())
+        });
+        // One unit a structure row read, while a decision runs (dunit part 2).
+        self.decision_rows(read);
+        stands
     }
 
     /// How close a walked route has to get before it counts as arrived,
@@ -2344,8 +2383,10 @@ impl World {
             .ok()
             .and_then(|row| self.beacons.seats().get(row.index()).copied())
             .map(SeatId::new);
+        // The core search's beacon rows, charged while a decision runs (a
+        // recycle's value, dunit part 2).
         let is_core = seat
-            .and_then(|seat| crate::power::core_of(self, seat))
+            .and_then(|seat| crate::power::core_of_metered(self, seat, self.decision_meter_now()))
             .is_some_and(|core| core == beacon);
         if is_core {
             return self.rules.core_hp();
@@ -2829,8 +2870,13 @@ impl World {
         let at = self
             .capability_site(seat, beacon, at)
             .ok_or(StepFailure::IllegalSite)?;
+        // The share's count reads every structure row.
+        self.decision_rows(self.structures.seats().len());
         if self.structures_held_by(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len())
-            || self.structures.vacancy(STRUCTURE_ROWS).is_err()
+            || self
+                .structures
+                .vacancy_metered(STRUCTURE_ROWS, self.decision_meter_now())
+                .is_err()
         {
             return Err(StepFailure::NoStructureRoom);
         }
@@ -2848,16 +2894,13 @@ impl World {
         // the price, less the price, is at or above zero.
         *slot = Money::new(slot.raw().saturating_sub(cost.raw()));
         let ready_at = self.armed_ready_at(self.structure_weapon(kind));
-        let Ok(placed) = self.structures.place(
+        let Ok(placed) = self.structures.place_metered(
             STRUCTURE_ROWS,
             seat,
             kind,
             at,
-            Hp::new(1),
-            beacon,
-            true,
-            QuarterTurns::NONE,
-            ready_at,
+            (Hp::new(1), beacon, true, QuarterTurns::NONE, ready_at),
+            meter_while_deciding(self.deciding, &self.decision_units),
         ) else {
             // The vacancy was read above, so this does not happen; were it
             // to, the price goes back where it came from rather than buying
@@ -2894,7 +2937,11 @@ impl World {
     fn capability_site(&self, seat: SeatId, beacon: BeaconId, centre: [Fx; 3]) -> Option<[Fx; 3]> {
         let [bx, by] = crate::targeting::column_of(centre);
         let ground = self.ground();
+        // One unit a spiral column, and the rows each test on it reads,
+        // while a decision runs (dunit part 2).
+        let meter = self.decision_meter_now();
         for &[dx, dy] in &self.spiral {
+            meter.rows(1);
             if dx == 0 && dy == 0 {
                 continue;
             }
@@ -2905,10 +2952,10 @@ impl World {
                 continue;
             };
             if !ground.surface.walkable(node)
-                || ground.features.at_column(x, y).is_some()
-                || ground.structure_on(x, y)
-                || ground.stacks_on_own(seat, x, y)
-                || ground.own_target_on(seat, None, x, y)
+                || ground.features.at_column_metered(x, y, meter).is_some()
+                || crate::targeting::metered::structure_on(&ground, [x, y], meter)
+                || crate::targeting::metered::stacks_on_own(&ground, seat, [x, y], meter)
+                || crate::targeting::metered::own_target_on(&ground, (seat, None), [x, y], meter)
                 || self.set_queued_on(x, y)
                 || self.wall_box_holds(seat, x, y)
             {
@@ -2947,17 +2994,21 @@ impl World {
     /// column `(x, y)`: ground its drones will fill.
     fn wall_box_holds(&self, seat: SeatId, x: i32, y: i32) -> bool {
         let targets = &self.targets;
-        targets
+        let mut read: usize = 0;
+        let holds = targets
             .beacons()
             .iter()
             .zip(targets.kinds())
             .zip(targets.areas().iter().zip(targets.wall_tops()))
+            .inspect(|_| read += 1)
             .any(|((beacon, kind), (area, top))| {
                 *kind == TargetKind::Build.id()
                     && *top != crate::tables::NO_WALL
                     && area.contains(x, y)
                     && self.seat_of_beacon(*beacon) == seat
-            })
+            });
+        self.decision_rows(read);
+        holds
     }
 
     /// A structure reached full hit points: it is finished, and starts
@@ -3491,7 +3542,12 @@ impl World {
         centre: [Fx; 3],
         area: ColumnBox,
     ) -> Result<(), TargetsFull> {
-        self.targets.add_area(beacon, kind, centre, area)
+        self.targets.add_area_metered(
+            beacon,
+            kind,
+            (centre, area),
+            meter_while_deciding(self.deciding, &self.decision_units),
+        )
     }
 
     /// Whether some Build target of `seat`'s already claims the anchor `at`.
@@ -3516,15 +3572,21 @@ impl World {
             .iter()
             .zip(self.targets.kinds())
             .zip(self.targets.anchors());
+        let mut read: usize = 0;
+        let mut claimed = false;
         for ((beacon, kind), anchor) in rows {
+            read += 1;
             if *kind == TargetKind::Build.id()
                 && *anchor == at
                 && self.seat_of_beacon(*beacon) == seat
             {
-                return true;
+                claimed = true;
+                break;
             }
         }
-        false
+        // One unit a target row read, while a decision runs (dunit part 2).
+        self.decision_rows(read);
+        claimed
     }
 
     /// Add a Build target written through `on`, bound to `feature` and
@@ -3543,7 +3605,7 @@ impl World {
         build: BuildOrder,
         wall: Option<crate::site::WallBox>,
     ) -> Result<(), TargetsFull> {
-        self.targets.add_bound(
+        self.targets.add_bound_metered(
             beacon,
             TargetKind::Build,
             blueprint,
@@ -3551,6 +3613,7 @@ impl World {
             ColumnBox::default(),
             bound,
             build,
+            meter_while_deciding(self.deciding, &self.decision_units),
         )?;
         if let Some(wall) = wall {
             let _ = self.make_wall_at(beacon, at, wall);
@@ -3567,6 +3630,8 @@ impl World {
         let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
+            // One unit a target row read, up to the one removed.
+            self.decision_rows(1);
             if self.targets.beacons().get(row).copied() == Some(beacon)
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
                 && self.targets.features().get(row).copied() == Some(feature)
@@ -3699,6 +3764,8 @@ impl World {
         // tick.
         self.carry.clear();
         let count = self.targets.row_count();
+        // One unit a target row the carry-over reads (dunit part 2).
+        self.decision_rows(count);
         for row in 0..count {
             if self.targets.beacons().get(row).copied() == Some(beacon)
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
@@ -3725,13 +3792,15 @@ impl World {
         }
         self.clear_targets(beacon, TargetKind::Build);
         for entry in list {
+            // One unit an entry of the list written.
+            self.decision_rows(1);
             let anchor = entry.anchor;
             // A target outside the sphere as it stands now is written and
             // waits for it (S3's plan, decision 6; `crate::mandate::buildable`).
             if self.anchor_is_claimed(seat, anchor) {
                 continue;
             }
-            self.targets.add_bound(
+            self.targets.add_bound_metered(
                 beacon,
                 TargetKind::Build,
                 entry.blueprint,
@@ -3739,6 +3808,7 @@ impl World {
                 ColumnBox::default(),
                 (entry.feature, entry.desc),
                 entry.build,
+                meter_while_deciding(self.deciding, &self.decision_units),
             )?;
             if let Some(wall) = entry.wall
                 && let Some(slot) = self.make_wall_at(beacon, anchor, wall)
@@ -3746,9 +3816,12 @@ impl World {
                 // The same wall sealed again, anchor and box alike, keeps its
                 // filled-whole flag; any change to the box is a new wall
                 // target, whose flag starts clear.
+                let mut read: usize = 0;
                 let same = self.carry.iter_mut().find(|old| {
+                    read += 1;
                     old.anchor == anchor && old.wall.0 == wall.columns && old.wall.1 == wall.top
                 });
+                meter_while_deciding(self.deciding, &self.decision_units).rows(read);
                 if let Some(old) = same {
                     old.kept = true;
                     if old.wall.2 {
@@ -3756,13 +3829,16 @@ impl World {
                     }
                 }
             }
+            let mut read: usize = 0;
             let carried = self.carry.iter_mut().find(|old| {
+                read += 1;
                 if entry.feature == NO_FEATURE {
                     old.anchor == anchor
                 } else {
                     old.feature == entry.feature
                 }
             });
+            meter_while_deciding(self.deciding, &self.decision_units).rows(read);
             let built = carried.map_or(StructureId::NONE, |old| {
                 old.kept = true;
                 old.built
@@ -3776,6 +3852,7 @@ impl World {
                 // it stood for: an old fixed-voxel row the new list wrote by
                 // its feature instead carries nothing by anchor or feature,
                 // and would otherwise recycle the structure just linked.
+                meter_while_deciding(self.deciding, &self.decision_units).rows(self.carry.len());
                 for old in self.carry.iter_mut().filter(|old| old.built == adopted) {
                     old.kept = true;
                 }
@@ -3786,6 +3863,8 @@ impl World {
         // than leaving it stranded. Walked by index so the scratch buffer is
         // not borrowed while the world is written.
         let mut at: usize = 0;
+        // One unit an entry of the carry-over the recycle walk reads.
+        self.decision_rows(self.carry.len());
         while let Some(old) = self.carry.get(at).copied() {
             at = at.saturating_add(1);
             if !old.kept && old.built.is_some() {
@@ -3835,14 +3914,19 @@ impl World {
         };
         let seat = self.seat_of_beacon(beacon);
         let mut needed = areas;
+        // One unit an entry of the list, an earlier entry each compares, and
+        // a target row the freed count reads with each kind it asks, while a
+        // decision runs (dunit part 2).
+        let mut read: usize = 0;
         if let Some(list) = build {
             for (index, entry) in list.clone().enumerate() {
+                read += 1;
                 let anchor = entry.anchor;
                 if self.anchor_claimed_elsewhere(seat, anchor, beacon)
-                    || list
-                        .clone()
-                        .take(index)
-                        .any(|earlier| earlier.anchor == anchor)
+                    || list.clone().take(index).any(|earlier| {
+                        read += 1;
+                        earlier.anchor == anchor
+                    })
                 {
                     continue;
                 }
@@ -3852,15 +3936,19 @@ impl World {
         let count = self.targets.row_count();
         let mut freed: usize = 0;
         for row in 0..count {
+            read += 1;
             let of_beacon = self.targets.beacons().get(row).copied() == Some(beacon);
-            let cleared =
-                self.targets.kinds().get(row).is_some_and(|kind| {
-                    replaces.clone().into_iter().any(|gone| gone.id() == *kind)
-                });
+            let cleared = self.targets.kinds().get(row).is_some_and(|kind| {
+                replaces.clone().into_iter().any(|gone| {
+                    read += 1;
+                    gone.id() == *kind
+                })
+            });
             if of_beacon && cleared {
                 freed = freed.checked_add(1).ok_or(full)?;
             }
         }
+        self.decision_rows(read);
         let capacity = usize::try_from(self.targets.capacity()).map_err(|_| full)?;
         let kept = count.checked_sub(freed).ok_or(full)?;
         let after = kept.checked_add(needed).ok_or(full)?;
@@ -3886,13 +3974,18 @@ impl World {
     /// `except`'s own Build list is cleared.
     fn anchor_claimed_elsewhere(&self, seat: SeatId, at: [Fx; 3], except: BeaconId) -> bool {
         let count = self.targets.row_count();
-        (0..count).any(|row| {
+        let mut read: usize = 0;
+        let claimed = (0..count).any(|row| {
+            read += 1;
             let beacon = self.targets.beacons().get(row).copied();
             beacon != Some(except)
                 && beacon.is_some_and(|beacon| self.seat_of_beacon(beacon) == seat)
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
                 && self.targets.anchors().get(row).copied() == Some(at)
-        })
+        });
+        // One unit a target row read, while a decision runs.
+        self.decision_rows(read);
+        claimed
     }
 
     /// Write the Build target of `beacon` at `at`, just added, as a wall with
@@ -3904,11 +3997,15 @@ impl World {
         wall: crate::site::WallBox,
     ) -> Option<usize> {
         let count = self.targets.row_count();
+        let mut read: usize = 0;
         let slot = (0..count).rev().find(|row| {
+            read += 1;
             self.targets.beacons().get(*row).copied() == Some(beacon)
                 && self.targets.kinds().get(*row).copied() == Some(TargetKind::Build.id())
                 && self.targets.anchors().get(*row).copied() == Some(at)
         });
+        // One unit a target row read, back to the row just added.
+        self.decision_rows(read);
         let slot = slot?;
         self.targets
             .make_wall(slot, wall.columns, wall.top)
@@ -3937,6 +4034,8 @@ impl World {
         let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
+            // One unit a target row read, up to the one linked.
+            self.decision_rows(1);
             if self.targets.beacons().get(row).copied() == Some(beacon)
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
                 && self.targets.anchors().get(row).copied() == Some(at)
@@ -3954,6 +4053,8 @@ impl World {
     /// What a settings edit does before writing the list it names: an edit is
     /// all-or-nothing (spec section 5), so the list it replaces goes first.
     pub(crate) fn clear_targets(&mut self, beacon: BeaconId, kind: TargetKind) {
+        // One unit a target row read: every row the table held.
+        self.decision_rows(crate::math::index::row(self.targets.len()));
         let mut row: usize = 0;
         while row < crate::math::index::row(self.targets.len()) {
             if self.targets.beacons().get(row).copied() == Some(beacon)
@@ -3976,6 +4077,8 @@ impl World {
         let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
+            // One unit a target row read, up to the one removed.
+            self.decision_rows(1);
             if self.targets.beacons().get(row).copied() == Some(beacon)
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
                 && self.targets.anchors().get(row).copied() == Some(at)
@@ -4841,6 +4944,9 @@ impl World {
         let mut interpreter = core::mem::take(&mut self.interpreter);
         let seats = interpreter.len();
         let mut seat: usize = 0;
+        // The world's own write paths and shared reads count while this runs
+        // (`World::decision_meter_now`), and only then.
+        self.deciding = true;
         while seat < seats {
             // P1's counted half: what this seat's decision spends, measured
             // from zero every decision and kept beside the world, unhashed.
@@ -4859,6 +4965,7 @@ impl World {
             }
             seat = seat.saturating_add(1);
         }
+        self.deciding = false;
         self.decision_units.reset();
         self.interpreter = interpreter;
     }
@@ -7103,6 +7210,17 @@ fn commander_index(units: &UnitTable, seats: u32) -> Vec<UnitId> {
     commanders
 }
 
+/// `units` while a seat's decision runs, and a meter that counts nothing
+/// otherwise: what the world's own write paths and shared reads report their
+/// rows to (dunit part 2). Taken from the two fields, not from the world, so
+/// a write path can hold it beside a mutable borrow of another table.
+fn meter_while_deciding(
+    deciding: bool,
+    units: &crate::seams::UnitTally,
+) -> &dyn crate::seams::Meter {
+    if deciding { units } else { &() }
+}
+
 /// How many rows of a seat column `seat` holds.
 fn count_seat(seats: &[u8], seat: SeatId) -> u32 {
     seats.iter().fold(0_u32, |sum, held| {
@@ -8933,5 +9051,293 @@ mod ids_tests {
                 Err(other) => panic!("a climb of {climb}: {other:?}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod decision_visits {
+    //! Dunit part 2: the world's write paths and shared reads charge the
+    //! decision tally one unit a row they read while a decision runs, and
+    //! nothing outside one. Each count here is made from the tables.
+
+    use super::{BuildEntry, World, WorldConfig};
+    use crate::math::fixed::Fx;
+    use crate::math::quantity::Money;
+    use crate::seams::{MandateKind, Meter as _, UnitTally};
+    use crate::tables::{BeaconId, BuildOrder, SeatId, StructureKind, TargetKind};
+
+    fn world() -> World {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let rules = crate::rules::RulesTable::load(&path)
+            .unwrap_or_else(|error| panic!("it loads: {error:?}"));
+        World::new(&WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"))
+    }
+
+    fn n(count: usize) -> u64 {
+        u64::try_from(count).unwrap_or(u64::MAX)
+    }
+
+    /// The units `run` charges as a decision would, from zero.
+    fn deciding(world: &mut World, run: impl FnOnce(&mut World)) -> u64 {
+        world.deciding = true;
+        world.decision_units.reset();
+        run(world);
+        world.deciding = false;
+        world
+            .decision_units
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"))
+    }
+
+    /// Seat 0's core, its row and where it stands.
+    fn core(world: &World) -> (BeaconId, usize, [Fx; 3]) {
+        let row = world
+            .beacons()
+            .row_of_ordinal(SeatId::new(0), 0)
+            .unwrap_or_else(|| panic!("a core"));
+        let id = BeaconId::new(world.beacons().ids().get(row).copied().unwrap_or(0));
+        let at = world
+            .beacons()
+            .positions()
+            .get(row)
+            .copied()
+            .unwrap_or([Fx::ZERO; 3]);
+        (id, row, at)
+    }
+
+    fn beside(world: &World, at: [Fx; 3], dx: i32) -> [Fx; 3] {
+        let [x, y] = crate::targeting::column_of(at);
+        world.standing_point([x + dx, y, 0])
+    }
+
+    #[test]
+    fn outside_a_decision_nothing_is_charged() {
+        let mut world = world();
+        let (_, _, at) = core(&world);
+        world.decision_units.reset();
+        let site = beside(&world, at, 3);
+        assert!(
+            world
+                .place_beacon(SeatId::new(0), site, MandateKind::Build)
+                .is_ok()
+        );
+        assert_eq!(world.decision_units.read(), Ok(0));
+    }
+
+    #[test]
+    fn a_deploy_charges_its_three_scans_of_the_beacon_rows() {
+        let mut world = world();
+        let (_, _, at) = core(&world);
+        let rows = n(world.beacons().ids().len());
+        assert!(world.beacons().frees().iter().all(|free| !*free));
+        let site = beside(&world, at, 3);
+        // The share's count, the vacancy check and the placement's own
+        // vacancy search: every row each, none being free.
+        let units = deciding(&mut world, |world| {
+            assert!(
+                world
+                    .place_beacon(SeatId::new(0), site, MandateKind::Build)
+                    .is_ok()
+            );
+        });
+        assert_eq!(units, 3 * rows);
+    }
+
+    #[test]
+    fn a_switch_charges_the_lists_it_clears() {
+        let mut world = world();
+        let (core, row, at) = core(&world);
+        for dx in [2, 4] {
+            let point = beside(&world, at, dx);
+            world
+                .add_target(core, StructureKind::Autocannon.id(), point)
+                .unwrap_or_else(|_| panic!("room"));
+        }
+        let expected = n(world.targets().row_count())
+            + n(world.defend().protected().len())
+            + n(world.attack().avoid().len());
+        let units = deciding(&mut world, |world| {
+            world.set_beacon_mandate(row, MandateKind::Defend);
+        });
+        assert_eq!(units, expected);
+        assert!(expected >= 2, "the targets were read");
+    }
+
+    #[test]
+    fn the_target_write_paths_charge_the_rows_they_read() {
+        let mut world = world();
+        let (core, _, at) = core(&world);
+        let seat = SeatId::new(0);
+        let points: Vec<[Fx; 3]> = [2, 4, 6].iter().map(|dx| beside(&world, at, *dx)).collect();
+        for point in &points {
+            world
+                .add_target(core, StructureKind::Autocannon.id(), *point)
+                .unwrap_or_else(|_| panic!("room"));
+        }
+        let rows = n(world.targets().row_count());
+        // A claim found at the second row reads two; one found nowhere, all.
+        let second = points.get(1).copied().unwrap_or([Fx::ZERO; 3]);
+        assert_eq!(
+            deciding(&mut world, |world| assert!(
+                world.anchor_is_claimed(seat, second)
+            )),
+            2
+        );
+        let nowhere = beside(&world, at, 9);
+        assert_eq!(
+            deciding(&mut world, |world| assert!(
+                !world.anchor_is_claimed(seat, nowhere)
+            )),
+            rows
+        );
+        // The room test for a two-entry list replacing the Build list: each
+        // entry, the earlier entry the second compares, each entry's claim
+        // test elsewhere (every row), and each row with the one kind it asks.
+        let entry = |anchor| BuildEntry {
+            blueprint: StructureKind::Autocannon.id(),
+            anchor,
+            feature: crate::targeting::NO_FEATURE,
+            desc: crate::targeting::DESCRIPTION_VOXEL,
+            build: BuildOrder::NONE,
+            wall: None,
+        };
+        let first = beside(&world, at, 8);
+        let list = [entry(first), entry(nowhere)];
+        assert_eq!(
+            deciding(&mut world, |world| {
+                assert!(
+                    world
+                        .check_list_room(core, Some(list.iter().copied()), 0, &[TargetKind::Build])
+                        .is_ok()
+                );
+            }),
+            2 + 1 + 2 * rows + 2 * rows
+        );
+        // The replacement: the carry-over and the clear read every row; each
+        // entry is one, with its claim test and its place (both over the rows
+        // written so far: none, then one), the carry-over it searches (every
+        // old row) and its paused-structure search (every structure row); and
+        // the recycle walk reads the carry-over again.
+        let structures = n(world.structures().ids().len());
+        let expected =
+            rows + rows + (1 + rows + structures) + (1 + 1 + 1 + rows + structures) + rows;
+        assert_eq!(
+            deciding(&mut world, |world| {
+                assert!(
+                    world
+                        .replace_build_targets(core, list.iter().copied())
+                        .is_ok()
+                );
+            }),
+            expected
+        );
+        // A removal found at the first row reads one; a clear reads every row.
+        assert_eq!(
+            deciding(&mut world, |world| assert!(
+                world.remove_target_at(core, first)
+            )),
+            1
+        );
+        let left = n(world.targets().row_count());
+        assert_eq!(
+            deciding(&mut world, |world| world
+                .clear_targets(core, TargetKind::Build)),
+            left
+        );
+    }
+
+    #[test]
+    fn a_recycle_charges_its_core_search() {
+        let mut world = world();
+        let (_, _, at) = core(&world);
+        let seat = SeatId::new(0);
+        let site = beside(&world, at, 3);
+        let placed = world
+            .place_beacon(seat, site, MandateKind::Build)
+            .unwrap_or_else(|_| panic!("placed"));
+        let rows = n(world.beacons().ids().len());
+        // The beacon's value asks whether it is its seat's core: every row.
+        assert_eq!(
+            deciding(&mut world, |world| assert!(
+                world.recycle_beacon(seat, placed)
+            )),
+            rows
+        );
+    }
+
+    #[test]
+    fn a_queued_spire_charges_its_site_search_and_its_room() {
+        let mut world = world();
+        let (core, _, centre) = core(&world);
+        let seat = SeatId::new(0);
+        world.award_licence_directly(seat, pharmakos_proto::gp::v1::Licence::ResonanceSpire, 1);
+        world.set_treasury(seat, Money::new(10_000));
+        // The site search, counted with the predicates' own metered forms
+        // (each held to the tables by its own tests): one unit a spiral
+        // column, and the rows each test on it reads, up to the first free
+        // column. The protected-area test is `mandate.rs`'s and charges
+        // nothing.
+        let structures = n(world.structures().ids().len());
+        let mut search = 0_u64;
+        {
+            let ground = world.ground();
+            let [bx, by] = crate::targeting::column_of(centre);
+            let probe = UnitTally::new();
+            for &[dx, dy] in &world.spiral {
+                search += 1;
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                let (x, y) = (bx + dx, by + dy);
+                let Some(node) = ground.surface.node_of(x, y) else {
+                    continue;
+                };
+                probe.reset();
+                let blocked = !ground.surface.walkable(node)
+                    || ground.features.at_column_metered(x, y, &probe).is_some()
+                    || crate::targeting::metered::structure_on(&ground, [x, y], &probe)
+                    || crate::targeting::metered::stacks_on_own(&ground, seat, [x, y], &probe)
+                    || crate::targeting::metered::own_target_on(
+                        &ground,
+                        (seat, None),
+                        [x, y],
+                        &probe,
+                    )
+                    || world.set_queued_on_metered([x, y], &probe)
+                    || {
+                        probe.rows(world.targets().row_count());
+                        false
+                    };
+                search += probe.read().unwrap_or(0);
+                if blocked {
+                    continue;
+                }
+                if ground
+                    .standing(x, y)
+                    .is_some_and(|point| !crate::mandate::protected(&world, core, point))
+                {
+                    break;
+                }
+            }
+        }
+        // No Spire stands yet (every structure row read); the share's count
+        // (every structure row); the vacancy check and the placement's own
+        // vacancy search (every row, none being free).
+        assert!(world.structures().frees().iter().all(|free| !*free));
+        let expected = structures + search + structures + structures + structures;
+        let units = deciding(&mut world, |world| {
+            assert!(
+                world
+                    .queue_capability(seat, core, StructureKind::ResonanceSpire)
+                    .is_ok()
+            );
+        });
+        assert_eq!(units, expected);
     }
 }

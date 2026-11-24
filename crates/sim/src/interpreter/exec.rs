@@ -751,6 +751,8 @@ fn bind_rows(
         .then(|| usize::try_from(state.bound_feature).ok())
         .flatten();
     for row in rows {
+        // One unit a row read, and one a target of it (dunit part 2).
+        world.charge_decision(1);
         // A switch binds what the settings it carries bind.
         let row = match row {
             Row::Mandate {
@@ -771,6 +773,7 @@ fn bind_rows(
             }
         };
         for target in targets {
+            world.charge_decision(1);
             if let Anchor::On(spec) = target.anchor {
                 let binding = bind_one(world, seat, centre, except, covered, spec)?;
                 state.bindings.push(binding);
@@ -813,7 +816,16 @@ fn bind_one(
 /// `feature_lost` (targeting.md, "Three reading rules", 1).
 fn bindings_live(world: &World, state: &PlanState) -> bool {
     let live = |feature: u32| -> bool { feature == NO_INDEX || feature_live(world, feature) };
-    live(state.bound_feature) && state.bindings.iter().all(|binding| live(binding.feature))
+    // One unit a binding read, beside what each liveness test reads (dunit
+    // part 2).
+    let mut read: usize = 0;
+    let all = live(state.bound_feature)
+        && state.bindings.iter().all(|binding| {
+            read += 1;
+            live(binding.feature)
+        });
+    crate::seams::Meter::rows(world.decision_meter(), read);
+    all
 }
 
 /// Begin the visit handshake (spec section 5: 1.5 s, once per visit). The walk
@@ -1460,7 +1472,7 @@ fn commit_row(
                 // the mandate would buy it a second time
                 // ([`World::replace_build_targets`]). The list goes over as an
                 // iterator, so nothing here allocates inside a tick.
-                let entries = build_entries(targets, bindings, slot)?;
+                let entries = build_entries(world, targets, bindings, slot)?;
                 world
                     .replace_build_targets(beacon, entries)
                     .map_err(|_| StepFailure::TargetsUnwritten)?;
@@ -1555,13 +1567,20 @@ fn resolve_protected(
     let mut escort = false;
     let mut beacons: Vec<BeaconId> = Vec::with_capacity(list.len());
     for entry in list {
+        world.charge_decision(1);
         match entry {
             crate::defend::Protect::Commander => escort = true,
             crate::defend::Protect::Beacon(spec) => {
                 let beacon =
                     super::cond::resolve_beacon_for(world, seat, *spec, world.decision_meter())
                         .ok_or(StepFailure::NoTarget)?;
-                if !beacons.contains(&beacon) {
+                // One unit an entry the duplicate test compares (dunit part 2).
+                let seen = beacons.iter().position(|held| *held == beacon);
+                crate::seams::Meter::rows(
+                    world.decision_meter(),
+                    seen.map_or(beacons.len(), |at| at + 1),
+                );
+                if seen.is_none() {
                     beacons.push(beacon);
                 }
             }
@@ -1582,12 +1601,20 @@ fn resolve_protected(
 /// on no point. Both are checked here, before anything is written, so the
 /// iterator reads them without a fallback.
 fn build_entries<'a>(
+    world: &World,
     targets: &'a [crate::interpreter::Target],
     bindings: &'a [Binding],
     slot: usize,
 ) -> Result<impl Iterator<Item = BuildEntry> + Clone + 'a, StepFailure> {
-    let bound = bound_slice(targets, bindings, slot).ok_or(StepFailure::NoTarget)?;
-    if bound.iter().any(|binding| binding_point(binding).is_none()) {
+    let bound = bound_slice(world, targets, bindings, slot).ok_or(StepFailure::NoTarget)?;
+    // One unit a binding the point test reads, up to the first with none.
+    let mut read: usize = 0;
+    let pointless = bound.iter().any(|binding| {
+        read += 1;
+        binding_point(binding).is_none()
+    });
+    crate::seams::Meter::rows(world.decision_meter(), read);
+    if pointless {
         return Err(StepFailure::IllegalSite);
     }
     Ok(targets.iter().scan(bound.iter(), |read, target| {
@@ -1694,7 +1721,7 @@ where
     let build = if targets.is_empty() {
         None
     } else {
-        Some(build_entries(targets, bindings, slot)?)
+        Some(build_entries(world, targets, bindings, slot)?)
     };
     world
         .check_list_room(beacon, build, areas, replaces)
@@ -1712,20 +1739,28 @@ fn targets_live(world: &World, spec: &Row, bindings: &[Binding], slot: usize) ->
     if targets.is_empty() {
         return true;
     }
-    bound_slice(targets, bindings, slot).is_some_and(|bound| {
-        bound
-            .iter()
-            .all(|binding| feature_live(world, binding.feature))
+    bound_slice(world, targets, bindings, slot).is_some_and(|bound| {
+        // One unit a binding read, beside what each liveness test reads.
+        let mut read: usize = 0;
+        let all = bound.iter().all(|binding| {
+            read += 1;
+            feature_live(world, binding.feature)
+        });
+        crate::seams::Meter::rows(world.decision_meter(), read);
+        all
     })
 }
 
 /// The bindings a target list's `on` anchors read when the step started: the
 /// `used` of them from `slot`, `None` when the step holds fewer.
 fn bound_slice<'a>(
+    world: &World,
     targets: &[crate::interpreter::Target],
     bindings: &'a [Binding],
     slot: usize,
 ) -> Option<&'a [Binding]> {
+    // One unit a target the count reads: every target (dunit part 2).
+    crate::seams::Meter::rows(world.decision_meter(), targets.len());
     let used = targets
         .iter()
         .filter(|target| target.anchor.binds())
@@ -1735,8 +1770,19 @@ fn bound_slice<'a>(
 
 /// Whether the feature at index `feature` of the map's table is live. An
 /// index past `usize` is no feature, so it is not.
+///
+/// Its footprint and depth reads are charged to the decision
+/// ([`crate::features::FeatureTable::is_live_metered`]; dunit part 2): every
+/// caller runs inside one.
 fn feature_live(world: &World, feature: u32) -> bool {
-    usize::try_from(feature).is_ok_and(|index| world.feature_is_live(index))
+    usize::try_from(feature).is_ok_and(|index| {
+        world.features().is_live_metered(
+            index,
+            world.surface(),
+            world.voxels(),
+            world.decision_meter(),
+        )
+    })
 }
 
 /// The point a binding's `on` column stands on: `None` for one no voxel
@@ -1951,7 +1997,10 @@ fn resolve_place(
 fn site_is_legal(world: &World, seat: SeatId, site: [Fx; 3]) -> bool {
     let ground = world.ground();
     let [x, y] = crate::targeting::column_of(site);
-    ground.inside_own_sphere(seat, site) && !ground.stacks_on_own(seat, x, y)
+    // The rows both tests read, charged to the decision (dunit part 2).
+    let meter = world.decision_meter();
+    crate::targeting::metered::inside_own_sphere(&ground, seat, site, meter)
+        && !crate::targeting::metered::stacks_on_own(&ground, seat, [x, y], meter)
 }
 
 /// Send the commander somewhere. The route itself is the router's (T7): this
@@ -2137,8 +2186,179 @@ fn walls_stand(world: &World, beacon: BeaconId, spec: &Row) -> Result<(), StepFa
     let Row::Settings { targets, .. } = spec else {
         return Ok(());
     };
+    // One unit a target read for its wall (dunit part 2).
+    crate::seams::Meter::rows(world.decision_meter(), targets.len());
     for wall in targets.iter().filter_map(|target| target.wall) {
         crate::site::check_wall(world, beacon, wall, world.decision_meter())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod visits {
+    //! Dunit part 2: the step helpers a decision runs charge one unit a visit
+    //! of each loop, counted here from what they read.
+
+    use super::{bindings_live, bound_slice, build_entries, resolve_protected, walls_stand};
+    use crate::features::FeatureKind;
+    use crate::interpreter::state::{Binding, PlanState};
+    use crate::interpreter::{Anchor, BeaconSpec, Row, Target};
+    use crate::tables::{BuildOrder, SeatId};
+    use crate::world::World;
+
+    fn world() -> World {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let rules = crate::rules::RulesTable::load(&path)
+            .unwrap_or_else(|error| panic!("it loads: {error:?}"));
+        World::new(&crate::world::WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"))
+    }
+
+    /// The units `run` charges to the decision tally, from zero.
+    fn charged(world: &World, run: impl FnOnce(&World)) -> u64 {
+        world.decision_meter().reset();
+        run(world);
+        world
+            .decision_meter()
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"))
+    }
+
+    /// A vent's liveness read: its footprint columns up to the live one.
+    fn live_rows(world: &World, feature: usize) -> u64 {
+        let tally = crate::seams::UnitTally::new();
+        let _ = world
+            .features()
+            .is_live_metered(feature, world.surface(), world.voxels(), &tally);
+        tally.read().unwrap_or(0)
+    }
+
+    /// Two `on` targets and a voxel target, and a binding for each `on`.
+    fn targets(world: &World) -> (Vec<Target>, Vec<Binding>, usize) {
+        let vent = world
+            .features()
+            .features()
+            .iter()
+            .position(|feature| feature.kind == FeatureKind::Vent)
+            .unwrap_or_else(|| panic!("a vent"));
+        let anchor = world
+            .features()
+            .get(vent)
+            .map_or_else(|| panic!("the vent"), |feature| feature.anchor);
+        let on = Anchor::On(crate::targeting::FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor,
+        });
+        let target = |anchor| Target {
+            blueprint: crate::tables::StructureKind::Generator.id(),
+            anchor,
+            build: BuildOrder::NONE,
+            wall: None,
+        };
+        let binding = Binding {
+            feature: u32::try_from(vent).unwrap_or(0),
+            at: [anchor[0], anchor[1], 10],
+        };
+        (
+            vec![target(on), target(Anchor::Voxel([3, 3, 3])), target(on)],
+            vec![binding, binding],
+            vent,
+        )
+    }
+
+    #[test]
+    fn the_bindings_and_their_list_charge_what_they_read() {
+        let world = world();
+        let (targets, bindings, vent) = targets(&world);
+        // The count of the list's `on` anchors reads every target.
+        assert_eq!(
+            charged(&world, |world| {
+                assert!(bound_slice(world, &targets, &bindings, 0).is_some());
+            }),
+            3
+        );
+        // The entries add the binding each point test reads.
+        assert_eq!(
+            charged(&world, |world| {
+                assert!(build_entries(world, &targets, &bindings, 0).is_ok());
+            }),
+            3 + 2
+        );
+        // A step's look: the bound feature's liveness, then each binding read
+        // with its own.
+        let state = PlanState {
+            bound_feature: u32::try_from(vent).unwrap_or(0),
+            bindings: bindings.clone(),
+            ..PlanState::default()
+        };
+        assert_eq!(
+            charged(&world, |world| assert!(bindings_live(world, &state))),
+            live_rows(&world, vent) * 3 + 2
+        );
+    }
+
+    #[test]
+    fn a_protect_list_charges_its_entries_and_its_duplicate_test() {
+        let world = world();
+        let seat = SeatId::new(0);
+        let core = BeaconSpec::Own(0);
+        let list = [
+            crate::defend::Protect::Commander,
+            crate::defend::Protect::Beacon(core),
+            crate::defend::Protect::Beacon(core),
+        ];
+        // `b_00` reads the beacon rows up to the core's, each time it is
+        // resolved.
+        let b_00 = u64::try_from(
+            world
+                .beacons()
+                .row_of_ordinal(seat, 0)
+                .unwrap_or_else(|| panic!("a core"))
+                + 1,
+        )
+        .unwrap_or(0);
+        let units = charged(&world, |world| {
+            let (escort, beacons) =
+                resolve_protected(world, seat, &list).unwrap_or_else(|_| panic!("resolved"));
+            assert!(escort);
+            assert_eq!(beacons.len(), 1, "the duplicate is held once");
+        });
+        // Three entries; two resolves; the duplicate test reads nothing for
+        // the first beacon and the one held for the second.
+        assert_eq!(units, 3 + 2 * b_00 + 1);
+    }
+
+    #[test]
+    fn a_settings_rows_walls_charge_their_targets() {
+        let world = world();
+        let (targets, _, _) = targets(&world);
+        let row = Row::Settings {
+            kind: None,
+            fields: 0,
+            targets,
+            protected: Vec::new(),
+            probes: Vec::new(),
+            scouts: 0,
+            mine: None,
+            roe: 0,
+            retreat_hp_pct: None,
+            build: crate::site::BuildEdit::default(),
+            defend: None,
+            attack: None,
+        };
+        let beacon =
+            crate::tables::BeaconId::new(world.beacons().ids().first().copied().unwrap_or(0));
+        // No target is a wall: each is read, and no box is checked.
+        assert_eq!(
+            charged(&world, |world| assert!(
+                walls_stand(world, beacon, &row).is_ok()
+            )),
+            3
+        );
+    }
 }
