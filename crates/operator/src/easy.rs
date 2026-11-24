@@ -67,7 +67,7 @@
 //! | the verifies | 1 `verify_plan`, then [`EASY_REPAIRS`] repairs of one `patch_plan` and one `verify_plan` each |
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
-//! | the last seal ([`LAST_SEAL_CALLS`]) | one `get_draft` of the seat's last seal when the last Push's feed counts a failed step of its own, and one `save_draft` keeping this round's own seal; a built-in seat's only |
+//! | the last seal ([`LAST_SEAL_CALLS`]) | one `get_draft` of the seat's last seal, the draft the gateway carries it into the Lull under ([`CARRIED_DRAFT_ID`]), when the last Push's feed counts a failed step of its own; the seat writes no draft; a built-in seat's only |
 //!
 //! The Resonance Spire costs no call: the licence is the briefing's, the
 //! core's radius `list_beacons`', and a Spire going up the view's, all fixed
@@ -249,8 +249,8 @@ pub const SURVEY_RAID_ROUNDS: i64 = 2;
 /// at most, and Easy evaluates [`EASY_CANDIDATES`] candidates, so no round
 /// can have more refused placements than that: the largest retry count there
 /// can be is [`EASY_CANDIDATES`], and its worst case fits. With it the
-/// built-in seat's budget is [`EASY_CALL_BUDGET`], 109 calls, 19 under the
-/// limit (15 %), which is the stated margin;
+/// built-in seat's budget is [`EASY_CALL_BUDGET`], 110 calls, 18 under the
+/// limit (14 %);
 /// `crates/gamectl/tests/operator.rs`' `easy_fits_the_in_process_limits`
 /// holds the two together when it compiles, and
 /// `easy_never_exceeds_its_derived_call_budget` builds the worst case (every
