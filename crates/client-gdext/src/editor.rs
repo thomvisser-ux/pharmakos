@@ -1136,12 +1136,11 @@ enum Job {
         field: Option<u64>,
     },
     /// Its second half: `set_value_text` writing `typed` at `value_at` of the patched copy
-    /// `staged`, whose own undo is `inverse`; only its answer goes on screen. `base` is the
+    /// `staged`; only its answer goes on screen. `base` is the
     /// revision the first half was patched against, and `first` the job to ask again from.
     VisitValueText {
         base: u64,
         staged: String,
-        inverse: String,
         value_at: String,
         typed: String,
         field: Option<u64>,
@@ -1187,10 +1186,13 @@ impl Job {
 enum Undo {
     /// The inverse patch `patch_plan` handed back for an edit.
     Patch(String),
-    /// The inverse patches of an edit made in two calls (a Visit & change number row), each
-    /// sent through `patch_plan` in turn, the first against the text on screen: one Undo takes
-    /// the whole edit back.
-    Chain(Vec<String>),
+    /// The text as it was before an edit made in two calls (a Visit & change number row),
+    /// restored as it was, byte for byte, with no call, and the text's file kept as it is now (a
+    /// save between the edit and its Undo names the file the text is in). One Undo takes the
+    /// whole edit back with no text between, which a chain of inverses through `patch_plan` could
+    /// not promise: a refused second inverse, or a Lull closing between the two, would leave on
+    /// screen a text the player never had (S3's `fixq-c`, fix pass 1).
+    Text(String),
     /// The text as it was before the wizard's playbook replaced it (`None`: there was no
     /// text), restored as it was, byte for byte, with no call, and the file it came from.
     Restore {
@@ -1280,7 +1282,6 @@ enum Wire {
     /// The second half ([`Job::VisitValueText`]).
     VisitText {
         base: u64,
-        inverse: String,
         field: Option<u64>,
         first: Box<Job>,
     },
@@ -3777,7 +3778,15 @@ impl Editor {
     fn render_undo(&mut self) -> Option<Call> {
         let patch = match self.undo.last()? {
             Undo::Patch(patch) => patch.clone(),
-            Undo::Chain(patches) => patches.first()?.clone(),
+            Undo::Text(_) => {
+                if let Some(Undo::Text(text)) = self.undo.pop() {
+                    self.drop_settled_ghost();
+                    let file = self.file.clone();
+                    self.restore(Some(text), file);
+                    self.say("undone", "");
+                }
+                return None;
+            }
             Undo::Restore { .. } => {
                 if let Some(Undo::Restore { text, file }) = self.undo.pop() {
                     self.drop_settled_ghost();
@@ -3953,7 +3962,6 @@ impl Editor {
             Job::VisitValueText {
                 base,
                 staged,
-                inverse,
                 value_at,
                 typed,
                 field,
@@ -3965,12 +3973,7 @@ impl Editor {
                     ("typed", Json::String(typed)),
                 ]);
                 Some(self.send(
-                    Sent::Wire(Wire::VisitText {
-                        base,
-                        inverse,
-                        field,
-                        first,
-                    }),
+                    Sent::Wire(Wire::VisitText { base, field, first }),
                     "set_value_text",
                     params,
                 ))
@@ -4134,19 +4137,7 @@ impl Editor {
             Sent::Undo { base } => {
                 let answer = patch_of(result)?;
                 if base == self.revision {
-                    // A chain's later halves are each undone in turn; the entry goes with the last.
-                    let more = match self.undo.last_mut() {
-                        Some(Undo::Chain(patches)) if patches.len() > 1 => {
-                            patches.remove(0);
-                            true
-                        }
-                        _ => false,
-                    };
-                    if more {
-                        self.queue.push_front(Job::Undo);
-                    } else {
-                        self.undo.pop();
-                    }
+                    self.undo.pop();
                     self.drop_settled_ghost();
                     self.accept_text(answer.playbook_jsonc);
                     self.say("undone", "");
@@ -4361,7 +4352,6 @@ impl Editor {
                     self.queue.push_front(Job::VisitValueText {
                         base,
                         staged: answer.playbook_jsonc,
-                        inverse: answer.inverse_json_patch,
                         value_at,
                         typed,
                         field,
@@ -4374,12 +4364,7 @@ impl Editor {
                     };
                 }
             }
-            Wire::VisitText {
-                base,
-                inverse,
-                first,
-                ..
-            } => {
+            Wire::VisitText { base, first, .. } => {
                 let answer: SetValueTextResponse =
                     json::decode_json(&body(result, "gp.api.v1.SetValueTextResponse"))?;
                 if self.hears(&first) {
@@ -4393,10 +4378,11 @@ impl Editor {
                     };
                 }
                 if base == self.revision {
-                    // Undo sends the value's own undo, then the step's, against the text each
-                    // produced in turn.
-                    self.undo
-                        .push(Undo::Chain(vec![answer.inverse_json_patch, inverse]));
+                    // Undo puts the text from before the edit back, with no call and no text
+                    // between: the copy the first half patched never reached the screen.
+                    if let Some(before) = self.text.clone() {
+                        self.undo.push(Undo::Text(before));
+                    }
                     self.drop_settled_ghost();
                     self.accept_text(answer.playbook_jsonc);
                     self.say("", "");
@@ -8407,21 +8393,15 @@ mod tests {
         assert_eq!(editor.bytes(), b"{\"written\": 25}");
         assert_eq!(editor.field_ask(), &FieldAsk::Landed);
         assert_eq!(editor.undo_depth(), 1, "one edit");
+        // One Undo puts the text from before back with no call: no text between ever reaches
+        // the screen (fix pass 1).
         assert!(editor.undo());
-        let call = editor.next_call(false).expect("the value's undo");
-        assert_eq!(patch_of_call(&call), "[\"undo-value\"]");
-        editor
-            .answered(Ok(&patched("{\"staged\": 1}", "[]")))
-            .expect("settled");
-        let call = editor.next_call(false).expect("the step's undo");
-        assert_eq!(patch_of_call(&call), "[\"undo-step\"]");
-        assert_eq!(
-            call.params.get("playbook_jsonc"),
-            Some(&Json::String("{\"staged\": 1}".to_owned()))
+        assert!(
+            editor
+                .next_call(false)
+                .is_none_or(|call| call.method != "patch_plan"),
+            "no inverse goes out"
         );
-        editor
-            .answered(Ok(&patched(&before, "[]")))
-            .expect("settled");
         assert_eq!(editor.bytes(), before.as_bytes());
         assert_eq!(editor.undo_depth(), 0, "the whole edit taken back");
         // The gateway refuses the value: nothing changes on screen, and the popup says why.
@@ -8478,6 +8458,83 @@ mod tests {
         format!(
             r#"[{{"op":"add","path":"/declarative/route/-","value":{{"label":"visit_1","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{row}]}}}}}}]"#
         )
+    }
+
+    /// **A two-call edit is atomic both ways** (S3's `fixq-c`, fix pass 1; the review's probes
+    /// `probe_chain_undo_second_half_refused` and `probe_chain_undo_door_shuts_between`): the
+    /// first half's copy never reaches the screen, whether the second half is refused, or the
+    /// door shuts between the two, or a Fix asked while the first half is on its way waits
+    /// behind the second; and its Undo, after a save in between, restores the text from before
+    /// with no call and keeps the file the text was saved to.
+    #[test]
+    fn a_two_call_edit_and_its_undo_show_no_half() {
+        let half = |editor: &mut Editor| {
+            let (at, pointer) = setting_named(editor, "/retreat_hp_pct");
+            editor.field_opened();
+            assert_eq!(
+                editor.change_setting_number_text("b_00", at, &pointer, "25"),
+                Ok(())
+            );
+            let _ = visit_patch(editor);
+            editor
+                .answered(Ok(&patched("{\"half\": 1}", "[]")))
+                .expect("settled");
+        };
+        // The door shuts between the halves: the second is dropped and the text is as it was.
+        let mut editor = visit_editor();
+        let before = editor.text.clone().expect("a text");
+        half(&mut editor);
+        editor.set_door(Door::Push);
+        assert!(
+            !editor.has_pending_jobs(),
+            "the second half went with the door"
+        );
+        assert_eq!(editor.text.as_deref(), Some(before.as_str()));
+        assert_eq!(editor.undo_depth(), 0);
+        assert_eq!(editor.field_ask().name(), "refused");
+        // A Fix is not taken while the first half is on its way (the editor is busy until the
+        // second half lands), so nothing can come between the halves.
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
+        assert_eq!(
+            editor.change_setting_number_text("b_00", at, &pointer, "25"),
+            Ok(())
+        );
+        let _ = visit_patch(&mut editor);
+        assert!(editor.busy(), "the first half is an edit on its way");
+        assert!(!editor.fix(0, 0), "no Fix between the halves");
+        editor
+            .answered(Ok(&patched("{\"half\": 1}", "[]")))
+            .expect("settled");
+        assert!(editor.busy(), "the second half is owed");
+        let second = editor.next_call(false).expect("the second half");
+        assert_eq!(second.method, "set_value_text");
+        editor
+            .answered(Ok(&patched("{\"whole\": 25}", "[]")))
+            .expect("settled");
+        assert_eq!(editor.bytes(), b"{\"whole\": 25}");
+        // Saved between the edit and its Undo: the text comes back, the file stays the saved one.
+        editor.saved_to("C:/elsewhere/saved.jsonc");
+        assert!(editor.undo());
+        // A Fix may be queued ahead; Undo's own job puts the text back with no inverse.
+        for _ in 0..4 {
+            match editor.next_call(false) {
+                Some(call) if call.method == "patch_plan" && patch_of_call(&call) == "[]" => {
+                    panic!("an inverse went out")
+                }
+                Some(_) => {
+                    editor
+                        .answered(Err(("INTERNAL", "not this test's call")))
+                        .expect("settled");
+                }
+                None => break,
+            }
+        }
+        assert_eq!(editor.file(), Some("C:/elsewhere/saved.jsonc"));
+        assert!(
+            editor.undo_depth() == 0 || editor.bytes() != b"{\"whole\": 25}",
+            "the two-call edit was taken back"
+        );
     }
 
     /// **A wall's Build target is two ground clicks and the gateway's box** (S3's `fixq-c`, item
