@@ -251,10 +251,15 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Every `.json` and `.jsonc` file under `dir`, recursively, in path order.
+/// A folder that cannot be listed fails the test: the corpus is what is
+/// committed, and a folder that went missing is not an empty one.
 fn files_under(dir: &Path, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|error| {
+        panic!(
+            "the corpus folder {} cannot be listed: {error}",
+            dir.display()
+        )
+    });
     let mut paths: Vec<PathBuf> = entries
         .map(|entry| entry.expect("a dir entry").path())
         .collect();
@@ -271,26 +276,42 @@ fn files_under(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// The folders the corpus is read from.
+const CORPUS_ROOTS: [&str; 8] = [
+    "examples",
+    "library",
+    "scenarios",
+    "tests/golden",
+    "crates/verifier/tests/cases",
+    "crates/plan-core/tests/cases",
+    "docs/demo",
+    "godot/fixtures",
+];
+
+/// The fewest files the corpus may hold. 424 were committed on 2026-11-24;
+/// the floor sits two dozen below, so that retiring a few goldens moves
+/// nothing, while losing a subtree inside a root (which the per-root check
+/// cannot see) fails. Each root must list a file of its own, so a renamed or
+/// emptied root fails by name. A change that removes files on purpose lowers
+/// the floor in the same commit.
+const CORPUS_AT_LEAST: usize = 400;
+
 /// The committed corpus: every playbook, template, sample, scenario and
 /// verifier case, and every JSON golden beside them.
 fn corpus() -> Vec<(String, String)> {
     let root = workspace_root();
     let mut paths = Vec::new();
-    for dir in [
-        "examples",
-        "library",
-        "scenarios",
-        "tests/golden",
-        "crates/verifier/tests/cases",
-        "crates/plan-core/tests/cases",
-        "docs/demo",
-        "godot/fixtures",
-    ] {
+    for dir in CORPUS_ROOTS {
+        let before = paths.len();
         files_under(&root.join(dir), &mut paths);
+        assert!(
+            paths.len() > before,
+            "the corpus folder {dir} lists no .json or .jsonc file"
+        );
     }
     assert!(
-        paths.len() > 300,
-        "the corpus is the committed files: {}",
+        paths.len() >= CORPUS_AT_LEAST,
+        "the corpus is the committed files: {} of at least {CORPUS_AT_LEAST}",
         paths.len()
     );
     paths
@@ -1655,19 +1676,17 @@ comment_groups!(
     every_comment_comes_out_and_canonicalising_twice_is_once_15 = 15,
 );
 
-/// The plan covers the corpus as the directories list it, and the edge
-/// cases: every text has exactly one first unit, every boundary the rule
-/// names (every one in a file of a playbook's size, the first 32 in a larger
-/// one; read here from [`boundaries`] directly, not through [`splices`]) is
-/// spliced in exactly one group with the comments the rule gives it, every
-/// group has work and a test of its own.
+/// The plan covers the corpus as the directories list it (each of
+/// [`CORPUS_ROOTS`] listing files of its own, and the whole at least
+/// [`CORPUS_AT_LEAST`]), and the edge cases: every text has exactly one first
+/// unit, every boundary the rule names (every one in a file of a playbook's
+/// size, the first 32 in a larger one; read here from [`boundaries`]
+/// directly, not through [`splices`]) is spliced in exactly one group with
+/// the comments the rule gives it, and every group has work and a test of its
+/// own.
 #[test]
 fn every_boundary_of_every_text_has_a_test() {
-    let texts = differential_texts();
-    let (shared_texts, planned) = planned_texts();
-    let names: Vec<&String> = texts.iter().map(|(name, _)| name).collect();
-    let shared: Vec<&String> = shared_texts.iter().map(|(name, _)| name).collect();
-    assert_eq!(names, shared, "the plan reads the corpus as listed");
+    let (texts, planned) = planned_texts();
     assert_eq!(
         GROUP_TESTS,
         (0..GROUPS).collect::<Vec<_>>().as_slice(),
