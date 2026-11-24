@@ -84,6 +84,8 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
     let mut used = false;
     let mut asked_again = false;
     let mut added = false;
+    let mut described = false;
+    let mut typed_fast = false;
     for frame in 0..6_000_usize {
         now += FRAME_US;
         if !loading && rig.phase() == Phase::Lull {
@@ -121,9 +123,15 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
         if started && used && !added && rig.editor().rules_editable() {
             added = rig.editor_mut().new_rule().is_ok();
         }
+        // Then a beacon's number setting typed fast, five times, and a wall's box from two clicks:
+        // `set_value_text` and `compose_wall_box` in the same budget (S3's `fixq-c`, fix pass 1).
+        if added {
+            typed_fast |= type_fast_once_described(&mut rig, &mut described, typed_fast);
+        }
         if started
             && used
             && added
+            && typed_fast
             && !ready_asked
             && rig.editor().revision() > u64::try_from(edits).expect("small")
         {
@@ -157,6 +165,40 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
     (gateway, rig)
 }
 
+/// Asks for `b_00`'s detail once the rule list takes an edit, then, once it and the vocabulary
+/// are on hand, types and places ([`type_fast_and_place_a_wall`]); returns whether it did.
+fn type_fast_once_described(rig: &mut Rig, described: &mut bool, typed_fast: bool) -> bool {
+    if !*described && rig.editor().rules_editable() {
+        *described = true;
+        rig.editor_mut().describe_beacon("b_00");
+    }
+    let ready = *described
+        && !typed_fast
+        && rig
+            .editor()
+            .beacon_detail()
+            .is_some_and(|detail| detail.id == "b_00")
+        && rig.editor().vocabulary().is_some();
+    if ready {
+        type_fast_and_place_a_wall(rig);
+    }
+    ready
+}
+
+/// A beacon's number setting typed five times fast, and a wall's box from two clicks.
+fn type_fast_and_place_a_wall(rig: &mut Rig) {
+    for value in 1..=5 {
+        assert!(
+            rig.editor_mut()
+                .change_setting_number_text("b_00", 0, "/retreat_hp_pct", &value.to_string())
+                .is_ok()
+        );
+    }
+    assert!(rig.editor_mut().begin_build_target("b_00", 0).is_ok());
+    assert!(rig.editor_mut().pick(&Target::Voxel([1, 1, 1])).is_ok());
+    assert!(rig.editor_mut().pick(&Target::Voxel([2, 2, 1])).is_ok());
+}
+
 #[test]
 fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
     let limits = limits();
@@ -188,9 +230,11 @@ fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
                  tested ({:?})",
                 gateway.methods
             );
+            // Every map action, the five typed values' first halves (the step, then
+            // `set_value_text` writes the value) and the wall's row.
             assert_eq!(
                 gateway.methods.get("patch_plan").copied(),
-                Some(u32::try_from(edits).expect("small")),
+                Some(u32::try_from(edits).expect("small") + 5 + 1),
                 "{context}: every edit went out"
             );
             assert_eq!(
@@ -233,6 +277,19 @@ fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
             assert!(count("render_plan") >= 1, "{context}");
             // Add a rule's one call (S3's `fixq-c`), in the same budget as every other.
             assert_eq!(count("new_rule"), 1, "{context}: {:?}", gateway.methods);
+            // Five values typed fast, each `set_value_text` once, and one wall's box.
+            assert_eq!(
+                count("set_value_text"),
+                5,
+                "{context}: {:?}",
+                gateway.methods
+            );
+            assert_eq!(
+                count("compose_wall_box"),
+                1,
+                "{context}: {:?}",
+                gateway.methods
+            );
             assert_eq!(count("get_draft"), 1, "{context}: {:?}", gateway.methods);
             assert!(count("get_economy_forecast") >= 1, "{context}");
             // The vocabulary the pickers draw, read once per Lull, and once more by the picker's

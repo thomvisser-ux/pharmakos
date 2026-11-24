@@ -1206,6 +1206,19 @@ const COMPOSED: &[Composed] = &[
             ".to_float()",
             ".is_valid_int()",
             ".is_valid_float()",
+            // A field's text read as a number by GDScript's `int()`/`float()` casts (fix pass 1,
+            // mutant GC: `int(text) > int(max)` in the field's Send survived): the bound and the
+            // value are the gateway's to read.
+            "int(text",
+            "float(text",
+            "int(field",
+            "float(field",
+            "int(typed",
+            "float(typed",
+            "int(_number_field",
+            "float(_number_field",
+            "int(value_text",
+            "float(value_text",
         ],
     },
     Composed {
@@ -1297,6 +1310,15 @@ fn the_composition_scan_catches_each_family() {
         ("x.rs", "    let digits = typed_integer(text)?;"),
         ("editor.rs", "    let now: i64 = text.parse::<i64>()?;"),
         ("value_field.gd", "\tvar typed := field.text.to_int()"),
+        (
+            "editor.gd",
+            "\tif int(text) > int(_number_chip.get(\"max\", 0)):",
+        ),
+        (
+            "editor.gd",
+            "\tif float(text) > float(_number_chip.get(\"max\", 0)):",
+        ),
+        ("value_field.gd", "\tvar n := int(field.text)"),
         (
             "x.rs",
             "        Shape::Integer(integer) if integer.unit == \"ms\" => {",

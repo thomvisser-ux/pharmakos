@@ -1660,11 +1660,12 @@ func entry_rows() -> Array[Control]:
 
 
 ## The value field for the chip `named` (or, with `named` empty, the Visit & change setting
-## `_number_setting` names): the value as the file holds it, its `value_json`, never clamped
-## (L1), the unit beside it as sent, and the gateway's bounds in the note as sent, none where it
-## set none. A value outside them is said with the gateway's numbers (`outside` is the bridge's
-## reading). The field applies no bound: a value past one goes to the gateway, whose answer is
-## drawn. Each open releases the field's focus, so the first click selects the old value.
+## `_number_setting` names): the value now as the gateway wrote it, its `value_text` in its
+## `display_unit`, never clamped (L1), and the gateway's bounds in the note as sent, in the unit
+## they were sent in (`unit`), none where it set none. A value outside its shape is said where the
+## gateway's `outside` says so. The field applies no bound: a value past one goes to the gateway,
+## whose answer is drawn. Each open releases the field's focus, so the first click selects the old
+## value.
 func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	_number_chip = named
 	if not named.is_empty():
@@ -1693,8 +1694,8 @@ func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	_number_popup.popup()
 
 
-## The value field sent `text`, exactly as typed: the bridge reads it and composes the edit, or
-## refuses it by its reason. The popup stays open and says what became of it
+## The value field sent `text`, exactly as typed: the bridge sends it to the gateway's
+## `set_value_text` (or refuses a text too large to send). The popup stays open and says what became of it
 ## (`_draw_number_field`), closing once the edit lands.
 func _on_number_send(text: String) -> void:
 	if not _number_setting.is_empty():

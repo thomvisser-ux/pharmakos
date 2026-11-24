@@ -193,6 +193,8 @@ impl Gateway {
             );
         }
         let result = match method.as_str() {
+            name @ ("new_rule" | "set_value_text" | "compose_wall_box" | "get_beacon"
+            | "get_vocabulary") => fixq_answer(name, &params),
             "report_host_clock" => self.report_host_clock(&params),
             "end_recap" => {
                 self.close_phase();
@@ -217,8 +219,6 @@ impl Gateway {
                 r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#.to_owned()
             }
             "patch_plan" => patched(&params),
-            // S3's `fixq` wire: an empty rule added, the text answered as patch_plan answers.
-            "new_rule" => new_rule(&params),
             "estimate_route" => {
                 r#"{"reachable":true,"ms":1000,"legs":[{"to":{"voxel":{"x":1}},"ms":1000}]}"#
                     .to_owned()
@@ -320,6 +320,31 @@ impl Gateway {
 
 /// `patch_plan`'s answer: the text with the new step's label in a trailing comment. A label
 /// the text already quotes fails the test (E0105): every click in a burst must get its own.
+/// S3's `fixq` wire, and the one own beacon's detail and the vocabulary the burst's typed values
+/// and wall box read.
+fn fixq_answer(method: &str, params: &Json) -> String {
+    match method {
+            // S3's `fixq` wire: an empty rule added, the text answered as patch_plan answers.
+            "new_rule" => new_rule(params),
+            "set_value_text" => {
+                let text = match params.get("playbook_jsonc") {
+                    Some(Json::String(text)) => text.clone(),
+                    other => panic!("a playbook, not {other:?}"),
+                };
+                json::write(&Json::Object(vec![
+                    ("playbook_jsonc".to_owned(), Json::String(format!("{text} "))),
+                    ("inverse_json_patch".to_owned(), Json::String("[]".to_owned())),
+                ]))
+            }
+            "compose_wall_box" => r#"{"target":{"blueprint_id":"wall","anchor":{"voxel":{"x":1,"y":1,"z":1}},"wall_box":{"min":{"x":1,"y":1,"z":1},"max":{"x":2,"y":2,"z":3}}}}"#.to_owned(),
+            // One own beacon's detail with a number setting, and a vocabulary with the wall, for
+            // the burst's typed values and wall box.
+            "get_beacon" => r#"{"summary":{"beacon_id":"b_00"},"mandate":"build","settings":[{"pointer":"/retreat_hp_pct","title":"Retreat","value_json":"0","value_text":"0","shape":{"integer":{"min":0,"max":100,"unit":"%","display_unit":"%"}}}]}"#.to_owned(),
+            "get_vocabulary" => r#"{"blueprints":[{"name":"wall","title":"Wall","anchor_shape":"box"}]}"#.to_owned(),
+        other => panic!("not a fixq method: {other}"),
+    }
+}
+
 /// `new_rule`'s answer: the text with a space more, as `patched` answers an edit.
 fn new_rule(params: &Json) -> String {
     let text = match params.get("playbook_jsonc") {
