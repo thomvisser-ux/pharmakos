@@ -909,7 +909,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-119 codes. A code is language-neutral, append-only and never
+120 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1289,6 +1289,10 @@ E0513  ERROR  settings and recycle  raised at: semantics
 E0514  ERROR  settings and recycle  raised at: structure
   `{id}` never stands as a structure in this build, so a predicate asking about one could never be true.
   Walls are built voxel by voxel, and nothing builds a Survey post yet, so neither can be asked about. Ask about a Generator, an autocannon, a mortar or a Resonance Spire.
+
+E0515  ERROR  settings and recycle  raised at: structure
+  `clear_{list}` cannot stand {place}.
+  A `clear_` setting empties a list the beacon already holds, so it goes in a Change settings row on its own: not beside entries of the same list, and not where the beacon or its new mandate starts with no list at all.
 
 W0501  WARNING  settings and recycle  raised at: none at the skeleton (retired by S2's `dfnd`, which built the threat model)
   `seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs the nearest seam no known threat's weapon reaches, and this code is retired and raised by nothing.

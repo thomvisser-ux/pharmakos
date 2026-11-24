@@ -444,3 +444,21 @@ report is as before the bump. The same two lines moved in the gateway's
 As with every bump, a save written under `0.1.0-s3.5` does not resume under
 `0.1.0-s3.6`: `SavedMatch::check` refuses a save stamped by another verifier
 (`crates/gateway/src/save.rs`, spec section 3).
+
+**S3's `presence7` (`VERIFIER_VERSION` 0.1.0-s3.7).** Every `report_hash` moved, for
+one of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.6` to `0.1.0-s3.7`
+(input 4), because `SurveySettings.scout_count`, `MineSettings.dig_max_depth` and
+`MineSettings.pillar_spacing` carry presence and four lists gain a `clear_*` flag
+(decisions-log item 184 (10)): this build prices a written 0 and a set clear as one
+field each and raises `E0515` for a clear beside entries of its own list or in
+settings that start from nothing. Beside the version, three things moved, each named:
+the catalogue gains `E0515`; two new cases, `e0515_a_clear_beside_its_own_list` and
+`e0515_a_clear_in_a_new_beacon`, have their first reports; and `I0003` for an omitted
+`pillar_spacing` now carries the Fix that writes the 0 (its message is unchanged), which
+moved `e0501_setting_percentage_out_of_range` and `expand_east` here, and the
+gateway's `demo_deploy_and_visit_verify` and `demo_expand_and_mine_verify` and the
+wizard's `expand_and_mine` report beside the version lines. No committed case writes
+any of the seven at 0, and only the two `E0515` cases set a clear. As with every bump,
+a save written under `0.1.0-s3.6` does not resume under `0.1.0-s3.7`:
+`SavedMatch::check` refuses a save stamped by another verifier
+(`crates/gateway/src/save.rs`, spec section 3).

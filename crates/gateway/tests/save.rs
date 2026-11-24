@@ -1001,7 +1001,10 @@ fn save_golden(file: &str, text: &str) {
 /// moving. It was re-blessed once, when lane `retreat` (#230) moved
 /// `VERIFIER_VERSION` from `0.1.0-s3.5` to `0.1.0-s3.6`: the stamp's
 /// `verifier_version` and the two `report_hash` lines moved with it, which
-/// hashes the version, and no `plan_fingerprint` line moved.
+/// hashes the version, and no `plan_fingerprint` line moved. It was
+/// re-blessed again when lane `presence7` moved `VERIFIER_VERSION` to
+/// `0.1.0-s3.7` (decisions-log item 184 (10)), for the same two kinds of
+/// line and no other.
 #[test]
 fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
     const MATCH_ID: &str = "m-fpstream2-save";
