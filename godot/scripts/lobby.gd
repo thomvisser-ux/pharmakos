@@ -18,7 +18,8 @@
 # the bridge's `timer` is then empty; decisions-log item 135). Ready is this seat's
 # `set_ready`, and its label and the line under it, shown in a Lull, say what it does: with
 # nothing sealed the gateway files the safe playbook (decisions-log item 143 (4)), and with a
-# seal the gateway accepted this round Ready keeps it (`ready_line`, S3's `fixp`). Continue
+# seal the gateway accepted this round Ready keeps it (`ready_line`, S3's `fixp`; the gateway's own
+# word on the seal, `get_status`'s, since S3's `fixq-c`). Continue
 # leaves the recap.
 #
 # THE RECAP (S1's plan, task `ui`): in a recap and once the match has ended, the column
@@ -218,7 +219,7 @@ func _process(_delta: float) -> void:
 	_status.text = "  ".join(parts)
 	_ready_help.visible = String(state.get("phase", "")) == "lull"
 	if _ready_help.visible:
-		_ready_help.text = ready_line(vista.bridge.editor_state())
+		_ready_help.text = ready_line(state)
 		_ready_help.accessibility_name = _ready_help.text
 	_draw_recap(String(state.get("phase", "")))
 
@@ -257,11 +258,16 @@ static func preset_line(state: Dictionary) -> String:
 	return said
 
 
-## What Ready will do now, in a Lull (S3's `fixp`, P6b finding 4): with a seal the gateway
-## accepted this round (the bridge's editor's `sealed_this_round`), Ready keeps it; with none, the
-## gateway files the safe playbook. A branch on the bridge's word, for display.
-static func ready_line(editor_state: Dictionary) -> String:
-	return Strings.text("lobby_ready_sealed" if editor_state.get("sealed_this_round", false) else "lobby_ready_help")
+## What Ready will do now, in a Lull (S3's `fixp`, P6b finding 4), from the gateway's own word on
+## this seat's seal: the watch state's `sealed_this_round`, the rig's reading of the seat's
+## `get_status` for this round and phase, and the one source of it (S3's `fixq-c`, item 13: the
+## editor keeps no record of its own, so a resumed client says what the gateway says). Sealed,
+## Ready keeps it; not sealed, the gateway files the safe playbook; not told yet, the line says the
+## client is asking. A branch on the bridge's word, for display.
+static func ready_line(watch_state: Dictionary) -> String:
+	if not watch_state.has("sealed_this_round"):
+		return Strings.text("lobby_ready_asking")
+	return Strings.text("lobby_ready_sealed" if watch_state.get("sealed_this_round", false) else "lobby_ready_help")
 
 
 ## The recap's prose, as the gateway wrote it, in a recap and after the match has ended;

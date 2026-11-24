@@ -1191,16 +1191,22 @@ func _check_the_dormant_box_through_the_rig(stage: SubViewport, editor: CanvasLa
 	_diagnostics = ""
 
 
-## The Ready line from the bridge's word: the filing sentence before a seal, and after the
-## gateway accepted one this round, that Ready keeps it.
+## The Ready line from the gateway's word on the seal (S3's `fixq-c`, item 13: the rig's reading of
+## the seat's `get_status`, the one source): the filing sentence before a seal, and after the
+## gateway accepted one this round, and said so on `get_status`, that Ready keeps it. The editor
+## keeps no seal of its own, so its state names none.
 func _check_the_ready_line_through_the_rig(bridge: Node, failures: Array[String]) -> void:
-	if Lobby.ready_line(bridge.editor_state()) != Strings.text("lobby_ready_help"):
-		failures.append("before a seal the Ready line says `%s`" % Lobby.ready_line(bridge.editor_state()))
+	_sealed = false
+	await _rig_until(bridge, func(_state: Dictionary) -> bool: return bridge.watch_state().has("sealed_this_round"))
+	if Lobby.ready_line(bridge.watch_state()) != Strings.text("lobby_ready_help"):
+		failures.append("before a seal the Ready line says `%s`" % Lobby.ready_line(bridge.watch_state()))
 	bridge.editor_submit()
-	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("sealed_this_round", false)):
-		failures.append("an accepted seal never showed as this round's")
-	if Lobby.ready_line(bridge.editor_state()) != Strings.text("lobby_ready_sealed"):
-		failures.append("after an accepted seal the Ready line says `%s`" % Lobby.ready_line(bridge.editor_state()))
+	if not await _rig_until(bridge, func(_state: Dictionary) -> bool: return bridge.watch_state().get("sealed_this_round", false)):
+		failures.append("an accepted seal never showed as this round's on the gateway's word")
+	if Lobby.ready_line(bridge.watch_state()) != Strings.text("lobby_ready_sealed"):
+		failures.append("after an accepted seal the Ready line says `%s`" % Lobby.ready_line(bridge.watch_state()))
+	if bridge.editor_state().has("sealed_this_round"):
+		failures.append("the editor still keeps a seal of its own beside the gateway's")
 
 
 ## Load, pressed through its own button, opens in the folder of the file the text came from.
@@ -1265,6 +1271,8 @@ var _held: Array = []
 var _diagnostics := ""
 ## Every `patch_plan` the stand-in answered, its `json_patch` as sent.
 var _patches: Array[String] = []
+## Whether the stand-in accepted a submission: its `get_status` then says this seat is sealed.
+var _sealed := false
 
 
 ## Starts the bridge's watch rig with both connections open, opens RIG_TEXT in the editor, and
@@ -1337,6 +1345,9 @@ func _answer(text: String, error: String) -> String:
 			return _fixture("res://fixtures/vocabulary.json", id)
 		"submit_plan":
 			body = "\"report\":{\"qualifies\":true,\"depth\":\"full\",\"diagnostics\":[]},\"accepted\":true,"
+			_sealed = true
+		"get_status":
+			body = "\"preset\":\"custom\",\"sealed_this_round\":%s," % ("true" if _sealed else "false")
 		"get_briefing":
 			body = "\"notes\":\"\","
 		"list_drafts":
@@ -1393,8 +1404,10 @@ func _check_the_refused_ghost_line(editor: CanvasLayer, failures: Array[String])
 ## a seat, each number as it came; between rounds, the prose alone.
 func _check_the_recap_words(failures: Array[String]) -> void:
 	# The Ready line says what Ready will do now (S3's `fixp`, P6b finding 4).
-	if Lobby.ready_line({}) != Strings.text("lobby_ready_help") or Lobby.ready_line({"sealed_this_round": false}) != Strings.text("lobby_ready_help"):
-		failures.append("with nothing sealed the Ready line says `%s`" % Lobby.ready_line({}))
+	if Lobby.ready_line({}) != Strings.text("lobby_ready_asking"):
+		failures.append("with the gateway's word not yet told the Ready line says `%s`" % Lobby.ready_line({}))
+	if Lobby.ready_line({"sealed_this_round": false}) != Strings.text("lobby_ready_help"):
+		failures.append("with nothing sealed the Ready line says `%s`" % Lobby.ready_line({"sealed_this_round": false}))
 	if Lobby.ready_line({"sealed_this_round": true}) != Strings.text("lobby_ready_sealed"):
 		failures.append("with this round's seal the Ready line says `%s`" % Lobby.ready_line({"sealed_this_round": true}))
 	var between := {"round": 2, "prose": "Words.", "seat_tallies": []}

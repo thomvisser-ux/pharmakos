@@ -46,6 +46,12 @@ fn read(relative: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
 }
 
+/// One of the bridge crate's own sources, `src/<name>`.
+fn read_source(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
+}
+
 #[test]
 fn the_gdextension_names_the_library_cargo_builds() {
     let extension = read("pharmakos.gdextension");
@@ -905,12 +911,20 @@ fn ready_says_what_it_does_and_the_gate_is_the_clients() {
     assert!(
         gd_code(&lobby, "_process")
             .iter()
-            .any(|line| line.contains("_ready_help.text = ready_line(vista.bridge.editor_state())")),
-        "the line says what Ready does now (fixp)"
+            .any(|line| line.contains("_ready_help.text = ready_line(state)")),
+        "the line says what Ready does now (fixp), from the watch state (fixq-c)"
+    );
+    // The gateway's word on the seal is the one source (S3's `fixq-c`, item 13): the editor
+    // keeps none, and its state names none.
+    assert!(
+        !read_source("editor_view.rs").contains("\"sealed_this_round\""),
+        "the editor's state carries no seal of its own"
     );
     assert!(
         gd_code(&lobby, "ready_line").iter().any(|line| line.contains(
-            "\"lobby_ready_sealed\" if editor_state.get(\"sealed_this_round\", false) else \"lobby_ready_help\""
+            "if not watch_state.has(\"sealed_this_round\"):"
+        )) && gd_code(&lobby, "ready_line").iter().any(|line| line.contains(
+            "\"lobby_ready_sealed\" if watch_state.get(\"sealed_this_round\", false) else \"lobby_ready_help\""
         )),
         "the bridge's word picks the line"
     );

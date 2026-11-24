@@ -37,6 +37,7 @@ const TEXT := {
 	"lobby_ready_help": "With nothing sealed, Ready files the safe playbook for you.",
 	# With a seal the gateway accepted this round (S3's `fixp`).
 	"lobby_ready_sealed": "Your seal for this round stands: Ready keeps it.",
+	"lobby_ready_asking": "Asking the gateway whether you hold a seal this round...",
 	"lobby_continue": "Continue",
 	"lobby_follow": "Follow",
 	"lobby_whole_map": "Whole map",

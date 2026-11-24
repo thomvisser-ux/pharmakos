@@ -1278,9 +1278,6 @@ pub struct Editor {
     drafts: Vec<DraftRow>,
     known: Known,
     sealed: Option<String>,
-    /// The round of the last submission the gateway accepted, as this process saw it: what the
-    /// Ready line says Ready will do (S3's `fixp`, P6b finding 4).
-    sealed_round: Option<u32>,
     submitted: Option<Submitted>,
     round: u32,
     carried_round: u32,
@@ -3325,15 +3322,6 @@ impl Editor {
         self.submitted
     }
 
-    /// Whether the gateway accepted a submission from this editor in the round under way, so
-    /// Ready keeps this round's seal rather than file the safe playbook. What this process saw;
-    /// a resumed process learns it from the gateway's own word on `get_status`, which the wire
-    /// does not carry yet (lane `probw`; S3's `fixp`, TODO 1).
-    #[must_use]
-    pub fn sealed_this_round(&self) -> bool {
-        self.sealed_round == Some(self.round)
-    }
-
     /// What `get_beacon` said about the beacon last clicked.
     #[must_use]
     pub fn beacon_prose(&self) -> &str {
@@ -4093,7 +4081,6 @@ impl Editor {
         }
         if response.accepted {
             self.sealed = Some(text);
-            self.sealed_round = Some(self.round);
             self.seal_to_ask = Some(self.round);
             // A re-seal changes the Lull's "this round" sentence at once (targeting.md,
             // "Messages"), so the briefing is read again.
@@ -5006,12 +4993,16 @@ mod tests {
         assert_eq!(editor.status().key, "fixed", "and again when it lands");
     }
 
+    /// The editor keeps no seal of its own (S3's `fixq-c`, item 13): an accepted submission only
+    /// marks, once, that the rig is to ask the gateway (`get_status`'s `sealed_this_round`, the one
+    /// source the Ready line reads); a refused one marks nothing. Two sources could disagree, and
+    /// a resumed client would hold only one of them.
     #[test]
-    fn an_accepted_seal_is_this_rounds_until_the_next_round() {
+    fn an_accepted_seal_asks_the_gateway_and_is_kept_nowhere_here() {
         let submit = |accepted: bool| {
             let mut editor = loaded(EXPAND_EAST);
             editor.lull_opened(2);
-            assert!(!editor.sealed_this_round());
+            assert!(!editor.take_sealed_mark());
             assert!(editor.submit());
             for _ in 0..12 {
                 match editor.next_call(false) {
@@ -5033,17 +5024,14 @@ mod tests {
         };
         let mut editor = submit(true);
         assert!(
-            editor.sealed_this_round(),
-            "an accepted seal is this round's"
+            editor.take_sealed_mark(),
+            "an accepted seal asks the gateway"
         );
-        editor.lull_opened(2);
+        assert!(!editor.take_sealed_mark(), "once");
         assert!(
-            editor.sealed_this_round(),
-            "the same Lull opened again keeps it"
+            !submit(false).take_sealed_mark(),
+            "a refused seal asks nothing"
         );
-        editor.lull_opened(3);
-        assert!(!editor.sealed_this_round(), "a new round holds no seal yet");
-        assert!(!submit(false).sealed_this_round(), "a refused seal is none");
     }
 
     #[test]
