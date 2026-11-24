@@ -1426,10 +1426,21 @@ fn kept_in_group(group: usize) {
         done.len(),
         kept.cases
     );
-    assert_eq!(
-        done, wanted,
-        "group {group} splices every boundary it plans"
-    );
+    if done != wanted {
+        let first = done
+            .iter()
+            .zip(&wanted)
+            .position(|(one, two)| one != two)
+            .unwrap_or(done.len().min(wanted.len()));
+        panic!(
+            "group {group} splices every boundary it plans: {} splices made, {} planned, \
+             first apart at {first}: made {:?}, planned {:?}",
+            done.len(),
+            wanted.len(),
+            done.get(first),
+            wanted.get(first)
+        );
+    }
     assert!(
         kept.cases * u64::try_from(GROUPS).expect("a count") > 10_000,
         "group {group}: {} canonical cases",
