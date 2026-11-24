@@ -7325,8 +7325,9 @@ mod fork {
     }
 
     /// `shard::SPLIT_SALT`'s rule over `shard::HEAVY_UNITS`, at the shard
-    /// count ci.yml runs: each heavy unit is a unit of this workspace (so a
-    /// renamed one is red here, not a rule that silently stopped binding),
+    /// count ci.yml runs: each heavy unit, and each unit `shard::MEASURED`
+    /// records, is a unit of this workspace (so a renamed one is red here, not
+    /// a rule that silently stopped binding),
     /// each falls to a shard no other heavy unit falls to, and the heaviest
     /// does not fall to shard 1, which also runs every step that is not
     /// sharded. No salt below `SPLIT_SALT` meets the rule, so the salt is the
@@ -7335,7 +7336,15 @@ mod fork {
     fn the_heavy_units_fall_apart_on_ci() {
         let total = ci_shards_total();
         let units = real_workspace_units();
-        for (step, key) in shard::HEAVY_UNITS {
+        let measured = shard::MEASURED
+            .iter()
+            .flat_map(|measured| measured.units)
+            .map(|(step, key, _)| (step, key));
+        for (step, key) in shard::HEAVY_UNITS
+            .iter()
+            .map(|(step, key)| (step, key))
+            .chain(measured)
+        {
             let known = units
                 .iter()
                 .any(|(owner, keys)| owner == step && keys.iter().any(|owned| owned == key));

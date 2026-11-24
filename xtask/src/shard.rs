@@ -70,28 +70,101 @@ pub(crate) const SHARDED_STEPS: &[&str] = &["test", "test-research", "scenario"]
 pub(crate) const MERGED_STEPS: &[&str] = &["golden"];
 
 /// The units that carry most of a leg's test time, heaviest first, as `(step,
-/// key)`: on windows-latest's runs of 2026-11-23, `test`'s `lib` took 491 s
-/// (456 s of it pharmakos-plan-core's unit tests), `test`'s
-/// `test:allocations` 252 s and `test-research`'s `test:allocations` 122 s,
-/// and every other unit 33 s or less. `the_heavy_units_fall_apart_on_ci`
-/// (main.rs) holds [`SPLIT_SALT`] to its rule over them: at CI's shard count
-/// each falls to a shard of its own, and the heaviest not to shard 1, which
-/// also runs every step that is not sharded.
+/// key)`: [`HEAVY_RULE`] applied to [`MEASURED`], which
+/// `the_heavy_units_are_the_rule_over_the_measured_runs` holds them to.
+/// `the_heavy_units_fall_apart_on_ci` (main.rs) holds [`SPLIT_SALT`] to its
+/// rule over them: at CI's shard count each falls to a shard of its own, and
+/// the heaviest not to shard 1, which also runs every step that is not
+/// sharded.
+///
+/// On the two runs [`MEASURED`] records, `test`'s `test:allocations` took 199
+/// to 324 s a leg (its tick tests, at opt-level 0) and `test`'s `lib` 168 to
+/// 364 s (142 to 325 s of it pharmakos-plan-core's unit tests); every other
+/// unit took 43 s or less, and `test-research`'s `test:allocations` under a
+/// second.
+///
+/// History: `shard4` #217 read three heavy units from windows-latest's runs
+/// of 2026-11-23 (`test`'s `lib` 491 s, `test`'s `test:allocations` 252 s,
+/// `test-research`'s `test:allocations` 122 s). Then `simtest` #225 gated the
+/// tick tests out of the research build, which left `test-research`'s
+/// `test:allocations` one test, and `pcsplit` #224 split
+/// pharmakos-plan-core's 456 s test into 16.
 // PLACEHOLDER: which units are heavy, read from CI's step timings — main session, when a unit's cost moves
 #[cfg(test)]
-pub(crate) const HEAVY_UNITS: &[(&str, &str)] = &[
-    ("test", "lib"),
-    ("test", "test:allocations"),
-    ("test-research", "test:allocations"),
+pub(crate) const HEAVY_UNITS: &[(&str, &str)] = &[("test", "test:allocations"), ("test", "lib")];
+
+/// The rule that reads [`HEAVY_UNITS`] from [`MEASURED`]: a unit is heavy when,
+/// on some operating system in some measured run, its seconds are more than
+/// one [`HEAVY_RULE`]th of that leg's test time (every unit of `test` and
+/// `test-research` on that operating system in that run, together). Heaviest
+/// first is by the sum of its seconds over every run and operating system,
+/// ties by step and key. On the measured runs each heavy unit takes 17.6 % to
+/// 32.3 % of every leg, and no other unit more than 4.2 % of any, so the line
+/// sits in a wide gap: the two runs differ by up to 2 to 1 in a unit's
+/// seconds (windows-latest's `lib`: 183 s, then 364 s), and neither crosses it.
+#[cfg(test)]
+pub(crate) const HEAVY_RULE: u32 = 10;
+
+/// The operating systems of [`Measured::leg`] and of each unit's seconds, in
+/// order: ci.yml's legs.
+#[cfg(test)]
+pub(crate) const MEASURED_LEGS: [&str; 3] = ["windows-latest", "macos-latest", "ubuntu-latest"];
+
+/// One `ci.yml` run's test seconds, read from its nine shard jobs' logs: each
+/// test executable's libtest `finished in` figure, summed per unit.
+#[cfg(test)]
+pub(crate) struct Measured {
+    /// The run's id.
+    pub(crate) run: u64,
+    /// The commit it ran.
+    pub(crate) head: &'static str,
+    /// Per leg ([`MEASURED_LEGS`]): every unit of `test` and `test-research`
+    /// together, whole seconds.
+    pub(crate) leg: [u32; 3],
+    /// Every unit over 30 s on some leg, as `(step, key, seconds per leg)`,
+    /// whole seconds; every unit left out is 30 s or less on every leg.
+    pub(crate) units: &'static [(&'static str, &'static str, [u32; 3])],
+}
+
+/// The runs [`HEAVY_UNITS`] were read from: `main`'s push run of `bdfe7b72`
+/// (the merge of `pcsplit` #224, after `simtest` #225), and the last pull
+/// request run of #224, whose tree is the same.
+#[cfg(test)]
+pub(crate) const MEASURED: &[Measured] = &[
+    Measured {
+        run: 45_342_940_283,
+        head: "bdfe7b72",
+        leg: [1127, 1020, 988],
+        units: &[
+            ("test", "test:allocations", [199, 324, 229]),
+            ("test", "lib", [364, 220, 227]),
+            ("test", "test:operator", [43, 34, 38]),
+            ("test", "test:ladder", [31, 36, 29]),
+        ],
+    },
+    Measured {
+        run: 45_332_694_060,
+        head: "1a0ae693",
+        leg: [907, 806, 943],
+        units: &[
+            ("test", "test:allocations", [259, 205, 282]),
+            ("test", "lib", [183, 207, 168]),
+            ("test", "test:operator", [27, 34, 30]),
+            ("test", "test:fuzz", [34, 19, 28]),
+            ("test", "test:ladder", [26, 31, 30]),
+        ],
+    },
 ];
 
 /// Hashed in front of every unit's name ([`Shard::holds`]). It is the smallest
 /// salt, counting from 0, for which [`HEAVY_UNITS`] fall apart at CI's shard
-/// count by the rule `the_heavy_units_fall_apart_on_ci` checks; without a
-/// salt, `lib` and `test`'s `test:allocations` both fell to shard 2 of 3,
-/// which made windows-latest's shard 2 a 20-minute job while its others took
-/// 5 to 9. A new salt moves every unit at once, so it changes only with
-/// [`HEAVY_UNITS`] or the shard count.
+/// count by the rule `the_heavy_units_fall_apart_on_ci` checks. Over
+/// `shard4`'s three heavy units that salt was 0, where the unsalted hash had
+/// put `lib` and `test`'s `test:allocations` both on shard 2 of 3 (a
+/// 20-minute windows-latest job). Over today's two it is still 0
+/// (`test:allocations` on shard 2 of 3, `lib` on shard 3), so `shard5`'s
+/// re-derivation moved no unit. A new salt moves every unit at once, so it
+/// changes only with [`HEAVY_UNITS`] or the shard count.
 // PLACEHOLDER: the split's salt, chosen from CI's step timings through HEAVY_UNITS — main session, when a unit's cost moves
 pub(crate) const SPLIT_SALT: u32 = 0;
 
@@ -382,6 +455,56 @@ mod tests {
             test: Some(test),
             doctest: Some(doctest),
         }
+    }
+
+    /// [`HEAVY_UNITS`] is [`HEAVY_RULE`] applied to [`MEASURED`], heaviest
+    /// first: a unit dropped from the list, one added by eye, or the order
+    /// changed is red here, and a new run's figures that move a unit across
+    /// the rule's line move the list in the same commit.
+    #[test]
+    fn the_heavy_units_are_the_rule_over_the_measured_runs() {
+        assert!(!MEASURED.is_empty(), "the rule reads at least one run");
+        let mut heavy: Vec<((&str, &str), u64)> = Vec::new();
+        for measured in MEASURED {
+            for (name, seconds) in MEASURED_LEGS.iter().zip(measured.leg) {
+                assert!(
+                    seconds > 0,
+                    "run {} ({}): {name} has no test time",
+                    measured.run,
+                    measured.head
+                );
+            }
+            for (step, key, seconds) in measured.units {
+                assert!(
+                    seconds.iter().any(|seconds| *seconds > 30),
+                    "run {}: {step}/{key} is 30 s or less on every leg, so it is not recorded",
+                    measured.run
+                );
+                let over = seconds.iter().zip(measured.leg).any(|(seconds, leg)| {
+                    u64::from(*seconds) * u64::from(HEAVY_RULE) > u64::from(leg)
+                });
+                if over && !heavy.iter().any(|(unit, _)| *unit == (*step, *key)) {
+                    heavy.push(((*step, *key), 0));
+                }
+            }
+        }
+        for (unit, total) in &mut heavy {
+            *total = MEASURED
+                .iter()
+                .flat_map(|measured| measured.units)
+                .filter(|(step, key, _)| (*step, *key) == *unit)
+                .flat_map(|(_, _, seconds)| seconds)
+                .map(|seconds| u64::from(*seconds))
+                .sum();
+        }
+        heavy.sort_by(|(left, left_total), (right, right_total)| {
+            right_total.cmp(left_total).then(left.cmp(right))
+        });
+        let derived: Vec<(&str, &str)> = heavy.into_iter().map(|(unit, _)| unit).collect();
+        assert_eq!(
+            derived, HEAVY_UNITS,
+            "HEAVY_UNITS is HEAVY_RULE over MEASURED"
+        );
     }
 
     #[test]
