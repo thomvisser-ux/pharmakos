@@ -495,7 +495,35 @@ struct Link {
     next_id: i64,
     in_flight: Option<(i64, Purpose)>,
     drops: u32,
+    /// Drops the gateway closed on the message in flight ([`Close::ThisMessage`]): counted
+    /// under their own reason, never asked again.
+    message_drops: u32,
+    /// Calls not sent because their frame was past the gateway's message cap.
+    unsent: u32,
     calls: u64,
+}
+
+/// Why a connection closed, as far as the call in flight goes (S3's `fixq-c`, fix pass 1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Close {
+    /// The connection went: the call in flight is asked again once it is back.
+    Connection,
+    /// The gateway closed on the message itself (RFC 6455 close codes 1003 unsupported data,
+    /// 1007 invalid payload, 1008 policy violation, 1009 message too big): the same call would
+    /// close it again, so it is settled as refused and never asked again.
+    ThisMessage(u16),
+}
+
+impl Close {
+    /// The close a WebSocket close code names; anything but the four codes about a message is
+    /// the connection's.
+    #[must_use]
+    pub fn of_code(code: i64) -> Self {
+        match u16::try_from(code) {
+            Ok(code @ (1003 | 1007 | 1008 | 1009)) => Self::ThisMessage(code),
+            _ => Self::Connection,
+        }
+    }
 }
 
 /// One frame to send: which connection, and the JSON-RPC text.
@@ -788,13 +816,34 @@ impl Rig {
     /// Connection `link` dropped. Whatever it had in flight is carried or forgotten, and
     /// the drop is counted: the watch check asserts there were none.
     pub fn dropped(&mut self, link: usize) {
+        self.closed(link, Close::Connection);
+    }
+
+    /// Connection `link` closed, for the reason `close` names. A close on the message itself
+    /// settles what was in flight as refused and asks nothing again ([`Close::ThisMessage`]);
+    /// any other is [`Rig::dropped`]'s.
+    pub fn closed(&mut self, link: usize, close: Close) {
         let Some(state) = self.links.get_mut(link) else {
             return;
         };
         if state.open {
             state.drops = state.drops.saturating_add(1);
+            if matches!(close, Close::ThisMessage(_)) {
+                state.message_drops = state.message_drops.saturating_add(1);
+            }
         }
         state.open = false;
+        if let Close::ThisMessage(code) = close {
+            match state.in_flight.take() {
+                Some((_, Purpose::Plan)) => {
+                    self.editor.closed_on(code);
+                    self.sync_editor();
+                }
+                Some((_, purpose)) => self.refused(purpose, "CLOSED_ON_MESSAGE"),
+                None => {}
+            }
+            return;
+        }
         match state.in_flight.take() {
             Some((_, Purpose::Advance)) => self.timing.pacer.refused(),
             Some((_, Purpose::Clock)) => {
@@ -1005,6 +1054,25 @@ impl Rig {
         let state = self.links.get_mut(link)?;
         state.next_id = state.next_id.saturating_add(1);
         let id = state.next_id;
+        let text = json::write(&object(vec![
+            ("jsonrpc", Json::String("2.0".to_owned())),
+            ("id", number(id)),
+            ("method", Json::String(method.to_owned())),
+            ("params", params),
+        ]));
+        // A frame past the gateway's message cap would close the connection (1009): it is not
+        // sent, and the call is settled as refused where its refusal is shown. A transport
+        // limit, read from the one number both sides read (S3's `fixq-c`, fix pass 1).
+        if text.len() > pharmakos_proto::transport::MAX_MESSAGE_BYTES {
+            state.unsent = state.unsent.saturating_add(1);
+            if purpose == Purpose::Plan {
+                self.editor.unsendable(text.len());
+                self.sync_editor();
+            } else {
+                self.refused(purpose, "TOO_LARGE_TO_SEND");
+            }
+            return None;
+        }
         state.in_flight = Some((id, purpose));
         state.calls = state.calls.saturating_add(1);
         if link == SEAT {
@@ -1019,12 +1087,6 @@ impl Rig {
             Purpose::Status if link == SEAT => self.reads.status = false,
             _ => {}
         }
-        let text = json::write(&object(vec![
-            ("jsonrpc", Json::String("2.0".to_owned())),
-            ("id", number(id)),
-            ("method", Json::String(method.to_owned())),
-            ("params", params),
-        ]));
         Some(Outgoing { link, text })
     }
 
@@ -1588,6 +1650,18 @@ impl Rig {
     pub const fn drops(&self) -> [u32; 2] {
         let [admin, seat] = &self.links;
         [admin.drops, seat.drops]
+    }
+
+    /// How many of each connection's drops the gateway closed on the message in flight
+    /// ([`Close::ThisMessage`]), and how many calls were not sent for being past the message cap:
+    /// `[[admin, seat] closes on a message, [admin, seat] unsent]`.
+    #[must_use]
+    pub const fn message_refusals(&self) -> [[u32; 2]; 2] {
+        let [admin, seat] = &self.links;
+        [
+            [admin.message_drops, seat.message_drops],
+            [admin.unsent, seat.unsent],
+        ]
     }
 
     /// How many calls each connection has sent: [`ADMIN`]'s, then [`SEAT`]'s.
@@ -2367,6 +2441,69 @@ mod tests {
             rig.editor().route().found_nothing,
             "waypoint 1 covers nothing: its step would fail `no_target`"
         );
+    }
+
+    /// **A call past the gateway's message cap is not sent** (S3's `fixq-c`, fix pass 1, the
+    /// HIGH: a 300 KB paste closed the seat connection with 1009, and was sent again after every
+    /// reconnect). The rig refuses the frame before it goes, counts it, settles the editor's call
+    /// as refused in this client's words, and asks it never again; the connection stays up.
+    #[test]
+    fn a_call_past_the_message_cap_is_never_sent() {
+        let mut rig = editing();
+        let notes = "x".repeat(pharmakos_proto::transport::MAX_MESSAGE_BYTES);
+        rig.editor_mut().save_notes(&notes);
+        let sent = rig.poll(3);
+        assert!(
+            sent.iter()
+                .all(|frame| frame.link != SEAT || method_of(frame) != "save_notes"),
+            "nothing past the cap goes out"
+        );
+        assert_eq!(rig.message_refusals(), [[0, 0], [0, 1]]);
+        assert_eq!(rig.editor().status().key, "call_too_large");
+        assert_eq!(rig.drops(), [0, 0], "the connection stays up");
+        for now in 4..12 {
+            for frame in rig.poll(now) {
+                assert_ne!(method_of(&frame), "save_notes", "never asked again");
+            }
+        }
+    }
+
+    /// **A connection the gateway closed on the message itself never re-sends it** (fix pass 1):
+    /// a close with 1009 (or 1003, 1007, 1008) settles the call in flight as refused and counts the
+    /// drop under its own reason; any other close asks the call again once the link is back.
+    #[test]
+    fn a_close_on_the_message_settles_it_and_any_other_close_asks_again() {
+        for (close, again) in [(Close::ThisMessage(1009), false), (Close::Connection, true)] {
+            let mut rig = editing();
+            assert!(rig.editor_mut().submit());
+            let sent = rig.poll(3);
+            assert!(sent.iter().any(|frame| method_of(frame) == "submit_plan"));
+            rig.closed(SEAT, close);
+            rig.opened(SEAT);
+            let mut resent = false;
+            for now in 4..12 {
+                for frame in rig.poll(now) {
+                    if method_of(&frame) == "submit_plan" {
+                        resent = true;
+                    }
+                    let body = match method_of(&frame).as_str() {
+                        "get_view" => r#"{"next_cursor":"c1","complete":true}"#,
+                        "get_status" => r#"{"preset":"custom"}"#,
+                        _ => "{}",
+                    };
+                    let _ = rig.receive(frame.link, &answer(id_of(&frame), body, "lull"));
+                }
+            }
+            assert_eq!(resent, again, "{close:?}");
+            if !again {
+                assert_eq!(rig.message_refusals()[0], [0, 1]);
+                assert_eq!(rig.editor().status().key, "call_closed_on");
+            }
+        }
+        assert_eq!(Close::of_code(1009), Close::ThisMessage(1009));
+        assert_eq!(Close::of_code(1008), Close::ThisMessage(1008));
+        assert_eq!(Close::of_code(1006), Close::Connection);
+        assert_eq!(Close::of_code(-1), Close::Connection);
     }
 
     #[test]

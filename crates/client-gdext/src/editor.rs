@@ -522,6 +522,12 @@ pub enum Unchecked {
     Unreadable(String),
     /// The door is shut, so no check is sent.
     Closed(Door),
+    /// The check's call was too large for the gateway to read, so it was not sent: the
+    /// encoded frame's size, in bytes (S3's `fixq-c`, fix pass 1).
+    TooLarge(String),
+    /// The gateway closed the connection on the check's call itself (a close code that says
+    /// "this message", 1009 and its kin): the code. The call is not sent again.
+    ClosedOn(String),
 }
 
 /// One check of the text on screen, by the panel line that waits for it: a refusal is
@@ -896,6 +902,10 @@ pub enum ReadFailed {
     Refused(String),
     /// The gateway answered, and this client could not read the answer: the decode's reason.
     Unreadable(String),
+    /// The read's call was too large for the gateway to read, so it was not sent: its size.
+    TooLarge(String),
+    /// The gateway closed the connection on the read's call itself: the close code.
+    ClosedOn(String),
 }
 
 impl ReadFailed {
@@ -905,6 +915,8 @@ impl ReadFailed {
         match self {
             Self::Refused(_) => "refused",
             Self::Unreadable(_) => "unreadable",
+            Self::TooLarge(_) => "too_large",
+            Self::ClosedOn(_) => "closed_on",
         }
     }
 
@@ -912,7 +924,10 @@ impl ReadFailed {
     #[must_use]
     pub fn detail(&self) -> &str {
         match self {
-            Self::Refused(detail) | Self::Unreadable(detail) => detail,
+            Self::Refused(detail)
+            | Self::Unreadable(detail)
+            | Self::TooLarge(detail)
+            | Self::ClosedOn(detail) => detail,
         }
     }
 }
@@ -4688,8 +4703,56 @@ impl Editor {
             }
             return Settled::Answered;
         }
-        self.refusals = self.refusals.saturating_add(1);
-        let detail = format!("{code}: {message}");
+        self.refused_by(sent, Refuser::Gateway, &format!("{code}: {message}"))
+    }
+
+    /// The call in flight is too large for the gateway to read (its encoded frame is past
+    /// [`pharmakos_proto::transport::MAX_MESSAGE_BYTES`]), so the rig did not send it: it is
+    /// settled as refused, by this client, where that call's refusal is shown (S3's `fixq-c`, fix
+    /// pass 1: a 300 KB paste once took the connection down, and was sent again after every
+    /// reconnect). `bytes` is the frame's size. Nothing is asked again.
+    pub fn unsendable(&mut self, bytes: usize) -> Settled {
+        let Some(sent) = self.in_flight.take() else {
+            return Settled::Answered;
+        };
+        self.touch();
+        let settled = self.refused_by(&sent, Refuser::TooLarge, &bytes.to_string());
+        if self.door != Door::Open {
+            self.shut();
+        }
+        settled
+    }
+
+    /// The seat connection closed on the call in flight itself, with a close code that names
+    /// the message and not the connection (`code`: 1009, a message too big, and its kin; the
+    /// rig's [`crate::rig::Close`]): the call is settled as refused where its refusal is shown,
+    /// and, unlike [`Editor::dropped`], never asked again, since the same call would close the
+    /// connection again (S3's `fixq-c`, fix pass 1).
+    pub fn closed_on(&mut self, code: u16) -> Settled {
+        let Some(sent) = self.in_flight.take() else {
+            return Settled::Answered;
+        };
+        self.touch();
+        let settled = self.refused_by(&sent, Refuser::ClosedOn, &code.to_string());
+        if self.door != Door::Open {
+            self.shut();
+        }
+        settled
+    }
+
+    /// A refused call, the gateway's or this client's own, said where that call's refusal is
+    /// shown, with `detail` filling the words.
+    fn refused_by(&mut self, sent: &Sent, refuser: Refuser, detail: &str) -> Settled {
+        // `refusals` counts the gateway's; a call this client did not send is the rig's to count
+        // (`Rig::message_refusals`).
+        if refuser != Refuser::TooLarge {
+            self.refusals = self.refusals.saturating_add(1);
+        }
+        let field_key = match refuser {
+            Refuser::Gateway => GATEWAY_REFUSED_KEY,
+            Refuser::TooLarge => TOO_LARGE_KEY,
+            Refuser::ClosedOn => CLOSED_ON_KEY,
+        };
         // A refused check of the text on screen will not come back by itself: the panel
         // says so, with the gateway's words, rather than "Checking..." for ever (finding K).
         // Each check's refusal is its own line's: a refused estimate leaves the chips'
@@ -4697,20 +4760,32 @@ impl Editor {
         if let Some((check, revision)) = check_of(sent)
             && revision == self.revision
         {
-            *self.check_refusals.slot(check) = Some((revision, Unchecked::Refused(detail.clone())));
+            *self.check_refusals.slot(check) = Some((
+                revision,
+                match refuser {
+                    Refuser::Gateway => Unchecked::Refused(detail.to_owned()),
+                    Refuser::TooLarge => Unchecked::TooLarge(detail.to_owned()),
+                    Refuser::ClosedOn => Unchecked::ClosedOn(detail.to_owned()),
+                },
+            ));
         }
         // A refused read of the gateway's words is said on its own line, and nothing waits on it.
+        let failed = || match refuser {
+            Refuser::Gateway => ReadFailed::Refused(detail.to_owned()),
+            Refuser::TooLarge => ReadFailed::TooLarge(detail.to_owned()),
+            Refuser::ClosedOn => ReadFailed::ClosedOn(detail.to_owned()),
+        };
         match sent {
             Sent::Vocabulary { round } if *round == self.round => {
-                self.vocabulary_failed = Some(ReadFailed::Refused(detail.clone()));
+                self.vocabulary_failed = Some(failed());
             }
             Sent::Beacon { .. } => {
                 self.beacon = None;
-                self.beacon_failed = Some(ReadFailed::Refused(detail.clone()));
+                self.beacon_failed = Some(failed());
             }
             Sent::Templates => {
                 self.templates.clear();
-                self.templates_failed = Some(ReadFailed::Refused(detail.clone()));
+                self.templates_failed = Some(failed());
             }
             _ => {}
         }
@@ -4718,8 +4793,8 @@ impl Editor {
             && self.hears(asked)
         {
             self.field_ask = FieldAsk::Refused {
-                key: GATEWAY_REFUSED_KEY.to_owned(),
-                detail: detail.clone(),
+                key: field_key.to_owned(),
+                detail: detail.to_owned(),
             };
         }
         if let Sent::Edit { base, retry } = sent
@@ -4727,17 +4802,38 @@ impl Editor {
         {
             self.rule_refusal = Some(RuleRefusal {
                 pointer: pointer.clone(),
-                key: GATEWAY_REFUSED_KEY.to_owned(),
-                detail: detail.clone(),
+                key: field_key.to_owned(),
+                detail: detail.to_owned(),
                 revision: *base,
             });
         }
+        if refuser != Refuser::Gateway {
+            if let Sent::Instantiate { asked } = sent
+                && let Some(wizard) = self.wizard.as_mut()
+                && wizard.asked == *asked
+            {
+                wizard.refusal = Some(detail.to_owned());
+            }
+            if matches!(sent, Sent::Preview { .. } | Sent::PreviewCheck) {
+                self.ghost = None;
+                self.preview = None;
+            }
+            self.say(
+                if refuser == Refuser::TooLarge {
+                    "call_too_large"
+                } else {
+                    "call_closed_on"
+                },
+                detail,
+            );
+            return Settled::Refused;
+        }
         match sent {
-            Sent::Load { .. } => self.say("load_refused_by_gateway", &detail),
+            Sent::Load { .. } => self.say("load_refused_by_gateway", detail),
             Sent::Preview { .. } | Sent::PreviewCheck => {
                 self.ghost = None;
                 self.preview = None;
-                self.say("gateway_refused", &detail);
+                self.say("gateway_refused", detail);
             }
             Sent::Instantiate { asked } => {
                 // Shown as the gateway wrote it; the value stays as typed, for the player
@@ -4745,15 +4841,31 @@ impl Editor {
                 if let Some(wizard) = self.wizard.as_mut()
                     && wizard.asked == *asked
                 {
-                    wizard.refusal = Some(detail.clone());
+                    wizard.refusal = Some(detail.to_owned());
                 }
-                self.say("wizard_refused", &detail);
+                self.say("wizard_refused", detail);
             }
-            _ => self.say("gateway_refused", &detail),
+            _ => self.say("gateway_refused", detail),
         }
         Settled::Refused
     }
 }
+
+/// Who refused a call: the gateway in words, this client for a call too large to send, or the
+/// gateway by closing the connection on the call itself.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Refuser {
+    Gateway,
+    TooLarge,
+    ClosedOn,
+}
+
+/// The string table's key for a call the gateway closed the connection on.
+pub const CLOSED_ON_KEY: &str = "status_call_closed_on";
+
+/// The string table's key for a call this client did not send because the gateway could not
+/// read one that large, drawn on its rule and in a value field's popup.
+pub const TOO_LARGE_KEY: &str = "status_call_too_large";
 
 /// The job a call was sent for, when an answer to it may be a value field's to say.
 fn sent_job(sent: &Sent) -> Option<&Job> {

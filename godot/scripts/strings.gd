@@ -252,6 +252,20 @@ const TEXT := {
 	"unchecked_refused": "Not checked: the gateway refused ({detail}).",
 	# The gateway answered, and this client could not read the answer (M4).
 	"unchecked_unreadable": "Not shown: this client could not read the gateway's answer ({detail}).",
+	# A call too large for the gateway to read is not sent (S3's `fixq-c`, fix pass 1): the
+	# connection stays up, and the line says so where the call's answer would have been.
+	"unchecked_too_large": "Not checked: the text is too large to send ({detail} bytes).",
+	"status_call_too_large": "Not sent: that is too large for the gateway to read ({detail} bytes), so nothing changed.",
+	"templates_too_large": "The template list was not asked: the call was too large to send ({detail} bytes).",
+	"vocabulary_too_large": "The words to pick from were not asked: the call was too large to send ({detail} bytes).",
+	"menu_detail_too_large": "This beacon's detail was not asked: the call was too large to send ({detail} bytes).",
+	# The gateway closed the connection on a call itself (close code 1009 and its kin): that call
+	# is not sent again, and the line says so.
+	"unchecked_closed_on": "Not checked: the gateway closed the connection on this check (code {detail}); it is not sent again.",
+	"status_call_closed_on": "The gateway closed the connection on that (code {detail}); it is not sent again, and nothing changed.",
+	"templates_closed_on": "The gateway closed the connection on the template list (code {detail}).",
+	"vocabulary_closed_on": "The gateway closed the connection on the words to pick from (code {detail}).",
+	"menu_detail_closed_on": "The gateway closed the connection on this beacon's detail (code {detail}).",
 	"unchecked_ready": "Not checked: after Ready this client sends no planning call for the rest of this Lull.",
 	"unchecked_push": "Not checked: planning is closed during the Push.",
 	"unchecked_recap": "Not checked: planning is closed during the recap.",

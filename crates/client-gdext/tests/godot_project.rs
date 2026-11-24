@@ -3377,3 +3377,30 @@ fn the_vista_draws_each_look_and_title_as_the_view_sent_them() {
         );
     }
 }
+
+/// **One message cap, read by both sides** (S3's `fixq-c`, fix pass 1): the gateway's
+/// `MAX_MESSAGE_BYTES` (`crates/gateway/src/frame.rs`) is `pharmakos-proto`'s
+/// `transport::MAX_MESSAGE_BYTES`, the number the rig refuses an outgoing frame past, so the
+/// client can never send what the gateway closes the connection on.
+#[test]
+fn the_client_and_the_gateway_read_one_message_cap() {
+    let frame = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("gateway")
+            .join("src")
+            .join("frame.rs"),
+    )
+    .expect("the gateway's frame module reads");
+    assert!(
+        frame.lines().any(|line| line.trim()
+            == "pub const MAX_MESSAGE_BYTES: usize = pharmakos_proto::transport::MAX_MESSAGE_BYTES;"),
+        "the gateway reads the one cap"
+    );
+    assert!(
+        read_source("rig.rs")
+            .contains("if text.len() > pharmakos_proto::transport::MAX_MESSAGE_BYTES {"),
+        "the rig refuses a frame past it"
+    );
+    assert_eq!(pharmakos_proto::transport::MAX_MESSAGE_BYTES, 256 * 1024);
+}

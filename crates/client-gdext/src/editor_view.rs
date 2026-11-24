@@ -533,6 +533,8 @@ fn unchecked_dictionary(why: Option<Unchecked>) -> VarDictionary {
         None => (String::new(), String::new()),
         Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
         Some(Unchecked::Unreadable(said)) => ("unreadable".to_owned(), said),
+        Some(Unchecked::TooLarge(bytes)) => ("too_large".to_owned(), bytes),
+        Some(Unchecked::ClosedOn(code)) => ("closed_on".to_owned(), code),
         Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
     };
     let mut out = VarDictionary::new();

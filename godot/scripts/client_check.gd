@@ -1234,6 +1234,37 @@ func _check_the_planning_wire(stage: SubViewport, editor: CanvasLayer, bridge: N
 			failures.append("the duration's \"3\" did not go to `set_value_text` as typed: %s" % [_typed])
 		popup.hide()
 		await _settle()
+	# Past the chip's bounds: the client compares nothing, so the gateway is asked and its refusal
+	# is said in the popup (fix pass 1, item 4).
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var pct := _chip_index(bridge, "/cmdr_hp_pct/pct")
+	editor._on_rule_chip(pct)
+	await _settle()
+	await _type_in_popup(stage, editor, "150")
+	_typed.clear()
+	_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("field", {}).get("state", "")) == "refused")
+	await _settle()
+	if _typed != ["150"] or editor._number_said.text != Strings.text("rule_refused", {"detail": "INVALID_ARGUMENT: `150` is above the most this takes, `100` %"}):
+		failures.append("a value past its bounds was not the gateway's to refuse: asked %s, said `%s`" % [_typed, editor._number_said.text])
+	popup.hide()
+	await _settle()
+	# A paste past the gateway's message cap is not sent: the popup says so, and the seat
+	# connection stays up (fix pass 1, item 1).
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	editor._on_rule_chip(pct)
+	await _settle()
+	_typed.clear()
+	editor._number_field.field.text = "1".repeat(300000)
+	_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("field", {}).get("state", "")) == "refused")
+	await _settle()
+	if not _typed.is_empty() or not editor._number_said.text.begins_with("Not sent:") or int(bridge.watch_state().get("unsent_seat", 0)) < 1 or int(bridge.watch_state().get("drops_seat", -1)) != 0:
+		failures.append("a paste past the message cap went out or was not said: asked %d, said `%s`, %s" % [_typed.size(), editor._number_said.text.left(80), bridge.watch_state()])
+	popup.hide()
+	await _settle()
 	# A choice, drawn by its titles.
 	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
 	await _settle()
@@ -1546,6 +1577,9 @@ func _answer(text: String, error: String) -> String:
 			_typed.append(typed)
 			if not typed.is_valid_int():
 				return head + "\"error\":" + _refusal("INVALID_ARGUMENT", "`%s` is not a number" % typed) + "}"
+			# The bound is the gateway's (fix pass 1, item 4): a percentage past 100 is refused.
+			if String(params.get("pointer", "")).ends_with("/pct") and typed.to_int() > 100:
+				return head + "\"error\":" + _refusal("INVALID_ARGUMENT", "`%s` is above the most this takes, `100` %%" % typed) + "}"
 			body = "\"playbook_jsonc\":%s,\"inverse_json_patch\":\"[]\"," % JSON.stringify(String(params.get("playbook_jsonc", "")) + " ")
 		"new_rule":
 			_new_rules += 1

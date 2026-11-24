@@ -138,7 +138,9 @@
 #     lands too; Remove, clicked, takes the rule out; a wall's Build target on the seat's core takes
 #     two ground clicks beside the commander and lands the gateway's box (`compose_wall_box`);
 #     Queue a structure lists the Queue's own entries; and Undo takes every one back to the
-#     committed bytes. Nothing is submitted, so the seal the legs above made stands;
+#     committed bytes; a 300 KB paste into a field is refused before it goes, with the seat
+#     connection kept up (fix pass 1), and the committed playbook is then sealed, which the
+#     carried draft of round 2 checks;
 #   * across every host: the bridge caught no panic, refused no view page, the gateway
 #     refused no call (so no burst met RATE_LIMITED), entities were drawn, and every host
 #     exited once the client let go of its standard input.
@@ -1623,6 +1625,20 @@ func _planning_wire() -> bool:
 		_failures.append("the planning wire: \"3\" seconds did not land as 3000 ms")
 	editor._number_popup.hide()
 	await _editor_until(func(s: Dictionary) -> bool: return s.get("rules_editable", false), "the planning wire: the list never took an edit again")
+	# A paste past the gateway's message cap (fix pass 1, item 1): not sent, said in the popup,
+	# and the seat connection stays up; the leg then seals and Ready ends the Lull as ever.
+	timeout = _chip_at(_editor(), "/timeout_ms")
+	editor._on_rule_chip(timeout)
+	await get_tree().process_frame
+	editor._number_field.field.text = "1".repeat(300000)
+	editor._number_field.send.pressed.emit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("field", {}).get("state", "")) == "refused" and String(s.get("status_key", "")) == "call_too_large", "the planning wire: a paste past the message cap was not refused before it went"):
+		return false
+	await get_tree().create_timer(2.0).timeout
+	if int(_state().get("drops_seat", -1)) != 0 or int(_state().get("unsent_seat", 0)) != 1:
+		_failures.append("the planning wire: a paste past the cap dropped the seat connection or was sent: %s" % _state())
+	editor._number_popup.hide()
+	print("[watch-check] the planning wire: a 300 KB paste was refused before it went, the seat connection up (%d unsent, %d drops)" % [int(_state().get("unsent_seat", 0)), int(_state().get("drops_seat", -1))])
 	# Add a rule, through its button; its empty slot takes a group; Remove takes it out.
 	var rules_before: int = _editor().get("rule_list", {}).get("rules", []).size()
 	var add := _rule_button("rule_add")
@@ -1712,6 +1728,10 @@ func _planning_wire() -> bool:
 			return false
 	if vista.bridge.editor_bytes() != original:
 		_failures.append("the planning wire: Undo did not give the committed bytes back")
+	# Sealed again after the paste: the submission is accepted, as any other.
+	editor.submit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("accepted", false) and not s.get("pending", true) and vista.bridge.editor_sealed_bytes() == original, "the planning wire: the seal after the paste was never accepted"):
+		return false
 	print("[watch-check] the planning wire: a duration typed in seconds landed, titles drawn, a rule added, filled with a group and removed, a wall's box composed, the Queue's own list, all undone")
 	return true
 

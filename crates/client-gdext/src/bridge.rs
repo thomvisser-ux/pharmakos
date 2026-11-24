@@ -575,11 +575,17 @@ impl PharmakosBridge {
         }
     }
 
-    /// Connection `link` (0 admin, 1 seat) dropped.
+    /// Connection `link` (0 admin, 1 seat) dropped, with the WebSocket close `code` the peer
+    /// read (`WebSocketPeer.get_close_code()`, -1 for none): a code about the message itself
+    /// (1009 and its kin) settles the call in flight as refused and asks it never again
+    /// ([`crate::rig::Close`]).
     #[func]
-    fn watch_dropped(&mut self, link: i64) {
+    fn watch_dropped(&mut self, link: i64, code: i64) {
         if let (Some(rig), Ok(link)) = (self.rig.as_mut(), usize::try_from(link)) {
-            let _ = self.panics.guard("watch_dropped", || rig.dropped(link));
+            let close = crate::rig::Close::of_code(code);
+            let _ = self
+                .panics
+                .guard("watch_dropped", || rig.closed(link, close));
         }
     }
 
@@ -1793,6 +1799,15 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     state.set(&"skipping".to_variant(), &rig.skipping().to_variant());
     state.set(&"all_ready".to_variant(), &rig.all_ready().to_variant());
     let [drops_admin, drops_seat] = rig.drops();
+    let [[closed_admin, closed_seat], [unsent_admin, unsent_seat]] = rig.message_refusals();
+    for (key, count) in [
+        ("message_drops_admin", closed_admin),
+        ("message_drops_seat", closed_seat),
+        ("unsent_admin", unsent_admin),
+        ("unsent_seat", unsent_seat),
+    ] {
+        state.set(&key.to_variant(), &i64::from(count).to_variant());
+    }
     let [calls_admin, calls_seat] = rig.calls();
     state.set(
         &"drops_admin".to_variant(),

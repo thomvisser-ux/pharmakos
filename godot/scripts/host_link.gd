@@ -459,7 +459,7 @@ func _pump_link(link: int) -> void:
 				received.emit(answer)
 	elif state == WebSocketPeer.STATE_CLOSED and not _done:
 		if _open[link]:
-			bridge.watch_dropped(link)
+			bridge.watch_dropped(link, peer.get_close_code())
 		_open[link] = false
 		if _reconnects >= RECONNECTS or not host_running():
 			_done = true
