@@ -949,78 +949,448 @@ mod tick {
     }
 }
 
-/// The premise of the file's one build (the module docs): read from the sim's
-/// own sources, the `research` feature gates exactly one item, `pub mod
-/// research;` in `lib.rs`, and the manifest's `research = []` enables nothing.
-/// A `cfg` on the feature anywhere else in the sim, a `cfg!` or `cfg_attr`
-/// naming it, or a feature it enables makes this red: the research build's
-/// tick would then differ from this build's, and this file's tests would have
-/// to run under the feature as well.
+/// One token of Rust source, as [`tokens`] reads it: comments are dropped,
+/// and a literal is one token, so a word inside a comment or a string is
+/// never read as code.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Token {
+    /// An identifier or keyword (a raw identifier without its `r#`).
+    Word(String),
+    /// A string literal's text between its quotes, raw or not, unescaped
+    /// only as far as the scan needs: `\"` stays two bytes.
+    Str(String),
+    /// A macro metavariable, `$name`.
+    Meta(String),
+    /// Punctuation: `==`, `!=`, `<=`, `>=`, `=>`, `->` and `::` as one token
+    /// each, so a lone `=` is an assignment or an attribute's `=`.
+    Punct(String),
+    /// A number, a character or byte literal, or a lifetime.
+    Other,
+}
+
+/// Rust source as [`Token`]s. Line comments, nested block comments and doc
+/// comments are dropped; string, raw string, byte string, character and
+/// byte literals are read whole, so their contents are never tokens.
+fn tokens(text: &str) -> Vec<Token> {
+    let chars: Vec<char> = text.chars().collect();
+    let at = |index: usize| chars.get(index).copied();
+    let mut out = Vec::new();
+    let mut i = 0_usize;
+    while let Some(c) = at(i) {
+        let next = at(i + 1);
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '/' && next == Some('/') {
+            while at(i).is_some_and(|c| c != '\n') {
+                i += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            i = past_block_comment(&chars, i);
+        } else if let Some((text, end)) = string_at(&chars, i) {
+            out.push(Token::Str(text));
+            i = end;
+        } else if c == '\'' {
+            out.push(Token::Other);
+            i = past_quote(&chars, i);
+        } else if c == '$' || c.is_alphabetic() || c == '_' {
+            let meta = c == '$';
+            if meta || (c == 'r' && next == Some('#')) {
+                i += if meta { 1 } else { 2 };
+            }
+            let start = i;
+            while at(i).is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                i += 1;
+            }
+            let word = collect(&chars, start, i);
+            out.push(if meta {
+                Token::Meta(word)
+            } else {
+                Token::Word(word)
+            });
+        } else if c.is_ascii_digit() {
+            while at(i).is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+                i += 1;
+            }
+            out.push(Token::Other);
+        } else {
+            let pair: String = [Some(c), next].into_iter().flatten().collect();
+            if ["==", "!=", "<=", ">=", "=>", "->", "::"].contains(&pair.as_str()) {
+                out.push(Token::Punct(pair));
+                i += 2;
+            } else {
+                out.push(Token::Punct(c.to_string()));
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// `chars[from..to]` as a string, empty where the range is not inside it.
+fn collect(chars: &[char], from: usize, to: usize) -> String {
+    chars.get(from..to).unwrap_or(&[]).iter().collect()
+}
+
+/// The index just past the (nested) block comment that opens at `i`.
+fn past_block_comment(chars: &[char], mut i: usize) -> usize {
+    let mut depth = 0_usize;
+    loop {
+        match (chars.get(i), chars.get(i + 1)) {
+            (Some('/'), Some('*')) => {
+                depth += 1;
+                i += 2;
+            }
+            (Some('*'), Some('/')) => {
+                depth = depth.saturating_sub(1);
+                i += 2;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            (Some(_), _) => i += 1,
+            (None, _) => return i,
+        }
+    }
+}
+
+/// The index just past the character literal (`'x'`, `'\n'`, `'\u{1F600}'`)
+/// or the lifetime that starts at `i`.
+fn past_quote(chars: &[char], mut i: usize) -> usize {
+    if chars.get(i + 1) == Some(&'\\') {
+        i += 2;
+        while chars.get(i).is_some_and(|c| *c != '\'') {
+            i += 1;
+        }
+        i + 1
+    } else if chars.get(i + 2) == Some(&'\'') {
+        i + 3
+    } else {
+        i += 1;
+        while chars
+            .get(i)
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+        {
+            i += 1;
+        }
+        i
+    }
+}
+
+/// The string literal that starts at `i`, plain, byte, C or raw: its text
+/// between the quotes and the index just past it; `None` when no string
+/// starts there.
+fn string_at(chars: &[char], i: usize) -> Option<(String, usize)> {
+    let c = *chars.get(i)?;
+    let prefixed = c == 'b' || c == 'c';
+    let quote = if prefixed { i + 1 } else { i };
+    if chars.get(quote) == Some(&'"') && (c == '"' || prefixed) {
+        let start = quote + 1;
+        let mut end = start;
+        while let Some(c) = chars.get(end) {
+            match c {
+                '\\' => end += 2,
+                '"' => break,
+                _ => end += 1,
+            }
+        }
+        return Some((collect(chars, start, end), end + 1));
+    }
+    let r = if prefixed { i + 1 } else { i };
+    if chars.get(r) != Some(&'r') || !(c == 'r' || prefixed) {
+        return None;
+    }
+    let hashes = chars
+        .get(r + 1..)?
+        .iter()
+        .take_while(|c| **c == '#')
+        .count();
+    if chars.get(r + 1 + hashes) != Some(&'"') {
+        return None;
+    }
+    let start = r + 2 + hashes;
+    let mut end = start;
+    while end < chars.len() {
+        let closes = chars.get(end) == Some(&'"')
+            && chars
+                .get(end + 1..end + 1 + hashes)
+                .is_some_and(|tail| tail.iter().all(|c| *c == '#'));
+        if closes {
+            return Some((collect(chars, start, end), end + 1 + hashes));
+        }
+        end += 1;
+    }
+    Some((collect(chars, start, end), end))
+}
+
+/// Every `.rs` file under `dir`, sorted, as a path from the crate root with
+/// `/` separators.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected and sorted before use, which is what happens below"
+)]
+fn rust_sources(dir: &std::path::Path, out: &mut Vec<String>) {
+    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .expect("the sim's source folder reads")
+        .map(|entry| entry.expect("a folder entry reads").path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            rust_sources(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path.display().to_string().replace('\\', "/"));
+        }
+    }
+}
+
+fn word(text: &str) -> Token {
+    Token::Word(text.to_owned())
+}
+
+fn punct(text: &str) -> Token {
+    Token::Punct(text.to_owned())
+}
+
+/// The research feature's whole reach, read from the sim's own sources and
+/// manifest, in **both** builds: this test is outside the default build's
+/// `tick` module, so a manifest that turned the feature on by default, or a
+/// crate that unified it on, still runs it, and it is red there.
+///
+/// It holds that the research build's tick is the default build's, function
+/// for function, which is the one premise that lets the `tick` module run in
+/// the default build only:
+///
+/// * the only `cfg` predicate on a feature anywhere under `src/` (a `cfg`,
+///   `cfg!` or `cfg_attr`, split over lines or not, a raw string or a macro's
+///   `$` parameter in the feature's place) is lib.rs's
+///   `#[cfg(feature = "research")] pub mod research;`;
+/// * nothing under `src/` reaches a file outside it: the one `#[path]` is
+///   `world.rs`'s `"support.rs"`, beside it, and nothing calls `include!`;
+/// * the manifest declares exactly `default = []` and `research = []`, names
+///   no build script (and there is no `build.rs`), and holds no
+///   `cfg(...)`-keyed target table;
+/// * `research.rs` is what it is today: two `use` lines and two free
+///   functions, `fork` (`#[must_use]`) and `fork_and_step`, with no `impl`
+///   (an `impl Drop` or an inherent `impl World` there would change the
+///   tick's code with no `cfg` outside the module), no `static`, no
+///   `unsafe`, no macro and no attribute but `#[must_use]`.
+///
+/// The scan drops comments and reads literals whole, so a mention in a
+/// comment, a doc or a string is not a gate.
 #[test]
 fn the_research_feature_gates_the_fork_module_and_nothing_else() {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected and sorted before use, which is what happens below"
-    )]
-    fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-            .expect("the sim's source folder reads")
-            .map(|entry| entry.expect("a folder entry reads").path())
-            .collect();
-        entries.sort();
-        for path in entries {
-            if path.is_dir() {
-                sources(&path, out);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                out.push(path);
-            }
-        }
-    }
-    let mut files = Vec::new();
-    sources(std::path::Path::new("src"), &mut files);
-    assert!(files.len() > 10, "the sim's sources were found: {files:?}");
-    let mut gates = Vec::new();
-    for file in &files {
-        let text = std::fs::read_to_string(file).expect("a source file reads");
-        let lines: Vec<&str> = text.lines().map(str::trim).collect();
-        for (at, line) in lines.iter().enumerate() {
-            if line.starts_with("//")
-                || !(line.contains("feature") && line.contains("\"research\""))
-            {
-                continue;
-            }
-            let next = lines
-                .iter()
-                .skip(at + 1)
-                .find(|next| !next.is_empty() && !next.starts_with("//"))
-                .copied()
-                .unwrap_or("(nothing follows)");
-            gates.push((
-                file.display().to_string().replace('\\', "/"),
-                (*line).to_owned(),
-                next.to_owned(),
-            ));
-        }
-    }
+    let (gates, reaches) = gates_and_reaches();
+    let lib_gate: Vec<Token> = vec![
+        punct("#"),
+        punct("["),
+        word("cfg"),
+        punct("("),
+        word("feature"),
+        punct("="),
+        Token::Str("research".to_owned()),
+        punct(")"),
+        punct("]"),
+        word("pub"),
+        word("mod"),
+        word("research"),
+    ];
     assert_eq!(
         gates,
-        [(
-            "src/lib.rs".to_owned(),
-            "#[cfg(feature = \"research\")]".to_owned(),
-            "pub mod research;".to_owned()
-        )],
-        "the research feature gates something beside the fork module, so the research build's \
-         tick is no longer the default build's: run the tick tests under it as well"
+        [("src/lib.rs".to_owned(), lib_gate)],
+        "a cfg predicate on a feature other than lib.rs's `#[cfg(feature = \"research\")] pub \
+         mod research`: the research build's tick is no longer the default build's, so the \
+         tick tests must run under the feature as well"
     );
-    let manifest = std::fs::read_to_string("Cargo.toml").expect("the sim's manifest reads");
-    let declared: Vec<&str> = manifest
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("research"))
+    assert_eq!(
+        reaches,
+        [(
+            "src/world.rs".to_owned(),
+            format!("#[path = {:?}]", Some(Token::Str("support.rs".to_owned())))
+        )],
+        "the sim's sources reach a file this scan does not read"
+    );
+    assert!(
+        std::path::Path::new("src/support.rs").is_file(),
+        "world.rs's #[path] names src/support.rs, which this scan reads"
+    );
+
+    let research =
+        tokens(&std::fs::read_to_string("src/research.rs").expect("the research module reads"));
+    assert_eq!(
+        item_heads(&research),
+        [
+            "use crate :: encoding :: Enc ;",
+            "use crate :: world :: World ;",
+            "# [ must_use ] pub fn fork (",
+            "pub fn fork_and_step (",
+        ],
+        "research.rs holds an item beside its two uses and two functions"
+    );
+    for refused in [
+        "impl",
+        "static",
+        "unsafe",
+        "macro_rules",
+        "mod",
+        "extern",
+        "trait",
+    ] {
+        assert!(
+            !research.contains(&word(refused)),
+            "research.rs holds `{refused}`: code there can change the tick's with no cfg \
+             outside the module"
+        );
+    }
+    let attributes: Vec<String> = research
+        .windows(3)
+        .filter(|window| window.first() == Some(&punct("#")))
+        .map(spelled)
         .collect();
     assert_eq!(
-        declared,
-        ["research = []"],
-        "the research feature enables nothing else"
+        attributes,
+        ["# [ must_use"],
+        "research.rs carries an attribute but fork's #[must_use]"
     );
+    assert!(!research.contains(&punct("!")), "research.rs calls a macro");
+
+    assert!(
+        !std::path::Path::new("build.rs").exists(),
+        "the sim has a build script, which can set a cfg from the feature"
+    );
+    assert_eq!(
+        manifest_features(),
+        ["default = []", "research = []"],
+        "the manifest's features are no longer `default = []` and a `research` that enables \
+         nothing"
+    );
+}
+
+/// A `cfg` predicate on a feature: the file, and the tokens round it.
+type Gate = (String, Vec<Token>);
+
+/// A reach outside a file: the file, and the `include!` or `#[path]` spelled.
+type Reach = (String, String);
+
+/// Every `cfg` predicate on a feature under `src/` (a `feature =` after a
+/// `(` or a `,`), with the tokens round it, and every reach outside the file
+/// it is in (`include!`, and an attribute's `path =` with its value).
+fn gates_and_reaches() -> (Vec<Gate>, Vec<Reach>) {
+    let mut files = Vec::new();
+    rust_sources(std::path::Path::new("src"), &mut files);
+    assert!(files.len() > 10, "the sim's sources were found: {files:?}");
+    let mut gates = Vec::new();
+    let mut reaches = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("a source file reads");
+        let code = tokens(&text);
+        for (at, window) in code.windows(3).enumerate() {
+            let [before, name, equals] = window else {
+                continue;
+            };
+            if *name == word("feature")
+                && *equals == punct("=")
+                && (*before == punct("(") || *before == punct(","))
+            {
+                let around: Vec<Token> = code
+                    .iter()
+                    .skip(at.saturating_sub(3))
+                    .take(12)
+                    .cloned()
+                    .collect();
+                gates.push((file.clone(), around));
+            }
+        }
+        for (at, window) in code.windows(2).enumerate() {
+            let after_bracket = at
+                .checked_sub(1)
+                .and_then(|before| code.get(before))
+                .is_some_and(|before| *before == punct("[") || *before == punct(","));
+            match window {
+                [Token::Word(name), bang] if name == "include" && *bang == punct("!") => {
+                    reaches.push((file.clone(), "include!".to_owned()));
+                }
+                [Token::Word(name), equals]
+                    if name == "path" && *equals == punct("=") && after_bracket =>
+                {
+                    let value = code.get(at + 2).cloned();
+                    reaches.push((file.clone(), format!("#[path = {value:?}]")));
+                }
+                _ => {}
+            }
+        }
+    }
+    (gates, reaches)
+}
+
+/// Tokens spelled out, a space between each.
+fn spelled(tokens: &[Token]) -> String {
+    tokens
+        .iter()
+        .map(|token| match token {
+            Token::Word(w) | Token::Punct(w) => w.clone(),
+            Token::Meta(m) => format!("${m}"),
+            Token::Str(s) => format!("{s:?}"),
+            Token::Other => "_".to_owned(),
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+/// Each top-level item's head: its tokens up to its first `(` or `{`, or
+/// through its `;`, [`spelled`].
+fn item_heads(code: &[Token]) -> Vec<String> {
+    let mut heads = Vec::new();
+    let mut head = Vec::new();
+    let mut depth = 0_usize;
+    for token in code {
+        if depth == 0 && head.last() != Some(&punct("(")) && head.last() != Some(&punct("{")) {
+            head.push(token.clone());
+        }
+        match token {
+            Token::Punct(p) if p == "{" || p == "(" => depth += 1,
+            Token::Punct(p) if p == "}" || p == ")" => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && p == "}" {
+                    heads.push(spelled(&core::mem::take(&mut head)));
+                }
+            }
+            Token::Punct(p) if p == ";" && depth == 0 => {
+                heads.push(spelled(&core::mem::take(&mut head)));
+            }
+            _ => {}
+        }
+    }
+    heads
+}
+
+/// The sim manifest's `[features]` lines, after checking that no table is
+/// keyed by a `cfg(...)` and that `[package]` names no build script.
+fn manifest_features() -> Vec<String> {
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("the sim's manifest reads");
+    let mut section = String::new();
+    let mut features = Vec::new();
+    for line in manifest
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        if line.starts_with('[') {
+            assert!(
+                !line.contains("cfg("),
+                "the manifest holds a cfg-keyed table: {line}"
+            );
+            line.clone_into(&mut section);
+            continue;
+        }
+        if section == "[package]" {
+            assert!(
+                !line.starts_with("build"),
+                "the manifest names a build script: {line}"
+            );
+        }
+        if section == "[features]" {
+            features.push(line.to_owned());
+        }
+    }
+    features
 }
