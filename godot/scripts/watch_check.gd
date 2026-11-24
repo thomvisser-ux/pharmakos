@@ -1880,6 +1880,14 @@ func _planning_wire() -> bool:
 	editor.submit()
 	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("accepted", false) and not s.get("pending", true) and vista.bridge.editor_sealed_bytes() == original, "the planning wire: the seal after the paste was never accepted"):
 		return false
+	# The same text sent again, as the editor re-sends a submission lost with its connection, is
+	# the same seal (fix pass 7, item 7): `submit_plan` replaces the seat's seal with this text's.
+	if not editor.submit() or not _editor().get("pending", false):
+		_failures.append("the planning wire: the same text was not taken for a second submission")
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("accepted", false) and not s.get("pending", true) and vista.bridge.editor_sealed_bytes() == original, "the planning wire: the same text submitted again was not the same seal"):
+		return false
+	print("[watch-check] the planning wire: the same text submitted twice, accepted twice, the same seal")
 	print("[watch-check] the planning wire: a duration typed in seconds landed, titles drawn, a rule added, filled with a group and removed, a wall's box composed, the Queue's own list, all undone")
 	return true
 
