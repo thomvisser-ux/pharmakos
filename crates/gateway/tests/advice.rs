@@ -277,8 +277,8 @@ fn advice_of(surface: &Surface, seat: u8) -> Option<pharmakos_gateway::surface::
     surface
         .seat_state(Subject::Seat(SeatId::new(seat)), SeatId::new(seat))
         .expect("its own")
-        .advice
-        .clone()
+        .advice()
+        .cloned()
 }
 
 // ---------------------------------------------------------------------------
@@ -741,7 +741,7 @@ fn a_built_in_seats_sealed_plan_is_the_same_with_and_without_an_advisor_running(
     };
     let (alone, alone_world) = run(false);
     let (beside, beside_world) = run(true);
-    assert!(!alone.filed_by_the_gateway, "seat 1 sealed its own");
+    assert!(!alone.filed_by_the_gateway(), "seat 1 sealed its own");
     assert_eq!(alone, beside, "the seal, report hash included");
     assert_eq!(alone_world, beside_world, "and what the match plays");
 }
@@ -853,13 +853,19 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
     assert_eq!(refusals, wanted);
 
     // And the seat's store is exactly as it was, but for the advice itself.
-    let mut after = surface
+    let after = surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
-        .expect("its own")
-        .clone();
-    assert!(after.advice.is_some());
-    after.advice = None;
-    assert_eq!(after, before);
+        .expect("its own");
+    assert!(after.advice().is_some());
+    assert!(before.advice().is_none());
+    // Every other part of the store, by its getter.
+    assert_eq!(after.seat(), before.seat());
+    assert_eq!(after.notebook(), before.notebook());
+    assert_eq!(after.drafts(), before.drafts());
+    assert_eq!(after.ready(), before.ready());
+    assert_eq!(after.sealed(), before.sealed());
+    assert_eq!(after.continuity(), before.continuity());
+    assert_eq!(after.memos(), before.memos());
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,10 +1041,27 @@ fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_an
             .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
             .expect("something is always filed")
             .clone();
-        assert!(sealed.filed_by_the_gateway, "filed on the seat's behalf");
-        assert_eq!(sealed.playbook_jsonc, expected);
+        assert!(sealed.filed_by_the_gateway(), "filed on the seat's behalf");
+        assert_eq!(sealed.playbook_jsonc(), expected);
+        // The fingerprint it carries, taken where it was qualified or filed,
+        // is its own text's (S3's `fpstream`, part 2).
+        let canonical =
+            pharmakos_plan_core::decode_jsonc(sealed.playbook_jsonc()).expect("a canonical form");
         assert_eq!(
-            sealed.report_hash.is_empty(),
+            sealed.plan_fingerprint(),
+            {
+                // The rule written out whole: the reference, test-only.
+                let mut bytes = pharmakos_proto::fingerprint::PLAN_FINGERPRINT_DOMAIN.to_vec();
+                bytes.extend_from_slice(
+                    &pharmakos_proto::fingerprint::canonical_input(canonical.decoded().message())
+                        .expect("canonical"),
+                );
+                pharmakos_sim::encoding::digest(&bytes)
+            },
+            "the carried fingerprint is the text's"
+        );
+        assert_eq!(
+            sealed.report_hash().is_empty(),
             !own,
             "an advised one carries the report that qualified it"
         );
@@ -1111,7 +1134,7 @@ fn a_suggestion_that_would_not_instantiate_is_dropped_and_audited() {
                 "{}: dropped, and never silently",
                 suggestion.why
             );
-            assert!(filed.advice.suggestions.is_empty(), "{}", suggestion.why);
+            assert!(filed.advice().suggestions.is_empty(), "{}", suggestion.why);
             assert_eq!(text_of(&made, "why"), "", "{}", suggestion.why);
             assert!(
                 !any_suggested,
@@ -1120,7 +1143,7 @@ fn a_suggestion_that_would_not_instantiate_is_dropped_and_audited() {
             );
         } else {
             assert!(lines.is_empty(), "a good suggestion is filed as it is");
-            assert_eq!(filed.advice.suggestions, vec![suggestion.clone()]);
+            assert_eq!(filed.advice().suggestions, vec![suggestion.clone()]);
             assert_eq!(text_of(&made, "why"), "A good one.");
             assert!(any_suggested, "the good suggestion is applied");
         }

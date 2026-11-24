@@ -259,27 +259,6 @@ fn inputs(
     Ok(enc)
 }
 
-/// The plan fingerprint for a decoded playbook (decisions-log item 77).
-///
-/// The arithmetic is the sim's: [`pharmakos_sim::hash::plan_fingerprint`],
-/// `xxh3-64( PLAN_FINGERPRINT_DOMAIN || canonical_json_bytes )` under the
-/// project's one seed, over the playbook's canonical JSON with
-/// `meta.fingerprint` cleared. It lived here until S1's `build` lane folded it
-/// into the sim's `hash` module beside the state hash (the register's S1-42),
-/// with its value unmoved: the sim's `the_plan_fingerprint_is_unmoved` holds
-/// it to the fingerprints this crate's report goldens carry. This reader keeps
-/// the verifier's own question, "is there a fingerprint", for its two callers.
-///
-/// Returns `None` when the playbook cannot be written as canonical JSON, which
-/// for a message that has just been decoded from canonical JSON means the codec
-/// has lost a field it can read but not write
-/// ([`pharmakos_sim::hash::FingerprintError`]); `E0008` and the report then
-/// carry no fingerprint rather than a made-up one.
-#[must_use]
-pub fn plan_fingerprint(playbook: &Playbook) -> Option<u64> {
-    pharmakos_sim::hash::plan_fingerprint(playbook).ok()
-}
-
 /// The canonical JSON of a playbook, for a caller that wants the bytes the
 /// fingerprint is over.
 ///

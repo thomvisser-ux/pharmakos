@@ -242,6 +242,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "This file is longer than a playbook may be, so nothing in it was checked. \
                    Take out what it does not need.",
     },
+    Text {
+        code: "E0030",
+        message: "the verifier could not write this playbook's canonical form to take its plan \
+                  fingerprint; this is a fault in the verifier, not in the file.",
+        beginner: "Something went wrong inside the checker, not in your file, so this playbook \
+                   cannot be sealed in this build. Report it.",
+    },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
         code: "E0101",

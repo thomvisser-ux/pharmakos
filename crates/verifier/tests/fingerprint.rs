@@ -5,7 +5,8 @@
 //!
 //! The decode stage takes a playbook's fingerprint from the wire bytes it was
 //! decoded from (`pharmakos_sim::hash::plan_fingerprint_of`) rather than by
-//! encoding the playbook again (`plan_fingerprint`). Every fingerprint a
+//! encoding the playbook again (`plan_fingerprint`, deleted from shipped code
+//! by S3's `fpstream` part 2, whose place here [`reference`] takes). Every fingerprint a
 //! report or a save carries must be the one it was, so these tests hold the
 //! two equal on every committed verifier case, on the three fingerprints the
 //! sim pins, on stamped, doubled and odd files, and on the two shapes P1 is
@@ -32,7 +33,7 @@ use pharmakos_proto::fingerprint::{PLAN_FINGERPRINT_DOMAIN, canonical_input};
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json;
 use pharmakos_sim::encoding::digest;
-use pharmakos_sim::hash::{plan_fingerprint, plan_fingerprint_of};
+use pharmakos_sim::hash::plan_fingerprint_of;
 
 /// The fingerprint as it was computed before S3's `fpstream`, kept here as
 /// the reference and nowhere in shipped code: the playbook's canonical text
@@ -50,7 +51,7 @@ fn reference(playbook: &Playbook) -> u64 {
 /// playbook.
 fn both(text: &str) -> Option<(u64, u64)> {
     let decoded = json::decode_encoded::<Playbook>(text).ok()?;
-    let old = plan_fingerprint(decoded.message()).expect("a decoded playbook writes");
+    let old = reference(decoded.message());
     let new = plan_fingerprint_of(&decoded).expect("its bytes write");
     assert_eq!(new, old, "the two fingerprints of {text}");
     assert_eq!(

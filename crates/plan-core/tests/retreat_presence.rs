@@ -22,7 +22,7 @@ use pharmakos_plan_core::{
     PickOp, PlanContext, Rendering, canonicalise_text, decode_jsonc, render,
 };
 use pharmakos_proto::gp::v1::{InterfaceRow, Playbook, interface_row, step};
-use pharmakos_sim::hash::plan_fingerprint;
+use pharmakos_sim::hash::plan_fingerprint_of;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::Snapshot;
 
@@ -132,8 +132,10 @@ fn a_written_zero_and_an_omitted_field_are_two_playbooks() {
     assert_eq!(retreat_of(&omitted.playbook), None);
     assert_ne!(written.json, omitted.json);
     assert_ne!(
-        plan_fingerprint(&written.playbook).expect("a fingerprint"),
-        plan_fingerprint(&omitted.playbook).expect("a fingerprint"),
+        plan_fingerprint_of(decode_jsonc(&written.text).expect("decodes").decoded())
+            .expect("a fingerprint"),
+        plan_fingerprint_of(decode_jsonc(&omitted.text).expect("decodes").decoded())
+            .expect("a fingerprint"),
         "a written 0 is a different plan from one that leaves the field out"
     );
 }

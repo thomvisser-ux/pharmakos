@@ -271,14 +271,14 @@ fn a_carried_draft_that_nothing_replaces_is_dropped() {
         Some(2),
         "round 1's playbook is carried into round 2"
     );
-    assert!(round_two.continuity.is_some());
+    assert!(round_two.continuity().is_some());
 
     // Round 2: the seat submits nothing, so the gateway files the safe
     // playbook, and round 3 has nothing of the seat's own to carry.
     finish_round(&mut surface);
     let round_three = own(&surface);
-    assert_eq!(round_three.drafts.len(), 0, "{:?}", round_three.drafts);
-    assert!(round_three.continuity.is_none());
+    assert_eq!(round_three.drafts().len(), 0, "{:?}", round_three.drafts());
+    assert!(round_three.continuity().is_none());
     let token = seat_token(&mut surface, 0);
     let mut left = FIRST_LULL_MS;
     let listed = result(

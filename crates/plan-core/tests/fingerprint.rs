@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The plan fingerprint of every committed JSONC playbook, three ways (S3's
+//! The plan fingerprint of every committed JSONC playbook, two ways (S3's
 //! `fpstream`).
 //!
 //! The gateway takes a seal's fingerprint from its text through this crate's
@@ -10,8 +10,9 @@
 //! playbooks (`scenarios/**/*.playbook.jsonc`) and the example
 //! (`examples/playbooks/*.jsonc`). For each, the fingerprint hashed in pieces
 //! as the codec writes it (`plan_fingerprint_of`, over the decode's wire
-//! bytes), the message's fingerprint (`plan_fingerprint`) and the reference
-//! below, the computation as it was before `fpstream`, must be one value.
+//! bytes) and the reference below, the computation as it was before
+//! `fpstream`, must be one value. (The message-encoding `plan_fingerprint`
+//! was a third way until `fpstream` part 2 deleted it from shipped code.)
 //! `crates/verifier/tests/fingerprint.rs` holds the same over the verifier's
 //! cases and the golden playbooks, which are plain JSON.
 
@@ -28,7 +29,7 @@ use pharmakos_plan_core::decode_jsonc;
 use pharmakos_proto::fingerprint::{PLAN_FINGERPRINT_DOMAIN, canonical_input};
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_sim::encoding::digest;
-use pharmakos_sim::hash::{plan_fingerprint, plan_fingerprint_of};
+use pharmakos_sim::hash::plan_fingerprint_of;
 
 /// The fingerprint as it was computed before `fpstream`, kept as the
 /// reference in tests only: the canonical text written whole, the domain put
@@ -105,12 +106,6 @@ fn every_committed_jsonc_playbook_has_one_fingerprint_three_ways() {
             });
             let decoded = canonical.decoded();
             let streamed = plan_fingerprint_of(decoded).expect("its bytes write");
-            assert_eq!(
-                Ok(streamed),
-                plan_fingerprint(decoded.message()),
-                "{}: the message's fingerprint",
-                path.display()
-            );
             assert_eq!(
                 streamed,
                 reference(decoded.message()),

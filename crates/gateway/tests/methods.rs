@@ -897,8 +897,8 @@ fn an_invalid_playbook_is_a_full_report_and_never_a_method_error() {
     let sealed = surface
         .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("sealed")
-        .playbook_jsonc
-        .clone();
+        .playbook_jsonc()
+        .to_owned();
     let _ = surface.call(
         Some(&token),
         &request(
@@ -911,7 +911,7 @@ fn an_invalid_playbook_is_a_full_report_and_never_a_method_error() {
         surface
             .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
             .expect("still sealed")
-            .playbook_jsonc,
+            .playbook_jsonc(),
         sealed,
         "a report that does not qualify leaves the previous seal alone"
     );
@@ -950,7 +950,7 @@ fn the_latest_verified_submission_replaces_the_previous_one_any_number_of_times(
             surface
                 .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
                 .expect("sealed")
-                .playbook_jsonc,
+                .playbook_jsonc(),
             playbook,
             "the latest replaces the previous"
         );
@@ -1005,8 +1005,7 @@ fn a_lull_opens_with_last_rounds_playbook_carried_and_re_verified() {
     assert_eq!(&carried.playbook_jsonc, playbook);
     assert_eq!(carried.round, 2, "carried into round 2");
     let continuity = state
-        .continuity
-        .as_ref()
+        .continuity()
         .expect("the re-verification has already run");
     assert!(
         continuity.qualifies,
@@ -1022,7 +1021,7 @@ fn a_lull_opens_with_last_rounds_playbook_carried_and_re_verified() {
     let other = surface
         .seat_state(Subject::Seat(SeatId::new(1)), SeatId::new(1))
         .expect("its own");
-    assert!(other.drafts.is_empty());
+    assert!(other.drafts().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,11 +1037,11 @@ fn a_seat_that_seals_nothing_has_the_safe_playbook_filed_for_it() {
             .sealed_plan(Subject::Seat(SeatId::new(seat)), SeatId::new(seat))
             .expect("something was filed");
         assert!(
-            sealed.filed_by_the_gateway,
+            sealed.filed_by_the_gateway(),
             "seat {seat} sealed nothing, so the gateway filed the safe playbook"
         );
         assert_eq!(
-            sealed.playbook_jsonc,
+            sealed.playbook_jsonc(),
             pharmakos_gateway::host::safe_playbook()
                 .expect("the fallback")
                 .as_str()
@@ -2759,7 +2758,7 @@ fn assert_sim_refusal(response: &Json, what: &str, names: &str, stage: &str) {
 /// stage: the closed set has no word for "valid and not executable by this
 /// build", adding one is a contract change, and of the ten codes it has this is
 /// the one that means "the request, and you can fix it"
-/// (`surface::planning::compile_playbook` gives the whole argument).
+/// (`surface::planning::compile_canonical` gives the whole argument).
 #[test]
 fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal() {
     let mut surface = hosted();

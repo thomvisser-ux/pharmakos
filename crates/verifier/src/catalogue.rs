@@ -63,7 +63,9 @@
 //! only where `E0418` judges its age. It also adds `E0029` (a player's text
 //! past [`crate::MAX_PLAYBOOK_CHARS`]) at the end of the decode family, and
 //! `I0007` (the count of `I0003` notes past [`crate::MAX_DEFAULT_NOTES`]) at
-//! the end of the information codes.
+//! the end of the information codes. S3's `fpstream` (part 2) adds `E0030` (the
+//! verifier could not take a decoded playbook's plan fingerprint: its own
+//! fault, not the file's) at the end of the decode family.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -460,6 +462,16 @@ pub const CATALOGUE: &[Entry] = &[
     // that holds it (`crate::Input::too_long`) before anything decodes it.
     Entry {
         code: "E0029",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Decode),
+    },
+    // S3's `fpstream`, part 2, fix pass 2: the codec could not write the
+    // canonical text a decoded playbook's plan fingerprint is taken over. An
+    // engine fault, never a diagnosis of the file, and an error, so a report
+    // without a fingerprint never qualifies.
+    Entry {
+        code: "E0030",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Decode),
