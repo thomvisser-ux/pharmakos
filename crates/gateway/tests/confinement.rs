@@ -2702,17 +2702,19 @@ fn wall_target_json(",
 // A seal carries the fingerprint it was made with (S3's `fpstream`, part 2)
 // ---------------------------------------------------------------------------
 
-/// The seals made in shipped code, each by the function that makes it: a
-/// submission, an advised safe playbook, the gateway's fallback, a resume and
-/// the scenario harness's door. Each holds its fingerprint in
-/// `tests/seal_work.rs`, `tests/advice.rs` or `gamectl`'s `scenario/run.rs`.
+/// The seal types, in `surface/sealed.rs`, and the functions there that write
+/// a literal of each: every seal is made by one of these, from one decode of
+/// its text.
 const SEAL_MAKERS: &[(&str, &str)] = &[
-    ("gamectl/src/scenario/run.rs", "seal"),
-    ("gateway/src/surface.rs", "file_safe_playbooks"),
-    ("gateway/src/surface.rs", "qualify_safe_playbook"),
-    ("gateway/src/surface.rs", "restore_seal"),
-    ("gateway/src/surface/planning.rs", "submit_plan"),
+    ("Sealed", "file"),
+    ("Sealed", "restored_seal"),
+    ("Unfiled", "fallback_for"),
+    ("Unfiled", "harness_seal"),
+    ("Unfiled", "qualify"),
 ];
+
+/// The file the seal types live in, relative to this crate.
+const SEAL_FILE: &str = "src/surface/sealed.rs";
 
 /// The function a line sits in: the name after the last `fn ` at or above it.
 fn enclosing_fn(lines: &[(usize, String)], index: usize) -> String {
@@ -2727,63 +2729,186 @@ fn enclosing_fn(lines: &[(usize, String)], index: usize) -> String {
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                 .collect();
-            (!name.is_empty() && after[name.len()..].starts_with(['(', '<'])).then_some(name)
+            let rest = after.get(name.len()..).unwrap_or_default();
+            (!name.is_empty() && rest.starts_with(['(', '<'])).then_some(name)
         })
         .unwrap_or_default()
 }
 
-/// A seal is made only by `Sealed::new`, which takes its plan fingerprint as a
-/// required argument, and only by the functions [`SEAL_MAKERS`] names. No
-/// shipped line writes a `Sealed` literal or renames the type (`Sealed as`),
-/// which would take a maker out of this search's sight. That no shipped code
-/// takes a fingerprint by encoding a message again is the compiler's: the
-/// message-encoding function is test-only (S3's `fpstream`, part 2, fix
-/// pass 1), and a field write to a seal does not compile (`Sealed`'s
-/// `compile_fail` doc test).
+/// The lines of the `pub struct <name>` block in `lines`.
+fn struct_block(lines: &[(usize, String)], name: &str) -> Vec<String> {
+    let opener = format!("pub struct {name} {{");
+    lines
+        .iter()
+        .skip_while(|(_, line)| line.trim() != opener)
+        .skip(1)
+        .take_while(|(_, line)| line.trim() != "}")
+        .map(|(_, line)| line.clone())
+        .collect()
+}
+
+/// A seal holds the pair "this fingerprint, and this price, are of this text"
+/// by its type (S3's `fpstream`, part 2, fix pass 2), and these needles hold
+/// the type to it, since a `compile_fail` doc test can pass for the wrong
+/// reason on stable:
+///
+/// * a seal is written as a literal only in `surface/sealed.rs`, and there
+///   only by the functions [`SEAL_MAKERS`] names;
+/// * no field of `Sealed` or `Unfiled` is `pub`, and `SeatState`'s `sealed`
+///   and `Advised`'s `safe` are not `pub` either, so nothing outside the
+///   surface reaches a seal to write it, replace it or swap it;
+/// * nothing in `surface/sealed.rs` takes `&mut self`, so no seal is changed
+///   after it is made;
+/// * no `pub` function there makes a seal: its makers are `pub(super)`.
+///
+/// The review's alias blind spot (`type Seal = Sealed; Seal::new(..)`) is
+/// moot: there is no public constructor to alias, and a literal outside the
+/// module does not compile.
 #[test]
-fn a_seal_is_made_by_its_constructor_in_the_named_makers() {
-    let mut files = sources();
-    files.extend(sources_of("gamectl"));
+fn a_seal_is_made_only_by_the_named_makers_and_never_changed() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut findings: Vec<String> = Vec::new();
     let mut makers: Vec<(String, String)> = Vec::new();
+    let mut files = sources();
+    files.extend(sources_of("gamectl"));
     for path in &files {
         let text = std::fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         let shown = path.display().to_string().replace('\\', "/");
-        let relative = shown
-            .split_once("/crates/")
-            .map_or(shown.as_str(), |(_, rest)| rest)
-            .replace("gateway/../", "");
+        let in_seal_file = shown.ends_with(SEAL_FILE);
         let lines = code_lines(&text);
         for (index, (number, line)) in lines.iter().enumerate() {
             let trimmed = line.trim();
-            let declares = trimmed == "pub struct Sealed {" || trimmed == "impl Sealed {";
-            // `Boundary::Sealed` is the save's boundary, a variant and not this type.
-            let literal = line.contains("Sealed {") && !line.contains("Boundary::Sealed");
-            if literal && !declares {
-                findings.push(format!("{relative}:{number}: a literal: {trimmed}"));
+            for name in ["Sealed", "Unfiled"] {
+                let declares = trimmed == format!("pub struct {name} {{")
+                    || trimmed == format!("impl {name} {{");
+                // `Boundary::Sealed { .. }` is the save's boundary, a variant
+                // and not this type, so a path-qualified name is skipped, and
+                // so are signatures (`-> Sealed {`).
+                let written = line.contains(&format!("{name} {{"))
+                    && !declares
+                    && !line.contains(&format!("::{name} {{"))
+                    && !line.contains(&format!("-> {name} {{"))
+                    && !trimmed.starts_with("pub ")
+                    && !trimmed.starts_with("pub(");
+                if !written {
+                    continue;
+                }
+                let function = enclosing_fn(&lines, index);
+                if in_seal_file {
+                    makers.push((name.to_owned(), function));
+                } else {
+                    findings.push(format!("{shown}:{number}: a `{name}` literal: {trimmed}"));
+                }
             }
-            if uses(line, "Sealed") && line.contains("Sealed as ") {
-                findings.push(format!("{relative}:{number}: a renamed seal: {trimmed}"));
+        }
+    }
+    makers.sort();
+    let expected: Vec<(String, String)> = SEAL_MAKERS
+        .iter()
+        .map(|(name, function)| ((*name).to_owned(), (*function).to_owned()))
+        .collect();
+    assert_eq!(
+        makers, expected,
+        "the seal makers moved; a new one is a maker whose carried fingerprint and price must \
+         be held to its text (`tests/seal_work.rs`), and its name joins SEAL_MAKERS with that test"
+    );
+
+    let sealed_text = std::fs::read_to_string(root.join(SEAL_FILE)).expect("the seal types' file");
+    let sealed_lines = code_lines(&sealed_text);
+    for name in ["Sealed", "Unfiled"] {
+        let fields = struct_block(&sealed_lines, name);
+        assert!(
+            fields.len() > 2,
+            "{name} read as {} lines; the scan is looking at the wrong text",
+            fields.len()
+        );
+        for field in fields {
+            if field.trim_start().starts_with("pub") {
+                findings.push(format!(
+                    "{SEAL_FILE}: `{name}` has a public field: {}",
+                    field.trim()
+                ));
             }
-            if line.contains("Sealed::new(") {
-                makers.push((relative.clone(), enclosing_fn(&lines, index)));
+        }
+    }
+    for (number, line) in &sealed_lines {
+        let trimmed = line.trim();
+        if line.contains("&mut self") {
+            findings.push(format!(
+                "{SEAL_FILE}:{number}: a method that changes a seal: {trimmed}"
+            ));
+        }
+        let public = trimmed.starts_with("pub fn ") || trimmed.starts_with("pub const fn ");
+        let makes_one = [
+            "-> Self",
+            "-> Sealed",
+            "-> Unfiled",
+            "Result<Sealed",
+            "Result<Unfiled",
+        ]
+        .iter()
+        .any(|shape| trimmed.contains(shape));
+        if public && makes_one {
+            findings.push(format!(
+                "{SEAL_FILE}:{number}: a public seal maker: {trimmed}"
+            ));
+        }
+    }
+    let surface_text = std::fs::read_to_string(root.join("src/surface.rs")).expect("the surface");
+    for (number, line) in code_lines(&surface_text) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("pub sealed:") || trimmed.starts_with("pub safe:") {
+            findings.push(format!(
+                "src/surface.rs:{number}: a seal reachable to write: {trimmed}"
+            ));
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "a seal is made by its named makers, holds its fields privately and is never changed:\n{}",
+        findings.join("\n")
+    );
+}
+
+/// The scenario harness's door, `Surface::seal_by_harness`, is host-side like
+/// `Surface::file_advice` (`no_handler_can_file_advice`): no module of this
+/// crate names it but the surface that defines it, and in `gamectl` only the
+/// scenario runner does. A handler that could reach it would let a client seal
+/// a playbook the verifier refused.
+#[test]
+fn no_handler_can_seal_by_the_harness() {
+    const NEEDLE: &str = "seal_by_harness";
+    const DEFINER_PATH: &str = "src/surface.rs";
+    const RUNNER_PATH: &str = "gamectl/src/scenario/run.rs";
+    let mut findings: Vec<String> = Vec::new();
+    let mut definitions = 0_usize;
+    let mut called = 0_usize;
+    let mut files = sources();
+    files.extend(sources_of("gamectl"));
+    for path in &files {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let shown = path.display().to_string().replace('\\', "/");
+        for (number, line) in code_lines(&text) {
+            if !uses(&line, NEEDLE) {
+                continue;
+            }
+            let trimmed = line.trim();
+            if shown.ends_with(DEFINER_PATH) && trimmed.starts_with("pub fn ") {
+                definitions = definitions.saturating_add(1);
+            } else if shown.ends_with(RUNNER_PATH) {
+                called = called.saturating_add(1);
+            } else {
+                findings.push(format!("{shown}:{number}: {trimmed}"));
             }
         }
     }
     assert!(
         findings.is_empty(),
-        "a seal is made by `Sealed::new`, which takes its fingerprint, under its own name:\n{}",
+        "the harness's door is named outside the surface and the scenario runner:\n{}",
         findings.join("\n")
     );
-    makers.sort();
-    let expected: Vec<(String, String)> = SEAL_MAKERS
-        .iter()
-        .map(|(file, function)| ((*file).to_owned(), (*function).to_owned()))
-        .collect();
-    assert_eq!(
-        makers, expected,
-        "the seal makers moved; a new one is a maker whose carried fingerprint must be held to \
-         its text, and its name joins SEAL_MAKERS with that test"
-    );
+    assert_eq!(definitions, 1, "the surface defines the door once");
+    assert_eq!(called, 1, "the scenario runner calls it once");
 }

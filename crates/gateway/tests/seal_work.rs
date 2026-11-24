@@ -15,11 +15,12 @@
 //! * the bytes the calling thread asks the allocator for, through a counting
 //!   allocator, as `crates/sim/tests/fingerprint_memory.rs` counts them.
 //!
-//! And it pins the value: every seal's carried fingerprint is the reference
-//! one, `pharmakos_sim::hash::plan_fingerprint` over the canonical form of its
-//! own text, for each way a seal is made (a submission, the gateway's
-//! fallback, a resume; the advised safe playbook is `tests/advice.rs`', and
-//! the scenario harness's door is `gamectl`'s).
+//! And it pins the values: every seal's carried fingerprint is the reference
+//! one ([`reference`], the rule written out whole over the canonical form of
+//! its own text), and its carried price is the projection's spend over that
+//! text, for each way a seal is made (a submission, the gateway's fallback,
+//! an advised safe playbook, a resume; the scenario harness's door is
+//! `gamectl`'s). The round a seal is filed for is the round it plays.
 
 #![allow(
     clippy::expect_used,
@@ -532,10 +533,212 @@ fn an_advised_safe_playbook_reads_its_text_as_a_full_verify_does() {
         .expect("its own")
         .advice
         .as_ref()
-        .and_then(|advised| advised.safe.clone())
+        .and_then(|advised| advised.safe().cloned())
         .expect("the advice qualified");
     assert_eq!(
         advised.plan_fingerprint(),
         reference(advised.playbook_jsonc())
+    );
+}
+
+/// A match of `rounds` rounds, in its opening Lull.
+fn match_of(match_id: &str, rounds: u32) -> Surface {
+    hosted_with(match_id, FogPolicy::fogged(), 2, SEGMENT_MS, rounds, None)
+}
+
+/// A resume of `saved` into a match of `rounds` rounds.
+fn resume_of(match_id: &str, rounds: u32, saved: &SavedMatch) -> Surface {
+    let host = Host::open_from(
+        &rules_json(),
+        SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: vec![SEGMENT_MS],
+            round_limit: rounds,
+        },
+        None,
+    )
+    .expect("a match");
+    let surface = Surface::new(
+        match_id,
+        SEED,
+        host.rules().clone(),
+        FogPolicy::fogged(),
+        &SEATS,
+    )
+    .expect("a surface");
+    resume_into(surface, host, saved)
+}
+
+/// Play the open Push to its end and open the next Lull.
+fn play_round(surface: &mut Surface) {
+    let _ = surface.take_persistence();
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(surface.end_recap().expect("the recap ends"));
+    surface.open_lull().expect("the next Lull");
+}
+
+/// The round a seal is filed for has one home, the filing (S3's `fpstream`,
+/// part 2, fix pass 2; review 2's probe): after a resume from round 2's Lull,
+/// the fallback filed in round 2 carries 2, and an advised safe playbook
+/// filed in round 3 carries 3, for a seat that seals nothing in either.
+#[test]
+fn a_filing_after_a_resume_carries_its_round() {
+    const ID: &str = "m-fpstream2-filing-round";
+    let mut surface = match_of(ID, 3);
+    let zero = walk_east(&surface, 0, 4, 2);
+    let one = walk_east(&surface, 1, 3, 1);
+    submit(&mut surface, 0, &zero);
+    submit(&mut surface, 1, &one);
+    assert!(surface.begin_push().expect("the Push begins"));
+    play_round(&mut surface);
+    let saved = surface.lull_save().expect("round 2's Lull saves");
+    assert_eq!(saved.round, 2);
+    let mut resumed = resume_of(ID, 3, &saved);
+    // Round 2: seat 0 seals nothing, seat 1 seals again.
+    let again = walk_east(&resumed, 1, 3, 1);
+    submit(&mut resumed, 1, &again);
+    assert!(resumed.begin_push().expect("round 2's Push"));
+    let filed = seal_of(&resumed, SeatId::new(0));
+    assert!(filed.filed_by_the_gateway());
+    assert_eq!(filed.round(), 2, "round 2's filing");
+    assert_eq!(filed.plan_fingerprint(), reference(filed.playbook_jsonc()));
+    play_round(&mut resumed);
+    // Round 3: seat 0 is advised and seals nothing.
+    let advised = walk_east(&resumed, 0, 2, 3);
+    resumed
+        .file_advice(
+            SeatId::new(0),
+            pharmakos_gateway::advice::Advice {
+                safe_playbook_jsonc: advised.clone(),
+                suggestions: Vec::new(),
+                start_here: None,
+            },
+        )
+        .expect("filed");
+    let third = walk_east(&resumed, 1, 3, 1);
+    submit(&mut resumed, 1, &third);
+    assert!(resumed.begin_push().expect("round 3's Push"));
+    let filed = seal_of(&resumed, SeatId::new(0));
+    assert!(filed.filed_by_the_gateway());
+    assert_eq!(filed.playbook_jsonc(), advised, "the advice is what files");
+    assert_eq!(filed.round(), 3, "a filing in round 3 carries round 3");
+    assert_eq!(filed.plan_fingerprint(), reference(filed.playbook_jsonc()));
+}
+
+/// The forecast reads the seal's carried price and no text: the codec's meter
+/// over `get_economy_forecast` reads nothing with a seal of this round, as
+/// it reads nothing without one. Until fix pass 2 it decoded the sealed text
+/// on every call (34,245 bytes at 121 of 128 units, review 2's probe).
+#[test]
+fn a_forecast_with_a_seal_reads_no_text() {
+    let mut surface = new_match("m-fpstream2-forecast-work");
+    let token = seat_token(&mut surface, 0);
+    let forecast = support::request("get_economy_forecast", "{}");
+    let call = |surface: &mut Surface| {
+        let sight = support::vision(surface);
+        let _ = work::take();
+        let answer = surface.call(Some(&token), &forecast, &sight);
+        let counted = work::take();
+        (result(&answer, "get_economy_forecast"), counted)
+    };
+    let (_, bare) = call(&mut surface);
+    assert_eq!(bare, 0, "a forecast with no seal reads no text");
+    let long = walk_east(&surface, 0, 4, 120);
+    submit(&mut surface, 0, &long);
+    let (answer, sealed) = call(&mut surface);
+    assert_eq!(sealed, 0, "a forecast read the sealed text");
+    assert_eq!(
+        answer.get("committed_dollars"),
+        Some(&Json::Number(
+            seal_of(&surface, SeatId::new(0))
+                .committed_dollars()
+                .to_string()
+        )),
+        "the forecast answers the carried price"
+    );
+}
+
+/// The carried price is the price: for every committed playbook a seat can
+/// seal on this match, the walks and the library's templates, the seal's
+/// `committed_dollars` is the verifier's projection of the same text, taken
+/// here again. The spend is a function of the text and the rules table alone
+/// (`pharmakos_verifier::projection::project`'s `spend`), so the economy the
+/// reference is projected against does not move it.
+#[test]
+fn the_carried_price_is_the_projection_of_the_sealed_text() {
+    use pharmakos_sim::knowledge::SeatEconomy;
+    use pharmakos_sim::math::quantity::{Kw, Money};
+    use pharmakos_verifier::projection::{Prices, project};
+    let rules = support::rules();
+    let prices = Prices::from_rules(&rules).expect("the rules price");
+    let economy = SeatEconomy {
+        treasury: Money::ZERO,
+        supply: Kw::ZERO,
+        draw: Kw::ZERO,
+    };
+    let probe = new_match("m-fpstream2-price-probe");
+    let mut texts: Vec<String> = [0_usize, 1, 20, 120]
+        .iter()
+        .map(|holds| walk_east(&probe, 0, 4, *holds))
+        .collect();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "clippy.toml sanctions read_dir when the listing is collected and sorted before use, which is what happens here"
+    )]
+    let mut templates: Vec<std::path::PathBuf> = std::fs::read_dir(support::library_folder())
+        .expect("the library")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonc")
+        })
+        .collect();
+    templates.sort();
+    for path in &templates {
+        let template = std::fs::read_to_string(path).expect("a template");
+        if let Ok(made) = pharmakos_plan_core::instantiate(&template, &[], &[]) {
+            texts.push(made.playbook_jsonc);
+        }
+    }
+    let mut sealed = 0_usize;
+    let mut priced_above_zero = 0_usize;
+    for (index, text) in texts.iter().enumerate() {
+        let mut surface = new_match(&format!("m-fpstream2-price-{index}"));
+        let token = seat_token(&mut surface, 0);
+        let mut left = FIRST_LULL_MS;
+        let answer = result(
+            &call_in_lull(
+                &mut surface,
+                &token,
+                &mut left,
+                "submit_plan",
+                &format!("{{\"playbook_jsonc\":{}}}", quote(text)),
+            ),
+            "submit_plan",
+        );
+        if answer.get("accepted") != Some(&Json::Bool(true)) {
+            continue;
+        }
+        let carried = seal_of(&surface, SeatId::new(0)).committed_dollars();
+        let canonical = pharmakos_plan_core::decode_jsonc(text).expect("a canonical form");
+        let spend = project(canonical.decoded().message(), economy, &prices)
+            .expect("a seal prices")
+            .spend
+            .raw();
+        assert_eq!(i64::from(carried), spend, "text {index}");
+        sealed = sealed.saturating_add(1);
+        if carried > 0 {
+            priced_above_zero = priced_above_zero.saturating_add(1);
+        }
+    }
+    assert!(sealed >= 5, "only {sealed} of {} texts sealed", texts.len());
+    assert!(
+        priced_above_zero >= 1,
+        "no sealed text ordered anything, so the price was never tested above 0"
     );
 }

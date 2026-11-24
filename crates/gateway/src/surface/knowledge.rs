@@ -793,7 +793,7 @@ impl Surface {
     ///   In a Lull none of it has been paid, so "not yet paid" holds of all
     ///   of it; 0 when the seat has sealed nothing this round, which commits
     ///   nothing. A seal always prices, because `submit_plan` refuses one
-    ///   that does not ([`Surface::seal_commitment`]). **Outside a Lull it
+    ///   that does not ([`Surface::seal_commitment_of`]). **Outside a Lull it
     ///   is left out:** a Push pays its seal as it goes, and how much of it is
     ///   still unpaid is the interpreter's to know, which this method does not
     ///   read.
@@ -905,14 +905,9 @@ impl Surface {
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::Internal`] when a seal of this round does not
-    /// price ([`Surface::seal_commitment`]): `submit_plan` refuses a playbook
-    /// that does not, and a resume refuses a save whose seal does not, against
-    /// the same frozen economy this reads -- so one that reaches here is the
-    /// gateway contradicting itself, not anything a seat could seal. From S2
-    /// the verifier refuses an unpriceable seal itself (`E0603`, S2-14), so a
-    /// qualifying FULL report promises it too; the door stays as defence in
-    /// depth, and so does this refusal.
+    /// As [`Surface::seat_state`]. A seal always carries its price: every
+    /// maker of one prices it ([`Surface::seal_commitment_of`]) and refuses one
+    /// that does not.
     fn committed_dollars(
         &self,
         subject: crate::token::Subject,
@@ -927,14 +922,11 @@ impl Surface {
         else {
             return Ok(0);
         };
-        self.seal_commitment(seat, sealed.playbook_jsonc())
-            .map_err(|unpriced| match unpriced {
-                Unpriced::Gateway(error) => error,
-                Unpriced::Playbook(why) => Error::internal(said!(
-                    "a sealed playbook will not price, which its seal should have refused: {}",
-                    why
-                )),
-            })
+        // Priced once, by the seal's maker, from the decode it sealed (S3's
+        // `fpstream`, part 2, fix pass 2): the spend is a function of the
+        // text and the rules table alone (`projection::project`'s `spend`),
+        // and this reads no text. A seal always carries it.
+        Ok(sealed.committed_dollars())
     }
 
     /// The seat's own economy, as the hosted world has it: what the forecast
@@ -981,16 +973,19 @@ impl Surface {
         })
     }
 
-    /// What a seal of `playbook_jsonc` by `seat` commits, in whole `$`, by the
+    /// What a seal of `playbook` by `seat` commits, in whole `$`, by the
     /// verifier's projection against the seat's economy as the hosted world
-    /// has it: the figure the forecast's `committed_dollars` answers.
+    /// has it: the figure the forecast's `committed_dollars` answers. It reads
+    /// the canonical form a seal's maker decoded (S3's `vfyq2`, fix pass 1,
+    /// item 3), and the maker carries the figure on the seal, so the forecast
+    /// reads no text (S3's `fpstream`, part 2, fix pass 2).
     ///
-    /// The one place a seal is priced, so the door that seals it
-    /// (`submit_plan`), the resume that restores it and the forecast that
-    /// reads it cannot price it two ways. Two things make a playbook not
-    /// price: its spend or draw leaving the sim's `$` and kW types
-    /// ([`pharmakos_verifier::projection::ProjectionError::Overflow`]), and a
-    /// spend that fits `$` but is past the wire's `int32`. Both are
+    /// The one place a seal is priced, so the makers in `surface/sealed.rs`
+    /// (`submit_plan`'s, an advised safe playbook's, the fallback's, a
+    /// resume's and the harness's) cannot price it two ways. Two things make
+    /// a playbook not price: its spend or draw leaving the sim's `$` and kW
+    /// types ([`pharmakos_verifier::projection::ProjectionError::Overflow`]),
+    /// and a spend that fits `$` but is past the wire's `int32`. Both are
     /// [`Unpriced::Playbook`], which the door refuses rather than seal a
     /// playbook whose own forecast could not answer. From S2 the verifier
     /// refuses both before a report qualifies (`E0603`, S2-14), so no
@@ -1002,29 +997,8 @@ impl Surface {
     /// # Errors
     ///
     /// [`Unpriced::Playbook`] for a playbook the projection or the wire cannot
-    /// carry, and [`Unpriced::Gateway`] for the rest: no canonical form, a
-    /// rules table that does not price, a seat table missing a column.
-    pub(super) fn seal_commitment(
-        &self,
-        seat: SeatId,
-        playbook_jsonc: &str,
-    ) -> Result<i32, Unpriced> {
-        let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
-            Unpriced::Gateway(Error::internal(said!(
-                "a playbook the verifier read has no canonical form: {}",
-                error.said()
-            )))
-        })?;
-        self.seal_commitment_of(seat, canonical.decoded().message())
-    }
-
-    /// [`Surface::seal_commitment`], over a playbook already decoded: what
-    /// `submit_plan` prices, the canonical form its report was taken over
-    /// (S3's `vfyq2`, fix pass 1, item 3).
-    ///
-    /// # Errors
-    ///
-    /// As [`Surface::seal_commitment`], less the decode.
+    /// carry, and [`Unpriced::Gateway`] for the rest: a rules table that does
+    /// not price, a seat table missing a column.
     pub(super) fn seal_commitment_of(
         &self,
         seat: SeatId,
@@ -3392,7 +3366,7 @@ fn tally_json(tally: pharmakos_sim::tables::Tally) -> Result<(Json, i32), Error>
     Ok((json, destroyed))
 }
 
-/// Why a seal does not price ([`Surface::seal_commitment`]).
+/// Why a seal does not price ([`Surface::seal_commitment_of`]).
 pub(super) enum Unpriced {
     /// The playbook orders more than the projection or the wire can carry:
     /// something a seat sent, which the door refuses as `INVALID_ARGUMENT`.

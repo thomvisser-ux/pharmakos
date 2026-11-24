@@ -526,7 +526,7 @@ fn visit(
             .seat_state(Subject::Seat(seat), seat)
             .expect("its own")
             .clone();
-        let sealed = state.sealed.as_ref();
+        let sealed = state.sealed();
         let sealed_by_easy =
             sealed.is_some_and(|held| held.round() == round && !held.filed_by_the_gateway());
         let note = sealed
@@ -1009,7 +1009,7 @@ fn round_one(seed: u64, match_id: &str) -> Vec<String> {
             let state = surface
                 .seat_state(Subject::Seat(seat), seat)
                 .expect("its own");
-            let sealed = state.sealed.as_ref().expect("Easy sealed a playbook");
+            let sealed = state.sealed().expect("Easy sealed a playbook");
             assert!(!sealed.filed_by_the_gateway());
             sealed.playbook_jsonc().to_owned()
         })
@@ -1086,8 +1086,7 @@ fn the_operator_does_not_depend_on_the_host_clock() {
                     surface
                         .seat_state(Subject::Seat(seat), seat)
                         .expect("its own")
-                        .sealed
-                        .as_ref()
+                        .sealed()
                         .expect("sealed")
                         .playbook_jsonc()
                         .to_owned()
@@ -1176,7 +1175,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
             .clone();
         assert_eq!(human_after.notebook, before.notebook);
         assert_eq!(human_after.drafts, before.drafts);
-        assert!(human_after.sealed.is_none(), "an advisor seals nothing");
+        assert!(human_after.sealed().is_none(), "an advisor seals nothing");
         assert!(!human_after.ready, "an advisor never says ready for a seat");
         advised.push(human_after.advice.clone());
 
@@ -1185,8 +1184,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
             .expect("its own");
         assert!(easy.notebook.is_empty() && easy.drafts.is_empty());
         assert!(
-            easy.sealed
-                .as_ref()
+            easy.sealed()
                 .is_some_and(|sealed| !sealed.filed_by_the_gateway())
         );
         assert!(easy.ready);
@@ -1199,7 +1197,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
         "the notebook changes nothing Easy advises"
     );
     assert!(
-        quiet.safe.is_some(),
+        quiet.safe().is_some(),
         "the advised safe playbook qualified at filing"
     );
 }
@@ -2171,8 +2169,7 @@ fn easy_seals_a_stone(stone_ms: Option<i64>) -> (String, Vec<String>, pharmakos_
     let sealed = surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("its own")
-        .sealed
-        .as_ref()
+        .sealed()
         .expect("round 2's seal")
         .playbook_jsonc()
         .to_owned();

@@ -85,7 +85,7 @@ use pharmakos_sim::rules::RulesTable;
 
 use crate::error::Error;
 use crate::rpc::Request;
-use crate::surface::{Draft, Sealed, Surface};
+use crate::surface::{Draft, Surface};
 
 /// The longest label a seat may hang on a draft.
 ///
@@ -1109,7 +1109,7 @@ impl Surface {
     /// Two doors stand after the verifier, and a refusal at either is a method
     /// error, `INVALID_ARGUMENT`, with the previous seal untouched: the sim's
     /// compile ([`compile_canonical`]), and the price of the seal
-    /// (`Surface::seal_commitment`) -- a playbook whose spend or draw does
+    /// (`Surface::seal_commitment_of`) -- a playbook whose spend or draw does
     /// not fit the sim's `$` and kW types, or whose spend is past the
     /// forecast's `int32`, is refused rather than sealed into a forecast that
     /// could not answer. The seal carries the report's plan fingerprint, and a
@@ -1125,56 +1125,29 @@ impl Surface {
         let playbook = playbook_param(request)?.to_owned();
         let round = self.host()?.runner().round();
         // One decode from the socket to the seal (S3's `vfyq2`, fix pass 1,
-        // item 3): the report, the compile, the price and the seal all read
-        // the canonical form `verified_for` decoded, so the playbook sealed is
-        // the one the report qualified, by construction, and the file written
-        // is the text that canonical form was decoded from.
-        let verified = self.verified_for(seat, &playbook, Depth::Full)?;
-        let accepted = matches!(
-            &verified,
-            pharmakos_plan_core::Verified::Canonical { report, .. } if report.qualifies
-        );
-        if let pharmakos_plan_core::Verified::Canonical { report, canonical } = &verified
-            && report.qualifies
-        {
-            // The second door. A refusal here leaves the previous seal exactly
-            // where it is -- `self.seat_state_mut` is not reached at all -- and
-            // comes back as a method error rather than as a report, because the
-            // verifier has already said this playbook may be sealed and saying
-            // `qualifies: false` on the same breath would be the gateway
-            // contradicting a hash it has just handed out.
-            let plan = compile_canonical(canonical, self.host()?.rules())?;
-            // The third: a seal always prices, so the seat's own forecast can
-            // always answer its `committed_dollars` (review A of `econ`). From
-            // S2 the verifier refuses a seal that does not price (`E0603`), so
-            // no qualifying report reaches this refusal; it stays as defence
-            // in depth.
-            self.seal_commitment_of(seat, canonical.decoded().message())
-                .map_err(|unpriced| match unpriced {
-                    super::knowledge::Unpriced::Gateway(error) => error,
-                    super::knowledge::Unpriced::Playbook(why) => Error::invalid(said!(
-                        "this playbook qualifies and the Ledger cannot price its seal: {}. \
-                         Order less in one step",
-                        why
-                    )),
-                })?;
-            // The fingerprint the report was written with, from the same
-            // decode: what every save of this seal stamps (S3's `fpstream`,
-            // part 2). A qualifying report without one is refused, typed,
-            // with the previous seal untouched.
-            let fingerprint = super::carried_fingerprint(report)?;
-            let sealed = Sealed::new(
-                playbook,
-                report.report_hash.clone(),
-                round,
-                false,
-                plan,
-                fingerprint,
-            );
-            self.seat_state_mut(subject, seat)?.sealed = Some(sealed);
-        }
+        // item 3): the report, the compile, the price, the fingerprint and the
+        // seal all come from the canonical form `verified_for` decoded, made
+        // into a seal by its one maker (`Surface::qualify`), so the playbook
+        // sealed is the one the report qualified, by construction, and the
+        // file written is the text that canonical form was decoded from.
+        //
+        // The doors after the verifier: the sim's compile, the price of the
+        // seal (a seal always prices, so the seat's own forecast can always
+        // answer its `committed_dollars`, review A of `econ`; from S2 the
+        // verifier refuses one that does not, `E0603`, so the door stays as
+        // defence in depth), and a qualifying report's fingerprint. A refusal
+        // at any of them is a method error, and the previous seal is left
+        // exactly where it is: the gateway does not say `qualifies: false` in
+        // the same breath as handing out the hash of a report that qualified.
+        let (report, accepted) = match self.qualify(seat, playbook)? {
+            super::sealed::Qualified::Sealable { report, unfiled } => {
+                self.seat_state_mut(subject, seat)?.sealed = Some(unfiled.file(round, false));
+                (report, true)
+            }
+            super::sealed::Qualified::Refused { report } => (report, false),
+        };
         Ok(Json::Object(vec![
-            (String::from("report"), report_json(verified.report())),
+            (String::from("report"), report_json(&report)),
             (String::from("accepted"), Json::Bool(accepted)),
         ]))
     }
@@ -1268,6 +1241,23 @@ pub(crate) fn compile_canonical(
             why
         ))
     })
+}
+
+/// [`compile_canonical`] for the scenario harness's door
+/// ([`crate::surface::Surface::seal_by_harness`]), whose playbook the verifier
+/// refused: the same door, with words that do not say it qualifies.
+///
+/// # Errors
+///
+/// [`crate::error::Code::InvalidArgument`] for a [`PlanError`].
+///
+/// [`PlanError`]: pharmakos_sim::interpreter::PlanError
+pub(crate) fn compile_harnessed(
+    canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
+    rules: &RulesTable,
+) -> Result<Plan, Error> {
+    compile_decoded(canonical.decoded().message(), rules)
+        .map_err(|why| Error::invalid(said!("this build cannot execute it: {}", why)))
 }
 
 /// The sim's own door, over a playbook already decoded: the **one** call of

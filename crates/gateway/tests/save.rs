@@ -332,8 +332,8 @@ fn a_resumed_lull_has_the_seats_notebooks_drafts_and_seals() {
         assert_eq!(after.notebook, before.notebook, "seat {}", seat.raw());
         assert_eq!(after.drafts, before.drafts, "seat {}", seat.raw());
         assert_eq!(
-            after.sealed,
-            before.sealed,
+            after.sealed(),
+            before.sealed(),
             "seat {}: the seal, recompiled to the same plan",
             seat.raw()
         );
@@ -346,8 +346,7 @@ fn a_resumed_lull_has_the_seats_notebooks_drafts_and_seals() {
     assert_eq!(zero_after.notebook, "hold the east vent");
     assert_eq!(
         zero_after
-            .sealed
-            .as_ref()
+            .sealed()
             .map(pharmakos_gateway::surface::Sealed::round),
         Some(2),
         "this round's verified submission, which the seat may still replace"
@@ -457,8 +456,7 @@ fn zero_after_sealed_plan(surface: &Surface) -> Option<pharmakos_sim::interprete
     surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .ok()?
-        .sealed
-        .as_ref()
+        .sealed()
         .map(|sealed| sealed.plan().clone())
 }
 
@@ -1038,8 +1036,7 @@ fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
             let held = resumed
                 .seat_state(Subject::Seat(*seat), *seat)
                 .expect("its own")
-                .sealed
-                .as_ref()
+                .sealed()
                 .expect("the seal is back");
             let stamped = saved.seal.as_ref().expect("a saved seal");
             assert_eq!(held.playbook_jsonc(), stamped.playbook_jsonc);

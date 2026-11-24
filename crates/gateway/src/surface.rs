@@ -141,7 +141,7 @@ pub mod planning;
 mod sealed;
 pub mod watch;
 
-pub use sealed::Sealed;
+pub use sealed::{Sealed, Unfiled};
 
 use crate::advice::Advice;
 use crate::audit::{AuditLog, Outcome};
@@ -194,29 +194,6 @@ pub struct Draft {
     pub round: u32,
     /// The playbook, as the author wrote it: JSONC, comments and all.
     pub playbook_jsonc: String,
-}
-
-/// The plan fingerprint a qualifying report carries, for the seal it qualifies.
-///
-/// The verifier writes it from the wire bytes of the decode it verified
-/// (`pharmakos_sim::hash::plan_fingerprint_of`), the same canonical form a
-/// resume checks a saved seal against. A report that qualifies with no
-/// fingerprint, or one not eight bytes long, is this build's verifier and its
-/// gateway disagreeing, and it is refused rather than sealed under a value
-/// nobody computed.
-///
-/// # Errors
-///
-/// [`crate::error::Code::Internal`] when the report carries no fingerprint,
-/// or one of the wrong length.
-fn carried_fingerprint(report: &VerifyReport) -> Result<u64, Error> {
-    pharmakos_proto::fingerprint::from_field(&report.plan_fingerprint).ok_or_else(|| {
-        Error::internal(said!(
-            "the verifier qualified this playbook and wrote no plan fingerprint for it ({} \
-             bytes where eight belong), so it is not sealed",
-            report.plan_fingerprint.len()
-        ))
-    })
 }
 
 /// The footer's `(untimed, untimed_by_rule)` pair (`gp.api.v1.Status`) for a
@@ -302,11 +279,22 @@ pub struct Advised {
     /// What the operator said, as it said it, less any suggestion that would
     /// not instantiate ([`Surface::file_advice`] drops and audits those).
     pub advice: Advice,
-    /// The operator's safe playbook, verified FULL and compiled when it was
-    /// filed. `None` when it did not qualify or would not compile, in which
-    /// case the gateway's fallback is what this seat is shown and filed, and
-    /// the audit log says why.
-    pub safe: Option<Sealed>,
+    /// The operator's safe playbook, verified FULL, compiled and priced when
+    /// it was filed, and not yet filed for a round: it is filed for this
+    /// advice's `round`, the one home of that round. `None` when it did not
+    /// qualify, compile or price, in which case the gateway's fallback is what
+    /// this seat is shown and filed, and the audit log says why. Private, so
+    /// an `Advised` is made only by [`Surface::file_advice`] (S3's
+    /// `fpstream`, part 2, fix pass 2).
+    safe: Option<Unfiled>,
+}
+
+impl Advised {
+    /// The operator's safe playbook, as it was qualified when it was filed.
+    #[must_use]
+    pub const fn safe(&self) -> Option<&Unfiled> {
+        self.safe.as_ref()
+    }
 }
 
 /// How the host treats a token it minted for itself: a built-in seat's or an
@@ -348,8 +336,12 @@ pub struct SeatState {
     pub drafts: Vec<Draft>,
     /// Whether the seat has said it is ready.
     pub ready: bool,
-    /// The latest verified submission, if there is one.
-    pub sealed: Option<Sealed>,
+    /// The latest verified submission, if there is one. Private, read by
+    /// [`SeatState::sealed`]: only the makers in `surface/sealed.rs`, filed by
+    /// the surface, put a seal here, so [`Surface::seat_state_mut`] reaches a
+    /// seat's drafts and notebook and never its seal (S3's `fpstream`, part 2,
+    /// fix pass 2).
+    sealed: Option<Sealed>,
     /// What the carried draft's re-verification found, if there is one.
     pub continuity: Option<Continuity>,
     /// What the built-in operator advised this seat this round, if it
@@ -381,6 +373,12 @@ impl SeatState {
     #[must_use]
     pub fn draft(&self, draft_id: &str) -> Option<&Draft> {
         self.drafts.iter().find(|draft| draft.draft_id == draft_id)
+    }
+
+    /// The latest verified submission, if there is one.
+    #[must_use]
+    pub const fn sealed(&self) -> Option<&Sealed> {
+        self.sealed.as_ref()
     }
 }
 
@@ -938,33 +936,12 @@ impl Surface {
                     held.seat
                 )));
             }
-            let restored = match held.seal.as_ref() {
+            // Decoded once: checked against its stamp, compiled, and priced when
+            // it is of the round the match resumes into (`Surface::restored_seal`).
+            let sealed = match held.seal.as_ref() {
                 None => None,
-                Some(seal) => Some(restore_seal(held, seal, &rules)?),
+                Some(seal) => Some(self.restored_seal(held, seal)?),
             };
-            // A seal of the round the save resumes into prices, as the door
-            // that sealed it required (`Surface::seal_commitment`), so the
-            // forecast's `committed_dollars` answers after a resume as before
-            // it. A save holding one that does not was never written by a
-            // build with that door. It prices the canonical form the restore
-            // checked and compiled: one decode a seal.
-            if let Some((seal, canonical)) = restored.as_ref()
-                && seal.round() == self.host()?.runner().round()
-            {
-                self.seal_commitment_of(SeatId::new(held.seat), canonical.decoded().message())
-                    .map_err(|unpriced| match unpriced {
-                        crate::surface::knowledge::Unpriced::Gateway(error) => error,
-                        crate::surface::knowledge::Unpriced::Playbook(why) => {
-                            Error::invalid(said!(
-                                "seat {}'s sealed playbook in this save does not price: {}: \
-                                 the file is damaged",
-                                held.seat,
-                                why
-                            ))
-                        }
-                    })?;
-            }
-            let sealed = restored.map(|(seal, _)| seal);
             if let Some(slot) = self
                 .seats
                 .iter_mut()
@@ -2623,46 +2600,38 @@ impl Surface {
             .seats
             .iter()
             .any(|seat| stale(seat) && own(seat).is_none());
+        // Read once for every seat it is filed for: decoded, compiled and
+        // fingerprinted, then priced for each seat.
         let fallback = if needs_fallback {
-            let safe = host.safe_playbook().to_owned();
-            // One decode, compiled and fingerprinted, once at filing: no
-            // report carries a fingerprint for it, and every save after
-            // stamps the one taken here.
-            let unfiled = |error: Error| {
-                Error::internal(said!(
-                    "the safe playbook this gateway files will not compile: {}",
-                    error.said()
-                ))
-            };
-            let canonical = sealed_canonical(&safe).map_err(unfiled)?;
-            let plan = crate::surface::planning::compile_canonical(&canonical, host.rules())
-                .map_err(unfiled)?;
-            let fingerprint = fingerprint_of(&canonical)?;
-            Some(Sealed::new(
-                safe,
-                // No report: this playbook did not come from a seat and was
-                // not pre-checked by one. The Push's own verification is what
-                // accepts it, and an invented hash here would be a hash
-                // nothing produced.
-                Vec::new(),
-                round,
-                true,
-                plan,
-                fingerprint,
-            ))
+            Some(sealed::Fallback::read(
+                host.safe_playbook().to_owned(),
+                host.rules(),
+            )?)
         } else {
             None
         };
-        for seat in &mut self.seats {
+        let mut filings: Vec<(usize, Sealed)> = Vec::new();
+        for (index, seat) in self.seats.iter().enumerate() {
             if !stale(seat) {
                 continue;
             }
-            let filed = own(seat).or_else(|| fallback.clone());
-            // Both are made for this round (`own` is the advice filed for it,
-            // and the fallback is sealed with it), so a filing changes nothing
-            // in the seal it files.
-            if let Some(filed) = filed {
-                seat.sealed = Some(filed);
+            let unfiled = match (own(seat), fallback.as_ref()) {
+                (Some(advised), _) => advised,
+                (None, Some(fallback)) => self.fallback_for(fallback, seat.seat)?,
+                // `needs_fallback` read the fallback for every seat this reaches.
+                (None, None) => {
+                    return Err(Error::internal(
+                        "a seat that sealed nothing has no fallback read for it",
+                    ));
+                }
+            };
+            // Filed for this round: the advice is the one filed for it, and
+            // the round has one home, the filing.
+            filings.push((index, unfiled.file(round, true)));
+        }
+        for (index, sealed) in filings {
+            if let Some(slot) = self.seats.get_mut(index) {
+                slot.sealed = Some(sealed);
             }
         }
         Ok(())
@@ -2713,7 +2682,7 @@ impl Surface {
         let round = self.host()?.runner().round();
         let tick = self.time.tick;
         let subject = Subject::Seat(seat);
-        let checked = self.qualify_safe_playbook(seat, &advice.safe_playbook_jsonc, round);
+        let checked = self.qualify_safe_playbook(seat, &advice.safe_playbook_jsonc);
         let safe = match checked {
             Ok(sealed) => {
                 self.audit
@@ -2790,6 +2759,44 @@ impl Surface {
         Ok(())
     }
 
+    /// Seal `playbook_jsonc` for `seat` though the verifier refuses it: the
+    /// scenario harness's door (`gamectl scenario run`), for the committed
+    /// scenarios that need one.
+    ///
+    /// **Host-side**, like [`Surface::file_advice`]: no method handler
+    /// reaches it, and `tests/confinement.rs`'s
+    /// `no_handler_can_seal_by_the_harness` holds every gateway module to
+    /// that and `gamectl` to its one scenario runner. It decodes the text
+    /// once, by a FULL verify, and compiles, prices and fingerprints that
+    /// decode ([`Surface::harness_seal`]), so the seal carries its own
+    /// text's fingerprint like every other (S3's `fpstream`, part 2, fix
+    /// pass 2).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`]; [`crate::error::Code::PhaseClosed`] outside a
+    /// Lull, because a seal is made in the Lull it is for;
+    /// [`crate::error::Code::NotFound`] for a seat the match has not got; and
+    /// as [`Surface::harness_seal`].
+    pub fn seal_by_harness(&mut self, seat: SeatId, playbook_jsonc: &str) -> Result<(), Error> {
+        if self.host()?.runner().phase() != MatchPhase::Lull {
+            return Err(Error::phase_closed(
+                "a playbook is sealed during a Lull, for the round about to be played",
+            ));
+        }
+        let round = self.host()?.runner().round();
+        let unfiled = self.harness_seal(seat, playbook_jsonc)?;
+        let slot = self
+            .seats
+            .iter_mut()
+            .find(|slot| slot.seat == seat)
+            .ok_or_else(|| Error::not_found(said!("this match has no seat {}", seat.raw())))?;
+        // Written by the harness, not filed by the gateway for a seat that
+        // sealed nothing (spec section 14).
+        slot.sealed = Some(unfiled.file(round, false));
+        Ok(())
+    }
+
     /// Whether one wizard suggestion instantiates, on its own, over the
     /// template it names.
     ///
@@ -2828,55 +2835,33 @@ impl Surface {
             .map_err(|error| Error::invalid(error.shown()))
     }
 
-    /// An advised safe playbook, verified FULL and compiled, or the reason it
-    /// is not filed.
+    /// An advised safe playbook, verified FULL, compiled and priced, not yet
+    /// filed for a round; or the reason it is not filed.
     ///
     /// `NO_QUALIFYING_PLAN` for one the verifier refuses — the code spec
-    /// section 12 names for "nothing that qualifies" — and the compile door's
-    /// own refusal for one this build cannot execute
-    /// ([`crate::surface::planning::compile_canonical`]).
-    fn qualify_safe_playbook(
-        &self,
-        seat: SeatId,
-        playbook_jsonc: &str,
-        round: u32,
-    ) -> Result<Sealed, Error> {
+    /// section 12 names for "nothing that qualifies" — and the doors' own
+    /// refusals for one this build cannot execute or the Ledger cannot price
+    /// ([`Surface::qualify`]), as `submit_plan` refuses them.
+    fn qualify_safe_playbook(&self, seat: SeatId, playbook_jsonc: &str) -> Result<Unfiled, Error> {
         if pharmakos_verifier::is_too_long(playbook_jsonc) {
             return Err(Error::invalid(said!(
                 "an advised safe playbook is at most {} characters, like any other",
                 pharmakos_verifier::MAX_PLAYBOOK_CHARS
             )));
         }
-        // One decode, verified then compiled, as `submit_plan` seals (S3's
-        // `vfyq2`, fix pass 1, item 3).
-        let (report, canonical) = match self.verified_for(seat, playbook_jsonc, Depth::Full)? {
-            pharmakos_plan_core::Verified::Canonical { report, canonical } if report.qualifies => {
-                (report, canonical)
-            }
-            refused => {
-                return Err(Error::new(
-                    crate::error::Code::NoQualifyingPlan,
-                    said!(
-                        "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \
-                         gateway's fallback is filed instead",
-                        seat.raw(),
-                        refused.report().diagnostics.len()
-                    ),
-                ));
-            }
-        };
-        let fingerprint = carried_fingerprint(&report)?;
-        let plan = crate::surface::planning::compile_canonical(&canonical, self.host()?.rules())?;
-        Ok(Sealed::new(
-            playbook_jsonc.to_owned(),
-            report.report_hash,
-            round,
-            // Filed on the seat's behalf, not written by it: draft continuity
-            // does not offer it back as the seat's own work.
-            true,
-            plan,
-            fingerprint,
-        ))
+        // One decode, verified, compiled and priced, as `submit_plan` seals
+        // (S3's `vfyq2`, fix pass 1, item 3).
+        match self.qualify(seat, playbook_jsonc.to_owned())? {
+            sealed::Qualified::Sealable { unfiled, .. } => Ok(unfiled),
+            sealed::Qualified::Refused { report } => Err(Error::new(
+                crate::error::Code::NoQualifyingPlan,
+                said!(
+                    "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \n                     gateway's fallback is filed instead",
+                    seat.raw(),
+                    report.diagnostics.len()
+                ),
+            )),
+        }
     }
 
     /// What the operator advised a seat for the round the match is in, if it
@@ -4107,98 +4092,6 @@ pub(crate) fn held_values(world: &pharmakos_sim::world::World) -> Vec<(SeatId, O
         .collect()
 }
 
-/// A sealed playbook's canonical form: the one decode a saved seal, and the
-/// gateway's fallback, are read through.
-fn sealed_canonical(
-    playbook_jsonc: &str,
-) -> Result<pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>, Error> {
-    pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
-        Error::internal(said!(
-            "a sealed playbook has no canonical form: {}",
-            error.said()
-        ))
-    })
-}
-
-/// The plan fingerprint of a canonical form already decoded (decisions-log
-/// item 77): what a resume checks a saved seal's stamp against, and what the
-/// gateway's fallback is sealed with. The arithmetic is the sim's, from the
-/// wire bytes the form was decoded from
-/// ([`pharmakos_sim::hash::plan_fingerprint_of`], S3's `fpstream`), so the
-/// message is neither cloned nor encoded again and the text is never held.
-fn fingerprint_of(
-    canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
-) -> Result<u64, Error> {
-    pharmakos_sim::hash::plan_fingerprint_of(canonical.decoded()).map_err(|error| {
-        Error::internal(said!(
-            "a sealed playbook's canonical form will not encode for its fingerprint: {}",
-            crate::error::engine(&error)
-        ))
-    })
-}
-
-/// One saved seal, back in a seat's store: its fingerprint checked, then
-/// recompiled.
-///
-/// The fingerprint first, because it is what says the text is the text that
-/// was saved; a text that compiles and is not is exactly what it catches. The
-/// text is decoded once, and the fingerprint and the compile both read that
-/// canonical form (S3's `vfyq2`, fix pass 2, item F): what is checked is what
-/// is compiled. The refusals keep their codes and their words. The seal
-/// carries the stamp it was checked against (S3's `fpstream`, part 2), so a
-/// save of the resumed match writes it back without reading the text, and
-/// the canonical form comes back beside it, for the caller's pricing of the
-/// seal to read rather than decode the text again.
-fn restore_seal(
-    held: &SavedSeat,
-    seal: &SavedSeal,
-    rules: &RulesTable,
-) -> Result<
-    (
-        Sealed,
-        pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
-    ),
-    Error,
-> {
-    let damaged = |error: Error| {
-        Error::invalid(said!(
-            "seat {}'s sealed playbook in this save has no canonical form ({}): the file is \
-             damaged",
-            held.seat,
-            error.said()
-        ))
-    };
-    let canonical = sealed_canonical(&seal.playbook_jsonc).map_err(damaged)?;
-    let fingerprint = fingerprint_of(&canonical).map_err(damaged)?;
-    if fingerprint != seal.plan_fingerprint {
-        return Err(Error::invalid(said!(
-            "seat {}'s sealed playbook in this save does not match the plan fingerprint saved \
-             beside it ({} against {}): the file is damaged, or this build writes a different \
-             canonical form than the one that saved it",
-            held.seat,
-            pharmakos_proto::json::grammar::quoted(&pharmakos_sim::hex(fingerprint)),
-            pharmakos_proto::json::grammar::quoted(&pharmakos_sim::hex(seal.plan_fingerprint))
-        )));
-    }
-    let plan = crate::surface::planning::compile_canonical(&canonical, rules).map_err(|error| {
-        Error::invalid(said!(
-            "seat {}'s sealed playbook in this save will not compile in this build: {}",
-            held.seat,
-            error.said()
-        ))
-    })?;
-    // The stamp, which the check above has just held to the text.
-    let sealed = Sealed::new(
-        seal.playbook_jsonc.clone(),
-        seal.report_hash.clone(),
-        seal.round,
-        seal.filed_by_the_gateway,
-        plan,
-        seal.plan_fingerprint,
-    );
-    Ok((sealed, canonical))
-}
-
 /// What the audit log records for a call, resolved against the schema.
 ///
 /// **The method string a client sent never reaches the log.** The log is
@@ -4310,38 +4203,6 @@ mod tests {
     use super::{Draft, Event, Surface};
     use crate::detail::Detail;
 
-    /// A qualifying report's fingerprint is what a seal carries, read as the
-    /// eight bytes the field holds; a report with none, or with one of another
-    /// length, is refused `INTERNAL` and never sealed under a default (S3's
-    /// `fpstream`, part 2; the main session's ruling 5).
-    #[test]
-    fn a_seal_takes_the_reports_fingerprint_or_refuses() {
-        use pharmakos_proto::gp::api::v1::VerifyReport;
-        let report = |bytes: Vec<u8>| VerifyReport {
-            qualifies: true,
-            plan_fingerprint: bytes,
-            ..VerifyReport::default()
-        };
-        assert_eq!(
-            super::carried_fingerprint(&report(pharmakos_proto::fingerprint::to_field(
-                0x0123_4567_89ab_cdef
-            )))
-            .expect("eight bytes"),
-            0x0123_4567_89ab_cdef
-        );
-        for wrong in [Vec::new(), vec![0; 7], vec![0; 9]] {
-            let length = wrong.len();
-            let refused = super::carried_fingerprint(&report(wrong)).expect_err("no fingerprint");
-            assert_eq!(refused.code(), Code::Internal, "{length} bytes");
-            assert!(
-                refused
-                    .message()
-                    .contains(&format!("({length} bytes where eight belong)")),
-                "{}",
-                refused.message()
-            );
-        }
-    }
     use crate::error::Code;
     use crate::fog::{Blind, FogPolicy};
     use crate::rpc;
@@ -6506,7 +6367,10 @@ mod tests {
             ),
             (300_000_000, "past the `int32`"),
         ] {
-            match surface.seal_commitment(SeatId::new(0), &many_scouts(scouts)) {
+            let text = many_scouts(scouts);
+            let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
+            let priced = surface.seal_commitment_of(SeatId::new(0), canonical.decoded().message());
+            match priced {
                 Err(super::knowledge::Unpriced::Playbook(why)) => {
                     assert!(why.as_str().contains(says), "{scouts} scouts: {why}");
                 }
@@ -6516,7 +6380,9 @@ mod tests {
                 Ok(spend) => panic!("{scouts} scouts priced at $ {spend}"),
             }
         }
-        let priced = surface.seal_commitment(SeatId::new(0), &many_scouts(1));
+        let one = many_scouts(1);
+        let canonical = pharmakos_plan_core::decode_jsonc(&one).expect("a canonical form");
+        let priced = surface.seal_commitment_of(SeatId::new(0), canonical.decoded().message());
         assert!(
             matches!(priced, Ok(spend) if spend > 0),
             "one scout prices, and costs something"

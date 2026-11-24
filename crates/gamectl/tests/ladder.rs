@@ -436,8 +436,7 @@ fn ladder_match(rules: &str, seed: u64, seats: u32, rounds: u32) -> Vec<SeatRoun
                 .expect("its own")
                 .clone();
             let sealed = state
-                .sealed
-                .as_ref()
+                .sealed()
                 .filter(|held| held.round() == round && !held.filed_by_the_gateway());
             let text = sealed.map(|held| held.playbook_jsonc().to_owned());
             let seal = match &text {

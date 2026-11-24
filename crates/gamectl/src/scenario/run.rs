@@ -944,50 +944,25 @@ fn seal(
             strings::nightly_arm_refused(seat, relative, round(surface)?, &codes),
         ));
     }
-    let report_hash = report_hash_of(result)?;
-
-    // The second door. Compiled by the route `compile_canonical` takes, so the
-    // plan is the one a submission would have produced.
-    let rules = surface.host().map_err(internal)?.rules().clone();
-    let round = surface.host().map_err(internal)?.runner().round();
-    let canonical = pharmakos_plan_core::canonicalise_text(&playbook).map_err(|error| {
-        Failure::input(strings::scenario_playbook_refused(
-            seat,
-            relative,
-            &format!("it has no canonical form: {}", error.message()),
-        ))
-    })?;
-    // The sim's refusal in the gateway's own sentence for it, one mapping
-    // (S3's `vfyq2`, fix pass 4, item L-g): its `Display` writes a label raw.
-    let plan = pharmakos_sim::Plan::compile(&canonical.playbook, &rules).map_err(|error| {
-        Failure::input(strings::scenario_playbook_refused(
-            seat,
-            relative,
-            pharmakos_proto::said!(
-                "this build cannot execute it: {}",
-                pharmakos_gateway::plan_refusal(&error)
-            )
-            .as_str(),
-        ))
-    })?;
-    // The fingerprint the report was written with, read only once the text
-    // has a canonical form and compiles, so a scenario's mistake is said in
-    // its own words first.
-    let plan_fingerprint = plan_fingerprint_of(result)?;
-    let state = surface
-        .seat_state_mut(Subject::Seat(SeatId::new(seat)), SeatId::new(seat))
-        .map_err(internal)?;
-    state.sealed = Some(pharmakos_gateway::surface::Sealed::new(
-        playbook,
-        report_hash,
-        round,
-        // False, and deliberately: `true` means the gateway filed the safe
-        // playbook for a seat that sealed nothing (spec §14), and saying so
-        // here would be this runner claiming to be the gateway.
-        false,
-        plan,
-        plan_fingerprint,
-    ));
+    // The second door, the gateway's own: it verifies the text once more,
+    // compiles, prices and fingerprints that one decode, and files the seal
+    // (`Surface::seal_by_harness`), so the harness's seal carries its own
+    // text's fingerprint and price like every other (S3's `fpstream`, part 2,
+    // fix pass 2). A refusal of the playbook itself is the scenario's input
+    // to fix; anything else is this build disagreeing with itself.
+    surface
+        .seal_by_harness(SeatId::new(seat), &playbook)
+        .map_err(|error| {
+            if error.code() == pharmakos_gateway::error::Code::InvalidArgument {
+                Failure::input(strings::scenario_playbook_refused(
+                    seat,
+                    relative,
+                    error.message(),
+                ))
+            } else {
+                internal(error)
+            }
+        })?;
     Ok(Door::Harness(codes))
 }
 
@@ -1026,64 +1001,6 @@ fn codes_of(result: Option<&Json>) -> Result<String, Failure> {
         }
     }
     Ok(codes.join("; "))
-}
-
-/// The report's `report_hash`, decoded.
-fn report_hash_of(result: Option<&Json>) -> Result<Vec<u8>, Failure> {
-    // Decoded, not stored as its own text. `Sealed::report_hash` is documented
-    // as "eight big-endian bytes" and the wire spells it base64
-    // (`surface/planning.rs`), so `text.into_bytes()` would have put twelve
-    // ASCII characters where the eight bytes go — latent today because nothing
-    // outside tests reads the field, and T17's restore path is named as the
-    // first reader. Reviewed finding, wave 5.
-    match result
-        .and_then(|result| result.get("report"))
-        .and_then(|report| report.get("report_hash"))
-    {
-        // A `report_hash` that is not base64 is this build's gateway and this
-        // runner disagreeing about the wire, not a playbook a scenario got
-        // wrong, so it is refused rather than sealed as no bytes (S2's sweep,
-        // E7; the site vfy1 found).
-        Some(Json::String(text)) => pharmakos_proto::json::base64::decode(text).ok_or_else(|| {
-            Failure::internal(format!(
-                "`submit_plan` answered with a `report_hash` that is not base64 ({text:?})"
-            ))
-        }),
-        // Every report carries its hash (spec section 11), so a refused
-        // playbook's answer without one is the wire's shape having moved, and
-        // it is refused rather than sealed as empty bytes (S2's sweep, E7).
-        other => Err(Failure::internal(format!(
-            "`submit_plan` answered with no `report_hash` string ({other:?})"
-        ))),
-    }
-}
-
-/// The refused report's plan fingerprint, for the harness door's seal.
-///
-/// The gateway's verifier wrote it from the wire bytes of the decode it
-/// reported on, which is the canonical form of the text this door seals, so it
-/// is the value a save of this seal stamps and a resume checks (S3's
-/// `fpstream`, part 2): carried, not taken again. A refused report with no
-/// fingerprint is one whose playbook did not decode, and the door seals
-/// nothing then, with a typed failure rather than a value nobody computed.
-fn plan_fingerprint_of(result: Option<&Json>) -> Result<u64, Failure> {
-    match result
-        .and_then(|result| result.get("report"))
-        .and_then(|report| report.get("plan_fingerprint"))
-    {
-        Some(Json::String(text)) => pharmakos_proto::json::base64::decode(text)
-            .and_then(|bytes| pharmakos_proto::fingerprint::from_field(&bytes))
-            .ok_or_else(|| {
-                Failure::internal(format!(
-                    "`submit_plan` answered with a report whose `plan_fingerprint` is not eight \
-                     base64 bytes ({text:?}), so the harness door has no fingerprint to seal \
-                     this playbook under"
-                ))
-            }),
-        other => Err(Failure::internal(format!(
-            "`submit_plan` answered with no `plan_fingerprint` string ({other:?})"
-        ))),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1564,12 +1481,14 @@ mod tests {
         }
     }
 
-    /// The harness door takes no fingerprint of its own: the codec's work over
-    /// `seal` is the request it writes and parses, the gateway's `submit_plan`
-    /// of the text, and the canonical form it compiles, each measured on its
-    /// own here, and nothing more.
+    /// The harness door reads its text twice and takes no fingerprint of its
+    /// own: the codec's work over `seal` is the request it writes and parses,
+    /// the gateway's `submit_plan` of the text (which refuses it), and the
+    /// gateway's `seal_by_harness`, whose one FULL verify reads the text as the
+    /// submission did and whose compile, price and fingerprint read that
+    /// decode, each measured on its own here, and nothing more.
     #[test]
-    fn the_harness_door_reads_its_text_as_its_submission_and_compile_do() {
+    fn the_harness_door_reads_its_text_as_two_full_verifies_do() {
         use pharmakos_gateway::fog::Blind;
         use pharmakos_proto::json::{Json, work};
         let source = root().join("scenarios/s2/mortar-breaks-wall.scenario.jsonc");
@@ -1615,14 +1534,18 @@ mod tests {
             r#"{{"jsonrpc":"2.0","id":1,"method":"submit_plan","params":{params}}}"#
         ))
         .expect("a request");
+        let written = work::take();
         let _ = twin.call(Some(twin_token), &request, &Blind);
-        let _ = pharmakos_plan_core::canonicalise_text(&playbook).expect("a canonical form");
-        let parts = work::take();
-        assert!(parts > 0, "the parts read the text");
+        let submitted = work::take();
+        assert!(submitted > 0, "a submission reads the text");
+        // The harness's verify is the submission's, of the same text against
+        // the same snapshot, and its compile, price and fingerprint read that
+        // decode and write no text.
         assert_eq!(
-            whole, parts,
-            "the harness door read or wrote the playbook's text beyond its submission and its \
-             compile"
+            whole,
+            written + 2 * submitted,
+            "the harness door read or wrote the playbook's text beyond its request, its \
+             submission and its one verify"
         );
     }
 }
