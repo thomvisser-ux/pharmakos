@@ -235,6 +235,14 @@ fn every_read_of_a_resumed_lull_is_the_live_lulls() {
                 .set_phase_remaining_ms(full)
                 .expect("a custom match takes a countdown");
         }
+        // The feed's clock, which dates every line the Lull publishes and
+        // the view's `at_ms`: counted from the anchor the save carries.
+        assert_eq!(
+            resumed.segment_elapsed_ms(),
+            live.segment_elapsed_ms(),
+            "round {}: the feed's clock",
+            live.time().round
+        );
         let (want, got) = (reads(&mut live), reads(&mut resumed));
         assert_eq!(want.len(), got.len(), "round {}", live.time().round);
         for ((what, want), (_, got)) in want.iter().zip(&got) {
