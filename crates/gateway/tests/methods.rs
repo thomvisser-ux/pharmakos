@@ -1005,8 +1005,7 @@ fn a_lull_opens_with_last_rounds_playbook_carried_and_re_verified() {
     assert_eq!(&carried.playbook_jsonc, playbook);
     assert_eq!(carried.round, 2, "carried into round 2");
     let continuity = state
-        .continuity
-        .as_ref()
+        .continuity()
         .expect("the re-verification has already run");
     assert!(
         continuity.qualifies,
@@ -1022,7 +1021,7 @@ fn a_lull_opens_with_last_rounds_playbook_carried_and_re_verified() {
     let other = surface
         .seat_state(Subject::Seat(SeatId::new(1)), SeatId::new(1))
         .expect("its own");
-    assert!(other.drafts.is_empty());
+    assert!(other.drafts().is_empty());
 }
 
 // ---------------------------------------------------------------------------

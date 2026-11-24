@@ -531,8 +531,7 @@ fn an_advised_safe_playbook_reads_its_text_as_a_full_verify_does() {
     let advised = surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("its own")
-        .advice
-        .as_ref()
+        .advice()
         .and_then(|advised| advised.safe().cloned())
         .expect("the advice qualified");
     assert_eq!(

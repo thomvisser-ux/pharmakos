@@ -1173,27 +1173,31 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
             .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
             .expect("its own")
             .clone();
-        assert_eq!(human_after.notebook, before.notebook);
-        assert_eq!(human_after.drafts, before.drafts);
+        assert_eq!(human_after.notebook(), before.notebook());
+        assert_eq!(human_after.drafts(), before.drafts());
         assert!(human_after.sealed().is_none(), "an advisor seals nothing");
-        assert!(!human_after.ready, "an advisor never says ready for a seat");
-        advised.push(human_after.advice.clone());
+        assert!(
+            !human_after.ready(),
+            "an advisor never says ready for a seat"
+        );
+        advised.push(human_after.advice().cloned());
 
         let easy = surface
             .seat_state(Subject::Seat(SeatId::new(1)), SeatId::new(1))
             .expect("its own");
-        assert!(easy.notebook.is_empty() && easy.drafts.is_empty());
+        assert!(easy.notebook().is_empty() && easy.drafts().is_empty());
         assert!(
             easy.sealed()
                 .is_some_and(|sealed| !sealed.filed_by_the_gateway())
         );
-        assert!(easy.ready);
+        assert!(easy.ready());
     }
     let (Some(Some(quiet)), Some(Some(noisy))) = (advised.first(), advised.get(1)) else {
         panic!("the human seat was advised both times");
     };
     assert_eq!(
-        quiet.advice, noisy.advice,
+        quiet.advice(),
+        noisy.advice(),
         "the notebook changes nothing Easy advises"
     );
     assert!(
@@ -2184,7 +2188,7 @@ fn easy_seals_a_stone(stone_ms: Option<i64>) -> (String, Vec<String>, pharmakos_
     let drafts = surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("its own")
-        .drafts
+        .drafts()
         .iter()
         .map(|draft| draft.draft_id.clone())
         .collect::<Vec<_>>();

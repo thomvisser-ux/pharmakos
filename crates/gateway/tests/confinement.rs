@@ -2754,12 +2754,19 @@ fn struct_block(lines: &[(usize, String)], name: &str) -> Vec<String> {
 ///
 /// * a seal is written as a literal only in `surface/sealed.rs`, and there
 ///   only by the functions [`SEAL_MAKERS`] names;
-/// * no field of `Sealed` or `Unfiled` is `pub`, and `SeatState`'s `sealed`
-///   and `Advised`'s `safe` are not `pub` either, so nothing outside the
-///   surface reaches a seal to write it, replace it or swap it;
-/// * nothing in `surface/sealed.rs` takes `&mut self`, so no seal is changed
-///   after it is made;
-/// * no `pub` function there makes a seal: its makers are `pub(super)`.
+/// * no field of `Sealed` or `Unfiled` carries any visibility (`pub`,
+///   `pub(crate)`, `pub(super)`, `pub(in ..)`): the seal's fields are the seal
+///   module's alone;
+/// * no field of `SeatState` or `Advised` carries any visibility either, and no
+///   plain `pub` function hands out `&mut SeatState` (`seat_state_mut` is
+///   `pub(crate)`), so code outside the crate cannot write a seat's store,
+///   assign a whole one or move an advice into another seat's (S3's
+///   `fpstream`, part 2, fix pass 3; review 3's N1 to N3 are compile errors);
+/// * nothing in `surface/sealed.rs` names `&mut self`, `&mut Self`, `&mut
+///   Sealed` or `&mut Unfiled`, so no seal is changed after it is made;
+/// * no plain `pub` function there returns a seal by value or by `&mut`, in
+///   any shape (`Self`, `Option<Sealed>`, `Result<Unfiled, _>`): its makers
+///   are `pub(super)`, and a shared reference hands out nothing to change.
 ///
 /// The review's alias blind spot (`type Seal = Sealed; Seal::new(..)`) is
 /// moot outside the module: there is no public constructor to alias, and a
@@ -2817,15 +2824,7 @@ fn a_seal_is_made_only_by_the_named_makers_and_never_changed() {
     );
 
     findings.extend(seal_file_findings(&root));
-    let surface_text = std::fs::read_to_string(root.join("src/surface.rs")).expect("the surface");
-    for (number, line) in code_lines(&surface_text) {
-        let trimmed = line.trim();
-        if trimmed.starts_with("pub sealed:") || trimmed.starts_with("pub safe:") {
-            findings.push(format!(
-                "src/surface.rs:{number}: a seal reachable to write: {trimmed}"
-            ));
-        }
-    }
+    findings.extend(store_findings(&root));
     assert!(
         findings.is_empty(),
         "a seal is made by its named makers, holds its fields privately and is never changed:\n{}",
@@ -2875,8 +2874,60 @@ fn no_handler_can_seal_by_the_harness() {
     assert_eq!(called, 1, "the scenario runner calls it once");
 }
 
-/// What `surface/sealed.rs` must not hold: a public field of a seal type, a
-/// literal under another name, a method that changes a seal, or a public maker.
+/// Every function signature in `lines`, joined onto one line from its `fn`
+/// to the brace or semicolon that ends it, with the line it starts on.
+fn signatures(lines: &[(usize, String)]) -> Vec<(usize, String)> {
+    let mut found: Vec<(usize, String)> = Vec::new();
+    let mut open: Option<(usize, String)> = None;
+    for (number, line) in lines {
+        let trimmed = line.trim();
+        if open.is_none() && (trimmed.starts_with("fn ") || trimmed.contains(" fn ")) {
+            open = Some((*number, String::new()));
+        }
+        if let Some((_, text)) = open.as_mut() {
+            text.push_str(trimmed);
+            text.push(' ');
+            if (trimmed.ends_with('{') || trimmed.ends_with(';'))
+                && let Some(done) = open.take()
+            {
+                found.push(done);
+            }
+        }
+    }
+    found
+}
+
+/// Whether a signature's visibility is plain `pub` (reachable outside the
+/// crate), as opposed to `pub(crate)`, `pub(super)` or private.
+fn is_plain_pub(signature: &str) -> bool {
+    signature.starts_with("pub fn ") || signature.starts_with("pub const fn ")
+}
+
+/// The part of a signature after its `->`, or empty.
+fn returned(signature: &str) -> &str {
+    signature.split_once("->").map_or("", |(_, rest)| rest)
+}
+
+/// Whether a return type names a seal by value or by `&mut`: a shape that
+/// could hand out a seal made or changed outside its makers. A shared
+/// reference (`&Sealed`, `Option<&Unfiled>`) hands out nothing to change.
+fn hands_out_a_seal(returned: &str) -> bool {
+    ["Self", "Sealed", "Unfiled"].iter().any(|name| {
+        returned.match_indices(name).any(|(at, _)| {
+            let before = returned.get(..at).unwrap_or_default().trim_end();
+            let after = returned
+                .get(at.saturating_add(name.len())..)
+                .unwrap_or_default();
+            let whole = !after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+            whole && !before.ends_with('&')
+        })
+    })
+}
+
+/// What `surface/sealed.rs` must not hold: a public field of a seal type, of
+/// any visibility spelling; a literal under another name; a `&mut` to a seal,
+/// as a receiver or anywhere else; or a public function that hands a seal out
+/// by value or by `&mut`.
 fn seal_file_findings(root: &std::path::Path) -> Vec<String> {
     let mut findings: Vec<String> = Vec::new();
     let sealed_text = std::fs::read_to_string(root.join(SEAL_FILE)).expect("the seal types' file");
@@ -2906,24 +2957,55 @@ fn seal_file_findings(root: &std::path::Path) -> Vec<String> {
                 "{SEAL_FILE}:{number}: a seal written under another name: {trimmed}"
             ));
         }
-        if line.contains("&mut self") {
+        let changes = ["&mut self", "&mut Self", "&mut Sealed", "&mut Unfiled"]
+            .iter()
+            .any(|shape| line.contains(shape));
+        if changes {
             findings.push(format!(
-                "{SEAL_FILE}:{number}: a method that changes a seal: {trimmed}"
+                "{SEAL_FILE}:{number}: a `&mut` to a seal: {trimmed}"
             ));
         }
-        let public = trimmed.starts_with("pub fn ") || trimmed.starts_with("pub const fn ");
-        let makes_one = [
-            "-> Self",
-            "-> Sealed",
-            "-> Unfiled",
-            "Result<Sealed",
-            "Result<Unfiled",
-        ]
-        .iter()
-        .any(|shape| trimmed.contains(shape));
-        if public && makes_one {
+    }
+    for (number, signature) in signatures(&sealed_lines) {
+        if is_plain_pub(&signature) && hands_out_a_seal(returned(&signature)) {
             findings.push(format!(
-                "{SEAL_FILE}:{number}: a public seal maker: {trimmed}"
+                "{SEAL_FILE}:{number}: a public function hands out a seal: {signature}"
+            ));
+        }
+    }
+    findings
+}
+
+/// What `src/surface.rs` must not hold: a field of `SeatState` or `Advised`
+/// with any visibility (`pub`, `pub(crate)`, `pub(super)` or `pub(in ..)`),
+/// since every write to a seat's store is the surface's; or a public function
+/// that hands out `&mut SeatState`, through which a whole store could be
+/// assigned (S3's `fpstream`, part 2, fix pass 3).
+fn store_findings(root: &std::path::Path) -> Vec<String> {
+    let mut findings: Vec<String> = Vec::new();
+    let surface_text = std::fs::read_to_string(root.join("src/surface.rs")).expect("the surface");
+    let lines = code_lines(&surface_text);
+    for name in ["SeatState", "Advised"] {
+        let fields = struct_block(&lines, name);
+        assert!(
+            fields.len() > 2,
+            "{name} read as {} lines; the scan is looking at the wrong text",
+            fields.len()
+        );
+        for field in fields {
+            if field.trim_start().starts_with("pub") {
+                findings.push(format!(
+                    "src/surface.rs: `{name}` has a field reachable outside the surface: {}",
+                    field.trim()
+                ));
+            }
+        }
+    }
+    for (number, signature) in signatures(&lines) {
+        if is_plain_pub(&signature) && returned(&signature).contains("&mut SeatState") {
+            findings.push(format!(
+                "src/surface.rs:{number}: a public function hands out a seat's store to write: \
+                 {signature}"
             ));
         }
     }

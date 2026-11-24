@@ -271,25 +271,40 @@ pub const CARRIED_DRAFT_ID: &str = "carried";
 /// Private to the seat like everything else in [`SeatState`]: a seat is told
 /// its own suggestions and its own safe playbook and nobody else's
 /// (`advice_for_one_seat_never_reaches_another`).
+///
+/// Every field is private: an `Advised` is made and placed only by
+/// [`Surface::file_advice`], for the seat it was qualified for, and nothing
+/// outside the surface can move one into another seat's store (S3's
+/// `fpstream`, part 2, fix pass 3).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Advised {
     /// Which round it is for. A Lull opening forgets it
     /// ([`Surface::open_lull`]), and every reader checks the round as well.
-    pub round: u32,
+    round: u32,
     /// What the operator said, as it said it, less any suggestion that would
     /// not instantiate ([`Surface::file_advice`] drops and audits those).
-    pub advice: Advice,
+    advice: Advice,
     /// The operator's safe playbook, verified FULL, compiled and priced when
     /// it was filed, and not yet filed for a round: it is filed for this
     /// advice's `round`, the one home of that round. `None` when it did not
     /// qualify, compile or price, in which case the gateway's fallback is what
-    /// this seat is shown and filed, and the audit log says why. Private, so
-    /// an `Advised` is made only by [`Surface::file_advice`] (S3's
-    /// `fpstream`, part 2, fix pass 2).
+    /// this seat is shown and filed, and the audit log says why.
     safe: Option<Unfiled>,
 }
 
 impl Advised {
+    /// Which round it is for.
+    #[must_use]
+    pub const fn round(&self) -> u32 {
+        self.round
+    }
+
+    /// What the operator said, less any suggestion that would not instantiate.
+    #[must_use]
+    pub const fn advice(&self) -> &Advice {
+        &self.advice
+    }
+
     /// The operator's safe playbook, as it was qualified when it was filed.
     #[must_use]
     pub const fn safe(&self) -> Option<&Unfiled> {
@@ -324,39 +339,40 @@ pub struct InProcess {
 
 /// One seat's private state.
 ///
-/// Reached only through [`Surface::seat_state`] and
-/// [`Surface::seat_state_mut`], both of which take the subject asking.
+/// Read through [`Surface::seat_state`], which takes the subject asking, and
+/// written only inside the surface ([`Surface::seat_state_mut`] is
+/// `pub(crate)`). Every field is private, read by a getter, so code outside
+/// this crate can neither write a field nor assign a whole store: one seat's
+/// seal or advice cannot be moved into another's (S3's `fpstream`, part 2,
+/// fix pass 3).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SeatState {
     /// Which seat this is.
-    pub seat: SeatId,
+    seat: SeatId,
     /// The private seat notebook (spec section 12, "Memory").
-    pub notebook: String,
+    notebook: String,
     /// Saved drafts, in the order they were saved.
-    pub drafts: Vec<Draft>,
+    drafts: Vec<Draft>,
     /// Whether the seat has said it is ready.
-    pub ready: bool,
-    /// The latest verified submission, if there is one. Private, read by
-    /// [`SeatState::sealed`]: only the makers in `surface/sealed.rs`, filed by
-    /// the surface, put a seal here, so [`Surface::seat_state_mut`] reaches a
-    /// seat's drafts and notebook and never its seal (S3's `fpstream`, part 2,
-    /// fix pass 2).
+    ready: bool,
+    /// The latest verified submission, if there is one: only the makers in
+    /// `surface/sealed.rs`, filed by the surface, put a seal here.
     sealed: Option<Sealed>,
     /// What the carried draft's re-verification found, if there is one.
-    pub continuity: Option<Continuity>,
+    continuity: Option<Continuity>,
     /// What the built-in operator advised this seat this round, if it
     /// advises this seat at all.
-    pub advice: Option<Advised>,
+    advice: Option<Advised>,
     /// The Ledger's memos issued to this seat, in the order they were issued:
     /// each at most once a match, and saved, so a resume never repeats one
     /// (S3's plan, E5; [`crate::probation`]).
-    pub memos: Vec<Memo>,
+    memos: Vec<Memo>,
 }
 
 impl SeatState {
     /// An empty private store for a seat.
     #[must_use]
-    pub const fn new(seat: SeatId) -> SeatState {
+    pub(crate) const fn new(seat: SeatId) -> SeatState {
         SeatState {
             seat,
             notebook: String::new(),
@@ -379,6 +395,48 @@ impl SeatState {
     #[must_use]
     pub const fn sealed(&self) -> Option<&Sealed> {
         self.sealed.as_ref()
+    }
+
+    /// Which seat this is.
+    #[must_use]
+    pub const fn seat(&self) -> SeatId {
+        self.seat
+    }
+
+    /// The private seat notebook.
+    #[must_use]
+    pub fn notebook(&self) -> &str {
+        &self.notebook
+    }
+
+    /// Saved drafts, in the order they were saved.
+    #[must_use]
+    pub fn drafts(&self) -> &[Draft] {
+        &self.drafts
+    }
+
+    /// Whether the seat has said it is ready.
+    #[must_use]
+    pub const fn ready(&self) -> bool {
+        self.ready
+    }
+
+    /// What the carried draft's re-verification found, if there is one.
+    #[must_use]
+    pub const fn continuity(&self) -> Option<&Continuity> {
+        self.continuity.as_ref()
+    }
+
+    /// What the built-in operator advised this seat this round, if it did.
+    #[must_use]
+    pub const fn advice(&self) -> Option<&Advised> {
+        self.advice.as_ref()
+    }
+
+    /// The Ledger's memos issued to this seat, in the order they were issued.
+    #[must_use]
+    pub fn memos(&self) -> &[Memo] {
+        &self.memos
     }
 }
 
@@ -3175,7 +3233,7 @@ impl Surface {
     /// # Errors
     ///
     /// As [`Surface::seat_state`].
-    pub fn seat_state_mut(
+    pub(crate) fn seat_state_mut(
         &mut self,
         subject: Subject,
         seat: SeatId,

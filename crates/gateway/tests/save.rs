@@ -329,21 +329,26 @@ fn a_resumed_lull_has_the_seats_notebooks_drafts_and_seals() {
         let after = resumed
             .seat_state(Subject::Seat(seat), seat)
             .expect("its own");
-        assert_eq!(after.notebook, before.notebook, "seat {}", seat.raw());
-        assert_eq!(after.drafts, before.drafts, "seat {}", seat.raw());
+        assert_eq!(after.notebook(), before.notebook(), "seat {}", seat.raw());
+        assert_eq!(after.drafts(), before.drafts(), "seat {}", seat.raw());
         assert_eq!(
             after.sealed(),
             before.sealed(),
             "seat {}: the seal, recompiled to the same plan",
             seat.raw()
         );
-        assert_eq!(after.continuity, before.continuity, "seat {}", seat.raw());
-        assert!(!after.ready, "ready is the new process's to say");
+        assert_eq!(
+            after.continuity(),
+            before.continuity(),
+            "seat {}",
+            seat.raw()
+        );
+        assert!(!after.ready(), "ready is the new process's to say");
     }
     let zero_after = resumed
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("its own");
-    assert_eq!(zero_after.notebook, "hold the east vent");
+    assert_eq!(zero_after.notebook(), "hold the east vent");
     assert_eq!(
         zero_after
             .sealed()

@@ -277,8 +277,8 @@ fn advice_of(surface: &Surface, seat: u8) -> Option<pharmakos_gateway::surface::
     surface
         .seat_state(Subject::Seat(SeatId::new(seat)), SeatId::new(seat))
         .expect("its own")
-        .advice
-        .clone()
+        .advice()
+        .cloned()
 }
 
 // ---------------------------------------------------------------------------
@@ -853,13 +853,19 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
     assert_eq!(refusals, wanted);
 
     // And the seat's store is exactly as it was, but for the advice itself.
-    let mut after = surface
+    let after = surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
-        .expect("its own")
-        .clone();
-    assert!(after.advice.is_some());
-    after.advice = None;
-    assert_eq!(after, before);
+        .expect("its own");
+    assert!(after.advice().is_some());
+    assert!(before.advice().is_none());
+    // Every other part of the store, by its getter.
+    assert_eq!(after.seat(), before.seat());
+    assert_eq!(after.notebook(), before.notebook());
+    assert_eq!(after.drafts(), before.drafts());
+    assert_eq!(after.ready(), before.ready());
+    assert_eq!(after.sealed(), before.sealed());
+    assert_eq!(after.continuity(), before.continuity());
+    assert_eq!(after.memos(), before.memos());
 }
 
 // ---------------------------------------------------------------------------
@@ -1128,7 +1134,7 @@ fn a_suggestion_that_would_not_instantiate_is_dropped_and_audited() {
                 "{}: dropped, and never silently",
                 suggestion.why
             );
-            assert!(filed.advice.suggestions.is_empty(), "{}", suggestion.why);
+            assert!(filed.advice().suggestions.is_empty(), "{}", suggestion.why);
             assert_eq!(text_of(&made, "why"), "", "{}", suggestion.why);
             assert!(
                 !any_suggested,
@@ -1137,7 +1143,7 @@ fn a_suggestion_that_would_not_instantiate_is_dropped_and_audited() {
             );
         } else {
             assert!(lines.is_empty(), "a good suggestion is filed as it is");
-            assert_eq!(filed.advice.suggestions, vec![suggestion.clone()]);
+            assert_eq!(filed.advice().suggestions, vec![suggestion.clone()]);
             assert_eq!(text_of(&made, "why"), "A good one.");
             assert!(any_suggested, "the good suggestion is applied");
         }
