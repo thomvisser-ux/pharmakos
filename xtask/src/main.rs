@@ -4432,13 +4432,92 @@ pub(crate) fn run_measurement(
         .map_err(|error| format!("the measurement printed something that is not UTF-8: {error}"))
 }
 
+/// The file of the test the allocations notice names, from the workspace root.
+const ALLOCATIONS_TEST_FILE: &str = "crates/sim/tests/allocations.rs";
+
+/// The test the allocations notice names, by its libtest path in
+/// [`ALLOCATIONS_TEST_FILE`]: the tick tests sit in a `tick` module that the
+/// `research` build leaves out (`simtest` #225). The tests' guard,
+/// `the_allocations_notice_names_one_test_the_test_step_runs`, holds the path
+/// to exactly one test the `test` step runs.
+const ALLOCATIONS_TEST: &str = "tick::a_tick_allocates_nothing";
+
 /// The allocations-per-tick notice, word for word. Pure, so its text is pinned.
 fn allocations_notice(os: &str) -> String {
     format!(
         "::notice title=allocations per tick::0 on {os}: asserted by \
-         crates/sim/tests/allocations.rs::a_tick_allocates_nothing in this commit's test step; \
-         zero by construction, never compared"
+         {ALLOCATIONS_TEST_FILE}::{ALLOCATIONS_TEST} in this commit's test step; zero by \
+         construction, never compared"
     )
+}
+
+/// How many `#[test]` functions at the libtest path `path` (`module::name`) a
+/// rustfmt-formatted test file `source` holds that a build without the
+/// `research` feature runs and libtest does not skip: none behind a `cfg` on
+/// that feature (`not(...)` aside), on the function or a module around it,
+/// and none `#[ignore]`d. Modules are read from `mod <name> {` lines, nested by
+/// rustfmt's four-space indent.
+#[cfg(test)]
+fn default_build_tests_at(source: &str, path: &str) -> usize {
+    let mut wanted: Vec<&str> = path.split("::").collect();
+    let Some(name) = wanted.pop() else {
+        return 0;
+    };
+    let research_only = |attribute: &str| {
+        attribute.starts_with("#[cfg")
+            && attribute.contains("feature = \"research\"")
+            && !attribute.contains("not(")
+    };
+    // (module name, its indent, whether the default build leaves it out)
+    let mut modules: Vec<(&str, usize, bool)> = Vec::new();
+    let mut attributes: Vec<&str> = Vec::new();
+    let mut found: Vec<&str> = Vec::new();
+    for line in source.lines() {
+        let item = line.trim_start();
+        let indent = line.bytes().take_while(|byte| *byte == b' ').count();
+        if item == "}" && modules.last().is_some_and(|(_, at, _)| *at == indent) {
+            modules.pop();
+            attributes.clear();
+            continue;
+        }
+        if item.starts_with("#[") {
+            attributes.push(item);
+            continue;
+        }
+        if item.starts_with("//") {
+            continue;
+        }
+        let left_out = attributes.iter().any(|attribute| research_only(attribute))
+            || modules.iter().any(|(_, _, left_out)| *left_out);
+        if let Some(module) = item
+            .strip_prefix("mod ")
+            .or_else(|| item.strip_prefix("pub mod "))
+            .and_then(|rest| rest.strip_suffix(" {"))
+        {
+            modules.push((module, indent, left_out));
+        } else if let Some(function) = item
+            .strip_prefix("fn ")
+            .or_else(|| item.strip_prefix("pub fn "))
+            .and_then(|rest| rest.split(['(', '<']).next())
+        {
+            let is_test = attributes.contains(&"#[test]");
+            let ignored = attributes
+                .iter()
+                .any(|attribute| attribute.starts_with("#[ignore"));
+            let here: Vec<&str> = modules.iter().map(|(module, _, _)| *module).collect();
+            if function == name
+                && is_test
+                && !ignored
+                && !left_out
+                && here == wanted
+                && modules.len().checked_mul(4) == Some(indent)
+            {
+                found.push(function);
+            }
+        }
+        attributes.clear();
+    }
+    found.len()
 }
 
 // ---------------------------------------------------------------------------
@@ -6961,9 +7040,80 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         assert_eq!(
             allocations_notice("linux"),
             "::notice title=allocations per tick::0 on linux: asserted by \
-             crates/sim/tests/allocations.rs::a_tick_allocates_nothing in this commit's test \
-             step; zero by construction, never compared"
+             crates/sim/tests/allocations.rs::tick::a_tick_allocates_nothing in this commit's \
+             test step; zero by construction, never compared"
         );
+    }
+
+    /// The notice runs nothing: it names the test that asserts the figure in
+    /// the `test` step. So the name must resolve, in the committed source, to
+    /// exactly one `#[test]` that the `test` step runs (not behind the
+    /// `research` feature, which that step leaves off, and not `#[ignore]`d);
+    /// a name that matches no test would publish a claim nothing checks.
+    #[test]
+    fn the_allocations_notice_names_one_test_the_test_step_runs() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Some(root) = manifest.parent() else {
+            panic!("xtask's manifest directory has no parent");
+        };
+        let source = match fs::read_to_string(root.join(ALLOCATIONS_TEST_FILE)) {
+            Ok(source) => source,
+            Err(error) => panic!("{ALLOCATIONS_TEST_FILE}: {error}"),
+        };
+        assert_eq!(
+            default_build_tests_at(&source, ALLOCATIONS_TEST),
+            1,
+            "{ALLOCATIONS_TEST_FILE} holds no single default-build test `{ALLOCATIONS_TEST}`"
+        );
+    }
+
+    /// The resolver the guard above uses, on texts whose answer is known.
+    #[test]
+    fn a_test_path_resolves_by_module_attribute_and_name() {
+        let source = "\
+fn helper() {}
+
+#[cfg(not(feature = \"research\"))]
+mod tick {
+    use super::*;
+
+    /// Counts.
+    #[test]
+    fn a_tick_allocates_nothing() {}
+
+    #[test]
+    #[ignore = \"by hand\"]
+    fn ignored() {}
+
+    fn not_a_test() {}
+}
+
+#[test]
+fn a_tick_allocates_nothing() {}
+
+#[cfg(feature = \"research\")]
+mod fork {
+    #[test]
+    fn forked() {}
+}
+";
+        assert_eq!(
+            default_build_tests_at(source, "tick::a_tick_allocates_nothing"),
+            1
+        );
+        assert_eq!(
+            default_build_tests_at(source, "a_tick_allocates_nothing"),
+            1
+        );
+        assert_eq!(default_build_tests_at(source, "tick::ignored"), 0);
+        assert_eq!(default_build_tests_at(source, "tick::not_a_test"), 0);
+        assert_eq!(default_build_tests_at(source, "fork::forked"), 0);
+        assert_eq!(default_build_tests_at(source, "tick::missing"), 0);
+        assert_eq!(
+            default_build_tests_at(source, "other::a_tick_allocates_nothing"),
+            0
+        );
+        assert_eq!(default_build_tests_at(source, "helper"), 0);
     }
 
     #[test]
