@@ -936,8 +936,8 @@ impl Surface {
                     held.seat
                 )));
             }
-            // Decoded once: checked against its stamp, compiled, and priced when
-            // it is of the round the match resumes into (`Surface::restored_seal`).
+            // Decoded once: checked against its stamp, compiled and priced
+            // (`Surface::restored_seal`).
             let sealed = match held.seal.as_ref() {
                 None => None,
                 Some(seal) => Some(self.restored_seal(held, seal)?),
