@@ -875,7 +875,7 @@ impl Surface {
         let own = self
             .current_advice(seat)
             .and_then(|advised| advised.safe.as_ref())
-            .map(|safe| safe.playbook_jsonc.clone());
+            .map(|safe| safe.playbook_jsonc().to_owned());
         let playbook = match own {
             Some(playbook) => playbook,
             None => self.host()?.safe_playbook().to_owned(),
@@ -1013,13 +1013,13 @@ impl Surface {
         let round = host.runner().round();
         let state = self.seat_state(crate::token::Subject::Seat(seat), seat)?;
         let Some(sealed) = state.sealed.as_ref().filter(|sealed| {
-            sealed.round == round
-                || (sealed.round.checked_add(1) == Some(round) && !sealed.filed_by_the_gateway)
+            sealed.round() == round
+                || (sealed.round().checked_add(1) == Some(round) && !sealed.filed_by_the_gateway())
         }) else {
             return Ok(None);
         };
         let canonical =
-            pharmakos_plan_core::decode_jsonc(&sealed.playbook_jsonc).map_err(|error| {
+            pharmakos_plan_core::decode_jsonc(sealed.playbook_jsonc()).map_err(|error| {
                 Error::internal(said!(
                     "a playbook this seat sealed has no canonical form: {}",
                     error.said()
@@ -1030,7 +1030,7 @@ impl Surface {
             host.runner().frozen().snapshot(),
             seat,
             canonical.decoded().message(),
-            &sealed.plan,
+            sealed.plan(),
         )?;
         let dollars = host
             .rules()

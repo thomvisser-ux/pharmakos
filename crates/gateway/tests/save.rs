@@ -345,7 +345,10 @@ fn a_resumed_lull_has_the_seats_notebooks_drafts_and_seals() {
         .expect("its own");
     assert_eq!(zero_after.notebook, "hold the east vent");
     assert_eq!(
-        zero_after.sealed.as_ref().map(|sealed| sealed.round),
+        zero_after
+            .sealed
+            .as_ref()
+            .map(pharmakos_gateway::surface::Sealed::round),
         Some(2),
         "this round's verified submission, which the seat may still replace"
     );
@@ -456,7 +459,7 @@ fn zero_after_sealed_plan(surface: &Surface) -> Option<pharmakos_sim::interprete
         .ok()?
         .sealed
         .as_ref()
-        .map(|sealed| sealed.plan.clone())
+        .map(|sealed| sealed.plan().clone())
 }
 
 /// A `sealed` save lands in its Push with its seals, and no Lull is offered:
@@ -1036,8 +1039,8 @@ fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
                 .as_ref()
                 .expect("the seal is back");
             let stamped = saved.seal.as_ref().expect("a saved seal");
-            assert_eq!(held.playbook_jsonc, stamped.playbook_jsonc);
-            assert_eq!(held.report_hash, stamped.report_hash);
+            assert_eq!(held.playbook_jsonc(), stamped.playbook_jsonc);
+            assert_eq!(held.report_hash(), stamped.report_hash.as_slice());
         }
         // A Lull resumed from main's file is saved again as main saved it.
         if file == "lull" {

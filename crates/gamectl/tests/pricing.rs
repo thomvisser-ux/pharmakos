@@ -121,7 +121,7 @@ fn hosted_seals(seed: u64, seats: u32, rounds: u32, rules: &str) -> Vec<String> 
                 .sealed
                 .as_ref()
             {
-                texts.push(sealed.playbook_jsonc.clone());
+                texts.push(sealed.playbook_jsonc().to_owned());
             }
         }
         assert!(surface.begin_push().expect("the Push opens"));

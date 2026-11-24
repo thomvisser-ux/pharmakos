@@ -923,11 +923,11 @@ impl Surface {
             .seat_state(subject, seat)?
             .sealed
             .as_ref()
-            .filter(|sealed| sealed.round == round)
+            .filter(|sealed| sealed.round() == round)
         else {
             return Ok(0);
         };
-        self.seal_commitment(seat, &sealed.playbook_jsonc)
+        self.seal_commitment(seat, sealed.playbook_jsonc())
             .map_err(|unpriced| match unpriced {
                 Unpriced::Gateway(error) => error,
                 Unpriced::Playbook(why) => Error::internal(said!(

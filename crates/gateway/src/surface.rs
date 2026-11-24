@@ -138,7 +138,10 @@ pub mod control;
 pub mod knowledge;
 pub mod plan_words;
 pub mod planning;
+mod sealed;
 pub mod watch;
+
+pub use sealed::Sealed;
 
 use crate::advice::Advice;
 use crate::audit::{AuditLog, Outcome};
@@ -191,83 +194,6 @@ pub struct Draft {
     pub round: u32,
     /// The playbook, as the author wrote it: JSONC, comments and all.
     pub playbook_jsonc: String,
-}
-
-/// What a seat has sealed: the latest verified submission, and the report that
-/// verified it.
-///
-/// Decisions-log item 5: "the latest verified submission replaces the previous
-/// one, any number of times until the timer ends", so there is one of these per
-/// seat and never a history. The safe playbook is filed only if nothing
-/// verified was ever submitted.
-///
-/// It carries the **compiled** [`Plan`] as well as the text, because the text
-/// is what a seat reads back and the plan is what the match plays. The compile
-/// happens once, at the door that can still tell somebody it failed
-/// ([`crate::surface::planning::compile_canonical`]); by the time
-/// [`Surface::begin_push`] seals this into the runner there is nothing left
-/// that can go wrong with it.
-///
-/// It carries the text's **plan fingerprint** too (decisions-log item 77),
-/// taken once where the seal is made, from the decode that qualified it, so
-/// a save stamps it beside the text and decodes nothing (S3's `fpstream`,
-/// part 2). A seal is made only by [`Sealed::new`], which takes the
-/// fingerprint as a required argument, and the field is private, so no seal
-/// can be built or left without one, and none can be changed after.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Sealed {
-    /// The playbook, as submitted.
-    pub playbook_jsonc: String,
-    /// `report_hash` of the FULL report that accepted it. Eight big-endian
-    /// bytes; the same value the pre-check returned, which is what spec
-    /// section 11's "byte-identical" promise means.
-    pub report_hash: Vec<u8>,
-    /// Which round it was sealed in.
-    pub round: u32,
-    /// True when the gateway filed this itself because the Lull ended with
-    /// nothing sealed (spec section 14).
-    pub filed_by_the_gateway: bool,
-    /// The playbook as the interpreter runs it.
-    pub plan: Plan,
-    /// The plan fingerprint of `playbook_jsonc`'s canonical form: what a save
-    /// stamps beside it ([`Sealed::plan_fingerprint`]).
-    plan_fingerprint: u64,
-}
-
-impl Sealed {
-    /// A seal of `playbook_jsonc`, compiled to `plan`, whose canonical form's
-    /// plan fingerprint is `plan_fingerprint`.
-    ///
-    /// The fingerprint is the caller's to take from the decode it made for the
-    /// verify or the compile (a qualifying report's `plan_fingerprint`, read
-    /// with [`carried_fingerprint`]; or the fingerprint of the canonical form
-    /// it compiled), never a value of its own making: what a save stamps is
-    /// what a resume checks the text against.
-    #[must_use]
-    pub const fn new(
-        playbook_jsonc: String,
-        report_hash: Vec<u8>,
-        round: u32,
-        filed_by_the_gateway: bool,
-        plan: Plan,
-        plan_fingerprint: u64,
-    ) -> Self {
-        Self {
-            playbook_jsonc,
-            report_hash,
-            round,
-            filed_by_the_gateway,
-            plan,
-            plan_fingerprint,
-        }
-    }
-
-    /// The plan fingerprint of the sealed text's canonical form, as it was
-    /// taken when the seal was made.
-    #[must_use]
-    pub const fn plan_fingerprint(&self) -> u64 {
-        self.plan_fingerprint
-    }
 }
 
 /// The plan fingerprint a qualifying report carries, for the seal it qualifies.
@@ -962,7 +888,7 @@ impl Surface {
             let every_seat_sealed = surface.seats.iter().all(|slot| {
                 slot.sealed
                     .as_ref()
-                    .is_some_and(|sealed| sealed.round == round)
+                    .is_some_and(|sealed| sealed.round() == round)
             });
             if !every_seat_sealed {
                 return Err(Error::invalid(
@@ -1023,7 +949,7 @@ impl Surface {
             // build with that door. It prices the canonical form the restore
             // checked and compiled: one decode a seal.
             if let Some((seal, canonical)) = restored.as_ref()
-                && seal.round == self.host()?.runner().round()
+                && seal.round() == self.host()?.runner().round()
             {
                 self.seal_commitment_of(SeatId::new(held.seat), canonical.decoded().message())
                     .map_err(|unpriced| match unpriced {
@@ -1153,10 +1079,10 @@ impl Surface {
         for slot in &self.seats {
             // The fingerprint the seal carries: no seal's text is read here.
             let seal = slot.sealed.as_ref().map(|sealed| SavedSeal {
-                playbook_jsonc: sealed.playbook_jsonc.clone(),
-                round: sealed.round,
-                filed_by_the_gateway: sealed.filed_by_the_gateway,
-                report_hash: sealed.report_hash.clone(),
+                playbook_jsonc: sealed.playbook_jsonc().to_owned(),
+                round: sealed.round(),
+                filed_by_the_gateway: sealed.filed_by_the_gateway(),
+                report_hash: sealed.report_hash().to_vec(),
                 plan_fingerprint: sealed.plan_fingerprint(),
             });
             seats.push(SavedSeat {
@@ -1742,7 +1668,7 @@ impl Surface {
             .filter(|slot| {
                 slot.sealed
                     .as_ref()
-                    .is_some_and(|sealed| sealed.round == round && sealed.filed_by_the_gateway)
+                    .is_some_and(|sealed| sealed.round() == round && sealed.filed_by_the_gateway())
             })
             .map(|slot| {
                 let line = if slot.ready {
@@ -1779,11 +1705,11 @@ impl Surface {
             .filter_map(|slot| {
                 slot.sealed
                     .as_ref()
-                    .filter(|sealed| sealed.round == round)
+                    .filter(|sealed| sealed.round() == round)
                     .map(|sealed| SealedFile {
                         seat: slot.seat,
                         round,
-                        playbook_jsonc: sealed.playbook_jsonc.clone(),
+                        playbook_jsonc: sealed.playbook_jsonc().to_owned(),
                     })
             })
             .collect();
@@ -1833,7 +1759,7 @@ impl Surface {
             .iter()
             .filter_map(|seat| {
                 seat.sealed.as_ref().map(|sealed| {
-                    let mut plan = sealed.plan.clone();
+                    let mut plan = sealed.plan().clone();
                     // S2's `atk`: an Attack target named by an `e_NN` handle
                     // is pinned at the seal (decisions-log item 13) to the
                     // beacon the handle names for this seat now, the names
@@ -2682,7 +2608,11 @@ impl Surface {
         let Some(host) = self.host.as_ref() else {
             return Ok(());
         };
-        let stale = |seat: &SeatState| seat.sealed.as_ref().is_none_or(|held| held.round != round);
+        let stale = |seat: &SeatState| {
+            seat.sealed
+                .as_ref()
+                .is_none_or(|held| held.round() != round)
+        };
         let own = |seat: &SeatState| {
             seat.advice
                 .as_ref()
@@ -2728,9 +2658,8 @@ impl Surface {
                 continue;
             }
             let filed = own(seat).or_else(|| fallback.clone());
-            if let Some(mut filed) = filed {
-                filed.round = round;
-                seat.sealed = Some(filed);
+            if let Some(filed) = filed {
+                seat.sealed = Some(filed.for_round(round));
             }
         }
         Ok(())
@@ -2971,8 +2900,8 @@ impl Surface {
             .seat_state(Subject::Seat(seat), seat)?
             .sealed
             .as_ref()
-            .filter(|sealed| !sealed.filed_by_the_gateway)
-            .map(|sealed| sealed.playbook_jsonc.clone());
+            .filter(|sealed| !sealed.filed_by_the_gateway())
+            .map(|sealed| sealed.playbook_jsonc().to_owned());
         let Some(playbook) = carried else {
             // Nothing is carried this round -- the seat sealed nothing, or the
             // gateway filed its safe playbook -- so last round's carried draft
@@ -3230,7 +3159,7 @@ impl Surface {
                     && slot
                         .sealed
                         .as_ref()
-                        .is_some_and(|sealed| sealed.round == round)
+                        .is_some_and(|sealed| sealed.round() == round)
             });
             entries.push((String::from("sealed_this_round"), Json::Bool(sealed)));
         }

@@ -897,8 +897,8 @@ fn an_invalid_playbook_is_a_full_report_and_never_a_method_error() {
     let sealed = surface
         .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("sealed")
-        .playbook_jsonc
-        .clone();
+        .playbook_jsonc()
+        .to_owned();
     let _ = surface.call(
         Some(&token),
         &request(
@@ -911,7 +911,7 @@ fn an_invalid_playbook_is_a_full_report_and_never_a_method_error() {
         surface
             .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
             .expect("still sealed")
-            .playbook_jsonc,
+            .playbook_jsonc(),
         sealed,
         "a report that does not qualify leaves the previous seal alone"
     );
@@ -950,7 +950,7 @@ fn the_latest_verified_submission_replaces_the_previous_one_any_number_of_times(
             surface
                 .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
                 .expect("sealed")
-                .playbook_jsonc,
+                .playbook_jsonc(),
             playbook,
             "the latest replaces the previous"
         );
@@ -1038,11 +1038,11 @@ fn a_seat_that_seals_nothing_has_the_safe_playbook_filed_for_it() {
             .sealed_plan(Subject::Seat(SeatId::new(seat)), SeatId::new(seat))
             .expect("something was filed");
         assert!(
-            sealed.filed_by_the_gateway,
+            sealed.filed_by_the_gateway(),
             "seat {seat} sealed nothing, so the gateway filed the safe playbook"
         );
         assert_eq!(
-            sealed.playbook_jsonc,
+            sealed.playbook_jsonc(),
             pharmakos_gateway::host::safe_playbook()
                 .expect("the fallback")
                 .as_str()

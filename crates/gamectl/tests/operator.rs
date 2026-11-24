@@ -528,10 +528,10 @@ fn visit(
             .clone();
         let sealed = state.sealed.as_ref();
         let sealed_by_easy =
-            sealed.is_some_and(|held| held.round == round && !held.filed_by_the_gateway);
+            sealed.is_some_and(|held| held.round() == round && !held.filed_by_the_gateway());
         let note = sealed
             .and_then(|held| {
-                held.playbook_jsonc
+                held.playbook_jsonc()
                     .lines()
                     .find(|line| line.trim_start().starts_with("\"note\""))
                     .map(|line| line.trim().to_owned())
@@ -1010,8 +1010,8 @@ fn round_one(seed: u64, match_id: &str) -> Vec<String> {
                 .seat_state(Subject::Seat(seat), seat)
                 .expect("its own");
             let sealed = state.sealed.as_ref().expect("Easy sealed a playbook");
-            assert!(!sealed.filed_by_the_gateway);
-            sealed.playbook_jsonc.clone()
+            assert!(!sealed.filed_by_the_gateway());
+            sealed.playbook_jsonc().to_owned()
         })
         .collect()
 }
@@ -1089,8 +1089,8 @@ fn the_operator_does_not_depend_on_the_host_clock() {
                         .sealed
                         .as_ref()
                         .expect("sealed")
-                        .playbook_jsonc
-                        .clone()
+                        .playbook_jsonc()
+                        .to_owned()
                 })
                 .collect(),
         );
@@ -1187,7 +1187,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
         assert!(
             easy.sealed
                 .as_ref()
-                .is_some_and(|sealed| !sealed.filed_by_the_gateway)
+                .is_some_and(|sealed| !sealed.filed_by_the_gateway())
         );
         assert!(easy.ready);
     }
@@ -2174,8 +2174,8 @@ fn easy_seals_a_stone(stone_ms: Option<i64>) -> (String, Vec<String>, pharmakos_
         .sealed
         .as_ref()
         .expect("round 2's seal")
-        .playbook_jsonc
-        .clone();
+        .playbook_jsonc()
+        .to_owned();
     assert!(
         sealed.contains("\"toward\":{\"feature\":{\"feature_id\":\"seam_190_124\"}}"),
         "{sealed}"

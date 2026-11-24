@@ -1528,12 +1528,21 @@ mod tests {
             }
             let id = SeatId::new(seat.seat);
             let sealed = surface.sealed_plan(Subject::Seat(id), id).expect("a seal");
-            let canonical = pharmakos_plan_core::decode_jsonc(&sealed.playbook_jsonc)
+            let canonical = pharmakos_plan_core::decode_jsonc(sealed.playbook_jsonc())
                 .expect("a canonical form");
             assert_eq!(
                 sealed.plan_fingerprint(),
-                pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
-                    .expect("a fingerprint"),
+                {
+                    // The rule written out whole: the reference, test-only.
+                    let mut bytes = pharmakos_proto::fingerprint::PLAN_FINGERPRINT_DOMAIN.to_vec();
+                    bytes.extend_from_slice(
+                        &pharmakos_proto::fingerprint::canonical_input(
+                            canonical.decoded().message(),
+                        )
+                        .expect("canonical"),
+                    );
+                    pharmakos_sim::encoding::digest(&bytes)
+                },
                 "seat {}: the carried fingerprint is the text's",
                 seat.seat
             );

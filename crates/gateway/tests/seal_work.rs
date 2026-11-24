@@ -176,7 +176,7 @@ fn carried_is_the_reference(surface: &Surface, what: &str) {
         let sealed = seal_of(surface, seat);
         assert_eq!(
             sealed.plan_fingerprint(),
-            reference(&sealed.playbook_jsonc),
+            reference(sealed.playbook_jsonc()),
             "{what}: seat {}'s carried fingerprint",
             seat.raw()
         );
@@ -287,7 +287,7 @@ fn the_fallback_is_fingerprinted_once_at_filing() {
     submit(&mut surface, 1, &one);
     assert!(surface.begin_push().expect("the Push begins"));
     let zero = seal_of(&surface, SeatId::new(0));
-    assert!(zero.filed_by_the_gateway, "the fallback");
+    assert!(zero.filed_by_the_gateway(), "the fallback");
     carried_is_the_reference(&surface, "a filed fallback");
     let _ = surface.take_persistence();
     while let Some(report) = surface.step().expect("a tick") {
