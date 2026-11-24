@@ -536,8 +536,12 @@ fn the_catalogue_is_the_committed_one() {
 /// `an_unreadable_snapshot_is_reported_and_not_swallowed`. And `E0029`, a
 /// player's text past the cap, which the boundary that holds the text reports
 /// through [`Input::too_long`] and no case file reaches, because a case is the
-/// bytes handed to [`Input::new`]: `a_playbook_past_the_cap_is_e0029_and_nothing_else`.
-const HOST_FAULT_CODES: &[&str] = &["W0707", "E0029"];
+/// bytes handed to [`Input::new`]: `a_playbook_past_the_cap_is_e0029_and_nothing_else`. And
+/// `E0030`, a fingerprint the codec could not write, which is the verifier's own
+/// fault and which no file reaches, because the codec writes every playbook it
+/// decodes: `decode.rs`'s
+/// `a_fingerprint_the_codec_could_not_write_is_e0030_and_never_e0008`.
+const HOST_FAULT_CODES: &[&str] = &["W0707", "E0029", "E0030"];
 
 #[test]
 fn every_emitted_code_has_a_case() {
@@ -2775,6 +2779,7 @@ const CARRIES: &[(&str, Carries)] = &[
     ("E0027", Carries::Engine),
     ("E0028", Carries::Engine),
     ("E0029", Carries::Engine),
+    ("E0030", Carries::Engine),
     ("E0101", Carries::Engine),
     ("E0102", Carries::Engine),
     ("E0103", Carries::Engine),
