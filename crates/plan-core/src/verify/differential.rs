@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 use pharmakos_proto::json::{self, Json};
 
 use super::{HandedOver, blank_comments, hand_over};
-use crate::canonical::canonicalise_text;
+use crate::canonical::{Canonical, canonicalise_text};
 use crate::jsonc::Document;
 
 /// The JSONC chain: the canonical JSON `canonicalise_text` writes, or the
@@ -251,10 +251,15 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Every `.json` and `.jsonc` file under `dir`, recursively, in path order.
+/// A folder that cannot be listed fails the test: the corpus is what is
+/// committed, and a folder that went missing is not an empty one.
 fn files_under(dir: &Path, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|error| {
+        panic!(
+            "the corpus folder {} cannot be listed: {error}",
+            dir.display()
+        )
+    });
     let mut paths: Vec<PathBuf> = entries
         .map(|entry| entry.expect("a dir entry").path())
         .collect();
@@ -271,26 +276,42 @@ fn files_under(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// The folders the corpus is read from.
+const CORPUS_ROOTS: [&str; 8] = [
+    "examples",
+    "library",
+    "scenarios",
+    "tests/golden",
+    "crates/verifier/tests/cases",
+    "crates/plan-core/tests/cases",
+    "docs/demo",
+    "godot/fixtures",
+];
+
+/// The fewest files the corpus may hold. 424 were committed on 2026-11-24;
+/// the floor sits two dozen below, so that retiring a few goldens moves
+/// nothing, while losing a subtree inside a root (which the per-root check
+/// cannot see) fails. Each root must list a file of its own, so a renamed or
+/// emptied root fails by name. A change that removes files on purpose lowers
+/// the floor in the same commit.
+const CORPUS_AT_LEAST: usize = 400;
+
 /// The committed corpus: every playbook, template, sample, scenario and
 /// verifier case, and every JSON golden beside them.
 fn corpus() -> Vec<(String, String)> {
     let root = workspace_root();
     let mut paths = Vec::new();
-    for dir in [
-        "examples",
-        "library",
-        "scenarios",
-        "tests/golden",
-        "crates/verifier/tests/cases",
-        "crates/plan-core/tests/cases",
-        "docs/demo",
-        "godot/fixtures",
-    ] {
+    for dir in CORPUS_ROOTS {
+        let before = paths.len();
         files_under(&root.join(dir), &mut paths);
+        assert!(
+            paths.len() > before,
+            "the corpus folder {dir} lists no .json or .jsonc file"
+        );
     }
     assert!(
-        paths.len() > 300,
-        "the corpus is the committed files: {}",
+        paths.len() >= CORPUS_AT_LEAST,
+        "the corpus is the committed files: {} of at least {CORPUS_AT_LEAST}",
         paths.len()
     );
     paths
@@ -1086,22 +1107,18 @@ fn a_leading_zero_is_refused_by_both() {
     );
 }
 
-/// Every comment a text holds, with the anchor it was written against, in
-/// the order it stands in.
-fn comment_texts(text: &str) -> Vec<Spotted> {
-    Document::parse(text)
-        .map(|document| {
-            document
-                .comments()
-                .into_iter()
-                .map(|comment| Spotted {
-                    anchor: format!("{:?}", comment.anchor),
-                    pointer: comment.anchor.pointer().map(str::to_owned),
-                    text: comment.text,
-                })
-                .collect()
+/// Every comment a document holds, with the anchor it was written against,
+/// in the order it stands in.
+fn spotted(document: &Document) -> Vec<Spotted> {
+    document
+        .comments()
+        .into_iter()
+        .map(|comment| Spotted {
+            anchor: format!("{:?}", comment.anchor),
+            pointer: comment.anchor.pointer().map(str::to_owned),
+            text: comment.text,
         })
-        .expect("the canonical text parses")
+        .collect()
 }
 
 /// One comment as a text holds it: its anchor, the pointer the anchor names
@@ -1162,23 +1179,209 @@ fn same_comments(inn: &[Spotted], out: &[Spotted], relocated: &[Moved]) -> bool 
     by_anchor(inn, relocated, true) == by_anchor(out, relocated, false)
 }
 
+/// The comment-keeping canonicaliser [`Kept`] holds to its two promises: the
+/// product's entry point, [`canonicalise_text`], which every shipped caller
+/// reaches the writer through, or, in the checker's own test, one broken on
+/// purpose. It takes the text, so the differential reads the file the way a
+/// caller does (fix pass 1 of `pcsplit`: a checker that called `canonicalise`
+/// on its own parse could not see a fault in the text-to-document step).
+type Canonicaliser = fn(&str) -> Result<Canonical, crate::error::Error>;
+
+/// One comment as a plain scan of the text finds it ([`reference_comments`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Scanned {
+    /// The byte it starts at and the byte after it.
+    span: std::ops::Range<usize>,
+    /// Its text: a line comment without its terminator or trailing
+    /// whitespace (as `Document::comments` gives it), a block comment as
+    /// written.
+    text: String,
+}
+
+/// A block comment that never closes, at the byte it opens at.
+#[derive(Debug, PartialEq, Eq)]
+struct Unclosed(usize);
+
+/// Every comment in `text`, by a scan written here and nowhere else, so that
+/// the checker does not ask the code it checks where a comment is: outside a
+/// string (a `"` opens one, a `\` escapes the next byte, a `"` closes it), a
+/// `//` runs to the first line feed or carriage return, which it leaves out,
+/// or to the end; a `/*` runs to the first `*/` that starts after it, so
+/// `/*/` does not close itself (`jsonc::comment_end`'s documented rule, and
+/// `tests/jsonc_refusals.rs`' `a_block_comment_opening_slash_star_slash_is_one_comment`).
+/// A block comment that never closes is no comment, and the product refuses
+/// the text there.
+fn reference_comments(text: &str) -> Result<Vec<Scanned>, Unclosed> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut at = 0;
+    let mut in_string = false;
+    while let Some(&byte) = bytes.get(at) {
+        if in_string {
+            match byte {
+                b'\\' => at += 2,
+                b'"' => {
+                    in_string = false;
+                    at += 1;
+                }
+                _ => at += 1,
+            }
+            continue;
+        }
+        match (byte, bytes.get(at + 1)) {
+            (b'"', _) => {
+                in_string = true;
+                at += 1;
+            }
+            (b'/', Some(b'/')) => {
+                let end = bytes[at..]
+                    .iter()
+                    .position(|byte| *byte == b'\n' || *byte == b'\r')
+                    .map_or(bytes.len(), |offset| at + offset);
+                found.push(Scanned {
+                    span: at..end,
+                    text: text[at..end].trim_end().to_owned(),
+                });
+                at = end;
+            }
+            (b'/', Some(b'*')) => {
+                let close = bytes
+                    .get(at + 2..)
+                    .and_then(|rest| rest.windows(2).position(|pair| pair == b"*/"))
+                    .ok_or(Unclosed(at))?;
+                let end = at + 2 + close + 2;
+                found.push(Scanned {
+                    span: at..end,
+                    text: text[at..end].to_owned(),
+                });
+                at = end;
+            }
+            _ => at += 1,
+        }
+    }
+    Ok(found)
+}
+
+/// `text` with every comment the scan found turned to spaces, byte for
+/// byte: plain JSON, if the text is JSON with comments between its tokens.
+fn blanked_by_scan(text: &str, comments: &[Scanned]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    for comment in comments {
+        out.push_str(&text[from..comment.span.start]);
+        out.extend(std::iter::repeat_n(' ', comment.span.len()));
+        from = comment.span.end;
+    }
+    out.push_str(&text[from..]);
+    out
+}
+
+/// The comments' texts, sorted: what must come out of the writer, text for
+/// text, wherever the canonical form puts each.
+fn sorted_texts(comments: &[Scanned]) -> Vec<&str> {
+    let mut texts: Vec<&str> = comments
+        .iter()
+        .map(|comment| comment.text.as_str())
+        .collect();
+    texts.sort_unstable();
+    texts
+}
+
 /// The two promises the canonical writer makes of every text it writes
 /// (fix pass 1, item 8): every comment comes out, text for text (a comment
 /// on a written-out default is moved, never dropped), and canonicalising the
-/// canonical text gives it back unchanged.
-#[derive(Default, Debug)]
+/// canonical text gives it back unchanged; and, under both, the JSONC reader
+/// finds the comments a plain scan of the text finds.
+///
+/// The reader is held to [`reference_comments`] on every text: where it reads
+/// one, it lists the scan's comments in the scan's order; where it refuses
+/// one, the scan found a comment that never closes, or the text with the
+/// scan's comments blanked is not JSON to the codec's reader, which knows no
+/// comments. The writer is held to the scan too: the canonical text's
+/// comments, by the scan, are the input's, text for text. So a reader that
+/// drops or mis-ends a comment, and a writer that loses or merges one,
+/// disagree with code that is not theirs (fix pass 1 of `pcsplit`: listing
+/// input and output with `Document::comments` alone was blind to a fault in
+/// it, since both sides were listed by it).
+#[derive(Debug)]
 struct Kept {
+    canonicalise: Canonicaliser,
     cases: u64,
     lost: Vec<String>,
     unstable: Vec<String>,
+    misread: Vec<String>,
 }
 
 impl Kept {
+    fn new(canonicalise: Canonicaliser) -> Self {
+        Self {
+            canonicalise,
+            cases: 0,
+            lost: Vec::new(),
+            unstable: Vec::new(),
+            misread: Vec::new(),
+        }
+    }
+
+    /// Notes `what` under `list`, with the head of `text`.
+    fn note(list: &mut Vec<String>, what: &str, why: &str, text: &str) {
+        list.push(format!(
+            "{what}: {why}: {:?}",
+            text.chars().take(300).collect::<String>()
+        ));
+    }
+
     fn check(&mut self, what: &str, text: &str) {
-        let Ok(once) = canonicalise_text(text) else {
+        let scanned = reference_comments(text);
+        let document = Document::parse(text);
+        match (&document, &scanned) {
+            (Ok(document), Ok(scanned)) => {
+                let listed: Vec<String> = document
+                    .comments()
+                    .into_iter()
+                    .map(|comment| comment.text)
+                    .collect();
+                let expected: Vec<&String> = scanned.iter().map(|comment| &comment.text).collect();
+                if listed.iter().collect::<Vec<_>>() != expected {
+                    Self::note(
+                        &mut self.misread,
+                        what,
+                        &format!("the reader lists {listed:?}, the scan {expected:?}"),
+                        text,
+                    );
+                }
+            }
+            (Ok(_), Err(Unclosed(at))) => Self::note(
+                &mut self.misread,
+                what,
+                &format!("read, with a block comment at byte {at} that never closes"),
+                text,
+            ),
+            (Err(_), Ok(scanned)) => {
+                if json::read(&blanked_by_scan(text, scanned)).is_ok() {
+                    Self::note(
+                        &mut self.misread,
+                        what,
+                        "refused, and JSON with its comments blanked",
+                        text,
+                    );
+                }
+            }
+            (Err(_), Err(_)) => {}
+        }
+        let Ok(once) = (self.canonicalise)(text) else {
             return;
         };
         self.cases += 1;
+        let (Ok(document), Ok(scanned)) = (document, scanned) else {
+            Self::note(
+                &mut self.misread,
+                what,
+                "canonicalised, and not read by the reader or the scan",
+                text,
+            );
+            return;
+        };
         let relocated: Vec<Moved> = once
             .relocated
             .iter()
@@ -1188,18 +1391,17 @@ impl Kept {
                 to: relocation.to.clone(),
             })
             .collect();
-        if !same_comments(&comment_texts(text), &comment_texts(&once.text), &relocated) {
-            self.lost.push(format!(
-                "{what}: {:?}",
-                text.chars().take(300).collect::<String>()
-            ));
+        let again = Document::parse(&once.text).expect("the canonical text parses");
+        let written = reference_comments(&once.text);
+        let kept_by_scan = written
+            .as_ref()
+            .is_ok_and(|written| sorted_texts(written) == sorted_texts(&scanned));
+        if !kept_by_scan || !same_comments(&spotted(&document), &spotted(&again), &relocated) {
+            Self::note(&mut self.lost, what, "a comment did not come out", text);
         }
-        match canonicalise_text(&once.text) {
+        match (self.canonicalise)(&once.text) {
             Ok(twice) if twice.text == once.text => {}
-            _ => self.unstable.push(format!(
-                "{what}: {:?}",
-                text.chars().take(300).collect::<String>()
-            )),
+            _ => Self::note(&mut self.unstable, what, "canonicalised twice", text),
         }
     }
 }
@@ -1208,52 +1410,446 @@ impl Kept {
 /// smaller.
 const EVERY_BOUNDARY_UP_TO: usize = 16 * 1024;
 
-#[test]
-fn every_comment_comes_out_and_canonicalising_twice_is_once() {
-    let mut kept = Kept::default();
-    let mut texts: Vec<(String, String)> = corpus();
-    texts.extend(probes());
-    for (index, (name, text)) in texts.into_iter().enumerate() {
-        kept.check(&name, &text);
-        let start = 0xc0de_0000_u64 + u64::try_from(index).expect("an index");
-        let mut rng = Rng(start);
-        for (how, mutated) in mutations(&text, &mut rng, 24) {
-            kept.check(&format!("{name} (seed {start:#x}), {how}"), &mutated);
-        }
-        // Every comment at the first 32 boundaries, and, in a file of a
-        // playbook's size, a comment at every boundary after them, the
-        // comments taken in turn (fix pass 2, item D4: only the first 32 were
-        // spliced at before). A larger file (a report or a response golden)
-        // keeps the first 32.
-        let spots = boundaries(&text);
-        let every = text.len() <= EVERY_BOUNDARY_UP_TO;
-        for (at_index, at) in spots.iter().enumerate() {
-            if at_index >= 32 && !every {
-                break;
-            }
-            let pieces: &[&str] = if at_index < 32 {
+/// How many boundaries of every file take every one of [`COMMENTS`].
+const EVERY_COMMENT_AT: usize = 32;
+
+/// One boundary a comment is spliced at: its place in the file's
+/// [`boundaries`], its byte offset, and the comments spliced there.
+struct Splice {
+    at_index: usize,
+    at: usize,
+    comments: &'static [&'static str],
+}
+
+/// Where `text` is spliced: every comment at the first
+/// [`EVERY_COMMENT_AT`] boundaries, and, in a file of a playbook's size, a
+/// comment at every boundary after them, the comments taken in turn (fix pass
+/// 2, item D4: only the first 32 were spliced at before). A larger file (a
+/// report or a response golden) keeps the first 32.
+fn splices(text: &str) -> Vec<Splice> {
+    let every = text.len() <= EVERY_BOUNDARY_UP_TO;
+    boundaries(text)
+        .into_iter()
+        .enumerate()
+        .take_while(|(at_index, _)| *at_index < EVERY_COMMENT_AT || every)
+        .map(|(at_index, at)| Splice {
+            at_index,
+            at,
+            comments: if at_index < EVERY_COMMENT_AT {
                 &COMMENTS
             } else {
-                let turn = at_index.checked_rem(COMMENTS.len()).expect("a comment");
-                COMMENTS.get(turn..=turn).expect("a comment")
-            };
-            for comment in pieces {
-                kept.check(
-                    &format!("{name}, {comment:?} at byte {at} ({at_index})"),
-                    &with_comment(&text, *at, comment),
-                );
+                let turn = at_index % COMMENTS.len();
+                &COMMENTS[turn..=turn]
+            },
+        })
+        .collect()
+}
+
+/// How many tests the comment differential is split into (`pcsplit`): one
+/// serial test took 456 s on windows-latest, and libtest runs tests on the
+/// runner's threads.
+const GROUPS: usize = 16;
+
+/// One piece of a group's work: a run of one text's [`splices`], and, for
+/// the text's first run, the text itself and its seeded mutations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Unit {
+    /// The text's place in [`differential_texts`].
+    text: usize,
+    /// Which of the text's [`splices`] this unit makes.
+    splices: std::ops::Range<usize>,
+    /// Whether this unit also checks the text and its mutations.
+    first: bool,
+    /// Its modelled cost: bytes canonicalised.
+    cost: u64,
+}
+
+/// The texts the differential reads: every committed file, then the edge
+/// cases, in that order (each text's place seeds its mutations).
+fn differential_texts() -> Vec<(String, String)> {
+    let mut texts = corpus();
+    texts.extend(probes());
+    texts
+}
+
+/// The work split into [`GROUPS`] groups, a pure function of the texts: each
+/// text's splices are cut into runs of at most an eighth of a group's fair
+/// share of the cost, and the runs dealt, dearest first, to the group with
+/// the least so far (ties to the lowest group, then the earliest text and
+/// run), so that every group costs about the same and every splice falls in
+/// exactly one group.
+fn plan(texts: &[(String, String)]) -> Vec<Vec<Unit>> {
+    let cost_of = |text: &str, splice: &Splice| -> u64 {
+        let one: u64 = splice
+            .comments
+            .iter()
+            .map(|comment| u64::try_from(text.len() + comment.len()).expect("a length"))
+            .sum();
+        one
+    };
+    let per_text: Vec<Vec<u64>> = texts
+        .iter()
+        .map(|(_, text)| {
+            splices(text)
+                .iter()
+                .map(|splice| cost_of(text, splice))
+                .collect()
+        })
+        .collect();
+    let total: u64 = per_text.iter().flatten().sum();
+    let runs = u64::try_from(GROUPS * 8).expect("a count");
+    let run_at_most = total.checked_div(runs).expect("GROUPS is not zero").max(1);
+    let mut units: Vec<Unit> = Vec::new();
+    for (text, costs) in per_text.iter().enumerate() {
+        let mut start = 0;
+        let mut cost = 0;
+        for (index, splice_cost) in costs.iter().enumerate() {
+            if index > start && cost + splice_cost > run_at_most {
+                units.push(Unit {
+                    text,
+                    splices: start..index,
+                    first: start == 0,
+                    cost,
+                });
+                start = index;
+                cost = 0;
+            }
+            cost += splice_cost;
+        }
+        units.push(Unit {
+            text,
+            splices: start..costs.len(),
+            first: start == 0,
+            cost,
+        });
+    }
+    units.sort_by(|one, two| {
+        two.cost
+            .cmp(&one.cost)
+            .then(one.text.cmp(&two.text))
+            .then(one.splices.start.cmp(&two.splices.start))
+    });
+    let mut planned: Vec<Vec<Unit>> = vec![Vec::new(); GROUPS];
+    let mut load = [0_u64; GROUPS];
+    for unit in units {
+        let lightest = (0..GROUPS)
+            .min_by_key(|group| (load[*group], *group))
+            .expect("a group");
+        load[lightest] += unit.cost;
+        planned[lightest].push(unit);
+    }
+    for group in &mut planned {
+        group.sort_by_key(|unit| (unit.text, unit.splices.start));
+    }
+    planned
+}
+
+/// The texts, by name, and the work [`plan`] splits them into.
+type Planned = (Vec<(String, String)>, Vec<Vec<Unit>>);
+
+/// The texts and their plan. Each test makes its own, in well under a second:
+/// a static shared by the tests would be one more static behind the type
+/// door (`tests/door.rs`) for no gain worth a review.
+fn planned_texts() -> Planned {
+    let texts = differential_texts();
+    let planned = plan(&texts);
+    (texts, planned)
+}
+
+/// One group of the differential: every unit's text and mutations, and every
+/// comment at every boundary it plans, each held to [`Kept`]'s promises.
+/// What it splices is checked against the plan boundary for boundary, and
+/// each group holds more than its share of the 10 000 canonical cases the one
+/// serial test asked for, so the groups together hold more than that.
+fn kept_in_group(group: usize) {
+    let (texts, planned) = planned_texts();
+    let units = &planned[group];
+    assert!(!units.is_empty(), "group {group} has no work");
+    let mut kept = Kept::new(canonicalise_text);
+    // Every splice checked, and every splice the plan names: (text, boundary,
+    // comment).
+    let mut done: Vec<(usize, usize, &str)> = Vec::new();
+    let mut wanted: Vec<(usize, usize, &str)> = Vec::new();
+    for unit in units {
+        let (name, text) = &texts[unit.text];
+        if unit.first {
+            kept.check(name, text);
+            let start = 0xc0de_0000_u64 + u64::try_from(unit.text).expect("an index");
+            let mut rng = Rng(start);
+            for (how, mutated) in mutations(text, &mut rng, 24) {
+                kept.check(&format!("{name} (seed {start:#x}), {how}"), &mutated);
             }
         }
+        let list = splices(text);
+        for splice in &list[unit.splices.clone()] {
+            for comment in splice.comments {
+                kept.check(
+                    &format!(
+                        "{name}, {comment:?} at byte {} ({})",
+                        splice.at, splice.at_index
+                    ),
+                    &with_comment(text, splice.at, comment),
+                );
+                done.push((unit.text, splice.at_index, comment));
+            }
+        }
+        for splice in &list[unit.splices.clone()] {
+            wanted.extend(
+                splice
+                    .comments
+                    .iter()
+                    .map(|comment| (unit.text, splice.at_index, *comment)),
+            );
+        }
     }
-    println!("comments kept over {} canonical cases", kept.cases);
-    assert!(kept.cases > 10_000, "{}", kept.cases);
+    println!(
+        "group {group}: {} units, {} splices, comments kept over {} canonical cases",
+        units.len(),
+        done.len(),
+        kept.cases
+    );
+    if done != wanted {
+        let first = done
+            .iter()
+            .zip(&wanted)
+            .position(|(one, two)| one != two)
+            .unwrap_or(done.len().min(wanted.len()));
+        panic!(
+            "group {group} splices every boundary it plans: {} splices made, {} planned, \
+             first apart at {first}: made {:?}, planned {:?}",
+            done.len(),
+            wanted.len(),
+            done.get(first),
+            wanted.get(first)
+        );
+    }
     assert!(
-        kept.lost.is_empty() && kept.unstable.is_empty(),
-        "{} of {} cases lost a comment, {} were not stable:\nlost: {:#?}\nunstable: {:#?}",
+        kept.cases * u64::try_from(GROUPS).expect("a count") > 10_000,
+        "group {group}: {} canonical cases",
+        kept.cases
+    );
+    assert!(
+        kept.lost.is_empty() && kept.unstable.is_empty() && kept.misread.is_empty(),
+        "{} of {} cases lost a comment, {} were not stable, {} texts were read otherwise than \
+         the scan reads them:\nlost: {:#?}\nunstable: {:#?}\nmisread: {:#?}",
         kept.lost.len(),
         kept.cases,
         kept.unstable.len(),
+        kept.misread.len(),
         kept.lost.iter().take(5).collect::<Vec<_>>(),
-        kept.unstable.iter().take(5).collect::<Vec<_>>()
+        kept.unstable.iter().take(5).collect::<Vec<_>>(),
+        kept.misread.iter().take(5).collect::<Vec<_>>()
     );
+}
+
+/// One test per group, so that a group cannot exist without its test: the
+/// list is [`GROUP_TESTS`], and `every_boundary_of_every_text_has_a_test`
+/// holds it to `0..GROUPS`.
+macro_rules! comment_groups {
+    ($($test:ident = $group:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $test() {
+                kept_in_group($group);
+            }
+        )*
+        const GROUP_TESTS: &[usize] = &[$($group),*];
+    };
+}
+
+comment_groups!(
+    every_comment_comes_out_and_canonicalising_twice_is_once_00 = 0,
+    every_comment_comes_out_and_canonicalising_twice_is_once_01 = 1,
+    every_comment_comes_out_and_canonicalising_twice_is_once_02 = 2,
+    every_comment_comes_out_and_canonicalising_twice_is_once_03 = 3,
+    every_comment_comes_out_and_canonicalising_twice_is_once_04 = 4,
+    every_comment_comes_out_and_canonicalising_twice_is_once_05 = 5,
+    every_comment_comes_out_and_canonicalising_twice_is_once_06 = 6,
+    every_comment_comes_out_and_canonicalising_twice_is_once_07 = 7,
+    every_comment_comes_out_and_canonicalising_twice_is_once_08 = 8,
+    every_comment_comes_out_and_canonicalising_twice_is_once_09 = 9,
+    every_comment_comes_out_and_canonicalising_twice_is_once_10 = 10,
+    every_comment_comes_out_and_canonicalising_twice_is_once_11 = 11,
+    every_comment_comes_out_and_canonicalising_twice_is_once_12 = 12,
+    every_comment_comes_out_and_canonicalising_twice_is_once_13 = 13,
+    every_comment_comes_out_and_canonicalising_twice_is_once_14 = 14,
+    every_comment_comes_out_and_canonicalising_twice_is_once_15 = 15,
+);
+
+/// The plan covers the corpus as the directories list it (each of
+/// [`CORPUS_ROOTS`] listing files of its own, and the whole at least
+/// [`CORPUS_AT_LEAST`]), and the edge cases: every text has exactly one first
+/// unit, every boundary the rule names (every one in a file of a playbook's
+/// size, the first 32 in a larger one; read here from [`boundaries`]
+/// directly, not through [`splices`]) is spliced in exactly one group with
+/// the comments the rule gives it, and every group has work and a test of its
+/// own.
+#[test]
+fn every_boundary_of_every_text_has_a_test() {
+    let (texts, planned) = planned_texts();
+    assert_eq!(
+        GROUP_TESTS,
+        (0..GROUPS).collect::<Vec<_>>().as_slice(),
+        "one test per group"
+    );
+    assert_eq!(planned.len(), GROUPS);
+    let mut firsts = vec![0_usize; texts.len()];
+    let mut spliced: Vec<Vec<usize>> = vec![Vec::new(); texts.len()];
+    for (group, units) in planned.iter().enumerate() {
+        assert!(!units.is_empty(), "group {group} has no work");
+        for unit in units {
+            assert!(unit.text < texts.len(), "{unit:?}");
+            if unit.first {
+                firsts[unit.text] += 1;
+            }
+            let list = splices(&texts[unit.text].1);
+            spliced[unit.text].extend(
+                list.get(unit.splices.clone())
+                    .unwrap_or_else(|| panic!("{unit:?} past the text's splices"))
+                    .iter()
+                    .map(|splice| splice.at_index),
+            );
+        }
+    }
+    let (mut boundaries_spliced, mut cases) = (0_usize, 0_usize);
+    for (index, (name, text)) in texts.iter().enumerate() {
+        assert_eq!(firsts[index], 1, "{name}: one unit checks the text itself");
+        let spots = boundaries(text);
+        let ruled = if text.len() <= EVERY_BOUNDARY_UP_TO {
+            spots.len()
+        } else {
+            spots.len().min(EVERY_COMMENT_AT)
+        };
+        let mut seen = spliced[index].clone();
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            (0..ruled).collect::<Vec<_>>(),
+            "{name}: every boundary spliced exactly once"
+        );
+        for splice in splices(text) {
+            assert_eq!(spots.get(splice.at_index), Some(&splice.at), "{name}");
+            let comments: Vec<&str> = if splice.at_index < EVERY_COMMENT_AT {
+                COMMENTS.to_vec()
+            } else {
+                vec![COMMENTS[splice.at_index % COMMENTS.len()]]
+            };
+            assert_eq!(splice.comments, comments.as_slice(), "{name}");
+            cases += comments.len();
+        }
+        boundaries_spliced += ruled;
+    }
+    println!(
+        "{} texts, {boundaries_spliced} boundaries spliced, {cases} splice cases, in {GROUPS} \
+         groups costing {:?}",
+        texts.len(),
+        planned
+            .iter()
+            .map(|units| units.iter().map(|unit| unit.cost).sum::<u64>())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A canonicaliser that drops every empty block comment, trailing or on a
+/// line of its own, and so writes a text that is stable but has lost a
+/// comment.
+fn dropping(text: &str) -> Result<Canonical, crate::error::Error> {
+    let mut canonical = canonicalise_text(text)?;
+    let mut kept = String::new();
+    let written = canonical.text.replace(" /**/", "");
+    for line in written.lines().filter(|line| line.trim() != "/**/") {
+        kept.push_str(line);
+        kept.push('\n');
+    }
+    canonical.text = kept;
+    Ok(canonical)
+}
+
+/// A canonicaliser that writes a space before a text that has none, and so
+/// writes the canonical text once differently.
+fn wavering(text: &str) -> Result<Canonical, crate::error::Error> {
+    let mut canonical = canonicalise_text(text)?;
+    if !text.starts_with(' ') {
+        canonical.text.insert(0, ' ');
+    }
+    Ok(canonical)
+}
+
+/// A canonicaliser that loses the file's last comment, after the value: the
+/// shape of a reader that drops the epilogue, which listing both sides with
+/// `Document::comments` could not see.
+fn tailless(text: &str) -> Result<Canonical, crate::error::Error> {
+    let mut canonical = canonicalise_text(text)?;
+    if let Some(end) = canonical.text.rfind("}\n") {
+        canonical.text.truncate(end + 2);
+    }
+    Ok(canonical)
+}
+
+/// [`Kept`] sees what it exists to see: a canonicaliser that loses a comment
+/// (inside the value, or after it), and one whose second pass differs from
+/// its first, and passes the real one.
+#[test]
+fn the_comment_checker_sees_a_lost_comment_and_an_unstable_text() {
+    let text = MINIMAL.replace(",\"meta\"", ",/**/\"meta\"");
+    let mut real = Kept::new(canonicalise_text);
+    real.check("the real writer", &text);
+    let ended = format!("{MINIMAL}\n// the end\n");
+    real.check("the real writer, a comment after the value", &ended);
+    assert_eq!(
+        (
+            real.cases,
+            real.lost.len(),
+            real.unstable.len(),
+            real.misread.len()
+        ),
+        (2, 0, 0, 0),
+        "{real:?}"
+    );
+    let mut lossy = Kept::new(dropping);
+    lossy.check("a dropped comment", &text);
+    assert_eq!(
+        (lossy.lost.len(), lossy.unstable.len()),
+        (1, 0),
+        "{lossy:?}"
+    );
+    let mut unsteady = Kept::new(wavering);
+    unsteady.check("a wavering writer", &text);
+    assert_eq!(
+        (unsteady.lost.len(), unsteady.unstable.len()),
+        (0, 1),
+        "{unsteady:?}"
+    );
+    let mut tail = Kept::new(tailless);
+    tail.check("a lost epilogue", &ended);
+    assert_eq!((tail.lost.len(), tail.unstable.len()), (1, 0), "{tail:?}");
+}
+
+/// The checker's own scan finds what `jsonc::comment_end` documents, and no
+/// more: a `//` or `/*` inside a string is no comment, a line comment ends
+/// at a lone CR or LF and keeps neither, `/*/` opens a comment that the
+/// next `*/` closes, and a block comment that never closes is reported.
+#[test]
+fn the_reference_scan_finds_comments_as_the_reader_documents_them() {
+    let texts = |text: &str| -> Result<Vec<String>, Unclosed> {
+        reference_comments(text).map(|found| found.into_iter().map(|one| one.text).collect())
+    };
+    assert_eq!(texts(r#"{"a":"// no /* no */"}"#), Ok(vec![]));
+    assert_eq!(texts(r#"{"a\"//":1}"#), Ok(vec![]));
+    assert_eq!(
+        texts("/*/ x */{} // end \t\r\n/**/"),
+        Ok(vec![
+            "/*/ x */".to_owned(),
+            "// end".to_owned(),
+            "/**/".to_owned()
+        ])
+    );
+    assert_eq!(texts("{}// end"), Ok(vec!["// end".to_owned()]));
+    assert_eq!(texts("{} /*/"), Err(Unclosed(3)));
+    assert_eq!(texts("{\"a\":1 /* x"), Err(Unclosed(7)));
+    let blanked = blanked_by_scan(
+        "{/* \u{e9} */\"a\":1}",
+        &reference_comments("{/* \u{e9} */\"a\":1}").expect("closed"),
+    );
+    assert_eq!(blanked, format!("{{{}\"a\":1}}", " ".repeat(8)));
 }
