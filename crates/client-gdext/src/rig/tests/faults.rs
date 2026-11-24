@@ -57,6 +57,10 @@ mod tests {
         Drop,
         SendFailed,
         Delay(u64),
+        /// No answer ever: the call's deadline settles it.
+        Silent,
+        /// An answer whose id is a string: dropped and counted; the deadline settles the call.
+        NoId,
     }
 
     /// The host's temper over a run.
@@ -74,7 +78,7 @@ mod tests {
     const CODES: [i64; 8] = [1000, 1001, 1003, 1007, 1008, 1009, 1011, -1];
 
     /// Steps a run takes, and how far apart.
-    const STEPS: u64 = 900;
+    const STEPS: u64 = 1200;
     const STEP_US: u64 = 50_000;
 
     /// Invariant 1's bound: a purpose may be sent at most this many times on a link in any
@@ -83,7 +87,7 @@ mod tests {
 
     /// Invariant 2's bound: how long a pressed Ready may wait, counting only time its link was
     /// open, before it is sent or the Ready line says why not.
-    const READY_WAIT_US: u64 = 4 * KEEPALIVE_US;
+    const READY_WAIT_US: u64 = super::super::CALL_DEADLINE_US + 4 * KEEPALIVE_US;
 
     /// Invariant 4's bound against a host that recovers: how long a "may have been taken" line
     /// may stand once the host answers rightly again.
@@ -196,6 +200,10 @@ mod tests {
             let healthy = temper == Temper::Recovering && now > 10_000_000;
             // The links, as host_link.gd drives them: the rig's policy says when to connect.
             for link in [ADMIN, SEAT] {
+                // A call past its deadline: host_link.gd closes the link (fix pass 6).
+                if rig.link_must_close(link) {
+                    rig.closed(link, Close::of_code(1000));
+                }
                 let open = rig.links.get(link).is_some_and(|state| state.open);
                 if open {
                     // A flapping host closes a link a second or so after it answered once.
@@ -293,6 +301,8 @@ mod tests {
                         ),
                         4 => Fault::Drop,
                         5 => Fault::SendFailed,
+                        6 if random.chance(300) => Fault::Silent,
+                        6 if random.chance(300) => Fault::NoId,
                         _ => Fault::Delay(random.below(800_000)),
                     }
                 };
@@ -302,6 +312,13 @@ mod tests {
                         let _ = rig.receive(link, &right(id, &method, footer));
                         answered_since_open.insert(link, true);
                         watch.unanswered.retain(|(at, _), _| *at != link);
+                    }
+                    Fault::Silent => {}
+                    Fault::NoId => {
+                        let _ = rig.receive(
+                            link,
+                            &format!(r#"{{"jsonrpc":"2.0","id":"{id}","result":{{}}}}"#),
+                        );
                     }
                     Fault::Delay(by) => {
                         delayed.push((now.saturating_add(by), link, right(id, &method, footer)));

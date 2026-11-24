@@ -567,7 +567,18 @@ struct Link {
     calls: u64,
     /// When and whether this link may be opened again ([`Reconnect`]).
     reconnect: Reconnect,
+    /// When the call in flight was sent, for its deadline ([`CALL_DEADLINE_US`]).
+    in_flight_since: u64,
+    /// A call on this link went past its deadline: the host link closes the link, and nothing
+    /// more is sent on it until it does ([`Rig::link_must_close`]).
+    close_owed: bool,
 }
+
+/// How long a call may wait for its answer before it is settled as timed out and its link is
+/// treated as failed (fix pass 6: a host that went silent, or answered with no numeric id, held
+/// a link for ever with no words).
+/// PLACEHOLDER: the call deadline, 20 s — OWNER, at hardening, with the transport's numbers.
+pub const CALL_DEADLINE_US: u64 = 20_000_000;
 
 /// How many times in a row a link is opened again after it closed, for any cause, before the
 /// client gives the host up (S3's `fixq-c`, fix pass 5): the budget is for a link that will not
@@ -696,6 +707,11 @@ pub struct Ledger {
     pub unfinished: u64,
     /// Calls lost with their link and carried to be asked again.
     pub carried: u64,
+    /// Answers that came after their call was settled (a timed-out call's, a call from before a
+    /// reconnect): dropped, never applied to another call.
+    pub late: u64,
+    /// Answers with no numeric id: dropped; their call is settled by its deadline.
+    pub idless: u64,
 }
 
 /// Why a call did not complete (S3's `fixq-c`, fix pass 4): whatever stopped it, it is settled
@@ -720,6 +736,8 @@ pub enum Unfinished {
     /// An editor call whose same request closed the link on its answer before: not sent again
     /// until it changes (fix pass 6). The earlier close's code.
     Held(u16),
+    /// No answer came within [`CALL_DEADLINE_US`] (fix pass 6).
+    TimedOut,
 }
 
 impl Unfinished {
@@ -731,6 +749,7 @@ impl Unfinished {
             Self::TooLarge(bytes) => bytes.to_string(),
             Self::SendFailed(code) => code.to_string(),
             Self::ClosedOn(code) | Self::Held(code) => code.to_string(),
+            Self::TimedOut => "no answer".to_owned(),
         }
     }
 
@@ -742,6 +761,7 @@ impl Unfinished {
             Self::TooLarge(_) => ReadFailed::TooLarge(self.said()),
             Self::SendFailed(_) => ReadFailed::SendFailed(self.said()),
             Self::ClosedOn(_) | Self::Held(_) => ReadFailed::ClosedOn(self.said()),
+            Self::TimedOut => ReadFailed::TimedOut(self.said()),
         }
     }
 
@@ -754,6 +774,7 @@ impl Unfinished {
             Self::SendFailed(_) => "send_failed",
             Self::ClosedOn(_) => "closed_on",
             Self::Held(_) => "held",
+            Self::TimedOut => "timed_out",
         }
     }
 }
@@ -1204,6 +1225,7 @@ impl Rig {
             }
         }
         state.open = false;
+        state.close_owed = false;
         // A close on a message settles the call only where the call's ARGUMENT is what made the
         // answer too big (the map view's page, an editor call on the player's text): the same
         // call would close the link again. Any other call's answer is small, so a close on it is
@@ -1260,6 +1282,7 @@ impl Rig {
         for state in &mut self.links {
             state.reconnect.tick(now_us);
         }
+        self.settle_overdue(now_us);
         if self.phase == Phase::Lull && self.timing.clock.run_out() {
             if self.ran_out == RanOut::No {
                 self.ran_out = RanOut::Owed;
@@ -1284,7 +1307,7 @@ impl Rig {
     fn idle(&self, link: usize) -> bool {
         self.links
             .get(link)
-            .is_some_and(|state| state.open && state.in_flight.is_none())
+            .is_some_and(|state| state.open && state.in_flight.is_none() && !state.close_owed)
     }
 
     fn admin_next(&mut self) -> Option<(Purpose, &'static str, Json)> {
@@ -1499,6 +1522,7 @@ impl Rig {
             return None;
         }
         state.in_flight = Some((id, purpose));
+        state.in_flight_since = self.timing.now_us();
         state.calls = state.calls.saturating_add(1);
         self.ledger.sent = self.ledger.sent.saturating_add(1);
         if link == SEAT {
@@ -1526,10 +1550,11 @@ impl Rig {
     /// gateway is not an error here: it is an [`Answer`] whose `error` says what it was.
     pub fn receive(&mut self, link: usize, text: &str) -> Result<Answer, BridgeError> {
         let frame = json::read(text)?;
-        let id = frame
-            .get("id")
-            .and_then(json_integer)
-            .ok_or_else(|| BridgeError::Rpc("an answer with no numeric id".to_owned()))?;
+        let id = frame.get("id").and_then(json_integer).ok_or_else(|| {
+            // Dropped and counted; its call is settled by its deadline (fix pass 6).
+            self.ledger.idless = self.ledger.idless.saturating_add(1);
+            BridgeError::Rpc("an answer with no numeric id".to_owned())
+        })?;
         let Some(state) = self.links.get_mut(link) else {
             return Err(BridgeError::Rpc(format!("there is no connection {link}")));
         };
@@ -1540,8 +1565,12 @@ impl Rig {
                 state.reconnect.answered();
                 purpose
             }
-            // From before a reconnect: nobody is waiting for it.
-            _ => return Ok(Answer::default()),
+            // From before a reconnect, or after its call timed out: nobody is waiting for it.
+            // Dropped and counted, never applied to another call (fix pass 6).
+            _ => {
+                self.ledger.late = self.ledger.late.saturating_add(1);
+                return Ok(Answer::default());
+            }
         };
 
         let mut answer = Answer::default();
@@ -1813,7 +1842,10 @@ impl Rig {
         }
         // The answer to a call that changes something was lost (unreadable, or the link closed on
         // it): the change may have been taken, so the fact it would have changed is read again.
-        let lost = matches!(why, Unfinished::Unreadable(_) | Unfinished::ClosedOn(_));
+        let lost = matches!(
+            why,
+            Unfinished::Unreadable(_) | Unfinished::ClosedOn(_) | Unfinished::TimedOut
+        );
         self.last_unfinished = Some((purpose, why.name()));
         match purpose {
             Purpose::Plan => {
@@ -1949,6 +1981,9 @@ impl Rig {
             Unfinished::Held(_) => Ok(self
                 .editor
                 .unfinished(crate::editor::Cause::AnswerTooLarge, &said)),
+            Unfinished::TimedOut => Ok(self
+                .editor
+                .unfinished(crate::editor::Cause::TimedOut, &said)),
         };
         self.sync_editor();
         // A write's answer was lost: the seal it would have changed is read again.
@@ -1961,6 +1996,31 @@ impl Rig {
             return false;
         }
         true
+    }
+
+    /// Every call in flight past its deadline is settled through [`Rig::unfinished`] as timed out,
+    /// and its link owes a close: the policy decides the rest when the host link reports it.
+    fn settle_overdue(&mut self, now_us: u64) {
+        for link in [ADMIN, SEAT] {
+            let Some(state) = self.links.get_mut(link) else {
+                continue;
+            };
+            let waited_us = now_us.saturating_sub(state.in_flight_since);
+            if state.in_flight.is_none() || waited_us < CALL_DEADLINE_US {
+                continue;
+            }
+            let in_flight = state.in_flight.take();
+            state.close_owed = true;
+            if let Some((_, purpose)) = in_flight {
+                self.unfinished(link, purpose, &Unfinished::TimedOut);
+            }
+        }
+    }
+
+    /// Whether link `link` owes a close: a call on it went past its deadline.
+    #[must_use]
+    pub fn link_must_close(&self, link: usize) -> bool {
+        self.links.get(link).is_some_and(|state| state.close_owed)
     }
 
     /// The map view's call for `cursor`, its argument remembered for a hold ([`Rig::unfinished`]).
@@ -3606,6 +3666,67 @@ mod tests {
             }
         }
         panic!("the rig never reached the Push");
+    }
+
+    /// **A call has a deadline** (fix pass 6, item 5; review 5's `p_silent_and_idless`): a host
+    /// that goes silent, or answers with no numeric id, has the call settled as timed out once
+    /// [`CALL_DEADLINE_US`] has passed, said in its cause's words, and its link owes a close and
+    /// sends nothing more until it is closed. An answer that comes after is dropped and counted,
+    /// never applied to another call.
+    #[test]
+    fn a_silent_or_idless_answer_is_settled_by_the_deadline_and_a_late_one_is_dropped() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let frames = rig.poll(1);
+        let status = frames
+            .iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("the admin's first call")
+            .clone();
+        // An answer whose id is a string: dropped and counted, the call still waiting.
+        assert!(
+            rig.receive(
+                ADMIN,
+                &format!(
+                    r#"{{"jsonrpc":"2.0","id":"{}","result":{{}}}}"#,
+                    id_of(&status)
+                ),
+            )
+            .is_err()
+        );
+        assert_eq!(rig.ledger().idless, 1);
+        assert!(
+            rig.links
+                .first()
+                .is_some_and(|link| link.in_flight.is_some())
+        );
+        // Silent past the deadline: timed out, said, and the link owes a close.
+        let late = CALL_DEADLINE_US.saturating_add(2);
+        rig.poll(late);
+        // Both links' calls were silent: the seat's view timed out too, and both were settled.
+        assert_eq!(rig.ledger().unfinished, 2);
+        assert_eq!(
+            rig.status_facts.failed,
+            Some(ReadFailed::TimedOut("no answer".to_owned()))
+        );
+        assert!(rig.link_must_close(ADMIN));
+        assert!(
+            rig.poll(late.saturating_add(1))
+                .iter()
+                .all(|frame| frame.link != ADMIN),
+            "a link that owes a close sent more"
+        );
+        // The answer comes after all: dropped and counted, not applied.
+        let answered = rig.ledger().answered;
+        let _ = rig.receive(ADMIN, &served(id_of(&status), "", "push", 1));
+        assert_eq!(rig.ledger().late, 1);
+        assert_eq!(rig.ledger().answered, answered);
+        assert_ne!(rig.phase, Phase::Push, "a late answer was applied");
+        // The host link closes it; the policy counts the close and opens it again.
+        rig.closed(ADMIN, Close::of_code(1000));
+        assert!(!rig.link_must_close(ADMIN));
+        assert_eq!(rig.link_attempts(ADMIN), Some(1));
     }
 
     /// **A lost Ready answer is sent again, and the line follows the answer** (fix pass 6, item 2;

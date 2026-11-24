@@ -481,10 +481,15 @@ const SCHEDULING_SUMS: &[(&str, &str)] = &[
         "rig.rs",
         "let up_us = self.opened_at_us.map(|at| now_us.saturating_sub(at));",
     ),
-    // Fix pass 6: when a Ready whose answer was lost is sent again (the keep-alive's spacing).
+    // Fix pass 6: when a Ready whose answer was lost is sent again (the keep-alive's spacing),
+    // and how long a call in flight has waited, for its deadline.
     (
         "rig.rs",
         "self.ready_resend_at = Some(self.timing.now_us().saturating_add(KEEPALIVE_US));",
+    ),
+    (
+        "rig.rs",
+        "let waited_us = now_us.saturating_sub(state.in_flight_since);",
     ),
 ];
 
@@ -494,6 +499,7 @@ const SCHEDULING_IDENTIFIERS: &[&str] = &[
     "retry_at_us",
     "up_us",
     "ready_resend_at",
+    "waited_us",
 ];
 
 /// Whether `code`, a line of `file` in `src/`, is one of [`SCHEDULING_SUMS`], word for

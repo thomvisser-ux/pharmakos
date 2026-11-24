@@ -60,6 +60,10 @@ const TEXT := {
 	"lobby_preset_none": "The match host says it hosts no match.",
 	"lobby_status_refused": "(The match host refused the latest status read: {detail})",
 	"lobby_status_unreadable": "(The latest status read could not be read: {detail})",
+	"lobby_status_too_large": "(The latest status read was too large to send: {detail} bytes)",
+	"lobby_status_send_failed": "(The latest status read could not be sent: error {detail})",
+	"lobby_status_closed_on": "(The connection closed on the latest status read: code {detail})",
+	"lobby_status_timed_out": "(No answer came in time to the latest status read)",
 	# One row per preset the schema names (gp.api.v1.Preset), keyed by its wire name.
 	"preset_custom": "Custom",
 	"preset_probation": "Probation",
@@ -78,6 +82,7 @@ const TEXT := {
 	"recap_failed_too_large": "The recap was not read: its call was too large to send ({detail} bytes).",
 	"recap_failed_send_failed": "The recap was not read: the connection refused to send its call (error {detail}).",
 	"recap_failed_closed_on": "The recap was not read: the connection closed on it (code {detail}).",
+	"recap_failed_timed_out": "The recap was not read: no answer came in time.",
 	# Every seat's tally once the match is decided (item 145 (7)), one frame a seat, each number
 	# as the gateway counted it.
 	"lobby_recap_tallies": "Every seat's tally:",
@@ -277,10 +282,14 @@ const TEXT := {
 	"status_call_too_large": "Not sent: that is {detail} bytes, and the gateway reads no message past {limit} bytes. Nothing changed; shorten it and send it again.",
 	# The transport refused to send a call (fix pass 2): said at once, never re-sent.
 	"unchecked_send_failed": "Not checked: the connection refused to send this check (error {detail}); it is not sent again.",
+	"unchecked_timed_out": "Not checked: no answer to this check came in time; it is not sent again.",
 	"status_call_send_failed": "Not sent: the connection refused to send that (error {detail}). Nothing changed.",
 	"templates_send_failed": "The template list was not sent: the connection refused it (error {detail}).",
+	"templates_timed_out": "The template list was not read: no answer came in time.",
 	"vocabulary_send_failed": "The words to pick from were not sent: the connection refused them (error {detail}).",
+	"vocabulary_timed_out": "The words to pick from were not read: no answer came in time.",
 	"menu_detail_send_failed": "This beacon's detail was not sent: the connection refused it (error {detail}).",
+	"menu_detail_timed_out": "This beacon's detail was not read: no answer came in time.",
 	"templates_too_large": "The template list was not asked: the call was too large to send ({detail} bytes).",
 	"vocabulary_too_large": "The words to pick from were not asked: the call was too large to send ({detail} bytes).",
 	"menu_detail_too_large": "This beacon's detail was not asked: the call was too large to send ({detail} bytes).",
@@ -307,6 +316,7 @@ const TEXT := {
 	# is not sent again, and the line says so.
 	"unchecked_closed_on": "Not checked: the connection closed on this check (code {detail}: too big for one side to read, or unreadable); it is not sent again.",
 	"status_call_answer_too_large": "The gateway's answer to this is too large for this client to read (code {detail}), so nothing changed; shorten the file. It is not sent again until the text changes.",
+	"status_call_timed_out": "No answer to that came in time, so nothing changed here; the connection is opened again.",
 	"status_call_unreadable": "The gateway's answer to that could not be read ({detail}); nothing changed, and it is not sent again.",
 	"status_call_closed_on": "The connection closed on that (code {detail}: too big for one side to read, or unreadable); it is not sent again, and nothing changed.",
 	"templates_closed_on": "The connection closed on the template list (code {detail}).",
@@ -389,6 +399,7 @@ const TEXT := {
 	"lobby_zero_too_large": "The Lull ran out, and telling the gateway so was too large to send ({detail} bytes).",
 	"lobby_zero_send_failed": "The Lull ran out, and the connection refused to send that (error {detail}).",
 	"lobby_zero_closed_on": "The Lull ran out, and the connection closed on telling the gateway so (code {detail}).",
+	"lobby_zero_timed_out": "The Lull ran out, and no answer came in time to telling the gateway so.",
 	"lobby_view_held": "The map's last answer was too big for this client to read, so the map will not refresh until the next phase.",
 	"link_gave_up": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last close was code {code}.",
 	"status_call_maybe_taken": "The answer to that was lost ({detail}), so it may have been taken; reading it again from the gateway.",

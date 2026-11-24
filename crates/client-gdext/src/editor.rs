@@ -531,6 +531,8 @@ pub enum Unchecked {
     /// The transport refused to send the check's call (Godot's `send_text` failed): its error
     /// code. The call is not sent again.
     SendFailed(String),
+    /// No answer to the check's call came within its deadline (fix pass 6).
+    TimedOut(String),
 }
 
 /// One check of the text on screen, by the panel line that waits for it: a refusal is
@@ -911,6 +913,8 @@ pub enum ReadFailed {
     ClosedOn(String),
     /// The transport refused to send the read's call: its error code.
     SendFailed(String),
+    /// No answer came within the call's deadline (fix pass 6).
+    TimedOut(String),
 }
 
 impl ReadFailed {
@@ -923,6 +927,7 @@ impl ReadFailed {
             Self::TooLarge(_) => "too_large",
             Self::ClosedOn(_) => "closed_on",
             Self::SendFailed(_) => "send_failed",
+            Self::TimedOut(_) => "timed_out",
         }
     }
 
@@ -934,7 +939,8 @@ impl ReadFailed {
             | Self::Unreadable(detail)
             | Self::TooLarge(detail)
             | Self::ClosedOn(detail)
-            | Self::SendFailed(detail) => detail,
+            | Self::SendFailed(detail)
+            | Self::TimedOut(detail) => detail,
         }
     }
 }
@@ -4743,6 +4749,7 @@ impl Editor {
             Cause::SendFailed => &mut self.unfinished.send_failed,
             Cause::ClosedOn | Cause::AnswerTooLarge => &mut self.unfinished.closed_on,
             Cause::Unreadable => &mut self.unfinished.unreadable,
+            Cause::TimedOut => &mut self.unfinished.timed_out,
         };
         *count = count.saturating_add(1);
         let refuser = match cause {
@@ -4751,13 +4758,14 @@ impl Editor {
             Cause::ClosedOn => Refuser::ClosedOn,
             Cause::AnswerTooLarge => Refuser::AnswerTooLarge,
             Cause::Unreadable => Refuser::Unreadable,
+            Cause::TimedOut => Refuser::TimedOut,
         };
         let settled = self.refused_by(&sent, refuser, detail);
         // A write whose answer was lost (the link closed on it, or it could not be read) may have
         // been taken: never "nothing changed" (fix pass 5).
         if matches!(
             cause,
-            Cause::ClosedOn | Cause::AnswerTooLarge | Cause::Unreadable
+            Cause::ClosedOn | Cause::AnswerTooLarge | Cause::Unreadable | Cause::TimedOut
         ) && writes(&sent)
         {
             self.write_lost(&sent, detail);
@@ -4907,6 +4915,7 @@ enum Refuser {
     AnswerTooLarge,
     SendFailed,
     Unreadable,
+    TimedOut,
 }
 
 impl Refuser {
@@ -4919,6 +4928,7 @@ impl Refuser {
             Self::AnswerTooLarge => ANSWER_TOO_LARGE_KEY,
             Self::SendFailed => SEND_FAILED_KEY,
             Self::Unreadable => UNREADABLE_KEY,
+            Self::TimedOut => TIMED_OUT_KEY,
         }
     }
 
@@ -4929,6 +4939,7 @@ impl Refuser {
             Self::SendFailed => "call_send_failed",
             Self::Unreadable => "call_unreadable",
             Self::AnswerTooLarge => "call_answer_too_large",
+            Self::TimedOut => "call_timed_out",
             Self::Gateway | Self::ClosedOn => "call_closed_on",
         }
     }
@@ -4942,6 +4953,7 @@ impl Refuser {
             Self::ClosedOn | Self::AnswerTooLarge => Unchecked::ClosedOn(detail),
             Self::SendFailed => Unchecked::SendFailed(detail),
             Self::Unreadable => Unchecked::Unreadable(detail),
+            Self::TimedOut => Unchecked::TimedOut(detail),
         }
     }
 
@@ -4954,6 +4966,7 @@ impl Refuser {
             Self::ClosedOn | Self::AnswerTooLarge => ReadFailed::ClosedOn(detail),
             Self::SendFailed => ReadFailed::SendFailed(detail),
             Self::Unreadable => ReadFailed::Unreadable(detail),
+            Self::TimedOut => ReadFailed::TimedOut(detail),
         }
     }
 }
@@ -4973,6 +4986,8 @@ pub enum Cause {
     AnswerTooLarge,
     /// The gateway's answer to it could not be read as an answer at all.
     Unreadable,
+    /// No answer came within the call's deadline (fix pass 6).
+    TimedOut,
 }
 
 /// The editor's calls that did not complete, by [`Cause`].
@@ -4986,6 +5001,8 @@ pub struct UnfinishedCalls {
     pub closed_on: u32,
     /// [`Cause::Unreadable`].
     pub unreadable: u32,
+    /// [`Cause::TimedOut`].
+    pub timed_out: u32,
 }
 
 /// Whether `sent` is a call that changes something at the gateway: a submission, the notes, a
@@ -4999,6 +5016,9 @@ const fn writes(sent: &Sent) -> bool {
 
 /// The string table's key for a call whose answer was too large for this client to read.
 pub const ANSWER_TOO_LARGE_KEY: &str = "status_call_answer_too_large";
+
+/// The string table's key for a call no answer came to within its deadline.
+pub const TIMED_OUT_KEY: &str = "status_call_timed_out";
 
 /// The string table's key for a call whose answer could not be read.
 pub const UNREADABLE_KEY: &str = "status_call_unreadable";

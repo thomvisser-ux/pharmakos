@@ -489,6 +489,11 @@ func _pump_link(link: int) -> void:
 		if not _open[link]:
 			_open[link] = true
 			bridge.watch_opened(link)
+		# A call on this link went past its deadline: the rig owes a close, which is made here; the
+		# rig's policy decides what follows once the close is reported (fix pass 6).
+		if bridge.watch_link_must_close(link):
+			peer.close(1000, "no answer in time")
+			return
 		for text in packets_of(peer):
 			var answer: Dictionary = bridge.watch_receive(link, text)
 			if not answer.is_empty():

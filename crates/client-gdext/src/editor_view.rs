@@ -243,6 +243,7 @@ fn put_unfinished(state: &mut VarDictionary, editor: &Editor) {
         ("send_failed_calls", unfinished.send_failed),
         ("closed_on_calls", unfinished.closed_on),
         ("unreadable_calls", unfinished.unreadable),
+        ("timed_out_calls", unfinished.timed_out),
     ] {
         state.set(&key.to_variant(), &i64::from(count).to_variant());
     }
@@ -551,6 +552,7 @@ fn unchecked_dictionary(why: Option<Unchecked>) -> VarDictionary {
         Some(Unchecked::TooLarge(bytes)) => ("too_large".to_owned(), bytes),
         Some(Unchecked::ClosedOn(code)) => ("closed_on".to_owned(), code),
         Some(Unchecked::SendFailed(code)) => ("send_failed".to_owned(), code),
+        Some(Unchecked::TimedOut(said)) => ("timed_out".to_owned(), said),
         Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
     };
     let mut out = VarDictionary::new();

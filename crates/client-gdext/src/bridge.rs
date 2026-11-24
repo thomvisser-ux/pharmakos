@@ -611,6 +611,16 @@ impl PharmakosBridge {
         words
     }
 
+    /// Whether connection `link` owes a close: a call on it went past its deadline (fix pass 6).
+    /// `host_link.gd` closes the peer when it does; the rig's policy decides the rest.
+    #[func]
+    fn watch_link_must_close(&self, link: i64) -> bool {
+        match (self.rig.as_ref(), usize::try_from(link)) {
+            (Some(rig), Ok(link)) => rig.link_must_close(link),
+            _ => false,
+        }
+    }
+
     /// Closes on connection `link` since it was last healthy (the rig's reconnect policy).
     #[func]
     fn watch_link_attempts(&self, link: i64) -> i64 {
