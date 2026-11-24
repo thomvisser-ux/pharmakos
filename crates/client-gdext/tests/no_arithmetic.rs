@@ -1355,3 +1355,242 @@ fn the_composition_scan_catches_each_family() {
         assert!(!caught, "{name}: {line}");
     }
 }
+
+/// The scripts a value the player types passes through, by file name, for the conversion ban.
+const TYPED_SCRIPTS: &[&str] = &[
+    "editor.gd",
+    "value_field.gd",
+    "rule_list.gd",
+    "condition_picker.gd",
+    "wizard.gd",
+];
+
+/// Conversions from text or a variant to a number, banned outright in [`TYPED_SCRIPTS`] (S3's
+/// `fixq-c`, fix pass 2: the first ban matched variable-name prefixes, so `int(raw)` passed).
+/// Each is matched as a whole word, whatever its argument is called.
+const CONVERSIONS: &[&str] = &[
+    "int(",
+    "float(",
+    "str_to_var(",
+    "type_convert(",
+    "Expression",
+    ".hex_to_int",
+    ".bin_to_int",
+    ".to_int(",
+    ".to_float(",
+    ".is_valid_int",
+    ".is_valid_float",
+];
+
+/// The exact lines in [`TYPED_SCRIPTS`] that convert something that is not typed text, each with
+/// why: every one reads an index, a rendering id or a count the bridge sent (or a layout size
+/// this script owns), never the text of a field.
+const CONVERSIONS_KEPT: &[(&str, &str, &str)] = &[
+    (
+        "editor.gd",
+        r#"var rendered := int(state.get("rules_rendering", -1))"#,
+        "the bridge's rendering id",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_choose_name(int(_name_chip.get("index", -1)), int(_name_chip.get("revision", -1)), String(_name_chip.get("pointer", "")), which)"#,
+        "a chip's index and rendering, the bridge's",
+    ),
+    (
+        "editor.gd",
+        r#"var slot := int(_picker_slot.get("slot", -1))"#,
+        "a slot's index, the bridge's",
+    ),
+    (
+        "editor.gd",
+        r#"var revision := int(_picker_slot.get("revision", -1))"#,
+        "a rendering id, the bridge's",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_choose_group(slot, pointer, revision, int(picked["group"]))"#,
+        "a group's index in the picker's own tree",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_choose_predicate(slot, pointer, revision, int(picked["family"]), int(picked["entry"]))"#,
+        "a family's and an entry's index in the picker's own tree",
+    ),
+    (
+        "editor.gd",
+        r#"_visit_menu.add_radio_check_item(Strings.text("menu_priority_" + String(row[1])), int(row[0]))"#,
+        "a menu item id this script owns",
+    ),
+    (
+        "editor.gd",
+        "_entry_popup.size = Vector2i(int(PANEL_WIDTH), 0)",
+        "a layout constant",
+    ),
+    (
+        "editor.gd",
+        "_entry_popup.size.x = int(PANEL_WIDTH)",
+        "a layout constant",
+    ),
+    (
+        "editor.gd",
+        "_entry_popup.popup(Rect2i(Vector2i(int(beside.end.x), int(beside.position.y)), _entry_popup.size))",
+        "a menu's pixel position",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_change_setting_number_text(String(_number_setting.get("beacon", "")), int(_number_setting.get("index", -1)), String(_number_setting.get("pointer", "")), text)"#,
+        "a setting's index; the typed text goes as text",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_set_number_text(int(_number_chip.get("index", -1)), int(_number_chip.get("revision", -1)), String(_number_chip.get("pointer", "")), text)"#,
+        "a chip's index and rendering; the typed text goes as text",
+    ),
+    (
+        "editor.gd",
+        r#"bridge.editor_choose(int(_choice_chip.get("index", -1)), int(_choice_chip.get("revision", -1)), String(_choice_chip.get("pointer", "")), which)"#,
+        "a chip's index and rendering",
+    ),
+    (
+        "editor.gd",
+        r#"var stored := int(state.get("notes_saved", -1))"#,
+        "the bridge's count of saved characters",
+    ),
+    (
+        "rule_list.gd",
+        "row.meta_clicked.connect(func(meta: Variant) -> void: on_chip.call(int(meta)))",
+        "a chip's index, this list's own meta",
+    ),
+    (
+        "rule_list.gd",
+        r#"return editable and data is Dictionary and String(data.get("parent", "")) == parent and int(data.get("revision", -1)) == revision and int(data.get("rule", -1)) != rule,"#,
+        "a drag's rule index and rendering, this list's own",
+    ),
+    (
+        "rule_list.gd",
+        r#"on_move.call(int(data["rule"]), String(data["pointer"]), rule, pointer, int(data["revision"]))"#,
+        "a drag's rule index and rendering, this list's own",
+    ),
+    (
+        "rule_list.gd",
+        r#"if child.has_meta("line") and int(child.get_meta("rule", -1)) == rule:"#,
+        "a row's rule index, this list's own meta",
+    ),
+];
+
+/// Whether `code` (a line with its comment and string literals blanked) calls `token` as a whole
+/// word: not as the tail of a longer identifier (`print(` is no `int(`, `Values.int_of(` no
+/// `int(`).
+fn calls_conversion(code: &str, token: &str) -> bool {
+    // A method (`.to_int(`) is a call whatever it is called on; a function (`int(`) is a call
+    // only where no identifier or `.` runs into it.
+    if token.starts_with('.') {
+        return code.contains(token);
+    }
+    code.match_indices(token).any(|(at, _)| {
+        !code
+            .get(..at)
+            .and_then(|head| head.chars().last())
+            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    })
+}
+
+/// A GDScript line with its comment and string literals blanked, keeping the quotes.
+fn gd_code_only(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for c in line.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+                out.push('"');
+            }
+            continue;
+        }
+        match c {
+            '#' => break,
+            '"' => {
+                in_string = true;
+                out.push('"');
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The lines of `text`, in a file named `name`, that call a banned conversion and are not kept.
+fn conversions_in(name: &str, text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| {
+            let code = gd_code_only(line);
+            CONVERSIONS
+                .iter()
+                .any(|token| calls_conversion(&code, token))
+        })
+        .filter(|line| {
+            !CONVERSIONS_KEPT
+                .iter()
+                .any(|(file, kept, _)| *file == name && line.trim() == *kept)
+        })
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_typed_input_scripts_convert_nothing_they_are_not_told_to() {
+    let mut found = Vec::new();
+    let mut kept_seen = 0_usize;
+    for name in TYPED_SCRIPTS {
+        let text = fs::read_to_string(godot_root().join("scripts").join(name)).expect("reads");
+        for line in conversions_in(name, &text) {
+            found.push(format!("{name}: {line}"));
+        }
+        kept_seen += CONVERSIONS_KEPT
+            .iter()
+            .filter(|(file, kept, _)| file == name && text.lines().any(|line| line.trim() == *kept))
+            .count();
+    }
+    assert!(
+        found.is_empty(),
+        "a typed-input script converts something: {found:#?}"
+    );
+    assert_eq!(
+        kept_seen,
+        CONVERSIONS_KEPT.len(),
+        "a kept line is gone: take it off the list"
+    );
+}
+
+/// The ban catches every conversion, whatever its argument is called, and no longer word.
+#[test]
+fn the_conversion_ban_catches_each_conversion() {
+    for line in [
+        "\tif int(raw) > 100:",
+        "\tvar n = float(anything)",
+        "\tvar v = str_to_var(t)",
+        "\tvar v = type_convert(t, TYPE_INT)",
+        "\tvar e := Expression.new()",
+        "\tvar n := t.hex_to_int()",
+        "\tvar n := t.bin_to_int()",
+        "\tvar n := t.to_int()",
+        "\tvar n := t.to_float()",
+        "\tif t.is_valid_int():",
+        "\tif t.is_valid_float():",
+    ] {
+        assert!(!conversions_in("editor.gd", line).is_empty(), "{line}");
+    }
+    for line in [
+        "\tprint(text)",
+        "\tvar n: Variant = Values.int_of(x)",
+        "\t# int(text) once lived here",
+        "\tvar s := \"int(not code)\"",
+    ] {
+        assert!(conversions_in("editor.gd", line).is_empty(), "{line}");
+    }
+}
