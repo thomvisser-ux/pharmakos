@@ -4916,6 +4916,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         // The load itself owes a route estimate.
         let call = editor.next_call(false).expect("the estimate");
@@ -5231,6 +5234,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -6570,6 +6576,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -6834,6 +6843,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -7113,6 +7125,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let said = "waypoint 1 covers nothing: its step would fail `illegal_site`";
@@ -7148,6 +7163,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let settled = editor
@@ -7173,6 +7191,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         };
         for door in [Door::Push, Door::Recap, Door::Ended, Door::Ready] {
             let mut editor = loaded(EXPAND_EAST);

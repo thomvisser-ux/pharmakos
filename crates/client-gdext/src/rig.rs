@@ -2350,6 +2350,9 @@ mod tests {
                     hp: None,
                     heading: None,
                     ring: None,
+                    look: None,
+                    title: String::new(),
+                    building: false,
                 }]);
             }
         };

@@ -3287,3 +3287,67 @@ fn the_guided_mark_is_a_look_and_the_words_are_the_gateways() {
         .count();
     assert_eq!(guided, 0, "no client words in the mark's branch: {draw:?}");
 }
+
+/// **Looks and titles as sent** (S3's `fixq-c`, items 1 to 3): a structure's, a wall's and a
+/// ruin's body is the primitive its `look` names, and its name is the view's `title`, never its
+/// `subtype`; going up is drawn from the view's `building` alone, so no line of the vista reads
+/// going up from hit points (`hp` is read only to fill the bar).
+#[test]
+fn the_vista_draws_each_look_and_title_as_the_view_sent_them() {
+    let vista = read("scripts/vista.gd");
+    let marker = gd_function(&vista, "_marker_for");
+    assert!(
+        marker
+            .iter()
+            .any(|line| line.contains("var drawn := _look_mesh(entity)")),
+        "a structure's body is its look's: {marker:?}"
+    );
+    assert!(
+        marker
+            .iter()
+            .any(|line| line.contains(r#"var title := String(entity.get("title", ""))"#))
+            && marker
+                .iter()
+                .any(|line| line.contains("node.add_child(_name(title, ")),
+        "the name is the view's title: {marker:?}"
+    );
+    assert!(
+        marker
+            .iter()
+            .any(|line| line.contains(r#"if entity.get("building", false):"#)),
+        "going up is the view's own flag: {marker:?}"
+    );
+    for line in &marker {
+        assert!(
+            !line.contains("_name(String(entity[\"subtype\"])"),
+            "no name is read from the subtype: {line}"
+        );
+    }
+    let look = gd_function(&vista, "_look_mesh");
+    for shape in [r#""tower":"#, r#""dish":"#, r#""block", "slab":"#] {
+        assert!(
+            look.iter().any(|line| line.trim() == shape),
+            "{shape}: {look:?}"
+        );
+    }
+    // `hp` is read in the bar's fill alone: nothing else compares it with its maximum.
+    for (number, line) in vista.lines().enumerate() {
+        if line.contains("\"hp\"") && line.contains("max_hp") {
+            assert!(
+                line.contains("var share := float(entity[\"hp\"]) / float(entity[\"max_hp\"])"),
+                "line {number} reads hit points against their maximum outside the bar: {line}"
+            );
+        }
+    }
+    let same = gd_function(&vista, "_same_look");
+    for wanted in [
+        r#"marker["look"] == entity.get("look", {})"#,
+        r#"marker["title"] == String(entity.get("title", ""))"#,
+        r#"marker["building"] == entity.get("building", false)"#,
+    ] {
+        assert!(
+            same.iter().any(|line| line.contains(wanted)),
+            "{wanted}: {same:?}"
+        );
+    }
+}

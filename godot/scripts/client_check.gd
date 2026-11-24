@@ -91,6 +91,9 @@ const LOW_PITCH := -0.1
 ## anchor spacing in voxels, the one kind that stands apart from the kit (one to a beacon, S3's
 ## plan E4), and the least height a name may be read at, in pixels.
 const KIT := ["generator", "autocannon", "mortar", "survey_post", "resonance_spire", "wall"]
+## The kit's names as the gateway's view titles them (`ViewEntity.title`, the `view_built` golden),
+## which the vista draws in place of the subtype (S3's `fixq-c`).
+const KIT_TITLES := ["Generator", "Autocannon", "Mortar", "Survey post", "Resonance Spire", "Wall"]
 const ANCHOR_SPACING := 4.0
 const LONE_KIND := "resonance_spire"
 const NAME_PIXELS_TALL := 10.0
@@ -306,6 +309,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	vista.my_seat = "seat.0"
 	_check_the_wheel(vista, failures)
 	await _check_the_name(vista, failures)
+	_check_the_looks(vista, failures)
 	var editor: CanvasLayer = CanvasLayer.new()
 	editor.set_script(EditorPanel)
 	stage.add_child(editor)
@@ -371,10 +375,10 @@ func _check_the_wheel(vista: Node3D, failures: Array[String]) -> void:
 		failures.append("%d wheel notches left the structure %.1f px wide, under %.0f" % [notches, close, READABLE_PIXELS])
 	if drift > CURSOR_DRIFT_PIXELS:
 		failures.append("the wheel zoomed the structure %.1f px away from the cursor" % drift)
-	# Its name is drawn at that distance, as the gateway spelt it, and not from the whole map.
-	vista.take_view({"entities": [{"id": "s_1", "kind": "structure", "subtype": "autocannon", "owner": "seat.0", "at": FAR_STRUCTURE}]})
+	# Its name is drawn at that distance, as the gateway titled it, and not from the whole map.
+	vista.take_view({"entities": [{"id": "s_1", "kind": "structure", "subtype": "autocannon", "owner": "seat.0", "at": FAR_STRUCTURE, "title": "Autocannon", "look": {"shape": "tower", "x": 1, "y": 1, "z": 1}}]})
 	var name_label: Label3D = vista.marker_node("s_1").get_node_or_null("Name")
-	if name_label == null or name_label.text != "autocannon":
+	if name_label == null or name_label.text != "Autocannon":
 		failures.append("the structure's marker carries no name: %s" % name_label)
 	elif name_label.visibility_range_end < rig.distance or name_label.visibility_range_end >= before:
 		failures.append("the name is drawn out to %.0f voxels, with the camera at %.1f and the whole map at %.0f" % [name_label.visibility_range_end, rig.distance, before])
@@ -448,7 +452,7 @@ func _check_no_ground(rig: Node3D, failures: Array[String]) -> void:
 func _check_the_name(vista: Node3D, failures: Array[String]) -> void:
 	var entities := []
 	for index in KIT.size():
-		entities.append({"id": "s_%d" % index, "kind": "structure", "subtype": KIT[index], "owner": "seat.0", "at": Vector3i(100 + index * 4, 100, 10)})
+		entities.append({"id": "s_%d" % index, "kind": "structure", "subtype": KIT[index], "owner": "seat.0", "at": Vector3i(100 + index * 4, 100, 10), "title": KIT_TITLES[index], "look": {"shape": "block", "x": 1, "y": 1, "z": 1}})
 	vista.take_view({"entities": entities})
 	vista.settle_markers()
 	await get_tree().process_frame
@@ -467,13 +471,76 @@ func _check_the_name(vista: Node3D, failures: Array[String]) -> void:
 		var bottom: Vector2 = rig.camera.unproject_position(label.global_position)
 		var top: Vector2 = rig.camera.unproject_position(label.global_position + rig.camera.global_basis.y * line)
 		var pixels: float = bottom.distance_to(top)
-		print("[client-check] the name `%s`: %.2f voxels wide, %.1f px tall at %.0f voxels off" % [KIT[index], box.size.x, pixels, label.visibility_range_end])
+		print("[client-check] the name `%s`: %.2f voxels wide, %.1f px tall at %.0f voxels off" % [KIT_TITLES[index], box.size.x, pixels, label.visibility_range_end])
 		if box.size.x <= 0.0:
 			failures.append("the name `%s` has no size: %s" % [KIT[index], box])
 		elif KIT[index] != LONE_KIND and box.size.x > ANCHOR_SPACING:
 			failures.append("the name `%s` is %.2f voxels wide, over its neighbour's at %.0f" % [KIT[index], box.size.x, ANCHOR_SPACING])
 		if pixels < NAME_PIXELS_TALL:
 			failures.append("the name `%s` is %.1f px tall at its farthest, under %.0f" % [KIT[index], pixels, NAME_PIXELS_TALL])
+	vista.take_view({"entities": []})
+
+
+## **Each structure is drawn by its look and named by its title** (S3's `fixq-c`, items 1 to 3;
+## P6b finding 8: every structure was one cube named by its subtype). The gateway's `view_built`
+## golden, through its byte copy and the bridge's own decoding: the autocannon is a tower and the
+## mortar a dish, so they draw different meshes; the mortar going up is named in the gateway's
+## going-up words and drawn see-through; the wall is a slab of its box, named "Wall". Then another
+## seat's structure at half its hit points: its plain title, a partial bar, nothing see-through,
+## because going up is the gateway's word and never read from hit points.
+func _check_the_looks(vista: Node3D, failures: Array[String]) -> void:
+	vista.configure()
+	var built: Array = []
+	for path in ["res://fixtures/view_keyframe.jsonl", "res://fixtures/view_built.jsonl"]:
+		for line in FileAccess.get_file_as_string(path).split("\n", false):
+			var view: Dictionary = vista.bridge.view_apply(line)
+			if view.is_empty():
+				failures.append("a page of %s did not decode" % path)
+				return
+			vista.take_view(view)
+			if view.has("entities"):
+				built = view["entities"]
+	var body := func(id: String) -> MeshInstance3D:
+		var node: Node3D = vista.marker_node(id)
+		return node.get_node_or_null("Body") if node != null else null
+	var name_of := func(id: String) -> String:
+		var node: Node3D = vista.marker_node(id)
+		var label: Label3D = node.get_node_or_null("Name") if node != null else null
+		return label.text if label != null else ""
+	var cannon: MeshInstance3D = body.call("s_3")
+	var mortar: MeshInstance3D = body.call("s_4")
+	var wall: MeshInstance3D = body.call("l_1")
+	if cannon == null or mortar == null or wall == null:
+		failures.append("the built view drew no autocannon, mortar or wall marker")
+		return
+	var tower := cannon.mesh as CylinderMesh
+	var dish := mortar.mesh as CylinderMesh
+	if tower == null or dish == null or tower.top_radius != tower.bottom_radius or dish.top_radius == dish.bottom_radius:
+		failures.append("the autocannon (a tower) and the mortar (a dish) are not drawn as an upright and a bowl: %s, %s" % [cannon.mesh, mortar.mesh])
+		failures.append("the autocannon (a tower) and the mortar (a dish) draw the same mesh: %s, %s" % [cannon.mesh, mortar.mesh])
+	if not (wall.mesh is BoxMesh) or (wall.mesh as BoxMesh).size != Vector3(4, 2, 1):
+		failures.append("the wall is not drawn as its 4 by 1 by 2 slab: %s" % [wall.mesh])
+	for named in [["s_3", "Autocannon"], ["s_4", "Mortar, going up"], ["l_1", "Wall"], ["s_2", "Survey post"]]:
+		if name_of.call(named[0]) != named[1]:
+			failures.append("%s is named `%s`, not the gateway's `%s`" % [named[0], name_of.call(named[0]), named[1]])
+	var paint: StandardMaterial3D = mortar.mesh.material
+	if paint.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+		failures.append("the mortar the gateway says is going up is drawn as standing")
+	# Another seat's survey post, hit to half: plain, standing, a partial bar.
+	var hit: Array = []
+	for entity in built:
+		var one: Dictionary = entity.duplicate()
+		if String(one["id"]) == "s_2":
+			one["hp"] = 100
+		hit.append(one)
+	vista.take_view({"entities": hit})
+	var post: MeshInstance3D = body.call("s_2")
+	var fill: MeshInstance3D = vista.marker_node("s_2").get_node_or_null("Bar/Fill")
+	if name_of.call("s_2") != "Survey post" or (post.mesh.material as StandardMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+		failures.append("another seat's structure at half its hit points is named `%s` or drawn see-through" % name_of.call("s_2"))
+	if fill == null or (fill.mesh as QuadMesh).size.x >= vista.BAR_SIZE.x:
+		failures.append("another seat's structure at half its hit points has no partial bar")
+	print("[client-check] the built view: tower, dish and slab drawn by look; titles as sent; going up see-through")
 	vista.take_view({"entities": []})
 
 

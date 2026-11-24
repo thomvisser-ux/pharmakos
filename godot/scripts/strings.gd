@@ -259,6 +259,7 @@ const TEXT := {
 	# A count the bridge sent as its refusal, one past what `int` holds (S3's `fixp`): `what` it
 	# is, and the digits it held.
 	"value_ring": "A beacon's sphere radius",
+	"value_look": "A look's size",
 	"value_unreadable": "{what} could not be read: the bridge sent {held}, past what this client's numbers hold.",
 	"value_changes": "The editor's change count",
 	"value_undo_depth": "How many edits Undo can take back",

@@ -70,6 +70,9 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
         hp: None,
         heading: None,
         ring: None,
+        look: None,
+        title: String::new(),
+        building: false,
     }]);
 
     let mut in_transit: Vec<(usize, usize, String)> = Vec::new();

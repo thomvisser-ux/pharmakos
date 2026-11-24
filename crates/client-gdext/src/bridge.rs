@@ -85,7 +85,7 @@ use crate::rules::{self, MesherRules};
 use crate::surface::{ColourQuantisation, Surface, SurfaceProbe};
 use crate::upload::{DEFAULT_UPLOAD_PATH, ResidentSurface, UploadCounters, UploadPath, Uploader};
 use crate::variant::{int_variant, json_to_variant, text_or_empty};
-use crate::view::{self, Applied, Entity, ViewModel};
+use crate::view::{self, Applied, Entity, LookShape, ViewModel};
 
 /// The bridge node. One per client; the scenes hold it and GDScript calls it.
 #[derive(GodotClass)]
@@ -1836,6 +1836,25 @@ fn entity_dictionary(entity: &Entity) -> VarDictionary {
     // no ring" (another seat's beacon), never a ring of a guessed size.
     if let Some(radius) = entity.ring {
         dictionary.set(&"ring".to_variant(), &i64::from(radius.get()).to_variant());
+    }
+    // The look only where the view carried one (a structure, a wall, a ruin): `shape` by name,
+    // `number` the wire's own value (for a shape this build cannot name, said in the log), and
+    // its size in the SIM's axes as sent. The title and the going-up flag as sent (S3's `fixq-c`).
+    if let Some(look) = entity.look {
+        let mut drawn = VarDictionary::new();
+        drawn.set(&"shape".to_variant(), &look.shape.name().to_variant());
+        if let LookShape::Unknown(number) = look.shape {
+            drawn.set(&"number".to_variant(), &i64::from(number).to_variant());
+        }
+        let [x, y, z] = look.size.map(|edge| i64::from(edge.get()));
+        for (key, edge) in [("x", x), ("y", y), ("z", z)] {
+            drawn.set(&key.to_variant(), &edge.to_variant());
+        }
+        dictionary.set(&"look".to_variant(), &drawn.to_variant());
+    }
+    dictionary.set(&"title".to_variant(), &entity.title.to_variant());
+    if entity.building {
+        dictionary.set(&"building".to_variant(), &true.to_variant());
     }
     dictionary
 }
