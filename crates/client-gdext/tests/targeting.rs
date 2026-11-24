@@ -141,11 +141,14 @@ fn resolve_refs_answer_is_one_chip_per_reference() {
         Some(&Json::String(now.id.clone())),
         reference.get("feature_id")
     );
+    // The travel in the gateway's own words, drawn as sent (S3's `fixq-c`, item 12): the client
+    // keeps no milliseconds to format.
     assert_eq!(
-        Some(&Json::Number(now.travel_ms.to_string())),
-        reference.get("travel_ms"),
-        "the travel time as the gateway answered it"
+        Some(&Json::String(now.travel_text.clone())),
+        reference.get("travel_text"),
+        "the travel time as the gateway rendered it"
     );
+    assert!(!now.travel_text.is_empty());
     assert!(
         first.next.is_some(),
         "the golden's first reference has more candidates"

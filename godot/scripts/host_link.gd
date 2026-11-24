@@ -35,6 +35,9 @@
 
 extends Node
 
+const Values := preload("res://scripts/values.gd")
+const Strings := preload("res://scripts/strings.gd")
+
 ## Emitted once the host has announced itself and both connections have been started.
 signal announced(match_id: String)
 ## Emitted when the host could not be started or has gone away.
@@ -47,16 +50,6 @@ const ADMIN := 0
 ## The seat connection's index in the bridge's watch rig.
 const SEAT := 1
 
-## One view page is cut at 256 KiB of encoded runs, which base64 and JSON grow by about a
-## third; 1 MiB holds a page with room to spare (skeleton-plan-t16a-notes.md section A (2)).
-const INBOUND_BYTES := 1048576
-
-## How many times a dropped connection is reopened before the link gives up.
-##
-## PLACEHOLDER: the reconnect bound — OWNER, at hardening, with the transport's numbers.
-## A local host that drops a connection more often than this has gone wrong in a way a
-## retry will not fix.
-const RECONNECTS := 5
 
 ## The match the lobby hosts until it has a match-settings screen.
 ##
@@ -133,7 +126,13 @@ var _port := 0
 var _tokens := ["", ""]
 var _peers: Array = [null, null]
 var _open := [false, false]
-var _reconnects := 0
+## Whether the bridge has been told of each link's current close: told once per close.
+var _close_told := [false, false]
+## Whether each link's peer was aborted (fix pass 7): read as closed from then on.
+var _aborted := [false, false]
+## Whether the links were attached to a listener with no host process (`attach`, the watch
+## check's silent-host leg); `pump_attached` pumps them.
+var _attached := false
 var _done := false
 
 
@@ -324,7 +323,11 @@ func start(gamectl: String, root: String, config_line: String) -> bool:
 	_pid = int(spawned.get("pid", -1))
 	_stdio = spawned.get("stdio")
 	_stderr = spawned.get("stderr")
-	_stdio.store_string(config_line)
+	# A line the host never reads is a host that never announces: said at once (fix pass 2).
+	if not _stdio.store_string(config_line):
+		failed.emit("could not write the config line to %s" % gamectl)
+		reset()
+		return false
 	_stdio.flush()
 	bridge.watch_begin()
 	return true
@@ -361,12 +364,41 @@ func pump() -> void:
 	if _port == 0:
 		_read_announce()
 		return
+	_pump_links()
+
+
+## Test-only (the watch check's silent-host leg, fix pass 7): opens both links to a listener on
+## `port` that the caller holds, with no host process, and a fresh watch rig. The links are then
+## pumped by `pump_attached`, through the same `_pump_link` the shipped path runs.
+func attach(port: int, tokens: Array) -> void:
+	bridge.watch_begin()
+	_attached = true
+	_port = port
+	_tokens = tokens
+	for link in [ADMIN, SEAT]:
+		_connect(link)
+
+
+## One frame of links opened by `attach`.
+func pump_attached() -> void:
+	if _done or not _attached:
+		return
+	_pump_links()
+
+
+## Both links, then the frames the rig has to send.
+func _pump_links() -> void:
 	for link in [ADMIN, SEAT]:
 		_pump_link(link)
 	for pair in bridge.watch_outbox():
-		var peer: WebSocketPeer = _peers[int(pair[0])]
+		var link := int(pair[0])
+		var peer: WebSocketPeer = _peers[link]
 		if peer != null and peer.get_ready_state() == WebSocketPeer.STATE_OPEN:
-			peer.send_text(String(pair[1]))
+			# A send the transport refuses is the bridge's to settle at once, so the call never
+			# waits "Sending..." for a timeout (S3's `fixq-c`, fix pass 2).
+			var sent := peer.send_text(String(pair[1]))
+			if sent != OK:
+				bridge.watch_send_failed(link, sent)
 
 
 ## Closes both connections and the host's standard input, which ends the host.
@@ -394,7 +426,9 @@ func reset() -> void:
 	_port = 0
 	_peers = [null, null]
 	_open = [false, false]
-	_reconnects = 0
+	_close_told = [false, false]
+	_aborted = [false, false]
+	_attached = false
 	_done = false
 
 
@@ -429,9 +463,43 @@ func _read_announce() -> void:
 	announced.emit(fields[1])
 
 
-func _connect(link: int) -> void:
+## A peer sized as every connection to the gateway is: both buffers from `limits`, the
+## bridge's `watch_transport_limits` (`crates/client-gdext/src/transport.rs`; fix pass 2:
+## Godot's default outbound buffer, 64 KiB, refused a frame the cap allowed and the link timed
+## out). Answers `peer`, or `refusal` (the words) when a size is missing or not a whole number:
+## a connection is never opened on a default size (fix pass 4). `client_check.gd` receives
+## through a peer made here, so the check is of this path.
+static func new_peer(limits: Dictionary) -> Dictionary:
+	var outbound: Variant = Values.int_of(limits.get("outbound_bytes"))
+	var inbound: Variant = Values.int_of(limits.get("inbound_bytes"))
+	if not outbound is int:
+		return {"refusal": Values.unreadable_text("outbound_bytes", outbound)}
+	if not inbound is int:
+		return {"refusal": Values.unreadable_text("inbound_bytes", inbound)}
 	var peer := WebSocketPeer.new()
-	peer.inbound_buffer_size = INBOUND_BYTES
+	peer.outbound_buffer_size = outbound
+	peer.inbound_buffer_size = inbound
+	return {"peer": peer}
+
+
+## Every whole message `peer` holds, as text, in the order it came. Godot hands a peer only
+## whole messages: one past its inbound buffer is never handed over, cut or whole; the peer
+## closes itself with 1009 ("Message too big"; measured on 4.7.2 by `client_check.gd`), which
+## `_pump_link` reports as a close on the message.
+static func packets_of(peer: WebSocketPeer) -> Array[String]:
+	var texts: Array[String] = []
+	while peer.get_available_packet_count() > 0:
+		texts.append(peer.get_packet().get_string_from_utf8())
+	return texts
+
+
+func _connect(link: int) -> void:
+	var made := new_peer(bridge.watch_transport_limits())
+	if not made.has("peer"):
+		_done = true
+		failed.emit("could not open connection %d: %s" % [link, made["refusal"]])
+		return
+	var peer: WebSocketPeer = made["peer"]
 	peer.handshake_headers = PackedStringArray(["Authorization: Bearer " + String(_tokens[link])])
 	var error := peer.connect_to_url("ws://127.0.0.1:%d/" % _port)
 	if error != OK:
@@ -440,33 +508,60 @@ func _connect(link: int) -> void:
 		return
 	_peers[link] = peer
 	_open[link] = false
+	_aborted[link] = false
 
 
+## One frame of connection `link`. Its state goes to the rig every frame, and the rig says when
+## to abort it: an open link whose call passed its deadline, a connect past its deadline, a
+## close past its grace (fix pass 7). An abort is `close(-1)`, which waits for nothing (Godot's
+## `close(1000)` waits for the other side's echo, and a host that never answers left the peer
+## closing for ever); the link is read as closed from then on, whatever the peer says, and the
+## close is reported as a connection lost with no code. So no state lasts unreported.
 func _pump_link(link: int) -> void:
 	var peer: WebSocketPeer = _peers[link]
 	if peer == null:
 		return
-	peer.poll()
-	var state := peer.get_ready_state()
+	var state := WebSocketPeer.STATE_CLOSED
+	if not _aborted[link]:
+		peer.poll()
+		state = peer.get_ready_state()
+	if bridge.watch_transport(link, state):
+		peer.close(-1)
+		_aborted[link] = true
+		state = WebSocketPeer.STATE_CLOSED
+		bridge.watch_transport(link, state)
 	if state == WebSocketPeer.STATE_OPEN:
 		if not _open[link]:
 			_open[link] = true
 			bridge.watch_opened(link)
-		while peer.get_available_packet_count() > 0:
-			var text := peer.get_packet().get_string_from_utf8()
+		for text in packets_of(peer):
 			var answer: Dictionary = bridge.watch_receive(link, text)
 			if not answer.is_empty():
 				received.emit(answer)
 	elif state == WebSocketPeer.STATE_CLOSED and not _done:
-		if _open[link]:
-			bridge.watch_dropped(link)
+		# Every close is the rig's to read, once, one that never opened included; what happens next
+		# is the rig's reconnect policy (fix pass 5): this script asks it every frame and decides
+		# nothing itself, neither from the code nor from whether the host still runs.
+		if not _close_told[link]:
+			_close_told[link] = true
+			bridge.watch_dropped(link, -1 if _aborted[link] else peer.get_close_code())
 		_open[link] = false
-		if _reconnects >= RECONNECTS or not host_running():
-			_done = true
-			failed.emit("connection %d closed (%d) and the host is gone or will not take it back" % [link, peer.get_close_code()])
-			return
-		_reconnects += 1
-		_connect(link)
+		match bridge.watch_link_action(link):
+			"connect":
+				_close_told[link] = false
+				_connect(link)
+			"give_up":
+				_done = true
+				var why: Dictionary = bridge.watch_give_up(link)
+				failed.emit(gave_up_words(link, why))
+
+
+## The words for a link given up: the last close's code, or, when it carried none (the
+## bridge's -1), that the connection was lost. Never a bare -1 (fix pass 6).
+static func gave_up_words(link: int, why: Dictionary) -> String:
+	var code: int = why.get("code", -1)
+	var fields := {"link": Strings.text("connection_" + ("admin" if link == 0 else "seat")), "attempts": why.get("attempts", 0), "code": code}
+	return Strings.text("link_gave_up" if code >= 0 else "link_gave_up_lost", fields)
 
 
 func _drain_stderr() -> void:

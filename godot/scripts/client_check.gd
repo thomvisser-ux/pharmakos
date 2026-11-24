@@ -68,6 +68,10 @@ const Wizard := preload("res://scripts/wizard.gd")
 const Values := preload("res://scripts/values.gd")
 const Rows := preload("res://scripts/rows.gd")
 const Strings := preload("res://scripts/strings.gd")
+const HostLink := preload("res://scripts/host_link.gd")
+## The worst view page `crates/client-gdext/tests/transport.rs` builds, in bytes: the same page
+## is built here and received through host_link.gd's own peer.
+const WORST_PAGE_BYTES := 1230868
 const OWNERS_WINDOW := Vector2i(1456, 819)
 ## A map as wide as the golden seed's, in voxels (x, up, north).
 const MAP_EXTENT := Vector3(384.0, 64.0, 384.0)
@@ -91,6 +95,9 @@ const LOW_PITCH := -0.1
 ## anchor spacing in voxels, the one kind that stands apart from the kit (one to a beacon, S3's
 ## plan E4), and the least height a name may be read at, in pixels.
 const KIT := ["generator", "autocannon", "mortar", "survey_post", "resonance_spire", "wall"]
+## The kit's names as the gateway's view titles them (`ViewEntity.title`, the `view_built` golden),
+## which the vista draws in place of the subtype (S3's `fixq-c`).
+const KIT_TITLES := ["Generator", "Autocannon", "Mortar", "Survey post", "Resonance Spire", "Wall"]
 const ANCHOR_SPACING := 4.0
 const LONE_KIND := "resonance_spire"
 const NAME_PIXELS_TALL := 10.0
@@ -306,6 +313,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	vista.my_seat = "seat.0"
 	_check_the_wheel(vista, failures)
 	await _check_the_name(vista, failures)
+	_check_the_looks(vista, failures)
 	var editor: CanvasLayer = CanvasLayer.new()
 	editor.set_script(EditorPanel)
 	stage.add_child(editor)
@@ -328,6 +336,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	stage.queue_free()
 	_check_the_recap_words(failures)
 	await _check_the_lobby_after_a_failure(failures)
+	await _check_the_remembered_line(failures)
 	_check_the_logs(failures)
 
 
@@ -371,10 +380,10 @@ func _check_the_wheel(vista: Node3D, failures: Array[String]) -> void:
 		failures.append("%d wheel notches left the structure %.1f px wide, under %.0f" % [notches, close, READABLE_PIXELS])
 	if drift > CURSOR_DRIFT_PIXELS:
 		failures.append("the wheel zoomed the structure %.1f px away from the cursor" % drift)
-	# Its name is drawn at that distance, as the gateway spelt it, and not from the whole map.
-	vista.take_view({"entities": [{"id": "s_1", "kind": "structure", "subtype": "autocannon", "owner": "seat.0", "at": FAR_STRUCTURE}]})
+	# Its name is drawn at that distance, as the gateway titled it, and not from the whole map.
+	vista.take_view({"entities": [{"id": "s_1", "kind": "structure", "subtype": "autocannon", "owner": "seat.0", "at": FAR_STRUCTURE, "title": "Autocannon", "look": {"shape": "tower", "x": 1, "y": 1, "z": 1}}]})
 	var name_label: Label3D = vista.marker_node("s_1").get_node_or_null("Name")
-	if name_label == null or name_label.text != "autocannon":
+	if name_label == null or name_label.text != "Autocannon":
 		failures.append("the structure's marker carries no name: %s" % name_label)
 	elif name_label.visibility_range_end < rig.distance or name_label.visibility_range_end >= before:
 		failures.append("the name is drawn out to %.0f voxels, with the camera at %.1f and the whole map at %.0f" % [name_label.visibility_range_end, rig.distance, before])
@@ -448,7 +457,7 @@ func _check_no_ground(rig: Node3D, failures: Array[String]) -> void:
 func _check_the_name(vista: Node3D, failures: Array[String]) -> void:
 	var entities := []
 	for index in KIT.size():
-		entities.append({"id": "s_%d" % index, "kind": "structure", "subtype": KIT[index], "owner": "seat.0", "at": Vector3i(100 + index * 4, 100, 10)})
+		entities.append({"id": "s_%d" % index, "kind": "structure", "subtype": KIT[index], "owner": "seat.0", "at": Vector3i(100 + index * 4, 100, 10), "title": KIT_TITLES[index], "look": {"shape": "block", "x": 1, "y": 1, "z": 1}})
 	vista.take_view({"entities": entities})
 	vista.settle_markers()
 	await get_tree().process_frame
@@ -467,13 +476,79 @@ func _check_the_name(vista: Node3D, failures: Array[String]) -> void:
 		var bottom: Vector2 = rig.camera.unproject_position(label.global_position)
 		var top: Vector2 = rig.camera.unproject_position(label.global_position + rig.camera.global_basis.y * line)
 		var pixels: float = bottom.distance_to(top)
-		print("[client-check] the name `%s`: %.2f voxels wide, %.1f px tall at %.0f voxels off" % [KIT[index], box.size.x, pixels, label.visibility_range_end])
+		print("[client-check] the name `%s`: %.2f voxels wide, %.1f px tall at %.0f voxels off" % [KIT_TITLES[index], box.size.x, pixels, label.visibility_range_end])
 		if box.size.x <= 0.0:
 			failures.append("the name `%s` has no size: %s" % [KIT[index], box])
 		elif KIT[index] != LONE_KIND and box.size.x > ANCHOR_SPACING:
 			failures.append("the name `%s` is %.2f voxels wide, over its neighbour's at %.0f" % [KIT[index], box.size.x, ANCHOR_SPACING])
 		if pixels < NAME_PIXELS_TALL:
 			failures.append("the name `%s` is %.1f px tall at its farthest, under %.0f" % [KIT[index], pixels, NAME_PIXELS_TALL])
+	vista.take_view({"entities": []})
+
+
+## **Each structure is drawn by its look and named by its title** (S3's `fixq-c`, items 1 to 3;
+## P6b finding 8: every structure was one cube named by its subtype). The gateway's `view_built`
+## golden, through its byte copy and the bridge's own decoding: the autocannon is a tower and the
+## mortar a dish, so they draw different meshes; the mortar going up is named in the gateway's
+## going-up words and drawn see-through; the wall is a slab of its box, named "Wall". Then another
+## seat's structure at half its hit points: its plain title, a partial bar, nothing see-through,
+## because going up is the gateway's word and never read from hit points.
+func _check_the_looks(vista: Node3D, failures: Array[String]) -> void:
+	vista.configure()
+	var built: Array = []
+	for path in ["res://fixtures/view_keyframe.jsonl", "res://fixtures/view_built.jsonl"]:
+		for line in FileAccess.get_file_as_string(path).split("\n", false):
+			var view: Dictionary = vista.bridge.view_apply(line)
+			if view.is_empty():
+				failures.append("a page of %s did not decode" % path)
+				return
+			vista.take_view(view)
+			if view.has("entities"):
+				built = view["entities"]
+	var body := func(id: String) -> MeshInstance3D:
+		var node: Node3D = vista.marker_node(id)
+		return node.get_node_or_null("Body") if node != null else null
+	var name_of := func(id: String) -> String:
+		var node: Node3D = vista.marker_node(id)
+		var label: Label3D = node.get_node_or_null("Name") if node != null else null
+		return label.text if label != null else ""
+	var cannon: MeshInstance3D = body.call("s_3")
+	var mortar: MeshInstance3D = body.call("s_4")
+	var wall: MeshInstance3D = body.call("l_1")
+	if cannon == null or mortar == null or wall == null:
+		failures.append("the built view drew no autocannon, mortar or wall marker")
+		return
+	var tower := cannon.mesh as CylinderMesh
+	var dish := mortar.mesh as CylinderMesh
+	if tower == null or dish == null or tower.top_radius != tower.bottom_radius or dish.top_radius == dish.bottom_radius:
+		failures.append("the autocannon (a tower) and the mortar (a dish) are not drawn as an upright and a bowl: %s, %s" % [cannon.mesh, mortar.mesh])
+		failures.append("the autocannon (a tower) and the mortar (a dish) draw the same mesh: %s, %s" % [cannon.mesh, mortar.mesh])
+	if not (wall.mesh is BoxMesh) or (wall.mesh as BoxMesh).size != Vector3(4, 2, 1):
+		failures.append("the wall is not drawn as its 4 by 1 by 2 slab: %s" % [wall.mesh])
+	for named in [["s_3", "Autocannon"], ["s_4", "Mortar, going up"], ["l_1", "Wall"], ["s_2", "Survey post"]]:
+		if name_of.call(named[0]) != named[1]:
+			failures.append("%s is named `%s`, not the gateway's `%s`" % [named[0], name_of.call(named[0]), named[1]])
+	var paint: StandardMaterial3D = mortar.mesh.material
+	if paint.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+		failures.append("the mortar the gateway says is going up is drawn as standing")
+	# Another seat's survey post, hit to half: plain, standing, a partial bar.
+	var hit: Array = []
+	# A fresh id, so the marker is drawn anew from this entity (fix pass 1, item 7: a redraw of the
+	# same marker would not run `_marker_for`, and going up read from hit points would pass).
+	for entity in built:
+		var one: Dictionary = entity.duplicate()
+		if String(one["id"]) == "s_2":
+			one["id"] = "s_2_hit"
+			one["hp"] = 100
+		hit.append(one)
+	vista.take_view({"entities": hit})
+	var post: MeshInstance3D = body.call("s_2_hit")
+	var fill: MeshInstance3D = vista.marker_node("s_2_hit").get_node_or_null("Bar/Fill")
+	if name_of.call("s_2_hit") != "Survey post" or (post.mesh.material as StandardMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+		failures.append("another seat's structure at half its hit points is named `%s` or drawn see-through" % name_of.call("s_2_hit"))
+	if fill == null or (fill.mesh as QuadMesh).size.x >= vista.BAR_SIZE.x:
+		failures.append("another seat's structure at half its hit points has no partial bar")
+	print("[client-check] the built view: tower, dish and slab drawn by look; titles as sent; going up see-through")
 	vista.take_view({"entities": []})
 
 
@@ -685,7 +760,7 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 	var sent: Array[String] = []
 	var listen := func(text: String) -> void: sent.append(text)
 	editor._number_field.sent.connect(listen)
-	editor._open_number({"index": 0, "revision": 0, "pointer": "/x"}, {"has_min": true, "min": 0, "has_max": true, "max": 100, "now": 40, "value_json": "40", "unit": "%", "text": "40"})
+	editor._open_number({"index": 0, "revision": 0, "pointer": "/x"}, {"has_min": true, "min": 0, "has_max": true, "max": 100, "value_text": "40", "value_json": "40", "unit": "%", "display_unit": "%", "text": "40"})
 	await _settle()
 	var popup: PopupPanel = editor._number_popup
 	if not popup.visible:
@@ -704,7 +779,7 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 		_key(stage, KEY_ENTER, 0)
 		if sent != ["30", "30"]:
 			failures.append("Enter in the editor's number popup sent %s" % [sent])
-		if editor._number_note.text != Strings.text("rule_number_bounds", {"min": 0, "max": 100}):
+		if editor._number_note.text != Strings.text("rule_number_bounds", {"min": 0, "max": 100, "unit": " %"}):
 			failures.append("the number popup's note says `%s`, not the gateway's bounds" % editor._number_note.text)
 	editor._number_field.sent.disconnect(listen)
 	popup.hide()
@@ -773,7 +848,7 @@ func _settle() -> void:
 ## open, as the P6a fix asks.
 func _check_an_action_pick_closes_the_menus(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
 	var beacon := {"id": "b_00", "owner": "seat.0", "position": Vector3.ZERO}
-	var detail := {"known": true, "id": "b_00", "priority": "normal", "settings": [{"title": "Rebuild", "pointer": "/build/rebuild_destroyed", "value_json": "true", "editor": "choice", "values": PackedStringArray(["true", "false"])}], "targets": []}
+	var detail := {"known": true, "id": "b_00", "priority": "normal", "settings": [{"title": "Rebuild", "pointer": "/build/rebuild_destroyed", "value_json": "true", "editor": "choice", "values": PackedStringArray(["true", "false"]), "titles": PackedStringArray(["yes", "no"])}], "targets": []}
 	for case in ["priority", "setting", "target"]:
 		# A frame between one menu's close and the next click, as a person's hand takes.
 		await get_tree().process_frame
@@ -1011,11 +1086,17 @@ func _check_the_rig_backed_panel(stage: SubViewport, editor: CanvasLayer, failur
 		return
 	await _check_the_field_refusal_and_its_owner(stage, editor, bridge, failures)
 	await _check_the_dormant_box_through_the_rig(stage, editor, bridge, failures)
+	await _check_the_planning_wire(stage, editor, bridge, failures)
 	await _check_the_ready_line_through_the_rig(bridge, failures)
 	await _check_load_through_its_button(stage, editor, bridge, failures)
+	await _check_the_transport(bridge, failures)
+	_check_a_close_on_a_message_is_said(bridge, failures)
+	_check_the_saves(editor, bridge, failures)
+	_check_the_limit_is_named(bridge, failures)
 
 
-## A value field's "abc" is refused in its own popup, by the bridge's typed refusal. Then chip A
+## A value field's "abc" goes to the gateway as typed (S3's `fixq-c`: the gateway reads typed
+## numbers), and its refusal is said in the popup in the gateway's words. Then chip A
 ## sends 500 and, before the gateway answers, the person opens field B, a Visit & change number
 ## setting (the rule list takes no edit while A's is on its way), and types in it: A's refusal,
 ## and A's landing, are not B's to say, and B stays open with what was typed. Last, an edit of
@@ -1044,8 +1125,12 @@ func _check_the_field_refusal_and_its_owner(stage: SubViewport, editor: CanvasLa
 	await _type_in_popup(stage, editor, "abc")
 	_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
 	await _settle()
-	if not popup.visible or editor._number_said.text != Strings.text("status_rule_refused_not_an_integer"):
-		failures.append("\"abc\" in the value field's popup says `%s` (open %s), not the bridge's refusal" % [editor._number_said.text, popup.visible])
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("field", {}).get("state", "")) == "refused")
+	await _settle()
+	if not popup.visible or editor._number_said.text != Strings.text("rule_refused", {"detail": "INVALID_ARGUMENT: `abc` is not a number"}):
+		failures.append("\"abc\" in the value field's popup says `%s` (open %s), not the gateway's refusal" % [editor._number_said.text, popup.visible])
+	if _typed.is_empty() or _typed[-1] != "abc":
+		failures.append("\"abc\" did not go to the gateway as typed: %s" % [_typed])
 	for landed in [false, true]:
 		if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false)):
 			failures.append("the rule list never took an edit again")
@@ -1054,7 +1139,7 @@ func _check_the_field_refusal_and_its_owner(stage: SubViewport, editor: CanvasLa
 		await _settle()
 		await _type_in_popup(stage, editor, "500")
 		_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
-		if not await _rig_until(bridge, func(_state: Dictionary) -> bool: return not _held.is_empty(), func(method: String) -> bool: return method == "patch_plan"):
+		if not await _rig_until(bridge, func(_state: Dictionary) -> bool: return not _held.is_empty(), func(method: String) -> bool: return method == "set_value_text"):
 			failures.append("chip A's edit never went out")
 			return
 		# Field B opens before the gateway answers A, and the person types in it.
@@ -1124,16 +1209,222 @@ func _check_the_dormant_box_through_the_rig(stage: SubViewport, editor: CanvasLa
 	_diagnostics = ""
 
 
-## The Ready line from the bridge's word: the filing sentence before a seal, and after the
-## gateway accepted one this round, that Ready keeps it.
+## **The editor's planning wire, through the panel** (S3's `fixq-c`; the run sheet's set-ups and
+## #183/#188's owed gaps, each red on `main`):
+## * a duration chip is a number field typed in seconds, pre-filled with the gateway's own "120"
+##   and its unit `s`, and "3" goes to `set_value_text` as typed (item 7: it was read-only);
+## * a choice chip's menu draws the gateway's titles, never a value's JSON (item 6);
+## * Queue a structure lists the Queue's own entries, each kind no queue takes locked with the
+##   verifier's sentence (item 5: it listed Add a build target's);
+## * the Remove list draws each target's line, the gateway's words (item 6: it drew JSON);
+## * Add a rule, clicked, asks `new_rule`; Remove, clicked, sends one `remove` at the rule's
+##   pointer (item 8: no control did either);
+## * the picker lists the groups, and a group pick writes its skeleton (item 16);
+## * a wall's Build target takes two ground clicks and the gateway's box (item 4).
+func _check_the_planning_wire(stage: SubViewport, editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	bridge.editor_load(RIG_TEXT.to_utf8_buffer())
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false) and state.get("vocabulary", {}).get("known", false)):
+		failures.append("the planning wire: the rule list never took an edit")
+		return
+	await _settle()
+	var popup: PopupPanel = editor._number_popup
+	# A duration, typed in seconds.
+	var timeout := _chip_index(bridge, "/route/0/timeout_ms")
+	var chip: Dictionary = bridge.editor_state().get("rule_list", {}).get("chips", [])[timeout] if timeout >= 0 else {}
+	if String(chip.get("editor", "")) != "number" or String(chip.get("display_unit", "")) != "s":
+		failures.append("the duration chip is not a number typed in seconds: %s" % [chip])
+	else:
+		editor._on_rule_chip(timeout)
+		await _settle()
+		if editor._number_field.field.text != "120" or editor._number_field.unit.text != "s":
+			failures.append("the duration's field shows `%s %s`, not the gateway's `120 s`" % [editor._number_field.field.text, editor._number_field.unit.text])
+		await _type_in_popup(stage, editor, "3")
+		_typed.clear()
+		_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return not state.get("busy", true) and not _typed.is_empty())
+		if _typed != ["3"]:
+			failures.append("the duration's \"3\" did not go to `set_value_text` as typed: %s" % [_typed])
+		popup.hide()
+		await _settle()
+	# Past the chip's bounds: the client compares nothing, so the gateway is asked and its refusal
+	# is said in the popup (fix pass 1, item 4).
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var pct := _chip_index(bridge, "/cmdr_hp_pct/pct")
+	editor._on_rule_chip(pct)
+	await _settle()
+	await _type_in_popup(stage, editor, "150")
+	_typed.clear()
+	_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("field", {}).get("state", "")) == "refused")
+	await _settle()
+	if _typed != ["150"] or editor._number_said.text != Strings.text("rule_refused", {"detail": "INVALID_ARGUMENT: `150` is above the most this takes, `100` %"}):
+		failures.append("a value past its bounds was not the gateway's to refuse: asked %s, said `%s`" % [_typed, editor._number_said.text])
+	popup.hide()
+	await _settle()
+	# A paste past the gateway's message cap is not sent: the popup says so, and the seat
+	# connection stays up (fix pass 1, item 1).
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	editor._on_rule_chip(pct)
+	await _settle()
+	_typed.clear()
+	editor._number_field.field.text = "1".repeat(300000)
+	_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("field", {}).get("state", "")) == "refused")
+	await _settle()
+	if not _typed.is_empty() or not editor._number_said.text.begins_with("Not sent:") or int(bridge.watch_state().get("unsent_seat", 0)) < 1 or int(bridge.watch_state().get("drops_seat", -1)) != 0:
+		failures.append("a paste past the message cap went out or was not said: asked %d, said `%s`, %s" % [_typed.size(), editor._number_said.text.left(80), bridge.watch_state()])
+	popup.hide()
+	await _settle()
+	# A choice, drawn by its titles.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var priority := _chip_index(bridge, "/initial/priority")
+	editor._on_rule_chip(priority)
+	await _settle()
+	var drawn: Array[String] = []
+	for item in editor._choice_menu.item_count:
+		drawn.append(editor._choice_menu.get_item_text(item))
+	if drawn != ["low", "normal", "high"]:
+		failures.append("the priority's menu draws %s, not the gateway's titles" % [drawn])
+	editor._choice_menu.hide()
+	# The Queue's own list, and the Remove list's lines, for the Build beacon b_01.
+	bridge.editor_describe_beacon("b_01")
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("beacon_detail", {}).get("id", "")) == "b_01"):
+		failures.append("the planning wire: b_01's detail never came")
+		return
+	editor._visit_beacon = "b_01"
+	var vocabulary: Dictionary = bridge.editor_state().get("vocabulary", {})
+	editor.open_entry_list(EditorPanel.ITEM_LIST_QUEUE, vocabulary.get(String(EditorPanel.ENTRY_LISTS[EditorPanel.ITEM_LIST_QUEUE][1]), []), Rect2(Vector2(200, 300), Vector2(180, 200)))
+	await _settle()
+	var queued: Array = vocabulary.get("queue_blueprints", [])
+	var rows: Array = editor.entry_rows()
+	var generator_locked := false
+	for row in rows:
+		var at := int(row.get_meta("entry"))
+		if at < queued.size() and String(queued[at].get("name", "")) == "generator":
+			generator_locked = row.has_meta("locked")
+	if rows.size() != queued.size() or not generator_locked:
+		failures.append("Queue a structure lists %d rows of the Queue's %d, the Generator locked %s" % [rows.size(), queued.size(), generator_locked])
+	editor._entry_popup.hide()
+	editor._visit_drawn = ""
+	editor._fill_visit_menu(bridge.editor_state())
+	var lines: Array[String] = []
+	for submenu in editor._visit_submenus:
+		if (submenu as PopupMenu).id_pressed.get_connections().size() > 0 and submenu.get_parent() == editor._visit_menu:
+			for item in (submenu as PopupMenu).item_count:
+				lines.append((submenu as PopupMenu).get_item_text(item))
+	var targets: Array = bridge.editor_state().get("beacon_detail", {}).get("targets", [])
+	for target in targets:
+		var line := String(target.get("line", ""))
+		if line == "" or "{" in line or not lines.has(line):
+			failures.append("the Remove list does not draw the target's line `%s`: %s" % [line, lines])
+	# Add a rule and Remove one, through their own buttons.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var add: Button = null
+	var remove: Button = null
+	for button in editor._rules_box.find_children("*", "Button", true, false):
+		if (button as Button).has_meta("rule_add"):
+			add = button
+		elif (button as Button).has_meta("rule_remove") and remove == null:
+			remove = button
+	if add == null or remove == null:
+		failures.append("the rule list has no Add a rule or no Remove button")
+	else:
+		var asked := _new_rules
+		editor.panel_scroll().ensure_control_visible(add)
+		await _settle()
+		_click(stage, add.get_global_rect().get_center())
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return _new_rules > asked and not state.get("busy", true))
+		if _new_rules != asked + 1:
+			failures.append("Add a rule, clicked, asked `new_rule` %d times" % (_new_rules - asked))
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+		await _settle()
+		for button in editor._rules_box.find_children("*", "Button", true, false):
+			if (button as Button).has_meta("rule_remove"):
+				remove = button
+				break
+		var rule := int(remove.get_meta("rule_remove"))
+		var pointer := String(bridge.editor_state().get("rule_list", {}).get("rules", [])[rule].get("pointer", ""))
+		_patches.clear()
+		editor.panel_scroll().ensure_control_visible(remove)
+		await _settle()
+		_click(stage, remove.get_global_rect().get_center())
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return not _patches.is_empty() and not state.get("busy", true))
+		var sent: Variant = JSON.parse_string(_patches[0]) if not _patches.is_empty() else null
+		if not (sent is Array and sent.size() == 1 and String(sent[0].get("op", "")) == "remove" and String(sent[0].get("path", "")) == pointer):
+			failures.append("Remove, clicked, sent %s, not one `remove` at %s" % [_patches, pointer])
+	# A group from the picker.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var slots: Array = bridge.editor_state().get("rule_list", {}).get("slots", [])
+	var slot := -1
+	for index in slots.size():
+		if slots[index].get("pickable", false):
+			slot = index
+			break
+	editor.open_condition_picker(slot)
+	await _settle()
+	var group_row: TreeItem = null
+	for row in editor._picker_tree.get_root().get_children():
+		if row.get_text(0) == Strings.text("picker_groups"):
+			group_row = row.get_child(0)
+	if group_row == null or group_row.get_text(0) != "All of these":
+		failures.append("the picker lists no group, or not as the gateway titles it")
+	else:
+		group_row.select(0)
+		_patches.clear()
+		editor._on_picker_use()
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return not _patches.is_empty() and not state.get("busy", true))
+		if _patches.is_empty() or not ("\"all\"" in _patches[0] and "\"items\"" in _patches[0]):
+			failures.append("a group pick sent %s, not the group's skeleton" % [_patches])
+	editor._picker_popup.hide()
+	# A wall: two ground clicks, and the gateway's box in the row.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var blueprints: Array = vocabulary.get("blueprints", [])
+	var wall := -1
+	for index in blueprints.size():
+		if String(blueprints[index].get("anchor_shape", "")) == "box":
+			wall = index
+	if wall < 0 or not bridge.editor_visit_row("b_01", "add_target", wall):
+		failures.append("Add a build target took no wall: %s" % bridge.editor_state().get("status_key", ""))
+		return
+	_walls.clear()
+	_patches.clear()
+	bridge.editor_pick({"voxel": Vector3i(10, 10, 4)})
+	if String(bridge.editor_state().get("status_key", "")) != "wall_second" or not bridge.editor_state().get("anchoring", false):
+		failures.append("the wall's first corner did not ask for the second: %s" % bridge.editor_state().get("status_key", ""))
+	bridge.editor_pick({"voxel": Vector3i(12, 11, 4)})
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return not _patches.is_empty() and not state.get("busy", true))
+	if _walls.size() != 1 or not ("\"corner_a\"" in _walls[0] and "\"corner_b\"" in _walls[0]):
+		failures.append("the two corners did not ask `compose_wall_box` once: %s" % [_walls])
+	if _patches.is_empty() or not ("\"wall_box\"" in _patches[0] and "\"add_build_target\"" in _patches[0]):
+		failures.append("the wall's row is not the gateway's target: %s" % [_patches])
+	# The panel back at its top, as the checks after this one find it.
+	editor.panel_scroll().scroll_vertical = 0
+	await _settle()
+	print("[client-check] the planning wire: a duration typed in seconds, titles, the Queue's list, target lines, Add and Remove rule, a group, a wall's box")
+
+
+## The Ready line from the gateway's word on the seal (S3's `fixq-c`, item 13: the rig's reading of
+## the seat's `get_status`, the one source): the filing sentence before a seal, and after the
+## gateway accepted one this round, and said so on `get_status`, that Ready keeps it. The editor
+## keeps no seal of its own, so its state names none.
 func _check_the_ready_line_through_the_rig(bridge: Node, failures: Array[String]) -> void:
-	if Lobby.ready_line(bridge.editor_state()) != Strings.text("lobby_ready_help"):
-		failures.append("before a seal the Ready line says `%s`" % Lobby.ready_line(bridge.editor_state()))
+	_sealed = false
+	await _rig_until(bridge, func(_state: Dictionary) -> bool: return bridge.watch_state().has("sealed_this_round"))
+	if Lobby.ready_line(bridge.watch_state()) != Strings.text("lobby_ready_help"):
+		failures.append("before a seal the Ready line says `%s`" % Lobby.ready_line(bridge.watch_state()))
 	bridge.editor_submit()
-	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("sealed_this_round", false)):
-		failures.append("an accepted seal never showed as this round's")
-	if Lobby.ready_line(bridge.editor_state()) != Strings.text("lobby_ready_sealed"):
-		failures.append("after an accepted seal the Ready line says `%s`" % Lobby.ready_line(bridge.editor_state()))
+	if not await _rig_until(bridge, func(_state: Dictionary) -> bool: return bridge.watch_state().get("sealed_this_round", false)):
+		failures.append("an accepted seal never showed as this round's on the gateway's word")
+	if Lobby.ready_line(bridge.watch_state()) != Strings.text("lobby_ready_sealed"):
+		failures.append("after an accepted seal the Ready line says `%s`" % Lobby.ready_line(bridge.watch_state()))
+	if bridge.editor_state().has("sealed_this_round"):
+		failures.append("the editor still keeps a seal of its own beside the gateway's")
 
 
 ## Load, pressed through its own button, opens in the folder of the file the text came from.
@@ -1198,6 +1489,13 @@ var _held: Array = []
 var _diagnostics := ""
 ## Every `patch_plan` the stand-in answered, its `json_patch` as sent.
 var _patches: Array[String] = []
+## Whether the stand-in accepted a submission: its `get_status` then says this seat is sealed.
+var _sealed := false
+## Every `set_value_text`'s `typed`, as sent; every `compose_wall_box` request's text; and how
+## many `new_rule` calls the stand-in answered.
+var _typed: Array[String] = []
+var _walls: Array[String] = []
+var _new_rules := 0
 
 
 ## Starts the bridge's watch rig with both connections open, opens RIG_TEXT in the editor, and
@@ -1270,6 +1568,9 @@ func _answer(text: String, error: String) -> String:
 			return _fixture("res://fixtures/vocabulary.json", id)
 		"submit_plan":
 			body = "\"report\":{\"qualifies\":true,\"depth\":\"full\",\"diagnostics\":[]},\"accepted\":true,"
+			_sealed = true
+		"get_status":
+			body = "\"preset\":\"custom\",\"sealed_this_round\":%s," % ("true" if _sealed else "false")
 		"get_briefing":
 			body = "\"notes\":\"\","
 		"list_drafts":
@@ -1279,7 +1580,25 @@ func _answer(text: String, error: String) -> String:
 		"get_map_summary":
 			body = "\"features\":[],"
 		"get_beacon":
-			return _fixture("res://fixtures/beacon_core.json", id)
+			# Seat 0's Build beacon `b_01`, with its targets; any other, the core.
+			return _fixture("res://fixtures/beacon_build.json" if String(params.get("beacon_id", "")) == "b_01" else "res://fixtures/beacon_core.json", id)
+		"set_value_text":
+			# The gateway reads the typed text (S3's `fixq`): digits are written, anything else
+			# refused in its words, as `set_value_text` refuses.
+			var typed := String(params.get("typed", ""))
+			_typed.append(typed)
+			if not typed.is_valid_int():
+				return head + "\"error\":" + _refusal("INVALID_ARGUMENT", "`%s` is not a number" % typed) + "}"
+			# The bound is the gateway's (fix pass 1, item 4): a percentage past 100 is refused.
+			if String(params.get("pointer", "")).ends_with("/pct") and typed.to_int() > 100:
+				return head + "\"error\":" + _refusal("INVALID_ARGUMENT", "`%s` is above the most this takes, `100` %%" % typed) + "}"
+			body = "\"playbook_jsonc\":%s,\"inverse_json_patch\":\"[]\"," % JSON.stringify(String(params.get("playbook_jsonc", "")) + " ")
+		"new_rule":
+			_new_rules += 1
+			body = "\"playbook_jsonc\":%s,\"inverse_json_patch\":\"[]\",\"rule_pointer\":\"/declarative/handlers/1\",\"rule_id\":\"rule_2\"," % JSON.stringify(String(params.get("playbook_jsonc", "")) + " ")
+		"compose_wall_box":
+			_walls.append(text)
+			body = "\"target\":{\"blueprint_id\":\"wall\",\"anchor\":{\"voxel\":{\"x\":10,\"y\":10,\"z\":4}},\"wall_box\":{\"min\":{\"x\":10,\"y\":10,\"z\":4},\"max\":{\"x\":12,\"y\":11,\"z\":6}}},"
 		"estimate_route", "resolve_refs":
 			return head + "\"error\":" + _refusal("NOT_FOUND", "the stand-in prices nothing") + "}"
 	return head + "\"result\":{" + body + footer + "}}"
@@ -1326,8 +1645,10 @@ func _check_the_refused_ghost_line(editor: CanvasLayer, failures: Array[String])
 ## a seat, each number as it came; between rounds, the prose alone.
 func _check_the_recap_words(failures: Array[String]) -> void:
 	# The Ready line says what Ready will do now (S3's `fixp`, P6b finding 4).
-	if Lobby.ready_line({}) != Strings.text("lobby_ready_help") or Lobby.ready_line({"sealed_this_round": false}) != Strings.text("lobby_ready_help"):
-		failures.append("with nothing sealed the Ready line says `%s`" % Lobby.ready_line({}))
+	if Lobby.ready_line({}) != Strings.text("lobby_ready_asking"):
+		failures.append("with the gateway's word not yet told the Ready line says `%s`" % Lobby.ready_line({}))
+	if Lobby.ready_line({"sealed_this_round": false}) != Strings.text("lobby_ready_help"):
+		failures.append("with nothing sealed the Ready line says `%s`" % Lobby.ready_line({"sealed_this_round": false}))
 	if Lobby.ready_line({"sealed_this_round": true}) != Strings.text("lobby_ready_sealed"):
 		failures.append("with this round's seal the Ready line says `%s`" % Lobby.ready_line({"sealed_this_round": true}))
 	var between := {"round": 2, "prose": "Words.", "seat_tallies": []}
@@ -1392,6 +1713,263 @@ func _check_the_lobby_after_a_failure(failures: Array[String]) -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(Lobby.REMEMBERED))
 	lobby.queue_free()
 	await get_tree().process_frame
+
+
+## **A save is said as the bridge's write answered** (S3's `fixq-c`, fix passes 3 to 5, item A).
+## The write is the operating system's atomic replace, in Rust (`crates/client-gdext/src/write.rs`),
+## whose every step and failure `tests/write.rs` holds on the three systems; this check holds what
+## is Godot's: Save (one path, `save_file`) refused for a target that is a folder and for a missing
+## folder (the same on every system), each said on the status line in its row's words, the old
+## file's bytes and the editor's file as they were; a save that lands whole, a player's own file
+## beside it untouched; and a `write_<name>` row in the string table for every failure the bridge
+## can answer.
+func _check_the_saves(editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	var folder := ProjectSettings.globalize_path("user://client_check_saves")
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		failures.append("the save check could not make %s" % folder)
+		return
+	var text: PackedByteArray = bridge.editor_bytes()
+	if text.is_empty():
+		failures.append("the save check found no text on screen")
+		return
+	var old := "the old file\n".to_utf8_buffer()
+	var held := folder + "/held.jsonc"
+	var players := held + ".bak"
+	var players_bytes := "the player's own copy\n".to_utf8_buffer()
+	var a_folder := folder + "/a_folder.jsonc"
+	if not _plain_write(held, old, failures) or not _plain_write(players, players_bytes, failures) or DirAccess.make_dir_recursive_absolute(a_folder) != OK:
+		failures.append("the save check could not set up %s" % folder)
+		return
+	var before: Dictionary = bridge.editor_state()
+	for case in [["a target that is a folder", a_folder, "write_is_folder"], ["a folder that does not exist", folder + "/no_such_folder/x.jsonc", "write_missing_folder"]]:
+		if editor.save_file(case[1]):
+			failures.append("a save to %s went ahead" % case[0])
+			continue
+		var said: String = editor.status_text()
+		var words := Strings.text(String(case[2]), {"path": "", "error": "", "step": ""}).get_slice("{", 0).strip_edges()
+		if not said.begins_with(Strings.text("status_save_not_done", {"why": ""})) or not said.contains(String(TEXT_OF[case[2]])):
+			failures.append("a save to %s is not said in its row's words (`%s`): `%s`" % [case[0], words, said])
+		var after: Dictionary = bridge.editor_state()
+		if after.get("file", "") != before.get("file", "") or after.get("last_file", "") != before.get("last_file", ""):
+			failures.append("a refused save to %s moved the editor's file" % case[0])
+		if FileAccess.get_file_as_bytes(held) != old:
+			failures.append("a refused save to %s changed %s" % [case[0], held])
+	if not editor.save_file(held):
+		failures.append("a save to %s did not land: `%s`" % [held, editor.status_text()])
+	elif FileAccess.get_file_as_bytes(held) != text:
+		failures.append("a save to %s did not write the text on screen whole" % held)
+	if String(bridge.editor_state().get("file", "")) != held:
+		failures.append("a save that landed did not make %s the text's file" % held)
+	if FileAccess.get_file_as_bytes(players) != players_bytes:
+		failures.append("a save touched the player's own %s" % players)
+	for name in bridge.file_failure_names():
+		if not Strings.TEXT.has("write_" + name):
+			failures.append("the string table has no words for the write failure `%s`" % name)
+	for path in [held, players]:
+		if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+			failures.append("the save check could not remove %s" % path)
+	for path in [a_folder, folder]:
+		if DirAccess.remove_absolute(path) != OK:
+			failures.append("the save check could not remove %s" % path)
+
+
+## The fixed part of each write row the save check looks for: the words after `{path}`.
+const TEXT_OF := {
+	"write_is_folder": "is a folder, so nothing was written",
+	"write_missing_folder": "does not exist, so nothing was written",
+}
+
+
+## `bytes` written to `path` for a check's set-up, every Error checked.
+func _plain_write(path: String, bytes: PackedByteArray, failures: Array[String]) -> bool:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		failures.append("could not open %s to set a check up (error %d)" % [path, FileAccess.get_open_error()])
+		return false
+	var stored := file.store_buffer(bytes)
+	file.close()
+	if not stored:
+		failures.append("could not write %s to set a check up" % path)
+	return stored
+
+
+## **The remembered line is whole or absent, and forgetting it is said when it fails** (S3's
+## `fixq-c`, fix passes 3 to 5, items 1b and 1c). The real lobby, pointed at a file of the check's
+## own: its reader takes an absent file, an empty one and a folder as no match; remembering writes
+## the line whole through the bridge, its bytes exactly what `main`'s writer wrote (the line and a
+## newline, by `store_string`), and a line that cannot be written (a folder in the way) is said and
+## claims no match; forgetting removes the file, and a removal that fails (a folder in the way) is
+## said. What the write does on disk is `tests/write.rs`'s.
+func _check_the_remembered_line(failures: Array[String]) -> void:
+	var folder := ProjectSettings.globalize_path("user://client_check_lobby")
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		failures.append("the remembered-line check could not make %s" % folder)
+		return
+	var path := folder + "/last_match.txt"
+	var lobby: Node = LobbyScene.instantiate()
+	lobby.remembered = path
+	add_child(lobby)
+	await get_tree().process_frame
+	var line := "check-match\t0x1\t2\t0\t30000\t6\tcustom"
+	var state := {"round": 1, "phase": "lull"}
+	if lobby.remembered_line() != "":
+		failures.append("an absent remembered file reads as `%s`" % lobby.remembered_line())
+	if _plain_write(path, PackedByteArray(), failures) and lobby.remembered_line() != "":
+		failures.append("an empty remembered file reads as `%s`" % lobby.remembered_line())
+	if DirAccess.remove_absolute(path) != OK or DirAccess.make_dir_recursive_absolute(path) != OK:
+		failures.append("the remembered-line check could not set up a folder at %s" % path)
+	elif lobby.remembered_line() != "":
+		failures.append("a folder at the remembered file reads as `%s`" % lobby.remembered_line())
+	# Remembering into a folder: not written, said, and no match claimed.
+	lobby._line = line
+	lobby._remember()
+	if not lobby.status_line(state).contains(Strings.text("lobby_not_remembered", {"why": ""})) or lobby.remembered_line() != "":
+		failures.append("a line that could not be remembered is not said, or a match is claimed: `%s`" % lobby.status_line(state))
+	# Forgetting a folder in the way: said, and not forgotten.
+	lobby._forget()
+	if lobby._forgotten or not lobby.status_line(state).contains(Strings.text("lobby_not_forgotten", {"why": ""})):
+		failures.append("a remembered line that could not be forgotten is not said: `%s`" % lobby.status_line(state))
+	if DirAccess.remove_absolute(path) != OK:
+		failures.append("the remembered-line check could not remove the folder at %s" % path)
+	# Remembering, whole, byte for byte what `main`'s writer wrote.
+	lobby._remember()
+	var mains := folder + "/mains_writer.txt"
+	var file := FileAccess.open(mains, FileAccess.WRITE)
+	if file == null or not file.store_string(line + "\n"):
+		failures.append("the remembered-line check could not write main's bytes to %s" % mains)
+	if file != null:
+		file.close()
+	if FileAccess.get_file_as_bytes(path) != FileAccess.get_file_as_bytes(mains) or lobby._remember_failed != "":
+		failures.append("the remembered line's bytes are not main's: `%s` (%s)" % [FileAccess.get_file_as_string(path), lobby._remember_failed])
+	if lobby.remembered_line() != line:
+		failures.append("the remembered line reads back as `%s`" % lobby.remembered_line())
+	# Forgetting, removed.
+	lobby._forget()
+	if FileAccess.file_exists(path) or not lobby._forgotten or lobby._forget_failed != "":
+		failures.append("an ended match was not forgotten by removing its file (%s)" % lobby._forget_failed)
+	for leftover in [path, mains]:
+		if FileAccess.file_exists(leftover) and DirAccess.remove_absolute(leftover) != OK:
+			failures.append("the remembered-line check could not remove %s" % leftover)
+	if DirAccess.remove_absolute(folder) != OK:
+		failures.append("the remembered-line check could not remove %s" % folder)
+	lobby.queue_free()
+	await get_tree().process_frame
+
+
+## **The refusal names the limit** (fix pass 2, item 3; review 3's G3): once the editor is set up,
+## the too-large words carry the shared cap the bridge passed through, never an empty `{limit}`.
+func _check_the_limit_is_named(bridge: Node, failures: Array[String]) -> void:
+	var cap := str(bridge.watch_transport_limits().get("message_bytes", ""))
+	var said := Strings.text("status_call_too_large", {"detail": "5"})
+	if cap == "" or Strings.message_limit != cap or not said.contains(cap) or said.contains("{limit}"):
+		failures.append("the too-large words do not name the cap `%s`: `%s`" % [cap, said])
+
+
+## **What a peer takes, and what it does past that** (S3's `fixq-c`, fix pass 3, item 3).
+## Through a peer host_link.gd makes (`new_peer`, from the bridge's limits) and its own reader
+## (`packets_of`): the worst view page `tests/transport.rs` builds arrives whole, as one message;
+## a message one byte past the inbound buffer is never handed over, cut or whole, and Godot
+## closes the peer with 1009.
+func _check_the_transport(bridge: Node, failures: Array[String]) -> void:
+	var limits: Dictionary = bridge.watch_transport_limits()
+	# A missing size refuses the peer in words, never a default (fix pass 4).
+	var missing: Dictionary = HostLink.new_peer({"outbound_bytes": limits.get("outbound_bytes")})
+	if missing.has("peer") or not String(missing.get("refusal", "")).contains("inbound_bytes"):
+		failures.append("a peer with no inbound size was made: %s" % missing)
+	var page := _worst_page()
+	if page.to_utf8_buffer().size() != WORST_PAGE_BYTES:
+		failures.append("the worst view page is %d bytes here, not the %d tests/transport.rs builds" % [page.to_utf8_buffer().size(), WORST_PAGE_BYTES])
+	var got: Dictionary = await _receive(limits, page)
+	var texts: Array = got.get("texts", [])
+	if texts.size() != 1 or String(texts[0]) != page:
+		failures.append("the worst view page did not arrive whole: %d message(s), %s byte(s)" % [texts.size(), [] if texts.is_empty() else [String(texts[0]).length()]])
+	var past := "x".repeat(int(limits.get("inbound_bytes", 0)) + 1)
+	got = await _receive(limits, past)
+	texts = got.get("texts", [])
+	if not texts.is_empty():
+		failures.append("a message past the inbound buffer was handed over (%d message(s), the first %d bytes)" % [texts.size(), String(texts[0]).length()])
+	if got.get("state", -1) != WebSocketPeer.STATE_CLOSED or got.get("code", -1) != 1009:
+		failures.append("a message past the inbound buffer did not close the peer with 1009: %s" % got)
+	print("[client-check] the transport: the %d-byte worst page whole; past the %d-byte buffer, nothing handed over and the peer closed with %s (`%s`)" % [WORST_PAGE_BYTES, int(limits.get("inbound_bytes", 0)), got.get("code", -1), got.get("reason", "")])
+
+
+## `text` sent once from a local server to a peer `host_link.gd` makes, read through its own
+## reader: `texts` handed over, the peer's `state`, its close `code` and `reason`.
+func _receive(limits: Dictionary, text: String) -> Dictionary:
+	var server := TCPServer.new()
+	if server.listen(0, "127.0.0.1") != OK:
+		return {"texts": [], "state": -1, "code": -1, "reason": "no local port"}
+	var made: Dictionary = HostLink.new_peer(limits)
+	if not made.has("peer"):
+		server.stop()
+		return {"texts": [], "state": -1, "code": -1, "reason": String(made.get("refusal", ""))}
+	var client: WebSocketPeer = made["peer"]
+	if client.connect_to_url("ws://127.0.0.1:%d/" % server.get_local_port()) != OK:
+		server.stop()
+		return {"texts": [], "state": -1, "code": -1, "reason": "no connection"}
+	var sender: WebSocketPeer = null
+	var sent := false
+	var texts: Array[String] = []
+	for frame in 600:
+		if sender == null and server.is_connection_available():
+			sender = WebSocketPeer.new()
+			sender.outbound_buffer_size = text.to_utf8_buffer().size() + 1024
+			if sender.accept_stream(server.take_connection()) != OK:
+				break
+		if sender != null:
+			sender.poll()
+		client.poll()
+		if not sent and sender != null and sender.get_ready_state() == WebSocketPeer.STATE_OPEN and client.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			if sender.send_text(text) != OK:
+				break
+			sent = true
+		if client.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			texts.append_array(HostLink.packets_of(client))
+		if not texts.is_empty() or (sent and client.get_ready_state() == WebSocketPeer.STATE_CLOSED):
+			break
+		await get_tree().process_frame
+	var answer := {"texts": texts, "state": client.get_ready_state(), "code": client.get_close_code(), "reason": client.get_close_reason(), "sent": sent}
+	server.stop()
+	return answer
+
+
+## The worst view page, as `crates/client-gdext/tests/transport.rs` builds it and as the gateway
+## spells every answer on the wire (`rpc::render`: the canonical writer, two-space indent, one
+## entry per line, a trailing newline, which Godot's own `JSON.stringify` with that indent writes
+## byte for byte): four chunks of 65 535 bytes of runs, every other chunk of the map one run, and
+## 2 000 entities of the committed golden's shape.
+static func _worst_page() -> String:
+	var chunks := []
+	for at in 288:
+		chunks.append({"origin": {"x": at * 32, "y": 352, "z": 32}, "voxels_rle": "A".repeat(87380 if at < 4 else 4)})
+	var entity := {"id": "s_4000", "kind": "structure", "subtype": "mortar", "owner": "seat.0", "at": {"x": 365, "y": 30, "z": 36}, "hp": 1, "max_hp": 400, "building": true, "look": {"shape": "dish", "x": 1, "y": 1, "z": 1}, "title": "Mortar, going up"}
+	var entities := []
+	for index in 2000:
+		entities.append(entity)
+	var page := {"jsonrpc": "2.0", "id": 999999, "result": {"at_ms": 480000, "chunks": chunks, "entities": entities, "next_cursor": "c".repeat(64), "complete": true}}
+	return JSON.stringify(page, "  ", false) + "\n"
+
+
+## **A close on a message is said, with the connection's state** (fix passes 3 to 5, item 3).
+## A 1009 with no call in flight carried nothing, so nothing is said as closed on a message; the
+## rig's reconnect policy has the link opened again at once (its first retry); and the words for a
+## close the rig did record (on the map view or an editor call, `tests` in `rig.rs`) name the code
+## and the connection's state, as the bridge's `closed_on` gives them.
+func _check_a_close_on_a_message_is_said(bridge: Node, failures: Array[String]) -> void:
+	bridge.watch_dropped(1, 1009)
+	if bridge.watch_state().has("closed_on"):
+		failures.append("a 1009 close that carried no call is said as a close on a message: %s" % bridge.watch_state().get("closed_on"))
+	if String(bridge.watch_link_action(1)) != "connect":
+		failures.append("the seat link's first reconnect is not due at once: %s" % bridge.watch_link_action(1))
+	bridge.watch_opened(1)
+	var closed := {"connection": "seat", "code": 1009, "call": "view", "open": false}
+	var said := Lobby.closed_on_line({"closed_on": closed})
+	if not said.contains("1009") or not said.contains(Strings.text("link_reopening")) or not said.contains(Strings.text("call_word_view")):
+		failures.append("a 1009 close is not said with its code, its call and the connection's state: `%s`" % said)
+	closed["open"] = true
+	said = Lobby.closed_on_line({"closed_on": closed})
+	if not said.contains(Strings.text("link_open")):
+		failures.append("a connection open again after a close on a message is not said so: `%s`" % said)
 
 
 ## **Each instance keeps its own log** (finding N): a second logger starting leaves the first's

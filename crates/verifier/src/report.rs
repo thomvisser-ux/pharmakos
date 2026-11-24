@@ -130,12 +130,13 @@ impl Diag {
 /// #179, item 3).
 ///
 /// Decision 8's notes come one per omitted setting, so a long file of bare
-/// steps made a report of megabytes, past the client's 1 MiB inbound buffer
-/// (`godot/scripts/host_link.gd`'s `INBOUND_BYTES`). Past this many the rest
-/// are counted, and one `I0007` says how many were left out. A note with its
-/// Fix is about 450 bytes of JSON, so the notes of the worst capped report
-/// are about 29 KB. `tests/report_size.rs` holds the longest file's report
-/// to an eighth of the client's buffer.
+/// steps made a report of megabytes, past the client's inbound buffer (1 MiB
+/// then; 4 MiB since S3's `fixq-c`, `crates/client-gdext/src/transport.rs`'s
+/// `INBOUND_BUFFER_BYTES`). Past this many the rest are counted, and one
+/// `I0007` says how many were left out. A note with its Fix is about 450 bytes
+/// of JSON, so the notes of the worst capped report are about 29 KB.
+/// `tests/report_size.rs` holds the longest file's report to 128 KiB, which
+/// it holds to no more than an eighth of the client's buffer.
 pub const MAX_DEFAULT_NOTES: u32 = 64;
 
 /// The code of decision 8's per-setting note.

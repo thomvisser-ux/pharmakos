@@ -26,7 +26,7 @@ use crate::targeting::{
     AttackAim, AttackMark, BuildAnchor, BuildMark, Chip, ChipFeature, FeatureKind, FeatureName,
 };
 use crate::variant::{int_variant, text_or_empty};
-use crate::vocabulary::{BeaconDetail, Entry, ParameterShape, Setting, Vocabulary};
+use crate::vocabulary::{AnchorShape, BeaconDetail, Entry, ParameterShape, Setting, Vocabulary};
 use crate::wizard::{Instance, Wizard};
 
 /// The menu's target, from the dictionary GDScript builds: `voxel` (a `Vector3i` in the
@@ -178,7 +178,6 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
         "accepted",
         submitted.is_some_and(|done| done.accepted).to_variant(),
     );
-    put("sealed_this_round", editor.sealed_this_round().to_variant());
     put("beacon_prose", editor.beacon_prose().to_variant());
     put("status_key", editor.status().key.to_variant());
     put("status_detail", editor.status().detail.to_variant());
@@ -229,11 +228,27 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("last_file", text_or_empty(editor.last_file()).to_variant());
     put("dormant", dormant_dictionary(editor).to_variant());
     put_rule_list(&mut state, editor);
+    put_unfinished(&mut state, editor);
     put_marks(&mut state, editor);
     state
 }
 
 /// The map's marks: `attack_targets` ([`attack_array`]) and `build_targets` ([`build_array`]).
+/// The editor's calls that did not complete for a cause other than the gateway's refusal, each
+/// by its own count (fix pass 4): `refusals` is the gateway's alone.
+fn put_unfinished(state: &mut VarDictionary, editor: &Editor) {
+    let unfinished = editor.unfinished_calls();
+    for (key, count) in [
+        ("too_large_calls", unfinished.too_large),
+        ("send_failed_calls", unfinished.send_failed),
+        ("closed_on_calls", unfinished.closed_on),
+        ("unreadable_calls", unfinished.unreadable),
+        ("timed_out_calls", unfinished.timed_out),
+    ] {
+        state.set(&key.to_variant(), &i64::from(count).to_variant());
+    }
+}
+
 fn put_marks(state: &mut VarDictionary, editor: &Editor) {
     state.set(
         &"attack_targets".to_variant(),
@@ -397,21 +412,33 @@ pub(crate) fn rule_list_dictionary(list: &RuleList) -> VarDictionary {
     out
 }
 
-/// One rule-list chip as a dictionary: `pointer`, `text` and `value_json` as sent, and
-/// `editor`: `number` (with `min` and `max`, each beside a `has_` flag that is false when the
-/// gateway set no bound, `unit`, `now`, and `outside`: whether `now` lies outside those bounds), `choice` (with `values`, the JSON texts as sent),
-/// `pick` (with `kind` and `arms`), or `read_only` (with `why`).
+/// One rule-list chip as a dictionary: `pointer`, `text` and `value_json` as sent, `outside`
+/// (the gateway's word that the value lies outside its shape), `pick_op` (the op its edit sends,
+/// `add`, `replace` or `none`), and its editor ([`editor_into`]).
 fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
     let mut out = VarDictionary::new();
     out.set(&"pointer".to_variant(), &chip.pointer.to_variant());
     out.set(&"text".to_variant(), &chip.text.to_variant());
     out.set(&"value_json".to_variant(), &chip.value_json.to_variant());
-    let editor = match &chip.editor {
+    out.set(&"outside".to_variant(), &chip.outside.to_variant());
+    out.set(&"pick_op".to_variant(), &chip.op.name().to_variant());
+    editor_into(&mut out, &chip.editor);
+    out
+}
+
+/// A chip's or a setting's editor into `out`: `editor` is `number` (with `min` and `max`, each
+/// beside a `has_` flag that is false when the gateway set no bound, both in `unit`; and
+/// `display_unit` and `value_text`, what the field is typed in and pre-fills with, as sent),
+/// `choice` (with `values`, the JSON texts, and `titles`, their words, as sent), `pick` (with
+/// `kind` and `arms`), `name` (with `kind`) or `read_only` (with `why`).
+fn editor_into(out: &mut VarDictionary, editor: &ChipEditor) {
+    let named = match editor {
         ChipEditor::Number {
             min,
             max,
             unit,
-            now,
+            display_unit,
+            value_text,
         } => {
             for (key, bound) in [("min", min), ("max", max)] {
                 out.set(
@@ -423,25 +450,18 @@ fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
                 }
             }
             out.set(&"unit".to_variant(), &unit.to_variant());
-            out.set(&"now".to_variant(), &now.to_variant());
-            out.set(&"outside".to_variant(), &chip.outside_bounds().to_variant());
+            out.set(&"display_unit".to_variant(), &display_unit.to_variant());
+            out.set(&"value_text".to_variant(), &value_text.to_variant());
             "number"
         }
-        ChipEditor::Choice { values } => {
-            let mut listed = PackedStringArray::new();
-            for value in values {
-                listed.push(value.as_str());
-            }
-            out.set(&"values".to_variant(), &listed.to_variant());
+        ChipEditor::Choice { values, titles } => {
+            out.set(&"values".to_variant(), &packed(values).to_variant());
+            out.set(&"titles".to_variant(), &packed(titles).to_variant());
             "choice"
         }
         ChipEditor::Pick { kind, arms } => {
-            let mut listed = PackedStringArray::new();
-            for arm in arms {
-                listed.push(arm.as_str());
-            }
             out.set(&"kind".to_variant(), &kind.name().to_variant());
-            out.set(&"arms".to_variant(), &listed.to_variant());
+            out.set(&"arms".to_variant(), &packed(arms).to_variant());
             "pick"
         }
         ChipEditor::Name(kind) => {
@@ -453,14 +473,23 @@ fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
             "read_only"
         }
     };
-    out.set(&"editor".to_variant(), &editor.to_variant());
-    out
+    out.set(&"editor".to_variant(), &named.to_variant());
+}
+
+/// Texts as GDScript's packed array, in order.
+fn packed(texts: &[String]) -> PackedStringArray {
+    let mut listed = PackedStringArray::new();
+    for text in texts {
+        listed.push(text.as_str());
+    }
+    listed
 }
 
 /// The words the pickers draw (decisions-log item 160 (4)): `known` (whether this Lull's answer is on
 /// hand), `failed` (`""`, `refused` or `unreadable`) with `detail`, and `families` (each
-/// `{family, title, locked, predicates}`), `mandates` and `blueprints`, every entry
-/// [`entry_dictionary`]. `locked` is the gateway's sentence, `""` when the entry can be used.
+/// `{family, title, locked, predicates}`), `mandates`, `blueprints` (Add a build target's),
+/// `queue_blueprints` (Queue a structure's) and `groups`, every entry [`entry_dictionary`].
+/// `locked` is the gateway's sentence, `""` when the entry can be used.
 pub(crate) fn vocabulary_dictionary(
     words: Option<&Vocabulary>,
     failed: Option<&ReadFailed>,
@@ -471,6 +500,8 @@ pub(crate) fn vocabulary_dictionary(
     let mut families = VarArray::new();
     let mut mandates = VarArray::new();
     let mut blueprints = VarArray::new();
+    let mut queue_blueprints = VarArray::new();
+    let mut groups = VarArray::new();
     if let Some(words) = words {
         for family in &words.families {
             let mut one = VarDictionary::new();
@@ -490,13 +521,24 @@ pub(crate) fn vocabulary_dictionary(
         for entry in &words.mandates {
             mandates.push(&entry_dictionary(entry).to_variant());
         }
-        for entry in &words.blueprints {
-            blueprints.push(&entry_dictionary(entry).to_variant());
+        for (list, entries) in [
+            (&mut blueprints, &words.blueprints),
+            (&mut queue_blueprints, &words.queue_blueprints),
+            (&mut groups, &words.groups),
+        ] {
+            for entry in entries {
+                list.push(&entry_dictionary(entry).to_variant());
+            }
         }
     }
     out.set(&"families".to_variant(), &families.to_variant());
     out.set(&"mandates".to_variant(), &mandates.to_variant());
     out.set(&"blueprints".to_variant(), &blueprints.to_variant());
+    out.set(
+        &"queue_blueprints".to_variant(),
+        &queue_blueprints.to_variant(),
+    );
+    out.set(&"groups".to_variant(), &groups.to_variant());
     out
 }
 
@@ -507,6 +549,10 @@ fn unchecked_dictionary(why: Option<Unchecked>) -> VarDictionary {
         None => (String::new(), String::new()),
         Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
         Some(Unchecked::Unreadable(said)) => ("unreadable".to_owned(), said),
+        Some(Unchecked::TooLarge(bytes)) => ("too_large".to_owned(), bytes),
+        Some(Unchecked::ClosedOn(code)) => ("closed_on".to_owned(), code),
+        Some(Unchecked::SendFailed(code)) => ("send_failed".to_owned(), code),
+        Some(Unchecked::TimedOut(said)) => ("timed_out".to_owned(), said),
         Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
     };
     let mut out = VarDictionary::new();
@@ -549,9 +595,10 @@ fn failed_into(out: &mut VarDictionary, failed: Option<&ReadFailed>) {
     out.set(&"detail".to_variant(), &detail.to_variant());
 }
 
-/// One vocabulary entry: `name`, `title` and `locked` as sent, and `parameters`, each
-/// `{pointer, title, shape}` with `shape` `number` (with `has_min`/`min`, `has_max`/`max` and
-/// `unit`), `ms`, `choice` (with `values`), `reference` (with `kind`) or `unknown`.
+/// One vocabulary entry: `name`, `title`, `locked` and `anchor_shape` (`point`, `box` or `""`)
+/// as sent, and `parameters`, each `{pointer, title, shape}` with `shape` `number` (with
+/// `has_min`/`min`, `has_max`/`max`, `unit` and `display_unit`), `choice` (with `values` and
+/// `titles`), `reference` (with `kind`) or `unknown`.
 fn entry_dictionary(entry: &Entry) -> VarDictionary {
     let mut one = VarDictionary::new();
     one.set(&"name".to_variant(), &entry.name.to_variant());
@@ -560,6 +607,12 @@ fn entry_dictionary(entry: &Entry) -> VarDictionary {
         &"locked".to_variant(),
         &text_or_empty(entry.locked.as_deref()).to_variant(),
     );
+    let anchor = match entry.anchor_shape {
+        AnchorShape::Point => "point",
+        AnchorShape::Box => "box",
+        AnchorShape::Unnamed => "",
+    };
+    one.set(&"anchor_shape".to_variant(), &anchor.to_variant());
     let mut parameters = VarArray::new();
     for parameter in &entry.parameters {
         let mut drawn = VarDictionary::new();
@@ -567,7 +620,12 @@ fn entry_dictionary(entry: &Entry) -> VarDictionary {
         drawn.set(&"title".to_variant(), &parameter.title.to_variant());
         drawn.set(&"shape".to_variant(), &parameter.shape.name().to_variant());
         match &parameter.shape {
-            ParameterShape::Number { min, max, unit } => {
+            ParameterShape::Number {
+                min,
+                max,
+                unit,
+                display_unit,
+            } => {
                 for (key, bound) in [("min", min), ("max", max)] {
                     drawn.set(
                         &format!("has_{key}").to_variant(),
@@ -578,18 +636,16 @@ fn entry_dictionary(entry: &Entry) -> VarDictionary {
                     }
                 }
                 drawn.set(&"unit".to_variant(), &unit.to_variant());
+                drawn.set(&"display_unit".to_variant(), &display_unit.to_variant());
             }
-            ParameterShape::Choice { values } => {
-                let mut listed = PackedStringArray::new();
-                for value in values {
-                    listed.push(value.as_str());
-                }
-                drawn.set(&"values".to_variant(), &listed.to_variant());
+            ParameterShape::Choice { values, titles } => {
+                drawn.set(&"values".to_variant(), &packed(values).to_variant());
+                drawn.set(&"titles".to_variant(), &packed(titles).to_variant());
             }
             ParameterShape::Reference { kind } => {
                 drawn.set(&"kind".to_variant(), &kind.to_variant());
             }
-            ParameterShape::Milliseconds | ParameterShape::Unknown => {}
+            ParameterShape::Unknown => {}
         }
         parameters.push(&drawn.to_variant());
     }
@@ -600,7 +656,7 @@ fn entry_dictionary(entry: &Entry) -> VarDictionary {
 /// The detail of the beacon last described (decisions-log item 160 (4)): `known`, `failed` with
 /// `detail` as for the vocabulary, `id`, `mandate` (as the wire spells it, `""` for none),
 /// `settings` (each a chip-shaped dictionary, [`setting_dictionary`]) and `targets` (each
-/// `{blueprint_id, anchor}`, the anchor as JSON text as it came).
+/// `{blueprint_id, line}`, the line the gateway's own words for the target).
 fn beacon_detail_dictionary(
     detail: Option<&BeaconDetail>,
     failed: Option<&ReadFailed>,
@@ -623,7 +679,7 @@ fn beacon_detail_dictionary(
                 &"blueprint_id".to_variant(),
                 &target.blueprint_id.to_variant(),
             );
-            one.set(&"anchor".to_variant(), &target.anchor_text.to_variant());
+            one.set(&"line".to_variant(), &target.line.to_variant());
             targets.push(&one.to_variant());
         }
     }
@@ -632,18 +688,15 @@ fn beacon_detail_dictionary(
     out
 }
 
-/// One setting as the Visit & change menu draws it: `title`, and `pointer`, `value_json` and
-/// `editor` in a rule-list chip's shape ([`rule_chip_dictionary`]), the setting's title its
-/// text.
+/// One setting as the Visit & change menu draws it: `title` (also its `text`), `pointer` and
+/// `value_json` as sent, and its editor as a chip's ([`editor_into`]). A setting row carries no
+/// `outside` and no `pick_op`: the gateway sends neither for one, and none is made up.
 fn setting_dictionary(setting: &Setting) -> VarDictionary {
-    let mut out = rule_chip_dictionary(&RuleChip {
-        pointer: setting.pointer.clone(),
-        line: 0,
-        start: 0,
-        text: setting.title.clone(),
-        value_json: setting.value_json.clone(),
-        editor: setting.editor.clone(),
-    });
+    let mut out = VarDictionary::new();
+    out.set(&"pointer".to_variant(), &setting.pointer.to_variant());
+    out.set(&"text".to_variant(), &setting.title.to_variant());
+    out.set(&"value_json".to_variant(), &setting.value_json.to_variant());
+    editor_into(&mut out, &setting.editor);
     out.set(&"title".to_variant(), &setting.title.to_variant());
     out.set(
         &"unreadable".to_variant(),
@@ -680,7 +733,7 @@ fn size_dictionary(size: Option<&SizeMeter>) -> VarDictionary {
 /// One chip as a dictionary: `pointer`, `step` (from 1; 0 for a reference outside the
 /// route), `arm` (`covering`, `on`, `other`), `form` (`name`, `description`,
 /// `covered`, `unknown`), `now` and `next` (each empty, or a feature: `id`, `kind`, `x`,
-/// `y` as the name spells them, and `travel_ms` as the gateway answered), `failure`,
+/// `y` as the name spells them, and `travel_text`, the gateway's rendered travel), `failure`,
 /// `matched` and `reachable` (whether a route reaches what it reads, as the gateway said).
 fn chip_dictionary(chip: &Chip) -> VarDictionary {
     let mut out = VarDictionary::new();
@@ -788,8 +841,8 @@ fn chip_feature(feature: Option<&ChipFeature>) -> VarDictionary {
     out.set(&"id".to_variant(), &feature.id.to_variant());
     name_into(&mut out, feature.name.as_ref());
     out.set(
-        &"travel_ms".to_variant(),
-        &i64::from(feature.travel_ms).to_variant(),
+        &"travel_text".to_variant(),
+        &feature.travel_text.to_variant(),
     );
     out
 }
@@ -814,6 +867,11 @@ pub(crate) fn recap_dictionary(recap: &Recap) -> VarDictionary {
     out.set(&"round".to_variant(), &i64::from(recap.round).to_variant());
     out.set(&"prose".to_variant(), &recap.prose.to_variant());
     out.set(&"refusal".to_variant(), &recap.refusal.to_variant());
+    // Its cause, for the string table's `recap_failed_<cause>` row (fix pass 5).
+    out.set(
+        &"refusal_cause".to_variant(),
+        &recap.refusal_cause.to_variant(),
+    );
     let mut tallies = VarArray::new();
     for seat in &recap.seat_tallies {
         let mut one = VarDictionary::new();
