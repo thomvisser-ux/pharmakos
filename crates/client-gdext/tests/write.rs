@@ -570,15 +570,51 @@ fn the_resolved_file_is_the_one_replaced() {
     assert!(!our_temp(&link).exists() && !our_temp(&real).exists());
 }
 
-/// A target that is a symbolic link: the real file gets the bytes, and the link stays a link.
+/// Makes `link` a symbolic link to the file `real`, as this system makes one.
 #[cfg(unix)]
+fn symlink_file(real: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(real, link)
+}
+
+/// Makes `link` a symbolic link to the file `real`, as this system makes one.
+#[cfg(windows)]
+fn symlink_file(real: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(real, link)
+}
+
+/// Windows' `ERROR_PRIVILEGE_NOT_HELD`: this user may not make a symbolic link (no Developer
+/// Mode and no administrator's right).
+#[cfg(windows)]
+const PRIVILEGE_NOT_HELD: i32 = 1314;
+
+/// A target that is a symbolic link, on every system: the real file gets the bytes, and the link
+/// stays a link (fix pass 7, item 6: on Windows it was tested only through the stand-in). Where
+/// this Windows user may not make a symbolic link, the test FAILS, saying so, unless
+/// `PHARMAKOS_WRITE_TESTS_WITHOUT_SYMLINKS` is set, when it prints that it was skipped: as the
+/// read-only test does, never a quiet pass.
 #[test]
 fn a_symbolic_link_is_followed_and_stays_a_link() {
     let at = folder("symlink");
     let real = at.join("real.jsonc");
     let link = at.join("link.jsonc");
     fs::write(&real, b"old").expect("the real file");
-    std::os::unix::fs::symlink(&real, &link).expect("a link");
+    if let Err(error) = symlink_file(&real, &link) {
+        #[cfg(windows)]
+        if error.raw_os_error() == Some(PRIVILEGE_NOT_HELD) {
+            assert!(
+                std::env::var_os("PHARMAKOS_WRITE_TESTS_WITHOUT_SYMLINKS").is_some(),
+                "this user may not make a symbolic link ({error}), so the link rule is not \
+                 tested: turn on Developer Mode or run as an administrator, or set \
+                 PHARMAKOS_WRITE_TESTS_WITHOUT_SYMLINKS to skip it knowingly"
+            );
+            println!(
+                "SKIPPED: this user may not make a symbolic link \
+                 (PHARMAKOS_WRITE_TESTS_WITHOUT_SYMLINKS)"
+            );
+            return;
+        }
+        panic!("a link: {error}");
+    }
     write_whole(&link, b"new").expect("written");
     assert!(
         fs::symlink_metadata(&link)
