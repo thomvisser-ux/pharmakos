@@ -88,6 +88,7 @@
 
 pub mod canonical;
 pub mod context;
+pub mod edit;
 pub mod error;
 pub mod jsonc;
 pub mod library;

@@ -238,7 +238,7 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    user arguments through `rounds_arg` too, the client's only refusals of the option, each about the command
    line's shape or the line's framing and never the number (`NO_VALUE`, `REPEATED`, `BREAKS_LINE`), made in `start()`
    before any host is spawned, every refusal of the value being the gateway's; and `watch_check.gd`'s `_rounds_cases`,
-   which runs `rounds_arg` over a fixed table first and fails the check on a mismatch; and, from S2's `view` (decisions-log item 149), `targeting.rs`'s `attack_targets` (`AttackAim`, `AttackMark`, `aim_of`, `voxel_aim`, `SELECTOR_ARMS`), a lax reader of the player's file for each Attack beacon's target, read once per text, with a selector and the enemy commander given as words only, and `editor.rs`'s `lax_document`, the lax JSONC read the route, E0601 and targeting readers share; `editor.gd`'s `_draw_attack` and `_place_attack_marks`, which mark a voxel target and put a named beacon's mark over the vista's marker of the same id (`vista.gd`'s `marker_node`), hidden while the view shows none; `chip_line`'s branch on the gateway's `reachable`; `vista.gd`'s shell, wreck and ruin markers, its hit-point bar filled by `hp` over `max_hp` as sent (`_set_bar`, drawn only when `hp` is present), its turn to the view's heading, and `_same_look`'s redraw on a change of kind, subtype, owner or bar presence, and `bridge.rs`'s `yaw_of`, a unit conversion for drawing; `view.rs`'s `entity_of`, the client's refusals of a view entity, each about the answer's shape (no position, half its hit points, a zero maximum, hit points past the maximum, a heading past the turn), and `ViewModel::new`'s refusal of an extent past the sim's `i32` coordinates; `palette_of`'s S2 rows, a wall drawn by the seat its material names; `edited_box` and the mesher's `LightField::relight`, which choose what to relight and redraw from two copies of what the gateway sent; `rig.rs`'s `served_status`, `refusal_of`, `proto3_text`, `event_rows`' refusal of a negative time, the pacer's refusal of an advance past its ask, and `HostClock::unreportable` with the rig's one sentence for it, and `variant.rs`' `proto3_integer`; and `host_link.gd`'s `GAMECTL_ARG`, `ROOT_ARG`, `prefixed_arg` and `repeated_option`, about the command line's shape and never the value, refused in `start()` before any host spawns; and `watch_check.gd`'s `_option_cases`. The client may compose a JSON Patch from a click; a verdict, a
+   which runs `rounds_arg` over a fixed table first and fails the check on a mismatch; and, from S2's `view` (decisions-log item 149), `targeting.rs`'s `attack_targets` (`AttackAim`, `AttackMark`, `aim_of`, `voxel_aim`, `SELECTOR_ARMS`), a lax reader of the player's file for each Attack beacon's target, read once per text, with a selector and the enemy commander given as words only, and `editor.rs`'s `lax_document`, the lax JSONC read the route, E0601 and targeting readers share; `editor.gd`'s `_draw_attack` and `_place_attack_marks`, which mark a voxel target and put a named beacon's mark over the vista's marker of the same id (`vista.gd`'s `marker_node`), hidden while the view shows none; `chip_line`'s branch on the gateway's `reachable`; `vista.gd`'s shell, wreck and ruin markers, its hit-point bar filled by `hp` over `max_hp` as sent (`_set_bar`, drawn only when `hp` is present), its turn to the view's heading, and `_same_look`'s redraw on a change of kind, subtype, owner or bar presence, and `bridge.rs`'s `yaw_of`, a unit conversion for drawing; `view.rs`'s `entity_of`, the client's refusals of a view entity, each about the answer's shape (no position, half its hit points, a zero maximum, hit points past the maximum, a heading past the turn), and `ViewModel::new`'s refusal of an extent past the sim's `i32` coordinates; `palette_of`'s S2 rows, a wall drawn by the seat its material names; `edited_box` and the mesher's `LightField::relight`, which choose what to relight and redraw from two copies of what the gateway sent; `rig.rs`'s `served_status`, `refusal_of`, `proto3_text`, `event_rows`' refusal of a negative time, the pacer's refusal of an advance past its ask, and `HostClock::unreportable` with the rig's one sentence for it, and `variant.rs`' `proto3_integer`; and `host_link.gd`'s `GAMECTL_ARG`, `ROOT_ARG`, `prefixed_arg` and `repeated_option`, about the command line's shape and never the value, refused in `start()` before any host spawns; and `watch_check.gd`'s `_option_cases`; and, from S3's `fixp` (decisions-log item 174 (8)), `value_field.gd`'s select on focus, the focus released at open, Enter and Send emitting the text as typed, and the first-click rule ending at the first key typed; the editor's integer parse of typed text (`editor.rs`'s `typed_integer`, with its JSON form of the digits), a decoding of the player's input and not a rule; a refusal drawn in the value field's popup (`FieldAsk`, `FieldAsk::Refused`, `status_rule_refused_changed`) and on the chip's rule (`RuleRefusal.key`); `Editor::field_opened`, `bridge.editor_field_opened()` and the token carried by `Job::RuleEdit` and `Job::Visit`, so only the field that asked hears the answer; `_draw_rules`' closing of the value field's popup, the choice menu, the name menu and the condition picker when the rendering changes, and `_rebind_number`; the one close after an action pick (`close_menu`, `_map_menus`); `sealed_this_round` and the lobby's `ready_line`; the entry list with its wrapped lock sentences, its placement beside the parent and its `ScrollContainer` capped at the window's height (`open_entry_list`); the popups' one opaque panel (`opaque`); the Build target reader (`targeting::build_targets`) with its marks and box outline (`_draw_build`, `_box_outline`); the dormant box's refusal path (`DormantRefusal`, standing only while its reason does) and its logging (`dormant_log`, and `lobby.gd`'s `--log-input` line for it); Load's folder (`load_folder`, `last_file`) and the editor state's `build_targets` key; `values.gd`'s `int_of`; and, from S3's `prob` (decisions-log item 182 (8)), `lobby.gd`'s `new_match_text` and `preset_name`, the preset's name from `HostLink.PRESET` through `strings.gd`'s `preset_<name>` rows, deciding nothing, and `preset_line`, a branch on the bridge's `preset_check` word, for display; `host_link.gd`'s `reset`, after a refused Resume; `rig.rs`'s `StatusFacts`, `MatchPreset`, `ServedPreset` and `PresetCheck` and the seat's open-time `get_status` (scheduling), and `bridge.rs`'s `watch_expect_preset`; `wizard.rs`'s `TemplateRow.guided` and its unreadable-list refusals, `editor_view.rs`'s `guided`, `guided_reason` and `templates_read`, `editor.gd`'s mark and sentence drawn as sent, and the per-Lull re-ask of `list_templates` (scheduling); `rig.rs`'s `event_rows`, `EventRow` and `Speaker` (a branch on the typed payload) and `lobby.gd`'s `event_text_of`, drawing a memo under the speaker word; `rig.rs`'s `Recap.memos`, read once per recap and drawn by `lobby.gd`'s `recap_text_of` as sent; `view.rs`'s `Entity.ring` and its two refusals, `bridge.rs`'s `ring` key and `vista.gd`'s `_set_ring` and `_ring`, drawing the served radius; `bridge.rs`'s hostless `watch_recap_of_response`, `watch_rows_of_response`, `watch_status_of_response` and `editor_templates_of_response` (`wizard::templates_of_text`), for the shots; `editor.rs`'s `ReadFailed` for the template list (`templates_failed`, `templates_read`) and `templates_unchecked` (the shut door, in the checks' words, through `editor_view.rs`'s shared `unchecked_dictionary`), `bridge.rs`'s `status_failed`, `status_detail`, `sealed_this_round` (the rig's: the seat's word for this round and phase only) and `templates_known` keys, and `lobby.gd`'s `lobby_status_*` words; `rig.rs`'s `SealFact` and the seat's `get_status` at each Lull's opening and after an accepted seal (scheduling), `Editor::take_sealed_mark`, and Ready waiting behind that read; `lobby.gd`'s `_offer_chooser` after any failure (a branch on "a failure came, and was it a refused Resume", reading no words) and `_resuming` cleared on the announce, and `host_link.gd`'s `_connect` and `_read_announce` stopping once the link is done, with `reset` deferred; `editor.gd`'s static `fill_templates` and `guided_in` and `GUIDED_LOOK`, the mark a look with the gateway's sentence as its only words; `smoke_check.gd`'s lookup of New match by `Lobby.new_match_text()`, `watch_check.gd`'s Probation leg (the six-field line refused, `reset`, the lobby's line, `get_status` naming `probation`, the guided mark drawn as sent) and the custom legs' `get_status` check, and `client_check.gd`'s `_check_the_lobby_after_a_failure`; and the hostless scenes `ring_shot`, `lobby_shot` and `templates_shot` and their scripts, which draw committed byte copies and decide nothing. The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
    from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
    a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,
@@ -523,8 +523,9 @@ to full quality once and changed only with the owner's explicit approval.
   `seats/<seat>/sealed/<round>.jsonc`, and `replay/<round>.hashes.txt` in the scenario hash-file
   format, which therefore lives on players' disks as well as under `tests/golden`; the audit log's
   leading sequence and tick fields, which a resume reads back (`MatchCache::continuation`); and,
-  from T19 PR 2, the config line the lobby remembers in `user://last_match.txt`: the six
-  `serve::Config` fields that `serve::ConfigLine` reads, without `resume`, and no token
+  from T19 PR 2, the config line the lobby remembers in `user://last_match.txt`: the seven
+  `serve::Config` fields that `serve::ConfigLine` reads (the seventh is the preset), without
+  `resume`, and no token
   (decisions-log items 113 and 114)
 - The event vocabulary: an event kind's id and name (`EventKind`, `crates/sim/src/events.rs`), a
   step failure's reason id and name (`StepFailure`, `crates/sim/src/interpreter/state.rs`) and an
@@ -562,10 +563,12 @@ never passes unseen (decisions-log items 100 (10), 109, 111, 129 and 130).
 
 ## 6. Parallel agents
 
-Review is the bottleneck, so parallelism is capped by what the owner can review, not by what the
-machine can run.
+Review is the bottleneck, so parallelism is capped by what can be reviewed, not by what the
+machine can run: under the owner's delegation (CLAUDE.md) the main session reads every pull
+request and the owner reviews the stage demo.
 
-- **At most 2–3 agents at once.** If you were spawned as a fourth, say so and wait.
+- **At most seven agents at once** (the owner's word of 2026-11-23, "raise the lane count to 7";
+  decisions-log item 183). If you were spawned as an eighth, say so and wait.
 - **Each agent works in its own git worktree**, never in the owner's checkout:
 
   ```sh
@@ -576,7 +579,11 @@ machine can run.
 
 - **One crate, one agent.** Two agents never edit the same crate at the same time. If your task
   needs a change in a crate another agent owns right now, stop and ask for the change to be
-  sequenced — do not "just add a small helper" over there. A task granted a *named place* in a
+  sequenced — do not "just add a small helper" over there. By the owner's word of 2026-11-23
+  (decisions-log item 183), for the rest of S3 two lanes may work in one crate at the same time
+  when their briefs name disjoint files. Under that word, each lane's brief lists its files, a file
+  both need is sequenced as above, merges stay one at a time, and the later lane takes `main` by a
+  signed merge and re-runs the full check. A task granted a *named place* in a
   crate it does not own (a module, or a few named lines) is granted that crate's confinement-test
   line with it wherever the test lists the crate's sources by name, and the grant says so:
   `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` (and its twin in
@@ -660,8 +667,11 @@ of that premise.
   the grammar's depth, and that is a bound on the stack only when the stack is a number: every
   thread of `gamectl` and of the gateway that reads player text is made by
   `pharmakos_plan_core::stack::player_text_thread` on `PLAYER_TEXT_STACK`, and the confinement
-  tests (`crates/gateway/tests/confinement.rs`, `crates/gamectl/tests/confinement.rs`) refuse
-  `thread::spawn` and `thread::Builder` in either crate's sources. So: make every new thread in
+  tests (`crates/gateway/tests/confinement.rs`, `crates/gamectl/tests/confinement.rs`) each refuse
+  any whole-word `thread` in their crate's shipped code, outside strings, characters and comments,
+  other than `thread::JoinHandle` (the gateway's reads each file only up to its first
+  `#[cfg(test)]` text until lane `opsave` ports `gamectl`'s reading) (decisions-log items 178 (10)
+  and 183). So: make every new thread in
   `gamectl` and the gateway through `player_text_thread` (decisions-log items 167 (6) and 168).
 - **No network telemetry.** Playtest mode is opt-in and local: "Export playtest bundle" writes a
   file the tester sends manually, containing survey, metrics, recording and the diagnostics log
@@ -754,12 +764,15 @@ cargo xtask ci --shard 2/3   # one of CI's shards (below); never needed locally
 xtask ci shard <n> (<os>)`, each running `cargo xtask ci --shard <n>/3`, so that a leg stays inside
 the owner's 75-minute budget (decisions-log items 119 (5) and 148 (2)). A shard runs its part of the
 three slow steps, `test`, `test-research` and `scenario`, and shard 1 runs every other step as well,
-except `golden`, which reads every shard's fresh outputs. The split is by name, never by timing:
-each test target (`--lib`, `--bin <name>`, `--test <name>`, `--doc`, selected over `--workspace`, so
-the build and its features are the unsharded run's) and each played scenario falls to the shard a
-hash of its name picks (`xtask/src/shard.rs`). xtask's tests check that the split is a partition,
-every unit on exactly one shard, over this workspace's own metadata, and that the units mirror
-`cargo test`'s default selection; the pull request that introduced it compared the test executables
+except `golden`, which reads every shard's fresh outputs. The split is by name and keeps no timing
+table: each test target (`--lib`, `--bin <name>`, `--test <name>`, `--doc`, selected over
+`--workspace`, so the build and its features are the unsharded run's) and each played scenario falls
+to the shard a salted hash of its name picks (`xtask/src/shard.rs`). Timing enters in one place
+only: the salt is the smallest one that sets `HEAVY_UNITS`, the few units that carry most of a
+leg's time, on shards of their own, a rule xtask's tests hold. xtask's tests check that the split
+is a partition, every unit on exactly one shard, over this workspace's own metadata, and that the
+units mirror `cargo test`'s default selection, and that the leg job counts a shard with no report,
+or one that did not run and pass its suite, as failed; the pull request that introduced it compared the test executables
 cargo builds both ways. A target the split cannot select the same way (an example, a bench `cargo
 test` would build, a target whose `test` or `doctest` flag is off) is a failure, never a target the
 shards stop testing. The leg's own job, `cargo xtask ci (<os>)`, is the required check under the

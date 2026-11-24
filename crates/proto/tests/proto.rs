@@ -1783,7 +1783,8 @@ fn the_s3_rule_list_wire_round_trips_in_its_documented_spellings() {
     let message = schema()
         .message("gp.api.v1.GetBeaconResponse")
         .expect("GetBeaconResponse is in the schema");
-    assert_eq!(message.reserved_ranges, [(6, 15)]);
+    // S3's `fixq` discharged 6 for `build_target_lines`.
+    assert_eq!(message.reserved_ranges, [(7, 15)]);
 
     let route = r#"{"reachable":true,"ms":84000,"legs":[{"ms":84000,"travel_text":"1:24"}],"travel_text":"1:24"}"#;
     let decoded: EstimateRouteResponse = json::decode(route).expect("the route decodes");
@@ -1853,10 +1854,8 @@ fn the_condition_slots_round_trip_in_their_documented_spellings() {
 }
 
 #[test]
-fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
-    use gp_api::{
-        FeatureCandidate, ResolveRefsRequest, ResolveRefsResponse, ResolvedRef, Status, status,
-    };
+fn the_s1_status_round_trips_in_its_documented_spellings() {
+    use gp_api::{Status, status};
 
     // S1-11: a recap has no countdown, and says so in its own field.
     round_trips(
@@ -1886,8 +1885,14 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
         r#"{"phase":"LULL","segment_length_ms":300000,"round":1,"untimed":true,"untimed_by_rule":true}"#,
         &["untimed", "untimed_by_rule"],
     );
+}
 
-    // resolve_refs.
+/// `resolve_refs`' pair, split from the S1 status test it was written in
+/// when S3's `fixq` added `travel_text`.
+#[test]
+fn the_s1_resolve_refs_pair_round_trips_in_its_documented_spellings() {
+    use gp_api::{FeatureCandidate, ResolveRefsRequest, ResolveRefsResponse, ResolvedRef};
+
     round_trips(
         &ResolveRefsRequest {
             playbook_jsonc: "{}".to_owned(),
@@ -1906,15 +1911,18 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
                         FeatureCandidate {
                             feature_id: "vent_120_88".to_owned(),
                             travel_ms: 14_000,
+                            travel_text: "14 s".to_owned(),
                         },
                         FeatureCandidate {
                             feature_id: "vent_150_20".to_owned(),
                             travel_ms: 16_000,
+                            travel_text: "16 s".to_owned(),
                         },
                     ],
                     matched: 2,
                     failure: String::new(),
                     reachable: true,
+                    travel_text: "14 s".to_owned(),
                 },
                 ResolvedRef {
                     pointer: "/declarative/route/3/place_beacon/at/covering".to_owned(),
@@ -1924,6 +1932,7 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
                     matched: 3,
                     failure: "no_target".to_owned(),
                     reachable: false,
+                    travel_text: String::new(),
                 },
                 // A named pick the origin cannot reach (item 133 (3) (i)): it
                 // reads its feature, and `reachable` false says that its
@@ -1936,15 +1945,16 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
                     matched: 1,
                     failure: String::new(),
                     reachable: false,
+                    travel_text: String::new(),
                 },
             ],
         },
         concat!(
             r#"{"refs":[{"pointer":"/declarative/route/0/place_beacon/at/covering","#,
             r#""feature_id":"vent_120_88","travel_ms":14000,"candidates":["#,
-            r#"{"feature_id":"vent_120_88","travel_ms":14000},"#,
-            r#"{"feature_id":"vent_150_20","travel_ms":16000}],"matched":2,"#,
-            r#""reachable":true},"#,
+            r#"{"feature_id":"vent_120_88","travel_ms":14000,"travel_text":"14 s"},"#,
+            r#"{"feature_id":"vent_150_20","travel_ms":16000,"travel_text":"16 s"}],"#,
+            r#""matched":2,"reachable":true,"travel_text":"14 s"},"#,
             r#"{"pointer":"/declarative/route/3/place_beacon/at/covering","matched":3,"#,
             r#""failure":"no_target"},"#,
             r#"{"pointer":"/declarative/route/4/place_beacon/at/covering","#,
@@ -1957,6 +1967,7 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
             "matched",
             "failure",
             "reachable",
+            "travel_text",
         ],
     );
 }

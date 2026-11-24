@@ -202,13 +202,14 @@ fn check_verifier(
         return;
     };
     let scope = seat::scope();
-    match pharmakos_plan_core::verify_jsonc(
-        pharmakos_gateway::host::SAFE_PLAYBOOK,
-        &snapshot,
-        &scope,
-        table,
-        Depth::Full,
-    ) {
+    let safe = match pharmakos_gateway::host::safe_playbook() {
+        Ok(safe) => safe,
+        Err(error) => {
+            note(lines, State::Fail, "verifier", error.message());
+            return;
+        }
+    };
+    match pharmakos_plan_core::verify_jsonc(&safe, &snapshot, &scope, table, Depth::Full) {
         Ok(report) if report.qualifies => note(
             lines,
             State::Ok,
@@ -240,7 +241,14 @@ fn check_plan_core(
     lines: &mut Vec<(State, String)>,
 ) {
     let _ = table;
-    let safe = pharmakos_gateway::host::SAFE_PLAYBOOK;
+    let safe = match pharmakos_gateway::host::safe_playbook() {
+        Ok(safe) => safe,
+        Err(error) => {
+            note(lines, State::Fail, "plan-core", error.message());
+            return;
+        }
+    };
+    let safe = safe.as_str();
     match pharmakos_plan_core::canonicalise_text(safe) {
         Ok(canonical) => {
             // The round trip, not the parse: `plan-core`'s promise is that a

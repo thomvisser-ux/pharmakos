@@ -19,7 +19,7 @@
 mod support;
 
 use pharmakos_gateway::fog::FogPolicy;
-use pharmakos_gateway::host::SAFE_PLAYBOOK;
+use pharmakos_gateway::host::safe_playbook;
 use pharmakos_proto::json::Json;
 
 use support::{MATCH, SEGMENT_MS, library_folder, result, text_of};
@@ -133,35 +133,48 @@ fn each_template_instantiates_and_qualifies_for_both_seats_of_the_golden_seed() 
     }
 }
 
-/// `SAFE_PLAYBOOK` is the Safe Playbook template instantiated with nothing
-/// raised: canonical-equal, comments aside (decision C16, item 81's "written
-/// once, tested twice").
+/// The gateway's fallback is the Safe Playbook template instantiated with
+/// nothing raised, from one source (decisions-log item 164 (3a); S3's
+/// `fixq`): the template a build embeds is the library file byte for byte, a
+/// host opens with that template instantiated as its fallback, and the
+/// fallback is a playbook, not a template, with nothing suggested.
 ///
-/// So the file the editor renders as "the cost of a timeout" and the constant
-/// a timeout files for a seat no operator advises cannot drift apart: a change
-/// to either fails here until the other follows.
+/// So the file the editor renders as "the cost of a timeout" and the text a
+/// timeout files for a seat no operator advises are one text.
 #[test]
 fn the_gateways_fallback_is_the_safe_template_with_nothing_raised() {
-    let template = std::fs::read_to_string(library_folder().join("safe_playbook.jsonc"))
+    let on_disk = std::fs::read_to_string(library_folder().join("safe_playbook.jsonc"))
         .expect("the safe template");
-    let made = pharmakos_plan_core::instantiate(&template, &[], &[]).expect("it instantiates");
+    assert_eq!(
+        pharmakos_gateway::host::SAFE_TEMPLATE,
+        on_disk,
+        "the embedded template is the library file"
+    );
+    let made = pharmakos_plan_core::instantiate(&on_disk, &[], &[]).expect("it instantiates");
     assert!(
         made.parameters.iter().all(|parameter| !parameter.suggested),
         "nothing suggested"
     );
-    let from_template =
-        pharmakos_plan_core::canonicalise_text(&made.playbook_jsonc).expect("canonical");
-    let constant = pharmakos_plan_core::canonicalise_text(SAFE_PLAYBOOK).expect("canonical");
+    let fallback = safe_playbook().expect("the fallback");
+    assert_eq!(fallback, made.playbook_jsonc);
+    let canonical = pharmakos_plan_core::canonicalise_text(&fallback).expect("canonical");
     assert_eq!(
-        constant.playbook, from_template.playbook,
-        "the gateway's fallback and the safe template with nothing raised"
+        canonical.playbook.kind(),
+        pharmakos_proto::gp::v1::playbook::Kind::Playbook
     );
-    // Canonical text too, which is the form a fingerprint is taken over.
-    let strip = |text: &str| -> String {
-        text.lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<&str>>()
-            .join("\n")
-    };
-    assert_eq!(strip(&constant.text), strip(&from_template.text));
+    // The start-up path: a host files exactly this.
+    let host = pharmakos_gateway::host::Host::open(
+        &pharmakos_sim::world::WorldConfig {
+            match_seed: 1,
+            seats: 2,
+            rules: support::rules(),
+            match_settings: pharmakos_sim::runner::MatchSettings {
+                segment_lengths_ms: vec![1000],
+                round_limit: 1,
+            },
+        },
+        None,
+    )
+    .expect("a host");
+    assert_eq!(host.safe_playbook(), fallback);
 }
