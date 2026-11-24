@@ -620,6 +620,13 @@ enum RanOut {
 /// sent again when the link is back, uncounted.
 pub const ZERO_REFUSALS: u8 = 3;
 
+/// How many refused or unreadable reads of the seat's seal (`get_status`) are asked again in one
+/// phase before the rig stops asking until the next event that owes one (S3's `fixq-c`, fix pass
+/// 1): as [`ZERO_REFUSALS`], enough for a rate limit to clear, few enough that a gateway which
+/// never answers does not spend the seat's budget for the whole Lull. While it is not told, the
+/// Ready line says the client is asking, and the read's refusal is said beside it.
+pub const STATUS_RETRIES: u8 = 3;
+
 /// Where a phase's clock reports stand, for the seat's budget: a phase's first report
 /// moves no gateway tick, and every later one does (the module doc's "Not every clock
 /// answer moves the clock").
@@ -690,6 +697,8 @@ pub struct Rig {
     reads: Reads,
     /// What `get_status`'s body last said beside its footer.
     status_facts: StatusFacts,
+    /// The seat's refused or unreadable status reads asked again in this phase.
+    status_retries: u8,
     /// The preset the lobby wrote on a new match's config line, to hold the gateway's answer
     /// to; `None` for a Resume, which repeats a remembered line.
     asked_preset: Option<MatchPreset>,
@@ -738,6 +747,7 @@ impl Rig {
             recap: Recap::default(),
             reads: Reads::default(),
             status_facts: StatusFacts::default(),
+            status_retries: 0,
             asked_preset: None,
         }
     }
@@ -770,7 +780,9 @@ impl Rig {
             self.due.keyframe = true;
             self.view_paging = None;
             self.due.feed = true;
-            self.reads.status = true;
+            // A seat connection open again (a reconnect, or a resumed client) is told its seal
+            // afresh: nothing it was told before stands (fix pass 1).
+            self.forget_seal();
         }
     }
 
@@ -781,6 +793,26 @@ impl Rig {
             self.timing.idle.edited();
         }
         if self.editor.take_sealed_mark() {
+            // A seal the gateway accepted changes the fact: the old word goes, and the line says
+            // the client is asking until the gateway's own answer comes (fix pass 1).
+            self.forget_seal();
+        }
+    }
+
+    /// The seat's seal is no longer known: the fact goes (the Ready line says the client is
+    /// asking) and `get_status` is owed, with its retries counted afresh.
+    fn forget_seal(&mut self) {
+        self.status_facts.sealed = None;
+        self.status_retries = 0;
+        self.reads.status = true;
+    }
+
+    /// A seat status read was refused or could not be read: the seal is not told, and it is
+    /// asked again, up to [`STATUS_RETRIES`] times in a phase.
+    fn status_read_failed(&mut self) {
+        self.status_facts.sealed = None;
+        if self.status_retries < STATUS_RETRIES {
+            self.status_retries = self.status_retries.saturating_add(1);
             self.reads.status = true;
         }
     }
@@ -1145,9 +1177,12 @@ impl Rig {
                 self.recap.refusal = format!("{code}: {message}");
             }
             if purpose == Purpose::Status {
-                // The facts stand as the last read gave them; the newest read's refusal is
-                // said beside them.
+                // The preset stands as the last read gave it; the seal does not (it may have
+                // moved since), and the newest read's refusal is said beside them.
                 self.status_facts.failed = Some(ReadFailed::Refused(format!("{code}: {message}")));
+                if link == SEAT {
+                    self.status_read_failed();
+                }
             }
             let said = format!("{code}: {message}");
             if purpose == Purpose::Clock
@@ -1321,12 +1356,16 @@ impl Rig {
                 self.status_facts.preset = Some(preset);
                 if link == SEAT {
                     self.status_facts.sealed = sealed;
+                    self.status_retries = 0;
                 }
                 self.status_facts.failed = None;
                 Ok(())
             }
             Err(error) => {
                 self.status_facts.failed = Some(ReadFailed::Unreadable(error.to_string()));
+                if link == SEAT {
+                    self.status_read_failed();
+                }
                 Err(error)
             }
         }
@@ -1463,8 +1502,9 @@ impl Rig {
             }
             Phase::Lull => {
                 self.reads.meter = true;
-                // The seat's seal is the new round's: asked, never carried (S3's `prob`).
-                self.reads.status = true;
+                // The seat's seal is the new round's: asked, never carried (S3's `prob`), and the
+                // old word goes at once (fix pass 1).
+                self.forget_seal();
                 self.editor.lull_opened(footer.round);
                 self.timing.pacer.stop();
                 self.timing.clock.enter(ClockPhase::Lull {
@@ -4039,6 +4079,70 @@ mod tests {
         assert_eq!(rig.status_facts().failed, None);
     }
 
+    /// **The seal is never told on stale facts** (fix pass 1; the review's probe
+    /// `probe_seal_after_accepted_submit_and_refused_status`): an accepted submission, a new
+    /// round's Lull, a seat connection opened again and a refused read each clear the fact, so
+    /// the Ready line says the client is asking rather than "with nothing sealed".
+    #[test]
+    fn the_seal_is_forgotten_at_every_event_that_moves_it() {
+        let mut rig = editing();
+        rig.status_facts.sealed = Some(SealFact {
+            round: rig.round,
+            phase: rig.phase,
+            sealed: false,
+        });
+        assert_eq!(rig.sealed_this_round(), Some(false));
+        // An accepted submission: the old "not sealed" goes at once.
+        assert!(rig.editor_mut().submit());
+        let sent = rig.poll(3);
+        let submit = sent
+            .iter()
+            .find(|frame| method_of(frame) == "submit_plan")
+            .expect("the submission");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(submit),
+                r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        assert_eq!(
+            rig.sealed_this_round(),
+            None,
+            "an accepted seal: not told yet"
+        );
+        // The read after it refused: still not told, and asked again.
+        let mut asked = 0;
+        for now in 4..10 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(now) {
+                let text = if method_of(&frame) == "get_status" && frame.link == SEAT {
+                    asked += 1;
+                    refusal(id_of(&frame), "RATE_LIMITED", "slow down")
+                } else {
+                    answer(id_of(&frame), r#"{"notes":""}"#, "lull")
+                };
+                let _ = rig.receive(frame.link, &text);
+            }
+        }
+        assert!(asked >= 2, "a refused read is asked again ({asked})");
+        assert_eq!(
+            rig.sealed_this_round(),
+            None,
+            "a refused read tells nothing"
+        );
+        // A seat connection opened again: told afresh.
+        rig.status_facts.sealed = Some(SealFact {
+            round: rig.round,
+            phase: rig.phase,
+            sealed: true,
+        });
+        rig.opened(SEAT);
+        assert_eq!(rig.sealed_this_round(), None, "a reconnect: told afresh");
+    }
+
     #[test]
     fn a_refused_or_unreadable_status_is_said_and_the_last_facts_stand() {
         let mut rig = Rig::new();
@@ -4048,7 +4152,7 @@ mod tests {
         // The seat's open-time read refused: said, and the preset read before still stands.
         rig.opened(SEAT);
         let mut refused = 0;
-        for _ in 0..8 {
+        for _ in 0..40 {
             rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
             for frame in rig.poll(1) {
                 let text = match method_of(&frame).as_str() {
@@ -4071,7 +4175,14 @@ mod tests {
                     .expect("a refusal is an answer");
             }
         }
-        assert_eq!(refused, 1, "a refused read is said, not asked in a loop");
+        // Said, and asked again a bounded number of times within the seat's budget (fix pass 1:
+        // the seal is not told while it fails), then not in a loop.
+        assert_eq!(
+            refused,
+            1 + usize::from(STATUS_RETRIES),
+            "a refused read is asked again a few times, never in a loop"
+        );
+        assert_eq!(rig.sealed_this_round(), None, "not told");
         assert_eq!(
             rig.status_facts().failed,
             Some(ReadFailed::Refused("RATE_LIMITED: slow down".to_owned()))
