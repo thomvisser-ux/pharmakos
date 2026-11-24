@@ -412,40 +412,85 @@ fn sources() -> Vec<PathBuf> {
     found
 }
 
+/// What ends a line read from a checkout made with CRLF line ends, and is not
+/// part of it (what `str::lines` drops).
+const CARRIAGE_RETURN: char = '\u{d}';
+
 /// The file's shipped code: comment-only lines removed, so prose *about* a
 /// banned name is not mistaken for a use of it, and every item a real
-/// `#[cfg(test)]` attribute stands on removed ([`test_item_lines`]), because a
+/// `#[cfg(test)]` attribute stands on blanked ([`test_item_spans`]), because a
 /// unit test is allowed to panic -- that is what a failing assertion is -- and
 /// is not compiled into the game. An attribute written in a comment or a
 /// string attributes nothing, and the rest of the file is read past it (the
 /// review of #219's T13 and T14; lane `opsave` ported `gamectl`'s reading).
-/// The lines keep their literals, which the needles of some scans are in.
+/// Only the item's own span is blanked, so code after its closing brace on
+/// that brace's line is read (`code_after_a_test_items_closing_brace_is_read`).
+/// A line the blanking leaves empty is dropped. The lines keep their
+/// literals, which the needles of some scans are in.
 fn code_lines(text: &str) -> Vec<(usize, String)> {
-    let tests = test_item_lines(&code_only(text));
-    text.lines()
-        .enumerate()
-        .filter(|(index, _)| !in_test_item(&tests, *index))
-        .filter(|(_, line)| !line.trim_start().starts_with("//"))
-        .map(|(number, line)| (number.saturating_add(1), (*line).to_owned()))
-        .collect()
+    let spans = test_item_spans(text);
+    let covered = |index: usize| {
+        spans
+            .iter()
+            .any(|(from, to)| (*from..=*to).contains(&index))
+    };
+    let mut lines = Vec::new();
+    let mut start = 0_usize;
+    let pieces = text.split('\n').count();
+    for (index, line) in text.split('\n').enumerate() {
+        let length = line.chars().count();
+        // A line wholly inside a test item, an empty one included (its line
+        // feed is then inside the item), is not shipped code.
+        let last = start.saturating_add(length.saturating_sub(1));
+        let inside = covered(start) && covered(last);
+        let shipped: String = line
+            .chars()
+            .enumerate()
+            .map(|(offset, c)| {
+                if covered(start.saturating_add(offset)) {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
+        start = start.saturating_add(length).saturating_add(1);
+        if inside || shipped.trim_start().starts_with("//") {
+            continue;
+        }
+        if index == pieces.saturating_sub(1) && line.is_empty() {
+            // The empty piece after a final line feed is not a line.
+            continue;
+        }
+        lines.push((
+            index.saturating_add(1),
+            shipped.trim_end_matches(CARRIAGE_RETURN).to_owned(),
+        ));
+    }
+    lines
 }
 
-/// `text` with every line of every item a real `#[cfg(test)]` attribute
-/// stands on blanked, line feeds kept, so a finding names the file's own line
-/// and a literal or a comment of the shipped code is read as written.
+/// `text` with every character of every item a real `#[cfg(test)]` attribute
+/// stands on blanked to a space, line feeds kept, so a finding names the
+/// file's own line and column, code after a test item's end on its last line
+/// is read, and a literal or a comment of the shipped code is read as
+/// written.
 fn shipped_text(text: &str) -> String {
-    let tests = test_item_lines(&code_only(text));
-    text.split('\n')
+    let spans = test_item_spans(text);
+    text.chars()
         .enumerate()
-        .map(|(index, line)| {
-            if in_test_item(&tests, index) {
-                ""
+        .map(|(index, c)| {
+            if c != '\n'
+                && spans
+                    .iter()
+                    .any(|(from, to)| (*from..=*to).contains(&index))
+            {
+                ' '
             } else {
-                line
+                c
             }
         })
-        .collect::<Vec<&str>>()
-        .join("\n")
+        .collect()
 }
 
 /// `text`'s shipped code as [`code_only`] reads it (every literal emptied,
@@ -455,63 +500,92 @@ fn shipped_code(text: &str) -> String {
     code_only(&shipped_text(text))
 }
 
-/// True when line `index` (from 0) is in one of `spans`.
-fn in_test_item(spans: &[(usize, usize)], index: usize) -> bool {
-    spans
-        .iter()
-        .any(|(from, to)| (*from..=*to).contains(&index))
-}
-
-/// The lines, counting from 0 and both ends included, of each item that a
-/// `#[cfg(test)]` in `code` (already [`code_only`], so one in a comment or a
-/// literal is gone) attributes: from the attribute through any further
-/// attributes to the item's end, which is its first `;` outside brackets, or
-/// the brace that closes its first `{`. Shipped code on the same line as a test
-/// item's closing brace is not read (the whole line is blanked), and `cargo fmt
-/// --check` refuses that layout (`a_test_items_closing_line_is_blanked_whole`).
-/// `gamectl`'s `test_item_lines`, copied:
-/// two crates' tests cannot share a helper, and the two are held to the same
-/// cases.
-fn test_item_lines(code: &str) -> Vec<(usize, usize)> {
-    const ATTRIBUTE: &str = "#[cfg(test)]";
-    let bytes = code.as_bytes();
-    let line_of = |at: usize| {
-        code.get(..at)
-            .map_or(0, |before| before.matches('\n').count())
-    };
+/// The characters, counting from 0 and both ends included, of each item that
+/// a real `#[cfg(test)]` in `text` attributes: from the attribute through any
+/// further attributes to the item's end, which is its first `;` outside
+/// brackets, or the brace that closes its first `{`. Read over [`masked`],
+/// which blanks every comment and literal without moving a character, so an
+/// attribute or a bracket in a comment or a literal counts for nothing and a
+/// span's ends are `text`'s own positions. `gamectl`'s `test_item_lines`,
+/// read by character rather than by line: the gateway's scan blanks the item
+/// and not the rest of its last line.
+fn test_item_spans(text: &str) -> Vec<(usize, usize)> {
+    const ATTRIBUTE: &[char] = &['#', '[', 'c', 'f', 'g', '(', 't', 'e', 's', 't', ')', ']'];
+    let code = masked(text);
     let mut spans = Vec::new();
     let mut from = 0_usize;
-    while let Some(offset) = code.get(from..).and_then(|rest| rest.find(ATTRIBUTE)) {
-        let start = from.saturating_add(offset);
+    while let Some(start) = (from..code.len())
+        .find(|at| code.get(*at..at.saturating_add(ATTRIBUTE.len())) == Some(ATTRIBUTE))
+    {
         let mut at = start.saturating_add(ATTRIBUTE.len());
         let mut depth = 0_usize;
         let mut braced = false;
         let end = loop {
-            let Some(byte) = bytes.get(at).copied() else {
-                break code.len();
+            let Some(c) = code.get(at).copied() else {
+                break code.len().saturating_sub(1);
             };
-            match byte {
-                b'(' | b'[' => depth = depth.saturating_add(1),
-                b')' | b']' => depth = depth.saturating_sub(1),
-                b'{' => {
+            match c {
+                '(' | '[' => depth = depth.saturating_add(1),
+                ')' | ']' => depth = depth.saturating_sub(1),
+                '{' => {
                     depth = depth.saturating_add(1);
                     braced = true;
                 }
-                b'}' => {
+                '}' => {
                     depth = depth.saturating_sub(1);
                     if braced && depth == 0 {
                         break at;
                     }
                 }
-                b';' if depth == 0 => break at,
+                ';' if depth == 0 => break at,
                 _ => {}
             }
             at = at.saturating_add(1);
         };
-        spans.push((line_of(start), line_of(end)));
+        spans.push((start, end));
         from = end.saturating_add(1);
     }
     spans
+}
+
+/// `text`'s characters with every comment and literal blanked to spaces, line
+/// feeds kept: [`code_only`]'s reading, but no character moves, so a position
+/// in it is a position in `text`.
+fn masked(text: &str) -> Vec<char> {
+    let chars: Vec<char> = text.chars().collect();
+    let at_char = |index: usize| chars.get(index).copied();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let mut at = 0_usize;
+    while let Some(c) = at_char(at) {
+        let next = at_char(at.saturating_add(1));
+        let word_before = at
+            .checked_sub(1)
+            .and_then(at_char)
+            .is_some_and(|before| before.is_alphanumeric() || before == '_');
+        let skipped = if c == '/' && next == Some('/') {
+            Some(line_comment_end(&chars, at))
+        } else if c == '/' && next == Some('*') {
+            Some(block_comment_end(&chars, at))
+        } else if word_before {
+            None
+        } else {
+            literal_end(&chars, at).map(|(end, _)| end)
+        };
+        if let Some(end) = skipped {
+            for index in at..end {
+                out.push(if at_char(index) == Some('\n') {
+                    '\n'
+                } else {
+                    ' '
+                });
+            }
+            at = end;
+        } else {
+            out.push(c);
+            at = at.saturating_add(1);
+        }
+    }
+    out
 }
 
 /// True when `line` uses `needle` as a name rather than merely spelling its
@@ -952,14 +1026,46 @@ fn the_scans_read_past_an_attribute_that_attributes_nothing() {
     );
 }
 
-/// The one layout the scan does not read past: code after a test item's
-/// closing brace on that brace's own line, which `cargo fmt --check` refuses.
+/// Code after a test item's closing brace, on that brace's own line, is
+/// shipped code and is read: only the item's own span is blanked
+/// ([`test_item_spans`]), never the rest of its last line. A layout `cargo fmt
+/// --check` refuses is still a layout the compiler builds, so the scan does
+/// not lean on the formatter.
 #[test]
-fn a_test_items_closing_line_is_blanked_whole() {
-    let text = "#[cfg(test)]\nmod t {\n} fn p() { std::thread::spawn(f); }\n";
+fn code_after_a_test_items_closing_brace_is_read() {
+    for text in [
+        "#[cfg(test)]\nmod t {\n} fn p() { std::thread::spawn(f); }\n",
+        "#[cfg(test)]\nfn t() { let _ = \"}\"; } fn p() { std::thread::spawn(f); }\n",
+        "#[cfg(test)]\nuse std::fs; fn p() { std::thread::spawn(f); }\n",
+    ] {
+        assert!(
+            !thread_offences(&shipped_code(text)).is_empty(),
+            "the code after the test item was not read: {text}"
+        );
+        assert!(
+            code_lines(text)
+                .iter()
+                .any(|(_, line)| line.contains("std::thread::spawn(f)")),
+            "the line scans did not read the code after the test item: {text}"
+        );
+        assert!(
+            string_literals(&text.replace("spawn(f)", "spawn(\"a  b\")"))
+                .iter()
+                .any(|literal| literal == "a  b"),
+            "the string scan did not read the code after the test item: {text}"
+        );
+    }
+    // The test item itself is still blanked, up to and including its end.
+    let text = "#[cfg(test)]\nmod t { fn t() { std::thread::spawn(g); }\n} fn p() {}\n";
     assert!(
         thread_offences(&shipped_code(text)).is_empty(),
-        "the closing line is blanked whole"
+        "a test item's own thread is not shipped code"
+    );
+    assert!(
+        code_lines(text)
+            .iter()
+            .all(|(_, line)| !line.contains("spawn")),
+        "a test item's lines are not shipped code"
     );
 }
 
