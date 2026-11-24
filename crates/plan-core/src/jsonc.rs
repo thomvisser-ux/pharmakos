@@ -693,6 +693,44 @@ impl Node {
         Ok(())
     }
 
+    /// Writes this array's last element, one just appended with no trivia
+    /// of its own, in the array's own style (S3's `fixq`, review fix pass 1,
+    /// item 7): it takes the indentation the element before it stands at (the
+    /// whitespace after the last line break of that element's leading trivia,
+    /// never a comment there) and that element's trailing whitespace, the
+    /// space before `]`, so the comma follows the element before it directly
+    /// and the bracket keeps its line. Nothing changes when the array holds
+    /// fewer than two elements, when the last one has trivia of its own, or
+    /// when the element before it ends in anything but whitespace (a comment
+    /// stays where it was written). Returns whether anything changed.
+    pub fn style_appended_item(&mut self) -> bool {
+        let Value::Array(items, _) = &mut self.value else {
+            return false;
+        };
+        let Some((last, rest)) = items.split_last_mut() else {
+            return false;
+        };
+        let Some(previous) = rest.last_mut() else {
+            return false;
+        };
+        if !last.before.is_empty()
+            || !last.after.is_empty()
+            || !previous.after.chars().all(char::is_whitespace)
+        {
+            return false;
+        }
+        let indent = match previous.before.rsplit_once('\n') {
+            Some((_, tail)) => format!("\n{tail}"),
+            None => previous.before.clone(),
+        };
+        if !indent.chars().all(char::is_whitespace) {
+            return false;
+        }
+        last.before = indent;
+        last.after = std::mem::take(&mut previous.after);
+        true
+    }
+
     /// Swaps this node's value for another, keeping the trivia around it.
     #[must_use]
     pub fn set(&mut self, node: Self) -> Self {

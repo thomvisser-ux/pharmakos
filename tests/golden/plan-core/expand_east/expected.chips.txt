@@ -2,51 +2,51 @@
   4:22-38 "voxel 96, 11, 62"
     /declarative/route/0/move/to
     reference LOCATION [voxel, beacon_anchor, safest]
-    = {"voxel":{"x":96,"y":11,"z":62}}
+    = {"voxel":{"x":96,"y":11,"z":62}}, replace
   5:18-22 "2:00"
     /declarative/route/0/timeout_ms
-    integer 0.. ms
-    = 120000
+    integer 0.. ms, shown in s
+    = 120000 (typed 120), replace
 /declarative/route/1  lines 6+1
   6:35-51 "voxel 96, 11, 62"
     /declarative/route/1/place_beacon/at
     reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
-    = {"voxel":{"x":96,"y":11,"z":62}}
+    = {"voxel":{"x":96,"y":11,"z":62}}, replace
   6:90-96 "normal"
     /declarative/route/1/place_beacon/initial/priority
-    choice "LOW" | "NORMAL" | "HIGH"
-    = "NORMAL"
+    choice "LOW" (low) | "NORMAL" (normal) | "HIGH" (high)
+    = "NORMAL", replace
 /declarative/route/2  lines 7+1
   7:24-37 "beacon "b_01""
     /declarative/route/2/move/to
     reference LOCATION [voxel, beacon_anchor, safest]
-    = {"beacon_anchor":{"beacon_id":"b_01"}}
+    = {"beacon_anchor":{"beacon_id":"b_01"}}, replace
 /declarative/handlers/0  lines 10+5
   10:35-46 "at or below"
     /declarative/handlers/0/when/all/items/0/cmdr_hp_pct/cmp
-    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
-    = "LE"
+    choice "LT" (below) | "LE" (at or below) | "EQ" (exactly) | "NE" (anything but) | "GE" (at or above) | "GT" (above)
+    = "LE", replace
   10:47-49 "40"
     /declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct
     integer 0..100 %
-    = 40
+    = 40 (typed 40), replace
   10:96-99 "3 s"
     /declarative/handlers/0/when/all/items/1/cmdr_took_damage_within/ms
-    integer 0.. ms
-    = 3000
+    integer 0.. ms, shown in s
+    = 3000 (typed 3), replace
   11:19-40 "the safest own beacon"
     /declarative/handlers/0/body/0/move/to
     reference LOCATION [voxel, beacon_anchor, safest]
-    = {"safest":{}}
+    = {"safest":{}}, replace
   12:20-23 "8 s"
     /declarative/handlers/0/body/1/hold/ms
-    integer 1.. ms
-    = 8000
+    integer 1.. ms, shown in s
+    = 8000 (typed 8), replace
   14:18-19 "3"
     /declarative/handlers/0/max_fires
     integer 1..8
-    = 3
+    = 3 (typed 3), replace
   14:52-56 "30 s"
     /declarative/handlers/0/cooldown_ms
-    integer 5000.. ms
-    = 30000
+    integer 5000.. ms, shown in s
+    = 30000 (typed 30), replace

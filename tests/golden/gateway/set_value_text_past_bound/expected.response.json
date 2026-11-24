@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32602,
+    "message": "`140` is above the most this takes, 100 %",
+    "data": {
+      "code": "INVALID_ARGUMENT"
+    }
+  }
+}

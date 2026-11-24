@@ -10,28 +10,34 @@
         "candidates": [
           {
             "feature_id": "vent_324_16",
-            "travel_ms": 39200
+            "travel_ms": 39200,
+            "travel_text": "40 s"
           },
           {
             "feature_id": "vent_148_117",
-            "travel_ms": 267800
+            "travel_ms": 267800,
+            "travel_text": "4:28"
           },
           {
             "feature_id": "vent_103_111",
-            "travel_ms": 309800
+            "travel_ms": 309800,
+            "travel_text": "5:10"
           },
           {
             "feature_id": "vent_98_135",
-            "travel_ms": 321800
+            "travel_ms": 321800,
+            "travel_text": "5:22"
           },
           {
             "feature_id": "vent_314_356",
-            "travel_ms": 369200
+            "travel_ms": 369200,
+            "travel_text": "6:10"
           }
         ],
         "matched": 5,
         "failure": "",
-        "reachable": true
+        "reachable": true,
+        "travel_text": "40 s"
       },
       {
         "pointer": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/anchor/on",
@@ -40,12 +46,14 @@
         "candidates": [
           {
             "feature_id": "vent_324_16",
-            "travel_ms": 13000
+            "travel_ms": 13000,
+            "travel_text": "13 s"
           }
         ],
         "matched": 1,
         "failure": "",
-        "reachable": true
+        "reachable": true,
+        "travel_text": "13 s"
       }
     ],
     "_status": {

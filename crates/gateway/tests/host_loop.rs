@@ -579,7 +579,7 @@ impl Advisor for Advising {
             ));
         }
         Advice {
-            safe_playbook_jsonc: String::from(pharmakos_gateway::host::SAFE_PLAYBOOK),
+            safe_playbook_jsonc: pharmakos_gateway::host::safe_playbook().expect("the fallback"),
             suggestions: Vec::new(),
             start_here: None,
         }
@@ -1414,7 +1414,9 @@ fn the_sealed_file_is_the_text_whose_canonical_form_was_verified() {
     let mut seat = Client::open(running.announce.port, &seat_token);
     let submitted = format!(
         "// sealed as written\n{}\n/* and the end */\n",
-        pharmakos_gateway::host::SAFE_PLAYBOOK
+        pharmakos_gateway::host::safe_playbook()
+            .expect("the fallback")
+            .as_str()
     );
     let params = format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&submitted));
     let hash_of = |answer: &Json| match answer
@@ -1453,7 +1455,11 @@ fn the_sealed_file_is_the_text_whose_canonical_form_was_verified() {
             .expect("a canonical form")
             .into_text()
     };
-    let bare = canonical(pharmakos_gateway::host::SAFE_PLAYBOOK);
+    let bare = canonical(
+        pharmakos_gateway::host::safe_playbook()
+            .expect("the fallback")
+            .as_str(),
+    );
     assert_eq!(
         canonical(&written),
         bare,
@@ -1483,13 +1489,11 @@ fn the_replay_files_reproduce_the_matchs_chain() {
         // The human seat plays its own orders in round 1 and none in round 2,
         // so the replay holds both a submission and a gateway-filed playbook.
         if round == 1 {
+            let fallback = pharmakos_gateway::host::safe_playbook().expect("the fallback");
             let _ = result(
                 &seat.call(
                     "submit_plan",
-                    &format!(
-                        r#"{{"playbook_jsonc":{}}}"#,
-                        support::quote(pharmakos_gateway::host::SAFE_PLAYBOOK)
-                    ),
+                    &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&fallback)),
                 ),
                 "submit_plan",
             );
@@ -1714,7 +1718,7 @@ struct Guiding;
 impl Advisor for Guiding {
     fn advise(&mut self, _seat: u8, _call: &mut dyn FnMut(&Request) -> Json) -> Advice {
         Advice {
-            safe_playbook_jsonc: String::from(pharmakos_gateway::host::SAFE_PLAYBOOK),
+            safe_playbook_jsonc: pharmakos_gateway::host::safe_playbook().expect("the fallback"),
             suggestions: vec![pharmakos_gateway::advice::Suggestion {
                 template_id: String::from("hold_and_build"),
                 parameters: Vec::new(),

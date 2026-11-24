@@ -859,6 +859,13 @@ pub struct GetBeaconResponse {
     /// on any other mandate.
     #[prost(message, repeated, tag="5")]
     pub build_targets: ::prost::alloc::vec::Vec<super::super::v1::BuildTarget>,
+    /// Each of `build_targets` as one sentence in the player's words, one per
+    /// target and in its order: its blueprint's name, where it stands and a
+    /// wall's box ("Generator at a spot on Heat vent (120, 88)"), from plan-core's
+    /// words for a Build target, so the Remove list draws a sentence and never an
+    /// anchor's JSON (S3's `fixq`). OWN beacons only, as `build_targets` is.
+    #[prost(string, repeated, tag="6")]
+    pub build_target_lines: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 impl ::prost::Name for GetBeaconResponse {
 const NAME: &'static str = "GetBeaconResponse";
@@ -883,6 +890,12 @@ pub struct BeaconSettingRow {
     /// What may be written there.
     #[prost(message, optional, tag="4")]
     pub shape: ::core::option::Option<ValueShape>,
+    /// For an integer shape, the value now as it is shown and typed, in the
+    /// shape's `display_unit`, as Chip.value_text is: "1.5" for 1500 ms. Empty
+    /// for a choice or a reference. OWN beacons only, as every row is. (S3's
+    /// `fixq`.)
+    #[prost(string, tag="5")]
+    pub value_text: ::prost::alloc::string::String,
 }
 impl ::prost::Name for BeaconSettingRow {
 const NAME: &'static str = "BeaconSettingRow";
@@ -1276,9 +1289,24 @@ pub struct GetVocabularyResponse {
     /// The route steps.
     #[prost(message, repeated, tag="3")]
     pub steps: ::prost::alloc::vec::Vec<VocabularyEntry>,
-    /// The blueprints a Build target or a queued structure may name.
+    /// Every blueprint, as a Build target may name it: a kind a Build target
+    /// cannot name is locked in the verifier's own sentence for E0010. Each entry
+    /// carries its `anchor_shape`. The Add a build target menu draws this list.
     #[prost(message, repeated, tag="4")]
     pub blueprints: ::prost::alloc::vec::Vec<VocabularyEntry>,
+    /// Every blueprint, as a `queue_structure` row may name it: a kind no queue
+    /// takes is locked in the verifier's own sentence for E0009, and a queued kind
+    /// whose licence the calling seat does not hold is locked for that. Read from
+    /// the same table the verifier's checks read, so the Queue menu draws it and
+    /// filters nothing (S3's `fixq`). The calling seat's own licences only, as
+    /// `blueprints`' locks are.
+    #[prost(message, repeated, tag="5")]
+    pub queue_blueprints: ::prost::alloc::vec::Vec<VocabularyEntry>,
+    /// The condition groups a picker may insert at a condition slot: `all`, `any`
+    /// and `not`, each with a skeleton of empty items whose slots then take
+    /// predicates (S3's `fixq`). Static, the same for every seat.
+    #[prost(message, repeated, tag="6")]
+    pub groups: ::prost::alloc::vec::Vec<VocabularyEntry>,
 }
 impl ::prost::Name for GetVocabularyResponse {
 const NAME: &'static str = "GetVocabularyResponse";
@@ -1322,6 +1350,48 @@ pub struct VocabularyEntry {
     /// "from S6". Unset when it can.
     #[prost(string, optional, tag="5")]
     pub locked: ::core::option::Option<::prost::alloc::string::String>,
+    /// On an entry of GetVocabularyResponse.blueprints, how a Build target of that
+    /// blueprint is anchored, read from the verifier's own table: POINT (a voxel,
+    /// or `on` a feature) or BOX (a wall, which fills a `wall_box` and is anchored
+    /// on a voxel inside it). ANCHOR_SHAPE_UNSPECIFIED, left out, on every
+    /// other entry. On the JSON-RPC wire it is lower case (decisions-log item 80):
+    /// "point", "box". Static, the same for every seat. (S3's `fixq`.)
+    #[prost(enumeration="vocabulary_entry::AnchorShape", tag="6")]
+    pub anchor_shape: i32,
+}
+/// Nested message and enum types in `VocabularyEntry`.
+pub mod vocabulary_entry {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum AnchorShape {
+        Unspecified = 0,
+        /// One place: a voxel, or `on` a feature.
+        Point = 1,
+        /// A box filled by a wall, its anchor a voxel inside it.
+        Box = 2,
+    }
+    impl AnchorShape {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ANCHOR_SHAPE_UNSPECIFIED",
+                Self::Point => "POINT",
+                Self::Box => "BOX",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ANCHOR_SHAPE_UNSPECIFIED" => Some(Self::Unspecified),
+                "POINT" => Some(Self::Point),
+                "BOX" => Some(Self::Box),
+                _ => None,
+            }
+        }
+    }
 }
 impl ::prost::Name for VocabularyEntry {
 const NAME: &'static str = "VocabularyEntry";
@@ -1378,9 +1448,16 @@ pub struct IntegerShape {
     #[prost(int32, optional, tag="2")]
     pub max: ::core::option::Option<i32>,
     /// The unit the number is in: `ms`, `%`, `$`, `kW` or `voxels`, or empty for a
-    /// bare count. Drawn beside the value; the client converts nothing.
+    /// bare count. `min` and `max` are in this unit. The client converts nothing.
     #[prost(string, tag="3")]
     pub unit: ::prost::alloc::string::String,
+    /// The unit the value is shown and typed in: `s` for an `ms` value, and
+    /// `unit` itself for every other. A Chip's `value_text` is in it, and
+    /// `set_value_text` reads a typed value in it and converts it to `unit`, so
+    /// the client shows seconds and converts nothing (S3's `fixq`). Static
+    /// words, the same for every seat.
+    #[prost(string, tag="4")]
+    pub display_unit: ::prost::alloc::string::String,
 }
 impl ::prost::Name for IntegerShape {
 const NAME: &'static str = "IntegerShape";
@@ -1392,6 +1469,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.IntegerShape".into
 pub struct EnumShape {
     #[prost(string, repeated, tag="1")]
     pub values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Each value in the player's words, one per `values` entry and in its order:
+    /// "at or below" for `"LE"`, "yes" for `true`, "Generator" for `"generator"`.
+    /// A menu draws these and sends the value beside it; no drawn choice is a
+    /// value's JSON text (S3's `fixq`). Static words from plan-core's string
+    /// table, the same for every seat.
+    #[prost(string, repeated, tag="2")]
+    pub titles: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 impl ::prost::Name for EnumShape {
 const NAME: &'static str = "EnumShape";
@@ -1835,9 +1919,10 @@ pub struct ConditionSlot {
     /// Written whether or not the file has the member: an EMPTY slot's pointer
     /// with nothing at it is where an `add` puts one. In the canonical snake_case
     /// spelling of the proto JSON mapping, as every chip's pointer is: in a file
-    /// that writes the member in its camelCase JSON name instead (`skipIf`), a
-    /// patch at this pointer is refused by `patch_plan` rather than written beside
-    /// it, and a pointer under such a member finds nothing.
+    /// that writes the member in its camelCase JSON name instead (`skipIf`),
+    /// `patch_plan` addresses the member the file writes, under the file's
+    /// spelling, so a patch at this pointer lands on it and never writes the
+    /// field a second time.
     #[prost(string, tag="1")]
     pub pointer: ::prost::alloc::string::String,
     /// The slot in the player's words, from the renderer's own string table:
@@ -1945,8 +2030,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ConditionSlot".int
 /// draws the span and parses no sentence.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Chip {
-    /// RFC 6901 JSON Pointer of the value in the playbook: the path of a patch's
-    /// `replace`.
+    /// RFC 6901 JSON Pointer of the value in the playbook: the path of the patch
+    /// operation `pick_op` names.
     #[prost(string, tag="1")]
     pub pointer: ::prost::alloc::string::String,
     /// The zero-based line of RenderPlanResponse.prose the chip stands on.
@@ -1967,6 +2052,25 @@ pub struct Chip {
     /// and never reads its own file. Filled by the gateway.
     #[prost(string, tag="6")]
     pub value_json: ::prost::alloc::string::String,
+    /// For an integer shape, the value now as it is shown and typed, in the
+    /// shape's `display_unit`: "1.5" for 1500 ms, "40" for 40 %. What a value
+    /// field pre-fills with, and what `set_value_text` reads back to the same
+    /// value. Empty for a choice or a reference. (S3's `fixq`.)
+    #[prost(string, tag="7")]
+    pub value_text: ::prost::alloc::string::String,
+    /// True when the value now lies outside its shape: an integer past a bound,
+    /// or a choice's value the choice does not list (an enum's unspecified zero,
+    /// a value this build does not name, a blueprint id no slot takes). The
+    /// client draws it as it is and says so, and compares nothing. (S3's `fixq`.)
+    #[prost(bool, tag="8")]
+    pub outside: bool,
+    /// The JSON Patch op an edit of this chip sends at `pointer`: REPLACE for a
+    /// value the file writes, ADD for one at its proto3 default, which the file
+    /// may leave out (an `add` of an object member writes it, or replaces it
+    /// where it is written). Never PICK_OP_UNSPECIFIED. On the JSON-RPC wire it
+    /// is lower case (decisions-log item 80): "add", "replace". (S3's `fixq`.)
+    #[prost(enumeration="condition_slot::PickOp", tag="9")]
+    pub pick_op: i32,
 }
 impl ::prost::Name for Chip {
 const NAME: &'static str = "Chip";
@@ -2134,8 +2238,9 @@ pub struct ResolvedRef {
     /// reads nothing, and `failure` says why.
     #[prost(string, tag="2")]
     pub feature_id: ::prost::alloc::string::String,
-    /// Travel from the origin to that feature, game milliseconds, by the
-    /// estimator "nearest" ranks with. Meaningful only when `reachable` is true.
+    /// Travel from the origin to that feature, game milliseconds: the walk the
+    /// router serves there, which is what "nearest" ranks by (decisions-log item
+    /// 169 (8)). Written only beside `reachable: true`.
     #[prost(int32, tag="3")]
     pub travel_ms: i32,
     /// Every candidate that matched the reference's filters and is reachable,
@@ -2155,10 +2260,16 @@ pub struct ResolvedRef {
     /// True when a route reaches the feature it reads from the origin; false
     /// when it reads nothing, or reads a named pick the origin cannot reach,
     /// and `travel_ms` then means nothing (decisions-log item 133 (3) (i), which
-    /// retires the `travel_ms` 0 a magic value stood for). S2's `wgw` writes it
-    /// from `resolve_refs`; until then the answer lacks it.
+    /// retires the `travel_ms` 0 a magic value stood for).
     #[prost(bool, tag="7")]
     pub reachable: bool,
+    /// `travel_ms` as the player reads it, the gateway's rendered figure, as
+    /// estimate_route's `travel_text` is: rounded up to a whole second ("41 s",
+    /// "2:05"). Written exactly when `travel_ms` is, so the chip draws it and does
+    /// no time maths. `resolve_refs` answers only in a Lull, so a written travel
+    /// is never withheld. (S3's `fixq`.)
+    #[prost(string, tag="8")]
+    pub travel_text: ::prost::alloc::string::String,
 }
 impl ::prost::Name for ResolvedRef {
 const NAME: &'static str = "ResolvedRef";
@@ -2169,14 +2280,138 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ResolvedRef".into(
 pub struct FeatureCandidate {
     #[prost(string, tag="1")]
     pub feature_id: ::prost::alloc::string::String,
-    /// Game milliseconds from the reference's origin.
+    /// Game milliseconds from the reference's origin: the walk the router serves
+    /// there.
     #[prost(int32, tag="2")]
     pub travel_ms: i32,
+    /// `travel_ms` as the player reads it, as ResolvedRef.travel_text is. (S3's
+    /// `fixq`.)
+    #[prost(string, tag="3")]
+    pub travel_text: ::prost::alloc::string::String,
 }
 impl ::prost::Name for FeatureCandidate {
 const NAME: &'static str = "FeatureCandidate";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.FeatureCandidate".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.FeatureCandidate".into() }}
+/// A value as the player typed it, written at a pointer (S3's `fixq`). The shape
+/// there is the rendering's chip at exactly `pointer` (RenderPlanResponse), whose
+/// `pick_op` is the op written; where no chip stands, a mandate setting the
+/// rendering does not list (a `set_mandate_settings` row's `retreat_hp_pct`)
+/// takes the vocabulary's shape for it, and an `add`. Anywhere else, and for a
+/// chip that is not an integer, the call is refused.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetValueTextRequest {
+    /// The playbook, JSONC, as patch_plan takes it.
+    #[prost(string, tag="1")]
+    pub playbook_jsonc: ::prost::alloc::string::String,
+    /// RFC 6901 JSON Pointer of the value: a Chip's `pointer`.
+    #[prost(string, tag="2")]
+    pub pointer: ::prost::alloc::string::String,
+    /// What the player typed, in the shape's `display_unit`: "3" or "1.5" seconds
+    /// for a duration, "40" for a percentage. Read after its leading and trailing
+    /// whitespace as an optional `-`, digits, and, for a duration only, a `.`
+    /// and digits that name whole milliseconds ("1.5", "1.500"); in any other
+    /// unit a `.` is refused ("40.0" is not 40). No `+`, no exponent, no
+    /// separators. A duration finer than a millisecond is refused, never rounded,
+    /// and so is a value past the shape's bounds or past what the field holds. Every refusal is
+    /// INVALID_ARGUMENT in the gateway's words, the typed text quoted.
+    #[prost(string, tag="3")]
+    pub typed: ::prost::alloc::string::String,
+}
+impl ::prost::Name for SetValueTextRequest {
+const NAME: &'static str = "SetValueTextRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SetValueTextRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.SetValueTextRequest".into() }}
+/// As PatchPlanResponse: the patched file and its undo, the undo produced by the
+/// same patch module and valid only against `playbook_jsonc`.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetValueTextResponse {
+    #[prost(string, tag="1")]
+    pub playbook_jsonc: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub inverse_json_patch: ::prost::alloc::string::String,
+}
+impl ::prost::Name for SetValueTextResponse {
+const NAME: &'static str = "SetValueTextResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SetValueTextResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.SetValueTextResponse".into() }}
+/// An empty rule, added (S3's `fixq`).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NewRuleRequest {
+    /// The playbook, JSONC, as patch_plan takes it. It must have a canonical form,
+    /// so its rules can be counted and their ids read.
+    #[prost(string, tag="1")]
+    pub playbook_jsonc: ::prost::alloc::string::String,
+}
+impl ::prost::Name for NewRuleRequest {
+const NAME: &'static str = "NewRuleRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.NewRuleRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.NewRuleRequest".into() }}
+/// The playbook with one rule more at the end of its rules: a fresh id
+/// (`rule_<n>`, the least `n` from one past the count of rules that no rule
+/// holds), `resume: CONTINUE`, `max_fires: 1`, the rules table's least
+/// cooldown, and no `when` and no body, so its RenderedRule lists one EMPTY slot
+/// for the picker. It writes no reserved construct. Refused, in the gateway's
+/// words, for a file with no canonical form and for one already holding the most
+/// rules a playbook may (the sim's handler ceiling, the verifier's E0113).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NewRuleResponse {
+    /// As PatchPlanResponse.
+    #[prost(string, tag="1")]
+    pub playbook_jsonc: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub inverse_json_patch: ::prost::alloc::string::String,
+    /// RFC 6901 JSON Pointer of the new rule: "/declarative/handlers/3".
+    #[prost(string, tag="3")]
+    pub rule_pointer: ::prost::alloc::string::String,
+    /// Its id.
+    #[prost(string, tag="4")]
+    pub rule_id: ::prost::alloc::string::String,
+}
+impl ::prost::Name for NewRuleResponse {
+const NAME: &'static str = "NewRuleResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.NewRuleResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.NewRuleResponse".into() }}
+/// A wall's box from two map clicks (S3's `fixq`).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ComposeWallBoxRequest {
+    /// One of the calling seat's own beacons, the one whose Build mandate will
+    /// hold the wall: "b_00". Another seat's beacon, a foreign handle and a name
+    /// that names nothing are one NOT_FOUND alike.
+    #[prost(string, tag="1")]
+    pub beacon_id: ::prost::alloc::string::String,
+    /// A blueprint whose VocabularyEntry.anchor_shape is BOX: "wall". Any other
+    /// is refused.
+    #[prost(string, tag="2")]
+    pub blueprint_id: ::prost::alloc::string::String,
+    /// The two clicked voxels, in either order. Only their columns are read: the
+    /// box spans every column between them, inclusive.
+    #[prost(message, optional, tag="3")]
+    pub corner_a: ::core::option::Option<super::super::v1::Voxel>,
+    #[prost(message, optional, tag="4")]
+    pub corner_b: ::core::option::Option<super::super::v1::Voxel>,
+}
+impl ::prost::Name for ComposeWallBoxRequest {
+const NAME: &'static str = "ComposeWallBoxRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ComposeWallBoxRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ComposeWallBoxRequest".into() }}
+/// The Build target an `add_build_target` row writes as it is. Its `wall_box`
+/// spans the corners' columns; `min.z` is the lowest ground under walls among
+/// them, and `max.z` the highest plus the rules' `wall_min_height_voxels`; its
+/// `anchor` is the box's lowest corner, a voxel inside it. The box is one the
+/// sim's wall check takes against the beacon's sphere and the frozen ground at
+/// the time of the call. Refusals, INVALID_ARGUMENT in the gateway's words:
+/// "no ground here" (a column off the map or with no ground, a corner past the
+/// map's coordinates) and "outside the sphere".
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ComposeWallBoxResponse {
+    #[prost(message, optional, tag="1")]
+    pub target: ::core::option::Option<super::super::v1::BuildTarget>,
+}
+impl ::prost::Name for ComposeWallBoxResponse {
+const NAME: &'static str = "ComposeWallBoxResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ComposeWallBoxResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ComposeWallBoxResponse".into() }}
 /// What the operator would file on a timeout, so a seat can see the cost of one
 /// (spec section 14). Always qualifies.
 ///
@@ -3050,6 +3285,26 @@ pub enum Method {
     /// every planning method, and it steps nothing (AGENTS.md section 3 rule 2:
     /// ranking is an estimate, not a dry run).
     ResolveRefs = 58,
+    /// "set_value_text" — a value as the player typed it, in the display unit
+    /// its shape names (seconds for a duration), written at a chip's pointer and
+    /// answered as patch_plan answers. The gateway reads and converts the text;
+    /// the client converts nothing (S3's `fixq`). Text in, text out, against the
+    /// frozen snapshot and the rules table: it steps nothing (AGENTS.md section 3
+    /// rule 2). Phase-gated like every planning method.
+    SetValueText = 59,
+    /// "new_rule" — an empty rule added at the end of the playbook's rules, with a
+    /// fresh id, answered as patch_plan answers (S3's `fixq`). Text in, text out:
+    /// it steps nothing. Phase-gated like every planning method. Its number is
+    /// past the commit block's 60 and 61 only because 59 was the planning
+    /// block's last free one; a number names a method and orders nothing.
+    NewRule = 62,
+    /// "compose_wall_box" — a wall's Build target from two map clicks: the box
+    /// over the two corners' columns, its top the rules' minimum wall height over
+    /// the frozen ground, judged by the sim's own wall check against the beacon's
+    /// sphere (S3's `fixq`). PHASE_CLOSED outside a Lull: it reads the frozen
+    /// planning world, the true ground (fog over terrain is S4's), and steps
+    /// nothing (AGENTS.md section 3 rule 2). The calling seat's own beacons only.
+    ComposeWallBox = 63,
     // --- Commit --------------------------------------------------------------
 
     /// "submit_plan" — always runs FULL. The latest verified submission replaces
@@ -3129,6 +3384,9 @@ impl Method {
             Self::GetSafePlan => "METHOD_GET_SAFE_PLAN",
             Self::GetDraft => "METHOD_GET_DRAFT",
             Self::ResolveRefs => "METHOD_RESOLVE_REFS",
+            Self::SetValueText => "METHOD_SET_VALUE_TEXT",
+            Self::NewRule => "METHOD_NEW_RULE",
+            Self::ComposeWallBox => "METHOD_COMPOSE_WALL_BOX",
             Self::SubmitPlan => "METHOD_SUBMIT_PLAN",
             Self::SetReady => "METHOD_SET_READY",
             Self::GetSegmentFeed => "METHOD_GET_SEGMENT_FEED",
@@ -3169,6 +3427,9 @@ impl Method {
             "METHOD_GET_SAFE_PLAN" => Some(Self::GetSafePlan),
             "METHOD_GET_DRAFT" => Some(Self::GetDraft),
             "METHOD_RESOLVE_REFS" => Some(Self::ResolveRefs),
+            "METHOD_SET_VALUE_TEXT" => Some(Self::SetValueText),
+            "METHOD_NEW_RULE" => Some(Self::NewRule),
+            "METHOD_COMPOSE_WALL_BOX" => Some(Self::ComposeWallBox),
             "METHOD_SUBMIT_PLAN" => Some(Self::SubmitPlan),
             "METHOD_SET_READY" => Some(Self::SetReady),
             "METHOD_GET_SEGMENT_FEED" => Some(Self::GetSegmentFeed),
