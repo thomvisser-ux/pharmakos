@@ -488,6 +488,17 @@ impl EventRow {
     }
 }
 
+/// A JSON-RPC request's text, as the rig sends it: the frame whose size, in UTF-8 bytes after
+/// JSON's own escaping, is held to the gateway's message cap.
+fn frame_text(id: i64, method: &str, params: Json) -> String {
+    json::write(&object(vec![
+        ("jsonrpc", Json::String("2.0".to_owned())),
+        ("id", number(id)),
+        ("method", Json::String(method.to_owned())),
+        ("params", params),
+    ]))
+}
+
 /// One connection's state.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 struct Link {
@@ -500,6 +511,8 @@ struct Link {
     message_drops: u32,
     /// Calls not sent because their frame was past the gateway's message cap.
     unsent: u32,
+    /// Calls the transport refused to send (`Rig::send_failed`).
+    send_failures: u32,
     calls: u64,
 }
 
@@ -851,6 +864,24 @@ impl Rig {
         self.closed(link, Close::Connection);
     }
 
+    /// The transport refused to send the frame `link` has in flight (Godot's `send_text` answered
+    /// the error `code`; fix pass 2): the call is settled as refused under its own reason, said
+    /// where that call's refusal is shown, counted, and never asked again; the link stays as it is.
+    pub fn send_failed(&mut self, link: usize, code: i64) {
+        let Some(state) = self.links.get_mut(link) else {
+            return;
+        };
+        state.send_failures = state.send_failures.saturating_add(1);
+        match state.in_flight.take() {
+            Some((_, Purpose::Plan)) => {
+                self.editor.send_failed(code);
+                self.sync_editor();
+            }
+            Some((_, purpose)) => self.refused(purpose, "SEND_FAILED"),
+            None => {}
+        }
+    }
+
     /// Connection `link` closed, for the reason `close` names. A close on the message itself
     /// settles what was in flight as refused and asks nothing again ([`Close::ThisMessage`]);
     /// any other is [`Rig::dropped`]'s.
@@ -1086,12 +1117,7 @@ impl Rig {
         let state = self.links.get_mut(link)?;
         state.next_id = state.next_id.saturating_add(1);
         let id = state.next_id;
-        let text = json::write(&object(vec![
-            ("jsonrpc", Json::String("2.0".to_owned())),
-            ("id", number(id)),
-            ("method", Json::String(method.to_owned())),
-            ("params", params),
-        ]));
+        let text = frame_text(id, method, params);
         // A frame past the gateway's message cap would close the connection (1009): it is not
         // sent, and the call is settled as refused where its refusal is shown. A transport
         // limit, read from the one number both sides read (S3's `fixq-c`, fix pass 1).
@@ -1702,6 +1728,14 @@ impl Rig {
             [admin.message_drops, seat.message_drops],
             [admin.unsent, seat.unsent],
         ]
+    }
+
+    /// How many calls the transport refused to send on each connection: [`ADMIN`]'s, then
+    /// [`SEAT`]'s.
+    #[must_use]
+    pub const fn send_failures(&self) -> [u32; 2] {
+        let [admin, seat] = &self.links;
+        [admin.send_failures, seat.send_failures]
     }
 
     /// How many calls each connection has sent: [`ADMIN`]'s, then [`SEAT`]'s.
@@ -2505,6 +2539,105 @@ mod tests {
         for now in 4..12 {
             for frame in rig.poll(now) {
                 assert_ne!(method_of(&frame), "save_notes", "never asked again");
+            }
+        }
+    }
+
+    /// The notes text that makes the seat's next `save_notes` frame exactly `bytes` long, in UTF-8
+    /// bytes, with the filler `unit` (one character of `unit_bytes` bytes once JSON has written
+    /// it) repeated; `None` when no whole number of units fits.
+    fn notes_for_frame(rig: &Rig, bytes: usize, unit: &str) -> Option<String> {
+        let id = rig.links.get(SEAT)?.next_id.checked_add(1)?;
+        let empty = frame_text(
+            id,
+            "save_notes",
+            object(vec![("notes", Json::String(String::new()))]),
+        );
+        let one = frame_text(
+            id,
+            "save_notes",
+            object(vec![("notes", Json::String(unit.to_owned()))]),
+        );
+        let per = one.len().checked_sub(empty.len())?;
+        let room = bytes.checked_sub(empty.len())?;
+        let units = room.checked_div(per)?;
+        (units.checked_mul(per)? == room).then(|| unit.repeat(units))
+    }
+
+    /// **The cap is a byte count of the frame as sent** (fix pass 2, review 2's mutants R1, the
+    /// cap counted in characters, and R2, `>=` for `>`): a frame of exactly the cap goes out and
+    /// one byte more does not; a text under the cap in characters and over it in UTF-8 bytes, and a
+    /// text under it before JSON's escaping and over it after, are not sent.
+    #[test]
+    fn the_cap_is_counted_in_bytes_of_the_frame_as_sent() {
+        let cap = pharmakos_proto::transport::MAX_MESSAGE_BYTES;
+        let sent_notes = |notes: &str| {
+            let mut rig = editing();
+            rig.editor_mut().save_notes(notes);
+            let sent = rig.poll(3);
+            let frame = sent
+                .iter()
+                .find(|frame| frame.link == SEAT && method_of(frame) == "save_notes");
+            (
+                frame.map(|frame| frame.text.len()),
+                rig.message_refusals()[1][1],
+            )
+        };
+        let rig = editing();
+        let exact = notes_for_frame(&rig, cap, "x").expect("x fills a frame to the cap");
+        assert_eq!(
+            sent_notes(&exact),
+            (Some(cap), 0),
+            "exactly the cap is sent"
+        );
+        let over = format!("{exact}x");
+        assert_eq!(sent_notes(&over), (None, 1), "one byte more is not");
+        // 90 000 three-byte characters: under the cap in characters, over it in bytes.
+        let euros = "\u{20ac}".repeat(90_000);
+        assert!(euros.chars().count() < cap && euros.len() > cap);
+        assert_eq!(
+            sent_notes(&euros),
+            (None, 1),
+            "a text over the cap in bytes"
+        );
+        // Quotes and backslashes: under the cap as typed, over it once JSON escapes each.
+        let quoted = "\"\\".repeat(87_000);
+        assert!(quoted.len() < cap);
+        assert_eq!(
+            sent_notes(&quoted),
+            (None, 1),
+            "a text over the cap once escaped"
+        );
+    }
+
+    /// **A send the transport refuses is settled at once** (fix pass 2, the HIGH's mechanism:
+    /// Godot's `send_text` refused a frame its outbound buffer could not hold, the error was
+    /// ignored, and the call sat "Sending..." until the link timed out and was asked again): the
+    /// call is refused under its own reason, said, counted, and neither left in flight nor asked
+    /// again.
+    #[test]
+    fn a_send_the_transport_refuses_is_settled_and_never_asked_again() {
+        let mut rig = editing();
+        rig.editor_mut().save_notes("notes");
+        let sent = rig.poll(3);
+        assert!(sent.iter().any(|frame| method_of(frame) == "save_notes"));
+        rig.send_failed(SEAT, 6);
+        assert_eq!(rig.send_failures(), [0, 1]);
+        assert_eq!(rig.editor().status().key, "call_send_failed");
+        assert_eq!(rig.drops(), [0, 0]);
+        assert!(
+            rig.links
+                .get(SEAT)
+                .is_some_and(|link| link.in_flight.is_none()),
+            "not left in flight"
+        );
+        for now in 4..12 {
+            for frame in rig.poll(now) {
+                assert_ne!(method_of(&frame), "save_notes", "never asked again");
+                let _ = rig.receive(
+                    frame.link,
+                    &answer(id_of(&frame), r#"{"notes":""}"#, "lull"),
+                );
             }
         }
     }

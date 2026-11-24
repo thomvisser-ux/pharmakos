@@ -47,9 +47,6 @@ const ADMIN := 0
 ## The seat connection's index in the bridge's watch rig.
 const SEAT := 1
 
-## One view page is cut at 256 KiB of encoded runs, which base64 and JSON grow by about a
-## third; 1 MiB holds a page with room to spare (skeleton-plan-t16a-notes.md section A (2)).
-const INBOUND_BYTES := 1048576
 
 ## How many times a dropped connection is reopened before the link gives up.
 ##
@@ -364,9 +361,14 @@ func pump() -> void:
 	for link in [ADMIN, SEAT]:
 		_pump_link(link)
 	for pair in bridge.watch_outbox():
-		var peer: WebSocketPeer = _peers[int(pair[0])]
+		var link := int(pair[0])
+		var peer: WebSocketPeer = _peers[link]
 		if peer != null and peer.get_ready_state() == WebSocketPeer.STATE_OPEN:
-			peer.send_text(String(pair[1]))
+			# A send the transport refuses is the bridge's to settle at once, so the call never
+			# waits "Sending..." for a timeout (S3's `fixq-c`, fix pass 2).
+			var sent := peer.send_text(String(pair[1]))
+			if sent != OK:
+				bridge.watch_send_failed(link, sent)
 
 
 ## Closes both connections and the host's standard input, which ends the host.
@@ -431,7 +433,12 @@ func _read_announce() -> void:
 
 func _connect(link: int) -> void:
 	var peer := WebSocketPeer.new()
-	peer.inbound_buffer_size = INBOUND_BYTES
+	# Every peer carries what the gateway's message cap allows, both ways, as the bridge passes the
+	# numbers through (`crates/client-gdext/src/transport.rs`; fix pass 2: Godot's default outbound
+	# buffer, 64 KiB, refused a frame the cap allowed and the link timed out).
+	var limits: Dictionary = bridge.watch_transport_limits()
+	peer.outbound_buffer_size = int(limits.get("outbound_bytes", 0))
+	peer.inbound_buffer_size = int(limits.get("inbound_bytes", 0))
 	peer.handshake_headers = PackedStringArray(["Authorization: Bearer " + String(_tokens[link])])
 	var error := peer.connect_to_url("ws://127.0.0.1:%d/" % _port)
 	if error != OK:

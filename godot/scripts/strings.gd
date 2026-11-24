@@ -258,8 +258,14 @@ const TEXT := {
 	"unchecked_unreadable": "Not shown: this client could not read the gateway's answer ({detail}).",
 	# A call too large for the gateway to read is not sent (S3's `fixq-c`, fix pass 1): the
 	# connection stays up, and the line says so where the call's answer would have been.
-	"unchecked_too_large": "Not checked: the text is too large to send ({detail} bytes).",
-	"status_call_too_large": "Not sent: that is too large for the gateway to read ({detail} bytes), so nothing changed.",
+	"unchecked_too_large": "Not checked: the text is {detail} bytes, past the {limit} bytes the gateway reads.",
+	"status_call_too_large": "Not sent: that is {detail} bytes, and the gateway reads no message past {limit} bytes. Nothing changed; shorten it and send it again.",
+	# The transport refused to send a call (fix pass 2): said at once, never re-sent.
+	"unchecked_send_failed": "Not checked: the connection refused to send this check (error {detail}); it is not sent again.",
+	"status_call_send_failed": "Not sent: the connection refused to send that (error {detail}). Nothing changed.",
+	"templates_send_failed": "The template list was not sent: the connection refused it (error {detail}).",
+	"vocabulary_send_failed": "The words to pick from were not sent: the connection refused them (error {detail}).",
+	"menu_detail_send_failed": "This beacon's detail was not sent: the connection refused it (error {detail}).",
 	"templates_too_large": "The template list was not asked: the call was too large to send ({detail} bytes).",
 	"vocabulary_too_large": "The words to pick from were not asked: the call was too large to send ({detail} bytes).",
 	"menu_detail_too_large": "This beacon's detail was not asked: the call was too large to send ({detail} bytes).",
@@ -288,6 +294,7 @@ const TEXT := {
 	# is, and the digits it held.
 	"value_ring": "A beacon's sphere radius",
 	"value_look": "A look's size",
+	"value_limit": "The gateway's message cap",
 	"value_unreadable": "{what} could not be read: the bridge sent {held}, past what this client's numbers hold.",
 	"value_changes": "The editor's change count",
 	"value_undo_depth": "How many edits Undo can take back",
@@ -435,7 +442,16 @@ const TEXT := {
 
 ## The sentence `key` names, with `args` put into its frame. An unknown key comes back as
 ## itself, so a missing row shows rather than hides.
+## The gateway's message cap in bytes, as the bridge passes it through (`watch_transport_limits`),
+## for the words that name it (`{limit}`): set once the bridge is up. Empty before.
+static var message_limit := ""
+
+
 static func text(key: String, args: Dictionary = {}) -> String:
 	if not TEXT.has(key):
 		return key
-	return String(TEXT[key]).format(args)
+	var filled := args
+	if not filled.has("limit") and String(TEXT[key]).contains("{limit}"):
+		filled = args.duplicate()
+		filled["limit"] = message_limit
+	return String(TEXT[key]).format(filled)

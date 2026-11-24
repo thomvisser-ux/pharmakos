@@ -575,6 +575,38 @@ impl PharmakosBridge {
         }
     }
 
+    /// The transport refused to send the frame `link` (0 admin, 1 seat) has in flight:
+    /// `WebSocketPeer.send_text` answered the error `code` (fix pass 2). The rig settles that call
+    /// as refused at once and never asks it again.
+    #[func]
+    fn watch_send_failed(&mut self, link: i64, code: i64) {
+        if let (Some(rig), Ok(link)) = (self.rig.as_mut(), usize::try_from(link)) {
+            let _ = self
+                .panics
+                .guard("watch_send_failed", || rig.send_failed(link, code));
+        }
+    }
+
+    /// What each WebSocket peer must carry, as `host_link.gd` sets it on every peer it makes:
+    /// `outbound_bytes` and `inbound_bytes` (`crate::transport`), and `message_bytes`, the
+    /// gateway's message cap the rig sends nothing past, for the words that name it. Passed
+    /// through, never computed in GDScript.
+    #[func]
+    fn watch_transport_limits(&self) -> VarDictionary {
+        let mut limits = VarDictionary::new();
+        for (key, value) in [
+            ("outbound_bytes", crate::transport::OUTBOUND_BUFFER_BYTES),
+            ("inbound_bytes", crate::transport::INBOUND_BUFFER_BYTES),
+            (
+                "message_bytes",
+                pharmakos_proto::transport::MAX_MESSAGE_BYTES,
+            ),
+        ] {
+            limits.set(&key.to_variant(), &int_variant(value));
+        }
+        limits
+    }
+
     /// Connection `link` (0 admin, 1 seat) dropped, with the WebSocket close `code` the peer
     /// read (`WebSocketPeer.get_close_code()`, -1 for none): a code about the message itself
     /// (1009 and its kin) settles the call in flight as refused and asks it never again
@@ -1805,6 +1837,8 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
         ("message_drops_seat", closed_seat),
         ("unsent_admin", unsent_admin),
         ("unsent_seat", unsent_seat),
+        ("send_failures_admin", rig.send_failures()[0]),
+        ("send_failures_seat", rig.send_failures()[1]),
     ] {
         state.set(&key.to_variant(), &i64::from(count).to_variant());
     }

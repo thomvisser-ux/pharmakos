@@ -5,7 +5,8 @@
 //! review of PR #179, item 3).
 //!
 //! The editor reads a report through a socket whose inbound buffer is
-//! `INBOUND_BYTES` (`godot/scripts/host_link.gd`). Decision 8's `I0003` notes
+//! `INBOUND_BUFFER_BYTES` (`crates/client-gdext/src/transport.rs`, which
+//! `godot/scripts/host_link.gd` sets on every peer since S3's `fixq-c`). Decision 8's `I0003` notes
 //! come one per omitted setting, so a long file of bare steps once made a
 //! report of megabytes where it had been one `E0110`. The notes are capped
 //! (`MAX_DEFAULT_NOTES`, then one `I0007` with the count), and none is written
@@ -32,19 +33,22 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The client's inbound buffer, read from the client's own script rather
-/// than written here a second time.
+/// The client's inbound buffer, read from the client's own source rather
+/// than written here a second time (the verifier may not depend on the
+/// walled client crate, so the line is read as text).
 fn inbound_bytes() -> usize {
-    let script = std::fs::read_to_string(root().join("godot/scripts/host_link.gd"))
-        .expect("the client's host link");
-    let line = script
+    const DECLARED: &str = "pub const INBOUND_BUFFER_BYTES: usize = ";
+    let source = std::fs::read_to_string(root().join("crates/client-gdext/src/transport.rs"))
+        .expect("the client's transport sizes");
+    let line = source
         .lines()
-        .find(|line| line.starts_with("const INBOUND_BYTES := "))
-        .expect("host_link.gd declares INBOUND_BYTES");
-    line.trim_start_matches("const INBOUND_BYTES := ")
-        .trim()
+        .find(|line| line.starts_with(DECLARED))
+        .expect("transport.rs declares INBOUND_BUFFER_BYTES");
+    line.trim_start_matches(DECLARED)
+        .trim_end_matches(';')
+        .replace('_', "")
         .parse()
-        .expect("INBOUND_BYTES is a whole number")
+        .expect("INBOUND_BUFFER_BYTES is a whole number")
 }
 
 fn report_text(steps: &str) -> String {

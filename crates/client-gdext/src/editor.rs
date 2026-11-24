@@ -528,6 +528,9 @@ pub enum Unchecked {
     /// The gateway closed the connection on the check's call itself (a close code that says
     /// "this message", 1009 and its kin): the code. The call is not sent again.
     ClosedOn(String),
+    /// The transport refused to send the check's call (Godot's `send_text` failed): its error
+    /// code. The call is not sent again.
+    SendFailed(String),
 }
 
 /// One check of the text on screen, by the panel line that waits for it: a refusal is
@@ -906,6 +909,8 @@ pub enum ReadFailed {
     TooLarge(String),
     /// The gateway closed the connection on the read's call itself: the close code.
     ClosedOn(String),
+    /// The transport refused to send the read's call: its error code.
+    SendFailed(String),
 }
 
 impl ReadFailed {
@@ -917,6 +922,7 @@ impl ReadFailed {
             Self::Unreadable(_) => "unreadable",
             Self::TooLarge(_) => "too_large",
             Self::ClosedOn(_) => "closed_on",
+            Self::SendFailed(_) => "send_failed",
         }
     }
 
@@ -927,7 +933,8 @@ impl ReadFailed {
             Self::Refused(detail)
             | Self::Unreadable(detail)
             | Self::TooLarge(detail)
-            | Self::ClosedOn(detail) => detail,
+            | Self::ClosedOn(detail)
+            | Self::SendFailed(detail) => detail,
         }
     }
 }
@@ -4709,6 +4716,22 @@ impl Editor {
         settled
     }
 
+    /// The transport refused to send the call in flight (Godot's `send_text` answered an error,
+    /// `code`, which the bridge hands on: `watch_send_failed`): the call is settled as refused
+    /// where its refusal is shown, at once and never asked again, so it never sits "Sending..."
+    /// until a timeout (S3's `fixq-c`, fix pass 2).
+    pub fn send_failed(&mut self, code: i64) -> Settled {
+        let Some(sent) = self.in_flight.take() else {
+            return Settled::Answered;
+        };
+        self.touch();
+        let settled = self.refused_by(&sent, Refuser::SendFailed, &code.to_string());
+        if self.door != Door::Open {
+            self.shut();
+        }
+        settled
+    }
+
     /// The seat connection closed on the call in flight itself, with a close code that names
     /// the message and not the connection (`code`: 1009, a message too big, and its kin; the
     /// rig's [`crate::rig::Close`]): the call is settled as refused where its refusal is shown,
@@ -4738,6 +4761,7 @@ impl Editor {
             Refuser::Gateway => GATEWAY_REFUSED_KEY,
             Refuser::TooLarge => TOO_LARGE_KEY,
             Refuser::ClosedOn => CLOSED_ON_KEY,
+            Refuser::SendFailed => SEND_FAILED_KEY,
         };
         // A refused check of the text on screen will not come back by itself: the panel
         // says so, with the gateway's words, rather than "Checking..." for ever (finding K).
@@ -4752,6 +4776,7 @@ impl Editor {
                     Refuser::Gateway => Unchecked::Refused(detail.to_owned()),
                     Refuser::TooLarge => Unchecked::TooLarge(detail.to_owned()),
                     Refuser::ClosedOn => Unchecked::ClosedOn(detail.to_owned()),
+                    Refuser::SendFailed => Unchecked::SendFailed(detail.to_owned()),
                 },
             ));
         }
@@ -4760,6 +4785,7 @@ impl Editor {
             Refuser::Gateway => ReadFailed::Refused(detail.to_owned()),
             Refuser::TooLarge => ReadFailed::TooLarge(detail.to_owned()),
             Refuser::ClosedOn => ReadFailed::ClosedOn(detail.to_owned()),
+            Refuser::SendFailed => ReadFailed::SendFailed(detail.to_owned()),
         };
         match sent {
             Sent::Vocabulary { round } if *round == self.round => {
@@ -4805,10 +4831,10 @@ impl Editor {
                 self.preview = None;
             }
             self.say(
-                if refuser == Refuser::TooLarge {
-                    "call_too_large"
-                } else {
-                    "call_closed_on"
+                match refuser {
+                    Refuser::TooLarge => "call_too_large",
+                    Refuser::SendFailed => "call_send_failed",
+                    Refuser::Gateway | Refuser::ClosedOn => "call_closed_on",
                 },
                 detail,
             );
@@ -4844,7 +4870,11 @@ enum Refuser {
     Gateway,
     TooLarge,
     ClosedOn,
+    SendFailed,
 }
+
+/// The string table's key for a call the transport refused to send.
+pub const SEND_FAILED_KEY: &str = "status_call_send_failed";
 
 /// The string table's key for a call the gateway closed the connection on.
 pub const CLOSED_ON_KEY: &str = "status_call_closed_on";
@@ -8495,6 +8525,7 @@ mod tests {
         // A Fix is not taken while the first half is on its way (the editor is busy until the
         // second half lands), so nothing can come between the halves.
         let mut editor = visit_editor();
+        let unedited = editor.text.clone().expect("a text");
         let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
         assert_eq!(
             editor.change_setting_number_text("b_00", at, &pointer, "25"),
@@ -8531,10 +8562,12 @@ mod tests {
             }
         }
         assert_eq!(editor.file(), Some("C:/elsewhere/saved.jsonc"));
-        assert!(
-            editor.undo_depth() == 0 || editor.bytes() != b"{\"whole\": 25}",
-            "the two-call edit was taken back"
+        assert_eq!(
+            editor.bytes(),
+            unedited.as_bytes(),
+            "the two-call edit was taken back to the text from before it, exactly"
         );
+        assert_eq!(editor.undo_depth(), 0);
     }
 
     /// **A wall's Build target is two ground clicks and the gateway's box** (S3's `fixq-c`, item

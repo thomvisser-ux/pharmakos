@@ -358,6 +358,9 @@ var _named := {}
 func setup(the_vista: Node3D) -> void:
 	vista = the_vista
 	bridge = vista.bridge
+	# The gateway's message cap, passed through for the words that name it (fix pass 2).
+	var cap: Variant = Values.int_of(bridge.watch_transport_limits().get("message_bytes"))
+	Strings.message_limit = str(cap) if cap is int else Values.unreadable_text(Strings.text("value_limit"), cap)
 	log_input = LOG_INPUT_ARG in OS.get_cmdline_user_args()
 	for name in COUNTED:
 		_clicks[name] = {"down": 0, "pressed": 0}

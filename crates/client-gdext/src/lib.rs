@@ -129,6 +129,7 @@ pub mod rule_list;
 pub mod rules;
 pub mod surface;
 pub mod targeting;
+pub mod transport;
 pub mod upload;
 pub mod view;
 pub mod vocabulary;
