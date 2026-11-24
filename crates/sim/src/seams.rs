@@ -193,6 +193,44 @@ impl core::fmt::Display for Unmeasured {
 
 impl std::error::Error for Unmeasured {}
 
+/// **A test seam: the sim never arms it.** Whether a test asked that the
+/// next decision's tally be left unmeasured at its first charge
+/// ([`crate::world::World::fault_next_decision_charge`]): the world keeps
+/// this, and no tally, between decisions, so nothing outside a decision has a
+/// tally it could charge. Compares equal to every other, as a measurement
+/// does ([`UnitTally`]).
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct FaultSeam(core::sync::atomic::AtomicBool);
+
+impl FaultSeam {
+    /// Arm it.
+    pub fn arm(&self) {
+        self.0.store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether it was armed, disarming it.
+    pub fn take(&self) -> bool {
+        self.0.swap(false, core::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl Clone for FaultSeam {
+    fn clone(&self) -> FaultSeam {
+        FaultSeam(core::sync::atomic::AtomicBool::new(
+            self.0.load(core::sync::atomic::Ordering::Relaxed),
+        ))
+    }
+}
+
+impl PartialEq for FaultSeam {
+    fn eq(&self, _other: &FaultSeam) -> bool {
+        true
+    }
+}
+
+impl Eq for FaultSeam {}
+
 /// Why a seat's published decision figure ([`crate::world::World::decision_work`])
 /// holds no count (dunit part 2).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

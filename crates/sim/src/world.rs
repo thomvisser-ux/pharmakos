@@ -440,16 +440,13 @@ pub struct World {
     /// radius in search order ([`crate::targeting::spiral_offsets`]). Derived
     /// from the rules table once, so a decision allocates nothing.
     spiral: Vec<[i32; 2]>,
-    /// The tally a seat's decision counts into, one unit a primitive step
-    /// of counted work ([`crate::seams::UnitTally`]; P1's counted half, S1's
-    /// plan section 5; decisions-log items 33 (c) and 175). **Never hashed,
-    /// never saved.** `phase_decision` takes it out for the seats' decisions,
-    /// resets it before each and **hands it down** as the decision's meter
-    /// (`exec::decide`, `mining::refresh_seams`), and puts it back: nothing
-    /// else charges it, because nothing else is handed it (dunit part 2).
-    /// Kept between ticks only so a test's armed fault
-    /// ([`World::fault_next_decision_charge`]) survives to the decision.
-    decision_units: crate::seams::UnitTally,
+    /// Whether a test armed a fault for the next decision's tally
+    /// ([`World::fault_next_decision_charge`]). The world holds **no tally**:
+    /// `phase_decision` makes the decisions' tally, resets it before each
+    /// seat and **hands it down** as the decision's meter (`exec::decide`,
+    /// `mining::refresh_seams`), so nothing outside a decision has a tally it
+    /// could charge (dunit part 2). Never hashed, never saved.
+    decision_fault: crate::seams::FaultSeam,
     /// Per seat, what its last decision spent, as the tally read it: the
     /// count, why it holds none, or that no decision has run since this world
     /// was made or restored ([`crate::seams::NoFigure`]). Not hashed, not
@@ -1354,7 +1351,7 @@ impl World {
             spiral: crate::targeting::spiral_offsets(i32::from(
                 config.rules.sphere_radius_voxels(),
             )),
-            decision_units: crate::seams::UnitTally::new(),
+            decision_fault: crate::seams::FaultSeam::default(),
             decision_work: vec![
                 Err(crate::seams::NoFigure::NoDecisionYet);
                 crate::math::index::row(config.seats)
@@ -1764,7 +1761,7 @@ impl World {
     /// (`tests/nearest.rs`'s `decision_units_never_reach_the_state_hash`).
     #[doc(hidden)]
     pub fn fault_next_decision_charge(&self) {
-        self.decision_units.fault_next_charge();
+        self.decision_fault.arm();
     }
 
     /// What `seat_index`'s last decision spent, in evaluation units, one a
@@ -5103,11 +5100,14 @@ impl World {
             return;
         }
         let mut interpreter = core::mem::take(&mut self.interpreter);
-        // P1's counted half: the tally is taken out of the world and handed
+        // P1's counted half: the decisions' tally is made here and handed
         // down as each seat's decision's meter, so what the decision runs is
-        // counted and nothing else can reach it (dunit part 2). Moving it out
-        // and back allocates nothing.
-        let units = core::mem::take(&mut self.decision_units);
+        // counted and nothing else can reach it (dunit part 2). A tally is
+        // three atomics: making one allocates nothing.
+        let units = crate::seams::UnitTally::new();
+        if self.decision_fault.take() {
+            units.fault_next_charge();
+        }
         let seats = interpreter.len();
         let mut seat: usize = 0;
         while seat < seats {
@@ -5128,8 +5128,6 @@ impl World {
             }
             seat = seat.saturating_add(1);
         }
-        units.reset();
-        self.decision_units = units;
         self.interpreter = interpreter;
     }
 
