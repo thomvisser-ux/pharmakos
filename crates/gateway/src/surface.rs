@@ -984,9 +984,15 @@ impl Surface {
                     "this rules table has no verifier block, so the notebook has no size",
                 )
             })?;
+        // Compared as counts, never through a cast that saturates: a notebook
+        // of any length past the bound is refused as itself.
+        let notebook_bound = usize::try_from(notebook_max).map_err(|_| {
+            Error::internal("the notebook's bound does not fit this platform's sizes")
+        })?;
         for held in &saved.seats {
-            let characters = u32::try_from(held.notebook.chars().count()).unwrap_or(u32::MAX);
-            if characters > notebook_max || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
+            let characters = held.notebook.chars().count();
+            if characters > notebook_bound
+                || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
             {
                 return Err(Error::invalid(said!(
                     "seat {}'s notebook or drafts in this save are over the bounds a seat may \
@@ -3684,8 +3690,12 @@ impl Surface {
                     "this rules table has no verifier block, so the notebook has no size",
                 )
             })?;
-        let characters = u32::try_from(notes.chars().count()).unwrap_or(u32::MAX);
-        if characters > maximum {
+        // Compared as counts, never through a cast that saturates.
+        let bound = usize::try_from(maximum).map_err(|_| {
+            Error::internal("the notebook's bound does not fit this platform's sizes")
+        })?;
+        let characters = notes.chars().count();
+        if characters > bound {
             return Err(Error::invalid(said!(
                 "the notebook holds {} characters and this is {}; it is never \
                  silently truncated",

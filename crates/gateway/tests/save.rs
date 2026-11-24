@@ -1057,3 +1057,41 @@ fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
         }
     }
 }
+
+/// A saved notebook is held to the rules' bound by its count, never through a
+/// cast that saturates (S3's `fpstream`, part 2, fix pass 3): a notebook at the
+/// bound resumes, and one a character past it is refused as a damaged file,
+/// with the words a save past a bound has always had.
+#[test]
+fn a_saved_notebook_past_its_bound_is_refused() {
+    const MATCH_ID: &str = "m-fpstream2-notebook-bound";
+    let bound = rules()
+        .message()
+        .verifier
+        .as_ref()
+        .map(|verifier| verifier.notebook_max_chars)
+        .expect("a verifier block");
+    let bound = usize::try_from(bound).expect("a size");
+    let surface = new_match(MATCH_ID);
+    let saved = surface.lull_save().expect("a Lull saves");
+    let with_notebook = |characters: usize| {
+        let mut held = saved.clone();
+        let seat = held.seats.first_mut().expect("seat 0");
+        // A two-byte character, so a count of bytes would not pass for one of
+        // characters.
+        seat.notebook = "é".repeat(characters);
+        held
+    };
+    assert!(
+        resume(MATCH_ID, &with_notebook(bound)).is_ok(),
+        "at the bound"
+    );
+    let refused = resume(MATCH_ID, &with_notebook(bound.saturating_add(1)))
+        .expect_err("a character past the bound");
+    assert_eq!(refused.code(), Code::InvalidArgument);
+    assert_eq!(
+        refused.message(),
+        "seat 0's notebook or drafts in this save are over the bounds a seat may hold: the file \
+         is damaged"
+    );
+}

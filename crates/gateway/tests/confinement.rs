@@ -2070,11 +2070,6 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "surface.rs",
-        "let characters = u32::try_from(held.notebook.chars().count()).unwrap_or(u32::MAX);",
-        "the count is compared with a u32 maximum, so a saturated count is refused exactly as the true one would be",
-    ),
-    (
-        "surface.rs",
         ".map_or(self.time.tick, |host| host.runner().tick());",
         "with no match hosted the feed's anchor is the gateway's own tick, as nothing has been stamped",
     ),
@@ -2117,11 +2112,6 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         "surface.rs",
         "let cursor = request.string_param(\"cursor\")?.unwrap_or_default();",
         "proto3's default: an absent cursor is the empty one, which waits from now",
-    ),
-    (
-        "surface.rs",
-        "let characters = u32::try_from(notes.chars().count()).unwrap_or(u32::MAX);",
-        "as the saved notebook's count: compared with a u32 maximum, and refused exactly as the true count would be",
     ),
     (
         "surface.rs",
