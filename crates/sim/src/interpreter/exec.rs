@@ -2274,9 +2274,11 @@ mod visits {
     //! of each loop, counted here from what they read.
 
     use super::{
-        bindings_live, bound_slice, build_entries, commit_row, resolve_protected, walls_stand,
+        Outcome, bindings_live, bound_slice, build_entries, commander_at, commit_row, pinned_point,
+        resolve_protected, run_deploy, site_is_legal, voxels_of, walls_stand,
     };
     use crate::features::FeatureKind;
+    use crate::interpreter::state::VisitState;
     use crate::interpreter::state::{Binding, PlanState};
     use crate::interpreter::{Anchor, BeaconSpec, Row, Target};
     use crate::tables::{BuildOrder, SeatId};
@@ -2482,5 +2484,75 @@ mod visits {
         assert_eq!(world.targets().row_count(), 0, "the target was removed");
         // The feature rows up to the vent's, and the one target row.
         assert_eq!(meter.read(), Ok(u64::try_from(vent + 1).unwrap_or(0) + 1));
+    }
+
+    /// A deploy's decision, with no settings rows: the site test, the
+    /// queued-`set` test on the site's column, then the placement's three
+    /// scans of the beacon rows (none free). Each part is measured on its
+    /// own first, so a placement that stopped charging is a count short.
+    #[test]
+    fn a_deploy_charges_its_site_test_and_its_placement() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let commander = commander_at(&world, seat).unwrap_or_else(|| panic!("a commander"));
+        let [x, y, z] = voxels_of(commander);
+        let pinned = voxels_of(world.standing_point([x + 2, y, z]));
+        let site = pinned_point(pinned).unwrap_or_else(|| panic!("a site"));
+        let legal = charged(&world, |world, meter| {
+            assert!(site_is_legal(world, seat, site, meter), "a legal site");
+        });
+        let queued = charged(&world, |world, meter| {
+            assert!(!world.set_queued_on_metered([pinned[0], pinned[1]], meter));
+        });
+        assert!(world.beacons().frees().iter().all(|free| !*free));
+        let rows = u64::try_from(world.beacons().ids().len()).unwrap_or(0);
+        assert!(legal > 0 && rows > 0, "each part reads rows");
+        let mut state = PlanState {
+            pinned_at: pinned,
+            stage: VisitState::Deploying,
+            visit_due: 0,
+            ..PlanState::default()
+        };
+        let meter = crate::seams::UnitTally::new();
+        let outcome = run_deploy(
+            &mut world,
+            seat,
+            &mut state,
+            crate::seams::MandateKind::Build,
+            &[],
+            &[],
+            0,
+            &meter,
+        );
+        assert_eq!(outcome, Outcome::Complete);
+        assert_eq!(
+            u64::try_from(world.beacons().ids().len()).unwrap_or(0),
+            rows + 1,
+            "the beacon was placed"
+        );
+        assert_eq!(meter.read(), Ok(legal + queued + 3 * rows));
+    }
+
+    /// A recycle row asks whether the beacon is its seat's core: every
+    /// beacon row, charged to the decision that commits the row.
+    #[test]
+    fn a_recycle_row_charges_its_core_search() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let commander = commander_at(&world, seat).unwrap_or_else(|| panic!("a commander"));
+        let [x, y, z] = voxels_of(commander);
+        let site = world.standing_point([x + 2, y, z]);
+        let placed = world
+            .place_beacon(seat, site, crate::seams::MandateKind::Build)
+            .unwrap_or_else(|_| panic!("placed"));
+        let row = world
+            .beacons()
+            .row_of(placed)
+            .unwrap_or_else(|_| panic!("its row"))
+            .index();
+        let rows = u64::try_from(world.beacons().ids().len()).unwrap_or(0);
+        let meter = crate::seams::UnitTally::new();
+        assert!(commit_row(&mut world, row, seat, &Row::Recycle, &[], 0, &meter).is_ok());
+        assert_eq!(meter.read(), Ok(rows));
     }
 }

@@ -24,7 +24,9 @@
 //! * every `#[allow]` in the crate names a lint on the audit list below and
 //!   carries a `reason`, and the `as_conversions` family appears **only** under
 //!   `src/math/`, which is the audited-widening-cast rule of AGENTS.md §4.3
-//!   turned into a check.
+//!   turned into a check;
+//! * the code a seat's decision runs calls no plain form that has a metered
+//!   twin (dunit part 2), so every loop a decision reaches is charged.
 
 #![allow(
     clippy::expect_used,
@@ -817,4 +819,146 @@ fn the_row_read_scan_finds_what_it_is_for() {
     assert_eq!(id_row_reads(positive), vec![2, 3, 4]);
     let negative = "fn f(row: Row, n: u32) {\n    let a = usize::try_from(n);\n    let b = crate::math::index::row(row.raw());\n    let c = row.index();\n}\n";
     assert!(id_row_reads(negative).is_empty());
+}
+
+/// The sources a seat's decision runs in: the interpreter, and the seam
+/// upkeep `phase_decision` runs for each seat after it (dunit part 2).
+const DECISION_SOURCES: &[&str] = &[
+    "interpreter/exec.rs",
+    "interpreter/cond.rs",
+    "interpreter/state.rs",
+    "mining.rs",
+];
+
+/// Every function the crate offers in a metered form, by its plain name:
+/// each `fn <name>_metered`, and each function in a `mod metered` block
+/// (`spire::metered`, `targeting::metered`), which are named as the plain
+/// forms they count. Built from the sources, so a new twin joins the guard
+/// by being written.
+fn metered_twins(texts: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for text in texts {
+        for (_, line) in code_lines(text) {
+            let mut rest = line.as_str();
+            while let Some(at) = rest.find("fn ") {
+                let after = rest.get(at.saturating_add(3)..).unwrap_or_default();
+                let name: String = after
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if let Some(plain) = name.strip_suffix("_metered") {
+                    names.push(plain.to_owned());
+                }
+                rest = after;
+            }
+        }
+        let mut search = text.as_str();
+        while let Some(start) = search.find("mod metered {") {
+            let block = search.get(start..).unwrap_or_default();
+            let end = block.find("\n}\n").unwrap_or(block.len());
+            for line in block.get(..end).unwrap_or_default().lines() {
+                for lead in ["    pub fn ", "    pub(crate) fn "] {
+                    if let Some(after) = line.strip_prefix(lead) {
+                        let name: String = after
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                            .collect();
+                        names.push(name);
+                    }
+                }
+            }
+            search = block.get(end..).unwrap_or_default();
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Every call in `text`'s shipped code of a plain form that has a metered
+/// twin, as `line: name`: `.name(` or `::name(` outside a `metered::` path.
+fn plain_calls(text: &str, twins: &[String]) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for (number, line) in code_lines(shipped(text)) {
+        for name in twins {
+            for lead in [".", "::"] {
+                let needle = format!("{lead}{name}(");
+                let mut from = 0;
+                while let Some(at) = line.get(from..).and_then(|rest| rest.find(&needle)) {
+                    let start = from.saturating_add(at);
+                    let before = line.get(..start).unwrap_or_default();
+                    if !(lead == "::" && before.ends_with("metered")) {
+                        found.push(format!("{number}: {name}"));
+                    }
+                    from = start.saturating_add(needle.len());
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Dunit part 2: **a decision charges every loop it runs**, and a function
+/// that has a metered twin counts nothing in its plain form (it passes `()`).
+/// So the code a decision runs never calls a plain form that has a metered
+/// twin: it calls the twin with the decision's meter. A plain call slipped
+/// into the interpreter compiles and moves no chain; this check is what
+/// makes it red, for every twin the crate has rather than the sites a count
+/// test happens to name.
+#[test]
+fn no_decision_calls_a_plain_form_with_a_metered_twin() {
+    let texts: Vec<String> = sources()
+        .iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect();
+    let twins = metered_twins(&texts);
+    for named in [
+        "place_beacon",
+        "recycle_beacon",
+        "spire_on",
+        "radius_of",
+        "is_live",
+    ] {
+        assert!(
+            twins.iter().any(|twin| twin == named),
+            "the twin list misses `{named}`; the scan is reading the wrong thing: {twins:?}"
+        );
+    }
+    let mut findings: Vec<String> = Vec::new();
+    for source in DECISION_SOURCES {
+        let path = Path::new("src").join(source);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        for finding in plain_calls(&text, &twins) {
+            findings.push(format!("{source}:{finding}"));
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "a decision calls a plain form that counts nothing; call its metered twin with the \
+         decision's meter:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn the_twin_scan_finds_what_it_is_for() {
+    let defined = vec![String::from(
+        "fn place_beacon_metered(\n}\npub mod metered {\n    pub fn radius_of<M>(\n}\n",
+    )];
+    let twins = metered_twins(&defined);
+    assert_eq!(
+        twins,
+        vec![String::from("place_beacon"), String::from("radius_of")]
+    );
+    let positive = "fn f() {\n    world.place_beacon(seat, site, kind);\n    let r = spire::radius_of(a, b);\n}\n";
+    assert_eq!(
+        plain_calls(positive, &twins),
+        vec![
+            String::from("2: place_beacon"),
+            String::from("3: radius_of")
+        ]
+    );
+    let negative = "fn f() {\n    world.place_beacon_metered(seat, site, kind, units);\n    let r = spire::metered::radius_of(a, b, units);\n    // world.place_beacon(seat)\n}\n#[cfg(test)]\nmod tests {\n    fn g() { world.place_beacon(seat, site, kind); }\n}\n";
+    assert!(plain_calls(negative, &twins).is_empty());
 }
