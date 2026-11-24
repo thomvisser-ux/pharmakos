@@ -26,9 +26,23 @@
 //! main thread, which allocates, and a test long enough to earn that line then
 //! fails for a reason that has nothing to do with the sim. Counting on the
 //! allocating thread makes each assertion say what it means, so the file's
-//! two tests (the tick, and the breach search at its most work and from a
-//! cloned scratch) each count only their own allocations.
+//! tests (the tick, the breach search at its most work and from a cloned
+//! scratch, the near estimate and the `toward` tick), which libtest runs on
+//! its threads side by side, each count only their own allocations.
+//!
+//! **One build, the default one.** The whole file is behind
+//! `not(feature = "research")`, the mirror of `tests/fork.rs`, so
+//! `test-research` compiles nothing here. The `research` feature gates one
+//! item in the sim, `pub mod research;` (`fork`, a `World::clone`, and
+//! `fork_and_step`), and enables nothing, so the research build's tick is the
+//! default build's tick, function for function: running these tests again
+//! under the feature counted the same code twice, at opt-level 0, for two to
+//! four minutes a leg. The premise is checked rather than assumed:
+//! [`the_research_feature_gates_the_fork_module_and_nothing_else`] reads the
+//! sim's sources and manifest, and goes red the day the feature reaches
+//! anything else, when the tests must run under it as well.
 
+#![cfg(not(feature = "research"))]
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -917,4 +931,80 @@ fn ring_round(world: &mut World, vent: [i32; 2], radius: i32) {
             }
         }
     }
+}
+
+/// The premise of the file's one build (the module docs): read from the sim's
+/// own sources, the `research` feature gates exactly one item, `pub mod
+/// research;` in `lib.rs`, and the manifest's `research = []` enables nothing.
+/// A `cfg` on the feature anywhere else in the sim, a `cfg!` or `cfg_attr`
+/// naming it, or a feature it enables makes this red: the research build's
+/// tick would then differ from this build's, and this file's tests would have
+/// to run under the feature as well.
+#[test]
+fn the_research_feature_gates_the_fork_module_and_nothing_else() {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected and sorted before use, which is what happens below"
+    )]
+    fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .expect("the sim's source folder reads")
+            .map(|entry| entry.expect("a folder entry reads").path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    sources(std::path::Path::new("src"), &mut files);
+    assert!(files.len() > 10, "the sim's sources were found: {files:?}");
+    let mut gates = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("a source file reads");
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        for (at, line) in lines.iter().enumerate() {
+            if line.starts_with("//")
+                || !(line.contains("feature") && line.contains("\"research\""))
+            {
+                continue;
+            }
+            let next = lines
+                .iter()
+                .skip(at + 1)
+                .find(|next| !next.is_empty() && !next.starts_with("//"))
+                .copied()
+                .unwrap_or("(nothing follows)");
+            gates.push((
+                file.display().to_string().replace('\\', "/"),
+                (*line).to_owned(),
+                next.to_owned(),
+            ));
+        }
+    }
+    assert_eq!(
+        gates,
+        [(
+            "src/lib.rs".to_owned(),
+            "#[cfg(feature = \"research\")]".to_owned(),
+            "pub mod research;".to_owned()
+        )],
+        "the research feature gates something beside the fork module, so the research build's \
+         tick is no longer the default build's: run the tick tests under it as well"
+    );
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("the sim's manifest reads");
+    let declared: Vec<&str> = manifest
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("research"))
+        .collect();
+    assert_eq!(
+        declared,
+        ["research = []"],
+        "the research feature enables nothing else"
+    );
 }
