@@ -779,10 +779,11 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "I0007",
-        message: "omitted settings not noted one by one: {count}. Each reads as its default; a \
-                  report notes at most the first few, and none past the size budget.",
-        beginner: "Many settings here are left to their defaults. The first few are noted; the \
-                   rest work the same way.",
+        message: "{count} more `{code}` not listed: a report lists at most {max} of one code \
+                  one by one, and no `I0003` once the size budget is past. Each counts as \
+                  raised: one left out that is an error still stops the playbook qualifying.",
+        beginner: "Not shown: {count} more `{code}`. Deal with the ones shown, then check \
+                   again to see the rest.",
     },
 ];
 
@@ -1050,12 +1051,32 @@ mod tests {
         }
     }
 
+    /// A beginner sentence names no argument its message does not, so every
+    /// one is filled from what the call site supplied. Only `I0007`'s names
+    /// any (S3's `vcap`): the client shows the beginner sentence, and "some
+    /// findings are not shown" without which and how many would send the
+    /// player looking for them.
     #[test]
-    fn no_beginner_sentence_is_templated() {
+    fn a_beginner_sentence_names_only_its_messages_arguments() {
+        let names = |template: &'static str| -> Vec<&'static str> {
+            template
+                .split('{')
+                .skip(1)
+                .filter_map(|tail| tail.split_once('}').map(|(name, _)| name))
+                .collect()
+        };
         for row in VERIFIER_STRINGS {
+            let message = names(row.message);
+            for name in names(row.beginner) {
+                assert!(
+                    message.contains(&name),
+                    "{}'s beginner sentence names `{{{name}}}`, which its message does not",
+                    row.code
+                );
+            }
             assert!(
-                !row.beginner.contains('{'),
-                "{}'s beginner sentence is templated; it must read the same every time",
+                row.code == "I0007" || !row.beginner.contains('{'),
+                "{}'s beginner sentence is templated",
                 row.code
             );
         }

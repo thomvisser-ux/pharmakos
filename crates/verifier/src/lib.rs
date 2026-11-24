@@ -233,7 +233,10 @@ pub fn read_rules(rules: &RulesTable) -> Result<RulesRead, RulesGap> {
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
-pub use report::MAX_DEFAULT_NOTES;
+pub use report::{
+    ARGUMENT_BYTES_MAX, CapRead, DIAGNOSTIC_ROOM_BYTES, LeftOut, MAX_PER_CODE, MAX_POINTER_BYTES,
+    ONCE_PER_REPORT,
+};
 pub use scope::{
     FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError, Sighted, Sighting,
 };
@@ -461,7 +464,7 @@ impl core::fmt::Display for InputError {
         match self {
             InputError::Oversize { bytes, max } => write!(
                 formatter,
-                "the playbook bytes are {bytes} long, past the {max} the canonical text of the 
+                "the playbook bytes are {bytes} long, past the {max} the canonical text of the \
                  longest player's text can be"
             ),
             InputError::Rules(gap) => write!(formatter, "{gap}"),
@@ -739,6 +742,26 @@ impl<'a> Input<'a> {
 /// parser.
 #[must_use]
 pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
+    verify_counted(input, depth).report
+}
+
+/// A report, and what its per-code cap ([`MAX_PER_CODE`]) left out as typed
+/// data: one [`LeftOut`] per code, in code order, each the data the report's
+/// closing `I0007` for that code is rendered from.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Counted {
+    /// The report, exactly as [`verify`] returns it.
+    pub report: VerifyReport,
+    /// What the cap left out, per code; empty when nothing was.
+    pub left_out: Vec<LeftOut>,
+}
+
+/// [`verify`], with what the cap left out as typed data beside the report.
+/// `gp.api.v1.VerifyReport` carries it only as the closing `I0007`s until the
+/// contract change after S3's `vcap` adds a field for it (decisions-log item
+/// 183 (5)); that change fills the field from [`Counted::left_out`].
+#[must_use]
+pub fn verify_counted(input: &Input<'_>, depth: Depth) -> Counted {
     let depth = match depth {
         Depth::Unspecified | Depth::Full => Depth::Full,
         Depth::Quick => Depth::Quick,
@@ -773,16 +796,19 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
     }
 
     let report_hash = input.report_hashes.at(depth);
+    let qualifies = !out.has_errors();
+    let (diagnostics, left_out) = out.finish();
 
-    VerifyReport {
-        qualifies: !out.has_errors(),
+    let report = VerifyReport {
+        qualifies,
         depth: i32::from(depth),
-        diagnostics: out.into_diagnostics(),
+        diagnostics,
         report_hash: report_hash.to_be_bytes().to_vec(),
         rules_hash: input.rules_hash.to_be_bytes().to_vec(),
         plan_fingerprint: fingerprint,
         verifier_version: VERIFIER_VERSION.to_owned(),
         size_units: units,
         size_budget: limits.size_budget_units(),
-    }
+    };
+    Counted { report, left_out }
 }

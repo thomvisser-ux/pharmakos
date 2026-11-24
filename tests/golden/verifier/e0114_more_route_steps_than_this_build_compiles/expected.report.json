@@ -18,8 +18,8 @@
     {
       "code": "I0007",
       "severity": "INFO",
-      "message": "omitted settings not noted one by one: 257. Each reads as its default; a report notes at most the first few, and none past the size budget.",
-      "beginner": "Many settings here are left to their defaults. The first few are noted; the rest work the same way."
+      "message": "257 more `I0003` not listed: a report lists at most 6 of one code one by one, and no `I0003` once the size budget is past. Each counts as raised: one left out that is an error still stops the playbook qualifying.",
+      "beginner": "Not shown: 257 more `I0003`. Deal with the ones shown, then check again to see the rest."
     }
   ],
   "report_hash": "rseKuE02m4w=",

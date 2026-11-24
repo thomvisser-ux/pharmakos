@@ -297,27 +297,80 @@ fn refuse(error: &json::Error, out: &mut Builder) {
     let unknown = (error.kind() == json::ErrorKind::UnknownField)
         .then(|| pointer::last_token(error.pointer()))
         .flatten();
+    let (path, cut) = bounded(error.pointer());
     if let Some(name) = unknown {
-        out.emit(
-            Diag::new("E0002", error.pointer().to_owned())
-                .arg_text("field", &name)
-                .fix(
-                    pharmakos_proto::said!("Delete `{}`", quoted(&name)),
-                    patch_remove(error.pointer()),
-                    Applicability::MaybeIncorrect,
-                ),
-        );
+        let diag = Diag::new("E0002", path.clone().into_owned()).arg_text("field", &name);
+        // A pointer past the bound addresses the object that holds the
+        // member, the deepest place a report can name; a Fix would have to
+        // spell the whole member name, so none is offered there, and the
+        // message names the member (quoted, cut) and asks the author to take
+        // it out, as E0002's beginner sentence says.
+        out.emit(if cut {
+            diag
+        } else {
+            diag.fix(
+                pharmakos_proto::said!("Delete `{}`", quoted(&name)),
+                patch_remove(&path),
+                Applicability::MaybeIncorrect,
+            )
+        });
     } else {
-        out.emit(Diag::new("E0001", error.pointer().to_owned()).arg("detail", error.said()));
+        out.emit(Diag::new("E0001", path.into_owned()).arg("detail", error.said()));
     }
 }
 
-/// Every reserved name anywhere in the document, with the pointer to it.
+/// How many bytes `text` takes as the body of a JSON string: the report's
+/// encoding, which escapes `"` and `\` in two bytes and every other control
+/// character in at most six.
+pub(crate) fn json_bytes(text: &str) -> usize {
+    text.chars().fold(0_usize, |total, character| {
+        let one = match character {
+            '"' | '\\' => 2,
+            other if u32::from(other) < 0x20 => 6,
+            other => other.len_utf8(),
+        };
+        total.saturating_add(one)
+    })
+}
+
+/// `pointer`, or the longest run of its whole tokens whose JSON is within
+/// [`crate::report::MAX_POINTER_BYTES`] when it is not, and whether it was
+/// cut. A cut pointer addresses an ancestor of the place, never a different
+/// place: only a member name of the player's own (an unknown key, never one
+/// of the schema's names) makes a pointer that long.
+fn bounded(pointer: &str) -> (Cow<'_, str>, bool) {
+    if json_bytes(pointer) <= crate::report::MAX_POINTER_BYTES {
+        return (Cow::Borrowed(pointer), false);
+    }
+    let mut kept = String::new();
+    let mut bytes = 0_usize;
+    // A pointer is empty or starts with `/`, so the piece before the first
+    // `/` is empty and skipped.
+    for token in pointer.split('/').skip(1) {
+        bytes = bytes.saturating_add(json_bytes(token)).saturating_add(1);
+        if bytes > crate::report::MAX_POINTER_BYTES {
+            break;
+        }
+        kept.push('/');
+        kept.push_str(token);
+    }
+    (Cow::Owned(kept), true)
+}
+
+/// Every reserved name anywhere in the document, with the pointer to it, as
+/// far as a report can point: a member whose pointer is past
+/// [`crate::report::MAX_POINTER_BYTES`] is not descended into, because only
+/// a member name of the player's own makes a pointer that long and no
+/// schema name sits beneath one. The document is then refused by the codec
+/// at the first member it does not know, which is never stripped either.
 fn scan_reserved(value: &Json, at: &str, found: &mut Vec<(String, String)>) {
     match value {
         Json::Object(entries) => {
             for (key, item) in entries {
                 let here = pointer::child(at, key);
+                if json_bytes(&here) > crate::report::MAX_POINTER_BYTES {
+                    continue;
+                }
                 if RESERVED_NAMES.contains(&key.as_str()) {
                     found.push((here.clone(), key.clone()));
                 }
