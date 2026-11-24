@@ -21,14 +21,20 @@ use pharmakos_proto::transport::MAX_MESSAGE_BYTES;
 /// the watch check sends a frame of exactly the cap to a real gateway on a peer sized so.
 pub const OUTBOUND_BUFFER_BYTES: usize = MAX_MESSAGE_BYTES;
 
-/// A peer's inbound buffer: the largest message the gateway sends a client, with room. The
-/// gateway bounds no outgoing message by a cap of its own; the largest it makes is a view page,
-/// whose runs it cuts at 256 KiB (about 350 KB once base64 and JSON grow them), plus a chunk origin
-/// each and the entity list, which nothing bounds: `tests/transport.rs` builds a page at the cut
-/// with every chunk of the committed map and 2 000 entities, 1 230 868 bytes as this crate's JSON
-/// writer spells it, past the 1 MiB `host_link.gd` used to give a peer. Four MiB holds that page
-/// with more than half to spare; the committed keyframe golden is 286 411 bytes. (Reported to the
-/// main session for the gateway's next lane: a bound on a page's entities, or on any message the
-/// gateway writes, belongs at the gateway.)
+/// A peer's inbound buffer: what the client takes of one message the gateway sends. The gateway
+/// bounds no outgoing message by a cap of its own. A view page cuts its runs at 256 KiB (about
+/// 350 KB once base64 and JSON grow them), but adds a chunk origin each and the entity list,
+/// which nothing bounds: `tests/transport.rs` builds a page at the cut with every chunk of the
+/// committed map and 2 000 entities, 1 230 868 bytes as the gateway's wire spells it (the
+/// canonical writer, `rpc::render`), past the 1 MiB `host_link.gd` used to give a peer. Four MiB
+/// holds that page with more than half to spare; the committed keyframe golden is 286 411 bytes.
+/// Other answers are unbounded too (a `render_plan` of a long file of bare steps, by reading,
+/// may pass 4 MiB): lane `outcap` bounds every message the gateway writes, at the gateway.
+///
+/// An answer past it is never handed over cut: Godot closes the peer with 1009 and hands over
+/// nothing (`client_check.gd` measures it), and the rig says that close to the player
+/// (`Rig::closed_on_message`).
+///
 /// Four MiB, written as a literal: `crates/verifier/tests/report_size.rs` reads this line.
+/// PLACEHOLDER: the client's inbound buffer, 4 MiB against a gateway that bounds no outgoing message — outcap, S3, when the gateway caps every message it sends
 pub const INBOUND_BUFFER_BYTES: usize = 4_194_304;

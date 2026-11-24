@@ -1870,8 +1870,30 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
         &"last_error".to_variant(),
         &text_or_empty(rig.last_error()).to_variant(),
     );
+    closed_on_into(&mut state, rig);
     status_facts_into(&mut state, rig);
     state
+}
+
+/// The last close on a message on the watch state (fix pass 3), as `closed_on`, present only
+/// when there was one: `connection` (`admin` or `seat`), `code`, `call` (the string table's
+/// `call_word_<call>`, present only when a call was in flight) and `open` (whether that
+/// connection is open now). The lobby says them; it decides nothing from them.
+fn closed_on_into(state: &mut VarDictionary, rig: &Rig) {
+    let Some(closed) = rig.closed_on_message() else {
+        return;
+    };
+    let mut entry = VarDictionary::new();
+    entry.set(&"connection".to_variant(), &closed.connection.to_variant());
+    entry.set(&"code".to_variant(), &i64::from(closed.code).to_variant());
+    if let Some(call) = closed.call {
+        entry.set(&"call".to_variant(), &call.to_variant());
+    }
+    entry.set(
+        &"open".to_variant(),
+        &rig.link_open(closed.link).to_variant(),
+    );
+    state.set(&"closed_on".to_variant(), &entry.to_variant());
 }
 
 /// `get_status`'s facts on the watch state: `preset` (the served preset's name, `none` when

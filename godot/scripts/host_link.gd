@@ -435,14 +435,30 @@ func _read_announce() -> void:
 	announced.emit(fields[1])
 
 
-func _connect(link: int) -> void:
+## A peer sized as every connection to the gateway is: both buffers from `limits`, the
+## bridge's `watch_transport_limits` (`crates/client-gdext/src/transport.rs`; fix pass 2:
+## Godot's default outbound buffer, 64 KiB, refused a frame the cap allowed and the link timed
+## out). `client_check.gd` receives through a peer made here, so the check is of this path.
+static func new_peer(limits: Dictionary) -> WebSocketPeer:
 	var peer := WebSocketPeer.new()
-	# Every peer carries what the gateway's message cap allows, both ways, as the bridge passes the
-	# numbers through (`crates/client-gdext/src/transport.rs`; fix pass 2: Godot's default outbound
-	# buffer, 64 KiB, refused a frame the cap allowed and the link timed out).
-	var limits: Dictionary = bridge.watch_transport_limits()
 	peer.outbound_buffer_size = int(limits.get("outbound_bytes", 0))
 	peer.inbound_buffer_size = int(limits.get("inbound_bytes", 0))
+	return peer
+
+
+## Every whole message `peer` holds, as text, in the order it came. Godot hands a peer only
+## whole messages: one past its inbound buffer is never handed over, cut or whole; the peer
+## closes itself with 1009 ("Message too big"; measured on 4.7.2 by `client_check.gd`), which
+## `_pump_link` reports as a close on the message.
+static func packets_of(peer: WebSocketPeer) -> Array[String]:
+	var texts: Array[String] = []
+	while peer.get_available_packet_count() > 0:
+		texts.append(peer.get_packet().get_string_from_utf8())
+	return texts
+
+
+func _connect(link: int) -> void:
+	var peer := new_peer(bridge.watch_transport_limits())
 	peer.handshake_headers = PackedStringArray(["Authorization: Bearer " + String(_tokens[link])])
 	var error := peer.connect_to_url("ws://127.0.0.1:%d/" % _port)
 	if error != OK:
@@ -463,8 +479,7 @@ func _pump_link(link: int) -> void:
 		if not _open[link]:
 			_open[link] = true
 			bridge.watch_opened(link)
-		while peer.get_available_packet_count() > 0:
-			var text := peer.get_packet().get_string_from_utf8()
+		for text in packets_of(peer):
 			var answer: Dictionary = bridge.watch_receive(link, text)
 			if not answer.is_empty():
 				received.emit(answer)

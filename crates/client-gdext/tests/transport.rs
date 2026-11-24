@@ -27,6 +27,10 @@ const PAGE_RUNS: usize = 256 * 1024;
 const MAP_CHUNKS: usize = 288;
 /// Entities on the page: more than any committed match fields.
 const ENTITIES: usize = 2_000;
+/// The page's bytes, as the gateway spells every answer on the wire (`rpc::render` is the
+/// canonical writer, `json::write`, which this test uses). `client_check.gd` builds the same
+/// page and receives it through `host_link.gd`'s own peer, so the two are held to one number.
+const WORST_PAGE_BYTES: usize = 1_230_868;
 
 /// Base64's length for `bytes` bytes.
 fn base64_len(bytes: usize) -> usize {
@@ -78,6 +82,10 @@ fn a_peer_holds_the_largest_view_page_and_the_message_cap() {
     let bytes = json::write(&page).len();
     println!(
         "the largest view page: {bytes} bytes, against an inbound buffer of {INBOUND_BUFFER_BYTES}"
+    );
+    assert_eq!(
+        bytes, WORST_PAGE_BYTES,
+        "the page client_check.gd receives whole"
     );
     assert!(
         bytes.saturating_mul(2) <= INBOUND_BUFFER_BYTES,

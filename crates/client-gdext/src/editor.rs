@@ -525,7 +525,7 @@ pub enum Unchecked {
     /// The check's call was too large for the gateway to read, so it was not sent: the
     /// encoded frame's size, in bytes (S3's `fixq-c`, fix pass 1).
     TooLarge(String),
-    /// The gateway closed the connection on the check's call itself (a close code that says
+    /// The connection closed on the check's call itself (a close code that says
     /// "this message", 1009 and its kin): the code. The call is not sent again.
     ClosedOn(String),
     /// The transport refused to send the check's call (Godot's `send_text` failed): its error
@@ -907,7 +907,7 @@ pub enum ReadFailed {
     Unreadable(String),
     /// The read's call was too large for the gateway to read, so it was not sent: its size.
     TooLarge(String),
-    /// The gateway closed the connection on the read's call itself: the close code.
+    /// The connection closed on the read's call itself: the close code.
     ClosedOn(String),
     /// The transport refused to send the read's call: its error code.
     SendFailed(String),
@@ -4876,7 +4876,7 @@ enum Refuser {
 /// The string table's key for a call the transport refused to send.
 pub const SEND_FAILED_KEY: &str = "status_call_send_failed";
 
-/// The string table's key for a call the gateway closed the connection on.
+/// The string table's key for a call the connection closed on (either side's close).
 pub const CLOSED_ON_KEY: &str = "status_call_closed_on";
 
 /// The string table's key for a call this client did not send because the gateway could not

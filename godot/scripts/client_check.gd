@@ -69,6 +69,10 @@ const Values := preload("res://scripts/values.gd")
 const Rows := preload("res://scripts/rows.gd")
 const Strings := preload("res://scripts/strings.gd")
 const SafeWrite := preload("res://scripts/safe_write.gd")
+const HostLink := preload("res://scripts/host_link.gd")
+## The worst view page `crates/client-gdext/tests/transport.rs` builds, in bytes: the same page
+## is built here and received through host_link.gd's own peer.
+const WORST_PAGE_BYTES := 1230868
 const OWNERS_WINDOW := Vector2i(1456, 819)
 ## A map as wide as the golden seed's, in voxels (x, up, north).
 const MAP_EXTENT := Vector3(384.0, 64.0, 384.0)
@@ -1086,6 +1090,8 @@ func _check_the_rig_backed_panel(stage: SubViewport, editor: CanvasLayer, failur
 	await _check_the_planning_wire(stage, editor, bridge, failures)
 	await _check_the_ready_line_through_the_rig(bridge, failures)
 	await _check_load_through_its_button(stage, editor, bridge, failures)
+	await _check_the_transport(bridge, failures)
+	_check_a_close_on_a_message_is_said(bridge, failures)
 	_check_the_saves(editor, bridge, failures)
 
 
@@ -1864,6 +1870,101 @@ func _check_the_remembered_line(failures: Array[String]) -> void:
 		failures.append("the remembered-line check could not remove %s" % folder)
 	lobby.queue_free()
 	await get_tree().process_frame
+
+
+## **What a peer takes, and what it does past that** (S3's `fixq-c`, fix pass 3, item 3).
+## Through a peer host_link.gd makes (`new_peer`, from the bridge's limits) and its own reader
+## (`packets_of`): the worst view page `tests/transport.rs` builds arrives whole, as one message;
+## a message one byte past the inbound buffer is never handed over, cut or whole, and Godot
+## closes the peer with 1009.
+func _check_the_transport(bridge: Node, failures: Array[String]) -> void:
+	var limits: Dictionary = bridge.watch_transport_limits()
+	var page := _worst_page()
+	if page.to_utf8_buffer().size() != WORST_PAGE_BYTES:
+		failures.append("the worst view page is %d bytes here, not the %d tests/transport.rs builds" % [page.to_utf8_buffer().size(), WORST_PAGE_BYTES])
+	var got: Dictionary = await _receive(limits, page)
+	var texts: Array = got.get("texts", [])
+	if texts.size() != 1 or String(texts[0]) != page:
+		failures.append("the worst view page did not arrive whole: %d message(s), %s byte(s)" % [texts.size(), [] if texts.is_empty() else [String(texts[0]).length()]])
+	var past := "x".repeat(int(limits.get("inbound_bytes", 0)) + 1)
+	got = await _receive(limits, past)
+	texts = got.get("texts", [])
+	if not texts.is_empty():
+		failures.append("a message past the inbound buffer was handed over (%d message(s), the first %d bytes)" % [texts.size(), String(texts[0]).length()])
+	if got.get("state", -1) != WebSocketPeer.STATE_CLOSED or got.get("code", -1) != 1009:
+		failures.append("a message past the inbound buffer did not close the peer with 1009: %s" % got)
+	print("[client-check] the transport: the %d-byte worst page whole; past the %d-byte buffer, nothing handed over and the peer closed with %s (`%s`)" % [WORST_PAGE_BYTES, int(limits.get("inbound_bytes", 0)), got.get("code", -1), got.get("reason", "")])
+
+
+## `text` sent once from a local server to a peer `host_link.gd` makes, read through its own
+## reader: `texts` handed over, the peer's `state`, its close `code` and `reason`.
+func _receive(limits: Dictionary, text: String) -> Dictionary:
+	var server := TCPServer.new()
+	if server.listen(0, "127.0.0.1") != OK:
+		return {"texts": [], "state": -1, "code": -1, "reason": "no local port"}
+	var client: WebSocketPeer = HostLink.new_peer(limits)
+	if client.connect_to_url("ws://127.0.0.1:%d/" % server.get_local_port()) != OK:
+		server.stop()
+		return {"texts": [], "state": -1, "code": -1, "reason": "no connection"}
+	var sender: WebSocketPeer = null
+	var sent := false
+	var texts: Array[String] = []
+	for frame in 600:
+		if sender == null and server.is_connection_available():
+			sender = WebSocketPeer.new()
+			sender.outbound_buffer_size = text.to_utf8_buffer().size() + 1024
+			if sender.accept_stream(server.take_connection()) != OK:
+				break
+		if sender != null:
+			sender.poll()
+		client.poll()
+		if not sent and sender != null and sender.get_ready_state() == WebSocketPeer.STATE_OPEN and client.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			if sender.send_text(text) != OK:
+				break
+			sent = true
+		if client.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			texts.append_array(HostLink.packets_of(client))
+		if not texts.is_empty() or (sent and client.get_ready_state() == WebSocketPeer.STATE_CLOSED):
+			break
+		await get_tree().process_frame
+	var answer := {"texts": texts, "state": client.get_ready_state(), "code": client.get_close_code(), "reason": client.get_close_reason(), "sent": sent}
+	server.stop()
+	return answer
+
+
+## The worst view page, as `crates/client-gdext/tests/transport.rs` builds it and as the gateway
+## spells every answer on the wire (`rpc::render`: the canonical writer, two-space indent, one
+## entry per line, a trailing newline, which Godot's own `JSON.stringify` with that indent writes
+## byte for byte): four chunks of 65 535 bytes of runs, every other chunk of the map one run, and
+## 2 000 entities of the committed golden's shape.
+static func _worst_page() -> String:
+	var chunks := []
+	for at in 288:
+		chunks.append({"origin": {"x": at * 32, "y": 352, "z": 32}, "voxels_rle": "A".repeat(87380 if at < 4 else 4)})
+	var entity := {"id": "s_4000", "kind": "structure", "subtype": "mortar", "owner": "seat.0", "at": {"x": 365, "y": 30, "z": 36}, "hp": 1, "max_hp": 400, "building": true, "look": {"shape": "dish", "x": 1, "y": 1, "z": 1}, "title": "Mortar, going up"}
+	var entities := []
+	for index in 2000:
+		entities.append(entity)
+	var page := {"jsonrpc": "2.0", "id": 999999, "result": {"at_ms": 480000, "chunks": chunks, "entities": entities, "next_cursor": "c".repeat(64), "complete": true}}
+	return JSON.stringify(page, "  ", false) + "\n"
+
+
+## **A close on a message is said, with the connection's state** (fix pass 3, item 3): the seat
+## connection closed with 1009, as Godot closes a peer an answer overflows, is on the watch state
+## and in the lobby's status line, with "opening again"; once it is open again, the line says so.
+func _check_a_close_on_a_message_is_said(bridge: Node, failures: Array[String]) -> void:
+	bridge.watch_dropped(1, 1009)
+	var state: Dictionary = bridge.watch_state()
+	var closed: Dictionary = state.get("closed_on", {})
+	if String(closed.get("connection", "")) != "seat" or closed.get("code", 0) != 1009:
+		failures.append("a 1009 close on the seat connection is not on the watch state: %s" % closed)
+	var said := Lobby.closed_on_line(state)
+	if not said.contains("1009") or not said.contains(Strings.text("link_reopening")):
+		failures.append("a 1009 close is not said with the connection's state: `%s`" % said)
+	bridge.watch_opened(1)
+	said = Lobby.closed_on_line(bridge.watch_state())
+	if not said.contains(Strings.text("link_open")):
+		failures.append("a connection open again after a close on a message is not said so: `%s`" % said)
 
 
 ## **Each instance keeps its own log** (finding N): a second logger starting leaves the first's

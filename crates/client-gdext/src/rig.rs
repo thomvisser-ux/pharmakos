@@ -195,6 +195,53 @@ enum Purpose {
     Recap,
 }
 
+impl Purpose {
+    /// The call's name in the string table's `call_word_<word>` rows, for the words that say a
+    /// close on a message (fix pass 3).
+    const fn word(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::View => "view",
+            Self::Feed => "feed",
+            Self::Advance => "advance",
+            Self::Clock => "clock",
+            Self::EndLull => "end_lull",
+            Self::EndRecap => "end_recap",
+            Self::Ready => "ready",
+            Self::Plan => "plan",
+            Self::Meter => "meter",
+            Self::Recap => "recap",
+        }
+    }
+}
+
+/// The last close on a message itself (S3's `fixq-c`, fix pass 3): a message too big for a
+/// side's buffer (1009, the client's own close when an answer is past its inbound buffer, or
+/// the gateway's), or one a side could not read. Kept for the lobby's words, which say it with
+/// whether the connection is open again ([`Rig::link_open`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ClosedOnMessage {
+    /// [`ADMIN`] or [`SEAT`].
+    pub link: usize,
+    /// The connection's name in the string table's `connection_<name>` rows: `admin` or `seat`.
+    pub connection: &'static str,
+    /// The close code.
+    pub code: u16,
+    /// The call the message carried, as the string table's `call_word_<call>` names it; none
+    /// when no call was in flight.
+    pub call: Option<&'static str>,
+}
+
+/// A connection's name in the string table's `connection_<name>` rows, for [`ADMIN`] and
+/// [`SEAT`]; no other link exists.
+const fn connection_word(link: usize) -> Option<&'static str> {
+    match link {
+        ADMIN => Some("admin"),
+        SEAT => Some("seat"),
+        _ => None,
+    }
+}
+
 /// The own `$`/`kW` meter: the last `get_economy_forecast` answer, field for field, and
 /// which phase it was served in.
 ///
@@ -506,7 +553,7 @@ struct Link {
     next_id: i64,
     in_flight: Option<(i64, Purpose)>,
     drops: u32,
-    /// Drops the gateway closed on the message in flight ([`Close::ThisMessage`]): counted
+    /// Drops closed on the message in flight, by either side ([`Close::ThisMessage`]): counted
     /// under their own reason, never asked again.
     message_drops: u32,
     /// Calls not sent because their frame was past the gateway's message cap.
@@ -521,9 +568,10 @@ struct Link {
 pub enum Close {
     /// The connection went: the call in flight is asked again once it is back.
     Connection,
-    /// The gateway closed on the message itself (RFC 6455 close codes 1003 unsupported data,
-    /// 1007 invalid payload, 1008 policy violation, 1009 message too big): the same call would
-    /// close it again, so it is settled as refused and never asked again.
+    /// A side closed on the message itself: the gateway, or this client when an answer is past
+    /// its inbound buffer (Godot closes with 1009, fix pass 3). RFC 6455 close codes 1003
+    /// unsupported data, 1007 invalid payload, 1008 policy violation, 1009 message too big: the
+    /// same call would close it again, so it is settled as refused and never asked again.
     ThisMessage(u16),
 }
 
@@ -668,6 +716,8 @@ pub struct Rig {
     wants: Wants,
     all_ready: bool,
     last_error: Option<String>,
+    /// The last close on a message itself, for the player's words.
+    closed_on: Option<ClosedOnMessage>,
     /// How long each Lull is, from the rules table's two Lull rows.
     lulls: LullLengths,
     /// Whether the admin connection's latest footer said the phase has no countdown
@@ -748,6 +798,7 @@ impl Rig {
             wants: Wants::default(),
             all_ready: false,
             last_error: None,
+            closed_on: None,
             lulls: LullLengths::default(),
             untimed: Untimed::NotReported,
             clock_answers: 0,
@@ -905,7 +956,8 @@ impl Rig {
     /// settles what was in flight as refused and asks nothing again ([`Close::ThisMessage`]);
     /// any other is [`Rig::dropped`]'s.
     pub fn closed(&mut self, link: usize, close: Close) {
-        let Some(state) = self.links.get_mut(link) else {
+        let (Some(state), Some(connection)) = (self.links.get_mut(link), connection_word(link))
+        else {
             return;
         };
         if state.open {
@@ -916,11 +968,22 @@ impl Rig {
         }
         state.open = false;
         if let Close::ThisMessage(code) = close {
-            match state.in_flight.take() {
+            let call = state.in_flight.as_ref().map(|(_, purpose)| purpose.word());
+            let in_flight = state.in_flight.take();
+            self.closed_on = Some(ClosedOnMessage {
+                link,
+                connection,
+                code,
+                call,
+            });
+            match in_flight {
                 Some((_, Purpose::Plan)) => {
                     self.editor.closed_on(code);
                     self.sync_editor();
                 }
+                // A page too big to read is a refused page: a keyframe is asked again, and no
+                // sooner than the keep-alive, so it is not asked in a loop (fix pass 3).
+                Some((_, Purpose::View)) => self.view_refused(),
                 Some((_, purpose)) => self.refused(purpose, "CLOSED_ON_MESSAGE"),
                 None => {}
             }
@@ -1747,7 +1810,7 @@ impl Rig {
         [admin.drops, seat.drops]
     }
 
-    /// How many of each connection's drops the gateway closed on the message in flight
+    /// How many of each connection's drops either side closed on the message in flight
     /// ([`Close::ThisMessage`]), and how many calls were not sent for being past the message cap:
     /// `[[admin, seat] closes on a message, [admin, seat] unsent]`.
     #[must_use]
@@ -1778,6 +1841,18 @@ impl Rig {
     #[must_use]
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    /// The last close on a message itself, if any (fix pass 3).
+    #[must_use]
+    pub const fn closed_on_message(&self) -> Option<ClosedOnMessage> {
+        self.closed_on
+    }
+
+    /// Whether connection `link` is open now.
+    #[must_use]
+    pub fn link_open(&self, link: usize) -> bool {
+        self.links.get(link).is_some_and(|state| state.open)
     }
 
     /// Whether the seat's view is complete and current: no keyframe or page waiting.
@@ -2671,7 +2746,52 @@ mod tests {
         }
     }
 
-    /// **A connection the gateway closed on the message itself never re-sends it** (fix pass 1):
+    /// **A connection closed on the message itself never re-sends it** (fix pass 1):
+    /// **A close on a message is kept for the player's words** (fix pass 3, item 3): which
+    /// connection, the close code, the call it carried, and whether the connection is open
+    /// again; a close of the connection itself is not one.
+    #[test]
+    fn a_close_on_a_message_is_kept_with_its_connection_code_and_call() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        assert_eq!(rig.closed_on_message(), None);
+        let view = rig
+            .poll(1)
+            .into_iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("the seat's first call");
+        assert_eq!(method_of(&view), "get_view");
+        rig.closed(SEAT, Close::ThisMessage(1009));
+        assert_eq!(
+            rig.closed_on_message(),
+            Some(ClosedOnMessage {
+                link: SEAT,
+                connection: "seat",
+                code: 1009,
+                call: Some("view"),
+            })
+        );
+        assert!(!rig.link_open(SEAT));
+        // A view closed on its message is a refused page: counted, and a keyframe asked again
+        // only once the keep-alive has passed, so a page too big to read is not asked in a loop.
+        assert_eq!(rig.view_refusals(), 1);
+        rig.opened(SEAT);
+        assert!(rig.link_open(SEAT));
+        assert!(
+            rig.poll(2)
+                .iter()
+                .all(|frame| !(frame.link == SEAT && method_of(frame) == "get_view")),
+            "a keyframe asked again at once"
+        );
+        rig.closed(SEAT, Close::Connection);
+        assert_eq!(
+            rig.closed_on_message().map(|closed| closed.code),
+            Some(1009),
+            "a close of the connection leaves the last close on a message as it was"
+        );
+    }
+
     /// a close with 1009 (or 1003, 1007, 1008) settles the call in flight as refused and counts the
     /// drop under its own reason; any other close asks the call again once the link is back.
     #[test]

@@ -252,6 +252,9 @@ func status_line(state: Dictionary) -> String:
 		parts.append(Strings.text("lobby_all_ready"))
 	if _forgotten:
 		parts.append(Strings.text("lobby_forgotten"))
+	var closed_on := closed_on_line(state)
+	if closed_on != "":
+		parts.append(closed_on)
 	if _remember_failed != "":
 		parts.append(_remember_failed)
 	if _forget_failed != "":
@@ -265,6 +268,25 @@ func status_line(state: Dictionary) -> String:
 	if zero_refused != "":
 		parts.append(Strings.text("lobby_zero_refused", {"detail": zero_refused}))
 	return "  ".join(parts)
+
+
+## The words for the last close on a message (fix pass 3): which connection, the close code,
+## the call it carried (or none in flight), and whether that connection is open again, all as
+## the bridge's watch state says them (`closed_on`); "" when there was none. A branch on the
+## bridge's words, for display.
+static func closed_on_line(state: Dictionary) -> String:
+	if not state.has("closed_on"):
+		return ""
+	var closed: Dictionary = state["closed_on"]
+	var call := "none"
+	if closed.has("call"):
+		call = String(closed["call"])
+	return Strings.text("lobby_closed_on_message", {
+		"connection": Strings.text("connection_" + String(closed["connection"])),
+		"code": closed["code"],
+		"call": Strings.text("call_word_" + call),
+		"state": Strings.text("link_open" if closed["open"] else "link_reopening"),
+	})
 
 
 ## The preset's name as the string table spells it: the `preset_<name>` row for the wire's
