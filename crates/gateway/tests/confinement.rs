@@ -2762,8 +2762,10 @@ fn struct_block(lines: &[(usize, String)], name: &str) -> Vec<String> {
 /// * no `pub` function there makes a seal: its makers are `pub(super)`.
 ///
 /// The review's alias blind spot (`type Seal = Sealed; Seal::new(..)`) is
-/// moot: there is no public constructor to alias, and a literal outside the
-/// module does not compile.
+/// moot outside the module: there is no public constructor to alias, and a
+/// literal outside the module does not compile. Inside it, a literal spelt
+/// `Self { .. }` or through a `type` alias is refused by name, so every
+/// literal there is one this scan counts.
 #[test]
 fn a_seal_is_made_only_by_the_named_makers_and_never_changed() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -2814,47 +2816,7 @@ fn a_seal_is_made_only_by_the_named_makers_and_never_changed() {
          be held to its text (`tests/seal_work.rs`), and its name joins SEAL_MAKERS with that test"
     );
 
-    let sealed_text = std::fs::read_to_string(root.join(SEAL_FILE)).expect("the seal types' file");
-    let sealed_lines = code_lines(&sealed_text);
-    for name in ["Sealed", "Unfiled"] {
-        let fields = struct_block(&sealed_lines, name);
-        assert!(
-            fields.len() > 2,
-            "{name} read as {} lines; the scan is looking at the wrong text",
-            fields.len()
-        );
-        for field in fields {
-            if field.trim_start().starts_with("pub") {
-                findings.push(format!(
-                    "{SEAL_FILE}: `{name}` has a public field: {}",
-                    field.trim()
-                ));
-            }
-        }
-    }
-    for (number, line) in &sealed_lines {
-        let trimmed = line.trim();
-        if line.contains("&mut self") {
-            findings.push(format!(
-                "{SEAL_FILE}:{number}: a method that changes a seal: {trimmed}"
-            ));
-        }
-        let public = trimmed.starts_with("pub fn ") || trimmed.starts_with("pub const fn ");
-        let makes_one = [
-            "-> Self",
-            "-> Sealed",
-            "-> Unfiled",
-            "Result<Sealed",
-            "Result<Unfiled",
-        ]
-        .iter()
-        .any(|shape| trimmed.contains(shape));
-        if public && makes_one {
-            findings.push(format!(
-                "{SEAL_FILE}:{number}: a public seal maker: {trimmed}"
-            ));
-        }
-    }
+    findings.extend(seal_file_findings(&root));
     let surface_text = std::fs::read_to_string(root.join("src/surface.rs")).expect("the surface");
     for (number, line) in code_lines(&surface_text) {
         let trimmed = line.trim();
@@ -2911,4 +2873,59 @@ fn no_handler_can_seal_by_the_harness() {
     );
     assert_eq!(definitions, 1, "the surface defines the door once");
     assert_eq!(called, 1, "the scenario runner calls it once");
+}
+
+/// What `surface/sealed.rs` must not hold: a public field of a seal type, a
+/// literal under another name, a method that changes a seal, or a public maker.
+fn seal_file_findings(root: &std::path::Path) -> Vec<String> {
+    let mut findings: Vec<String> = Vec::new();
+    let sealed_text = std::fs::read_to_string(root.join(SEAL_FILE)).expect("the seal types' file");
+    let sealed_lines = code_lines(&sealed_text);
+    for name in ["Sealed", "Unfiled"] {
+        let fields = struct_block(&sealed_lines, name);
+        assert!(
+            fields.len() > 2,
+            "{name} read as {} lines; the scan is looking at the wrong text",
+            fields.len()
+        );
+        for field in fields {
+            if field.trim_start().starts_with("pub") {
+                findings.push(format!(
+                    "{SEAL_FILE}: `{name}` has a public field: {}",
+                    field.trim()
+                ));
+            }
+        }
+    }
+    for (number, line) in &sealed_lines {
+        let trimmed = line.trim();
+        // A literal spelt `Self { .. }` or through an alias would make a seal
+        // out of this scan's sight, so neither is written here.
+        if line.contains("Self {") || trimmed.starts_with("type ") || line.contains(" as Sealed") {
+            findings.push(format!(
+                "{SEAL_FILE}:{number}: a seal written under another name: {trimmed}"
+            ));
+        }
+        if line.contains("&mut self") {
+            findings.push(format!(
+                "{SEAL_FILE}:{number}: a method that changes a seal: {trimmed}"
+            ));
+        }
+        let public = trimmed.starts_with("pub fn ") || trimmed.starts_with("pub const fn ");
+        let makes_one = [
+            "-> Self",
+            "-> Sealed",
+            "-> Unfiled",
+            "Result<Sealed",
+            "Result<Unfiled",
+        ]
+        .iter()
+        .any(|shape| trimmed.contains(shape));
+        if public && makes_one {
+            findings.push(format!(
+                "{SEAL_FILE}:{number}: a public seal maker: {trimmed}"
+            ));
+        }
+    }
+    findings
 }
