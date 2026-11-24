@@ -512,7 +512,7 @@ fn the_lobby_remembers_one_line_and_no_token() {
     assert!(
         forget
             .iter()
-            .any(|line| line.contains("SafeWrite.write(path, PackedByteArray())")),
+            .any(|line| line.contains("SafeWrite.write(path, PackedByteArray(), disk)")),
         "the lobby empties, and writes nothing else into, a line it cannot remove: {forget:?}"
     );
     let announced = gd_function(&text, "_on_announced");
@@ -593,7 +593,7 @@ fn the_lobby_forgets_an_ended_match_and_shows_a_refusal_as_the_host_wrote_it() {
     let forget = gd_function(&text, "_forget");
     assert!(
         forget.iter().any(|line| line.contains("remembered"))
-            && forget.iter().any(|line| line.contains("remove_absolute")),
+            && forget.iter().any(|line| line.contains("disk.remove(path)")),
         "_forget removes the remembered line: {forget:?}"
     );
     assert!(

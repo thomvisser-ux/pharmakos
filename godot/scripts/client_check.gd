@@ -1093,6 +1093,7 @@ func _check_the_rig_backed_panel(stage: SubViewport, editor: CanvasLayer, failur
 	await _check_the_transport(bridge, failures)
 	_check_a_close_on_a_message_is_said(bridge, failures)
 	_check_the_saves(editor, bridge, failures)
+	_check_the_limit_is_named(bridge, failures)
 
 
 ## A value field's "abc" goes to the gateway as typed (S3's `fixq-c`: the gateway reads typed
@@ -1715,12 +1716,47 @@ func _check_the_lobby_after_a_failure(failures: Array[String]) -> void:
 	await get_tree().process_frame
 
 
-## **A save is whole or not at all** (S3's `fixq-c`, fix pass 3, item 1a). Save and Save as
-## (one path, `save_file`) refuse a target that is a folder, a folder that cannot be written, an
-## old file that cannot be moved aside (held open), and a `.tmp` already beside the target, each
-## with the status line saying why, the old file's bytes as they were, no temporary file left
-## (or the one in the way untouched), and the editor's file as it was; then a save lands whole,
-## with nothing left beside it.
+## A file seam that fails chosen steps (S3's `fixq-c`, fix pass 4): the listed calls (1 the
+## first) of each operation answer `error` (a `write` answers `write_as`, OPEN or STORE); every
+## other call is the real disk's. So each failure point is provoked the same way on Windows,
+## Linux and macOS, never through one system's file behaviour.
+class FailingDisk extends SafeWrite.Disk:
+	var failing: Dictionary
+	var error := ERR_FILE_CANT_WRITE
+	var write_as: int = SafeWrite.Failure.STORE
+	var _calls := {}
+
+	func _init(steps: Dictionary, as_failure: int = SafeWrite.Failure.STORE) -> void:
+		failing = steps
+		write_as = as_failure
+
+	func _fails(op: String) -> bool:
+		_calls[op] = int(_calls.get(op, 0)) + 1
+		return (failing.get(op, []) as Array).has(_calls[op])
+
+	func read(path: String) -> Dictionary:
+		return {"error": error, "text": ""} if _fails("read") else super(path)
+
+	func probe_writable(path: String) -> int:
+		return error if _fails("probe_writable") else super(path)
+
+	func write(path: String, bytes: PackedByteArray) -> Dictionary:
+		return {"failure": write_as, "error": error} if _fails("write") else super(path, bytes)
+
+	func rename(from: String, to: String) -> int:
+		return error if _fails("rename") else super(from, to)
+
+	func remove(path: String) -> int:
+		return error if _fails("remove") else super(path)
+
+
+## **A save is whole or not at all, recovers what an earlier one left, and never gets past a
+## file the player protected** (S3's `fixq-c`, fix passes 3 and 4, items 1a and 3). Save and Save
+## as are one path (`save_file`). Each refused save is said on the status line with why, leaves
+## the old file's bytes as they were, leaves none of the helper's beside-files behind, and keeps
+## the editor's file as it was. The failures are provoked through the file seam, the same on the
+## three systems; on the real filesystem only what is the same on all three: a target that is a
+## folder, a folder that does not exist, and a read-only file (made so by each system's own means).
 func _check_the_saves(editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
 	var folder := ProjectSettings.globalize_path("user://client_check_saves")
 	if DirAccess.make_dir_recursive_absolute(folder) != OK:
@@ -1732,55 +1768,102 @@ func _check_the_saves(editor: CanvasLayer, bridge: Node, failures: Array[String]
 		return
 	var old := "the old file\n".to_utf8_buffer()
 	var held := folder + "/held.jsonc"
+	var temp := SafeWrite.temp_of(held)
+	var backup := SafeWrite.backup_of(held)
+	# A player's own file beside the target, named as a backup tool would: never touched.
+	var players := held + ".bak"
+	var players_bytes := "the player's own copy\n".to_utf8_buffer()
 	var a_folder := folder + "/a_folder.jsonc"
-	if not _plain_write(held, old, failures) or DirAccess.make_dir_recursive_absolute(a_folder) != OK:
+	if not _plain_write(held, old, failures) or not _plain_write(players, players_bytes, failures) or DirAccess.make_dir_recursive_absolute(a_folder) != OK:
 		failures.append("the save check could not set up %s" % folder)
 		return
-	var before: Dictionary = bridge.editor_state()
-	var refused := func(name: String, path: String, words: String) -> void:
-		if editor.save_file(path):
+	# Held in a dictionary: a lambda captures a local by value, and the read-only case moves it.
+	var before := {"state": bridge.editor_state()}
+	var refused := func(name: String, path: String, disk: SafeWrite.Disk, words: String, kept: PackedByteArray) -> void:
+		if editor.save_file(path, disk):
 			failures.append("a save to %s went ahead" % name)
 			return
 		var said: String = editor.status_text()
 		if not said.begins_with(Strings.text("status_save_not_done", {"why": ""})) or not said.contains(words):
 			failures.append("a save to %s is not said with why (`%s`): `%s`" % [name, words, said])
 		var after: Dictionary = bridge.editor_state()
-		if after.get("file", "") != before.get("file", "") or after.get("last_file", "") != before.get("last_file", ""):
-			failures.append("a refused save to %s moved the editor's file: %s to %s" % [name, before.get("file", ""), after.get("file", "")])
-		if FileAccess.get_file_as_bytes(held) != old:
+		if after.get("file", "") != before["state"].get("file", "") or after.get("last_file", "") != before["state"].get("last_file", ""):
+			failures.append("a refused save to %s moved the editor's file: %s to %s" % [name, before["state"].get("file", ""), after.get("file", "")])
+		if path == held and FileAccess.get_file_as_bytes(held) != kept:
 			failures.append("a refused save to %s changed %s" % [name, held])
-	refused.call("a target that is a folder", a_folder, "is a folder")
-	if not DirAccess.dir_exists_absolute(a_folder) or FileAccess.file_exists(a_folder + SafeWrite.TEMP):
-		failures.append("a save to a folder touched it or left %s" % (a_folder + SafeWrite.TEMP))
-	refused.call("a folder that cannot be written", folder + "/no_such_folder/x.jsonc", "could not be opened for writing")
-	# Held open by another handle: on Windows it cannot be moved aside, so the temporary file,
-	# written whole by then, is removed and the old file stays.
-	var handle := FileAccess.open(held, FileAccess.READ)
-	refused.call("an old file held open", held, "could not be moved aside")
-	handle = null
-	if FileAccess.file_exists(held + SafeWrite.TEMP):
-		failures.append("a save that could not move the old file aside left %s" % (held + SafeWrite.TEMP))
-	var newer := "newer text a failed save left\n".to_utf8_buffer()
-	if _plain_write(held + SafeWrite.TEMP, newer, failures):
-		refused.call("a target with a temporary file in the way", held, "is already there")
-		if FileAccess.get_file_as_bytes(held + SafeWrite.TEMP) != newer:
-			failures.append("a save overwrote the temporary file in its way")
-		if DirAccess.remove_absolute(held + SafeWrite.TEMP) != OK:
-			failures.append("the save check could not remove %s" % (held + SafeWrite.TEMP))
+		if path == held and (FileAccess.file_exists(temp) or FileAccess.file_exists(backup)):
+			failures.append("a refused save to %s left a beside-file" % name)
+	# The real filesystem, the same on the three systems.
+	refused.call("a target that is a folder", a_folder, null, "is a folder", old)
+	refused.call("a folder that does not exist", folder + "/no_such_folder/x.jsonc", null, "its folder cannot be written", old)
+	# Through the seam: each step that can fail, failing.
+	refused.call("a target this user may not write", held, FailingDisk.new({"probe_writable": [1]}), "cannot be written by you", old)
+	refused.call("a temporary file that cannot be opened", held, FailingDisk.new({"write": [1]}, SafeWrite.Failure.OPEN), "could not be written", old)
+	refused.call("a temporary file that cannot be written whole", held, FailingDisk.new({"write": [1]}), "could not all be written", old)
+	refused.call("an old file that cannot be moved aside", held, FailingDisk.new({"rename": [1]}), "could not be moved aside", old)
+	refused.call("a new file that cannot be moved into place", held, FailingDisk.new({"rename": [2]}), "could not be put under", old)
+	# Neither the new file into place nor the old one back: the words name where each is, and
+	# they are true of the disk.
+	if editor.save_file(held, FailingDisk.new({"rename": [2, 3]})):
+		failures.append("a save whose new file and old one could not be placed went ahead")
+	var lost: String = editor.status_text()
+	if not lost.contains(temp) or not lost.contains(backup) or FileAccess.file_exists(held):
+		failures.append("PLACE_LOST is not said with where each copy is: `%s`" % lost)
+	if FileAccess.get_file_as_bytes(temp) != text or FileAccess.get_file_as_bytes(backup) != old:
+		failures.append("PLACE_LOST's words are not true of the disk")
+	# The next save recovers: the name absent and the backup present, so the backup is moved
+	# back first (and said), the stale temporary file removed, and then the save lands whole.
 	if not editor.save_file(held):
-		failures.append("a save to %s did not land: `%s`" % [held, editor.status_text()])
-	elif FileAccess.get_file_as_bytes(held) != text:
-		failures.append("a save to %s did not write the text on screen whole" % held)
-	if FileAccess.file_exists(held + SafeWrite.TEMP) or FileAccess.file_exists(held + SafeWrite.BACKUP):
-		failures.append("a save that landed left a file beside %s" % held)
+		failures.append("a save after PLACE_LOST did not land: `%s`" % editor.status_text())
+	elif not editor.status_text().contains(Strings.text("write_restored", {"path": ProjectSettings.globalize_path(held), "backup": backup})):
+		failures.append("a save that put the last good copy back does not say so: `%s`" % editor.status_text())
+	if FileAccess.get_file_as_bytes(held) != text or FileAccess.file_exists(temp) or FileAccess.file_exists(backup):
+		failures.append("a save after PLACE_LOST did not land whole with nothing left beside it")
+	# A backup that cannot be moved back is its own failure, naming where the last good copy is.
+	if DirAccess.rename_absolute(held, backup) != OK:
+		failures.append("the save check could not set up a stopped write")
+	if editor.save_file(held, FailingDisk.new({"rename": [1]})):
+		failures.append("a save whose stopped write's backup could not be moved back went ahead")
+	elif not editor.status_text().contains(backup) or not editor.status_text().contains(Strings.text("status_save_not_done", {"why": ""})):
+		failures.append("a stopped write's backup that cannot be moved back is not named: `%s`" % editor.status_text())
+	if not FileAccess.file_exists(backup) or FileAccess.file_exists(held) or FileAccess.get_file_as_bytes(backup) != text:
+		failures.append("a refused recovery moved something")
+	if DirAccess.rename_absolute(backup, held) != OK:
+		failures.append("the save check could not undo its stopped write")
+	# A save that lands but cannot remove the old copy says so; the next save clears it.
+	if not editor.save_file(held, FailingDisk.new({"remove": [1]})) or not editor.status_text().contains(backup):
+		failures.append("a save that left the old copy does not say so: `%s`" % editor.status_text())
+	if not editor.save_file(held) or FileAccess.file_exists(backup):
+		failures.append("the next save did not clear the old copy an earlier one left")
+	# A read-only file, made so by each system's own means: refused before anything moves.
+	if _make_read_only(held, true, failures):
+		# The saves above landed, so the text's file is `held` now: that is what a refusal keeps.
+		before["state"] = bridge.editor_state()
+		refused.call("a read-only file", held, null, "cannot be written by you", text)
+		_make_read_only(held, false, failures)
+	if FileAccess.get_file_as_bytes(players) != players_bytes:
+		failures.append("a save touched the player's own %s" % players)
 	if String(bridge.editor_state().get("file", "")) != held:
 		failures.append("a save that landed did not make %s the text's file" % held)
-	for path in [held, held + SafeWrite.TEMP, held + SafeWrite.BACKUP]:
+	for path in [held, players, temp, backup]:
 		if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
 			failures.append("the save check could not remove %s" % path)
 	for path in [a_folder, folder]:
 		if DirAccess.remove_absolute(path) != OK:
 			failures.append("the save check could not remove %s" % path)
+
+
+## Makes `path` read-only for this user (`on`), or writable again, by the means its system has:
+## Windows' read-only attribute, or the owner's write permission elsewhere. Checked.
+func _make_read_only(path: String, on: bool, failures: Array[String]) -> bool:
+	var done := OK
+	if OS.get_name() == "Windows":
+		done = FileAccess.set_read_only_attribute(path, on)
+	else:
+		done = FileAccess.set_unix_permissions(path, FileAccess.UNIX_READ_OWNER if on else FileAccess.UNIX_READ_OWNER | FileAccess.UNIX_WRITE_OWNER)
+	if done != OK:
+		failures.append("could not make %s %s (error %d)" % [path, "read-only" if on else "writable", done])
+	return done == OK
 
 
 ## `bytes` written to `path` for a check's set-up, every Error checked.
@@ -1797,12 +1880,12 @@ func _plain_write(path: String, bytes: PackedByteArray, failures: Array[String])
 
 
 ## **The remembered line is whole or absent, and forgetting it is said when it fails** (S3's
-## `fixq-c`, fix pass 3, items 1b and 1c). The real lobby, pointed at a file of the check's own:
-## its reader takes an absent file, an empty one and a folder as no match; remembering writes the
-## line whole, with nothing left beside it, and a line that cannot be written is said and claims
-## no match; forgetting removes the file, or, when it cannot be removed (read-only), empties it
-## whole, so the reader finds no match; and when neither can be done (held open), the status line
-## says so and the line is still what Resume offers.
+## `fixq-c`, fix passes 3 and 4, items 1b and 1c). The real lobby, pointed at a file of the
+## check's own, with the file seam where a step must fail: its reader takes an absent file, an
+## empty one and a folder as no match, and says a file it cannot read; remembering writes the
+## line whole, and a line that cannot be written is said and claims no match; forgetting removes
+## the file, or, when it cannot be removed, empties it whole, so the reader finds no match; and
+## when neither can be done, the status line says so and the line is still what Resume offers.
 func _check_the_remembered_line(failures: Array[String]) -> void:
 	var folder := ProjectSettings.globalize_path("user://client_check_lobby")
 	if DirAccess.make_dir_recursive_absolute(folder) != OK:
@@ -1830,12 +1913,25 @@ func _check_the_remembered_line(failures: Array[String]) -> void:
 		failures.append("a line that could not be remembered is not said, or a match is claimed: `%s`" % lobby.status_line(state))
 	if DirAccess.remove_absolute(path) != OK:
 		failures.append("the remembered-line check could not remove the folder at %s" % path)
+	# Remembering, a write that fails through the seam: said, and no match claimed.
+	lobby.disk = FailingDisk.new({"write": [1]})
+	lobby._remember()
+	lobby.disk = SafeWrite.Disk.new()
+	if not lobby.status_line(state).contains(Strings.text("lobby_not_remembered", {"why": ""})) or lobby.remembered_line() != "":
+		failures.append("a remembered line whose write failed is not said, or a match is claimed: `%s`" % lobby.status_line(state))
 	# Remembering, whole.
 	lobby._remember()
 	if FileAccess.get_file_as_string(path) != line + "\n" or lobby._remember_failed != "":
 		failures.append("the remembered line is not written whole: `%s` (%s)" % [FileAccess.get_file_as_string(path), lobby._remember_failed])
-	if FileAccess.file_exists(path + SafeWrite.TEMP) or FileAccess.file_exists(path + SafeWrite.BACKUP):
+	if FileAccess.file_exists(SafeWrite.temp_of(path)) or FileAccess.file_exists(SafeWrite.backup_of(path)):
 		failures.append("remembering left a file beside %s" % path)
+	# A remembered file that exists and cannot be read: said, not taken as no match.
+	lobby.disk = FailingDisk.new({"read": [1]})
+	var unread: String = lobby.remembered_line()
+	lobby.disk = SafeWrite.Disk.new()
+	if unread != "" or not lobby.status_line(state).contains(Strings.text("lobby_remembered_unreadable", {"path": path, "error": ERR_FILE_CANT_WRITE})):
+		failures.append("a remembered file that cannot be read is not said: `%s`" % lobby.status_line(state))
+	lobby.remembered_line()
 	# Forgetting, removed.
 	lobby._forget()
 	if FileAccess.file_exists(path) or not lobby._forgotten or lobby._forget_failed != "":
@@ -1843,33 +1939,37 @@ func _check_the_remembered_line(failures: Array[String]) -> void:
 	# Forgetting a file that cannot be removed: emptied whole, and the reader finds no match.
 	lobby._forgotten = false
 	if _plain_write(path, (line + "\n").to_utf8_buffer(), failures):
-		if FileAccess.set_read_only_attribute(path, true) != OK:
-			failures.append("the remembered-line check could not make %s read-only" % path)
+		lobby.disk = FailingDisk.new({"remove": [1]})
 		lobby._forget()
+		lobby.disk = SafeWrite.Disk.new()
 		if lobby.remembered_line() != "" or not lobby._forgotten:
 			failures.append("an ended match whose file could not be removed is still offered: `%s`" % lobby.remembered_line())
-		for leftover in [path + SafeWrite.BACKUP, path]:
-			if FileAccess.file_exists(leftover):
-				FileAccess.set_read_only_attribute(leftover, false)
-				if DirAccess.remove_absolute(leftover) != OK:
-					failures.append("the remembered-line check could not remove %s" % leftover)
-	# Forgetting a file held open: neither removed nor emptied; said, and still offered.
+	# Forgetting a file that can be neither removed nor emptied: said, and still offered.
 	lobby._forgotten = false
 	if _plain_write(path, (line + "\n").to_utf8_buffer(), failures):
-		var handle := FileAccess.open(path, FileAccess.READ)
+		lobby.disk = FailingDisk.new({"remove": [1], "write": [1]})
 		lobby._forget()
+		lobby.disk = SafeWrite.Disk.new()
 		if not lobby.status_line(state).contains(Strings.text("lobby_not_forgotten", {"error": "", "why": ""}).get_slice("(", 0)) or lobby._forgotten:
 			failures.append("an ended match that could not be forgotten is not said: `%s`" % lobby.status_line(state))
 		if lobby.remembered_line() != line:
 			failures.append("an ended match that could not be forgotten reads as `%s`" % lobby.remembered_line())
-		handle = null
-		for leftover in [path, path + SafeWrite.TEMP, path + SafeWrite.BACKUP]:
-			if FileAccess.file_exists(leftover) and DirAccess.remove_absolute(leftover) != OK:
-				failures.append("the remembered-line check could not remove %s" % leftover)
+	for leftover in [path, SafeWrite.temp_of(path), SafeWrite.backup_of(path)]:
+		if FileAccess.file_exists(leftover) and DirAccess.remove_absolute(leftover) != OK:
+			failures.append("the remembered-line check could not remove %s" % leftover)
 	if DirAccess.remove_absolute(folder) != OK:
 		failures.append("the remembered-line check could not remove %s" % folder)
 	lobby.queue_free()
 	await get_tree().process_frame
+
+
+## **The refusal names the limit** (fix pass 2, item 3; review 3's G3): once the editor is set up,
+## the too-large words carry the shared cap the bridge passed through, never an empty `{limit}`.
+func _check_the_limit_is_named(bridge: Node, failures: Array[String]) -> void:
+	var cap := str(bridge.watch_transport_limits().get("message_bytes", ""))
+	var said := Strings.text("status_call_too_large", {"detail": "5"})
+	if cap == "" or Strings.message_limit != cap or not said.contains(cap) or said.contains("{limit}"):
+		failures.append("the too-large words do not name the cap `%s`: `%s`" % [cap, said])
 
 
 ## **What a peer takes, and what it does past that** (S3's `fixq-c`, fix pass 3, item 3).

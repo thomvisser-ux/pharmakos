@@ -407,17 +407,21 @@ func load_bytes(bytes: PackedByteArray) -> bool:
 ## write that did not happen is said on the status line under its enumerated failure, and the
 ## text keeps its unsaved mark and its file: nothing on screen claims a save that is not on
 ## disk.
-func save_file(path: String) -> bool:
+## `disk` is the file seam (`safe_write.gd`): the real one unless a check passes its own.
+func save_file(path: String, disk: SafeWrite.Disk = null) -> bool:
 	var bytes: PackedByteArray = bridge.editor_bytes()
-	var written := SafeWrite.write(path, bytes)
+	var written := SafeWrite.write(path, bytes, disk)
 	if written["failure"] != SafeWrite.Failure.NONE:
 		_say_local("status_save_not_done", {"why": SafeWrite.why(written)})
 		return false
 	# The bridge's editor keeps the file and says so; a line said here alone would be gone at the
 	# next redraw, which that call causes.
 	bridge.editor_saved_to(path)
-	if String(written["leftover"]) != "":
-		_say_local("status_saved_with_leftover", {"path": path, "why": SafeWrite.why(written)})
+	# A save that landed may still have something to say: an earlier save's last good copy put
+	# back first, or a beside-file it could not remove.
+	var note := SafeWrite.why(written)
+	if note != "":
+		_say_local("status_saved_with_note", {"path": path, "why": note})
 	return true
 
 

@@ -129,6 +129,12 @@ var _forgotten := false
 ## The file the remembered line is kept in: REMEMBERED, unless a check points the lobby at a
 ## file of its own before it enters the tree.
 var remembered := REMEMBERED
+## The file seam (`safe_write.gd`): the real one unless a check passes its own before the lobby
+## enters the tree.
+var disk: SafeWrite.Disk = SafeWrite.Disk.new()
+## Why the remembered file, which exists, could not be read, in the string table's words; ""
+## when it could (or there is none). Said on the chooser's line.
+var _remembered_unreadable := ""
 ## Why this match's line could not be remembered, or why the ended match could not be
 ## forgotten, in the string table's words; "" when it was. The status line says it.
 var _remember_failed := ""
@@ -147,15 +153,24 @@ func _ready() -> void:
 	editor.setup(vista)
 	editor.visible = false
 	_status.text = Strings.text("lobby_choose")
+	if _remembered_unreadable != "":
+		_status.text += "  " + _remembered_unreadable
 
 
 ## The line the lobby remembered from the last match it started, or "" when none is: an absent
 ## file, an empty one (an ended match forgotten by emptying it) and a folder are all none. The
 ## line itself is read by the host, which refuses a short or malformed one in its own words.
 func remembered_line() -> String:
-	if not FileAccess.file_exists(remembered):
+	var path := ProjectSettings.globalize_path(remembered)
+	_remembered_unreadable = ""
+	if not disk.exists(path):
 		return ""
-	return FileAccess.get_file_as_string(remembered).strip_edges()
+	# A file that exists and cannot be read is said, not read as no match (fix pass 4).
+	var read: Dictionary = SafeWrite.read(path, disk)
+	if read["error"] != OK:
+		_remembered_unreadable = Strings.text("lobby_remembered_unreadable", {"path": path, "error": read["error"]})
+		return ""
+	return String(read["text"]).strip_edges()
 
 
 ## Starts a new match under a fresh id, under HostLink.PRESET, which the bridge then holds the
@@ -190,33 +205,34 @@ func _start(line: String, resuming: bool) -> void:
 ## Remembers this match's line, whole or not at all; a line that could not be written is said
 ## on the status line, which then claims no remembered match.
 func _remember() -> void:
-	var written := SafeWrite.write(remembered, (_line + "\n").to_utf8_buffer())
+	var written := SafeWrite.write(remembered, (_line + "\n").to_utf8_buffer(), disk)
 	_remember_failed = ""
 	if written["failure"] != SafeWrite.Failure.NONE:
 		_remember_failed = Strings.text("lobby_not_remembered", {"why": SafeWrite.why(written)})
-	elif String(written["leftover"]) != "":
-		_remember_failed = Strings.text("lobby_remembered_leftover", {"why": SafeWrite.why(written)})
+	elif SafeWrite.why(written) != "":
+		_remember_failed = Strings.text("lobby_remembered_note", {"why": SafeWrite.why(written)})
 
 
 ## Forgets the ended match: its file removed, or, when it cannot be, emptied whole (an empty
-## file is no match to the reader); when neither can be done, the status line says so and says
-## to start a new match. (A Resume of an ended match is not refused by the host today: reported
-## in PR #229 for the gateway's lane.)
+## file is no match to the reader); when neither can be done (a file the player protected is
+## refused before anything moves, `safe_write.gd`), the status line says so and says to start a
+## new match. (A Resume of an ended match is not refused by the host today: reported in PR #229
+## for the gateway's lane, which lane `opsave` carries.)
 func _forget() -> void:
 	_forget_failed = ""
 	var path := ProjectSettings.globalize_path(remembered)
-	if not FileAccess.file_exists(path):
+	if not disk.exists(path):
 		_forgotten = true
 		return
-	var removed := DirAccess.remove_absolute(path)
+	var removed := disk.remove(path)
 	if removed == OK:
 		_forgotten = true
 		return
-	var emptied := SafeWrite.write(path, PackedByteArray())
+	var emptied := SafeWrite.write(path, PackedByteArray(), disk)
 	if emptied["failure"] == SafeWrite.Failure.NONE:
 		_forgotten = true
-		if String(emptied["leftover"]) != "":
-			_forget_failed = Strings.text("lobby_forgotten_leftover", {"why": SafeWrite.why(emptied)})
+		if SafeWrite.why(emptied) != "":
+			_forget_failed = Strings.text("lobby_forgotten_note", {"why": SafeWrite.why(emptied)})
 		return
 	_forget_failed = Strings.text("lobby_not_forgotten", {"error": removed, "why": SafeWrite.why(emptied)})
 
@@ -259,6 +275,8 @@ func status_line(state: Dictionary) -> String:
 		parts.append(_remember_failed)
 	if _forget_failed != "":
 		parts.append(_forget_failed)
+	if _remembered_unreadable != "":
+		parts.append(_remembered_unreadable)
 	var preset := preset_line(state)
 	if preset != "":
 		parts.append(preset)
@@ -441,6 +459,8 @@ func _offer_chooser(resume_too: bool) -> void:
 	_recap.visible = false
 	editor.visible = false
 	_resume_button.visible = resume_too and remembered_line() != ""
+	if _remembered_unreadable != "":
+		_status.text += "  " + _remembered_unreadable
 	_chooser.visible = true
 
 

@@ -1666,6 +1666,10 @@ fn ignored_errors(text: &str) -> Vec<String> {
         .filter(|line| {
             let code = gd_code_only(line);
             let code = code.trim();
+            // A declaration names the method; it calls nothing.
+            if code.starts_with("func ") || code.starts_with("static func ") {
+                return false;
+            }
             if KEYWORDS.iter().any(|keyword| code.starts_with(keyword)) {
                 return false;
             }
