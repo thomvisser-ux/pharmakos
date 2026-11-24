@@ -97,6 +97,7 @@ pub mod mining;
 pub mod pathing;
 pub mod power;
 pub mod programs;
+pub mod reserved;
 pub mod rules;
 pub mod runner;
 pub mod seams;

@@ -68,6 +68,7 @@ use crate::pathing::repair::{RepairReport, Repairer, repair};
 use crate::pathing::router::{Router, ServeReport, WalkState};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{StepCosts, Surface};
+use crate::reserved::Reserved;
 use crate::rules::RulesTable;
 use crate::runner::{MatchEndReason, MatchPhase, MatchSettings, MatchState};
 use crate::seams::{BeaconMandate, MandateKind, ProgramId, WorkCounter};
@@ -401,7 +402,7 @@ pub struct World {
     licences: crate::licence::LicenceTable,
     /// The licences a seat's elimination voids, one tick's worth: scratch
     /// sized at construction so the voiding allocates nothing.
-    voided: Vec<u8>,
+    voided: Reserved<u8>,
 
     chunks: ChunkDigests,
 
@@ -470,7 +471,7 @@ pub struct World {
     /// What the last tick's serving did. Diagnostic; never hashed.
     serve_report: ServeReport,
     /// This tick's voxel edits, drained by [`Phase::Voxels`].
-    edits: Vec<VoxelEdit>,
+    edits: Reserved<VoxelEdit>,
     /// The two queues' rooms (S2's plan, E5). Derived at construction from
     /// the table rooms and kept by a restore, as [`World::unit_limit`] is.
     rooms: QueueRooms,
@@ -505,48 +506,48 @@ pub struct World {
     /// never hashed, never snapshotted.
     damage_dealt: Vec<u64>,
     /// Scratch for the firing order, sized to every row that can fire.
-    fire_order: Vec<combat::Firer>,
+    fire_order: Reserved<combat::Firer>,
     /// Scratch for `RETURN_FIRE`'s attacker set, sized as above.
-    attackers: Vec<(u8, u32)>,
+    attackers: Reserved<(u8, u32)>,
     /// Scratch for a `SAFEST` seam choice's known threats, each with its
     /// weapon's reach (S2's `dfnd`), sized as above: an armed asset is one
     /// that can fire.
-    threat_scratch: Vec<([Fx; 3], Sq)>,
+    threat_scratch: Reserved<([Fx; 3], Sq)>,
     /// Scratch for a `toward` step's candidate sites (S3's `pred`), empty
     /// between uses and reserved for every column of the map, the most one
     /// search lists (each site is one column, once).
-    stone_scratch: Vec<crate::targeting::StoneCandidate>,
+    stone_scratch: Reserved<crate::targeting::StoneCandidate>,
     /// Scratch for the breach search (S2's `atk`), reserved for the whole
     /// graph so a search allocates nothing.
     breach_scratch: crate::attack::BreachScratch,
     /// Scratch for the charges that fire on one tick, sized to the beacon
     /// ceiling (a charge per breach).
-    charge_scratch: Vec<crate::attack::Charge>,
+    charge_scratch: Reserved<crate::attack::Charge>,
     /// The Attack mandate's counters (S2's `atk`). Diagnostic; never hashed.
     attack_counts: crate::attack::AttackCounts,
     /// Scratch for the pathing phase's route surcharges (S2's `atk`): every
     /// zone a waiting route avoids, and each unit's span of it.
-    route_zones: Vec<crate::pathing::route::Zone>,
+    route_zones: Reserved<crate::pathing::route::Zone>,
     /// Each unit row's span of [`World::route_zones`], `(start, end)`.
     route_spans: Vec<(u32, u32)>,
     /// How many threat zones the route zones hold room for besides the
     /// avoid areas: every armed row, for every seat.
     zone_base: usize,
     /// Scratch for a weapon's unit query, sized to the unit ceiling.
-    fire_rows: Vec<Row>,
+    fire_rows: Reserved<Row>,
     /// Scratch for a splash's unit query, sized to the unit ceiling.
-    splash_rows: Vec<Row>,
+    splash_rows: Reserved<Row>,
     /// Scratch for the damage queue's sorted index, sized to the queue.
-    damage_index: Vec<u32>,
+    damage_index: Reserved<u32>,
     /// Scratch for one target's dealers, one bucket a seat and nobody's.
-    dealers: Vec<(u8, i64)>,
+    dealers: Reserved<(u8, i64)>,
     /// Scratch for one target's split.
-    dealt_split: Vec<(u8, i64)>,
+    dealt_split: Reserved<(u8, i64)>,
     /// Scratch for the split's largest-remainder flags.
-    topped: Vec<bool>,
+    topped: Reserved<bool>,
     /// The units and structures the tick's damage killed, in target order,
     /// drained by the settle function in the same tick (E2): never state.
-    deaths: Vec<DamageTarget>,
+    deaths: Reserved<DamageTarget>,
     /// The stale references met and the rows retired, by reason (S2's plan,
     /// E1). Diagnostic; never hashed, and equal to any other count.
     refs: RefCounts,
@@ -554,7 +555,7 @@ pub struct World {
     /// reused row stands where the grid has not seen it, so a query this tick
     /// tests these rows directly as well (S2's plan, E11). Scratch, sized to
     /// the unit ceiling; never hashed.
-    placed_since_broadphase: Vec<Row>,
+    placed_since_broadphase: Reserved<Row>,
     /// The broadphase pad, in Q16.16 voxels: the most any unit can move in one
     /// tick, derived from the locomotion rows at load (S2's plan, E11). A query
     /// asks the grid for its radius plus this and tests the candidates' current
@@ -562,7 +563,7 @@ pub struct World {
     /// that ran after the grid was rebuilt.
     query_pad: Fx,
     /// Scratch for a vision query's rows, so a sensor allocates nothing.
-    sight_rows: Vec<Row>,
+    sight_rows: Reserved<Row>,
     /// The next phase of the tick that is open, as an index into
     /// [`PHASE_ORDER`], or `None` between ticks (S2's plan, E30). Never
     /// hashed and never snapshotted: a snapshot is only ever taken between
@@ -571,29 +572,29 @@ pub struct World {
     /// Scratch for a settings edit's carry-over: every old Build row of the
     /// beacon it edits, sized to the list-settings table at construction so
     /// the carry covers every entry and allocates nothing (item 136 (5)).
-    carry: Vec<Carried>,
+    carry: Reserved<Carried>,
     /// Scratch for a crater's touched-chunk list, so an edit allocates nothing.
-    touched: Vec<u32>,
+    touched: Reserved<u32>,
     /// The support rule's scratch (S2's plan, `fall`): unhashed, out of the
     /// snapshot, holding nothing between ticks but its diagnostic counts, so
     /// it adds no hash, snapshot or table line.
     support: support::Scratch,
     /// Scratch for broadphase queries, so a query allocates nothing.
-    candidates: Vec<Row>,
+    candidates: Reserved<Row>,
     /// This tick's damage orders, drained by [`Phase::Combat`].
-    damage: Vec<DamageOrder>,
+    damage: Reserved<DamageOrder>,
     /// This tick's spend requests, gathered by [`Phase::Quartermaster`].
-    requests: Vec<SpendRequest>,
+    requests: Reserved<SpendRequest>,
     /// Scratch for one seat's brownout order, so the power phase allocates
     /// nothing.
-    power_order: Vec<u32>,
+    power_order: Reserved<u32>,
     /// Scratch for one asset's kill-credit shares.
-    credit_shares: Vec<(u8, i32)>,
+    credit_shares: Reserved<(u8, i32)>,
     /// Scratch for one asset's apportioned split.
-    credit_split: Vec<(u8, i64)>,
+    credit_split: Reserved<(u8, i64)>,
     /// Scratch for the settlement's ladder: every seat's held value, read once
     /// before anybody is paid.
-    settlement: Vec<i64>,
+    settlement: Reserved<i64>,
     /// The spend-control seam ([`crate::economy::Quartermaster`]). A zero-sized
     /// stub today; never hashed, because it holds no state — the round robin's
     /// position is on the seat table, where it is.
@@ -613,7 +614,7 @@ pub struct World {
     /// rather than every tick afterwards. A restore rebuilds it from the
     /// restored hit points, which loses no edge, because a snapshot is taken
     /// after the match phase has already acted on this tick's deaths.
-    beacon_alive: Vec<bool>,
+    beacon_alive: Reserved<bool>,
     /// How many unit rows the table may ever hold. Derived and not hashed, and
     /// not merely an allocation size — see [`World::unit_limit`].
     unit_limit: u32,
@@ -1273,7 +1274,8 @@ impl World {
         let beacon_start = beacons.len();
         let beacon_limit = beacon_limit_of(config.seats);
         beacons.reserve(beacon_limit.saturating_sub(beacons.len()));
-        let mut beacon_alive: Vec<bool> = Vec::with_capacity(crate::math::index::row(beacon_limit));
+        let mut beacon_alive: Reserved<bool> =
+            Reserved::with_capacity(crate::math::index::row(beacon_limit));
         beacon_alive.extend(beacons.hit_points().iter().map(|hp| hp.is_alive()));
         let commanders = commander_index(&units, config.seats);
         // Each seat's placement counter starts at the beacons the generator
@@ -1340,7 +1342,7 @@ impl World {
                 table
             },
             licences: crate::licence::LicenceTable::with_room(config.seats),
-            voided: Vec::with_capacity(crate::licence::AWARDED.len()),
+            voided: Reserved::with_capacity(crate::licence::AWARDED.len()),
             chunks,
             router,
             match_state: MatchState::new(&settings),
@@ -1364,7 +1366,7 @@ impl World {
             work: WorkCounter::with_budget(HARNESS_WORK_BUDGET),
             repair_report: RepairReport::default(),
             serve_report: ServeReport::default(),
-            edits: Vec::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
+            edits: Reserved::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
             rooms,
             damage_drops: DamageDrops::default(),
             site_drops: crate::site::SiteDrops::default(),
@@ -1375,47 +1377,47 @@ impl World {
             shell_landing,
             combat: CombatCounts::default(),
             damage_dealt: vec![0; seat_rows.saturating_mul(seat_rows)],
-            fire_order: Vec::with_capacity(armed_rows),
-            attackers: Vec::with_capacity(armed_rows),
-            threat_scratch: Vec::with_capacity(armed_rows),
-            stone_scratch: Vec::with_capacity(crate::math::index::row(breach_nodes)),
+            fire_order: Reserved::with_capacity(armed_rows),
+            attackers: Reserved::with_capacity(armed_rows),
+            threat_scratch: Reserved::with_capacity(armed_rows),
+            stone_scratch: Reserved::with_capacity(crate::math::index::row(breach_nodes)),
             breach_scratch: crate::attack::BreachScratch::new(breach_nodes),
-            charge_scratch: Vec::with_capacity(crate::math::index::row(beacon_limit)),
+            charge_scratch: Reserved::with_capacity(crate::math::index::row(beacon_limit)),
             attack_counts: crate::attack::AttackCounts::default(),
-            route_zones: Vec::with_capacity(
+            route_zones: Reserved::with_capacity(
                 armed_rows
                     .saturating_mul(seat_rows.max(1))
                     .saturating_add(AVOID_AREA_ROOM),
             ),
             route_spans: vec![(0, 0); crate::math::index::row(unit_ceiling)],
             zone_base: armed_rows.saturating_mul(seat_rows.max(1)),
-            fire_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
-            splash_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
-            damage_index: Vec::with_capacity(damage_capacity),
-            dealers: Vec::with_capacity(seat_rows.saturating_add(1)),
-            dealt_split: Vec::with_capacity(seat_rows.saturating_add(1)),
-            topped: Vec::with_capacity(seat_rows.saturating_add(1)),
-            deaths: Vec::with_capacity(armed_rows),
+            fire_rows: Reserved::with_capacity(crate::math::index::row(unit_ceiling)),
+            splash_rows: Reserved::with_capacity(crate::math::index::row(unit_ceiling)),
+            damage_index: Reserved::with_capacity(damage_capacity),
+            dealers: Reserved::with_capacity(seat_rows.saturating_add(1)),
+            dealt_split: Reserved::with_capacity(seat_rows.saturating_add(1)),
+            topped: Reserved::with_capacity(seat_rows.saturating_add(1)),
+            deaths: Reserved::with_capacity(armed_rows),
             refs: RefCounts::default(),
-            placed_since_broadphase: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
+            placed_since_broadphase: Reserved::with_capacity(crate::math::index::row(unit_ceiling)),
             query_pad: query_pad_of(&config.rules),
-            sight_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
+            sight_rows: Reserved::with_capacity(crate::math::index::row(unit_ceiling)),
             open_phase: None,
-            carry: Vec::with_capacity(crate::math::index::row(
+            carry: Reserved::with_capacity(crate::math::index::row(
                 beacon_limit.saturating_mul(TARGETS_PER_BEACON),
             )),
             // Sized to the whole map rather than to the queue: one crater can
             // touch more chunks than the queue holds edits, and a scratch
             // buffer that has to grow is an allocation inside a tick.
-            touched: Vec::with_capacity(crate::math::index::row(chunk_total)),
+            touched: Reserved::with_capacity(crate::math::index::row(chunk_total)),
             support,
-            candidates: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
-            damage: Vec::with_capacity(damage_capacity),
-            requests: Vec::with_capacity(crate::math::index::row(beacon_limit)),
-            power_order: Vec::with_capacity(crate::math::index::row(beacon_limit)),
-            credit_shares: Vec::with_capacity(crate::tables::CREDIT_SLOTS),
-            credit_split: Vec::with_capacity(crate::tables::CREDIT_SLOTS),
-            settlement: Vec::with_capacity(crate::math::index::row(config.seats)),
+            candidates: Reserved::with_capacity(crate::math::index::row(unit_ceiling)),
+            damage: Reserved::with_capacity(damage_capacity),
+            requests: Reserved::with_capacity(crate::math::index::row(beacon_limit)),
+            power_order: Reserved::with_capacity(crate::math::index::row(beacon_limit)),
+            credit_shares: Reserved::with_capacity(crate::tables::CREDIT_SLOTS),
+            credit_split: Reserved::with_capacity(crate::tables::CREDIT_SLOTS),
+            settlement: Reserved::with_capacity(crate::math::index::row(config.seats)),
             quartermaster: SingleTreasury,
             events: EventBus::with_capacity(EVENT_BUS_CAPACITY),
             commanders,
@@ -1487,25 +1489,25 @@ impl World {
     /// The `SAFEST` seam choice's threat scratch, empty between uses (S2's
     /// `dfnd`): taken and given back so the choice allocates nothing.
     pub(crate) fn take_threat_scratch(&mut self) -> Vec<([Fx; 3], Sq)> {
-        core::mem::take(&mut self.threat_scratch)
+        core::mem::take(&mut self.threat_scratch).into_inner()
     }
 
     /// A `toward` step's candidate scratch (S3's `pred`), taken and given back
     /// so a later search reuses what an earlier one grew.
     pub(crate) fn take_stone_scratch(&mut self) -> Vec<crate::targeting::StoneCandidate> {
-        core::mem::take(&mut self.stone_scratch)
+        core::mem::take(&mut self.stone_scratch).into_inner()
     }
 
     /// Give the `toward` scratch back, cleared.
     pub(crate) fn put_stone_scratch(&mut self, mut scratch: Vec<crate::targeting::StoneCandidate>) {
         scratch.clear();
-        self.stone_scratch = scratch;
+        self.stone_scratch = scratch.into();
     }
 
     /// Give the threat scratch back, cleared.
     pub(crate) fn put_threat_scratch(&mut self, mut scratch: Vec<([Fx; 3], Sq)>) {
         scratch.clear();
-        self.threat_scratch = scratch;
+        self.threat_scratch = scratch.into();
     }
 
     /// Every Defend beacon's settings and state (S2's `dfnd`).
@@ -1636,13 +1638,13 @@ impl World {
 
     /// The fired-charge scratch, empty between uses.
     pub(crate) fn take_charge_scratch(&mut self) -> Vec<crate::attack::Charge> {
-        core::mem::take(&mut self.charge_scratch)
+        core::mem::take(&mut self.charge_scratch).into_inner()
     }
 
     /// Give the fired-charge scratch back, cleared.
     pub(crate) fn put_charge_scratch(&mut self, mut scratch: Vec<crate::attack::Charge>) {
         scratch.clear();
-        self.charge_scratch = scratch;
+        self.charge_scratch = scratch.into();
     }
 
     /// The core's bore ([`crate::bore`]; S2's plan, E31). Derived, never
@@ -7114,7 +7116,7 @@ impl World {
 
     /// The vision query's scratch, taken and put back by
     /// [`crate::survey::record_sightings`] so a sensor allocates nothing.
-    pub(crate) const fn sight_rows_mut(&mut self) -> &mut Vec<Row> {
+    pub(crate) fn sight_rows_mut(&mut self) -> &mut Vec<Row> {
         &mut self.sight_rows
     }
 
@@ -7244,7 +7246,7 @@ impl World {
         self.beacon_limit = beacon_limit_of(self.seats.len());
         self.beacons
             .reserve(self.beacon_limit.saturating_sub(self.beacons.len()));
-        self.beacon_alive = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
+        self.beacon_alive = Reserved::with_capacity(crate::math::index::row(self.beacon_limit));
         self.beacon_alive
             .extend(self.beacons.hit_points().iter().map(|hp| hp.is_alive()));
         self.match_state.restore(restored.match_state);
@@ -7284,25 +7286,25 @@ impl World {
         // empty and sized for the restored world (E5, E30).
         self.open_phase = None;
         self.rooms = rooms;
-        self.edits = Vec::with_capacity(edit_capacity);
-        self.damage = Vec::with_capacity(damage_capacity);
-        self.damage_index = Vec::with_capacity(damage_capacity);
+        self.edits = Reserved::with_capacity(edit_capacity);
+        self.damage = Reserved::with_capacity(damage_capacity);
+        self.damage_index = Reserved::with_capacity(damage_capacity);
         let armed_rows = crate::math::index::row(
             self.unit_limit
                 .saturating_add(STRUCTURE_ROWS)
                 .saturating_add(self.beacon_limit),
         );
         let seat_rows = crate::math::index::row(self.seats.len());
-        self.fire_order = Vec::with_capacity(armed_rows);
-        self.attackers = Vec::with_capacity(armed_rows);
-        self.deaths = Vec::with_capacity(armed_rows);
-        self.fire_rows = Vec::with_capacity(crate::math::index::row(self.unit_limit));
-        self.splash_rows = Vec::with_capacity(crate::math::index::row(self.unit_limit));
-        self.dealers = Vec::with_capacity(seat_rows.saturating_add(1));
-        self.dealt_split = Vec::with_capacity(seat_rows.saturating_add(1));
-        self.topped = Vec::with_capacity(seat_rows.saturating_add(1));
+        self.fire_order = Reserved::with_capacity(armed_rows);
+        self.attackers = Reserved::with_capacity(armed_rows);
+        self.deaths = Reserved::with_capacity(armed_rows);
+        self.fire_rows = Reserved::with_capacity(crate::math::index::row(self.unit_limit));
+        self.splash_rows = Reserved::with_capacity(crate::math::index::row(self.unit_limit));
+        self.dealers = Reserved::with_capacity(seat_rows.saturating_add(1));
+        self.dealt_split = Reserved::with_capacity(seat_rows.saturating_add(1));
+        self.topped = Reserved::with_capacity(seat_rows.saturating_add(1));
         self.damage_dealt = vec![0; seat_rows.saturating_mul(seat_rows)];
-        self.carry = Vec::with_capacity(crate::math::index::row(
+        self.carry = Reserved::with_capacity(crate::math::index::row(
             self.beacon_limit.saturating_mul(TARGETS_PER_BEACON),
         ));
         // The event bus is derived output and is not in the file
@@ -7314,24 +7316,25 @@ impl World {
         // resumed feed a function of the restored state rather than of whatever
         // this world had been doing before.
         self.events.reset(self.tick);
-        self.touched = Vec::with_capacity(crate::math::index::row(self.voxels.chunk_count()));
+        self.touched = Reserved::with_capacity(crate::math::index::row(self.voxels.chunk_count()));
         self.support = support;
         // The query scratch is sized the same way, and for the same reason: a
         // query that has to grow its buffer is an allocation inside a tick.
-        self.candidates = Vec::with_capacity(crate::math::index::row(self.unit_limit));
-        self.sight_rows = Vec::with_capacity(crate::math::index::row(self.unit_limit));
+        self.candidates = Reserved::with_capacity(crate::math::index::row(self.unit_limit));
+        self.sight_rows = Reserved::with_capacity(crate::math::index::row(self.unit_limit));
         // A restore lands between ticks with the grid unbuilt; the next tick's
         // Broadphase builds it from every restored row.
-        self.placed_since_broadphase = Vec::with_capacity(crate::math::index::row(self.unit_limit));
+        self.placed_since_broadphase =
+            Reserved::with_capacity(crate::math::index::row(self.unit_limit));
         // The three phase scratch buffers are re-reserved from the **restored**
         // counts for the same reason the tables are: they were sized at
         // construction from the config's seat count, and a snapshot of a match
         // with more seats raises `beacon_limit` and `seats.len()` past what
         // they were built for. A `power_order.push` past the reservation would
         // then allocate inside a tick, which `tests/allocations.rs` fails on.
-        self.requests = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
-        self.power_order = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
-        self.settlement = Vec::with_capacity(crate::math::index::row(self.seats.len()));
+        self.requests = Reserved::with_capacity(crate::math::index::row(self.beacon_limit));
+        self.power_order = Reserved::with_capacity(crate::math::index::row(self.beacon_limit));
+        self.settlement = Reserved::with_capacity(crate::math::index::row(self.seats.len()));
         true
     }
 }

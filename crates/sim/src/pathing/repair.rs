@@ -39,6 +39,7 @@
 use crate::pathing::clusters::Clusters;
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::Surface;
+use crate::reserved::Reserved;
 
 /// What one tick's repair did.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -57,13 +58,13 @@ pub struct RepairReport {
 /// nothing.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Repairer {
-    dirty: Vec<u16>,
+    dirty: Reserved<u16>,
     dirty_flag: Vec<bool>,
-    transitions: Vec<u16>,
+    transitions: Reserved<u16>,
     transitions_flag: Vec<bool>,
-    inter: Vec<u16>,
+    inter: Reserved<u16>,
     inter_flag: Vec<bool>,
-    repaired: Vec<u16>,
+    repaired: Reserved<u16>,
     /// How many times [`repair`] has run since [`Repairer::start_tick`]:
     /// diagnostic, never hashed. The world settles its graph in one place a
     /// tick (lane `settle`), and this is how a test holds it to that.
@@ -100,13 +101,13 @@ impl Repairer {
     #[must_use]
     pub fn new(clusters: usize) -> Repairer {
         Repairer {
-            dirty: Vec::with_capacity(clusters),
+            dirty: Reserved::with_capacity(clusters),
             dirty_flag: vec![false; clusters],
-            transitions: Vec::with_capacity(clusters),
+            transitions: Reserved::with_capacity(clusters),
             transitions_flag: vec![false; clusters],
-            inter: Vec::with_capacity(clusters),
+            inter: Reserved::with_capacity(clusters),
             inter_flag: vec![false; clusters],
-            repaired: Vec::with_capacity(clusters),
+            repaired: Reserved::with_capacity(clusters),
             calls: Repairs::None,
         }
     }
