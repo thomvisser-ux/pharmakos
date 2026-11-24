@@ -97,8 +97,8 @@ const AboutScene := preload("res://scenes/credits.tscn")
 ## How many event rows the list keeps on screen. PLACEHOLDER, UI, OWNER at S6.
 const EVENT_ROWS := 14
 ## The one file the lobby writes: the six-field config line of the last match it started,
-## with no token in it. It is written whole or not at all (`safe_write.gd`, S3's `fixq-c`,
-## fix pass 3), through `<file>.tmp` and `<file>.bak` beside it; its format is unchanged.
+## with no token in it. It is written whole or not at all, by the bridge's `file_write` (an
+## atomic replace, `crates/client-gdext/src/write.rs`, S3's `fixq-c`); its format is unchanged.
 const REMEMBERED := "user://last_match.txt"
 
 @onready var vista: Node3D = $Vista

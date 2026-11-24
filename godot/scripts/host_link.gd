@@ -513,7 +513,15 @@ func _pump_link(link: int) -> void:
 			"give_up":
 				_done = true
 				var why: Dictionary = bridge.watch_give_up(link)
-				failed.emit(Strings.text("link_gave_up", {"link": Strings.text("connection_" + ("admin" if link == 0 else "seat")), "attempts": why.get("attempts", 0), "code": why.get("code", -1)}))
+				failed.emit(gave_up_words(link, why))
+
+
+## The words for a link given up: the last close's code, or, when it carried none (the
+## bridge's -1), that the connection was lost. Never a bare -1 (fix pass 6).
+static func gave_up_words(link: int, why: Dictionary) -> String:
+	var code: int = why.get("code", -1)
+	var fields := {"link": Strings.text("connection_" + ("admin" if link == 0 else "seat")), "attempts": why.get("attempts", 0), "code": code}
+	return Strings.text("link_gave_up" if code >= 0 else "link_gave_up_lost", fields)
 
 
 func _drain_stderr() -> void:

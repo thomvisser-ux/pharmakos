@@ -42,7 +42,6 @@ const TEXT := {
 	"ready_failed_lost_spent": "Ready's answers were lost each time it was sent (the last: {detail}). Press Ready again.",
 	"ready_failed_too_large": "Ready was not sent: it was too large to send ({detail} bytes). Press Ready again.",
 	"ready_failed_send_failed": "Ready was not sent: the connection refused to send it (error {detail}). Press Ready again.",
-	"ready_failed_closed_on": "Ready may have been taken (the connection closed on it: code {detail}); asking the gateway again.",
 	"lobby_ready_asking": "Asking the gateway whether you hold a seal this round...",
 	"lobby_ready_not_told": "Not told whether you hold a seal this round: the gateway refused to say ({detail}). Ready still ends your Lull.",
 	"lobby_continue": "Continue",
@@ -371,7 +370,7 @@ const TEXT := {
 	"status_carried": "Last round's orders are loaded again and checked against the new map ({detail}).",
 	"status_not_yours": "That beacon is not yours.",
 	"status_saved_file": "Saved to {detail}.",
-	# A write whole or not at all (safe_write.gd, fix pass 3): each failure says what is on disk.
+	# A save that was not done, or was done with a note: {why} is one of the write_* rows below.
 	"status_save_not_done": "Not saved: {why}",
 	"status_saved_with_note": "Saved to {path}. {why}",
 	# A write by an atomic replace (crates/client-gdext/src/write.rs, fix pass 5): each failure says
@@ -402,6 +401,8 @@ const TEXT := {
 	"lobby_zero_timed_out": "The Lull ran out, and no answer came in time to telling the gateway so.",
 	"lobby_view_held": "The map's last answer was too big for this client to read, so the map will not refresh until the next phase.",
 	"link_gave_up": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last close was code {code}.",
+	# The same, when the last close carried no code: the connection was lost, not closed.
+	"link_gave_up_lost": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last time, the connection was lost with no close.",
 	"status_call_maybe_taken": "The answer to that was lost ({detail}), so it may have been taken; reading it again from the gateway.",
 	"status_lost_notes_read": "Read again from the gateway after a lost answer: the notebook below is what it keeps.",
 	"status_lost_drafts_read": "Read again from the gateway after a lost answer: the drafts listed are what it keeps.",

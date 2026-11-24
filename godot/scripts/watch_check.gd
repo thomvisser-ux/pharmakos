@@ -591,6 +591,13 @@ func _host_gone() -> void:
 	# The give-up is the reconnect policy's, in its own words (fix pass 5).
 	if not _refused_reason.contains("connection was given up after") or not Strings.text("link_gave_up").contains("connection was given up after"):
 		_failures.append("the host went away and the link gave up in words that are not the policy's: %s" % _refused_reason)
+	# Never a bare -1 (fix pass 6): a close with no code is said as a lost connection.
+	if _refused_reason.contains("-1"):
+		_failures.append("the give-up says a bare -1: %s" % _refused_reason)
+	var lost := HostLink.gave_up_words(1, {"attempts": 4, "code": -1})
+	var coded := HostLink.gave_up_words(0, {"attempts": 4, "code": 1006})
+	if lost.contains("-1") or not lost.contains("lost with no close") or not coded.contains("code 1006"):
+		_failures.append("the give-up's words by code are wrong: %s | %s" % [lost, coded])
 	print("[watch-check] the host went away (pid %d) and the reconnect policy gave the link up: %s" % [pid, _refused_reason])
 
 ## A line remembered before the preset existed (six fields) is refused by the gateway when it
