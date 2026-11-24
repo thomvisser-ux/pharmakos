@@ -254,9 +254,6 @@ pub enum LookShape {
     Dish,
     /// A flat box filling its size: a wall.
     Slab,
-    /// `SHAPE_UNSPECIFIED`, or a number this build has no name for: drawn as a block, and the
-    /// number said in the log, never dropped (the gateway decided the viewer may see it).
-    Unknown(i32),
 }
 
 impl LookShape {
@@ -268,19 +265,21 @@ impl LookShape {
             Self::Tower => "tower",
             Self::Dish => "dish",
             Self::Slab => "slab",
-            Self::Unknown(_) => "unknown",
         }
     }
 
-    /// The shape a wire value names.
+    /// The shape a wire value names; `None` for `SHAPE_UNSPECIFIED` or a number this build has
+    /// no name for, which refuses the entity (S3's `fixq-c`, fix pass 1: a shape drawn as a
+    /// block it is not would be a guess; this supersedes `fixq-brief.md` item 1's "drawn as a
+    /// block").
     #[must_use]
-    pub fn of_wire(shape: i32) -> Self {
+    pub fn of_wire(shape: i32) -> Option<Self> {
         match view_entity::look::Shape::try_from(shape) {
-            Ok(view_entity::look::Shape::Block) => Self::Block,
-            Ok(view_entity::look::Shape::Tower) => Self::Tower,
-            Ok(view_entity::look::Shape::Dish) => Self::Dish,
-            Ok(view_entity::look::Shape::Slab) => Self::Slab,
-            Ok(view_entity::look::Shape::Unspecified) | Err(_) => Self::Unknown(shape),
+            Ok(view_entity::look::Shape::Block) => Some(Self::Block),
+            Ok(view_entity::look::Shape::Tower) => Some(Self::Tower),
+            Ok(view_entity::look::Shape::Dish) => Some(Self::Dish),
+            Ok(view_entity::look::Shape::Slab) => Some(Self::Slab),
+            Ok(view_entity::look::Shape::Unspecified) | Err(_) => None,
         }
     }
 }
@@ -474,7 +473,12 @@ fn entity_of(entity: &ViewEntity) -> Result<Entity, BridgeError> {
                 NonZeroU32::new(value).ok_or_else(|| refused("has a look with an edge of zero"))
             };
             Some(Look {
-                shape: LookShape::of_wire(look.shape),
+                shape: LookShape::of_wire(look.shape).ok_or_else(|| {
+                    refused(&format!(
+                        "has a look whose shape this build has no name for ({})",
+                        look.shape
+                    ))
+                })?,
                 size: [edge(look.x)?, edge(look.y)?, edge(look.z)?],
             })
         }
@@ -774,6 +778,26 @@ impl ViewModel {
             return Err(BridgeError::View(format!(
                 "a chunk's origin {:?} is outside the map's extent {:?}",
                 outside.origin, self.extent
+            )));
+        }
+        // A look larger than the map on any axis is drawn nowhere the gateway could have meant
+        // (fix pass 1): the page is refused, as an entity's other impossible fields refuse it.
+        if let Some((entity, look)) = page.entities.iter().find_map(|entity| {
+            entity
+                .look
+                .filter(|look| {
+                    look.size
+                        .iter()
+                        .zip(self.extent)
+                        .any(|(edge, axis)| edge.get() > axis)
+                })
+                .map(|look| (entity, look))
+        }) {
+            return Err(BridgeError::View(format!(
+                "the entity {:?} has a look of {:?} voxels, past the map's extent {:?}",
+                entity.id,
+                look.size.map(NonZeroU32::get),
+                self.extent
             )));
         }
         let chunks = page.chunks.len();
@@ -1535,9 +1559,9 @@ mod tests {
         );
     }
 
-    /// A look anywhere but on a structure or a ruin, a look with an edge of nothing, and a
-    /// going-up flag on anything but a structure are each refused with the page; a look whose
-    /// shape this build has no name for is kept, with its number, to be drawn as a block.
+    /// A look anywhere but on a structure or a ruin, a look with an edge of nothing, a look whose
+    /// shape this build has no name for (fix pass 1: it is refused, not drawn as a block), and a
+    /// going-up flag on anything but a structure are each refused with the page.
     #[test]
     fn a_look_or_a_going_up_where_the_schema_sends_none_is_refused() {
         let look = |shape: i32, x: u32| view_entity::Look {
@@ -1570,16 +1594,30 @@ mod tests {
             decode_page(&with_entities(vec![bare])).is_err(),
             "a structure with no look"
         );
-        let mut odd = entity("s_2", view_entity::Kind::Ruin, "");
-        odd.look = Some(look(77, 2));
-        let page = decode_page(&with_entities(vec![odd])).expect("an unknown shape is kept");
+        for shape in [77, 0] {
+            let mut odd = entity("s_2", view_entity::Kind::Ruin, "");
+            odd.look = Some(look(shape, 2));
+            assert!(
+                decode_page(&with_entities(vec![odd])).is_err(),
+                "a shape with no name ({shape})"
+            );
+        }
+        let mut ruin = entity("s_2", view_entity::Kind::Ruin, "");
+        ruin.look = Some(look(1, 2));
+        let page = decode_page(&with_entities(vec![ruin])).expect("a named shape reads");
         let kept = page
             .entities
             .first()
             .and_then(|one| one.look)
             .expect("its look");
-        assert_eq!(kept.shape, LookShape::Unknown(77));
+        assert_eq!(kept.shape, LookShape::Block);
         assert_eq!(kept.size.map(NonZeroU32::get), [2, 1, 1]);
+        // Past the map's extent on an axis: the page is refused when it is stored.
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
+        let mut huge = entity("s_9", view_entity::Kind::Structure, "seat.0");
+        huge.look = Some(look(1, EXTENT[0].saturating_add(1)));
+        let page = decode_page(&with_entities(vec![huge])).expect("decodes");
+        assert!(model.apply(page).is_err(), "a look past the map");
     }
 
     /// One crater in a delta queues the chunks its relight reaches, not the map: before S2

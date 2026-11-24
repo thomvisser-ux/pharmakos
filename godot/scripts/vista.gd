@@ -38,9 +38,10 @@
 # from the voxel it names), and named by the view's `title`, the gateway's words, "Wall" and
 # "Mortar, going up" included. A structure the view says is going up (`building`, sent for this
 # seat's own only) is drawn see-through; nothing here reads going up from its hit points, so
-# another seat's structure at half its hit points is drawn standing, with its bar. A look whose
-# shape this build has no name for is drawn as a block and its number said in the log; a
-# structure or a ruin sent with no look is drawn as one voxel's block and said in the log too.
+# another seat's structure at half its hit points is drawn standing, with its bar. A look the
+# bridge cannot name refused the page before it came here (`view.rs`, fix pass 1); a look this
+# script still cannot draw (no look, an edge it cannot read, a shape it has no primitive for) is
+# not drawn at all, and said in the log: never a guessed block.
 #
 # S3 (S3's `prob`, the plan's E3): a beacon the view gives a sphere radius
 # (`sphere_radius_voxels`, on this seat's own beacons) carries a flat ring of that radius, in
@@ -263,6 +264,10 @@ func _show(entities: Array, snap: bool) -> void:
 			_markers.erase(id)
 		if not _markers.has(id):
 			var node := _marker_for(entity)
+			# A look this script cannot draw was said in the log; the entity is not drawn.
+			if node == null:
+				seen.erase(id)
+				continue
 			node.position = goal
 			if entity.has("yaw"):
 				node.rotation.y = float(entity["yaw"])
@@ -394,6 +399,8 @@ func _marker_for(entity: Dictionary) -> Node3D:
 		material.emission_energy_multiplier = 2.5
 	elif kind == "structure" or kind == "ruin":
 		var drawn := _look_mesh(entity)
+		if drawn.is_empty():
+			return null
 		mesh = drawn[0]
 		size = drawn[1]
 		middle = Vector3((size.x - 1.0) * 0.5, 0.0, (size.z - 1.0) * 0.5)
@@ -451,18 +458,15 @@ func _marker_for(entity: Dictionary) -> Node3D:
 func _look_mesh(entity: Dictionary) -> Array:
 	var look: Dictionary = entity.get("look", {})
 	if look.is_empty():
-		push_warning("[vista] %s came with no look; drawn as one voxel's block" % String(entity["id"]))
-		var cube := BoxMesh.new()
-		cube.size = Vector3.ONE
-		return [cube, Vector3.ONE]
+		push_error("[vista] %s came with no look, and is not drawn" % String(entity["id"]))
+		return []
 	var edges := []
 	for axis in ["x", "y", "z"]:
-		var read: Variant = Values.int_of(look.get(axis, 1))
-		if read is int:
-			edges.append(float(read))
-		else:
-			push_warning(Values.unreadable_text(Strings.text("value_look"), read))
-			edges.append(1.0)
+		var read: Variant = Values.int_of(look.get(axis))
+		if not read is int:
+			push_error(Values.unreadable_text(Strings.text("value_look"), read))
+			return []
+		edges.append(float(read))
 	# The sim's x east, y north, z up are the world's x, z and y.
 	var size := Vector3(edges[0], edges[2], edges[1])
 	var across := minf(size.x, size.z)
@@ -480,12 +484,11 @@ func _look_mesh(entity: Dictionary) -> Array:
 			dish.height = size.y * DISH_HEIGHT
 			return [dish, Vector3(size.x, size.y * DISH_HEIGHT, size.z)]
 		"block", "slab":
-			pass
-		_:
-			push_warning("[vista] %s's look has a shape this build cannot name (%s); drawn as a block" % [String(entity["id"]), str(look.get("number", look.get("shape", "")))])
-	var box := BoxMesh.new()
-	box.size = size
-	return [box, size]
+			var box := BoxMesh.new()
+			box.size = size
+			return [box, size]
+	push_error("[vista] %s's look names no shape this script draws (%s), and is not drawn" % [String(entity["id"]), String(look.get("shape", ""))])
+	return []
 
 
 ## A structure's name as the gateway wrote it (its `title`), `lift` voxels over its feet, facing

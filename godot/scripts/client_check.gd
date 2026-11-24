@@ -528,16 +528,19 @@ func _check_the_looks(vista: Node3D, failures: Array[String]) -> void:
 		failures.append("the mortar the gateway says is going up is drawn as standing")
 	# Another seat's survey post, hit to half: plain, standing, a partial bar.
 	var hit: Array = []
+	# A fresh id, so the marker is drawn anew from this entity (fix pass 1, item 7: a redraw of the
+	# same marker would not run `_marker_for`, and going up read from hit points would pass).
 	for entity in built:
 		var one: Dictionary = entity.duplicate()
 		if String(one["id"]) == "s_2":
+			one["id"] = "s_2_hit"
 			one["hp"] = 100
 		hit.append(one)
 	vista.take_view({"entities": hit})
-	var post: MeshInstance3D = body.call("s_2")
-	var fill: MeshInstance3D = vista.marker_node("s_2").get_node_or_null("Bar/Fill")
-	if name_of.call("s_2") != "Survey post" or (post.mesh.material as StandardMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
-		failures.append("another seat's structure at half its hit points is named `%s` or drawn see-through" % name_of.call("s_2"))
+	var post: MeshInstance3D = body.call("s_2_hit")
+	var fill: MeshInstance3D = vista.marker_node("s_2_hit").get_node_or_null("Bar/Fill")
+	if name_of.call("s_2_hit") != "Survey post" or (post.mesh.material as StandardMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+		failures.append("another seat's structure at half its hit points is named `%s` or drawn see-through" % name_of.call("s_2_hit"))
 	if fill == null or (fill.mesh as QuadMesh).size.x >= vista.BAR_SIZE.x:
 		failures.append("another seat's structure at half its hit points has no partial bar")
 	print("[client-check] the built view: tower, dish and slab drawn by look; titles as sent; going up see-through")
