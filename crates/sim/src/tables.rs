@@ -1753,7 +1753,23 @@ impl TargetTable {
         centre: [Fx; 3],
         area: ColumnBox,
     ) -> Result<(), TargetsFull> {
-        self.add_bound(
+        self.add_area_metered(beacon, kind, (centre, area), &())
+    }
+
+    /// [`TargetTable::add_area`], one unit to `meter` a row its search for
+    /// the row's place reads ([`TargetTable::add_bound_metered`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`TargetTable::add_area`].
+    pub fn add_area_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        beacon: BeaconId,
+        kind: AreaKind,
+        (centre, area): ([Fx; 3], ColumnBox),
+        meter: &M,
+    ) -> Result<(), TargetsFull> {
+        self.add_bound_metered(
             beacon,
             kind.kind(),
             0,
@@ -1761,6 +1777,7 @@ impl TargetTable {
             area,
             (u32::MAX, crate::targeting::DESCRIPTION_VOXEL),
             BuildOrder::NONE,
+            meter,
         )
     }
 
@@ -3411,7 +3428,26 @@ impl BeaconTable {
         mandate: BeaconMandate,
         start: BeaconStart,
     ) -> Result<Placed<BeaconId>, TableFull> {
-        let at = self.vacancy(room)?;
+        self.place_metered(room, seat, pos, mandate, start, &())
+    }
+
+    /// [`BeaconTable::place`], one unit to `meter` a row its vacancy search
+    /// reads ([`BeaconTable::vacancy_metered`]; decisions-log item 175, dunit
+    /// part 2): a deploy a decision makes passes the decision's tally.
+    ///
+    /// # Errors
+    ///
+    /// As [`BeaconTable::place`].
+    pub fn place_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        room: u32,
+        seat: SeatId,
+        pos: [Fx; 3],
+        mandate: BeaconMandate,
+        start: BeaconStart,
+        meter: &M,
+    ) -> Result<Placed<BeaconId>, TableFull> {
+        let at = self.vacancy_metered(room, meter)?;
         let id = BeaconId::of(at.row, at.generation);
         let row = at.row;
         let mine = crate::mining::MineSettings::default();
@@ -4111,7 +4147,35 @@ impl StructureTable {
         rotation: QuarterTurns,
         ready_at: u32,
     ) -> Result<Placed<StructureId>, TableFull> {
-        let at = self.vacancy(room)?;
+        self.place_metered(
+            room,
+            seat,
+            kind,
+            pos,
+            (hp, home, building, rotation, ready_at),
+            &(),
+        )
+    }
+
+    /// [`StructureTable::place`], one unit to `meter` a row its vacancy
+    /// search reads ([`StructureTable::vacancy_metered`]; decisions-log item
+    /// 175, dunit part 2): a structure a decision queues passes the
+    /// decision's tally. `start` is the hit points, home, building flag,
+    /// rotation and weapon readiness `place` takes.
+    ///
+    /// # Errors
+    ///
+    /// As [`StructureTable::place`].
+    pub fn place_metered<M: crate::seams::Meter + ?Sized>(
+        &mut self,
+        room: u32,
+        seat: SeatId,
+        kind: StructureKind,
+        pos: [Fx; 3],
+        (hp, home, building, rotation, ready_at): (Hp, BeaconId, bool, QuarterTurns, u32),
+        meter: &M,
+    ) -> Result<Placed<StructureId>, TableFull> {
+        let at = self.vacancy_metered(room, meter)?;
         let id = StructureId::of(at.row, at.generation);
         let row = at.row;
         put(&mut self.id, row, id.raw());
