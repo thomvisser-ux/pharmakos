@@ -217,6 +217,8 @@ impl Gateway {
                 r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#.to_owned()
             }
             "patch_plan" => patched(&params),
+            // S3's `fixq` wire: an empty rule added, the text answered as patch_plan answers.
+            "new_rule" => new_rule(&params),
             "estimate_route" => {
                 r#"{"reachable":true,"ms":1000,"legs":[{"to":{"voxel":{"x":1}},"ms":1000}]}"#
                     .to_owned()
@@ -318,6 +320,29 @@ impl Gateway {
 
 /// `patch_plan`'s answer: the text with the new step's label in a trailing comment. A label
 /// the text already quotes fails the test (E0105): every click in a burst must get its own.
+/// `new_rule`'s answer: the text with a space more, as `patched` answers an edit.
+fn new_rule(params: &Json) -> String {
+    let text = match params.get("playbook_jsonc") {
+        Some(Json::String(text)) => text.clone(),
+        other => panic!("a playbook, not {other:?}"),
+    };
+    json::write(&Json::Object(vec![
+        (
+            "playbook_jsonc".to_owned(),
+            Json::String(format!("{text} ")),
+        ),
+        (
+            "inverse_json_patch".to_owned(),
+            Json::String("[]".to_owned()),
+        ),
+        (
+            "rule_pointer".to_owned(),
+            Json::String("/declarative/handlers/0".to_owned()),
+        ),
+        ("rule_id".to_owned(), Json::String("rule_1".to_owned())),
+    ]))
+}
+
 fn patched(params: &Json) -> String {
     let text = match params.get("playbook_jsonc") {
         Some(Json::String(text)) => text.clone(),

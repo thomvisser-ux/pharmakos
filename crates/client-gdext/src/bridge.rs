@@ -1169,6 +1169,74 @@ impl PharmakosBridge {
         })
     }
 
+    /// The condition picker took group `which` (an index into the editor state's
+    /// `vocabulary.groups`: `all`, `any`, `not`) for condition slot `slot`, named as for
+    /// [`Self::editor_choose_predicate`]: one patch with the op the slot names (S3's `fixq`).
+    #[func]
+    fn editor_choose_group(
+        &mut self,
+        slot: i64,
+        pointer: GString,
+        rendering: i64,
+        which: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_choose_group", false, || {
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(slot),
+                u64::try_from(rendering),
+                usize::try_from(which),
+            ) {
+                (Ok(slot), Ok(rendering), Ok(which)) => editor
+                    .choose_group(slot, rendering, &pointer, which)
+                    .is_ok(),
+                (Err(_), _, _) => refused(editor, RuleEditRefusal::NoSuchSlot),
+                (_, Err(_), _) => refused(editor, RuleEditRefusal::Changed),
+                (_, _, Err(_)) => refused(editor, RuleEditRefusal::NoSuchEntry),
+            }
+        })
+    }
+
+    /// Add a rule: the gateway's `new_rule` against the text on screen (S3's `fixq`). Returns
+    /// whether it was taken; a refusal is on the status line.
+    #[func]
+    fn editor_new_rule(&mut self) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics.guard_or("editor_new_rule", false, || {
+            rig.editor_mut().new_rule().is_ok()
+        })
+    }
+
+    /// Remove rule `rule` (its index and `pointer` in the rendering `rendering` it was drawn in):
+    /// one `remove` at its pointer. Returns whether it was taken.
+    #[func]
+    fn editor_remove_rule(&mut self, rule: i64, pointer: GString, rendering: i64) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_remove_rule", false, || {
+            let editor = rig.editor_mut();
+            match (usize::try_from(rule), u64::try_from(rendering)) {
+                (Ok(index), Ok(rendering)) => editor
+                    .remove_rule(&RuleNamed {
+                        index,
+                        rendering,
+                        pointer,
+                    })
+                    .is_ok(),
+                (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchRule),
+                (_, Err(_)) => refused(editor, RuleEditRefusal::Changed),
+            }
+        })
+    }
+
     /// Rule-list name chip `chip` took its `which`th choice from the editor state's
     /// `step_labels` or `rule_ids`, by its kind: one `replace`.
     #[func]

@@ -1118,3 +1118,218 @@ fn no_script_reads_a_clock_but_the_id_helper_and_the_checks_waits() {
         found.join("\n")
     );
 }
+
+/// One family of composition the gateway now answers (S3's `fixq-c`): where it is banned, and
+/// the source text that would bring it back.
+struct Composed {
+    /// What the family is, for the failure.
+    family: &'static str,
+    /// Whether a file is held to it: by its name.
+    applies: fn(&str) -> bool,
+    /// Code that composes it, any one of which fails the file.
+    banned: &'static [&'static str],
+}
+
+fn extension_is(name: &str, wanted: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(wanted))
+}
+
+fn shipped_rust(name: &str) -> bool {
+    extension_is(name, "rs")
+}
+
+fn shipped_gdscript(name: &str) -> bool {
+    extension_is(name, "gd")
+        && !Path::new(name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem.ends_with("_check"))
+}
+
+/// The sources a value the player types passes through: the editor, its rule list and
+/// vocabulary, the state it hands GDScript, and the bridge. Elsewhere a number is the wire's,
+/// read as the gateway wrote it (a lax read of the player's file, a footer's count).
+fn typed_rust(name: &str) -> bool {
+    [
+        "editor.rs",
+        "rule_list.rs",
+        "vocabulary.rs",
+        "editor_view.rs",
+        "bridge.rs",
+    ]
+    .contains(&name)
+}
+
+/// The scripts a value the player types passes through: the panel, its value field, the rule
+/// list, the picker and the wizard's pages.
+fn typed_gdscript(name: &str) -> bool {
+    [
+        "editor.gd",
+        "value_field.gd",
+        "rule_list.gd",
+        "condition_picker.gd",
+        "wizard.gd",
+    ]
+    .contains(&name)
+}
+
+/// **The compositions the gateway now answers stay the gateway's** (S3's `fixq-c`, AGENTS.md
+/// section 3 rule 4): a typed number is read by `set_value_text`, a duration is shown in the
+/// display unit the gateway sends, a value outside its shape is the chip's `outside`, a choice is
+/// drawn by its `titles`, a Build target by its `build_target_lines`, a travel by its
+/// `travel_text`, the Queue by its own `queue_blueprints`, and this seat's seal by `get_status`.
+/// Each family's code, put back into any shipped Rust source or GDScript (the checks' own stand-in
+/// gateway excepted), fails here.
+const COMPOSED: &[Composed] = &[
+    Composed {
+        family: "a typed number read by the client",
+        applies: shipped_rust,
+        banned: &["typed_integer(", "NotAnInteger"],
+    },
+    Composed {
+        family: "a typed number read by the client",
+        applies: typed_rust,
+        banned: &[
+            ".parse::<i64>",
+            ".parse::<i32>",
+            ".parse::<u32>",
+            ".parse::<f64>",
+        ],
+    },
+    Composed {
+        family: "a typed number read by the client",
+        applies: typed_gdscript,
+        banned: &[
+            ".to_int()",
+            ".to_float()",
+            ".is_valid_int()",
+            ".is_valid_float()",
+        ],
+    },
+    Composed {
+        family: "a duration's unit judged by the client",
+        applies: shipped_rust,
+        banned: &[
+            "== MILLISECONDS",
+            "unit == \"ms\"",
+            "ReadOnly::Milliseconds",
+        ],
+    },
+    Composed {
+        family: "a value compared with its bounds by the client",
+        applies: shipped_rust,
+        banned: &["outside_bounds", "< i64::from(min)", "> i64::from(max)"],
+    },
+    Composed {
+        family: "a travel time drawn from milliseconds",
+        applies: shipped_gdscript,
+        banned: &["travel_ms"],
+    },
+    Composed {
+        family: "a choice or an anchor drawn as its JSON",
+        applies: shipped_gdscript,
+        banned: &[
+            "add_radio_check_item(values[which], which)",
+            "{\"value\": listed[value]}",
+            "\"anchor\": targets[which]",
+        ],
+    },
+    Composed {
+        family: "a choice or an anchor drawn as its JSON",
+        applies: shipped_rust,
+        banned: &["anchor_text"],
+    },
+    Composed {
+        family: "the Queue drawn from Add a build target's list",
+        applies: shipped_gdscript,
+        banned: &["[\"queue\", \"blueprints\""],
+    },
+    Composed {
+        family: "a seal kept by the client beside the gateway's",
+        applies: shipped_rust,
+        banned: &["sealed_round"],
+    },
+];
+
+/// The lines of `text` that compose what a family bans, with comment lines left out.
+fn composing(text: &str, family: &Composed) -> Vec<String> {
+    text.lines()
+        .filter(|line| {
+            let code = line.trim_start();
+            !(code.starts_with("//") || code.starts_with('#'))
+        })
+        .filter(|line| family.banned.iter().any(|banned| line.contains(banned)))
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_compositions_the_gateway_answers_stay_the_gateways() {
+    let mut found: Vec<String> = Vec::new();
+    for file in sources() {
+        let name = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a file name")
+            .to_owned();
+        let text = fs::read_to_string(&file).expect("a source reads");
+        // A unit-test module drives the editor as the gateway would, and is not shipped.
+        let shipped = text.split("#[cfg(test)]").next().unwrap_or_default();
+        for family in COMPOSED.iter().filter(|family| (family.applies)(&name)) {
+            for line in composing(shipped, family) {
+                found.push(format!("{name}: {}: {line}", family.family));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "the client composes again what the gateway answers (AGENTS.md section 3 rule 4; S3's \
+         fixq-c): {found:#?}"
+    );
+}
+
+/// The scan catches each family's code, a mutant per family, and not its comment.
+#[test]
+fn the_composition_scan_catches_each_family() {
+    let mutants: &[(&str, &str)] = &[
+        ("x.rs", "    let digits = typed_integer(text)?;"),
+        ("editor.rs", "    let now: i64 = text.parse::<i64>()?;"),
+        ("value_field.gd", "\tvar typed := field.text.to_int()"),
+        (
+            "x.rs",
+            "        Shape::Integer(integer) if integer.unit == \"ms\" => {",
+        ),
+        ("x.rs", "    if chip.outside_bounds() {"),
+        ("x.gd", "\t\"ms\": now.get(\"travel_ms\", 0)"),
+        (
+            "x.gd",
+            "\t\t_choice_menu.add_radio_check_item(values[which], which)",
+        ),
+        ("x.rs", "    anchor_text: compact(&anchor),"),
+        (
+            "x.gd",
+            "const LISTS := {33: [\"queue\", \"blueprints\", \"menu_queue\"]}",
+        ),
+        ("x.rs", "    sealed_round: Option<u32>,"),
+    ];
+    for (name, line) in mutants {
+        let caught = COMPOSED
+            .iter()
+            .filter(|family| (family.applies)(name))
+            .any(|family| !composing(line, family).is_empty());
+        assert!(caught, "{name}: {line}");
+    }
+    for (name, line) in [
+        ("x.rs", "// typed_integer( once lived here"),
+        ("x.gd", "# travel_ms is the gateway's"),
+        ("watch_check.gd", "\tif not typed.is_valid_int():"),
+    ] {
+        let caught = COMPOSED
+            .iter()
+            .filter(|family| (family.applies)(name))
+            .any(|family| !composing(line, family).is_empty());
+        assert!(!caught, "{name}: {line}");
+    }
+}

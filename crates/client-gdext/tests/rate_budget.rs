@@ -83,6 +83,7 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
     let mut typed = false;
     let mut used = false;
     let mut asked_again = false;
+    let mut added = false;
     for frame in 0..6_000_usize {
         now += FRAME_US;
         if !loading && rig.phase() == Phase::Lull {
@@ -115,8 +116,14 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
         } else if started && wizard_current && typed && !used {
             used = rig.editor_mut().wizard_use();
         }
+        // Add a rule once the rule list takes an edit: `new_rule`, one call in the same budget
+        // (S3's `fixq-c`).
+        if started && used && !added && rig.editor().rules_editable() {
+            added = rig.editor_mut().new_rule().is_ok();
+        }
         if started
             && used
+            && added
             && !ready_asked
             && rig.editor().revision() > u64::try_from(edits).expect("small")
         {
@@ -224,6 +231,8 @@ fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
                 gateway.methods
             );
             assert!(count("render_plan") >= 1, "{context}");
+            // Add a rule's one call (S3's `fixq-c`), in the same budget as every other.
+            assert_eq!(count("new_rule"), 1, "{context}: {:?}", gateway.methods);
             assert_eq!(count("get_draft"), 1, "{context}: {:?}", gateway.methods);
             assert!(count("get_economy_forecast") >= 1, "{context}");
             // The vocabulary the pickers draw, read once per Lull, and once more by the picker's

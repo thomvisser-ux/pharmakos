@@ -2552,10 +2552,18 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
         );
     }
     // L1, fixp: no float and no bound in the client; the text goes to the bridge as typed.
+    // fixq-c: the field pre-fills with the gateway's own text in its display unit, and whether
+    // the value lies outside is the chip's word, so nothing here converts or compares.
     assert!(
         number.iter().any(|line| line.contains(
-            "_number_field.open(String(chip.get(\"value_json\", \"\")), String(chip.get(\"unit\", \"\")), String(chip.get(\"text\", \"\")))"
+            "_number_field.open(String(chip.get(\"value_text\", \"\")), shown_unit, String(chip.get(\"text\", \"\")))"
         )),
+        "{number:?}"
+    );
+    assert!(
+        number
+            .iter()
+            .any(|line| line.contains("var outside: bool = chip.get(\"outside\", false)")),
         "{number:?}"
     );
     assert!(
@@ -2590,14 +2598,18 @@ fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
     for wanted in [
         "item.set_selectable(0, locked == \"\" and family_locked == \"\")",
         "item.set_text(0, Strings.text(\"picker_entry_locked\", {\"title\": entry.get(\"title\", \"\"), \"locked\": locked}))",
-        "item.set_metadata(0, [family_index, entry_index])",
+        "item.set_metadata(0, {\"family\": family_index, \"entry\": entry_index})",
+        "item.set_metadata(0, {\"group\": group_index})",
+        "heading.set_text(0, Strings.text(\"picker_groups\"))",
     ] {
         assert!(fill.contains(&wanted), "{wanted}: {fill:?}");
     }
     let editor = read("scripts/editor.gd");
     assert!(
         gd_code(&editor, "_on_picker_use").iter().any(|line| line.contains(
-            "bridge.editor_choose_predicate(int(_picker_slot.get(\"slot\", -1)), String(_picker_slot.get(\"pointer\", \"\")), int(_picker_slot.get(\"revision\", -1)), int(picked[0]), int(picked[1]))"
+            "bridge.editor_choose_predicate(slot, pointer, revision, int(picked[\"family\"]), int(picked[\"entry\"]))"
+        )) && gd_code(&editor, "_on_picker_use").iter().any(|line| line.contains(
+            "bridge.editor_choose_group(slot, pointer, revision, int(picked[\"group\"]))"
         )),
         "the pick names the slot by index and pointer, and the rendering"
     );

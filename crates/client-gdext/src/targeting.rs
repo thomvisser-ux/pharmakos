@@ -211,8 +211,9 @@ pub struct ChipFeature {
     pub id: String,
     /// Its parts, when the name is one this build can spell.
     pub name: Option<FeatureName>,
-    /// Travel from the origin, game milliseconds, exactly as the gateway answered.
-    pub travel_ms: i32,
+    /// Travel from the origin in the player's words, the gateway's rendered figure
+    /// (`travel_text`, "41 s", S3's `fixq`): drawn as sent, so the client does no time maths.
+    pub travel_text: String,
 }
 
 /// One chip: what one reference in the file reads now (targeting.md, "Surfaces": "now: Heat
@@ -265,7 +266,7 @@ pub fn chips_of(result: &Json, text: &str) -> Result<Vec<Chip>, BridgeError> {
             let now = (!reference.feature_id.is_empty()).then(|| ChipFeature {
                 name: FeatureName::parse(&reference.feature_id),
                 id: reference.feature_id.clone(),
-                travel_ms: reference.travel_ms,
+                travel_text: reference.travel_text.clone(),
             });
             let pick = reference
                 .candidates
@@ -283,7 +284,7 @@ pub fn chips_of(result: &Json, text: &str) -> Result<Vec<Chip>, BridgeError> {
                 .map(|candidate| ChipFeature {
                     id: candidate.feature_id.clone(),
                     name: FeatureName::parse(&candidate.feature_id),
-                    travel_ms: candidate.travel_ms,
+                    travel_text: candidate.travel_text.clone(),
                 });
             let form = document
                 .as_ref()
@@ -764,8 +765,8 @@ mod tests {
     fn a_chip_is_the_gateways_pick_with_the_next_candidate_after_it() {
         let answer = json::read(
             r#"{"refs":[
-              {"pointer":"/declarative/route/0/place_beacon/at/covering","feature_id":"vent_120_88","travel_ms":14000,
-               "candidates":[{"feature_id":"vent_9_9","travel_ms":9000},{"feature_id":"vent_120_88","travel_ms":14000},{"feature_id":"vent_150_20","travel_ms":16000}],
+              {"pointer":"/declarative/route/0/place_beacon/at/covering","feature_id":"vent_120_88","travel_ms":14000,"travel_text":"14 s",
+               "candidates":[{"feature_id":"vent_9_9","travel_ms":9000,"travel_text":"9 s"},{"feature_id":"vent_120_88","travel_ms":14000,"travel_text":"14 s"},{"feature_id":"vent_150_20","travel_ms":16000,"travel_text":"16 s"}],
                "matched":3,"failure":"","reachable":true},
               {"pointer":"/declarative/route/0/place_beacon/initial/mandate/build/targets/0/anchor/on","feature_id":"vent_120_88","travel_ms":13000,
                "candidates":[{"feature_id":"vent_120_88","travel_ms":13000}],"matched":1,"failure":"","reachable":true},
@@ -785,15 +786,15 @@ mod tests {
             first
                 .now
                 .as_ref()
-                .map(|now| (now.id.as_str(), now.travel_ms)),
-            Some(("vent_120_88", 14_000))
+                .map(|now| (now.id.as_str(), now.travel_text.as_str())),
+            Some(("vent_120_88", "14 s"))
         );
         assert_eq!(
             first
                 .next
                 .as_ref()
-                .map(|next| (next.id.as_str(), next.travel_ms)),
-            Some(("vent_150_20", 16_000)),
+                .map(|next| (next.id.as_str(), next.travel_text.as_str())),
+            Some(("vent_150_20", "16 s")),
             "next is the one listed after the pick, not the first listed"
         );
         let second = chips.get(1).expect("two");

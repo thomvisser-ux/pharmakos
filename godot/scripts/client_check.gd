@@ -752,7 +752,7 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 	var sent: Array[String] = []
 	var listen := func(text: String) -> void: sent.append(text)
 	editor._number_field.sent.connect(listen)
-	editor._open_number({"index": 0, "revision": 0, "pointer": "/x"}, {"has_min": true, "min": 0, "has_max": true, "max": 100, "now": 40, "value_json": "40", "unit": "%", "text": "40"})
+	editor._open_number({"index": 0, "revision": 0, "pointer": "/x"}, {"has_min": true, "min": 0, "has_max": true, "max": 100, "value_text": "40", "value_json": "40", "unit": "%", "display_unit": "%", "text": "40"})
 	await _settle()
 	var popup: PopupPanel = editor._number_popup
 	if not popup.visible:
@@ -771,7 +771,7 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 		_key(stage, KEY_ENTER, 0)
 		if sent != ["30", "30"]:
 			failures.append("Enter in the editor's number popup sent %s" % [sent])
-		if editor._number_note.text != Strings.text("rule_number_bounds", {"min": 0, "max": 100}):
+		if editor._number_note.text != Strings.text("rule_number_bounds", {"min": 0, "max": 100, "unit": " %"}):
 			failures.append("the number popup's note says `%s`, not the gateway's bounds" % editor._number_note.text)
 	editor._number_field.sent.disconnect(listen)
 	popup.hide()
@@ -1078,11 +1078,13 @@ func _check_the_rig_backed_panel(stage: SubViewport, editor: CanvasLayer, failur
 		return
 	await _check_the_field_refusal_and_its_owner(stage, editor, bridge, failures)
 	await _check_the_dormant_box_through_the_rig(stage, editor, bridge, failures)
+	await _check_the_planning_wire(stage, editor, bridge, failures)
 	await _check_the_ready_line_through_the_rig(bridge, failures)
 	await _check_load_through_its_button(stage, editor, bridge, failures)
 
 
-## A value field's "abc" is refused in its own popup, by the bridge's typed refusal. Then chip A
+## A value field's "abc" goes to the gateway as typed (S3's `fixq-c`: the gateway reads typed
+## numbers), and its refusal is said in the popup in the gateway's words. Then chip A
 ## sends 500 and, before the gateway answers, the person opens field B, a Visit & change number
 ## setting (the rule list takes no edit while A's is on its way), and types in it: A's refusal,
 ## and A's landing, are not B's to say, and B stays open with what was typed. Last, an edit of
@@ -1111,8 +1113,12 @@ func _check_the_field_refusal_and_its_owner(stage: SubViewport, editor: CanvasLa
 	await _type_in_popup(stage, editor, "abc")
 	_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
 	await _settle()
-	if not popup.visible or editor._number_said.text != Strings.text("status_rule_refused_not_an_integer"):
-		failures.append("\"abc\" in the value field's popup says `%s` (open %s), not the bridge's refusal" % [editor._number_said.text, popup.visible])
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("field", {}).get("state", "")) == "refused")
+	await _settle()
+	if not popup.visible or editor._number_said.text != Strings.text("rule_refused", {"detail": "INVALID_ARGUMENT: `abc` is not a number"}):
+		failures.append("\"abc\" in the value field's popup says `%s` (open %s), not the gateway's refusal" % [editor._number_said.text, popup.visible])
+	if _typed.is_empty() or _typed[-1] != "abc":
+		failures.append("\"abc\" did not go to the gateway as typed: %s" % [_typed])
 	for landed in [false, true]:
 		if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false)):
 			failures.append("the rule list never took an edit again")
@@ -1121,7 +1127,7 @@ func _check_the_field_refusal_and_its_owner(stage: SubViewport, editor: CanvasLa
 		await _settle()
 		await _type_in_popup(stage, editor, "500")
 		_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
-		if not await _rig_until(bridge, func(_state: Dictionary) -> bool: return not _held.is_empty(), func(method: String) -> bool: return method == "patch_plan"):
+		if not await _rig_until(bridge, func(_state: Dictionary) -> bool: return not _held.is_empty(), func(method: String) -> bool: return method == "set_value_text"):
 			failures.append("chip A's edit never went out")
 			return
 		# Field B opens before the gateway answers A, and the person types in it.
@@ -1189,6 +1195,175 @@ func _check_the_dormant_box_through_the_rig(stage: SubViewport, editor: CanvasLa
 	_release(bridge, "")
 	await _rig_until(bridge, func(state: Dictionary) -> bool: return not state.get("busy", true) and state.get("rows_current", false))
 	_diagnostics = ""
+
+
+## **The editor's planning wire, through the panel** (S3's `fixq-c`; the run sheet's set-ups and
+## #183/#188's owed gaps, each red on `main`):
+## * a duration chip is a number field typed in seconds, pre-filled with the gateway's own "120"
+##   and its unit `s`, and "3" goes to `set_value_text` as typed (item 7: it was read-only);
+## * a choice chip's menu draws the gateway's titles, never a value's JSON (item 6);
+## * Queue a structure lists the Queue's own entries, each kind no queue takes locked with the
+##   verifier's sentence (item 5: it listed Add a build target's);
+## * the Remove list draws each target's line, the gateway's words (item 6: it drew JSON);
+## * Add a rule, clicked, asks `new_rule`; Remove, clicked, sends one `remove` at the rule's
+##   pointer (item 8: no control did either);
+## * the picker lists the groups, and a group pick writes its skeleton (item 16);
+## * a wall's Build target takes two ground clicks and the gateway's box (item 4).
+func _check_the_planning_wire(stage: SubViewport, editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	bridge.editor_load(RIG_TEXT.to_utf8_buffer())
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false) and state.get("vocabulary", {}).get("known", false)):
+		failures.append("the planning wire: the rule list never took an edit")
+		return
+	await _settle()
+	var popup: PopupPanel = editor._number_popup
+	# A duration, typed in seconds.
+	var timeout := _chip_index(bridge, "/route/0/timeout_ms")
+	var chip: Dictionary = bridge.editor_state().get("rule_list", {}).get("chips", [])[timeout] if timeout >= 0 else {}
+	if String(chip.get("editor", "")) != "number" or String(chip.get("display_unit", "")) != "s":
+		failures.append("the duration chip is not a number typed in seconds: %s" % [chip])
+	else:
+		editor._on_rule_chip(timeout)
+		await _settle()
+		if editor._number_field.field.text != "120" or editor._number_field.unit.text != "s":
+			failures.append("the duration's field shows `%s %s`, not the gateway's `120 s`" % [editor._number_field.field.text, editor._number_field.unit.text])
+		await _type_in_popup(stage, editor, "3")
+		_typed.clear()
+		_click(stage, Vector2(popup.position) + editor._number_field.send.get_global_rect().get_center())
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return not state.get("busy", true) and not _typed.is_empty())
+		if _typed != ["3"]:
+			failures.append("the duration's \"3\" did not go to `set_value_text` as typed: %s" % [_typed])
+		popup.hide()
+		await _settle()
+	# A choice, drawn by its titles.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var priority := _chip_index(bridge, "/initial/priority")
+	editor._on_rule_chip(priority)
+	await _settle()
+	var drawn: Array[String] = []
+	for item in editor._choice_menu.item_count:
+		drawn.append(editor._choice_menu.get_item_text(item))
+	if drawn != ["low", "normal", "high"]:
+		failures.append("the priority's menu draws %s, not the gateway's titles" % [drawn])
+	editor._choice_menu.hide()
+	# The Queue's own list, and the Remove list's lines, for the Build beacon b_01.
+	bridge.editor_describe_beacon("b_01")
+	if not await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("beacon_detail", {}).get("id", "")) == "b_01"):
+		failures.append("the planning wire: b_01's detail never came")
+		return
+	editor._visit_beacon = "b_01"
+	var vocabulary: Dictionary = bridge.editor_state().get("vocabulary", {})
+	editor.open_entry_list(EditorPanel.ITEM_LIST_QUEUE, vocabulary.get(String(EditorPanel.ENTRY_LISTS[EditorPanel.ITEM_LIST_QUEUE][1]), []), Rect2(Vector2(200, 300), Vector2(180, 200)))
+	await _settle()
+	var queued: Array = vocabulary.get("queue_blueprints", [])
+	var rows: Array = editor.entry_rows()
+	var generator_locked := false
+	for row in rows:
+		var at := int(row.get_meta("entry"))
+		if at < queued.size() and String(queued[at].get("name", "")) == "generator":
+			generator_locked = row.has_meta("locked")
+	if rows.size() != queued.size() or not generator_locked:
+		failures.append("Queue a structure lists %d rows of the Queue's %d, the Generator locked %s" % [rows.size(), queued.size(), generator_locked])
+	editor._entry_popup.hide()
+	editor._visit_drawn = ""
+	editor._fill_visit_menu(bridge.editor_state())
+	var lines: Array[String] = []
+	for submenu in editor._visit_submenus:
+		if (submenu as PopupMenu).id_pressed.get_connections().size() > 0 and submenu.get_parent() == editor._visit_menu:
+			for item in (submenu as PopupMenu).item_count:
+				lines.append((submenu as PopupMenu).get_item_text(item))
+	var targets: Array = bridge.editor_state().get("beacon_detail", {}).get("targets", [])
+	for target in targets:
+		var line := String(target.get("line", ""))
+		if line == "" or "{" in line or not lines.has(line):
+			failures.append("the Remove list does not draw the target's line `%s`: %s" % [line, lines])
+	# Add a rule and Remove one, through their own buttons.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var add: Button = null
+	var remove: Button = null
+	for button in editor._rules_box.find_children("*", "Button", true, false):
+		if (button as Button).has_meta("rule_add"):
+			add = button
+		elif (button as Button).has_meta("rule_remove") and remove == null:
+			remove = button
+	if add == null or remove == null:
+		failures.append("the rule list has no Add a rule or no Remove button")
+	else:
+		var asked := _new_rules
+		editor.panel_scroll().ensure_control_visible(add)
+		await _settle()
+		_click(stage, add.get_global_rect().get_center())
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return _new_rules > asked and not state.get("busy", true))
+		if _new_rules != asked + 1:
+			failures.append("Add a rule, clicked, asked `new_rule` %d times" % (_new_rules - asked))
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+		await _settle()
+		for button in editor._rules_box.find_children("*", "Button", true, false):
+			if (button as Button).has_meta("rule_remove"):
+				remove = button
+				break
+		var rule := int(remove.get_meta("rule_remove"))
+		var pointer := String(bridge.editor_state().get("rule_list", {}).get("rules", [])[rule].get("pointer", ""))
+		_patches.clear()
+		editor.panel_scroll().ensure_control_visible(remove)
+		await _settle()
+		_click(stage, remove.get_global_rect().get_center())
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return not _patches.is_empty() and not state.get("busy", true))
+		var sent: Variant = JSON.parse_string(_patches[0]) if not _patches.is_empty() else null
+		if not (sent is Array and sent.size() == 1 and String(sent[0].get("op", "")) == "remove" and String(sent[0].get("path", "")) == pointer):
+			failures.append("Remove, clicked, sent %s, not one `remove` at %s" % [_patches, pointer])
+	# A group from the picker.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var slots: Array = bridge.editor_state().get("rule_list", {}).get("slots", [])
+	var slot := -1
+	for index in slots.size():
+		if slots[index].get("pickable", false):
+			slot = index
+			break
+	editor.open_condition_picker(slot)
+	await _settle()
+	var group_row: TreeItem = null
+	for row in editor._picker_tree.get_root().get_children():
+		if row.get_text(0) == Strings.text("picker_groups"):
+			group_row = row.get_child(0)
+	if group_row == null or group_row.get_text(0) != "All of these":
+		failures.append("the picker lists no group, or not as the gateway titles it")
+	else:
+		group_row.select(0)
+		_patches.clear()
+		editor._on_picker_use()
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return not _patches.is_empty() and not state.get("busy", true))
+		if _patches.is_empty() or not ("\"all\"" in _patches[0] and "\"items\"" in _patches[0]):
+			failures.append("a group pick sent %s, not the group's skeleton" % [_patches])
+	editor._picker_popup.hide()
+	# A wall: two ground clicks, and the gateway's box in the row.
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+	await _settle()
+	var blueprints: Array = vocabulary.get("blueprints", [])
+	var wall := -1
+	for index in blueprints.size():
+		if String(blueprints[index].get("anchor_shape", "")) == "box":
+			wall = index
+	if wall < 0 or not bridge.editor_visit_row("b_01", "add_target", wall):
+		failures.append("Add a build target took no wall: %s" % bridge.editor_state().get("status_key", ""))
+		return
+	_walls.clear()
+	_patches.clear()
+	bridge.editor_pick({"voxel": Vector3i(10, 10, 4)})
+	if String(bridge.editor_state().get("status_key", "")) != "wall_second" or not bridge.editor_state().get("anchoring", false):
+		failures.append("the wall's first corner did not ask for the second: %s" % bridge.editor_state().get("status_key", ""))
+	bridge.editor_pick({"voxel": Vector3i(12, 11, 4)})
+	await _rig_until(bridge, func(state: Dictionary) -> bool: return not _patches.is_empty() and not state.get("busy", true))
+	if _walls.size() != 1 or not ("\"corner_a\"" in _walls[0] and "\"corner_b\"" in _walls[0]):
+		failures.append("the two corners did not ask `compose_wall_box` once: %s" % [_walls])
+	if _patches.is_empty() or not ("\"wall_box\"" in _patches[0] and "\"add_build_target\"" in _patches[0]):
+		failures.append("the wall's row is not the gateway's target: %s" % [_patches])
+	# The panel back at its top, as the checks after this one find it.
+	editor.panel_scroll().scroll_vertical = 0
+	await _settle()
+	print("[client-check] the planning wire: a duration typed in seconds, titles, the Queue's list, target lines, Add and Remove rule, a group, a wall's box")
 
 
 ## The Ready line from the gateway's word on the seal (S3's `fixq-c`, item 13: the rig's reading of
@@ -1273,6 +1448,11 @@ var _diagnostics := ""
 var _patches: Array[String] = []
 ## Whether the stand-in accepted a submission: its `get_status` then says this seat is sealed.
 var _sealed := false
+## Every `set_value_text`'s `typed`, as sent; every `compose_wall_box` request's text; and how
+## many `new_rule` calls the stand-in answered.
+var _typed: Array[String] = []
+var _walls: Array[String] = []
+var _new_rules := 0
 
 
 ## Starts the bridge's watch rig with both connections open, opens RIG_TEXT in the editor, and
@@ -1357,7 +1537,22 @@ func _answer(text: String, error: String) -> String:
 		"get_map_summary":
 			body = "\"features\":[],"
 		"get_beacon":
-			return _fixture("res://fixtures/beacon_core.json", id)
+			# Seat 0's Build beacon `b_01`, with its targets; any other, the core.
+			return _fixture("res://fixtures/beacon_build.json" if String(params.get("beacon_id", "")) == "b_01" else "res://fixtures/beacon_core.json", id)
+		"set_value_text":
+			# The gateway reads the typed text (S3's `fixq`): digits are written, anything else
+			# refused in its words, as `set_value_text` refuses.
+			var typed := String(params.get("typed", ""))
+			_typed.append(typed)
+			if not typed.is_valid_int():
+				return head + "\"error\":" + _refusal("INVALID_ARGUMENT", "`%s` is not a number" % typed) + "}"
+			body = "\"playbook_jsonc\":%s,\"inverse_json_patch\":\"[]\"," % JSON.stringify(String(params.get("playbook_jsonc", "")) + " ")
+		"new_rule":
+			_new_rules += 1
+			body = "\"playbook_jsonc\":%s,\"inverse_json_patch\":\"[]\",\"rule_pointer\":\"/declarative/handlers/1\",\"rule_id\":\"rule_2\"," % JSON.stringify(String(params.get("playbook_jsonc", "")) + " ")
+		"compose_wall_box":
+			_walls.append(text)
+			body = "\"target\":{\"blueprint_id\":\"wall\",\"anchor\":{\"voxel\":{\"x\":10,\"y\":10,\"z\":4}},\"wall_box\":{\"min\":{\"x\":10,\"y\":10,\"z\":4},\"max\":{\"x\":12,\"y\":11,\"z\":6}}},"
 		"estimate_route", "resolve_refs":
 			return head + "\"error\":" + _refusal("NOT_FOUND", "the stand-in prices nothing") + "}"
 	return head + "\"result\":{" + body + footer + "}}"

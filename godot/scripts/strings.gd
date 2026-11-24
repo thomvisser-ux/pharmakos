@@ -135,14 +135,15 @@ const TEXT := {
 	"rule_number_send": "Set this value",
 	# The gateway's bounds for the value, as it sent them ("-" where it set none): the field applies
 	# none of them, and a value past them goes to the gateway, whose answer is drawn (S3's `fixp`).
-	"rule_number_bounds": "The gateway's range here: {min} to {max}.",
+	"rule_number_bounds": "The gateway's range here: {min} to {max}{unit}.",
 	"rule_number_waiting": "Sending...",
 	"rule_conflict": "Never fires while the rule joined above it is true: {sentence}",
 	"rule_refused": "The gateway refused that edit: {detail}",
-	"rule_chip_read_only_ms": "This duration is shown as the gateway wrote it. Editing it here waits on a unit the gateway can send.",
 	"rule_chip_read_only_no_shape": "The gateway sent no way to edit this value.",
-	# The file's value lies outside the gateway's bounds: shown as it is, never clamped (L1).
-	"rule_number_outside": "The file holds {now}, outside the range the gateway gives here ({min} to {max}). It is shown as it is; the checks say what it costs.",
+	# The file's value lies outside its shape, by the gateway's word (`outside`): shown as it is,
+	# never clamped (L1). The bounds are said in the unit the gateway sent them in (S3's `fixq-c`).
+	"rule_number_outside": "The file holds {now}{display_unit}, outside what the gateway takes here ({min} to {max}{unit}). It is shown as it is; the checks say what it costs.",
+	"rule_choice_outside": "The file holds {now}, which is not one of the values the gateway offers here. It is shown as it is; the checks say what it costs.",
 	# Why the rule list took no edit, by the bridge's reason (`RuleEditRefusal`), never in silence.
 	"status_rule_refused_shut": "The rule list takes no edit while planning is closed.",
 	"status_rule_refused_no_text": "Open a playbook first.",
@@ -162,7 +163,8 @@ const TEXT := {
 	"status_rule_refused_rendering_out_of_range": "The rule list cannot be edited until it is drawn again.",
 	"status_rule_refused_not_this_kind": "That is not a {detail}. Click one on the map, or Escape.",
 	"status_rule_refused_arm_not_here": "That cannot go here: the gateway takes no {detail} at this point. Click something else, or Escape.",
-	"status_rule_refused_not_an_integer": "That is not a whole number (digits, with a + or - in front if you write one), so nothing was sent.",
+	"status_rule_refused_no_anchor_shape": "The gateway named no way to place that blueprint, so no click is asked for.",
+	"status_rule_refused_route_unread": "The route in this text could not be read, so the visit's step cannot be named; nothing was sent.",
 	"status_rule_refused_no_vocabulary": "The words to pick from have not come yet this Lull (or were refused); see the picker's line.",
 	"status_rule_refused_not_in_rule": "That condition is not in the rule the picker was opened on.",
 	"status_rule_refused_no_such_entry": "That is not in the list the gateway sent any more.",
@@ -171,8 +173,14 @@ const TEXT := {
 	"status_rule_refused_no_pointer": "The gateway sent a setting this client cannot place.",
 	"status_rule_refused_no_such_slot": "That condition is not in the rule list any more.",
 	"status_rule_refused_group_slot": "That condition is a group: pick one of its items instead.",
-	"status_rule_refused_no_pick_op": "The gateway named no way to put a condition there, so nothing was sent.",
+	"status_rule_refused_no_pick_op": "The gateway named no way to write there, so nothing was sent.",
 	"rule_slot": "Condition: {title}",
+	# Add and Remove a rule (S3's `fixq-c`, item 8): Add asks the gateway for an empty rule with a
+	# fresh id; Remove is one `remove` at the row's pointer, which the verifier then judges.
+	"rule_add": "Add a rule",
+	"rule_remove": "Remove",
+	"status_rule_adding": "Adding a rule...",
+	"status_rule_added": "Rule added: pick its condition.",
 	"status_rule_refused_unnamed": "The gateway's answer named nothing to write for that entry, so nothing was sent.",
 	"rule_chip_read_only_unreadable": "This value does not fit what the gateway says it holds, so it is shown as it came and not edited.",
 	"picker_parameter_unknown": "{title}: the gateway sent no way to edit this value",
@@ -183,11 +191,12 @@ const TEXT := {
 	"picker_heading": "Pick a condition",
 	"picker_family_locked": "{title} (locked: {locked})",
 	"picker_entry": "{title}",
+	# The condition groups (S3's `fixq-c`, item 16): `all`, `any`, `not` as the gateway titles them.
+	"picker_groups": "Groups of conditions",
 	"picker_entry_locked": "{title} (locked: {locked})",
 	"picker_parameter": "{title}",
-	"picker_parameter_number": "{title}: a number{bounds}{unit}",
-	"picker_parameter_bounds": " from {min} to {max}",
-	"picker_parameter_ms": "{title}: a time, edited where the gateway can send its unit",
+	"picker_parameter_number": "{title}: a number{bounds}, typed in{unit}",
+	"picker_parameter_bounds": " from {min} to {max}{unit}",
 	"picker_parameter_choice": "{title}: one of {values}",
 	"picker_parameter_reference": "{title}: picked ({kind})",
 	"picker_use": "Use this condition",
@@ -201,7 +210,7 @@ const TEXT := {
 	"menu_mandate": "Switch mandate",
 	"menu_add_target": "Add a build target (then click the ground)",
 	"menu_remove_target": "Remove a build target",
-	"menu_target_row": "{blueprint} at {anchor}",
+	"menu_target_row": "{line}",
 	"menu_queue": "Queue a structure",
 	# Under a locked entry in the entry list, the gateway's sentence as it came.
 	"menu_entry_locked": "Locked: {locked}",
@@ -297,6 +306,10 @@ const TEXT := {
 	"status_picking": "Click the map for the new value; Escape stops.",
 	"lobby_zero_refused": "The Lull ran out, and the gateway refused to be told so: {detail}",
 	"status_anchoring": "Click the ground where the target goes; Escape stops.",
+	# A wall's box from two clicks (S3's `fixq-c`, item 4); the box itself is the gateway's.
+	"status_wall_first": "Click the ground at one corner of the wall; Escape stops.",
+	"status_wall_second": "Now click the ground at the opposite corner; Escape stops.",
+	"status_wall_composing": "Asking the gateway for the wall's box...",
 	"status_visit_changing": "Adding the visit...",
 	"status_rule_editing": "Editing...",
 	"status_wizard_used": "The template's playbook is in the editor. Undo takes it back.",
@@ -344,7 +357,7 @@ const TEXT := {
 	"chips_none": "No step names a vent or a seam.",
 	# One chip per vent or seam the playbook names or describes. Every number is the
 	# gateway's, as it came; a travel time is game milliseconds (strings.gd's `leg`).
-	"chip_now": "Step {step}: now {feature}, {ms} ms",
+	"chip_now": "Step {step}: now {feature}, {travel}",
 	"chip_now_unreachable": "Step {step}: now {feature}, which no route reaches from where it is read",
 	"attack_heading": "Attack targets",
 	# The Build targets the text writes (S3's `fixp`): each blueprint as the file writes it.
@@ -362,7 +375,7 @@ const TEXT := {
 	"attack_selector": "Step {step}: attacks the enemy beacon its selector picks when the attack runs",
 	"attack_enemy_commander": "Step {step}: hunts an enemy commander your side has seen recently, chosen when the force launches; it waits until there is one",
 	"attack_unknown": "Step {step}: an attack target this panel cannot read; the checks say what is wrong",
-	"chip_next": "; next {feature}, {ms} ms",
+	"chip_next": "; next {feature}, {travel}",
 	"chip_how_description_covering": " - nearest by travel from the commander, read when the step starts",
 	"chip_how_description_on": " - nearest by travel from its beacon, read when the step starts",
 	"chip_how_description_other": " - nearest by travel, read when the step starts",

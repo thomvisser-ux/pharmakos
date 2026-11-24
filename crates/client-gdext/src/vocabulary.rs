@@ -22,6 +22,7 @@
 
 use pharmakos_proto::gp::api::v1::reference_shape::Kind;
 use pharmakos_proto::gp::api::v1::value_shape::Shape;
+use pharmakos_proto::gp::api::v1::vocabulary_entry::AnchorShape as WireAnchorShape;
 use pharmakos_proto::gp::api::v1::{
     Chip, GetBeaconResponse, GetVocabularyResponse, ValueShape, VocabularyEntry,
 };
@@ -33,30 +34,29 @@ use crate::error::BridgeError;
 use crate::rule_list::{self, ChipEditor};
 use crate::view::split_footer;
 
-/// The unit of a duration, which the client never asks the player to type (the owner's ruling
-/// of 2026-11-15, decisions-log item 160, which holds for the picker's parameters as for the
-/// rule list's chips).
-const MILLISECONDS: &str = "ms";
-
 /// What a picker's parameter holds, by the shape the gateway sent: drawn beside its title,
 /// never edited on the picker's page (once a predicate is in the file its values are chips).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ParameterShape {
-    /// A whole number within the bounds sent, in `unit`.
+    /// A number within the bounds sent, in `unit`, shown in `display_unit` (seconds for a
+    /// duration, S3's `fixq`).
     Number {
-        /// The lowest value, as sent.
+        /// The lowest value, as sent, in `unit`.
         min: Option<i32>,
-        /// The highest value, as sent.
+        /// The highest value, as sent, in `unit`.
         max: Option<i32>,
-        /// The unit, as sent.
+        /// The unit the value and its bounds are in, as sent.
         unit: String,
+        /// The unit it is shown and typed in, as sent.
+        display_unit: String,
     },
-    /// A duration: drawn with no field, as the rule list draws a duration's chip.
-    Milliseconds,
-    /// A closed list: each value the JSON text the gateway sent.
+    /// A closed list: each value the JSON text the gateway sent, and its title.
     Choice {
         /// The values, in the gateway's order.
         values: Vec<String>,
+        /// Each value in the player's words, one per value; a list the gateway sent short or
+        /// long is kept as sent and drawn as the values (`titles` then names none).
+        titles: Vec<String>,
     },
     /// A reference picked from the map or the playbook: the reference's kind, by name.
     Reference {
@@ -73,7 +73,6 @@ impl ParameterShape {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Number { .. } => "number",
-            Self::Milliseconds => "ms",
             Self::Choice { .. } => "choice",
             Self::Reference { .. } => "reference",
             Self::Unknown => "unknown",
@@ -105,6 +104,22 @@ pub struct Entry {
     pub skeleton_json: String,
     /// Why this seat cannot use it, in the gateway's words; `None` when it can.
     pub locked: Option<String>,
+    /// On a blueprint, how its Build target is anchored, as the gateway read it from the
+    /// verifier's table (`VocabularyEntry.anchor_shape`).
+    pub anchor_shape: AnchorShape,
+}
+
+/// How a blueprint's Build target is anchored, as `get_vocabulary` names it (S3's `fixq`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AnchorShape {
+    /// One place: a map click on ground, or on a vent.
+    Point,
+    /// A box a wall fills: two map clicks, its corners, composed by the gateway
+    /// (`compose_wall_box`).
+    Box,
+    /// Unset (every entry that is no blueprint) or a value this build has no name for: no
+    /// anchor pick is guessed for it.
+    Unnamed,
 }
 
 /// One condition family.
@@ -127,8 +142,15 @@ pub struct Vocabulary {
     pub families: Vec<Family>,
     /// The mandates a beacon may carry.
     pub mandates: Vec<Entry>,
-    /// The blueprints a Build target or a queued structure may name.
+    /// The blueprints, as a Build target may name them (Add a build target's list).
     pub blueprints: Vec<Entry>,
+    /// The blueprints, as a `queue_structure` row may name them, each locked by the verifier's
+    /// own rule for a queue (Queue a structure's list; S3's `fixq`). Drawn as sent, never
+    /// filtered.
+    pub queue_blueprints: Vec<Entry>,
+    /// The condition groups a picker may insert (`all`, `any`, `not`), each with its skeleton
+    /// of empty items.
+    pub groups: Vec<Entry>,
 }
 
 /// A `get_vocabulary` answer.
@@ -153,6 +175,12 @@ pub fn vocabulary_of(result: &Json) -> Result<Vocabulary, BridgeError> {
             .collect(),
         mandates: response.mandates.into_iter().map(entry_of).collect(),
         blueprints: response.blueprints.into_iter().map(entry_of).collect(),
+        queue_blueprints: response
+            .queue_blueprints
+            .into_iter()
+            .map(entry_of)
+            .collect(),
+        groups: response.groups.into_iter().map(entry_of).collect(),
     })
 }
 
@@ -191,21 +219,25 @@ fn entry_of(entry: VocabularyEntry) -> Entry {
             .collect(),
         skeleton_json: entry.skeleton_json,
         locked: entry.locked,
+        anchor_shape: match WireAnchorShape::try_from(entry.anchor_shape) {
+            Ok(WireAnchorShape::Point) => AnchorShape::Point,
+            Ok(WireAnchorShape::Box) => AnchorShape::Box,
+            Ok(WireAnchorShape::Unspecified) | Err(_) => AnchorShape::Unnamed,
+        },
     }
 }
 
 fn parameter_shape(shape: Option<&ValueShape>) -> ParameterShape {
     match shape.and_then(|shape| shape.shape.as_ref()) {
-        Some(Shape::Integer(integer)) if integer.unit == MILLISECONDS => {
-            ParameterShape::Milliseconds
-        }
         Some(Shape::Integer(integer)) => ParameterShape::Number {
             min: integer.min,
             max: integer.max,
             unit: integer.unit.clone(),
+            display_unit: integer.display_unit.clone(),
         },
         Some(Shape::Choice(choice)) => ParameterShape::Choice {
             values: choice.values.clone(),
+            titles: choice.titles.clone(),
         },
         Some(Shape::Reference(reference)) => match Kind::try_from(reference.kind) {
             Ok(Kind::Beacon) => ParameterShape::Reference { kind: "beacon" },
@@ -308,8 +340,9 @@ pub struct HeldTarget {
     /// Its anchor, a `gp.v1.Location` in the playbook's canonical spelling: what a removal
     /// names.
     pub anchor: Json,
-    /// The anchor as JSON text, for the menu to show as it came.
-    pub anchor_text: String,
+    /// The target in the player's words, the gateway's (`GetBeaconResponse.build_target_lines`,
+    /// S3's `fixq`): what the Remove list draws, never an anchor's JSON.
+    pub line: String,
 }
 
 /// What `get_beacon` said about one of this seat's beacons.
@@ -337,7 +370,8 @@ pub struct BeaconDetail {
 /// # Errors
 ///
 /// [`BridgeError::Schema`] when the answer is not a `GetBeaconResponse`, and
-/// [`BridgeError::Rpc`] for a target with no anchor.
+/// [`BridgeError::Rpc`] for a target with no anchor, or for a list of target lines that does not
+/// pair with the targets one for one (a line drawn beside the wrong target removes the wrong one).
 pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail), BridgeError> {
     let (answer, _) = split_footer(result);
     let canonical = enums::canonical("gp.api.v1.GetBeaconResponse", &answer);
@@ -360,6 +394,7 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
             let chip = Chip {
                 pointer: row.pointer.clone(),
                 value_json: row.value_json.clone(),
+                value_text: row.value_text.clone(),
                 shape: row.shape,
                 ..Chip::default()
             };
@@ -381,8 +416,15 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
         })
         .collect::<Vec<_>>();
     let mut targets = Vec::with_capacity(response.build_targets.len());
+    if response.build_target_lines.len() != response.build_targets.len() {
+        return Err(BridgeError::Rpc(format!(
+            "{} build targets came with {} lines",
+            response.build_targets.len(),
+            response.build_target_lines.len()
+        )));
+    }
     if let Some(Json::Array(held)) = canonical.get("build_targets") {
-        for target in held {
+        for (target, line) in held.iter().zip(&response.build_target_lines) {
             let anchor = target.get("anchor").cloned().ok_or_else(|| {
                 BridgeError::Rpc("a target with no anchor, which removes nothing".to_owned())
             })?;
@@ -392,8 +434,8 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
             };
             targets.push(HeldTarget {
                 blueprint_id,
-                anchor_text: compact(&anchor),
                 anchor,
+                line: line.clone(),
             });
         }
     }
@@ -407,14 +449,6 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
             targets,
         },
     ))
-}
-
-/// JSON text on one line, as it came: what the menu shows of an anchor.
-fn compact(value: &Json) -> String {
-    json::write(value)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// The `gp.v1.MandateSettings` object that sets the one field at `pointer` to `value`: the
@@ -436,6 +470,30 @@ pub fn nested_setting(pointer: &str, value: Json) -> Result<Json, PickError> {
         .into_iter()
         .rev()
         .fold(value, |inner, key| Json::Object(vec![(key, inner)])))
+}
+
+/// The `gp.v1.MandateSettings` object that holds every object the setting at `pointer` sits in,
+/// and not the setting: `/retreat_hp_pct` gives `{}`, `/build/repair_threshold_pct` gives
+/// `{"build":{}}`. What a Visit & change number row is appended with, before `set_value_text`
+/// writes the typed value into it (S3's `fixq`: the gateway reads typed text, the client none).
+///
+/// # Errors
+///
+/// [`PickError::NoPointer`] for a pointer that names no field.
+pub fn setting_parents(pointer: &str) -> Result<Json, PickError> {
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return Err(PickError::NoPointer);
+    };
+    let mut segments: Vec<String> = rest.split('/').map(unescape).collect();
+    if segments.iter().any(String::is_empty) || segments.pop().is_none() {
+        return Err(PickError::NoPointer);
+    }
+    Ok(segments
+        .into_iter()
+        .rev()
+        .fold(Json::Object(Vec::new()), |inner, key| {
+            Json::Object(vec![(key, inner)])
+        }))
 }
 
 /// One RFC 6901 reference token, unescaped: `~1` is `/`, `~0` is `~`.
@@ -497,6 +555,28 @@ pub fn remove_target_row(target: &HeldTarget) -> Json {
         "remove_build_target".to_owned(),
         Json::Object(vec![("anchor".to_owned(), target.anchor.clone())]),
     )])
+}
+
+/// The interface row that adds the Build target `target` as the gateway composed it
+/// (`compose_wall_box`'s answer, a wall's box and its anchor), written as it came.
+#[must_use]
+pub fn add_composed_target_row(target: Json) -> Json {
+    Json::Object(vec![(
+        "add_build_target".to_owned(),
+        Json::Object(vec![("target".to_owned(), target)]),
+    )])
+}
+
+/// The value a group pick writes into a condition slot: `{"<name>": <skeleton>}`, from group
+/// `which` as `get_vocabulary` sent it (`all`, `any`, `not`), whose items are then slots of
+/// their own.
+///
+/// # Errors
+///
+/// As [`named_skeleton`], and [`PickError::NoSuchEntry`] for a group the vocabulary does not
+/// hold.
+pub fn group_value(vocabulary: &Vocabulary, which: usize) -> Result<Json, PickError> {
+    named_skeleton(vocabulary.groups.get(which).ok_or(PickError::NoSuchEntry)?)
 }
 
 /// The interface row that queues `blueprint` on the beacon's fabricator.
@@ -644,14 +724,48 @@ mod tests {
             .expect("the locked rest of the clock");
         assert_eq!(rest.locked.as_deref(), Some("from S6"));
         let elapsed = entry(&clock.predicates, "segment_elapsed");
-        assert_eq!(
-            parameter(elapsed, "/ms/value").shape,
-            ParameterShape::Milliseconds
-        );
+        // A duration is a number shown in the gateway's seconds (S3's `fixq-c`, item 7).
+        assert!(matches!(
+            &parameter(elapsed, "/ms/value").shape,
+            ParameterShape::Number { unit, display_unit, .. } if unit == "ms" && display_unit == "s"
+        ));
         let compared = parameter(elapsed, "/ms/op");
         assert!(
-            matches!(&compared.shape, ParameterShape::Choice { values } if values.first().map(String::as_str) == Some("\"LT\""))
+            matches!(&compared.shape, ParameterShape::Choice { values, titles } if values.first().map(String::as_str) == Some("\"LT\"") && titles.first().map(String::as_str) == Some("below"))
         );
+        // Each list as sent: the Queue's own, every kind but the Spire locked by its rule; the
+        // wall the one blueprint a box anchors; the three groups.
+        let queue_locks: Vec<(&str, bool)> = words
+            .queue_blueprints
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.locked.is_some()))
+            .collect();
+        assert!(
+            queue_locks.contains(&("generator", true)),
+            "{queue_locks:?}"
+        );
+        assert!(queue_locks.contains(&("wall", true)), "{queue_locks:?}");
+        let shapes: Vec<(&str, AnchorShape)> = words
+            .blueprints
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.anchor_shape))
+            .collect();
+        assert!(shapes.contains(&("wall", AnchorShape::Box)), "{shapes:?}");
+        assert!(
+            shapes.contains(&("generator", AnchorShape::Point)),
+            "{shapes:?}"
+        );
+        let groups: Vec<&str> = words
+            .groups
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(groups, ["all", "any", "not"]);
+        assert_eq!(
+            compact(&group_value(&words, 2).expect("not")),
+            r#"{"not":{"item":{}}}"#
+        );
+        assert_eq!(group_value(&words, 3), Err(PickError::NoSuchEntry));
         assert!(!words.mandates.is_empty());
         assert!(
             words
@@ -738,8 +852,20 @@ mod tests {
         assert_eq!(
             rebuild.editor,
             ChipEditor::Choice {
-                values: vec!["true".to_owned(), "false".to_owned()]
+                values: vec!["true".to_owned(), "false".to_owned()],
+                titles: vec!["yes".to_owned(), "no".to_owned()]
             }
+        );
+        // A percentage setting carries its value in its display unit, as sent.
+        let retreat = detail
+            .settings
+            .iter()
+            .find(|setting| setting.pointer == "/retreat_hp_pct")
+            .expect("the setting");
+        assert!(
+            matches!(&retreat.editor, ChipEditor::Number { value_text, display_unit, .. } if value_text == "0" && display_unit == "%"),
+            "{:?}",
+            retreat.editor
         );
         let foreign =
             json::read(r#"{"summary":{"beacon_id":"e_00"},"prose":"Theirs."}"#).expect("json");
@@ -762,14 +888,41 @@ mod tests {
             .map(|target| target.blueprint_id.as_str())
             .collect();
         assert!(blueprints.contains(&"wall"), "{blueprints:?}");
+        // Each target in the gateway's own words, never its anchor's JSON (S3's `fixq-c`).
+        for target in &detail.targets {
+            assert!(
+                !target.line.is_empty() && !target.line.contains('{'),
+                "{target:?}"
+            );
+        }
         let described = detail
             .targets
             .iter()
-            .find(|target| target.anchor_text.contains("\"vent\""))
+            .find(|target| compact(&target.anchor).contains("\"vent\""))
             .expect("a target on a described vent");
         assert_eq!(
             compact(&remove_target_row(described)),
             r#"{"remove_build_target":{"anchor":{"on":{"vent":{"rank":"NEAREST"}}}}}"#
+        );
+    }
+
+    /// The Remove list draws each target's line beside it, so lines that do not pair with the
+    /// targets one for one are refused whole: a line beside the wrong target removes the wrong one.
+    #[test]
+    fn target_lines_that_do_not_pair_with_the_targets_are_refused() {
+        let short = json::read(
+            r#"{"mandate":"build","build_targets":[{"blueprint_id":"generator","anchor":{"voxel":{"x":1,"y":2,"z":3}}}],"build_target_lines":[]}"#,
+        )
+        .expect("json");
+        assert!(beacon_detail_of("b_00", &short).is_err());
+        let paired = json::read(
+            r#"{"mandate":"build","build_targets":[{"blueprint_id":"generator","anchor":{"voxel":{"x":1,"y":2,"z":3}}}],"build_target_lines":["Generator at voxel 1, 2, 3"]}"#,
+        )
+        .expect("json");
+        let (_, detail) = beacon_detail_of("b_00", &paired).expect("reads");
+        assert_eq!(
+            detail.targets.first().map(|target| target.line.as_str()),
+            Some("Generator at voxel 1, 2, 3")
         );
     }
 
@@ -788,6 +941,17 @@ mod tests {
             )),
             r#"{"set_mandate_settings":{"retreat_hp_pct":30}}"#
         );
+        assert_eq!(
+            compact(&settings_row(
+                setting_parents("/retreat_hp_pct").expect("a pointer")
+            )),
+            r#"{"set_mandate_settings":{}}"#
+        );
+        assert_eq!(
+            compact(&setting_parents("/build/repair_threshold_pct").expect("a pointer")),
+            r#"{"build":{}}"#
+        );
+        assert_eq!(setting_parents("/"), Err(PickError::NoPointer));
         assert_eq!(nested_setting("", Json::Null), Err(PickError::NoPointer));
         assert_eq!(
             nested_setting("/a//b", Json::Null),
@@ -799,6 +963,7 @@ mod tests {
             parameters: Vec::new(),
             skeleton_json: skeleton.to_owned(),
             locked: locked.map(str::to_owned),
+            anchor_shape: AnchorShape::Point,
         };
         assert_eq!(
             compact(&mandate_row(&entry("defend", "{}", None)).expect("a row")),
@@ -820,7 +985,7 @@ mod tests {
             compact(&remove_target_row(&HeldTarget {
                 blueprint_id: "generator".to_owned(),
                 anchor: json::read(r#"{"on":{"feature_id":"vent_120_88"}}"#).expect("json"),
-                anchor_text: String::new(),
+                line: String::new(),
             })),
             r#"{"remove_build_target":{"anchor":{"on":{"feature_id":"vent_120_88"}}}}"#
         );

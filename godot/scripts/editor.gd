@@ -206,7 +206,7 @@ const SELECTORS := ["nearest", "weakest", "safest", "most_threatened"]
 const ITEM_LIST_MANDATE := 31
 const ITEM_LIST_ADD_TARGET := 32
 const ITEM_LIST_QUEUE := 33
-const ENTRY_LISTS := {ITEM_LIST_MANDATE: ["mandate", "mandates", "menu_mandate"], ITEM_LIST_ADD_TARGET: ["add_target", "blueprints", "menu_add_target"], ITEM_LIST_QUEUE: ["queue", "blueprints", "menu_queue"]}
+const ENTRY_LISTS := {ITEM_LIST_MANDATE: ["mandate", "mandates", "menu_mandate"], ITEM_LIST_ADD_TARGET: ["add_target", "blueprints", "menu_add_target"], ITEM_LIST_QUEUE: ["queue", "queue_blueprints", "menu_queue"]}
 ## A locked entry's sentence colour. PLACEHOLDER: the entry list's look — OWNER, at S6.
 const LOCKED_COLOUR := Color(0.65, 0.65, 0.65)
 ## How much of the window's height the entry list leaves free, in pixels: its panel's margins.
@@ -1123,12 +1123,12 @@ static func chip_line(chip: Dictionary) -> String:
 	# nothing, so the line says it is out of reach instead of drawing one.
 	var parts: PackedStringArray = []
 	if chip.get("reachable", false):
-		parts.append(Strings.text("chip_now", {"step": Values.said(Strings.text("value_step"), chip.get("step", 0)), "feature": feature_text(now), "ms": now.get("travel_ms", 0)}))
+		parts.append(Strings.text("chip_now", {"step": Values.said(Strings.text("value_step"), chip.get("step", 0)), "feature": feature_text(now), "travel": now.get("travel_text", "")}))
 	else:
 		parts.append(Strings.text("chip_now_unreachable", {"step": Values.said(Strings.text("value_step"), chip.get("step", 0)), "feature": feature_text(now)}))
 	var next: Dictionary = chip.get("next", {})
 	if not next.is_empty():
-		parts.append(Strings.text("chip_next", {"feature": feature_text(next), "ms": next.get("travel_ms", 0)}))
+		parts.append(Strings.text("chip_next", {"feature": feature_text(next), "travel": next.get("travel_text", "")}))
 	var how := "chip_how_%s_%s" % [chip.get("form", ""), chip.get("arm", "")]
 	if Strings.TEXT.has(how):
 		parts.append(Strings.text(how))
@@ -1337,7 +1337,7 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 	_rule_slots = list.get("slots", [])
 	# An unreadable picking index highlights no chip; the map click still goes to the bridge.
 	var picking: Variant = Values.int_of(state.get("picking", -1))
-	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), picking if picking is int else -1, state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"))
+	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), picking if picking is int else -1, state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"), Callable(self, "_on_rule_remove"), Callable(self, "_on_rule_add"), state.get("has_text", false))
 	# An editor opened on the rendering drawn before names chips that may not be there any more
 	# (M1): it closes with that rendering, and the bridge would refuse its edit anyway. A redraw
 	# of the same rendering (an edit on its way, a refusal on a rule) keeps it, so its popup can
@@ -1370,9 +1370,11 @@ func _on_rule_chip(index: int) -> void:
 		"choice":
 			_choice_chip = named
 			_choice_menu.clear()
+			# Drawn by the gateway's titles; the value sent is its own JSON, beside the title.
 			var values: PackedStringArray = chip.get("values", PackedStringArray())
+			var titles: PackedStringArray = chip.get("titles", PackedStringArray())
 			for which in values.size():
-				_choice_menu.add_radio_check_item(values[which], which)
+				_choice_menu.add_radio_check_item(titles[which] if which < titles.size() else values[which], which)
 				_choice_menu.set_item_checked(which, values[which] == String(chip.get("value_json", "")))
 			_choice_menu.position = Vector2i(get_viewport().get_mouse_position())
 			_choice_menu.popup()
@@ -1427,7 +1429,13 @@ func _on_picker_use() -> void:
 	if picked.is_empty():
 		return
 	_picker_popup.hide()
-	bridge.editor_choose_predicate(int(_picker_slot.get("slot", -1)), String(_picker_slot.get("pointer", "")), int(_picker_slot.get("revision", -1)), int(picked[0]), int(picked[1]))
+	var slot := int(_picker_slot.get("slot", -1))
+	var pointer := String(_picker_slot.get("pointer", ""))
+	var revision := int(_picker_slot.get("revision", -1))
+	if picked.has("group"):
+		bridge.editor_choose_group(slot, pointer, revision, int(picked["group"]))
+	else:
+		bridge.editor_choose_predicate(slot, pointer, revision, int(picked["family"]), int(picked["entry"]))
 
 
 ## The condition picker's rows as drawn, `[text, selectable]` each, for a check to read.
@@ -1448,7 +1456,7 @@ func _fill_visit_menu(state: Dictionary) -> void:
 		return
 	var detail: Dictionary = state.get("beacon_detail", {})
 	var vocabulary: Dictionary = state.get("vocabulary", {})
-	var drawn := var_to_str([_visit_beacon, detail, vocabulary.get("mandates", []), vocabulary.get("blueprints", [])])
+	var drawn := var_to_str([_visit_beacon, detail, vocabulary.get("mandates", []), vocabulary.get("blueprints", []), vocabulary.get("queue_blueprints", [])])
 	if drawn == _visit_drawn:
 		return
 	_visit_drawn = drawn
@@ -1482,7 +1490,8 @@ func _fill_visit_menu(state: Dictionary) -> void:
 	var remove := _visit_submenu(Strings.text("menu_remove_target"))
 	var targets: Array = detail.get("targets", [])
 	for which in targets.size():
-		remove.add_item(Strings.text("menu_target_row", {"blueprint": targets[which].get("blueprint_id", ""), "anchor": targets[which].get("anchor", "")}), which)
+		# The target in the gateway's own words (`build_target_lines`), never its anchor's JSON.
+		remove.add_item(Strings.text("menu_target_row", {"line": targets[which].get("line", "")}), which)
 	remove.id_pressed.connect(func(which: int) -> void: _on_visit_row("remove_target", which))
 	_visit_menu.add_item(Strings.text("menu_queue"), ITEM_LIST_QUEUE)
 
@@ -1501,7 +1510,7 @@ func _visit_submenu(title: String) -> PopupMenu:
 ## One setting's row: an enum's values as sent in a submenu of their own, a number opening the
 ## value field, with the gateway's bounds said beside it, a value not edited here greyed with its reason.
 func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
-	var title := Strings.text("menu_setting", {"title": setting.get("title", ""), "value": setting.get("value_json", "")})
+	var title := Strings.text("menu_setting", {"title": setting.get("title", ""), "value": setting_value_text(setting)})
 	match String(setting.get("editor", "")):
 		"choice":
 			var values := PopupMenu.new()
@@ -1509,8 +1518,9 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 			settings.add_child(values)
 			settings.add_submenu_node_item(title, values)
 			var listed: PackedStringArray = setting.get("values", PackedStringArray())
+			var titles: PackedStringArray = setting.get("titles", PackedStringArray())
 			for value in listed.size():
-				values.add_radio_check_item(Strings.text("menu_setting_value", {"value": listed[value]}), value)
+				values.add_radio_check_item(Strings.text("menu_setting_value", {"value": titles[value] if value < titles.size() else listed[value]}), value)
 				values.set_item_checked(value, listed[value] == String(setting.get("value_json", "")))
 			var pointer := String(setting.get("pointer", ""))
 			values.id_pressed.connect(func(value: int) -> void: _on_setting_choice(which, pointer, value))
@@ -1526,6 +1536,22 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 			if cause != "":
 				said = Strings.text("menu_setting_unreadable", {"said": said, "cause": cause})
 			settings.set_item_tooltip(settings.item_count - 1, said)
+
+
+## A setting's value now as the menu says it, in the gateway's words: a number's `value_text` in
+## its display unit, a choice's title for the value it holds, and anything else as it came.
+static func setting_value_text(setting: Dictionary) -> String:
+	match String(setting.get("editor", "")):
+		"number":
+			var unit := String(setting.get("display_unit", ""))
+			return String(setting.get("value_text", "")) + ((" " + unit) if unit != "" else "")
+		"choice":
+			var values: PackedStringArray = setting.get("values", PackedStringArray())
+			var titles: PackedStringArray = setting.get("titles", PackedStringArray())
+			var at := values.find(String(setting.get("value_json", "")))
+			if at >= 0 and at < titles.size():
+				return titles[at]
+	return String(setting.get("value_json", ""))
 
 
 ## An enum setting took its `value`th value: the bridge's one row, and the map menus close.
@@ -1641,8 +1667,11 @@ func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	if not named.is_empty():
 		_number_setting = {}
 	bridge.editor_field_opened()
+	# `outside` is the gateway's word, sent on a rule-list chip; a setting row carries none.
 	var outside: bool = chip.get("outside", false)
-	var bounds := {"now": chip.get("value_json", ""), "min": chip.get("min", "-") if chip.get("has_min", false) else "-", "max": chip.get("max", "-") if chip.get("has_max", false) else "-"}
+	var unit := String(chip.get("unit", ""))
+	var shown_unit := String(chip.get("display_unit", ""))
+	var bounds := {"now": chip.get("value_text", ""), "display_unit": (" " + shown_unit) if shown_unit != "" else "", "unit": (" " + unit) if unit != "" else "", "min": chip.get("min", "-") if chip.get("has_min", false) else "-", "max": chip.get("max", "-") if chip.get("has_max", false) else "-"}
 	_number_heading.text = Strings.text("rule_number_heading", {"text": chip.get("text", "")})
 	var bounded: bool = chip.get("has_min", false) or chip.get("has_max", false)
 	_number_note.visible = outside or bounded
@@ -1654,7 +1683,9 @@ func _open_number(named: Dictionary, chip: Dictionary) -> void:
 		_number_note.text = ""
 	_number_said.text = ""
 	_number_said.visible = false
-	_number_field.open(String(chip.get("value_json", "")), String(chip.get("unit", "")), String(chip.get("text", "")))
+	# Pre-filled with the gateway's own text of the value, in the unit it is typed in (seconds for
+	# a duration): the field converts nothing, and what is typed goes to the gateway as typed.
+	_number_field.open(String(chip.get("value_text", "")), shown_unit, String(chip.get("text", "")))
 	_number_popup.position = Vector2i(get_viewport().get_mouse_position())
 	_number_popup.popup()
 
@@ -1693,6 +1724,16 @@ func _draw_number_field(field: Dictionary) -> void:
 
 func _on_choice(which: int) -> void:
 	bridge.editor_choose(int(_choice_chip.get("index", -1)), int(_choice_chip.get("revision", -1)), String(_choice_chip.get("pointer", "")), which)
+
+
+## Remove on rule `rule` (its index and pointer in the rendering drawn): the bridge's one `remove`.
+func _on_rule_remove(rule: int, pointer: String) -> void:
+	bridge.editor_remove_rule(rule, pointer, _rules_rendering)
+
+
+## Add a rule: the gateway writes an empty one with a fresh id, whose condition the picker fills.
+func _on_rule_add() -> void:
+	bridge.editor_new_rule()
 
 
 ## A rule dropped on another of its list, each named by its index and pointer, in the
