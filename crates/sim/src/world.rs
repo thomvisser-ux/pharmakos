@@ -7197,6 +7197,12 @@ impl World {
         self.match_seed = restored.match_seed;
         self.tick = restored.tick;
         self.seats = restored.seats;
+        // No decision has run since the restore: every seat's figure says
+        // so, one a seat of the RESTORED table, whatever this world ran before
+        // (dunit part 2). A figure is a measurement, never in the file.
+        self.decision_work.clear();
+        self.decision_work
+            .resize(seat_width, Err(crate::seams::NoFigure::NoDecisionYet));
         self.units = restored.units;
         // The ceiling is **kept**, not recomputed: this world was built by
         // `World::new` from the match's own configuration, which set
@@ -9443,6 +9449,82 @@ mod decision_visits {
             figures(&source)
                 .iter()
                 .all(|figure| matches!(figure, Some(Ok(_))))
+        );
+    }
+
+    /// A runner restored over a world that has decided reports no decision
+    /// for any seat until its next one: the figures of the decisions it ran
+    /// before the restore are not the restored match's.
+    #[test]
+    fn a_runner_restore_reports_no_decision_yet() {
+        let mut runner =
+            crate::runner::Runner::new(world()).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            runner
+                .begin_push()
+                .unwrap_or_else(|error| panic!("{error:?}"))
+        );
+        for _ in 0..37 {
+            let _ = runner.step().unwrap_or_else(|error| panic!("{error:?}"));
+        }
+        let snapshot = runner
+            .capture()
+            .unwrap_or_else(|error| panic!("a snapshot: {error:?}"));
+        for _ in 0..20 {
+            let _ = runner.step().unwrap_or_else(|error| panic!("{error:?}"));
+        }
+        assert!(
+            figures(runner.world())
+                .iter()
+                .all(|figure| matches!(figure, Some(Ok(_))))
+        );
+        runner
+            .restore(&snapshot)
+            .unwrap_or_else(|error| panic!("a restore: {error:?}"));
+        assert_eq!(
+            figures(runner.world()),
+            vec![Some(Err(NoFigure::NoDecisionYet)); 2],
+            "no decision since the restore"
+        );
+    }
+
+    /// The figures after a restore are sized from the restored seat table:
+    /// a two-seat match restored into a world built for three reports two
+    /// seats, each with no decision yet.
+    #[test]
+    fn a_restore_sizes_the_figures_from_its_seats() {
+        let mut source =
+            crate::runner::Runner::new(world()).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            source
+                .begin_push()
+                .unwrap_or_else(|error| panic!("{error:?}"))
+        );
+        let _ = source.step().unwrap_or_else(|error| panic!("{error:?}"));
+        let snapshot = source
+            .capture()
+            .unwrap_or_else(|error| panic!("a snapshot: {error:?}"));
+        let mut wider = World::new(&WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 3,
+            rules: source.world().rules().clone(),
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"));
+        assert_eq!(figures(&wider).len(), 3);
+        snapshot
+            .restore_into(&mut wider)
+            .unwrap_or_else(|error| panic!("a restore: {error:?}"));
+        assert_eq!(
+            (0..3)
+                .map(|seat| wider.decision_work(seat))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(Err(NoFigure::NoDecisionYet)),
+                Some(Err(NoFigure::NoDecisionYet)),
+                None
+            ],
+            "two seats, no decision yet, and no third"
         );
     }
 
