@@ -142,7 +142,7 @@
 //!
 //! # The allocation test runs the sim unoptimised
 //!
-//! `crates/sim/tests/allocations.rs`'s `a_tick_allocates_nothing` counts the
+//! `crates/sim/tests/allocations.rs`'s `tick::a_tick_allocates_nothing` counts the
 //! allocations a tick makes. The optimiser deletes an allocation whose value
 //! is never read (a `Vec::with_capacity` dropped at once, a `Box` freed where
 //! it was made), so at opt-level 2 a pull request that adds such code to a tick
