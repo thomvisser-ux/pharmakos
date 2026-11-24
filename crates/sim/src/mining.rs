@@ -1322,20 +1322,61 @@ mod visits {
 
     #[test]
     fn a_dig_search_charges_what_it_visits() {
-        let world = world();
-        let (row, settings) = core(&world);
+        dig_searches_charge_what_they_visit(&world());
+        dig_searches_charge_what_they_visit(&with_structures());
+    }
+
+    /// The fixture with structure rows for [`super::blocked`] to read: two
+    /// Generators of seat 1's on its own core's column, far from seat 0's
+    /// seams.
+    fn with_structures() -> World {
+        let mut world = world();
+        let row = world
+            .beacons()
+            .row_of_ordinal(SeatId::new(1), 0)
+            .unwrap_or_else(|| panic!("seat 1 has a core"));
+        let core = crate::tables::BeaconId::new(
+            world
+                .beacons()
+                .ids()
+                .get(row)
+                .copied()
+                .unwrap_or_else(|| panic!("its id")),
+        );
+        let at = world
+            .beacons()
+            .positions()
+            .get(row)
+            .copied()
+            .unwrap_or_else(|| panic!("its place"));
+        for _ in 0..2 {
+            let _ = world
+                .raise_structure(
+                    SeatId::new(1),
+                    core,
+                    crate::tables::StructureKind::Generator,
+                    at,
+                )
+                .unwrap_or_else(|| panic!("room for a structure"));
+        }
+        assert!(world.structures().ids().len() >= 2, "the table holds rows");
+        world
+    }
+
+    fn dig_searches_charge_what_they_visit(world: &World) {
+        let (row, settings) = core(world);
         let mut searched = 0;
         for seam in 0..world.features().len() {
             let units = charged(|meter| {
-                let _ = dig_in(&world, row, seam, settings, meter);
+                let _ = dig_in(world, row, seam, settings, meter);
             });
-            let counted = dig_in_rows(&world, row, seam, settings);
+            let counted = dig_in_rows(world, row, seam, settings);
             assert_eq!(units, counted, "seam {seam}: the visits, counted");
             if world
                 .features()
                 .get(seam)
                 .is_some_and(|f| f.kind == FeatureKind::Seam)
-                && dig_in(&world, row, seam, settings, &()).is_some()
+                && dig_in(world, row, seam, settings, &()).is_some()
             {
                 searched += 1;
             }
@@ -1345,22 +1386,26 @@ mod visits {
 
     #[test]
     fn a_seams_yield_charges_what_it_reads() {
-        let world = world();
-        let (row, settings) = core(&world);
+        yields_charge_what_they_read(&world());
+        yields_charge_what_they_read(&with_structures());
+    }
+
+    fn yields_charge_what_they_read(world: &World) {
+        let (row, settings) = core(world);
         for seam in 0..world.features().len() {
             let Some(feature) = world.features().get(seam) else {
                 continue;
             };
             let units = charged(|meter| {
-                let _ = remaining_yield(&world, (row, seam), settings, meter);
+                let _ = remaining_yield(world, (row, seam), settings, meter);
             });
-            let mut rows = radius_rows(&world);
+            let mut rows = radius_rows(world);
             for column in &feature.footprint {
                 rows += 1;
                 if pillar(feature, settings, column.x, column.y) {
                     continue;
                 }
-                let (blocked, read) = blocked_rows(&world, column.x, column.y);
+                let (blocked, read) = blocked_rows(world, column.x, column.y);
                 rows += read;
                 if blocked {
                     continue;
