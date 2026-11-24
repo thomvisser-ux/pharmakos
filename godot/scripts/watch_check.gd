@@ -130,6 +130,15 @@
 #     Lull, `get_status` names `probation` as asked, and round 1's first `list_templates`
 #     marks exactly one template with a sentence, which the panel draws as sent. The first
 #     host's legs hold `get_status` to `custom` and read the seat's `sealed_this_round`;
+#   * THE PLANNING WIRE (S3's `fixq-c`; `_planning_wire`), in round 1's Lull against the real
+#     gateway, on the committed playbook: a duration chip is a number typed in seconds, pre-filled
+#     with the gateway's own text, and "3" typed into its field and sent lands as 3000 game
+#     milliseconds by `set_value_text`; a choice chip's menu draws the gateway's titles; Add a
+#     rule, clicked, lands a rule whose empty condition slot the picker fills with a group, which
+#     lands too; Remove, clicked, takes the rule out; a wall's Build target on the seat's core takes
+#     two ground clicks beside the commander and lands the gateway's box (`compose_wall_box`);
+#     Queue a structure lists the Queue's own entries; and Undo takes every one back to the
+#     committed bytes. Nothing is submitted, so the seal the legs above made stands;
 #   * across every host: the bridge caught no panic, refused no view page, the gateway
 #     refused no call (so no burst met RATE_LIMITED), entities were drawn, and every host
 #     exited once the client let go of its standard input.
@@ -383,6 +392,9 @@ func _run() -> void:
 		_finish()
 		return
 	if not await _real_wheel():
+		_finish()
+		return
+	if not await _planning_wire():
 		_finish()
 		return
 	var sealed: PackedByteArray = vista.bridge.editor_sealed_bytes()
@@ -1582,6 +1594,143 @@ func _on_received(answer: Dictionary) -> void:
 			_failures.append("a get_view page did not decode (the reason is in the log)")
 		else:
 			vista.take_view(answer["view"])
+
+
+## The planning wire against the real gateway (S3's `fixq-c`): see the header.
+func _planning_wire() -> bool:
+	var original := FileAccess.get_file_as_bytes(COMMITTED)
+	editor.load_file(COMMITTED)
+	if not await _editor_until(func(s: Dictionary) -> bool: return vista.bridge.editor_bytes() == original and s.get("prose_current", false) and s.get("rows_current", false) and s.get("rules_editable", false) and s.get("vocabulary", {}).get("known", false), "the planning wire: the committed playbook never rendered"):
+		return false
+	var depth := _count(_editor(), "undo_depth")
+	# A duration, typed in seconds.
+	var timeout := _chip_at(_editor(), "/timeout_ms")
+	var chip: Dictionary = _editor().get("rule_list", {}).get("chips", [])[timeout] if timeout >= 0 else {}
+	if String(chip.get("editor", "")) != "number" or String(chip.get("display_unit", "")) != "s" or String(chip.get("value_text", "")) == "":
+		_failures.append("the planning wire: the duration chip is not a number typed in seconds: %s" % [chip])
+		return false
+	editor._on_rule_chip(timeout)
+	await get_tree().process_frame
+	if editor._number_field.field.text != String(chip.get("value_text", "")) or editor._number_field.unit.text != "s":
+		_failures.append("the planning wire: the duration's field shows `%s %s`, not the gateway's `%s s`" % [editor._number_field.field.text, editor._number_field.unit.text, chip.get("value_text", "")])
+	var before := _count(_editor(), "revision")
+	editor._number_field.field.text = "3"
+	editor._number_field.send.pressed.emit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and not s.get("busy", true) and s.get("prose_current", false), "the planning wire: the duration's \"3\" never landed"):
+		return false
+	var typed: String = vista.bridge.editor_bytes().get_string_from_utf8()
+	if not ("\"timeout_ms\": 3000" in typed):
+		_failures.append("the planning wire: \"3\" seconds did not land as 3000 ms")
+	editor._number_popup.hide()
+	await _editor_until(func(s: Dictionary) -> bool: return s.get("rules_editable", false), "the planning wire: the list never took an edit again")
+	# Add a rule, through its button; its empty slot takes a group; Remove takes it out.
+	var rules_before: int = _editor().get("rule_list", {}).get("rules", []).size()
+	var add := _rule_button("rule_add")
+	if add == null:
+		_failures.append("the planning wire: no Add a rule button")
+		return false
+	before = _count(_editor(), "revision")
+	add.pressed.emit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and s.get("rules_editable", false) and s.get("rule_list", {}).get("rules", []).size() == rules_before + 1, "the planning wire: Add a rule never landed a rule"):
+		return false
+	var slots: Array = _editor().get("rule_list", {}).get("slots", [])
+	var slot := -1
+	for index in slots.size():
+		if String(slots[index].get("state", "")) == "empty" and int(slots[index].get("rule", -1)) == rules_before and slots[index].get("pickable", false):
+			slot = index
+	if slot < 0:
+		_failures.append("the planning wire: the new rule has no empty slot for the picker: %s" % [slots])
+		return false
+	before = _count(_editor(), "revision")
+	if not vista.bridge.editor_choose_group(slot, String(slots[slot].get("pointer", "")), int(_editor().get("rules_rendering", -1)), 0):
+		_failures.append("the planning wire: the group pick was refused: %s" % _editor().get("status_key", ""))
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and s.get("rules_editable", false), "the planning wire: the group never landed"):
+		return false
+	if not ("\"all\"" in vista.bridge.editor_bytes().get_string_from_utf8()):
+		_failures.append("the planning wire: the group pick wrote no `all`")
+	var remove: Button = null
+	for button in editor._rules_box.find_children("*", "Button", true, false):
+		if (button as Button).has_meta("rule_remove") and int(button.get_meta("rule_remove")) == rules_before:
+			remove = button
+	if remove == null:
+		_failures.append("the planning wire: the new rule has no Remove button")
+		return false
+	before = _count(_editor(), "revision")
+	remove.pressed.emit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and s.get("rules_editable", false) and s.get("rule_list", {}).get("rules", []).size() == rules_before, "the planning wire: Remove never took the rule out"):
+		return false
+	# A wall on the seat's core, by two ground clicks beside the commander.
+	var core := ""
+	for beacon in vista.beacons():
+		if String(beacon["owner"]) == vista.my_seat:
+			core = String(beacon["id"])
+	vista.bridge.editor_describe_beacon(core)
+	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("beacon_detail", {}).get("id", "")) == core, "the planning wire: the core's detail never came"):
+		return false
+	# The core's settings in the gateway's words: a choice by its title, a number in its unit.
+	editor._visit_beacon = core
+	editor._visit_drawn = ""
+	editor._fill_visit_menu(_editor())
+	var drawn: Array[String] = []
+	for submenu in editor._visit_submenus:
+		for item in (submenu as PopupMenu).item_count:
+			drawn.append((submenu as PopupMenu).get_item_text(item))
+	for setting in _editor().get("beacon_detail", {}).get("settings", []):
+		var said := Strings.text("menu_setting", {"title": setting.get("title", ""), "value": editor.setting_value_text(setting)})
+		if not drawn.has(said) or "\"" in said:
+			_failures.append("the planning wire: the setting `%s` is not drawn in the gateway's words: %s" % [said, drawn])
+	var blueprints: Array = _editor().get("vocabulary", {}).get("blueprints", [])
+	var wall := -1
+	for index in blueprints.size():
+		if String(blueprints[index].get("anchor_shape", "")) == "box":
+			wall = index
+	var at: Vector3i = vista.my_commander_at()
+	before = _count(_editor(), "revision")
+	if wall < 0 or not vista.bridge.editor_visit_row(core, "add_target", wall):
+		_failures.append("the planning wire: Add a build target took no wall: %s" % _editor().get("status_key", ""))
+		return false
+	vista.bridge.editor_pick({"voxel": at + Vector3i(2, 2, 0)})
+	vista.bridge.editor_pick({"voxel": at + Vector3i(4, 3, 0)})
+	if not await _editor_until(func(s: Dictionary) -> bool: return (_count(s, "revision") > before or String(s.get("status_key", "")) == "gateway_refused") and not s.get("busy", true) and not s.get("pending", true), "the planning wire: the wall's box never came"):
+		return false
+	if not ("\"wall_box\"" in vista.bridge.editor_bytes().get_string_from_utf8()):
+		_failures.append("the planning wire: the wall's row holds no box: %s %s" % [_editor().get("status_key", ""), _editor().get("status_detail", "")])
+	# The Queue's own list.
+	var queued: Array = _editor().get("vocabulary", {}).get("queue_blueprints", [])
+	editor._visit_beacon = core
+	editor.open_entry_list(editor.ITEM_LIST_QUEUE, _editor().get("vocabulary", {}).get(String(editor.ENTRY_LISTS[editor.ITEM_LIST_QUEUE][1]), []), Rect2(Vector2(200, 300), Vector2(180, 200)))
+	await get_tree().process_frame
+	if editor.entry_rows().size() != queued.size() or queued.is_empty():
+		_failures.append("the planning wire: Queue a structure lists %d rows of the Queue's %d" % [editor.entry_rows().size(), queued.size()])
+	editor._entry_popup.hide()
+	# Undo takes every one of them back to the committed bytes.
+	while _count(_editor(), "undo_depth") > depth:
+		var undone := _count(_editor(), "undo_depth")
+		vista.bridge.editor_undo()
+		if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "undo_depth") < undone and not s.get("busy", true) and not s.get("pending", true), "the planning wire: Undo never came back"):
+			return false
+	if vista.bridge.editor_bytes() != original:
+		_failures.append("the planning wire: Undo did not give the committed bytes back")
+	print("[watch-check] the planning wire: a duration typed in seconds landed, titles drawn, a rule added, filled with a group and removed, a wall's box composed, the Queue's own list, all undone")
+	return true
+
+
+## The rule-list chip whose pointer ends in `suffix`, by its index, or -1.
+func _chip_at(state: Dictionary, suffix: String) -> int:
+	var chips: Array = state.get("rule_list", {}).get("chips", [])
+	for index in chips.size():
+		if String(chips[index].get("pointer", "")).ends_with(suffix):
+			return index
+	return -1
+
+
+## The rule list's button carrying the meta `meta`, or null.
+func _rule_button(meta: String) -> Button:
+	for button in editor._rules_box.find_children("*", "Button", true, false):
+		if (button as Button).has_meta(meta):
+			return button
+	return null
 
 
 func _state() -> Dictionary:
