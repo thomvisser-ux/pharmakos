@@ -472,6 +472,7 @@ const GROWS: &[&str] = &[
     "sim:mandate.rs::building_work",
     "sim:world.rs::queue_target",
     "sim:world/site.rs::check_wall",
+    "gateway:surface/planning.rs::sized_wall",
     "sim:world/site.rs::wall_voxel",
     "sim:world/site.rs::refill_voxel",
     "sim:world/site.rs::build_job",

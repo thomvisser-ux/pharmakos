@@ -1,0 +1,24 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Lane `srvy`, seat 0: deploy a Survey beacon beside the core, two scouts,
+// one probe area over the enemy's corner of the map, far more ground than two
+// scouts scan in three Pushes. See survey-keeps-a-core-fresh.scenario.jsonc.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Keep watch", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "watch_post", "timeout_ms": 30000,
+        "place_beacon": {"at": {"voxel": {"x": 360, "y": 30, "z": 36}},
+          "initial": {"priority": "NORMAL", "mandate": {"survey": {
+            "probe_areas": [{"min": {"x": 200, "y": 240, "z": 0}, "max": {"x": 383, "y": 383, "z": 63}}],
+            "scout_count": 2}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

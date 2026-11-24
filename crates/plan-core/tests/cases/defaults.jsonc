@@ -1,0 +1,25 @@
+// defaults.jsonc - values left at their proto3 defaults where the prose still
+// shows their words (S3's `fixq`, items 11 and 14): each is a chip whose edit
+// adds the value, and a default outside its shape says so. Not a playbook the
+// verifier accepts, on purpose.
+{ "schema_version": {"major":1},
+  "meta": {"title":"Defaults","author_kind":"HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      // a hold of nothing, below the verifier's least of 1 ms
+      {"label":"wait","hold":{}}
+    ],
+    "handlers": [
+      {"id":"thin","when":{"all":{"items":[
+        {"cmdr_hp_pct":{"cmp":"LE"}},
+        {"segment_elapsed":{"ms":{}}},
+        {"beacon_has_structure":{"beacon":{"safest":{}}}},
+        {"beacon_powered":{"beacon":{"safest":{}}}},
+        {"rule_fired":{}}
+      ]}},"body":[{"label":"rest","hold":{"ms":1000}}],"resume":"CONTINUE"}
+    ]
+  },
+  "on_death": {"on_respawn":"CONTINUE"},
+  "fallback": {"hold":{"at":{"beacon_anchor":{"safest":{}}}}}
+}

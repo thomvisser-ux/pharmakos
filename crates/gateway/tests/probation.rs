@@ -1315,7 +1315,9 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
             &call(surface, &token, "get_vocabulary", "{}"),
             "get_vocabulary",
         );
-        array_of(&words, "blueprints")
+        // The Spire is queued, never a Build target's, so its licence lock
+        // is on the Queue's own list (S3's `fixq`, item 5).
+        array_of(&words, "queue_blueprints")
             .into_iter()
             .find(|entry| text_of(entry, "name") == "resonance_spire")
             .expect("the Spire is listed")

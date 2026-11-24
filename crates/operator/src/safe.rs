@@ -111,8 +111,8 @@ pub(crate) struct SafePlan {
 /// With no core to deepen and nothing to raise it **is** that instantiation,
 /// and costs no call. Otherwise it is one instantiate with the route and one
 /// FULL verify; a route that did not qualify falls back to the template's own
-/// value, which is the gateway's own fallback and qualifies
-/// (`the_gateways_fallback_is_the_safe_template_with_nothing_raised`).
+/// value, which qualifies: the same text the gateway embeds and instantiates
+/// with no parameters as its own fallback.
 ///
 /// `None` when the library has no Safe Playbook template: the gateway then
 /// files its own fallback, which is that template with nothing raised.

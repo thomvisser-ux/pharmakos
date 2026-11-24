@@ -274,14 +274,36 @@ pub fn value_shape(shape: &pharmakos_plan_core::shape::Shape) -> pharmakos_proto
                 entries.push((String::from("max"), Json::Number(max.to_string())));
             }
             entries.push((String::from("unit"), Json::String((*unit).to_owned())));
+            // Always written, as `unit` is: the unit the client shows the value
+            // in and `set_value_text` reads typed text in (S3's `fixq`).
+            entries.push((
+                String::from("display_unit"),
+                Json::String(pharmakos_plan_core::shape::display_unit(unit).to_owned()),
+            ));
             ("integer", Json::Object(entries))
         }
-        Shape::Choice { values } => (
+        Shape::Choice { options } => (
             "choice",
-            Json::Object(vec![(
-                String::from("values"),
-                Json::Array(values.iter().cloned().map(Json::String).collect()),
-            )]),
+            Json::Object(vec![
+                (
+                    String::from("values"),
+                    Json::Array(
+                        options
+                            .iter()
+                            .map(|option| Json::String(option.json.clone()))
+                            .collect(),
+                    ),
+                ),
+                (
+                    String::from("titles"),
+                    Json::Array(
+                        options
+                            .iter()
+                            .map(|option| Json::String(option.title.to_owned()))
+                            .collect(),
+                    ),
+                ),
+            ]),
         ),
         Shape::Reference { kind, arms } => (
             "reference",

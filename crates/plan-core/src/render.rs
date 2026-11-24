@@ -71,13 +71,21 @@
 //! marks where a value already stands, so the prose goldens do not move, and
 //! the chips have a golden of their own (`expected.chips.txt`).
 //!
-//! **A chip is a value the file writes.** Its pointer is the path of a JSON
-//! Patch `replace`, which needs a member to replace, and a proto3 value at its
-//! default may be absent from the file: so a value is chipped when it is not
-//! at its default, or when its field carries presence (an `optional` field, a
-//! message), and never otherwise. A value the prose does not show (a step's
-//! label, a rule's id, a note) is no chip, and neither is a list, a wall's
-//! box, an Attack's staging voxel or a selector's filter, which no one
+//! **A chip is a value the prose shows.** A proto3 value at its default may be
+//! absent from the file, so each chip names the JSON Patch op its edit sends
+//! ([`Chip::pick`]): `replace` for a value the file writes (one not at its
+//! default, or a field with presence: an `optional` field, a message), and
+//! `add` for one at its default whose words the sentence shows ("hold for
+//! 0 s", "rule \"\" has fired"), because an `add` of an object member writes
+//! it where it is absent and replaces it where it is written (S3's `fixq`,
+//! item 11: before, a default had words and no chip, so a predicate whose
+//! skeleton held a default lost that parameter after a pick). A chip also
+//! says, from its shape, whether its value lies outside it ([`Chip::outside`])
+//! and, for an integer, how the value is shown and typed
+//! ([`Chip::value_text`]), so the client compares and converts nothing. A
+//! value the prose does not show (a step's label, a rule's id, a note, a
+//! setting a clause leaves out at zero) is no chip, and neither is a list, a
+//! wall's box, an Attack's staging voxel or a selector's filter, which no one
 //! [`crate::shape::Shape`] describes. The tail blocks (the death limit, the
 //! fallback, the options) are no rule or step, so they carry none.
 //!
@@ -99,11 +107,12 @@
 //! so they move neither the prose nor the chips; they have a golden of their
 //! own (`expected.slots.txt`). A slot holding a group lists its items after
 //! it, so a leaf under an `all` is a slot too. Its pointer is in the canonical
-//! `snake_case` spelling, as a chip's is: in a file that writes the member
-//! in its camelCase JSON name, `patch_plan` refuses a patch at the pointer
-//! rather than write the field a second time ([`crate::patch`]), and a
-//! pointer under such a member finds nothing. Making those files editable is
-//! owed (carried from `ed3b` part 1).
+//! `snake_case` spelling, as a chip's is, and that is every file's pointer: in
+//! a file that writes a member under its camelCase JSON name, `patch_plan`
+//! addresses the member the file writes, under the file's spelling, so an edit
+//! at a chip's or a slot's pointer lands on it and never writes the field a
+//! second time ([`crate::patch`]'s `as_the_file_spells`, S3's `vfyq2`;
+//! `tests/edits.rs`' `a_camel_case_file_edits_through_its_chips_and_slots`).
 
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::{
@@ -166,7 +175,8 @@ pub struct RenderedRule {
 pub struct ConditionSlot {
     /// The `gp.v1.Condition`'s JSON Pointer, whether or not the file writes
     /// it: an empty slot's is where a JSON Patch `add` puts one. Canonical
-    /// `snake_case`, as a chip's.
+    /// `snake_case`, as a chip's, which `patch_plan` addresses under whichever
+    /// spelling the file writes.
     pub pointer: String,
     /// The slot in the player's words ([`crate::strings`]'s `SLOT_*`).
     pub title: String,
@@ -245,6 +255,20 @@ pub struct Chip {
     pub shape: Shape,
     /// The value now, as JSON text in the canonical spelling.
     pub value_json: String,
+    /// For an integer shape, the value now as it is shown and typed, in the
+    /// shape's display unit ([`Shape::display_unit`]): `"1.5"` for a value of
+    /// 1500 ms, `"40"` for 40 %. Empty for a choice or a reference.
+    pub value_text: String,
+    /// Whether the value now lies outside its shape: an integer past a
+    /// bound, or a choice's value the choice does not list (an enum's
+    /// unspecified zero, a value this build does not name). Such a chip is
+    /// drawn as it is and said to be outside, never clamped.
+    pub outside: bool,
+    /// The JSON Patch op an edit of this chip sends at its pointer:
+    /// [`PickOp::Replace`] for a value the file writes, and [`PickOp::Add`] for
+    /// one at its proto3 default, which the file may leave out (an `add` of an
+    /// object member writes it, or replaces it where it is written).
+    pub pick: PickOp,
 }
 
 /// Renders a playbook as English prose.
@@ -370,10 +394,17 @@ impl Slot {
 }
 
 /// A blueprint id the file writes, as a chip over `slot`'s choices; an
-/// absent one (proto3's empty default) as the words alone.
+/// absent one (proto3's empty default) as a [`default_chip`] holding the
+/// empty id, which no choice lists, under the words that say no kind is
+/// named (S3's `fixq`, item 11: before, it was no words and no chip).
 fn blueprint_chip(id: &str, pointer: String, slot: Slot) -> Text {
     if id.is_empty() {
-        return Text::default();
+        return default_chip(
+            s::STRUCTURE_NONE,
+            pointer,
+            Spec::Blueprint(slot),
+            Value::text(id),
+        );
     }
     chip(
         escaped(id).as_str(),
@@ -428,6 +459,7 @@ struct Mark {
     pointer: String,
     spec: Spec,
     value: Value,
+    op: PickOp,
 }
 
 /// Words, with the chips among them.
@@ -512,8 +544,21 @@ macro_rules! cat {
     }};
 }
 
-/// `shown`, as one chip.
+/// `shown`, as one chip of a value the file writes: an edit replaces it.
 fn chip(shown: &str, pointer: String, spec: Spec, value: Value) -> Text {
+    marked(shown, pointer, spec, value, PickOp::Replace)
+}
+
+/// `shown`, as one chip of a value at its proto3 default, which the file may
+/// leave out: an edit adds it (S3's `fixq`, item 11). The words are the ones
+/// the prose wrote for the default before it was a chip, so the prose does
+/// not move.
+fn default_chip(shown: &str, pointer: String, spec: Spec, value: Value) -> Text {
+    marked(shown, pointer, spec, value, PickOp::Add)
+}
+
+/// `shown`, as one chip whose edit sends `op`.
+fn marked(shown: &str, pointer: String, spec: Spec, value: Value, op: PickOp) -> Text {
     let chars = shown.chars().count();
     Text {
         words: shown.to_owned(),
@@ -524,6 +569,7 @@ fn chip(shown: &str, pointer: String, spec: Spec, value: Value) -> Text {
             pointer,
             spec,
             value,
+            op,
         }],
         fault: None,
     }
@@ -578,6 +624,7 @@ struct Placed {
     pointer: String,
     spec: Spec,
     value: Value,
+    op: PickOp,
 }
 
 /// A rule or step whose chips are placed and not yet written.
@@ -714,12 +761,18 @@ impl Pending {
                     })?,
                     Spec::Blueprint(slot) => slot.shape(kinds),
                 };
+                let value_json = placed.value.json()?;
+                let (value_text, outside) = held(&shape, &value_json)
+                    .map_err(|why| Error::at(placed.pointer.clone(), why))?;
                 Ok(Chip {
                     line: placed.line,
                     start: span(placed.start)?,
                     end: span(placed.end)?,
                     shape,
-                    value_json: placed.value.json()?,
+                    value_json,
+                    value_text,
+                    outside,
+                    pick: placed.op,
                     pointer: placed.pointer,
                 })
             })
@@ -731,6 +784,33 @@ impl Pending {
             chips,
             slots: self.slots,
         })
+    }
+}
+
+/// A chip's value as it is shown and typed (empty unless its shape is an
+/// integer) and whether it lies outside its shape, read off the value's JSON
+/// text and the shape alone, so the client draws both as sent and compares
+/// nothing (S3's `fixq`, items 7 and 14).
+///
+/// # Errors
+///
+/// An integer shape whose value is not a whole number: this crate writing a
+/// chip it cannot read, which never happens.
+fn held(shape: &Shape, value_json: &str) -> Result<(String, bool), &'static str> {
+    match shape {
+        Shape::Integer { min, max, unit } => {
+            let value: i64 = value_json
+                .parse()
+                .map_err(|_| s::RENDER_CHIP_NOT_A_NUMBER)?;
+            let outside = min.is_some_and(|min| value < i64::from(min))
+                || max.is_some_and(|max| value > i64::from(max));
+            Ok((crate::shape::shown_text(unit, value), outside))
+        }
+        Shape::Choice { options } => Ok((
+            String::new(),
+            !options.iter().any(|option| option.json == value_json),
+        )),
+        Shape::Reference { .. } => Ok((String::new(), false)),
     }
 }
 
@@ -947,7 +1027,11 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
 /// no member to replace, so it is words alone, as [`nonzero_duration`]'s are.
 fn hold_body(ms: i32, ms_at: &str) -> Text {
     if ms == 0 {
-        cat!(s::STEP_HOLD, " ", duration(Ms::new(ms)))
+        cat!(
+            s::STEP_HOLD,
+            " ",
+            default_duration_chip(ms_at.to_owned(), Some(1))
+        )
     } else {
         cat!(
             s::STEP_HOLD,
@@ -1003,7 +1087,12 @@ fn guards(entry: &Step, here: &str) -> Vec<Text> {
 fn label_chip(label: &str, pointer: String, kind: ReferenceKind) -> Text {
     let shown = format!("\"{}\"", escaped(label));
     if label.is_empty() {
-        return cat!(shown);
+        return default_chip(
+            &shown,
+            pointer,
+            Spec::Ready(Shape::reference(kind, &[])),
+            Value::text(label),
+        );
     }
     chip(
         &shown,
@@ -1064,19 +1153,10 @@ fn row_sentence(row: &InterfaceRow, here: &str) -> Text {
                 at(&target_at, "anchor"),
                 &arms,
             );
-            // A wall's box is named as the author wrote it, corner to corner
-            // (S2's plan, task `con4`); whether it is legal is the verifier's.
-            let wall_box = target
-                .and_then(|target| target.wall_box.as_ref())
-                .map_or_else(String::new, |area| {
-                    format!(
-                        ", {} {} {} {}",
-                        s::WALL_BOX_FROM,
-                        corner(area.min.as_ref()),
-                        s::WALL_BOX_TO,
-                        corner(area.max.as_ref())
-                    )
-                });
+            let wall_box = match target {
+                Some(target) => box_words(target),
+                None => String::new(),
+            };
             cat!(s::ROW_ADD_TARGET, " ", blueprint, " at ", anchor, wall_box)
         }
         Some(interface_row::Row::RemoveBuildTarget(remove)) => cat!(
@@ -1098,6 +1178,51 @@ fn row_sentence(row: &InterfaceRow, here: &str) -> Text {
             )
         ),
     }
+}
+
+/// A Build target as one sentence for a player: its blueprint's name in the
+/// player's words, where it stands, and a wall's box, from the same pieces the
+/// prose's `add a build target` row is written with ("Generator at a spot on
+/// Heat vent (120, 88)", "Wall at voxel 30, 40, 5, filling the box from voxel
+/// 30, 40, 0 to voxel 38, 40, 7"). A blueprint id this build does not know is
+/// quoted as written, and an absent one is said to name no kind (S3's `fixq`,
+/// item 6: `get_beacon`'s `build_target_lines`, which the Remove list draws in
+/// place of an anchor's JSON).
+#[must_use]
+pub fn target_line(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
+    let kinds = crate::vocabulary::blueprints_by_slot();
+    let name = if target.blueprint_id.is_empty() {
+        s::STRUCTURE_NONE.to_owned()
+    } else {
+        match kinds.iter().find(|kind| kind.id == target.blueprint_id) {
+            Some(kind) => kind.title.to_owned(),
+            None => format!(
+                "{} \"{}\"",
+                s::FEATURE_NOUN_BLUEPRINT,
+                escaped(&target.blueprint_id)
+            ),
+        }
+    };
+    format!(
+        "{name} at {}{}",
+        location(target.anchor.as_ref()),
+        box_words(target)
+    )
+}
+
+/// A wall target's box, named as the author wrote it, corner to corner (S2's
+/// plan, task `con4`), after a comma; nothing for a target with no box.
+/// Whether it is legal is the verifier's.
+fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
+    target.wall_box.as_ref().map_or_else(String::new, |area| {
+        format!(
+            ", {} {} {} {}",
+            s::WALL_BOX_FROM,
+            corner(area.min.as_ref()),
+            s::WALL_BOX_TO,
+            corner(area.max.as_ref())
+        )
+    })
 }
 
 /// What a Defend or an Attack arm writes, as a clause after its writ: empty
@@ -1387,24 +1512,31 @@ fn priority_chip(value: i32, pointer: String) -> Text {
 // Chips of one kind
 // ---------------------------------------------------------------------------
 
-/// An enum's words, as a chip of the schema's values when the file writes a
-/// value the schema names; the words alone for the unspecified zero or a
-/// number the schema does not name, which are the verifier's to refuse and
-/// which no `replace` should keep.
+/// An enum's words, as a chip of the schema's values. A value the schema
+/// names is written by its name; the unspecified zero is the proto3 default,
+/// which the file may leave out, so its chip is a [`default_chip`] holding the
+/// zero's name; a number the schema does not name is written as the number.
+/// Neither of the last two is one of the choice's values, so each chip says it
+/// is outside its shape ([`Chip::outside`]), and both are the verifier's to
+/// refuse (S3's `fixq`, items 11 and 14).
 fn enum_chip(words: &str, value: i32, pointer: String, full_name: &'static str) -> Text {
-    let named = pharmakos_proto::descriptor::schema()
+    let declared = pharmakos_proto::descriptor::schema()
         .enumeration(full_name)
-        .and_then(|declared| declared.value_by_number(value))
-        .filter(|declared| declared.number != 0);
-    if let Some(declared) = named {
-        chip(
+        .and_then(|declared| declared.value_by_number(value));
+    match declared {
+        Some(declared) if declared.number == 0 => default_chip(
             words,
             pointer,
             Spec::Choice(full_name),
             Value::name(&declared.name),
-        )
-    } else {
-        cat!(words)
+        ),
+        Some(declared) => chip(
+            words,
+            pointer,
+            Spec::Choice(full_name),
+            Value::name(&declared.name),
+        ),
+        None => chip(words, pointer, Spec::Choice(full_name), Value::int(value)),
     }
 }
 
@@ -1427,6 +1559,17 @@ fn duration_chip(ms: i32, pointer: String, least: Option<i32>) -> Text {
         pointer,
         Spec::Ready(Shape::integer(least, None, crate::shape::UNIT_MS)),
         Value::int(ms),
+    )
+}
+
+/// [`duration_chip`] of a duration at its proto3 zero, which the file may
+/// leave out ([`default_chip`]).
+fn default_duration_chip(pointer: String, least: Option<i32>) -> Text {
+    default_chip(
+        &duration(Ms::new(0)),
+        pointer,
+        Spec::Ready(Shape::integer(least, None, crate::shape::UNIT_MS)),
+        Value::int(0),
     )
 }
 
@@ -1780,7 +1923,12 @@ fn cmdr_hp(test: pharmakos_proto::gp::v1::CmdrHpPct, here: &str) -> Text {
         ),
         " ",
         if test.pct == 0 {
-            cat!(test.pct.to_string())
+            default_chip(
+                &test.pct.to_string(),
+                at(here, "pct"),
+                Spec::Ready(Shape::percent()),
+                Value::int(test.pct),
+            )
         } else {
             int_chip(test.pct, at(here, "pct"), Shape::percent())
         },
@@ -1798,7 +1946,12 @@ fn beacon_powered(test: &pharmakos_proto::gp::v1::BeaconPowered, here: &str) -> 
             Value::int(true),
         )
     } else {
-        cat!(s::DORMANT)
+        default_chip(
+            s::DORMANT,
+            at(here, "powered"),
+            Spec::Ready(Shape::boolean()),
+            Value::int(false),
+        )
     };
     cat!(
         beacon_chip(test.beacon.as_ref(), at(here, "beacon"), &BEACON_ARMS),
@@ -1853,7 +2006,9 @@ fn enemy_structure(test: &pharmakos_proto::gp::v1::EnemyStructureNear, here: &st
                 blueprint_chip(id, at(here, "blueprint_id"), Slot::Standing)
             }
             Some(enemy_structure_near::Structure::AnyKind(_)) => cat!(s::ANY_STRUCTURE),
-            None => cat!(s::STRUCTURE_NONE),
+            // Neither arm is written: the `blueprint_id` arm at its default,
+            // which an edit adds.
+            None => blueprint_chip("", at(here, "blueprint_id"), Slot::Standing),
         },
         " within ",
         radius_chip(test.radius_voxels, at(here, "radius_voxels")),
@@ -1875,7 +2030,12 @@ fn grid(lead: &str, test: Option<pharmakos_proto::gp::v1::IntCompare>, here: &st
 /// A `uint32` radius in voxels, as a chip when it is written.
 fn radius_chip(radius: u32, pointer: String) -> Text {
     if radius == 0 {
-        cat!(radius.to_string())
+        default_chip(
+            &radius.to_string(),
+            pointer,
+            Spec::Ready(Shape::integer(Some(1), None, UNIT_VOXELS)),
+            Value::int(radius),
+        )
     } else {
         // The verifier refuses a radius of 0 (`E0101`, S3's `vfy6`).
         int_chip(radius, pointer, Shape::integer(Some(1), None, UNIT_VOXELS))
@@ -1885,7 +2045,7 @@ fn radius_chip(radius: u32, pointer: String) -> Text {
 /// A duration the verifier refuses below zero, as a chip when it is written.
 fn nonzero_duration(ms: i32, pointer: String) -> Text {
     if ms == 0 {
-        cat!(duration(Ms::new(ms)))
+        default_duration_chip(pointer, Some(0))
     } else {
         duration_chip(ms, pointer, Some(0))
     }
@@ -1934,7 +2094,7 @@ fn fresh_words(window: Option<&Freshness>, here: &str) -> Text {
             // The verifier refuses a window of 0 under KNOWN_WITHIN (`E0209`)
             // and a negative one (`E0109`), S3's `vfy6`.
             if window.known_within_ms == 0 {
-                cat!(duration(Ms::new(0)))
+                default_duration_chip(at(here, "known_within_ms"), Some(1))
             } else {
                 duration_chip(window.known_within_ms, at(here, "known_within_ms"), Some(1))
             }
@@ -1992,7 +2152,12 @@ fn op_chip(test: pharmakos_proto::gp::v1::IntCompare, here: &str) -> Text {
 /// An `IntCompare`'s value, as a chip when it is written.
 fn value_chip(test: pharmakos_proto::gp::v1::IntCompare, here: &str, shape: Shape) -> Text {
     if test.value == 0 {
-        cat!(test.value.to_string())
+        default_chip(
+            &test.value.to_string(),
+            at(here, "value"),
+            Spec::Ready(shape),
+            Value::int(test.value),
+        )
     } else {
         int_chip(test.value, at(here, "value"), shape)
     }
@@ -2048,7 +2213,12 @@ fn compare_ms(test: Option<pharmakos_proto::gp::v1::IntCompare>, here: &str) -> 
         return cat!(s::CONDITION_NOTHING);
     };
     let shown = if test.value == 0 {
-        cat!(duration(Ms::new(test.value)))
+        default_chip(
+            &duration(Ms::new(test.value)),
+            at(here, "value"),
+            Spec::Ready(Shape::integer(None, None, crate::shape::UNIT_MS)),
+            Value::int(test.value),
+        )
     } else {
         chip(
             &duration(Ms::new(test.value)),
@@ -2144,26 +2314,31 @@ fn resume(rule: &Handler, here: &str) -> Text {
 /// between 1 and the rules table's ceiling (`E0107`) and the cooldown at or
 /// above its floor (`E0108`).
 fn firing(rule: &Handler, here: &str, limits: &Limits) -> Text {
-    let fires = if rule.max_fires == 0 {
-        cat!(rule.max_fires.to_string())
-    } else {
-        // The rules table's ceiling as the chip's `int32` bound; one the
-        // bound cannot hold is the table disagreeing with the wire, refused
-        // with the rendering (E22) rather than read as no ceiling.
-        if let Ok(most) = i32::try_from(limits.max_fires_max()) {
-            int_chip(
-                rule.max_fires,
+    // The rules table's ceiling as the chip's `int32` bound; one the bound
+    // cannot hold is the table disagreeing with the wire, refused with the
+    // rendering (E22) rather than read as no ceiling.
+    let fires = if let Ok(most) = i32::try_from(limits.max_fires_max()) {
+        let shape = Shape::integer(Some(1), Some(most), UNIT_COUNT);
+        if rule.max_fires == 0 {
+            default_chip(
+                &rule.max_fires.to_string(),
                 at(here, "max_fires"),
-                Shape::integer(Some(1), Some(most), UNIT_COUNT),
+                Spec::Ready(shape),
+                Value::int(rule.max_fires),
             )
         } else {
-            let mut text = cat!(rule.max_fires.to_string());
-            text.fail(s::RENDER_BOUND_PAST_RANGE);
-            text
+            int_chip(rule.max_fires, at(here, "max_fires"), shape)
         }
+    } else {
+        let mut text = cat!(rule.max_fires.to_string());
+        text.fail(s::RENDER_BOUND_PAST_RANGE);
+        text
     };
     let cooldown = if rule.cooldown_ms == 0 {
-        cat!(duration(Ms::new(rule.cooldown_ms)))
+        default_duration_chip(
+            at(here, "cooldown_ms"),
+            Some(limits.handler_cooldown_min_ms()),
+        )
     } else {
         duration_chip(
             rule.cooldown_ms,
@@ -2298,6 +2473,7 @@ fn line(depth: usize, text: Text, out: &mut Out) {
                 pointer: mark.pointer,
                 spec: mark.spec,
                 value: mark.value,
+                op: mark.op,
             }),
             _ => out.fail(s::RENDER_COUNT_PAST_RANGE),
         }

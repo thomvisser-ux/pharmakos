@@ -56,7 +56,7 @@ a contributor may always add the library's licence to a file below it (the check
 licence only above it), and the owner can move the line.
 
 *What passes.* `reuse` often reports more than one expression for a file (one from a manifest
-block, one from the file's header; `crates/gateway/src/host.rs`, `crates/client-gdext/tests/wizard.rs`,
+block, one from the file's header; `crates/client-gdext/tests/wizard.rs`,
 `scenarios/skeleton/against-easy.playbook.jsonc` and `tests/golden/vista/README.md` each have both).
 The check requires each expression a quoting file carries to be exactly one of three forms,
 `GPL-3.0-or-later`, `MIT OR Apache-2.0` or `GPL-3.0-or-later AND (MIT OR Apache-2.0)`, compared
@@ -162,9 +162,9 @@ has no entry for a file, or that the positive control failed.
 
 A positive control keeps "nothing found" from meaning "nothing looked at": the check fails
 unless it read more than 800 files, at least 5 library files and more than 100 word runs, and
-found each of eleven named files (the six template render goldens, the `instantiate_suggested`
-pair, `godot/fixtures/rule_list_render.json`, `scenarios/skeleton/against-easy.playbook.jsonc`
-and `crates/gateway/src/host.rs`) quoting the library and carrying the game's licence and the library's, so
+found each of ten named files (the six template render goldens, the `instantiate_suggested`
+pair, `godot/fixtures/rule_list_render.json` and `scenarios/skeleton/against-easy.playbook.jsonc`)
+quoting the library and carrying the game's licence and the library's, so
 the converse, which keys on those licences, cannot pass by finding nothing either.
 
 **`rules/`** is `MIT OR Apache-2.0` for the reason `proto/` is: `rules.v1.json`

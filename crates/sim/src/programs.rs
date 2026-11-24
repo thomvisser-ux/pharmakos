@@ -154,6 +154,10 @@ pub(crate) fn run_all(world: &mut World) {
     // Then every Attack beacon's force, and the charges whose fuses ran out
     // (S2's `atk`).
     crate::attack::update(world);
+    // Then every seat's Survey scouts, together, so a sighting goes to one
+    // scout and each scout's walk is checked against the sighting it gets
+    // (spec section 6's Survey row; `crate::survey`).
+    crate::survey::decide_scouts(world);
     let count = world.units().len();
     let mut unit: u32 = 0;
     while unit < count {
@@ -465,8 +469,13 @@ impl Program for ScoutProgram {
         if crate::defend::run_picket(world, unit) {
             return;
         }
-        // Scan, refresh, or idle at home: spec section 6's Survey row, in
-        // `crate::survey` (S2's `surv`).
+        // A Survey beacon's scout was decided with its seat's others before
+        // the programs ran (`crate::survey::decide_scouts`).
+        if crate::survey::is_survey_scout(world, crate::math::index::row(unit)) {
+            return;
+        }
+        // Any other scout: scan, refresh, or idle at home, decided alone, by
+        // the same rules (spec section 6's Survey row, in `crate::survey`).
         crate::survey::run_scout(world, unit);
     }
 }

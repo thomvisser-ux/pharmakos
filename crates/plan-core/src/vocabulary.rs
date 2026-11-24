@@ -80,8 +80,20 @@ pub struct Vocabulary {
     pub mandates: Vec<Entry>,
     /// The route steps.
     pub steps: Vec<Entry>,
-    /// The blueprints a Build target or a queued structure may name.
+    /// Every blueprint, as a Build target may name it: a kind a Build target
+    /// cannot name is locked in the verifier's sentence for `E0010`. Each
+    /// entry says how a target of it is anchored ([`Entry::anchor_shape`]).
     pub blueprints: Vec<Entry>,
+    /// Every blueprint, as a `queue_structure` row may name it: a kind no
+    /// queue takes is locked in the verifier's sentence for `E0009`, and a
+    /// queued kind whose licence the seat lacks is locked for that (S3's
+    /// `fixq`, item 5). Read from the one table the verifier's checks read,
+    /// [`blueprints_by_slot`].
+    pub queue_blueprints: Vec<Entry>,
+    /// The condition groups a picker may insert at a slot: `all`, `any` and
+    /// `not`, each with a skeleton whose item slots then take predicates
+    /// (S3's `fixq`, item 16).
+    pub groups: Vec<Entry>,
 }
 
 /// One condition family (`gp.api.v1.VocabularyFamily`).
@@ -111,6 +123,38 @@ pub struct Entry {
     pub skeleton_json: String,
     /// Why this seat cannot use it yet.
     pub locked: Option<String>,
+    /// For a Build target's blueprint entry, how a target of it is anchored;
+    /// `None` on every other entry.
+    pub anchor_shape: Option<AnchorShape>,
+}
+
+/// How a Build target naming a blueprint is anchored
+/// (`gp.api.v1.VocabularyEntry.AnchorShape`), read from the verifier's own
+/// table ([`pharmakos_verifier::BLUEPRINT_SLOTS`]' `anchor`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AnchorShape {
+    /// One place: a voxel, or `on` a feature.
+    Point,
+    /// A box the target fills, its anchor a voxel inside it: a wall.
+    Box,
+}
+
+impl AnchorShape {
+    /// The value's name in `gp.api.v1.VocabularyEntry.AnchorShape`.
+    #[must_use]
+    pub const fn proto_name(self) -> &'static str {
+        match self {
+            AnchorShape::Point => "POINT",
+            AnchorShape::Box => "BOX",
+        }
+    }
+
+    const fn of(anchor: pharmakos_verifier::Anchor) -> AnchorShape {
+        match anchor {
+            pharmakos_verifier::Anchor::VoxelOrFeature => AnchorShape::Point,
+            pharmakos_verifier::Anchor::VoxelInsideBox => AnchorShape::Box,
+        }
+    }
 }
 
 /// One parameter of an entry (`gp.api.v1.VocabularyParameter`).
@@ -135,7 +179,9 @@ pub fn vocabulary(held: &[Licence]) -> Result<Vocabulary, VocabularyError> {
         families: families(&kinds)?,
         mandates: mandates()?,
         steps: steps()?,
-        blueprints: blueprints(held, &kinds)?,
+        blueprints: blueprints(&kinds)?,
+        queue_blueprints: queue_blueprints(held, &kinds)?,
+        groups: groups(),
     })
 }
 
@@ -157,6 +203,8 @@ pub struct Blueprint {
     pub queued: bool,
     /// The licence a seat must hold to queue it, if any.
     pub licence: Option<Licence>,
+    /// How a Build target naming it is anchored.
+    pub anchor: AnchorShape,
 }
 
 impl Blueprint {
@@ -233,18 +281,20 @@ pub fn blueprints_by_slot() -> Vec<Blueprint> {
             build_target: row.build_target,
             queued: row.queued,
             licence: licence_for(row.kind),
+            anchor: AnchorShape::of(row.anchor),
         })
         .collect()
 }
 
-/// A choice over the ids of the `kinds` that `keep` picks.
+/// A choice over the ids of the `kinds` that `keep` picks, each titled with
+/// its name in the player's words.
 #[must_use]
 pub fn blueprint_choice(kinds: &[Blueprint], keep: impl Fn(&Blueprint) -> bool) -> Shape {
     Shape::Choice {
-        values: kinds
+        options: kinds
             .iter()
             .filter(|kind| keep(kind))
-            .map(Blueprint::json)
+            .map(|kind| crate::shape::Choice::new(kind.json(), kind.title))
             .collect(),
     }
 }
@@ -262,6 +312,7 @@ fn entry(
         parameters,
         skeleton_json: String::from(skeleton_json),
         locked: None,
+        anchor_shape: None,
     }
 }
 
@@ -273,6 +324,7 @@ fn reserved(title: &'static str, stage: &str) -> Entry {
         parameters: Vec::new(),
         skeleton_json: String::new(),
         locked: Some(format!("{} {stage}", s::VOCABULARY_FROM)),
+        anchor_shape: None,
     }
 }
 
@@ -963,30 +1015,49 @@ fn steps() -> Result<Vec<Entry>, VocabularyError> {
     ])
 }
 
-/// The blueprints a Build target or a queued structure may name, from
-/// [`blueprints_by_slot`]: a kind no slot takes is locked in the verifier's
-/// own sentence for a Build target's (`E0010`), and a kind only a queue takes
-/// is locked while the seat lacks its licence. The list cannot say which slot
-/// takes which kind (`gp.api.v1.VocabularyEntry` has no field for it), so a
-/// kind one slot takes is offered open and nothing is locked wrongly; the
-/// chips say it per slot.
+/// Every blueprint as a Build target may name it, from [`blueprints_by_slot`]:
+/// a kind the verifier refuses there is locked in its own sentence for
+/// `E0010`; every entry carries its [`AnchorShape`]. A licence locks no Build
+/// target: the one licensed kind, the Spire, is no Build target's.
 ///
 /// # Errors
 ///
 /// [`VocabularyError::NoRefusalText`] when the verifier's string table has
 /// no sentence for `E0010`.
-fn blueprints(held: &[Licence], kinds: &[Blueprint]) -> Result<Vec<Entry>, VocabularyError> {
+fn blueprints(kinds: &[Blueprint]) -> Result<Vec<Entry>, VocabularyError> {
     kinds
         .iter()
         .map(|kind| {
             let mut found = entry(kind.id, kind.title, Vec::new(), "");
-            if !kind.can_stand() {
-                let text = pharmakos_verifier::strings::text("E0010")
-                    .ok_or(VocabularyError::NoRefusalText("E0010"))?;
-                found.locked = Some(String::from(text.beginner));
-            } else if !kind.build_target
-                && kind.licence.is_some_and(|licence| !held.contains(&licence))
-            {
+            found.anchor_shape = Some(kind.anchor);
+            if kind.build_target {
+                found.skeleton_json = kind.json();
+            } else {
+                found.locked = Some(refusal("E0010")?);
+            }
+            Ok(found)
+        })
+        .collect()
+}
+
+/// Every blueprint as a `queue_structure` row may name it, from
+/// [`blueprints_by_slot`]: a kind the verifier refuses there is locked in its
+/// own sentence for `E0009`, and a queued kind whose licence the seat does
+/// not hold is locked for that (the verifier's `E0507`). A queue's entries
+/// carry no anchor shape: a queued structure stands where its fabricator is.
+///
+/// # Errors
+///
+/// [`VocabularyError::NoRefusalText`] when the verifier's string table has
+/// no sentence for `E0009`.
+fn queue_blueprints(held: &[Licence], kinds: &[Blueprint]) -> Result<Vec<Entry>, VocabularyError> {
+    kinds
+        .iter()
+        .map(|kind| {
+            let mut found = entry(kind.id, kind.title, Vec::new(), "");
+            if !kind.queued {
+                found.locked = Some(refusal("E0009")?);
+            } else if kind.licence.is_some_and(|licence| !held.contains(&licence)) {
                 found.locked = Some(String::from(s::VOCABULARY_NEEDS_SPIRE_LICENCE));
             } else {
                 found.skeleton_json = kind.json();
@@ -994,6 +1065,27 @@ fn blueprints(held: &[Licence], kinds: &[Blueprint]) -> Result<Vec<Entry>, Vocab
             Ok(found)
         })
         .collect()
+}
+
+/// The verifier's beginner sentence for `code`.
+fn refusal(code: &'static str) -> Result<String, VocabularyError> {
+    pharmakos_verifier::strings::text(code)
+        .map(|text| String::from(text.beginner))
+        .ok_or(VocabularyError::NoRefusalText(code))
+}
+
+/// The condition groups (`gp.v1.Condition`'s `all`, `any` and `not` arms): a
+/// group of two empty items, or of one, whose item slots the picker then
+/// fills with predicates (`render`'s condition slots list them). An empty
+/// item is a `Condition` with no arm, which the verifier refuses until it is
+/// picked, as it refuses an empty `when`. A group's items are slots and not
+/// values, so it lists no parameter.
+fn groups() -> Vec<Entry> {
+    vec![
+        entry("all", s::GROUP_ALL, Vec::new(), r#"{"items":[{},{}]}"#),
+        entry("any", s::GROUP_ANY, Vec::new(), r#"{"items":[{},{}]}"#),
+        entry("not", s::GROUP_NOT, Vec::new(), r#"{"item":{}}"#),
+    ]
 }
 
 #[cfg(test)]
@@ -1076,7 +1168,9 @@ mod tests {
             .flat_map(|family| &family.predicates)
             .chain(&words.mandates)
             .chain(&words.steps)
-            .chain(&words.blueprints);
+            .chain(&words.blueprints)
+            .chain(&words.queue_blueprints)
+            .chain(&words.groups);
         for entry in entries {
             assert_eq!(
                 entry.locked.is_some(),
@@ -1099,7 +1193,7 @@ mod tests {
         let spire = |held: &[Licence]| {
             vocabulary(held)
                 .expect("the vocabulary")
-                .blueprints
+                .queue_blueprints
                 .into_iter()
                 .find(|entry| entry.name == "resonance_spire")
                 .expect("the Spire")

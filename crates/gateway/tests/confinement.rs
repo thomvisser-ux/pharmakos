@@ -2634,3 +2634,66 @@ fn the_string_scan_reads_literals_as_the_compiler_does() {
     assert!(inner_run("does not                      define"));
     assert!(!inner_run("{\n  \"indented\": 1\n}"));
 }
+
+/// S3's `fixq`: `compose_wall_box` reads the frozen world in a Lull and steps
+/// nothing. Its body, comments aside, names no stepping, sealing or mutating
+/// call: no runner, no `host_mut`, no world accessor that writes, no voxel
+/// write path; only the sim's two read-only wall readers.
+#[test]
+fn compose_wall_box_reads_the_frozen_world_and_steps_nothing() {
+    let text = std::fs::read_to_string("src/surface/planning.rs").expect("planning.rs");
+    // The handler and the two helpers it alone calls.
+    let mut body: Vec<String> = Vec::new();
+    for (opening, closing) in [
+        (
+            "pub(super) fn compose_wall_box<",
+            "
+    }
+",
+        ),
+        (
+            "
+fn sized_wall(",
+            "
+}
+",
+        ),
+        (
+            "
+fn wall_target_json(",
+            "
+}
+",
+        ),
+    ] {
+        let start = text.find(opening).expect("the function is in planning.rs");
+        let rest = &text[start..];
+        let end = rest.find(closing).expect("its body ends");
+        body.extend(code_lines(&rest[..end]).into_iter().map(|(_, line)| line));
+    }
+    assert!(body.len() > 20, "the scan reads the handler: {body:?}");
+    for banned in [
+        "host_mut",
+        "runner(",
+        "Runner",
+        "_mut(",
+        "seal",
+        "phased",
+        ".tick(",
+        "crater",
+        ".set(",
+        "restore",
+        "snapshot(",
+    ] {
+        assert!(
+            !body.iter().any(|line| line.contains(banned)),
+            "compose_wall_box or its helpers name `{banned}`"
+        );
+    }
+    for read in ["site::ground_under_walls", "site::check_wall"] {
+        assert!(
+            body.iter().any(|line| line.contains(read)),
+            "compose_wall_box reads through `{read}`"
+        );
+    }
+}
