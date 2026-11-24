@@ -451,3 +451,90 @@ fn a_resume_reads_each_seal_once() {
     );
     drop(resumed);
 }
+
+/// The codec's work over one call of `method` by seat 0 with `playbook`, on a
+/// fresh match: the request is parsed and the vision built before the meter is
+/// read, so what is counted is the call's own reading and writing.
+fn work_of_call(match_id: &str, method: &str, params: &str) -> u128 {
+    let mut surface = new_match(match_id);
+    let token = seat_token(&mut surface, 0);
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(FIRST_LULL_MS - 50))
+        .expect("a custom match takes a countdown");
+    let request = support::request(method, params);
+    let sight = support::vision(&surface);
+    let _ = work::take();
+    let answer = surface.call(Some(&token), &request, &sight);
+    let counted = work::take();
+    assert!(answer.get("result").is_some(), "{method}: {answer:?}");
+    counted
+}
+
+/// `submit_plan` reads its playbook exactly as `verify_plan` at FULL does and
+/// takes no fingerprint of its own: the seal's is the report's, read as eight
+/// bytes. Its compile and its pricing read the same decode and write no text.
+#[test]
+fn a_submission_reads_its_text_as_a_full_verify_does() {
+    let probe = new_match("m-fpstream2-submit-probe");
+    let playbook = walk_east(&probe, 0, 4, 20);
+    let quoted = quote(&playbook);
+    let verified = work_of_call(
+        "m-fpstream2-submit-verify",
+        "verify_plan",
+        &format!("{{\"playbook_jsonc\":{quoted},\"depth\":\"full\"}}"),
+    );
+    let submitted = work_of_call(
+        "m-fpstream2-submit",
+        "submit_plan",
+        &format!("{{\"playbook_jsonc\":{quoted}}}"),
+    );
+    assert!(verified > 0, "a verify reads its text");
+    assert_eq!(
+        submitted, verified,
+        "a submission read or wrote the playbook's text other than its verify did"
+    );
+}
+
+/// The advised safe playbook is filed as a FULL verify reads it, and no
+/// fingerprint is taken beside the report's.
+#[test]
+fn an_advised_safe_playbook_reads_its_text_as_a_full_verify_does() {
+    let probe = new_match("m-fpstream2-advice-probe");
+    let playbook = walk_east(&probe, 0, 2, 10);
+    let verified = work_of_call(
+        "m-fpstream2-advice-verify",
+        "verify_plan",
+        &format!(
+            "{{\"playbook_jsonc\":{},\"depth\":\"full\"}}",
+            quote(&playbook)
+        ),
+    );
+    let mut surface = new_match("m-fpstream2-advice");
+    let _ = work::take();
+    surface
+        .file_advice(
+            SeatId::new(0),
+            pharmakos_gateway::advice::Advice {
+                safe_playbook_jsonc: playbook.clone(),
+                suggestions: Vec::new(),
+                start_here: None,
+            },
+        )
+        .expect("filed");
+    let filed = work::take();
+    assert_eq!(
+        filed, verified,
+        "filing an advised safe playbook read or wrote its text other than its verify did"
+    );
+    let advised = surface
+        .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
+        .expect("its own")
+        .advice
+        .as_ref()
+        .and_then(|advised| advised.safe.clone())
+        .expect("the advice qualified");
+    assert_eq!(
+        advised.plan_fingerprint(),
+        reference(advised.playbook_jsonc())
+    );
+}

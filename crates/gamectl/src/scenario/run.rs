@@ -1563,4 +1563,66 @@ mod tests {
             );
         }
     }
+
+    /// The harness door takes no fingerprint of its own: the codec's work over
+    /// `seal` is the request it writes and parses, the gateway's `submit_plan`
+    /// of the text, and the canonical form it compiles, each measured on its
+    /// own here, and nothing more.
+    #[test]
+    fn the_harness_door_reads_its_text_as_its_submission_and_compile_do() {
+        use pharmakos_gateway::fog::Blind;
+        use pharmakos_proto::json::{Json, work};
+        let source = root().join("scenarios/s2/mortar-breaks-wall.scenario.jsonc");
+        let scenario = crate::scenario::load(root(), &source).expect("a committed scenario");
+        let rules = super::load_rules(root(), &scenario).expect("its rules table");
+        let (seat, relative) = scenario
+            .seats
+            .iter()
+            .find_map(|seat| match &seat.kind {
+                super::SeatKind::Playbook(relative) => Some((seat.seat, relative.clone())),
+                _ => None,
+            })
+            .expect("a playbook seat");
+        let index = scenario
+            .seats
+            .iter()
+            .position(|held| held.seat == seat)
+            .expect("its index");
+
+        // The door, measured whole.
+        let mut surface = open(root(), &scenario, rules.clone()).expect("the match opens");
+        let tokens = super::mint(&mut surface, &scenario).expect("tokens");
+        let token = tokens.get(index).expect("its token");
+        let _ = work::take();
+        let door =
+            super::seal(root(), &mut surface, token, seat, &relative, false).expect("sealed");
+        let whole = work::take();
+        assert!(matches!(door, super::Door::Harness(_)), "{door:?}");
+
+        // Its parts, each on its own, on a second match opened the same way.
+        let playbook = crate::verify::read_bounded(&root().join(&relative))
+            .expect("readable")
+            .expect("under the cap");
+        let mut twin = open(root(), &scenario, rules).expect("the match opens");
+        let twins = super::mint(&mut twin, &scenario).expect("tokens");
+        let twin_token = twins.get(index).expect("its token");
+        let _ = work::take();
+        let params = pharmakos_proto::json::write(&Json::Object(vec![(
+            String::from("playbook_jsonc"),
+            Json::String(playbook.clone()),
+        )]));
+        let request = pharmakos_gateway::rpc::parse(&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"submit_plan","params":{params}}}"#
+        ))
+        .expect("a request");
+        let _ = twin.call(Some(twin_token), &request, &Blind);
+        let _ = pharmakos_plan_core::canonicalise_text(&playbook).expect("a canonical form");
+        let parts = work::take();
+        assert!(parts > 0, "the parts read the text");
+        assert_eq!(
+            whole, parts,
+            "the harness door read or wrote the playbook's text beyond its submission and its \
+             compile"
+        );
+    }
 }
