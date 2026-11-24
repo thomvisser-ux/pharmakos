@@ -1931,6 +1931,39 @@ fn the_manifest_declares_no_feature_and_takes_the_sim_without_default_features()
 /// host-side save calls, the save format's reader, or a resume. The names are
 /// allowed where they are defined and in `serve.rs`, the host loop that calls
 /// them.
+/// The surface's host-side save seams (`no_handler_reads_the_save_or_the_replay`).
+const SURFACE_SIDE: &[(&str, &str)] = &[
+    (
+        "take_persistence",
+        "what a Push's beginning and a segment's end leave for the disk is the host loop's",
+    ),
+    (
+        "lull_save",
+        "a Lull is saved by the host loop, on end of file",
+    ),
+    // Since S3's `gwu` the surface's resume is a method, reached as
+    // `.resume(` (the entry below, which also covers `Host::resume`); this
+    // one still blocks the path form, `Surface::resume(..)` or a
+    // `Surface::resume` handed around as a function value.
+    (
+        "Surface::resume",
+        "a surface is built over a save by the host loop's resume, and by nothing else",
+    ),
+    (".resume(", "a restore belongs to the match host"),
+    // Lane `opsave`: the last Push's feed and recap are put back by the
+    // one restore, `Surface::resume`, and by nothing a seat can reach.
+    (
+        "restore_last_push",
+        "the last Push is put back by the surface's resume, and by nothing else",
+    ),
+    // Its capture reads the whole bus, every seat's lines: what a save is
+    // built from (`saved_match`), never what a handler answers.
+    (
+        ".last_push(",
+        "the last Push is captured for a save, and by nothing a seat can reach",
+    ),
+];
+
 #[test]
 fn no_handler_reads_the_save_or_the_replay() {
     const CACHE_SIDE: &[(&str, &str)] = &[
@@ -1960,25 +1993,6 @@ fn no_handler_reads_the_save_or_the_replay() {
             "the save format is read by a resume, in the host loop",
         ),
     ];
-    const SURFACE_SIDE: &[(&str, &str)] = &[
-        (
-            "take_persistence",
-            "what a Push's beginning and a segment's end leave for the disk is the host loop's",
-        ),
-        (
-            "lull_save",
-            "a Lull is saved by the host loop, on end of file",
-        ),
-        // Since S3's `gwu` the surface's resume is a method, reached as
-        // `.resume(` (the entry below, which also covers `Host::resume`); this
-        // one still blocks the path form, `Surface::resume(..)` or a
-        // `Surface::resume` handed around as a function value.
-        (
-            "Surface::resume",
-            "a surface is built over a save by the host loop's resume, and by nothing else",
-        ),
-        (".resume(", "a restore belongs to the match host"),
-    ];
     // Exempted by their path under the crate, as `no_handler_can_file_advice`
     // does, so a file of the same name in a handler directory is scanned.
     const DEFINERS_AND_CALLER: &[&str] = &[
@@ -1986,6 +2000,7 @@ fn no_handler_reads_the_save_or_the_replay() {
         "src/save.rs",
         "src/serve.rs",
         "src/surface.rs",
+        "src/surface/last_push.rs",
         "src/host.rs",
     ];
     let mut needles: Vec<(&str, &str)> = CACHE_SIDE.to_vec();
@@ -2088,7 +2103,9 @@ fn surface_calls_no_save_seam(surface_text: &str, needles: &[(&str, &str)]) {
             if !uses(&line, needle) || definition.is_some() {
                 continue;
             }
-            if method != "resume" {
+            // The save's own builder captures the last Push for it.
+            let builds_the_save = *needle == ".last_push(" && method == "saved_match";
+            if method != "resume" && !builds_the_save {
                 called.push(format!(
                     "surface.rs:{number} (in `{method}`): `{needle}` -- {why}\n    {}",
                     line.trim()

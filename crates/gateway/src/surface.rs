@@ -136,6 +136,7 @@
 
 pub mod control;
 pub mod knowledge;
+pub mod last_push;
 pub mod plan_words;
 pub mod planning;
 pub mod watch;
@@ -143,7 +144,7 @@ pub mod watch;
 use crate::advice::Advice;
 use crate::audit::{AuditLog, Outcome};
 use crate::error::Error;
-use crate::feed::{Event, Kind, SegmentFeed, SnapshotId, Witnesses};
+use crate::feed::{Event, Kind, SegmentFeed, Witnesses};
 use crate::fog::{Audience, FogPolicy, Viewer, Vision};
 use crate::host::{Host, LiveVision, WorldSight};
 use crate::limit::{Limits, RateLimiter};
@@ -714,7 +715,7 @@ impl Surface {
             time: MatchTime::lobby(),
             tokens: TokenStore::new(),
             fog,
-            feed: SegmentFeed::new(SnapshotId::of(match_seed, 0, 0)),
+            feed: SegmentFeed::new(match_seed, 0, 0),
             audit: AuditLog::new(),
             limits: Limits::default(),
             limiters: Vec::new(),
@@ -1190,7 +1191,7 @@ impl Surface {
     /// Start a new segment: a new feed, a new snapshot, and every cursor from
     /// the old segment now stale.
     pub fn begin_segment(&mut self, round: u32, segment: u32) {
-        self.feed = SegmentFeed::new(SnapshotId::of(self.match_seed, round, segment));
+        self.feed = SegmentFeed::new(self.match_seed, round, segment);
         self.recycled.clear();
         // The anchor is the SIM's tick, never [`MatchTime::tick`]: an event's
         // `at_ms` is game milliseconds since the segment began, and the sim
