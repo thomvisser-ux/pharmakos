@@ -85,6 +85,10 @@ mod tests {
     /// open, before it is sent or the Ready line says why not.
     const READY_WAIT_US: u64 = 4 * KEEPALIVE_US;
 
+    /// Invariant 4's bound against a host that recovers: how long a "may have been taken" line
+    /// may stand once the host answers rightly again.
+    const RESOLVE_US: u64 = 6 * KEEPALIVE_US;
+
     /// A JSON-RPC answer with a footer: `extra` is the result's fields before `_status`.
     fn wire(id: i64, extra: &str) -> String {
         format!(
@@ -149,6 +153,7 @@ mod tests {
         let mut opened_at: BTreeMap<usize, u64> = BTreeMap::new();
         let mut answered_since_open: BTreeMap<usize, bool> = BTreeMap::new();
         let mut now = 0_u64;
+        let mut maybe_since: Option<u64> = None;
         for step in 0..STEPS {
             now = now.saturating_add(STEP_US);
             let healthy = temper == Temper::Recovering && now > 10_000_000;
@@ -310,6 +315,22 @@ mod tests {
                     }
                 }
             }
+            // Invariant 4, resolved: against a host that recovers, every "may have been taken"
+            // line (the editor's, the Ready line's) gives way within its bound once the host
+            // answers rightly.
+            let maybe = rig.editor().status().key == "call_maybe_taken"
+                || rig.ready_failed().map(|(name, _)| name) == Some("lost");
+            if maybe && healthy {
+                let since = *maybe_since.get_or_insert(now);
+                assert!(
+                    now.saturating_sub(since) <= RESOLVE_US,
+                    "seed {seed:#x} {temper:?} step {step}: true words: a \"may have been \
+                     taken\" line stood {} us against a host that recovered",
+                    now.saturating_sub(since)
+                );
+            } else {
+                maybe_since = None;
+            }
             // Invariant 2: no hang. A pressed Ready is sent, or its line says why, within its bound
             // of link-open time; and the editor never waits on a call that is not in flight.
             if let Some(waited) = watch.ready_waiting.as_mut() {
@@ -380,11 +401,20 @@ mod tests {
             "seed {seed:#x} step {step}: true words: {method} settled as {named}, not {cause}"
         );
         match purpose {
-            Purpose::Ready => assert_eq!(
-                rig.ready_failed().map(|(name, _)| name),
-                Some(cause),
-                "seed {seed:#x} step {step}: true words: the Ready line"
-            ),
+            Purpose::Ready => {
+                // A lost answer (unreadable, closed on, timed out) is "may have been taken" while
+                // Ready is sent again, then "lost each time"; any other cause is said as itself.
+                let lost = matches!(cause, "unreadable" | "closed_on" | "timed_out");
+                let said = rig.ready_failed().map(|(name, _)| name);
+                assert!(
+                    if lost {
+                        matches!(said, Some("lost" | "lost_spent"))
+                    } else {
+                        said == Some(cause)
+                    },
+                    "seed {seed:#x} step {step}: true words: the Ready line says {said:?} for {cause}"
+                );
+            }
             Purpose::Status => assert_eq!(
                 rig.status_facts
                     .failed

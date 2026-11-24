@@ -481,10 +481,20 @@ const SCHEDULING_SUMS: &[(&str, &str)] = &[
         "rig.rs",
         "let up_us = self.opened_at_us.map(|at| now_us.saturating_sub(at));",
     ),
+    // Fix pass 6: when a Ready whose answer was lost is sent again (the keep-alive's spacing).
+    (
+        "rig.rs",
+        "self.ready_resend_at = Some(self.timing.now_us().saturating_add(KEEPALIVE_US));",
+    ),
 ];
 
 /// The identifier each of [`SCHEDULING_SUMS`]'s lines assigns, for the one-line check.
-const SCHEDULING_IDENTIFIERS: &[&str] = &["keyframe_not_before_us", "retry_at_us", "up_us"];
+const SCHEDULING_IDENTIFIERS: &[&str] = &[
+    "keyframe_not_before_us",
+    "retry_at_us",
+    "up_us",
+    "ready_resend_at",
+];
 
 /// Whether `code`, a line of `file` in `src/`, is one of [`SCHEDULING_SUMS`], word for
 /// word once comments are stripped.

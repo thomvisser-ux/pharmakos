@@ -883,6 +883,10 @@ pub const ZERO_REFUSALS: u8 = 3;
 /// Ready line says the client is asking, and the read's refusal is said beside it.
 pub const STATUS_RETRIES: u8 = 3;
 
+/// How many times a Ready whose answer was lost is sent again before the Ready line says the
+/// answers were lost and asks the player to press Ready again (fix pass 6).
+pub const READY_RESENDS: u8 = 3;
+
 /// Where a phase's clock reports stand, for the seat's budget: a phase's first report
 /// moves no gateway tick, and every later one does (the module doc's "Not every clock
 /// answer moves the clock").
@@ -927,8 +931,13 @@ pub struct Rig {
     /// The editor request last sent: its method and arguments.
     plan_asking: String,
     /// Why this seat's Ready did not go through, for the Ready line (`ready_failed_<name>`,
-    /// and the words that fill it); cleared when Ready is pressed again or the phase moves.
+    /// and the words that fill it); cleared when Ready is pressed again, answered, or the phase
+    /// moves.
     ready_failed: Option<(&'static str, String)>,
+    /// A Ready whose answer was lost is sent again (`set_ready(true)` is idempotent): how many
+    /// times so far, up to [`READY_RESENDS`], and when the next may go (fix pass 6).
+    ready_resends: u8,
+    ready_resend_at: Option<u64>,
     /// How each sent call ended ([`Ledger`]).
     ledger: Ledger,
     /// The last call settled through [`Rig::unfinished`]: what it was for and its cause's name,
@@ -1023,6 +1032,8 @@ impl Rig {
             held_plans: Vec::new(),
             plan_asking: String::new(),
             ready_failed: None,
+            ready_resends: 0,
+            ready_resend_at: None,
             ledger: Ledger::default(),
             last_unfinished: None,
             admin_reread: None,
@@ -1370,6 +1381,15 @@ impl Rig {
         if !self.idle(SEAT) || self.seat_calls_left == 0 {
             return None;
         }
+        // A Ready whose answer was lost is sent again once its time has come (fix pass 6).
+        if let Some(at) = self.ready_resend_at
+            && self.timing.now_us() >= at
+        {
+            self.ready_resend_at = None;
+            if self.phase == Phase::Lull {
+                self.wants.ready = true;
+            }
+        }
         // A refused status read is asked again once the link has been quiet for the keep-alive
         // interval: spaced by the existing scheduling constant, never back to back.
         if self.status_retry_owed && self.timing.keepalive_due(SEAT) {
@@ -1674,7 +1694,13 @@ impl Rig {
             }
             Purpose::EndLull => self.wants.end_lull = false,
             Purpose::EndRecap => self.wants.end_recap = false,
-            Purpose::Ready => self.wants.ready = false,
+            Purpose::Ready => {
+                // Answered: the line follows the answer.
+                self.wants.ready = false;
+                self.ready_failed = None;
+                self.ready_resends = 0;
+                self.ready_resend_at = None;
+            }
             Purpose::Plan => {
                 self.editor.answered(Ok(result))?;
             }
@@ -1726,6 +1752,8 @@ impl Rig {
                 if link == SEAT {
                     self.status_facts.sealed = sealed;
                     self.status_retries = 0;
+                    // A submission whose answer was lost: its seal is read back here.
+                    self.editor.lost_resolved("submit");
                 }
                 self.status_facts.failed = None;
                 Ok(())
@@ -1822,12 +1850,18 @@ impl Rig {
             Purpose::Ready => {
                 self.wants.ready = false;
                 self.ready_sent = false;
-                self.ready_failed = Some((why.name(), said.clone()));
                 self.sync_door();
-                if lost {
-                    // It may have been taken: who is ready is read again.
-                    self.admin_reread = Some(purpose.word());
-                    self.forget_seal();
+                if lost && self.ready_resends < READY_RESENDS {
+                    // It may have been taken, and `set_ready(true)` is idempotent: sent again
+                    // once the link has been quiet for the keep-alive, and the line follows the
+                    // answer (fix pass 6: the line said "asking again" for ever).
+                    self.ready_resends = self.ready_resends.saturating_add(1);
+                    self.ready_resend_at = Some(self.timing.now_us().saturating_add(KEEPALIVE_US));
+                    self.ready_failed = Some(("lost", said.clone()));
+                } else if lost {
+                    self.ready_failed = Some(("lost_spent", said.clone()));
+                } else {
+                    self.ready_failed = Some((why.name(), said.clone()));
                 }
             }
             Purpose::Recap => {
@@ -2039,6 +2073,8 @@ impl Rig {
         self.status_retry_owed = false;
         // A new phase changes what the held view and the held editor request ask, and a Ready is
         // the new phase's.
+        self.ready_resends = 0;
+        self.ready_resend_at = None;
         self.held_view = None;
         self.held_plans.clear();
         self.ready_failed = None;
@@ -2161,6 +2197,8 @@ impl Rig {
     /// The human pressed Ready.
     pub fn ready(&mut self) {
         self.ready_failed = None;
+        self.ready_resends = 0;
+        self.ready_resend_at = None;
         if self.phase == Phase::Lull {
             self.wants.ready = true;
         }
@@ -3556,6 +3594,121 @@ mod tests {
         panic!("the rig never reached the Push");
     }
 
+    /// **A lost Ready answer is sent again, and the line follows the answer** (fix pass 6, item 2;
+    /// review 5's `p_ready_answer_lost`: the line said "asking again" for ever). `set_ready(true)`
+    /// is idempotent: an unreadable answer sends it again once the keep-alive has passed, the
+    /// line says it may have been taken meanwhile, and the next answer clears it; past
+    /// [`READY_RESENDS`] lost answers the line says so.
+    #[test]
+    fn a_lost_ready_answer_is_sent_again_and_the_line_follows_the_answer() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let schedule: Vec<(&str, u32)> = (0..8).map(|_| ("lull", 1)).collect();
+        let _ = drive(&mut rig, &schedule, &|_| false);
+        rig.ready();
+        let mut now = rig.timing.now_us();
+        let mut lost = 0;
+        let mut answered = false;
+        for _ in 0..600 {
+            now += 50_000;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(now) {
+                let text = if method_of(&frame) == "set_ready" && lost < 2 {
+                    lost += 1;
+                    format!(r#"{{"jsonrpc":"2.0","id":{}}}"#, id_of(&frame))
+                } else {
+                    if method_of(&frame) == "set_ready" {
+                        answered = true;
+                    }
+                    served(
+                        id_of(&frame),
+                        r#""next_cursor":"c9","complete":true,"#,
+                        "lull",
+                        1,
+                    )
+                };
+                let _ = rig.receive(frame.link, &text);
+                if lost > 0 && !answered && method_of(&frame) == "set_ready" {
+                    assert_eq!(rig.ready_failed().map(|(name, _)| name), Some("lost"));
+                }
+            }
+            if answered {
+                break;
+            }
+        }
+        assert!(answered, "a lost Ready answer was never sent again");
+        assert_eq!(
+            rig.ready_failed(),
+            None,
+            "the line does not follow the answer"
+        );
+        // Every answer lost: the bound is spent, and the line says so.
+        rig.ready();
+        let mut spent = false;
+        for _ in 0..2000 {
+            now += 50_000;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(now) {
+                let text = if method_of(&frame) == "set_ready" {
+                    format!(r#"{{"jsonrpc":"2.0","id":{}}}"#, id_of(&frame))
+                } else {
+                    served(
+                        id_of(&frame),
+                        r#""next_cursor":"c9","complete":true,"#,
+                        "lull",
+                        1,
+                    )
+                };
+                let _ = rig.receive(frame.link, &text);
+            }
+            if rig.ready_failed().map(|(name, _)| name) == Some("lost_spent") {
+                spent = true;
+                break;
+            }
+        }
+        assert!(
+            spent,
+            "the Ready line never said the answers were lost each time"
+        );
+    }
+
+    /// **An admin control whose answer was lost reads the phase again at once** (fix pass 6, item
+    /// 2): an unreadable `end_lull` answer has the admin link ask `get_status` on its next poll,
+    /// not a keep-alive later.
+    #[test]
+    fn a_lost_admin_control_reads_the_phase_again_at_once() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let schedule: Vec<(&str, u32)> = (0..8).map(|_| ("lull", 1)).collect();
+        let _ = drive(&mut rig, &schedule, &|_| false);
+        rig.end_lull();
+        let mut now = rig.timing.now_us();
+        let end = loop {
+            now += 50_000;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            let frames = rig.poll(now);
+            if let Some(frame) = frames.iter().find(|frame| method_of(frame) == "end_lull") {
+                break frame.clone();
+            }
+            for frame in frames {
+                let _ = rig.receive(frame.link, &served(id_of(&frame), "", "lull", 1));
+            }
+            assert!(now < 30_000_000, "end_lull never went out");
+        };
+        let _ = rig.receive(
+            end.link,
+            &format!(r#"{{"jsonrpc":"2.0","id":{}}}"#, id_of(&end)),
+        );
+        let next = rig.poll(now.saturating_add(1));
+        assert!(
+            next.iter()
+                .any(|frame| frame.link == ADMIN && method_of(frame) == "get_status"),
+            "the phase was not read again at once: {next:?}"
+        );
+    }
+
     /// **A Ready that did not go through is said, and pressing Ready again clears it** (fix pass
     /// 4, item 2; review 3's probe: a failed `set_ready` undid the player's Ready with nothing
     /// said).
@@ -3661,7 +3814,8 @@ mod tests {
             assert_eq!(resent, again, "{close:?}");
             if !again {
                 assert_eq!(rig.message_refusals()[0], [0, 1]);
-                assert_eq!(rig.editor().status().key, "call_maybe_taken");
+                // "May have been taken" gave way once the seat's status read the seal back.
+                assert_eq!(rig.editor().status().key, "lost_submit_read");
             }
         }
         assert_eq!(Close::of_code(1009), Close::ThisMessage(1009));

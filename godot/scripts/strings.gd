@@ -38,7 +38,8 @@ const TEXT := {
 	# With a seal the gateway accepted this round (S3's `fixp`).
 	"lobby_ready_sealed": "Your seal for this round stands: Ready keeps it.",
 	"ready_failed_refused": "Ready was not taken: the gateway refused it ({detail}). Press Ready again.",
-	"ready_failed_unreadable": "Ready may have been taken (its answer could not be read: {detail}); asking the gateway again.",
+	"ready_failed_lost": "Ready may have been taken (its answer was lost: {detail}); sending it again.",
+	"ready_failed_lost_spent": "Ready's answers were lost each time it was sent (the last: {detail}). Press Ready again.",
 	"ready_failed_too_large": "Ready was not sent: it was too large to send ({detail} bytes). Press Ready again.",
 	"ready_failed_send_failed": "Ready was not sent: the connection refused to send it (error {detail}). Press Ready again.",
 	"ready_failed_closed_on": "Ready may have been taken (the connection closed on it: code {detail}); asking the gateway again.",
@@ -391,6 +392,9 @@ const TEXT := {
 	"lobby_view_held": "The map's last answer was too big for this client to read, so the map will not refresh until the next phase.",
 	"link_gave_up": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last close was code {code}.",
 	"status_call_maybe_taken": "The answer to that was lost ({detail}), so it may have been taken; reading it again from the gateway.",
+	"status_lost_notes_read": "Read again from the gateway after a lost answer: the notebook below is what it keeps.",
+	"status_lost_drafts_read": "Read again from the gateway after a lost answer: the drafts listed are what it keeps.",
+	"status_lost_submit_read": "Read again from the gateway after a lost answer: the Ready line says whether this round's seal was taken.",
 	"status_anchoring": "Click the ground where the target goes; Escape stops.",
 	# A wall's box from two clicks (S3's `fixq-c`, item 4); the box itself is the gateway's.
 	"status_wall_first": "Click the ground at one corner of the wall; Escape stops.",

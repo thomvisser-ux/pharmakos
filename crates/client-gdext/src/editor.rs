@@ -1362,6 +1362,10 @@ pub struct Editor {
     /// Calls that write (a submission, the notes, a draft) whose answer was lost since the rig
     /// last asked: the rig reads the seat's seal again ([`Editor::take_lost_write`]).
     lost_writes: u32,
+    /// The write whose answer was lost and whose effect is being read back, by the string
+    /// table's `status_lost_<what>_read` row: the "may have been taken" line stands until the
+    /// read that returns it answers (fix pass 6).
+    lost_pending: Option<&'static str>,
     changes: u64,
     templates: Vec<TemplateRow>,
     wizard: Option<Wizard>,
@@ -4217,6 +4221,7 @@ impl Editor {
                 self.notes = response.notes;
                 self.known.notes = true;
                 self.this_round = targeting::this_round_of(&response.prose);
+                self.lost_resolved("notes");
             }
             Sent::Notes { .. } => {
                 let response: SaveNotesResponse =
@@ -4228,6 +4233,7 @@ impl Editor {
                 let response: ListDraftsResponse =
                     json::decode_json(&body(result, "gp.api.v1.ListDraftsResponse"))?;
                 self.settle_drafts(response);
+                self.lost_resolved("drafts");
             }
             Sent::SaveDraft => {
                 self.queue.push_back(Job::Drafts);
@@ -4767,12 +4773,26 @@ impl Editor {
     fn write_lost(&mut self, sent: &Sent, detail: &str) {
         self.say("call_maybe_taken", detail);
         self.lost_writes = self.lost_writes.saturating_add(1);
-        let reread = match sent {
-            Sent::SaveDraft => Job::Drafts,
-            _ => Job::Briefing,
+        // What reads the write's effect back: the draft list for a draft, the briefing (which
+        // carries the notebook) for the notes, the seat's status (its seal, read by the rig) for
+        // a submission.
+        let (reread, what) = match sent {
+            Sent::SaveDraft => (Job::Drafts, "drafts"),
+            Sent::Submit { .. } => (Job::Briefing, "submit"),
+            _ => (Job::Briefing, "notes"),
         };
+        self.lost_pending = Some(what);
         if !self.queue.contains(&reread) {
             self.queue.push_back(reread);
+        }
+    }
+
+    /// The read that returns a lost write's effect answered (`what`: `notes`, `drafts` or
+    /// `submit`): the "may have been taken" line gives way to what the gateway has now.
+    pub fn lost_resolved(&mut self, what: &str) {
+        if self.lost_pending == Some(what) {
+            self.lost_pending = None;
+            self.say(&format!("lost_{what}_read"), "");
         }
     }
 
