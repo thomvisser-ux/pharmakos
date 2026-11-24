@@ -906,6 +906,8 @@ pub const STATUS_RETRIES: u8 = 3;
 
 /// How many times a Ready whose answer was lost is sent again before the Ready line says the
 /// answers were lost and asks the player to press Ready again (fix pass 6).
+///
+/// PLACEHOLDER: a lost Ready's resends, 3 — OWNER, at hardening, with the transport's numbers.
 pub const READY_RESENDS: u8 = 3;
 
 /// Where a phase's clock reports stand, for the seat's budget: a phase's first report
