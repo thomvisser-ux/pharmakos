@@ -413,20 +413,102 @@ fn sources() -> Vec<PathBuf> {
 }
 
 /// The file's shipped code: comment-only lines removed, so prose *about* a
-/// banned name is not mistaken for a use of it, and everything from the first
-/// `#[cfg(test)]` onward removed, because a unit test is allowed to panic --
-/// that is what a failing assertion is -- and is not compiled into the game.
+/// banned name is not mistaken for a use of it, and every item a real
+/// `#[cfg(test)]` attribute stands on removed ([`test_item_lines`]), because a
+/// unit test is allowed to panic -- that is what a failing assertion is -- and
+/// is not compiled into the game. An attribute written in a comment or a
+/// string attributes nothing, and the rest of the file is read past it (the
+/// review of #219's T13 and T14; lane `opsave` ported `gamectl`'s reading).
+/// The lines keep their literals, which the needles of some scans are in.
 fn code_lines(text: &str) -> Vec<(usize, String)> {
-    let shipped = match text.find("#[cfg(test)]") {
-        Some(index) => text.get(..index).unwrap_or(text),
-        None => text,
-    };
-    shipped
-        .lines()
+    let tests = test_item_lines(&code_only(text));
+    text.lines()
         .enumerate()
+        .filter(|(index, _)| !in_test_item(&tests, *index))
         .filter(|(_, line)| !line.trim_start().starts_with("//"))
         .map(|(number, line)| (number.saturating_add(1), (*line).to_owned()))
         .collect()
+}
+
+/// `text` with every line of every item a real `#[cfg(test)]` attribute
+/// stands on blanked, line feeds kept, so a finding names the file's own line
+/// and a literal or a comment of the shipped code is read as written.
+fn shipped_text(text: &str) -> String {
+    let tests = test_item_lines(&code_only(text));
+    text.split('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            if in_test_item(&tests, index) {
+                ""
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+/// `text`'s shipped code as [`code_only`] reads it (every literal emptied,
+/// every comment removed), with every item a `#[cfg(test)]` in that code
+/// stands on blanked: `gamectl`'s `shipped_code`, the same reading.
+fn shipped_code(text: &str) -> String {
+    code_only(&shipped_text(text))
+}
+
+/// True when line `index` (from 0) is in one of `spans`.
+fn in_test_item(spans: &[(usize, usize)], index: usize) -> bool {
+    spans
+        .iter()
+        .any(|(from, to)| (*from..=*to).contains(&index))
+}
+
+/// The lines, counting from 0 and both ends included, of each item that a
+/// `#[cfg(test)]` in `code` (already [`code_only`], so one in a comment or a
+/// literal is gone) attributes: from the attribute through any further
+/// attributes to the item's end, which is its first `;` outside brackets, or
+/// the brace that closes its first `{`. `gamectl`'s `test_item_lines`, copied:
+/// two crates' tests cannot share a helper, and the two are held to the same
+/// cases.
+fn test_item_lines(code: &str) -> Vec<(usize, usize)> {
+    const ATTRIBUTE: &str = "#[cfg(test)]";
+    let bytes = code.as_bytes();
+    let line_of = |at: usize| {
+        code.get(..at)
+            .map_or(0, |before| before.matches('\n').count())
+    };
+    let mut spans = Vec::new();
+    let mut from = 0_usize;
+    while let Some(offset) = code.get(from..).and_then(|rest| rest.find(ATTRIBUTE)) {
+        let start = from.saturating_add(offset);
+        let mut at = start.saturating_add(ATTRIBUTE.len());
+        let mut depth = 0_usize;
+        let mut braced = false;
+        let end = loop {
+            let Some(byte) = bytes.get(at).copied() else {
+                break code.len();
+            };
+            match byte {
+                b'(' | b'[' => depth = depth.saturating_add(1),
+                b')' | b']' => depth = depth.saturating_sub(1),
+                b'{' => {
+                    depth = depth.saturating_add(1);
+                    braced = true;
+                }
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if braced && depth == 0 {
+                        break at;
+                    }
+                }
+                b';' if depth == 0 => break at,
+                _ => {}
+            }
+            at = at.saturating_add(1);
+        };
+        spans.push((line_of(start), line_of(end)));
+        from = end.saturating_add(1);
+    }
+    spans
 }
 
 /// True when `line` uses `needle` as a name rather than merely spelling its
@@ -784,14 +866,11 @@ fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        // The shipped code: everything before the first test module, read
-        // whole, so a literal or a comment that spans lines is read as one.
-        let shipped = text
-            .find("#[cfg(test)]")
-            .and_then(|index| text.get(..index))
-            .unwrap_or(&text);
-        for (number, why) in thread_offences(shipped) {
-            let line = shipped.lines().nth(number.saturating_sub(1)).unwrap_or("");
+        // The shipped code, read whole, so a literal or a comment that spans
+        // lines is read as one, less only the items `#[cfg(test)]` attributes
+        // ([`shipped_code`]); its lines are the file's.
+        for (number, why) in thread_offences(&shipped_code(&text)) {
+            let line = text.lines().nth(number.saturating_sub(1)).unwrap_or("");
             findings.push(format!(
                 "{}:{number}: {why}\n    {}",
                 path.display(),
@@ -803,6 +882,70 @@ fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
         findings.is_empty(),
         "every gateway thread is made by player_text_thread:\n{}",
         findings.join("\n")
+    );
+}
+
+/// The review of #219's T13 and T14, re-cast for the gateway (lane
+/// `opsave`): the scans once stopped at the first `#[cfg(test)]` text, even
+/// one in a comment (T13) or a string (T14), so a spawn after it was never
+/// read; now only an item a real attribute stands on is left out, and the
+/// rest of the file is read past it. `gamectl`'s cases, held to the same.
+#[test]
+fn the_scans_read_past_an_attribute_that_attributes_nothing() {
+    for text in [
+        "fn p() {\n    // #[cfg(test)] is where the tests start\n    let _ = std::thread::spawn(|| ());\n}\n",
+        "fn p() {\n    let _s = \"#[cfg(test)]\";\n    let _ = std::thread::spawn(|| ());\n}\n",
+        "/* #[cfg(test)] */\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nmod tests { fn t() {} }\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nfn t() {}\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nuse std::thread;\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+    ] {
+        assert!(
+            !thread_offences(&shipped_code(text)).is_empty(),
+            "the thread guard let through: {text}"
+        );
+        // The line scans read past it too: the fallback scan's needle and the
+        // string scan's run, written after the same attribute, are found.
+        let planted = text.replace(
+            "let _ = std::thread::spawn(|| ());",
+            "let x = y.unwrap_or(0);",
+        );
+        assert!(
+            fallback_lines(&planted)
+                .iter()
+                .any(|line| line.contains("unwrap_or")),
+            "the line scans stopped at: {planted}"
+        );
+        let quoted = text.replace("let _ = std::thread::spawn(|| ());", "let s = \"a  b\";");
+        assert!(
+            string_literals(&quoted)
+                .iter()
+                .any(|literal| literal == "a  b"),
+            "the string scan stopped at: {quoted}"
+        );
+    }
+    for text in [
+        "#[cfg(test)]\nmod tests {\n    fn t() { let _ = std::thread::spawn(|| ()); }\n}\n",
+        "#[cfg(test)]\n#[allow(dead_code)]\nfn t() { let _ = std::thread::spawn(|| { \"}\" }); }\n",
+    ] {
+        assert!(
+            thread_offences(&shipped_code(text)).is_empty(),
+            "a test item's own thread is not shipped code: {text}"
+        );
+        assert!(
+            code_lines(text)
+                .iter()
+                .all(|(_, line)| !line.contains("spawn")),
+            "a test item's lines are not shipped code: {text}"
+        );
+    }
+    // The finding names the file's own line.
+    let text = "// one\n#[cfg(test)]\nmod t {\n}\nfn p() { std::thread::spawn(f); }\n";
+    assert_eq!(
+        thread_offences(&shipped_code(text))
+            .first()
+            .map(|(line, _)| *line),
+        Some(5)
     );
 }
 
@@ -2540,14 +2683,15 @@ impl Chars {
     }
 }
 
-/// The string literals of `text`'s shipped code (everything before its first
-/// `#[cfg(test)]`), each as the compiler reads it: a `\` at a line's end
+/// The string literals of `text`'s shipped code (less every item a real
+/// `#[cfg(test)]` stands on, [`shipped_text`]), each as the compiler reads
+/// it: a `\` at a line's end
 /// swallows the newline and the next line's leading white space, `\n`, `\r`
 /// and `\t` read as themselves, and every other escape as one character.
 /// Comments, character literals and lifetimes are skipped; a raw string is
 /// read as written.
 fn string_literals(text: &str) -> Vec<String> {
-    let shipped = text.split("#[cfg(test)]").next().unwrap_or_default();
+    let shipped = shipped_text(text);
     let reader = Chars {
         chars: shipped.chars().collect(),
     };
