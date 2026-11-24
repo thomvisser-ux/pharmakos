@@ -2307,8 +2307,8 @@ fn a_stone_made_to_time_out_is_not_weighed_again() {
 /// Round 2 of [`failed_stone_match`]'s match twice from one save (fix pass 4,
 /// item 2): its Lull saved, Easy plays seat 0 on the live surface, then on a
 /// fresh surface resumed from the save. Answers the live round and the
-/// resumed one. With `carried` false the save is a format-version-3 one, made
-/// before the save carried the last Push (lane `opsave`): no `last_push`.
+/// resumed one. With `carried` false the save is the committed format-version-3
+/// one `main`'s build wrote of the same Lull (lane `opsave`).
 fn round_two_live_and_resumed(
     carried: bool,
 ) -> (pharmakos_operator::Played, pharmakos_operator::Played) {
@@ -2331,14 +2331,29 @@ fn round_two_live_and_resumed(
     );
     assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
     play_to_next_lull(&mut surface);
-    let mut saved = surface.lull_save().expect("a Lull saves");
-    assert!(
-        saved.last_push.is_some(),
-        "a save this build makes carries it"
-    );
-    if !carried {
-        saved.last_push = None;
-    }
+    let saved = if carried {
+        let saved = surface.lull_save().expect("a Lull saves");
+        assert!(
+            saved.last_push.is_some(),
+            "a save this build makes carries it"
+        );
+        saved
+    } else {
+        // The same Lull as `main`'s build saved it at `34e2f427` (format
+        // version 3, no last Push): `tests/fixtures/save-v3-round-two-lull.json`.
+        let text = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("save-v3-round-two-lull.json"),
+        )
+        .expect("the version-3 fixture");
+        let save = pharmakos_gateway::save::Save::parse(text.trim_end_matches('\n'))
+            .expect("a version-3 save reads");
+        assert_eq!(save.stamp.format_version, 3);
+        assert_eq!(save.state.last_push, None);
+        save.state
+    };
     let as_composed = |text: &str| text.to_owned();
     let mut easy = Easy::new(&rules).expect("the rules text");
     let (_, live) = easy_plays_seat_zero(&mut surface, &mut easy, &as_composed);
