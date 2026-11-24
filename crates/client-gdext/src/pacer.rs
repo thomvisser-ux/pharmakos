@@ -676,6 +676,236 @@ impl Timing {
     }
 }
 
+/// Why Playtest mode's clock could not take a reading (S3's `prob`, part 2): each is counted by
+/// the recorder under its own reason and said in the bundle, never clamped.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum ClockFault {
+    /// A reading earlier than the last one. [`WallClock`] is monotonic, so this is a reading
+    /// from somewhere else, and nothing moves.
+    Backwards,
+    /// A sum past a `u64` of microseconds.
+    Overflow,
+}
+
+impl ClockFault {
+    /// The name the bundle counts it under.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Backwards => "clock_backwards",
+            Self::Overflow => "clock_overflow",
+        }
+    }
+}
+
+/// One Push's wall time, split by whether the window had focus (the fun gate's second metric,
+/// decisions-log item 153 (1); S3's plan, E10).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct PushTime {
+    /// Wall microseconds the window had focus.
+    pub focused_us: u64,
+    /// Wall microseconds it did not.
+    pub unfocused_us: u64,
+}
+
+/// How a Lull's used time ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LullEnd {
+    /// This seat pressed Ready.
+    Ready,
+    /// The phase moved on with no Ready from this seat (a timed Lull's countdown, or the client
+    /// left the Lull some other way).
+    PhaseLeft,
+}
+
+impl LullEnd {
+    /// The name the bundle writes.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::PhaseLeft => "phase_left",
+        }
+    }
+}
+
+/// One Lull's used time: wall time from its opening to this seat's Ready, or to its end.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LullTime {
+    /// Wall microseconds used.
+    pub used_us: u64,
+    /// What ended it.
+    pub ended_by: LullEnd,
+}
+
+/// The open Lull: when it opened, and when this seat pressed Ready.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct LullSpan {
+    opened_us: u64,
+    ready_us: Option<u64>,
+}
+
+/// Playtest mode's wall time (S3's `prob`, part 2; the plan's E10, decision 1): the sums of
+/// durations its metrics need, here because this module is the one place in the client that
+/// computes time (`tests/no_arithmetic.rs`'s `PACING_MODULE`). It is fed [`WallClock`] readings
+/// and answers durations; it decides nothing and reaches neither the gateway nor the sim.
+///
+/// It counts only while a Push or a Lull is open: focus changes outside a Push move no Push
+/// time, and a Push's time is split at each focus change by the focus it had before it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PlaytestClock {
+    /// The reading Playtest mode was switched on at: the zero of [`PlaytestClock::stamp_ms`].
+    origin_us: u64,
+    /// The latest reading taken.
+    last_us: u64,
+    /// Whether the window has focus, as last told.
+    focused: bool,
+    /// The open Push's split so far.
+    push: Option<PushTime>,
+    /// The open Lull.
+    lull: Option<LullSpan>,
+}
+
+impl PlaytestClock {
+    /// A clock whose zero is `now_us`, with the window's focus as it is now.
+    #[must_use]
+    pub const fn start(now_us: u64, focused: bool) -> Self {
+        Self {
+            origin_us: now_us,
+            last_us: now_us,
+            focused,
+            push: None,
+            lull: None,
+        }
+    }
+
+    /// Whole milliseconds since Playtest mode was switched on, for a diagnostics line.
+    ///
+    /// # Errors
+    ///
+    /// [`ClockFault::Backwards`] for a reading before the switch.
+    pub fn stamp_ms(&self, now_us: u64) -> Result<u64, ClockFault> {
+        now_us
+            .checked_sub(self.origin_us)
+            .map(|since_us| floor_div(since_us, US_PER_MS))
+            .ok_or(ClockFault::Backwards)
+    }
+
+    /// Takes the reading `now_us`: the time since the last one goes to the open Push's share for
+    /// the focus it had.
+    fn take(&mut self, now_us: u64) -> Result<(), ClockFault> {
+        let gone_us = now_us
+            .checked_sub(self.last_us)
+            .ok_or(ClockFault::Backwards)?;
+        if let Some(push) = self.push.as_mut() {
+            let share = if self.focused {
+                &mut push.focused_us
+            } else {
+                &mut push.unfocused_us
+            };
+            *share = share.checked_add(gone_us).ok_or(ClockFault::Overflow)?;
+        }
+        self.last_us = now_us;
+        Ok(())
+    }
+
+    /// The window gained (`true`) or lost focus at `now_us`.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClockFault`]; the focus is taken as told either way.
+    pub fn focus(&mut self, now_us: u64, focused: bool) -> Result<(), ClockFault> {
+        let taken = self.take(now_us);
+        self.focused = focused;
+        taken
+    }
+
+    /// A Push began at `now_us`.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClockFault`]; the Push is open either way, from nothing.
+    pub fn push_began(&mut self, now_us: u64) -> Result<(), ClockFault> {
+        let taken = self.take(now_us);
+        self.push = Some(PushTime::default());
+        taken
+    }
+
+    /// The open Push ended at `now_us`: its split, or `None` when no Push was open.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClockFault`]; the Push is closed either way, and its split is not answered.
+    pub fn push_ended(&mut self, now_us: u64) -> Result<Option<PushTime>, ClockFault> {
+        let taken = self.take(now_us);
+        let push = self.push.take();
+        taken.map(|()| push)
+    }
+
+    /// A Lull opened at `now_us`.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClockFault`]; the Lull is open either way.
+    pub fn lull_began(&mut self, now_us: u64) -> Result<(), ClockFault> {
+        let taken = self.take(now_us);
+        self.lull = Some(LullSpan {
+            opened_us: now_us,
+            ready_us: None,
+        });
+        taken
+    }
+
+    /// This seat pressed Ready at `now_us`; a second Ready in the same Lull moves nothing, and
+    /// outside a Lull it is nothing.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClockFault`].
+    pub fn lull_ready(&mut self, now_us: u64) -> Result<(), ClockFault> {
+        self.take(now_us)?;
+        if let Some(lull) = self.lull.as_mut()
+            && lull.ready_us.is_none()
+        {
+            lull.ready_us = Some(now_us);
+        }
+        Ok(())
+    }
+
+    /// The open Lull ended at `now_us`: its used time, or `None` when no Lull was open.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClockFault`]; the Lull is closed either way, and its time is not answered.
+    pub fn lull_ended(&mut self, now_us: u64) -> Result<Option<LullTime>, ClockFault> {
+        let taken = self.take(now_us);
+        let Some(lull) = self.lull.take() else {
+            return taken.map(|()| None);
+        };
+        taken?;
+        let (until_us, ended_by) = match lull.ready_us {
+            Some(ready_us) => (ready_us, LullEnd::Ready),
+            None => (now_us, LullEnd::PhaseLeft),
+        };
+        let used_us = until_us
+            .checked_sub(lull.opened_us)
+            .ok_or(ClockFault::Backwards)?;
+        Ok(Some(LullTime { used_us, ended_by }))
+    }
+
+    /// Whether a Push is open.
+    #[must_use]
+    pub const fn in_push(&self) -> bool {
+        self.push.is_some()
+    }
+
+    /// Whether a Lull is open.
+    #[must_use]
+    pub const fn in_lull(&self) -> bool {
+        self.lull.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,6 +1135,126 @@ mod tests {
             !timing.idle.due(),
             "asked for once, not again until the next edit"
         );
+    }
+
+    /// A Push's time is split at each focus change by the focus it had before it (E10).
+    #[test]
+    fn a_push_is_split_by_focus_exactly() {
+        let mut clock = PlaytestClock::start(1_000, true);
+        clock.push_began(2_000).expect("forward");
+        clock.focus(5_000, false).expect("forward");
+        clock.focus(12_000, true).expect("forward");
+        assert_eq!(
+            clock.push_ended(20_000),
+            Ok(Some(PushTime {
+                focused_us: 11_000,
+                unfocused_us: 7_000
+            }))
+        );
+        assert!(!clock.in_push());
+    }
+
+    /// Focus changes outside a Push are no Push's time, and the next Push starts from nothing
+    /// with the focus it was last told.
+    #[test]
+    fn focus_outside_a_push_is_not_push_time() {
+        let mut clock = PlaytestClock::start(0, true);
+        clock.focus(1_000, false).expect("forward");
+        clock.focus(9_000, true).expect("forward");
+        clock.focus(10_000, false).expect("forward");
+        clock.push_began(50_000).expect("forward");
+        assert_eq!(
+            clock.push_ended(53_000),
+            Ok(Some(PushTime {
+                focused_us: 0,
+                unfocused_us: 3_000
+            }))
+        );
+        assert_eq!(clock.push_ended(60_000), Ok(None), "no Push is open");
+    }
+
+    /// Two Pushes are two splits.
+    #[test]
+    fn two_pushes_are_two_splits() {
+        let mut clock = PlaytestClock::start(0, true);
+        clock.push_began(0).expect("forward");
+        let first = clock.push_ended(4_000).expect("forward");
+        clock.push_began(10_000).expect("forward");
+        let second = clock.push_ended(11_000).expect("forward");
+        assert_eq!(
+            (first, second),
+            (
+                Some(PushTime {
+                    focused_us: 4_000,
+                    unfocused_us: 0
+                }),
+                Some(PushTime {
+                    focused_us: 1_000,
+                    unfocused_us: 0
+                })
+            )
+        );
+    }
+
+    /// A Lull's used time runs to this seat's first Ready, or to its end with none.
+    #[test]
+    fn a_lulls_used_time_runs_to_ready_or_to_its_end() {
+        let mut clock = PlaytestClock::start(0, true);
+        clock.lull_began(1_000).expect("forward");
+        clock.lull_ready(4_000).expect("forward");
+        clock
+            .lull_ready(6_000)
+            .expect("a second Ready moves nothing");
+        assert_eq!(
+            clock.lull_ended(9_000),
+            Ok(Some(LullTime {
+                used_us: 3_000,
+                ended_by: LullEnd::Ready
+            }))
+        );
+        clock.lull_began(10_000).expect("forward");
+        assert_eq!(
+            clock.lull_ended(15_500),
+            Ok(Some(LullTime {
+                used_us: 5_500,
+                ended_by: LullEnd::PhaseLeft
+            }))
+        );
+        assert_eq!(clock.lull_ended(16_000), Ok(None), "no Lull is open");
+        clock
+            .lull_ready(17_000)
+            .expect("a Ready outside a Lull is nothing");
+        assert!(!clock.in_lull());
+    }
+
+    /// A reading before the last is refused as backwards, and a sum past `u64` as an overflow:
+    /// never clamped.
+    #[test]
+    fn a_fault_is_said_and_never_clamped() {
+        let mut clock = PlaytestClock::start(1_000, true);
+        assert_eq!(clock.stamp_ms(999), Err(ClockFault::Backwards));
+        assert_eq!(clock.stamp_ms(1_999), Ok(0));
+        assert_eq!(clock.stamp_ms(3_000), Ok(2));
+        clock.push_began(2_000).expect("forward");
+        assert_eq!(clock.focus(1_500, false), Err(ClockFault::Backwards));
+        assert_eq!(
+            clock.push_ended(u64::MAX),
+            Ok(Some(PushTime {
+                focused_us: 0,
+                unfocused_us: u64::MAX - 2_000
+            })),
+            "the focus is taken as told, and the refused reading moved nothing"
+        );
+        // A share that is already full cannot take another microsecond.
+        let mut grown = PlaytestClock {
+            push: Some(PushTime {
+                focused_us: u64::MAX,
+                unfocused_us: 0,
+            }),
+            ..PlaytestClock::start(0, true)
+        };
+        assert_eq!(grown.push_ended(1), Err(ClockFault::Overflow));
+        assert!(!grown.in_push(), "closed either way");
     }
 
     #[test]
