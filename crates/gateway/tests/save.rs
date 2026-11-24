@@ -928,3 +928,124 @@ fn a_resumed_match_keeps_its_tick_monotonic() {
     let resumed = resume(MATCH_ID, &saved).expect("resumed");
     assert_eq!(resumed.time().tick, before);
 }
+
+/// The golden case the save's bytes are pinned by: one match's round-1 saves,
+/// a `lull` one with both seats' seals and the `sealed` one its Push begins
+/// with (S3's `fpstream`, part 2).
+const SAVE_GOLDEN: &str = "save_round_one";
+
+/// The committed save of `SAVE_GOLDEN`, `file` being `lull` or `sealed`.
+fn committed_save(file: &str) -> std::path::PathBuf {
+    support::workspace_root()
+        .join("tests")
+        .join("golden")
+        .join("gateway")
+        .join(SAVE_GOLDEN)
+        .join(format!("expected.{file}.json"))
+}
+
+/// A save's file text as the golden holds it: the render and the one newline
+/// every golden ends with (`tests/golden/README.md`, rule 3).
+fn save_text(match_id: &str, state: &SavedMatch) -> String {
+    let mut text = Save {
+        stamp: Stamp::current(rules().rules_hash()),
+        config: config_of(match_id),
+        state: state.clone(),
+    }
+    .render();
+    text.push('\n');
+    text
+}
+
+/// Write the fresh save and compare it with the committed one, byte for byte.
+fn save_golden(file: &str, text: &str) {
+    assert!(!text.contains('\r'), "a save is written with LF endings");
+    let fresh = support::target_dir()
+        .join("golden")
+        .join("gateway")
+        .join(SAVE_GOLDEN);
+    std::fs::create_dir_all(&fresh).expect("the fresh output's folder");
+    std::fs::write(fresh.join(format!("actual.{file}.json")), text).expect("the fresh output");
+    let committed = committed_save(file);
+    let Ok(expected) = std::fs::read_to_string(&committed) else {
+        panic!(
+            "no committed golden at {}. A new case is committed by copying the fresh output \
+             beside it, byte for byte, once it is right; `cargo xtask golden --bless` rewrites \
+             only goldens that exist.",
+            committed.display()
+        );
+    };
+    assert!(
+        expected == text,
+        "the save at {} moved. tests/golden/gateway/README.md says what a diff means; the pull \
+         request has to say which input moved it.",
+        committed.display()
+    );
+}
+
+/// A save is a format on players' disks (AGENTS.md section 5): this build
+/// writes the same bytes for the same match as the build that committed the
+/// golden, and a save that build wrote resumes here, its seals carrying the
+/// fingerprints stamped beside them, and is written again byte for byte.
+///
+/// The golden was written by `main` at `bbddd094`, before the seal carried
+/// its fingerprint (S3's `fpstream`, part 2), so the `plan_fingerprint` lines
+/// it holds are the ones the save writer used to recompute from each seal's
+/// text: this test failing is a fingerprint value, or the save's format,
+/// moving.
+#[test]
+fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
+    const MATCH_ID: &str = "m-fpstream2-save";
+    let mut surface = new_match(MATCH_ID);
+    plan_round(&mut surface);
+    let lull = surface.lull_save().expect("a Lull saves");
+    assert!(lull.seats.iter().all(|seat| seat.seal.is_some()));
+    save_golden("lull", &save_text(MATCH_ID, &lull));
+    assert!(surface.begin_push().expect("the Push begins"));
+    let sealed = surface
+        .take_persistence()
+        .save
+        .expect("a Push's beginning is saved");
+    assert_eq!(sealed.boundary, Boundary::Sealed);
+    save_golden("sealed", &save_text(MATCH_ID, &sealed));
+
+    // The committed files, read as a resume reads them.
+    for file in ["lull", "sealed"] {
+        let text = std::fs::read_to_string(committed_save(file)).expect("the committed save");
+        let save = Save::parse(text.trim_end_matches('\n')).expect("the committed save reads");
+        save.check(&config_of(MATCH_ID), rules().rules_hash())
+            .expect("the same rules, the same verifier, the same match");
+        let resumed = {
+            let host = pristine();
+            Surface::new(
+                MATCH_ID,
+                SEED,
+                host.rules().clone(),
+                FogPolicy::fogged(),
+                &SEATS,
+            )
+            .expect("a surface")
+            .resume(host, &save.state, CONTINUATION)
+        }
+        .expect("the committed save resumes");
+        for (seat, saved) in SEATS.iter().zip(&save.state.seats) {
+            let held = resumed
+                .seat_state(Subject::Seat(*seat), *seat)
+                .expect("its own")
+                .sealed
+                .as_ref()
+                .expect("the seal is back");
+            let stamped = saved.seal.as_ref().expect("a saved seal");
+            assert_eq!(held.playbook_jsonc, stamped.playbook_jsonc);
+            assert_eq!(held.report_hash, stamped.report_hash);
+        }
+        // A Lull resumed from main's file is saved again as main saved it.
+        if file == "lull" {
+            let again = resumed.lull_save().expect("a resumed Lull saves");
+            assert!(
+                save_text(MATCH_ID, &again) == text,
+                "a resumed Lull's save is not the save it was resumed from"
+            );
+        }
+    }
+}

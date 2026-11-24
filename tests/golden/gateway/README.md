@@ -34,9 +34,11 @@ S3's `gwr`'s, and the last three are S3's `gwu`'s: the answers the client's
 picker and Visit & change fixtures are byte copies of. The next six are S3's
 `probw`'s: the match's frame and the view's look on the wire (decisions-log
 item 178 (5)). The last five are S3's `fixq`'s: the editor's planning edits
-`set_value_text`, `new_rule` and `compose_wall_box`.
+`set_value_text`, `new_rule` and `compose_wall_box`. The last, `save_round_one`, is S3's
+`fpstream`'s: a save's bytes, the format a match leaves on a player's disk (AGENTS.md
+section 5), produced by `crates/gateway/tests/save.rs`.
 
-## The forty-three cases
+## The forty-four cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -83,6 +85,7 @@ item 178 (5)). The last five are S3's `fixq`'s: the editor's planning edits
 | `set_value_text_past_bound/` | `expected.response.json` | The same call with "140" at a percentage chip: its refusal, naming the most it takes in its display unit |
 | `new_rule/` | `expected.response.json` | Seat 0's `new_rule` on the same playbook: the rule added at the end with its fresh id, the rules table's least cooldown and no `when`, its undo, pointer and id |
 | `compose_wall_box/` | `expected.response.json` | Seat 0's `compose_wall_box` near its core in `tests/editor_wire.rs`' opening Lull: the wall's Build target, its box over the corners' columns from the lowest ground to the rules' least wall height over the highest, its anchor the box's lowest corner |
+| `save_round_one/` | `expected.lull.json`, `expected.sealed.json` | Round 1 of `tests/save.rs`' two-seat match, both seats sealed through `submit_plan`: the `lull` save taken before the Push and the `sealed` save its Push begins with, as `Save::render` writes them; the test also resumes each committed file and saves the Lull again, byte for byte |
 
 ## What a diff means, case by case
 
@@ -613,6 +616,23 @@ its own): the lane that moves one of them re-copies its fixture.
   no detail, and no case here asks for one.
 * **The context moved.** The golden seed's map, the rules table, or the
   snapshot's shape, as for the demo cases.
+
+### `save_round_one/`
+
+A save file, whole: the stamp, the config line, the boundary, the snapshot and
+each seat's seal with the `plan_fingerprint` stamped beside it. A save is a format
+on players' disks (AGENTS.md section 5), so read a diff by its line:
+
+* **A `plan_fingerprint` moved** while its `playbook_jsonc` did not: the plan
+  fingerprint's value moved (decisions-log item 77), and every save on disk would
+  be refused on resume. That is the owner's (item 168 (12)) and is never blessed
+  as a side effect.
+* **A key appeared, went, was renamed or changed its shape**: the save's format
+  moved, which is a contract change of its own, with `SAVE_FORMAT_VERSION`.
+* **The stamp's `rules_hash` or `snapshot_version`, or the `snapshot` line,
+  moved**: the rules table or the sim's state moved, as for the chains; say
+  which. The seals' lines then stay put.
+* **A `report_hash` moved**: the verifier's report moved, as for the demo cases.
 
 ## Conventions
 
