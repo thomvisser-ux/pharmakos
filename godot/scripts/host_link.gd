@@ -48,13 +48,6 @@ const ADMIN := 0
 const SEAT := 1
 
 
-## How many times a dropped connection is reopened before the link gives up.
-##
-## PLACEHOLDER: the reconnect bound — OWNER, at hardening, with the transport's numbers.
-## A local host that drops a connection more often than this has gone wrong in a way a
-## retry will not fix.
-const RECONNECTS := 5
-
 ## The match the lobby hosts until it has a match-settings screen.
 ##
 ## PLACEHOLDER: the match the lobby hosts — OWNER, S6, with the settings screen.
@@ -130,7 +123,6 @@ var _port := 0
 var _tokens := ["", ""]
 var _peers: Array = [null, null]
 var _open := [false, false]
-var _reconnects := 0
 var _done := false
 
 
@@ -400,7 +392,6 @@ func reset() -> void:
 	_port = 0
 	_peers = [null, null]
 	_open = [false, false]
-	_reconnects = 0
 	_done = false
 
 
@@ -484,14 +475,16 @@ func _pump_link(link: int) -> void:
 			if not answer.is_empty():
 				received.emit(answer)
 	elif state == WebSocketPeer.STATE_CLOSED and not _done:
-		if _open[link]:
-			bridge.watch_dropped(link, peer.get_close_code())
+		# Every close is the rig's to read, one that never opened included: it classes a close on
+		# a message apart from the connection's, and keeps the reconnect budget (fix pass 4: this
+		# link counted every close against five for the match, so a few too-big answers ended a
+		# playable match). This script decides nothing from the code.
+		bridge.watch_dropped(link, peer.get_close_code())
 		_open[link] = false
-		if _reconnects >= RECONNECTS or not host_running():
+		if not bridge.watch_may_reconnect(link) or not host_running():
 			_done = true
-			failed.emit("connection %d closed (%d) and the host is gone or will not take it back" % [link, peer.get_close_code()])
+			failed.emit("connection %d closed (%d, %s) and the host is gone or will not take it back" % [link, peer.get_close_code(), peer.get_close_reason()])
 			return
-		_reconnects += 1
 		_connect(link)
 
 

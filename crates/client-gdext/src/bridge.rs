@@ -575,6 +575,17 @@ impl PharmakosBridge {
         }
     }
 
+    /// Whether connection `link` (0 admin, 1 seat) may be opened again after a close: the rig's
+    /// reconnect budget, which a close on a message does not spend and an answer gives back
+    /// (fix pass 4). `host_link.gd` asks this and counts nothing itself.
+    #[func]
+    fn watch_may_reconnect(&self, link: i64) -> bool {
+        match (self.rig.as_ref(), usize::try_from(link)) {
+            (Some(rig), Ok(link)) => rig.may_reconnect(link),
+            _ => false,
+        }
+    }
+
     /// The transport refused to send the frame `link` (0 admin, 1 seat) has in flight:
     /// `WebSocketPeer.send_text` answered the error `code` (fix pass 2). The rig settles that call
     /// as refused at once and never asks it again.
@@ -1935,6 +1946,12 @@ fn status_facts_into(state: &mut VarDictionary, rig: &Rig) {
         &"seal_not_told".to_variant(),
         &rig.seal_not_told().to_variant(),
     );
+    // Why this seat's Ready did not go through (fix pass 4): the string table's
+    // `ready_failed_<name>` row and its words, present only then.
+    if let Some((name, said)) = rig.ready_failed() {
+        state.set(&"ready_failed".to_variant(), &name.to_variant());
+        state.set(&"ready_failed_detail".to_variant(), &said.to_variant());
+    }
     state.set(&"status_detail".to_variant(), &detail.to_variant());
 }
 

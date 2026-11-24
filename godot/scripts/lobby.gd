@@ -348,6 +348,9 @@ static func preset_line(state: Dictionary) -> String:
 ## Ready keeps it; not sealed, the gateway files the safe playbook; not told yet, the line says the
 ## client is asking. A branch on the bridge's word, for display.
 static func ready_line(watch_state: Dictionary) -> String:
+	# A Ready that did not go through, whatever stopped it, is said on this line (fix pass 4).
+	if watch_state.has("ready_failed"):
+		return Strings.text("ready_failed_" + String(watch_state["ready_failed"]), {"detail": watch_state.get("ready_failed_detail", "")})
 	if not watch_state.has("sealed_this_round"):
 		# Asked a few times and refused each time: the gateway's refusal, never "Asking..." while
 		# nobody is asking (fix pass 2).

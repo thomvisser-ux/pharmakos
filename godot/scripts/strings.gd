@@ -37,6 +37,11 @@ const TEXT := {
 	"lobby_ready_help": "With nothing sealed, Ready files the safe playbook for you.",
 	# With a seal the gateway accepted this round (S3's `fixp`).
 	"lobby_ready_sealed": "Your seal for this round stands: Ready keeps it.",
+	"ready_failed_refused": "Ready was not taken: the gateway refused it ({detail}). Press Ready again.",
+	"ready_failed_unreadable": "Ready may not have been taken: its answer could not be read ({detail}). Press Ready again.",
+	"ready_failed_too_large": "Ready was not sent: it was too large to send ({detail} bytes). Press Ready again.",
+	"ready_failed_send_failed": "Ready was not sent: the connection refused to send it (error {detail}). Press Ready again.",
+	"ready_failed_closed_on": "Ready was not taken: the connection closed on it (code {detail}). Press Ready again.",
 	"lobby_ready_asking": "Asking the gateway whether you hold a seal this round...",
 	"lobby_ready_not_told": "Not told whether you hold a seal this round: the gateway refused to say ({detail}). Ready still ends your Lull.",
 	"lobby_continue": "Continue",
@@ -297,6 +302,7 @@ const TEXT := {
 	# A connection closed on a call itself (close code 1009 and its kin): that call
 	# is not sent again, and the line says so.
 	"unchecked_closed_on": "Not checked: the connection closed on this check (code {detail}: too big for one side to read, or unreadable); it is not sent again.",
+	"status_call_unreadable": "The gateway's answer to that could not be read ({detail}); nothing changed, and it is not sent again.",
 	"status_call_closed_on": "The connection closed on that (code {detail}: too big for one side to read, or unreadable); it is not sent again, and nothing changed.",
 	"templates_closed_on": "The connection closed on the template list (code {detail}).",
 	"vocabulary_closed_on": "The connection closed on the words to pick from (code {detail}).",

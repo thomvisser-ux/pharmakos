@@ -228,11 +228,26 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("last_file", text_or_empty(editor.last_file()).to_variant());
     put("dormant", dormant_dictionary(editor).to_variant());
     put_rule_list(&mut state, editor);
+    put_unfinished(&mut state, editor);
     put_marks(&mut state, editor);
     state
 }
 
 /// The map's marks: `attack_targets` ([`attack_array`]) and `build_targets` ([`build_array`]).
+/// The editor's calls that did not complete for a cause other than the gateway's refusal, each
+/// by its own count (fix pass 4): `refusals` is the gateway's alone.
+fn put_unfinished(state: &mut VarDictionary, editor: &Editor) {
+    let unfinished = editor.unfinished_calls();
+    for (key, count) in [
+        ("too_large_calls", unfinished.too_large),
+        ("send_failed_calls", unfinished.send_failed),
+        ("closed_on_calls", unfinished.closed_on),
+        ("unreadable_calls", unfinished.unreadable),
+    ] {
+        state.set(&key.to_variant(), &i64::from(count).to_variant());
+    }
+}
+
 fn put_marks(state: &mut VarDictionary, editor: &Editor) {
     state.set(
         &"attack_targets".to_variant(),

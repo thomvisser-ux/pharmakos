@@ -168,6 +168,7 @@ const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
 const Values := preload("res://scripts/values.gd")
 const LobbyScene := preload("res://scenes/lobby.tscn")
+const Lobby := preload("res://scripts/lobby.gd")
 ## The remembered file the cut-line leg points the real lobby at: the check's own, never the
 ## lobby's `user://last_match.txt`.
 const ENDED_REMEMBERED := "user://watch_check_last_match.txt"
@@ -467,7 +468,9 @@ func _run() -> void:
 	await get_tree().create_timer(IDLE_WAIT).timeout
 	var idle := _state()
 	print("[watch-check] after the idle stretch: %s" % idle)
-	if idle.get("phase", "") != "lull" or int(idle.get("drops_admin", 0)) != 0 or int(idle.get("drops_seat", 0)) != 0:
+	# A close on a message (the planning wire's six big loads, fix pass 4) is not a dropped
+	# connection: what may not happen is a drop of the connection itself.
+	if idle.get("phase", "") != "lull" or _connection_drops(idle, "admin") != 0 or _connection_drops(idle, "seat") != 0:
 		_failures.append("the idle stretch did not stay a Lull with both connections up: %s" % idle)
 		_finish()
 		return
@@ -562,14 +565,38 @@ func _run_probation() -> void:
 	if state.get("phase", "") != "lull":
 		_failures.append("the Probation Lull ended by itself: %s" % state)
 	print("[watch-check] Probation: %.0f s of the Lull, %d clock report(s) answered, %d countdown(s) sent, none shown, untimed by rule %s, %d refusal(s)" % [PROBATION_WATCH, answered, countdowns, state.get("untimed_by_rule"), _refusals.size() - refused_before])
+	await _host_gone()
 	_finish()
 
+
+## **A host that truly goes away ends the link** (fix pass 4, item 1): the host is killed, and
+## the link gives up in words rather than reconnecting for ever.
+func _host_gone() -> void:
+	var pid: int = link.host_pid()
+	# Up to here no connection may have dropped; the drops the host's going makes are this leg's.
+	if _connection_drops(_state(), "admin") != 0 or _connection_drops(_state(), "seat") != 0:
+		_failures.append("a connection dropped before the host went away: %s" % _state())
+	_host_killed = true
+	_refused_reason = ""
+	_expecting_refusal = true
+	if OS.kill(pid) != OK:
+		_failures.append("the host-gone leg could not end the host (pid %d)" % pid)
+		_expecting_refusal = false
+		return
+	var ended := await _until(func() -> bool: return _refused_reason != "", START_WAIT)
+	_expecting_refusal = false
+	if not ended:
+		_failures.append("the host went away and the link never gave up")
+		return
+	print("[watch-check] the host went away (pid %d) and the link gave up: %s" % [pid, _refused_reason])
 
 ## A line remembered before the preset existed (six fields) is refused by the gateway when it
 ## is resumed, and the link then starts another host (S3's `prob`; the plan's E6): what the
 ## lobby's refused Resume leans on. The refusal's words are printed, never read: any refusal
 ## before an announce is the refusal this needs. The refused host is gone once it refused.
 var _refused_reason := ""
+## Whether the host-gone leg ended the host: its drops are the leg's, checked before it.
+var _host_killed := false
 var _expecting_refusal := false
 
 
@@ -1596,12 +1623,18 @@ func _has_draft(state: Dictionary, id: String) -> bool:
 
 
 ## What must hold of one client's bridge, whichever host it watched.
+## The drops of `link`'s connection itself: its drops less its closes on a message, which the
+## planning wire's big loads make on purpose and which spend no reconnect (fix pass 4).
+func _connection_drops(state: Dictionary, link: String) -> int:
+	return _count(state, "drops_" + link) - _count(state, "message_drops_" + link)
+
+
 func _check_bridge(who: String) -> void:
 	var state := _state()
 	print("[watch-check] %s's final state: %s" % [who, state])
 	print("[watch-check] %s: %d event rows; %s" % [who, _events, vista.bridge.panic_report()])
-	if int(state.get("drops_admin", 0)) != 0 or int(state.get("drops_seat", 0)) != 0:
-		_failures.append("%s: a connection dropped: admin %s, seat %s" % [who, state.get("drops_admin"), state.get("drops_seat")])
+	if not _host_killed and (_connection_drops(state, "admin") != 0 or _connection_drops(state, "seat") != 0):
+		_failures.append("%s: a connection dropped: admin %s, seat %s (closes on a message: %s, %s)" % [who, state.get("drops_admin"), state.get("drops_seat"), state.get("message_drops_admin"), state.get("message_drops_seat")])
 	if vista.bridge.caught_panics() != 0:
 		_failures.append("%s: %d panic(s) were caught at the bridge boundary" % [who, vista.bridge.caught_panics()])
 	if int(state.get("view_refusals", 0)) != 0:
@@ -1700,6 +1733,8 @@ func _planning_wire() -> bool:
 	# Pastes against the real gateway (fix pass 2, item 1e): every one leaves the seat link up
 	# with its drops unchanged, and the leg then seals, and Ready ends the Lull as ever.
 	if not await _pastes():
+		return false
+	if not await _closes_on_a_message():
 		return false
 	# Add a rule, through its button; its empty slot takes a group; Remove takes it out.
 	var rules_before: int = _editor().get("rule_list", {}).get("rules", []).size()
@@ -1868,6 +1903,36 @@ func _take_asked_refusal(detail: String) -> void:
 			_asked_refusals += 1
 			return
 	_failures.append("the planning wire: the gateway's refusal `%s` never reached the feed of answers" % detail.left(80))
+
+
+## **Closes on a message do not end a playable match** (S3's `fixq-c`, fix pass 4, item 1).
+## Review 3's playbook of 18 000 bare holds (216 056 bytes, under the cap) is loaded six times;
+## each load's answers are past the client's inbound buffer, so the seat link closes on the
+## message each time (Godot's 1009). Through all six: the link opens again, its reconnect budget
+## is not spent, the text on screen stays as it was, and the leg goes on to seal and Ready.
+func _closes_on_a_message() -> bool:
+	var steps: PackedStringArray = []
+	for index in 18000:
+		steps.append("{\"hold\":{}}")
+	var big := ("{\"schema_version\":{\"major\":1},\"declarative\":{\"route\":[" + ",".join(steps) + "]}}").to_utf8_buffer()
+	var text: PackedByteArray = vista.bridge.editor_bytes()
+	var closes := _count(_state(), "message_drops_seat")
+	for attempt in 6:
+		var before := _count(_editor(), "closed_on_calls")
+		if not editor.load_bytes(big):
+			_failures.append("the planning wire: big load %d was not taken to the gateway" % attempt)
+			return false
+		if not await _until(func() -> bool: return _count(_editor(), "closed_on_calls") > before and _state().get("closed_on", {}).get("open", false) and not _editor().get("busy", true), PUSH_WAIT):
+			_failures.append("the planning wire: big load %d did not close on its message and open again: %s %s" % [attempt, _state(), _editor().get("status_key", "")])
+			return false
+	if _count(_state(), "message_drops_seat") < closes + 6:
+		_failures.append("the planning wire: six big loads closed the seat link on a message %d times" % (_count(_state(), "message_drops_seat") - closes))
+	if vista.bridge.editor_bytes() != text:
+		_failures.append("the planning wire: a load refused on its message changed the text on screen")
+	if not vista.bridge.watch_may_reconnect(1):
+		_failures.append("the planning wire: closes on a message spent the seat link's reconnect budget")
+	print("[watch-check] the planning wire: six loads closed the seat link on their message (%s), each said: `%s`; the link open again and its budget whole" % [_state().get("closed_on", {}), Lobby.closed_on_line(_state())])
+	return true
 
 
 ## The rule-list chip whose pointer ends in `suffix`, by its index, or -1.

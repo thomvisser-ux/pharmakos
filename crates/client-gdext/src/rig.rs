@@ -561,6 +561,74 @@ struct Link {
     /// Calls the transport refused to send (`Rig::send_failed`).
     send_failures: u32,
     calls: u64,
+    /// Closes of the connection itself since this link last answered a call ([`RECONNECTS`]).
+    reconnects: u8,
+}
+
+/// How many times in a row a link is opened again after a close of the connection itself
+/// ([`Close::Connection`]) before the client gives the host up: the budget is for a link that
+/// will not come back. A close on a message does not spend it, and an answer on the reopened
+/// link gives it back whole (S3's `fixq-c`, fix pass 4: five lifetime reconnects, spent by too-big
+/// answers, ended a playable match). Connection scheduling (AGENTS.md section 3 rule 4).
+/// A local host that drops a connection more often than this has gone wrong in a way a retry
+/// will not fix. Moved here from `host_link.gd` in fix pass 4, with its marker.
+/// PLACEHOLDER: the reconnect bound — OWNER, at hardening, with the transport's numbers.
+pub const RECONNECTS: u8 = 5;
+
+/// Why a call did not complete (S3's `fixq-c`, fix pass 4): whatever stopped it, it is settled
+/// by one function, [`Rig::unfinished`], per what the call was for.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Unfinished {
+    /// The gateway refused it: its code and message.
+    Refused {
+        /// The JSON-RPC error's code, as the gateway names it.
+        code: String,
+        /// Its message.
+        message: String,
+    },
+    /// The gateway's answer could not be read as an answer: why.
+    Unreadable(String),
+    /// Its frame was past the gateway's message cap, so it was not sent: the frame's bytes.
+    TooLarge(usize),
+    /// The transport refused to send it: Godot's error code.
+    SendFailed(i64),
+    /// The connection closed on the message itself: the close code.
+    ClosedOn(u16),
+}
+
+impl Unfinished {
+    /// The words that fill the line where the call's failure is shown.
+    fn said(&self) -> String {
+        match self {
+            Self::Refused { code, message } => format!("{code}: {message}"),
+            Self::Unreadable(why) => why.clone(),
+            Self::TooLarge(bytes) => bytes.to_string(),
+            Self::SendFailed(code) => code.to_string(),
+            Self::ClosedOn(code) => code.to_string(),
+        }
+    }
+
+    /// How the status line names a read that did not come.
+    fn read_failed(&self) -> ReadFailed {
+        match self {
+            Self::Refused { .. } => ReadFailed::Refused(self.said()),
+            Self::Unreadable(_) => ReadFailed::Unreadable(self.said()),
+            Self::TooLarge(_) => ReadFailed::TooLarge(self.said()),
+            Self::SendFailed(_) => ReadFailed::SendFailed(self.said()),
+            Self::ClosedOn(_) => ReadFailed::ClosedOn(self.said()),
+        }
+    }
+
+    /// The string table's `ready_failed_<name>` row for a Ready that did not go through.
+    const fn name(&self) -> &'static str {
+        match self {
+            Self::Refused { .. } => "refused",
+            Self::Unreadable(_) => "unreadable",
+            Self::TooLarge(_) => "too_large",
+            Self::SendFailed(_) => "send_failed",
+            Self::ClosedOn(_) => "closed_on",
+        }
+    }
 }
 
 /// Why a connection closed, as far as the call in flight goes (S3's `fixq-c`, fix pass 1).
@@ -718,6 +786,12 @@ pub struct Rig {
     last_error: Option<String>,
     /// The last close on a message itself, for the player's words.
     closed_on: Option<ClosedOnMessage>,
+    /// The reads whose answer closed the link on the message itself (fix pass 4): not asked
+    /// again with the same arguments until the phase changes them.
+    held: Vec<Purpose>,
+    /// Why this seat's Ready did not go through, for the Ready line (`ready_failed_<name>`,
+    /// and the words that fill it); cleared when Ready is pressed again or the phase moves.
+    ready_failed: Option<(&'static str, String)>,
     /// How long each Lull is, from the rules table's two Lull rows.
     lulls: LullLengths,
     /// Whether the admin connection's latest footer said the phase has no countdown
@@ -799,6 +873,8 @@ impl Rig {
             all_ready: false,
             last_error: None,
             closed_on: None,
+            held: Vec::new(),
+            ready_failed: None,
             lulls: LullLengths::default(),
             untimed: Untimed::NotReported,
             clock_answers: 0,
@@ -942,13 +1018,8 @@ impl Rig {
             return;
         };
         state.send_failures = state.send_failures.saturating_add(1);
-        match state.in_flight.take() {
-            Some((_, Purpose::Plan)) => {
-                self.editor.send_failed(code);
-                self.sync_editor();
-            }
-            Some((_, purpose)) => self.refused(purpose, "SEND_FAILED"),
-            None => {}
+        if let Some((_, purpose)) = state.in_flight.take() {
+            self.unfinished(link, purpose, &Unfinished::SendFailed(code));
         }
     }
 
@@ -968,6 +1039,8 @@ impl Rig {
         }
         state.open = false;
         if let Close::ThisMessage(code) = close {
+            // A close on a message is not a link that will not come back: it spends none of the
+            // reconnect budget (fix pass 4).
             let call = state.in_flight.as_ref().map(|(_, purpose)| purpose.word());
             let in_flight = state.in_flight.take();
             self.closed_on = Some(ClosedOnMessage {
@@ -976,19 +1049,12 @@ impl Rig {
                 code,
                 call,
             });
-            match in_flight {
-                Some((_, Purpose::Plan)) => {
-                    self.editor.closed_on(code);
-                    self.sync_editor();
-                }
-                // A page too big to read is a refused page: a keyframe is asked again, and no
-                // sooner than the keep-alive, so it is not asked in a loop (fix pass 3).
-                Some((_, Purpose::View)) => self.view_refused(),
-                Some((_, purpose)) => self.refused(purpose, "CLOSED_ON_MESSAGE"),
-                None => {}
+            if let Some((_, purpose)) = in_flight {
+                self.unfinished(link, purpose, &Unfinished::ClosedOn(code));
             }
             return;
         }
+        state.reconnects = state.reconnects.saturating_add(1);
         match state.in_flight.take() {
             Some((_, Purpose::Advance)) => self.timing.pacer.refused(),
             Some((_, Purpose::Clock)) => {
@@ -1134,10 +1200,11 @@ impl Rig {
             self.status_retry_owed = false;
             self.reads.status = true;
         }
-        if let Some(cursor) = self.view_paging.clone() {
+        let view_held = self.is_held(Purpose::View);
+        if !view_held && let Some(cursor) = self.view_paging.clone() {
             return Some((Purpose::View, "get_view", cursor_params(&cursor)));
         }
-        if self.due.keyframe && self.timing.now_us() >= self.keyframe_not_before_us {
+        if !view_held && self.due.keyframe && self.timing.now_us() >= self.keyframe_not_before_us {
             return Some((Purpose::View, "get_view", cursor_params("")));
         }
         // Ready waits behind the seat's owed `get_status` as it waits behind the editor's
@@ -1171,24 +1238,27 @@ impl Rig {
         // The meter goes ahead of the view and the feed: in a Push all three fall due at
         // every advance, and a debug host can take longer than the pacer's period over a
         // view page, so a meter behind them would never be asked. It is one small call.
-        if self.reads.status {
+        if self.reads.status && !self.is_held(Purpose::Status) {
             return Some((Purpose::Status, "get_status", object(Vec::new())));
         }
-        if self.reads.meter {
+        if self.reads.meter && !self.is_held(Purpose::Meter) {
             return Some((Purpose::Meter, "get_economy_forecast", object(Vec::new())));
         }
-        if self.reads.recap {
+        if self.reads.recap && !self.is_held(Purpose::Recap) {
             return Some((Purpose::Recap, "get_recap", object(Vec::new())));
         }
-        if self.due.view {
+        // A cursor's page waits while a keyframe is owed: the keyframe starts the view afresh,
+        // and a page asked behind its back re-asks what the keyframe's own spacing holds back
+        // (fix pass 4: the first re-ask after a close came 283 ms after it, by this path).
+        if self.due.view && !self.due.keyframe && !view_held {
             let cursor = self.view_cursor.clone();
             return Some((Purpose::View, "get_view", cursor_params(&cursor)));
         }
-        if self.due.feed {
+        if self.due.feed && !self.is_held(Purpose::Feed) {
             let cursor = self.feed_cursor.clone();
             return Some((Purpose::Feed, "get_segment_feed", cursor_params(&cursor)));
         }
-        if self.timing.keepalive_due(SEAT) {
+        if self.timing.keepalive_due(SEAT) && !self.is_held(Purpose::Status) {
             return Some((Purpose::Status, "get_status", object(Vec::new())));
         }
         None
@@ -1211,12 +1281,7 @@ impl Rig {
         // limit, read from the one number both sides read (S3's `fixq-c`, fix pass 1).
         if text.len() > pharmakos_proto::transport::MAX_MESSAGE_BYTES {
             state.unsent = state.unsent.saturating_add(1);
-            if purpose == Purpose::Plan {
-                self.editor.unsendable(text.len());
-                self.sync_editor();
-            } else {
-                self.refused(purpose, "TOO_LARGE_TO_SEND");
-            }
+            self.unfinished(link, purpose, &Unfinished::TooLarge(text.len()));
             return None;
         }
         state.in_flight = Some((id, purpose));
@@ -1256,6 +1321,8 @@ impl Rig {
         let purpose = match state.in_flight {
             Some((waiting, purpose)) if waiting == id => {
                 state.in_flight = None;
+                // A link that answers a call is a link that came back: its budget is whole.
+                state.reconnects = 0;
                 purpose
             }
             // From before a reconnect: nobody is waiting for it.
@@ -1266,52 +1333,39 @@ impl Rig {
         if let Some(error) = frame.get("error") {
             let Some((code, message)) = refusal_of(error) else {
                 // The call is settled either way: nothing is left waiting on it.
-                self.refused(purpose, "RPC");
+                self.unfinished(
+                    link,
+                    purpose,
+                    &Unfinished::Unreadable(
+                        "a refusal with no code or no message, which JSON-RPC requires of every \
+                         error"
+                            .to_owned(),
+                    ),
+                );
                 return Err(BridgeError::Rpc(
                     "a refusal with no code or no message, which JSON-RPC requires of every \
                      error"
                         .to_owned(),
                 ));
             };
-            if purpose == Purpose::Plan {
-                // A refusal is an answer: the editor settles the call and says what it was.
-                // Some are the gateway's answer to a question rather than a refused call
-                // (an `estimate_route` waypoint that resolves to nothing): the editor draws
-                // those, and they are not reported as refusals.
-                let settled = self.editor.answered(Err((code.as_str(), message.as_str())));
-                self.sync_editor();
-                if matches!(settled, Ok(crate::editor::Settled::Answered)) {
-                    return Ok(answer);
-                }
+            let why = Unfinished::Refused { code, message };
+            if !self.unfinished(link, purpose, &why) {
+                // The gateway's answer to a question rather than a refused call (an
+                // `estimate_route` waypoint that resolves to nothing): the editor drew it.
+                return Ok(answer);
             }
-            self.refused(purpose, &code);
-            if purpose == Purpose::Recap {
-                // The recap column shows the refusal in place of the prose: the gateway's
-                // words, as they came.
-                self.recap.refusal = format!("{code}: {message}");
-            }
-            if purpose == Purpose::Status {
-                // The preset stands as the last read gave it; the seal does not (it may have
-                // moved since), and the newest read's refusal is said beside them.
-                self.status_facts.failed = Some(ReadFailed::Refused(format!("{code}: {message}")));
-                if link == SEAT {
-                    self.status_read_failed();
-                }
-            }
-            let said = format!("{code}: {message}");
-            if purpose == Purpose::Clock
-                && self.ran_out == RanOut::GivenUp
-                && self.zero_refusal.is_none()
-            {
-                self.zero_refusal = Some(said.clone());
-            }
+            let said = why.said();
             self.last_error = Some(said.clone());
             answer.error = Some(said);
             return Ok(answer);
         }
         let Some(result) = frame.get("result") else {
             // The call is settled either way: nothing is left waiting on it.
-            self.refused(purpose, "RPC");
+            self.unfinished(
+                link,
+                purpose,
+                &Unfinished::Unreadable("an answer with neither result nor error".to_owned()),
+            );
             return Err(BridgeError::Rpc(
                 "an answer with neither result nor error".to_owned(),
             ));
@@ -1476,10 +1530,11 @@ impl Rig {
                 Ok(())
             }
             Err(error) => {
-                self.status_facts.failed = Some(ReadFailed::Unreadable(error.to_string()));
-                if link == SEAT {
-                    self.status_read_failed();
-                }
+                self.unfinished(
+                    link,
+                    Purpose::Status,
+                    &Unfinished::Unreadable(error.to_string()),
+                );
                 Err(error)
             }
         }
@@ -1524,35 +1579,122 @@ impl Rig {
         self.keyframe_not_before_us = self.timing.now_us().saturating_add(KEEPALIVE_US);
     }
 
-    /// Undoes what a refused call had counted on.
-    fn refused(&mut self, purpose: Purpose, code: &str) {
+    /// Settles a call on `link`, for `purpose`, that did not complete, whatever stopped it
+    /// (S3's `fixq-c`, fix pass 4): the one place that decides it, so a failed send, a frame
+    /// too large to send, a close on the message and an unreadable answer are settled as a
+    /// refusal is. Answers whether it is a refusal to report: false only for the gateway's
+    /// answer to a question the editor draws (an `estimate_route` that found nothing).
+    fn unfinished(&mut self, link: usize, purpose: Purpose, why: &Unfinished) -> bool {
+        let said = why.said();
+        // A read whose answer closed the link would close it again: held until the phase
+        // changes what it asks; its words are the close's line (`closed_on_message`).
+        if matches!(why, Unfinished::ClosedOn(_))
+            && matches!(
+                purpose,
+                Purpose::View | Purpose::Feed | Purpose::Status | Purpose::Meter | Purpose::Recap
+            )
+            && !self.held.contains(&purpose)
+        {
+            self.held.push(purpose);
+        }
         match purpose {
+            Purpose::Plan => {
+                let settled = match why {
+                    Unfinished::Refused { code, message } => {
+                        self.editor.answered(Err((code.as_str(), message.as_str())))
+                    }
+                    Unfinished::Unreadable(_) => Ok(self
+                        .editor
+                        .unfinished(crate::editor::Cause::Unreadable, &said)),
+                    Unfinished::TooLarge(_) => Ok(self
+                        .editor
+                        .unfinished(crate::editor::Cause::TooLarge, &said)),
+                    Unfinished::SendFailed(_) => Ok(self
+                        .editor
+                        .unfinished(crate::editor::Cause::SendFailed, &said)),
+                    Unfinished::ClosedOn(_) => Ok(self
+                        .editor
+                        .unfinished(crate::editor::Cause::ClosedOn, &said)),
+                };
+                self.sync_editor();
+                if matches!(why, Unfinished::Refused { .. })
+                    && matches!(settled, Ok(crate::editor::Settled::Answered))
+                {
+                    return false;
+                }
+            }
+            Purpose::View => match why {
+                // A cursor from before an attach, or any other refusal: start again from a
+                // keyframe, which is what the feed asks of a client that lost its place.
+                Unfinished::Refused { .. } => {
+                    self.due.keyframe = true;
+                    self.view_paging = None;
+                }
+                // Anything else is a page lost on the way: a keyframe again, and no sooner
+                // than the keep-alive, so it is not asked in a loop.
+                _ => self.view_refused(),
+            },
+            Purpose::Status => {
+                // The preset stands as the last read gave it; the seal does not (it may have
+                // moved since), and the newest read's failure is said beside them.
+                self.status_facts.failed = Some(why.read_failed());
+                if link == SEAT {
+                    self.status_read_failed();
+                }
+            }
+            Purpose::Ready => {
+                self.wants.ready = false;
+                self.ready_sent = false;
+                self.ready_failed = Some((why.name(), said.clone()));
+                self.sync_door();
+            }
+            Purpose::Recap => {
+                // The recap column shows the failure in place of the prose, as it came.
+                self.recap.refusal.clone_from(&said);
+            }
             Purpose::Advance => self.timing.pacer.refused(),
             Purpose::Clock => {
                 self.timing.clock.refused();
                 self.clock_reports = ClockReports::Refilling;
                 self.zero_refused();
-            }
-            Purpose::View => {
-                // A cursor from before an attach, or any other refusal: start again from
-                // a keyframe, which is what the feed asks of a client that lost its place.
-                self.due.keyframe = true;
-                self.view_paging = None;
+                if self.ran_out == RanOut::GivenUp && self.zero_refusal.is_none() {
+                    self.zero_refusal = Some(said.clone());
+                }
             }
             Purpose::Feed => {
-                if code == "STALE_SNAPSHOT" {
+                if matches!(why, Unfinished::Refused { code, .. } if code == "STALE_SNAPSHOT") {
                     self.feed_cursor.clear();
                 }
             }
             Purpose::EndLull => self.wants.end_lull = false,
             Purpose::EndRecap => self.wants.end_recap = false,
-            Purpose::Ready => {
-                self.wants.ready = false;
-                self.ready_sent = false;
-                self.sync_door();
-            }
-            Purpose::Plan | Purpose::Status | Purpose::Meter | Purpose::Recap => {}
+            Purpose::Meter => {}
         }
+        true
+    }
+
+    /// Whether `purpose`'s reads are held after a close on their message ([`Rig::unfinished`]).
+    fn is_held(&self, purpose: Purpose) -> bool {
+        self.held.contains(&purpose)
+    }
+
+    /// Whether link `link` may be opened again: its closes of the connection itself since it
+    /// last answered a call are under [`RECONNECTS`]. A close on a message spends nothing.
+    #[must_use]
+    pub fn may_reconnect(&self, link: usize) -> bool {
+        self.links
+            .get(link)
+            .is_some_and(|state| state.reconnects < RECONNECTS)
+    }
+
+    /// Why this seat's last Ready did not go through, as the string table's
+    /// `ready_failed_<name>` row and the words that fill it; `None` when it did or none was
+    /// pressed.
+    #[must_use]
+    pub fn ready_failed(&self) -> Option<(&'static str, &str)> {
+        self.ready_failed
+            .as_ref()
+            .map(|(name, said)| (*name, said.as_str()))
     }
 
     /// Takes in an admin footer. Returns whether the phase moved.
@@ -1592,6 +1734,9 @@ impl Rig {
         // afresh (fix pass 2).
         self.status_retries = 0;
         self.status_retry_owed = false;
+        // A new phase changes what the held reads ask, and a Ready is the new phase's.
+        self.held.clear();
+        self.ready_failed = None;
         if phase == Phase::Lull {
             self.ready_sent = false;
         }
@@ -1710,6 +1855,7 @@ impl Rig {
 
     /// The human pressed Ready.
     pub fn ready(&mut self) {
+        self.ready_failed = None;
         if self.phase == Phase::Lull {
             self.wants.ready = true;
         }
@@ -2744,9 +2890,248 @@ mod tests {
                 );
             }
         }
+        // The editor's `refusals` are the gateway's alone; this one is counted by its cause.
+        assert_eq!(rig.editor().refusals(), 0);
+        assert_eq!(rig.editor().unfinished_calls().send_failed, 1);
     }
 
-    /// **A connection closed on the message itself never re-sends it** (fix pass 1):
+    /// The seat's first poll after it opens: the keyframe, sent and in flight.
+    fn keyframe_in_flight(rig: &mut Rig, now: u64) {
+        let frames = rig.poll(now);
+        assert!(
+            frames
+                .iter()
+                .any(|frame| frame.link == SEAT && method_of(frame) == "get_view"),
+            "the seat asks a keyframe first: {frames:?}"
+        );
+    }
+
+    /// Every seat call `rig` sends over `polls` polls from `from_us`, a poll each 50 ms, each
+    /// answered (a `get_view` with an empty, complete page; anything else with an empty result).
+    fn seat_calls(rig: &mut Rig, from_us: u64, polls: u64) -> Vec<String> {
+        let mut asked = Vec::new();
+        for step in 0..polls {
+            let now = from_us.saturating_add(step.saturating_mul(50_000));
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(now) {
+                if frame.link == SEAT {
+                    asked.push(method_of(&frame));
+                }
+                let text = match method_of(&frame).as_str() {
+                    "get_view" => answer(
+                        id_of(&frame),
+                        r#"{"next_cursor":"c9","complete":true}"#,
+                        "lull",
+                    ),
+                    _ => answer(id_of(&frame), "{}", "lull"),
+                };
+                let _ = rig.receive(frame.link, &text);
+            }
+        }
+        asked
+    }
+
+    /// **A close on a message spends none of the reconnect budget, and an answer gives it back**
+    /// (fix pass 4, item 1): six closes on a message and the link may still be opened again;
+    /// [`RECONNECTS`] closes of the connection itself and it may not; one answer on the
+    /// reopened link and the budget is whole.
+    #[test]
+    fn a_close_on_a_message_spends_no_reconnect_and_an_answer_gives_the_budget_back() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        for _ in 0..6 {
+            rig.opened(SEAT);
+            rig.closed(SEAT, Close::ThisMessage(1009));
+            assert!(
+                rig.may_reconnect(SEAT),
+                "a close on a message spent the budget"
+            );
+        }
+        for _ in 0..RECONNECTS {
+            assert!(rig.may_reconnect(SEAT));
+            rig.opened(SEAT);
+            rig.closed(SEAT, Close::Connection);
+        }
+        assert!(
+            !rig.may_reconnect(SEAT),
+            "the budget ends a link that will not come back"
+        );
+        rig.opened(SEAT);
+        let asked = seat_calls(&mut rig, crate::pacer::KEEPALIVE_US, 4);
+        assert!(!asked.is_empty(), "the reopened link asks something");
+        assert!(
+            rig.may_reconnect(SEAT),
+            "an answer on the reopened link gives the budget back"
+        );
+    }
+
+    /// **A view closed on its message is held, and its re-ask waits** (fix pass 4, item 1):
+    /// after the close no view is asked again in the phase, past the keep-alive included, and
+    /// the status read still goes out; a new phase asks it afresh.
+    #[test]
+    fn a_view_closed_on_its_message_is_held_until_the_phase_changes() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        keyframe_in_flight(&mut rig, 1);
+        rig.closed(SEAT, Close::ThisMessage(1009));
+        rig.opened(SEAT);
+        let asked = seat_calls(&mut rig, 2, 240);
+        assert!(
+            !asked.iter().any(|method| method == "get_view"),
+            "a view closed on its message was asked again in its phase: {asked:?}"
+        );
+        assert!(
+            asked.iter().any(|method| method == "get_status"),
+            "the status read is starved: {asked:?}"
+        );
+        assert!(rig.is_held(Purpose::View));
+        rig.held.clear();
+        let after = seat_calls(&mut rig, crate::pacer::KEEPALIVE_US.saturating_mul(4), 4);
+        assert!(after.iter().any(|method| method == "get_view"), "{after:?}");
+    }
+
+    /// **A cursor's page waits while a keyframe is owed** (fix pass 4, item 1): the keyframe's
+    /// spacing is not got round by a page asked behind its back.
+    #[test]
+    fn a_cursor_page_waits_while_a_keyframe_is_owed() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        keyframe_in_flight(&mut rig, 1);
+        rig.send_failed(SEAT, 6);
+        rig.due.view = true;
+        let asked = seat_calls(&mut rig, 2, 40);
+        assert!(
+            !asked.iter().any(|method| method == "get_view"),
+            "a view was asked within the keep-alive of a failed keyframe: {asked:?}"
+        );
+    }
+
+    /// **A failed keyframe waits the keep-alive, and the status is still asked** (fix pass 4,
+    /// item 2; review 3's probe: it was re-asked on every poll, 1 999 times in 2 s).
+    #[test]
+    fn a_failed_keyframe_waits_the_keep_alive_and_the_status_is_still_asked() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        keyframe_in_flight(&mut rig, 1);
+        rig.send_failed(SEAT, 6);
+        let asked = seat_calls(&mut rig, 2, 40);
+        assert!(
+            !asked.iter().any(|method| method == "get_view"),
+            "{asked:?}"
+        );
+        assert!(
+            asked.iter().any(|method| method == "get_status"),
+            "{asked:?}"
+        );
+        let later = seat_calls(&mut rig, crate::pacer::KEEPALIVE_US.saturating_mul(2), 4);
+        assert!(later.iter().any(|method| method == "get_view"), "{later:?}");
+    }
+
+    /// **A failed status read is retried** (fix pass 4, item 2): it goes by the read-failed
+    /// path, with its own reason on the status line.
+    #[test]
+    fn a_failed_status_read_is_retried_with_its_reason() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let mut now = 1;
+        let status = loop {
+            let frames = rig.poll(now);
+            if let Some(frame) = frames
+                .iter()
+                .find(|frame| frame.link == SEAT && method_of(frame) == "get_status")
+            {
+                break frame.clone();
+            }
+            for frame in frames {
+                let text = match method_of(&frame).as_str() {
+                    "get_view" => answer(
+                        id_of(&frame),
+                        r#"{"next_cursor":"c9","complete":true}"#,
+                        "lull",
+                    ),
+                    _ => answer(id_of(&frame), "{}", "lull"),
+                };
+                let _ = rig.receive(frame.link, &text);
+            }
+            now += 50_000;
+            assert!(now < 10_000_000, "the seat never asked its status");
+        };
+        assert_eq!(status.link, SEAT);
+        rig.send_failed(SEAT, 6);
+        assert!(rig.status_retry_owed, "a failed status read is not retried");
+        assert_eq!(
+            rig.status_facts.failed,
+            Some(ReadFailed::SendFailed("6".to_owned()))
+        );
+    }
+
+    /// **A phase change alone gives the status reads their retries back** (fix pass 4, review
+    /// 3's M11): round 1's Lull spent them; the Push of the same round, with no seal forgotten
+    /// and no read answered, starts with none spent.
+    #[test]
+    fn a_phase_change_alone_resets_the_status_retries() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let schedule: Vec<(&str, u32)> = (0..8).map(|_| ("lull", 1)).collect();
+        let _ = drive(&mut rig, &schedule, &|_| false);
+        rig.status_retries = STATUS_RETRIES;
+        rig.status_retry_owed = false;
+        let mut now = rig.timing.now_us();
+        for _ in 0..40 {
+            now += CLOCK_REPORT_US + 50_000;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(now) {
+                let text = if frame.link == ADMIN {
+                    served(id_of(&frame), r#""all_ready":false,"#, "push", 1)
+                } else {
+                    refusal(id_of(&frame), "RATE_LIMITED", "slow down")
+                };
+                let _ = rig.receive(frame.link, &text);
+                if rig.phase == Phase::Push {
+                    assert_eq!(rig.status_retries, 0, "the Push carried the Lull's retries");
+                    return;
+                }
+            }
+        }
+        panic!("the rig never reached the Push");
+    }
+
+    /// **A Ready that did not go through is said, and pressing Ready again clears it** (fix pass
+    /// 4, item 2; review 3's probe: a failed `set_ready` undid the player's Ready with nothing
+    /// said).
+    #[test]
+    fn a_failed_ready_is_said_and_pressing_ready_again_clears_it() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let schedule: Vec<(&str, u32)> = (0..8).map(|_| ("lull", 1)).collect();
+        let _ = drive(&mut rig, &schedule, &|_| false);
+        rig.ready();
+        let mut now = rig.timing.now_us();
+        let ready = loop {
+            now += 50_000;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            let frames = rig.poll(now);
+            if let Some(frame) = frames.iter().find(|frame| method_of(frame) == "set_ready") {
+                break frame.clone();
+            }
+            for frame in frames {
+                let _ = rig.receive(frame.link, &served(id_of(&frame), "", "lull", 1));
+            }
+            assert!(now < 30_000_000, "Ready was never sent");
+        };
+        rig.send_failed(ready.link, 6);
+        assert_eq!(rig.ready_failed(), Some(("send_failed", "6")));
+        assert!(!rig.wants.ready && !rig.ready_sent, "the Ready is undone");
+        rig.ready();
+        assert_eq!(rig.ready_failed(), None);
+    }
+
     /// **A close on a message is kept for the player's words** (fix pass 3, item 3): which
     /// connection, the close code, the call it carried, and whether the connection is open
     /// again; a close of the connection itself is not one.
@@ -2792,6 +3177,7 @@ mod tests {
         );
     }
 
+    /// **A connection closed on the message itself never re-sends it** (fix pass 1):
     /// a close with 1009 (or 1003, 1007, 1008) settles the call in flight as refused and counts the
     /// drop under its own reason; any other close asks the call again once the link is back.
     #[test]

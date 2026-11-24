@@ -1357,6 +1357,8 @@ pub struct Editor {
     beacon_prose: String,
     status: Status,
     refusals: u32,
+    /// The editor's calls that did not complete for another cause ([`Editor::unfinished`]).
+    unfinished: UnfinishedCalls,
     changes: u64,
     templates: Vec<TemplateRow>,
     wizard: Option<Wizard>,
@@ -4699,70 +4701,53 @@ impl Editor {
         self.refused_by(sent, Refuser::Gateway, &format!("{code}: {message}"))
     }
 
-    /// The call in flight is too large for the gateway to read (its encoded frame is past
-    /// [`pharmakos_proto::transport::MAX_MESSAGE_BYTES`]), so the rig did not send it: it is
-    /// settled as refused, by this client, where that call's refusal is shown (S3's `fixq-c`, fix
-    /// pass 1: a 300 KB paste once took the connection down, and was sent again after every
-    /// reconnect). `bytes` is the frame's size. Nothing is asked again.
-    pub fn unsendable(&mut self, bytes: usize) -> Settled {
+    /// The call in flight did not complete for a reason that is not the gateway's refusal
+    /// (S3's `fixq-c`, fix pass 4: one door for every such reason, the rig's
+    /// `Rig::unfinished`): too large to send, the transport refused to send it, the connection
+    /// closed on the message itself, or the gateway's answer could not be read. It is settled
+    /// as refused where that call's refusal is shown, at once and never asked again, and
+    /// counted under its own cause ([`Editor::unfinished_calls`]), never as the gateway's.
+    pub fn unfinished(&mut self, cause: Cause, detail: &str) -> Settled {
         let Some(sent) = self.in_flight.take() else {
             return Settled::Answered;
         };
         self.touch();
-        let settled = self.refused_by(&sent, Refuser::TooLarge, &bytes.to_string());
+        let count = match cause {
+            Cause::TooLarge => &mut self.unfinished.too_large,
+            Cause::SendFailed => &mut self.unfinished.send_failed,
+            Cause::ClosedOn => &mut self.unfinished.closed_on,
+            Cause::Unreadable => &mut self.unfinished.unreadable,
+        };
+        *count = count.saturating_add(1);
+        let refuser = match cause {
+            Cause::TooLarge => Refuser::TooLarge,
+            Cause::SendFailed => Refuser::SendFailed,
+            Cause::ClosedOn => Refuser::ClosedOn,
+            Cause::Unreadable => Refuser::Unreadable,
+        };
+        let settled = self.refused_by(&sent, refuser, detail);
         if self.door != Door::Open {
             self.shut();
         }
         settled
     }
 
-    /// The transport refused to send the call in flight (Godot's `send_text` answered an error,
-    /// `code`, which the bridge hands on: `watch_send_failed`): the call is settled as refused
-    /// where its refusal is shown, at once and never asked again, so it never sits "Sending..."
-    /// until a timeout (S3's `fixq-c`, fix pass 2).
-    pub fn send_failed(&mut self, code: i64) -> Settled {
-        let Some(sent) = self.in_flight.take() else {
-            return Settled::Answered;
-        };
-        self.touch();
-        let settled = self.refused_by(&sent, Refuser::SendFailed, &code.to_string());
-        if self.door != Door::Open {
-            self.shut();
-        }
-        settled
-    }
-
-    /// The seat connection closed on the call in flight itself, with a close code that names
-    /// the message and not the connection (`code`: 1009, a message too big, and its kin; the
-    /// rig's [`crate::rig::Close`]): the call is settled as refused where its refusal is shown,
-    /// and, unlike [`Editor::dropped`], never asked again, since the same call would close the
-    /// connection again (S3's `fixq-c`, fix pass 1).
-    pub fn closed_on(&mut self, code: u16) -> Settled {
-        let Some(sent) = self.in_flight.take() else {
-            return Settled::Answered;
-        };
-        self.touch();
-        let settled = self.refused_by(&sent, Refuser::ClosedOn, &code.to_string());
-        if self.door != Door::Open {
-            self.shut();
-        }
-        settled
+    /// The editor's calls that did not complete for a reason other than the gateway's
+    /// refusal, by cause ([`Editor::unfinished`]); [`Editor::refusals`] counts the gateway's.
+    #[must_use]
+    pub const fn unfinished_calls(&self) -> UnfinishedCalls {
+        self.unfinished
     }
 
     /// A refused call, the gateway's or this client's own, said where that call's refusal is
     /// shown, with `detail` filling the words.
     fn refused_by(&mut self, sent: &Sent, refuser: Refuser, detail: &str) -> Settled {
-        // `refusals` counts the gateway's; a call this client did not send is the rig's to count
-        // (`Rig::message_refusals`).
-        if refuser != Refuser::TooLarge {
+        // `refusals` counts the gateway's alone; every other cause has its own count
+        // (`Editor::unfinished_calls`, fix pass 4).
+        if refuser == Refuser::Gateway {
             self.refusals = self.refusals.saturating_add(1);
         }
-        let field_key = match refuser {
-            Refuser::Gateway => GATEWAY_REFUSED_KEY,
-            Refuser::TooLarge => TOO_LARGE_KEY,
-            Refuser::ClosedOn => CLOSED_ON_KEY,
-            Refuser::SendFailed => SEND_FAILED_KEY,
-        };
+        let field_key = refuser.field_key();
         // A refused check of the text on screen will not come back by itself: the panel
         // says so, with the gateway's words, rather than "Checking..." for ever (finding K).
         // Each check's refusal is its own line's: a refused estimate leaves the chips'
@@ -4770,23 +4755,10 @@ impl Editor {
         if let Some((check, revision)) = check_of(sent)
             && revision == self.revision
         {
-            *self.check_refusals.slot(check) = Some((
-                revision,
-                match refuser {
-                    Refuser::Gateway => Unchecked::Refused(detail.to_owned()),
-                    Refuser::TooLarge => Unchecked::TooLarge(detail.to_owned()),
-                    Refuser::ClosedOn => Unchecked::ClosedOn(detail.to_owned()),
-                    Refuser::SendFailed => Unchecked::SendFailed(detail.to_owned()),
-                },
-            ));
+            *self.check_refusals.slot(check) = Some((revision, refuser.unchecked(detail)));
         }
         // A refused read of the gateway's words is said on its own line, and nothing waits on it.
-        let failed = || match refuser {
-            Refuser::Gateway => ReadFailed::Refused(detail.to_owned()),
-            Refuser::TooLarge => ReadFailed::TooLarge(detail.to_owned()),
-            Refuser::ClosedOn => ReadFailed::ClosedOn(detail.to_owned()),
-            Refuser::SendFailed => ReadFailed::SendFailed(detail.to_owned()),
-        };
+        let failed = || refuser.read_failed(detail);
         match sent {
             Sent::Vocabulary { round } if *round == self.round => {
                 self.vocabulary_failed = Some(failed());
@@ -4830,14 +4802,7 @@ impl Editor {
                 self.ghost = None;
                 self.preview = None;
             }
-            self.say(
-                match refuser {
-                    Refuser::TooLarge => "call_too_large",
-                    Refuser::SendFailed => "call_send_failed",
-                    Refuser::Gateway | Refuser::ClosedOn => "call_closed_on",
-                },
-                detail,
-            );
+            self.say(refuser.status_key(), detail);
             return Settled::Refused;
         }
         match sent {
@@ -4863,15 +4828,92 @@ impl Editor {
     }
 }
 
-/// Who refused a call: the gateway in words, this client for a call too large to send, or the
-/// gateway by closing the connection on the call itself.
+/// Who refused a call: the gateway in words, or one of the causes of [`Cause`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Refuser {
     Gateway,
     TooLarge,
     ClosedOn,
     SendFailed,
+    Unreadable,
 }
+
+impl Refuser {
+    /// The string table's key for this refusal on a rule's line and in a value field.
+    const fn field_key(self) -> &'static str {
+        match self {
+            Self::Gateway => GATEWAY_REFUSED_KEY,
+            Self::TooLarge => TOO_LARGE_KEY,
+            Self::ClosedOn => CLOSED_ON_KEY,
+            Self::SendFailed => SEND_FAILED_KEY,
+            Self::Unreadable => UNREADABLE_KEY,
+        }
+    }
+
+    /// The status line's key for a refusal that is not the gateway's (`status_<key>`).
+    const fn status_key(self) -> &'static str {
+        match self {
+            Self::TooLarge => "call_too_large",
+            Self::SendFailed => "call_send_failed",
+            Self::Unreadable => "call_unreadable",
+            Self::Gateway | Self::ClosedOn => "call_closed_on",
+        }
+    }
+
+    /// A check's line for this refusal.
+    fn unchecked(self, detail: &str) -> Unchecked {
+        let detail = detail.to_owned();
+        match self {
+            Self::Gateway => Unchecked::Refused(detail),
+            Self::TooLarge => Unchecked::TooLarge(detail),
+            Self::ClosedOn => Unchecked::ClosedOn(detail),
+            Self::SendFailed => Unchecked::SendFailed(detail),
+            Self::Unreadable => Unchecked::Unreadable(detail),
+        }
+    }
+
+    /// A read's line for this refusal.
+    fn read_failed(self, detail: &str) -> ReadFailed {
+        let detail = detail.to_owned();
+        match self {
+            Self::Gateway => ReadFailed::Refused(detail),
+            Self::TooLarge => ReadFailed::TooLarge(detail),
+            Self::ClosedOn => ReadFailed::ClosedOn(detail),
+            Self::SendFailed => ReadFailed::SendFailed(detail),
+            Self::Unreadable => ReadFailed::Unreadable(detail),
+        }
+    }
+}
+
+/// Why one of the editor's calls did not complete, when it was not the gateway's refusal
+/// ([`Editor::unfinished`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Cause {
+    /// Its frame was past the gateway's message cap, so it was not sent.
+    TooLarge,
+    /// The transport refused to send it.
+    SendFailed,
+    /// The connection closed on the message itself.
+    ClosedOn,
+    /// The gateway's answer to it could not be read as an answer at all.
+    Unreadable,
+}
+
+/// The editor's calls that did not complete, by [`Cause`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct UnfinishedCalls {
+    /// [`Cause::TooLarge`].
+    pub too_large: u32,
+    /// [`Cause::SendFailed`].
+    pub send_failed: u32,
+    /// [`Cause::ClosedOn`].
+    pub closed_on: u32,
+    /// [`Cause::Unreadable`].
+    pub unreadable: u32,
+}
+
+/// The string table's key for a call whose answer could not be read.
+pub const UNREADABLE_KEY: &str = "status_call_unreadable";
 
 /// The string table's key for a call the transport refused to send.
 pub const SEND_FAILED_KEY: &str = "status_call_send_failed";
