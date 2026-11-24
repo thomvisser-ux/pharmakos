@@ -493,14 +493,25 @@ fn every_vocabulary_parameter_is_the_verifiers() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// Every oneof arm of `message`, by the schema.
+/// Every oneof arm of `message`, by the schema. A proto3 `optional` field
+/// sits in a synthetic oneof of its own, named `_<field>` by protoc, which is
+/// presence and not a choice of arms, so it is no arm here
+/// (`MandateSettings.retreat_hp_pct`, decisions-log item 177 (3)).
 fn arms_of(message: &str) -> Vec<String> {
-    schema()
+    let declared = schema()
         .message(message)
-        .unwrap_or_else(|| panic!("{message} is a declared message"))
+        .unwrap_or_else(|| panic!("{message} is a declared message"));
+    declared
         .fields
         .iter()
-        .filter(|field| field.oneof_index.is_some())
+        .filter(|field| {
+            field.oneof_index.is_some_and(|index| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|index| declared.oneofs.get(index))
+                    .is_some_and(|oneof| *oneof != format!("_{}", field.name))
+            })
+        })
         .map(|field| field.name.clone())
         .collect()
 }

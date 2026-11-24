@@ -134,7 +134,7 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
         retreat_hp_pct,
         mandate,
     } = settings;
-    let common = add(&[set(*roe != 0), set(*retreat_hp_pct != 0)])?;
+    let common = add(&[set(*roe != 0), set(retreat_hp_pct.unwrap_or(0) != 0)])?;
     let (fields, targets) = match mandate {
         Some(mandate_settings::Mandate::Build(build)) => {
             let BuildSettings {

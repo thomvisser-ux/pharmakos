@@ -443,7 +443,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
         mandate,
     } = settings;
     let mut counted = Counted {
-        fields: add(&[set(*roe != 0), set(*retreat_hp_pct != 0)]),
+        fields: add(&[set(*roe != 0), set(retreat_hp_pct.unwrap_or(0) != 0)]),
         targets: 0,
     };
     let (fields, targets) = match mandate {
@@ -688,7 +688,7 @@ mod tests {
                 priority: 2,
                 mandate: Some(MandateSettings {
                     roe: 2,
-                    retreat_hp_pct: 0,
+                    retreat_hp_pct: None,
                     mandate: Some(mandate_settings::Mandate::Mine(MineSettings {
                         dig_max_depth: 4,
                         flee_on_threat: Some(true),
@@ -716,7 +716,7 @@ mod tests {
     fn each_element_of_a_list_is_one_field_and_the_cap_still_bounds_the_edit() {
         let survey = |areas: usize, scouts: u32| MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Survey(SurveySettings {
                 probe_areas: vec![area(); areas],
                 scout_count: scouts,
@@ -761,7 +761,7 @@ mod tests {
         };
         let settings = MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Build(BuildSettings {
                 targets: vec![target.clone(), target.clone(), target],
                 repair_threshold_pct: None,
@@ -792,7 +792,7 @@ mod tests {
     fn a_written_zero_or_false_is_one_field_and_survives_canonicalisation() {
         let build = |threshold: Option<u32>, rebuild: Option<bool>| MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Build(BuildSettings {
                 repair_threshold_pct: threshold,
                 rebuild_destroyed: rebuild,
@@ -801,7 +801,7 @@ mod tests {
         };
         let mine = |flee: Option<bool>| MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Mine(MineSettings {
                 flee_on_threat: flee,
                 ..MineSettings::default()
@@ -845,7 +845,7 @@ mod tests {
         };
         let defend = |picket: Option<u32>| MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Defend(DefendSettings {
                 protect: vec![commander(), commander()],
                 engagement_radius_pct: 50,
@@ -857,7 +857,7 @@ mod tests {
         assert_eq!(count(&defend(Some(0))).fields, 5, "a written 0 is a field");
         let attack = MandateSettings {
             roe: 3,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Attack(AttackSettings {
                 target: Some(AttackTarget {
                     target: Some(attack_target::Target::Voxel(Voxel { x: 1, y: 2, z: 3 })),

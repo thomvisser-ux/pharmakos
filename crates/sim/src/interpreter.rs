@@ -1514,7 +1514,8 @@ fn compile_switch_settings(
         _ => false,
     };
     if empty_s2_arm {
-        let fields = u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct != 0);
+        let fields =
+            u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct.unwrap_or(0) != 0);
         let (roe, retreat_hp_pct) = compile_common(settings)?;
         return Ok((fields > 0).then(|| {
             Box::new(Row::Settings {
@@ -1566,7 +1567,8 @@ fn compile_settings_row(
     names: &Names<'_>,
     covering: bool,
 ) -> Result<Row, PlanError> {
-    let mut fields: u32 = u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct != 0);
+    let mut fields: u32 =
+        u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct.unwrap_or(0) != 0);
     let mut targets: Vec<Target> = Vec::new();
     let mut protected: Vec<([i16; 3], ColumnBox)> = Vec::new();
     let mut probes: Vec<([i16; 3], ColumnBox)> = Vec::new();
@@ -1944,10 +1946,9 @@ fn compile_common(settings: &gp::v1::MandateSettings) -> Result<(u8, u8), PlanEr
     };
     let roe = gp::v1::mandate_settings::Roe::try_from(settings.roe).map_err(|_| unknown.clone())?;
     let roe = u8::try_from(i32::from(roe)).map_err(|_| unknown)?;
-    let refused = PlanError::RetreatOutOfRange {
-        found: settings.retreat_hp_pct,
-    };
-    let retreat_hp_pct = u8::try_from(settings.retreat_hp_pct)
+    let written = settings.retreat_hp_pct.unwrap_or(0);
+    let refused = PlanError::RetreatOutOfRange { found: written };
+    let retreat_hp_pct = u8::try_from(written)
         .ok()
         .filter(|pct| *pct <= 100)
         .ok_or(refused)?;
