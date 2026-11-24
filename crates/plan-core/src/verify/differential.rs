@@ -1166,16 +1166,129 @@ fn same_comments(inn: &[Spotted], out: &[Spotted], relocated: &[Moved]) -> bool 
 /// on its own parse could not see a fault in the text-to-document step).
 type Canonicaliser = fn(&str) -> Result<Canonical, crate::error::Error>;
 
+/// One comment as a plain scan of the text finds it ([`reference_comments`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Scanned {
+    /// The byte it starts at and the byte after it.
+    span: std::ops::Range<usize>,
+    /// Its text: a line comment without its terminator or trailing
+    /// whitespace (as `Document::comments` gives it), a block comment as
+    /// written.
+    text: String,
+}
+
+/// A block comment that never closes, at the byte it opens at.
+#[derive(Debug, PartialEq, Eq)]
+struct Unclosed(usize);
+
+/// Every comment in `text`, by a scan written here and nowhere else, so that
+/// the checker does not ask the code it checks where a comment is: outside a
+/// string (a `"` opens one, a `\` escapes the next byte, a `"` closes it), a
+/// `//` runs to the first line feed or carriage return, which it leaves out,
+/// or to the end; a `/*` runs to the first `*/` that starts after it, so
+/// `/*/` does not close itself (`jsonc::comment_end`'s documented rule, and
+/// `tests/jsonc_refusals.rs`' `a_block_comment_opening_slash_star_slash_is_one_comment`).
+/// A block comment that never closes is no comment, and the product refuses
+/// the text there.
+fn reference_comments(text: &str) -> Result<Vec<Scanned>, Unclosed> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut at = 0;
+    let mut in_string = false;
+    while let Some(&byte) = bytes.get(at) {
+        if in_string {
+            match byte {
+                b'\\' => at += 2,
+                b'"' => {
+                    in_string = false;
+                    at += 1;
+                }
+                _ => at += 1,
+            }
+            continue;
+        }
+        match (byte, bytes.get(at + 1)) {
+            (b'"', _) => {
+                in_string = true;
+                at += 1;
+            }
+            (b'/', Some(b'/')) => {
+                let end = bytes[at..]
+                    .iter()
+                    .position(|byte| *byte == b'\n' || *byte == b'\r')
+                    .map_or(bytes.len(), |offset| at + offset);
+                found.push(Scanned {
+                    span: at..end,
+                    text: text[at..end].trim_end().to_owned(),
+                });
+                at = end;
+            }
+            (b'/', Some(b'*')) => {
+                let close = bytes
+                    .get(at + 2..)
+                    .and_then(|rest| rest.windows(2).position(|pair| pair == b"*/"))
+                    .ok_or(Unclosed(at))?;
+                let end = at + 2 + close + 2;
+                found.push(Scanned {
+                    span: at..end,
+                    text: text[at..end].to_owned(),
+                });
+                at = end;
+            }
+            _ => at += 1,
+        }
+    }
+    Ok(found)
+}
+
+/// `text` with every comment the scan found turned to spaces, byte for
+/// byte: plain JSON, if the text is JSON with comments between its tokens.
+fn blanked_by_scan(text: &str, comments: &[Scanned]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    for comment in comments {
+        out.push_str(&text[from..comment.span.start]);
+        out.extend(std::iter::repeat_n(' ', comment.span.len()));
+        from = comment.span.end;
+    }
+    out.push_str(&text[from..]);
+    out
+}
+
+/// The comments' texts, sorted: what must come out of the writer, text for
+/// text, wherever the canonical form puts each.
+fn sorted_texts(comments: &[Scanned]) -> Vec<&str> {
+    let mut texts: Vec<&str> = comments
+        .iter()
+        .map(|comment| comment.text.as_str())
+        .collect();
+    texts.sort_unstable();
+    texts
+}
+
 /// The two promises the canonical writer makes of every text it writes
 /// (fix pass 1, item 8): every comment comes out, text for text (a comment
 /// on a written-out default is moved, never dropped), and canonicalising the
-/// canonical text gives it back unchanged.
+/// canonical text gives it back unchanged; and, under both, the JSONC reader
+/// finds the comments a plain scan of the text finds.
+///
+/// The reader is held to [`reference_comments`] on every text: where it reads
+/// one, it lists the scan's comments in the scan's order; where it refuses
+/// one, the scan found a comment that never closes, or the text with the
+/// scan's comments blanked is not JSON to the codec's reader, which knows no
+/// comments. The writer is held to the scan too: the canonical text's
+/// comments, by the scan, are the input's, text for text. So a reader that
+/// drops or mis-ends a comment, and a writer that loses or merges one,
+/// disagree with code that is not theirs (fix pass 1 of `pcsplit`: listing
+/// input and output with `Document::comments` alone was blind to a fault in
+/// it, since both sides were listed by it).
 #[derive(Debug)]
 struct Kept {
     canonicalise: Canonicaliser,
     cases: u64,
     lost: Vec<String>,
     unstable: Vec<String>,
+    misread: Vec<String>,
 }
 
 impl Kept {
@@ -1185,14 +1298,69 @@ impl Kept {
             cases: 0,
             lost: Vec::new(),
             unstable: Vec::new(),
+            misread: Vec::new(),
         }
     }
 
+    /// Notes `what` under `list`, with the head of `text`.
+    fn note(list: &mut Vec<String>, what: &str, why: &str, text: &str) {
+        list.push(format!(
+            "{what}: {why}: {:?}",
+            text.chars().take(300).collect::<String>()
+        ));
+    }
+
     fn check(&mut self, what: &str, text: &str) {
+        let scanned = reference_comments(text);
+        let document = Document::parse(text);
+        match (&document, &scanned) {
+            (Ok(document), Ok(scanned)) => {
+                let listed: Vec<String> = document
+                    .comments()
+                    .into_iter()
+                    .map(|comment| comment.text)
+                    .collect();
+                let expected: Vec<&String> = scanned.iter().map(|comment| &comment.text).collect();
+                if listed.iter().collect::<Vec<_>>() != expected {
+                    Self::note(
+                        &mut self.misread,
+                        what,
+                        &format!("the reader lists {listed:?}, the scan {expected:?}"),
+                        text,
+                    );
+                }
+            }
+            (Ok(_), Err(Unclosed(at))) => Self::note(
+                &mut self.misread,
+                what,
+                &format!("read, with a block comment at byte {at} that never closes"),
+                text,
+            ),
+            (Err(_), Ok(scanned)) => {
+                if json::read(&blanked_by_scan(text, scanned)).is_ok() {
+                    Self::note(
+                        &mut self.misread,
+                        what,
+                        "refused, and JSON with its comments blanked",
+                        text,
+                    );
+                }
+            }
+            (Err(_), Err(_)) => {}
+        }
         let Ok(once) = (self.canonicalise)(text) else {
             return;
         };
         self.cases += 1;
+        let (Ok(document), Ok(scanned)) = (document, scanned) else {
+            Self::note(
+                &mut self.misread,
+                what,
+                "canonicalised, and not read by the reader or the scan",
+                text,
+            );
+            return;
+        };
         let relocated: Vec<Moved> = once
             .relocated
             .iter()
@@ -1202,20 +1370,17 @@ impl Kept {
                 to: relocation.to.clone(),
             })
             .collect();
-        let read = Document::parse(text).expect("a text the writer canonicalised parses");
         let again = Document::parse(&once.text).expect("the canonical text parses");
-        if !same_comments(&spotted(&read), &spotted(&again), &relocated) {
-            self.lost.push(format!(
-                "{what}: {:?}",
-                text.chars().take(300).collect::<String>()
-            ));
+        let written = reference_comments(&once.text);
+        let kept_by_scan = written
+            .as_ref()
+            .is_ok_and(|written| sorted_texts(written) == sorted_texts(&scanned));
+        if !kept_by_scan || !same_comments(&spotted(&document), &spotted(&again), &relocated) {
+            Self::note(&mut self.lost, what, "a comment did not come out", text);
         }
         match (self.canonicalise)(&once.text) {
             Ok(twice) if twice.text == once.text => {}
-            _ => self.unstable.push(format!(
-                "{what}: {:?}",
-                text.chars().take(300).collect::<String>()
-            )),
+            _ => Self::note(&mut self.unstable, what, "canonicalised twice", text),
         }
     }
 }
@@ -1443,13 +1608,16 @@ fn kept_in_group(group: usize) {
         kept.cases
     );
     assert!(
-        kept.lost.is_empty() && kept.unstable.is_empty(),
-        "{} of {} cases lost a comment, {} were not stable:\nlost: {:#?}\nunstable: {:#?}",
+        kept.lost.is_empty() && kept.unstable.is_empty() && kept.misread.is_empty(),
+        "{} of {} cases lost a comment, {} were not stable, {} texts were read otherwise than \
+         the scan reads them:\nlost: {:#?}\nunstable: {:#?}\nmisread: {:#?}",
         kept.lost.len(),
         kept.cases,
         kept.unstable.len(),
+        kept.misread.len(),
         kept.lost.iter().take(5).collect::<Vec<_>>(),
-        kept.unstable.iter().take(5).collect::<Vec<_>>()
+        kept.unstable.iter().take(5).collect::<Vec<_>>(),
+        kept.misread.iter().take(5).collect::<Vec<_>>()
     );
 }
 
@@ -1588,16 +1756,35 @@ fn wavering(text: &str) -> Result<Canonical, crate::error::Error> {
     Ok(canonical)
 }
 
-/// [`Kept`] sees what it exists to see: a canonicaliser that loses a comment,
-/// and one whose second pass differs from its first, and passes the real one.
+/// A canonicaliser that loses the file's last comment, after the value: the
+/// shape of a reader that drops the epilogue, which listing both sides with
+/// `Document::comments` could not see.
+fn tailless(text: &str) -> Result<Canonical, crate::error::Error> {
+    let mut canonical = canonicalise_text(text)?;
+    if let Some(end) = canonical.text.rfind("}\n") {
+        canonical.text.truncate(end + 2);
+    }
+    Ok(canonical)
+}
+
+/// [`Kept`] sees what it exists to see: a canonicaliser that loses a comment
+/// (inside the value, or after it), and one whose second pass differs from
+/// its first, and passes the real one.
 #[test]
 fn the_comment_checker_sees_a_lost_comment_and_an_unstable_text() {
     let text = MINIMAL.replace(",\"meta\"", ",/**/\"meta\"");
     let mut real = Kept::new(canonicalise_text);
     real.check("the real writer", &text);
+    let ended = format!("{MINIMAL}\n// the end\n");
+    real.check("the real writer, a comment after the value", &ended);
     assert_eq!(
-        (real.cases, real.lost.len(), real.unstable.len()),
-        (1, 0, 0),
+        (
+            real.cases,
+            real.lost.len(),
+            real.unstable.len(),
+            real.misread.len()
+        ),
+        (2, 0, 0, 0),
         "{real:?}"
     );
     let mut lossy = Kept::new(dropping);
@@ -1614,4 +1801,36 @@ fn the_comment_checker_sees_a_lost_comment_and_an_unstable_text() {
         (0, 1),
         "{unsteady:?}"
     );
+    let mut tail = Kept::new(tailless);
+    tail.check("a lost epilogue", &ended);
+    assert_eq!((tail.lost.len(), tail.unstable.len()), (1, 0), "{tail:?}");
+}
+
+/// The checker's own scan finds what `jsonc::comment_end` documents, and no
+/// more: a `//` or `/*` inside a string is no comment, a line comment ends
+/// at a lone CR or LF and keeps neither, `/*/` opens a comment that the
+/// next `*/` closes, and a block comment that never closes is reported.
+#[test]
+fn the_reference_scan_finds_comments_as_the_reader_documents_them() {
+    let texts = |text: &str| -> Result<Vec<String>, Unclosed> {
+        reference_comments(text).map(|found| found.into_iter().map(|one| one.text).collect())
+    };
+    assert_eq!(texts(r#"{"a":"// no /* no */"}"#), Ok(vec![]));
+    assert_eq!(texts(r#"{"a\"//":1}"#), Ok(vec![]));
+    assert_eq!(
+        texts("/*/ x */{} // end \t\r\n/**/"),
+        Ok(vec![
+            "/*/ x */".to_owned(),
+            "// end".to_owned(),
+            "/**/".to_owned()
+        ])
+    );
+    assert_eq!(texts("{}// end"), Ok(vec!["// end".to_owned()]));
+    assert_eq!(texts("{} /*/"), Err(Unclosed(3)));
+    assert_eq!(texts("{\"a\":1 /* x"), Err(Unclosed(7)));
+    let blanked = blanked_by_scan(
+        "{/* \u{e9} */\"a\":1}",
+        &reference_comments("{/* \u{e9} */\"a\":1}").expect("closed"),
+    );
+    assert_eq!(blanked, format!("{{{}\"a\":1}}", " ".repeat(8)));
 }
