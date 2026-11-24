@@ -78,7 +78,7 @@ mod tests {
     const CODES: [i64; 8] = [1000, 1001, 1003, 1007, 1008, 1009, 1011, -1];
 
     /// Steps a run takes, and how far apart.
-    const STEPS: u64 = 1200;
+    const STEPS: u64 = 2400;
     const STEP_US: u64 = 50_000;
 
     /// Invariant 1's bound: a purpose may be sent at most this many times on a link in any
@@ -93,7 +93,6 @@ mod tests {
     /// may stand once the host answers rightly again.
     const RESOLVE_US: u64 = 6 * KEEPALIVE_US;
 
-    /// A JSON-RPC answer with a footer: `extra` is the result's fields before `_status`.
     /// The footer the model host writes: its phase and round.
     #[derive(Clone, Copy)]
     struct Footer {
@@ -107,19 +106,25 @@ mod tests {
         round: 1,
     };
 
+    /// Steps in one round of the model host, and the last step of its Lull: a Lull longer than
+    /// [`READY_WAIT_US`], so a Ready that hangs is seen before the phase moves on.
+    const ROUND_STEPS: u64 = 1100;
+    const LULL_LAST_STEP: u64 = 899;
+    const _: () = assert!(LULL_LAST_STEP * STEP_US > READY_WAIT_US);
+
     /// The model host's phase at `step` of a run: a Lull, a Push and a recap a round, round after
     /// round, and the match ended for the last stretch.
     fn footer_at(step: u64) -> Footer {
-        if step >= STEPS.saturating_sub(100) {
+        if step >= STEPS.saturating_sub(200) {
             return Footer {
                 phase: "ended",
-                round: 4,
+                round: 3,
             };
         }
-        let round = u32::try_from(step.checked_div(300).expect("a span")).expect("fits");
-        let phase = match step.checked_rem(300).expect("a span") {
-            0..=169 => "lull",
-            170..=249 => "push",
+        let round = u32::try_from(step.checked_div(ROUND_STEPS).expect("a span")).expect("fits");
+        let phase = match step.checked_rem(ROUND_STEPS).expect("a span") {
+            0..=LULL_LAST_STEP => "lull",
+            900..=999 => "push",
             _ => "recap",
         };
         Footer {
@@ -181,13 +186,18 @@ mod tests {
 
     /// One run of the model host against a rig, checking every invariant at every step. Answers
     /// the step at which the rig gave a link up, if it did.
+    fn run(seed: u64, temper: Temper) -> Option<u64> {
+        run_on(&mut Honest(Rig::new()), seed, temper)
+    }
+
+    /// [`run`] against `rig`: the real one ([`Honest`]) or a deliberately bad one (the
+    /// self-test's).
     #[allow(
         clippy::too_many_lines,
         reason = "one step of the model host after another, read in order; not a determinism lint"
     )]
-    fn run(seed: u64, temper: Temper) -> Option<u64> {
+    fn run_on<R: Harnessed>(rig: &mut R, seed: u64, temper: Temper) -> Option<u64> {
         let mut random = Seeded(seed | 1);
-        let mut rig = Rig::new();
         let mut watch = Watch::default();
         let mut delayed: Vec<(u64, usize, String)> = Vec::new();
         let mut opened_at: BTreeMap<usize, u64> = BTreeMap::new();
@@ -239,7 +249,7 @@ mod tests {
             }
             // The player.
             if random.chance(20) && rig.phase == Phase::Lull {
-                rig.ready();
+                rig.press_ready();
                 watch.ready_waiting.get_or_insert(0);
             }
             if random.chance(15) {
@@ -263,7 +273,7 @@ mod tests {
             delayed = later;
             for (_, link, text) in due {
                 if rig.links.get(link).is_some_and(|state| state.open) {
-                    let _ = rig.receive(link, &text);
+                    rig.receive(link, &text);
                     answered_since_open.insert(link, true);
                     watch.unanswered.retain(|(at, _), _| *at != link);
                 }
@@ -286,7 +296,11 @@ mod tests {
                 if method == "set_ready" {
                     watch.ready_waiting = None;
                 }
-                let fault = if healthy || temper == Temper::Flapping || !random.chance(250) {
+                // A frame the rig never tracks (the self-test's spinner): the host never
+                // answers it, so only the spin invariant can see it.
+                let fault = if id >= 900_000 {
+                    Fault::Silent
+                } else if healthy || temper == Temper::Flapping || !random.chance(250) {
                     Fault::Answer
                 } else {
                     match random.below(8) {
@@ -309,13 +323,13 @@ mod tests {
                 let ledger_before = rig.ledger();
                 match fault {
                     Fault::Answer => {
-                        let _ = rig.receive(link, &right(id, &method, footer));
+                        rig.receive(link, &right(id, &method, footer));
                         answered_since_open.insert(link, true);
                         watch.unanswered.retain(|(at, _), _| *at != link);
                     }
                     Fault::Silent => {}
                     Fault::NoId => {
-                        let _ = rig.receive(
+                        rig.receive(
                             link,
                             &format!(r#"{{"jsonrpc":"2.0","id":"{id}","result":{{}}}}"#),
                         );
@@ -324,20 +338,24 @@ mod tests {
                         delayed.push((now.saturating_add(by), link, right(id, &method, footer)));
                     }
                     Fault::Refuse => {
-                        let _ = rig.receive(
+                        rig.receive(
                             link,
                             &format!(
                                 r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":-32000,"message":"slow down","data":{{"code":"RATE_LIMITED"}}}}}}"#
                             ),
                         );
-                        check_words(&rig, seed, step, &method, "refused");
+                        if rig.ledger().unfinished > ledger_before.unfinished {
+                            check_words(&*rig, seed, step, &method, "refused");
+                        }
                     }
                     Fault::Unreadable => {
-                        let _ = rig.receive(link, &format!(r#"{{"jsonrpc":"2.0","id":{id}}}"#));
-                        check_words(&rig, seed, step, &method, "unreadable");
+                        rig.receive(link, &format!(r#"{{"jsonrpc":"2.0","id":{id}}}"#));
+                        if rig.ledger().unfinished > ledger_before.unfinished {
+                            check_words(&*rig, seed, step, &method, "unreadable");
+                        }
                     }
                     Fault::Garbled => {
-                        let _ = rig.receive(
+                        rig.receive(
                             link,
                             &wire(
                                 id,
@@ -346,19 +364,19 @@ mod tests {
                             ),
                         );
                         if rig.ledger().unfinished > ledger_before.unfinished {
-                            check_words(&rig, seed, step, &method, "unreadable");
+                            check_words(&*rig, seed, step, &method, "unreadable");
                         }
                     }
                     Fault::PastBuffer => {
                         rig.closed(link, Close::ThisMessage(1009));
                         if rig.ledger().unfinished > ledger_before.unfinished {
-                            check_words_closed(&rig, seed, step, &method, 1009);
+                            check_words_closed(&*rig, seed, step, &method, 1009);
                         }
                     }
                     Fault::Close(code) => {
                         rig.closed(link, Close::of_code(code));
                         if rig.ledger().unfinished > ledger_before.unfinished {
-                            check_words_closed(&rig, seed, step, &method, code);
+                            check_words_closed(&*rig, seed, step, &method, code);
                         }
                     }
                     Fault::Drop => {
@@ -366,7 +384,9 @@ mod tests {
                     }
                     Fault::SendFailed => {
                         rig.send_failed(link, 6);
-                        check_words(&rig, seed, step, &method, "send_failed");
+                        if rig.ledger().unfinished > ledger_before.unfinished {
+                            check_words(&*rig, seed, step, &method, "send_failed");
+                        }
                     }
                 }
             }
@@ -389,14 +409,22 @@ mod tests {
             // Invariant 2: no hang. A pressed Ready is sent, or its line says why, within its bound
             // of link-open time; and the editor never waits on a call that is not in flight.
             if let Some(waited) = watch.ready_waiting.as_mut() {
-                if rig.ready_failed().is_some() || rig.phase != Phase::Lull || !rig.wants.ready {
+                if rig.ready_failed().is_some() || rig.phase != Phase::Lull || !rig.wants_ready() {
                     watch.ready_waiting = None;
                 } else if rig.links.get(SEAT).is_some_and(|state| state.open) {
                     *waited = waited.saturating_add(STEP_US);
                     assert!(
                         *waited <= READY_WAIT_US,
                         "seed {seed:#x} {temper:?} step {step}: no hang: Ready pressed and neither \
-                         sent nor said after {waited} us of an open seat link"
+                         sent nor said after {waited} us of an open seat link (editor jobs {}, \
+                         status owed {}, seat in flight {:?}, calls left {}, paging {:?}, \
+                         keyframe {})",
+                        rig.editor().has_pending_jobs(),
+                        rig.reads.status,
+                        rig.links.get(SEAT).map(|state| state.in_flight),
+                        rig.seat_calls_left,
+                        rig.view_paging,
+                        rig.due.keyframe
                     );
                 }
             }
@@ -430,23 +458,23 @@ mod tests {
     /// and forgets the seal.
     /// [`check_words`] for a close on the message with `code`: a 1009 on an editor call is the
     /// client's own close on an answer too big for it, said as what to do.
-    fn check_words_closed(rig: &Rig, seed: u64, step: u64, method: &str, code: i64) {
+    fn check_words_closed<R: Harnessed>(rig: &R, seed: u64, step: u64, method: &str, code: i64) {
         check_words_with(rig, seed, step, method, "closed_on", Some(code));
     }
 
-    fn check_words(rig: &Rig, seed: u64, step: u64, method: &str, cause: &str) {
+    fn check_words<R: Harnessed>(rig: &R, seed: u64, step: u64, method: &str, cause: &str) {
         check_words_with(rig, seed, step, method, cause, None);
     }
 
-    fn check_words_with(
-        rig: &Rig,
+    fn check_words_with<R: Harnessed>(
+        rig: &R,
         seed: u64,
         step: u64,
         method: &str,
         cause: &str,
         code: Option<i64>,
     ) {
-        let Some((purpose, named)) = rig.last_unfinished else {
+        let Some((purpose, named)) = rig.named_unfinished() else {
             panic!(
                 "seed {seed:#x} step {step}: true words: {method} {cause} was settled by no door"
             );
@@ -544,15 +572,212 @@ mod tests {
             .checked_div(STEP_US)
             .expect("a step");
         for seed in 0..30_u64 {
-            let gave_up = run(seed.wrapping_add(7), Temper::Flapping);
-            assert!(
-                gave_up.is_some_and(|step| step <= bound),
-                "seed {seed}: gives up: a flapping host was given up at {gave_up:?}, past step {bound}"
-            );
+            assert_gives_up(&mut Honest(Rig::new()), seed.wrapping_add(7), bound);
             assert_eq!(
                 run(seed.wrapping_add(1000), Temper::Recovering),
                 None,
                 "seed {seed}: a host that recovers was given up"
+            );
+        }
+    }
+
+    /// Invariant 3, as an assertion the self-test can trip: against a flapping host, `rig` gives
+    /// the link up within `bound` steps.
+    fn assert_gives_up<R: Harnessed>(rig: &mut R, seed: u64, bound: u64) {
+        let gave_up = run_on(rig, seed, Temper::Flapping);
+        assert!(
+            gave_up.is_some_and(|step| step <= bound),
+            "seed {seed}: gives up: a flapping host was given up at {gave_up:?}, past step {bound}"
+        );
+    }
+
+    /// What the harness drives: the calls a host and a player make, which a bad rig overrides;
+    /// everything else is the rig's, through `Deref`.
+    trait Harnessed: std::ops::DerefMut<Target = Rig> {
+        fn poll(&mut self, now: u64) -> Vec<super::super::Outgoing> {
+            (**self).poll(now)
+        }
+        fn receive(&mut self, link: usize, text: &str) {
+            let _ = (**self).receive(link, text);
+        }
+        fn link_action(&self, link: usize) -> Option<LinkAction> {
+            (**self).link_action(link)
+        }
+        fn press_ready(&mut self) {
+            (**self).ready();
+        }
+        fn wants_ready(&self) -> bool {
+            self.wants.ready
+        }
+        fn named_unfinished(&self) -> Option<(Purpose, &'static str)> {
+            self.last_unfinished
+        }
+    }
+
+    /// The real rig, as the harness drives it.
+    struct Honest(Rig);
+
+    impl std::ops::Deref for Honest {
+        type Target = Rig;
+        fn deref(&self) -> &Rig {
+            &self.0
+        }
+    }
+
+    impl std::ops::DerefMut for Honest {
+        fn deref_mut(&mut self) -> &mut Rig {
+            &mut self.0
+        }
+    }
+
+    impl Harnessed for Honest {}
+
+    /// A deliberately bad rig, one fault per invariant, for the self-test.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Bad {
+        /// Sends a status read on every poll, answered or not (invariant 1).
+        Spinner,
+        /// Takes Ready and never sends it, nor says why (invariant 2).
+        Hanger,
+        /// Opens a link again however often it fails (invariant 3).
+        NeverGivesUp,
+        /// Names every failure as the gateway's refusal (invariant 4).
+        FalseCause,
+        /// Settles a refused call by clearing it, past the one door (invariant 5).
+        PrivateSettle,
+    }
+
+    struct Sabotaged {
+        rig: Rig,
+        bad: Bad,
+        spun: i64,
+        wants: bool,
+    }
+
+    impl std::ops::Deref for Sabotaged {
+        type Target = Rig;
+        fn deref(&self) -> &Rig {
+            &self.rig
+        }
+    }
+
+    impl std::ops::DerefMut for Sabotaged {
+        fn deref_mut(&mut self) -> &mut Rig {
+            &mut self.rig
+        }
+    }
+
+    impl Harnessed for Sabotaged {
+        fn poll(&mut self, now: u64) -> Vec<super::super::Outgoing> {
+            let mut frames = self.rig.poll(now);
+            if self.bad == Bad::Spinner && self.rig.links.get(SEAT).is_some_and(|link| link.open) {
+                self.spun = self.spun.saturating_add(1);
+                frames.push(super::super::Outgoing {
+                    link: SEAT,
+                    text: super::super::frame_text(
+                        900_000_i64.saturating_add(self.spun),
+                        "get_status",
+                        super::super::object(Vec::new()),
+                    ),
+                });
+            }
+            frames
+        }
+        fn receive(&mut self, link: usize, text: &str) {
+            if self.bad == Bad::PrivateSettle && text.contains("\"error\"") {
+                if let Some(state) = self.rig.links.get_mut(link) {
+                    state.in_flight = None;
+                }
+                return;
+            }
+            let _ = self.rig.receive(link, text);
+        }
+        fn link_action(&self, link: usize) -> Option<LinkAction> {
+            match (self.bad, self.rig.link_action(link)) {
+                (Bad::NeverGivesUp, Some(LinkAction::GiveUp)) => Some(LinkAction::Connect),
+                (_, action) => action,
+            }
+        }
+        fn press_ready(&mut self) {
+            if self.bad == Bad::Hanger {
+                self.wants = true;
+            } else {
+                self.rig.ready();
+            }
+        }
+        fn wants_ready(&self) -> bool {
+            if self.bad == Bad::Hanger {
+                self.wants
+            } else {
+                self.rig.wants.ready
+            }
+        }
+        fn named_unfinished(&self) -> Option<(Purpose, &'static str)> {
+            match (self.bad, self.rig.last_unfinished) {
+                (Bad::FalseCause, Some((purpose, _))) => Some((purpose, "refused")),
+                (_, named) => named,
+            }
+        }
+    }
+
+    /// **The fault test holds its own strength** (fix pass 6, item 6; review 5's MT1 and MT2):
+    /// against each deliberately bad rig, the harness's own named assertion fires. Raising a bound
+    /// past what the spinner does, or deleting an assertion, turns this red.
+    #[test]
+    fn each_invariant_catches_a_rig_that_breaks_it() {
+        let bound = RECONNECT_BACKOFF_US
+            .iter()
+            .sum::<u64>()
+            .saturating_add(
+                u64::from(RECONNECTS)
+                    .saturating_add(1)
+                    .saturating_mul(2_000_000),
+            )
+            .checked_div(STEP_US)
+            .expect("a step");
+        for (bad, temper, named) in [
+            (Bad::Spinner, Temper::Recovering, "no spin"),
+            (Bad::Hanger, Temper::Recovering, "no hang"),
+            (Bad::NeverGivesUp, Temper::Flapping, "gives up"),
+            (Bad::FalseCause, Temper::Mixed, "true words"),
+            (Bad::PrivateSettle, Temper::Mixed, "one door"),
+        ] {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut rig = Sabotaged {
+                    rig: Rig::new(),
+                    bad,
+                    spun: 0,
+                    wants: false,
+                };
+                if temper == Temper::Flapping {
+                    assert_gives_up(&mut rig, 7, bound);
+                } else {
+                    for seed in 0..12_u64 {
+                        let _ = run_on(&mut rig, seed.wrapping_mul(0x9E37_79B9), temper);
+                        rig = Sabotaged {
+                            rig: Rig::new(),
+                            bad,
+                            spun: 0,
+                            wants: false,
+                        };
+                    }
+                }
+            }));
+            let said = match &caught {
+                Ok(()) => String::new(),
+                Err(payload) => payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| {
+                        payload
+                            .downcast_ref::<&str>()
+                            .map(|said| (*said).to_owned())
+                    })
+                    .expect("a message"),
+            };
+            assert!(
+                said.contains(named),
+                "a {bad:?} rig was not caught by \"{named}\": {said}"
             );
         }
     }
