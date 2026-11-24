@@ -240,6 +240,10 @@ pub enum NoFigure {
     NoDecisionYet,
     /// The last decision ran, and its tally stopped being a count.
     Unmeasured(Unmeasured),
+    /// The seat is out of the match: its decision returns before it decides
+    /// anything, so it made none. Its seam upkeep still runs, as it always
+    /// has, and what that reads is not a decision's figure.
+    Eliminated,
 }
 
 impl core::fmt::Display for NoFigure {
@@ -249,6 +253,7 @@ impl core::fmt::Display for NoFigure {
                 f.write_str("no decision has run since the world was made or restored")
             }
             NoFigure::Unmeasured(reason) => reason.fmt(f),
+            NoFigure::Eliminated => f.write_str("the seat is eliminated, so it made no decision"),
         }
     }
 }

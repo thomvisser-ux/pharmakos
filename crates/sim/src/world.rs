@@ -5112,7 +5112,10 @@ impl World {
         let mut seat: usize = 0;
         while seat < seats {
             // Measured from zero every decision and kept beside the world,
-            // unhashed.
+            // unhashed. An eliminated seat's decision returns before it
+            // decides anything: its figure says so, and its upkeep below
+            // runs as it always has.
+            let deciding = self.seats.is_alive(seat);
             units.reset();
             if let Some((plan, state)) = interpreter.parts_mut(seat) {
                 crate::interpreter::exec::decide(self, seat, plan, state, &units);
@@ -5124,7 +5127,11 @@ impl World {
                 crate::mining::refresh_seams(self, SeatId::new(id), &units);
             }
             if let Some(slot) = self.decision_work.get_mut(seat) {
-                *slot = units.read().map_err(crate::seams::NoFigure::Unmeasured);
+                *slot = if deciding {
+                    units.read().map_err(crate::seams::NoFigure::Unmeasured)
+                } else {
+                    Err(crate::seams::NoFigure::Eliminated)
+                };
             }
             seat = seat.saturating_add(1);
         }
@@ -9525,6 +9532,52 @@ mod decision_visits {
                 None
             ],
             "two seats, no decision yet, and no third"
+        );
+    }
+
+    /// An eliminated seat made no decision: its decision returns before it
+    /// decides anything, so its figure is the typed `Eliminated`, never the
+    /// rows its seam upkeep reads read as a decision's count. The seats still
+    /// in the match publish theirs.
+    #[test]
+    fn an_eliminated_seat_reports_no_decision() {
+        let rules = world().rules().clone();
+        let three = World::new(&WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 3,
+            rules,
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"));
+        let mut runner =
+            crate::runner::Runner::new(three).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            runner
+                .begin_push()
+                .unwrap_or_else(|error| panic!("{error:?}"))
+        );
+        let tick = runner.world().tick().raw();
+        if let Some(slot) = runner
+            .world_mut()
+            .seats
+            .match_columns()
+            .eliminated_at
+            .get_mut(2)
+        {
+            *slot = tick;
+        }
+        assert!(!runner.world().seats().is_alive(2), "seat 2 is out");
+        let _ = runner.step().unwrap_or_else(|error| panic!("{error:?}"));
+        let published = figures(runner.world());
+        assert!(
+            matches!(published.first(), Some(Some(Ok(_))))
+                && matches!(published.get(1), Some(Some(Ok(_)))),
+            "the seats in the match decided: {published:?}"
+        );
+        assert_eq!(
+            published.get(2),
+            Some(&Some(Err(NoFigure::Eliminated))),
+            "an eliminated seat made no decision"
         );
     }
 
