@@ -474,13 +474,18 @@ impl<'t> Direct<'t> {
         }
     }
 
-    /// `unsigned`: a bare or quoted lexeme, as a `u64`.
+    /// `unsigned`: a bare or quoted lexeme, as a `u64`; `-0` is a whole zero,
+    /// as the exact path reads it.
     fn unsigned(&self, scalar: Scalar<'_>) -> Option<u64> {
-        match scalar {
-            Scalar::Number(lexeme) => whole(lexeme)?.parse::<u64>().ok(),
-            Scalar::String(text) => whole(self.text_of(text)?)?.parse::<u64>().ok(),
-            Scalar::Bool(_) => None,
+        let digits = match scalar {
+            Scalar::Number(lexeme) => whole(lexeme)?,
+            Scalar::String(text) => whole(self.text_of(text)?)?,
+            Scalar::Bool(_) => return None,
+        };
+        if digits == "-0" {
+            return Some(0);
         }
+        digits.parse::<u64>().ok()
     }
 
     /// Moves the members an object wrote since `region` into ascending field

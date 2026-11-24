@@ -659,10 +659,7 @@ mod tests {
                 let field = declared
                     .field_by_name(arm)
                     .unwrap_or_else(|| panic!("{message} declares no `{arm}`"));
-                assert!(
-                    field.oneof_index.is_some(),
-                    "{message}.{arm} is a oneof arm"
-                );
+                assert!(field.is_arm(), "{message}.{arm} is a oneof arm");
             }
         }
     }

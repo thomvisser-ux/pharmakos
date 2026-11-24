@@ -76,28 +76,3 @@ breaking:
   # discharging nothing, deletes it. When no `ignore_only:` key follows, the
   # last proto change discharged nothing. The pull request that adds or deletes
   # a block names it.
-  ignore_only:
-    # S3's `fixq-w` (fixq-launch.md, section 7, ruling 5; AGENTS.md section 5).
-    # One rule, one file, one held range, one number taken by the field it was
-    # held for and the rest held again. This replaces `probw`'s block, whose
-    # discharge (`ViewEntity` 9, `building`) is on main and inert. Every other
-    # new number in this change (the `Method` values 59, 62 and 63, the
-    # `ComposeWallBox*` messages, the
-    # `SetValueText*` and `NewRule*` messages, `GetVocabularyResponse` 5 and 6,
-    # `VocabularyEntry` 6 and its `AnchorShape` enum, `IntegerShape` 4,
-    # `EnumShape` 2, `Chip` 7 to 9, `BeaconSettingRow` 5, `ResolvedRef` 8,
-    # `FeatureCandidate` 3) comes from no `reserved` statement, so it
-    # discharges nothing.
-    #
-    # gp/api/v1/gateway.proto, `GetBeaconResponse`:
-    #   * 6-15 were held "for a further field of the detail". 6 takes
-    #     `build_target_lines`, the rendered sentence of each Build target the
-    #     detail already carries; 7-15 stay held.
-    #
-    # buf sees the old range go away and cannot tell a discharge from an
-    # un-reservation; tests/golden/proto/expected.reserved.txt shows the
-    # narrowing, which is the reviewable half. Inert once this change is on
-    # main. The next proto pull request replaces this block with its own, or
-    # deletes it if it discharges nothing.
-    RESERVED_MESSAGE_NO_DELETE:
-      - gp/api/v1/gateway.proto

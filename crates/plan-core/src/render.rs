@@ -1225,13 +1225,16 @@ fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
     })
 }
 
-/// What a Defend or an Attack arm writes, as a clause after its writ: empty
-/// for every other writ and for an empty arm, so S1's prose is unchanged
-/// (S2's plan, task `vfy2`). Every field the arm writes is said, in field
+/// What the Common row's `retreat_hp_pct` and a Defend or an Attack arm write,
+/// as a clause after the writ: the threshold first ([`common_parts`]), then
+/// the arm's;
+/// empty when the row writes neither, so S1's prose is unchanged for a row
+/// that writes neither (S2's plan, task `vfy2`). Every field is said, in field
 /// order, as the file wrote it; whether it is legal is the verifier's. `here`
 /// is the `MandateSettings`' pointer.
 fn settings_clause(settings: &MandateSettings, here: &str) -> Text {
-    let parts = match settings.mandate.as_ref() {
+    let mut parts = common_parts(settings, here);
+    parts.extend(match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Defend(defend)) => {
             defend_parts(defend, &at(here, "defend"))
         }
@@ -1239,12 +1242,31 @@ fn settings_clause(settings: &MandateSettings, here: &str) -> Text {
             attack_parts(attack, &at(here, "attack"))
         }
         _ => Vec::new(),
-    };
+    });
     if parts.is_empty() {
         Text::default()
     } else {
         cat!(": ", join(parts))
     }
+}
+
+/// What the Common row writes, beside any writ: `retreat_hp_pct` whenever the
+/// file writes it, a written 0 said as retreat off (decisions-log item 177
+/// (3): the field carries presence, and 0 turns a beacon's retreat off).
+/// `roe` is not said, as it was not before. `here` is the `MandateSettings`'
+/// pointer.
+fn common_parts(settings: &MandateSettings, here: &str) -> Vec<Text> {
+    let mut parts = Vec::new();
+    if let Some(pct) = settings.retreat_hp_pct {
+        // 0 to 100; past 100 is the range's (`E0501`).
+        let chip = int_chip(pct, at(here, "retreat_hp_pct"), Shape::percent());
+        parts.push(if pct == 0 {
+            cat!(s::RETREAT_OFF, " (", chip, "%)")
+        } else {
+            cat!(s::RETREAT_BELOW, " ", chip, "% ", s::RETREAT_BELOW_UNIT)
+        });
+    }
+    parts
 }
 
 /// A Defend arm's fields, in field order.

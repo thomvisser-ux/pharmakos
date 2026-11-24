@@ -339,6 +339,15 @@ pub const FRESH_WITHIN: &str = "seen in the last";
 /// A freshness left out, which `E0209` rejects.
 pub const FRESH_NONE: &str = "at no freshness the file names";
 
+// --- The Common row's `retreat_hp_pct` (decisions-log item 177 (3)) ----------
+
+/// Before a written retreat threshold.
+pub const RETREAT_BELOW: &str = "units retreating below";
+/// After a written retreat threshold's percentage.
+pub const RETREAT_BELOW_UNIT: &str = "of their hit points";
+/// A written `retreat_hp_pct` of 0, before its chip.
+pub const RETREAT_OFF: &str = "retreat off";
+
 // --- S2's Defend and Attack settings (task `vfy2`) ---------------------------
 
 /// Before a Defend arm's protect list.
