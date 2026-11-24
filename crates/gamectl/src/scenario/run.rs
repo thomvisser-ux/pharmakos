@@ -997,7 +997,17 @@ fn codes_of(result: Option<&Json>) -> Result<String, Failure> {
                     )));
                 }
             };
-            codes.push(format!("{code} at {path}"));
+            // An `I0007` closes the report for a code it listed only the
+            // first of (S3's `vcap`): said as that, so a reader of this line
+            // does not take the listed codes for all there were.
+            if code == "I0007" {
+                codes.push(format!(
+                    "I0007: more of one code than the {} a report lists",
+                    pharmakos_verifier::MAX_PER_CODE
+                ));
+            } else {
+                codes.push(format!("{code} at {path}"));
+            }
         }
     }
     Ok(codes.join("; "))

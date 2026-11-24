@@ -470,11 +470,21 @@ pub fn verify_qualifies(size_units: u32, budget: u32) -> String {
     format!("  qualifies    yes ({size_units} of {budget} size units)")
 }
 
-/// The line that says it may not.
+/// The line that says it may not: how many errors the report **lists**, and,
+/// when a code of error is at the report's per-code cap and something was
+/// left out of it (S3's `vcap`), that more are counted on the report's
+/// `I0007` lines below. The verdict is the verifier's `qualifies`, never this
+/// count.
 #[must_use]
-pub fn verify_refuses(errors: usize) -> String {
+pub fn verify_refuses(errors: usize, cap: Option<u32>) -> String {
     let plural = if errors == 1 { "" } else { "s" };
-    format!("  qualifies    no ({errors} error{plural})")
+    match cap {
+        None => format!("  qualifies    no ({errors} error{plural})"),
+        Some(cap) => format!(
+            "  qualifies    no ({errors} error{plural} listed; a report lists at most {cap} of \
+             one code, and its I0007 lines count the rest)"
+        ),
+    }
 }
 
 /// The `report_hash` line: the number a pre-check and the check at submit
