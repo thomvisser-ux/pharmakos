@@ -662,12 +662,17 @@ fn a_forecast_with_a_seal_reads_no_text() {
     );
 }
 
-/// The carried price is the price: for every committed playbook a seat can
-/// seal on this match, the walks and the library's templates, the seal's
+/// The carried price is the price, for every way a seal is made: for every
+/// committed playbook a seat can seal on this match (the walks and the
+/// library's templates, every one of which must instantiate), the seal's
 /// `committed_dollars` is the verifier's projection of the same text, taken
-/// here again. The spend is a function of the text and the rules table alone
-/// (`pharmakos_verifier::projection::project`'s `spend`), so the economy the
-/// reference is projected against does not move it.
+/// here again, when it is submitted, when it is read back by a resume, and
+/// when it is advised and filed for a seat that sealed nothing; and the
+/// gateway's fallback carries its own text's. The spend is a function of the
+/// text and the rules table alone (`pharmakos_verifier::projection::project`'s
+/// `spend`), so the economy the reference is projected against does not move
+/// it. At least one of the sealed texts costs money, so a price off by one at
+/// any of the makers is red.
 #[test]
 fn the_carried_price_is_the_projection_of_the_sealed_text() {
     use pharmakos_sim::knowledge::SeatEconomy;
@@ -680,6 +685,102 @@ fn the_carried_price_is_the_projection_of_the_sealed_text() {
         supply: Kw::ZERO,
         draw: Kw::ZERO,
     };
+    let projected = |text: &str| {
+        let canonical = pharmakos_plan_core::decode_jsonc(text).expect("a canonical form");
+        project(canonical.decoded().message(), economy, &prices)
+            .expect("a seal prices")
+            .spend
+            .raw()
+    };
+    let texts = committed_texts();
+    let mut sealed = 0_usize;
+    let mut costly = 0_usize;
+    for (index, text) in texts.iter().enumerate() {
+        // Submitted.
+        let id = format!("m-fpstream2-price-{index}");
+        let mut surface = new_match(&id);
+        let token = seat_token(&mut surface, 0);
+        let mut left = FIRST_LULL_MS;
+        let answer = result(
+            &call_in_lull(
+                &mut surface,
+                &token,
+                &mut left,
+                "submit_plan",
+                &format!("{{\"playbook_jsonc\":{}}}", quote(text)),
+            ),
+            "submit_plan",
+        );
+        if answer.get("accepted") != Some(&Json::Bool(true)) {
+            continue;
+        }
+        let spend = projected(text);
+        let carried = seal_of(&surface, SeatId::new(0)).committed_dollars();
+        assert_eq!(i64::from(carried), spend, "text {index}, submitted");
+        // Read back by a resume.
+        let saved = surface.lull_save().expect("a Lull saves");
+        let resumed = resume(&id, &saved);
+        assert_eq!(
+            i64::from(seal_of(&resumed, SeatId::new(0)).committed_dollars()),
+            spend,
+            "text {index}, resumed"
+        );
+        // Advised, and filed for a seat that sealed nothing.
+        let mut advised = new_match(&format!("{id}-advised"));
+        advised
+            .file_advice(
+                SeatId::new(0),
+                pharmakos_gateway::advice::Advice {
+                    safe_playbook_jsonc: text.clone(),
+                    suggestions: Vec::new(),
+                    start_here: None,
+                },
+            )
+            .expect("filed");
+        let one = walk_east(&advised, 1, 3, 1);
+        submit(&mut advised, 1, &one);
+        assert!(advised.begin_push().expect("the Push begins"));
+        let filed = seal_of(&advised, SeatId::new(0));
+        assert!(filed.filed_by_the_gateway());
+        assert_eq!(
+            filed.playbook_jsonc(),
+            text.as_str(),
+            "text {index}, advised"
+        );
+        assert_eq!(
+            i64::from(filed.committed_dollars()),
+            spend,
+            "text {index}, advised and filed"
+        );
+        sealed = sealed.saturating_add(1);
+        if spend > 0 {
+            costly = costly.saturating_add(1);
+        }
+    }
+    assert!(sealed >= 5, "only {sealed} of {} texts sealed", texts.len());
+    assert!(
+        costly >= 1,
+        "no sealed text ordered anything, so no price was tested above 0"
+    );
+
+    // The gateway's fallback, filed for a seat that sealed nothing and was
+    // advised nothing.
+    let mut fallback = new_match("m-fpstream2-price-fallback");
+    let one = walk_east(&fallback, 1, 3, 1);
+    submit(&mut fallback, 1, &one);
+    assert!(fallback.begin_push().expect("the Push begins"));
+    let filed = seal_of(&fallback, SeatId::new(0));
+    assert!(filed.filed_by_the_gateway());
+    assert_eq!(
+        i64::from(filed.committed_dollars()),
+        projected(filed.playbook_jsonc()),
+        "the fallback"
+    );
+}
+
+/// The texts the carried-price test seals: the walks, and every template in
+/// the library, each of which must instantiate.
+fn committed_texts() -> Vec<String> {
     let probe = new_match("m-fpstream2-price-probe");
     let mut texts: Vec<String> = [0_usize, 1, 20, 120]
         .iter()
@@ -698,46 +799,17 @@ fn the_carried_price_is_the_projection_of_the_sealed_text() {
         })
         .collect();
     templates.sort();
+    assert!(templates.len() >= 5, "the library holds its templates");
     for path in &templates {
         let template = std::fs::read_to_string(path).expect("a template");
-        if let Ok(made) = pharmakos_plan_core::instantiate(&template, &[], &[]) {
-            texts.push(made.playbook_jsonc);
-        }
+        let made = pharmakos_plan_core::instantiate(&template, &[], &[]).unwrap_or_else(|error| {
+            panic!(
+                "{}: a committed template that does not instantiate: {}",
+                path.display(),
+                error.message()
+            )
+        });
+        texts.push(made.playbook_jsonc);
     }
-    let mut sealed = 0_usize;
-    let mut priced_above_zero = 0_usize;
-    for (index, text) in texts.iter().enumerate() {
-        let mut surface = new_match(&format!("m-fpstream2-price-{index}"));
-        let token = seat_token(&mut surface, 0);
-        let mut left = FIRST_LULL_MS;
-        let answer = result(
-            &call_in_lull(
-                &mut surface,
-                &token,
-                &mut left,
-                "submit_plan",
-                &format!("{{\"playbook_jsonc\":{}}}", quote(text)),
-            ),
-            "submit_plan",
-        );
-        if answer.get("accepted") != Some(&Json::Bool(true)) {
-            continue;
-        }
-        let carried = seal_of(&surface, SeatId::new(0)).committed_dollars();
-        let canonical = pharmakos_plan_core::decode_jsonc(text).expect("a canonical form");
-        let spend = project(canonical.decoded().message(), economy, &prices)
-            .expect("a seal prices")
-            .spend
-            .raw();
-        assert_eq!(i64::from(carried), spend, "text {index}");
-        sealed = sealed.saturating_add(1);
-        if carried > 0 {
-            priced_above_zero = priced_above_zero.saturating_add(1);
-        }
-    }
-    assert!(sealed >= 5, "only {sealed} of {} texts sealed", texts.len());
-    assert!(
-        priced_above_zero >= 1,
-        "no sealed text ordered anything, so the price was never tested above 0"
-    );
+    texts
 }
