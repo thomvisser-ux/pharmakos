@@ -4735,7 +4735,7 @@ impl Editor {
         let count = match cause {
             Cause::TooLarge => &mut self.unfinished.too_large,
             Cause::SendFailed => &mut self.unfinished.send_failed,
-            Cause::ClosedOn => &mut self.unfinished.closed_on,
+            Cause::ClosedOn | Cause::AnswerTooLarge => &mut self.unfinished.closed_on,
             Cause::Unreadable => &mut self.unfinished.unreadable,
         };
         *count = count.saturating_add(1);
@@ -4743,12 +4743,17 @@ impl Editor {
             Cause::TooLarge => Refuser::TooLarge,
             Cause::SendFailed => Refuser::SendFailed,
             Cause::ClosedOn => Refuser::ClosedOn,
+            Cause::AnswerTooLarge => Refuser::AnswerTooLarge,
             Cause::Unreadable => Refuser::Unreadable,
         };
         let settled = self.refused_by(&sent, refuser, detail);
         // A write whose answer was lost (the link closed on it, or it could not be read) may have
         // been taken: never "nothing changed" (fix pass 5).
-        if matches!(cause, Cause::ClosedOn | Cause::Unreadable) && writes(&sent) {
+        if matches!(
+            cause,
+            Cause::ClosedOn | Cause::AnswerTooLarge | Cause::Unreadable
+        ) && writes(&sent)
+        {
             self.write_lost(&sent, detail);
         }
         if self.door != Door::Open {
@@ -4879,6 +4884,7 @@ enum Refuser {
     Gateway,
     TooLarge,
     ClosedOn,
+    AnswerTooLarge,
     SendFailed,
     Unreadable,
 }
@@ -4890,6 +4896,7 @@ impl Refuser {
             Self::Gateway => GATEWAY_REFUSED_KEY,
             Self::TooLarge => TOO_LARGE_KEY,
             Self::ClosedOn => CLOSED_ON_KEY,
+            Self::AnswerTooLarge => ANSWER_TOO_LARGE_KEY,
             Self::SendFailed => SEND_FAILED_KEY,
             Self::Unreadable => UNREADABLE_KEY,
         }
@@ -4901,6 +4908,7 @@ impl Refuser {
             Self::TooLarge => "call_too_large",
             Self::SendFailed => "call_send_failed",
             Self::Unreadable => "call_unreadable",
+            Self::AnswerTooLarge => "call_answer_too_large",
             Self::Gateway | Self::ClosedOn => "call_closed_on",
         }
     }
@@ -4911,7 +4919,7 @@ impl Refuser {
         match self {
             Self::Gateway => Unchecked::Refused(detail),
             Self::TooLarge => Unchecked::TooLarge(detail),
-            Self::ClosedOn => Unchecked::ClosedOn(detail),
+            Self::ClosedOn | Self::AnswerTooLarge => Unchecked::ClosedOn(detail),
             Self::SendFailed => Unchecked::SendFailed(detail),
             Self::Unreadable => Unchecked::Unreadable(detail),
         }
@@ -4923,7 +4931,7 @@ impl Refuser {
         match self {
             Self::Gateway => ReadFailed::Refused(detail),
             Self::TooLarge => ReadFailed::TooLarge(detail),
-            Self::ClosedOn => ReadFailed::ClosedOn(detail),
+            Self::ClosedOn | Self::AnswerTooLarge => ReadFailed::ClosedOn(detail),
             Self::SendFailed => ReadFailed::SendFailed(detail),
             Self::Unreadable => ReadFailed::Unreadable(detail),
         }
@@ -4940,6 +4948,9 @@ pub enum Cause {
     SendFailed,
     /// The connection closed on the message itself.
     ClosedOn,
+    /// The gateway's answer to it was too large for this client to read (the client's own close,
+    /// 1009), or the same request did that before and is held until it changes.
+    AnswerTooLarge,
     /// The gateway's answer to it could not be read as an answer at all.
     Unreadable,
 }
@@ -4965,6 +4976,9 @@ const fn writes(sent: &Sent) -> bool {
         Sent::Submit { .. } | Sent::Notes { .. } | Sent::SaveDraft
     )
 }
+
+/// The string table's key for a call whose answer was too large for this client to read.
+pub const ANSWER_TOO_LARGE_KEY: &str = "status_call_answer_too_large";
 
 /// The string table's key for a call whose answer could not be read.
 pub const UNREADABLE_KEY: &str = "status_call_unreadable";

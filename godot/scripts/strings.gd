@@ -305,6 +305,7 @@ const TEXT := {
 	# A connection closed on a call itself (close code 1009 and its kin): that call
 	# is not sent again, and the line says so.
 	"unchecked_closed_on": "Not checked: the connection closed on this check (code {detail}: too big for one side to read, or unreadable); it is not sent again.",
+	"status_call_answer_too_large": "The gateway's answer to this is too large for this client to read (code {detail}), so nothing changed; shorten the file. It is not sent again until the text changes.",
 	"status_call_unreadable": "The gateway's answer to that could not be read ({detail}); nothing changed, and it is not sent again.",
 	"status_call_closed_on": "The connection closed on that (code {detail}: too big for one side to read, or unreadable); it is not sent again, and nothing changed.",
 	"templates_closed_on": "The connection closed on the template list (code {detail}).",

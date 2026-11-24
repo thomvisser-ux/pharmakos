@@ -195,6 +195,15 @@ mod tests {
             if random.chance(15) {
                 rig.editor_mut().save_notes("notes");
             }
+            if random.chance(10) {
+                let _ = rig.editor_mut().load(br#"{"schema_version":{"major":1}}"#);
+            }
+            if random.chance(8) {
+                let _ = rig.editor_mut().submit();
+            }
+            if random.chance(8) {
+                let _ = rig.editor_mut().save_draft("draft");
+            }
             if step.checked_rem(20) == Some(0) {
                 rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
             }
@@ -283,13 +292,13 @@ mod tests {
                     Fault::PastBuffer => {
                         rig.closed(link, Close::ThisMessage(1009));
                         if rig.ledger().unfinished > ledger_before.unfinished {
-                            check_words(&rig, seed, step, &method, "closed_on");
+                            check_words_closed(&rig, seed, step, &method, 1009);
                         }
                     }
                     Fault::Close(code) => {
                         rig.closed(link, Close::of_code(code));
                         if rig.ledger().unfinished > ledger_before.unfinished {
-                            check_words(&rig, seed, step, &method, "closed_on");
+                            check_words_closed(&rig, seed, step, &method, code);
                         }
                     }
                     Fault::Drop => {
@@ -343,7 +352,24 @@ mod tests {
     /// Invariant 4: true words. The last settlement names the cause that happened, and the words
     /// the rig hands the bridge for it are that cause's; a lost write says it may have been taken
     /// and forgets the seal.
+    /// [`check_words`] for a close on the message with `code`: a 1009 on an editor call is the
+    /// client's own close on an answer too big for it, said as what to do.
+    fn check_words_closed(rig: &Rig, seed: u64, step: u64, method: &str, code: i64) {
+        check_words_with(rig, seed, step, method, "closed_on", Some(code));
+    }
+
     fn check_words(rig: &Rig, seed: u64, step: u64, method: &str, cause: &str) {
+        check_words_with(rig, seed, step, method, cause, None);
+    }
+
+    fn check_words_with(
+        rig: &Rig,
+        seed: u64,
+        step: u64,
+        method: &str,
+        cause: &str,
+        code: Option<i64>,
+    ) {
         let Some((purpose, named)) = rig.last_unfinished else {
             panic!(
                 "seed {seed:#x} step {step}: true words: {method} {cause} was settled by no door"
@@ -382,6 +408,7 @@ mod tests {
                         "too_large" => "call_too_large",
                         "send_failed" => "call_send_failed",
                         "unreadable" => "call_unreadable",
+                        _ if code == Some(1009) => "call_answer_too_large",
                         _ => "call_closed_on",
                     }
                 };

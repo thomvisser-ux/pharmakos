@@ -638,6 +638,17 @@ impl Reconnect {
         self.last = Some(close);
     }
 
+    /// The link closed at `now_us` on the answer to a request the player made (an editor call):
+    /// the link is opened again at once and the close spends no attempt, since the rig never
+    /// sends that request again by itself (fix pass 6: six Load clicks on a file whose answer is
+    /// too big gave the seat link up).
+    const fn closed_free(&mut self, now_us: u64, close: Close) {
+        self.retry_at_us = Some(now_us);
+        self.opened_at_us = None;
+        self.answered = false;
+        self.last = Some(close);
+    }
+
     /// The link opened at `now_us`: the count stands until it has stayed up.
     const fn opened(&mut self, now_us: u64) {
         self.opened_at_us = Some(now_us);
@@ -706,6 +717,9 @@ pub enum Unfinished {
     SendFailed(i64),
     /// The connection closed on the message itself: the close code.
     ClosedOn(u16),
+    /// An editor call whose same request closed the link on its answer before: not sent again
+    /// until it changes (fix pass 6). The earlier close's code.
+    Held(u16),
 }
 
 impl Unfinished {
@@ -716,7 +730,7 @@ impl Unfinished {
             Self::Unreadable(why) => why.clone(),
             Self::TooLarge(bytes) => bytes.to_string(),
             Self::SendFailed(code) => code.to_string(),
-            Self::ClosedOn(code) => code.to_string(),
+            Self::ClosedOn(code) | Self::Held(code) => code.to_string(),
         }
     }
 
@@ -727,7 +741,7 @@ impl Unfinished {
             Self::Unreadable(_) => ReadFailed::Unreadable(self.said()),
             Self::TooLarge(_) => ReadFailed::TooLarge(self.said()),
             Self::SendFailed(_) => ReadFailed::SendFailed(self.said()),
-            Self::ClosedOn(_) => ReadFailed::ClosedOn(self.said()),
+            Self::ClosedOn(_) | Self::Held(_) => ReadFailed::ClosedOn(self.said()),
         }
     }
 
@@ -739,6 +753,7 @@ impl Unfinished {
             Self::TooLarge(_) => "too_large",
             Self::SendFailed(_) => "send_failed",
             Self::ClosedOn(_) => "closed_on",
+            Self::Held(_) => "held",
         }
     }
 }
@@ -905,6 +920,12 @@ pub struct Rig {
     held_view: Option<String>,
     /// The argument of the map view call last asked (its cursor; "" for a keyframe).
     view_asking: String,
+    /// The editor requests (each its method and arguments) whose answer closed the seat link on
+    /// the message itself, with the close's code: none is sent again until the phase changes
+    /// (fix pass 6). Keyed by the request, as the held view is by its argument.
+    held_plans: Vec<(String, u16)>,
+    /// The editor request last sent: its method and arguments.
+    plan_asking: String,
     /// Why this seat's Ready did not go through, for the Ready line (`ready_failed_<name>`,
     /// and the words that fill it); cleared when Ready is pressed again or the phase moves.
     ready_failed: Option<(&'static str, String)>,
@@ -999,6 +1020,8 @@ impl Rig {
             closed_on: None,
             held_view: None,
             view_asking: String::new(),
+            held_plans: Vec::new(),
+            plan_asking: String::new(),
             ready_failed: None,
             ledger: Ledger::default(),
             last_unfinished: None,
@@ -1170,9 +1193,6 @@ impl Rig {
             }
         }
         state.open = false;
-        // Every close counts against the link's policy, a close on a message included: a host
-        // that closes every link is given up whatever code it closes with (fix pass 5).
-        state.reconnect.closed(self.timing.now_us(), close);
         // A close on a message settles the call only where the call's ARGUMENT is what made the
         // answer too big (the map view's page, an editor call on the player's text): the same
         // call would close the link again. Any other call's answer is small, so a close on it is
@@ -1183,6 +1203,16 @@ impl Rig {
             }
             _ => None,
         };
+        // Every close counts against the link's policy, a close on a message included: a host
+        // that closes every link is given up whatever code it closes with (fix pass 5). The one
+        // exception is a close on an editor call's message: the player's request, which the rig
+        // never sends again by itself and holds until it changes (fix pass 6).
+        let now = self.timing.now_us();
+        if matches!(on_its_message, Some((_, Purpose::Plan))) {
+            state.reconnect.closed_free(now, close);
+        } else {
+            state.reconnect.closed(now, close);
+        }
         if let Some((code, purpose)) = on_its_message {
             state.in_flight = None;
             self.closed_on = Some(ClosedOnMessage {
@@ -1421,6 +1451,21 @@ impl Rig {
         method: &str,
         params: Json,
     ) -> Option<Outgoing> {
+        // An editor request whose answer closed the link before is not sent again until it
+        // changes: refused at once, in the same words, with no frame and no attempt spent.
+        if purpose == Purpose::Plan {
+            let asking = format!("{method} {}", json::write(&params));
+            if let Some(code) = self
+                .held_plans
+                .iter()
+                .find(|(held, _)| *held == asking)
+                .map(|(_, code)| *code)
+            {
+                self.unfinished(link, purpose, &Unfinished::Held(code));
+                return None;
+            }
+            self.plan_asking = asking;
+        }
         let state = self.links.get_mut(link)?;
         state.next_id = state.next_id.saturating_add(1);
         let id = state.next_id;
@@ -1735,7 +1780,7 @@ impl Rig {
     fn unfinished(&mut self, link: usize, purpose: Purpose, why: &Unfinished) -> bool {
         let said = why.said();
         // A frame too large to send was never sent; everything else was, and ends here.
-        if !matches!(why, Unfinished::TooLarge(_)) {
+        if !matches!(why, Unfinished::TooLarge(_) | Unfinished::Held(_)) {
             self.ledger.unfinished = self.ledger.unfinished.saturating_add(1);
         }
         // The answer to a call that changes something was lost (unreadable, or the link closed on
@@ -1847,9 +1892,29 @@ impl Rig {
             Unfinished::SendFailed(_) => Ok(self
                 .editor
                 .unfinished(crate::editor::Cause::SendFailed, &said)),
-            Unfinished::ClosedOn(_) => Ok(self
+            Unfinished::ClosedOn(code) => {
+                // The player's request closed the link on its answer: held until it changes,
+                // since the same request would close it again (fix pass 6). A 1009 is the
+                // client's own close on an answer too big for it, said as what to do.
+                if !self
+                    .held_plans
+                    .iter()
+                    .any(|(held, _)| *held == self.plan_asking)
+                {
+                    self.held_plans.push((self.plan_asking.clone(), *code));
+                }
+                Ok(self.editor.unfinished(
+                    if *code == 1009 {
+                        crate::editor::Cause::AnswerTooLarge
+                    } else {
+                        crate::editor::Cause::ClosedOn
+                    },
+                    &said,
+                ))
+            }
+            Unfinished::Held(_) => Ok(self
                 .editor
-                .unfinished(crate::editor::Cause::ClosedOn, &said)),
+                .unfinished(crate::editor::Cause::AnswerTooLarge, &said)),
         };
         self.sync_editor();
         // A write's answer was lost: the seal it would have changed is read again.
@@ -1972,8 +2037,10 @@ impl Rig {
         // afresh (fix pass 2).
         self.status_retries = 0;
         self.status_retry_owed = false;
-        // A new phase changes what the held view asks, and a Ready is the new phase's.
+        // A new phase changes what the held view and the held editor request ask, and a Ready is
+        // the new phase's.
         self.held_view = None;
+        self.held_plans.clear();
         self.ready_failed = None;
         if phase == Phase::Lull {
             self.ready_sent = false;
@@ -3138,6 +3205,61 @@ mod tests {
         // The editor's `refusals` are the gateway's alone; this one is counted by its cause.
         assert_eq!(rig.editor().refusals(), 0);
         assert_eq!(rig.editor().unfinished_calls().send_failed, 1);
+    }
+
+    /// **A player who clicks Load a few times on a file whose answer is too big keeps the seat
+    /// link** (fix pass 6; review 5's `p_loads_at_a_players_pace`): six loads half a second apart,
+    /// each answered past the client's buffer (its own 1009). The first closes the link on its
+    /// message, which spends no attempt; the same text is never sent again (held until it
+    /// changes); the link is never given up; and the editor's line says what to do.
+    #[test]
+    fn six_loads_of_a_too_big_file_half_a_second_apart_keep_the_seat_link() {
+        let mut rig = editing();
+        let big = br#"{"schema_version":{"major":1},"meta":{"title":"too big an answer"}}"#;
+        let mut now = rig.timing.now_us();
+        let mut sent_loads = 0;
+        for click in 0..6 {
+            assert!(rig.editor_mut().load(big), "click {click} was not taken");
+            for _ in 0..10 {
+                now += 50_000;
+                rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+                if rig.link_action(SEAT) == Some(LinkAction::Connect) {
+                    rig.opened(SEAT);
+                }
+                for frame in rig.poll(now) {
+                    if frame.link == SEAT && frame.text.contains("too big an answer") {
+                        sent_loads += 1;
+                        rig.closed(SEAT, Close::ThisMessage(1009));
+                    } else {
+                        let text = match method_of(&frame).as_str() {
+                            "get_view" => answer(
+                                id_of(&frame),
+                                r#"{"next_cursor":"c9","complete":true}"#,
+                                "lull",
+                            ),
+                            _ => answer(id_of(&frame), "{}", "lull"),
+                        };
+                        let _ = rig.receive(frame.link, &text);
+                    }
+                }
+                assert_ne!(
+                    rig.link_action(SEAT),
+                    Some(LinkAction::GiveUp),
+                    "click {click}: the seat link was given up"
+                );
+            }
+            assert_eq!(
+                rig.link_attempts(SEAT),
+                Some(0),
+                "click {click} spent an attempt"
+            );
+            assert_eq!(
+                rig.editor().status().key,
+                "call_answer_too_large",
+                "click {click}: the editor's line"
+            );
+        }
+        assert_eq!(sent_loads, 1, "the same text was sent again unchanged");
     }
 
     /// The seat's first poll after it opens: the keyframe, sent and in flight.

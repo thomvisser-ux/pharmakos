@@ -1908,11 +1908,14 @@ func _take_asked_refusal(detail: String) -> void:
 	_failures.append("the planning wire: the gateway's refusal `%s` never reached the feed of answers" % detail.left(80))
 
 
-## **Closes on a message do not end a playable match** (S3's `fixq-c`, fix pass 4, item 1).
-## Review 3's playbook of 18 000 bare holds (216 056 bytes, under the cap) is loaded six times;
-## each load's answers are past the client's inbound buffer, so the seat link closes on the
-## message each time (Godot's 1009). Through all six: the link opens again, its reconnect budget
-## is not spent, the text on screen stays as it was, and the leg goes on to seal and Ready.
+## **Closes on a message do not end a playable match** (S3's `fixq-c`, fix passes 4 to 6, item
+## 1). Review 3's playbook of 18 000 bare holds (216 056 bytes, under the cap) is loaded six times
+## with no wait between the loads, as a player might click; its answers are past the client's
+## inbound buffer, so the first load closes the seat link on its message (Godot's 1009). That close
+## spends no reconnect attempt, and the same text is held: the five loads after it are refused at
+## once without being sent. Through all six the seat link is never given up, the text on screen
+## stays as it was, the editor's line says the answer is too large to read and to shorten the
+## file, and the leg goes on to seal and Ready.
 func _closes_on_a_message() -> bool:
 	var steps: PackedStringArray = []
 	for index in 18000:
@@ -1921,25 +1924,26 @@ func _closes_on_a_message() -> bool:
 	var text: PackedByteArray = vista.bridge.editor_bytes()
 	var closes := _count(_state(), "message_drops_seat")
 	for attempt in 6:
-		# Each close counts against the seat link's reconnect policy, so the next load waits until
-		# the link has stayed up with an answer and its count is back to zero (fix pass 5).
-		if not await _until(func() -> bool: return vista.bridge.watch_link_attempts(1) == 0, PUSH_WAIT):
-			_failures.append("the planning wire: the seat link never became healthy again before big load %d" % attempt)
-			return false
 		var before := _count(_editor(), "closed_on_calls")
 		if not editor.load_bytes(big):
 			_failures.append("the planning wire: big load %d was not taken to the gateway" % attempt)
 			return false
-		if not await _until(func() -> bool: return _count(_editor(), "closed_on_calls") > before and _state().get("closed_on", {}).get("open", false) and not _editor().get("busy", true), PUSH_WAIT):
-			_failures.append("the planning wire: big load %d did not close on its message and open again: %s %s" % [attempt, _state(), _editor().get("status_key", "")])
+		if not await _until(func() -> bool: return _count(_editor(), "closed_on_calls") > before and not _editor().get("busy", true), PUSH_WAIT):
+			_failures.append("the planning wire: big load %d was not settled on its message: %s %s" % [attempt, _state(), _editor().get("status_key", "")])
 			return false
-	if _count(_state(), "message_drops_seat") < closes + 6:
-		_failures.append("the planning wire: six big loads closed the seat link on a message %d times" % (_count(_state(), "message_drops_seat") - closes))
+		if String(vista.bridge.watch_link_action(1)) == "give_up":
+			_failures.append("the planning wire: big load %d gave the seat link up" % attempt)
+			return false
+	var dropped := _count(_state(), "message_drops_seat") - closes
+	if dropped < 1:
+		_failures.append("the planning wire: six big loads never closed the seat link on their message")
+	if vista.bridge.watch_link_attempts(1) != 0:
+		_failures.append("the planning wire: closes on the player's loads spent the seat link's attempts (%d)" % vista.bridge.watch_link_attempts(1))
 	if vista.bridge.editor_bytes() != text:
 		_failures.append("the planning wire: a load refused on its message changed the text on screen")
-	if vista.bridge.watch_link_action(1) == "give_up":
-		_failures.append("the planning wire: six closes on a message, each followed by a healthy spell, gave the seat link up")
-	print("[watch-check] the planning wire: six loads closed the seat link on their message (%s), each said: `%s`; the link healthy again after each" % [_state().get("closed_on", {}), Lobby.closed_on_line(_state())])
+	if String(_editor().get("status_key", "")) != "call_answer_too_large":
+		_failures.append("the planning wire: the editor's line after the big loads is `%s`" % _editor().get("status_key", ""))
+	print("[watch-check] the planning wire: six loads with no wait, %d close(s) on the message, the rest held; the seat link kept, no attempt spent; the editor says: `%s`" % [dropped, Strings.text("status_" + String(_editor().get("status_key", "")), {"detail": _editor().get("status_detail", "")})])
 	return true
 
 
