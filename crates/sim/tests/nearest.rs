@@ -2183,7 +2183,7 @@ fn decision_units_equal_the_primitive_steps_counted() {
 /// `cargo xtask ci`'s `scenario` step plays.
 #[test]
 fn decision_units_never_reach_the_state_hash() {
-    use pharmakos_sim::seams::Unmeasured;
+    use pharmakos_sim::seams::{NoFigure, Unmeasured};
     let route = concat!(
         r#"{"label":"stone","place_beacon":{"at":{"toward":{"feature":{"feature_id":"vent_232_96"}}}},"timeout_ms":120000},"#,
         r#"{"label":"cover","place_beacon":{"at":{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}},"timeout_ms":120000}"#
@@ -2218,7 +2218,7 @@ fn decision_units_never_reach_the_state_hash() {
             .any(|(_, units)| matches!(units, Ok(units) if *units > 0)),
         "the match charges decision units"
     );
-    let hashes = |chain: &[(u64, Result<u64, Unmeasured>)]| -> Vec<u64> {
+    let hashes = |chain: &[(u64, Result<u64, NoFigure>)]| -> Vec<u64> {
         chain.iter().map(|(hash, _)| *hash).collect()
     };
     assert_eq!(
@@ -2230,7 +2230,7 @@ fn decision_units_never_reach_the_state_hash() {
         if matches!(clean, Ok(units) if *units > 0) {
             assert_eq!(
                 *faulted,
-                Err(Unmeasured::Overflowed),
+                Err(NoFigure::Unmeasured(Unmeasured::Overflowed)),
                 "the fault fired inside the decision"
             );
         }

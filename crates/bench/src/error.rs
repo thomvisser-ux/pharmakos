@@ -67,6 +67,13 @@ pub enum Error {
         /// Why the sim holds no count.
         reason: pharmakos_sim::seams::Unmeasured,
     },
+    /// A seat's decision figure was read before any decision ran since the
+    /// world was made or restored (`pharmakos_sim::seams::NoFigure`): there
+    /// is nothing to measure yet, which is not a count of nothing.
+    NoDecisionYet {
+        /// The seat whose figure was read.
+        seat: usize,
+    },
     /// A generated playbook shape cannot be laid at the size asked for
     /// ([`crate::shapes::Shape`]).
     Shape {
@@ -97,6 +104,10 @@ impl fmt::Display for Error {
             Error::Unmeasured { seat, reason } => {
                 write!(f, "seat {seat}'s decision was not measured: {reason}")
             }
+            Error::NoDecisionYet { seat } => write!(
+                f,
+                "seat {seat} has run no decision since the world was made or restored, so it has no decision units to read"
+            ),
             Error::Shape {
                 shape,
                 units,

@@ -450,11 +450,12 @@ pub struct World {
     /// Kept between ticks only so a test's armed fault
     /// ([`World::fault_next_decision_charge`]) survives to the decision.
     decision_units: crate::seams::UnitTally,
-    /// Per seat, what its last decision tick's decision spent, as the tally
-    /// read it: the count, or why it holds none. Not hashed, and
-    /// `tests/determinism.rs` keeps it out of the state encoding as it keeps
-    /// the tick's counter out.
-    decision_work: Vec<Result<u64, crate::seams::Unmeasured>>,
+    /// Per seat, what its last decision spent, as the tally read it: the
+    /// count, why it holds none, or that no decision has run since this world
+    /// was made or restored ([`crate::seams::NoFigure`]). Not hashed, not
+    /// saved, and `tests/determinism.rs` keeps it out of the state encoding as
+    /// it keeps the tick's counter out.
+    decision_work: Vec<Result<u64, crate::seams::NoFigure>>,
     broadphase: Csr,
     /// The HPA\* surface graph. Derived from the chunk store and the cost rows,
     /// rebuilt on a restore rather than carried in a snapshot.
@@ -1354,7 +1355,10 @@ impl World {
                 config.rules.sphere_radius_voxels(),
             )),
             decision_units: crate::seams::UnitTally::new(),
-            decision_work: vec![Ok(0); crate::math::index::row(config.seats)],
+            decision_work: vec![
+                Err(crate::seams::NoFigure::NoDecisionYet);
+                crate::math::index::row(config.seats)
+            ],
             broadphase,
             repairer: Repairer::new(clusters.cluster_count()),
             surface,
@@ -1765,16 +1769,14 @@ impl World {
 
     /// What `seat_index`'s last decision spent, in evaluation units, one a
     /// primitive step of counted work ([`crate::seams::UnitTally`]; P1's
-    /// counted half, S1's plan section 5), or the
-    /// [`crate::seams::Unmeasured`] reason it holds no count.
+    /// counted half, S1's plan section 5), or why it holds no count
+    /// ([`crate::seams::NoFigure`]): its tally stopped being a count, or no
+    /// decision has run since this world was made or restored.
     ///
-    /// **Not hashed**: a measurement of the decision, not an input to the
-    /// next one. `None` for a seat the world does not have.
+    /// **Not hashed, not saved**: a measurement of the decision, not an input
+    /// to the next one. `None` for a seat the world does not have.
     #[must_use]
-    pub fn decision_work(
-        &self,
-        seat_index: usize,
-    ) -> Option<Result<u64, crate::seams::Unmeasured>> {
+    pub fn decision_work(&self, seat_index: usize) -> Option<Result<u64, crate::seams::NoFigure>> {
         self.decision_work.get(seat_index).copied()
     }
 
@@ -5122,7 +5124,7 @@ impl World {
                 crate::mining::refresh_seams(self, SeatId::new(id), &units);
             }
             if let Some(slot) = self.decision_work.get_mut(seat) {
-                *slot = units.read();
+                *slot = units.read().map_err(crate::seams::NoFigure::Unmeasured);
             }
             seat = seat.saturating_add(1);
         }
@@ -9214,7 +9216,7 @@ mod decision_visits {
     use super::{BuildEntry, World, WorldConfig};
     use crate::math::fixed::Fx;
     use crate::math::quantity::Money;
-    use crate::seams::{MandateKind, Meter as _, UnitTally, Unmeasured};
+    use crate::seams::{MandateKind, Meter as _, NoFigure, UnitTally};
     use crate::tables::{
         AreaKind, BeaconId, BuildOrder, ColumnBox, SeatId, StructureKind, TargetKind,
     };
@@ -9267,7 +9269,7 @@ mod decision_visits {
     }
 
     /// Every seat's published figure.
-    fn figures(world: &World) -> Vec<Option<Result<u64, Unmeasured>>> {
+    fn figures(world: &World) -> Vec<Option<Result<u64, NoFigure>>> {
         (0..crate::math::index::row(world.seats().len()))
             .map(|seat| world.decision_work(seat))
             .collect()
@@ -9333,6 +9335,65 @@ mod decision_visits {
             figures(runner.world()),
             before,
             "a tick with no decision charged nothing"
+        );
+    }
+
+    /// A restored world has run no decision: it reports none yet, never a
+    /// count, and after its next decision the figures its source reports.
+    #[test]
+    fn a_restored_world_reports_no_decision_yet() {
+        let world = world();
+        let mut runner =
+            crate::runner::Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            runner
+                .begin_push()
+                .unwrap_or_else(|error| panic!("{error:?}"))
+        );
+        let _ = runner.step().unwrap_or_else(|error| panic!("{error:?}"));
+        let snapshot = crate::snapshot::Snapshot::capture(runner.world())
+            .unwrap_or_else(|error| panic!("a snapshot: {error:?}"));
+        let mut restored = super::World::new(&WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            rules: runner.world().rules().clone(),
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"));
+        snapshot
+            .restore_into(&mut restored)
+            .unwrap_or_else(|error| panic!("a restore: {error:?}"));
+        assert!(
+            figures(&restored)
+                .iter()
+                .all(|figure| *figure == Some(Err(NoFigure::NoDecisionYet))),
+            "no decision since the restore: {:?}",
+            figures(&restored)
+        );
+        assert!(
+            figures(runner.world())
+                .iter()
+                .all(|figure| matches!(figure, Some(Ok(_))))
+        );
+        // Step both to their next decision: the figures agree.
+        let mut enc = crate::encoding::Enc::default();
+        let mut source = runner.world().clone();
+        loop {
+            source
+                .step(&mut enc)
+                .unwrap_or_else(|error| panic!("{error:?}"));
+            restored
+                .step(&mut enc)
+                .unwrap_or_else(|error| panic!("{error:?}"));
+            if source.is_decision_tick() {
+                break;
+            }
+        }
+        assert_eq!(figures(&restored), figures(&source));
+        assert!(
+            figures(&source)
+                .iter()
+                .all(|figure| matches!(figure, Some(Ok(_))))
         );
     }
 

@@ -506,14 +506,23 @@ fn seat_work(world: &pharmakos_sim::world::World, seats: u32) -> Result<u64, Err
 /// (`World::decision_work`): its count, or why it has none.
 fn seat_units(
     seat: usize,
-    work: Option<Result<u64, pharmakos_sim::seams::Unmeasured>>,
+    work: Option<Result<u64, pharmakos_sim::seams::NoFigure>>,
 ) -> Result<u64, Error> {
     work.ok_or_else(|| {
         Error::Drift(format!(
             "the world keeps no counted work for seat {seat}, which sealed a playbook"
         ))
     })?
-    .map_err(|reason| Error::Unmeasured { seat, reason })
+    .map_err(|missing| no_figure(seat, missing))
+}
+
+/// The bench's own error for a seat's figure that holds no count: a
+/// decision whose tally stopped being a count, or no decision yet.
+pub(crate) fn no_figure(seat: usize, missing: pharmakos_sim::seams::NoFigure) -> Error {
+    match missing {
+        pharmakos_sim::seams::NoFigure::Unmeasured(reason) => Error::Unmeasured { seat, reason },
+        pharmakos_sim::seams::NoFigure::NoDecisionYet => Error::NoDecisionYet { seat },
+    }
 }
 
 /// One size of the decision tick's curve.
@@ -682,11 +691,16 @@ mod tests {
 
     #[test]
     fn an_unmeasured_decision_is_the_benchs_own_error() {
-        use pharmakos_sim::seams::Unmeasured;
+        use pharmakos_sim::seams::{NoFigure, Unmeasured};
         assert_eq!(seat_units(2, Some(Ok(57))), Ok(57));
+        assert_eq!(
+            seat_units(2, Some(Err(NoFigure::NoDecisionYet))),
+            Err(Error::NoDecisionYet { seat: 2 }),
+            "a figure no decision has written yet is refused, never read as zero"
+        );
         for reason in [Unmeasured::Overflowed, Unmeasured::SourceUnreadable] {
             assert_eq!(
-                seat_units(2, Some(Err(reason))),
+                seat_units(2, Some(Err(NoFigure::Unmeasured(reason)))),
                 Err(Error::Unmeasured { seat: 2, reason }),
                 "a count the sim could not take is refused, never read as a number"
             );

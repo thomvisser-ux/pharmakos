@@ -193,6 +193,30 @@ impl core::fmt::Display for Unmeasured {
 
 impl std::error::Error for Unmeasured {}
 
+/// Why a seat's published decision figure ([`crate::world::World::decision_work`])
+/// holds no count (dunit part 2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoFigure {
+    /// No decision has run since this world was made or restored: there is
+    /// nothing to report yet, which is not a count of nothing.
+    NoDecisionYet,
+    /// The last decision ran, and its tally stopped being a count.
+    Unmeasured(Unmeasured),
+}
+
+impl core::fmt::Display for NoFigure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            NoFigure::NoDecisionYet => {
+                f.write_str("no decision has run since the world was made or restored")
+            }
+            NoFigure::Unmeasured(reason) => reason.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for NoFigure {}
+
 impl UnitTally {
     /// A tally at zero.
     #[must_use]

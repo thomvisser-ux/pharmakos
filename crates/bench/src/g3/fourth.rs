@@ -96,14 +96,13 @@ const FOURTH: usize = 3;
 ///
 /// # Errors
 ///
-/// [`Error::Unmeasured`] when the sim holds no count for it.
+/// [`Error::Unmeasured`] when the sim holds no count for it, and
+/// [`Error::NoDecisionYet`] when it has run no decision.
 fn fourth_units(
-    work: Option<Result<u64, pharmakos_sim::seams::Unmeasured>>,
+    work: Option<Result<u64, pharmakos_sim::seams::NoFigure>>,
 ) -> Result<Option<u64>, Error> {
-    work.transpose().map_err(|reason| Error::Unmeasured {
-        seat: FOURTH,
-        reason,
-    })
+    work.transpose()
+        .map_err(|missing| crate::decision::no_figure(FOURTH, missing))
 }
 
 /// Play one run.
@@ -278,15 +277,20 @@ pub fn measure(
 #[cfg(test)]
 mod tests {
     use super::{Error, FOURTH, fourth_units};
-    use pharmakos_sim::seams::Unmeasured;
+    use pharmakos_sim::seams::{NoFigure, Unmeasured};
 
     #[test]
     fn an_unmeasured_fourth_seat_is_the_benchs_own_error() {
         assert_eq!(fourth_units(Some(Ok(57))), Ok(Some(57)));
         assert_eq!(fourth_units(None), Ok(None));
+        assert_eq!(
+            fourth_units(Some(Err(NoFigure::NoDecisionYet))),
+            Err(Error::NoDecisionYet { seat: FOURTH }),
+            "a figure no decision has written yet is refused, never read as zero"
+        );
         for reason in [Unmeasured::Overflowed, Unmeasured::SourceUnreadable] {
             assert_eq!(
-                fourth_units(Some(Err(reason))),
+                fourth_units(Some(Err(NoFigure::Unmeasured(reason)))),
                 Err(Error::Unmeasured {
                     seat: FOURTH,
                     reason
