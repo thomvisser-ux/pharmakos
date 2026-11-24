@@ -686,16 +686,15 @@ mod tests {
     /// with a name nothing else uses -- the same thing `xtask`'s own self-tests
     /// do.
     ///
-    /// Unique to this process and this call (the process id and a counter),
-    /// so two test processes sharing one temporary directory never share a
-    /// folder, and removed when the test drops it.
+    /// Unique to this process and this test (its name, which no other test
+    /// here uses, and the process id), so two test processes sharing one
+    /// temporary directory never share a folder; removed when the test drops
+    /// it.
     fn scratch(name: &str) -> Scratch {
-        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let count = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let base = std::env::temp_dir()
             .join("pharmakos-gateway-tests")
             .join("cache")
-            .join(format!("{name}-{}-{count}", std::process::id()));
+            .join(format!("{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("scratch");
         Scratch(base)
