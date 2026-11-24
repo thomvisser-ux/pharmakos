@@ -42,6 +42,13 @@
 //! still runs it, and it reads the sim's sources and manifest and goes red the
 //! day the feature reaches anything else, when the tests must run under it as
 //! well.
+//!
+//! **What the research build adds, `fork`, is counted in the research build
+//! alone**, in the `fork` module: a forked world's tick allocates exactly the
+//! chunks it un-shares with its parent (copy-on-write, counted by the chunks'
+//! addresses), its parent's tick likewise while the fork lives, and nothing
+//! once the fork is dropped. The match, the warm-up and the edits both builds'
+//! tests file are the shared helpers below.
 
 #![allow(
     clippy::expect_used,
@@ -115,6 +122,421 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
+use pharmakos_sim::encoding::Enc;
+use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, Runner};
+use pharmakos_sim::voxels::VoxelEdit;
+use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
+
+/// How many times this thread has allocated so far. Called only from a test's
+/// own body, where the slot exists; a missing slot is a failure, never a zero
+/// that would read as "nothing was allocated".
+fn allocations() -> u64 {
+    ALLOCATIONS
+        .try_with(Cell::get)
+        .expect("the counting slot exists on a running test's thread")
+}
+
+/// The ticks [`warm_up`] runs: every buffer a tick fills is at its steady
+/// capacity after them.
+const WARM_UP_TICKS: u32 = 50;
+
+/// The ticks counted for table growth, after the warm-up: long enough that
+/// every placed seat's deploy, Generator and fabricated drone land inside them
+/// (the last Generator is finished at tick 1 300 at the committed table).
+const GROWTH_TICKS: u32 = 1_400;
+
+/// The determinism harness's match, in its first Push, every seat sealed: the
+/// world both builds' tick tests count. Built outside every counted window.
+fn harness_runner() -> Runner {
+    let rules = RulesTable::load(
+        &std::path::Path::new("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json"),
+    )
+    .expect("the committed rules table loads");
+    let world = World::new(&WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: pharmakos_sim::DETERMINISM_SEATS,
+        // No walkers. The determinism harness fielded fifty a seat until S1's
+        // real segment (decision 16), and this test with it. A probe with
+        // fifty a seat on the committed playbook (S1's `tune` fix pass) held
+        // both allocation assertions below, but not the fixed-stride one: with
+        // walkers wandering through the steady window the encoding's length
+        // changed between ticks, so the window is no longer steady. The
+        // wide-table coverage lives in `tests/determinism.rs` (`TEST_MOVERS`);
+        // this test covers the real playbook's in-tick growth instead.
+        rules,
+        match_settings: MatchSettings {
+            // Long enough that the measured loop never reaches the segment's
+            // end: the segment-end freeze allocates by design (it captures a
+            // whole world) and belongs outside the assertion, exactly like
+            // `Runner::new` below.
+            segment_lengths_ms: vec![600_000],
+            round_limit: DEFAULT_ROUND_LIMIT,
+        },
+    })
+    .expect("the rules table describes a map and a broadphase grid");
+    // Driven through the `Runner`, and **in a Push**, because `World::phase_match`
+    // returns at its first gate outside one: a world stepped by hand stays in
+    // its opening Lull, and everything T10 put in that phase — the beacon
+    // deaths, elimination, the respawns, the one-tick match-end rule, the
+    // segment's end and every event they emit — would sit outside the counted
+    // loop.
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    // Every seat seals the harness playbook, for the same reason: the decision
+    // phase returns immediately for a seat that sealed nothing, so without this
+    // the whole interpreter — the `covering` resolver with its "nearest"
+    // estimates and its spiral, the walk in, the deploy's charge, the initial
+    // settings' interface rows, the Build target written `on` the covered
+    // vent, the hold, the handler scan and the guaranteed tail — would sit
+    // outside the one assertion that a tick allocates nothing (T11). Since
+    // S1's real determinism segment (decision 16) the playbook is the
+    // committed copy of Hold & Build's instantiation the chain runs.
+    let playbook = pharmakos_sim::determinism_playbook(
+        &std::path::Path::new("..")
+            .join("..")
+            .join(pharmakos_sim::DETERMINISM_PLAYBOOK_PATH),
+    )
+    .expect("the committed harness playbook reads");
+    let sealed = pharmakos_sim::seal_determinism_playbooks(runner.world_mut(), &playbook)
+        .expect("the harness playbook compiles");
+    assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
+    runner
+}
+
+/// Warm `runner` up for [`WARM_UP_TICKS`] ticks, cratering and collapsing on
+/// each, outside every counted window.
+fn warm_up(runner: &mut Runner, enc: &mut Enc) {
+    // Warm up: the first tick may still grow the encoder's buffer, and a
+    // capacity that is right for tick 1 is right for tick 10 000 because every
+    // table's count is fixed at construction.
+    // The warm-up craters too, so the voxel phase's own scratch — the edit
+    // queue, the store's pending and settled lists, the crater's touched list —
+    // is paid for out here and the measured loop below sees it at its steady
+    // capacity.
+    for step in 0..WARM_UP_TICKS {
+        crater_at(runner.world_mut(), step);
+        collapse_at(runner.world_mut(), step);
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
+        runner.clear_events();
+        runner.world().encode(enc);
+    }
+}
+
+/// Queue one crater on a fresh patch of ground, so the edit actually changes
+/// voxels and the whole voxel phase runs.
+///
+/// The columns walk a coprime stride across the map, so a later tick never
+/// craters air a former tick already removed; the `z` is the column's own
+/// surface, so the ball always has rock to take.
+fn crater_at(world: &mut World, step: u32) {
+    let size = world.voxels().size();
+    let width = i32::try_from(size[0]).expect("the map fits in an i32");
+    let depth = i32::try_from(size[1]).expect("the map fits in an i32");
+    let x = i32::try_from(step.wrapping_mul(37) % 4096).expect("a column index") % width;
+    let y = i32::try_from(step.wrapping_mul(53) % 4096).expect("a column index") % depth;
+    let z = world
+        .voxels()
+        .top_solid_z(x, y)
+        .expect("every column of the determinism map has ground");
+    assert!(
+        world
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: [x, y, z],
+                radius: 3,
+                by: None,
+            })
+            .is_ok(),
+        "the edit queue is full at step {step}"
+    );
+}
+
+/// Queue a collapse on a fresh column: a voxel two above the column's top,
+/// joined to it by one voxel that the same tick's last edit removes, so the
+/// voxel above is a detached region of one that falls a voxel.
+///
+/// The columns walk a different coprime stride from [`crater_at`]'s, offset
+/// across the map, so a collapse and a crater rarely share a column, and a
+/// shared one still collapses: the edits run in the order they are filed.
+fn collapse_at(world: &mut World, step: u32) {
+    let size = world.voxels().size();
+    let width = i32::try_from(size[0]).expect("the map fits in an i32");
+    let depth = i32::try_from(size[1]).expect("the map fits in an i32");
+    let x = (i32::try_from(step.wrapping_mul(41) % 4096).expect("a column index") + 101) % width;
+    let y = (i32::try_from(step.wrapping_mul(59) % 4096).expect("a column index") + 211) % depth;
+    let z = world
+        .voxels()
+        .top_solid_z(x, y)
+        .expect("every column of the determinism map has ground");
+    for (dz, material) in [
+        (2, pharmakos_sim::voxels::Material::STONE),
+        (1, pharmakos_sim::voxels::Material::STONE),
+        (1, pharmakos_sim::voxels::Material::AIR),
+    ] {
+        assert!(
+            world
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: [x, y, z + dz],
+                    material,
+                    by: None,
+                })
+                .is_ok(),
+            "the edit queue is full at step {step}"
+        );
+    }
+}
+
+/// The `research` build's test: a forked world's tick, and its parent's while
+/// the fork lives. Behind `feature = "research"` because `fork` exists only
+/// there; the default build's tick is counted by [`tick`]'s tests.
+#[cfg(feature = "research")]
+mod fork {
+    use super::{
+        GROWTH_TICKS, WARM_UP_TICKS, allocations, collapse_at, crater_at, harness_runner, warm_up,
+    };
+
+    use pharmakos_sim::World;
+    use pharmakos_sim::encoding::Enc;
+    use pharmakos_sim::runner::Runner;
+
+    /// The ticks each counted window runs: the child's, the parent's while
+    /// the child lives, and the parent's after the child is dropped.
+    const FORK_TICKS: u32 = 50;
+
+    /// Each of `world`'s chunks' bytes, by address, into `into`: what the
+    /// counting compares to find the chunks a tick re-pointed. `into` is
+    /// reserved for every chunk before any window, so this allocates nothing.
+    fn chunk_addresses(world: &World, into: &mut Vec<*const u8>) {
+        into.clear();
+        for chunk in 0..world.voxels().chunk_count() {
+            let bytes = world
+                .voxels()
+                .chunk_bytes(chunk)
+                .expect("every chunk below the count has bytes");
+            into.push(bytes.as_ptr());
+        }
+    }
+
+    /// How many of `world`'s chunks no longer sit at the address `before`
+    /// recorded: the chunks re-pointed since. A chunk shared with another
+    /// world is re-pointed by its first write (copy-on-write,
+    /// `Arc::make_mut`), and that copy is one allocation; a chunk this world
+    /// alone holds is written in place.
+    fn repointed(world: &World, before: &[*const u8]) -> u64 {
+        let mut moved = 0_u64;
+        for (chunk, was) in (0..world.voxels().chunk_count()).zip(before) {
+            let now = world
+                .voxels()
+                .chunk_bytes(chunk)
+                .expect("every chunk below the count has bytes")
+                .as_ptr();
+            if !core::ptr::eq(now, *was) {
+                moved += 1;
+            }
+        }
+        moved
+    }
+
+    /// One window's figures: what the thread allocated, and the chunks the
+    /// stepped world re-pointed, counted tick by tick.
+    struct Window {
+        allocated: u64,
+        repointed: u64,
+    }
+
+    /// Step the child `child` for `ticks` ticks, cratering and
+    /// collapsing on each from `first`, through the host's door
+    /// (`request_voxel_edit`, between ticks, so the edit queue is counted
+    /// too).
+    fn count_child(
+        child: &mut World,
+        enc: &mut Enc,
+        first: u32,
+        ticks: u32,
+        addresses: &mut Vec<*const u8>,
+    ) -> Window {
+        let mut repointed_total = 0_u64;
+        let before = allocations();
+        for step in 0..ticks {
+            chunk_addresses(child, addresses);
+            crater_at(child, step + first);
+            collapse_at(child, step + first);
+            child.step(enc).expect("the forked world steps");
+            child.clear_events();
+            child.encode(enc);
+            repointed_total += repointed(child, addresses);
+        }
+        Window {
+            allocated: allocations() - before,
+            repointed: repointed_total,
+        }
+    }
+
+    /// As [`count_child`], for the parent, driven through its `Runner`.
+    fn count_parent(
+        runner: &mut Runner,
+        enc: &mut Enc,
+        first: u32,
+        addresses: &mut Vec<*const u8>,
+    ) -> Window {
+        let mut repointed_total = 0_u64;
+        let before = allocations();
+        for step in 0..FORK_TICKS {
+            chunk_addresses(runner.world(), addresses);
+            crater_at(runner.world_mut(), step + first);
+            collapse_at(runner.world_mut(), step + first);
+            runner
+                .step()
+                .expect("the parent steps")
+                .expect("the segment outlasts this test");
+            runner.clear_events();
+            runner.world().encode(enc);
+            repointed_total += repointed(runner.world(), addresses);
+        }
+        Window {
+            allocated: allocations() - before,
+            repointed: repointed_total,
+        }
+    }
+
+    /// What the `research` build adds to the tick, it adds through `fork`
+    /// alone, and a fork costs exactly the chunks it un-shares.
+    ///
+    /// A fork is a `World::clone`. It shares every chunk with its parent
+    /// (copy-on-write, by design), so the first write to a shared chunk, in
+    /// either world, copies it: one allocation, which this test counts by the
+    /// chunk's address changing, never by a counter in the code under test.
+    /// Everything else a clone must keep as the original built it: a clone that
+    /// copied a buffer's length and not its reserved room (as a derived `Clone`
+    /// of a `Vec` does) would allocate on the first tick that filled it, in
+    /// the clone rather than in the original, which is exactly where nobody
+    /// looks.
+    ///
+    /// The parent is warmed as the default build's tick test's match is, so
+    /// every buffer is at its steady capacity when it is forked. Then: the
+    /// child's first [`FORK_TICKS`] ticks, the parent's next ones while the
+    /// child lives (on columns the child did not crater, so it meets chunks
+    /// the two still share), and the parent's after the child is dropped,
+    /// when it holds every chunk alone and must allocate nothing, as the
+    /// default build's tick does. Every counted tick craters and collapses,
+    /// through the host's `request_voxel_edit` between ticks.
+    #[test]
+    fn a_forked_worlds_tick_allocates_only_the_chunks_it_re_points() {
+        let mut runner = harness_runner();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        warm_up(&mut runner, &mut enc);
+        let chunks = usize::try_from(runner.world().voxels().chunk_count())
+            .expect("a chunk count fits a usize");
+        let mut addresses: Vec<*const u8> = Vec::with_capacity(chunks);
+
+        let mut child = pharmakos_sim::research::fork(runner.world());
+        let regions_before = child.collapse_counts().regions;
+        let forked = count_child(
+            &mut child,
+            &mut enc,
+            WARM_UP_TICKS,
+            FORK_TICKS,
+            &mut addresses,
+        );
+        let fell = child.collapse_counts().regions - regions_before;
+        assert!(
+            fell >= u64::from(FORK_TICKS),
+            "a region fell on every counted tick of the fork: {fell}"
+        );
+        assert!(
+            forked.repointed > 0,
+            "the child's craters met chunks it shares with its parent, so the count is not vacuous"
+        );
+        assert_eq!(
+            forked.allocated, forked.repointed,
+            "the first {FORK_TICKS} ticks of a forked world allocated {} times and re-pointed {} \
+             chunks: a fork's clone must keep every buffer's reserved room, so the chunks it \
+             un-shares are all it allocates",
+            forked.allocated, forked.repointed
+        );
+
+        // The parent, on columns of its own, while the child still shares
+        // every chunk neither has written since the fork.
+        let parent = count_parent(
+            &mut runner,
+            &mut enc,
+            WARM_UP_TICKS + 4 * FORK_TICKS,
+            &mut addresses,
+        );
+        assert!(
+            parent.repointed > 0,
+            "the parent's craters met chunks it shares with the live child"
+        );
+        assert_eq!(
+            parent.allocated, parent.repointed,
+            "while a fork lives, its parent's {FORK_TICKS} ticks allocated {} times and \
+             re-pointed {} chunks",
+            parent.allocated, parent.repointed
+        );
+
+        drop(child);
+        let alone = count_parent(
+            &mut runner,
+            &mut enc,
+            WARM_UP_TICKS + 8 * FORK_TICKS,
+            &mut addresses,
+        );
+        assert_eq!(
+            (alone.allocated, alone.repointed),
+            (0, 0),
+            "once the fork is dropped the parent holds every chunk alone, and its tick \
+             allocates nothing, as the default build's does"
+        );
+    }
+
+    /// A fork keeps every table's reserved room, as it keeps every scratch
+    /// buffer's: the child of a world forked before its growth window adds a
+    /// beacon, a structure and a fabricated drone per seat (the rows the default
+    /// build's tick test counts in that window) and allocates only the chunks it
+    /// re-points. A table whose room a derived `Clone` dropped would allocate
+    /// at its first row in the child.
+    #[test]
+    fn a_forked_worlds_table_growth_allocates_only_the_chunks_it_re_points() {
+        let mut runner = harness_runner();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        warm_up(&mut runner, &mut enc);
+        let chunks = usize::try_from(runner.world().voxels().chunk_count())
+            .expect("a chunk count fits a usize");
+        let mut addresses: Vec<*const u8> = Vec::with_capacity(chunks);
+
+        let mut child = pharmakos_sim::research::fork(runner.world());
+        drop(runner);
+        let beacons_before = child.beacons().len();
+        let structures_before = child.structures().len();
+        let units_before = child.units().len();
+        let grown = count_child(
+            &mut child,
+            &mut enc,
+            WARM_UP_TICKS,
+            GROWTH_TICKS,
+            &mut addresses,
+        );
+        assert!(
+            child.beacons().len() > beacons_before
+                && child.structures().len() > structures_before
+                && child.units().len() > units_before,
+            "the child's deploy, its Generator and the drone it asks for all landed inside the \
+             counted window"
+        );
+        assert_eq!(
+            grown.allocated, grown.repointed,
+            "the {GROWTH_TICKS} ticks in which a forked world grows its tables allocated {} times \
+             and re-pointed {} chunks",
+            grown.allocated, grown.repointed
+        );
+    }
+}
+
 /// The default build's tests: the tick and the searches, each counted on its
 /// own thread. Behind `not(feature = "research")` because the research build's
 /// tick is this build's, function for function, which
@@ -122,22 +544,14 @@ static ALLOCATOR: Counting = Counting;
 /// builds.
 #[cfg(not(feature = "research"))]
 mod tick {
-    use super::ALLOCATIONS;
-    use std::cell::Cell;
+    use super::{
+        GROWTH_TICKS, WARM_UP_TICKS, allocations, collapse_at, crater_at, harness_runner, warm_up,
+    };
 
     use pharmakos_sim::encoding::Enc;
     use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, Runner};
     use pharmakos_sim::voxels::VoxelEdit;
     use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
-
-    /// How many times this thread has allocated so far. Called only from a test's
-    /// own body, where the slot exists; a missing slot is a failure, never a zero
-    /// that would read as "nothing was allocated".
-    fn allocations() -> u64 {
-        ALLOCATIONS
-            .try_with(Cell::get)
-            .expect("the counting slot exists on a running test's thread")
-    }
 
     /// Counts the allocations of a tick. The optimiser deletes an allocation whose
     /// value is never read (a `Vec::with_capacity` dropped at once, a `Box` freed
@@ -151,80 +565,9 @@ mod tick {
     /// there it counts only the allocations the optimiser kept.
     #[test]
     fn a_tick_allocates_nothing() {
-        let rules = RulesTable::load(
-            &std::path::Path::new("..")
-                .join("..")
-                .join("rules")
-                .join("rules.v1.json"),
-        )
-        .expect("the committed rules table loads");
-        let world = World::new(&WorldConfig {
-            match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
-            seats: pharmakos_sim::DETERMINISM_SEATS,
-            // No walkers. The determinism harness fielded fifty a seat until S1's
-            // real segment (decision 16), and this test with it. A probe with
-            // fifty a seat on the committed playbook (S1's `tune` fix pass) held
-            // both allocation assertions below, but not the fixed-stride one: with
-            // walkers wandering through the steady window the encoding's length
-            // changed between ticks, so the window is no longer steady. The
-            // wide-table coverage lives in `tests/determinism.rs` (`TEST_MOVERS`);
-            // this test covers the real playbook's in-tick growth instead.
-            rules,
-            match_settings: MatchSettings {
-                // Long enough that the measured loop never reaches the segment's
-                // end: the segment-end freeze allocates by design (it captures a
-                // whole world) and belongs outside the assertion, exactly like
-                // `Runner::new` below.
-                segment_lengths_ms: vec![600_000],
-                round_limit: DEFAULT_ROUND_LIMIT,
-            },
-        })
-        .expect("the rules table describes a map and a broadphase grid");
-        // Driven through the `Runner`, and **in a Push**, because `World::phase_match`
-        // returns at its first gate outside one: a world stepped by hand stays in
-        // its opening Lull, and everything T10 put in that phase — the beacon
-        // deaths, elimination, the respawns, the one-tick match-end rule, the
-        // segment's end and every event they emit — would sit outside the counted
-        // loop.
-        let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
-        // Every seat seals the harness playbook, for the same reason: the decision
-        // phase returns immediately for a seat that sealed nothing, so without this
-        // the whole interpreter — the `covering` resolver with its "nearest"
-        // estimates and its spiral, the walk in, the deploy's charge, the initial
-        // settings' interface rows, the Build target written `on` the covered
-        // vent, the hold, the handler scan and the guaranteed tail — would sit
-        // outside the one assertion that a tick allocates nothing (T11). Since
-        // S1's real determinism segment (decision 16) the playbook is the
-        // committed copy of Hold & Build's instantiation the chain runs.
-        let playbook = pharmakos_sim::determinism_playbook(
-            &std::path::Path::new("..")
-                .join("..")
-                .join(pharmakos_sim::DETERMINISM_PLAYBOOK_PATH),
-        )
-        .expect("the committed harness playbook reads");
-        let sealed = pharmakos_sim::seal_determinism_playbooks(runner.world_mut(), &playbook)
-            .expect("the harness playbook compiles");
-        assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
-        assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
+        let mut runner = harness_runner();
         let mut enc = Enc::with_capacity(64 * 1024);
-
-        // Warm up: the first tick may still grow the encoder's buffer, and a
-        // capacity that is right for tick 1 is right for tick 10 000 because every
-        // table's count is fixed at construction.
-        // The warm-up craters too, so the voxel phase's own scratch — the edit
-        // queue, the store's pending and settled lists, the crater's touched list —
-        // is paid for out here and the measured loop below sees it at its steady
-        // capacity.
-        for step in 0..50 {
-            crater_at(runner.world_mut(), step);
-            collapse_at(runner.world_mut(), step);
-            runner
-                .step()
-                .unwrap()
-                .expect("the segment outlasts this test");
-            runner.clear_events();
-            runner.world().encode(&mut enc);
-        }
+        warm_up(&mut runner, &mut enc);
         // The growth window. The harness playbook adds **rows to tables** inside
         // a tick: its deploy a beacon (`BeaconTable::reserve`), the Build target it
         // writes a structure (the structure table's room), and the fabricator the
@@ -241,8 +584,8 @@ mod tick {
         let structures_before = runner.world().structures().len();
         let units_before = runner.world().units().len();
         for step in 0..GROWTH_TICKS {
-            crater_at(runner.world_mut(), step + 50);
-            collapse_at(runner.world_mut(), step + 50);
+            crater_at(runner.world_mut(), step + WARM_UP_TICKS);
+            collapse_at(runner.world_mut(), step + WARM_UP_TICKS);
             runner
                 .step()
                 .unwrap()
@@ -275,10 +618,10 @@ mod tick {
             // work in it: a crater is the edit S2 will file by the thousand, and an
             // empty queue would leave `settle`, `mark` and `crater` outside the
             // property this file exists to defend.
-            crater_at(runner.world_mut(), step + 50 + GROWTH_TICKS);
+            crater_at(runner.world_mut(), step + WARM_UP_TICKS + GROWTH_TICKS);
             // And a collapse every tick (S2's plan, `fall`): the support rule's
             // search, its fall and its labels' clearing inside the property too.
-            collapse_at(runner.world_mut(), step + 50 + GROWTH_TICKS);
+            collapse_at(runner.world_mut(), step + WARM_UP_TICKS + GROWTH_TICKS);
             runner
                 .step()
                 .unwrap()
@@ -418,76 +761,6 @@ mod tick {
             lanes.push(beacon);
         }
         <[pharmakos_sim::tables::BeaconId; 2]>::try_from(lanes).expect("two lanes")
-    }
-
-    /// The ticks counted for table growth, after the 50-tick warm-up: long enough
-    /// that every placed seat's deploy, Generator and fabricated drone land inside
-    /// them (the last Generator is finished at tick 1 300 at the committed table).
-    const GROWTH_TICKS: u32 = 1_400;
-
-    /// Queue one crater on a fresh patch of ground, so the edit actually changes
-    /// voxels and the whole voxel phase runs.
-    ///
-    /// The columns walk a coprime stride across the map, so a later tick never
-    /// craters air a former tick already removed; the `z` is the column's own
-    /// surface, so the ball always has rock to take.
-    fn crater_at(world: &mut World, step: u32) {
-        let size = world.voxels().size();
-        let width = i32::try_from(size[0]).expect("the map fits in an i32");
-        let depth = i32::try_from(size[1]).expect("the map fits in an i32");
-        let x = i32::try_from(step.wrapping_mul(37) % 4096).expect("a column index") % width;
-        let y = i32::try_from(step.wrapping_mul(53) % 4096).expect("a column index") % depth;
-        let z = world
-            .voxels()
-            .top_solid_z(x, y)
-            .expect("every column of the determinism map has ground");
-        assert!(
-            world
-                .request_voxel_edit(VoxelEdit::Crater {
-                    centre: [x, y, z],
-                    radius: 3,
-                    by: None,
-                })
-                .is_ok(),
-            "the edit queue is full at step {step}"
-        );
-    }
-
-    /// Queue a collapse on a fresh column: a voxel two above the column's top,
-    /// joined to it by one voxel that the same tick's last edit removes, so the
-    /// voxel above is a detached region of one that falls a voxel.
-    ///
-    /// The columns walk a different coprime stride from [`crater_at`]'s, offset
-    /// across the map, so a collapse and a crater rarely share a column, and a
-    /// shared one still collapses: the edits run in the order they are filed.
-    fn collapse_at(world: &mut World, step: u32) {
-        let size = world.voxels().size();
-        let width = i32::try_from(size[0]).expect("the map fits in an i32");
-        let depth = i32::try_from(size[1]).expect("the map fits in an i32");
-        let x =
-            (i32::try_from(step.wrapping_mul(41) % 4096).expect("a column index") + 101) % width;
-        let y =
-            (i32::try_from(step.wrapping_mul(59) % 4096).expect("a column index") + 211) % depth;
-        let z = world
-            .voxels()
-            .top_solid_z(x, y)
-            .expect("every column of the determinism map has ground");
-        for (dz, material) in [
-            (2, pharmakos_sim::voxels::Material::STONE),
-            (1, pharmakos_sim::voxels::Material::STONE),
-            (1, pharmakos_sim::voxels::Material::AIR),
-        ] {
-            assert!(
-                world
-                    .request_voxel_edit(VoxelEdit::Set {
-                        at: [x, y, z + dz],
-                        material,
-                        by: None,
-                    })
-                    .is_ok(),
-                "the edit queue is full at step {step}"
-            );
-        }
     }
 
     /// The served walk "nearest" ranks by, and the estimator's clear queries
