@@ -670,3 +670,80 @@ fn a_typed_zero_retreat_is_written_and_said_as_retreat_off() {
     let prose = text_of(&rendered, "prose");
     assert!(prose.contains("retreat off (0%)"), "{prose}");
 }
+
+/// Decisions-log item 184 (10): `scout_count` carries presence and Survey's
+/// probe areas can be cleared. Over the wire: a "0" typed at an edit row's
+/// unwritten `scout_count` writes the present 0, a composed `add` of
+/// `clear_probe_areas: true` goes through `patch_plan`, and `render_plan`
+/// says both, with a chip at each pointer.
+#[test]
+fn a_typed_zero_scout_count_and_a_clear_are_written_and_said() {
+    let visit = ONE_RULE.replace(
+        r#"{"label": "wait", "hold": {"ms": 90000}}"#,
+        r#"{"label": "visit", "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [{"set_mandate_settings": {"survey": {}}}]}, "timeout_ms": 120000}"#,
+    );
+    assert_ne!(visit, ONE_RULE, "the visit replaced the hold");
+    let survey = "/declarative/route/0/interface/rows/0/set_mandate_settings/survey";
+    let scouts = format!("{survey}/scout_count");
+    let clear = format!("{survey}/clear_probe_areas");
+    let mut surface = hosted(2, SEGMENT_MS, 3);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let typed = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "set_value_text",
+            &format!(
+                "{{\"playbook_jsonc\":{},\"pointer\":{},\"typed\":\"0\"}}",
+                quote(&visit),
+                quote(&scouts)
+            ),
+        ),
+        "set_value_text",
+    );
+    let patched = text_of(&typed, "playbook_jsonc");
+    assert!(patched.contains("\"scout_count\":0"), "{patched}");
+    let cleared = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "patch_plan",
+            &format!(
+                "{{\"playbook_jsonc\":{},\"json_patch\":{}}}",
+                quote(&patched),
+                quote(&format!(
+                    r#"[{{"op":"add","path":"{clear}","value":true}}]"#
+                ))
+            ),
+        ),
+        "patch_plan",
+    );
+    let patched = text_of(&cleared, "playbook_jsonc");
+    assert!(patched.contains("\"clear_probe_areas\":true"), "{patched}");
+    assert_eq!(
+        text_of(&chip_value(&mut surface, &patched, &scouts), "value_json"),
+        "0"
+    );
+    assert_eq!(
+        text_of(&chip_value(&mut surface, &patched, &clear), "value_json"),
+        "true"
+    );
+    let rendered = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "render_plan",
+            &format!("{{\"playbook_jsonc\":{}}}", quote(&patched)),
+        ),
+        "render_plan",
+    );
+    let prose = text_of(&rendered, "prose");
+    assert!(
+        prose.contains("emptying its probe areas") && prose.contains("no scouts (0)"),
+        "{prose}"
+    );
+}

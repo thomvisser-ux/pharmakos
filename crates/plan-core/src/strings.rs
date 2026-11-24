@@ -348,6 +348,23 @@ pub const RETREAT_BELOW_UNIT: &str = "of their hit points";
 /// A written `retreat_hp_pct` of 0, before its chip.
 pub const RETREAT_OFF: &str = "retreat off";
 
+// --- A written 0 and a list's clear (decisions-log item 184 (10)) -----------
+
+/// A written `scout_count` of 0, before its chip.
+pub const SCOUTS_NONE: &str = "no scouts";
+/// A written `dig_max_depth` of 0, before its chip.
+pub const DIG_RIM_ONLY: &str = "digging the exposed rim only";
+/// A written `pillar_spacing` of 0, before its chip.
+pub const PILLARS_NONE: &str = "leaving no pillars";
+/// A set `clear_protected_areas`.
+pub const CLEAR_PROTECTED: &str = "emptying its protected areas";
+/// A set `clear_probe_areas`.
+pub const CLEAR_PROBES: &str = "emptying its probe areas";
+/// A set `clear_protect`.
+pub const CLEAR_PROTECT: &str = "emptying its protect list";
+/// A set `clear_avoid_areas`.
+pub const CLEAR_AVOID: &str = "emptying its avoid areas";
+
 // --- S2's Defend and Attack settings (task `vfy2`) ---------------------------
 
 /// Before a Defend arm's protect list.

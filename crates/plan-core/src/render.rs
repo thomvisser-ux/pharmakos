@@ -1232,6 +1232,12 @@ fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
 /// that writes neither (S2's plan, task `vfy2`). Every field is said, in field
 /// order, as the file wrote it; whether it is legal is the verifier's. `here`
 /// is the `MandateSettings`' pointer.
+///
+/// A Build, Survey or Mine arm says only what decisions-log item 184 (10)
+/// made writable: a written 0 of `scout_count`, `dig_max_depth` or
+/// `pillar_spacing`, and a set `clear_*` flag ([`s1_arm_parts`]); the rest of
+/// those arms is unsaid, as it was. A Defend or Attack arm's clear is said in
+/// its field order.
 fn settings_clause(settings: &MandateSettings, here: &str) -> Text {
     let mut parts = common_parts(settings, here);
     parts.extend(match settings.mandate.as_ref() {
@@ -1241,7 +1247,8 @@ fn settings_clause(settings: &MandateSettings, here: &str) -> Text {
         Some(mandate_settings::Mandate::Attack(attack)) => {
             attack_parts(attack, &at(here, "attack"))
         }
-        _ => Vec::new(),
+        Some(mandate) => s1_arm_parts(mandate, here),
+        None => Vec::new(),
     });
     if parts.is_empty() {
         Text::default()
@@ -1267,6 +1274,102 @@ fn common_parts(settings: &MandateSettings, here: &str) -> Vec<Text> {
         });
     }
     parts
+}
+
+/// What a Build, Survey or Mine arm says (decisions-log item 184 (10)): a
+/// written 0 of a number with presence, with its chip, and a set `clear_*`
+/// flag, with its chip, in field order. A written non-zero number and the
+/// arms' other fields are not said, as before.
+fn s1_arm_parts(mandate: &mandate_settings::Mandate, here: &str) -> Vec<Text> {
+    let mut parts = Vec::new();
+    let zero =
+        |parts: &mut Vec<Text>, words: &str, written: Option<u32>, pointer: String, shape| {
+            if written == Some(0) {
+                parts.push(cat!(words, " (", int_chip(0, pointer, shape), ")"));
+            }
+        };
+    match mandate {
+        mandate_settings::Mandate::Build(build) => {
+            let here = at(here, "build");
+            clear_part(
+                &mut parts,
+                build.clear_protected_areas,
+                s::CLEAR_PROTECTED,
+                &here,
+                "clear_protected_areas",
+            );
+        }
+        mandate_settings::Mandate::Survey(survey) => {
+            let here = at(here, "survey");
+            clear_part(
+                &mut parts,
+                survey.clear_probe_areas,
+                s::CLEAR_PROBES,
+                &here,
+                "clear_probe_areas",
+            );
+            zero(
+                &mut parts,
+                s::SCOUTS_NONE,
+                survey.scout_count,
+                at(&here, "scout_count"),
+                Shape::integer(Some(0), Some(i32::from(u8::MAX)), UNIT_COUNT),
+            );
+        }
+        mandate_settings::Mandate::Mine(mine) => {
+            let here = at(here, "mine");
+            zero(
+                &mut parts,
+                s::DIG_RIM_ONLY,
+                mine.dig_max_depth,
+                at(&here, "dig_max_depth"),
+                Shape::count(UNIT_VOXELS),
+            );
+            zero(
+                &mut parts,
+                s::PILLARS_NONE,
+                mine.pillar_spacing,
+                at(&here, "pillar_spacing"),
+                Shape::count(UNIT_VOXELS),
+            );
+        }
+        mandate_settings::Mandate::Defend(_) | mandate_settings::Mandate::Attack(_) => {}
+    }
+    parts
+}
+
+/// A set `clear_*` flag (decisions-log item 184 (10)), said with a boolean
+/// chip at its pointer; nothing for one left out or written `false`.
+fn clear_part(parts: &mut Vec<Text>, clear: bool, words: &str, here: &str, field: &str) {
+    if clear {
+        parts.push(chip(
+            words,
+            at(here, field),
+            Spec::Ready(Shape::boolean()),
+            Value::int(true),
+        ));
+    }
+}
+
+/// An Attack arm's avoid areas, as a count, and its clear of them, in field
+/// order.
+fn avoid_parts(parts: &mut Vec<Text>, attack: &AttackSettings, here: &str) {
+    if !attack.avoid_areas.is_empty() {
+        let count = attack.avoid_areas.len();
+        let noun = if count == 1 {
+            s::AREA_ONE
+        } else {
+            s::AREA_MANY
+        };
+        parts.push(cat!(s::ATTACK_AVOIDING, " ", count.to_string(), " ", noun));
+    }
+    clear_part(
+        parts,
+        attack.clear_avoid_areas,
+        s::CLEAR_AVOID,
+        here,
+        "clear_avoid_areas",
+    );
 }
 
 /// A Defend arm's fields, in field order.
@@ -1318,6 +1421,13 @@ fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
             "gp.v1.DefendSettings.Pursue",
         ));
     }
+    clear_part(
+        &mut parts,
+        defend.clear_protect,
+        s::CLEAR_PROTECT,
+        here,
+        "clear_protect",
+    );
     if let Some(pickets) = defend.picket_scouts {
         // At most a beacon's byte column (`E0508`).
         parts.push(cat!(
@@ -1396,15 +1506,7 @@ fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
             "gp.v1.AttackSettings.AfterAction",
         ));
     }
-    if !attack.avoid_areas.is_empty() {
-        let count = attack.avoid_areas.len();
-        let noun = if count == 1 {
-            s::AREA_ONE
-        } else {
-            s::AREA_MANY
-        };
-        parts.push(cat!(s::ATTACK_AVOIDING, " ", count.to_string(), " ", noun));
-    }
+    avoid_parts(&mut parts, attack, here);
     if let Some(breach) = attack.breach_allowed {
         let words = if breach {
             s::BREACH_ALLOWED
