@@ -548,7 +548,11 @@ impl Visit for Semantics<'_> {
             }
             _ => {}
         }
-        self.percent(at, "retreat_hp_pct", settings.retreat_hp_pct.unwrap_or(0));
+        // An omitted threshold has nothing to check; a written 0 is retreat
+        // off (decisions-log item 177 (3)).
+        if let Some(pct) = settings.retreat_hp_pct {
+            self.percent(at, "retreat_hp_pct", pct);
+        }
         // An omitted threshold has nothing to check (S3's plan, task `con5b`).
         if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref()
             && let Some(threshold) = build.repair_threshold_pct

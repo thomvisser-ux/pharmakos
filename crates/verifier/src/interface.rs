@@ -414,7 +414,8 @@ fn each<T>(list: &[T]) -> u64 {
 /// same rule the canonical form, the size meter and the sim's compile count
 /// by; a field with presence counts whenever it is written, its default
 /// included (S3's plan, task `con5b`, for `repair_threshold_pct`,
-/// `rebuild_destroyed` and `flee_on_threat`). The mandate *type* is free (spec
+/// `rebuild_destroyed` and `flee_on_threat`; decisions-log item 177 (3) for
+/// the Common row's `retreat_hp_pct`). The mandate *type* is free (spec
 /// section 5) and is never a field.
 ///
 /// **What "one field" means for a list (S1-23, ruled).** Spec section 5 writes
@@ -443,7 +444,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
         mandate,
     } = settings;
     let mut counted = Counted {
-        fields: add(&[set(*roe != 0), set(retreat_hp_pct.unwrap_or(0) != 0)]),
+        fields: add(&[set(*roe != 0), set(retreat_hp_pct.is_some())]),
         targets: 0,
     };
     let (fields, targets) = match mandate {
@@ -812,11 +813,21 @@ mod tests {
         assert_eq!(fields(&build(None, None)), 0);
         assert_eq!(fields(&mine(Some(false))), 1);
         assert_eq!(fields(&mine(None)), 0);
+        // The Common row's `retreat_hp_pct` has presence too (decisions-log
+        // item 177 (3)): a written 0 is retreat off, and one field.
+        let retreat = |pct: Option<u32>| MandateSettings {
+            retreat_hp_pct: pct,
+            ..MandateSettings::default()
+        };
+        assert_eq!(fields(&retreat(Some(0))), 1, "a written 0 is a field");
+        assert_eq!(fields(&retreat(Some(30))), 1);
+        assert_eq!(fields(&retreat(None)), 0);
 
         for (message, text) in [
             ("gp.v1.MineSettings", r#"{"flee_on_threat":false}"#),
             ("gp.v1.BuildSettings", r#"{"repair_threshold_pct":0}"#),
             ("gp.v1.BuildSettings", r#"{"rebuild_destroyed":false}"#),
+            ("gp.v1.MandateSettings", r#"{"retreat_hp_pct":0}"#),
         ] {
             let canonical =
                 pharmakos_proto::json::canonicalise(message, text).expect("canonicalises");
