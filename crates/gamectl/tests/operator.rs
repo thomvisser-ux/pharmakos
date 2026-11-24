@@ -1219,13 +1219,14 @@ fn easy_fits_the_in_process_limits() {
         assert!(EASY_ADVISOR_CALL_BUDGET <= IN_PROCESS_LIMITS.per_tick);
         assert!(EASY_CALL_BUDGET <= IN_PROCESS_LIMITS.per_window);
         // The derivation's sums, pinned (`crates/operator/src/easy.rs`' table):
-        // 20 fixed reads, 2 tap probe, 1 guard probe, 1 raid probe, 1 Survey
+        // 20 fixed reads, 7 tap probe (one resolve and six parts of five, S3's
+        // `vcap`), 1 guard probe, 1 raid probe, 1 Survey
         // probe, 30 candidates, 30 stepping stones, 5 templates, 1
         // composition, 9 verifies, 6 for the safe playbook, 3 to commit and 1
         // for the last seal; the advisor's the same less the Survey probe, the
         // stones, the composition, the verifies, the commit and the last seal.
-        assert!(EASY_CALL_BUDGET == 110);
-        assert!(EASY_ADVISOR_CALL_BUDGET == 65);
+        assert!(EASY_CALL_BUDGET == 115);
+        assert!(EASY_ADVISOR_CALL_BUDGET == 70);
     }
 }
 
