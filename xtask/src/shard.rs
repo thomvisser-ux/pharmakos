@@ -466,10 +466,31 @@ mod tests {
         assert!(!MEASURED.is_empty(), "the rule reads at least one run");
         let mut heavy: Vec<((&str, &str), u64)> = Vec::new();
         for measured in MEASURED {
-            for (name, seconds) in MEASURED_LEGS.iter().zip(measured.leg) {
+            for (index, (name, leg)) in MEASURED_LEGS.iter().zip(measured.leg).enumerate() {
+                // A unit left out of the record is 30 s or less, so it can
+                // never be heavy only while a tenth of every leg is above 30 s.
                 assert!(
-                    seconds > 0,
-                    "run {} ({}): {name} has no test time",
+                    u64::from(leg) > 30 * u64::from(HEAVY_RULE),
+                    "run {} ({}): {name}'s {leg} s is too short for the record's 30 s floor",
+                    measured.run,
+                    measured.head
+                );
+                let recorded: u64 = measured
+                    .units
+                    .iter()
+                    .filter_map(|(_, _, seconds)| seconds.get(index))
+                    .map(|seconds| u64::from(*seconds))
+                    .sum();
+                // Each figure is rounded to the second, so the recorded units
+                // may pass the leg's total by at most half a second each.
+                let slack = match u64::try_from(measured.units.len()) {
+                    Ok(slack) => slack,
+                    Err(error) => panic!("{error}"),
+                };
+                assert!(
+                    recorded <= u64::from(leg) + slack,
+                    "run {} ({}): {name}'s recorded units take {recorded} s, more than the \
+                     leg's {leg} s",
                     measured.run,
                     measured.head
                 );
@@ -487,6 +508,27 @@ mod tests {
                     heavy.push(((*step, *key), 0));
                 }
             }
+            // Each run reads the same heavy set on its own, so one run's
+            // figures (a leg total mistyped, a unit left out) cannot pass
+            // behind another's.
+            let mut alone: Vec<(&str, &str)> = measured
+                .units
+                .iter()
+                .filter(|(_, _, seconds)| {
+                    seconds.iter().zip(measured.leg).any(|(seconds, leg)| {
+                        u64::from(*seconds) * u64::from(HEAVY_RULE) > u64::from(leg)
+                    })
+                })
+                .map(|(step, key, _)| (*step, *key))
+                .collect();
+            alone.sort_unstable();
+            let mut listed = HEAVY_UNITS.to_vec();
+            listed.sort_unstable();
+            assert_eq!(
+                alone, listed,
+                "run {} ({}) alone reads another heavy set",
+                measured.run, measured.head
+            );
         }
         for (unit, total) in &mut heavy {
             *total = MEASURED
