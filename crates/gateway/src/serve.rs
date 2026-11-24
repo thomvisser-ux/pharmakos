@@ -818,7 +818,8 @@ pub fn run_in<C: Read, A: Write>(
     // has one.
     let (cache, mut surface, seats) = if line.resume {
         let cache = MatchCache::reopen(data_root, &config.match_id)?;
-        let save = Save::parse(&cache.read_save()?)?;
+        let largest = largest_save(&config, &setup.rules_json)?;
+        let save = Save::parse(&cache.read_save(largest)?)?;
         save.check(&config, rules_hash.0)?;
         // Read before the surface exists: the view's identity folds in the
         // log's last sequence number, so that nothing the dead process served
@@ -892,9 +893,7 @@ pub fn run_in<C: Read, A: Write>(
         drops: Arc::clone(&drops),
     };
     let surface_thread = pharmakos_plan_core::stack::player_text_thread("gateway surface")
-        .spawn(move || {
-            serve_surface(&mut surface, &writer, &mut in_process, &work);
-        })
+        .spawn(move || serve_surface(&mut surface, &writer, &mut in_process, &work))
         .map_err(|error| {
             Error::internal(said!(
                 "starting the surface thread: {}",
@@ -923,9 +922,17 @@ pub fn run_in<C: Read, A: Write>(
     // `accept`, and `gamectl host` exiting is what ends them.
     let _ = jobs.send(Job::Stop);
     drop(jobs);
-    let _ = surface_thread.join();
+    let served = surface_thread.join();
     drop(dispatcher);
-    Ok(())
+    match served {
+        // The surface stopped on a save it could not have: the host's last
+        // word, said by its caller (`gamectl host`'s standard error).
+        Ok(Err(error)) => Err(error),
+        Ok(Ok(())) => Ok(()),
+        Err(_) => Err(Error::internal(
+            "the surface thread ended in a panic, and the match it served is not saved past it",
+        )),
+    }
 }
 
 /// The rules table's hash, read off the text the binary handed over.
@@ -1012,6 +1019,25 @@ fn open_surface(
     surface.attach(host)?;
     surface.open_lull()?;
     Ok((surface, seats))
+}
+
+/// The largest a save of the match `config` names can be
+/// ([`Save::max_bytes`]), under the rules text the binary handed over: what a
+/// resume reads the save to, and refuses past.
+///
+/// # Errors
+///
+/// [`crate::error::Code::InvalidArgument`] for rules text this build does not
+/// read; as [`Save::max_bytes`] otherwise.
+fn largest_save(config: &Config, rules_json: &str) -> Result<u64, Error> {
+    let rules =
+        pharmakos_sim::rules::RulesTable::from_canonical_json(rules_json).map_err(|error| {
+            Error::invalid(said!(
+                "this is not a rules table this build reads: {}",
+                crate::error::engine(&error)
+            ))
+        })?;
+    Save::max_bytes(config, &rules)
 }
 
 /// Open a saved match, and the surface over it, where the save left it: in
@@ -1404,10 +1430,21 @@ struct Writer {
 
 impl Writer {
     /// Write whatever the surface has pending -- the seals and the save a
-    /// Push's beginning left, the chain a segment's end left -- and then the
-    /// audit log, so that a write that failed is itself in the log.
-    fn flush(&self, surface: &mut Surface) {
+    /// Push's beginning left, the chain a segment's end left, the save a
+    /// match's end left -- and then the audit log, so that a write that failed
+    /// is itself in the log.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a save the disk needs could not
+    /// be had: the surface could not build it ([`crate::save::Persistence::unsaved`]), or
+    /// the cache would not write a Push's or a match's end's save. The disk
+    /// then holds a save a resume would misread (the Lull a Push already
+    /// sealed, or the final Push as live), so the host stops serving and says
+    /// it ([`serve_surface`]).
+    fn flush(&self, surface: &mut Surface) -> Result<(), Error> {
         let pending = surface.take_persistence();
+        let mut stop: Option<Error> = pending.unsaved.clone();
         let mut refused: Vec<(&'static str, Error)> = Vec::new();
         for file in &pending.sealed {
             if let Err(error) = self
@@ -1422,16 +1459,28 @@ impl Writer {
                 refused.push(("write replay chain", error));
             }
         }
-        if let Some(state) = pending.save
-            && let Err(error) = self.write_save(state)
-        {
-            refused.push(("write save", error));
+        if let Some(state) = pending.save {
+            let boundary = state.boundary;
+            if let Err(error) = self.write_save(state) {
+                if stop.is_none() {
+                    stop = Some(Error::internal(said!(
+                        "a `{}` save could not be written ({}): the save on disk is the one before it, which a resume would misread, so this host stops serving",
+                        boundary.name(),
+                        error.said()
+                    )));
+                }
+                refused.push(("write save", error));
+            }
         }
         let tick = surface.time().tick;
         for (action, error) in &refused {
             surface.audit().refused(tick, None, None, *action, error);
         }
         let _ = self.cache.append_audit(&surface.audit().take());
+        match stop {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn write_save(&self, state: crate::save::SavedMatch) -> Result<(), Error> {
@@ -1470,19 +1519,26 @@ impl Writer {
             };
         }
         self.drops.record(surface);
-        self.flush(surface);
+        // The match is closing: what could not be saved is the host's last
+        // word, said by `serve_surface`'s caller.
+        let _ = self.flush(surface);
     }
 }
 
 /// The one thread that owns the surface.
+///
+/// # Errors
+///
+/// As [`Writer::flush`]: a save the disk needed and could not have stops the
+/// surface, which answers no further job.
 fn serve_surface(
     surface: &mut Surface,
     writer: &Writer,
     in_process: &mut InProcessSeats,
     work: &Receiver<Job>,
-) {
+) -> Result<(), Error> {
     in_process.plan(surface);
-    writer.flush(surface);
+    writer.flush(surface)?;
     while let Ok(job) = work.recv() {
         match job {
             Job::Open { token, reply } => {
@@ -1524,7 +1580,7 @@ fn serve_surface(
             }
             Job::Stop => {
                 writer.close(surface);
-                return;
+                return Ok(());
             }
             Job::Refused { reason, status } => {
                 let tick = surface.time().tick;
@@ -1538,11 +1594,15 @@ fn serve_surface(
             }
         }
         in_process.plan(surface);
-        writer.flush(surface);
+        if let Err(error) = writer.flush(surface) {
+            writer.close(surface);
+            return Err(error);
+        }
     }
     // Every sender went away without a `Stop`: the process is going down
     // anyway, and what the surface holds is still worth the disk.
     writer.close(surface);
+    Ok(())
 }
 
 /// What a seat can see right now, rebuilt before every call.

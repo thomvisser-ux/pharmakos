@@ -392,19 +392,51 @@ impl MatchCache {
         })
     }
 
-    /// The save's text, for a resume.
+    /// The save's text, for a resume, at most `max_bytes` long: a save's
+    /// own bounds give its largest size (`crate::save::Save::max_bytes`), and
+    /// a file past it is refused before it is read whole, never cut.
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::InvalidArgument`] when there is no save, or it is
-    /// not text.
-    pub fn read_save(&self) -> Result<String, Error> {
+    /// [`crate::error::Code::InvalidArgument`] when there is no save, it is
+    /// not text, or it is longer than `max_bytes`.
+    pub fn read_save(&self, max_bytes: u64) -> Result<String, Error> {
+        use std::io::Read as _;
         let path = self.directory.join(SAVE_FILE);
-        fs::read_to_string(&path).map_err(|error| {
+        let unread = |error: std::io::Error| {
             Error::invalid(said!(
                 "match `{}` has no save this host can read: {}",
                 pharmakos_proto::json::grammar::quoted(&self.match_id),
                 crate::error::engine(&error)
+            ))
+        };
+        let past = |bytes: u64| {
+            Error::invalid(said!(
+                "match `{}`'s save is {} bytes or more, past the {} a save of this match can be: it is not a save this build wrote",
+                pharmakos_proto::json::grammar::quoted(&self.match_id),
+                bytes,
+                max_bytes
+            ))
+        };
+        let file = fs::File::open(&path).map_err(unread)?;
+        let length = file.metadata().map_err(unread)?.len();
+        if length > max_bytes {
+            return Err(past(length));
+        }
+        // Read at most one byte past the bound, so a file that grew after
+        // its length was read is refused as well, and never read whole.
+        let mut bytes: Vec<u8> = Vec::new();
+        file.take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(unread)?;
+        let read = u64::try_from(bytes.len()).map_err(|_| past(max_bytes))?;
+        if read > max_bytes {
+            return Err(past(read));
+        }
+        String::from_utf8(bytes).map_err(|_| {
+            Error::invalid(said!(
+                "match `{}`'s save is not UTF-8 text",
+                pharmakos_proto::json::grammar::quoted(&self.match_id)
             ))
         })
     }
@@ -653,14 +685,37 @@ mod tests {
     /// unit tests inside the crate, so this is the system temporary directory
     /// with a name nothing else uses -- the same thing `xtask`'s own self-tests
     /// do.
-    fn scratch(name: &str) -> PathBuf {
+    ///
+    /// Unique to this process and this call (the process id and a counter),
+    /// so two test processes sharing one temporary directory never share a
+    /// folder, and removed when the test drops it.
+    fn scratch(name: &str) -> Scratch {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let count = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let base = std::env::temp_dir()
             .join("pharmakos-gateway-tests")
             .join("cache")
-            .join(name);
+            .join(format!("{name}-{}-{count}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("scratch");
-        base
+        Scratch(base)
+    }
+
+    /// A scratch folder, removed when it is dropped.
+    struct Scratch(PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     fn header(seed: u64) -> Header {
@@ -768,7 +823,11 @@ mod tests {
         assert!(!cache.has_save());
         cache.write_save("first\n").expect("saved");
         cache.write_save("second\n").expect("saved again");
-        assert_eq!(cache.read_save().expect("read"), "second\n", "latest wins");
+        assert_eq!(
+            cache.read_save(64).expect("read"),
+            "second\n",
+            "latest wins"
+        );
         assert!(
             !cache.directory().join("save.json.partial").exists(),
             "the temporary file was renamed into place"
@@ -781,7 +840,7 @@ mod tests {
         assert!(error.message().contains("resume"), "{}", error.message());
 
         let again = MatchCache::reopen(&root, "m-0004").expect("reopened");
-        assert_eq!(again.read_save().expect("read"), "second\n");
+        assert_eq!(again.read_save(64).expect("read"), "second\n");
         assert_eq!(
             std::fs::read_to_string(again.directory().join("match.json")).expect("header"),
             match_json,
@@ -932,6 +991,39 @@ mod tests {
         assert!(
             cache.last_audit_seq().is_err(),
             "and so is the sequence number"
+        );
+    }
+
+    /// `read_save` is capped (lane `opsave`, fix pass 1): a save at most the
+    /// bound long reads back whole; one a byte past it, or longer, is refused
+    /// as `INVALID_ARGUMENT` before it is read whole, and bytes that are not
+    /// UTF-8 are refused too. Seeded over sizes around the bound.
+    #[test]
+    fn a_save_past_its_bound_is_refused_before_it_is_read() {
+        const BOUND: u64 = 1_024;
+        let root = scratch("read-capped");
+        let cache = MatchCache::open(&root, "m-capped", &header(7)).expect("a cache");
+        let path = cache.directory().join(super::SAVE_FILE);
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        for case in 0..64_u32 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let length = usize::try_from(state % (2 * BOUND)).expect("small");
+            std::fs::write(&path, "x".repeat(length)).expect("written");
+            let read = cache.read_save(BOUND);
+            if u64::try_from(length).expect("small") <= BOUND {
+                assert_eq!(read.expect("within the bound").len(), length, "case {case}");
+            } else {
+                let error = read.expect_err("past the bound");
+                assert_eq!(error.code(), Code::InvalidArgument, "case {case}");
+                assert!(error.message().contains("bytes"), "{}", error.message());
+            }
+        }
+        std::fs::write(&path, [0xff_u8, 0xfe, 0x00]).expect("written");
+        assert_eq!(
+            cache.read_save(BOUND).expect_err("not UTF-8").code(),
+            Code::InvalidArgument
         );
     }
 }

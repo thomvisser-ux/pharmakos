@@ -341,13 +341,21 @@ pub struct Persistence {
     pub sealed: Vec<SealedFile>,
     /// Every segment that has ended since the last take.
     pub chains: Vec<SegmentChain>,
+    /// A save the disk needed and the surface could not build: the match's
+    /// end or a Push's beginning (`Surface::persist_end`,
+    /// `Surface::persist_push`). The host loop stops serving on it and says
+    /// it, rather than leave a save on disk that a resume would misread.
+    pub unsaved: Option<Error>,
 }
 
 impl Persistence {
     /// True when there is nothing to write.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.save.is_none() && self.sealed.is_empty() && self.chains.is_empty()
+        self.save.is_none()
+            && self.sealed.is_empty()
+            && self.chains.is_empty()
+            && self.unsaved.is_none()
     }
 }
 
@@ -730,9 +738,10 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
     let seat = u8::try_from(integer(member(value, "seat")?, "seat")?)
         .map_err(|_| damaged("a seat number does not fit"))?;
     let listed = array_at(value, "drafts")?;
-    if listed.len() > crate::surface::planning::MAX_DRAFTS {
+    // Its own and the carried one, at most: refused before a draft is read.
+    if listed.len() > crate::surface::planning::MAX_DRAFTS.saturating_add(1) {
         return Err(damaged(said!(
-            "seat {} holds {} drafts, past the {} a seat may",
+            "seat {} holds {} drafts, past the {} of its own and the carried one a seat may",
             seat,
             listed.len(),
             crate::surface::planning::MAX_DRAFTS
@@ -742,6 +751,8 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
     for draft in listed {
         drafts.push(parse_draft(seat, draft)?);
     }
+    crate::surface::planning::drafts_hold(&drafts)
+        .map_err(|broken| damaged(said!("seat {}'s drafts: {}", seat, broken.said())))?;
     let sealed = match member(value, "seal")? {
         Json::Null => None,
         held => Some(SavedSeal {
@@ -859,11 +870,20 @@ fn parse_draft(seat: u8, draft: &Json) -> Result<Draft, Error> {
 /// words the host says on its announce path (`gamectl host`'s refusal).
 pub fn refuse_ended(boundary: Boundary) -> Result<(), Error> {
     match boundary {
-        Boundary::Ended => Err(Error::invalid(
-            "this match has ended, and an ended match cannot be continued: start a new match",
-        )),
+        Boundary::Ended => Err(match_ended()),
         Boundary::Sealed | Boundary::Lull => Ok(()),
     }
+}
+
+/// The refusal of a resume of an ended match, in the words the host says on
+/// its announce path ([`refuse_ended`]). A save of another boundary whose
+/// world has already ended is refused by the one restore, `Host::resume`,
+/// which lands a save in a Lull only.
+#[must_use]
+pub fn match_ended() -> Error {
+    Error::invalid(
+        "this match has ended, and an ended match cannot be continued: start a new match",
+    )
 }
 
 /// The refusal for a file that is not a save this build reads.
@@ -980,6 +1000,110 @@ fn hex64_at(value: &Json, key: &str) -> Result<u64, Error> {
             pharmakos_proto::json::grammar::quoted(key)
         ))
     })
+}
+
+/// The most bytes one character of a save's text can take: the writer spells
+/// a control character as a six-byte `\u` escape, and nothing it writes
+/// takes more.
+const BYTES_PER_CHAR: u64 = 6;
+
+/// The most bytes one encoded voxel of the planning snapshot is taken to
+/// take, base64 included.
+///
+/// PLACEHOLDER: a snapshot taken at 16 bytes a map voxel, the sim giving no bound of its encoding — owner, at hardening, with the sim's snapshot ceiling.
+const SNAPSHOT_BYTES_PER_VOXEL: u64 = 16;
+
+/// The fixed part of a save: its keys, stamp, config line and counts.
+const FIXED_BYTES: u64 = 64 * 1024;
+
+impl Save {
+    /// The largest a save of the match `config` names can be, from the
+    /// format's own bounds, so a resume refuses a file past it before it
+    /// reads it (`crate::cache::MatchCache::read_save`):
+    ///
+    /// * each seat's notebook (`verifier.notebook_max_chars`), its drafts (at
+    ///   most `MAX_DRAFTS` of its own and the carried one, each a playbook of
+    ///   at most `MAX_PLAYBOOK_CHARS` with a label and an id), its seal, its
+    ///   handle table (`MAX_FOREIGN_HANDLES`) and its memos;
+    /// * the last Push's feed: at most `EVENT_BUS_CAPACITY` lines for each
+    ///   drain of the match's longest segment, each at most `MAX_LINE_CHARS`,
+    ///   and the recap's record beside it;
+    /// * the planning snapshot, at [`SNAPSHOT_BYTES_PER_VOXEL`] a voxel of
+    ///   the rules' map.
+    ///
+    /// Every character counts at [`BYTES_PER_CHAR`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the rules table has no verifier
+    /// block, or a term does not fit a `u64`.
+    pub fn max_bytes(
+        config: &Config,
+        rules: &pharmakos_sim::rules::RulesTable,
+    ) -> Result<u64, Error> {
+        let past = || Error::internal("a save's largest size does not fit a count");
+        let count = |value: usize| u64::try_from(value).map_err(|_| past());
+        let mul = |a: u64, b: u64| a.checked_mul(b).ok_or_else(past);
+        let add = |a: u64, b: u64| a.checked_add(b).ok_or_else(past);
+        let notebook = rules
+            .message()
+            .verifier
+            .as_ref()
+            .map(|verifier| u64::from(verifier.notebook_max_chars))
+            .ok_or_else(|| {
+                Error::internal(
+                    "this rules table has no verifier block, so the notebook has no size",
+                )
+            })?;
+        let playbook = count(pharmakos_verifier::MAX_PLAYBOOK_CHARS)?;
+        let draft = add(
+            add(
+                playbook,
+                count(crate::surface::planning::MAX_DRAFT_LABEL_CHARS)?,
+            )?,
+            64,
+        )?;
+        let drafts = mul(add(count(crate::surface::planning::MAX_DRAFTS)?, 1)?, draft)?;
+        let handles = mul(count(crate::viewfeed::MAX_FOREIGN_HANDLES)?, 64)?;
+        let seat_chars = add(add(add(notebook, drafts)?, playbook)?, add(handles, 1024)?)?;
+        let seats = mul(u64::from(config.seats), mul(seat_chars, BYTES_PER_CHAR)?)?;
+
+        let longest = config
+            .segment_lengths_ms
+            .iter()
+            .chain(rules.segment_lengths_ms())
+            .copied()
+            .max()
+            .ok_or_else(|| {
+                Error::internal("neither the config line nor the rules give a segment length")
+            })?;
+        let ticks = u64::from(pharmakos_sim::math::quantity::Ms::new(longest).to_ticks_ceil());
+        let lines = add(
+            mul(
+                add(ticks, crate::surface::last_push::DRAINS_BEYOND_TICKS)?,
+                count(pharmakos_sim::EVENT_BUS_CAPACITY)?,
+            )?,
+            add(
+                u64::from(config.seats),
+                count(crate::probation::Memo::ALL.len())?,
+            )?,
+        )?;
+        let line = add(
+            mul(count(crate::feed::MAX_LINE_CHARS)?, BYTES_PER_CHAR)?,
+            512,
+        )?;
+        // The feed's lines, and as many failed steps in the record beside it.
+        let feed = mul(lines, add(line, 64)?)?;
+
+        let [x, y, z] = rules.map_size_voxels();
+        let mut voxels: u64 = 1;
+        for side in [x, y, z] {
+            let side = u64::try_from(side).map_err(|_| past())?;
+            voxels = mul(voxels, side)?;
+        }
+        let snapshot = mul(voxels, SNAPSHOT_BYTES_PER_VOXEL)?;
+        add(add(add(FIXED_BYTES, seats)?, feed)?, snapshot)
+    }
 }
 
 #[cfg(test)]

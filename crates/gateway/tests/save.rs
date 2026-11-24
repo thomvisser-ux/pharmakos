@@ -1143,3 +1143,162 @@ fn a_version_3_save_written_by_main_still_resumes() {
     let again = resumed.lull_save().expect("its Lull saves");
     assert!(again.last_push.is_some(), "and is saved again as version 4");
 }
+
+/// One damage of a seat's saved drafts.
+type DraftsDamage = Box<dyn Fn(&mut Vec<pharmakos_gateway::surface::Draft>)>;
+
+/// The draft rule across a resume (lane `opsave`, fix pass 1; the review's
+/// hosted probe): a seat that keeps the 32 drafts of its own a seat may and
+/// seals carries its seal into the next Lull as a 33rd, the gateway's
+/// `carried` one; that Lull saves and resumes and lists all 33; a 33rd draft
+/// of its own is still refused, and so is a save under the carried id; a
+/// save holding 33 of its own, or the carried draft twice, is refused typed.
+#[test]
+fn a_seat_with_every_draft_and_a_seal_resumes_its_next_lull() {
+    const MATCH_ID: &str = "m-opsave-drafts";
+    let mut surface = new_match(MATCH_ID);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let body = walk_east(&surface, 0, 3, 0);
+    for index in 0..pharmakos_gateway::surface::planning::MAX_DRAFTS {
+        let answer = call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "save_draft",
+            &format!(
+                "{{\"draft_id\":\"own-{index}\",\"playbook_jsonc\":{}}}",
+                quote(&body)
+            ),
+        );
+        let _ = result(&answer, "save_draft");
+    }
+    plan_round(&mut surface);
+    assert!(surface.begin_push().expect("the Push begins"));
+    let _ = play_push(&mut surface);
+    close_round(&mut surface);
+    let saved = surface.lull_save().expect("round 2's Lull saves");
+    let held = saved.seats.first().expect("seat 0").drafts.len();
+    assert_eq!(held, 33, "32 of its own and the carried one");
+
+    let mut resumed = resume(MATCH_ID, &saved).expect("the Lull resumes");
+    let token = seat_token(&mut resumed, 0);
+    let mut left = FIRST_LULL_MS;
+    let listed = result(
+        &call_in_lull(&mut resumed, &token, &mut left, "list_drafts", "{}"),
+        "list_drafts",
+    );
+    assert_eq!(support::array_of(&listed, "drafts").len(), 33);
+    for (id, what) in [
+        ("own-extra", "a 33rd draft of its own"),
+        ("carried", "the carried id"),
+    ] {
+        let answer = call_in_lull(
+            &mut resumed,
+            &token,
+            &mut left,
+            "save_draft",
+            &format!(
+                "{{\"draft_id\":\"{id}\",\"playbook_jsonc\":{}}}",
+                quote(&body)
+            ),
+        );
+        assert_eq!(code(&answer), "INVALID_ARGUMENT", "{what}: {answer:?}");
+    }
+
+    let cases: [(&str, DraftsDamage); 2] = [
+        (
+            "33 drafts of its own",
+            Box::new(|drafts: &mut Vec<pharmakos_gateway::surface::Draft>| {
+                for draft in drafts.iter_mut() {
+                    if draft.draft_id == "carried" {
+                        draft.draft_id = String::from("own-extra");
+                    }
+                }
+            }),
+        ),
+        (
+            "the carried draft twice",
+            Box::new(|drafts: &mut Vec<pharmakos_gateway::surface::Draft>| {
+                if let Some(own) = drafts.first_mut() {
+                    own.draft_id = String::from("carried");
+                }
+            }),
+        ),
+    ];
+    for (what, mutate) in cases {
+        let mut damaged = saved.clone();
+        if let Some(seat) = damaged.seats.first_mut() {
+            mutate(&mut seat.drafts);
+        }
+        let text = Save {
+            stamp: Stamp::current(rules().rules_hash()),
+            config: config_of(MATCH_ID),
+            state: damaged,
+        }
+        .render();
+        let error = Save::parse(&text).expect_err(what);
+        assert_eq!(error.code(), Code::InvalidArgument, "{what}");
+        assert!(
+            error.message().contains("draft"),
+            "{what}: {}",
+            error.message()
+        );
+    }
+}
+
+/// A `sealed` save main wrote before the save carried the last Push (format
+/// version 3, `34e2f427`'s round-1 `sealed` golden, committed as a fixture)
+/// resumes into its Push, as it always did: the Push was sealed, not played,
+/// so replaying it is the Push itself. Its next Lull's feed is that replayed
+/// Push's own, `segment_ended` and all, so the Lull reads the Push it follows
+/// (the operator does not read it as `PushUnread::Resumed`).
+#[test]
+fn a_version_3_sealed_save_resumes_into_its_push_and_its_next_lull_shows_it() {
+    const MATCH_ID: &str = "m-fpstream2-save";
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("save-v3-round-one-sealed.json"),
+    )
+    .expect("the version-3 sealed fixture");
+    let save = Save::parse(text.trim_end_matches('\n')).expect("a version-3 save reads");
+    assert_eq!(save.stamp.format_version, 3);
+    assert_eq!(save.state.boundary, Boundary::Sealed);
+    assert!(
+        u64::try_from(text.len()).expect("small")
+            <= Save::max_bytes(&config_of(MATCH_ID), &rules()).expect("a bound"),
+        "a save this size is within the bound a resume reads to"
+    );
+    save.check(&config_of(MATCH_ID), rules().rules_hash())
+        .expect("the same rules, the same verifier, the same match");
+    let host = pristine();
+    let mut resumed = Surface::new(
+        MATCH_ID,
+        SEED,
+        host.rules().clone(),
+        FogPolicy::fogged(),
+        &SEATS,
+    )
+    .expect("a surface")
+    .resume(host, &save.state, CONTINUATION)
+    .expect("a version-3 sealed save resumes");
+    assert_eq!(resumed.time().phase, Phase::Push, "into its Push");
+    let _ = play_push(&mut resumed);
+    close_round(&mut resumed);
+    assert_eq!(resumed.time().phase, Phase::Lull);
+    let token = seat_token(&mut resumed, 0);
+    let mut left = FIRST_LULL_MS;
+    let feed = call_in_lull(
+        &mut resumed,
+        &token,
+        &mut left,
+        "get_segment_feed",
+        "{\"detail\":\"full\"}",
+    );
+    assert!(
+        pharmakos_proto::json::write(&feed).contains("segment_ended"),
+        "the next Lull's feed shows the replayed Push"
+    );
+}

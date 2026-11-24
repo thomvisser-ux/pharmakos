@@ -172,6 +172,13 @@ fn feed_pages(surface: &mut Surface, token: &Token, detail: &str, limit: u32) ->
 /// Every seat-facing read of a Lull, for each caller: both seats, the lobby
 /// and a no-fog spectator, each answer's text in a fixed order.
 fn reads(surface: &mut Surface) -> Vec<(String, String)> {
+    // Every read, past the rate limit's few calls a tick: the reads are the
+    // test, and the limiter counts the same on both sides.
+    surface.set_limits(pharmakos_gateway::limit::Limits {
+        per_tick: 100_000,
+        per_window: 1_000_000,
+        window_ticks: 200,
+    });
     let mut callers: Vec<(String, Token)> = SEATS
         .iter()
         .map(|seat| {
@@ -677,7 +684,6 @@ fn an_ended_match_leaves_an_ended_save_that_does_not_resume() {
 /// a few of the gateway's own; a member holding more is refused, never cut.
 #[test]
 fn a_feed_past_its_line_bound_is_refused() {
-    use pharmakos_gateway::surface::last_push::DRAINS_BEYOND_TICKS;
     const MATCH_ID: &str = "m-opsave-bound";
     let live = new_match(MATCH_ID);
     let saved = live.lull_save().expect("a Lull saves");
@@ -685,10 +691,10 @@ fn a_feed_past_its_line_bound_is_refused() {
         .last_push(Boundary::Lull)
         .expect("the last Push")
         .render();
-    let most = usize::try_from(DRAINS_BEYOND_TICKS).expect("small")
-        * pharmakos_sim::EVENT_BUS_CAPACITY
-        + SEATS.len()
-        + pharmakos_gateway::probation::Memo::ALL.len();
+    // Pinned, not computed from the constants it checks: three drains of a
+    // 512-event bus, a safe-playbook line for each of two seats, and one line
+    // for each of the four memos.
+    let most: usize = 3 * 512 + 2 + 4;
     if let Json::Object(entries) = &mut member
         && let Some((_, Json::Object(feed))) = entries.iter_mut().find(|(key, _)| key == "feed")
         && let Some((_, Json::Array(lines))) = feed.iter_mut().find(|(key, _)| key == "lines")
@@ -724,5 +730,504 @@ fn entries_of(value: &mut Json) -> &mut Vec<(String, Json)> {
     match value {
         Json::Object(entries) => entries,
         other => panic!("an object: {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One damaged member a restore-time check (fix pass 1, item 3)
+// ---------------------------------------------------------------------------
+
+/// The member's value at `path`, a key at a time.
+fn at_path<'a>(value: &'a mut Json, path: &[&str]) -> &'a mut Json {
+    path.iter().fold(value, |here, key| match here {
+        Json::Object(entries) => {
+            &mut entries
+                .iter_mut()
+                .find(|(name, _)| name == key)
+                .unwrap_or_else(|| panic!("`{key}` in the member"))
+                .1
+        }
+        other => panic!("an object at `{key}`: {other:?}"),
+    })
+}
+
+/// A whole number, as the save spells one.
+fn number(value: i128) -> Json {
+    Json::Number(value.to_string())
+}
+
+/// The time of a member's last line.
+fn last_at(member: &mut Json) -> Json {
+    match at_path(member, &["feed", "lines"]) {
+        Json::Array(lines) => lines
+            .last()
+            .and_then(|line| line.get("at_ms").cloned())
+            .expect("a line's time"),
+        other => panic!("lines: {other:?}"),
+    }
+}
+
+/// A member with one more line at its end.
+fn push_line(member: &mut Json, kind: &str, audience: Json, witnesses: Vec<Json>, memo: Json) {
+    let at = last_at(member);
+    if let Json::Array(lines) = at_path(member, &["feed", "lines"]) {
+        lines.push(Json::Object(vec![
+            (String::from("at_ms"), at),
+            (String::from("kind"), Json::String(kind.to_owned())),
+            (String::from("text"), Json::String(String::from("x"))),
+            (String::from("audience"), audience),
+            (String::from("witnesses"), Json::Array(witnesses)),
+            (String::from("memo"), memo),
+        ]));
+    }
+}
+
+/// A world audience owned by `owner`.
+fn world_of(owner: u8) -> Json {
+    Json::Object(vec![
+        (String::from("to"), Json::String(String::from("world"))),
+        (String::from("owner"), number(i128::from(owner))),
+        (
+            String::from("at"),
+            Json::Array(vec![number(0), number(0), number(0)]),
+        ),
+    ])
+}
+
+/// A private audience of `seat`.
+fn private_of(seat: u8) -> Json {
+    Json::Object(vec![
+        (String::from("to"), Json::String(String::from("private"))),
+        (String::from("seat"), number(i128::from(seat))),
+    ])
+}
+
+/// One damage of a member, by name.
+type Damage = Box<dyn Fn(&mut Json)>;
+
+/// Each restore-time check's damage: its name, the words its refusal says,
+/// and the damage. `rows` is the world's beacon rows; `anchor` the feed's
+/// anchor.
+fn restore_damages(rows: usize, anchor: i128) -> Vec<(&'static str, &'static str, Damage)> {
+    let mut damages = record_damages(rows);
+    damages.extend(feed_damages(anchor));
+    damages
+}
+
+/// The lines' and the record's damages of [`restore_damages`].
+fn record_damages(rows: usize) -> Vec<(&'static str, &'static str, Damage)> {
+    vec![
+        (
+            "M16 the recap's round",
+            "recap tells round",
+            Box::new(|member| *at_path(member, &["recap", "facts", "round"]) = number(7)),
+        ),
+        (
+            "M17 a line's owner among its witnesses",
+            "witnessed by the seat it belongs to",
+            Box::new(|member| {
+                push_line(
+                    member,
+                    "beacon_placed",
+                    world_of(0),
+                    vec![number(0)],
+                    Json::Null,
+                );
+            }),
+        ),
+        (
+            "M18 a memo line its seat was not issued",
+            "was not issued",
+            Box::new(|member| {
+                push_line(
+                    member,
+                    "ledger_memo",
+                    private_of(0),
+                    Vec::new(),
+                    Json::String(String::from("first_death")),
+                );
+            }),
+        ),
+        (
+            "M21 an unknown kind",
+            "neither the sim nor the gateway writes",
+            Box::new(|member| {
+                push_line(
+                    member,
+                    "no_such_kind",
+                    private_of(0),
+                    Vec::new(),
+                    Json::Null,
+                );
+            }),
+        ),
+        (
+            "M22 more dark beacons than the world has rows",
+            "dark beacons",
+            Box::new(move |member| {
+                let ordinals: Vec<Json> = (0..=rows)
+                    .map(|ordinal| number(i128::try_from(ordinal).expect("small")))
+                    .collect();
+                *at_path(member, &["recap", "facts", "dark"]) =
+                    Json::Array(vec![Json::Object(vec![
+                        (String::from("seat"), number(0)),
+                        (String::from("ordinals"), Json::Array(ordinals)),
+                        (String::from("shed_kw"), number(0)),
+                    ])]);
+            }),
+        ),
+    ]
+}
+
+/// The feed's and the counts' damages of [`restore_damages`].
+fn feed_damages(anchor: i128) -> Vec<(&'static str, &'static str, Damage)> {
+    vec![
+        (
+            "the anchor far past the world's tick",
+            "does not bear out",
+            Box::new(|member| *at_path(member, &["feed", "anchor_tick"]) = number(4_000_000_000)),
+        ),
+        (
+            "the anchor a tick off its Push's start",
+            "is not where its segment began",
+            Box::new(move |member| *at_path(member, &["feed", "anchor_tick"]) = number(anchor + 1)),
+        ),
+        (
+            "a segment past the round's one",
+            "does not bear out",
+            Box::new(|member| *at_path(member, &["feed", "segment"]) = number(1)),
+        ),
+        (
+            "a feed of a round the match is not near",
+            "does not bear out",
+            Box::new(|member| {
+                *at_path(member, &["feed", "round"]) = number(7);
+                *at_path(member, &["recap"]) =
+                    Json::Object(vec![(String::from("none"), Json::Bool(true))]);
+            }),
+        ),
+        (
+            "a segment that ran more ticks than its round's length",
+            "its round's length allows",
+            Box::new(|member| {
+                *at_path(member, &["recap", "facts", "ticks"]) = number(4_000_000_000);
+            }),
+        ),
+        (
+            "200 000 failed steps in a segment of 60 ticks",
+            "failed steps",
+            Box::new(|member| {
+                let one = Json::Object(vec![
+                    (String::from("seat"), number(0)),
+                    (String::from("value"), number(1)),
+                ]);
+                *at_path(member, &["recap", "facts", "failures"]) = Json::Array(vec![one; 200_000]);
+            }),
+        ),
+        (
+            "drops since the segment's end past the bound",
+            "events the bus dropped",
+            Box::new(|member| *at_path(member, &["feed", "dropped_since"]) = number(0x1_0000_0000)),
+        ),
+        (
+            "the record's drops past the bound",
+            "events the bus dropped",
+            Box::new(|member| {
+                *at_path(member, &["recap", "facts", "dropped"]) = number(0x1_0000_0000);
+            }),
+        ),
+        (
+            "a lost record's drops past the bound",
+            "events the bus dropped",
+            Box::new(|member| {
+                *at_path(member, &["recap"]) =
+                    Json::Object(vec![(String::from("lost"), number(0x1_0000_0000))]);
+            }),
+        ),
+    ]
+}
+
+/// Each check `restore_last_push` makes has its own damaged member, refused
+/// as `INVALID_ARGUMENT` with its own words; after each, the good member
+/// restores in the same process, and the feed is then the live one's.
+#[test]
+fn each_restore_check_refuses_its_own_damage_and_a_good_member_still_restores() {
+    const MATCH_ID: &str = "m-opsave-checks";
+    let mut live = new_match(MATCH_ID);
+    plan_round(&mut live);
+    play_round(&mut live);
+    let saved = live.lull_save().expect("round 2's Lull saves");
+    let good = live.last_push(Boundary::Lull).expect("the last Push");
+    let whole = good.render();
+    let rows = live.host().expect("a match").world().beacons().ids().len();
+    let anchor = match at_path(&mut whole.clone(), &["feed", "anchor_tick"]) {
+        Json::Number(lexeme) => lexeme.parse::<i128>().expect("a tick"),
+        other => panic!("an anchor: {other:?}"),
+    };
+    let mut resumed = resume(MATCH_ID, &saved, None);
+    for (what, words, damage) in restore_damages(rows, anchor) {
+        let mut member = whole.clone();
+        damage(&mut member);
+        let outcome = LastPush::parse(&member)
+            .and_then(|last| resumed.restore_last_push(Boundary::Lull, &last));
+        let error = outcome.expect_err(what);
+        assert_eq!(error.code(), Code::InvalidArgument, "{what}");
+        assert!(
+            error.message().contains(words),
+            "{what}: {}",
+            error.message()
+        );
+        resumed
+            .restore_last_push(Boundary::Lull, &good)
+            .unwrap_or_else(|error| panic!("{what}: the good member then restores: {error:?}"));
+    }
+    // Drops at the bound itself are a member this build would write.
+    let mut at_bound = whole.clone();
+    *at_path(&mut at_bound, &["feed", "dropped_since"]) = number(0xFFFF_FFFF);
+    let at_bound = LastPush::parse(&at_bound).expect("it reads");
+    resumed
+        .restore_last_push(Boundary::Lull, &at_bound)
+        .expect("drops at the bound restore");
+    resumed
+        .restore_last_push(Boundary::Lull, &good)
+        .expect("the good member restores");
+    let token = seat_token(&mut resumed, 0);
+    let live_token = seat_token(&mut live, 0);
+    assert_eq!(
+        feed_pages(&mut resumed, &token, "full", 256),
+        feed_pages(&mut live, &live_token, "full", 256),
+        "the feed is the live one's after every refusal"
+    );
+}
+
+/// Every end this build reaches is reported at the match's final tick, so the
+/// `ended` save is made there and once: closing the final recap makes none
+/// (its branch for an end no tick reported saves one only when none was).
+/// And a save whose world has already ended is refused whatever boundary it
+/// says, a version-3 `lull` one (no last Push) included: `Host::resume`
+/// lands a save in a Lull only.
+#[test]
+fn every_end_is_reported_at_its_final_tick() {
+    const MATCH_ID: &str = "m-opsave-final-tick";
+    let mut live = new_match(MATCH_ID);
+    let mut ended_at_a_tick = false;
+    let mut ended: Option<SavedMatch> = None;
+    while live.time().phase == Phase::Lull {
+        plan_round(&mut live);
+        assert!(live.begin_push().expect("the Push begins"));
+        let _ = live.take_persistence();
+        while let Some(report) = live.step().expect("a tick") {
+            if report.match_ended {
+                ended_at_a_tick = true;
+                ended = live.take_persistence().save;
+            }
+            if report.segment_ended {
+                break;
+            }
+        }
+        let _ = live.take_persistence();
+        assert!(live.end_recap().expect("the recap ends"));
+        assert!(
+            live.take_persistence().save.is_none(),
+            "closing a recap saves nothing more"
+        );
+        if live.time().phase == Phase::Lull {
+            live.open_lull().expect("the next Lull");
+        }
+    }
+    assert!(ended_at_a_tick, "the end was reported at a tick");
+    let mut ended = ended.expect("the ended save, made at that tick");
+    assert_eq!(ended.boundary, Boundary::Ended);
+    ended.boundary = Boundary::Lull;
+    ended.last_push = None;
+    let host = Host::open_from(
+        &rules_json(),
+        SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: vec![SEGMENT_MS],
+            round_limit: ROUNDS,
+        },
+        None,
+    )
+    .expect("a match");
+    let error = Surface::new(
+        MATCH_ID,
+        SEED,
+        host.rules().clone(),
+        FogPolicy::fogged(),
+        &SEATS,
+    )
+    .expect("a surface")
+    .resume(host, &ended, CONTINUATION)
+    .expect_err("an ended world is not resumed");
+    // Refused by the one restore, `Host::resume`, which lands a save only in
+    // a Lull: a world that has ended is not one.
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(error.message().contains("ended"), "{}", error.message());
+}
+
+// ---------------------------------------------------------------------------
+// The facts the owner approved: a death and failed steps (fix pass 1, item 2)
+// ---------------------------------------------------------------------------
+
+/// The hunt's segment: eight minutes, `scenarios/s2/hunt-the-commander`'s.
+const HUNT_MS: i32 = 480_000;
+
+/// The quarry's playbook with two first steps that fail, each for its own
+/// reason: a beacon placed on the column of its own core, which no seat may
+/// stack on (an illegal site), and a move to where it walks anyway given
+/// 50 ms (out of time); then the walk the hunt cuts short.
+fn quarry(core: [i32; 3]) -> String {
+    let text = std::fs::read_to_string(
+        support::workspace_root().join("scenarios/s2/hunt-the-commander.enemy.playbook.jsonc"),
+    )
+    .expect("the quarry's playbook");
+    let walk = "{\"label\": \"south\"";
+    assert!(text.contains(walk), "the quarry walks south");
+    let [x, y, z] = core;
+    let stack = format!(
+        "{{\"label\": \"stack\", \"timeout_ms\": 60000, \"place_beacon\": {{\"at\": {{\"voxel\": \
+         {{\"x\": {x}, \"y\": {y}, \"z\": {z}}}}}}}, \"on_fail\": {{\"action\": \"SKIP\"}}}},\n      "
+    );
+    let dash = "{\"label\": \"dash\", \"timeout_ms\": 50, \"move\": {\"to\": {\"voxel\": {\"x\": \
+                358, \"y\": 60, \"z\": 37}}, \"pace\": \"DIRECT\"}, \"on_fail\": {\"action\": \
+                \"SKIP\"}},\n      ";
+    text.replacen(walk, &format!("{stack}{dash}{walk}"), 1)
+}
+
+/// Seat 0 hunts and seat 1 walks into sight, through `submit_plan`.
+fn plan_the_hunt(surface: &mut Surface) {
+    let hunter = std::fs::read_to_string(
+        support::workspace_root().join("scenarios/s2/hunt-the-commander.playbook.jsonc"),
+    )
+    .expect("the hunter's playbook");
+    let mut left = FIRST_LULL_MS;
+    let (_, core) = support::core_beacon(surface, 1);
+    for (seat, playbook) in [(0_u8, hunter), (1, quarry(core))] {
+        let token = seat_token(surface, seat);
+        let answer = result(
+            &call_in_lull(
+                surface,
+                &token,
+                &mut left,
+                "submit_plan",
+                &format!("{{\"playbook_jsonc\":{}}}", quote(&playbook)),
+            ),
+            "submit_plan",
+        );
+        assert_eq!(
+            answer.get("accepted"),
+            Some(&Json::Bool(true)),
+            "{answer:?}"
+        );
+    }
+}
+
+/// A fresh surface resumed from `saved` of a match of `segment_ms` segments
+/// and `rounds` rounds.
+fn resume_hunt(match_id: &str, saved: &SavedMatch) -> Surface {
+    let host = Host::open_from(
+        &rules_json(),
+        SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: vec![HUNT_MS],
+            round_limit: 2,
+        },
+        None,
+    )
+    .expect("a match");
+    Surface::new(
+        match_id,
+        SEED,
+        host.rules().clone(),
+        FogPolicy::fogged(),
+        &SEATS,
+    )
+    .expect("a surface")
+    .resume(host, saved, CONTINUATION)
+    .expect("the Lull resumes")
+}
+
+/// The kinds and texts of a member's feed lines.
+fn lines_of(member: &Json) -> Vec<(String, String)> {
+    let Some(Json::Object(feed)) = member.get("feed") else {
+        panic!("a feed: {member:?}");
+    };
+    let Some((_, Json::Array(lines))) = feed.iter().find(|(key, _)| key == "lines") else {
+        panic!("lines");
+    };
+    lines
+        .iter()
+        .map(|line| match (line.get("kind"), line.get("text")) {
+            (Some(Json::String(kind)), Some(Json::String(text))) => (kind.clone(), text.clone()),
+            other => panic!("a line: {other:?}"),
+        })
+        .collect()
+}
+
+/// The differential on a match that holds what the owner's ruling is about:
+/// seat 1's commander dies in the hunt, and its steps fail for two reasons
+/// (a step out of time, a step its commander's death ended). The save carries
+/// those lines by kind; the resumed Lull reads them as the live one does, its
+/// feed's clock (the anchor every later line is dated from) is the live one's,
+/// and the next round, played on both, is the same feed and recap.
+#[test]
+fn a_lull_after_a_death_and_failed_steps_resumes_as_played() {
+    const MATCH_ID: &str = "m-opsave-hunt";
+    let mut live = hosted_with(MATCH_ID, FogPolicy::fogged(), 2, HUNT_MS, 2, None);
+    plan_the_hunt(&mut live);
+    play_round(&mut live);
+    assert_eq!(live.time().phase, Phase::Lull, "round 2's Lull");
+    let saved = live.lull_save().expect("a Lull saves");
+    let member = saved
+        .last_push
+        .as_ref()
+        .expect("the save carries it")
+        .render();
+    let lines = lines_of(&member);
+    assert!(
+        lines.iter().any(|(kind, _)| kind == "commander_died"),
+        "the save carries the death"
+    );
+    let mut reasons: Vec<&str> = lines
+        .iter()
+        .filter(|(kind, _)| kind == "step_failed")
+        .map(|(_, text)| text.as_str())
+        .collect();
+    reasons.sort_unstable();
+    reasons.dedup();
+    assert!(
+        reasons.len() >= 2,
+        "the save carries failed steps for two reasons: {reasons:?} in {lines:?}"
+    );
+
+    let mut resumed = resume_hunt(MATCH_ID, &saved);
+    for surface in [&mut live, &mut resumed] {
+        let full = surface.lull_length(surface.time().round);
+        surface
+            .set_phase_remaining_ms(full)
+            .expect("a custom match takes a countdown");
+    }
+    assert_eq!(
+        resumed.segment_elapsed_ms(),
+        live.segment_elapsed_ms(),
+        "the feed's clock is the live one's"
+    );
+    let (want, got) = (reads(&mut live), reads(&mut resumed));
+    assert_eq!(want.len(), got.len());
+    for ((what, want), (_, got)) in want.iter().zip(&got) {
+        assert_eq!(got, want, "round 2's Lull: {what}");
+    }
+
+    // The next round, played on both from here: its feed and its recap.
+    for surface in [&mut live, &mut resumed] {
+        plan_the_hunt(surface);
+        play_round(surface);
+    }
+    let (want, got) = (reads(&mut live), reads(&mut resumed));
+    for ((what, want), (_, got)) in want.iter().zip(&got) {
+        assert_eq!(got, want, "after round 2: {what}");
     }
 }

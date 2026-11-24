@@ -258,22 +258,23 @@ impl Surface {
                 ));
             }
         };
-        let elapsed = match feed {
-            Some(feed) => {
-                if feed.round > round || feed.anchor > now {
-                    return Err(damaged(said!(
-                        "its feed was opened in round {} at tick {}, after the round {} and the \
-                         tick {} its world stands at",
-                        feed.round,
-                        feed.anchor.raw(),
-                        round,
-                        now.raw()
-                    )));
-                }
-                Some(now.since(feed.anchor))
-            }
-            None => None,
+        let recap_drops = match &saved.recap {
+            SavedRecap::Lost(dropped) => Some(*dropped),
+            SavedRecap::Facts(facts) => Some(facts.dropped),
+            SavedRecap::None => None,
         };
+        for count in recap_drops
+            .into_iter()
+            .chain(feed.map(|feed| feed.dropped_since))
+        {
+            if count > MAX_SAVED_DROPS {
+                return Err(damaged(said!(
+                    "it counts {} events the bus dropped, past the {} a save holds",
+                    count,
+                    MAX_SAVED_DROPS
+                )));
+            }
+        }
         match &saved.recap {
             SavedRecap::None | SavedRecap::Lost(_) => {}
             SavedRecap::Facts(facts) => {
@@ -281,12 +282,18 @@ impl Surface {
                     facts,
                     round,
                     feed.map(|feed| feed.round),
-                    elapsed,
+                    feed.map(|feed| now.since(feed.anchor)),
+                    host_ticks_of(self, facts.round)?,
                     &world_seats,
                     beacon_rows,
                 )?;
             }
         }
+        // The record first, then the feed's anchor against it.
+        let elapsed = match feed {
+            Some(feed) => Some(check_anchor(feed, &saved.recap, round, now)?),
+            None => None,
+        };
         if let (Some(feed), Some(elapsed)) = (feed, elapsed) {
             self.check_lines(feed, elapsed, &ours)?;
             let mut rebuilt =
@@ -436,12 +443,84 @@ impl Surface {
     }
 }
 
+/// The most events the sim's bus dropped that a save's counts may hold: the
+/// segment's drops since its end (`dropped_since`), the record's (`dropped`)
+/// and a lost record's (`lost`). Each counts one segment's drops, to which
+/// the live gateway adds that segment's further drops in a `u64`
+/// (`Surface::count_drops`, a typed `INTERNAL` on overflow at its cause); a
+/// resumed count at this bound leaves that sum `2^64 - 2^32` of room, more
+/// than the bus's own counter could add over any match. A save past it is
+/// one this build did not write.
+pub const MAX_SAVED_DROPS: u64 = 0xFFFF_FFFF;
+
+/// The feed's round, segment and anchor against the world the save restores,
+/// and the ticks its segment has run. The feed was opened for this round (a
+/// Lull whose feed shows no Push, as after a version-3 save's resume) or the
+/// round before (the Push this Lull follows), always as the round's segment 0
+/// (every segment the gateway opens is), at the tick its Push began: as many
+/// ticks before the world's tick as the record says the segment ran, or at
+/// the world's tick when the feed is this round's own.
+///
+/// # Errors
+///
+/// [`crate::error::Code::InvalidArgument`] for a round, segment or anchor
+/// the match's world does not bear out.
+fn check_anchor(feed: &SavedFeed, recap: &SavedRecap, round: u32, now: Tick) -> Result<u32, Error> {
+    let opened_here = feed.round == round;
+    let opened_before = feed.round.checked_add(1) == Some(round);
+    if feed.segment != 0 || !(opened_here || opened_before) || feed.anchor > now {
+        return Err(damaged(said!(
+            "its feed was opened as segment {} of round {} at tick {}, which the world, in round \
+             {} at tick {}, does not bear out",
+            feed.segment,
+            feed.round,
+            feed.anchor.raw(),
+            round,
+            now.raw()
+        )));
+    }
+    let elapsed = now.since(feed.anchor);
+    let ran = if opened_here {
+        Some(0)
+    } else {
+        match recap {
+            SavedRecap::Facts(facts) => Some(facts.ticks),
+            SavedRecap::None | SavedRecap::Lost(_) => None,
+        }
+    };
+    if ran.is_some_and(|ran| ran != elapsed) {
+        return Err(damaged(said!(
+            "its feed's anchor, tick {}, is not where its segment began: the world stands at \
+             tick {}",
+            feed.anchor.raw(),
+            now.raw()
+        )));
+    }
+    Ok(elapsed)
+}
+
+/// The most ticks round `round`'s segment can run: its length on the
+/// match state's own ladder, in whole ticks, rounded up.
+///
+/// # Errors
+///
+/// As [`Surface::host`].
+fn host_ticks_of(surface: &Surface, round: u32) -> Result<u32, Error> {
+    Ok(surface
+        .host()?
+        .world()
+        .match_state()
+        .length_for_round(round)
+        .to_ticks_ceil())
+}
+
 /// The recap's record against this match (the module doc's bounds).
 fn check_facts(
     facts: &RecapFacts,
     round: u32,
     feed_round: Option<u32>,
     elapsed: Option<u32>,
+    longest: u32,
     world_seats: &[SeatId],
     beacon_rows: usize,
 ) -> Result<(), Error> {
@@ -452,10 +531,15 @@ fn check_facts(
             round
         )));
     }
-    if elapsed.is_some_and(|elapsed| facts.ticks > elapsed) {
+    // The segment ran at most its round's length, the match state's own ladder
+    // (`MatchState::length_for_round`): a record of a longer one is not this
+    // match's. With a feed, its anchor holds the ticks exactly
+    // (`check_anchor`).
+    if facts.ticks > longest {
         return Err(damaged(said!(
-            "its recap's segment ran {} ticks, more than its feed has seen",
-            facts.ticks
+            "its recap's segment ran {} ticks, past the {} its round's length allows",
+            facts.ticks,
+            longest
         )));
     }
     let in_match = |seat: &SeatId| world_seats.contains(seat);
@@ -569,14 +653,8 @@ fn parse_feed(value: &Json) -> Result<SavedFeed, Error> {
         let kind = Kind::new(string_at(line, "kind")?)
             .map_err(|refused| damaged(said!("a line's kind: {}", refused.said())))?;
         let words = string_at(line, "text")?;
-        let chars = words.chars().count();
-        if chars > crate::feed::MAX_LINE_CHARS {
-            return Err(damaged(said!(
-                "a line of its feed is {} characters, past the {} a feed line holds",
-                chars,
-                crate::feed::MAX_LINE_CHARS
-            )));
-        }
+        // A line's length is held where every line is, live or restored:
+        // `SegmentFeed::publish`, which the restore publishes through.
         let audience_json = member(line, "audience")?;
         let audience = match string_at(audience_json, "to")? {
             "public" => {
@@ -993,4 +1071,86 @@ fn i64_of(value: &Json, key: &str) -> Result<i64, Error> {
 
 fn seat_of(value: &Json) -> Result<SeatId, Error> {
     Ok(SeatId::new(fits::<u8>(value, "seat")?))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::Code;
+    use crate::fog::FogPolicy;
+    use crate::surface::Surface;
+    use pharmakos_sim::math::quantity::Damage;
+    use pharmakos_sim::rules::RulesTable;
+    use pharmakos_sim::runner::MatchSettings;
+    use pharmakos_sim::tables::{SeatId, UnitId};
+    use pharmakos_sim::world::{DamageOrder, DamageTarget, WorldConfig};
+
+    /// A two-seat match of one one-second round, hosted, in its Lull.
+    fn hosted() -> Surface {
+        let rules = || {
+            RulesTable::load(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("..")
+                    .join("..")
+                    .join("rules")
+                    .join("rules.v1.json"),
+            )
+            .expect("the shipped rules table")
+        };
+        let seed = 0x0000_0000_ca5c_aded;
+        let mut surface = Surface::new(
+            "m-opsave-unsaved",
+            seed,
+            rules(),
+            FogPolicy::fogged(),
+            &[SeatId::new(0), SeatId::new(1)],
+        )
+        .expect("a surface");
+        let host = crate::host::Host::open(
+            &WorldConfig {
+                match_seed: seed,
+                seats: 2,
+                rules: rules(),
+                match_settings: MatchSettings {
+                    segment_lengths_ms: vec![1_000],
+                    round_limit: 1,
+                },
+            },
+            None,
+        )
+        .expect("a match");
+        surface.attach(host).expect("attached");
+        surface.open_lull().expect("the opening Lull");
+        surface
+    }
+
+    /// A match's end whose save cannot be built is not an audit line alone:
+    /// the refusal is typed, returned, and left where the host loop stops on
+    /// it (`Persistence::unsaved`), so no `sealed` save of the final Push is
+    /// left to be resumed as live without the host saying so. Here a host
+    /// order waits for a tick, so the match cannot be saved.
+    #[test]
+    fn an_end_that_cannot_be_saved_is_refused_and_carried_to_the_host_loop() {
+        let mut surface = hosted();
+        surface
+            .host_mut()
+            .expect("a match")
+            .file_damage(DamageOrder {
+                target: DamageTarget::Unit(UnitId::new(0)),
+                amount: Damage::new(1).expect("a positive amount"),
+                by: SeatId::NEUTRAL,
+                source: None,
+            })
+            .expect("an order filed");
+        let error = surface.persist_end().expect_err("an order waits");
+        assert_eq!(error.code(), Code::Internal);
+        assert!(
+            error.message().contains("could not be saved"),
+            "{}",
+            error.message()
+        );
+        let pending = surface.take_persistence();
+        assert_eq!(pending.unsaved, Some(error));
+        assert!(pending.save.is_none());
+        assert!(!surface.end_saved, "nothing was saved");
+    }
 }

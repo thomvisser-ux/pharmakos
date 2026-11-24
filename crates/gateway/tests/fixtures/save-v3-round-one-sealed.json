@@ -1,0 +1,55 @@
+{
+  "format": "pharmakos.save",
+  "stamp": {
+    "format_version": 3,
+    "rules_hash": "1b26c525068bff61",
+    "verifier_version": "0.1.0-s3.6",
+    "snapshot_version": 16
+  },
+  "config": {
+    "match_id": "m-fpstream2-save",
+    "seed": "0x00000000ca5caded",
+    "seats": 2,
+    "human_seat": null,
+    "segment_lengths_ms": [
+      3000
+    ],
+    "round_limit": 3,
+    "preset": "custom"
+  },
+  "boundary": "sealed",
+  "round": 1,
+  "lull_offset": 2,
+  "snapshot": "EO3b8tIMAAIAAQKQA5ADAhQUAggIAv////8P/////w8CAAAC/////w//////DwL/////D/////8PAgEBAgAAAgAAAgAAAgAAAgAAAv////8P/////w8C/////w//////DwgAAQIDBAUGBwgAAAAAAQEBAQgBAgIDAQICAxiAgLAWgICwAYCAoAKAgMAWgIDAAYCAoAKAgLAWgIDQAYCAoAKAgKAWgIDAAYCAoAKAgKgWgICoFoCA6AGAgLgWgIC4FoCA6AGAgKgWgIDIFoCA6AGAgJgWgIC4FoCA6AEYgICwFoCAsAGAgKACgIDAFoCAwAGAgKACgICwFoCA0AGAgKACgICgFoCAwAGAgKACgICoFoCAqBaAgOgBgIC4FoCAuBaAgOgBgICoFoCAyBaAgOgBgICYFoCAuBaAgOgBCAAAAAAAAAAACNgEyAHIAcgB2ATIAcgByAEIAAAAAAEBAQEIAAAAAAAAAAAI/////w//////D/////8P/////w//////D/////8P/////w//////DwgAAAAAAAAAAAgAAAAAAAAAAAj/////D/////8P/////w//////D/////8P/////w//////D/////8PCP////8P/////w//////D/////8P/////w//////D/////8P/////w8I/////w//////D/////8P/////w//////D/////8P/////w//////Dwj/////D/////8P/////w//////D/////8P/////w//////D/////8PAgABAgABBoCAsBaAgMABgICgAoCAqBaAgLgWgIDoAQIBAQIAAALwLvAuAgAAAgICAgAAAgAAAgAAAgAAAgICAgAAAv////8P/////w8CAAACAAACAAAC/////w//////DwL/////D/////8PAv////8P/////w8CAAACAAACAAACAAACAQECAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKACsLeH6fzRwI2hAbj16r7T+/nDigG+qPvMl7Kx/l69hKzsu5jd9CCborvL5saI3R7ej+7K1L+EyBu9p/zU7e7k0gSJhpK/gpeJ/e8B/NGKwd+R7diBAdPq3ajDkLO1Ls7ijsv2keGuBN2YksmC7fq68QGp64Pz9fyriwKbv/eD1tzr73bozMfeocWqhcoB8eDF9sSlu7kg+P6Pzca70rQ+/OTpg53kmr08rtuE8NeYvodP0Zrr4pnoqt5y/7LNo775qtPtAaWN5sbZ9ueJXoGhpJSssd+re4uqkoiphdWGC6m1nvqyq8zRtwGfr4rw1+O5tjDY2bKXmJOn4KIBzJGK6taijvY8yIiY9cbN372SAeifxNSf2o7LQpGoguH33ba5XInkjtCLlrHc3gGv58ff4eSP4KUBhLCl2PvJ7qNVkIK65POOm6Ijo4jx+NDjx51C2oKo4bGq89AikNrjpfinm5wTi5jrn+3voJ8k5dCdnoKCjfcCpZTRw6f+0OsorPC/s7z8wtG3Ae3OsIPG4OPF9QGs+pL1ke7e+5MBisrRja7qya2VAdrg/qCDvtDTmgHggOWSla+g4pIBgdCttdDt/emdAfe9uZuV1NyfzAGcosOm68moruIB8/e7oobHo8WiAY3OrJSzkPrQZuKgh/KtvOm39gG6iJ7Uu67EsXGU1fKb2aC0qTrmg6nI9q6CtaQBhLiKpO/olZizAfOY6svRtqXzVsS4m4iWmMGEdL6Wv5f4/puHyQGR+IOs97+ZqkuhrcKFvLHnu17t/5671tHjiT/GxdbQ946h7HjA7P7DsKPJlbEBzbbgrpOGmtOnAa+NhOrZo6mVCYS/x4GU4/3RQ6Gz5KXa0qbtJsjpl7jS/PurROyA6dGUo5LsQPCKqebrre2oCtXc1aSg8c6Vc/25x8fKqojMdd3HxvCc3o38cuCAgMic9+i5X/eu5fXVr4aALIjOqqvi1orv+QGt/cbbppO94zOY+sXt/eO3tH3Z6Nfcw+Lx1WLjq4z5hsCL9uABpMXh44uwhMuHAbCp88vExNqddsi47qKTmLjX0QHRsMGHj+21hV3erfr4mq6uhrwB3Zjv7uPf3aGLAdHWua7qlMaztAHumbHEw+Xyk2SWvanRpqD1+6UBgau6+PTKkukau/2vy4nEypcZ4NXrr47nmIvYAeC6kPfoifjqRoLu18GAxOuXkAH/34CN4a/5hgrV7q3CwavUtcYBoOG6kuPn2ITJAYT0gOnHqd2GkAGUlOnBquzZpqYB9qKdmd6dzoHNAbj/odaT8cuPWfGewKDC/cXq1QHbtpbx5J6QwPgBqNuuvb6sw8+0AfbhvsWOtqeMa4Xu2d3p4vOJowHn9ovRv/v15RyWq/mw04qL8f0BmOWj5ayas+81i6q9ttfEtZBHnofvr6b648/CAbHD++eLismEpgHg78bx4eTD+n/4xaXuj+zfpdoBpeu+7oaIq9nXAfSThN6X0ub+VabMrO7/qMKs2gG+5ouE07mu494Bt4qLuf+0q4nCAaaKqu7KmorT3QGsnNWl1c7wynbc/dGejuK6w2v7xaKO+tGFguMBkpm0jtqK5rR2tqexwLvkoeeTAcqAq+D09Y33XYSZmfaxv9uvkwHd6ZvPvKrE4d4BoZvR3aiW1dD6Ae7dh6rBr/6xigHvtcKosteuudQBp8D3z7L8/J+OAaWAoIPpn/3qygG4rJer883F3DWLlJyqyaqk9GLllPWXq/u/6jrp9pv+iuKKi7sBnJfZl8bPsKPVAbLK7MyuiYOxC9/QjeqLgMiEP8CD/vnF4p6Q4gGnx4uA8+ag+WedjoHEodKks88Bz/7D/oaoso8Jz/7D/oaoso8Jz/7D/oaoso8Jvpi0ppr4ovt4z/7D/oaoso8Jz/7D/oaoso8J+fy89u3Gy5NstuXzkZuExfsh5fbppu+Ap5vLAfGSkZXu/5PW8wGx/PzyqsOz6nvP/sP+hqiyjwnP/sP+hqiyjwnP/sP+hqiyjwm9lsL3uNn8ve4Bn5ui2sT+uIWbAc/+w/6GqLKPCc/+w/6GqLKPCfra/bWQrbL0tgGm/4TQnpyO27gBy9us6ubau4N04NTWi92WkfbqAcyXxuHxme2qbs/+w/6GqLKPCc/+w/6GqLKPCYChnbqdktP0hQHznoKJgt2ywrABvrrY+a3HqPE/z/7D/oaoso8Jz/7D/oaoso8Ju/2Q6qjdk/PsAYKe2vjt2tH2f+XuyYPwvM/fYoWJ6N3f8/qfCZ22gMmP2J3OS7aGnPXBz43I+gHP/sP+hqiyjwnisq/d/s+761XVtMDOmfv4pU2lu8DG/fnbpXDP/sP+hqiyjwnP/sP+hqiyjwnP/sP+hqiyjwnF8vL2rrCF6r4Bvb622au5hLYhwe+l/bTgn8ciloPCzemLxvy/AfKR6rTUkY/M3wHP/sP+hqiyjwnP/sP+hqiyjwn06/7z/+u+/O4B98uUneHBo8C0Ac/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCaCg+YmN+fbJ5QGl5/23lbfYyiLLsbLinoyquuwB5sajyuWP08uGAc/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCZDw65vswvjsE7qN3srpjMORP5mP6ffYg/2Mb8HdmOTLhrKxxAHY05f4z/WUnlmmtcP3/JeT8zjP/sP+hqiyjwnP/sP+hqiyjwnP/sP+hqiyjwnP/sP+hqiyjwnF1eWcjJuKnX7P/sP+hqiyjwnK+P6KlaD/qbsB45ax09XrgobFAZq71L7GvLftWPDPhNTsjJ2v8AHQ7Zavlo6/9iCrnvv8xvGr9LwBz/7D/oaoso8Jz/7D/oaoso8Jz/7D/oaoso8J79yCw6eCj8iuAbWhl7/WwPD8ftKbj/XL58rCBLm32KTJlf360wHP/sP+hqiyjwnP/sP+hqiyjwmToqCB1OiOuCPzo/yS6pqy3NsB+IyfzoTmp+jzAc/+w/6GqLKPCejej7SJtYrHiQH9hP7HqJSIvvUBoM/xuc+5z9BY+tiok4uemZ0UrPm6j5ntjbkO+IeTspvz2NWaAc/2ka+ohvb1wAHP/sP+hqiyjwnEw+vZkdrAhzbL/f2g3YqYjYsBsKLP7JWKwpHAAc/+w/6GqLKPCYyr4JyH8/D8lQGQzdf72/uk6V+93M/T4IuGjHX1oJqZvLyj8qgB0OGUyYjO1osh95Oh3NKX5cN0sOHD9rSS55NWqonVqZTPhtP5Ac/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCa24mejTxsLzjgGm8suRiIeS1XL0nKykn8uwvcEBltO4kLfAsaEsjKyFheKCn95zzKye65rlxYEfqefFt9CKs6GtAam56aiz2puIdc/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCc/+w/6GqLKPCeC00rf85KfuS5z0+bqG6ZOoH/jGpoTqzbnb3gGP1u29+sDuwYcBz/7D/oaoso8Jz/7D/oaoso8Jz/7D/oaoso8JnY6BxKHSpLPPAfLWsfKsj4XczQHNqMPpl+Dg9BjP/sP+hqiyjwkIAQEBAQEBAQEIAAAAAAAAAAAIAAAAAAAAAAAIAAAAAAAAAAAIAAAAAAAAAAAIAAAAAAAAAAAAAAEBAwHwLgAA8C4A/wACAAAC/////w//////DwL/////D/////8PAgAAAv////8P/////w8C/////w//////DwL/////D/////8PAgAAAgAAAv////8P/////w8GAAAAAAAAAv////8P/////w8CAAAC/////w//////DwIAAAIAAAL/////D/////8PAgAAAgAAAgAAAAAC/////w//////DwIAAAAAAgAAAv////8P/////w8C/////w//////DwL/////D/////8PAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "seats": [
+    {
+      "seat": 0,
+      "notebook": "",
+      "drafts": [],
+      "seal": {
+        "playbook_jsonc": "// Walk east, then stand.\n{\"schema_version\": {\"major\": 1},\n \"meta\": {\"title\": \"East\", \"author_kind\": \"HUMAN\"},\n \"declarative\": {\"route\": [{\"label\": \"east\", \"move\": {\"to\": {\"voxel\": {\"x\": 362, \"y\": 22, \"z\": 36}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 60000, \"on_fail\": {\"action\": \"SKIP\"}}]},\n \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n \"kind\": \"PLAYBOOK\"}\n",
+        "round": 1,
+        "filed_by_the_gateway": false,
+        "report_hash": "731c89171086ec66",
+        "plan_fingerprint": "76debd683352224d"
+      },
+      "handles": [],
+      "memos": []
+    },
+    {
+      "seat": 1,
+      "notebook": "",
+      "drafts": [],
+      "seal": {
+        "playbook_jsonc": "// Walk east, then stand.\n{\"schema_version\": {\"major\": 1},\n \"meta\": {\"title\": \"East\", \"author_kind\": \"HUMAN\"},\n \"declarative\": {\"route\": [{\"label\": \"wait0\", \"hold\": {\"ms\": 250}}, {\"label\": \"east\", \"move\": {\"to\": {\"voxel\": {\"x\": 360, \"y\": 357, \"z\": 29}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 60000, \"on_fail\": {\"action\": \"SKIP\"}}]},\n \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n \"kind\": \"PLAYBOOK\"}\n",
+        "round": 1,
+        "filed_by_the_gateway": false,
+        "report_hash": "d6f34c3a195f2e44",
+        "plan_fingerprint": "1831e30f46e07604"
+      },
+      "handles": [],
+      "memos": []
+    }
+  ]
+}
+

@@ -542,6 +542,9 @@ pub struct Surface {
     /// beacon its own seat recycled is no dark Stake (decision 4's reading).
     /// Cleared with each segment's feed.
     recycled: Vec<pharmakos_sim::knowledge::AssetId>,
+    /// True once the match's end has been put in the pending slot as an
+    /// `ended` save ([`Surface::persist_end`]), so it is written once.
+    end_saved: bool,
 }
 
 /// What one segment's end told the recap, as the sim reported it: the round,
@@ -794,6 +797,7 @@ impl Surface {
             preset: Preset::Custom,
             human_seat: None,
             recycled: Vec::new(),
+            end_saved: false,
         })
     }
 
@@ -1003,15 +1007,21 @@ impl Surface {
         })?;
         for held in &saved.seats {
             let characters = held.notebook.chars().count();
-            if characters > notebook_bound
-                || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
-            {
+            if characters > notebook_bound {
                 return Err(Error::invalid(said!(
                     "seat {}'s notebook or drafts in this save are over the bounds a seat may \
                      hold: the file is damaged",
                     held.seat
                 )));
             }
+            // The draft rule, the one every door holds (`drafts_hold`).
+            crate::surface::planning::drafts_hold(&held.drafts).map_err(|broken| {
+                Error::invalid(said!(
+                    "seat {}'s drafts in this save break the draft rule: {}: the file is damaged",
+                    held.seat,
+                    broken.said()
+                ))
+            })?;
             // Decoded once: checked against its stamp, compiled and priced
             // (`Surface::restored_seal`).
             let sealed = match held.seal.as_ref() {
@@ -1672,7 +1682,7 @@ impl Surface {
         if started {
             self.close_phase();
             self.views.bump();
-            self.persist_push(round);
+            self.persist_push(round)?;
         }
         self.sync_time();
         self.absorb_events()?;
@@ -1755,19 +1765,52 @@ impl Surface {
     /// a resume is refused rather than replaying the final Push
     /// ([`Boundary::Ended`]). A save that cannot be built is an audit line, as
     /// [`Surface::persist_push`]'s is: the match has already ended.
-    fn persist_end(&mut self) {
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the save cannot be built: the
+    /// match has ended and the save on disk is still the final round's
+    /// `sealed` one, which a resume would replay as a live Push. The refusal
+    /// is audited, carried to the host loop ([`Persistence::unsaved`]),
+    /// which stops serving and says it, and returned to the caller that
+    /// stepped the match.
+    fn persist_end(&mut self) -> Result<(), Error> {
         match self.saved_match(Boundary::Ended) {
-            Ok(saved) => self.pending.save = Some(saved),
-            Err(error) => {
-                let tick = self.time.tick;
-                self.audit.refused(tick, None, None, "save ended", &error);
+            Ok(saved) => {
+                self.pending.save = Some(saved);
+                self.end_saved = true;
+                Ok(())
             }
+            Err(cause) => Err(self.unsaved(
+                "save ended",
+                said!(
+                    "the match has ended and its end could not be saved ({}): the save on disk is still the final round's `sealed` one, which a resume would replay as a live Push; this host stops serving",
+                    cause.said()
+                ),
+            )),
         }
+    }
+
+    /// A save the disk needed and could not have: audited under `action`,
+    /// put where the host loop stops on it ([`Persistence::unsaved`]), and
+    /// answered as the typed refusal to return.
+    fn unsaved(&mut self, action: &str, why: pharmakos_proto::json::grammar::Said) -> Error {
+        let error = Error::internal(why);
+        let tick = self.time.tick;
+        self.audit.refused(tick, None, None, action, &error);
+        self.pending.unsaved = Some(error.clone());
+        error
     }
 
     /// Put a beginning Push's save and seals in the pending slot, and make
     /// room for its chain.
-    fn persist_push(&mut self, round: u32) {
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the `sealed` save cannot be built:
+    /// the save on disk is then the Lull's, which a resume would re-plan, so
+    /// the host loop stops serving and says it ([`Surface::unsaved`]).
+    fn persist_push(&mut self, round: u32) -> Result<(), Error> {
         self.pending.sealed = self
             .seats
             .iter()
@@ -1784,9 +1827,14 @@ impl Surface {
             .collect();
         match self.saved_match(Boundary::Sealed) {
             Ok(saved) => self.pending.save = Some(saved),
-            Err(error) => {
-                let tick = self.time.tick;
-                self.audit.refused(tick, None, None, "save sealed", &error);
+            Err(cause) => {
+                return Err(self.unsaved(
+                    "save sealed",
+                    said!(
+                        "the Push has begun and its seals could not be saved ({}): a resume would offer its Lull again, so this host stops serving",
+                        cause.said()
+                    ),
+                ));
             }
         }
         // Reserved once, here, so that recording the chain allocates nothing
@@ -1797,6 +1845,7 @@ impl Surface {
         self.chain.clear();
         self.chain
             .reserve(usize::try_from(ticks).unwrap_or(0).saturating_add(1));
+        Ok(())
     }
 
     /// Every seat's sealed plan, in ascending seat id.
@@ -1909,7 +1958,6 @@ impl Surface {
         if let Some(report) = report {
             if report.match_ended {
                 self.fog.end_match();
-                self.persist_end();
             }
             // The private replay's chain (the wave-6 notes, decision C11):
             // room was reserved when the Push began, so this allocates nothing
@@ -1936,6 +1984,11 @@ impl Surface {
             if let Some(host) = host.as_ref() {
                 views.stamp(host.world().voxels().settled());
             }
+        }
+        // The match's end, where the sim reports it: the `ended` save that
+        // replaces the final round's `sealed` one, once.
+        if report.is_some_and(|report| report.match_ended) && !self.end_saved {
+            self.persist_end()?;
         }
         Ok(report)
     }
@@ -1987,6 +2040,15 @@ impl Surface {
             // `end_match` is idempotent. (Found by T16a's own
             // acceptance test, when every round-limit end came through here.)
             self.fog.end_match();
+            // And the match's end is saved here when no tick reported it (the
+            // sim's `end_recap` announces such an end itself), so the `ended`
+            // save cannot be missing whichever way the match ended. Every end
+            // this build reaches is reported at its final tick
+            // (`tests/last_push.rs`, `every_end_is_reported_at_its_final_tick`),
+            // which saved it already.
+            if !self.end_saved {
+                self.persist_end()?;
+            }
         }
         if ended {
             // The recap's own reported clock is the recap's; the Lull that
@@ -3051,6 +3113,15 @@ impl Surface {
             round,
             playbook_jsonc: playbook,
         });
+        // The carried draft replaces last round's, so the rule holds by
+        // construction; held here too, as at every door.
+        crate::surface::planning::drafts_hold(&state.drafts).map_err(|broken| {
+            Error::internal(said!(
+                "carrying seat {}'s draft forward broke the draft rule: {}",
+                seat.raw(),
+                broken.said()
+            ))
+        })?;
         state.continuity = Some(continuity);
         Ok(())
     }

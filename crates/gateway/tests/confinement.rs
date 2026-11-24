@@ -466,7 +466,10 @@ fn in_test_item(spans: &[(usize, usize)], index: usize) -> bool {
 /// `#[cfg(test)]` in `code` (already [`code_only`], so one in a comment or a
 /// literal is gone) attributes: from the attribute through any further
 /// attributes to the item's end, which is its first `;` outside brackets, or
-/// the brace that closes its first `{`. `gamectl`'s `test_item_lines`, copied:
+/// the brace that closes its first `{`. Shipped code on the same line as a test
+/// item's closing brace is not read (the whole line is blanked), and `cargo fmt
+/// --check` refuses that layout (`a_test_items_closing_line_is_blanked_whole`).
+/// `gamectl`'s `test_item_lines`, copied:
 /// two crates' tests cannot share a helper, and the two are held to the same
 /// cases.
 fn test_item_lines(code: &str) -> Vec<(usize, usize)> {
@@ -946,6 +949,17 @@ fn the_scans_read_past_an_attribute_that_attributes_nothing() {
             .first()
             .map(|(line, _)| *line),
         Some(5)
+    );
+}
+
+/// The one layout the scan does not read past: code after a test item's
+/// closing brace on that brace's own line, which `cargo fmt --check` refuses.
+#[test]
+fn a_test_items_closing_line_is_blanked_whole() {
+    let text = "#[cfg(test)]\nmod t {\n} fn p() { std::thread::spawn(f); }\n";
+    assert!(
+        thread_offences(&shipped_code(text)).is_empty(),
+        "the closing line is blanked whole"
     );
 }
 
