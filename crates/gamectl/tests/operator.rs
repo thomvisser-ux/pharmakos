@@ -2418,6 +2418,12 @@ fn a_resumed_lull_seals_what_the_unresumed_one_does() {
         live.playbook_jsonc, resumed.playbook_jsonc,
         "a resumed Lull seals what the unresumed one does"
     );
+    assert_eq!(
+        resumed.failed_stones,
+        FailedStones::Known(vec![String::from("seam_190_124")]),
+        "the resumed Lull reads the failed stone the live one does: {}",
+        resumed.why
+    );
     assert_eq!(resumed.failed_stones, live.failed_stones, "{}", resumed.why);
     assert_eq!(resumed.why, live.why);
 }

@@ -1987,7 +1987,6 @@ impl Surface {
             // `end_match` is idempotent. (Found by T16a's own
             // acceptance test, when every round-limit end came through here.)
             self.fog.end_match();
-            self.persist_end();
         }
         if ended {
             // The recap's own reported clock is the recap's; the Lull that
