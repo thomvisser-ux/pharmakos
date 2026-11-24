@@ -1886,19 +1886,46 @@ fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
     let selected = selected_packages(workspace, &ctx.packages)?;
     let all = workspace_test_units(workspace, &selected)?;
     let sim_selected = selected.iter().any(|name| name == resolved::SIM);
-    let report = if let Some(shard) = ctx.shard {
-        run_shard_units(ctx, shard, "test", &all, &base, sim_selected)?
+    let (report, checked) = if let Some(shard) = ctx.shard {
+        run_shard_units(
+            ctx,
+            shard,
+            "test",
+            &all,
+            &base,
+            sim_selected,
+            Some(ALLOCATION_CHECK),
+        )?
     } else {
-        run_units(ctx, &base, &all, sim_selected)?;
-        ShardPart::Ran(format!("{} unit(s)", all.len()))
+        let checked = run_units(ctx, &base, &all, sim_selected, Some(ALLOCATION_CHECK))?;
+        (ShardPart::Ran(format!("{} unit(s)", all.len())), checked)
     };
+    let allocation_note = allocation_check_note(checked, sim_selected);
     Ok(Outcome::Done(match report {
         ShardPart::Ran(part) => format!(
             "{part}; tests pass without `research`, each invocation's resolved profile \
-             checked first; {fresh_note}"
+             checked first; {allocation_note}; {fresh_note}"
         ),
-        ShardPart::Empty(part) => format!("{part}; {fresh_note}"),
+        ShardPart::Empty(part) => format!("{part}; {allocation_note}; {fresh_note}"),
     }))
+}
+
+/// What the `test` step says of [`ALLOCATION_CHECK`]: the check's sentence
+/// when this run held the test, else why it did not. Pure, so its words are
+/// pinned.
+fn allocation_check_note(checked: Option<String>, sim_selected: bool) -> String {
+    match checked {
+        Some(sentence) => sentence,
+        None if !sim_selected => format!(
+            "the --package list leaves {} out, so `{}` is not checked in this run",
+            resolved::SIM,
+            ALLOCATION_CHECK.path
+        ),
+        None => format!(
+            "`{}` is checked by the shard that runs `test:{}`",
+            ALLOCATION_CHECK.path, ALLOCATION_CHECK.target
+        ),
+    }
 }
 
 /// The workspace packages a `--package` list selects, by name: every package
@@ -1971,7 +1998,8 @@ fn run_shard_units(
     all: &[shard::Unit],
     base: &[String],
     sim_selected: bool,
-) -> Result<ShardPart, String> {
+    required: Option<RequiredTest>,
+) -> Result<(ShardPart, Option<String>), String> {
     let part = shard_part(shard, step, all);
     let keys: Vec<String> = part.iter().map(shard::Unit::key).collect();
     println!(
@@ -1984,18 +2012,24 @@ fn run_shard_units(
             keys.join(", ")
         }
     );
-    run_units(ctx, base, &part, sim_selected)?;
+    let checked = run_units(ctx, base, &part, sim_selected, required)?;
     if part.is_empty() {
-        return Ok(ShardPart::Empty(format!(
-            "none of the step's {} unit(s) falls to shard {shard}, so this shard ran none",
-            all.len()
-        )));
+        return Ok((
+            ShardPart::Empty(format!(
+                "none of the step's {} unit(s) falls to shard {shard}, so this shard ran none",
+                all.len()
+            )),
+            checked,
+        ));
     }
-    Ok(ShardPart::Ran(format!(
-        "shard {shard} ran {} of the step's {} unit(s)",
-        part.len(),
-        all.len()
-    )))
+    Ok((
+        ShardPart::Ran(format!(
+            "shard {shard} ran {} of the step's {} unit(s)",
+            part.len(),
+            all.len()
+        )),
+        checked,
+    ))
 }
 
 /// Runs `base` (a `cargo test` command line up to its target selection, its
@@ -2008,15 +2042,23 @@ fn run_shard_units(
 /// [`resolved::faults`] reads the profile cargo resolved for every unit it
 /// built; a fault stops the step before a test runs. A flags variable in the
 /// environment is refused first.
+///
+/// `required`, when `units` hold its target and the sim is selected, is held
+/// to libtest's own lines in its invocation ([`RequiredTestReader`]): the
+/// answer is the check's sentence, and `None` when `units` do not hold it.
 fn run_units(
     ctx: &Ctx,
     base: &[String],
     units: &[shard::Unit],
     sim_selected: bool,
-) -> Result<(), String> {
+    required: Option<RequiredTest>,
+) -> Result<Option<String>, String> {
+    let required = required.filter(|required| {
+        sim_selected && units.contains(&shard::Unit::Test(required.target.to_owned()))
+    });
     let runs = resolved::invocations(units, sim_selected);
     if runs.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let Some(("test", selection)) = base
         .split_first()
@@ -2050,17 +2092,47 @@ fn run_units(
     }
     let colour = colour();
     let mut cargo = ProcessCargo::of(ctx);
+    let mut checked: Option<String> = None;
     for invocation in runs {
+        // The required test's own invocation: the unoptimised one that selects
+        // its target alone.
+        let watched = required.filter(|required| {
+            invocation.sim == resolved::SimRule::Unoptimised
+                && invocation.selectors == ["--test", required.target]
+        });
         let test = resolved::TestRun::new(selection.to_vec(), invocation, ctx.locked, colour);
+        let mut reader = watched.map(RequiredTestReader::new);
         resolved::execute(
             &test,
             &graph,
             &mut cargo,
             &mut print_diagnostic,
-            &mut print_line,
+            &mut |line| {
+                if let Some(reader) = reader.as_mut() {
+                    reader.feed(line);
+                }
+                print_line(line)
+            },
         )?;
+        if let (Some(required), Some(reader)) = (watched, reader) {
+            reader.verdict().map_err(|fault| fault.to_string())?;
+            let sentence = format!(
+                "libtest reported `{}` (`--test {}`) passed, once, so the allocations notice's \
+                 figure is asserted",
+                required.path, required.target
+            );
+            println!("   checked: {sentence}");
+            checked = Some(sentence);
+        }
     }
-    Ok(())
+    match (required, checked) {
+        (Some(required), None) => Err(format!(
+            "the units hold `--test {}`, and no invocation ran it alone and unoptimised, so \
+             `{}` was not checked",
+            required.target, required.path
+        )),
+        (_, checked) => Ok(checked),
+    }
 }
 
 /// The workspace packages that own a test target called `name`: the ones
@@ -2543,7 +2615,7 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
     .map_err(|error| error.to_string())?;
     if let Some(shard) = ctx.shard {
         return Ok(Outcome::Done(
-            match run_shard_units(ctx, shard, "test-research", &all, &args, true)? {
+            match run_shard_units(ctx, shard, "test-research", &all, &args, true, None)?.0 {
                 ShardPart::Ran(part) => format!(
                     "{part}; tests pass with {feature}, each invocation's resolved profile \
                      checked first"
@@ -2552,7 +2624,7 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
             },
         ));
     }
-    run_units(ctx, &args, &all, true)?;
+    run_units(ctx, &args, &all, true, None)?;
     Ok(Outcome::Done(format!(
         "tests pass with {feature}, each invocation's resolved profile checked first; no other \
          crate's code reads the feature, and clippy's research pass compiles every \
@@ -4326,8 +4398,9 @@ fn alarm_selection(name: &str) -> Result<AlarmSelection, String> {
 ///   in one test, as the bench does;
 /// * **allocations per tick**: a notice naming the test that asserts it. The
 ///   count is zero by construction — `crates/sim/tests/allocations.rs` fails
-///   otherwise, in every leg's `test` step — so it is published, not
-///   measured again and never compared.
+///   otherwise, in every leg's `test` step, which also fails unless libtest
+///   reported that test passed, once ([`ALLOCATION_CHECK`]) — so it is
+///   published, not measured again and never compared.
 ///
 /// The tick-minus-pathing mean the skeleton plan named is G3′-real's, and
 /// published by the `g3` alarm since S2's `g3h`; G3′'s budget is not gated
@@ -4437,87 +4510,181 @@ const ALLOCATIONS_TEST_FILE: &str = "crates/sim/tests/allocations.rs";
 
 /// The test the allocations notice names, by its libtest path in
 /// [`ALLOCATIONS_TEST_FILE`]: the tick tests sit in a `tick` module that the
-/// `research` build leaves out (`simtest` #225). The tests' guard,
-/// `the_allocations_notice_names_one_test_the_test_step_runs`, holds the path
-/// to exactly one test the `test` step runs.
+/// `research` build leaves out (`simtest` #225). The notice and the `test`
+/// step's check ([`ALLOCATION_CHECK`]) both read this one constant.
 const ALLOCATIONS_TEST: &str = "tick::a_tick_allocates_nothing";
 
 /// The allocations-per-tick notice, word for word. Pure, so its text is pinned.
 fn allocations_notice(os: &str) -> String {
     format!(
         "::notice title=allocations per tick::0 on {os}: asserted by \
-         {ALLOCATIONS_TEST_FILE}::{ALLOCATIONS_TEST} in this commit's test step; zero by \
-         construction, never compared"
+         {ALLOCATIONS_TEST_FILE}::{} in this commit's test step; zero by \
+         construction, never compared",
+        ALLOCATION_CHECK.path
     )
 }
 
-/// How many `#[test]` functions at the libtest path `path` (`module::name`) a
-/// rustfmt-formatted test file `source` holds that a build without the
-/// `research` feature runs and libtest does not skip: none behind a `cfg` on
-/// that feature (`not(...)` aside), on the function or a module around it,
-/// and none `#[ignore]`d. Modules are read from `mod <name> {` lines, nested by
-/// rustfmt's four-space indent.
-#[cfg(test)]
-fn default_build_tests_at(source: &str, path: &str) -> usize {
-    let mut wanted: Vec<&str> = path.split("::").collect();
-    let Some(name) = wanted.pop() else {
-        return 0;
-    };
-    let research_only = |attribute: &str| {
-        attribute.starts_with("#[cfg")
-            && attribute.contains("feature = \"research\"")
-            && !attribute.contains("not(")
-    };
-    // (module name, its indent, whether the default build leaves it out)
-    let mut modules: Vec<(&str, usize, bool)> = Vec::new();
-    let mut attributes: Vec<&str> = Vec::new();
-    let mut found: Vec<&str> = Vec::new();
-    for line in source.lines() {
-        let item = line.trim_start();
-        let indent = line.bytes().take_while(|byte| *byte == b' ').count();
-        if item == "}" && modules.last().is_some_and(|(_, at, _)| *at == indent) {
-            modules.pop();
-            attributes.clear();
-            continue;
+/// A test the `test` step requires libtest to report as passed, exactly once,
+/// in the invocation that runs its target: a figure published as "asserted by
+/// this test in this commit's test step" is then held by what the step saw,
+/// not by a reading of the source, which would trail the language (a `cfg` on
+/// a platform, a `cfg_attr` that ignores, `should_panic`, a file-level gate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RequiredTest {
+    /// The integration-test target, as `--test <target>` selects it.
+    pub(crate) target: &'static str,
+    /// The test's libtest path in that target.
+    pub(crate) path: &'static str,
+}
+
+/// The `test` step's one required test: the allocation test, in the
+/// opt-level-0 invocation `--test allocations` (xtask's `resolved` module).
+pub(crate) const ALLOCATION_CHECK: RequiredTest = RequiredTest {
+    target: "allocations",
+    path: ALLOCATIONS_TEST,
+};
+
+/// Why libtest's output does not show a [`RequiredTest`] passing once.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RequiredTestFault {
+    /// No top-level `test <path> ...` line: the test did not run (filtered
+    /// out, compiled out, renamed, or a `should_panic` test, which libtest
+    /// names `<path> - should panic`).
+    Absent { path: &'static str },
+    /// More than one top-level line for the path.
+    Repeated { path: &'static str, count: usize },
+    /// It ran, and its outcome is not `ok` (`ignored`, `FAILED`, or a
+    /// `should_panic` variant's).
+    NotOk { path: &'static str, outcome: String },
+    /// A `test result:` line with no `running N tests` line open: output
+    /// this reader cannot place, so it does not guess.
+    Unbalanced { path: &'static str },
+}
+
+impl std::fmt::Display for RequiredTestFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Absent { path } => write!(
+                f,
+                "libtest reported no run of `{path}` in this invocation, so the figure the \
+                 allocations notice publishes as asserted by it is not asserted"
+            ),
+            Self::Repeated { path, count } => write!(
+                f,
+                "libtest reported `{path}` {count} times in this invocation; the notice names \
+                 one test"
+            ),
+            Self::NotOk { path, outcome } => write!(
+                f,
+                "libtest reported `{path}` as `{outcome}`, not `ok`, so the figure the \
+                 allocations notice publishes is not asserted"
+            ),
+            Self::Unbalanced { path } => write!(
+                f,
+                "libtest's output for `{path}`'s invocation holds a `test result:` line with no \
+                 run open, so whether the test ran cannot be read"
+            ),
         }
-        if item.starts_with("#[") {
-            attributes.push(item);
-            continue;
-        }
-        if item.starts_with("//") {
-            continue;
-        }
-        let left_out = attributes.iter().any(|attribute| research_only(attribute))
-            || modules.iter().any(|(_, _, left_out)| *left_out);
-        if let Some(module) = item
-            .strip_prefix("mod ")
-            .or_else(|| item.strip_prefix("pub mod "))
-            .and_then(|rest| rest.strip_suffix(" {"))
-        {
-            modules.push((module, indent, left_out));
-        } else if let Some(function) = item
-            .strip_prefix("fn ")
-            .or_else(|| item.strip_prefix("pub fn "))
-            .and_then(|rest| rest.split(['(', '<']).next())
-        {
-            let is_test = attributes.contains(&"#[test]");
-            let ignored = attributes
-                .iter()
-                .any(|attribute| attribute.starts_with("#[ignore"));
-            let here: Vec<&str> = modules.iter().map(|(module, _, _)| *module).collect();
-            if function == name
-                && is_test
-                && !ignored
-                && !left_out
-                && here == wanted
-                && modules.len().checked_mul(4) == Some(indent)
-            {
-                found.push(function);
-            }
-        }
-        attributes.clear();
     }
-    found.len()
+}
+
+/// Reads one invocation's test output, line by line as the step prints it,
+/// for one [`RequiredTest`]. Only top-level lines count: a test that prints a
+/// nested libtest run of its own (`doctest_runner`'s shape) opens a second
+/// `running N tests` block, and lines inside it are that inner run's.
+#[derive(Debug)]
+pub(crate) struct RequiredTestReader {
+    test: RequiredTest,
+    /// How many `running N tests` blocks are open.
+    depth: usize,
+    /// The outcome of each top-level line naming the test.
+    outcomes: Vec<String>,
+    unbalanced: bool,
+}
+
+impl RequiredTestReader {
+    pub(crate) fn new(test: RequiredTest) -> Self {
+        Self {
+            test,
+            depth: 0,
+            outcomes: Vec::new(),
+            unbalanced: false,
+        }
+    }
+
+    /// Reads one line of output, as the test wrote it.
+    pub(crate) fn feed(&mut self, line: &[u8]) {
+        let Ok(text) = std::str::from_utf8(line) else {
+            // Not text, so not one of libtest's lines.
+            return;
+        };
+        let text = text.trim_end_matches('\r');
+        if is_running_line(text) {
+            match self.depth.checked_add(1) {
+                Some(depth) => self.depth = depth,
+                None => self.unbalanced = true,
+            }
+            return;
+        }
+        if text.starts_with("test result: ") {
+            match self.depth.checked_sub(1) {
+                Some(depth) => self.depth = depth,
+                None => self.unbalanced = true,
+            }
+            return;
+        }
+        if self.depth != 1 {
+            return;
+        }
+        let Some(rest) = text
+            .strip_prefix("test ")
+            .and_then(|rest| rest.strip_prefix(self.test.path))
+        else {
+            return;
+        };
+        if let Some(outcome) = rest.strip_prefix(" ... ") {
+            self.outcomes.push(outcome.to_owned());
+        } else if let Some(variant) = rest.strip_prefix(" - ") {
+            // `<path> - should panic ... ok`: a different test from the one named.
+            self.outcomes.push(variant.to_owned());
+        }
+        // Anything else (`has been running for over 60 seconds`, a longer
+        // name that starts with this one) is not this test's result line.
+    }
+
+    /// The verdict once the invocation has ended.
+    pub(crate) fn verdict(self) -> Result<(), RequiredTestFault> {
+        let path = self.test.path;
+        if self.unbalanced {
+            return Err(RequiredTestFault::Unbalanced { path });
+        }
+        match self.outcomes.as_slice() {
+            [] => Err(RequiredTestFault::Absent { path }),
+            [outcome] if outcome == "ok" => Ok(()),
+            [outcome] => Err(RequiredTestFault::NotOk {
+                path,
+                outcome: outcome.clone(),
+            }),
+            more => Err(RequiredTestFault::Repeated {
+                path,
+                count: more.len(),
+            }),
+        }
+    }
+}
+
+/// Whether `line` is libtest's `running N test(s)` line, which opens a run.
+fn is_running_line(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("running ") else {
+        return false;
+    };
+    let Some(count) = rest
+        .strip_suffix(" tests")
+        .or_else(|| rest.strip_suffix(" test"))
+    else {
+        return false;
+    };
+    !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 // ---------------------------------------------------------------------------
@@ -7045,75 +7212,156 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
     }
 
-    /// The notice runs nothing: it names the test that asserts the figure in
-    /// the `test` step. So the name must resolve, in the committed source, to
-    /// exactly one `#[test]` that the `test` step runs (not behind the
-    /// `research` feature, which that step leaves off, and not `#[ignore]`d);
-    /// a name that matches no test would publish a claim nothing checks.
+    /// The test the notice names is the test the step's check holds.
     #[test]
-    fn the_allocations_notice_names_one_test_the_test_step_runs() {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let Some(root) = manifest.parent() else {
-            panic!("xtask's manifest directory has no parent");
-        };
-        let source = match fs::read_to_string(root.join(ALLOCATIONS_TEST_FILE)) {
-            Ok(source) => source,
-            Err(error) => panic!("{ALLOCATIONS_TEST_FILE}: {error}"),
-        };
+    fn the_notice_names_the_test_the_step_checks() {
+        assert!(
+            allocations_notice("linux").contains(&format!(
+                "{ALLOCATIONS_TEST_FILE}::{} in this commit's",
+                ALLOCATION_CHECK.path
+            )),
+            "{}",
+            allocations_notice("linux")
+        );
         assert_eq!(
-            default_build_tests_at(&source, ALLOCATIONS_TEST),
-            1,
-            "{ALLOCATIONS_TEST_FILE} holds no single default-build test `{ALLOCATIONS_TEST}`"
+            ALLOCATIONS_TEST_FILE,
+            format!("crates/sim/tests/{}.rs", ALLOCATION_CHECK.target)
+        );
+        assert!(resolved::UNOPTIMISED_TESTS.contains(&ALLOCATION_CHECK.target));
+    }
+
+    /// The `test` step's check of the allocation test, over libtest outputs
+    /// whose verdicts are known.
+    #[test]
+    fn the_required_test_is_read_from_libtest_s_own_lines() {
+        let read = |lines: &[&str]| {
+            let mut reader = RequiredTestReader::new(ALLOCATION_CHECK);
+            for line in lines {
+                reader.feed(line.as_bytes());
+            }
+            reader.verdict()
+        };
+        let path = ALLOCATION_CHECK.path;
+        let ok = format!("test {path} ... ok");
+        let result = "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out";
+        // Passed once, beside another test, with a CR and a long-run notice.
+        assert_eq!(
+            read(&[
+                "",
+                "running 2 tests",
+                &format!("test {path} has been running for over 60 seconds"),
+                "test tick::a_breach_search_allocates_nothing ... ok",
+                &format!("{ok}\r"),
+                "",
+                result,
+            ]),
+            Ok(())
+        );
+        // Ignored, plain or with a reason.
+        for outcome in ["ignored", "ignored, by hand"] {
+            assert_eq!(
+                read(&[
+                    "running 1 test",
+                    &format!("test {path} ... {outcome}"),
+                    result
+                ]),
+                Err(RequiredTestFault::NotOk {
+                    path,
+                    outcome: outcome.to_owned()
+                })
+            );
+        }
+        // Failed.
+        assert_eq!(
+            read(&["running 1 test", &format!("test {path} ... FAILED"), result]),
+            Err(RequiredTestFault::NotOk {
+                path,
+                outcome: "FAILED".to_owned()
+            })
+        );
+        // A `should_panic` test of that path is not the test named.
+        assert_eq!(
+            read(&[
+                "running 1 test",
+                &format!("test {path} - should panic ... ok"),
+                result
+            ]),
+            Err(RequiredTestFault::NotOk {
+                path,
+                outcome: "should panic ... ok".to_owned()
+            })
+        );
+        // Absent: no binary ran it, or every test was filtered out.
+        assert_eq!(read(&[]), Err(RequiredTestFault::Absent { path }));
+        assert_eq!(
+            read(&[
+                "running 0 tests",
+                "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out",
+            ]),
+            Err(RequiredTestFault::Absent { path })
+        );
+        // Twice: two binaries of the invocation both hold the path.
+        assert_eq!(
+            read(&["running 1 test", &ok, result, "running 1 test", &ok, result]),
+            Err(RequiredTestFault::Repeated { path, count: 2 })
+        );
+        // A different module's test of the same name, and a longer name.
+        assert_eq!(
+            read(&[
+                "running 3 tests",
+                "test a_tick_allocates_nothing ... ok",
+                "test other::tick::a_tick_allocates_nothing ... ok",
+                &format!("test {path}_twice ... ok"),
+                result,
+            ]),
+            Err(RequiredTestFault::Absent { path })
+        );
+        // A nested run printed by a test (`doctest_runner`'s shape) is not the
+        // invocation's own: its line does not count, before or after.
+        assert_eq!(
+            read(&[
+                "running 1 test",
+                "running 2 tests",
+                &ok,
+                "test result: FAILED. 1 passed; 1 failed",
+                "test outer ... ok",
+                result,
+            ]),
+            Err(RequiredTestFault::Absent { path })
+        );
+        assert_eq!(
+            read(&[
+                "running 2 tests",
+                "running 1 test",
+                "test result: ok. 1 passed",
+                &ok,
+                result,
+            ]),
+            Ok(())
+        );
+        // A result with no run open cannot be placed.
+        assert_eq!(
+            read(&[result, "running 1 test", &ok, result]),
+            Err(RequiredTestFault::Unbalanced { path })
         );
     }
 
-    /// The resolver the guard above uses, on texts whose answer is known.
     #[test]
-    fn a_test_path_resolves_by_module_attribute_and_name() {
-        let source = "\
-fn helper() {}
-
-#[cfg(not(feature = \"research\"))]
-mod tick {
-    use super::*;
-
-    /// Counts.
-    #[test]
-    fn a_tick_allocates_nothing() {}
-
-    #[test]
-    #[ignore = \"by hand\"]
-    fn ignored() {}
-
-    fn not_a_test() {}
-}
-
-#[test]
-fn a_tick_allocates_nothing() {}
-
-#[cfg(feature = \"research\")]
-mod fork {
-    #[test]
-    fn forked() {}
-}
-";
+    fn the_test_step_says_where_the_allocation_test_is_checked() {
         assert_eq!(
-            default_build_tests_at(source, "tick::a_tick_allocates_nothing"),
-            1
+            allocation_check_note(Some("the sentence".to_owned()), true),
+            "the sentence"
         );
         assert_eq!(
-            default_build_tests_at(source, "a_tick_allocates_nothing"),
-            1
+            allocation_check_note(None, false),
+            "the --package list leaves pharmakos-sim out, so `tick::a_tick_allocates_nothing` \
+             is not checked in this run"
         );
-        assert_eq!(default_build_tests_at(source, "tick::ignored"), 0);
-        assert_eq!(default_build_tests_at(source, "tick::not_a_test"), 0);
-        assert_eq!(default_build_tests_at(source, "fork::forked"), 0);
-        assert_eq!(default_build_tests_at(source, "tick::missing"), 0);
         assert_eq!(
-            default_build_tests_at(source, "other::a_tick_allocates_nothing"),
-            0
+            allocation_check_note(None, true),
+            "`tick::a_tick_allocates_nothing` is checked by the shard that runs \
+             `test:allocations`"
         );
-        assert_eq!(default_build_tests_at(source, "helper"), 0);
     }
 
     #[test]
