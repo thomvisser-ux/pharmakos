@@ -2759,7 +2759,7 @@ fn assert_sim_refusal(response: &Json, what: &str, names: &str, stage: &str) {
 /// stage: the closed set has no word for "valid and not executable by this
 /// build", adding one is a contract change, and of the ten codes it has this is
 /// the one that means "the request, and you can fix it"
-/// (`surface::planning::compile_playbook` gives the whole argument).
+/// (`surface::planning::compile_canonical` gives the whole argument).
 #[test]
 fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal() {
     let mut surface = hosted();

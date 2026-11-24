@@ -2206,7 +2206,7 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     (
         "targeting.rs",
         "crate::surface::plan_words::beacon_spec(reference, reader.world.rules()).ok()?",
-        "a beacon reference the sim's compile refuses places nothing, and `compile_playbook` says why at the door",
+        "a beacon reference the sim's compile refuses places nothing, and `compile_canonical` says why at the door",
     ),
     (
         "targeting.rs",
