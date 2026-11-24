@@ -1913,7 +1913,7 @@ impl Editor {
         Dormant {
             shown: checked || (self.rows_current() && named),
             checked,
-            enabled: self.door == Door::Open,
+            enabled: self.door() == Door::Open,
             // A refusal stands while its reason does: for the text it was refused for, and a stale
             // or busy one only until the rows describe the text and no edit is on its way (fix
             // pass 1, item 4).
@@ -3131,10 +3131,15 @@ impl Editor {
         }
     }
 
-    /// The door, as the rig last set it.
+    /// The door the player's asks meet: the rig's, except that a pressed Ready not yet sent
+    /// shuts it as the sent Ready will (fix pass 7, item 4: the panel's Fix buttons and E0601
+    /// checkbox read this, so they show what `shut_to_asks` enforces).
     #[must_use]
     pub const fn door(&self) -> Door {
-        self.door
+        match (self.door, self.ready_press) {
+            (Door::Open, ReadyPress::Waiting) => Door::Ready,
+            (door, _) => door,
+        }
     }
 
     /// The gateway filed this seat's safe playbook for the round: its `safe_playbook_filed`
@@ -3662,11 +3667,10 @@ impl Editor {
     /// rather than queued behind a door the rig will not open (finding K). A pressed Ready
     /// shuts it to asks as the sent Ready will.
     fn shut_to_asks(&mut self) -> bool {
-        let door = match self.door {
-            Door::Open if self.ready_press == ReadyPress::Waiting => Door::Ready,
-            Door::Open => return false,
-            door => door,
-        };
+        let door = self.door();
+        if door == Door::Open {
+            return false;
+        }
         let key = format!("closed_{}", door.name());
         self.say(&key, "");
         true
@@ -7733,6 +7737,28 @@ mod tests {
         assert_eq!(editor.status().key, "closed_push");
         editor.set_door(Door::Open);
         assert_eq!(editor.status().key, "", "the door is open again");
+    }
+
+    /// **The panel shows the door the asks meet** (fix pass 7, item 4; review 6's F2): between a
+    /// pressed Ready and its send, the Fix buttons and the E0601 checkbox read the door that
+    /// refuses the asks, not the rig's open one.
+    #[test]
+    fn a_pressed_ready_shuts_the_panels_door_before_it_is_sent() {
+        let mut editor = loaded("{}");
+        editor.lull_opened(1);
+        assert_eq!(editor.door(), Door::Open);
+        assert!(editor.dormant().enabled);
+        editor.set_ready_pressed(true);
+        assert_eq!(editor.door(), Door::Ready);
+        assert!(
+            !editor.dormant().enabled,
+            "the checkbox takes an ask the door refuses"
+        );
+        editor.save_notes("after Ready");
+        assert_eq!(editor.status().key, "closed_ready");
+        editor.set_ready_pressed(false);
+        assert_eq!(editor.door(), Door::Open);
+        assert!(editor.dormant().enabled);
     }
 
     /// A shut door's line goes when the door moves on to another shut door: an ask after Ready
