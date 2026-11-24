@@ -2501,6 +2501,7 @@ mod tests {
         assert_eq!(rig.message_refusals(), [[0, 0], [0, 1]]);
         assert_eq!(rig.editor().status().key, "call_too_large");
         assert_eq!(rig.drops(), [0, 0], "the connection stays up");
+        assert_eq!(rig.editor().refusals(), 0, "not the gateway's refusal");
         for now in 4..12 {
             for frame in rig.poll(now) {
                 assert_ne!(method_of(&frame), "save_notes", "never asked again");
@@ -4132,6 +4133,36 @@ mod tests {
             rig.sealed_this_round(),
             None,
             "a refused read tells nothing"
+        );
+        // A fact standing when a read is refused goes with the refusal.
+        rig.status_facts.sealed = Some(SealFact {
+            round: rig.round,
+            phase: rig.phase,
+            sealed: false,
+        });
+        rig.status_retries = 0;
+        rig.reads.status = true;
+        let mut refused_now = false;
+        for now in 10..30 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(now) {
+                let text = if method_of(&frame) == "get_status" && frame.link == SEAT {
+                    refused_now = true;
+                    refusal(id_of(&frame), "RATE_LIMITED", "slow down")
+                } else {
+                    answer(id_of(&frame), r#"{"notes":""}"#, "lull")
+                };
+                let _ = rig.receive(frame.link, &text);
+            }
+            if refused_now {
+                break;
+            }
+        }
+        assert!(refused_now, "the status read went out");
+        assert_eq!(
+            rig.sealed_this_round(),
+            None,
+            "the refused read took the old fact with it"
         );
         // A seat connection opened again: told afresh.
         rig.status_facts.sealed = Some(SealFact {

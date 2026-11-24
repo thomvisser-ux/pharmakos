@@ -1617,7 +1617,11 @@ mod tests {
         let mut huge = entity("s_9", view_entity::Kind::Structure, "seat.0");
         huge.look = Some(look(1, EXTENT[0].saturating_add(1)));
         let page = decode_page(&with_entities(vec![huge])).expect("decodes");
-        assert!(model.apply(page).is_err(), "a look past the map");
+        let refused = model.apply(page).expect_err("a look past the map");
+        assert!(
+            refused.to_string().contains("past the map's extent"),
+            "refused for its look: {refused}"
+        );
     }
 
     /// One crater in a delta queues the chunks its relight reaches, not the map: before S2
