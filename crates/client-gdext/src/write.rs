@@ -11,15 +11,16 @@
 //! states, and each had a hole. `std::fs::rename` replaces a file atomically on Windows, Linux
 //! and macOS: the name holds the whole old file until the rename, and the whole new file after.
 //! So [`write_whole`]:
-//! 1. refuses a name this platform cannot hold as a file (on Windows a reserved device name, or a
-//!    name ending in a dot or a space), a target that is a folder, and a missing folder, each its
-//!    own [`WriteFailure`];
+//! 1. refuses a name this platform cannot hold as a file (on Windows a reserved device name, a
+//!    name ending in a dot or a space, or one holding `< > : " | ? *` or a control character),
+//!    before anything looks at the disk; then follows a symbolic link to the real file; and
+//!    refuses a target that is a folder and a missing folder, each its own [`WriteFailure`];
 //! 2. refuses an existing target its metadata marks read-only, before anything is created;
 //! 3. creates a temporary file in the same folder with `create_new` (a dot-prefixed name with the
-//!    process id and a suffix no player file has, [`temp_of`]; if that exact name exists it is
-//!    ours, from a write of this process that stopped: it is removed, and said once; no other
-//!    file is ever touched), writes every byte, `sync_all`s it, and copies the old file's
-//!    permissions onto it;
+//!    process id, a process-wide count of writes and a suffix no player file has, [`temp_of`]; if
+//!    that exact name exists it is ours, from a write that stopped: it is removed, and said once;
+//!    no other file is ever touched), writes every byte, `sync_all`s it, and copies the old
+//!    file's permissions onto it;
 //! 4. renames it over the target; on any failure it removes the temporary file (a leftover is
 //!    said by its full name), and the target is untouched, true by construction: the only step
 //!    that touches it is the atomic rename;
@@ -36,6 +37,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The temporary file's suffix: no player file ends in it.
 pub const TEMP_SUFFIX: &str = ".pharmakos-write";
@@ -106,7 +108,22 @@ pub trait Files {
     ///
     /// The disk did not take them.
     fn sync_folder(&mut self, folder: &Path) -> io::Result<()>;
+    /// The file `path` names: itself, or, when it is a symbolic link, the real file the link
+    /// leads to, so the real file is replaced and the link stays a link.
+    ///
+    /// # Errors
+    ///
+    /// The link could not be followed.
+    fn resolve(&mut self, path: &Path) -> io::Result<PathBuf>;
+    /// The temporary file beside `path` this write goes through: unique per process and per call
+    /// ([`temp_of`] with the process-wide counter). A test's `Files` may name its own.
+    fn temp_for(&mut self, path: &Path) -> Option<PathBuf> {
+        temp_of(path, WRITES.fetch_add(1, Ordering::Relaxed))
+    }
 }
+
+/// The writes this process has made: the counter in each temporary file's name.
+static WRITES: AtomicU64 = AtomicU64::new(0);
 
 /// The real file system: the only [`Files`] a shipped call site makes.
 #[derive(Debug, Default)]
@@ -166,6 +183,33 @@ impl Files for RealFiles {
     fn sync_folder(&mut self, folder: &Path) -> io::Result<()> {
         File::open(folder)?.sync_all()
     }
+
+    fn resolve(&mut self, path: &Path) -> io::Result<PathBuf> {
+        match fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(path),
+            Ok(_) => Ok(path.to_path_buf()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// The rules of the platform a write runs on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Platform {
+    /// Refuse the names Windows cannot hold as a file (its reserved device names, a name ending
+    /// in a dot or a space, a name with one of `< > : " | ? *` or a control character).
+    pub windows_names: bool,
+    /// Sync the folder after the rename, so the rename itself survives a crash (Unix).
+    pub sync_folder: bool,
+}
+
+impl Platform {
+    /// This build's platform: what [`write_whole`] runs with.
+    pub const THIS: Self = Self {
+        windows_names: cfg!(windows),
+        sync_folder: cfg!(unix),
+    };
 }
 
 /// Why a write or a removal did not happen, or did with something to say. Each variant says what
@@ -186,6 +230,13 @@ pub enum WriteFailure {
     /// The name ends in a dot or a space, which Windows drops from a file name. Nothing was
     /// touched.
     BadEnding {
+        /// The path.
+        path: PathBuf,
+    },
+    /// The name holds a character Windows cannot hold in a file name (`< > : " | ? *` or a
+    /// control character; a `:` would name an alternate data stream of another file). Nothing
+    /// was touched.
+    IllegalCharacter {
         /// The path.
         path: PathBuf,
     },
@@ -262,6 +313,7 @@ impl WriteFailure {
         "no_name",
         "reserved_name",
         "bad_ending",
+        "illegal_character",
         "is_folder",
         "missing_folder",
         "read_only",
@@ -280,6 +332,7 @@ impl WriteFailure {
             Self::NoName { .. } => "no_name",
             Self::ReservedName { .. } => "reserved_name",
             Self::BadEnding { .. } => "bad_ending",
+            Self::IllegalCharacter { .. } => "illegal_character",
             Self::IsFolder { .. } => "is_folder",
             Self::MissingFolder { .. } => "missing_folder",
             Self::ReadOnly { .. } => "read_only",
@@ -299,6 +352,7 @@ impl WriteFailure {
             Self::NoName { path }
             | Self::ReservedName { path }
             | Self::BadEnding { path }
+            | Self::IllegalCharacter { path }
             | Self::IsFolder { path }
             | Self::ReadOnly { path }
             | Self::Inspect { path, .. }
@@ -324,6 +378,7 @@ impl WriteFailure {
             Self::NoName { .. }
             | Self::ReservedName { .. }
             | Self::BadEnding { .. }
+            | Self::IllegalCharacter { .. }
             | Self::IsFolder { .. }
             | Self::MissingFolder { .. }
             | Self::ReadOnly { .. } => None,
@@ -365,6 +420,10 @@ impl fmt::Display for WriteFailure {
             Self::BadEnding { .. } => {
                 write!(out, "{path} ends in a dot or a space; nothing was written")
             }
+            Self::IllegalCharacter { .. } => write!(
+                out,
+                "{path} holds a character this system cannot hold in a name; nothing was written"
+            ),
             Self::IsFolder { .. } => write!(out, "{path} is a folder; nothing was written"),
             Self::MissingFolder { .. } => {
                 write!(out, "the folder {path} does not exist; nothing was written")
@@ -430,9 +489,46 @@ pub enum Removed {
 /// The device names Windows reserves, matched against a file name's part before its first dot
 /// (and its trailing spaces), in any case.
 const RESERVED: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "COM\u{b9}",
+    "COM\u{b2}",
+    "COM\u{b3}",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+    "LPT\u{b9}",
+    "LPT\u{b2}",
+    "LPT\u{b3}",
+    "CONIN$",
+    "CONOUT$",
 ];
+
+/// The characters Windows cannot hold in a file name, besides the control characters.
+const ILLEGAL: &[char] = &['<', '>', ':', '"', '|', '?', '*'];
+
+/// Whether `name` holds a character Windows cannot hold in a file name, whatever system this is.
+#[must_use]
+pub fn has_windows_illegal_character(name: &str) -> bool {
+    name.chars().any(|c| ILLEGAL.contains(&c) || c.is_control())
+}
 
 /// Whether `name` is one Windows reserves for a device, whatever system this is.
 #[must_use]
@@ -453,13 +549,17 @@ pub fn has_windows_bad_ending(name: &str) -> bool {
     name.ends_with('.') || name.ends_with(' ')
 }
 
-/// The temporary file beside `path` this process writes through: `<folder>/.<name>.<pid>` and
-/// [`TEMP_SUFFIX`].
+/// The temporary file beside `path` for this process's write number `count`:
+/// `<folder>/.<name>.<pid>.<count>` and [`TEMP_SUFFIX`]. If that exact name exists, it is ours,
+/// from a write of this process (or of an earlier one with the same id) that stopped.
 #[must_use]
-pub fn temp_of(path: &Path) -> Option<PathBuf> {
+pub fn temp_of(path: &Path, count: u64) -> Option<PathBuf> {
     let name = path.file_name()?.to_string_lossy();
     let folder = path.parent()?;
-    Some(folder.join(format!(".{name}.{}{TEMP_SUFFIX}", std::process::id())))
+    Some(folder.join(format!(
+        ".{name}.{}.{count}{TEMP_SUFFIX}",
+        std::process::id()
+    )))
 }
 
 /// `bytes` written to `path` whole, by an atomic replace, through the real file system.
@@ -468,13 +568,7 @@ pub fn temp_of(path: &Path) -> Option<PathBuf> {
 ///
 /// [`WriteFailure`], each variant saying what is on disk.
 pub fn write_whole(path: &Path, bytes: &[u8]) -> Result<Written, WriteFailure> {
-    write_whole_with(
-        &mut RealFiles::default(),
-        path,
-        bytes,
-        cfg!(windows),
-        cfg!(unix),
-    )
+    write_whole_with(&mut RealFiles::default(), path, bytes, Platform::THIS)
 }
 
 /// The file `path` removed, through the real file system: a forgotten remembered line.
@@ -486,23 +580,35 @@ pub fn remove_whole(path: &Path) -> Result<Removed, WriteFailure> {
     remove_whole_with(&mut RealFiles::default(), path)
 }
 
-/// [`write_whole`] through `files`, with this platform's rules given: `windows_names` (refuse
-/// Windows' reserved names and endings) and `sync_folder` (Unix: sync the folder after the
-/// rename).
+/// [`write_whole`] through `files`, with the platform's rules given ([`Platform`]).
+///
+/// A target that is a symbolic link is resolved first, and the real file is replaced: the
+/// temporary file is written beside it, so the link stays a link and the player's file gets the
+/// bytes. A target with a second hard link is replaced under this name alone: the other name
+/// keeps the old bytes, which is what an atomic replace means (`tests/write.rs` shows it on
+/// Unix).
 ///
 /// # Errors
 ///
 /// [`WriteFailure`].
 pub fn write_whole_with(
     files: &mut dyn Files,
-    path: &Path,
+    asked: &Path,
     bytes: &[u8],
-    windows_names: bool,
-    sync_folder: bool,
+    platform: Platform,
 ) -> Result<Written, WriteFailure> {
-    let owned = || path.to_path_buf();
-    let (target, folder) = refusals(files, path, windows_names)?;
-    let Some(temp) = temp_of(path) else {
+    // The name asked for is checked before anything looks at the disk: Windows answers a look
+    // at a reserved device name with an error of its own. The resolved name is checked again.
+    names(asked, platform.windows_names)?;
+    let path = &files
+        .resolve(asked)
+        .map_err(|error| WriteFailure::Inspect {
+            path: asked.to_path_buf(),
+            error,
+        })?;
+    let owned = || path.clone();
+    let (target, folder) = refusals(files, path, platform.windows_names)?;
+    let Some(temp) = files.temp_for(path) else {
         return Err(WriteFailure::NoName { path: owned() });
     };
     let stale_removed = clear_stale(files, &temp)?;
@@ -545,7 +651,9 @@ pub fn write_whole_with(
             leftover,
         });
     }
-    if sync_folder && let Err(error) = files.sync_folder(&folder) {
+    if platform.sync_folder
+        && let Err(error) = files.sync_folder(&folder)
+    {
         return Err(WriteFailure::SyncFolder {
             path: owned(),
             error,
@@ -562,18 +670,7 @@ fn refusals(
     windows_names: bool,
 ) -> Result<(Kind, PathBuf), WriteFailure> {
     let owned = || path.to_path_buf();
-    let Some(name) = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-    else {
-        return Err(WriteFailure::NoName { path: owned() });
-    };
-    if windows_names && is_windows_reserved(&name) {
-        return Err(WriteFailure::ReservedName { path: owned() });
-    }
-    if windows_names && has_windows_bad_ending(&name) {
-        return Err(WriteFailure::BadEnding { path: owned() });
-    }
+    names(path, windows_names)?;
     let target = inspect(files, path)?;
     match target {
         Kind::Folder => return Err(WriteFailure::IsFolder { path: owned() }),
@@ -590,6 +687,27 @@ fn refusals(
         return Err(WriteFailure::MissingFolder { folder });
     }
     Ok((target, folder))
+}
+
+/// The refusals of a name alone, made before anything looks at the disk.
+fn names(path: &Path, windows_names: bool) -> Result<(), WriteFailure> {
+    let owned = || path.to_path_buf();
+    let Some(name) = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+    else {
+        return Err(WriteFailure::NoName { path: owned() });
+    };
+    if windows_names && is_windows_reserved(&name) {
+        return Err(WriteFailure::ReservedName { path: owned() });
+    }
+    if windows_names && has_windows_bad_ending(&name) {
+        return Err(WriteFailure::BadEnding { path: owned() });
+    }
+    if windows_names && has_windows_illegal_character(&name) {
+        return Err(WriteFailure::IllegalCharacter { path: owned() });
+    }
+    Ok(())
 }
 
 /// What is at `at`, or why that could not be read.

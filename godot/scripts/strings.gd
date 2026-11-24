@@ -367,6 +367,7 @@ const TEXT := {
 	"write_no_name": "{path} names no file, so nothing was written.",
 	"write_reserved_name": "{path} is a name this system keeps for a device, so nothing was written. Choose another name.",
 	"write_bad_ending": "{path} ends in a dot or a space, which this system drops from a name, so nothing was written. Choose another name.",
+	"write_illegal_character": "{path} holds a character this system cannot hold in a file name (one of < > : \" | ? * or a control character), so nothing was written. Choose another name.",
 	"write_is_folder": "{path} is a folder, so nothing was written. Choose a file name.",
 	"write_missing_folder": "the folder {path} does not exist, so nothing was written.",
 	"write_read_only": "{path} is read-only, so it is as it was.",
