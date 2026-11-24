@@ -3421,8 +3421,22 @@ mod tests {
             "the status read is starved: {asked:?}"
         );
         assert!(rig.view_held() && rig.is_held(""));
-        rig.held_view = None;
-        let after = seat_calls(&mut rig, crate::pacer::KEEPALIVE_US.saturating_mul(4), 4);
+        // The phase moves, as the gateway's admin footer says: the admin's first status read,
+        // in flight since the link opened, is answered with a Push. The hold goes with the phase.
+        let in_flight = rig.links.first().and_then(|link| link.in_flight);
+        let Some((id, Purpose::Status)) = in_flight else {
+            panic!("the admin link has no status read in flight: {in_flight:?}");
+        };
+        rig.receive(ADMIN, &served(id, "", "push", 1))
+            .expect("reads");
+        assert_eq!(
+            rig.phase,
+            Phase::Push,
+            "the admin footer did not move the phase"
+        );
+        let now = crate::pacer::KEEPALIVE_US.saturating_mul(4);
+        assert!(!rig.view_held(), "the held view outlived its phase");
+        let after = seat_calls(&mut rig, now.saturating_add(crate::pacer::KEEPALIVE_US), 6);
         assert!(after.iter().any(|method| method == "get_view"), "{after:?}");
     }
 

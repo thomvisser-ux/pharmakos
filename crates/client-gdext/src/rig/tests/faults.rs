@@ -90,14 +90,50 @@ mod tests {
     const RESOLVE_US: u64 = 6 * KEEPALIVE_US;
 
     /// A JSON-RPC answer with a footer: `extra` is the result's fields before `_status`.
-    fn wire(id: i64, extra: &str) -> String {
+    /// The footer the model host writes: its phase and round.
+    #[derive(Clone, Copy)]
+    struct Footer {
+        phase: &'static str,
+        round: u32,
+    }
+
+    /// The footer the hand-written cases answer with.
+    const LULL: Footer = Footer {
+        phase: "lull",
+        round: 1,
+    };
+
+    /// The model host's phase at `step` of a run: a Lull, a Push and a recap a round, round after
+    /// round, and the match ended for the last stretch.
+    fn footer_at(step: u64) -> Footer {
+        if step >= STEPS.saturating_sub(100) {
+            return Footer {
+                phase: "ended",
+                round: 4,
+            };
+        }
+        let round = u32::try_from(step.checked_div(300).expect("a span")).expect("fits");
+        let phase = match step.checked_rem(300).expect("a span") {
+            0..=169 => "lull",
+            170..=249 => "push",
+            _ => "recap",
+        };
+        Footer {
+            phase,
+            round: round.saturating_add(1),
+        }
+    }
+
+    /// A JSON-RPC answer with a footer: `extra` is the result's fields before `_status`.
+    fn wire(id: i64, extra: &str, footer: Footer) -> String {
+        let Footer { phase, round } = footer;
         format!(
-            r#"{{"jsonrpc":"2.0","id":{id},"result":{{{extra}"_status":{{"phase":"lull","phase_remaining_ms":180000,"round":1}}}}}}"#
+            r#"{{"jsonrpc":"2.0","id":{id},"result":{{{extra}"_status":{{"phase":"{phase}","phase_remaining_ms":180000,"round":{round}}}}}}}"#
         )
     }
 
     /// The right answer to `method`.
-    fn right(id: i64, method: &str) -> String {
+    fn right(id: i64, method: &str, footer: Footer) -> String {
         let extra = match method {
             "get_view" => r#""next_cursor":"c9","complete":true,"#,
             "get_segment_feed" => r#""events":[],"next_cursor":"f1","#,
@@ -106,7 +142,7 @@ mod tests {
             "get_recap" => r#""prose":"x","seat_tallies":[],"#,
             _ => "",
         };
-        wire(id, extra)
+        wire(id, extra, footer)
     }
 
     fn id_of(text: &str) -> i64 {
@@ -156,6 +192,7 @@ mod tests {
         let mut maybe_since: Option<u64> = None;
         for step in 0..STEPS {
             now = now.saturating_add(STEP_US);
+            let footer = footer_at(step);
             let healthy = temper == Temper::Recovering && now > 10_000_000;
             // The links, as host_link.gd drives them: the rig's policy says when to connect.
             for link in [ADMIN, SEAT] {
@@ -262,12 +299,12 @@ mod tests {
                 let ledger_before = rig.ledger();
                 match fault {
                     Fault::Answer => {
-                        let _ = rig.receive(link, &right(id, &method));
+                        let _ = rig.receive(link, &right(id, &method, footer));
                         answered_since_open.insert(link, true);
                         watch.unanswered.retain(|(at, _), _| *at != link);
                     }
                     Fault::Delay(by) => {
-                        delayed.push((now.saturating_add(by), link, right(id, &method)));
+                        delayed.push((now.saturating_add(by), link, right(id, &method, footer)));
                     }
                     Fault::Refuse => {
                         let _ = rig.receive(
@@ -288,6 +325,7 @@ mod tests {
                             &wire(
                                 id,
                                 r#""next_cursor":5,"events":5,"advanced_ms":"x","all_ready":"x","seat_tallies":5,"prose":5,"#,
+                                    footer,
                             ),
                         );
                         if rig.ledger().unfinished > ledger_before.unfinished {
@@ -519,7 +557,10 @@ mod tests {
             }
             for frame in rig.poll(now) {
                 if frame.link == SEAT {
-                    let _ = rig.receive(SEAT, &right(id_of(&frame.text), &method_of(&frame.text)));
+                    let _ = rig.receive(
+                        SEAT,
+                        &right(id_of(&frame.text), &method_of(&frame.text), LULL),
+                    );
                 }
             }
             rig.closed(SEAT, Close::Connection);
@@ -566,9 +607,9 @@ mod tests {
                 let text = if method == "get_view" {
                     views += 1;
                     // A wrongly typed cursor: readable JSON, an answer this build cannot take.
-                    wire(id, r#""next_cursor":5,"complete":true,"#)
+                    wire(id, r#""next_cursor":5,"complete":true,"#, LULL)
                 } else {
-                    right(id, &method)
+                    right(id, &method, LULL)
                 };
                 let _ = rig.receive(frame.link, &text);
             }
