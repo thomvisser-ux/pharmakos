@@ -3749,6 +3749,65 @@ mod tests {
         panic!("the rig never reached the Push");
     }
 
+    /// **An answer to an earlier call is never applied to the call in flight** (fix pass 7, item
+    /// 2; review 6's M6 left the crate green): call N is carried by a close, call N+1 goes out on
+    /// the reopened link, and an answer with N's id comes. It is dropped and counted as late,
+    /// nothing is applied, N+1 stays in flight, and N+1's own answer settles it.
+    #[test]
+    fn an_answer_with_an_earlier_id_is_late_and_the_call_in_flight_keeps_waiting() {
+        let mut rig = Rig::new();
+        rig.opened(SEAT);
+        let first = rig
+            .poll(1)
+            .into_iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("the seat's first call");
+        rig.closed(SEAT, Close::Connection);
+        rig.opened(SEAT);
+        let second = rig
+            .poll(2)
+            .into_iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("the seat's call on the reopened link");
+        assert_ne!(id_of(&first), id_of(&second));
+        let before = rig.ledger();
+        let _ = rig.receive(
+            SEAT,
+            &served(
+                id_of(&first),
+                r#""next_cursor":"c9","complete":true,"#,
+                "push",
+                1,
+            ),
+        );
+        assert_eq!(rig.ledger().late, before.late.saturating_add(1));
+        assert_eq!(rig.ledger().answered, before.answered);
+        assert_ne!(rig.phase, Phase::Push, "the late answer was applied");
+        assert_eq!(
+            rig.links
+                .get(SEAT)
+                .and_then(|link| link.in_flight)
+                .map(|(id, _)| id),
+            Some(id_of(&second)),
+            "the call in flight was settled by another call's answer"
+        );
+        let _ = rig.receive(
+            SEAT,
+            &served(
+                id_of(&second),
+                r#""next_cursor":"c9","complete":true,"#,
+                "lull",
+                1,
+            ),
+        );
+        assert_eq!(rig.ledger().answered, before.answered.saturating_add(1));
+        assert!(
+            rig.links
+                .get(SEAT)
+                .is_some_and(|link| link.in_flight.is_none())
+        );
+    }
+
     /// **No state of a connection lasts unreported** (fix pass 7, review 6's silent host: a
     /// `close(1000)` against a host that never echoed it left the peer closing for ever, and a
     /// connect that never completes is the same hang). The host link reports each link's state

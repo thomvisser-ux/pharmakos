@@ -61,6 +61,9 @@ mod tests {
         Silent,
         /// An answer whose id is a string: dropped and counted; the deadline settles the call.
         NoId,
+        /// An answer to an earlier call comes first (a stale id), then the right one: the stale
+        /// one is dropped and counted as late, never applied (fix pass 7, item 2).
+        Stale,
     }
 
     /// The host's temper over a run.
@@ -405,6 +408,7 @@ mod tests {
                         5 => Fault::SendFailed,
                         6 if random.chance(300) => Fault::Silent,
                         6 if random.chance(300) => Fault::NoId,
+                        6 if random.chance(300) => Fault::Stale,
                         _ => Fault::Delay(random.below(800_000)),
                     }
                 };
@@ -416,6 +420,19 @@ mod tests {
                         watch.unanswered.retain(|(at, _), _| *at != link);
                     }
                     Fault::Silent => {}
+                    Fault::Stale => {
+                        rig.receive(link, &right(id.saturating_sub(1), &method, footer));
+                        let ledger = rig.ledger();
+                        assert!(
+                            ledger.late == ledger_before.late.saturating_add(1)
+                                && ledger.answered == ledger_before.answered,
+                            "seed {seed:#x} step {step}: one door: an answer with a stale id was \
+                             applied to {method}: {ledger:?}"
+                        );
+                        rig.receive(link, &right(id, &method, footer));
+                        answered_since_open.insert(link, true);
+                        watch.unanswered.retain(|(at, _), _| *at != link);
+                    }
                     Fault::NoId => {
                         rig.receive(
                             link,
