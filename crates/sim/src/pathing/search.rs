@@ -209,6 +209,15 @@ pub struct Scratch {
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
     pub(crate) reach_faults: Tally,
+    pub(crate) survey_unserved: Tally,
+    pub(crate) survey_out_of_reach: Tally,
+    pub(crate) survey_scout_lost: Tally,
+    pub(crate) survey_crowded_out: Tally,
+    pub(crate) survey_under_threat: Tally,
+    pub(crate) survey_drops_unlogged: Tally,
+    /// What naming a Survey drop's reason remembers of the running Push, and
+    /// its drop log ([`crate::survey::Memory`]).
+    pub(crate) survey: crate::survey::Memory,
 }
 
 /// A diagnostic count that never reads wrong: it counts up by a checked add,
@@ -326,6 +335,13 @@ impl Scratch {
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
             reach_faults: Tally::ZERO,
+            survey_unserved: Tally::ZERO,
+            survey_out_of_reach: Tally::ZERO,
+            survey_scout_lost: Tally::ZERO,
+            survey_crowded_out: Tally::ZERO,
+            survey_under_threat: Tally::ZERO,
+            survey_drops_unlogged: Tally::ZERO,
+            survey: crate::survey::Memory::new(),
         })
     }
 
@@ -458,6 +474,109 @@ impl Scratch {
         self.stalled.read()
     }
 
+    /// Survey re-checks the router served no walk to since the last reset
+    /// ([`crate::pathing::estimate::WalkError::NoPath`] met while a scout's
+    /// walk to a due sighting was priced, `crate::survey`): a scout dropped
+    /// as a candidate for that sighting, counted here so the drop is read,
+    /// never silent.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_unserved(&self) -> Result<u64, TallyOverflow> {
+        self.survey_unserved.read()
+    }
+
+    /// Needed Survey sightings dropped as out of reach since the last reset,
+    /// each once a Push (`crate::survey::Drop::OutOfReach`): no scout of the
+    /// seat, setting off at once for it alone, reaches it before the Lull,
+    /// even at the octile bound.
+    ///
+    /// The drop tallies and their log ([`Scratch::survey_drops`]) are a
+    /// measurement: in the scratch, never hashed, never snapshotted, zero
+    /// after a resume; tests alone read them.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_out_of_reach(&self) -> Result<u64, TallyOverflow> {
+        self.survey_out_of_reach.read()
+    }
+
+    /// Needed Survey sightings dropped because a scout was lost since the
+    /// last reset, each once a Push (`crate::survey::Drop::ScoutLost`).
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_scout_lost(&self) -> Result<u64, TallyOverflow> {
+        self.survey_scout_lost.read()
+    }
+
+    /// Needed Survey sightings a scout alone would reach that no list took
+    /// since the last reset, each once a Push
+    /// (`crate::survey::Drop::CrowdedOut`).
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_crowded_out(&self) -> Result<u64, TallyOverflow> {
+        self.survey_crowded_out.read()
+    }
+
+    /// Needed Survey sightings dropped because a threat the seat sees now
+    /// covers them since the last reset, each once a Push
+    /// (`crate::survey::Drop::UnderThreat`).
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_under_threat(&self) -> Result<u64, TallyOverflow> {
+        self.survey_under_threat.read()
+    }
+
+    /// Survey drops, listings or scouts of a Push past the room
+    /// [`crate::survey::Memory`] reserves: counted here, so a drop whose
+    /// reason the memory could not name is never silent, and the drop is not
+    /// counted again on every decision.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_drops_unlogged(&self) -> Result<u64, TallyOverflow> {
+        self.survey_drops_unlogged.read()
+    }
+
+    /// The running Push's Survey drops, once each for every seat, asset and
+    /// reason: the seat, the sighting's asset id, the reason and the decision
+    /// tick it was last dropped on. Emptied on the first Survey decision of
+    /// every Push, so a Push with no drop reads an empty log.
+    #[must_use]
+    pub fn survey_drops(&self) -> &[(u8, u32, crate::survey::Drop, u32)] {
+        self.survey.log()
+    }
+
+    /// Log a Survey drop of the running Push on decision tick `tick`, once a
+    /// Push for each seat, asset and reason, and count it under its reason.
+    pub(crate) fn survey_drop(
+        &mut self,
+        seat: u8,
+        asset: u32,
+        reason: crate::survey::Drop,
+        tick: u32,
+    ) {
+        match self.survey.log_drop(seat, asset, reason, tick) {
+            Ok(false) => {}
+            Ok(true) => match reason {
+                crate::survey::Drop::OutOfReach => self.survey_out_of_reach.bump(),
+                crate::survey::Drop::ScoutLost => self.survey_scout_lost.bump(),
+                crate::survey::Drop::CrowdedOut => self.survey_crowded_out.bump(),
+                crate::survey::Drop::UnderThreat => self.survey_under_threat.bump(),
+            },
+            Err(crate::survey::Full) => self.survey_drops_unlogged.bump(),
+        }
+    }
+
     /// Grid-optimum searches that met a [`crate::pathing::reach::ReachError`]
     /// since the last reset: a `toward` with no stone for it, counted here so
     /// the miss is read, never silent. Nothing hands the search a column it
@@ -471,7 +590,7 @@ impl Scratch {
     }
 
     /// Zero the counters.
-    pub const fn reset_counters(&mut self) {
+    pub fn reset_counters(&mut self) {
         self.expansions = Tally::ZERO;
         self.endpoint_expansions = Tally::ZERO;
         self.abstract_expansions = Tally::ZERO;
@@ -479,6 +598,13 @@ impl Scratch {
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
         self.reach_faults = Tally::ZERO;
+        self.survey_unserved = Tally::ZERO;
+        self.survey_out_of_reach = Tally::ZERO;
+        self.survey_scout_lost = Tally::ZERO;
+        self.survey_crowded_out = Tally::ZERO;
+        self.survey_under_threat = Tally::ZERO;
+        self.survey_drops_unlogged = Tally::ZERO;
+        self.survey.clear();
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the

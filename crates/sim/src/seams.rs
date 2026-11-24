@@ -285,22 +285,31 @@ impl UnitTally {
     }
 }
 
-/// Where a read-only scan reports the rows it reads, so that the same scan is
-/// charged when a decision runs it and costs nothing to count when anything
-/// else does.
+/// Where a read-only scan reports the counted work it does, so that the
+/// same scan is charged when a decision runs it and costs nothing to count
+/// when anything else does: the rows it reads ([`Meter::rows`]), and units of
+/// work measured another way, such as a search's pops, which can be
+/// unreadable ([`Meter::measured`]).
 ///
 /// A decision's caller passes the world's decision tally
-/// ([`UnitTally`], one unit a row read); every other caller passes `()`,
-/// which counts nothing. A meter never changes what the scan decides or
-/// returns: it only hears how many rows were read.
+/// ([`UnitTally`], one unit a row read, and each measured unit); every other
+/// caller passes `()`, which counts nothing. A meter never changes what the
+/// scan decides or returns: it only hears counts.
 pub trait Meter {
     /// `rows` more rows read.
     fn rows(&self, rows: usize);
+
+    /// `units` more units of counted work, or the reason they could not be
+    /// counted: what a search's pops are charged as, the change in its
+    /// scratch's counters over the call, which can be unreadable.
+    fn measured(&self, units: Result<u64, Unmeasured>);
 }
 
 /// Counts nothing: a scan run outside a decision.
 impl Meter for () {
     fn rows(&self, _rows: usize) {}
+
+    fn measured(&self, _units: Result<u64, Unmeasured>) {}
 }
 
 /// One unit a row read; a row count past `u64` leaves the tally
@@ -308,6 +317,10 @@ impl Meter for () {
 impl Meter for UnitTally {
     fn rows(&self, rows: usize) {
         self.add_measured(u64::try_from(rows).map_err(|_| Unmeasured::Overflowed));
+    }
+
+    fn measured(&self, units: Result<u64, Unmeasured>) {
+        self.add_measured(units);
     }
 }
 
