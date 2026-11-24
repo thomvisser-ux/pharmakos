@@ -103,16 +103,21 @@ impl WorkCounter {
 /// plan section 5; decisions-log item 33 (c)).
 ///
 /// **One unit is one primitive step of counted work, charged where the step
-/// happens** (lane `dunit`): a handler tried, a condition node evaluated, a
-/// selector candidate ranked, a feature the "nearest" ranker scans, a column
-/// a site search scans (the `covering` spiral's, the `toward` site
-/// listing's), and **a node a search pops** -- the grid and endpoint pops and
-/// the abstract pops of a served walk (`targeting::Ground::travel`) and the
-/// grid optimum's pops of a `toward` (`targeting::stone_site`), each charged
-/// as the change in the search scratch's own counters over the call. A call
-/// that pops nothing charges nothing: there is no flat charge per call. A
-/// search's heuristic is evaluated a bounded number of times per node it
-/// pushes, so the pops carry it and it is not charged again. A unit is a
+/// happens** (lane `dunit` and its part 2, decisions-log item 175): **one a
+/// visit of each loop a decision runs, at every level down to the
+/// innermost** -- a handler tried, a condition node evaluated, a selector
+/// candidate ranked, a feature row, a footprint column, a voxel of a seam's
+/// depth or a column's fall, a cell of a pit-safe flood, a beacon, unit,
+/// structure, target, sighting or edit row a scan reads (up to the row that
+/// answers, for a scan that stops there), a Spire test's kind byte or
+/// structure row, a ranker entry, a site column, a sphere an `h` folds
+/// over -- and **a node a search pops**: the grid and endpoint pops and the
+/// abstract pops of a served walk (`targeting::Ground::travel`) and the grid
+/// optimum's pops of a `toward` (`targeting::stone_site`), each charged as
+/// the change in the search scratch's own counters over the call. A call
+/// that visits nothing charges nothing: there is no flat charge per call. A
+/// read by index (an id's row, a column's node) is no loop and is not
+/// charged, nor are the standard library's sorts and moves. A unit is a
 /// count, not a cost model: no step is weighted against another, so what a
 /// unit costs in nanoseconds per kind of step is the bench's to measure.
 ///

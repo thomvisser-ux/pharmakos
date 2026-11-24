@@ -91,7 +91,7 @@
 use crate::features::{Feature, FeatureKind, MAX_FEATURES, MAX_FOOTPRINT_COLUMNS};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::surface::Node;
-use crate::seams::MandateKind;
+use crate::seams::{MandateKind, Meter};
 use crate::tables::{BeaconId, SeatId, UnitKind};
 use crate::targeting::{NO_FEATURE, Ranker};
 use crate::voxels::Material;
@@ -288,6 +288,7 @@ pub fn next_dig(world: &World, beacon: BeaconId) -> Option<Dig> {
         row,
         usize::try_from(seam).ok()?,
         settings_at(world, row)?,
+        &(),
     )
 }
 
@@ -334,23 +335,40 @@ pub fn dig_waits(world: &World, beacon: BeaconId) -> bool {
 /// there holds nothing for a beacon that is not there, and saying 0 would
 /// rank it.
 #[must_use]
-pub fn remaining_yield(
+///
+/// What it visits is reported to `meter` ([`crate::seams::Meter`];
+/// decisions-log item 175): the rows the sphere's Spire test reads, one unit
+/// a footprint column, the rows each column's structure test reads
+/// (`blocked`), and one unit a voxel of a column's depth. A decision's
+/// seam choice passes its tally; any other reader passes `()`.
+pub fn remaining_yield<M: Meter + ?Sized>(
     world: &World,
-    row: usize,
-    seam: usize,
+    (row, seam): (usize, usize),
     settings: MineSettings,
+    meter: &M,
 ) -> Option<i64> {
     let feature = world.features().get(seam)?;
     let centre = world.beacons().positions().get(row).copied()?;
-    let limit = Sq::of_radius(world.sphere_radius_at_row(row));
+    let limit = Sq::of_radius(Fx::from_voxels(crate::spire::metered::radius_at_row(
+        world.rules(),
+        world.beacons(),
+        world.structures(),
+        row,
+        meter,
+    )));
     let mut total: i64 = 0;
+    let mut read: usize = 0;
     for column in &feature.footprint {
-        if pillar(feature, settings, column.x, column.y) || blocked(world, column.x, column.y) {
+        read += 1;
+        if pillar(feature, settings, column.x, column.y)
+            || blocked(world, column.x, column.y, meter)
+        {
             continue;
         }
         let deepest = i64::from(column.top).saturating_sub(i64::from(settings.dig_max_depth));
         let mut z = column.top;
         while i64::from(z) >= deepest && z >= 0 {
+            read += 1;
             if let Some(dollars) = world.ore_yield_at([column.x, column.y, z])
                 && point(column.x, column.y, z)
                     .is_some_and(|voxel| Sq::between(voxel, centre) <= limit)
@@ -360,18 +378,44 @@ pub fn remaining_yield(
             z = z.saturating_sub(1);
         }
     }
+    meter.rows(read);
     Some(total)
 }
 
 /// The next dig in the seam at `seam` for the beacon at `row`, under
 /// `settings`.
-fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Option<Dig> {
+///
+/// What it visits is reported to `meter` ([`crate::seams::Meter`];
+/// decisions-log item 175), one unit a visit of each loop: the rows the
+/// sphere's Spire test reads, a footprint column, the rows each column's
+/// structure test reads ([`blocked`]), a cell of the box the grid is read
+/// from and a footprint column it marks ([`Grid::of`]), each flood's cells
+/// and steps ([`Grid::flood`]), a candidate tried, a column its stand search
+/// tries ([`stand_for`]), a voxel its dug top search reads ([`top_below`]),
+/// and a cell the strand test compares ([`Grid::strands_nothing`]). The sort
+/// of the candidates, at most [`MAX_FOOTPRINT_COLUMNS`] of them, is the
+/// standard library's and is not counted. A drone's own dig, in the Programs
+/// phase, passes `()`; a seat's decision, which keeps or chooses its
+/// beacons' seams, passes its tally.
+fn dig_in<M: Meter + ?Sized>(
+    world: &World,
+    row: usize,
+    seam: usize,
+    settings: MineSettings,
+    meter: &M,
+) -> Option<Dig> {
     let feature = world.features().get(seam)?;
     if feature.kind != FeatureKind::Seam {
         return None;
     }
     let centre = world.beacons().positions().get(row).copied()?;
-    let radius = world.sphere_radius_at_row(row);
+    let radius = Fx::from_voxels(crate::spire::metered::radius_at_row(
+        world.rules(),
+        world.beacons(),
+        world.structures(),
+        row,
+        meter,
+    ));
     if !reaches(centre, radius, feature) {
         return None;
     }
@@ -383,7 +427,9 @@ fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Opt
     let limit = Sq::of_radius(radius);
     let mut keys = [(Sq::ZERO, 0_i32, 0_i32, 0_i32); MAX_FOOTPRINT_COLUMNS];
     let mut count: usize = 0;
+    let mut read: usize = 0;
     for column in &feature.footprint {
+        read += 1;
         let Some(node) = world.surface().node_of(column.x, column.y) else {
             continue;
         };
@@ -401,7 +447,9 @@ fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Opt
         if depth < 0 || depth > i64::from(settings.dig_max_depth) {
             continue;
         }
-        if pillar(feature, settings, column.x, column.y) || blocked(world, column.x, column.y) {
+        if pillar(feature, settings, column.x, column.y)
+            || blocked(world, column.x, column.y, meter)
+        {
             continue;
         }
         // A voxel no coordinate holds is off every map, so in no sphere.
@@ -417,30 +465,35 @@ fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Opt
             count = count.saturating_add(1);
         }
     }
+    meter.rows(read);
     let candidates = keys.get_mut(..count)?;
     if candidates.is_empty() {
         return None;
     }
     // item 62: a column appears once, so `(x, y)` is unique and the key total.
     candidates.sort_unstable();
-    let grid = Grid::of(world, feature)?;
-    let before = grid.flood(None);
+    let grid = Grid::of(world, feature, meter)?;
+    let before = grid.flood(None, meter);
     for (_, x, y, z) in candidates.iter().copied() {
-        let Some(stand) = stand_for(world, &grid, &before, home, [x, y, z]) else {
+        meter.rows(1);
+        let Some(stand) = stand_for(world, &grid, &before, home, [x, y, z], meter) else {
             continue;
         };
         let Some(cell) = grid.index(x, y) else {
             continue;
         };
-        let after = grid.flood(Some(Dug {
-            cell,
-            top: top_below(world, x, y, z),
-        }));
+        let after = grid.flood(
+            Some(Dug {
+                cell,
+                top: top_below(world, [x, y, z], meter),
+            }),
+            meter,
+        );
         // Mine never undermines (decisions-log item 144 (3)): a footing is
         // anchored ground that ignores every edit (the owner's ruling of
         // 2026-10-20), so no dig can drop a structure or a beacon, and the
         // dig needs no support search of its own.
-        if grid.strands_nothing(&before, &after) {
+        if grid.strands_nothing(&before, &after, meter) {
             return Some(Dig {
                 ore: [x, y, z],
                 stand,
@@ -453,16 +506,19 @@ fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Opt
 /// Where a drone stands to dig `ore`: the first of the eight columns around
 /// it, in [`AROUND`]'s order, that is walkable, has its top level with the ore
 /// or one voxel below it, walks out of the seam's box (`before`) and is
-/// connected to the home beacon's column.
-fn stand_for(
+/// connected to the home beacon's column. One unit to `meter` a column it
+/// tries.
+fn stand_for<M: Meter + ?Sized>(
     world: &World,
     grid: &Grid,
     before: &Reach,
     home: Node,
     ore: [i32; 3],
+    meter: &M,
 ) -> Option<[Fx; 3]> {
     let [x, y, z] = ore;
     for [dx, dy] in AROUND {
+        meter.rows(1);
         let nx = x.saturating_add(dx);
         let ny = y.saturating_add(dy);
         let Some(node) = world.surface().node_of(nx, ny) else {
@@ -504,27 +560,34 @@ fn pillar(feature: &Feature, settings: MineSettings, x: i32, y: i32) -> bool {
 
 /// **Never under structures**: whether the column `(x, y)` is in or beside
 /// (one column, diagonals included) the column of a live structure or a live
-/// beacon of any seat.
-fn blocked(world: &World, x: i32, y: i32) -> bool {
+/// beacon of any seat. One unit to `meter` a structure row and a beacon row
+/// it reads, up to the one that blocks the column.
+fn blocked<M: Meter + ?Sized>(world: &World, x: i32, y: i32, meter: &M) -> bool {
     let near = |at: [Fx; 3]| {
         let [cx, cy] = crate::targeting::column_of(at);
         cx.saturating_sub(x).abs() <= 1 && cy.saturating_sub(y).abs() <= 1
     };
+    let mut read: usize = 0;
     let structures = world.structures();
     let built = structures
         .positions()
         .iter()
         .zip(structures.hit_points())
+        .inspect(|_| read += 1)
         .any(|(at, hp)| hp.is_alive() && near(*at));
     if built {
+        meter.rows(read);
         return true;
     }
     let beacons = world.beacons();
-    beacons
+    let by_beacon = beacons
         .positions()
         .iter()
         .zip(beacons.hit_points())
-        .any(|(at, hp)| hp.is_alive() && near(*at))
+        .inspect(|_| read += 1)
+        .any(|(at, hp)| hp.is_alive() && near(*at));
+    meter.rows(read);
+    by_beacon
 }
 
 /// Whether any footprint column of `feature` can lie inside the sphere around
@@ -593,7 +656,9 @@ impl Reach {
 impl Grid {
     /// The grid around `feature`, or `None` when its box does not fit
     /// [`BOX_CELLS`] (which [`crate::features::FeatureTable::new`] rules out).
-    fn of(world: &World, feature: &Feature) -> Option<Grid> {
+    /// One unit to `meter` a cell of the box it reads and a footprint column
+    /// it marks.
+    fn of<M: Meter + ?Sized>(world: &World, feature: &Feature, meter: &M) -> Option<Grid> {
         let [min_x, min_y, max_x, max_y] = feature.bounds;
         let x0 = min_x.checked_sub(1)?;
         let y0 = min_y.checked_sub(1)?;
@@ -613,10 +678,12 @@ impl Grid {
             walk: [false; BOX_CELLS],
             seam: [false; BOX_CELLS],
         };
+        let mut read: usize = 0;
         let mut cy: i32 = 0;
         while cy < h {
             let mut cx: i32 = 0;
             while cx < w {
+                read += 1;
                 let x = x0.saturating_add(cx);
                 let y = y0.saturating_add(cy);
                 if let (Some(cell), Some(node)) = (grid.index(x, y), world.surface().node_of(x, y))
@@ -633,12 +700,14 @@ impl Grid {
             cy = cy.saturating_add(1);
         }
         for column in &feature.footprint {
+            read += 1;
             if let Some(cell) = grid.index(column.x, column.y)
                 && let Some(slot) = grid.seam.get_mut(cell)
             {
                 *slot = true;
             }
         }
+        meter.rows(read);
         Some(grid)
     }
 
@@ -667,15 +736,18 @@ impl Grid {
     /// Every cell that can walk, by one-voxel cardinal steps inside the box,
     /// to a walkable cell that is not a footprint column -- the ring and any
     /// undisturbed ground inside the box -- with `dug`'s exposed voxel taken
-    /// out when it is `Some`.
-    fn flood(&self, dug: Option<Dug>) -> Reach {
+    /// out when it is `Some`. One unit to `meter` a cell it seeds from, a
+    /// cell it takes off its stack and a step it tries from it.
+    fn flood<M: Meter + ?Sized>(&self, dug: Option<Dug>, meter: &M) -> Reach {
         let mut reach = Reach {
             reached: [false; BOX_CELLS],
         };
         let mut stack = [0_u16; BOX_CELLS];
         let mut depth: usize = 0;
         let mut cell: usize = 0;
+        let mut read: usize = 0;
         while cell < self.cells {
+            read += 1;
             let walk = self.column(cell, dug).is_some_and(|(_, walk)| walk);
             if walk
                 // E7: rule: a cell outside the box holds no seam that could stop a walk
@@ -691,6 +763,7 @@ impl Grid {
             cell = cell.saturating_add(1);
         }
         while depth > 0 {
+            read += 1;
             depth = depth.saturating_sub(1);
             let Some(here) = stack.get(depth).copied().map(usize::from) else {
                 break;
@@ -708,6 +781,7 @@ impl Grid {
                 continue;
             };
             for [dx, dy] in CARDINAL {
+                read += 1;
                 let Some(next) = self.index(
                     self.x0.saturating_add(hx).saturating_add(dx),
                     self.y0.saturating_add(hy).saturating_add(dy),
@@ -733,43 +807,61 @@ impl Grid {
                 }
             }
         }
+        meter.rows(read);
         reach
     }
 
     /// Whether every cell that walked out before the dig still does after it.
-    fn strands_nothing(&self, before: &Reach, after: &Reach) -> bool {
-        (0..self.cells).all(|cell| !before.reached(cell) || after.reached(cell))
+    /// One unit to `meter` a cell it compares, up to the first stranded.
+    fn strands_nothing<M: Meter + ?Sized>(&self, before: &Reach, after: &Reach, meter: &M) -> bool {
+        let mut read: usize = 0;
+        let kept = (0..self.cells).all(|cell| {
+            read += 1;
+            !before.reached(cell) || after.reached(cell)
+        });
+        meter.rows(read);
+        kept
     }
 }
 
 /// The top solid z of the column `(x, y)` once its voxel at `top` is gone:
-/// the first solid voxel below it, or `-1`.
-fn top_below(world: &World, x: i32, y: i32, top: i32) -> i32 {
+/// the first solid voxel below it, or `-1`. One unit to `meter` a voxel it
+/// reads.
+fn top_below<M: Meter + ?Sized>(world: &World, [x, y, top]: [i32; 3], meter: &M) -> i32 {
     let mut z = top.saturating_sub(1);
+    let mut read: usize = 0;
     while z >= 0 {
+        read += 1;
         if world.voxels().get([x, y, z]).is_some_and(|m| !m.is_air()) {
+            meter.rows(read);
             return z;
         }
         z = z.saturating_sub(1);
     }
+    meter.rows(read);
     -1
 }
 
 /// Whether the beacon at `row` mines: its writ is Mine, or a living mining
 /// drone is homed to it (a unit's kind is its job, item 127 (6), so the
-/// starting mining drone homed to a Build core keeps earning).
-fn mines(world: &World, row: usize, beacon: BeaconId) -> bool {
+/// starting mining drone homed to a Build core keeps earning). One unit to
+/// `meter` a unit row it reads, up to the drone.
+fn mines<M: Meter + ?Sized>(world: &World, row: usize, beacon: BeaconId, meter: &M) -> bool {
     if world.beacons().mandates().get(row).copied() == Some(MandateKind::Mine.id()) {
         return true;
     }
     let units = world.units();
     let miner = UnitKind::MiningDrone.id();
-    units
+    let mut read: usize = 0;
+    let found = units
         .homes()
         .iter()
         .zip(units.kinds())
         .zip(units.hit_points())
-        .any(|((home, kind), hp)| *home == beacon && *kind == miner && hp.is_alive())
+        .inspect(|_| read += 1)
+        .any(|((home, kind), hp)| *home == beacon && *kind == miner && hp.is_alive());
+    meter.rows(read);
+    found
 }
 
 /// Keep every mining beacon of `seat` holding a seam with work left for it.
@@ -777,12 +869,14 @@ fn mines(world: &World, row: usize, beacon: BeaconId) -> bool {
 /// Run once per decision tick, inside `seat`'s own decision, in ascending
 /// beacon order: a beacon whose held seam still has work keeps it, and one
 /// whose seam is spent -- or that holds none -- chooses again, which may find
-/// nothing. The "nearest" estimates a choice runs are counted on the decision's
-/// evaluation units.
+/// nothing. Everything it visits is counted on the decision's units (one a
+/// beacon row, the unit rows [`mines`] reads, and what the keeping
+/// [`dig_in`] and the choice [`choose_seam`] visit).
 pub(crate) fn refresh_seams(world: &mut World, seat: SeatId) {
     let count = world.beacons().ids().len();
     let mut row: usize = 0;
     while row < count {
+        world.decision_meter().rows(1);
         let beacons = world.beacons();
         let owned = beacons.seats().get(row).copied() == Some(seat.raw());
         let alive = beacons
@@ -793,14 +887,14 @@ pub(crate) fn refresh_seams(world: &mut World, seat: SeatId) {
         if owned
             && alive
             && let Some(beacon) = beacon
-            && mines(world, row, beacon)
+            && mines(world, row, beacon, world.decision_meter())
             && let Some(held) = world.beacons().seams().get(row).copied()
             && let Some(settings) = settings_at(world, row)
         {
             let keeps = held != NO_FEATURE
                 && usize::try_from(held)
                     .ok()
-                    .and_then(|seam| dig_in(world, row, seam, settings))
+                    .and_then(|seam| dig_in(world, row, seam, settings, world.decision_meter()))
                     .is_some();
             if !keeps {
                 let chosen = choose_seam(world, row, settings);
@@ -825,13 +919,16 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
     let features = world.features().len().min(MAX_FEATURES);
     let mut index: usize = 0;
     while index < features {
-        if dig_in(world, row, index, settings).is_some() {
+        // One unit a feature row asked, beside what its dig search visits.
+        world.decision_meter().rows(1);
+        if dig_in(world, row, index, settings, world.decision_meter()).is_some() {
             if let Some(slot) = work.get_mut(index) {
                 *slot = true;
             }
             if settings.seam_choice == SeamChoice::Richest
                 && let Some(slot) = wealth.get_mut(index)
-                && let Some(left) = remaining_yield(world, row, index, settings)
+                && let Some(left) =
+                    remaining_yield(world, (row, index), settings, world.decision_meter())
             {
                 *slot = left;
             }
@@ -894,11 +991,18 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
                 break;
             }
             SeamChoice::Safest => {
-                let threatened = ground.anchor_point(index).is_none_or(|anchor| {
-                    threats
-                        .iter()
-                        .any(|(at, reach)| Sq::between(*at, anchor) <= *reach)
-                });
+                // The anchor's footprint test and one unit a threat read, up
+                // to the one whose reach covers it.
+                let mut read: usize = 0;
+                let threatened =
+                    crate::targeting::metered::anchor_point(&ground, index, ground.work)
+                        .is_none_or(|anchor| {
+                            threats.iter().any(|(at, reach)| {
+                                read += 1;
+                                Sq::between(*at, anchor) <= *reach
+                            })
+                        });
+                ground.work.rows(read);
                 if !threatened {
                     best = Some((index, yield_left));
                     break;
@@ -958,5 +1062,512 @@ mod tests {
     #[test]
     fn an_omitted_flee_on_threat_leaves_the_setting_alone() {
         assert_eq!(edit(None), Ok((None, true)));
+    }
+}
+
+#[cfg(test)]
+mod visits {
+    //! Dunit part 2: a seam's dig search, its yield and a decision's seam
+    //! upkeep each charge one unit a visit of each loop they run, and the
+    //! count equals the test's own count of those visits, made from the
+    //! tables and from what each search answered, never from the meter.
+
+    use super::{
+        AROUND, Dug, Grid, MineSettings, Reach, dig_in, pillar, point, reaches, remaining_yield,
+    };
+    use crate::features::FeatureKind;
+    use crate::math::fixed::{Fx, Sq};
+    use crate::seams::UnitTally;
+    use crate::tables::SeatId;
+    use crate::voxels::Material;
+    use crate::world::World;
+
+    fn world() -> World {
+        let rules = crate::rules::RulesTable::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .unwrap_or_else(|error| panic!("the committed rules table loads: {error}"));
+        World::new(&crate::world::WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("the committed table describes a world: {error}"))
+    }
+
+    /// The units `run` charges on a fresh tally.
+    fn charged(run: impl FnOnce(&UnitTally)) -> u64 {
+        let tally = UnitTally::new();
+        run(&tally);
+        tally
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"))
+    }
+
+    /// The rows a radius of the beacon in `row` reads with no Spire on the
+    /// map: every kind byte of the structure table.
+    fn radius_rows(world: &World) -> u64 {
+        assert!(
+            !crate::spire::holds_a_spire(world.structures().kinds()),
+            "the fixture holds no Spire"
+        );
+        u64::try_from(world.structures().kinds().len()).unwrap_or(u64::MAX)
+    }
+
+    /// [`super::blocked`]'s visits: structure rows up to the one beside the
+    /// column, then, with none, beacon rows up to the one beside it.
+    fn blocked_rows(world: &World, x: i32, y: i32) -> (bool, u64) {
+        let near = |at: [Fx; 3]| {
+            let [cx, cy] = crate::targeting::column_of(at);
+            (cx - x).abs() <= 1 && (cy - y).abs() <= 1
+        };
+        let mut rows = 0;
+        let structures = world.structures();
+        for (at, hp) in structures.positions().iter().zip(structures.hit_points()) {
+            rows += 1;
+            if hp.is_alive() && near(*at) {
+                return (true, rows);
+            }
+        }
+        let beacons = world.beacons();
+        for (at, hp) in beacons.positions().iter().zip(beacons.hit_points()) {
+            rows += 1;
+            if hp.is_alive() && near(*at) {
+                return (true, rows);
+            }
+        }
+        (false, rows)
+    }
+
+    /// A flood's visits, from what it answered: every cell it seeds from,
+    /// and each cell it reached taken off the stack once with its four steps.
+    fn flood_rows(grid: &Grid, reach: &Reach) -> u64 {
+        let reached = reach
+            .reached
+            .iter()
+            .take(grid.cells)
+            .filter(|r| **r)
+            .count();
+        u64::try_from(grid.cells + 5 * reached).unwrap_or(u64::MAX)
+    }
+
+    /// The independent count of one [`dig_in`]: its answer is the sim's, read
+    /// from the run with `()`, and every visit is counted here.
+    fn dig_in_rows(world: &World, row: usize, seam: usize, settings: MineSettings) -> u64 {
+        let Some(feature) = world.features().get(seam) else {
+            return 0;
+        };
+        if feature.kind != FeatureKind::Seam {
+            return 0;
+        }
+        let Some(centre) = world.beacons().positions().get(row).copied() else {
+            return 0;
+        };
+        let mut rows = radius_rows(world);
+        let radius = world.sphere_radius_at_row(row);
+        if !reaches(centre, radius, feature) {
+            return rows;
+        }
+        let [hx, hy] = crate::targeting::column_of(centre);
+        let Some(home) = world.surface().node_of(hx, hy) else {
+            return rows;
+        };
+        let (mut candidates, read) =
+            candidate_rows(world, feature, (centre, Sq::of_radius(radius)), settings);
+        rows += read;
+        if candidates.is_empty() {
+            return rows;
+        }
+        candidates.sort_unstable();
+        let Some(grid) = Grid::of(world, feature, &()) else {
+            return rows;
+        };
+        rows += u64::try_from(grid.cells + feature.footprint.len()).unwrap_or(u64::MAX);
+        let before = grid.flood(None, &());
+        rows += flood_rows(&grid, &before);
+        for (_, x, y, z) in candidates {
+            rows += 1;
+            let (stand, tried) = stand_rows(world, (&grid, &before), home, [x, y, z]);
+            rows += tried;
+            let Some(cell) = grid.index(x, y).filter(|_| stand) else {
+                continue;
+            };
+            let mut below = z - 1;
+            loop {
+                if below < 0 {
+                    break;
+                }
+                rows += 1;
+                if world
+                    .voxels()
+                    .get([x, y, below])
+                    .is_some_and(|m| !m.is_air())
+                {
+                    break;
+                }
+                below -= 1;
+            }
+            let after = grid.flood(
+                Some(Dug {
+                    cell,
+                    top: below.max(-1),
+                }),
+                &(),
+            );
+            rows += flood_rows(&grid, &after);
+            let mut kept = true;
+            for at in 0..grid.cells {
+                rows += 1;
+                if before.reached(at) && !after.reached(at) {
+                    kept = false;
+                    break;
+                }
+            }
+            if kept {
+                return rows;
+            }
+        }
+        rows
+    }
+
+    /// The dig search's first loop, counted: a footprint column read, and
+    /// the rows each structure test reads; and the ore columns that pass.
+    fn candidate_rows(
+        world: &World,
+        feature: &crate::features::Feature,
+        (centre, limit): ([Fx; 3], Sq),
+        settings: MineSettings,
+    ) -> (Vec<(Sq, i32, i32, i32)>, u64) {
+        let mut rows = 0;
+        let mut candidates: Vec<(Sq, i32, i32, i32)> = Vec::new();
+        for column in &feature.footprint {
+            rows += 1;
+            let Some(node) = world.surface().node_of(column.x, column.y) else {
+                continue;
+            };
+            let z = world.surface().top(node);
+            if z < 0
+                || world
+                    .voxels()
+                    .get([column.x, column.y, z])
+                    .and_then(Material::ore_richness)
+                    .is_none()
+            {
+                continue;
+            }
+            let depth = i64::from(column.top) - i64::from(z);
+            if depth < 0 || depth > i64::from(settings.dig_max_depth) {
+                continue;
+            }
+            if pillar(feature, settings, column.x, column.y) {
+                continue;
+            }
+            let (blocked, read) = blocked_rows(world, column.x, column.y);
+            rows += read;
+            if blocked {
+                continue;
+            }
+            let Some(voxel) = point(column.x, column.y, z) else {
+                continue;
+            };
+            let distance = Sq::between(voxel, centre);
+            if distance <= limit {
+                candidates.push((distance, column.x, column.y, z));
+            }
+        }
+        (candidates, rows)
+    }
+
+    /// [`super::stand_for`]'s visits: a column around the ore tried, up to
+    /// the first a drone can stand on.
+    fn stand_rows(
+        world: &World,
+        (grid, before): (&Grid, &Reach),
+        home: crate::pathing::surface::Node,
+        [x, y, z]: [i32; 3],
+    ) -> (bool, u64) {
+        let mut rows = 0;
+        for [dx, dy] in AROUND {
+            rows += 1;
+            let (nx, ny) = (x + dx, y + dy);
+            let Some(node) = world.surface().node_of(nx, ny) else {
+                continue;
+            };
+            let top = world.surface().top(node);
+            if world.surface().walkable(node)
+                && (top == z || top == z - 1)
+                && grid.index(nx, ny).is_some_and(|cell| before.reached(cell))
+                && world.clusters().connected(world.surface(), node, home)
+            {
+                return (true, rows);
+            }
+        }
+        (false, rows)
+    }
+
+    /// The core of seat 0: its row and its Mine settings.
+    fn core(world: &World) -> (usize, MineSettings) {
+        let row = world
+            .beacons()
+            .row_of_ordinal(SeatId::new(0), 0)
+            .unwrap_or_else(|| panic!("seat 0 has a core"));
+        let settings = super::settings_at(world, row).unwrap_or_else(|| panic!("its settings"));
+        (row, settings)
+    }
+
+    #[test]
+    fn a_dig_search_charges_what_it_visits() {
+        let world = world();
+        let (row, settings) = core(&world);
+        let mut searched = 0;
+        for seam in 0..world.features().len() {
+            let units = charged(|meter| {
+                let _ = dig_in(&world, row, seam, settings, meter);
+            });
+            let counted = dig_in_rows(&world, row, seam, settings);
+            assert_eq!(units, counted, "seam {seam}: the visits, counted");
+            if world
+                .features()
+                .get(seam)
+                .is_some_and(|f| f.kind == FeatureKind::Seam)
+                && dig_in(&world, row, seam, settings, &()).is_some()
+            {
+                searched += 1;
+            }
+        }
+        assert!(searched > 0, "the core has a seam to dig");
+    }
+
+    #[test]
+    fn a_seams_yield_charges_what_it_reads() {
+        let world = world();
+        let (row, settings) = core(&world);
+        for seam in 0..world.features().len() {
+            let Some(feature) = world.features().get(seam) else {
+                continue;
+            };
+            let units = charged(|meter| {
+                let _ = remaining_yield(&world, (row, seam), settings, meter);
+            });
+            let mut rows = radius_rows(&world);
+            for column in &feature.footprint {
+                rows += 1;
+                if pillar(feature, settings, column.x, column.y) {
+                    continue;
+                }
+                let (blocked, read) = blocked_rows(&world, column.x, column.y);
+                rows += read;
+                if blocked {
+                    continue;
+                }
+                let deepest = i64::from(column.top) - i64::from(settings.dig_max_depth);
+                let mut z = column.top;
+                while i64::from(z) >= deepest && z >= 0 {
+                    rows += 1;
+                    z -= 1;
+                }
+            }
+            assert_eq!(units, rows, "seam {seam}: the visits, counted");
+        }
+    }
+
+    #[test]
+    fn a_kept_seam_charges_its_dig_search() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        // The first upkeep chooses; the second keeps what it chose.
+        world.decision_meter().reset();
+        super::refresh_seams(&mut world, seat);
+        let (row, settings) = core(&world);
+        let held = world
+            .beacons()
+            .seams()
+            .get(row)
+            .copied()
+            .unwrap_or(super::NO_FEATURE);
+        assert_ne!(held, super::NO_FEATURE, "the core chose a seam");
+        world.decision_meter().reset();
+        super::refresh_seams(&mut world, seat);
+        let units = world
+            .decision_meter()
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"));
+        // Every beacon row; for each of seat 0's living beacons, the unit
+        // rows its miner test reads (a Mine writ reads none); and the kept
+        // seam's dig search.
+        let mut rows = 0;
+        let beacons = world.beacons();
+        for at in 0..beacons.ids().len() {
+            rows += 1;
+            let owned = beacons.seats().get(at).copied() == Some(seat.raw());
+            let alive = beacons.hit_points().get(at).is_some_and(|hp| hp.is_alive());
+            if !owned || !alive {
+                continue;
+            }
+            if beacons.mandates().get(at).copied() == Some(crate::seams::MandateKind::Mine.id()) {
+                continue;
+            }
+            let id = beacons
+                .ids()
+                .get(at)
+                .copied()
+                .map(crate::tables::BeaconId::new);
+            let units_table = world.units();
+            for ((home, kind), hp) in units_table
+                .homes()
+                .iter()
+                .zip(units_table.kinds())
+                .zip(units_table.hit_points())
+            {
+                rows += 1;
+                if Some(*home) == id
+                    && *kind == crate::tables::UnitKind::MiningDrone.id()
+                    && hp.is_alive()
+                {
+                    break;
+                }
+            }
+        }
+        let kept_seam = usize::try_from(held).unwrap_or(usize::MAX);
+        rows += dig_in_rows(&world, row, kept_seam, settings);
+        assert_eq!(units, rows, "the upkeep's visits, counted");
+    }
+
+    /// The upkeep's scan of `seat`'s beacons, counted: one unit a beacon row,
+    /// and every unit row the core's miner test reads up to its drone.
+    fn scan_rows(world: &World, seat: SeatId) -> u64 {
+        let beacons = world.beacons();
+        let units = world.units();
+        let mut rows = u64::try_from(beacons.ids().len()).unwrap_or(u64::MAX);
+        for at in 0..beacons.ids().len() {
+            let owned = beacons.seats().get(at).copied() == Some(seat.raw());
+            let alive = beacons.hit_points().get(at).is_some_and(|hp| hp.is_alive());
+            let mine =
+                beacons.mandates().get(at).copied() == Some(crate::seams::MandateKind::Mine.id());
+            if !owned || !alive || mine {
+                continue;
+            }
+            let id = beacons
+                .ids()
+                .get(at)
+                .copied()
+                .map(crate::tables::BeaconId::new);
+            for ((home, kind), hp) in units
+                .homes()
+                .iter()
+                .zip(units.kinds())
+                .zip(units.hit_points())
+            {
+                rows += 1;
+                if Some(*home) == id
+                    && *kind == crate::tables::UnitKind::MiningDrone.id()
+                    && hp.is_alive()
+                {
+                    break;
+                }
+            }
+        }
+        rows
+    }
+
+    /// The first upkeep of a seat whose core holds no seam chooses one: the
+    /// scan, one unit a feature asked with each feature's dig search, and the
+    /// ranking of the features with work, which `tests/nearest.rs`'s
+    /// `decision_units_equal_the_primitive_steps_counted` counts exactly and
+    /// which is measured here alone, on a fresh tally and a fresh scratch.
+    #[test]
+    fn a_seam_choice_charges_what_it_visits() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let (row, settings) = core(&world);
+        assert_eq!(
+            world.beacons().seams().get(row).copied(),
+            Some(super::NO_FEATURE)
+        );
+        let features = world.features().len();
+        let work: Vec<bool> = (0..features)
+            .map(|seam| dig_in(&world, row, seam, settings, &()).is_some())
+            .collect();
+        let mut rows = scan_rows(&world, seat);
+        for seam in 0..features {
+            rows += 1 + dig_in_rows(&world, row, seam, settings);
+        }
+        let ranking = charged(|meter| {
+            let ground = crate::targeting::Ground {
+                work: meter,
+                ..world.ground()
+            };
+            let origin = crate::targeting::column_of(
+                world
+                    .beacons()
+                    .positions()
+                    .get(row)
+                    .copied()
+                    .unwrap_or_else(|| panic!("the core's row")),
+            );
+            let mut scratch =
+                crate::pathing::search::Scratch::for_map(world.surface(), world.clusters().size())
+                    .unwrap_or_else(|| panic!("a scratch for the map"));
+            let mut ranker = crate::targeting::Ranker::new(&ground, origin, |at| {
+                work.get(at).copied().unwrap_or(false)
+            });
+            assert!(
+                ranker.next(&ground, &mut scratch).is_some(),
+                "a seam is reached"
+            );
+        });
+        assert!(ranking > 0, "the ranking prices a walk");
+        world.decision_meter().reset();
+        super::refresh_seams(&mut world, seat);
+        let units = world
+            .decision_meter()
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"));
+        assert_eq!(units, rows + ranking, "the choice's visits, counted");
+    }
+
+    /// A beacon none of whose seams has work left (every column a pillar)
+    /// asks every feature's dig search on every decision and ranks nothing.
+    #[test]
+    fn a_spent_beacon_charges_its_searches_and_no_ranking() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let (row, _) = core(&world);
+        let beacon = crate::tables::BeaconId::new(
+            world
+                .beacons()
+                .ids()
+                .get(row)
+                .copied()
+                .unwrap_or_else(|| panic!("the core's id")),
+        );
+        world.edit_mine_settings(
+            beacon,
+            super::MineEdit {
+                pillar_spacing: Some(1),
+                ..super::MineEdit::default()
+            },
+        );
+        let (_, settings) = core(&world);
+        let mut rows = scan_rows(&world, seat);
+        for seam in 0..world.features().len() {
+            assert!(
+                dig_in(&world, row, seam, settings, &()).is_none(),
+                "no work left"
+            );
+            rows += 1 + dig_in_rows(&world, row, seam, settings);
+        }
+        world.decision_meter().reset();
+        super::refresh_seams(&mut world, seat);
+        let units = world
+            .decision_meter()
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"));
+        assert_eq!(units, rows, "the searches, and no ranking");
     }
 }

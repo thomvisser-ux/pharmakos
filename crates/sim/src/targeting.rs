@@ -115,7 +115,8 @@ use crate::pathing::estimate::{ServedWalk, WalkError, walk_cost};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
-use crate::tables::{BeaconId, BeaconTable, SeatId, StructureTable, TargetKind, TargetTable};
+use crate::seams::Meter as _;
+use crate::tables::{BeaconId, BeaconTable, SeatId, StructureTable, TargetTable};
 use crate::voxels::VoxelStore;
 
 /// What a playbook's `FeatureRef` asks for, compiled.
@@ -201,9 +202,11 @@ pub struct Ground<'a> {
     pub spiral: &'a [[i32; 2]],
     /// Where the work a resolution does is counted: P1's evaluation units
     /// (S1's plan, section 5), one a primitive step
-    /// ([`crate::seams::UnitTally`]): here, one a feature the ranker scans,
-    /// one a column a site search scans, and one a node a search pops. Not
-    /// hashed.
+    /// ([`crate::seams::UnitTally`]): here, one a visit of each loop a
+    /// resolver runs -- a feature the ranker scans, a column a site search
+    /// scans, and every row, column and Spire byte the tests on them read
+    /// (`targeting::metered`) -- and one a node a search pops. The public predicates
+    /// of [`Ground`] charge nothing; the resolvers charge this. Not hashed.
     pub work: &'a crate::seams::UnitTally,
 }
 
@@ -217,6 +220,22 @@ pub(crate) fn popped(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured>
         .map_err(unreadable)?
         .checked_add(scratch.abstract_expansions().map_err(unreadable)?)
         .ok_or(crate::seams::Unmeasured::SourceUnreadable)
+}
+
+/// The spheres the last grid optimum in `scratch` read for its `h`: each of
+/// its `h` ([`crate::pathing::reach::Reach::evaluations`], counted from the
+/// search's own start) folds over every sphere the listing added
+/// ([`crate::pathing::reach::Reach::heuristic`]).
+fn heuristic_folds(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
+    let evaluations = scratch
+        .reach()
+        .evaluations()
+        .map_err(|_| crate::seams::Unmeasured::SourceUnreadable)?;
+    let spheres = u64::try_from(scratch.reach().spheres().len())
+        .map_err(|_| crate::seams::Unmeasured::Overflowed)?;
+    evaluations
+        .checked_mul(spheres)
+        .ok_or(crate::seams::Unmeasured::Overflowed)
 }
 
 /// The nodes popped since `before` was read ([`popped`]): what the call
@@ -267,12 +286,7 @@ impl Ground<'_> {
     /// a site where no beacon stands yet.
     #[must_use]
     pub fn radius_of(&self, beacon: Option<BeaconId>) -> Fx {
-        Fx::from_voxels(match beacon {
-            Some(beacon) => {
-                crate::spire::radius_of(self.rules, self.beacons, self.structures, beacon)
-            }
-            None => self.rules.sphere_radius_voxels(),
-        })
+        metered::radius_of(self, beacon, &())
     }
 
     /// Whether `point` lies inside the sphere centred on `centre` of `beacon`
@@ -280,7 +294,7 @@ impl Ground<'_> {
     /// stands yet for `None`.
     #[must_use]
     pub fn in_sphere_of(&self, beacon: Option<BeaconId>, centre: [Fx; 3], point: [Fx; 3]) -> bool {
-        Sq::between(centre, point) <= Sq::of_radius(self.radius_of(beacon))
+        metered::in_sphere_of(self, beacon, (centre, point), &())
     }
 
     /// The point a unit or a structure stands at on the column `(x, y)`: one
@@ -299,50 +313,21 @@ impl Ground<'_> {
     /// ([`FeatureTable::is_live`]).
     #[must_use]
     pub fn is_live(&self, index: usize) -> bool {
-        self.features.is_live(index, self.surface, self.voxels)
+        metered::is_live(self, index, &())
     }
 
     /// Whether `point` lies inside the sphere of one of `seat`'s own living
     /// beacons, **awake or dormant**: a dormant beacon keeps its sphere.
     #[must_use]
     pub fn inside_own_sphere(&self, seat: SeatId, point: [Fx; 3]) -> bool {
-        // Each beacon's own radius, grown by a finished Spire (decision 6: the
-        // anchor for placing the next beacon grows).
-        self.beacons
-            .seats()
-            .iter()
-            .zip(self.beacons.hit_points())
-            .zip(self.beacons.positions())
-            .enumerate()
-            .filter(|(_, ((owner, hp), _))| **owner == seat.raw() && hp.is_alive())
-            .any(|(row, (_, centre))| {
-                crate::spire::inside_at_row(
-                    self.rules,
-                    self.beacons,
-                    self.structures,
-                    row,
-                    *centre,
-                    point,
-                )
-            })
+        metered::inside_own_sphere(self, seat, point, &())
     }
 
     /// **No stacking**: whether one of `seat`'s own live beacons stands on the
     /// column `(x, y)` (`docs/design/targeting.md`, "Companion changes").
     #[must_use]
     pub fn stacks_on_own(&self, seat: SeatId, x: i32, y: i32) -> bool {
-        self.own_live_beacons(seat).any(|at| same_column(at, x, y))
-    }
-
-    /// Where each of `seat`'s own living beacons stands, in row order.
-    fn own_live_beacons(&self, seat: SeatId) -> impl Iterator<Item = [Fx; 3]> + '_ {
-        self.beacons
-            .seats()
-            .iter()
-            .zip(self.beacons.hit_points())
-            .zip(self.beacons.positions())
-            .filter(move |((owner, hp), _)| **owner == seat.raw() && hp.is_alive())
-            .map(|(_, at)| *at)
+        metered::stacks_on_own(self, seat, [x, y], &())
     }
 
     /// **One structure per voxel**: whether a structure with hit points left
@@ -351,11 +336,7 @@ impl Ground<'_> {
     /// structure at zero hit points frees its column.
     #[must_use]
     pub fn structure_on(&self, x: i32, y: i32) -> bool {
-        self.structures
-            .hit_points()
-            .iter()
-            .zip(self.structures.positions())
-            .any(|(hp, at)| hp.is_alive() && same_column(*at, x, y))
+        metered::structure_on(self, [x, y], &())
     }
 
     /// Whether a Build target of one of `seat`'s own beacons -- `except`
@@ -363,27 +344,7 @@ impl Ground<'_> {
     /// per-seat claim, so another seat's stays hidden.
     #[must_use]
     pub fn own_target_on(&self, seat: SeatId, except: Option<BeaconId>, x: i32, y: i32) -> bool {
-        let build = TargetKind::Build.id();
-        self.targets
-            .beacons()
-            .iter()
-            .zip(self.targets.kinds())
-            .zip(self.targets.anchors())
-            .any(|((beacon, kind), at)| {
-                if except.is_some_and(|skip| skip == *beacon) || *kind != build {
-                    return false;
-                }
-                // The target's beacon, read through its id's row and checked
-                // by generation (S2's plan, E1): an id that names no row the
-                // table still holds is no beacon of this seat's.
-                let owned = self
-                    .beacons
-                    .row_of(*beacon)
-                    .ok()
-                    .and_then(|row| self.beacons.seats().get(row.index()).copied())
-                    == Some(seat.raw());
-                owned && same_column(*at, x, y)
-            })
+        metered::own_target_on(self, (seat, except), [x, y], &())
     }
 
     /// The feature's **`on` column**: its anchor column if it is free,
@@ -397,20 +358,7 @@ impl Ground<'_> {
         seat: SeatId,
         except: Option<BeaconId>,
     ) -> Option<[i32; 2]> {
-        let feature = self.features.get(index)?;
-        let free = |x: i32, y: i32| -> bool {
-            !self.structure_on(x, y) && !self.own_target_on(seat, except, x, y)
-        };
-        if let Some(column) = feature.anchor_column()
-            && free(column.x, column.y)
-        {
-            return Some([column.x, column.y]);
-        }
-        feature
-            .footprint
-            .iter()
-            .find(|column| free(column.x, column.y))
-            .map(|column| [column.x, column.y])
+        metered::on_column(self, index, (seat, except), &())
     }
 
     /// The point a feature is measured and covered at: its anchor column's
@@ -419,11 +367,7 @@ impl Ground<'_> {
     /// not in the table or the column is off the map.
     #[must_use]
     pub fn anchor_point(&self, index: usize) -> Option<[Fx; 3]> {
-        let feature = self.features.get(index)?;
-        let column = feature
-            .anchor_column()
-            .or_else(|| feature.footprint.first().copied())?;
-        self.standing(column.x, column.y)
+        metered::anchor_point(self, index, &())
     }
 
     /// The column a "nearest" measures to from `origin`: the anchor column if
@@ -435,21 +379,7 @@ impl Ground<'_> {
     /// this rule names rather than restating it.
     #[must_use]
     pub fn measure_to(&self, index: usize, origin: Node) -> Option<Node> {
-        let feature = self.features.get(index)?;
-        let reachable = |x: i32, y: i32| -> Option<Node> {
-            let node = self.surface.node_of(x, y)?;
-            (self.surface.walkable(node) && self.clusters.connected(self.surface, origin, node))
-                .then_some(node)
-        };
-        if let Some(column) = feature.anchor_column()
-            && let Some(node) = reachable(column.x, column.y)
-        {
-            return Some(node);
-        }
-        feature
-            .footprint
-            .iter()
-            .find_map(|column| reachable(column.x, column.y))
+        metered::measure_to(self, index, origin, &())
     }
 
     /// The integer cost of the walk the router serves from `from` to `to`
@@ -463,6 +393,357 @@ impl Ground<'_> {
         let walk = walk_cost(self.surface, self.clusters, scratch, (from, to));
         self.charge_pops(before, scratch);
         walk
+    }
+}
+
+/// The predicates of [`Ground`], each reporting the rows, columns and cells
+/// it visits to a [`Meter`] (decisions-log item 175; dunit part 2): one unit
+/// a visit of each loop, at every level down to the innermost -- a beacon,
+/// structure or target row a scan reads (up to the row that answers, for a
+/// scan that stops there), a footprint column, a feature row, a voxel of a
+/// seam's depth, and the rows a Spire test reads
+/// ([`crate::spire::metered`]). A single read by index (an id's row, a
+/// column's node, its component) is no loop and is not charged.
+///
+/// [`Ground`]'s public methods are these with `()`, which counts nothing, so
+/// a reader outside a decision (a mandate's program, a host's preview)
+/// charges nothing; the resolvers below pass the ground's own tally,
+/// [`Ground::work`], which a decision's ground is the decision's. A meter
+/// only hears counts: no answer changes with it. Each function is named as
+/// its method, so the readers of the sphere are the same names
+/// (`tests/spire.rs`, `every_sphere_reader_is_named`).
+pub(crate) mod metered {
+    use super::{Feature, Ground, Node, same_column};
+    use crate::math::fixed::{Fx, Sq};
+    use crate::seams::Meter;
+    use crate::tables::BeaconId;
+    use crate::tables::{SeatId, TargetKind};
+
+    /// [`Ground::is_live`]: the footprint columns and depth voxels it reads.
+    pub(crate) fn is_live<M: Meter + ?Sized>(ground: &Ground<'_>, index: usize, meter: &M) -> bool {
+        ground
+            .features
+            .is_live_metered(index, ground.surface, ground.voxels, meter)
+    }
+
+    /// [`Ground::radius_of`]: the rows the Spire test reads.
+    pub(crate) fn radius_of<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        beacon: Option<BeaconId>,
+        meter: &M,
+    ) -> Fx {
+        Fx::from_voxels(match beacon {
+            Some(beacon) => crate::spire::metered::radius_of(
+                ground.rules,
+                ground.beacons,
+                ground.structures,
+                beacon,
+                meter,
+            ),
+            None => ground.rules.sphere_radius_voxels(),
+        })
+    }
+
+    /// [`Ground::in_sphere_of`]: the rows its radius reads.
+    pub(crate) fn in_sphere_of<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        beacon: Option<BeaconId>,
+        (centre, point): ([Fx; 3], [Fx; 3]),
+        meter: &M,
+    ) -> bool {
+        Sq::between(centre, point) <= Sq::of_radius(radius_of(ground, beacon, meter))
+    }
+
+    /// [`Ground::inside_own_sphere`]: one unit a beacon row it reads, up to
+    /// the sphere that holds the point, and the rows each own living
+    /// beacon's Spire test reads.
+    pub(crate) fn inside_own_sphere<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        seat: SeatId,
+        point: [Fx; 3],
+        meter: &M,
+    ) -> bool {
+        let mut read: usize = 0;
+        // Each beacon's own radius, grown by a finished Spire (decision 6: the
+        // anchor for placing the next beacon grows).
+        let inside = ground
+            .beacons
+            .seats()
+            .iter()
+            .zip(ground.beacons.hit_points())
+            .zip(ground.beacons.positions())
+            .enumerate()
+            .inspect(|_| read += 1)
+            .filter(|(_, ((owner, hp), _))| **owner == seat.raw() && hp.is_alive())
+            .any(|(row, (_, centre))| {
+                crate::spire::metered::inside_at_row(
+                    ground.rules,
+                    ground.beacons,
+                    ground.structures,
+                    row,
+                    (*centre, point),
+                    meter,
+                )
+            });
+        meter.rows(read);
+        inside
+    }
+
+    /// [`Ground::stacks_on_own`]: one unit a beacon row it reads, up to the
+    /// own living beacon on the column.
+    pub(crate) fn stacks_on_own<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        seat: SeatId,
+        [x, y]: [i32; 2],
+        meter: &M,
+    ) -> bool {
+        let mut read: usize = 0;
+        let stacks = ground
+            .beacons
+            .seats()
+            .iter()
+            .zip(ground.beacons.hit_points())
+            .zip(ground.beacons.positions())
+            .inspect(|_| read += 1)
+            .any(|((owner, hp), at)| {
+                *owner == seat.raw() && hp.is_alive() && same_column(*at, x, y)
+            });
+        meter.rows(read);
+        stacks
+    }
+
+    /// [`Ground::structure_on`]: one unit a structure row it reads, up to
+    /// the one on the column.
+    pub(crate) fn structure_on<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        [x, y]: [i32; 2],
+        meter: &M,
+    ) -> bool {
+        let mut read: usize = 0;
+        let on = ground
+            .structures
+            .hit_points()
+            .iter()
+            .zip(ground.structures.positions())
+            .inspect(|_| read += 1)
+            .any(|(hp, at)| hp.is_alive() && same_column(*at, x, y));
+        meter.rows(read);
+        on
+    }
+
+    /// [`Ground::own_target_on`]: one unit a target row it reads, up to the
+    /// claim on the column.
+    pub(crate) fn own_target_on<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        (seat, except): (SeatId, Option<BeaconId>),
+        [x, y]: [i32; 2],
+        meter: &M,
+    ) -> bool {
+        let build = TargetKind::Build.id();
+        let mut read: usize = 0;
+        let claimed = ground
+            .targets
+            .beacons()
+            .iter()
+            .zip(ground.targets.kinds())
+            .zip(ground.targets.anchors())
+            .inspect(|_| read += 1)
+            .any(|((beacon, kind), at)| {
+                if except.is_some_and(|skip| skip == *beacon) || *kind != build {
+                    return false;
+                }
+                // The target's beacon, read through its id's row and checked
+                // by generation (S2's plan, E1): an id that names no row the
+                // table still holds is no beacon of this seat's.
+                let owned = ground
+                    .beacons
+                    .row_of(*beacon)
+                    .ok()
+                    .and_then(|row| ground.beacons.seats().get(row.index()).copied())
+                    == Some(seat.raw());
+                owned && same_column(*at, x, y)
+            });
+        meter.rows(read);
+        claimed
+    }
+
+    /// Whether no live structure stands on the column and no Build target of
+    /// `seat` (but `except`'s) claims it: [`Ground::on_column`]'s "free".
+    fn free<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        owner: (SeatId, Option<BeaconId>),
+        column: [i32; 2],
+        meter: &M,
+    ) -> bool {
+        !structure_on(ground, column, meter) && !own_target_on(ground, owner, column, meter)
+    }
+
+    /// [`Ground::on_column`]: the footprint columns its anchor test compares,
+    /// one unit a footprint column it tries, and the rows each "free" reads.
+    pub(crate) fn on_column<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        index: usize,
+        owner: (SeatId, Option<BeaconId>),
+        meter: &M,
+    ) -> Option<[i32; 2]> {
+        let feature = ground.features.get(index)?;
+        if let Some(column) = feature.anchor_column_metered(meter)
+            && free(ground, owner, [column.x, column.y], meter)
+        {
+            return Some([column.x, column.y]);
+        }
+        let mut tried: usize = 0;
+        let found = feature
+            .footprint
+            .iter()
+            .inspect(|_| tried += 1)
+            .find(|column| free(ground, owner, [column.x, column.y], meter))
+            .map(|column| [column.x, column.y]);
+        meter.rows(tried);
+        found
+    }
+
+    /// [`Ground::anchor_point`]: the footprint columns its anchor test
+    /// compares.
+    pub(crate) fn anchor_point<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        index: usize,
+        meter: &M,
+    ) -> Option<[Fx; 3]> {
+        let feature = ground.features.get(index)?;
+        let column = feature
+            .anchor_column_metered(meter)
+            .or_else(|| feature.footprint.first().copied())?;
+        ground.standing(column.x, column.y)
+    }
+
+    /// [`Ground::measure_to`]: the footprint columns its anchor test
+    /// compares, and one unit a footprint column it tries.
+    pub(crate) fn measure_to<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        index: usize,
+        origin: Node,
+        meter: &M,
+    ) -> Option<Node> {
+        let feature = ground.features.get(index)?;
+        let reachable = |x: i32, y: i32| -> Option<Node> {
+            let node = ground.surface.node_of(x, y)?;
+            (ground.surface.walkable(node)
+                && ground.clusters.connected(ground.surface, origin, node))
+            .then_some(node)
+        };
+        if let Some(column) = feature.anchor_column_metered(meter)
+            && let Some(node) = reachable(column.x, column.y)
+        {
+            return Some(node);
+        }
+        let mut tried: usize = 0;
+        let found = feature
+            .footprint
+            .iter()
+            .inspect(|_| tried += 1)
+            .find_map(|column| reachable(column.x, column.y));
+        meter.rows(tried);
+        found
+    }
+
+    /// [`super::generator_on`]: one unit a structure row it reads, up to the
+    /// Generator on the column.
+    pub(crate) fn generator_on<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        [x, y]: [i32; 2],
+        meter: &M,
+    ) -> bool {
+        let generator = crate::tables::StructureKind::Generator.id();
+        let mut read: usize = 0;
+        let on = ground
+            .structures
+            .kinds()
+            .iter()
+            .zip(ground.structures.hit_points())
+            .zip(ground.structures.positions())
+            .inspect(|_| read += 1)
+            .any(|((kind, hp), at)| *kind == generator && hp.is_alive() && same_column(*at, x, y));
+        meter.rows(read);
+        on
+    }
+
+    /// Whether a live Generator of any seat, or a Build target of `seat`'s
+    /// (but `except`'s), stands on any column of the feature's footprint: one
+    /// unit a footprint column it tries, and the rows each column's two scans
+    /// read.
+    pub(crate) fn vent_taken<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        owner: (SeatId, Option<BeaconId>),
+        vent: &Feature,
+        meter: &M,
+    ) -> bool {
+        let mut tried: usize = 0;
+        let taken = vent.footprint.iter().any(|column| {
+            tried += 1;
+            generator_on(ground, [column.x, column.y], meter)
+                || own_target_on(ground, owner, [column.x, column.y], meter)
+        });
+        meter.rows(tried);
+        taken
+    }
+
+    /// [`super::anchor_in_sphere_of`]: the rows its anchor and radius read.
+    pub(crate) fn anchor_in_sphere_of<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        beacon: Option<BeaconId>,
+        centre: [Fx; 3],
+        index: usize,
+        meter: &M,
+    ) -> bool {
+        anchor_point(ground, index, meter)
+            .is_some_and(|point| in_sphere_of(ground, beacon, (centre, point), meter))
+    }
+
+    /// [`super::matches_pick`]: the rows its liveness, anchor and sphere
+    /// tests read.
+    pub(crate) fn matches_pick<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        seat: SeatId,
+        index: usize,
+        (kind, uncovered): (crate::features::FeatureKind, bool),
+        meter: &M,
+    ) -> bool {
+        let Some(feature) = ground.features.get(index) else {
+            return false;
+        };
+        if feature.kind != kind || !is_live(ground, index, meter) {
+            return false;
+        }
+        if !uncovered {
+            return true;
+        }
+        anchor_point(ground, index, meter)
+            .is_some_and(|point| !inside_own_sphere(ground, seat, point, meter))
+    }
+
+    /// [`super::on_candidate`]: the rows its liveness, claim, column and
+    /// sphere tests read.
+    pub(crate) fn on_candidate<M: Meter + ?Sized>(
+        ground: &Ground<'_>,
+        owner: (SeatId, Option<BeaconId>),
+        centre: [Fx; 3],
+        index: usize,
+        meter: &M,
+    ) -> bool {
+        let Some(feature) = ground.features.get(index) else {
+            return false;
+        };
+        if feature.kind != crate::features::FeatureKind::Vent || !is_live(ground, index, meter) {
+            return false;
+        }
+        if vent_taken(ground, owner, feature, meter) {
+            return false;
+        }
+        let (_, except) = owner;
+        on_column(ground, index, owner, meter)
+            .and_then(|[x, y]| ground.standing(x, y))
+            .is_some_and(|point| in_sphere_of(ground, except, (centre, point), meter))
     }
 }
 
@@ -542,7 +823,7 @@ impl Ranker {
             }
             ranker.matched += 1;
             if let Some(start) = start
-                && let Some(goal) = ground.measure_to(index, start)
+                && let Some(goal) = metered::measure_to(ground, index, start, ground.work)
                 && let Some(slot) = ranker.entries.get_mut(ranker.len)
             {
                 let [x, y] = feature.anchor;
@@ -587,6 +868,10 @@ impl Ranker {
         let origin = self.origin?;
         loop {
             let live = self.entries.get(..self.len)?;
+            // Each turn reads every entry twice: for the least priced, and
+            // for the least bound.
+            ground.work.rows(live.len());
+            ground.work.rows(live.len());
             // item 62: anchors are unique per feature, so both keys below end
             // in a unique `(y, x)`.
             let best_priced = live
@@ -698,9 +983,9 @@ pub fn covering_site(
     feature: usize,
 ) -> Option<[i32; 2]> {
     let [ax, ay] = ground.features.get(feature)?.anchor;
-    let [ox, oy] = ground.on_column(feature, seat, None)?;
+    let [ox, oy] = metered::on_column(ground, feature, (seat, None), ground.work)?;
     let on_point = ground.standing(ox, oy)?;
-    let anchor_point = ground.anchor_point(feature)?;
+    let anchor_point = metered::anchor_point(ground, feature, ground.work)?;
     let [cx, cy] = column_of(commander);
     let start = ground.surface.node_of(cx, cy)?;
 
@@ -722,11 +1007,14 @@ pub fn covering_site(
                 continue;
             };
             if !ground.surface.walkable(node)
-                || ground.features.at_column(x, y).is_some()
+                || ground
+                    .features
+                    .at_column_metered(x, y, ground.work)
+                    .is_some()
                 || !ground.in_sphere(site, on_point)
                 || !ground.in_sphere(site, anchor_point)
-                || !ground.inside_own_sphere(seat, site)
-                || ground.stacks_on_own(seat, x, y)
+                || !metered::inside_own_sphere(ground, seat, site, ground.work)
+                || metered::stacks_on_own(ground, seat, [x, y], ground.work)
                 || !ground.clusters.connected(ground.surface, start, node)
             {
                 continue;
@@ -800,8 +1088,8 @@ pub fn cover_counted(
         FeatureSpec::Name { kind, anchor } => {
             let feature = ground
                 .features
-                .index_of(kind, anchor)
-                .filter(|index| ground.is_live(*index))
+                .index_of_metered(kind, anchor, ground.work)
+                .filter(|index| metered::is_live(ground, *index, ground.work))
                 .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
             let site = covering_site(ground, seat, commander, feature)
                 .ok_or(StepFailed::counted(StepFailure::IllegalSite, 1))?;
@@ -809,7 +1097,7 @@ pub fn cover_counted(
         }
         FeatureSpec::Nearest { kind, uncovered } => {
             let mut ranker = Ranker::new(ground, column_of(commander), |index| {
-                matches_pick(ground, seat, index, kind, uncovered)
+                metered::matches_pick(ground, seat, index, (kind, uncovered), ground.work)
             });
             let mut reached = false;
             while let Some((feature, _)) = ranker.next(ground, scratch) {
@@ -910,15 +1198,17 @@ fn stone_site(
     // measure to the one column the commander would: the feature's anchor
     // column, or its first footprint column a walker reaches. A feature the
     // commander cannot reach is no target, and nothing is searched.
-    let Some(goal) = ground.measure_to(feature, start) else {
+    let Some(goal) = metered::measure_to(ground, feature, start, ground.work) else {
         return Sited::Unreached(weighed);
     };
     // The grid optimum's pops are the search's work, charged one a node as a
-    // served walk's are; its heuristic, evaluated once a node it reaches,
-    // rides on them and is not charged again.
+    // served walk's are; and its `h`, computed once a column it reaches, is a
+    // fold over every sphere the listing added, charged one a sphere a fold
+    // reads (dunit part 2).
     let before = popped(scratch);
     let closest = closest_site(scratch, ground.surface, goal);
     ground.charge_pops(before, scratch);
+    ground.work.add_measured(heuristic_folds(scratch));
     match closest {
         Ok(Some(site)) => Sited::Stone(site, weighed),
         // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out
@@ -1000,10 +1290,13 @@ fn legal_sites(
         .zip(beacons.positions())
         .zip(beacons.ids())
     {
+        // One unit a beacon row the listing reads, the seat's or not.
+        ground.charge(1);
         if *owner != seat.raw() || !hp.is_alive() {
             continue;
         }
-        let radius = ground.radius_of(Some(BeaconId::new(*id))).floor_voxels();
+        let radius =
+            metered::radius_of(ground, Some(BeaconId::new(*id)), ground.work).floor_voxels();
         let limit = i64::from(radius) * i64::from(radius);
         let [bx, by] = column_of(*centre);
         // This sphere's own sites: how many, and the most octile cost from
@@ -1027,9 +1320,12 @@ fn legal_sites(
                     continue;
                 };
                 if !ground.surface.walkable(node)
-                    || ground.features.at_column(x, y).is_some()
-                    || !ground.inside_own_sphere(seat, site)
-                    || ground.stacks_on_own(seat, x, y)
+                    || ground
+                        .features
+                        .at_column_metered(x, y, ground.work)
+                        .is_some()
+                    || !metered::inside_own_sphere(ground, seat, site, ground.work)
+                    || metered::stacks_on_own(ground, seat, [x, y], ground.work)
                     || !ground.clusters.connected(ground.surface, start, node)
                     || !scratch.reach.mark_site(node)
                 {
@@ -1085,8 +1381,8 @@ pub fn toward_counted(
         FeatureSpec::Name { kind, anchor } => {
             let feature = ground
                 .features
-                .index_of(kind, anchor)
-                .filter(|index| ground.is_live(*index))
+                .index_of_metered(kind, anchor, ground.work)
+                .filter(|index| metered::is_live(ground, *index, ground.work))
                 .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
             // No legal site: refused before any search.
             let sites = legal_sites(ground, scratch, candidates, seat, commander)
@@ -1105,7 +1401,7 @@ pub fn toward_counted(
         }
         FeatureSpec::Nearest { kind, uncovered } => {
             let mut ranker = Ranker::new(ground, column_of(commander), |index| {
-                matches_pick(ground, seat, index, kind, uncovered)
+                metered::matches_pick(ground, seat, index, (kind, uncovered), ground.work)
             });
             // No legal site is no site for any feature: refused before the
             // ranker prices a walk or the stone's search starts, as
@@ -1166,18 +1462,7 @@ pub fn matches_pick(
     kind: FeatureKind,
     uncovered: bool,
 ) -> bool {
-    let Some(feature) = ground.features.get(index) else {
-        return false;
-    };
-    if feature.kind != kind || !ground.is_live(index) {
-        return false;
-    }
-    if !uncovered {
-        return true;
-    }
-    ground
-        .anchor_point(index)
-        .is_some_and(|point| !ground.inside_own_sphere(seat, point))
+    metered::matches_pick(ground, seat, index, (kind, uncovered), &())
 }
 
 /// Whether a **Generator** of any seat stands, alive, on the column `(x, y)`:
@@ -1185,14 +1470,7 @@ pub fn matches_pick(
 /// `supply_of`).
 #[must_use]
 pub fn generator_on(ground: &Ground<'_>, x: i32, y: i32) -> bool {
-    let generator = crate::tables::StructureKind::Generator.id();
-    ground
-        .structures
-        .kinds()
-        .iter()
-        .zip(ground.structures.hit_points())
-        .zip(ground.structures.positions())
-        .any(|((kind, hp), at)| *kind == generator && hp.is_alive() && same_column(*at, x, y))
+    metered::generator_on(ground, [x, y], &())
 }
 
 /// **The sphere test** a named or `covered {}` `on` asks first: whether the
@@ -1219,18 +1497,7 @@ pub fn anchor_in_sphere_of(
     centre: [Fx; 3],
     index: usize,
 ) -> bool {
-    ground
-        .anchor_point(index)
-        .is_some_and(|point| ground.in_sphere_of(beacon, centre, point))
-}
-
-/// Whether a live Generator of any seat, or a Build target of `seat`'s (but
-/// `except`'s), stands on any column of the feature's footprint.
-fn vent_taken(ground: &Ground<'_>, seat: SeatId, except: Option<BeaconId>, vent: &Feature) -> bool {
-    vent.footprint.iter().any(|column| {
-        generator_on(ground, column.x, column.y)
-            || ground.own_target_on(seat, except, column.x, column.y)
-    })
+    metered::anchor_in_sphere_of(ground, beacon, centre, index, &())
 }
 
 /// What an `on` resolved to: the feature and the column the structure stands
@@ -1302,19 +1569,20 @@ pub fn on_vent_counted(
         let feature = feature.ok_or(missed)?;
         let found = ground.features.get(feature).ok_or(missed)?;
         if found.kind != FeatureKind::Vent
-            || !ground.is_live(feature)
-            || !anchor_in_sphere_of(ground, except, centre, feature)
+            || !metered::is_live(ground, feature, ground.work)
+            || !metered::anchor_in_sphere_of(ground, except, centre, feature, ground.work)
         {
             return Err(missed);
         }
         let illegal = StepFailed::counted(StepFailure::IllegalSite, 1);
-        if vent_taken(ground, seat, except, found) {
+        if metered::vent_taken(ground, (seat, except), found, ground.work) {
             return Err(illegal);
         }
-        let [x, y] = ground.on_column(feature, seat, except).ok_or(illegal)?;
-        let inside = ground
-            .standing(x, y)
-            .is_some_and(|point| ground.in_sphere_of(except, centre, point));
+        let [x, y] =
+            metered::on_column(ground, feature, (seat, except), ground.work).ok_or(illegal)?;
+        let inside = ground.standing(x, y).is_some_and(|point| {
+            metered::in_sphere_of(ground, except, (centre, point), ground.work)
+        });
         if !inside {
             return Err(illegal);
         }
@@ -1324,16 +1592,19 @@ pub fn on_vent_counted(
         })
     };
     match spec {
-        FeatureSpec::Name { kind, anchor } => named(ground.features.index_of(kind, anchor)),
+        FeatureSpec::Name { kind, anchor } => {
+            named(ground.features.index_of_metered(kind, anchor, ground.work))
+        }
         FeatureSpec::Covered => named(covered),
         FeatureSpec::Nearest { .. } => {
             let mut ranker = Ranker::new(ground, column_of(centre), |index| {
-                on_candidate(ground, seat, except, centre, index)
+                metered::on_candidate(ground, (seat, except), centre, index, ground.work)
             });
             let missed = StepFailed::counted(StepFailure::NoTarget, ranker.matched());
             let (feature, _) = ranker.next(ground, scratch).ok_or(missed)?;
             // The candidate rule read this column, so a ranked vent has one.
-            let column = ground.on_column(feature, seat, except).ok_or(missed)?;
+            let column =
+                metered::on_column(ground, feature, (seat, except), ground.work).ok_or(missed)?;
             Ok(OnSite { feature, column })
         }
     }
@@ -1353,19 +1624,7 @@ pub fn on_candidate(
     centre: [Fx; 3],
     index: usize,
 ) -> bool {
-    let Some(feature) = ground.features.get(index) else {
-        return false;
-    };
-    if feature.kind != FeatureKind::Vent || !ground.is_live(index) {
-        return false;
-    }
-    if vent_taken(ground, seat, except, feature) {
-        return false;
-    }
-    ground
-        .on_column(index, seat, except)
-        .and_then(|[x, y]| ground.standing(x, y))
-        .is_some_and(|point| ground.in_sphere_of(except, centre, point))
+    metered::on_candidate(ground, (seat, except), centre, index, &())
 }
 
 #[cfg(test)]

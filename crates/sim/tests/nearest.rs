@@ -29,6 +29,7 @@ use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::interpreter::state::{StepFailed, StepFailure};
+use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::pathing::estimate::{Speed, max_partials, walk_cost};
 use pharmakos_sim::pathing::reach::Reach;
 use pharmakos_sim::pathing::route::{Surcharge, route_with};
@@ -1354,20 +1355,494 @@ fn the_site_listing_at_a_seats_most_beacons() {
         scratch.reach().spheres().len(),
         popped(&scratch),
     );
-    println!("the most beacons: {measured:?}");
-    // The decision units are the columns scanned, 37,653, and the nodes the
-    // grid optimum popped, 14 (lane `dunit`: a pop is a unit).
-    assert_eq!(measured, (Some([232, 94]), Ok(37_667), 36_513, 21, 14));
+    println!(
+        "the most beacons: {measured:?}; {} columns listed",
+        listed_columns(&world, seat)
+    );
     assert_eq!(
         measured.1,
-        Ok(listed_columns(&world, seat) + measured.4),
-        "a toward charges its columns and its pops, and nothing else"
+        Ok(toward_named_steps(&world, seat, start, &scratch) + measured.4),
+        "a toward charges what it visits and its pops, and nothing else"
     );
+    // Pinned on the probation seed: the decision units (one a visit of each
+    // loop the resolve runs, and one a node popped), the sites listed, the
+    // spheres that listed one, and the nodes the search then pops. Before
+    // dunit part 2 the units were the 37,653 columns scanned and the 14 pops
+    // alone (37,667): the tests each column asks, the beacon rows, the Spire
+    // tests and the `h` folds were charged nothing.
+    assert_eq!(measured, (Some([232, 94]), Ok(1_685_650), 36_513, 21, 14));
 }
 
 // ---------------------------------------------------------------------------
 // Decision units follow counted work (lane `dunit`)
 // ---------------------------------------------------------------------------
+
+/// The test's own count of what a resolve visits, made from the tables and
+/// not from the resolver (dunit part 2): **one unit a visit of each loop, at
+/// every level down to the innermost** -- a feature row, a footprint column,
+/// a voxel of a seam's depth, a beacon, structure or target row, a Spire
+/// test's kind byte or structure row, a ranker entry, a spiral or disc
+/// column. A scan that stops at the row that answers visits up to that row.
+/// Each function answers what the sim's predicate answers, so the walk the
+/// count follows is the resolver's, and the count beside it.
+struct Steps<'w> {
+    world: &'w World,
+}
+
+impl Steps<'_> {
+    /// The anchor's footprint column, and the columns compared to find it.
+    fn anchor_column(
+        feature: &pharmakos_sim::features::Feature,
+    ) -> (Option<pharmakos_sim::features::FootprintColumn>, u64) {
+        let mut rows = 0;
+        for column in &feature.footprint {
+            rows += 1;
+            if column.x == feature.anchor[0] && column.y == feature.anchor[1] {
+                return (Some(*column), rows);
+            }
+        }
+        (None, rows)
+    }
+
+    /// Which feature covers `(x, y)`: a feature row asked, and the footprint
+    /// columns of each whose box holds the column.
+    fn at_column(&self, x: i32, y: i32) -> (bool, u64) {
+        let mut rows = 0;
+        for feature in self.world.features().features() {
+            rows += 1;
+            let [min_x, min_y, max_x, max_y] = feature.bounds;
+            if x < min_x || x > max_x || y < min_y || y > max_y {
+                continue;
+            }
+            for column in &feature.footprint {
+                rows += 1;
+                if column.x == x && column.y == y {
+                    return (true, rows);
+                }
+            }
+        }
+        (false, rows)
+    }
+
+    /// The feature row whose kind and anchor match.
+    fn index_of(&self, kind: FeatureKind, anchor: [i32; 2]) -> (Option<usize>, u64) {
+        let mut rows = 0;
+        for (index, feature) in self.world.features().features().iter().enumerate() {
+            rows += 1;
+            if feature.kind == kind && feature.anchor == anchor {
+                return (Some(index), rows);
+            }
+        }
+        (None, rows)
+    }
+
+    /// Whether the feature is live: a footprint column asked, and a seam's
+    /// depth voxels read.
+    fn is_live(&self, index: usize) -> (bool, u64) {
+        let Some(feature) = self.world.features().features().get(index) else {
+            return (false, 0);
+        };
+        let surface = self.world.surface();
+        let voxels = self.world.voxels();
+        let mut rows = 0;
+        for column in &feature.footprint {
+            rows += 1;
+            match feature.kind {
+                FeatureKind::Vent => {
+                    if let Some(node) = surface.node_of(column.x, column.y)
+                        && voxels
+                            .get([column.x, column.y, surface.top(node)])
+                            .and_then(Material::vent_richness)
+                            .is_some()
+                    {
+                        return (true, rows);
+                    }
+                }
+                FeatureKind::Seam => {
+                    for depth in 0..pharmakos_sim::features::SEAM_DEPTH_VOXELS {
+                        rows += 1;
+                        if voxels
+                            .get([column.x, column.y, column.top.saturating_sub(depth)])
+                            .and_then(Material::ore_richness)
+                            .is_some()
+                        {
+                            return (true, rows);
+                        }
+                    }
+                }
+            }
+        }
+        (false, rows)
+    }
+
+    /// The radius of the beacon in `row`: the kind bytes compared to the
+    /// first Spire's, and, with one, the structure rows read to the Spire
+    /// that grows it.
+    fn radius_at_row(&self, row: usize) -> (i16, u64) {
+        let rules = self.world.rules();
+        let kinds = self.world.structures().kinds();
+        let spire = pharmakos_sim::tables::StructureKind::ResonanceSpire.id();
+        let Some(at) = kinds.iter().position(|kind| *kind == spire) else {
+            return (
+                rules.sphere_radius_voxels(),
+                u64::try_from(kinds.len()).unwrap(),
+            );
+        };
+        let mut rows = u64::try_from(at + 1).unwrap();
+        let seat = self.world.beacons().seats()[row];
+        let id = self.world.beacons().ids()[row];
+        for facts in pharmakos_sim::spire::facts_of(self.world.structures()) {
+            rows += 1;
+            if facts.grows(seat, id) {
+                return (rules.grown_sphere_radius_voxels(), rows);
+            }
+        }
+        (rules.sphere_radius_voxels(), rows)
+    }
+
+    /// Whether `point` is inside the sphere of the beacon in `row`: the rows
+    /// its radius reads, asked only between the base and the grown radius.
+    fn inside_at_row(&self, row: usize, centre: [Fx; 3], point: [Fx; 3]) -> (bool, u64) {
+        let rules = self.world.rules();
+        let distance = Sq::between(centre, point);
+        if distance <= Sq::of_radius(Fx::from_voxels(rules.sphere_radius_voxels())) {
+            return (true, 0);
+        }
+        if distance > Sq::of_radius(Fx::from_voxels(rules.grown_sphere_radius_voxels())) {
+            return (false, 0);
+        }
+        let (radius, rows) = self.radius_at_row(row);
+        (radius == rules.grown_sphere_radius_voxels(), rows)
+    }
+
+    /// Whether `point` is in one of `seat`'s own living spheres: a beacon row
+    /// read, and each own living beacon's sphere test.
+    fn inside_own_sphere(&self, seat: SeatId, point: [Fx; 3]) -> (bool, u64) {
+        let beacons = self.world.beacons();
+        let mut rows = 0;
+        for row in 0..beacons.seats().len() {
+            rows += 1;
+            if beacons.seats()[row] != seat.raw() || !beacons.hit_points()[row].is_alive() {
+                continue;
+            }
+            let (inside, read) = self.inside_at_row(row, beacons.positions()[row], point);
+            rows += read;
+            if inside {
+                return (true, rows);
+            }
+        }
+        (false, rows)
+    }
+
+    /// Whether one of `seat`'s own living beacons stands on `(x, y)`.
+    fn stacks_on_own(&self, seat: SeatId, x: i32, y: i32) -> (bool, u64) {
+        let beacons = self.world.beacons();
+        let mut rows = 0;
+        for row in 0..beacons.seats().len() {
+            rows += 1;
+            if beacons.seats()[row] == seat.raw()
+                && beacons.hit_points()[row].is_alive()
+                && column_of(beacons.positions()[row]) == [x, y]
+            {
+                return (true, rows);
+            }
+        }
+        (false, rows)
+    }
+
+    /// Whether a structure with hit points left stands on `(x, y)`.
+    fn structure_on(&self, x: i32, y: i32) -> (bool, u64) {
+        let structures = self.world.structures();
+        let mut rows = 0;
+        for row in 0..structures.hit_points().len() {
+            rows += 1;
+            if structures.hit_points()[row].is_alive()
+                && column_of(structures.positions()[row]) == [x, y]
+            {
+                return (true, rows);
+            }
+        }
+        (false, rows)
+    }
+
+    /// Whether a Build target of `seat`'s (but `except`'s) claims `(x, y)`.
+    fn own_target_on(&self, seat: SeatId, except: Option<BeaconId>, x: i32, y: i32) -> (bool, u64) {
+        let targets = self.world.targets();
+        let build = pharmakos_sim::tables::TargetKind::Build.id();
+        let mut rows = 0;
+        for row in 0..targets.beacons().len() {
+            rows += 1;
+            let beacon = targets.beacons()[row];
+            if except == Some(beacon) || targets.kinds()[row] != build {
+                continue;
+            }
+            let owned = self
+                .world
+                .beacons()
+                .row_of(beacon)
+                .is_ok_and(|at| self.world.beacons().seats()[at.index()] == seat.raw());
+            if owned && column_of(targets.anchors()[row]) == [x, y] {
+                return (true, rows);
+            }
+        }
+        (false, rows)
+    }
+
+    /// A column no live structure and no claim of `seat`'s stands on.
+    fn free(&self, seat: SeatId, except: Option<BeaconId>, x: i32, y: i32) -> (bool, u64) {
+        let (on, rows) = self.structure_on(x, y);
+        if on {
+            return (false, rows);
+        }
+        let (claimed, more) = self.own_target_on(seat, except, x, y);
+        (!claimed, rows + more)
+    }
+
+    /// The feature's `on` column.
+    fn on_column(
+        &self,
+        index: usize,
+        seat: SeatId,
+        except: Option<BeaconId>,
+    ) -> (Option<[i32; 2]>, u64) {
+        let feature = &self.world.features().features()[index];
+        let (anchor, mut rows) = Self::anchor_column(feature);
+        if let Some(column) = anchor {
+            let (free, read) = self.free(seat, except, column.x, column.y);
+            rows += read;
+            if free {
+                return (Some([column.x, column.y]), rows);
+            }
+        }
+        for column in &feature.footprint {
+            rows += 1;
+            let (free, read) = self.free(seat, except, column.x, column.y);
+            rows += read;
+            if free {
+                return (Some([column.x, column.y]), rows);
+            }
+        }
+        (None, rows)
+    }
+
+    /// The feature's anchor point.
+    fn anchor_point(&self, index: usize) -> (Option<[Fx; 3]>, u64) {
+        let feature = &self.world.features().features()[index];
+        let (anchor, rows) = Self::anchor_column(feature);
+        let column = anchor.or_else(|| feature.footprint.first().copied());
+        (
+            column.and_then(|column| self.world.ground().standing(column.x, column.y)),
+            rows,
+        )
+    }
+
+    /// The column a "nearest" measures to: the anchor test, and a footprint
+    /// column tried after it.
+    fn measure_to(&self, index: usize, origin: Node) -> (Option<Node>, u64) {
+        let feature = &self.world.features().features()[index];
+        let surface = self.world.surface();
+        let reachable = |x: i32, y: i32| {
+            let node = surface.node_of(x, y)?;
+            (surface.walkable(node) && self.world.clusters().connected(surface, origin, node))
+                .then_some(node)
+        };
+        let (anchor, mut rows) = Self::anchor_column(feature);
+        if let Some(column) = anchor
+            && let Some(node) = reachable(column.x, column.y)
+        {
+            return (Some(node), rows);
+        }
+        for column in &feature.footprint {
+            rows += 1;
+            if let Some(node) = reachable(column.x, column.y) {
+                return (Some(node), rows);
+            }
+        }
+        (None, rows)
+    }
+
+    /// A `covering` pick's filter: kind, liveness and, for `UNCOVERED`, the
+    /// anchor outside the seat's spheres.
+    fn matches_pick(
+        &self,
+        seat: SeatId,
+        index: usize,
+        kind: FeatureKind,
+        uncovered: bool,
+    ) -> (bool, u64) {
+        if self.world.features().features()[index].kind != kind {
+            return (false, 0);
+        }
+        let (live, mut rows) = self.is_live(index);
+        if !live {
+            return (false, rows);
+        }
+        if !uncovered {
+            return (true, rows);
+        }
+        let (point, read) = self.anchor_point(index);
+        rows += read;
+        let Some(point) = point else {
+            return (false, rows);
+        };
+        let (inside, read) = self.inside_own_sphere(seat, point);
+        (!inside, rows + read)
+    }
+
+    /// A ranker's construction from `origin`: one unit a feature scanned,
+    /// the rows `keep` reads, and the rows each kept feature's measure
+    /// reads. Answers the reachable entries and the rows.
+    fn ranker_new(&self, origin: [i32; 2], keep: impl Fn(usize) -> (bool, u64)) -> (u64, u64) {
+        let start = self.world.surface().node_of(origin[0], origin[1]);
+        let (mut entries, mut rows) = (0, 0);
+        for index in 0..self.world.features().len() {
+            rows += 1;
+            let (kept, read) = keep(index);
+            rows += read;
+            if !kept {
+                continue;
+            }
+            if let Some(start) = start {
+                let (goal, read) = self.measure_to(index, start);
+                rows += read;
+                entries += u64::from(goal.is_some());
+            }
+        }
+        (entries, rows)
+    }
+
+    /// A ranker's draws: each turn of its loop reads every entry twice (the
+    /// least priced and the least bound), and a draw turns once a walk it
+    /// prices and once more to answer.
+    fn ranker_draws(entries: u64, walks: u64, draws: u64) -> u64 {
+        2 * entries * (walks + draws)
+    }
+
+    /// A `toward`'s site listing for `seat`'s commander at `commander`: a
+    /// beacon row read, each own living beacon's radius, and each disc
+    /// column with the tests it reaches, in the listing's order.
+    fn legal_sites(&self, seat: SeatId, commander: [Fx; 3]) -> u64 {
+        let beacons = self.world.beacons();
+        let surface = self.world.surface();
+        let [cx, cy] = column_of(commander);
+        let start = surface.node_of(cx, cy).unwrap();
+        let mut rows = 0;
+        for row in 0..beacons.seats().len() {
+            rows += 1;
+            if beacons.seats()[row] != seat.raw() || !beacons.hit_points()[row].is_alive() {
+                continue;
+            }
+            let (radius, read) = self.radius_at_row(row);
+            rows += read;
+            let radius = i32::from(radius);
+            let [bx, by] = column_of(beacons.positions()[row]);
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    if dx * dx + dy * dy > radius * radius {
+                        continue;
+                    }
+                    rows += 1;
+                    let (x, y) = (bx + dx, by + dy);
+                    let Some(node) = surface.node_of(x, y) else {
+                        continue;
+                    };
+                    let Some(site) = self.world.ground().standing(x, y) else {
+                        continue;
+                    };
+                    if !surface.walkable(node) {
+                        continue;
+                    }
+                    let (covered, read) = self.at_column(x, y);
+                    rows += read;
+                    if covered {
+                        continue;
+                    }
+                    let (inside, read) = self.inside_own_sphere(seat, site);
+                    rows += read;
+                    if !inside {
+                        continue;
+                    }
+                    let (stacks, read) = self.stacks_on_own(seat, x, y);
+                    rows += read;
+                    let _ = (stacks, start);
+                }
+            }
+        }
+        rows
+    }
+
+    /// A `covering` site search for `feature`: its `on` column and anchor,
+    /// then each spiral column with the tests it reaches, ring by ring until
+    /// a ring holds a site. Answers the site and the rows.
+    fn covering_site(
+        &self,
+        seat: SeatId,
+        commander: [Fx; 3],
+        feature: usize,
+    ) -> (Option<[i32; 2]>, u64) {
+        let ground = self.world.ground();
+        let surface = self.world.surface();
+        let [ax, ay] = self.world.features().features()[feature].anchor;
+        let (on, mut rows) = self.on_column(feature, seat, None);
+        let [ox, oy] = on.unwrap();
+        let on_point = ground.standing(ox, oy).unwrap();
+        let (anchor_point, read) = self.anchor_point(feature);
+        rows += read;
+        let anchor_point = anchor_point.unwrap();
+        let [cx, cy] = column_of(commander);
+        let start = surface.node_of(cx, cy).unwrap();
+        let key = |[dx, dy]: [i32; 2]| i64::from(dx).pow(2) + i64::from(dy).pow(2);
+        for ring in ground.spiral.chunk_by(|a, b| key(*a) == key(*b)) {
+            let mut best: Option<(i64, i32, i32)> = None;
+            for &[dx, dy] in ring {
+                rows += 1;
+                let (x, y) = (ax + dx, ay + dy);
+                let Some(node) = surface.node_of(x, y) else {
+                    continue;
+                };
+                let Some(site) = ground.standing(x, y) else {
+                    continue;
+                };
+                if !surface.walkable(node) {
+                    continue;
+                }
+                let (covered, read) = self.at_column(x, y);
+                rows += read;
+                if covered
+                    || !ground.in_sphere(site, on_point)
+                    || !ground.in_sphere(site, anchor_point)
+                {
+                    continue;
+                }
+                let (inside, read) = self.inside_own_sphere(seat, site);
+                rows += read;
+                if !inside {
+                    continue;
+                }
+                let (stacks, read) = self.stacks_on_own(seat, x, y);
+                rows += read;
+                if stacks || !self.world.clusters().connected(surface, start, node) {
+                    continue;
+                }
+                let held = (i64::from(x - cx).pow(2) + i64::from(y - cy).pow(2), y, x);
+                if best.is_none_or(|best| held < best) {
+                    best = Some(held);
+                }
+            }
+            if let Some((_, y, x)) = best {
+                return (Some([x, y]), rows);
+            }
+        }
+        (None, rows)
+    }
+}
+
+/// The `h` the directed search computed in `scratch`'s last grid optimum,
+/// each a fold over every sphere the listing added: one unit a sphere a
+/// fold reads.
+fn heuristic_reads(scratch: &Scratch) -> u64 {
+    scratch.reach().evaluations().unwrap() * u64::try_from(scratch.reach().spheres().len()).unwrap()
+}
 
 /// The columns a `toward`'s site listing scans for `seat`: the disc of each
 /// of its living beacons' spheres, at each one's own radius, overlaps
@@ -1386,21 +1861,6 @@ fn listed_columns(world: &World, seat: SeatId) -> u64 {
             u64::try_from(pharmakos_sim::targeting::spiral_offsets(radius).len()).unwrap()
         })
         .sum()
-}
-
-/// The columns a `covering` search scans before it answers `site` for the
-/// feature anchored at `anchor`: every offset of the spiral whose ring is not
-/// past the site's ring, which the search scans whole.
-fn spiral_columns(world: &World, anchor: [i32; 2], site: [i32; 2]) -> u64 {
-    let key = |[dx, dy]: [i32; 2]| i64::from(dx).pow(2) + i64::from(dy).pow(2);
-    let at = key([site[0] - anchor[0], site[1] - anchor[1]]);
-    let columns = world
-        .ground()
-        .spiral
-        .iter()
-        .filter(|offset| key(**offset) <= at)
-        .count();
-    u64::try_from(columns).unwrap()
 }
 
 /// Seat 0's commander on the probation seed: its point and its column.
@@ -1453,17 +1913,24 @@ fn a_ranked_walk_charges_the_nodes_it_pops() {
     let order = by_octile(&world, origin);
     let near = *order.first().expect("a reachable feature");
     let far = *order.last().expect("a reachable feature");
-    let features = u64::try_from(world.features().len()).unwrap();
+    let model = Steps { world: &world };
+    // The ranker's scan, one a feature, the measure of its one candidate, its
+    // two draws (one to price the walk, one to answer) of one entry read
+    // twice each, and the walk's pops.
+    let scan = |index: usize| {
+        let (entries, rows) = model.ranker_new(origin, |at| (at == index, 0));
+        rows + Steps::ranker_draws(entries, 1, 1)
+    };
     let (near_units, near_pops) = one_walk(&world, origin, near);
     let (far_units, far_pops) = one_walk(&world, origin, far);
     println!("near: {near_units} units, {near_pops} pops; far: {far_units} units, {far_pops} pops");
     assert!(near_pops > 0, "a served walk pops nodes");
     assert_eq!(
         near_units,
-        features + near_pops,
-        "the ranker's scan, one a feature, and the walk's pops"
+        scan(near) + near_pops,
+        "the ranker's scan, its draws and the walk's pops"
     );
-    assert_eq!(far_units, features + far_pops);
+    assert_eq!(far_units, scan(far) + far_pops);
     assert!(far_pops > near_pops, "the far walk pops more");
     assert!(far_units > near_units, "so it charges more");
 }
@@ -1500,7 +1967,30 @@ fn a_toward_charges_its_grid_optimum_pops() {
     let units = tally.read().expect("measured");
     println!("the pinned vent: {units} units, {pops} pops");
     assert!(pops > 0, "the grid optimum pops nodes");
-    assert_eq!(units - listed_columns(&world, seat), pops);
+    assert_eq!(
+        units - toward_named_steps(&world, seat, start, &scratch),
+        pops
+    );
+}
+
+/// What a `toward` the probation seed's pinned vent, by name, visits besides
+/// the nodes its grid optimum pops, counted by [`Steps`]: the name's lookup,
+/// the vent's liveness, the site listing, the measure to the vent and the
+/// directed search's `h` folds, read from `scratch` once the resolve ran.
+fn toward_named_steps(
+    world: &World,
+    seat: SeatId,
+    start: [pharmakos_sim::math::fixed::Fx; 3],
+    scratch: &Scratch,
+) -> u64 {
+    let model = Steps { world };
+    let [cx, cy] = column_of(start);
+    let from = world.surface().node_of(cx, cy).unwrap();
+    let (index, named) = model.index_of(FeatureKind::Vent, PROBATION_VENT);
+    let index = index.unwrap();
+    let (_, live) = model.is_live(index);
+    let (_, measure) = model.measure_to(index, from);
+    named + live + model.legal_sites(seat, start) + measure + heuristic_reads(scratch)
 }
 
 /// One resolve of [`decision_units_equal_the_primitive_steps_counted`]'s
@@ -1526,7 +2016,6 @@ enum Resolve {
 fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64) {
     let seat = SeatId::new(0);
     let (start, origin) = commander_start(world);
-    let features = u64::try_from(world.features().len()).unwrap();
     let tally = pharmakos_sim::seams::UnitTally::new();
     let ground = pharmakos_sim::targeting::Ground {
         work: &tally,
@@ -1542,14 +2031,18 @@ fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64)
         kind: FeatureKind::Vent,
         anchor,
     };
+    let model = Steps { world };
+    let start_node = world.surface().node_of(origin[0], origin[1]).unwrap();
+    let uncovered_vent = |index: usize| model.matches_pick(seat, index, FeatureKind::Vent, true);
     let steps = match resolve {
         Resolve::Walk(index) => {
             let mut ranker = Ranker::new(&ground, origin, |at| at == index);
             assert!(ranker.next(&ground, &mut scratch).is_some(), "{label}");
-            features
+            let (entries, rows) = model.ranker_new(origin, |at| (at == index, 0));
+            rows + Steps::ranker_draws(entries, scratch.walks().unwrap(), 1)
         }
         Resolve::TowardName => {
-            toward_counted(
+            let stone = toward_counted(
                 &ground,
                 &mut scratch,
                 &mut stones,
@@ -1558,11 +2051,20 @@ fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64)
                 named(PROBATION_VENT),
             )
             .expect(label);
-            listed_columns(world, seat)
+            let (index, _) = model.index_of(FeatureKind::Vent, PROBATION_VENT);
+            assert_eq!(Some(stone.feature), index, "{label}");
+            toward_named_steps(world, seat, start, &scratch)
         }
         Resolve::TowardNearest => {
-            toward_counted(&ground, &mut scratch, &mut stones, seat, start, vents).expect(label);
-            features + listed_columns(world, seat)
+            let stone = toward_counted(&ground, &mut scratch, &mut stones, seat, start, vents)
+                .expect(label);
+            let (entries, ranked) = model.ranker_new(origin, uncovered_vent);
+            let (_, measure) = model.measure_to(stone.feature, start_node);
+            ranked
+                + model.legal_sites(seat, start)
+                + Steps::ranker_draws(entries, scratch.walks().unwrap(), 1)
+                + measure
+                + heuristic_reads(&scratch)
         }
         Resolve::CoverName(anchor) => {
             let cover = pharmakos_sim::targeting::cover_counted(
@@ -1573,7 +2075,16 @@ fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64)
                 named(anchor),
             )
             .expect(label);
-            spiral_columns(world, anchor, cover.site)
+            let (index, named_rows) = model.index_of(FeatureKind::Vent, anchor);
+            let index = index.unwrap();
+            let (_, live) = model.is_live(index);
+            let (site, searched) = model.covering_site(seat, start, index);
+            assert_eq!(
+                site,
+                Some(cover.site),
+                "{label}: the model searches as the sim does"
+            );
+            named_rows + live + searched
         }
         Resolve::CoverNearest { first_vent } => {
             let cover =
@@ -1583,8 +2094,14 @@ fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64)
                 cover.feature, first_vent,
                 "{label}: the ranker's first vent has a site, so one spiral is searched"
             );
-            let anchor = world.features().features()[first_vent].anchor;
-            features + spiral_columns(world, anchor, cover.site)
+            let (entries, ranked) = model.ranker_new(origin, uncovered_vent);
+            let (site, searched) = model.covering_site(seat, start, first_vent);
+            assert_eq!(
+                site,
+                Some(cover.site),
+                "{label}: the model searches as the sim does"
+            );
+            ranked + Steps::ranker_draws(entries, scratch.walks().unwrap(), 1) + searched
         }
     };
     (tally.read().expect("measured"), steps, popped(&scratch))
@@ -1592,10 +2109,12 @@ fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64)
 
 /// **Decision units follow counted work**: over a table of resolves, each on
 /// a fresh tally and a fresh scratch, the units charged equal the primitive
-/// steps the structures' own counters and the test's own arithmetic count --
-/// one a feature the ranker scans, one a column a site search scans, one a
-/// node a search pops -- exactly. A search that pops without charging, or a
-/// charge with no step under it, fails here.
+/// steps the structures' own counters and the test's own count ([`Steps`])
+/// make -- one a visit of each loop the resolve runs, at every level down to
+/// the innermost (a feature row, a footprint column, a beacon, structure or
+/// target row, a Spire test's row, a ranker entry, a site column, an `h`
+/// fold's sphere), and one a node a search pops -- exactly. A loop that
+/// visits without charging, or a charge with no visit under it, fails here.
 #[test]
 fn decision_units_equal_the_primitive_steps_counted() {
     let world = world_of(PROBATION, 2);
