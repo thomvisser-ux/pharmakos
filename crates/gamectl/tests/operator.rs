@@ -1719,7 +1719,14 @@ const SURVEY_MATCHES: [(u64, u32); 5] = [
 /// `(Survey posts sealed in rounds 1 to 4, of them finding an enemy beacon
 /// by the end of the next round's Push)` on [`SURVEY_MATCHES`] over five
 /// rounds.
-const SURVEY_POSTS: (usize, usize) = (11, 9);
+///
+/// Moved from `(11, 9)` by lane `srvy` (PR #210, the Survey scouts' refresh
+/// of held sightings before the next Lull): on seed `0x0102030405060708` at
+/// two seats, seat 0 posts in round 4 as before and now finds an enemy beacon
+/// by round 5's Push, because its scouts leave their scan to re-check the
+/// sightings the seat holds and see the beacon on that walk. The posts are
+/// unchanged.
+const SURVEY_POSTS: (usize, usize) = (11, 10);
 
 /// Spec section 14's Survey post through the real gateway (S3's plan,
 /// decision 3), looking over the half of the ground away from the seat's core

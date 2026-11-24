@@ -71,6 +71,7 @@ const SCENARIOS: &[&str] = &[
     "scenarios/s3/enemy-known-rule.scenario.jsonc",
     "scenarios/s3/breach-at-a-corner.scenario.jsonc",
     "scenarios/s3/breach-at-a-slant.scenario.jsonc",
+    "scenarios/s3/survey-keeps-a-core-fresh.scenario.jsonc",
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -373,6 +374,7 @@ fn the_committed_list_is_the_whole_set() {
                 "breach-at-a-slant",
                 "resonance-spire",
                 "spire-lost",
+                "survey-keeps-a-core-fresh",
             ][..],
         ),
     ] {
