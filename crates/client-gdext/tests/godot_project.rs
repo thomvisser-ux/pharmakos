@@ -309,6 +309,7 @@ const SCRIPTS: &[&str] = &[
     "rows_shot.gd",
     "rule_list.gd",
     "rule_list_shot.gd",
+    "safe_write.gd",
     "smoke_check.gd",
     "strings.gd",
     "templates_shot.gd",
@@ -479,23 +480,40 @@ fn the_lobby_remembers_one_line_and_no_token() {
         text.contains("const REMEMBERED := \"user://"),
         "the lobby's remembered line lives in user://"
     );
-    let writes: Vec<&&str> = code
+    // Since S3's `fixq-c` (fix pass 3) the lobby opens no file itself: it writes through
+    // `safe_write.gd`, whole or not at all, and only to `remembered`, which is REMEMBERED
+    // unless a check points the lobby elsewhere.
+    let opens: Vec<&&str> = code
         .iter()
         .filter(|line| line.contains("FileAccess.WRITE") || line.contains("FileAccess.open("))
         .collect();
-    assert_eq!(writes.len(), 1, "the lobby opens one file: {writes:?}");
+    assert!(opens.is_empty(), "the lobby opens a file itself: {opens:?}");
+    let writes: Vec<&&str> = code
+        .iter()
+        .filter(|line| line.contains("SafeWrite.write("))
+        .collect();
+    assert_eq!(
+        writes.len(),
+        2,
+        "the lobby writes in two places, remembering and emptying: {writes:?}"
+    );
     assert!(
-        writes
-            .iter()
-            .all(|line| line.contains("FileAccess.open(REMEMBERED, FileAccess.WRITE)")),
-        "the one file the lobby writes is REMEMBERED: {writes:?}"
+        text.contains("var remembered := REMEMBERED"),
+        "the file the lobby writes is REMEMBERED by default"
     );
     let remember = gd_function(&text, "_remember");
     assert!(
         remember
             .iter()
-            .any(|line| line.contains("store_string(_line")),
-        "the lobby remembers the line it wrote: {remember:?}"
+            .any(|line| line.contains("SafeWrite.write(remembered, (_line + ")),
+        "the lobby remembers the line it wrote, whole: {remember:?}"
+    );
+    let forget = gd_function(&text, "_forget");
+    assert!(
+        forget
+            .iter()
+            .any(|line| line.contains("SafeWrite.write(path, PackedByteArray())")),
+        "the lobby empties, and writes nothing else into, a line it cannot remove: {forget:?}"
     );
     let announced = gd_function(&text, "_on_announced");
     assert!(
@@ -574,7 +592,7 @@ fn the_lobby_forgets_an_ended_match_and_shows_a_refusal_as_the_host_wrote_it() {
     );
     let forget = gd_function(&text, "_forget");
     assert!(
-        forget.iter().any(|line| line.contains("REMEMBERED"))
+        forget.iter().any(|line| line.contains("remembered"))
             && forget.iter().any(|line| line.contains("remove_absolute")),
         "_forget removes the remembered line: {forget:?}"
     );
@@ -1647,7 +1665,8 @@ fn the_chooser_hides_the_watch_strip_and_the_editor_until_a_match_starts() {
             "`{shown}` once the host has announced: {announced:?}"
         );
     }
-    let process = gd_code(&lobby, "_process");
+    // The status line is drawn by `status_line` since fix pass 3, so the checks can read it.
+    let process = gd_code(&lobby, "status_line");
     let speed = process
         .iter()
         .position(|line| line.contains("\"lobby_speed\""))

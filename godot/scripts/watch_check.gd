@@ -167,6 +167,10 @@ extends Node
 const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
 const Values := preload("res://scripts/values.gd")
+const LobbyScene := preload("res://scenes/lobby.tscn")
+## The remembered file the cut-line leg points the real lobby at: the check's own, never the
+## lobby's `user://last_match.txt`.
+const ENDED_REMEMBERED := "user://watch_check_last_match.txt"
 
 ## The idle stretch: longer than the gateway's 30-second READ_TIMEOUT, so a connection
 ## with no keep-alive would be dropped inside it.
@@ -520,6 +524,9 @@ func _run_probation() -> void:
 	if not await _older_line_refused():
 		_finish()
 		return
+	if not await _cut_line_refused():
+		_finish()
+		return
 	if not link.start(_gamectl, _root, _line):
 		_finish()
 		return
@@ -585,6 +592,67 @@ func _older_line_refused() -> bool:
 	link.reset()
 	print("[watch-check] a six-field remembered line was refused on resume: %s" % _refused_reason)
 	return true
+
+
+## **A remembered line cut mid-field is the host's to refuse** (S3's `fixq-c`, fix pass 3,
+## item 1b: what the lobby's reader leans on, as the six-field line above is). The real lobby,
+## pointed at a file of the check's own holding a line cut inside its second field, offers it;
+## Resume ends in the host's refusal in its own words, with the chooser back and no match
+## started, never a crash or a hang. The line is not parsed here: the host reads it.
+##
+## Not checked here: an ended match's line. Resumed, the host announces the ended match rather
+## than refusing it (measured 2026-11-24 against this branch's `gamectl host`); that is reported
+## in PR #229 for the gateway's lane, and the lobby claims no refusal for it.
+func _cut_line_refused() -> bool:
+	var cut_from := HostLink.config_line(HostLink.match_id("watch-check-cut"), SEGMENT, 1, CHECK_SEED, CHECK_PRESET).strip_edges()
+	if not await _resume_refused("a line cut mid-field", cut_from.get_slice("\t", 0) + "\t" + cut_from.get_slice("\t", 1).left(4)):
+		return false
+	var path := ProjectSettings.globalize_path(ENDED_REMEMBERED)
+	if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+		_failures.append("the cut-line leg could not remove %s" % path)
+		return false
+	return true
+
+
+## The real lobby, offered `line` from the check's own remembered file: Resume is shown, and
+## pressing it ends in the host's refusal (`lobby_resumed_failed`), the chooser back, no match
+## started and no host left running.
+func _resume_refused(name: String, line: String) -> bool:
+	var file := FileAccess.open(ENDED_REMEMBERED, FileAccess.WRITE)
+	if file == null:
+		_failures.append("the cut-line leg could not open %s (error %d)" % [ENDED_REMEMBERED, FileAccess.get_open_error()])
+		return false
+	var stored := file.store_string(line + "\n")
+	file.close()
+	if not stored:
+		_failures.append("the cut-line leg could not write %s" % ENDED_REMEMBERED)
+		return false
+	var lobby: Node = LobbyScene.instantiate()
+	lobby.remembered = ENDED_REMEMBERED
+	add_child(lobby)
+	await get_tree().process_frame
+	var offered: bool = lobby._resume_button.visible
+	if not offered:
+		_failures.append("the lobby does not offer %s" % name)
+	else:
+		lobby.resume_match()
+		var settled := await _until(func() -> bool: return lobby._announced or (not lobby._started and lobby._chooser.visible), START_WAIT)
+		var refused_prefix := Strings.text("lobby_resumed_failed", {"reason": ""}).get_slice(":", 0)
+		if lobby._announced:
+			_failures.append("STOP: the host resumed %s instead of refusing it: %s" % [name, lobby._status.text])
+		elif not settled:
+			_failures.append("Resume of %s neither was refused nor resumed: `%s`" % [name, lobby._status.text])
+		elif not String(lobby._status.text).begins_with(refused_prefix):
+			_failures.append("Resume of %s did not end in the host's refusal: `%s`" % [name, lobby._status.text])
+		else:
+			print("[watch-check] Resume of %s was refused by the host: %s" % [name, String(lobby._status.text).strip_edges().replace("\n", " ")])
+		var pid: int = lobby.link.host_pid()
+		lobby.link.quit()
+		if pid >= 0 and not await _until(func() -> bool: return not OS.is_process_running(pid), EXIT_WAIT):
+			_failures.append("the host that refused %s (pid %d) was still running" % [name, pid])
+	lobby.queue_free()
+	await get_tree().process_frame
+	return _failures.is_empty()
 
 
 ## The Probation match's frame on a real gateway (S3's `prob`): `get_status` names it

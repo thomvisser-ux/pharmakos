@@ -142,6 +142,7 @@ const RuleList := preload("res://scripts/rule_list.gd")
 const ConditionPicker := preload("res://scripts/condition_picker.gd")
 const ValueField := preload("res://scripts/value_field.gd")
 const Values := preload("res://scripts/values.gd")
+const SafeWrite := preload("res://scripts/safe_write.gd")
 
 ## How close, in screen pixels, a click must land to a beacon to pick it.
 ## PLACEHOLDER: the pick distance — OWNER, at S6.
@@ -401,19 +402,22 @@ func load_bytes(bytes: PackedByteArray) -> bool:
 	return bridge.editor_load(bytes)
 
 
-## Writes the playbook on screen to `path`, byte for byte; from then on `path` is the text's
-## file.
+## Writes the playbook on screen to `path`, byte for byte, whole or not at all
+## (`safe_write.gd`, S3's `fixq-c`, fix pass 3); from then on `path` is the text's file. A
+## write that did not happen is said on the status line under its enumerated failure, and the
+## text keeps its unsaved mark and its file: nothing on screen claims a save that is not on
+## disk.
 func save_file(path: String) -> bool:
 	var bytes: PackedByteArray = bridge.editor_bytes()
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if file == null:
-		_say_local("status_save_failed", {"path": path})
+	var written := SafeWrite.write(path, bytes)
+	if written["failure"] != SafeWrite.Failure.NONE:
+		_say_local("status_save_not_done", {"why": SafeWrite.why(written)})
 		return false
-	file.store_buffer(bytes)
-	file.close()
 	# The bridge's editor keeps the file and says so; a line said here alone would be gone at the
 	# next redraw, which that call causes.
 	bridge.editor_saved_to(path)
+	if String(written["leftover"]) != "":
+		_say_local("status_saved_with_leftover", {"path": path, "why": SafeWrite.why(written)})
 	return true
 
 

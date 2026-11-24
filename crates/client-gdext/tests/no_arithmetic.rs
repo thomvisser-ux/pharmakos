@@ -1633,28 +1633,6 @@ const ERROR_RETURNING: &[&str] = &[
     "kill(",
 ];
 
-/// The bare-statement calls kept, each with why: the two saves whose honest handling of a write
-/// that fails part-way needs a decision (a temporary file renamed into place, or what the player
-/// is told), and the removal of a remembered line whose failure leaves the lobby offering an
-/// ended match, held for the main session (fix pass 2, item 1d).
-const ERRORS_HELD: &[(&str, &str, &str)] = &[
-    (
-        "editor.gd",
-        "file.store_buffer(bytes)",
-        "held: Save as's write failing part-way",
-    ),
-    (
-        "lobby.gd",
-        r#"file.store_string(_line + "\n")"#,
-        "held: the remembered config line's write failing part-way",
-    ),
-    (
-        "lobby.gd",
-        "DirAccess.remove_absolute(ProjectSettings.globalize_path(REMEMBERED))",
-        "held: an ended match's line that cannot be forgotten (what the lobby offers next)",
-    ),
-];
-
 /// Whether a script is shipped: every one but the checks and the hostless shots (the smoke check
 /// ships).
 fn shipped_script(name: &str) -> bool {
@@ -1680,7 +1658,7 @@ fn deferred_error(line: &str) -> bool {
 }
 
 /// The lines of `text` that call an [`ERROR_RETURNING`] method as a bare statement.
-fn ignored_errors(name: &str, text: &str) -> Vec<String> {
+fn ignored_errors(text: &str) -> Vec<String> {
     const KEYWORDS: &[&str] = &[
         "var ", "if ", "elif ", "return", "while ", "for ", "match ", "not ", "await ", "assert",
     ];
@@ -1706,11 +1684,6 @@ fn ignored_errors(name: &str, text: &str) -> Vec<String> {
             })
         })
         .chain(text.lines().filter(|line| deferred_error(line)))
-        .filter(|line| {
-            !ERRORS_HELD
-                .iter()
-                .any(|(file, held, _)| *file == name && line.trim() == *held)
-        })
         .map(|line| line.trim().to_owned())
         .collect()
 }
@@ -1728,7 +1701,7 @@ fn no_shipped_script_ignores_an_error() {
             continue;
         }
         let text = fs::read_to_string(&file).expect("reads");
-        for line in ignored_errors(&name, &text) {
+        for line in ignored_errors(&text) {
             found.push(format!("{name}: {line}"));
         }
     }
@@ -1749,16 +1722,17 @@ fn the_error_scan_catches_a_bare_call() {
         "\tOS.execute(\"x\", [])",
         "\tget_tree().call_deferred(\"change_scene_to_file\", target)",
         "\tget_tree().change_scene_to_file.call_deferred(target)",
+        "\tfile.store_buffer(bytes)",
+        "\tDirAccess.remove_absolute(ProjectSettings.globalize_path(REMEMBERED))",
     ] {
-        assert!(!ignored_errors("host_link.gd", line).is_empty(), "{line}");
+        assert!(!ignored_errors(line).is_empty(), "{line}");
     }
     for line in [
         "\t\t\tvar sent := peer.send_text(String(pair[1]))",
         "\tif not _stdio.store_string(config_line):",
         "\treturn peer.send_text(x)",
         "\t# peer.send_text(x)",
-        "\tfile.store_buffer(bytes)",
     ] {
-        assert!(ignored_errors("editor.gd", line).is_empty(), "{line}");
+        assert!(ignored_errors(line).is_empty(), "{line}");
     }
 }

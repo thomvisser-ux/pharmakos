@@ -91,13 +91,15 @@ extends Node
 const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
 const Values := preload("res://scripts/values.gd")
+const SafeWrite := preload("res://scripts/safe_write.gd")
 ## The credits overlay the chooser's Credits button adds (decisions-log item 117 (11)).
 const AboutScene := preload("res://scenes/credits.tscn")
 
 ## How many event rows the list keeps on screen. PLACEHOLDER, UI, OWNER at S6.
 const EVENT_ROWS := 14
 ## The one file the lobby writes: the six-field config line of the last match it started,
-## with no token in it.
+## with no token in it. It is written whole or not at all (`safe_write.gd`, S3's `fixq-c`,
+## fix pass 3), through `<file>.tmp` and `<file>.bak` beside it; its format is unchanged.
 const REMEMBERED := "user://last_match.txt"
 
 @onready var vista: Node3D = $Vista
@@ -124,6 +126,13 @@ var _announced := false
 var _strip: HBoxContainer
 ## Whether the lobby forgot the match because it ended; the status line then says so.
 var _forgotten := false
+## The file the remembered line is kept in: REMEMBERED, unless a check points the lobby at a
+## file of its own before it enters the tree.
+var remembered := REMEMBERED
+## Why this match's line could not be remembered, or why the ended match could not be
+## forgotten, in the string table's words; "" when it was. The status line says it.
+var _remember_failed := ""
+var _forget_failed := ""
 
 
 func _ready() -> void:
@@ -140,11 +149,13 @@ func _ready() -> void:
 	_status.text = Strings.text("lobby_choose")
 
 
-## The line the lobby remembered from the last match it started, or "" when none is.
-static func remembered_line() -> String:
-	if not FileAccess.file_exists(REMEMBERED):
+## The line the lobby remembered from the last match it started, or "" when none is: an absent
+## file, an empty one (an ended match forgotten by emptying it) and a folder are all none. The
+## line itself is read by the host, which refuses a short or malformed one in its own words.
+func remembered_line() -> String:
+	if not FileAccess.file_exists(remembered):
 		return ""
-	return FileAccess.get_file_as_string(REMEMBERED).strip_edges()
+	return FileAccess.get_file_as_string(remembered).strip_edges()
 
 
 ## Starts a new match under a fresh id, under HostLink.PRESET, which the bridge then holds the
@@ -176,17 +187,38 @@ func _start(line: String, resuming: bool) -> void:
 			vista.bridge.watch_expect_preset(HostLink.PRESET)
 
 
+## Remembers this match's line, whole or not at all; a line that could not be written is said
+## on the status line, which then claims no remembered match.
 func _remember() -> void:
-	var file := FileAccess.open(REMEMBERED, FileAccess.WRITE)
-	if file != null:
-		file.store_string(_line + "\n")
-		file.close()
+	var written := SafeWrite.write(remembered, (_line + "\n").to_utf8_buffer())
+	_remember_failed = ""
+	if written["failure"] != SafeWrite.Failure.NONE:
+		_remember_failed = Strings.text("lobby_not_remembered", {"why": SafeWrite.why(written)})
+	elif String(written["leftover"]) != "":
+		_remember_failed = Strings.text("lobby_remembered_leftover", {"why": SafeWrite.why(written)})
 
 
+## Forgets the ended match: its file removed, or, when it cannot be, emptied whole (an empty
+## file is no match to the reader); when neither can be done, the status line says so and says
+## to start a new match. (A Resume of an ended match is not refused by the host today: reported
+## in PR #229 for the gateway's lane.)
 func _forget() -> void:
-	if FileAccess.file_exists(REMEMBERED):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(REMEMBERED))
-	_forgotten = true
+	_forget_failed = ""
+	var path := ProjectSettings.globalize_path(remembered)
+	if not FileAccess.file_exists(path):
+		_forgotten = true
+		return
+	var removed := DirAccess.remove_absolute(path)
+	if removed == OK:
+		_forgotten = true
+		return
+	var emptied := SafeWrite.write(path, PackedByteArray())
+	if emptied["failure"] == SafeWrite.Failure.NONE:
+		_forgotten = true
+		if String(emptied["leftover"]) != "":
+			_forget_failed = Strings.text("lobby_forgotten_leftover", {"why": SafeWrite.why(emptied)})
+		return
+	_forget_failed = Strings.text("lobby_not_forgotten", {"error": removed, "why": SafeWrite.why(emptied)})
 
 
 func _process(_delta: float) -> void:
@@ -196,6 +228,18 @@ func _process(_delta: float) -> void:
 	var state: Dictionary = vista.bridge.watch_state()
 	if state.is_empty():
 		return
+	_status.text = status_line(state)
+	_ready_help.visible = String(state.get("phase", "")) == "lull"
+	if _ready_help.visible:
+		_ready_help.text = ready_line(state)
+		_ready_help.accessibility_name = _ready_help.text
+	_draw_recap(String(state.get("phase", "")))
+
+
+## The status line for the watch state `state`: the round and phase, the timer, the speed, and
+## what the lobby and the bridge have to say (a forgotten or unremembered match, a close on a
+## message, the preset, a refused zero), joined.
+func status_line(state: Dictionary) -> String:
 	var parts: PackedStringArray = [Strings.text("lobby_status", {"round": state.get("round", 0), "phase": String(state.get("phase", "")).to_upper()})]
 	var timer := String(state.get("timer", ""))
 	if timer != "":
@@ -208,6 +252,10 @@ func _process(_delta: float) -> void:
 		parts.append(Strings.text("lobby_all_ready"))
 	if _forgotten:
 		parts.append(Strings.text("lobby_forgotten"))
+	if _remember_failed != "":
+		parts.append(_remember_failed)
+	if _forget_failed != "":
+		parts.append(_forget_failed)
 	var preset := preset_line(state)
 	if preset != "":
 		parts.append(preset)
@@ -216,12 +264,7 @@ func _process(_delta: float) -> void:
 	var zero_refused := String(state.get("zero_refusal", ""))
 	if zero_refused != "":
 		parts.append(Strings.text("lobby_zero_refused", {"detail": zero_refused}))
-	_status.text = "  ".join(parts)
-	_ready_help.visible = String(state.get("phase", "")) == "lull"
-	if _ready_help.visible:
-		_ready_help.text = ready_line(state)
-		_ready_help.accessibility_name = _ready_help.text
-	_draw_recap(String(state.get("phase", "")))
+	return "  ".join(parts)
 
 
 ## The preset's name as the string table spells it: the `preset_<name>` row for the wire's

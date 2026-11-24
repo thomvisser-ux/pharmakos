@@ -68,6 +68,7 @@ const Wizard := preload("res://scripts/wizard.gd")
 const Values := preload("res://scripts/values.gd")
 const Rows := preload("res://scripts/rows.gd")
 const Strings := preload("res://scripts/strings.gd")
+const SafeWrite := preload("res://scripts/safe_write.gd")
 const OWNERS_WINDOW := Vector2i(1456, 819)
 ## A map as wide as the golden seed's, in voxels (x, up, north).
 const MAP_EXTENT := Vector3(384.0, 64.0, 384.0)
@@ -332,6 +333,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	stage.queue_free()
 	_check_the_recap_words(failures)
 	await _check_the_lobby_after_a_failure(failures)
+	await _check_the_remembered_line(failures)
 	_check_the_logs(failures)
 
 
@@ -1084,6 +1086,7 @@ func _check_the_rig_backed_panel(stage: SubViewport, editor: CanvasLayer, failur
 	await _check_the_planning_wire(stage, editor, bridge, failures)
 	await _check_the_ready_line_through_the_rig(bridge, failures)
 	await _check_load_through_its_button(stage, editor, bridge, failures)
+	_check_the_saves(editor, bridge, failures)
 
 
 ## A value field's "abc" goes to the gateway as typed (S3's `fixq-c`: the gateway reads typed
@@ -1702,6 +1705,163 @@ func _check_the_lobby_after_a_failure(failures: Array[String]) -> void:
 			failures.append("%s: the lobby still counts a match as started" % case["name"])
 	if FileAccess.file_exists(Lobby.REMEMBERED):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(Lobby.REMEMBERED))
+	lobby.queue_free()
+	await get_tree().process_frame
+
+
+## **A save is whole or not at all** (S3's `fixq-c`, fix pass 3, item 1a). Save and Save as
+## (one path, `save_file`) refuse a target that is a folder, a folder that cannot be written, an
+## old file that cannot be moved aside (held open), and a `.tmp` already beside the target, each
+## with the status line saying why, the old file's bytes as they were, no temporary file left
+## (or the one in the way untouched), and the editor's file as it was; then a save lands whole,
+## with nothing left beside it.
+func _check_the_saves(editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	var folder := ProjectSettings.globalize_path("user://client_check_saves")
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		failures.append("the save check could not make %s" % folder)
+		return
+	var text: PackedByteArray = bridge.editor_bytes()
+	if text.is_empty():
+		failures.append("the save check found no text on screen")
+		return
+	var old := "the old file\n".to_utf8_buffer()
+	var held := folder + "/held.jsonc"
+	var a_folder := folder + "/a_folder.jsonc"
+	if not _plain_write(held, old, failures) or DirAccess.make_dir_recursive_absolute(a_folder) != OK:
+		failures.append("the save check could not set up %s" % folder)
+		return
+	var before: Dictionary = bridge.editor_state()
+	var refused := func(name: String, path: String, words: String) -> void:
+		if editor.save_file(path):
+			failures.append("a save to %s went ahead" % name)
+			return
+		var said: String = editor.status_text()
+		if not said.begins_with(Strings.text("status_save_not_done", {"why": ""})) or not said.contains(words):
+			failures.append("a save to %s is not said with why (`%s`): `%s`" % [name, words, said])
+		var after: Dictionary = bridge.editor_state()
+		if after.get("file", "") != before.get("file", "") or after.get("last_file", "") != before.get("last_file", ""):
+			failures.append("a refused save to %s moved the editor's file: %s to %s" % [name, before.get("file", ""), after.get("file", "")])
+		if FileAccess.get_file_as_bytes(held) != old:
+			failures.append("a refused save to %s changed %s" % [name, held])
+	refused.call("a target that is a folder", a_folder, "is a folder")
+	if not DirAccess.dir_exists_absolute(a_folder) or FileAccess.file_exists(a_folder + SafeWrite.TEMP):
+		failures.append("a save to a folder touched it or left %s" % (a_folder + SafeWrite.TEMP))
+	refused.call("a folder that cannot be written", folder + "/no_such_folder/x.jsonc", "could not be opened for writing")
+	# Held open by another handle: on Windows it cannot be moved aside, so the temporary file,
+	# written whole by then, is removed and the old file stays.
+	var handle := FileAccess.open(held, FileAccess.READ)
+	refused.call("an old file held open", held, "could not be moved aside")
+	handle = null
+	if FileAccess.file_exists(held + SafeWrite.TEMP):
+		failures.append("a save that could not move the old file aside left %s" % (held + SafeWrite.TEMP))
+	var newer := "newer text a failed save left\n".to_utf8_buffer()
+	if _plain_write(held + SafeWrite.TEMP, newer, failures):
+		refused.call("a target with a temporary file in the way", held, "is already there")
+		if FileAccess.get_file_as_bytes(held + SafeWrite.TEMP) != newer:
+			failures.append("a save overwrote the temporary file in its way")
+		if DirAccess.remove_absolute(held + SafeWrite.TEMP) != OK:
+			failures.append("the save check could not remove %s" % (held + SafeWrite.TEMP))
+	if not editor.save_file(held):
+		failures.append("a save to %s did not land: `%s`" % [held, editor.status_text()])
+	elif FileAccess.get_file_as_bytes(held) != text:
+		failures.append("a save to %s did not write the text on screen whole" % held)
+	if FileAccess.file_exists(held + SafeWrite.TEMP) or FileAccess.file_exists(held + SafeWrite.BACKUP):
+		failures.append("a save that landed left a file beside %s" % held)
+	if String(bridge.editor_state().get("file", "")) != held:
+		failures.append("a save that landed did not make %s the text's file" % held)
+	for path in [held, held + SafeWrite.TEMP, held + SafeWrite.BACKUP]:
+		if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+			failures.append("the save check could not remove %s" % path)
+	for path in [a_folder, folder]:
+		if DirAccess.remove_absolute(path) != OK:
+			failures.append("the save check could not remove %s" % path)
+
+
+## `bytes` written to `path` for a check's set-up, every Error checked.
+func _plain_write(path: String, bytes: PackedByteArray, failures: Array[String]) -> bool:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		failures.append("could not open %s to set a check up (error %d)" % [path, FileAccess.get_open_error()])
+		return false
+	var stored := file.store_buffer(bytes)
+	file.close()
+	if not stored:
+		failures.append("could not write %s to set a check up" % path)
+	return stored
+
+
+## **The remembered line is whole or absent, and forgetting it is said when it fails** (S3's
+## `fixq-c`, fix pass 3, items 1b and 1c). The real lobby, pointed at a file of the check's own:
+## its reader takes an absent file, an empty one and a folder as no match; remembering writes the
+## line whole, with nothing left beside it, and a line that cannot be written is said and claims
+## no match; forgetting removes the file, or, when it cannot be removed (read-only), empties it
+## whole, so the reader finds no match; and when neither can be done (held open), the status line
+## says so and the line is still what Resume offers.
+func _check_the_remembered_line(failures: Array[String]) -> void:
+	var folder := ProjectSettings.globalize_path("user://client_check_lobby")
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		failures.append("the remembered-line check could not make %s" % folder)
+		return
+	var path := folder + "/last_match.txt"
+	var lobby: Node = LobbyScene.instantiate()
+	lobby.remembered = path
+	add_child(lobby)
+	await get_tree().process_frame
+	var line := "check-match\t0x1\t2\t0\t30000\t6\tcustom"
+	var state := {"round": 1, "phase": "lull"}
+	if lobby.remembered_line() != "":
+		failures.append("an absent remembered file reads as `%s`" % lobby.remembered_line())
+	if _plain_write(path, PackedByteArray(), failures) and lobby.remembered_line() != "":
+		failures.append("an empty remembered file reads as `%s`" % lobby.remembered_line())
+	if DirAccess.remove_absolute(path) != OK or DirAccess.make_dir_recursive_absolute(path) != OK:
+		failures.append("the remembered-line check could not set up a folder at %s" % path)
+	elif lobby.remembered_line() != "":
+		failures.append("a folder at the remembered file reads as `%s`" % lobby.remembered_line())
+	# Remembering into a folder: not written, said, and no match claimed.
+	lobby._line = line
+	lobby._remember()
+	if not lobby.status_line(state).contains(Strings.text("lobby_not_remembered", {"why": ""})) or lobby.remembered_line() != "":
+		failures.append("a line that could not be remembered is not said, or a match is claimed: `%s`" % lobby.status_line(state))
+	if DirAccess.remove_absolute(path) != OK:
+		failures.append("the remembered-line check could not remove the folder at %s" % path)
+	# Remembering, whole.
+	lobby._remember()
+	if FileAccess.get_file_as_string(path) != line + "\n" or lobby._remember_failed != "":
+		failures.append("the remembered line is not written whole: `%s` (%s)" % [FileAccess.get_file_as_string(path), lobby._remember_failed])
+	if FileAccess.file_exists(path + SafeWrite.TEMP) or FileAccess.file_exists(path + SafeWrite.BACKUP):
+		failures.append("remembering left a file beside %s" % path)
+	# Forgetting, removed.
+	lobby._forget()
+	if FileAccess.file_exists(path) or not lobby._forgotten or lobby._forget_failed != "":
+		failures.append("an ended match was not forgotten by removing its file (%s)" % lobby._forget_failed)
+	# Forgetting a file that cannot be removed: emptied whole, and the reader finds no match.
+	lobby._forgotten = false
+	if _plain_write(path, (line + "\n").to_utf8_buffer(), failures):
+		if FileAccess.set_read_only_attribute(path, true) != OK:
+			failures.append("the remembered-line check could not make %s read-only" % path)
+		lobby._forget()
+		if lobby.remembered_line() != "" or not lobby._forgotten:
+			failures.append("an ended match whose file could not be removed is still offered: `%s`" % lobby.remembered_line())
+		for leftover in [path + SafeWrite.BACKUP, path]:
+			if FileAccess.file_exists(leftover):
+				FileAccess.set_read_only_attribute(leftover, false)
+				if DirAccess.remove_absolute(leftover) != OK:
+					failures.append("the remembered-line check could not remove %s" % leftover)
+	# Forgetting a file held open: neither removed nor emptied; said, and still offered.
+	lobby._forgotten = false
+	if _plain_write(path, (line + "\n").to_utf8_buffer(), failures):
+		var handle := FileAccess.open(path, FileAccess.READ)
+		lobby._forget()
+		if not lobby.status_line(state).contains(Strings.text("lobby_not_forgotten", {"error": "", "why": ""}).get_slice("(", 0)) or lobby._forgotten:
+			failures.append("an ended match that could not be forgotten is not said: `%s`" % lobby.status_line(state))
+		if lobby.remembered_line() != line:
+			failures.append("an ended match that could not be forgotten reads as `%s`" % lobby.remembered_line())
+		handle = null
+		for leftover in [path, path + SafeWrite.TEMP, path + SafeWrite.BACKUP]:
+			if FileAccess.file_exists(leftover) and DirAccess.remove_absolute(leftover) != OK:
+				failures.append("the remembered-line check could not remove %s" % leftover)
+	if DirAccess.remove_absolute(folder) != OK:
+		failures.append("the remembered-line check could not remove %s" % folder)
 	lobby.queue_free()
 	await get_tree().process_frame
 
