@@ -1909,6 +1909,10 @@ fn status_facts_into(state: &mut VarDictionary, rig: &Rig) {
         Some(failed) => (failed.name(), failed.detail()),
     };
     state.set(&"status_failed".to_variant(), &failed.to_variant());
+    state.set(
+        &"seal_not_told".to_variant(),
+        &rig.seal_not_told().to_variant(),
+    );
     state.set(&"status_detail".to_variant(), &detail.to_variant());
 }
 

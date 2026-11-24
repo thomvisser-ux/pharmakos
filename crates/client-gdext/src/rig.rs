@@ -710,8 +710,13 @@ pub struct Rig {
     reads: Reads,
     /// What `get_status`'s body last said beside its footer.
     status_facts: StatusFacts,
-    /// The seat's refused or unreadable status reads asked again in this phase.
+    /// The seat's refused or unreadable status reads in this round's phase: asked again up to
+    /// [`STATUS_RETRIES`] times, then given up until an event owes a read afresh.
     status_retries: u8,
+    /// A refused status read is owed again once the seat link has been quiet for the
+    /// keep-alive interval (fix pass 2: the retries went back to back, so one `RATE_LIMITED`
+    /// spent them all).
+    status_retry_owed: bool,
     /// The preset the lobby wrote on a new match's config line, to hold the gateway's answer
     /// to; `None` for a Resume, which repeats a remembered line.
     asked_preset: Option<MatchPreset>,
@@ -761,6 +766,7 @@ impl Rig {
             reads: Reads::default(),
             status_facts: StatusFacts::default(),
             status_retries: 0,
+            status_retry_owed: false,
             asked_preset: None,
         }
     }
@@ -817,17 +823,30 @@ impl Rig {
     fn forget_seal(&mut self) {
         self.status_facts.sealed = None;
         self.status_retries = 0;
+        self.status_retry_owed = false;
         self.reads.status = true;
     }
 
     /// A seat status read was refused or could not be read: the seal is not told, and it is
-    /// asked again, up to [`STATUS_RETRIES`] times in a phase.
+    /// asked again once the link has been quiet for the keep-alive interval, up to
+    /// [`STATUS_RETRIES`] times in a round's phase; then given up ([`Rig::seal_not_told`]).
     fn status_read_failed(&mut self) {
         self.status_facts.sealed = None;
         if self.status_retries < STATUS_RETRIES {
             self.status_retries = self.status_retries.saturating_add(1);
-            self.reads.status = true;
+            self.status_retry_owed = true;
         }
+    }
+
+    /// Whether the seat's seal is not told and no read of it is owed: the refused reads of this
+    /// round's phase spent [`STATUS_RETRIES`], so the Ready line says the gateway's refusal and
+    /// not that the client is asking.
+    #[must_use]
+    pub fn seal_not_told(&self) -> bool {
+        self.sealed_this_round().is_none()
+            && !self.reads.status
+            && !self.status_retry_owed
+            && self.status_retries >= STATUS_RETRIES
     }
 
     /// A zero report the gateway refused is owed again, up to [`ZERO_REFUSALS`] refusals, and
@@ -1045,6 +1064,12 @@ impl Rig {
     fn seat_next(&mut self) -> Option<(Purpose, &'static str, Json)> {
         if !self.idle(SEAT) || self.seat_calls_left == 0 {
             return None;
+        }
+        // A refused status read is asked again once the link has been quiet for the keep-alive
+        // interval: spaced by the existing scheduling constant, never back to back.
+        if self.status_retry_owed && self.timing.keepalive_due(SEAT) {
+            self.status_retry_owed = false;
+            self.reads.status = true;
         }
         if let Some(cursor) = self.view_paging.clone() {
             return Some((Purpose::View, "get_view", cursor_params(&cursor)));
@@ -1500,6 +1525,10 @@ impl Rig {
             return Ok(false);
         }
         self.phase = phase;
+        // The status reads' retries are a round's phase's: a phase spent them, the next asks
+        // afresh (fix pass 2).
+        self.status_retries = 0;
+        self.status_retry_owed = false;
         if phase == Phase::Lull {
             self.ready_sent = false;
         }
@@ -4249,7 +4278,8 @@ mod tests {
         );
         // The read after it refused: still not told, and asked again.
         let mut asked = 0;
-        for now in 4..10 {
+        for step in 0..6_u64 {
+            let now = 4 + step * (crate::pacer::KEEPALIVE_US + 1);
             rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
             for frame in rig.poll(now) {
                 let text = if method_of(&frame) == "get_status" && frame.link == SEAT {
@@ -4276,7 +4306,7 @@ mod tests {
         rig.status_retries = 0;
         rig.reads.status = true;
         let mut refused_now = false;
-        for now in 10..30 {
+        for now in 40_000_000_u64..40_000_020 {
             rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
             for frame in rig.poll(now) {
                 let text = if method_of(&frame) == "get_status" && frame.link == SEAT {
@@ -4316,12 +4346,14 @@ mod tests {
         // The seat's open-time read refused: said, and the preset read before still stands.
         rig.opened(SEAT);
         let mut refused = 0;
-        for _ in 0..40 {
+        // In one instant: the open-time read alone, never a retry back to back (fix pass 2).
+        let mut now = 1_u64;
+        let serve = |rig: &mut Rig, now: u64, refused: &mut usize| {
             rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
-            for frame in rig.poll(1) {
+            for frame in rig.poll(now) {
                 let text = match method_of(&frame).as_str() {
                     "get_status" if frame.link == SEAT => {
-                        refused += 1;
+                        *refused += 1;
                         refusal(id_of(&frame), "RATE_LIMITED", "slow down")
                     }
                     "get_view" => answer(
@@ -4338,13 +4370,30 @@ mod tests {
                 rig.receive(frame.link, &text)
                     .expect("a refusal is an answer");
             }
+        };
+        for _ in 0..40 {
+            serve(&mut rig, now, &mut refused);
         }
-        // Said, and asked again a bounded number of times within the seat's budget (fix pass 1:
-        // the seal is not told while it fails), then not in a loop.
+        assert_eq!(refused, 1, "no retry back to back");
+        assert!(!rig.seal_not_told(), "a retry is owed");
+        // Each retry once the link has been quiet for the keep-alive interval, up to the bound;
+        // then the line says the gateway's refusal, not that the client is asking.
+        for _ in 0..usize::from(STATUS_RETRIES) {
+            now = now
+                .saturating_add(crate::pacer::KEEPALIVE_US)
+                .saturating_add(1);
+            for _ in 0..40 {
+                serve(&mut rig, now, &mut refused);
+            }
+        }
         assert_eq!(
             refused,
             1 + usize::from(STATUS_RETRIES),
-            "a refused read is asked again a few times, never in a loop"
+            "a refused read is asked again a few times, spaced"
+        );
+        assert!(
+            rig.seal_not_told(),
+            "the retries are spent: not told, and said"
         );
         assert_eq!(rig.sealed_this_round(), None, "not told");
         assert_eq!(
@@ -4449,7 +4498,8 @@ mod tests {
     ) -> (BTreeMap<u32, u32>, Vec<Option<bool>>) {
         let mut asks: BTreeMap<u32, u32> = BTreeMap::new();
         let mut seen = Vec::new();
-        let mut now = 0_u64;
+        // From the rig's own clock, so a second drive carries on where the first left off.
+        let mut now = rig.timing.now_us();
         for &(phase, round) in schedule {
             // A step is longer than the clock's report interval, so the admin connection asks
             // at every step and the phase the schedule names reaches the rig.
@@ -4508,6 +4558,65 @@ mod tests {
             seen.get(12..24)
                 .is_some_and(|push| push.iter().all(Option::is_none)),
             "the Push moved past the Lull's answer, so nothing is claimed: {seen:?}"
+        );
+    }
+
+    /// **The status reads' retries are a round's phase's** (fix pass 2; review 2's mutant R6): a
+    /// round whose retries were spent does not carry the count into the next round, whose Lull
+    /// asks its seal afresh and is not "not told".
+    #[test]
+    fn spent_retries_do_not_carry_into_the_next_round() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let schedule: Vec<(&str, u32)> = (0..8).map(|_| ("lull", 1)).collect();
+        let _ = drive(&mut rig, &schedule, &|_| false);
+        rig.status_facts.sealed = None;
+        rig.status_retries = STATUS_RETRIES;
+        rig.status_retry_owed = false;
+        rig.reads.status = false;
+        assert!(rig.seal_not_told(), "round 1's retries are spent");
+        let push: Vec<(&str, u32)> = (0..12).map(|_| ("push", 1)).collect();
+        let _ = drive(&mut rig, &push, &|_| false);
+        // Round 2's Lull, every seat status read refused: its first refusal is retried, because
+        // round 1's spent count does not carry into round 2.
+        let mut refused = 0;
+        let mut now = rig.timing.now_us();
+        for _ in 0..12 {
+            now += CLOCK_REPORT_US + 50_000;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(now) {
+                let text = match method_of(&frame).as_str() {
+                    "get_status" if frame.link == SEAT => {
+                        refused += 1;
+                        refusal(id_of(&frame), "RATE_LIMITED", "slow down")
+                    }
+                    "get_status" => served(id_of(&frame), r#""preset":"probation","#, "lull", 2),
+                    "get_view" => served(
+                        id_of(&frame),
+                        r#""next_cursor":"c9","complete":true,"#,
+                        "lull",
+                        2,
+                    ),
+                    "get_segment_feed" => served(
+                        id_of(&frame),
+                        r#""events":[],"next_cursor":"f1","#,
+                        "lull",
+                        2,
+                    ),
+                    "report_host_clock" => {
+                        served(id_of(&frame), r#""all_ready":false,"#, "lull", 2)
+                    }
+                    _ => served(id_of(&frame), "", "lull", 2),
+                };
+                let _ = rig.receive(frame.link, &text);
+            }
+        }
+        assert_eq!(rig.round, 2);
+        assert!(refused >= 1, "round 2's read went out");
+        assert!(
+            !rig.seal_not_told(),
+            "round 2's refused read is retried, not given up on round 1's count ({refused} refused)"
         );
     }
 

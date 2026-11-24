@@ -266,6 +266,10 @@ static func preset_line(state: Dictionary) -> String:
 ## client is asking. A branch on the bridge's word, for display.
 static func ready_line(watch_state: Dictionary) -> String:
 	if not watch_state.has("sealed_this_round"):
+		# Asked a few times and refused each time: the gateway's refusal, never "Asking..." while
+		# nobody is asking (fix pass 2).
+		if watch_state.get("seal_not_told", false):
+			return Strings.text("lobby_ready_not_told", {"detail": watch_state.get("status_detail", "")})
 		return Strings.text("lobby_ready_asking")
 	return Strings.text("lobby_ready_sealed" if watch_state.get("sealed_this_round", false) else "lobby_ready_help")
 
