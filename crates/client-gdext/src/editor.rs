@@ -8194,7 +8194,7 @@ mod tests {
     /// sent back, is unchanged and nothing goes out. A duration's chip is typed in seconds.
     #[test]
     fn a_typed_value_goes_to_the_gateway_as_typed() {
-        for typed in ["abc", "1.5", "123456789012345678901234567890", "-5"] {
+        for typed in ["abc", "1.5", "123456789012345678901234567890", "-5", " 2 "] {
             let mut editor = rendered(EXPAND_EAST);
             let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
             let rule = editor.rule_list().rule_holding(&at);
