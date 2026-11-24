@@ -154,6 +154,9 @@ const GHOST_COLOURS := {
 	"waiting": Color(0.8, 0.8, 0.8, 0.45),
 	"legal": Color(0.3, 0.9, 0.4, 0.5),
 	"illegal": Color(0.95, 0.25, 0.2, 0.5),
+	# Not known: the report left errors out past its per-code cap, and the placed step's own may
+	# be among them (S3's `vcap`). Never drawn as legal, illegal or waiting.
+	"unknown": Color(0.95, 0.75, 0.2, 0.5),
 }
 ## The size meter's bar, in pixels, and how far it fades while its numbers describe an older text.
 ## PLACEHOLDER: the size meter's look — OWNER, at S6.
@@ -1346,7 +1349,7 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 	_rule_slots = list.get("slots", [])
 	# An unreadable picking index highlights no chip; the map click still goes to the bridge.
 	var picking: Variant = Values.int_of(state.get("picking", -1))
-	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), picking if picking is int else -1, state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"), Callable(self, "_on_rule_remove"), Callable(self, "_on_rule_add"), state.get("has_text", false))
+	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), picking if picking is int else -1, state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"), Callable(self, "_on_rule_remove"), Callable(self, "_on_rule_add"), state.get("has_text", false), String(state.get("conflicts_more", "")))
 	# An editor opened on the rendering drawn before names chips that may not be there any more
 	# (M1): it closes with that rendering, and the bridge would refuse its edit anyway. A redraw
 	# of the same rendering (an edit on its way, a refusal on a rule) keeps it, so its popup can
@@ -1834,9 +1837,15 @@ func _draw_ghost(ghost: Dictionary) -> void:
 	_ghost.visible = true
 	_ghost.position = Vector3(at.x + 0.5, at.z + 4.5, at.y + 0.5)
 	var material: StandardMaterial3D = _ghost.material_override
-	material.albedo_color = GHOST_COLOURS.get(state, GHOST_COLOURS["waiting"])
-	if state == "illegal":
-		_ghost_label.text = Strings.text("ghost_illegal", {"sentence": ghost.get("sentence", "")})
+	# Every state the bridge names has its colour; one it does not is said, never drawn as another.
+	if not GHOST_COLOURS.has(state):
+		push_error("the ghost's state %s has no colour" % state)
+		_ghost.visible = false
+		_ghost_label.text = Strings.text("ghost_unnamed", {"state": state})
+		return
+	material.albedo_color = GHOST_COLOURS[state]
+	if state == "illegal" or state == "unknown":
+		_ghost_label.text = Strings.text("ghost_" + state, {"sentence": ghost.get("sentence", "")})
 	else:
 		_ghost_label.text = Strings.text("ghost_" + state)
 	_ghost_in_menu(ghost)

@@ -67,6 +67,7 @@ const ValueFieldScript := preload("res://scripts/value_field.gd")
 const Wizard := preload("res://scripts/wizard.gd")
 const Values := preload("res://scripts/values.gd")
 const Rows := preload("res://scripts/rows.gd")
+const RuleList := preload("res://scripts/rule_list.gd")
 const Strings := preload("res://scripts/strings.gd")
 const HostLink := preload("res://scripts/host_link.gd")
 ## The worst view page `crates/client-gdext/tests/transport.rs` builds, in bytes: the same page
@@ -333,6 +334,8 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_rig_backed_panel(stage, editor, failures)
 	await _check_the_value_field(stage, editor, failures)
 	_check_the_refused_ghost_line(editor, failures)
+	_check_the_ghost_states(editor, failures)
+	_check_the_conflicts_left_out(failures)
 	stage.queue_free()
 	_check_the_recap_words(failures)
 	await _check_the_lobby_after_a_failure(failures)
@@ -1639,6 +1642,49 @@ func _check_the_refused_ghost_line(editor: CanvasLayer, failures: Array[String])
 	if EditorPanel.ghost_went(true, true, null) or not EditorPanel.ghost_went(true, true, Vector3i(4, 4, 4)):
 		failures.append("ghost_went does not close exactly a menu whose ghost existed and went")
 	editor.close_menu()
+
+
+## **A ghost the report's cap may hide is not known** (S3's `vcap`): the bridge's `unknown`
+## is drawn in its own colour with the report's words, never as legal, illegal or waiting; and a
+## state the bridge names that the editor has no colour for is said and hidden, never drawn as
+## another.
+func _check_the_ghost_states(editor: CanvasLayer, failures: Array[String]) -> void:
+	var colours := {}
+	for state in ["waiting", "legal", "illegal", "unknown"]:
+		editor._draw_ghost({"at": Vector3i(4, 4, 4), "state": state, "sentence": "2 more `E0403` findings are not shown."})
+		var material: StandardMaterial3D = editor._ghost.material_override
+		if not editor._ghost.visible:
+			failures.append("the %s ghost is not drawn" % state)
+		colours[state] = material.albedo_color
+	for other in ["waiting", "legal", "illegal"]:
+		if colours["unknown"] == colours[other]:
+			failures.append("the unknown ghost is drawn in the %s ghost's colour" % other)
+	editor._draw_ghost({"at": Vector3i(4, 4, 4), "state": "unknown", "sentence": "2 more `E0403` findings are not shown."})
+	if editor._ghost_label.text != Strings.text("ghost_unknown", {"sentence": "2 more `E0403` findings are not shown."}):
+		failures.append("the unknown ghost says `%s`" % editor._ghost_label.text)
+	editor._draw_ghost({"at": Vector3i(4, 4, 4), "state": "sideways"})
+	if editor._ghost.visible:
+		failures.append("a ghost state with no colour is drawn")
+	if editor._ghost_label.text != Strings.text("ghost_unnamed", {"state": "sideways"}):
+		failures.append("a ghost state with no colour says `%s`" % editor._ghost_label.text)
+	editor._draw_ghost({})
+
+
+## **Conflicts the report left out are said under the list** (S3's `vcap`): the bridge's
+## `conflicts_more`, the report's own words, is a note under the rule list; with none, no note.
+func _check_the_conflicts_left_out(failures: Array[String]) -> void:
+	var words := "9 more `W0702` findings are not shown."
+	for more in [words, ""]:
+		var box := VBoxContainer.new()
+		add_child(box)
+		RuleList.fill(box, {"lines": [], "rules": [], "chips": []}, 0, true, -1, [], {}, func(_chip: int) -> void: pass, func(_from: int, _from_at: String, _to: int, _to_at: String, _rendering: int) -> void: pass, Callable(), Callable(), Callable(), false, more)
+		var said := false
+		for child in box.get_children():
+			if child is Label and (child as Label).text == words:
+				said = true
+		if said != (more != ""):
+			failures.append("conflicts left out `%s`: the note is %s" % [more, "drawn" if said else "missing"])
+		box.queue_free()
 
 
 ## **Every seat's tally at the match's end** (item 155 (3) 7): the gateway's prose, then one frame

@@ -700,6 +700,10 @@ pub enum GhostState {
     Legal,
     /// QUICK found an error in the placed step.
     Illegal,
+    /// QUICK listed no error in the placed step, but the report left some errors out past its
+    /// per-code cap (S3's `vcap`), and the placed step's own may be among them: not known,
+    /// never drawn as legal or as illegal. Its sentence is the report's own `I0007` words.
+    Unknown,
 }
 
 impl GhostState {
@@ -710,8 +714,35 @@ impl GhostState {
             Self::Waiting => "waiting",
             Self::Legal => "legal",
             Self::Illegal => "illegal",
+            Self::Unknown => "unknown",
         }
     }
+}
+
+/// The most diagnostics of one code a verifier report lists one by one (S3's `vcap`): the
+/// verifier's `MAX_PER_CODE`, which this walled crate may not name, so `tests/report_cap.rs`
+/// reads the verifier's own line and holds the two equal.
+pub const REPORT_CAP_PER_CODE: usize = 6;
+
+/// The code that closes a report once for each code it left diagnostics out of.
+pub const LEFT_OUT_CODE: &str = "I0007";
+
+/// Whether a report whose diagnostics carry `codes` may have left out a diagnostic of `code`,
+/// read from the codes alone and never from a sentence: only once [`REPORT_CAP_PER_CODE`] of a
+/// code are listed is any of it left out, and only a report closing with an `I0007` left any.
+/// Every diagnostic of a code listed fewer times is in the report.
+pub fn may_have_left_out<'a>(codes: impl Iterator<Item = &'a str> + Clone, code: &str) -> bool {
+    let closed = codes.clone().any(|found| found == LEFT_OUT_CODE);
+    closed && codes.filter(|found| *found == code).count() >= REPORT_CAP_PER_CODE
+}
+
+/// The report's own words for what it left out: every `I0007`'s sentence, in its order.
+fn left_out_words<'a>(sentences: impl Iterator<Item = (&'a str, &'a str)>) -> String {
+    sentences
+        .filter(|(code, _)| *code == LEFT_OUT_CODE)
+        .map(|(_, sentence)| sentence)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Where a beacon would go, and what QUICK said about the draft with it placed.
@@ -2432,6 +2463,25 @@ impl Editor {
                 })
             })
             .collect()
+    }
+
+    /// The report's own words for the conflicts it left out, when the rows on screen may have
+    /// left out a W0702 past the report's per-code cap ([`may_have_left_out`]): the connector
+    /// joins only the rows listed, and this says that more were found. `None` when every
+    /// conflict is listed, or while the rows or the rule list describe another text.
+    #[must_use]
+    pub fn conflicts_left_out(&self) -> Option<String> {
+        if !self.rows_current() || !self.prose_current() {
+            return None;
+        }
+        let codes = self.rows.iter().map(|row| row.code.as_str());
+        may_have_left_out(codes, rule_list::CONFLICT_CODE).then(|| {
+            left_out_words(
+                self.rows
+                    .iter()
+                    .map(|row| (row.code.as_str(), row.sentence.as_str())),
+            )
+        })
     }
 
     /// Rule `named.index` of the rule list on screen, when it is the rule a drag named: the
@@ -5123,7 +5173,9 @@ const fn check_of(sent: &Sent) -> Option<(Check, u64)> {
 }
 
 /// The ghost's verdict from the patched draft's QUICK report: illegal when an error points
-/// into the placed step, legal otherwise. `step` is the placed step's index in the route;
+/// into the placed step; not known when none does but an error code is at the report's cap
+/// and the report left some out (the placed step is the route's last, so its own error is the
+/// first a cap leaves out); legal otherwise. `step` is the placed step's index in the route;
 /// when the route could not be read, the report's own `qualifies` is the verdict.
 fn placement_verdict(report: &VerifyReport, step: Option<usize>) -> (GhostState, String) {
     let inside = |path: &str| match step {
@@ -5147,7 +5199,29 @@ fn placement_verdict(report: &VerifyReport, step: Option<usize>) -> (GhostState,
             (GhostState::Illegal, sentence)
         }
         None if step.is_none() && !report.qualifies => (GhostState::Illegal, String::new()),
-        None => (GhostState::Legal, String::new()),
+        None => {
+            let codes = report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str());
+            let hidden = report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.severity() == Severity::Error
+                    && may_have_left_out(codes.clone(), &diagnostic.code)
+            });
+            if hidden {
+                let words = left_out_words(report.diagnostics.iter().map(|diagnostic| {
+                    let sentence = if diagnostic.beginner.is_empty() {
+                        diagnostic.message.as_str()
+                    } else {
+                        diagnostic.beginner.as_str()
+                    };
+                    (diagnostic.code.as_str(), sentence)
+                }));
+                (GhostState::Unknown, words)
+            } else {
+                (GhostState::Legal, String::new())
+            }
+        }
     }
 }
 
@@ -5890,6 +5964,109 @@ mod tests {
         assert_eq!(placement_verdict(&report, Some(3)).0, GhostState::Legal);
     }
 
+    /// A diagnostic of `code` at `path`, as the wire's report carries one.
+    fn diagnostic(
+        code: &str,
+        severity: Severity,
+        path: &str,
+        beginner: &str,
+    ) -> pharmakos_proto::gp::api::v1::Diagnostic {
+        pharmakos_proto::gp::api::v1::Diagnostic {
+            code: code.to_owned(),
+            severity: i32::from(severity),
+            path: path.to_owned(),
+            beginner: beginner.to_owned(),
+            ..pharmakos_proto::gp::api::v1::Diagnostic::default()
+        }
+    }
+
+    /// `count` E0403 at the route's first steps and, when `closed`, the `I0007` that says the
+    /// report left more out (S3's `vcap`).
+    fn capped_report(count: usize, closed: bool) -> VerifyReport {
+        let mut diagnostics: Vec<pharmakos_proto::gp::api::v1::Diagnostic> = (0..count)
+            .map(|index| {
+                diagnostic(
+                    "E0403",
+                    Severity::Error,
+                    &format!("/declarative/route/{index}/place_beacon/at"),
+                    "Outside every sphere.",
+                )
+            })
+            .collect();
+        if closed {
+            diagnostics.push(diagnostic(
+                LEFT_OUT_CODE,
+                Severity::Info,
+                "",
+                "4 more `E0403` findings are not shown.",
+            ));
+        }
+        VerifyReport {
+            qualifies: false,
+            diagnostics,
+            ..VerifyReport::default()
+        }
+    }
+
+    /// The cap's case (S3's `vcap`; the set-aside review's example): the report lists the
+    /// first `E0403`s at earlier steps, the placed step's own is past the cap, and the report
+    /// says it left some out. The ghost is not known, never legal, never illegal, and says the
+    /// report's own words.
+    #[test]
+    fn a_ghost_whose_step_the_cap_may_hide_is_not_known() {
+        let report = capped_report(REPORT_CAP_PER_CODE, true);
+        let (state, sentence) = placement_verdict(&report, Some(REPORT_CAP_PER_CODE + 4));
+        assert_eq!(state, GhostState::Unknown);
+        assert_eq!(sentence, "4 more `E0403` findings are not shown.");
+        assert_eq!(GhostState::Unknown.name(), "unknown");
+    }
+
+    /// Under the cap, or with nothing left out, an error elsewhere says nothing about the
+    /// placed step: legal; and the placed step's own listed error is illegal, as before.
+    #[test]
+    fn a_ghost_the_cap_cannot_hide_keeps_its_verdict() {
+        for (count, closed) in [
+            (REPORT_CAP_PER_CODE - 1, true),
+            (REPORT_CAP_PER_CODE, false),
+        ] {
+            let report = capped_report(count, closed);
+            assert_eq!(
+                placement_verdict(&report, Some(REPORT_CAP_PER_CODE + 4)).0,
+                GhostState::Legal,
+                "{count} listed, closed {closed}"
+            );
+        }
+        let report = capped_report(REPORT_CAP_PER_CODE, true);
+        let (state, sentence) = placement_verdict(&report, Some(2));
+        assert_eq!(state, GhostState::Illegal);
+        assert_eq!(sentence, "Outside every sphere.");
+        // A warning at the cap hides no error.
+        let mut warnings = capped_report(0, true);
+        for index in 0..REPORT_CAP_PER_CODE {
+            warnings.diagnostics.insert(
+                0,
+                diagnostic(
+                    "W0702",
+                    Severity::Warning,
+                    &format!("/declarative/handlers/{index}"),
+                    "Never fires.",
+                ),
+            );
+        }
+        assert_eq!(placement_verdict(&warnings, Some(9)).0, GhostState::Legal);
+    }
+
+    #[test]
+    fn a_code_is_complete_under_the_cap_or_with_nothing_left_out() {
+        let at_cap: Vec<&str> = std::iter::repeat_n("W0702", REPORT_CAP_PER_CODE).collect();
+        assert!(!may_have_left_out(at_cap.iter().copied(), "W0702"));
+        let closed: Vec<&str> = at_cap.iter().copied().chain([LEFT_OUT_CODE]).collect();
+        assert!(may_have_left_out(closed.iter().copied(), "W0702"));
+        assert!(!may_have_left_out(closed.iter().copied(), "E0403"));
+        let under: Vec<&str> = closed.iter().copied().skip(1).collect();
+        assert!(!may_have_left_out(under.iter().copied(), "W0702"));
+    }
+
     /// Answers every call the editor makes with something unremarkable, until it is quiet.
     /// `get_draft` answers with `carried` as its body.
     fn drain(editor: &mut Editor, drafts: &str) {
@@ -6583,6 +6760,38 @@ mod tests {
             Some("/declarative/route/1")
         );
         assert_eq!(conflict.sentence, later);
+    }
+
+    /// A report listing the cap's W0702 rows and an `I0007` for the rest (S3's `vcap`): the
+    /// connector joins the rows listed, and the list says, in the report's own words, that more
+    /// were found; with no `I0007`, every conflict is listed and nothing more is said.
+    #[test]
+    fn conflicts_past_the_cap_are_said_and_never_drawn_as_none() {
+        for closed in [true, false] {
+            let mut editor = rendered(EXPAND_EAST);
+            let mut rows: Vec<String> = (0..REPORT_CAP_PER_CODE)
+                .map(|_| {
+                    r#"{"code":"W0702","severity":"warning","path":"/declarative/handlers/0/when","related_paths":["/declarative/route/1"],"beginner":"beaten"}"#.to_owned()
+                })
+                .collect();
+            if closed {
+                rows.push(
+                    r#"{"code":"I0007","severity":"info","beginner":"9 more `W0702` findings are not shown."}"#
+                        .to_owned(),
+                );
+            }
+            editor.owe_checks();
+            let _ = editor.next_call(false);
+            editor
+                .answered(Ok(&quick_report(&rows.join(","), true)))
+                .expect("reads");
+            assert_eq!(editor.conflicts().len(), REPORT_CAP_PER_CODE);
+            assert_eq!(
+                editor.conflicts_left_out().as_deref(),
+                closed.then_some("9 more `W0702` findings are not shown."),
+                "closed {closed}"
+            );
+        }
     }
 
     fn compact_row(a: &str, b: &str) -> String {
