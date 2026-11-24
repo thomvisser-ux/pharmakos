@@ -1044,17 +1044,28 @@ fn the_feature_table_is_regenerated_identically_on_restore() {
 /// every position when none does. Counted from `World::sensor_at`'s own
 /// positions, not from the sim's walk.
 fn seen_rows(world: &World, seat: SeatId, point: [Fx; 3]) -> u64 {
-    let total = world.beacons().seats().len()
-        + world.units().seats().len()
-        + world.structures().seats().len();
+    let beacons = world.beacons().seats().len();
+    let total = beacons + world.units().seats().len() + world.structures().seats().len();
+    // Each beacon sensor the walk meets sizes its sphere: the Spire test's
+    // kind bytes (dunit part 2; no fixture here holds a Spire).
+    let kinds = world.structures().kinds();
+    assert!(
+        !kinds.contains(&pharmakos_sim::tables::StructureKind::ResonanceSpire.id()),
+        "the fixture holds no Spire"
+    );
+    let sphere = u64::try_from(kinds.len()).unwrap();
+    let mut spheres = 0_u64;
     let mut at = 0_usize;
     while let Some((sensor, next)) = world.sensor_at(at) {
         at = next;
+        if at <= beacons {
+            spheres += sphere;
+        }
         if sensor.seat == seat && sensor.sees(&pharmakos_sim::sight::RadiusOnly, point) {
-            return u64::try_from(at).unwrap();
+            return u64::try_from(at).unwrap() + spheres;
         }
     }
-    u64::try_from(total).unwrap()
+    u64::try_from(total).unwrap() + spheres
 }
 
 /// The rows one known-threat scan for `seat` reads, counted from the tables:
@@ -1268,6 +1279,10 @@ fn with_an_enemy_in_sight(drone: bool) -> World {
     world
         .field_unit(one, outpost, pharmakos_sim::tables::UnitKind::Raider, at)
         .expect("room for the raider");
+    // A structure row, so a sphere's Spire test has kind bytes to read.
+    world
+        .raise_structure(one, outpost, StructureKind::Generator, at)
+        .expect("room for a structure");
     if drone {
         let near = world.standing_point([cx + 2, cy - 2, 0]);
         world

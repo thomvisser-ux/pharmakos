@@ -648,17 +648,28 @@ fn starting_walk_pops(fixture: &World) -> u64 {
 /// every position when none does. Counted from `World::sensor_at`'s own
 /// positions, not from the sim's walk.
 fn seen_rows(world: &World, seat: SeatId, point: [pharmakos_sim::math::fixed::Fx; 3]) -> u64 {
-    let total = world.beacons().seats().len()
-        + world.units().seats().len()
-        + world.structures().seats().len();
+    let beacons = world.beacons().seats().len();
+    let total = beacons + world.units().seats().len() + world.structures().seats().len();
+    // Each beacon sensor the walk meets sizes its sphere: the Spire test's
+    // kind bytes (dunit part 2; no fixture here holds a Spire).
+    let kinds = world.structures().kinds();
+    assert!(
+        !kinds.contains(&pharmakos_sim::tables::StructureKind::ResonanceSpire.id()),
+        "the fixture holds no Spire"
+    );
+    let sphere = u64::try_from(kinds.len()).expect("a count");
+    let mut spheres = 0_u64;
     let mut at = 0_usize;
     while let Some((sensor, next)) = world.sensor_at(at) {
         at = next;
+        if at <= beacons {
+            spheres += sphere;
+        }
         if sensor.seat == seat && sensor.sees(&pharmakos_sim::sight::RadiusOnly, point) {
-            return u64::try_from(at).expect("a count");
+            return u64::try_from(at).expect("a count") + spheres;
         }
     }
-    u64::try_from(total).expect("a count")
+    u64::try_from(total).expect("a count") + spheres
 }
 
 /// The rows one known-threat scan for `seat` reads, counted from the tables
@@ -770,6 +781,10 @@ fn a_safest_seam_choice_counts_the_threats_it_scans() {
         fixture
             .field_unit(one, outpost, UnitKind::Raider, at)
             .expect("room for the raider");
+        // A structure row, so a sphere's Spire test has kind bytes to read.
+        fixture
+            .raise_structure(one, outpost, StructureKind::Generator, at)
+            .expect("room for a structure");
         fixture.edit_mine_settings(
             beacon,
             MineEdit {
