@@ -1339,3 +1339,87 @@ fn a_version_3_sealed_save_resumes_into_its_push_and_its_next_lull_shows_it() {
         "the next Lull's feed shows the replayed Push"
     );
 }
+
+/// `Save::max_bytes` bounds a match by its own ladder (lane `opsave`, fix
+/// pass 2, item 7): the feed's term is the live feed's retention over the
+/// longest Push **this** match plays, never the rules' ladder chained in. A
+/// match of 1-second Pushes is bounded below one of the rules' own ladder,
+/// rounds past the round limit do not count, and the bound is printed
+/// beside every committed save and the largest save of a played match.
+#[test]
+fn the_save_bound_is_the_matchs_own_and_is_printed_beside_its_saves() {
+    const MATCH_ID: &str = "m-opsave-bound-played";
+    let rules = rules();
+    let with = |segment_lengths_ms: Vec<i32>, round_limit: u32| {
+        let config = Config {
+            segment_lengths_ms,
+            round_limit,
+            ..config_of("m-opsave-bound")
+        };
+        Save::max_bytes(&config, &rules).expect("a bound")
+    };
+    let short = with(vec![1_000], 2);
+    let ladder = with(Vec::new(), 2);
+    assert!(
+        short < ladder,
+        "a 1-second match is bounded by its own Pushes ({short}), not the rules' ladder ({ladder})"
+    );
+    assert_eq!(
+        with(vec![1_000, 480_000], 1),
+        short,
+        "a round the limit never plays does not count"
+    );
+    assert!(
+        with(vec![1_000, 480_000], 2) > short,
+        "a round it plays does"
+    );
+
+    // The committed saves, each beside the bound of its own match.
+    let root = support::workspace_root();
+    for path in [
+        "crates/gateway/tests/fixtures/save-v3-round-one-lull.json",
+        "crates/gateway/tests/fixtures/save-v3-round-one-sealed.json",
+        "crates/gamectl/tests/fixtures/save-v3-round-two-lull.json",
+        "tests/golden/gateway/save_round_one/expected.lull.json",
+        "tests/golden/gateway/save_round_one/expected.sealed.json",
+    ] {
+        let text = std::fs::read_to_string(root.join(path)).expect("a committed save");
+        let save = Save::parse(text.trim_end_matches('\n')).expect("it reads");
+        let bound = Save::max_bytes(&save.config, &rules).expect("a bound");
+        let size = u64::try_from(text.len()).expect("small");
+        println!("{path}: {size} bytes, bound {bound} bytes");
+        assert!(size <= bound, "{path}");
+    }
+
+    // A played match's largest save, at every boundary it saves.
+    let mut surface = new_match(MATCH_ID);
+    let mut largest = 0_usize;
+    let mut measure = |saved: SavedMatch| {
+        let text = Save {
+            stamp: Stamp::current(rules.rules_hash()),
+            config: config_of(MATCH_ID),
+            state: saved,
+        }
+        .render();
+        largest = largest.max(text.len());
+    };
+    for _ in 0..ROUNDS {
+        measure(surface.lull_save().expect("a Lull saves"));
+        plan_round(&mut surface);
+        assert!(surface.begin_push().expect("the Push begins"));
+        if let Some(saved) = surface.take_persistence().save {
+            measure(saved);
+        }
+        let _ = play_push(&mut surface);
+        if let Some(saved) = surface.take_persistence().save {
+            measure(saved);
+        }
+        close_round(&mut surface);
+        if surface.time().phase != Phase::Lull {
+            break;
+        }
+    }
+    let bound = Save::max_bytes(&config_of(MATCH_ID), &rules).expect("a bound");
+    println!("{MATCH_ID}: largest save {largest} bytes, bound {bound} bytes");
+    assert!(u64::try_from(largest).expect("small") <= bound);
+}

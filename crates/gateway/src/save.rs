@@ -1025,9 +1025,13 @@ impl Save {
     ///   most `MAX_DRAFTS` of its own and the carried one, each a playbook of
     ///   at most `MAX_PLAYBOOK_CHARS` with a label and an id), its seal, its
     ///   handle table (`MAX_FOREIGN_HANDLES`) and its memos;
-    /// * the last Push's feed: at most `EVENT_BUS_CAPACITY` lines for each
-    ///   drain of the match's longest segment, each at most `MAX_LINE_CHARS`,
-    ///   and the recap's record beside it;
+    /// * the last Push's feed, which is what the live feed retains: every line
+    ///   of every drain of the sim's bus, at most `EVENT_BUS_CAPACITY` a drain
+    ///   (the bus drops and counts the rest), one drain a tick of the
+    ///   segment and `DRAINS_BEYOND_TICKS` more, for the longest segment of
+    ///   this match's **own** ladder over the rounds it plays
+    ///   ([`longest_segment_ticks`]), each line at most `MAX_LINE_CHARS`, and
+    ///   the recap's record beside it;
     /// * the planning snapshot, at [`SNAPSHOT_BYTES_PER_VOXEL`] a voxel of
     ///   the rules' map.
     ///
@@ -1035,8 +1039,9 @@ impl Save {
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::Internal`] when the rules table has no verifier
-    /// block, or a term does not fit a `u64`.
+    /// [`crate::error::Code::InvalidArgument`] for match settings a host
+    /// refuses, and [`crate::error::Code::Internal`] when the rules table has
+    /// no verifier block, or a term does not fit a `u64`.
     pub fn max_bytes(
         config: &Config,
         rules: &pharmakos_sim::rules::RulesTable,
@@ -1063,21 +1068,12 @@ impl Save {
             )?,
             64,
         )?;
-        let drafts = mul(add(count(crate::surface::planning::MAX_DRAFTS)?, 1)?, draft)?;
+        let drafts = mul(count(crate::surface::planning::MAX_HELD_DRAFTS)?, draft)?;
         let handles = mul(count(crate::viewfeed::MAX_FOREIGN_HANDLES)?, 64)?;
         let seat_chars = add(add(add(notebook, drafts)?, playbook)?, add(handles, 1024)?)?;
         let seats = mul(u64::from(config.seats), mul(seat_chars, BYTES_PER_CHAR)?)?;
 
-        let longest = config
-            .segment_lengths_ms
-            .iter()
-            .chain(rules.segment_lengths_ms())
-            .copied()
-            .max()
-            .ok_or_else(|| {
-                Error::internal("neither the config line nor the rules give a segment length")
-            })?;
-        let ticks = u64::from(pharmakos_sim::math::quantity::Ms::new(longest).to_ticks_ceil());
+        let ticks = u64::from(longest_segment_ticks(config, rules)?);
         let lines = add(
             mul(
                 add(ticks, crate::surface::last_push::DRAINS_BEYOND_TICKS)?,
@@ -1104,6 +1100,44 @@ impl Save {
         let snapshot = mul(voxels, SNAPSHOT_BYTES_PER_VOXEL)?;
         add(add(add(FIXED_BYTES, seats)?, feed)?, snapshot)
     }
+}
+
+/// The most ticks any Push of the match `config` names plays: the longest of
+/// its rounds' lengths on its own ladder (the config line's, or the rules'
+/// when the line gives none, as the match is hosted: `MatchSettings::validate`),
+/// over the rounds its round limit lets it play, in whole ticks rounded up.
+/// Rounds past the ladder's end take its last entry, so the rounds read are
+/// at most one past the ladder.
+///
+/// # Errors
+///
+/// [`crate::error::Code::InvalidArgument`] for settings the sim refuses, as
+/// a host refuses them.
+fn longest_segment_ticks(
+    config: &Config,
+    rules: &pharmakos_sim::rules::RulesTable,
+) -> Result<u32, Error> {
+    let settings = pharmakos_sim::runner::MatchSettings {
+        segment_lengths_ms: config.segment_lengths_ms.clone(),
+        round_limit: config.round_limit,
+    };
+    // The lobby's refusals first, in the host's own words; then the sim's, of
+    // the ladder the rules table would give.
+    crate::host::Host::check_settings(&settings)?;
+    let checked = settings.validate(rules).map_err(|_| {
+        Error::invalid("the rules table's own segment ladder is not one a host plays")
+    })?;
+    let state = pharmakos_sim::runner::MatchState::new(&checked);
+    let ladder = u32::try_from(state.segment_lengths_ms().len())
+        .map_err(|_| Error::internal("a segment ladder longer than a count holds"))?;
+    let past_the_ladder = ladder
+        .checked_add(1)
+        .ok_or_else(|| Error::internal("a segment ladder longer than a count holds"))?;
+    let rounds = config.round_limit.min(past_the_ladder);
+    (1..=rounds)
+        .map(|round| state.length_for_round(round).to_ticks_ceil())
+        .max()
+        .ok_or_else(|| Error::internal("a match that plays no round has no segment"))
 }
 
 #[cfg(test)]
