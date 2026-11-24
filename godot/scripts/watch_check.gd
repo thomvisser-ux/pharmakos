@@ -222,6 +222,10 @@ const CARRY := "pharmakos_watch_check"
 
 var _failures: Array[String] = []
 var _refusals: Array[String] = []
+## The editor's calls the gateway refused on purpose: the planning wire's pastes past what a
+## value holds (fix pass 2). Each is taken off `_refusals` as it comes, and the editor's own count
+## of refusals is held to this number rather than to none.
+var _asked_refusals := 0
 var _events := 0
 var _ended := false
 var _gamectl := ""
@@ -620,8 +624,8 @@ func _carried(sealed: PackedByteArray, where: String) -> bool:
 	if opened != sealed:
 		_failures.append("%s: the carried draft is not round 1's sealed submission (%d bytes against %d)" % [where, opened.size(), sealed.size()])
 		return false
-	if int(_editor().get("refusals", 0)) != 0:
-		_failures.append("%s: the gateway refused %s of the editor's calls" % [where, _editor().get("refusals")])
+	if int(_editor().get("refusals", 0)) != _asked_refusals:
+		_failures.append("%s: the gateway refused %s of the editor's calls (%d asked for)" % [where, _editor().get("refusals"), _asked_refusals])
 	return await _save_as_offers("", "%s: the carried draft" % where)
 
 
@@ -1625,20 +1629,10 @@ func _planning_wire() -> bool:
 		_failures.append("the planning wire: \"3\" seconds did not land as 3000 ms")
 	editor._number_popup.hide()
 	await _editor_until(func(s: Dictionary) -> bool: return s.get("rules_editable", false), "the planning wire: the list never took an edit again")
-	# A paste past the gateway's message cap (fix pass 1, item 1): not sent, said in the popup,
-	# and the seat connection stays up; the leg then seals and Ready ends the Lull as ever.
-	timeout = _chip_at(_editor(), "/timeout_ms")
-	editor._on_rule_chip(timeout)
-	await get_tree().process_frame
-	editor._number_field.field.text = "1".repeat(300000)
-	editor._number_field.send.pressed.emit()
-	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("field", {}).get("state", "")) == "refused" and String(s.get("status_key", "")) == "call_too_large", "the planning wire: a paste past the message cap was not refused before it went"):
+	# Pastes against the real gateway (fix pass 2, item 1e): every one leaves the seat link up
+	# with its drops unchanged, and the leg then seals, and Ready ends the Lull as ever.
+	if not await _pastes():
 		return false
-	await get_tree().create_timer(2.0).timeout
-	if int(_state().get("drops_seat", -1)) != 0 or int(_state().get("unsent_seat", 0)) != 1:
-		_failures.append("the planning wire: a paste past the cap dropped the seat connection or was sent: %s" % _state())
-	editor._number_popup.hide()
-	print("[watch-check] the planning wire: a 300 KB paste was refused before it went, the seat connection up (%d unsent, %d drops)" % [int(_state().get("unsent_seat", 0)), int(_state().get("drops_seat", -1))])
 	# Add a rule, through its button; its empty slot takes a group; Remove takes it out.
 	var rules_before: int = _editor().get("rule_list", {}).get("rules", []).size()
 	var add := _rule_button("rule_add")
@@ -1734,6 +1728,78 @@ func _planning_wire() -> bool:
 		return false
 	print("[watch-check] the planning wire: a duration typed in seconds landed, titles drawn, a rule added, filled with a group and removed, a wall's box composed, the Queue's own list, all undone")
 	return true
+
+
+## Pastes into the duration field, against the real gateway (S3's `fixq-c`, fix pass 2, item
+## 1e): about 100 KB, under the cap and past Godot's default outbound buffer (sent; the gateway
+## refuses the value in its words); exactly the cap (sent, on a peer sized for it); the cap and one
+## byte more (refused before it goes); 90 000 three-byte characters (over the cap in bytes); and a
+## text of quotes and backslashes over the cap only once JSON escapes it. The seat link stays up
+## and its drops stay as they were through every one; nothing waits "Sending...".
+func _pastes() -> bool:
+	var cap := _count(vista.bridge.watch_transport_limits(), "message_bytes")
+	var drops := _count(_state(), "drops_seat")
+	var paste := func(text: String) -> Dictionary:
+		var at := _chip_at(_editor(), "/timeout_ms")
+		editor._on_rule_chip(at)
+		await get_tree().process_frame
+		editor._number_field.field.text = text
+		editor._number_field.send.pressed.emit()
+		if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("field", {}).get("state", "")) in ["refused", "landed"] and not s.get("busy", true), "the planning wire: a paste of %d characters never settled" % text.length()):
+			return {}
+		var field: Dictionary = _editor().get("field", {})
+		editor._number_popup.hide()
+		await _editor_until(func(s: Dictionary) -> bool: return s.get("rules_editable", false), "the planning wire: the list never took an edit after a paste")
+		return field
+	# The frame's own bytes around the typed text, measured from a refusal that names them.
+	var probe: Dictionary = await paste.call("1".repeat(cap))
+	if String(probe.get("key", "")) != "status_call_too_large":
+		_failures.append("the planning wire: a paste of the cap's length went out: %s" % probe)
+		return false
+	var around := int(String(probe.get("detail", "0"))) - cap
+	var cases := [
+		["about 100 KB", "1".repeat(100000), "gateway"],
+		["exactly the cap", "1".repeat(cap - around), "sent"],
+		["the cap and one byte", "1".repeat(cap - around + 1), "unsent"],
+		["90 000 three-byte characters", "€".repeat(90000), "unsent"],
+		["quotes and backslashes", "\"\\".repeat(70000), "unsent"],
+	]
+	for case in cases:
+		var unsent := _count(_state(), "unsent_seat")
+		var field: Dictionary = await paste.call(String(case[1]))
+		if field.is_empty():
+			return false
+		var key := String(field.get("key", ""))
+		match String(case[2]):
+			"gateway":
+				if key != "rule_refused":
+					_failures.append("the planning wire: %s was not the gateway's to refuse: %s" % [case[0], field])
+				_take_asked_refusal(String(field.get("detail", "")))
+			"sent":
+				if _count(_state(), "unsent_seat") != unsent or key == "status_call_too_large" or key == "status_call_send_failed":
+					_failures.append("the planning wire: %s did not go out: %s" % [case[0], field])
+				# The gateway reads it, and may refuse the value in its words: a refusal asked for.
+				if key == "rule_refused":
+					_take_asked_refusal(String(field.get("detail", "")))
+			"unsent":
+				if key != "status_call_too_large" or _count(_state(), "unsent_seat") != unsent + 1:
+					_failures.append("the planning wire: %s was not refused before it went: %s" % [case[0], field])
+		if _count(_state(), "drops_seat") != drops or _count(_state(), "send_failures_seat") != 0:
+			_failures.append("the planning wire: %s dropped the seat link or the transport refused it: %s" % [case[0], _state()])
+		print("[watch-check] the planning wire: %s: %s (`%s`), drops %d" % [case[0], key, String(field.get("detail", "")).left(80), _count(_state(), "drops_seat")])
+	return true
+
+
+## A refusal the planning wire asked for, taken off `_refusals` (where `_on_received` put it) and
+## counted, so the run's own "the gateway refused no call" stays about the calls nobody asked it to
+## refuse. A refusal that never arrived is this check's failure.
+func _take_asked_refusal(detail: String) -> void:
+	for index in _refusals.size():
+		if _refusals[index] == detail:
+			_refusals.remove_at(index)
+			_asked_refusals += 1
+			return
+	_failures.append("the planning wire: the gateway's refusal `%s` never reached the feed of answers" % detail.left(80))
 
 
 ## The rule-list chip whose pointer ends in `suffix`, by its index, or -1.
