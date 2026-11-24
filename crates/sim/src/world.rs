@@ -9338,6 +9338,57 @@ mod decision_visits {
         );
     }
 
+    /// Nothing a planning read charges reaches the next decision either: the
+    /// same match, with and without a host's planning reads between its
+    /// decisions, publishes the same figures at the next one.
+    #[test]
+    fn a_planning_read_reaches_no_later_decision() {
+        let figure_after = |read: bool| {
+            let world = world();
+            let (_, _, at) = core(&world);
+            let mut runner =
+                crate::runner::Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+            assert!(
+                runner
+                    .begin_push()
+                    .unwrap_or_else(|error| panic!("{error:?}"))
+            );
+            let _ = runner.step().unwrap_or_else(|error| panic!("{error:?}"));
+            if read {
+                let world = runner.world();
+                let ground = world.ground();
+                let mut scratch = crate::pathing::search::Scratch::for_map(
+                    world.surface(),
+                    world.clusters().size(),
+                )
+                .unwrap_or_else(|| panic!("a scratch for the map"));
+                for seat in [SeatId::new(0), SeatId::new(1)] {
+                    let _ = crate::targeting::cover_counted(
+                        &ground,
+                        &mut scratch,
+                        seat,
+                        at,
+                        crate::targeting::FeatureSpec::Nearest {
+                            kind: crate::features::FeatureKind::Vent,
+                            uncovered: true,
+                        },
+                    );
+                    let _ = world.spire_on(BeaconId::new(0));
+                }
+            }
+            loop {
+                let _ = runner.step().unwrap_or_else(|error| panic!("{error:?}"));
+                if runner.world().is_decision_tick() {
+                    break;
+                }
+            }
+            figures(runner.world())
+        };
+        let quiet = figure_after(false);
+        assert!(quiet.iter().all(|figure| matches!(figure, Some(Ok(_)))));
+        assert_eq!(figure_after(true), quiet);
+    }
+
     /// A restored world has run no decision: it reports none yet, never a
     /// count, and after its next decision the figures its source reports.
     #[test]
