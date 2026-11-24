@@ -98,13 +98,23 @@ fn initial_ms(initial: &InitialSettings, tuning: &Tuning) -> Option<i64> {
 /// target at its own.
 fn settings_ms(settings: &MandateSettings, tuning: &Tuning) -> Option<i64> {
     let (fields, targets) = count(settings)?;
-    let edit = match fields.checked_sub(1) {
-        None => 0,
-        Some(extra) => tuning
+    // No field, no edit: `fields` is signed, so `checked_sub(1)` alone would
+    // read 0 as one field less than the base (the verifier's
+    // `Rates::edit_settings`, over an unsigned count, answers 0).
+    // A count is a sum of lengths and ones, never negative.
+    let edit = match fields {
+        0 => 0,
+        1.. => tuning
             .times
             .edit_settings_base
-            .checked_add(tuning.times.edit_settings_per_field.checked_mul(extra)?)?
+            .checked_add(
+                tuning
+                    .times
+                    .edit_settings_per_field
+                    .checked_mul(fields.checked_sub(1)?)?,
+            )?
             .min(tuning.times.edit_settings_max),
+        _ => return None,
     };
     edit.checked_add(tuning.times.build_target.checked_mul(targets)?)
 }
@@ -288,6 +298,19 @@ mod tests {
         assert_eq!(
             step_ms(&visit(r#"{"roe":"HOLD_FIRE","retreat_hp_pct":0}"#), &tuning),
             Some(handshake + base + tuning.times.edit_settings_per_field)
+        );
+    }
+
+    /// An edit that writes no field costs nothing beyond the visit, as the
+    /// verifier's `Rates::edit_settings` prices it. The count is signed here,
+    /// so `checked_sub(1)` on 0 is -1, not `None`: such an edit was priced at
+    /// the base rate less one field.
+    #[test]
+    fn an_edit_that_writes_no_field_costs_nothing() {
+        let tuning = tuning();
+        assert_eq!(
+            step_ms(&visit("{}"), &tuning),
+            Some(tuning.times.visit_handshake)
         );
     }
 }
