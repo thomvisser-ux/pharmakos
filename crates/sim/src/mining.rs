@@ -1417,7 +1417,7 @@ mod visits {
 
     #[test]
     fn a_kept_seam_charges_its_dig_search() {
-        let mut world = world();
+        let mut world = with_structures();
         let seat = SeatId::new(0);
         // The first upkeep chooses; the second keeps what it chose.
         let meter = UnitTally::new();
@@ -1520,7 +1520,7 @@ mod visits {
     /// which is measured here alone, on a fresh tally and a fresh scratch.
     #[test]
     fn a_seam_choice_charges_what_it_visits() {
-        let mut world = world();
+        let mut world = with_structures();
         let seat = SeatId::new(0);
         let (row, settings) = core(&world);
         assert_eq!(
@@ -1572,7 +1572,7 @@ mod visits {
     /// asks every feature's dig search on every decision and ranks nothing.
     #[test]
     fn a_spent_beacon_charges_its_searches_and_no_ranking() {
-        let mut world = world();
+        let mut world = with_structures();
         let seat = SeatId::new(0);
         let (row, _) = core(&world);
         let beacon = crate::tables::BeaconId::new(

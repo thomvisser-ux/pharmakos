@@ -2441,6 +2441,86 @@ mod visits {
         );
     }
 
+    /// A settings row with a wall: each target read, then the wall's check,
+    /// which reads the sphere's Spire test once (every structure kind byte,
+    /// with no Spire standing) and, for its one column, the column and each
+    /// voxel of its fall to the ground under walls. Whatever the check
+    /// answers, it has read that column first.
+    #[test]
+    fn a_settings_rows_wall_charges_its_sphere_and_its_columns() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let beacon =
+            crate::tables::BeaconId::new(world.beacons().ids().first().copied().unwrap_or(0));
+        let centre = world
+            .beacons()
+            .positions()
+            .first()
+            .copied()
+            .unwrap_or_else(|| panic!("a beacon"));
+        let [x, y] = crate::targeting::column_of(centre);
+        // A structure stands, so the Spire test reads a row.
+        let far = world.standing_point([x + 30, y, 0]);
+        assert!(
+            world
+                .raise_structure(seat, beacon, crate::tables::StructureKind::Generator, far)
+                .is_some()
+        );
+        let kinds = u64::try_from(world.structures().kinds().len()).unwrap_or(0);
+        assert_eq!(kinds, 1);
+        let [wx, wy] = [x + 3, y];
+        let cell = |v: i32| i16::try_from(v).unwrap_or_else(|_| panic!("on the map"));
+        let wall = crate::site::WallBox {
+            columns: crate::tables::ColumnBox::new([cell(wx), cell(wy)], [cell(wx), cell(wy)])
+                .unwrap_or_else(|| panic!("a box")),
+            floor: 0,
+            top: 40,
+        };
+        // The column's fall, counted here: the voxels from the surface's top
+        // down to the first that is neither air nor a wall's.
+        let node = world
+            .surface()
+            .node_of(wx, wy)
+            .unwrap_or_else(|| panic!("on the map"));
+        let mut z = world.surface().top(node);
+        let mut fall = 0_u64;
+        loop {
+            fall += 1;
+            let fallen = world
+                .voxels()
+                .get([wx, wy, z])
+                .is_some_and(|material| material.wall_of().is_some() || material.is_air());
+            if !fallen || z == 0 {
+                break;
+            }
+            z -= 1;
+        }
+        let (mut targets, _, _) = targets(&world);
+        if let Some(first) = targets.first_mut() {
+            first.wall = Some(wall);
+        }
+        let row = Row::Settings {
+            kind: None,
+            fields: 0,
+            targets,
+            protected: Vec::new(),
+            probes: Vec::new(),
+            scouts: 0,
+            mine: None,
+            roe: 0,
+            retreat_hp_pct: None,
+            build: crate::site::BuildEdit::default(),
+            defend: None,
+            attack: None,
+        };
+        assert_eq!(
+            charged(&world, |world, meter| {
+                let _ = walls_stand(world, beacon, &row, meter);
+            }),
+            3 + kinds + 1 + fall
+        );
+    }
+
     /// A removal by feature looks the feature's name up (the feature rows up
     /// to it) and removes the target bound to it (the target rows up to it).
     #[test]

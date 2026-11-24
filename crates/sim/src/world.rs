@@ -9557,14 +9557,31 @@ mod decision_visits {
                 .add_target(core, StructureKind::Autocannon.id(), point)
                 .unwrap_or_else(|_| panic!("room"));
         }
-        let expected = n(world.targets().row_count())
-            + n(world.defend().protected().len())
-            + n(world.attack().avoid().len());
+        // Another seat's beacon holds a protect list and avoid areas, so the
+        // switch's clears of both lists read entries: a term that is zero in
+        // the fixture is not tested.
+        let other = world
+            .beacons()
+            .row_of_ordinal(SeatId::new(1), 0)
+            .and_then(|row| world.beacons().ids().get(row).copied())
+            .map_or_else(|| panic!("the other seat's core"), BeaconId::new);
+        world.defend_mut().open(other);
+        world.defend_mut().set_protected(other, &[other]);
+        let area = ColumnBox::new([0, 0], [1, 1]).unwrap_or_else(|| panic!("a box"));
+        world.attack_mut().open(other);
+        world.attack_mut().set_avoid(other, &[area, area]);
+        let targets = n(world.targets().row_count());
+        let protected = n(world.defend().protected().len());
+        let avoid = n(world.attack().avoid().len());
+        assert_eq!(
+            (targets, protected, avoid),
+            (2, 1, 2),
+            "each list holds rows"
+        );
         let units = measured(&mut world, |world, meter| {
             world.set_beacon_mandate_metered(row, MandateKind::Defend, meter);
         });
-        assert_eq!(units, expected);
-        assert!(expected >= 2, "the targets were read");
+        assert_eq!(units, targets + protected + avoid);
     }
 
     #[test]
@@ -9578,6 +9595,14 @@ mod decision_visits {
                 .add_target(core, StructureKind::Autocannon.id(), *point)
                 .unwrap_or_else(|_| panic!("room"));
         }
+        // A structure stands, away from the targets, so the replacement's
+        // paused-structure searches read a row.
+        let far = beside(&world, at, 30);
+        assert!(
+            world
+                .raise_structure(seat, core, StructureKind::Generator, far)
+                .is_some()
+        );
         let rows = n(world.targets().row_count());
         // A claim found at the second row reads two; one found nowhere, all.
         let second = points.get(1).copied().unwrap_or([Fx::ZERO; 3]);
@@ -9629,6 +9654,7 @@ mod decision_visits {
         // old row) and its paused-structure search (every structure row); and
         // the recycle walk reads the carry-over again.
         let structures = n(world.structures().ids().len());
+        assert_eq!(structures, 1, "the paused-structure search reads a row");
         let expected =
             rows + rows + (1 + rows + structures) + (1 + 1 + 1 + rows + structures) + rows;
         assert_eq!(
@@ -9856,6 +9882,19 @@ mod decision_visits {
         let seat = SeatId::new(0);
         world.award_licence_directly(seat, pharmakos_proto::gp::v1::Licence::ResonanceSpire, 1);
         world.set_treasury(seat, Money::new(10_000));
+        // Two structures stand before the queue, away from the search, so
+        // every structure-row term below reads rows: a term that is zero in
+        // the fixture is not tested.
+        let [cx, cy] = crate::targeting::column_of(centre);
+        for dx in [30, 34] {
+            let at = world.standing_point([cx + dx, cy, 0]);
+            assert!(
+                world
+                    .raise_structure(seat, core, StructureKind::Generator, at)
+                    .is_some(),
+                "a structure raised"
+            );
+        }
         // A wall target whose box holds the first free column (anchored
         // elsewhere), and a protected area over the second, so the search
         // reads both tests' rows and answers at the third.
@@ -9904,11 +9943,29 @@ mod decision_visits {
             walled && sheltered,
             "the search met the wall box and the protected area"
         );
-        // No Spire stands yet (every structure row read); the share's count
-        // (every structure row); the vacancy check and the placement's own
-        // vacancy search (every row, none being free).
+        assert_eq!(structures, 2, "two structure rows");
+        // No Spire stands yet: every structure row read, measured alone.
+        let spire = measured(&mut world, |world, meter| {
+            assert!(!world.spire_on_metered(core, meter));
+        });
+        assert_eq!(spire, structures);
+        // The share's count: every structure row.
+        let share = n(world.structures().seats().len());
+        assert_eq!(share, structures);
+        // The vacancy check: every row, none being free, measured alone.
         assert!(world.structures().frees().iter().all(|free| !*free));
-        let expected = structures + search + structures + structures + structures;
+        let vacancy = measured(&mut world, |world, meter| {
+            assert!(
+                world
+                    .structures()
+                    .vacancy_metered(super::STRUCTURE_ROWS, meter)
+                    .is_ok()
+            );
+        });
+        assert_eq!(vacancy, structures);
+        // The placement's own vacancy search: the same rows again.
+        let placement = structures;
+        let expected = spire + search + share + vacancy + placement;
         let units = measured(&mut world, |world, meter| {
             assert!(
                 world

@@ -399,14 +399,16 @@ pub fn check_wall<M: crate::seams::Meter + ?Sized>(
     meter: &M,
 ) -> Result<(), WallRefused> {
     let rows = world.rules().site();
-    let sphere = crate::mandate::Sphere::of(world, beacon);
+    // The sphere's Spire test, charged once (dunit part 2).
+    let sphere = crate::mandate::Sphere::counted(world, beacon, meter);
     let [lx, ly] = wall.columns.min_column();
     let [hx, hy] = wall.columns.max_column();
     let top = i32::from(wall.top);
     for y in i32::from(ly)..=i32::from(hy) {
         for x in i32::from(lx)..=i32::from(hx) {
             meter.rows(1);
-            let ground = ground_under_walls(world, x, y).ok_or(WallRefused::OffTheGround)?;
+            let ground =
+                ground_under_walls_metered(world, x, y, meter).ok_or(WallRefused::OffTheGround)?;
             if ground < i32::from(wall.floor) {
                 return Err(WallRefused::OffTheGround);
             }
@@ -561,15 +563,30 @@ fn ground_top(world: &World, x: i32, y: i32) -> Option<i32> {
 /// nothing.
 #[must_use]
 pub fn ground_under_walls(world: &World, x: i32, y: i32) -> Option<i32> {
+    ground_under_walls_metered(world, x, y, &())
+}
+
+/// [`ground_under_walls`], one unit to `meter` a voxel of the column's fall
+/// it reads ([`crate::seams::Meter`]; dunit part 2): what [`check_wall`]
+/// charges a decision committing a wall row.
+pub(crate) fn ground_under_walls_metered<M: crate::seams::Meter + ?Sized>(
+    world: &World,
+    x: i32,
+    y: i32,
+    meter: &M,
+) -> Option<i32> {
     let mut z = ground_top(world, x, y)?;
-    while world
-        .voxels()
-        .get([x, y, z])
-        .is_some_and(|material| material.wall_of().is_some() || material.is_air())
-    {
+    loop {
+        meter.rows(1);
+        let fallen = world
+            .voxels()
+            .get([x, y, z])
+            .is_some_and(|material| material.wall_of().is_some() || material.is_air());
+        if !fallen {
+            return Some(z);
+        }
         z = z.checked_sub(1).filter(|below| *below >= 0)?;
     }
-    Some(z)
 }
 
 /// The lowest air voxel of the column `(x, y)` from `ground + 1` up to `top`,
@@ -2634,7 +2651,7 @@ mod tests {
             u64::try_from(queued).unwrap_or(0),
             "every edit"
         );
-        // No paused structure on a fresh map: every structure row is read.
+        // No paused structure: every structure row is read.
         let beacon =
             crate::tables::BeaconId::new(world.beacons().ids().first().copied().unwrap_or(0));
         let at = world
@@ -2643,6 +2660,21 @@ mod tests {
             .first()
             .copied()
             .unwrap_or([Fx::ZERO; 3]);
+        // A finished structure stands away from the beacon, so the search
+        // reads a row that is not paused: a zero term is not tested.
+        let [x, y] = crate::targeting::column_of(at);
+        let far = world.standing_point([x + 30, y, 0]);
+        assert!(
+            world
+                .raise_structure(
+                    crate::tables::SeatId::new(0),
+                    beacon,
+                    StructureKind::Generator,
+                    far
+                )
+                .is_some()
+        );
+        assert_eq!(world.structures().ids().len(), 1);
         assert_eq!(
             tally(&|meter| {
                 assert!(

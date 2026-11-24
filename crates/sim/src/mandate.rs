@@ -627,11 +627,30 @@ impl Sphere {
     /// `beacon`'s sphere, or `None` for an id that names no row the beacon
     /// table still holds.
     pub(crate) fn of(world: &World, beacon: BeaconId) -> Option<Sphere> {
+        Self::counted(world, beacon, &())
+    }
+
+    /// [`Sphere::of`], reporting the Spire test's rows to `meter`
+    /// ([`crate::spire::metered::radius_at_row`]; dunit part 2): a decision
+    /// passes its tally. Named apart from the `_metered` twins because `of`
+    /// is a name the interpreter's sources use for other types.
+    pub(crate) fn counted<M: crate::seams::Meter + ?Sized>(
+        world: &World,
+        beacon: BeaconId,
+        meter: &M,
+    ) -> Option<Sphere> {
         let row = world.beacons().row_of(beacon).ok()?;
         let centre = world.beacons().positions().get(row.index()).copied()?;
+        let radius = crate::spire::metered::radius_at_row(
+            world.rules(),
+            world.beacons(),
+            world.structures(),
+            row.index(),
+            meter,
+        );
         Some(Sphere {
             centre,
-            limit: Sq::of_radius(world.sphere_radius_at_row(row.index())),
+            limit: Sq::of_radius(Fx::from_voxels(radius)),
         })
     }
 

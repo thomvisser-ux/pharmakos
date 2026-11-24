@@ -1607,15 +1607,18 @@ fn a_committed_wall_counts_the_columns_it_checks() {
     println!("wall: {units:?}");
     let columns = u64::try_from(grounds.len()).unwrap();
     assert_eq!(columns, 6, "a three-by-two box");
+    // The sphere's Spire test reads every structure kind byte, with no Spire
+    // on the map (dunit part 2, fix pass 2).
+    let spire = u64::try_from(world_at(SEED, 2, &[180_000]).structures().kinds().len()).unwrap();
     assert_eq!(
         units,
         vec![
             b_00_rows(&world_at(SEED, 2, &[180_000])) + 2,
             0,
-            columns + 1,
+            spire + 2 * columns + 1,
             1
         ],
-        "the step's start finds b_00 and reads its row and its target; the walk and interface charge nothing; the commit checks its six columns and finds the row it wrote to make it a wall (the claim test and the place found nothing to read); then the wait one node a decision"
+        "the step's start finds b_00 and reads its row and its target; the walk and interface charge nothing; the commit reads the sphere's Spire test, checks its six columns, each with the one voxel of its fall (its top is ground), and finds the row it wrote to make it a wall (the claim test and the place found nothing to read); then the wait one node a decision"
     );
 }
 
@@ -2297,3 +2300,4 @@ fn a_rules_table_without_a_voxel_length_sphere_does_not_load() {
             if field == "beacon.sphere_radius_voxels"
     ));
 }
+
