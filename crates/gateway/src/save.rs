@@ -49,7 +49,16 @@
 //!   and its **plan fingerprint** (decisions-log items 77, 103 (5), 104 (4));
 //! * per seat, from format version 3, the **handle table** -- every `e_NN`
 //!   the seat holds and the beacon id it names, in the order they were
-//!   minted (S3's plan, E1) -- and the **memos** issued to it (E5).
+//!   minted (S3's plan, E1) -- and the **memos** issued to it (E5);
+//! * from format version 4, the **last Push** (`last_push`,
+//!   [`crate::surface::last_push`]): the segment feed a Lull holds, in a
+//!   `lull` save, and the recap's record, in every save, so a resumed Lull
+//!   reads the Push before it as the live one did. A version-3 save, without
+//!   it, still loads.
+//!
+//! A third boundary, **`ended`**, is written when the match ends, in place of
+//! the final round's `sealed` save, and is never resumed: [`Save::check`]
+//! refuses it ([`refuse_ended`]).
 //!
 //! # Why the handle table is saved (S3's plan, E1)
 //!
@@ -104,6 +113,7 @@ use crate::error::Error;
 use crate::probation::{Memo, Preset};
 use crate::serve::Config;
 use crate::surface::Draft;
+use crate::surface::last_push::LastPush;
 
 /// The format's name, the first thing in the file.
 pub const SAVE_FORMAT: &str = "pharmakos.save";
@@ -123,7 +133,21 @@ pub const SAVE_FORMAT: &str = "pharmakos.save";
 /// its seats were shown (the module doc's "Why the handle table is saved");
 /// it is refused by its version, naming both, with no converter (S2's saves
 /// are development saves on the owner's disk only; S3's plan, risk R7).
-pub const SAVE_FORMAT_VERSION: u32 = 3;
+///
+/// **4 is S3's `opsave`** (decisions-log item 177 (5)): the last Push, what a
+/// Lull holds of the Push before it that lives only in the running gateway
+/// (`last_push`, [`crate::surface::last_push`]), required in a version-4
+/// save. The field is **additive**: a version-3 save, which holds none, still
+/// loads ([`LAST_PUSH_ABSENT`]) and resumes as it always did, into a Lull
+/// whose feed shows no Push, which the operator reads as unread
+/// (`PushUnread::Resumed`). A reader of a later version that adds a member
+/// does the same: it reads the older version with the member absent and
+/// says so in a typed state, never by a default it cannot tell from a value.
+pub const SAVE_FORMAT_VERSION: u32 = 4;
+
+/// The last format version written before the save carried the last Push:
+/// still read, with [`SavedMatch::last_push`] `None`.
+pub const LAST_PUSH_ABSENT: u32 = 3;
 
 /// The last format version written before S1's per-seat beacon names.
 pub const PRE_S1_SAVE: u32 = 1;
@@ -135,6 +159,13 @@ pub enum Boundary {
     Sealed,
     /// On control end of file during a Lull: resumes into that Lull.
     Lull,
+    /// When the match ended (lane `opsave`, from `fixq-c`'s finding): the
+    /// match as it ended, which **never resumes**. An ended match cannot be
+    /// continued (the lobby forgets its line for that reason, decisions-log
+    /// item 114), and without this boundary the last save on disk was the
+    /// final round's `sealed` one, which replayed the final Push and served
+    /// a match that had ended. [`Save::check`] refuses it, naming why.
+    Ended,
 }
 
 impl Boundary {
@@ -144,6 +175,7 @@ impl Boundary {
         match self {
             Boundary::Sealed => "sealed",
             Boundary::Lull => "lull",
+            Boundary::Ended => "ended",
         }
     }
 
@@ -151,6 +183,7 @@ impl Boundary {
         match name {
             "sealed" => Some(Boundary::Sealed),
             "lull" => Some(Boundary::Lull),
+            "ended" => Some(Boundary::Ended),
             _ => None,
         }
     }
@@ -235,6 +268,10 @@ pub struct SavedMatch {
     pub snapshot: Vec<u8>,
     /// Every seat of the match, ascending.
     pub seats: Vec<SavedSeat>,
+    /// What the Lull holds of the Push before it ([`LastPush`]): always
+    /// written; `None` only for a save of format version
+    /// [`LAST_PUSH_ABSENT`], written before the save carried it.
+    pub last_push: Option<LastPush>,
 }
 
 /// What a resume needs from the processes that ran this match before it, read
@@ -366,7 +403,7 @@ impl Save {
             ),
         ]);
         let seats: Vec<Json> = self.state.seats.iter().map(seat_json).collect();
-        json::write(&object(vec![
+        let mut entries = vec![
             ("format", Json::String(String::from(SAVE_FORMAT))),
             ("stamp", stamp),
             ("config", config),
@@ -381,7 +418,13 @@ impl Save {
                 Json::String(json::base64::encode(&self.state.snapshot)),
             ),
             ("seats", Json::Array(seats)),
-        ]))
+        ];
+        // A version-3 save, read back, is written back as it was read: no
+        // member. Every save this build makes holds one.
+        if let Some(last_push) = &self.state.last_push {
+            entries.push(("last_push", last_push.render()));
+        }
+        json::write(&object(entries))
     }
 
     /// Read a save's text.
@@ -412,7 +455,7 @@ impl Save {
                 SAVE_FORMAT_VERSION
             )));
         }
-        if format_version != SAVE_FORMAT_VERSION {
+        if format_version != SAVE_FORMAT_VERSION && format_version != LAST_PUSH_ABSENT {
             return Err(Error::invalid(said!(
                 "this save is format version {} and this build reads version \
                  {}; a save from another build is refused rather than \
@@ -460,13 +503,26 @@ impl Save {
         };
 
         let boundary = Boundary::from_name(string_at(&root, "boundary")?)
-            .ok_or_else(|| damaged("its boundary is neither `sealed` nor `lull`"))?;
+            .ok_or_else(|| damaged("its boundary is not `sealed`, `lull` or `ended`"))?;
         let snapshot = json::base64::decode(string_at(&root, "snapshot")?)
             .ok_or_else(|| damaged("its snapshot is not base64"))?;
         let mut seats: Vec<SavedSeat> = Vec::new();
         for seat in array_at(&root, "seats")? {
             seats.push(parse_seat(seat)?);
         }
+        // Required from version 4, and absent before it: a version-4 save
+        // without it, or an older one with it, is not one this build wrote.
+        let last_push = match (format_version, root.get("last_push")) {
+            (LAST_PUSH_ABSENT, None) => None,
+            (SAVE_FORMAT_VERSION, Some(member)) => Some(LastPush::parse(member)?),
+            (LAST_PUSH_ABSENT, Some(_)) => {
+                return Err(damaged(said!(
+                    "it is format version {} and holds a last Push, which that version never wrote",
+                    LAST_PUSH_ABSENT
+                )));
+            }
+            (_, _) => return Err(damaged("it has no `last_push`")),
+        };
         Ok(Save {
             stamp,
             config,
@@ -476,6 +532,7 @@ impl Save {
                 lull_offset: u32_at(&root, "lull_offset")?,
                 snapshot,
                 seats,
+                last_push,
             },
         })
     }
@@ -495,7 +552,8 @@ impl Save {
     /// [`crate::error::Code::InvalidArgument`], naming what differs.
     pub fn check(&self, config: &Config, rules_hash: u64) -> Result<(), Error> {
         self.check_stamp(rules_hash)?;
-        self.check_config(config)
+        self.check_config(config)?;
+        refuse_ended(self.state.boundary)
     }
 
     /// The stamp's half of [`SavedMatch::check`]: the rules table, the
@@ -671,14 +729,18 @@ fn seat_json(seat: &SavedSeat) -> Json {
 fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
     let seat = u8::try_from(integer(member(value, "seat")?, "seat")?)
         .map_err(|_| damaged("a seat number does not fit"))?;
-    let mut drafts: Vec<Draft> = Vec::new();
-    for draft in array_at(value, "drafts")? {
-        drafts.push(Draft {
-            draft_id: string_at(draft, "draft_id")?.to_owned(),
-            label: string_at(draft, "label")?.to_owned(),
-            round: u32_at(draft, "round")?,
-            playbook_jsonc: string_at(draft, "playbook_jsonc")?.to_owned(),
-        });
+    let listed = array_at(value, "drafts")?;
+    if listed.len() > crate::surface::planning::MAX_DRAFTS {
+        return Err(damaged(said!(
+            "seat {} holds {} drafts, past the {} a seat may",
+            seat,
+            listed.len(),
+            crate::surface::planning::MAX_DRAFTS
+        )));
+    }
+    let mut drafts: Vec<Draft> = Vec::with_capacity(listed.len());
+    for draft in listed {
+        drafts.push(parse_draft(seat, draft)?);
     }
     let sealed = match member(value, "seal")? {
         Json::Null => None,
@@ -745,6 +807,63 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
         handles,
         memos,
     })
+}
+
+/// One saved draft, held to the bounds `save_draft` holds a draft to when a
+/// seat saves it (`crate::surface::planning`): its id in the draft id
+/// grammar, its label at most [`crate::surface::planning::MAX_DRAFT_LABEL_CHARS`]
+/// characters and its body at most [`pharmakos_verifier::MAX_PLAYBOOK_CHARS`],
+/// so `get_draft` after a resume hands back no draft a seat could not have
+/// saved.
+fn parse_draft(seat: u8, draft: &Json) -> Result<Draft, Error> {
+    let draft_id = string_at(draft, "draft_id")?;
+    let label = string_at(draft, "label")?;
+    let playbook_jsonc = string_at(draft, "playbook_jsonc")?;
+    if !crate::surface::planning::is_draft_id(draft_id) {
+        return Err(damaged(said!(
+            "seat {} holds a draft whose id is not a draft id",
+            seat
+        )));
+    }
+    if label.chars().count() > crate::surface::planning::MAX_DRAFT_LABEL_CHARS {
+        return Err(damaged(said!(
+            "seat {}'s draft `{}` has a label past the {} characters a label may have",
+            seat,
+            pharmakos_proto::json::grammar::quoted(draft_id),
+            crate::surface::planning::MAX_DRAFT_LABEL_CHARS
+        )));
+    }
+    if pharmakos_verifier::is_too_long(playbook_jsonc) {
+        return Err(damaged(said!(
+            "seat {}'s draft `{}` is past the {} characters a playbook may have",
+            seat,
+            pharmakos_proto::json::grammar::quoted(draft_id),
+            pharmakos_verifier::MAX_PLAYBOOK_CHARS
+        )));
+    }
+    Ok(Draft {
+        draft_id: draft_id.to_owned(),
+        label: label.to_owned(),
+        round: u32_at(draft, "round")?,
+        playbook_jsonc: playbook_jsonc.to_owned(),
+    })
+}
+
+/// The refusal of a save made when its match ended: an ended match is not
+/// resumed, whichever door it is resumed by ([`Save::check`],
+/// `Surface::resume`).
+///
+/// # Errors
+///
+/// [`crate::error::Code::InvalidArgument`] for [`Boundary::Ended`], in the
+/// words the host says on its announce path (`gamectl host`'s refusal).
+pub fn refuse_ended(boundary: Boundary) -> Result<(), Error> {
+    match boundary {
+        Boundary::Ended => Err(Error::invalid(
+            "this match has ended, and an ended match cannot be continued: start a new match",
+        )),
+        Boundary::Sealed | Boundary::Lull => Ok(()),
+    }
 }
 
 /// The refusal for a file that is not a save this build reads.
@@ -925,8 +1044,17 @@ mod tests {
                         memos: Vec::new(),
                     },
                 ],
+                last_push: Some(last_push(r#"{"feed": null, "recap": {"none": true}}"#)),
             },
         }
+    }
+
+    /// A last Push read from its member's text.
+    fn last_push(text: &str) -> crate::surface::last_push::LastPush {
+        crate::surface::last_push::LastPush::parse(
+            &pharmakos_proto::json::read(text).expect("JSON"),
+        )
+        .expect("a last Push")
     }
 
     #[test]
@@ -943,17 +1071,17 @@ mod tests {
     /// start a new match; so is one from a later build.
     #[test]
     fn a_save_from_another_format_version_is_refused_naming_both_versions() {
-        assert_eq!(super::SAVE_FORMAT_VERSION, 3);
-        for other in [2_u32, 4] {
+        assert_eq!(super::SAVE_FORMAT_VERSION, 4);
+        for other in [2_u32, 5] {
             let text = save().render().replace(
-                "\"format_version\": 3",
+                "\"format_version\": 4",
                 &format!("\"format_version\": {other}"),
             );
             let error = Save::parse(&text).expect_err("another version");
             assert_eq!(error.code(), Code::InvalidArgument);
             assert!(
                 error.message().contains(&format!("format version {other}"))
-                    && error.message().contains("reads version 3")
+                    && error.message().contains("reads version 4")
                     && error.message().contains("start a new match"),
                 "{}",
                 error.message()
@@ -1069,7 +1197,7 @@ mod tests {
     fn a_pre_s1_save_is_refused() {
         let text = save()
             .render()
-            .replace("\"format_version\": 3", "\"format_version\": 1");
+            .replace("\"format_version\": 4", "\"format_version\": 1");
         let error = Save::parse(&text).expect_err("a pre-S1 save");
         assert_eq!(error.code(), Code::InvalidArgument);
         assert!(
@@ -1165,5 +1293,138 @@ mod tests {
             chain.render(),
             "21\t00000000000000ab\n22\tffffffffffffffff\n"
         );
+    }
+
+    /// The last Push is additive (lane `opsave`): a version-3 save, which
+    /// holds none, loads with it absent and writes back as it was read; a
+    /// version-4 save without one, or a version-3 save with one, is not a
+    /// save this build wrote.
+    #[test]
+    fn a_version_3_save_loads_without_the_last_push_and_no_other_mix_does() {
+        let mut old = save();
+        old.stamp.format_version = super::LAST_PUSH_ABSENT;
+        old.state.last_push = None;
+        let text = old.render();
+        assert!(!text.contains("last_push"), "{text}");
+        let read = Save::parse(&text).expect("a version-3 save loads");
+        assert_eq!(read, old);
+        assert_eq!(read.state.last_push, None);
+
+        let mut current = save();
+        current.state.last_push = None;
+        let error = Save::parse(&current.render()).expect_err("version 4 carries it");
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("last_push"), "{}", error.message());
+
+        let mut mixed = save();
+        mixed.stamp.format_version = super::LAST_PUSH_ABSENT;
+        let error = Save::parse(&mixed.render()).expect_err("version 3 never carried it");
+        assert_eq!(error.code(), Code::InvalidArgument);
+    }
+
+    /// A saved draft is held to `save_draft`'s bounds at load: its id, its
+    /// label and its body.
+    #[test]
+    fn a_saved_draft_past_save_drafts_bounds_is_refused() {
+        let at = |mutate: &dyn Fn(&mut Draft)| {
+            let mut written = save();
+            if let Some(draft) = written
+                .state
+                .seats
+                .first_mut()
+                .and_then(|seat| seat.drafts.first_mut())
+            {
+                mutate(draft);
+            }
+            Save::parse(&written.render())
+        };
+        let most = pharmakos_verifier::MAX_PLAYBOOK_CHARS;
+        assert!(at(&|draft| draft.playbook_jsonc = "x".repeat(most)).is_ok());
+        assert!(at(&|draft| draft.playbook_jsonc = String::new()).is_ok());
+        for (what, outcome) in [
+            (
+                "a body past the bound",
+                at(&|draft| draft.playbook_jsonc = "x".repeat(most + 1)),
+            ),
+            (
+                "a label past the bound",
+                at(&|draft| {
+                    draft.label = "l".repeat(crate::surface::planning::MAX_DRAFT_LABEL_CHARS + 1);
+                }),
+            ),
+            (
+                "an id off the grammar",
+                at(&|draft| draft.draft_id = String::from("Not An Id")),
+            ),
+        ] {
+            let error = outcome.expect_err(what);
+            assert_eq!(error.code(), Code::InvalidArgument, "{what}");
+        }
+        let mut many = save();
+        if let Some(seat) = many.state.seats.first_mut() {
+            let one = seat.drafts.first().cloned().expect("a draft");
+            seat.drafts = (0..=crate::surface::planning::MAX_DRAFTS)
+                .map(|index| Draft {
+                    draft_id: format!("d{index}"),
+                    ..one.clone()
+                })
+                .collect();
+        }
+        assert_eq!(
+            Save::parse(&many.render())
+                .expect_err("past the count")
+                .code(),
+            Code::InvalidArgument
+        );
+    }
+
+    /// The draft bodies a save holds, under damage: oversized, empty, a lone
+    /// surrogate escape (text that is not UTF-8), a control byte, a body of
+    /// another type. Seeded; only the typed error escapes.
+    #[test]
+    fn a_damaged_draft_body_is_refused_only_as_an_argument() {
+        let text = save().render();
+        let needle = "\"playbook_jsonc\": \"// a comment\\n{}\\n\"";
+        assert!(text.contains(needle), "{text}");
+        let most = pharmakos_verifier::MAX_PLAYBOOK_CHARS;
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut taken, mut refused) = (0_u32, 0_u32);
+        for case in 0..400_u32 {
+            let body = match next() % 8 {
+                0 => format!(
+                    "\"{}\"",
+                    "x".repeat(most + 1 + usize::try_from(next() % 64).expect("small"))
+                ),
+                1 => String::from("\"\""),
+                2 => String::from("\"\\udc80\""),
+                3 => String::from("\"\\ud800x\""),
+                4 => String::from("\"a\u{0}b\""),
+                5 => String::from("null"),
+                6 => format!(
+                    "\"{}\"",
+                    "é".repeat(usize::try_from(next() % 4).expect("small") + most - 2)
+                ),
+                _ => String::from("12"),
+            };
+            let damaged = text.replace(needle, &format!("\"playbook_jsonc\": {body}"));
+            match Save::parse(&damaged) {
+                Ok(_) => taken = taken.saturating_add(1),
+                Err(error) => {
+                    assert_eq!(
+                        error.code(),
+                        Code::InvalidArgument,
+                        "case {case}: {body:.40}"
+                    );
+                    refused = refused.saturating_add(1);
+                }
+            }
+        }
+        assert!(taken > 0 && refused > 0, "{taken} taken, {refused} refused");
     }
 }

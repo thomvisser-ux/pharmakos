@@ -1001,7 +1001,13 @@ fn save_golden(file: &str, text: &str) {
 /// moving. It was re-blessed once, when lane `retreat` (#230) moved
 /// `VERIFIER_VERSION` from `0.1.0-s3.5` to `0.1.0-s3.6`: the stamp's
 /// `verifier_version` and the two `report_hash` lines moved with it, which
-/// hashes the version, and no `plan_fingerprint` line moved.
+/// hashes the version, and no `plan_fingerprint` line moved. Re-blessed again
+/// by lane `opsave`, which made the save format version 4: the stamp's
+/// `format_version` moved from 3 to 4 and each file gained its `last_push`
+/// member (the `lull` file the Lull's feed, the `sealed` file none, both no
+/// recap in round 1); no other line moved. Main's version-3 file is kept as
+/// `tests/fixtures/save-v3-round-one-lull.json`, and still resumes
+/// (`a_version_3_save_written_by_main_still_resumes`).
 #[test]
 fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
     const MATCH_ID: &str = "m-fpstream2-save";
@@ -1094,4 +1100,46 @@ fn a_saved_notebook_past_its_bound_is_refused() {
         "seat 0's notebook or drafts in this save are over the bounds a seat may hold: the file \
          is damaged"
     );
+}
+
+/// A save main wrote before the save carried the last Push (format version 3,
+/// `bbddd094`'s round-1 `lull` file, committed as a fixture) still loads and
+/// resumes into its Lull, with no last Push (lane `opsave`): the format's
+/// version-4 member is additive.
+#[test]
+fn a_version_3_save_written_by_main_still_resumes() {
+    const MATCH_ID: &str = "m-fpstream2-save";
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("save-v3-round-one-lull.json"),
+    )
+    .expect("the version-3 fixture");
+    assert!(
+        text.contains("\"format_version\": 3"),
+        "the fixture is version 3"
+    );
+    let save = Save::parse(text.trim_end_matches('\n')).expect("a version-3 save reads");
+    assert_eq!(
+        save.stamp.format_version,
+        pharmakos_gateway::save::LAST_PUSH_ABSENT
+    );
+    assert_eq!(save.state.last_push, None);
+    save.check(&config_of(MATCH_ID), rules().rules_hash())
+        .expect("the same rules, the same verifier, the same match");
+    let host = pristine();
+    let resumed = Surface::new(
+        MATCH_ID,
+        SEED,
+        host.rules().clone(),
+        FogPolicy::fogged(),
+        &SEATS,
+    )
+    .expect("a surface")
+    .resume(host, &save.state, CONTINUATION)
+    .expect("a version-3 save resumes");
+    assert_eq!(resumed.time().phase, Phase::Lull);
+    let again = resumed.lull_save().expect("its Lull saves");
+    assert!(again.last_push.is_some(), "and is saved again as version 4");
 }

@@ -1369,7 +1369,7 @@ fn is_template_id(text: &str) -> bool {
 /// reason: a draft id reaches the private match cache's filesystem layout, and
 /// a rule that leaned on the host's path parsing would answer differently on
 /// Windows (decisions-log item 100's closing note).
-fn is_draft_id(text: &str) -> bool {
+pub(crate) fn is_draft_id(text: &str) -> bool {
     !text.is_empty()
         && text.chars().count() <= 64
         && text

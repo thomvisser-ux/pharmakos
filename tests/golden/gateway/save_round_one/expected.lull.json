@@ -1,7 +1,7 @@
 {
   "format": "pharmakos.save",
   "stamp": {
-    "format_version": 3,
+    "format_version": 4,
     "rules_hash": "1b26c525068bff61",
     "verifier_version": "0.1.0-s3.6",
     "snapshot_version": 16
@@ -50,6 +50,39 @@
       "handles": [],
       "memos": []
     }
-  ]
+  ],
+  "last_push": {
+    "feed": {
+      "round": 1,
+      "segment": 0,
+      "anchor_tick": 0,
+      "dropped_since": 0,
+      "lines": [
+        {
+          "at_ms": 0,
+          "kind": "match_started",
+          "text": "The match opened.",
+          "audience": {
+            "to": "public"
+          },
+          "witnesses": [],
+          "memo": null
+        },
+        {
+          "at_ms": 0,
+          "kind": "lull_opened",
+          "text": "The Lull opened: seals may be written.",
+          "audience": {
+            "to": "public"
+          },
+          "witnesses": [],
+          "memo": null
+        }
+      ]
+    },
+    "recap": {
+      "none": true
+    }
+  }
 }
 

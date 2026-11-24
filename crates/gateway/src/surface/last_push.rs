@@ -186,7 +186,7 @@ impl Surface {
     /// does.
     pub fn last_push(&self, boundary: Boundary) -> Result<LastPush, Error> {
         let feed = match boundary {
-            Boundary::Sealed => None,
+            Boundary::Sealed | Boundary::Ended => None,
             Boundary::Lull => Some(SavedFeed {
                 round: self.feed.round(),
                 segment: self.feed.segment(),
@@ -245,13 +245,13 @@ impl Surface {
         let ours: Vec<SeatId> = self.seats.iter().map(|slot| slot.seat).collect();
         let feed = match (boundary, saved.feed.as_ref()) {
             (Boundary::Lull, Some(feed)) => Some(feed),
-            (Boundary::Sealed, None) => None,
+            (Boundary::Sealed | Boundary::Ended, None) => None,
             (Boundary::Lull, None) => {
                 return Err(damaged(
                     "a save made in a Lull carries that Lull's feed, and this one does not",
                 ));
             }
-            (Boundary::Sealed, Some(_)) => {
+            (Boundary::Sealed | Boundary::Ended, Some(_)) => {
                 return Err(damaged(
                     "a save made as a Push began carries no feed, since its Push replays its \
                      own, and this one does",

@@ -63,7 +63,8 @@ fn through_the_text(last: &LastPush) -> LastPush {
     read
 }
 
-/// A fresh surface resumed from `saved`, given `last` back when there is one.
+/// A fresh surface resumed from `saved`, carrying `last` as its last Push,
+/// or none (a format-version-3 save, made before the save carried it).
 fn resume(match_id: &str, saved: &SavedMatch, last: Option<&LastPush>) -> Surface {
     let host = Host::open_from(
         &rules_json(),
@@ -76,7 +77,9 @@ fn resume(match_id: &str, saved: &SavedMatch, last: Option<&LastPush>) -> Surfac
         None,
     )
     .expect("a match");
-    let mut surface = Surface::new(
+    let mut saved = saved.clone();
+    saved.last_push = last.cloned();
+    Surface::new(
         match_id,
         SEED,
         host.rules().clone(),
@@ -84,14 +87,8 @@ fn resume(match_id: &str, saved: &SavedMatch, last: Option<&LastPush>) -> Surfac
         &SEATS,
     )
     .expect("a surface")
-    .resume(host, saved, CONTINUATION)
-    .expect("the Lull resumes");
-    if let Some(last) = last {
-        surface
-            .restore_last_push(saved.boundary, last)
-            .expect("the last Push restores");
-    }
-    surface
+    .resume(host, &saved, CONTINUATION)
+    .expect("the Lull resumes")
 }
 
 /// What each seat submits: seat 0 walks further east each round, seat 1 in
@@ -221,6 +218,7 @@ fn every_read_of_a_resumed_lull_is_the_live_lulls() {
     while live.time().phase == Phase::Lull {
         let saved = live.lull_save().expect("a Lull saves");
         let last = through_the_text(&live.last_push(Boundary::Lull).expect("the last Push"));
+        assert_eq!(saved.last_push.as_ref(), Some(&last), "the save carries it");
         let mut resumed = resume(MATCH_ID, &saved, Some(&last));
         // The Lull's countdown is the client's, which it reports again after a
         // resume (decisions-log item 99): both sides report the same.
@@ -574,4 +572,157 @@ fn a_damaged_last_push_is_refused_and_only_as_an_argument() {
         taken > 0,
         "and some damage is a member this build would write"
     );
+}
+
+// ---------------------------------------------------------------------------
+// An ended match is not resumed (lane `opsave`, from `fixq-c`'s finding)
+// ---------------------------------------------------------------------------
+
+/// The match's end leaves an `ended` save for the host loop to write, in
+/// place of the final round's `sealed` one, and neither the save's check nor
+/// the surface's resume continues it: both refuse it as `INVALID_ARGUMENT`,
+/// in the words the host says on its announce path. A recap is never saved
+/// (`lull_save` answers `PHASE_CLOSED` there), so the final recap's only
+/// save on disk is this one.
+#[test]
+fn an_ended_match_leaves_an_ended_save_that_does_not_resume() {
+    use pharmakos_gateway::save::{Save, Stamp};
+    const MATCH_ID: &str = "m-opsave-ended";
+    let mut live = new_match(MATCH_ID);
+    let mut last_save: Option<SavedMatch> = None;
+    let mut refused_in_recap = false;
+    while live.time().phase == Phase::Lull {
+        plan_round(&mut live);
+        assert!(live.begin_push().expect("the Push begins"));
+        while let Some(report) = live.step().expect("a tick") {
+            if report.segment_ended {
+                break;
+            }
+        }
+        if let Some(save) = live.take_persistence().save {
+            last_save = Some(save);
+        }
+        if live.time().phase == Phase::Recap {
+            let error = live.lull_save().expect_err("a recap is not saved");
+            assert_eq!(error.code(), Code::PhaseClosed);
+            refused_in_recap = true;
+        }
+        assert!(live.end_recap().expect("the recap ends"));
+        if let Some(save) = live.take_persistence().save {
+            last_save = Some(save);
+        }
+        if live.time().phase == Phase::Lull {
+            live.open_lull().expect("the next Lull");
+        }
+    }
+    assert_eq!(live.time().phase, Phase::Ended);
+    assert!(refused_in_recap, "a recap was met and refused a save");
+    let ended = last_save.expect("a save");
+    assert_eq!(
+        ended.boundary,
+        Boundary::Ended,
+        "the last save is the match's end"
+    );
+
+    let config = pharmakos_gateway::serve::Config {
+        match_id: MATCH_ID.to_owned(),
+        seed: SEED,
+        seats: 2,
+        human_seat: None,
+        segment_lengths_ms: vec![SEGMENT_MS],
+        round_limit: ROUNDS,
+        preset: pharmakos_gateway::probation::Preset::Custom,
+    };
+    let hash = support::rules().rules_hash();
+    let text = Save {
+        stamp: Stamp::current(hash),
+        config: config.clone(),
+        state: ended.clone(),
+    }
+    .render();
+    let read = Save::parse(&text).expect("an ended save reads");
+    let error = read
+        .check(&config, hash)
+        .expect_err("an ended match is not resumed");
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(error.message().contains("has ended"), "{}", error.message());
+
+    let host = Host::open_from(
+        &rules_json(),
+        SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: vec![SEGMENT_MS],
+            round_limit: ROUNDS,
+        },
+        None,
+    )
+    .expect("a match");
+    let error = Surface::new(
+        MATCH_ID,
+        SEED,
+        host.rules().clone(),
+        FogPolicy::fogged(),
+        &SEATS,
+    )
+    .expect("a surface")
+    .resume(host, &ended, CONTINUATION)
+    .expect_err("the surface refuses it too");
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(error.message().contains("has ended"), "{}", error.message());
+}
+
+/// The line bound: a round-1 Lull's feed has run no tick, so it holds at most
+/// `EVENT_BUS_CAPACITY` lines for each of the `DRAINS_BEYOND_TICKS` drains and
+/// a few of the gateway's own; a member holding more is refused, never cut.
+#[test]
+fn a_feed_past_its_line_bound_is_refused() {
+    use pharmakos_gateway::surface::last_push::DRAINS_BEYOND_TICKS;
+    const MATCH_ID: &str = "m-opsave-bound";
+    let live = new_match(MATCH_ID);
+    let saved = live.lull_save().expect("a Lull saves");
+    let mut member = live
+        .last_push(Boundary::Lull)
+        .expect("the last Push")
+        .render();
+    let most = usize::try_from(DRAINS_BEYOND_TICKS).expect("small")
+        * pharmakos_sim::EVENT_BUS_CAPACITY
+        + SEATS.len()
+        + pharmakos_gateway::probation::Memo::ALL.len();
+    if let Json::Object(entries) = &mut member
+        && let Some((_, Json::Object(feed))) = entries.iter_mut().find(|(key, _)| key == "feed")
+        && let Some((_, Json::Array(lines))) = feed.iter_mut().find(|(key, _)| key == "lines")
+    {
+        let one = lines.first().cloned().expect("a line");
+        lines.clear();
+        lines.resize(most, one.clone());
+        let at_the_bound = LastPush::parse(&member).expect("it reads");
+        let mut resumed = resume(MATCH_ID, &saved, None);
+        resumed
+            .restore_last_push(Boundary::Lull, &at_the_bound)
+            .expect("at the bound");
+        if let Some((_, Json::Object(feed))) = entries_of(&mut member)
+            .iter_mut()
+            .find(|(key, _)| key == "feed")
+            && let Some((_, Json::Array(lines))) = feed.iter_mut().find(|(key, _)| key == "lines")
+        {
+            lines.push(one);
+        }
+        let past = LastPush::parse(&member).expect("it reads");
+        let error = resumed
+            .restore_last_push(Boundary::Lull, &past)
+            .expect_err("past the bound");
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("lines"), "{}", error.message());
+    } else {
+        panic!("a feed with lines: {member:?}");
+    }
+}
+
+/// The entries of an object.
+fn entries_of(value: &mut Json) -> &mut Vec<(String, Json)> {
+    match value {
+        Json::Object(entries) => entries,
+        other => panic!("an object: {other:?}"),
+    }
 }

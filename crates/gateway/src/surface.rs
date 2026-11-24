@@ -109,21 +109,26 @@
 //! What a resume rebuilds, field by field (the notes, A2):
 //!
 //! * **saved** -- every seat's notebook, drafts and seal, and `lull_offset`;
+//!   and, from format version 4, the last Push (lane `opsave`,
+//!   [`last_push`]): in a `lull` save the segment feed (`feed`, its anchor
+//!   `feed_anchor` and the drops since the segment's end), and in every save
+//!   the recap's record (`recap` and `recap_lost`), so a resumed Lull reads
+//!   the last Push and its recap as the live one did;
 //! * **derived** -- `time` (round and phase from the restored runner),
-//!   `host`, `lulls` (the Lulls' lengths, from the rules table), `feed_anchor`, the fog policy's eliminations (from the restored
-//!   seat table), `views` (the generated map re-encoded from the pristine
-//!   world, every chunk an edit touched re-marked, the stamp restarting, and
-//!   the view's id minted with the resume's generation folded in, so every
-//!   cursor and handle from the dead process is stale), and draft
-//!   continuity (the carried draft re-verified against the same snapshot);
+//!   `host`, `lulls` (the Lulls' lengths, from the rules table), the fog
+//!   policy's eliminations (from the restored seat table), `views` (the
+//!   generated map re-encoded from the pristine world, every chunk an edit
+//!   touched re-marked, the stamp restarting, and the view's id minted with
+//!   the resume's generation folded in, so every cursor and handle from the
+//!   dead process is stale), and draft continuity (the carried draft
+//!   re-verified against the same snapshot);
 //! * **reset** -- `tokens` (a new process, a new announce line: spec section
 //!   3's "seat tokens are reissued"), `limits` and `limiters`,
 //!   `lull_remaining_ms`, `reported_elapsed_ms` and `phase_elapsed` (the
 //!   client re-reports its clock), every ready flag, the operator's advice
-//!   (the advisor re-runs at a resumed Lull), `feed`: a replayed Push
-//!   regenerates it, and a resumed Lull's is empty, and `recap`, the last
-//!   segment's facts, which a segment that ends in this process sets again.
-//!   PLACEHOLDER: the last recap's events do not survive a resume — owner, at S7.
+//!   (the advisor re-runs at a resumed Lull), and `feed` in a `sealed` save,
+//!   whose Push replays it. A version-3 save carries no last Push, and its
+//!   Lull's feed shows none, as before.
 //!
 //! # Secrecy
 //!
@@ -508,8 +513,8 @@ pub struct Surface {
     chain: Vec<(Tick, u64)>,
     /// What the last segment's end left for its recap, read off the sim's own
     /// events as they arrive ([`Surface::absorb_events`]). `None` until a
-    /// segment has ended in this process: a resume does not carry it, as it
-    /// does not carry the recap's events (the module doc's PLACEHOLDER).
+    /// segment has ended; a resume puts the saved one back
+    /// ([`Surface::restore_last_push`]).
     recap: Option<RecapFacts>,
     /// The `step_failed` events of the segment now being played, as
     /// `(seat, value)` in the order the sim emitted them: moved into the
@@ -887,6 +892,7 @@ impl Surface {
         continuation: Continuation,
     ) -> Result<Surface, Error> {
         let mut surface = self;
+        crate::save::refuse_ended(saved.boundary)?;
         if surface.host.is_some() {
             return Err(Error::internal(
                 "a surface resumes a save once, before it hosts any match",
@@ -934,10 +940,15 @@ impl Surface {
             surface.lull_offset = surface.lull_offset.saturating_add(behind);
             surface.sync_time();
         }
-        // A fresh feed: the recap's events are not in the save.
+        // A fresh feed, which the save's last Push replaces below.
         surface.begin_segment(round, 0);
 
         surface.restore_seats(saved)?;
+        // The last Push's feed and recap, as the saved Lull held them; a
+        // version-3 save holds none, and its Lull shows no Push, as before.
+        if let Some(last_push) = saved.last_push.as_ref() {
+            surface.restore_last_push(saved.boundary, last_push)?;
+        }
         surface.name_sightings()?;
         surface.derive_continuity(round)?;
 
@@ -1145,6 +1156,7 @@ impl Surface {
             lull_offset: self.lull_offset.saturating_add(self.phase_elapsed),
             snapshot,
             seats,
+            last_push: Some(self.last_push(boundary)?),
         })
     }
 
@@ -1738,6 +1750,21 @@ impl Surface {
         Ok(())
     }
 
+    /// Put the save of a match that has just ended in the pending slot: an
+    /// `ended` save, which replaces the final round's `sealed` one on disk so
+    /// a resume is refused rather than replaying the final Push
+    /// ([`Boundary::Ended`]). A save that cannot be built is an audit line, as
+    /// [`Surface::persist_push`]'s is: the match has already ended.
+    fn persist_end(&mut self) {
+        match self.saved_match(Boundary::Ended) {
+            Ok(saved) => self.pending.save = Some(saved),
+            Err(error) => {
+                let tick = self.time.tick;
+                self.audit.refused(tick, None, None, "save ended", &error);
+            }
+        }
+    }
+
     /// Put a beginning Push's save and seals in the pending slot, and make
     /// room for its chain.
     fn persist_push(&mut self, round: u32) {
@@ -1882,6 +1909,7 @@ impl Surface {
         if let Some(report) = report {
             if report.match_ended {
                 self.fog.end_match();
+                self.persist_end();
             }
             // The private replay's chain (the wave-6 notes, decision C11):
             // room was reserved when the Push began, so this allocates nothing
@@ -1959,6 +1987,7 @@ impl Surface {
             // `end_match` is idempotent. (Found by T16a's own
             // acceptance test, when every round-limit end came through here.)
             self.fog.end_match();
+            self.persist_end();
         }
         if ended {
             // The recap's own reported clock is the recap's; the Lull that
