@@ -258,8 +258,9 @@ fn percent(value: i64, total: i64) -> i64 {
 /// Evaluate one condition tree.
 ///
 /// Every node evaluated is one of P1's evaluation units (S1's plan, section
-/// 5): counted on the world's unhashed decision counter as it is reached, so a
-/// short-circuited `all` or `any` counts only what it read.
+/// 5): charged to the view's meter, the deciding seat's tally that
+/// `phase_decision` hands down (unhashed, and held by no world), as it is
+/// reached, so a short-circuited `all` or `any` counts only what it read.
 pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
     view.meter.rows(1);
     match condition {

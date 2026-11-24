@@ -2321,7 +2321,8 @@ impl World {
             read += 1;
             facts.stands(seat, beacon.raw())
         });
-        // One unit a structure row read, while a decision runs (dunit part 2).
+        // One unit a structure row read, to the meter the caller passed: a
+        // decision's tally, or `()`, which counts nothing (dunit part 2).
         meter.rows(read);
         stands
     }
@@ -2420,8 +2421,8 @@ impl World {
             .ok()
             .and_then(|row| self.beacons.seats().get(row.index()).copied())
             .map(SeatId::new);
-        // The core search's beacon rows, charged while a decision runs (a
-        // recycle's value, dunit part 2).
+        // The core search's beacon rows, charged to the meter the caller
+        // passed (a recycle's value, dunit part 2).
         let is_core = seat
             .and_then(|seat| crate::power::core_of_metered(self, seat, meter))
             .is_some_and(|core| core == beacon);
@@ -2985,8 +2986,8 @@ impl World {
     ) -> Option<[Fx; 3]> {
         let [bx, by] = crate::targeting::column_of(centre);
         let ground = self.ground();
-        // One unit a spiral column, and the rows each test on it reads,
-        // while a decision runs (dunit part 2).
+        // One unit a spiral column, and the rows each test on it reads, to
+        // the meter the caller passed (dunit part 2).
         for &[dx, dy] in &self.spiral {
             meter.rows(1);
             if dx == 0 && dy == 0 {
@@ -3659,7 +3660,8 @@ impl World {
                 break;
             }
         }
-        // One unit a target row read, while a decision runs (dunit part 2).
+        // One unit a target row read, to the meter the caller passed (dunit
+        // part 2).
         meter.rows(read);
         claimed
     }
@@ -4104,7 +4106,7 @@ impl World {
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
                 && self.targets.anchors().get(row).copied() == Some(at)
         });
-        // One unit a target row read, while a decision runs.
+        // One unit a target row read, to the meter the caller passed.
         meter.rows(read);
         claimed
     }

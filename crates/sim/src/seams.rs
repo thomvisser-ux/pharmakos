@@ -363,9 +363,10 @@ impl UnitTally {
 /// work measured another way, such as a search's pops, which can be
 /// unreadable ([`Meter::measured`]).
 ///
-/// A decision's caller passes the world's decision tally
-/// ([`UnitTally`], one unit a row read, and each measured unit); every other
-/// caller passes `()`, which counts nothing. A meter never changes what the
+/// A decision passes its seat's tally, which `phase_decision` makes and
+/// hands down the decision's calls ([`UnitTally`], one unit a row read, and
+/// each measured unit); the world holds none. Every other caller passes
+/// `()`, which counts nothing. A meter never changes what the
 /// scan decides or returns: it only hears counts.
 pub trait Meter: core::fmt::Debug {
     /// `rows` more rows read.

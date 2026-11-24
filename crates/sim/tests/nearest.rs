@@ -2172,9 +2172,10 @@ fn decision_units_equal_the_primitive_steps_counted() {
 }
 
 /// A measurement is not state: the same `toward` and `covering` match, played
-/// twice, the second time with the world's decision tally made to fault on
-/// its next charge before every tick (`UnitTally::fault_next_charge`, which
-/// survives the decision's own reset), so every decision that charges
+/// twice, the second time with the decisions' tally armed to fault on its
+/// next charge before every tick (`World::fault_next_decision_charge`, which
+/// `phase_decision` passes to the tally it makes, and which survives each
+/// seat's reset), so every decision that charges
 /// anything ends unmeasured. Every tick hashes the same in both, and each
 /// decision the clean run measured is unmeasured in the faulted one: the
 /// fault reached inside the decision and changed nothing. The cross-build
