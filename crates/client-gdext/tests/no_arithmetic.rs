@@ -1661,6 +1661,24 @@ fn shipped_script(name: &str) -> bool {
     name == "smoke_check.gd" || !(name.ends_with("_check.gd") || name.ends_with("_shot.gd"))
 }
 
+/// Whether `line` calls an [`ERROR_RETURNING`] method through a deferral or a callable, whose
+/// answer nobody can read (`call_deferred("change_scene_to_file", ...)`,
+/// `change_scene_to_file.call_deferred(...)`; fix pass 2's sweep found `boot.gd`'s).
+fn deferred_error(line: &str) -> bool {
+    let code = gd_code_only(line);
+    ERROR_RETURNING.iter().any(|method| {
+        let name = method.trim_end_matches('(');
+        let by_name = ["call_deferred(", "callv(", ".call("]
+            .iter()
+            .any(|via| code.contains(via))
+            && line.contains(&format!("\"{name}\""));
+        let by_callable = [".call_deferred(", ".call(", ".callv("]
+            .iter()
+            .any(|via| code.contains(&format!("{name}{via}")));
+        by_name || by_callable
+    })
+}
+
 /// The lines of `text` that call an [`ERROR_RETURNING`] method as a bare statement.
 fn ignored_errors(name: &str, text: &str) -> Vec<String> {
     const KEYWORDS: &[&str] = &[
@@ -1687,6 +1705,7 @@ fn ignored_errors(name: &str, text: &str) -> Vec<String> {
                 })
             })
         })
+        .chain(text.lines().filter(|line| deferred_error(line)))
         .filter(|line| {
             !ERRORS_HELD
                 .iter()
@@ -1728,6 +1747,8 @@ fn the_error_scan_catches_a_bare_call() {
         "\tDirAccess.remove_absolute(path)",
         "\tget_tree().change_scene_to_file(\"res://x.tscn\")",
         "\tOS.execute(\"x\", [])",
+        "\tget_tree().call_deferred(\"change_scene_to_file\", target)",
+        "\tget_tree().change_scene_to_file.call_deferred(target)",
     ] {
         assert!(!ignored_errors("host_link.gd", line).is_empty(), "{line}");
     }
