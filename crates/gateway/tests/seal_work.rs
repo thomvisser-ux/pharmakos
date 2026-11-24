@@ -156,11 +156,21 @@ fn seal_both(surface: &mut Surface, holds: usize) {
     submit(surface, 1, &one);
 }
 
-/// The reference fingerprint of a seal's text: its canonical form's, by the
-/// message, as the save writer took it until the seal carried it.
+/// The reference fingerprint of a seal's text: the domain and its canonical
+/// form's text with `meta.fingerprint` cleared, whole, through the one-shot
+/// digest: the value the save writer took until the seal carried it, written
+/// out independently of the shipped streaming function.
 fn reference(playbook_jsonc: &str) -> u64 {
     let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).expect("a canonical form");
-    pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message()).expect("a fingerprint")
+    {
+        // The rule written out whole: the reference, test-only.
+        let mut bytes = pharmakos_proto::fingerprint::PLAN_FINGERPRINT_DOMAIN.to_vec();
+        bytes.extend_from_slice(
+            &pharmakos_proto::fingerprint::canonical_input(canonical.decoded().message())
+                .expect("canonical"),
+        );
+        pharmakos_sim::encoding::digest(&bytes)
+    }
 }
 
 /// Seat `seat`'s seal.

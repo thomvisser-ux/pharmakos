@@ -1286,11 +1286,14 @@ fn the_budget_fixture_sits_exactly_on_the_budget() {
 
 #[test]
 fn the_fingerprint_is_the_rule_crates_proto_writes_down() {
-    let playbook: pharmakos_proto::gp::v1::Playbook =
-        json::decode(&String::from_utf8(case_bytes("expand_east")).expect("UTF-8"))
-            .expect("the worked example decodes");
-    let digest = hash::plan_fingerprint(&playbook).expect("a fingerprint");
-    let canonical = pharmakos_proto::fingerprint::canonical_input(&playbook).expect("canonical");
+    let decoded = json::decode_encoded::<pharmakos_proto::gp::v1::Playbook>(
+        &String::from_utf8(case_bytes("expand_east")).expect("UTF-8"),
+    )
+    .expect("the worked example decodes");
+    let playbook = decoded.message();
+    // The one fingerprint function, from the wire bytes (S3's `fpstream`).
+    let digest = pharmakos_sim::hash::plan_fingerprint_of(&decoded).expect("a fingerprint");
+    let canonical = pharmakos_proto::fingerprint::canonical_input(playbook).expect("canonical");
     let mut bytes = pharmakos_proto::fingerprint::PLAN_FINGERPRINT_DOMAIN.to_vec();
     bytes.extend_from_slice(&canonical);
     assert_eq!(digest, pharmakos_sim::encoding::digest(&bytes));

@@ -675,8 +675,8 @@ fn every_refusal_of_a_restored_seal_keeps_its_code_and_words() {
     .expect("the committed case")
     .replace("\r\n", "\n");
     let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
-    let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
-        .expect("a fingerprint");
+    let fingerprint =
+        pharmakos_sim::hash::plan_fingerprint_of(canonical.decoded()).expect("a fingerprint");
     let error = with_seat_zero(&text, Some(fingerprint ^ 1));
     assert_eq!(error.code(), Code::InvalidArgument);
     assert_eq!(
@@ -730,8 +730,8 @@ fn a_restored_seals_compile_refusal_quotes_the_label() {
         &pharmakos_proto::json::write(&Json::String(label.to_owned())),
     );
     let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
-    let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
-        .expect("a fingerprint");
+    let fingerprint =
+        pharmakos_sim::hash::plan_fingerprint_of(canonical.decoded()).expect("a fingerprint");
     let mut damaged = saved;
     let seal = damaged
         .seats
