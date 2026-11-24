@@ -28,14 +28,16 @@
 //!
 //! So `crates/proto` owns the **rule** — the domain separator, the byte order,
 //! and what is hashed — and the arithmetic lives in the sim's `hash` module
-//! beside the state hash: `pharmakos_sim::hash::plan_fingerprint` computes
-//! it, xxh3-64 under the sim's `STATE_HASH_SEED` over
-//! [`PLAN_FINGERPRINT_DOMAIN`] followed by [`canonical_input`]'s bytes, and
-//! [`to_field`]'s bytes are what `Meta.fingerprint` holds. S1's `build` lane
-//! (#97, decisions-log item 136) moved it there from the verifier with its
-//! value unmoved (the register's S1-42, closed; item 77); the verifier's
-//! `hash::plan_fingerprint` and the gateway, for what a save stamps beside
-//! each seal, both call the sim's. There is one copy, and this crate's rule is
+//! beside the state hash: `pharmakos_sim::hash::plan_fingerprint_of`
+//! computes it from a decoded playbook's wire bytes, xxh3-64 under the sim's
+//! `STATE_HASH_SEED` over [`PLAN_FINGERPRINT_DOMAIN`] followed by
+//! [`canonical_input`]'s bytes, and [`to_field`]'s bytes are what
+//! `Meta.fingerprint` holds. S1's `build` lane (#97, decisions-log item 136)
+//! moved it there from the verifier with its value unmoved (the register's
+//! S1-42, closed; item 77); the verifier's decode stage and the gateway, for
+//! what a seal carries and a resume checks, both call the sim's, and since
+//! S3's `fpstream` part 2 it is the only fingerprint function: the
+//! message-encoding one is gone. There is one copy, and this crate's rule is
 //! what it is held to.
 
 use crate::gp::v1::Playbook;

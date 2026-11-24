@@ -32,7 +32,7 @@
 //! `tests/confinement.rs` asserts it over this crate's own source text
 //! (AGENTS.md section 3 rule 2, "no dry runs"). A handler may **compile** a
 //! playbook, which is a pure function of the playbook and the rules table
-//! ([`planning::compile_playbook`]); sealing the result into the match is the
+//! ([`planning::compile_canonical`]); sealing the result into the match is the
 //! host's.
 //!
 //! # A sealed playbook reaches the match
@@ -138,7 +138,10 @@ pub mod control;
 pub mod knowledge;
 pub mod plan_words;
 pub mod planning;
+mod sealed;
 pub mod watch;
+
+pub use sealed::{Sealed, Unfiled};
 
 use crate::advice::Advice;
 use crate::audit::{AuditLog, Outcome};
@@ -191,37 +194,6 @@ pub struct Draft {
     pub round: u32,
     /// The playbook, as the author wrote it: JSONC, comments and all.
     pub playbook_jsonc: String,
-}
-
-/// What a seat has sealed: the latest verified submission, and the report that
-/// verified it.
-///
-/// Decisions-log item 5: "the latest verified submission replaces the previous
-/// one, any number of times until the timer ends", so there is one of these per
-/// seat and never a history. The safe playbook is filed only if nothing
-/// verified was ever submitted.
-///
-/// It carries the **compiled** [`Plan`] as well as the text, because the text
-/// is what a seat reads back and the plan is what the match plays. The compile
-/// happens once, at the door that can still tell somebody it failed
-/// ([`crate::surface::planning::compile_playbook`]); by the time
-/// [`Surface::begin_push`] seals this into the runner there is nothing left
-/// that can go wrong with it.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Sealed {
-    /// The playbook, as submitted.
-    pub playbook_jsonc: String,
-    /// `report_hash` of the FULL report that accepted it. Eight big-endian
-    /// bytes; the same value the pre-check returned, which is what spec
-    /// section 11's "byte-identical" promise means.
-    pub report_hash: Vec<u8>,
-    /// Which round it was sealed in.
-    pub round: u32,
-    /// True when the gateway filed this itself because the Lull ended with
-    /// nothing sealed (spec section 14).
-    pub filed_by_the_gateway: bool,
-    /// The playbook as the interpreter runs it.
-    pub plan: Plan,
 }
 
 /// The footer's `(untimed, untimed_by_rule)` pair (`gp.api.v1.Status`) for a
@@ -299,19 +271,45 @@ pub const CARRIED_DRAFT_ID: &str = "carried";
 /// Private to the seat like everything else in [`SeatState`]: a seat is told
 /// its own suggestions and its own safe playbook and nobody else's
 /// (`advice_for_one_seat_never_reaches_another`).
+///
+/// Every field is private: an `Advised` is made and placed only by
+/// [`Surface::file_advice`], for the seat it was qualified for, and nothing
+/// outside the surface can move one into another seat's store (S3's
+/// `fpstream`, part 2, fix pass 3).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Advised {
     /// Which round it is for. A Lull opening forgets it
     /// ([`Surface::open_lull`]), and every reader checks the round as well.
-    pub round: u32,
+    round: u32,
     /// What the operator said, as it said it, less any suggestion that would
     /// not instantiate ([`Surface::file_advice`] drops and audits those).
-    pub advice: Advice,
-    /// The operator's safe playbook, verified FULL and compiled when it was
-    /// filed. `None` when it did not qualify or would not compile, in which
-    /// case the gateway's fallback is what this seat is shown and filed, and
-    /// the audit log says why.
-    pub safe: Option<Sealed>,
+    advice: Advice,
+    /// The operator's safe playbook, verified FULL, compiled and priced when
+    /// it was filed, and not yet filed for a round: it is filed for this
+    /// advice's `round`, the one home of that round. `None` when it did not
+    /// qualify, compile or price, in which case the gateway's fallback is what
+    /// this seat is shown and filed, and the audit log says why.
+    safe: Option<Unfiled>,
+}
+
+impl Advised {
+    /// Which round it is for.
+    #[must_use]
+    pub const fn round(&self) -> u32 {
+        self.round
+    }
+
+    /// What the operator said, less any suggestion that would not instantiate.
+    #[must_use]
+    pub const fn advice(&self) -> &Advice {
+        &self.advice
+    }
+
+    /// The operator's safe playbook, as it was qualified when it was filed.
+    #[must_use]
+    pub const fn safe(&self) -> Option<&Unfiled> {
+        self.safe.as_ref()
+    }
 }
 
 /// How the host treats a token it minted for itself: a built-in seat's or an
@@ -341,35 +339,40 @@ pub struct InProcess {
 
 /// One seat's private state.
 ///
-/// Reached only through [`Surface::seat_state`] and
-/// [`Surface::seat_state_mut`], both of which take the subject asking.
+/// Read through [`Surface::seat_state`], which takes the subject asking, and
+/// written only inside the surface ([`Surface::seat_state_mut`] is
+/// `pub(crate)`). Every field is private, read by a getter, so code outside
+/// this crate can neither write a field nor assign a whole store: one seat's
+/// seal or advice cannot be moved into another's (S3's `fpstream`, part 2,
+/// fix pass 3).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SeatState {
     /// Which seat this is.
-    pub seat: SeatId,
+    seat: SeatId,
     /// The private seat notebook (spec section 12, "Memory").
-    pub notebook: String,
+    notebook: String,
     /// Saved drafts, in the order they were saved.
-    pub drafts: Vec<Draft>,
+    drafts: Vec<Draft>,
     /// Whether the seat has said it is ready.
-    pub ready: bool,
-    /// The latest verified submission, if there is one.
-    pub sealed: Option<Sealed>,
+    ready: bool,
+    /// The latest verified submission, if there is one: only the makers in
+    /// `surface/sealed.rs`, filed by the surface, put a seal here.
+    sealed: Option<Sealed>,
     /// What the carried draft's re-verification found, if there is one.
-    pub continuity: Option<Continuity>,
+    continuity: Option<Continuity>,
     /// What the built-in operator advised this seat this round, if it
     /// advises this seat at all.
-    pub advice: Option<Advised>,
+    advice: Option<Advised>,
     /// The Ledger's memos issued to this seat, in the order they were issued:
     /// each at most once a match, and saved, so a resume never repeats one
     /// (S3's plan, E5; [`crate::probation`]).
-    pub memos: Vec<Memo>,
+    memos: Vec<Memo>,
 }
 
 impl SeatState {
     /// An empty private store for a seat.
     #[must_use]
-    pub const fn new(seat: SeatId) -> SeatState {
+    pub(crate) const fn new(seat: SeatId) -> SeatState {
         SeatState {
             seat,
             notebook: String::new(),
@@ -386,6 +389,54 @@ impl SeatState {
     #[must_use]
     pub fn draft(&self, draft_id: &str) -> Option<&Draft> {
         self.drafts.iter().find(|draft| draft.draft_id == draft_id)
+    }
+
+    /// The latest verified submission, if there is one.
+    #[must_use]
+    pub const fn sealed(&self) -> Option<&Sealed> {
+        self.sealed.as_ref()
+    }
+
+    /// Which seat this is.
+    #[must_use]
+    pub const fn seat(&self) -> SeatId {
+        self.seat
+    }
+
+    /// The private seat notebook.
+    #[must_use]
+    pub fn notebook(&self) -> &str {
+        &self.notebook
+    }
+
+    /// Saved drafts, in the order they were saved.
+    #[must_use]
+    pub fn drafts(&self) -> &[Draft] {
+        &self.drafts
+    }
+
+    /// Whether the seat has said it is ready.
+    #[must_use]
+    pub const fn ready(&self) -> bool {
+        self.ready
+    }
+
+    /// What the carried draft's re-verification found, if there is one.
+    #[must_use]
+    pub const fn continuity(&self) -> Option<&Continuity> {
+        self.continuity.as_ref()
+    }
+
+    /// What the built-in operator advised this seat this round, if it did.
+    #[must_use]
+    pub const fn advice(&self) -> Option<&Advised> {
+        self.advice.as_ref()
+    }
+
+    /// The Ledger's memos issued to this seat, in the order they were issued.
+    #[must_use]
+    pub fn memos(&self) -> &[Memo] {
+        &self.memos
     }
 }
 
@@ -893,7 +944,7 @@ impl Surface {
             let every_seat_sealed = surface.seats.iter().all(|slot| {
                 slot.sealed
                     .as_ref()
-                    .is_some_and(|sealed| sealed.round == round)
+                    .is_some_and(|sealed| sealed.round() == round)
             });
             if !every_seat_sealed {
                 return Err(Error::invalid(
@@ -933,9 +984,15 @@ impl Surface {
                     "this rules table has no verifier block, so the notebook has no size",
                 )
             })?;
+        // Compared as counts, never through a cast that saturates: a notebook
+        // of any length past the bound is refused as itself.
+        let notebook_bound = usize::try_from(notebook_max).map_err(|_| {
+            Error::internal("the notebook's bound does not fit this platform's sizes")
+        })?;
         for held in &saved.seats {
-            let characters = u32::try_from(held.notebook.chars().count()).unwrap_or(u32::MAX);
-            if characters > notebook_max || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
+            let characters = held.notebook.chars().count();
+            if characters > notebook_bound
+                || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
             {
                 return Err(Error::invalid(said!(
                     "seat {}'s notebook or drafts in this save are over the bounds a seat may \
@@ -943,31 +1000,12 @@ impl Surface {
                     held.seat
                 )));
             }
+            // Decoded once: checked against its stamp, compiled and priced
+            // (`Surface::restored_seal`).
             let sealed = match held.seal.as_ref() {
                 None => None,
-                Some(seal) => Some(restore_seal(held, seal, &rules)?),
+                Some(seal) => Some(self.restored_seal(held, seal)?),
             };
-            // A seal of the round the save resumes into prices, as the door
-            // that sealed it required (`Surface::seal_commitment`), so the
-            // forecast's `committed_dollars` answers after a resume as before
-            // it. A save holding one that does not was never written by a
-            // build with that door.
-            if let Some(seal) = sealed.as_ref()
-                && seal.round == self.host()?.runner().round()
-            {
-                self.seal_commitment(SeatId::new(held.seat), &seal.playbook_jsonc)
-                    .map_err(|unpriced| match unpriced {
-                        crate::surface::knowledge::Unpriced::Gateway(error) => error,
-                        crate::surface::knowledge::Unpriced::Playbook(why) => {
-                            Error::invalid(said!(
-                                "seat {}'s sealed playbook in this save does not price: {}: \
-                                 the file is damaged",
-                                held.seat,
-                                why
-                            ))
-                        }
-                    })?;
-            }
             if let Some(slot) = self
                 .seats
                 .iter_mut()
@@ -1060,7 +1098,8 @@ impl Surface {
     ///
     /// [`crate::error::Code::PhaseClosed`] outside a Lull -- no saving
     /// mid-Push (spec section 3) -- and [`crate::error::Code::Internal`] when
-    /// the snapshot will not encode or a seal has no canonical form.
+    /// the snapshot will not encode. A seal's text is not read: its plan
+    /// fingerprint is the one it carries ([`Sealed::plan_fingerprint`]).
     pub fn lull_save(&self) -> Result<SavedMatch, Error> {
         if self.host()?.runner().phase() != MatchPhase::Lull {
             return Err(Error::phase_closed(
@@ -1079,16 +1118,14 @@ impl Surface {
         let snapshot = self.snapshot_bytes()?;
         let mut seats: Vec<SavedSeat> = Vec::with_capacity(self.seats.len());
         for slot in &self.seats {
-            let seal = match slot.sealed.as_ref() {
-                None => None,
-                Some(sealed) => Some(SavedSeal {
-                    playbook_jsonc: sealed.playbook_jsonc.clone(),
-                    round: sealed.round,
-                    filed_by_the_gateway: sealed.filed_by_the_gateway,
-                    report_hash: sealed.report_hash.clone(),
-                    plan_fingerprint: plan_fingerprint(&sealed.playbook_jsonc)?,
-                }),
-            };
+            // The fingerprint the seal carries: no seal's text is read here.
+            let seal = slot.sealed.as_ref().map(|sealed| SavedSeal {
+                playbook_jsonc: sealed.playbook_jsonc().to_owned(),
+                round: sealed.round(),
+                filed_by_the_gateway: sealed.filed_by_the_gateway(),
+                report_hash: sealed.report_hash().to_vec(),
+                plan_fingerprint: sealed.plan_fingerprint(),
+            });
             seats.push(SavedSeat {
                 seat: slot.seat.raw(),
                 notebook: slot.notebook.clone(),
@@ -1672,7 +1709,7 @@ impl Surface {
             .filter(|slot| {
                 slot.sealed
                     .as_ref()
-                    .is_some_and(|sealed| sealed.round == round && sealed.filed_by_the_gateway)
+                    .is_some_and(|sealed| sealed.round() == round && sealed.filed_by_the_gateway())
             })
             .map(|slot| {
                 let line = if slot.ready {
@@ -1709,11 +1746,11 @@ impl Surface {
             .filter_map(|slot| {
                 slot.sealed
                     .as_ref()
-                    .filter(|sealed| sealed.round == round)
+                    .filter(|sealed| sealed.round() == round)
                     .map(|sealed| SealedFile {
                         seat: slot.seat,
                         round,
-                        playbook_jsonc: sealed.playbook_jsonc.clone(),
+                        playbook_jsonc: sealed.playbook_jsonc().to_owned(),
                     })
             })
             .collect();
@@ -1763,7 +1800,7 @@ impl Surface {
             .iter()
             .filter_map(|seat| {
                 seat.sealed.as_ref().map(|sealed| {
-                    let mut plan = sealed.plan.clone();
+                    let mut plan = sealed.plan().clone();
                     // S2's `atk`: an Attack target named by an `e_NN` handle
                     // is pinned at the seal (decisions-log item 13) to the
                     // beacon the handle names for this seat now, the names
@@ -2612,7 +2649,11 @@ impl Surface {
         let Some(host) = self.host.as_ref() else {
             return Ok(());
         };
-        let stale = |seat: &SeatState| seat.sealed.as_ref().is_none_or(|held| held.round != round);
+        let stale = |seat: &SeatState| {
+            seat.sealed
+                .as_ref()
+                .is_none_or(|held| held.round() != round)
+        };
         let own = |seat: &SeatState| {
             seat.advice
                 .as_ref()
@@ -2623,38 +2664,38 @@ impl Surface {
             .seats
             .iter()
             .any(|seat| stale(seat) && own(seat).is_none());
+        // Read once for every seat it is filed for: decoded, compiled and
+        // fingerprinted, then priced for each seat.
         let fallback = if needs_fallback {
-            let safe = host.safe_playbook().to_owned();
-            let plan = crate::surface::planning::compile_playbook(&safe, host.rules()).map_err(
-                |error| {
-                    Error::internal(said!(
-                        "the safe playbook this gateway files will not compile: {}",
-                        error.said()
-                    ))
-                },
-            )?;
-            Some(Sealed {
-                playbook_jsonc: safe,
-                // No report: this playbook did not come from a seat and was
-                // not pre-checked by one. The Push's own verification is what
-                // accepts it, and an invented hash here would be a hash
-                // nothing produced.
-                report_hash: Vec::new(),
-                round,
-                filed_by_the_gateway: true,
-                plan,
-            })
+            Some(sealed::Fallback::read(
+                host.safe_playbook().to_owned(),
+                host.rules(),
+            )?)
         } else {
             None
         };
-        for seat in &mut self.seats {
+        let mut filings: Vec<(usize, Sealed)> = Vec::new();
+        for (index, seat) in self.seats.iter().enumerate() {
             if !stale(seat) {
                 continue;
             }
-            let filed = own(seat).or_else(|| fallback.clone());
-            if let Some(mut filed) = filed {
-                filed.round = round;
-                seat.sealed = Some(filed);
+            let unfiled = match (own(seat), fallback.as_ref()) {
+                (Some(advised), _) => advised,
+                (None, Some(fallback)) => self.fallback_for(fallback, seat.seat)?,
+                // `needs_fallback` read the fallback for every seat this reaches.
+                (None, None) => {
+                    return Err(Error::internal(
+                        "a seat that sealed nothing has no fallback read for it",
+                    ));
+                }
+            };
+            // Filed for this round: the advice is the one filed for it, and
+            // the round has one home, the filing.
+            filings.push((index, unfiled.file(round, true)));
+        }
+        for (index, sealed) in filings {
+            if let Some(slot) = self.seats.get_mut(index) {
+                slot.sealed = Some(sealed);
             }
         }
         Ok(())
@@ -2705,7 +2746,7 @@ impl Surface {
         let round = self.host()?.runner().round();
         let tick = self.time.tick;
         let subject = Subject::Seat(seat);
-        let checked = self.qualify_safe_playbook(seat, &advice.safe_playbook_jsonc, round);
+        let checked = self.qualify_safe_playbook(seat, &advice.safe_playbook_jsonc);
         let safe = match checked {
             Ok(sealed) => {
                 self.audit
@@ -2782,6 +2823,83 @@ impl Surface {
         Ok(())
     }
 
+    /// Seal `playbook_jsonc` for `seat` though the verifier refuses it: the
+    /// scenario harness's door (`gamectl scenario run`), for the committed
+    /// scenarios that need one.
+    ///
+    /// **Host-side**, like [`Surface::file_advice`]: no method handler
+    /// reaches it, and `tests/confinement.rs`'s
+    /// `no_handler_can_seal_by_the_harness` holds every gateway module to
+    /// that and `gamectl` to its one scenario runner. It decodes the text
+    /// once, by a FULL verify, and compiles, prices and fingerprints that
+    /// decode ([`Surface::harness_seal`]), so the seal carries its own
+    /// text's fingerprint like every other (S3's `fpstream`, part 2, fix
+    /// pass 2).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`]; [`crate::error::Code::PhaseClosed`] outside a
+    /// Lull, because a seal is made in the Lull it is for;
+    /// `INVALID_ARGUMENT` for a text past
+    /// `pharmakos_verifier::MAX_PLAYBOOK_CHARS`, the cap every way a seal is
+    /// made applies; [`crate::error::Code::NotFound`] for a seat the match has
+    /// not got; and as [`Surface::harness_seal`]. Every call is audited as
+    /// `seal by harness`, with its outcome, as `file advice` is.
+    pub fn seal_by_harness(&mut self, seat: SeatId, playbook_jsonc: &str) -> Result<(), Error> {
+        let tick = self.time.tick;
+        let sealed = self.harnessed(seat, playbook_jsonc);
+        // Audited, like every other way a seal is made, with its outcome.
+        match &sealed {
+            Ok(()) => {
+                self.audit.record(
+                    tick,
+                    Some(Subject::Seat(seat)),
+                    None,
+                    "seal by harness",
+                    Outcome::Ok,
+                );
+            }
+            Err(error) => {
+                self.audit.refused(
+                    tick,
+                    Some(Subject::Seat(seat)),
+                    None,
+                    "seal by harness",
+                    error,
+                );
+            }
+        }
+        sealed
+    }
+
+    /// [`Surface::seal_by_harness`]'s seal, unaudited: the phase, the size
+    /// cap every seal's text is held to (`submit_plan`'s and an advised safe
+    /// playbook's), the seal, and its filing.
+    fn harnessed(&mut self, seat: SeatId, playbook_jsonc: &str) -> Result<(), Error> {
+        if self.host()?.runner().phase() != MatchPhase::Lull {
+            return Err(Error::phase_closed(
+                "a playbook is sealed during a Lull, for the round about to be played",
+            ));
+        }
+        if pharmakos_verifier::is_too_long(playbook_jsonc) {
+            return Err(Error::invalid(said!(
+                "a playbook is at most {} characters, sealed by the harness or not",
+                pharmakos_verifier::MAX_PLAYBOOK_CHARS
+            )));
+        }
+        let round = self.host()?.runner().round();
+        let unfiled = self.harness_seal(seat, playbook_jsonc)?;
+        let slot = self
+            .seats
+            .iter_mut()
+            .find(|slot| slot.seat == seat)
+            .ok_or_else(|| Error::not_found(said!("this match has no seat {}", seat.raw())))?;
+        // Written by the harness, not filed by the gateway for a seat that
+        // sealed nothing (spec section 14).
+        slot.sealed = Some(unfiled.file(round, false));
+        Ok(())
+    }
+
     /// Whether one wizard suggestion instantiates, on its own, over the
     /// template it names.
     ///
@@ -2820,53 +2938,33 @@ impl Surface {
             .map_err(|error| Error::invalid(error.shown()))
     }
 
-    /// An advised safe playbook, verified FULL and compiled, or the reason it
-    /// is not filed.
+    /// An advised safe playbook, verified FULL, compiled and priced, not yet
+    /// filed for a round; or the reason it is not filed.
     ///
     /// `NO_QUALIFYING_PLAN` for one the verifier refuses — the code spec
-    /// section 12 names for "nothing that qualifies" — and the compile door's
-    /// own refusal for one this build cannot execute
-    /// ([`crate::surface::planning::compile_playbook`]).
-    fn qualify_safe_playbook(
-        &self,
-        seat: SeatId,
-        playbook_jsonc: &str,
-        round: u32,
-    ) -> Result<Sealed, Error> {
+    /// section 12 names for "nothing that qualifies" — and the doors' own
+    /// refusals for one this build cannot execute or the Ledger cannot price
+    /// ([`Surface::qualify`]), as `submit_plan` refuses them.
+    fn qualify_safe_playbook(&self, seat: SeatId, playbook_jsonc: &str) -> Result<Unfiled, Error> {
         if pharmakos_verifier::is_too_long(playbook_jsonc) {
             return Err(Error::invalid(said!(
                 "an advised safe playbook is at most {} characters, like any other",
                 pharmakos_verifier::MAX_PLAYBOOK_CHARS
             )));
         }
-        // One decode, verified then compiled, as `submit_plan` seals (S3's
-        // `vfyq2`, fix pass 1, item 3).
-        let (report, canonical) = match self.verified_for(seat, playbook_jsonc, Depth::Full)? {
-            pharmakos_plan_core::Verified::Canonical { report, canonical } if report.qualifies => {
-                (report, canonical)
-            }
-            refused => {
-                return Err(Error::new(
-                    crate::error::Code::NoQualifyingPlan,
-                    said!(
-                        "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \
-                         gateway's fallback is filed instead",
-                        seat.raw(),
-                        refused.report().diagnostics.len()
-                    ),
-                ));
-            }
-        };
-        let plan = crate::surface::planning::compile_canonical(&canonical, self.host()?.rules())?;
-        Ok(Sealed {
-            playbook_jsonc: playbook_jsonc.to_owned(),
-            report_hash: report.report_hash,
-            round,
-            // Filed on the seat's behalf, not written by it: draft continuity
-            // does not offer it back as the seat's own work.
-            filed_by_the_gateway: true,
-            plan,
-        })
+        // One decode, verified, compiled and priced, as `submit_plan` seals
+        // (S3's `vfyq2`, fix pass 1, item 3).
+        match self.qualify(seat, playbook_jsonc.to_owned())? {
+            sealed::Qualified::Sealable { unfiled, .. } => Ok(unfiled),
+            sealed::Qualified::Refused { report } => Err(Error::new(
+                crate::error::Code::NoQualifyingPlan,
+                said!(
+                    "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \n                     gateway's fallback is filed instead",
+                    seat.raw(),
+                    report.diagnostics.len()
+                ),
+            )),
+        }
     }
 
     /// What the operator advised a seat for the round the match is in, if it
@@ -2893,8 +2991,8 @@ impl Surface {
             .seat_state(Subject::Seat(seat), seat)?
             .sealed
             .as_ref()
-            .filter(|sealed| !sealed.filed_by_the_gateway)
-            .map(|sealed| sealed.playbook_jsonc.clone());
+            .filter(|sealed| !sealed.filed_by_the_gateway())
+            .map(|sealed| sealed.playbook_jsonc().to_owned());
         let Some(playbook) = carried else {
             // Nothing is carried this round -- the seat sealed nothing, or the
             // gateway filed its safe playbook -- so last round's carried draft
@@ -3152,7 +3250,7 @@ impl Surface {
                     && slot
                         .sealed
                         .as_ref()
-                        .is_some_and(|sealed| sealed.round == round)
+                        .is_some_and(|sealed| sealed.round() == round)
             });
             entries.push((String::from("sealed_this_round"), Json::Bool(sealed)));
         }
@@ -3180,7 +3278,7 @@ impl Surface {
     /// # Errors
     ///
     /// As [`Surface::seat_state`].
-    pub fn seat_state_mut(
+    pub(crate) fn seat_state_mut(
         &mut self,
         subject: Subject,
         seat: SeatId,
@@ -3592,8 +3690,12 @@ impl Surface {
                     "this rules table has no verifier block, so the notebook has no size",
                 )
             })?;
-        let characters = u32::try_from(notes.chars().count()).unwrap_or(u32::MAX);
-        if characters > maximum {
+        // Compared as counts, never through a cast that saturates.
+        let bound = usize::try_from(maximum).map_err(|_| {
+            Error::internal("the notebook's bound does not fit this platform's sizes")
+        })?;
+        let characters = notes.chars().count();
+        if characters > bound {
             return Err(Error::invalid(said!(
                 "the notebook holds {} characters and this is {}; it is never \
                  silently truncated",
@@ -4097,84 +4199,6 @@ pub(crate) fn held_values(world: &pharmakos_sim::world::World) -> Vec<(SeatId, O
         .collect()
 }
 
-/// The plan fingerprint of a playbook's canonical form (decisions-log item
-/// 77): what a save carries beside each seal, and what a resume recomputes.
-/// The arithmetic is the sim's ([`pharmakos_sim::hash::plan_fingerprint`],
-/// beside the state hash since S1's `build` lane, the register's S1-42).
-fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
-    fingerprint_of(&sealed_canonical(playbook_jsonc)?)
-}
-
-/// A sealed playbook's canonical form: the one decode a save's seal is read
-/// through.
-fn sealed_canonical(
-    playbook_jsonc: &str,
-) -> Result<pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>, Error> {
-    pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
-        Error::internal(said!(
-            "a sealed playbook has no canonical form: {}",
-            error.said()
-        ))
-    })
-}
-
-/// [`plan_fingerprint`], over a canonical form already decoded.
-fn fingerprint_of(
-    canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
-) -> Result<u64, Error> {
-    pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message()).map_err(|error| {
-        Error::internal(said!(
-            "a sealed playbook's canonical form will not encode for its fingerprint: {}",
-            crate::error::engine(&error)
-        ))
-    })
-}
-
-/// One saved seal, back in a seat's store: its fingerprint checked, then
-/// recompiled.
-///
-/// The fingerprint first, because it is what says the text is the text that
-/// was saved; a text that compiles and is not is exactly what it catches. The
-/// text is decoded once, and the fingerprint and the compile both read that
-/// canonical form (S3's `vfyq2`, fix pass 2, item F): what is checked is what
-/// is compiled. The refusals keep their codes and their words.
-fn restore_seal(held: &SavedSeat, seal: &SavedSeal, rules: &RulesTable) -> Result<Sealed, Error> {
-    let damaged = |error: Error| {
-        Error::invalid(said!(
-            "seat {}'s sealed playbook in this save has no canonical form ({}): the file is \
-             damaged",
-            held.seat,
-            error.said()
-        ))
-    };
-    let canonical = sealed_canonical(&seal.playbook_jsonc).map_err(damaged)?;
-    let fingerprint = fingerprint_of(&canonical).map_err(damaged)?;
-    if fingerprint != seal.plan_fingerprint {
-        return Err(Error::invalid(said!(
-            "seat {}'s sealed playbook in this save does not match the plan fingerprint saved \
-             beside it ({} against {}): the file is damaged, or this build writes a different \
-             canonical form than the one that saved it",
-            held.seat,
-            pharmakos_proto::json::grammar::quoted(&pharmakos_sim::hex(fingerprint)),
-            pharmakos_proto::json::grammar::quoted(&pharmakos_sim::hex(seal.plan_fingerprint))
-        )));
-    }
-    let plan = crate::surface::planning::compile_canonical(&canonical, rules).map_err(|error| {
-        Error::invalid(said!(
-            "seat {}'s sealed playbook in this save will not compile in this build: {}",
-            held.seat,
-            error.said()
-        ))
-    })?;
-    Ok(Sealed {
-        playbook_jsonc: seal.playbook_jsonc.clone(),
-        report_hash: seal.report_hash.clone(),
-        round: seal.round,
-        filed_by_the_gateway: seal.filed_by_the_gateway,
-        plan,
-    })
-}
-
 /// What the audit log records for a call, resolved against the schema.
 ///
 /// **The method string a client sent never reaches the log.** The log is
@@ -4285,6 +4309,7 @@ fn refreshes_by_seat(events: &[pharmakos_sim::events::Event]) -> Vec<(SeatId, us
 mod tests {
     use super::{Draft, Event, Surface};
     use crate::detail::Detail;
+
     use crate::error::Code;
     use crate::fog::{Blind, FogPolicy};
     use crate::rpc;
@@ -6449,7 +6474,10 @@ mod tests {
             ),
             (300_000_000, "past the `int32`"),
         ] {
-            match surface.seal_commitment(SeatId::new(0), &many_scouts(scouts)) {
+            let text = many_scouts(scouts);
+            let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
+            let priced = surface.seal_commitment_of(SeatId::new(0), canonical.decoded().message());
+            match priced {
                 Err(super::knowledge::Unpriced::Playbook(why)) => {
                     assert!(why.as_str().contains(says), "{scouts} scouts: {why}");
                 }
@@ -6459,7 +6487,9 @@ mod tests {
                 Ok(spend) => panic!("{scouts} scouts priced at $ {spend}"),
             }
         }
-        let priced = surface.seal_commitment(SeatId::new(0), &many_scouts(1));
+        let one = many_scouts(1);
+        let canonical = pharmakos_plan_core::decode_jsonc(&one).expect("a canonical form");
+        let priced = surface.seal_commitment_of(SeatId::new(0), canonical.decoded().message());
         assert!(
             matches!(priced, Ok(spend) if spend > 0),
             "one scout prices, and costs something"

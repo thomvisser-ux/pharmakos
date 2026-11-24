@@ -325,7 +325,7 @@ fn a_conforming_client_upgrades_and_calls() {
         surface
             .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
             .expect("its own")
-            .notebook,
+            .notebook(),
         "walk east"
     );
 }

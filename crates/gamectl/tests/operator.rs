@@ -526,12 +526,12 @@ fn visit(
             .seat_state(Subject::Seat(seat), seat)
             .expect("its own")
             .clone();
-        let sealed = state.sealed.as_ref();
+        let sealed = state.sealed();
         let sealed_by_easy =
-            sealed.is_some_and(|held| held.round == round && !held.filed_by_the_gateway);
+            sealed.is_some_and(|held| held.round() == round && !held.filed_by_the_gateway());
         let note = sealed
             .and_then(|held| {
-                held.playbook_jsonc
+                held.playbook_jsonc()
                     .lines()
                     .find(|line| line.trim_start().starts_with("\"note\""))
                     .map(|line| line.trim().to_owned())
@@ -1009,9 +1009,9 @@ fn round_one(seed: u64, match_id: &str) -> Vec<String> {
             let state = surface
                 .seat_state(Subject::Seat(seat), seat)
                 .expect("its own");
-            let sealed = state.sealed.as_ref().expect("Easy sealed a playbook");
-            assert!(!sealed.filed_by_the_gateway);
-            sealed.playbook_jsonc.clone()
+            let sealed = state.sealed().expect("Easy sealed a playbook");
+            assert!(!sealed.filed_by_the_gateway());
+            sealed.playbook_jsonc().to_owned()
         })
         .collect()
 }
@@ -1086,11 +1086,10 @@ fn the_operator_does_not_depend_on_the_host_clock() {
                     surface
                         .seat_state(Subject::Seat(seat), seat)
                         .expect("its own")
-                        .sealed
-                        .as_ref()
+                        .sealed()
                         .expect("sealed")
-                        .playbook_jsonc
-                        .clone()
+                        .playbook_jsonc()
+                        .to_owned()
                 })
                 .collect(),
         );
@@ -1174,32 +1173,35 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
             .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
             .expect("its own")
             .clone();
-        assert_eq!(human_after.notebook, before.notebook);
-        assert_eq!(human_after.drafts, before.drafts);
-        assert!(human_after.sealed.is_none(), "an advisor seals nothing");
-        assert!(!human_after.ready, "an advisor never says ready for a seat");
-        advised.push(human_after.advice.clone());
+        assert_eq!(human_after.notebook(), before.notebook());
+        assert_eq!(human_after.drafts(), before.drafts());
+        assert!(human_after.sealed().is_none(), "an advisor seals nothing");
+        assert!(
+            !human_after.ready(),
+            "an advisor never says ready for a seat"
+        );
+        advised.push(human_after.advice().cloned());
 
         let easy = surface
             .seat_state(Subject::Seat(SeatId::new(1)), SeatId::new(1))
             .expect("its own");
-        assert!(easy.notebook.is_empty() && easy.drafts.is_empty());
+        assert!(easy.notebook().is_empty() && easy.drafts().is_empty());
         assert!(
-            easy.sealed
-                .as_ref()
-                .is_some_and(|sealed| !sealed.filed_by_the_gateway)
+            easy.sealed()
+                .is_some_and(|sealed| !sealed.filed_by_the_gateway())
         );
-        assert!(easy.ready);
+        assert!(easy.ready());
     }
     let (Some(Some(quiet)), Some(Some(noisy))) = (advised.first(), advised.get(1)) else {
         panic!("the human seat was advised both times");
     };
     assert_eq!(
-        quiet.advice, noisy.advice,
+        quiet.advice(),
+        noisy.advice(),
         "the notebook changes nothing Easy advises"
     );
     assert!(
-        quiet.safe.is_some(),
+        quiet.safe().is_some(),
         "the advised safe playbook qualified at filing"
     );
 }
@@ -2171,11 +2173,10 @@ fn easy_seals_a_stone(stone_ms: Option<i64>) -> (String, Vec<String>, pharmakos_
     let sealed = surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("its own")
-        .sealed
-        .as_ref()
+        .sealed()
         .expect("round 2's seal")
-        .playbook_jsonc
-        .clone();
+        .playbook_jsonc()
+        .to_owned();
     assert!(
         sealed.contains("\"toward\":{\"feature\":{\"feature_id\":\"seam_190_124\"}}"),
         "{sealed}"
@@ -2187,7 +2188,7 @@ fn easy_seals_a_stone(stone_ms: Option<i64>) -> (String, Vec<String>, pharmakos_
     let drafts = surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("its own")
-        .drafts
+        .drafts()
         .iter()
         .map(|draft| draft.draft_id.clone())
         .collect::<Vec<_>>();

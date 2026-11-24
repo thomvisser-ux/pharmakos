@@ -754,7 +754,9 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
     } else if let Some(decoded) = decode::run(input.playbook, input.handed, &mut out) {
         let playbook = &decoded.playbook;
         units = size::size_units(playbook);
-        if let Some(digest) = decoded.fingerprint {
+        // An `Err` has already been reported as `E0030`, an error, so the
+        // report carries no fingerprint and does not qualify.
+        if let Ok(digest) = decoded.fingerprint {
             // `to_field` rather than `to_be_bytes` here: `crates/proto`'s
             // `fingerprint` module owns "eight big-endian bytes" (item 77), and
             // a rule with one home cannot drift between its callers.
