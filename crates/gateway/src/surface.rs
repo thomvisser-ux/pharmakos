@@ -237,8 +237,12 @@ pub struct Continuity {
     pub draft_id: String,
     /// Whether it still qualifies against the new snapshot.
     pub qualifies: bool,
-    /// How many diagnostics the re-verification produced.
+    /// How many diagnostics the re-verification's report **lists**: at most
+    /// `pharmakos_verifier::MAX_PER_CODE` of one code, the rest of a code
+    /// counted by the report's closing `I0007`, one per code (S3's `vcap`).
     pub diagnostics: u32,
+    /// How many codes that report left diagnostics out of: its `I0007` rows.
+    pub codes_left_out: u32,
     /// `report_hash` of that re-verification.
     pub report_hash: Vec<u8>,
 }
@@ -1070,6 +1074,7 @@ impl Surface {
                 draft_id: String::from(CARRIED_DRAFT_ID),
                 qualifies: report.qualifies,
                 diagnostics: diagnostic_count(&report)?,
+                codes_left_out: codes_left_out(&report)?,
                 report_hash: report.report_hash,
             });
         }
@@ -2959,9 +2964,10 @@ impl Surface {
             sealed::Qualified::Refused { report } => Err(Error::new(
                 crate::error::Code::NoQualifyingPlan,
                 said!(
-                    "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \n                     gateway's fallback is filed instead",
+                    "seat {}'s advised safe playbook does not qualify ({}); the gateway's \
+                     fallback is filed instead",
                     seat.raw(),
-                    report.diagnostics.len()
+                    listed_words(&report)
                 ),
             )),
         }
@@ -3010,6 +3016,7 @@ impl Surface {
             draft_id: String::from(CARRIED_DRAFT_ID),
             qualifies: report.qualifies,
             diagnostics: diagnostic_count(&report)?,
+            codes_left_out: codes_left_out(&report)?,
             report_hash: report.report_hash.clone(),
         };
         let state = self.seat_state_mut(Subject::Seat(seat), seat)?;
@@ -4166,7 +4173,37 @@ fn tallies_of(
         .collect()
 }
 
-/// How many diagnostics a report carries, as `Continuity.diagnostics`, a
+/// A refusal's words for what a report lists: its rows, and how many codes it
+/// left diagnostics out of past the per-code cap (S3's `vcap`), read from the
+/// rows and never from a sentence ([`pharmakos_verifier::CapRead`]).
+fn listed_words(report: &VerifyReport) -> pharmakos_proto::json::grammar::Said {
+    let read = pharmakos_verifier::CapRead::of(report);
+    if read.any_left_out() {
+        said!(
+            "{} diagnostics listed, and more of {} codes past the {} of one code a report lists",
+            report.diagnostics.len(),
+            read.left_out_codes,
+            pharmakos_verifier::MAX_PER_CODE
+        )
+    } else {
+        said!("{} diagnostics", report.diagnostics.len())
+    }
+}
+
+/// How many codes a report left diagnostics out of, as
+/// `Continuity.codes_left_out`, a `uint32`.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] past a `u32`, which the catalogue's size
+/// keeps far below; never clamped.
+fn codes_left_out(report: &VerifyReport) -> Result<u32, Error> {
+    let codes = pharmakos_verifier::CapRead::of(report).left_out_codes;
+    u32::try_from(codes)
+        .map_err(|_| Error::internal(said!("a report left out {} codes, past a uint32", codes)))
+}
+
+/// How many diagnostics a report lists, as `Continuity.diagnostics`, a
 /// `uint32`.
 ///
 /// # Errors
