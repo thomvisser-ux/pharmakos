@@ -1037,6 +1037,16 @@ fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_an
             .clone();
         assert!(sealed.filed_by_the_gateway, "filed on the seat's behalf");
         assert_eq!(sealed.playbook_jsonc, expected);
+        // The fingerprint it carries, taken where it was qualified or filed,
+        // is its own text's (S3's `fpstream`, part 2).
+        let canonical =
+            pharmakos_plan_core::decode_jsonc(&sealed.playbook_jsonc).expect("a canonical form");
+        assert_eq!(
+            sealed.plan_fingerprint(),
+            pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
+                .expect("a fingerprint"),
+            "the carried fingerprint is the text's"
+        );
         assert_eq!(
             sealed.report_hash.is_empty(),
             !own,

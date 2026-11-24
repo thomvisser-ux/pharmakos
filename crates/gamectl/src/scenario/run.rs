@@ -832,7 +832,7 @@ pub enum Door {
 /// would refuse — and every run that uses this door prints a line naming the
 /// seat, the file and the codes (`Played::notes`, and the report `check`
 /// renders). It compiles by exactly the route the gateway's own
-/// `compile_playbook` does, `plan-core`'s canonical form into `Plan::compile`,
+/// `compile_canonical` does, `plan-core`'s canonical form into `Plan::compile`,
 /// so the plan the match plays is the plan a submission would have produced.
 ///
 /// **This is the one thing in this task the owner is asked to rule on**, and
@@ -946,7 +946,7 @@ fn seal(
     }
     let report_hash = report_hash_of(result)?;
 
-    // The second door. Compiled by the route `compile_playbook` takes, so the
+    // The second door. Compiled by the route `compile_canonical` takes, so the
     // plan is the one a submission would have produced.
     let rules = surface.host().map_err(internal)?.rules().clone();
     let round = surface.host().map_err(internal)?.runner().round();
@@ -970,19 +970,24 @@ fn seal(
             .as_str(),
         ))
     })?;
+    // The fingerprint the report was written with, read only once the text
+    // has a canonical form and compiles, so a scenario's mistake is said in
+    // its own words first.
+    let plan_fingerprint = plan_fingerprint_of(result)?;
     let state = surface
         .seat_state_mut(Subject::Seat(SeatId::new(seat)), SeatId::new(seat))
         .map_err(internal)?;
-    state.sealed = Some(pharmakos_gateway::surface::Sealed {
-        playbook_jsonc: playbook,
+    state.sealed = Some(pharmakos_gateway::surface::Sealed::new(
+        playbook,
         report_hash,
         round,
         // False, and deliberately: `true` means the gateway filed the safe
         // playbook for a seat that sealed nothing (spec §14), and saying so
         // here would be this runner claiming to be the gateway.
-        filed_by_the_gateway: false,
+        false,
         plan,
-    });
+        plan_fingerprint,
+    ));
     Ok(Door::Harness(codes))
 }
 
@@ -1049,6 +1054,34 @@ fn report_hash_of(result: Option<&Json>) -> Result<Vec<u8>, Failure> {
         // it is refused rather than sealed as empty bytes (S2's sweep, E7).
         other => Err(Failure::internal(format!(
             "`submit_plan` answered with no `report_hash` string ({other:?})"
+        ))),
+    }
+}
+
+/// The refused report's plan fingerprint, for the harness door's seal.
+///
+/// The gateway's verifier wrote it from the wire bytes of the decode it
+/// reported on, which is the canonical form of the text this door seals, so it
+/// is the value a save of this seal stamps and a resume checks (S3's
+/// `fpstream`, part 2): carried, not taken again. A refused report with no
+/// fingerprint is one whose playbook did not decode, and the door seals
+/// nothing then, with a typed failure rather than a value nobody computed.
+fn plan_fingerprint_of(result: Option<&Json>) -> Result<u64, Failure> {
+    match result
+        .and_then(|result| result.get("report"))
+        .and_then(|report| report.get("plan_fingerprint"))
+    {
+        Some(Json::String(text)) => pharmakos_proto::json::base64::decode(text)
+            .and_then(|bytes| pharmakos_proto::fingerprint::from_field(&bytes))
+            .ok_or_else(|| {
+                Failure::internal(format!(
+                    "`submit_plan` answered with a report whose `plan_fingerprint` is not eight \
+                     base64 bytes ({text:?}), so the harness door has no fingerprint to seal \
+                     this playbook under"
+                ))
+            }),
+        other => Err(Failure::internal(format!(
+            "`submit_plan` answered with no `plan_fingerprint` string ({other:?})"
         ))),
     }
 }
@@ -1469,5 +1502,56 @@ mod tests {
             !surface.time().untimed,
             "a Lull handed its whole length is timed"
         );
+    }
+
+    /// The harness door's seal carries the fingerprint the gateway's report
+    /// was written with, which is its own text's (S3's `fpstream`, part 2),
+    /// and a save of the match stamps it beside the text.
+    #[test]
+    fn the_harness_door_s_seal_carries_its_text_s_fingerprint() {
+        use pharmakos_gateway::token::Subject;
+        use pharmakos_sim::tables::SeatId;
+        let source = root().join("scenarios/s2/mortar-breaks-wall.scenario.jsonc");
+        let scenario = crate::scenario::load(root(), &source).expect("a committed scenario");
+        let rules = super::load_rules(root(), &scenario).expect("its rules table");
+        let mut surface = open(root(), &scenario, rules).expect("the match opens");
+        let tokens = super::mint(&mut surface, &scenario).expect("tokens");
+        let mut harnessed = 0_usize;
+        for (seat, token) in scenario.seats.iter().zip(&tokens) {
+            let super::SeatKind::Playbook(relative) = &seat.kind else {
+                continue;
+            };
+            let door = super::seal(root(), &mut surface, token, seat.seat, relative, false)
+                .expect("sealed");
+            if matches!(door, super::Door::Harness(_)) {
+                harnessed += 1;
+            }
+            let id = SeatId::new(seat.seat);
+            let sealed = surface.sealed_plan(Subject::Seat(id), id).expect("a seal");
+            let canonical = pharmakos_plan_core::decode_jsonc(&sealed.playbook_jsonc)
+                .expect("a canonical form");
+            assert_eq!(
+                sealed.plan_fingerprint(),
+                pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
+                    .expect("a fingerprint"),
+                "seat {}: the carried fingerprint is the text's",
+                seat.seat
+            );
+        }
+        assert_eq!(harnessed, 1, "this scenario is the harness door's one");
+        let saved = surface.lull_save().expect("a Lull saves");
+        for held in &saved.seats {
+            let Some(seal) = held.seal.as_ref() else {
+                continue;
+            };
+            let id = SeatId::new(held.seat);
+            assert_eq!(
+                seal.plan_fingerprint,
+                surface
+                    .sealed_plan(Subject::Seat(id), id)
+                    .expect("a seal")
+                    .plan_fingerprint()
+            );
+        }
     }
 }

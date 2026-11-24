@@ -57,7 +57,7 @@
 //! vocabulary whose effect waits for a later stage, an enum value newer than
 //! this build, a voxel the verifier's resolve stage does not yet bound.
 //!
-//! [`compile_playbook`] is where the second door is (its one `Plan::compile`
+//! [`compile_canonical`] is where the second door is (its one `Plan::compile`
 //! call is [`compile_decoded`], which `resolve_refs` shares, so a preview and
 //! a seal go through the same door), and it is **at submit**
 //! rather than at `begin_push` (decisions-log item 103 (1)): a refusal
@@ -1108,11 +1108,14 @@ impl Surface {
     ///
     /// Two doors stand after the verifier, and a refusal at either is a method
     /// error, `INVALID_ARGUMENT`, with the previous seal untouched: the sim's
-    /// compile ([`compile_playbook`]), and the price of the seal
+    /// compile ([`compile_canonical`]), and the price of the seal
     /// (`Surface::seal_commitment`) -- a playbook whose spend or draw does
     /// not fit the sim's `$` and kW types, or whose spend is past the
     /// forecast's `int32`, is refused rather than sealed into a forecast that
-    /// could not answer.
+    /// could not answer. The seal carries the report's plan fingerprint, and a
+    /// qualifying report that carries none is `INTERNAL`, the previous seal
+    /// untouched again: the verifier and the gateway disagreeing, never a
+    /// seal under a fingerprint nobody took.
     pub(super) fn submit_plan(
         &mut self,
         subject: crate::token::Subject,
@@ -1155,13 +1158,19 @@ impl Surface {
                         why
                     )),
                 })?;
-            let sealed = Sealed {
-                playbook_jsonc: playbook,
-                report_hash: report.report_hash.clone(),
+            // The fingerprint the report was written with, from the same
+            // decode: what every save of this seal stamps (S3's `fpstream`,
+            // part 2). A qualifying report without one is refused, typed,
+            // with the previous seal untouched.
+            let fingerprint = super::carried_fingerprint(report)?;
+            let sealed = Sealed::new(
+                playbook,
+                report.report_hash.clone(),
                 round,
-                filed_by_the_gateway: false,
+                false,
                 plan,
-            };
+                fingerprint,
+            );
             self.seat_state_mut(subject, seat)?.sealed = Some(sealed);
         }
         Ok(Json::Object(vec![
@@ -1206,15 +1215,15 @@ impl Surface {
     }
 }
 
-/// The sim's door: a JSONC playbook to a compiled [`Plan`], or the refusal a
-/// caller is told.
+/// The sim's door: a playbook's canonical form, already decoded, to a
+/// compiled [`Plan`], or the refusal a caller is told.
 ///
 /// The one path from a submitted file to something the interpreter can run, so
-/// `submit_plan` and [`crate::surface::Surface`]'s filing of the safe playbook
-/// cannot compile it two different ways. The decode is `plan-core`'s
-/// `decode_jsonc`, the same decode the verifier's report is taken over; a
-/// caller holding that decode already compiles it through
-/// [`compile_canonical`] instead.
+/// `submit_plan`, [`crate::surface::Surface`]'s filing of the safe playbook
+/// and of an advised one, and a resume's restore of a saved seal cannot
+/// compile it two different ways. Each compiles the canonical form its report
+/// or its fingerprint was taken over (S3's `vfyq2`, fix pass 1, item 3): what
+/// is verified is what is compiled.
 ///
 /// # The code, and why it is this one
 ///
@@ -1248,30 +1257,7 @@ impl Surface {
 ///
 /// # Errors
 ///
-/// [`crate::error::Code::InvalidArgument`] for a [`PlanError`], and
-/// [`crate::error::Code::Internal`] when the text has no canonical form at all
-/// — which for a submission cannot happen, because the report that qualified it
-/// was taken over that same canonical form, and so would mean the two had
-/// drifted apart.
-pub(crate) fn compile_playbook(playbook_jsonc: &str, rules: &RulesTable) -> Result<Plan, Error> {
-    let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
-        Error::internal(said!(
-            "a playbook the verifier read has no canonical form: {}",
-            error.said()
-        ))
-    })?;
-    compile_canonical(&canonical, rules)
-}
-
-/// [`compile_playbook`], over a canonical form already decoded: what
-/// `submit_plan` compiles, the one its report was taken over (S3's `vfyq2`,
-/// fix pass 1, item 3).
-///
-/// # Errors
-///
-/// As [`compile_playbook`], for a [`PlanError`].
-///
-/// [`PlanError`]: pharmakos_sim::interpreter::PlanError
+/// [`crate::error::Code::InvalidArgument`] for a [`PlanError`].
 pub(crate) fn compile_canonical(
     canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
     rules: &RulesTable,
@@ -1286,7 +1272,7 @@ pub(crate) fn compile_canonical(
 
 /// The sim's own door, over a playbook already decoded: the **one** call of
 /// `Plan::compile` in the handler modules (`tests/confinement.rs`), which
-/// [`compile_playbook`] and `resolve_refs` both go through, so the playbook
+/// [`compile_canonical`] and `resolve_refs` both go through, so the playbook
 /// `resolve_refs` reads is the one a submission would seal. A refusal comes
 /// back as the gateway's own sentence for it ([`plan_refusal`]), never as
 /// the sim's error, so no handler can say a `PlanError` any other way.
@@ -1935,9 +1921,41 @@ fn condition_slot(slot: &pharmakos_plan_core::ConditionSlot) -> Json {
     ])
 }
 
+/// The tests' compile of a JSONC text, where `host.rs`'s tests name it.
+#[cfg(test)]
+pub(crate) use tests::compile_playbook;
+
 #[cfg(test)]
 mod tests {
     use super::resolved_json;
+    use crate::error::Error;
+    use pharmakos_proto::said;
+    use pharmakos_sim::interpreter::Plan;
+    use pharmakos_sim::rules::RulesTable;
+
+    /// [`super::compile_canonical`] over a JSONC text, decoded here by
+    /// `plan-core`'s `decode_jsonc`: for this crate's tests, which compile a text
+    /// with no decode in hand. Every shipped caller holds the decode it verified
+    /// or fingerprinted and compiles that (S3's `fpstream`, part 2: the
+    /// gateway's filing of its fallback, the last shipped caller, now decodes
+    /// once for the compile and the fingerprint both).
+    ///
+    /// # Errors
+    ///
+    /// As [`super::compile_canonical`], and [`crate::error::Code::Internal`]
+    /// when the text has no canonical form at all.
+    pub(crate) fn compile_playbook(
+        playbook_jsonc: &str,
+        rules: &RulesTable,
+    ) -> Result<Plan, Error> {
+        let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
+            Error::internal(said!(
+                "a playbook the verifier read has no canonical form: {}",
+                error.said()
+            ))
+        })?;
+        super::compile_canonical(&canonical, rules)
+    }
     use crate::targeting::{Candidate, Resolved, Site};
     use pharmakos_proto::json::Json;
     use pharmakos_sim::math::quantity::Ms;

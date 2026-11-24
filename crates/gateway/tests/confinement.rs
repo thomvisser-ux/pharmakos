@@ -1501,7 +1501,7 @@ fn a_handler_may_compile_a_playbook_and_may_never_seal_or_step_one() {
     assert_eq!(
         compiles, 1,
         "`Plan::compile` is called once, in `surface/planning.rs`'s `compile_decoded`, which \
-         `compile_playbook` and `resolve_refs` share: the one door a playbook goes through into \
+         `compile_canonical` and `resolve_refs` share: the one door a playbook goes through into \
          the sim. If this is 0 the ban above is guarding an empty room; if it is more than 1 \
          there are two doors and they can drift"
     );
@@ -2696,4 +2696,62 @@ fn wall_target_json(",
             "compose_wall_box reads through `{read}`"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// A seal carries the fingerprint it was made with (S3's `fpstream`, part 2)
+// ---------------------------------------------------------------------------
+
+/// A seal is made only by `Sealed::new`, which takes its plan fingerprint as a
+/// required argument, and no shipped code of the gateway or `gamectl` takes a
+/// fingerprint by encoding a message again: the fingerprint is taken once,
+/// from the decode that qualified or compiled the seal, and carried
+/// (`tests/seal_work.rs` holds the counted work).
+///
+/// The field is private, so another crate cannot write a literal; this holds
+/// the gateway's own modules, which could, to the constructor as well.
+#[test]
+fn a_seal_is_made_by_its_constructor_and_no_fingerprint_is_taken_twice() {
+    let mut files = sources();
+    files.extend(sources_of("gamectl"));
+    let mut literals: Vec<String> = Vec::new();
+    let mut reencoded: Vec<String> = Vec::new();
+    let mut constructed = 0_usize;
+    for path in &files {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        for (number, line) in code_lines(&text) {
+            let trimmed = line.trim();
+            let declares = trimmed == "pub struct Sealed {" || trimmed == "impl Sealed {";
+            // `Boundary::Sealed` is the save's boundary, a variant and not this type.
+            let literal = line.contains("Sealed {") && !line.contains("Boundary::Sealed");
+            if literal && !declares {
+                literals.push(format!("{}:{number}: {trimmed}", path.display()));
+            }
+            if line.contains("Sealed::new(") {
+                constructed = constructed.saturating_add(1);
+            }
+            if line.contains("hash::plan_fingerprint(") {
+                reencoded.push(format!("{}:{number}: {trimmed}", path.display()));
+            }
+        }
+    }
+    assert!(
+        literals.is_empty(),
+        "a seal is made by `Sealed::new`, which takes its fingerprint, and never by a literal:\n{}",
+        literals.join("\n")
+    );
+    assert!(
+        reencoded.is_empty(),
+        "the plan fingerprint is taken from the decode a caller holds \
+         (`plan_fingerprint_of`), or carried on the seal, and never by encoding a message \
+         again:\n{}",
+        reencoded.join("\n")
+    );
+    // Submission, advice, the fallback, a resume and the scenario harness.
+    assert_eq!(
+        constructed, 5,
+        "one `Sealed::new` for each way a seal is made; a new one is a maker whose fingerprint \
+         `tests/seal_work.rs` must hold"
+    );
 }
