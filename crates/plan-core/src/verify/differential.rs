@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 use pharmakos_proto::json::{self, Json};
 
 use super::{HandedOver, blank_comments, hand_over};
-use crate::canonical::{Canonical, canonicalise, canonicalise_text};
+use crate::canonical::{Canonical, canonicalise_text};
 use crate::jsonc::Document;
 
 /// The JSONC chain: the canonical JSON `canonicalise_text` writes, or the
@@ -1158,20 +1158,18 @@ fn same_comments(inn: &[Spotted], out: &[Spotted], relocated: &[Moved]) -> bool 
     by_anchor(inn, relocated, true) == by_anchor(out, relocated, false)
 }
 
-/// The comment-keeping canonicaliser [`Kept`] holds to its two promises:
-/// [`canonicalise`] itself, or, in the checker's own test, one broken on
-/// purpose.
-type Canonicaliser = fn(&Document) -> Result<Canonical, crate::error::Error>;
+/// The comment-keeping canonicaliser [`Kept`] holds to its two promises: the
+/// product's entry point, [`canonicalise_text`], which every shipped caller
+/// reaches the writer through, or, in the checker's own test, one broken on
+/// purpose. It takes the text, so the differential reads the file the way a
+/// caller does (fix pass 1 of `pcsplit`: a checker that called `canonicalise`
+/// on its own parse could not see a fault in the text-to-document step).
+type Canonicaliser = fn(&str) -> Result<Canonical, crate::error::Error>;
 
 /// The two promises the canonical writer makes of every text it writes
 /// (fix pass 1, item 8): every comment comes out, text for text (a comment
 /// on a written-out default is moved, never dropped), and canonicalising the
 /// canonical text gives it back unchanged.
-///
-/// Each text is read once and its document shared by the canonicaliser and
-/// the comment listing, and so is the canonical text's (`pcsplit`): reading a
-/// text twice gave the same document twice, since `canonicalise_text` is
-/// `canonicalise` over `Document::parse`.
 #[derive(Debug)]
 struct Kept {
     canonicalise: Canonicaliser,
@@ -1191,10 +1189,7 @@ impl Kept {
     }
 
     fn check(&mut self, what: &str, text: &str) {
-        let Ok(document) = Document::parse(text) else {
-            return;
-        };
-        let Ok(once) = (self.canonicalise)(&document) else {
+        let Ok(once) = (self.canonicalise)(text) else {
             return;
         };
         self.cases += 1;
@@ -1207,14 +1202,15 @@ impl Kept {
                 to: relocation.to.clone(),
             })
             .collect();
+        let read = Document::parse(text).expect("a text the writer canonicalised parses");
         let again = Document::parse(&once.text).expect("the canonical text parses");
-        if !same_comments(&spotted(&document), &spotted(&again), &relocated) {
+        if !same_comments(&spotted(&read), &spotted(&again), &relocated) {
             self.lost.push(format!(
                 "{what}: {:?}",
                 text.chars().take(300).collect::<String>()
             ));
         }
-        match (self.canonicalise)(&again) {
+        match (self.canonicalise)(&once.text) {
             Ok(twice) if twice.text == once.text => {}
             _ => self.unstable.push(format!(
                 "{what}: {:?}",
@@ -1383,7 +1379,7 @@ fn kept_in_group(group: usize) {
     let (texts, planned) = planned_texts();
     let units = &planned[group];
     assert!(!units.is_empty(), "group {group} has no work");
-    let mut kept = Kept::new(canonicalise);
+    let mut kept = Kept::new(canonicalise_text);
     // Every splice checked, and every splice the plan names: (text, boundary,
     // comment).
     let mut done: Vec<(usize, usize, &str)> = Vec::new();
@@ -1570,11 +1566,11 @@ fn every_boundary_of_every_text_has_a_test() {
 /// A canonicaliser that drops every empty block comment, trailing or on a
 /// line of its own, and so writes a text that is stable but has lost a
 /// comment.
-fn dropping(document: &Document) -> Result<Canonical, crate::error::Error> {
-    let mut canonical = canonicalise(document)?;
+fn dropping(text: &str) -> Result<Canonical, crate::error::Error> {
+    let mut canonical = canonicalise_text(text)?;
     let mut kept = String::new();
-    let text = canonical.text.replace(" /**/", "");
-    for line in text.lines().filter(|line| line.trim() != "/**/") {
+    let written = canonical.text.replace(" /**/", "");
+    for line in written.lines().filter(|line| line.trim() != "/**/") {
         kept.push_str(line);
         kept.push('\n');
     }
@@ -1584,9 +1580,9 @@ fn dropping(document: &Document) -> Result<Canonical, crate::error::Error> {
 
 /// A canonicaliser that writes a space before a text that has none, and so
 /// writes the canonical text once differently.
-fn wavering(document: &Document) -> Result<Canonical, crate::error::Error> {
-    let mut canonical = canonicalise(document)?;
-    if !document.to_text().starts_with(' ') {
+fn wavering(text: &str) -> Result<Canonical, crate::error::Error> {
+    let mut canonical = canonicalise_text(text)?;
+    if !text.starts_with(' ') {
         canonical.text.insert(0, ' ');
     }
     Ok(canonical)
@@ -1597,7 +1593,7 @@ fn wavering(document: &Document) -> Result<Canonical, crate::error::Error> {
 #[test]
 fn the_comment_checker_sees_a_lost_comment_and_an_unstable_text() {
     let text = MINIMAL.replace(",\"meta\"", ",/**/\"meta\"");
-    let mut real = Kept::new(canonicalise);
+    let mut real = Kept::new(canonicalise_text);
     real.check("the real writer", &text);
     assert_eq!(
         (real.cases, real.lost.len(), real.unstable.len()),
