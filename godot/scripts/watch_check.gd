@@ -637,6 +637,62 @@ func _silent_host() -> void:
 	if not _refused_reason.contains("connection was given up after"):
 		_failures.append("the silent-host leg gave up in words that are not the policy's: %s" % _refused_reason)
 	print("[watch-check] a host that accepts and never answers: %d connection(s) taken, given up with %.1f s of the %.0f s bound left: %s" % [held.size(), left, SILENT_WAIT, _refused_reason])
+	await _silent_after_open()
+
+
+## How long the open-then-silent leg waits for its first abort: the call deadline (20 s) and a
+## slow frame's room.
+const DEADLINE_WAIT := 40.0
+## How long an aborted peer may take to read CLOSED (measured: 32 ms).
+const ABORT_WAIT := 2.0
+
+## **A host that opens and then never answers is aborted, not closed by a handshake** (fix pass
+## 7, item 1 (a)): a listener completes each handshake and then never polls again. The call in
+## flight passes its deadline, the rig has the peer aborted, and the aborted peer reads CLOSED
+## within `ABORT_WAIT`. A `close(1000)` would wait for an echo that never comes, and the peer
+## would read CLOSING for ever (review 6 measured 40 s).
+func _silent_after_open() -> void:
+	var server := TCPServer.new()
+	if server.listen(0, "127.0.0.1") != OK:
+		_failures.append("the open-then-silent leg could not listen")
+		return
+	var answering: Array[WebSocketPeer] = []
+	link.reset()
+	_refused_reason = ""
+	_expecting_refusal = true
+	link.attach(server.get_local_port(), ["silent-admin", "silent-seat"])
+	var first: WebSocketPeer = link._peers[0]
+	var timer := get_tree().create_timer(DEADLINE_WAIT)
+	while link._peers[0] == first and _refused_reason == "" and timer.time_left > 0.0:
+		while server.is_connection_available():
+			var peer := WebSocketPeer.new()
+			peer.accept_stream(server.take_connection())
+			answering.append(peer)
+		# Each server peer is polled until its handshake is done, and never after.
+		for peer in answering:
+			if peer.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
+				peer.poll()
+		link.pump_attached()
+		await get_tree().process_frame
+	_expecting_refusal = false
+	var aborted := link._peers[0] != first
+	var closed := false
+	if aborted:
+		var settle := get_tree().create_timer(ABORT_WAIT)
+		while settle.time_left > 0.0 and not closed:
+			first.poll()
+			closed = first.get_ready_state() == WebSocketPeer.STATE_CLOSED
+			await get_tree().process_frame
+	var state := first.get_ready_state()
+	link.reset()
+	server.stop()
+	if not aborted:
+		_failures.append("the open-then-silent leg: the admin link was not aborted in %.0f s (%s)" % [DEADLINE_WAIT, _refused_reason])
+		return
+	if not closed:
+		_failures.append("the open-then-silent leg: the aborted peer still reads state %d after %.0f s, not CLOSED" % [state, ABORT_WAIT])
+		return
+	print("[watch-check] a host that opens and never answers: the call deadline aborted the admin link, and the aborted peer read CLOSED; the link was opened again")
 
 
 ## A line remembered before the preset existed (six fields) is refused by the gateway when it
