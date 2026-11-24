@@ -502,7 +502,11 @@ fn a_sealed_save_resumes_into_its_push_and_offers_no_lull() {
         "submit_plan",
         &format!(
             r#"{{"playbook_jsonc":{}}}"#,
-            quote(pharmakos_gateway::host::SAFE_PLAYBOOK)
+            quote(
+                pharmakos_gateway::host::safe_playbook()
+                    .expect("the fallback")
+                    .as_str()
+            )
         ),
     );
     assert_eq!(

@@ -24,7 +24,10 @@
                 ]
               }
             },
-            "value_json": "{\"voxel\":{\"x\":350,\"y\":22,\"z\":36}}"
+            "value_json": "{\"voxel\":{\"x\":350,\"y\":22,\"z\":36}}",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/route/0/timeout_ms",
@@ -34,10 +37,14 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "30000"
+            "value_json": "30000",
+            "value_text": "30",
+            "outside": false,
+            "pick_op": "replace"
           }
         ],
         "slots": [
@@ -73,7 +80,10 @@
                 ]
               }
             },
-            "value_json": "{\"voxel\":{\"x\":350,\"y\":22,\"z\":36}}"
+            "value_json": "{\"voxel\":{\"x\":350,\"y\":22,\"z\":36}}",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/route/1/place_beacon/initial/priority",
@@ -86,10 +96,18 @@
                   "\"LOW\"",
                   "\"NORMAL\"",
                   "\"HIGH\""
+                ],
+                "titles": [
+                  "low",
+                  "normal",
+                  "high"
                 ]
               }
             },
-            "value_json": "\"NORMAL\""
+            "value_json": "\"NORMAL\"",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/route/1/timeout_ms",
@@ -99,10 +117,14 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "30000"
+            "value_json": "30000",
+            "value_text": "30",
+            "outside": false,
+            "pick_op": "replace"
           }
         ],
         "slots": [
@@ -136,7 +158,10 @@
                 ]
               }
             },
-            "value_json": "{\"beacon_anchor\":{\"beacon_id\":\"b_00\"}}"
+            "value_json": "{\"beacon_anchor\":{\"beacon_id\":\"b_00\"}}",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/route/2/timeout_ms",
@@ -146,10 +171,14 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "60000"
+            "value_json": "60000",
+            "value_text": "60",
+            "outside": false,
+            "pick_op": "replace"
           }
         ],
         "slots": [
@@ -185,7 +214,10 @@
                 ]
               }
             },
-            "value_json": "{\"beacon_id\":\"b_00\"}"
+            "value_json": "{\"beacon_id\":\"b_00\"}",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/route/3/interface/rows/0/set_priority",
@@ -198,10 +230,18 @@
                   "\"LOW\"",
                   "\"NORMAL\"",
                   "\"HIGH\""
+                ],
+                "titles": [
+                  "low",
+                  "normal",
+                  "high"
                 ]
               }
             },
-            "value_json": "\"LOW\""
+            "value_json": "\"LOW\"",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/route/3/timeout_ms",
@@ -211,10 +251,14 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             },
-            "value_json": "20000"
+            "value_json": "20000",
+            "value_text": "20",
+            "outside": false,
+            "pick_op": "replace"
           }
         ],
         "slots": [

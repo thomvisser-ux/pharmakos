@@ -562,7 +562,7 @@ fn the_fourteen_call_walkthrough_also_runs_over_the_transport() {
         per_window: 600,
         window_ticks: 200,
     });
-    let safe = pharmakos_gateway::host::SAFE_PLAYBOOK;
+    let safe = &pharmakos_gateway::host::safe_playbook().expect("the fallback");
 
     let calls: Vec<(u32, &str, String)> = vec![
         (1, "get_status", String::from("{}")),

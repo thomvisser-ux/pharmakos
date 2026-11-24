@@ -50,7 +50,7 @@
 //! |---|---|
 //! | here | `get_status`, `wait_for`, `save_notes`, `set_ready`, `get_segment_feed` |
 //! | [`knowledge`] | `get_briefing`, `get_recap`, `list_beacons`, `get_beacon`, `get_map_summary`, `get_economy_forecast`, `estimate_route` |
-//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `resolve_refs`, `submit_plan` |
+//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `resolve_refs`, `set_value_text`, `new_rule`, `compose_wall_box`, `submit_plan` |
 //! | [`watch`] | `get_view` |
 //! | [`control`] | `end_lull`, `advance_push`, `end_recap`, `report_host_clock` |
 //!
@@ -2595,7 +2595,7 @@ impl Surface {
     /// that one was verified FULL and compiled when it was filed
     /// ([`Surface::file_advice`]), against the frozen snapshot this Lull has
     /// planned against all along, so it is filed here as it stands. Otherwise
-    /// the gateway's fallback, [`crate::host::SAFE_PLAYBOOK`] — for a seat no
+    /// the gateway's fallback, [`crate::host::safe_playbook`] — for a seat no
     /// operator advises, and for one whose advice did not qualify, which the
     /// audit log already says.
     ///
@@ -3429,6 +3429,9 @@ impl Surface {
             Method::GetDraft => self.get_draft(subject, request),
             Method::GetSafePlan => self.get_safe_plan(subject),
             Method::ResolveRefs => self.resolve_refs(subject, request),
+            Method::SetValueText => self.set_value_text(subject, request),
+            Method::NewRule => self.new_rule(request),
+            Method::ComposeWallBox => self.compose_wall_box(subject, request, vision),
             Method::SubmitPlan => self.submit_plan(subject, request),
 
             // The view.
@@ -6676,6 +6679,41 @@ mod tests {
             "the handler's own refusal: {}",
             error.message()
         );
+    }
+
+    /// S3's `fixq` (review fix pass 1, item 1): each of the editor's three new
+    /// planning handlers holds its own phase gate, reached without the
+    /// dispatcher, and answers before it parses anything: none of these
+    /// requests is even well formed.
+    #[test]
+    fn the_editor_planning_handlers_close_their_own_doors_in_a_push() {
+        let mut surface = hosted();
+        assert!(surface.begin_push().expect("the Push begins"));
+        let seat = Subject::Seat(SeatId::new(0));
+        let refusals = [
+            (
+                "set_value_text",
+                surface.set_value_text(seat, &request("set_value_text", "{}")),
+            ),
+            ("new_rule", surface.new_rule(&request("new_rule", "{}"))),
+            (
+                "compose_wall_box",
+                surface.compose_wall_box(
+                    seat,
+                    &request("compose_wall_box", "{}"),
+                    &crate::fog::Blind,
+                ),
+            ),
+        ];
+        for (method, answer) in refusals {
+            let error = answer.expect_err(method);
+            assert_eq!(error.code(), Code::PhaseClosed, "{method}");
+            assert!(
+                error.message().contains(&format!("`{method}`")),
+                "{method}'s own refusal: {}",
+                error.message()
+            );
+        }
     }
 
     /// S3's `mapw`: outside a Lull `get_map_summary` withholds its travel

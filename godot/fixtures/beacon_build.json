@@ -30,9 +30,15 @@
               "\"HOLD_FIRE\"",
               "\"RETURN_FIRE\"",
               "\"FREE_FIRE\""
+            ],
+            "titles": [
+              "hold fire",
+              "return fire",
+              "fire freely"
             ]
           }
-        }
+        },
+        "value_text": ""
       },
       {
         "pointer": "/retreat_hp_pct",
@@ -42,9 +48,11 @@
           "integer": {
             "min": 0,
             "max": 100,
-            "unit": "%"
+            "unit": "%",
+            "display_unit": "%"
           }
-        }
+        },
+        "value_text": "0"
       },
       {
         "pointer": "/build/repair_threshold_pct",
@@ -54,9 +62,11 @@
           "integer": {
             "min": 0,
             "max": 100,
-            "unit": "%"
+            "unit": "%",
+            "display_unit": "%"
           }
-        }
+        },
+        "value_text": "0"
       },
       {
         "pointer": "/build/rebuild_destroyed",
@@ -67,9 +77,14 @@
             "values": [
               "true",
               "false"
+            ],
+            "titles": [
+              "yes",
+              "no"
             ]
           }
-        }
+        },
+        "value_text": ""
       },
       {
         "pointer": "/build/terraform",
@@ -82,9 +97,16 @@
               "\"FILL\"",
               "\"DIG\"",
               "\"BOTH\""
+            ],
+            "titles": [
+              "leave the ground as it is",
+              "fill hollows",
+              "dig out rises",
+              "fill and dig"
             ]
           }
-        }
+        },
+        "value_text": ""
       }
     ],
     "build_targets": [
@@ -141,6 +163,12 @@
         },
         "order": 3
       }
+    ],
+    "build_target_lines": [
+      "Wall at voxel 360, 24, 36, filling the box from voxel 360, 24, 0 to voxel 362, 24, 40",
+      "Generator at a spot on Heat vent (324, 16)",
+      "Generator at a spot on the nearest heat vent (nearest by travel, read when the step starts)",
+      "Mortar at voxel 360, 24, 36"
     ],
     "_status": {
       "phase": "lull",

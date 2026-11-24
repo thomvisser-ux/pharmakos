@@ -710,7 +710,6 @@ const KNOWN: &[&str] = &[
     "godot/fixtures/instantiate_suggested.json",
     "godot/fixtures/rule_list_render.json",
     "scenarios/skeleton/against-easy.playbook.jsonc",
-    "crates/gateway/src/host.rs",
 ];
 
 /// The `reuse` step's quotation check over the tracked tree: `git ls-files`, the files'

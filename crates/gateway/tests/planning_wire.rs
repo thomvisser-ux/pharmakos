@@ -61,7 +61,7 @@ fn get_draft_answers_a_seat_its_own_draft() {
     for (policy, mut surface) in both_policies("m-t17-own-draft") {
         let token = seat_token(&mut surface, 0);
         let mut left = FIRST_LULL_MS;
-        let playbook = pharmakos_gateway::host::SAFE_PLAYBOOK;
+        let playbook = &pharmakos_gateway::host::safe_playbook().expect("the fallback");
         let _ = result(
             &call_in_lull(
                 &mut surface,
@@ -89,7 +89,7 @@ fn get_draft_answers_a_seat_its_own_draft() {
             pharmakos_proto::json::decode_json(&without_footer(&answer))
                 .unwrap_or_else(|error| panic!("{policy}: not a GetDraftResponse: {error}"));
         assert_eq!(
-            decoded.playbook_jsonc, playbook,
+            &decoded.playbook_jsonc, playbook,
             "{policy}: comments and all"
         );
         assert_eq!(decoded.label, "east plan", "{policy}");
@@ -114,7 +114,11 @@ fn get_draft_never_reaches_another_seats_draft() {
                 "save_draft",
                 &format!(
                     r#"{{"playbook_jsonc":{},"label":"secret","draft_id":"secret"}}"#,
-                    quote(pharmakos_gateway::host::SAFE_PLAYBOOK)
+                    quote(
+                        pharmakos_gateway::host::safe_playbook()
+                            .expect("the fallback")
+                            .as_str()
+                    )
                 ),
             ),
             "save_draft",
