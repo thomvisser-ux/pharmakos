@@ -675,7 +675,7 @@ func _silent_after_open() -> void:
 		link.pump_attached()
 		await get_tree().process_frame
 	_expecting_refusal = false
-	var aborted := link._peers[0] != first
+	var aborted: bool = link._peers[0] != first
 	var closed := false
 	if aborted:
 		var settle := get_tree().create_timer(ABORT_WAIT)
