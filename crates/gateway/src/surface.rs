@@ -2042,15 +2042,15 @@ impl Surface {
             // `end_match` is idempotent. (Found by T16a's own
             // acceptance test, when every round-limit end came through here.)
             self.fog.end_match();
-            // And the match's end is saved here when no tick reported it (the
-            // sim's `end_recap` announces such an end itself), so the `ended`
-            // save cannot be missing whichever way the match ended. Every end
-            // this build reaches is reported at its final tick
-            // (`tests/last_push.rs`, `every_end_is_reported_at_its_final_tick`),
-            // which saved it already.
-            if !self.end_saved {
-                self.persist_end()?;
-            }
+            // No save is made here. Every end this build reaches is reported
+            // at the match's final tick, where [`Surface::after_tick`] makes
+            // the `ended` save (`tests/last_push.rs`,
+            // `every_end_is_reported_at_its_final_tick`); the sim's arm that
+            // decides an end only as its recap closes (`Runner::end_recap`'s
+            // `!announced`) is reached by a world restored into an undecided
+            // last recap, which no save of this build holds: a save is made
+            // in a Lull, as a Push begins or as the match ends, never in a
+            // recap, and an ended one does not resume.
         }
         if ended {
             // The recap's own reported clock is the recap's; the Lull that

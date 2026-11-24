@@ -1039,8 +1039,9 @@ fn each_restore_check_refuses_its_own_damage_and_a_good_member_still_restores() 
 }
 
 /// Every end this build reaches is reported at the match's final tick, so the
-/// `ended` save is made there and once: closing the final recap makes none
-/// (its branch for an end no tick reported saves one only when none was).
+/// `ended` save is made there and once: closing the final recap makes none,
+/// and `Surface::end_recap` has no save of its own to make (lane `opsave`,
+/// fix pass 2, item 9: its branch for an end no tick reported is deleted).
 /// And a save whose world has already ended is refused whatever boundary it
 /// says, a version-3 `lull` one (no last Push) included: `Host::resume`
 /// lands a save in a Lull only.
