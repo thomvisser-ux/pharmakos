@@ -207,8 +207,8 @@ impl MineEdit {
     /// The `seam_choice` value, when the schema does not define it.
     pub fn of(message: &gp::v1::MineSettings) -> Result<MineEdit, i32> {
         Ok(MineEdit {
-            dig_max_depth: (message.dig_max_depth != 0).then_some(message.dig_max_depth),
-            pillar_spacing: (message.pillar_spacing != 0).then_some(message.pillar_spacing),
+            dig_max_depth: message.dig_max_depth.filter(|depth| *depth != 0),
+            pillar_spacing: message.pillar_spacing.filter(|spacing| *spacing != 0),
             seam_choice: SeamChoice::from_wire(message.seam_choice)?,
             flee_on_threat: message.flee_on_threat,
         })

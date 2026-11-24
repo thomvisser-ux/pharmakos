@@ -746,7 +746,7 @@ impl Visit for Sites<'_> {
                 if mine.seam_choice == i32::from(SeamChoice::Unspecified) {
                     self.default_note(&here, "seam_choice", "NEAREST", true);
                 }
-                if mine.pillar_spacing == 0 {
+                if mine.pillar_spacing.unwrap_or(0) == 0 {
                     // No Fix: proto3 writes a zero by leaving it out, so there
                     // is no spelling of "0" for the note to go quiet on.
                     self.default_note(&here, "pillar_spacing", strings::NO_PILLARS, false);

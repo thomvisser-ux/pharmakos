@@ -455,6 +455,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
                 rebuild_destroyed,
                 terraform,
                 protected_areas,
+                clear_protected_areas: _,
             } = build;
             (
                 add(&[
@@ -470,8 +471,12 @@ pub fn count(settings: &MandateSettings) -> Counted {
             let SurveySettings {
                 probe_areas,
                 scout_count,
+                clear_probe_areas: _,
             } = survey;
-            (add(&[each(probe_areas), set(*scout_count != 0)]), 0)
+            (
+                add(&[each(probe_areas), set(scout_count.unwrap_or(0) != 0)]),
+                0,
+            )
         }
         Some(mandate_settings::Mandate::Mine(mine)) => {
             let MineSettings {
@@ -482,10 +487,10 @@ pub fn count(settings: &MandateSettings) -> Counted {
             } = mine;
             (
                 add(&[
-                    set(*dig_max_depth != 0),
+                    set(dig_max_depth.unwrap_or(0) != 0),
                     set(flee_on_threat.is_some()),
                     set(*seam_choice != 0),
-                    set(*pillar_spacing != 0),
+                    set(pillar_spacing.unwrap_or(0) != 0),
                 ]),
                 0,
             )
@@ -517,6 +522,7 @@ fn defend_fields(defend: &DefendSettings) -> u64 {
         engagement_radius_pct,
         pursue,
         picket_scouts,
+        clear_protect: _,
     } = defend;
     add(&[
         each(protect),
@@ -538,6 +544,7 @@ fn attack_fields(attack: &AttackSettings) -> u64 {
         avoid_areas,
         breach_allowed,
         waves,
+        clear_avoid_areas: _,
     } = attack;
     let launch_fields = match launch {
         Some(AttackLaunch {
@@ -691,10 +698,10 @@ mod tests {
                     roe: 2,
                     retreat_hp_pct: None,
                     mandate: Some(mandate_settings::Mandate::Mine(MineSettings {
-                        dig_max_depth: 4,
+                        dig_max_depth: Some(4),
                         flee_on_threat: Some(true),
                         seam_choice: 0,
-                        pillar_spacing: 0,
+                        pillar_spacing: None,
                     })),
                 }),
             }),
@@ -720,7 +727,8 @@ mod tests {
             retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Survey(SurveySettings {
                 probe_areas: vec![area(); areas],
-                scout_count: scouts,
+                scout_count: Some(scouts).filter(|scouts| *scouts != 0),
+                clear_probe_areas: false,
             })),
         };
         assert_eq!(
@@ -769,6 +777,7 @@ mod tests {
                 rebuild_destroyed: None,
                 terraform: 0,
                 protected_areas: vec![area(), area()],
+                clear_protected_areas: false,
             })),
         };
         assert_eq!(
@@ -862,6 +871,7 @@ mod tests {
                 engagement_radius_pct: 50,
                 pursue: 2,
                 picket_scouts: picket,
+                clear_protect: false,
             })),
         };
         assert_eq!(count(&defend(None)).fields, 4);
@@ -887,6 +897,7 @@ mod tests {
                 avoid_areas: vec![area(), area()],
                 breach_allowed: Some(false),
                 waves: 1,
+                clear_avoid_areas: false,
             })),
         };
         // roe, target, retarget, staging, two launch conditions, one retreat

@@ -153,6 +153,7 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
                 rebuild_destroyed,
                 terraform,
                 protected_areas,
+                clear_protected_areas: _,
             } = build;
             (
                 add(&[
@@ -168,8 +169,12 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
             let SurveySettings {
                 probe_areas,
                 scout_count,
+                clear_probe_areas: _,
             } = survey;
-            (add(&[each(probe_areas)?, set(*scout_count != 0)])?, 0)
+            (
+                add(&[each(probe_areas)?, set(scout_count.unwrap_or(0) != 0)])?,
+                0,
+            )
         }
         Some(mandate_settings::Mandate::Mine(mine)) => {
             let MineSettings {
@@ -180,10 +185,10 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
             } = mine;
             (
                 add(&[
-                    set(*dig_max_depth != 0),
+                    set(dig_max_depth.unwrap_or(0) != 0),
                     set(flee_on_threat.is_some()),
                     set(*seam_choice != 0),
-                    set(*pillar_spacing != 0),
+                    set(pillar_spacing.unwrap_or(0) != 0),
                 ])?,
                 0,
             )
@@ -202,6 +207,7 @@ fn defend_fields(defend: &DefendSettings) -> Option<i64> {
         engagement_radius_pct,
         pursue,
         picket_scouts,
+        clear_protect: _,
     } = defend;
     add(&[
         each(protect)?,
@@ -223,6 +229,7 @@ fn attack_fields(attack: &AttackSettings) -> Option<i64> {
         avoid_areas,
         breach_allowed,
         waves,
+        clear_avoid_areas: _,
     } = attack;
     let launch_fields = match launch {
         Some(AttackLaunch {

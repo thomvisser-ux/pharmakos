@@ -85,6 +85,7 @@ gp.v1.AttackSettings
   avoid_areas                  7   repeated gp.v1.Area
   breach_allowed               8   bool
   waves                        9   uint32
+  clear_avoid_areas            16  bool
   reserved 10 to 15
 
 gp.v1.AttackTarget
@@ -146,6 +147,7 @@ gp.v1.BuildSettings
   rebuild_destroyed            3   bool
   terraform                    4   gp.v1.BuildSettings.Terraform
   protected_areas              5   repeated gp.v1.Area
+  clear_protected_areas        8   bool
   reserved 6
   reserved 7
   reserved reclaim_drones, repair_drones
@@ -235,6 +237,7 @@ gp.v1.DefendSettings
   engagement_radius_pct        2   uint32
   pursue                       3   gp.v1.DefendSettings.Pursue
   picket_scouts                4   uint32
+  clear_protect                16  bool
   reserved 5
   reserved 6
   reserved 7 to 15
@@ -375,7 +378,7 @@ gp.v1.Meta
   reserved team_id
 
 gp.v1.MineSettings
-  oneof: _flee_on_threat
+  oneof: _dig_max_depth, _flee_on_threat, _pillar_spacing
   dig_max_depth                1   uint32
   flee_on_threat               2   bool
   seam_choice                  3   gp.v1.MineSettings.SeamChoice
@@ -722,8 +725,10 @@ gp.v1.StepReached
   label                        1   string
 
 gp.v1.SurveySettings
+  oneof: _scout_count
   probe_areas                  1   repeated gp.v1.Area
   scout_count                  2   uint32
+  clear_probe_areas            4   bool
   reserved 3
   reserved probe_directions
 

@@ -2285,9 +2285,21 @@ pub struct BuildSettings {
     /// this file's header (decisions-log item 128, decision 11).
     #[prost(enumeration="build_settings::Terraform", tag="4")]
     pub terraform: i32,
-    /// Ground the mandate will not dig, fill or build on.
+    /// Ground the mandate will not dig, fill or build on. A list written in an
+    /// edit row replaces the beacon's; an empty one is the same as one left out
+    /// (proto3 cannot tell them apart), so emptying it is `clear_protected_areas`.
     #[prost(message, repeated, tag="5")]
     pub protected_areas: ::prost::alloc::vec::Vec<Area>,
+    /// Empty the beacon's `protected_areas` (decisions-log item 184 (10)). A
+    /// plain proto3 bool: false is the same as leaving it out, and the canonical
+    /// form never writes it. True is legal only in a `set_mandate_settings` row
+    /// that writes no `protected_areas` of its own, where it is one field of the
+    /// edit; with a non-empty list beside it, or in a new beacon's or a switched
+    /// mandate's settings (which start with no list, so there is nothing to
+    /// clear), it is refused: the verifier's E0515, and the sim's compile refuses
+    /// it too (`PlanError::ClearRefused`).
+    #[prost(bool, tag="8")]
+    pub clear_protected_areas: bool,
 }
 /// Nested message and enum types in `BuildSettings`.
 pub mod build_settings {
@@ -2347,7 +2359,9 @@ pub struct DefendSettings {
     /// Defend beacon holds its sphere whatever this list says (spec section 6:
     /// "Hold the sphere and protect listed assets"); the list adds the assets
     /// its guards escort first. Empty, it adds none, so an empty list is not a
-    /// default of its own.
+    /// default of its own. A list written in an edit row replaces the beacon's;
+    /// an empty one is the same as one left out (proto3 cannot tell them
+    /// apart), so emptying it is `clear_protect`.
     #[prost(message, repeated, tag="1")]
     pub protect: ::prost::alloc::vec::Vec<ProtectedAsset>,
     /// How far from the beacon its guards engage, as a whole percentage of the
@@ -2365,6 +2379,15 @@ pub struct DefendSettings {
     /// picket down) and be told apart from a row that leaves the count alone.
     #[prost(uint32, optional, tag="4")]
     pub picket_scouts: ::core::option::Option<u32>,
+    /// Empty the beacon's `protect` list (decisions-log item 184 (10)), as
+    /// BuildSettings' `clear_protected_areas` empties its list, under the same
+    /// rules: a plain bool, never written as false; one field of a
+    /// `set_mandate_settings` row that writes no `protect` entry; refused beside
+    /// a non-empty list and in a new beacon's or a switched mandate's settings
+    /// (E0515; `PlanError::ClearRefused`). Its number is past the held range
+    /// above, which stays held.
+    #[prost(bool, tag="16")]
+    pub clear_protect: bool,
 }
 /// Nested message and enum types in `DefendSettings`.
 pub mod defend_settings {
@@ -2478,7 +2501,9 @@ pub struct AttackSettings {
     #[prost(enumeration="attack_settings::AfterAction", tag="6")]
     pub after_action: i32,
     /// Ground the force routes around, as a route cost. Areas count toward the
-    /// playbook size budget.
+    /// playbook size budget. A list written in an edit row replaces the
+    /// beacon's; an empty one is the same as one left out (proto3 cannot tell
+    /// them apart), so emptying it is `clear_avoid_areas`.
     #[prost(message, repeated, tag="7")]
     pub avoid_areas: ::prost::alloc::vec::Vec<Area>,
     /// Whether the attack may spend mortar or charge time digging or demolishing
@@ -2490,6 +2515,15 @@ pub struct AttackSettings {
     /// Launches per segment, at least 1. Required: 0 is a verifier error.
     #[prost(uint32, tag="9")]
     pub waves: u32,
+    /// Empty the beacon's `avoid_areas` (decisions-log item 184 (10)), as
+    /// BuildSettings' `clear_protected_areas` empties its list, under the same
+    /// rules: a plain bool, never written as false; one field of a
+    /// `set_mandate_settings` row that writes no avoid area; refused beside a
+    /// non-empty list and in a new beacon's or a switched mandate's settings
+    /// (E0515; `PlanError::ClearRefused`). Its number is past the held range
+    /// above, which stays held.
+    #[prost(bool, tag="16")]
+    pub clear_avoid_areas: bool,
 }
 /// Nested message and enum types in `AttackSettings`.
 pub mod attack_settings {
@@ -2647,12 +2681,29 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.AttackRetreat".into() 
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SurveySettings {
     /// Where to look. Scouts scan unexplored ground inside these first, then
-    /// re-check the sightings closest to leaving the reach window.
+    /// re-check the sightings closest to leaving the reach window. A list
+    /// written in an edit row replaces the beacon's; an empty one is the same as
+    /// one left out (proto3 cannot tell them apart), so emptying it is
+    /// `clear_probe_areas`.
     #[prost(message, repeated, tag="1")]
     pub probe_areas: ::prost::alloc::vec::Vec<Area>,
-    /// How many scouts the mandate fields.
-    #[prost(uint32, tag="2")]
-    pub scout_count: u32,
+    /// How many scouts the mandate fields; 0 fields none. `optional`, so that a
+    /// written 0 (stand the scouts down) is told apart from a field left out
+    /// (decisions-log item 184 (10)): a written value, 0 included, is one field
+    /// of the edit and sets the beacon's count; an omitted one leaves it. In a
+    /// new beacon's or a switched mandate's settings, omitted is 0. A count past
+    /// what a beacon holds is refused: the verifier's E0508, and the sim's
+    /// compile refuses it too (`PlanError::ScoutsOutOfRange`).
+    #[prost(uint32, optional, tag="2")]
+    pub scout_count: ::core::option::Option<u32>,
+    /// Empty the beacon's `probe_areas` (decisions-log item 184 (10)), as
+    /// BuildSettings' `clear_protected_areas` empties its list, under the same
+    /// rules: a plain bool, never written as false; one field of a
+    /// `set_mandate_settings` row that writes no probe area; refused beside a
+    /// non-empty list and in a new beacon's or a switched mandate's settings
+    /// (E0515; `PlanError::ClearRefused`).
+    #[prost(bool, tag="4")]
+    pub clear_probe_areas: bool,
 }
 impl ::prost::Name for SurveySettings {
 const NAME: &'static str = "SurveySettings";
@@ -2677,9 +2728,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.SurveySettings".into()
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MineSettings {
     /// Voxels below the seam's ORIGINAL top surface the mandate may dig; 0 means
-    /// the exposed rim only.
-    #[prost(uint32, tag="1")]
-    pub dig_max_depth: u32,
+    /// the exposed rim only. `optional`, so that a written 0 is told apart from
+    /// a field left out (decisions-log item 184 (10)): a written value, 0
+    /// included, is one field of the edit and sets the beacon's depth; an
+    /// omitted one leaves it. In a new beacon's or a switched mandate's
+    /// settings, omitted is 0, the rim only.
+    #[prost(uint32, optional, tag="1")]
+    pub dig_max_depth: ::core::option::Option<u32>,
     /// Walk the beacon's mining drones home while a known threat is inside its
     /// sphere (S2's plan's decision 12). `optional`, so that an edit row can
     /// write false and be told apart from a row that leaves it alone (S3's plan,
@@ -2697,9 +2752,13 @@ pub struct MineSettings {
     /// column in x and in y undug; 0 means no pillars, which is also what an
     /// omitted spacing reads as, with an I-level note. A dig pattern, not a
     /// collapse rule: there is no collapse before S2, so in S1 a non-zero spacing
-    /// only costs yield.
-    #[prost(uint32, tag="4")]
-    pub pillar_spacing: u32,
+    /// only costs yield. `optional`, so that a written 0 (dig the pillars out
+    /// too) is told apart from a field left out (decisions-log item 184 (10)): a
+    /// written value, 0 included, is one field of the edit and sets the beacon's
+    /// spacing; an omitted one leaves it. In a new beacon's or a switched
+    /// mandate's settings, omitted is the named default above, with its note.
+    #[prost(uint32, optional, tag="4")]
+    pub pillar_spacing: ::core::option::Option<u32>,
 }
 /// Nested message and enum types in `MineSettings`.
 pub mod mine_settings {

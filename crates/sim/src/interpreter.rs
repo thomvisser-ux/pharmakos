@@ -1594,11 +1594,11 @@ fn compile_settings_row(
                 for area in &survey.probe_areas {
                     probes.push(compile_area(area, names)?);
                 }
-                scouts =
-                    u8::try_from(survey.scout_count).map_err(|_| PlanError::ScoutsOutOfRange {
-                        found: survey.scout_count,
-                        most: u8::MAX,
-                    })?;
+                let written = survey.scout_count.unwrap_or(0);
+                scouts = u8::try_from(written).map_err(|_| PlanError::ScoutsOutOfRange {
+                    found: written,
+                    most: u8::MAX,
+                })?;
             }
             gp::v1::mandate_settings::Mandate::Mine(settings) => {
                 mine = Some(crate::mining::MineEdit::of(settings).map_err(|value| {
@@ -2274,14 +2274,14 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
             each(build.protected_areas.len())?,
         ]),
         gp::v1::mandate_settings::Mandate::Survey(survey) => sum(&[
-            set(survey.scout_count != 0),
+            set(survey.scout_count.unwrap_or(0) != 0),
             each(survey.probe_areas.len())?,
         ]),
         gp::v1::mandate_settings::Mandate::Mine(mine) => sum(&[
-            set(mine.dig_max_depth != 0),
+            set(mine.dig_max_depth.unwrap_or(0) != 0),
             set(mine.flee_on_threat.is_some()),
             set(mine.seam_choice != 0),
-            set(mine.pillar_spacing != 0),
+            set(mine.pillar_spacing.unwrap_or(0) != 0),
         ]),
         // S2's `dfnd`: the verifier's `defend_fields`, field for field.
         gp::v1::mandate_settings::Mandate::Defend(defend) => sum(&[

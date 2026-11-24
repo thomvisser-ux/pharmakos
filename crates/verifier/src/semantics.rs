@@ -536,7 +536,7 @@ impl Visit for Semantics<'_> {
             self.scouts(
                 &pointer::child(at, "survey"),
                 "scout_count",
-                survey.scout_count,
+                survey.scout_count.unwrap_or(0),
             );
         }
         match settings.mandate.as_ref() {
