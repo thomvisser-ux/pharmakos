@@ -26,9 +26,10 @@ const LOCKED_COLOUR := Color(0.6, 0.6, 0.6)
 
 
 ## Fills `tree` with the vocabulary `vocabulary` (the bridge's `vocabulary`): one row per family,
-## its predicates under it, their parameters under each. A predicate row carries the family's
-## and the predicate's indices as its metadata, `[family, entry]`; it is selectable only when
-## neither it nor its family is locked.
+## its predicates under it, their parameters under each, then the groups the gateway sent (`all`,
+## `any`, `not`; S3's `fixq-c`, item 16). A predicate row carries `{"family", "entry"}` as its
+## metadata and a group row `{"group"}`, each an index into what the bridge sent; a row is
+## selectable only when neither it nor its family is locked.
 static func fill(tree: Tree, vocabulary: Dictionary) -> void:
 	tree.clear()
 	tree.hide_root = true
@@ -50,7 +51,7 @@ static func fill(tree: Tree, vocabulary: Dictionary) -> void:
 			var entry: Dictionary = predicates[entry_index]
 			var locked := String(entry.get("locked", ""))
 			var item := tree.create_item(row)
-			item.set_metadata(0, [family_index, entry_index])
+			item.set_metadata(0, {"family": family_index, "entry": entry_index})
 			if locked != "":
 				item.set_text(0, Strings.text("picker_entry_locked", {"title": entry.get("title", ""), "locked": locked}))
 				item.set_custom_color(0, LOCKED_COLOUR)
@@ -62,6 +63,22 @@ static func fill(tree: Tree, vocabulary: Dictionary) -> void:
 				leaf.set_text(0, parameter_text(parameter))
 				leaf.set_selectable(0, false)
 			item.collapsed = true
+	var groups: Array = vocabulary.get("groups", [])
+	if not groups.is_empty():
+		var heading := tree.create_item(root)
+		heading.set_selectable(0, false)
+		heading.set_text(0, Strings.text("picker_groups"))
+		for group_index in groups.size():
+			var group: Dictionary = groups[group_index]
+			var locked := String(group.get("locked", ""))
+			var item := tree.create_item(heading)
+			item.set_metadata(0, {"group": group_index})
+			if locked != "":
+				item.set_text(0, Strings.text("picker_entry_locked", {"title": group.get("title", ""), "locked": locked}))
+				item.set_custom_color(0, LOCKED_COLOUR)
+			else:
+				item.set_text(0, Strings.text("picker_entry", {"title": group.get("title", "")}))
+			item.set_selectable(0, locked == "")
 
 
 ## A parameter's line: its title and what it holds, as the gateway sent them.
@@ -69,15 +86,19 @@ static func parameter_text(parameter: Dictionary) -> String:
 	var title: Variant = parameter.get("title", "")
 	match String(parameter.get("shape", "")):
 		"number":
+			# The bounds in the unit the gateway sent them in, and the number typed, once it is a
+			# chip, in its display unit (seconds for a duration): both as sent, nothing converted.
+			var unit := String(parameter.get("unit", ""))
 			var bounds := ""
 			if parameter.get("has_min", false) and parameter.get("has_max", false):
-				bounds = Strings.text("picker_parameter_bounds", {"min": parameter.get("min"), "max": parameter.get("max")})
-			var unit := String(parameter.get("unit", ""))
-			return Strings.text("picker_parameter_number", {"title": title, "bounds": bounds, "unit": (" " + unit) if unit != "" else ""})
-		"ms":
-			return Strings.text("picker_parameter_ms", {"title": title})
+				bounds = Strings.text("picker_parameter_bounds", {"min": parameter.get("min"), "max": parameter.get("max"), "unit": (" " + unit) if unit != "" else ""})
+			var shown := String(parameter.get("display_unit", ""))
+			return Strings.text("picker_parameter_number", {"title": title, "bounds": bounds, "unit": (" " + shown) if shown != "" else ""})
 		"choice":
-			return Strings.text("picker_parameter_choice", {"title": title, "values": ", ".join(parameter.get("values", PackedStringArray()))})
+			var titles: PackedStringArray = parameter.get("titles", PackedStringArray())
+			# The gateway's words for each value; the bridge refused an answer whose titles do not
+			# pair with its values, so no value's JSON is drawn in their place.
+			return Strings.text("picker_parameter_choice", {"title": title, "values": ", ".join(titles)})
 		"reference":
 			return Strings.text("picker_parameter_reference", {"title": title, "kind": parameter.get("kind", "")})
 		_:
@@ -86,13 +107,14 @@ static func parameter_text(parameter: Dictionary) -> String:
 			return Strings.text("picker_parameter_unknown", {"title": title})
 
 
-## The selected predicate as `[family, entry]`, or an empty array when none is selected.
-static func chosen(tree: Tree) -> Array:
+## The selected row's metadata, `{"family", "entry"}` for a predicate or `{"group"}` for a group,
+## or an empty dictionary when none is selected.
+static func chosen(tree: Tree) -> Dictionary:
 	var item := tree.get_selected()
 	if item == null:
-		return []
+		return {}
 	var picked: Variant = item.get_metadata(0)
-	return picked if picked is Array else []
+	return picked if picked is Dictionary else {}
 
 
 ## What the picker's line says about the vocabulary: waiting, the gateway's refusal, an answer

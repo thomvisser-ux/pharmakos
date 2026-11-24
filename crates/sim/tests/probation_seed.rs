@@ -481,9 +481,11 @@ fn a_toward_says_why_it_found_no_site() {
 /// live vent farthest from the core, whose walk the octile bound prunes
 /// least; and toward the pinned vent again with a Resonance Spire finished at
 /// the core, its sphere grown. Each prints the legal sites weighed, the
-/// columns of the spheres scanned, the decision units charged (one a column
-/// scanned and one a node popped, lane `dunit`; the search prices no walk
-/// since fix pass 2 of lane `p3fix`) and the nodes the search popped.
+/// columns of the spheres scanned, the decision units charged (one a visit
+/// of each loop the resolve runs -- a column scanned and every row, column
+/// and Spire byte the tests on it read -- and one a node popped, lane
+/// `dunit` and its part 2; the search prices no walk since fix pass 2 of
+/// lane `p3fix`) and the nodes the search popped.
 #[test]
 #[ignore = "a measurement, run by hand: `cargo test --test probation_seed -- --ignored --nocapture toward_costs`"]
 fn toward_costs() {
@@ -525,10 +527,16 @@ fn toward_costs() {
         let units = tally.read().expect("the decision units are measured");
         match found {
             Ok(stone) => println!(
-                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {units} decision units, {} nodes popped",
+                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {units} decision units, {} nodes popped; the queue: {} bucket turns over {} moves ({} to empty buckets), {} columns moved, {} cells reset",
                 stone.site,
                 stone.weighed,
-                scratch.expansions().expect("the count fits a u64")
+                scratch.expansions().expect("the count fits a u64"),
+                scratch.reach().turns().expect("a count"),
+                scratch.reach().advances().expect("a count"),
+                scratch.reach().turns().expect("a count")
+                    - scratch.reach().advances().expect("a count"),
+                scratch.reach().unlinked().expect("a count"),
+                scratch.reach().filled().expect("a count"),
             ),
             Err(failed) => println!("{label}: no site, {failed:?}, {units} decision units"),
         }

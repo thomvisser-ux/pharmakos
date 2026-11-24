@@ -246,7 +246,7 @@ impl World {
         let mut at = at;
         loop {
             let sensor = if at < beacons {
-                self.beacon_sensor(at)
+                self.beacon_sensor(at, meter)
             } else if at < beacons.saturating_add(units) {
                 self.unit_sensor(at.saturating_sub(beacons))
             } else if at < beacons.saturating_add(units).saturating_add(structures) {
@@ -266,7 +266,16 @@ impl World {
     /// dormant or not. A dormant beacon keeps its seal and its sphere powered
     /// off the key-core (item 10), so its sphere still sees, as
     /// [`World::spheres`] has it (decisions-log item 146).
-    fn beacon_sensor(&self, row: usize) -> Option<Sensor> {
+    ///
+    /// Its radius's Spire test reports the rows it reads to `meter`
+    /// ([`crate::spire::metered::radius_at_row`]; decisions-log item 175,
+    /// dunit part 2): a walk a decision's threat scan asks passes the
+    /// decision's tally, any other `()`.
+    fn beacon_sensor<M: crate::seams::Meter + ?Sized>(
+        &self,
+        row: usize,
+        meter: &M,
+    ) -> Option<Sensor> {
         self.beacons().id_of(Row::of_index(row)?)?;
         if !self.beacons().hit_points().get(row)?.is_alive() {
             return None;
@@ -277,7 +286,13 @@ impl World {
             centre: self.beacons().positions().get(row).copied()?,
             // The sphere as a sensor grows with a finished Spire (decision 6:
             // "the sphere's place in the sensor seam's sphere output").
-            radius: self.sphere_radius_at_row(row),
+            radius: Fx::from_voxels(crate::spire::metered::radius_at_row(
+                self.rules(),
+                self.beacons(),
+                self.structures(),
+                row,
+                meter,
+            )),
             kind: SensorKind::Sphere,
         })
     }

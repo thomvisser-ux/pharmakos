@@ -62,7 +62,13 @@ enum Outcome {
 }
 
 /// Run one decision for one seat.
-pub(crate) fn decide(world: &mut World, seat_index: usize, plan: &Plan, state: &mut PlanState) {
+pub(crate) fn decide(
+    world: &mut World,
+    seat_index: usize,
+    plan: &Plan,
+    state: &mut PlanState,
+    units: &dyn crate::seams::Meter,
+) {
     let Some(raw) = world.seats().seats().get(seat_index).copied() else {
         return;
     };
@@ -72,7 +78,7 @@ pub(crate) fn decide(world: &mut World, seat_index: usize, plan: &Plan, state: &
     let seat = SeatId::new(raw);
     let tick = world.tick();
 
-    let hp = view(world, seat, seat_index, state).commander_hp();
+    let hp = view(world, seat, seat_index, state, units).commander_hp();
     if hp < state.last_hp {
         state.last_damage = tick.raw();
         state.reflex_armed = true;
@@ -105,7 +111,7 @@ pub(crate) fn decide(world: &mut World, seat_index: usize, plan: &Plan, state: &
         enter_fallback(world, seat, state, plan);
     }
 
-    if run_reflex(world, seat, seat_index, state) {
+    if run_reflex(world, seat, seat_index, state, units) {
         return;
     }
 
@@ -129,15 +135,15 @@ pub(crate) fn decide(world: &mut World, seat_index: usize, plan: &Plan, state: &
             VisitState::Handshake | VisitState::Committing | VisitState::Deploying
         )
     {
-        try_fire(world, seat, seat_index, state, plan);
+        try_fire(world, seat, seat_index, state, plan, units);
     }
 
     if state.rule != NO_INDEX {
-        advance_body(world, seat, seat_index, state, plan);
+        advance_body(world, seat, seat_index, state, plan, units);
     } else if state.in_fallback() {
-        run_fallback(world, seat, seat_index, state, plan);
+        run_fallback(world, seat, seat_index, state, plan, units);
     } else {
-        advance_route(world, seat, seat_index, state, plan);
+        advance_route(world, seat, seat_index, state, plan, units);
     }
 }
 
@@ -164,9 +170,15 @@ fn out_of_deaths(world: &World, seat_index: usize, plan: &Plan) -> bool {
 }
 
 /// The fixed 20 % reflex. Returns `true` when it is holding the decision.
-fn run_reflex(world: &mut World, seat: SeatId, seat_index: usize, state: &mut PlanState) -> bool {
+fn run_reflex(
+    world: &mut World,
+    seat: SeatId,
+    seat_index: usize,
+    state: &mut PlanState,
+    units: &dyn crate::seams::Meter,
+) -> bool {
     let tick = world.tick();
-    let pct = view(world, seat, seat_index, state).commander_hp_pct();
+    let pct = view(world, seat, seat_index, state, units).commander_hp_pct();
     if state.reflex_armed && pct <= i64::from(REFLEX_HP_PERCENT) {
         state.reflex_armed = false;
         if state.stage.is_visiting() {
@@ -184,7 +196,7 @@ fn run_reflex(world: &mut World, seat: SeatId, seat_index: usize, state: &mut Pl
         drop_step(world, seat, state);
         emit(world, tick, EventKind::ReflexFired, seat, None, None, pct);
         let target = {
-            let seen = view(world, seat, seat_index, state);
+            let seen = view(world, seat, seat_index, state, units);
             resolve_beacon(&seen, crate::interpreter::BeaconSpec::Safest)
                 .and_then(|beacon| beacon_at(world, beacon).map(|at| (beacon, at)))
         };
@@ -209,7 +221,7 @@ fn run_reflex(world: &mut World, seat: SeatId, seat_index: usize, state: &mut Pl
         return false;
     }
     let arrived = {
-        let seen = view(world, seat, seat_index, state);
+        let seen = view(world, seat, seat_index, state, units);
         let radius = world.arrive_radius();
         match (seen.commander_at(), pinned_point(state.pinned_at)) {
             (Some(at), Some(target)) => within(at, target, radius),
@@ -224,7 +236,7 @@ fn run_reflex(world: &mut World, seat: SeatId, seat_index: usize, state: &mut Pl
     // that has since died is exactly that case, and it is not hypothetical:
     // `tests/pathing.rs` builds the walled-in walker on purpose.
     let gone = state.pinned_beacon().is_none_or(|beacon| {
-        let seen = view(world, seat, seat_index, state);
+        let seen = view(world, seat, seat_index, state, units);
         !seen
             .beacon_row(beacon)
             .is_some_and(|row| seen.beacon_alive(row))
@@ -249,10 +261,11 @@ fn try_fire(
     seat_index: usize,
     state: &mut PlanState,
     plan: &Plan,
+    units: &dyn crate::seams::Meter,
 ) {
     let tick = world.tick();
     let chosen = {
-        let seen = view(world, seat, seat_index, state);
+        let seen = view(world, seat, seat_index, state, units);
         let mut found: Option<u32> = None;
         // The per-handler columns are sized from the plan at the seal, so they
         // walk with its handlers (S2's plan, E7).
@@ -268,7 +281,7 @@ fn try_fire(
             }
             // P1's counted half: a handler tried is one evaluation unit, and
             // its condition's nodes are counted as they are evaluated.
-            seen.world.charge_decision(1);
+            seen.meter.rows(1);
             if cond::evaluate(&seen, &rule.when) {
                 found = u32::try_from(index).ok();
                 break;
@@ -316,6 +329,7 @@ fn advance_body(
     seat_index: usize,
     state: &mut PlanState,
     plan: &Plan,
+    units: &dyn crate::seams::Meter,
 ) {
     let Some(rule) = slot_of(state.rule).and_then(|at| plan.handlers().get(at)) else {
         state.rule = NO_INDEX;
@@ -328,7 +342,7 @@ fn advance_body(
         return;
     };
     let times = plan.interface_times();
-    let outcome = run_step(world, seat, seat_index, state, step, index, times);
+    let outcome = run_step(world, seat, seat_index, state, step, index, times, units);
     let body_len = rule.body.len();
     let resume = rule.resume;
     if outcome != Outcome::Running {
@@ -410,6 +424,7 @@ fn advance_route(
     seat_index: usize,
     state: &mut PlanState,
     plan: &Plan,
+    units: &dyn crate::seams::Meter,
 ) {
     let index = state.cursor;
     let Some(step) = slot_of(index).and_then(|at| plan.route().get(at)) else {
@@ -424,6 +439,7 @@ fn advance_route(
         step,
         index,
         plan.interface_times(),
+        units,
     );
     // `None` means the route has ended and the fallback takes over. Every arm
     // below either leaves the cursor alone or moves it **forward**, which is
@@ -449,6 +465,10 @@ fn advance_route(
 }
 
 /// Run one step: start it if it has not started, then look at it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the step's own arguments and the seat's decision meter, handed down from `phase_decision` (dunit part 2); a parameter struct would be built at each caller only to be taken apart here"
+)]
 fn run_step(
     world: &mut World,
     seat: SeatId,
@@ -457,11 +477,12 @@ fn run_step(
     step: &PlanStep,
     index: u32,
     times: &InterfaceTimes,
+    units: &dyn crate::seams::Meter,
 ) -> Outcome {
     let tick = world.tick();
     if state.stage == VisitState::NotStarted {
         if let Some(guard) = step.skip_if.as_ref() {
-            let seen = view(world, seat, seat_index, state);
+            let seen = view(world, seat, seat_index, state, units);
             if cond::evaluate(&seen, guard) {
                 emit(
                     world,
@@ -478,7 +499,7 @@ fn run_step(
         if state.rule == NO_INDEX && (state.reached == NO_INDEX || index > state.reached) {
             state.reached = index;
         }
-        match start_step(world, seat, seat_index, state, step, index, times) {
+        match start_step(world, seat, seat_index, state, step, index, times, units) {
             Ok(()) => {}
             Err(failure) => {
                 // A step that fails *while starting* — an unresolvable
@@ -503,7 +524,7 @@ fn run_step(
     if state.deadline != NO_TICK && tick.raw() >= state.deadline {
         return fail(world, seat, state, StepFailure::Timeout.into());
     }
-    match look(world, seat, seat_index, state, step, index, times) {
+    match look(world, seat, seat_index, state, step, index, times, units) {
         Outcome::Failed(failure) => fail(world, seat, state, failure.into()),
         other => other,
     }
@@ -545,6 +566,7 @@ fn fail(world: &mut World, seat: SeatId, state: &PlanState, failure: StepFailed)
 /// placement range no longer plays a part (amending item 11).
 #[allow(
     clippy::too_many_lines,
+    clippy::too_many_arguments,
     reason = "one arm per action, and the placement arm is two halves -- a fresh placement and a resumed one -- that share the walk in; splitting it would hand the state between functions as a parameter list as long as the arm"
 )]
 fn start_step(
@@ -555,6 +577,7 @@ fn start_step(
     step: &PlanStep,
     index: u32,
     times: &InterfaceTimes,
+    units: &dyn crate::seams::Meter,
 ) -> Result<(), StepFailed> {
     let tick = world.tick();
     let resuming =
@@ -575,13 +598,13 @@ fn start_step(
     let mut visit: Option<(BeaconId, [Fx; 3], usize)> = None;
     match &step.action {
         Action::Move { to, .. } => {
-            let at = pin_place(world, seat, seat_index, state, *to)?;
+            let at = pin_place(world, seat, seat_index, state, *to, units)?;
             walk_commander(world, seat, at);
             where_at = Some(at);
         }
         Action::Interface { beacon, rows, .. } => {
             let resolved = {
-                let seen = view(world, seat, seat_index, state);
+                let seen = view(world, seat, seat_index, state, units);
                 // *Touch to change* is a rule about your **own** beacons:
                 // beacon capture is out of v1 (AGENTS.md §11). Since S1 a
                 // `b_NN` counts only the seat's own beacons and an `e_NN`
@@ -593,7 +616,7 @@ fn start_step(
             };
             let at = beacon_at(world, resolved).ok_or(StepFailure::NoTarget)?;
             let commander = commander_at(world, seat).ok_or(StepFailure::CommanderDead)?;
-            bind_rows(world, seat, state, rows, at, Some(resolved))?;
+            bind_rows(world, seat, state, rows, at, Some(resolved), units)?;
             state.pinned = true;
             state.pinned_beacon = resolved.raw();
             state.pinned_at = voxels_of(at);
@@ -642,7 +665,7 @@ fn start_step(
                 let site = match at {
                     Place::Covering(spec) => {
                         let found = {
-                            let (ground, scratch) = world.ground_and_scratch();
+                            let (ground, scratch) = world.ground_and_scratch_metered(units);
                             crate::targeting::cover_counted(
                                 &ground, scratch, seat, commander, *spec,
                             )?
@@ -667,7 +690,7 @@ fn start_step(
                     Place::Toward(spec) => {
                         let mut candidates = world.take_stone_scratch();
                         let found = {
-                            let (ground, scratch) = world.ground_and_scratch();
+                            let (ground, scratch) = world.ground_and_scratch_metered(units);
                             crate::targeting::toward_counted(
                                 &ground,
                                 scratch,
@@ -689,15 +712,15 @@ fn start_step(
                         point
                     }
                     Place::Voxel(_) | Place::Beacon(_) => {
-                        pin_place(world, seat, seat_index, state, *at)?
+                        pin_place(world, seat, seat_index, state, *at, units)?
                     }
                 };
-                if !site_is_legal(world, seat, site) {
+                if !site_is_legal(world, seat, site, units) {
                     return Err(StepFailure::IllegalSite.into());
                 }
-                bind_rows(world, seat, state, rows, site, None)?;
+                bind_rows(world, seat, state, rows, site, None, units)?;
                 if within(commander, site, world.interface_range()) {
-                    begin_deploy(world, seat, state, site, times)?;
+                    begin_deploy(world, seat, state, site, times, units)?;
                 } else {
                     walk_in(world, seat, commander, site)?;
                 }
@@ -745,12 +768,15 @@ fn bind_rows(
     rows: &[Row],
     centre: [Fx; 3],
     except: Option<BeaconId>,
+    units: &dyn crate::seams::Meter,
 ) -> Result<(), StepFailed> {
     state.bindings.clear();
     let covered = (state.bound_feature != NO_INDEX)
         .then(|| usize::try_from(state.bound_feature).ok())
         .flatten();
     for row in rows {
+        // One unit a row read, and one a target of it (dunit part 2).
+        units.rows(1);
         // A switch binds what the settings it carries bind.
         let row = match row {
             Row::Mandate {
@@ -771,8 +797,9 @@ fn bind_rows(
             }
         };
         for target in targets {
+            units.rows(1);
             if let Anchor::On(spec) = target.anchor {
-                let binding = bind_one(world, seat, centre, except, covered, spec)?;
+                let binding = bind_one(world, seat, centre, except, covered, spec, units)?;
                 state.bindings.push(binding);
             }
         }
@@ -788,9 +815,10 @@ fn bind_one(
     except: Option<BeaconId>,
     covered: Option<usize>,
     spec: FeatureSpec,
+    units: &dyn crate::seams::Meter,
 ) -> Result<Binding, StepFailed> {
     let site = {
-        let (ground, scratch) = world.ground_and_scratch();
+        let (ground, scratch) = world.ground_and_scratch_metered(units);
         crate::targeting::on_vent_counted(&ground, scratch, seat, centre, except, covered, spec)?
     };
     let [x, y] = site.column;
@@ -811,9 +839,19 @@ fn bind_one(
 /// Whether every feature the step in progress bound is still there. A step
 /// checks its bound features at each decision, and a lost one fails it
 /// `feature_lost` (targeting.md, "Three reading rules", 1).
-fn bindings_live(world: &World, state: &PlanState) -> bool {
-    let live = |feature: u32| -> bool { feature == NO_INDEX || feature_live(world, feature) };
-    live(state.bound_feature) && state.bindings.iter().all(|binding| live(binding.feature))
+fn bindings_live(world: &World, state: &PlanState, units: &dyn crate::seams::Meter) -> bool {
+    let live =
+        |feature: u32| -> bool { feature == NO_INDEX || feature_live(world, feature, units) };
+    // One unit a binding read, beside what each liveness test reads (dunit
+    // part 2).
+    let mut read: usize = 0;
+    let all = live(state.bound_feature)
+        && state.bindings.iter().all(|binding| {
+            read += 1;
+            live(binding.feature)
+        });
+    units.rows(read);
+    all
 }
 
 /// Begin the visit handshake (spec section 5: 1.5 s, once per visit). The walk
@@ -843,8 +881,9 @@ fn begin_deploy(
     state: &mut PlanState,
     site: [Fx; 3],
     times: &InterfaceTimes,
+    units: &dyn crate::seams::Meter,
 ) -> Result<(), StepFailure> {
-    if !site_is_legal(world, seat, site) {
+    if !site_is_legal(world, seat, site, units) {
         return Err(StepFailure::IllegalSite);
     }
     if !world.charge_deploy(seat) {
@@ -882,6 +921,10 @@ fn walk_in(
 }
 
 /// Look at a started step and say whether it is done.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the step's own arguments and the seat's decision meter, handed down from `phase_decision` (dunit part 2); a parameter struct would be built at each caller only to be taken apart here"
+)]
 fn look(
     world: &mut World,
     seat: SeatId,
@@ -890,9 +933,10 @@ fn look(
     step: &PlanStep,
     index: u32,
     times: &InterfaceTimes,
+    units: &dyn crate::seams::Meter,
 ) -> Outcome {
     let tick = world.tick();
-    if !bindings_live(world, state) {
+    if !bindings_live(world, state, units) {
         return Outcome::Failed(StepFailure::FeatureLost);
     }
     match &step.action {
@@ -922,7 +966,7 @@ fn look(
             Outcome::Running
         }
         Action::WaitUntil(condition) => {
-            let seen = view(world, seat, seat_index, state);
+            let seen = view(world, seat, seat_index, state, units);
             if cond::evaluate(&seen, condition) {
                 complete(world, seat, index);
                 return Outcome::Complete;
@@ -936,7 +980,7 @@ fn look(
             if state.stage == VisitState::Running {
                 return walk_to_visit(world, seat, state, rows.len(), times);
             }
-            run_visit(world, seat, state, rows, durations, index)
+            run_visit(world, seat, state, rows, durations, index, units)
         }
         Action::PlaceBeacon {
             mandate,
@@ -951,12 +995,12 @@ fn look(
                     let left = rows_left(rows, state.visit_row);
                     return walk_to_visit(world, seat, state, left, times);
                 }
-                return run_visit(world, seat, state, rows, durations, index);
+                return run_visit(world, seat, state, rows, durations, index, units);
             }
             if state.stage == VisitState::Running {
-                return walk_to_deploy(world, seat, state, times);
+                return walk_to_deploy(world, seat, state, times, units);
             }
-            run_deploy(world, seat, state, *mandate, rows, durations, index)
+            run_deploy(world, seat, state, *mandate, rows, durations, index, units)
         }
     }
 }
@@ -1016,6 +1060,7 @@ fn walk_to_deploy(
     seat: SeatId,
     state: &mut PlanState,
     times: &InterfaceTimes,
+    units: &dyn crate::seams::Meter,
 ) -> Outcome {
     // The site was pinned off a point the step resolved; one no point stands
     // on is no site to deploy at.
@@ -1026,7 +1071,7 @@ fn walk_to_deploy(
         return Outcome::Failed(StepFailure::CommanderDead);
     };
     if within(commander, site, world.interface_range()) {
-        return match begin_deploy(world, seat, state, site, times) {
+        return match begin_deploy(world, seat, state, site, times, units) {
             Ok(()) => Outcome::Running,
             Err(failure) => Outcome::Failed(failure),
         };
@@ -1049,6 +1094,7 @@ fn run_visit(
     rows: &[Row],
     durations: &[i32],
     index: u32,
+    units: &dyn crate::seams::Meter,
 ) -> Outcome {
     let tick = world.tick();
     let beacon = BeaconId::new(state.visit_beacon);
@@ -1107,7 +1153,7 @@ fn run_visit(
         return Outcome::Complete;
     };
     let slots = crate::interpreter::binding_slots(done);
-    if let Err(failure) = commit_row(world, row_index, seat, row, &state.bindings, slots) {
+    if let Err(failure) = commit_row(world, row_index, seat, row, &state.bindings, slots, units) {
         return Outcome::Failed(failure);
     }
     emit(
@@ -1154,6 +1200,7 @@ fn run_deploy(
     rows: &[Row],
     durations: &[i32],
     index: u32,
+    units: &dyn crate::seams::Meter,
 ) -> Outcome {
     let tick = world.tick();
     let Some(site) = pinned_point(state.pinned_at) else {
@@ -1181,7 +1228,7 @@ fn run_deploy(
         return Outcome::Running;
     }
     if state.stage == VisitState::Deploying {
-        if !site_is_legal(world, seat, site) {
+        if !site_is_legal(world, seat, site, units) {
             return Outcome::Failed(StepFailure::IllegalSite);
         }
         // A `set` already filed on the site's column this tick (a dig
@@ -1189,13 +1236,13 @@ fn run_deploy(
         // footing the beacon begins: the placement waits a tick (the owner's
         // footing ruling of 2026-10-20; no paid edit is refused).
         let [x, y] = crate::targeting::column_of(site);
-        if world.set_queued_on(x, y) {
+        if world.set_queued_on_metered([x, y], units) {
             return Outcome::Running;
         }
         // Every refusal is the seat's want of room as the step reports it: a
         // seat in the match always has a seat row, and the counter cannot be
         // spent at the beacon room.
-        let Ok(placed) = world.place_beacon(seat, site, mandate) else {
+        let Ok(placed) = world.place_beacon_metered(seat, site, mandate, units) else {
             return Outcome::Failed(StepFailure::NoBeaconRoom);
         };
         state.visit_beacon = placed.raw();
@@ -1247,7 +1294,7 @@ fn run_deploy(
         return Outcome::Complete;
     };
     let slots = crate::interpreter::binding_slots(done);
-    if let Err(failure) = commit_row(world, row_index, seat, row, &state.bindings, slots) {
+    if let Err(failure) = commit_row(world, row_index, seat, row, &state.bindings, slots, units) {
         return Outcome::Failed(failure);
     }
     emit(
@@ -1307,6 +1354,7 @@ fn commit_row(
     spec: &Row,
     bindings: &[Binding],
     slot: usize,
+    units: &dyn crate::seams::Meter,
 ) -> Result<(), StepFailure> {
     let beacon = world
         .beacons()
@@ -1315,7 +1363,8 @@ fn commit_row(
         .copied()
         .map(BeaconId::new)
         .ok_or(StepFailure::BeaconGone)?;
-    let live = |world: &World, binding: &Binding| -> bool { feature_live(world, binding.feature) };
+    let live =
+        |world: &World, binding: &Binding| -> bool { feature_live(world, binding.feature, units) };
     match spec {
         Row::Mandate { kind, settings } => {
             // The switch first, which clears the old mandate's settings, then
@@ -1325,26 +1374,34 @@ fn commit_row(
             // before the switch writes anything, so a failed row leaves the
             // old writ, its settings and its held seam exactly as they were.
             if let Some(settings) = settings {
-                if !targets_live(world, settings, bindings, slot) {
+                if !targets_live(world, settings, bindings, slot, units) {
                     return Err(StepFailure::FeatureLost);
                 }
                 // A switch clears every list the beacon holds, so the room the
                 // settings need is counted against the beacon's rows all gone
                 // (ruling 10: the whole row or none of it).
-                settings_room(world, beacon, settings, bindings, slot, &TargetKind::ALL)?;
-                walls_stand(world, beacon, settings)?;
+                settings_room(
+                    world,
+                    beacon,
+                    settings,
+                    bindings,
+                    slot,
+                    &TargetKind::ALL,
+                    units,
+                )?;
+                walls_stand(world, beacon, settings, units)?;
             }
-            world.set_beacon_mandate(row, *kind);
+            world.set_beacon_mandate_metered(row, *kind, units);
             if let Some(settings) = settings {
-                commit_row(world, row, seat, settings, bindings, slot)?;
+                commit_row(world, row, seat, settings, bindings, slot, units)?;
             }
         }
         Row::Priority { priority } => world.set_beacon_priority(row, *priority),
         Row::Recycle => {
-            world.recycle_beacon(seat, beacon);
+            world.recycle_beacon_metered(seat, beacon, units);
         }
         Row::QueueStructure { kind } => {
-            world.queue_capability(seat, beacon, *kind)?;
+            world.queue_capability(seat, beacon, *kind, units)?;
         }
         Row::AddTarget { target } => {
             let (at, bound) = match target.anchor {
@@ -1370,38 +1427,40 @@ fn commit_row(
             // physical work reaches it until the sphere holds it (S3's plan,
             // decision 6; `crate::mandate::buildable`), rather than the row
             // committing and writing nothing.
-            if !world.anchor_is_claimed(seat, at) {
+            if !world.anchor_is_claimed_metered(seat, at, units) {
                 // A wall's box is checked against the ground before it is
                 // written: the verifier sees no terrain (decisions-log item 146
                 // (4)), so these halves of its checks are the sim's.
                 if let Some(wall) = target.wall {
-                    crate::site::check_wall(world, beacon, wall, world.decision_meter())?;
+                    crate::site::check_wall(world, beacon, wall, units)?;
                 }
                 world
-                    .add_bound_target(
+                    .add_bound_target_metered(
                         beacon,
                         target.blueprint,
                         at,
                         bound,
                         target.build,
                         target.wall,
+                        units,
                     )
                     .map_err(|_| StepFailure::TargetsUnwritten)?;
             }
         }
         Row::RemoveTarget { anchor } => match anchor {
             Removal::Voxel(voxel) => {
-                world.remove_target_at(beacon, point_of(*voxel));
+                world.remove_target_at(beacon, point_of(*voxel), units);
             }
             Removal::Feature { kind, anchor } => {
                 // A feature index past `u32` is no feature a target is bound
                 // to, so the removal names nothing and changes nothing.
+                // The name's lookup reads the feature rows up to it.
                 if let Some(feature) = world
                     .features()
-                    .index_of(*kind, *anchor)
+                    .index_of_metered(*kind, *anchor, units)
                     .and_then(|index| u32::try_from(index).ok())
                 {
-                    world.remove_bound_target(beacon, feature);
+                    world.remove_bound_target(beacon, feature, units);
                 }
             }
         },
@@ -1430,7 +1489,7 @@ fn commit_row(
             // selector; one that resolves to nothing fails the step
             // `no_target` before anything is written.
             let guarded = match defend.as_ref().and_then(|edit| edit.protect.as_ref()) {
-                Some(list) => Some(resolve_protected(world, seat, list)?),
+                Some(list) => Some(resolve_protected(world, seat, list, units)?),
                 None => None,
             };
             // A settings edit **replaces** the lists it names, because spec
@@ -1445,43 +1504,49 @@ fn commit_row(
             // its step (ruling 10, decisions-log item 139 (1)). Both tests run
             // before the first write, which is what makes the writes below
             // unable to fail part-way.
-            if !targets_live(world, spec, bindings, slot) {
+            if !targets_live(world, spec, bindings, slot, units) {
                 return Err(StepFailure::FeatureLost);
             }
             let replaced = replaced_kinds(spec);
-            settings_room(world, beacon, spec, bindings, slot, &replaced.iter())?;
+            settings_room(world, beacon, spec, bindings, slot, &replaced.iter(), units)?;
             // Every wall the list names is checked against the ground first, so
             // a box that cannot stand writes nothing (decisions-log item 146
             // (4)).
-            walls_stand(world, beacon, spec)?;
+            walls_stand(world, beacon, spec, units)?;
             if !targets.is_empty() {
                 // Replacing is not abandoning: an anchor that survives the
                 // edit keeps the structure it has already been paid for, or
                 // the mandate would buy it a second time
                 // ([`World::replace_build_targets`]). The list goes over as an
                 // iterator, so nothing here allocates inside a tick.
-                let entries = build_entries(targets, bindings, slot)?;
+                let entries = build_entries(targets, bindings, slot, units)?;
                 world
-                    .replace_build_targets(beacon, entries)
+                    .replace_build_targets(beacon, entries, units)
                     .map_err(|_| StepFailure::TargetsUnwritten)?;
             }
             if !protected.is_empty() {
-                world.clear_targets(beacon, TargetKind::Protected);
+                world.clear_targets(beacon, TargetKind::Protected, units);
                 for (centre, area) in protected {
                     // One decision unit a box written (lane `dunit`).
-                    world.charge_decision(1);
+                    units.rows(1);
                     world
-                        .add_area(beacon, AreaKind::Protected, point_of(*centre), *area)
+                        .add_area_metered(
+                            beacon,
+                            AreaKind::Protected,
+                            point_of(*centre),
+                            *area,
+                            units,
+                        )
                         .map_err(|_| StepFailure::TargetsUnwritten)?;
                 }
             }
             if !probes.is_empty() {
-                world.clear_targets(beacon, TargetKind::Probe);
+                world.clear_targets(beacon, TargetKind::Probe, units);
                 for (centre, area) in probes {
                     // One decision unit a box written (lane `dunit`).
-                    world.charge_decision(1);
+                    units.rows(1);
                     world
-                        .add_area(beacon, AreaKind::Probe, point_of(*centre), *area)
+                        .add_area_metered(beacon, AreaKind::Probe, point_of(*centre), *area, units)
                         .map_err(|_| StepFailure::TargetsUnwritten)?;
                 }
             }
@@ -1512,12 +1577,12 @@ fn commit_row(
             // The Defend settings the row names (S2's `dfnd`), and nothing it
             // is silent about.
             if let Some(edit) = defend {
-                world.set_defend_settings(beacon, edit, guarded.as_ref());
+                world.set_defend_settings(beacon, edit, guarded.as_ref(), units);
             }
             // The Attack settings the row names (S2's `atk`), and nothing it
             // is silent about.
             if let Some(edit) = attack {
-                world.set_attack_settings(beacon, edit, aim);
+                world.set_attack_settings(beacon, edit, aim, units);
             }
         }
     }
@@ -1551,17 +1616,21 @@ fn resolve_protected(
     world: &World,
     seat: SeatId,
     list: &[crate::defend::Protect],
+    units: &dyn crate::seams::Meter,
 ) -> Result<(bool, Vec<BeaconId>), StepFailure> {
     let mut escort = false;
     let mut beacons: Vec<BeaconId> = Vec::with_capacity(list.len());
     for entry in list {
+        units.rows(1);
         match entry {
             crate::defend::Protect::Commander => escort = true,
             crate::defend::Protect::Beacon(spec) => {
-                let beacon =
-                    super::cond::resolve_beacon_for(world, seat, *spec, world.decision_meter())
-                        .ok_or(StepFailure::NoTarget)?;
-                if !beacons.contains(&beacon) {
+                let beacon = super::cond::resolve_beacon_for(world, seat, *spec, units)
+                    .ok_or(StepFailure::NoTarget)?;
+                // One unit an entry the duplicate test compares (dunit part 2).
+                let seen = beacons.iter().position(|held| *held == beacon);
+                crate::seams::Meter::rows(units, seen.map_or(beacons.len(), |at| at + 1));
+                if seen.is_none() {
                     beacons.push(beacon);
                 }
             }
@@ -1585,9 +1654,17 @@ fn build_entries<'a>(
     targets: &'a [crate::interpreter::Target],
     bindings: &'a [Binding],
     slot: usize,
+    units: &dyn crate::seams::Meter,
 ) -> Result<impl Iterator<Item = BuildEntry> + Clone + 'a, StepFailure> {
-    let bound = bound_slice(targets, bindings, slot).ok_or(StepFailure::NoTarget)?;
-    if bound.iter().any(|binding| binding_point(binding).is_none()) {
+    let bound = bound_slice(targets, bindings, slot, units).ok_or(StepFailure::NoTarget)?;
+    // One unit a binding the point test reads, up to the first with none.
+    let mut read: usize = 0;
+    let pointless = bound.iter().any(|binding| {
+        read += 1;
+        binding_point(binding).is_none()
+    });
+    units.rows(read);
+    if pointless {
         return Err(StepFailure::IllegalSite);
     }
     Ok(targets.iter().scan(bound.iter(), |read, target| {
@@ -1674,6 +1751,7 @@ fn settings_room<K>(
     bindings: &[Binding],
     slot: usize,
     replaces: &K,
+    units: &dyn crate::seams::Meter,
 ) -> Result<(), StepFailure>
 where
     K: IntoIterator<Item = TargetKind> + Clone,
@@ -1694,10 +1772,10 @@ where
     let build = if targets.is_empty() {
         None
     } else {
-        Some(build_entries(targets, bindings, slot)?)
+        Some(build_entries(targets, bindings, slot, units)?)
     };
     world
-        .check_list_room(beacon, build, areas, replaces)
+        .check_list_room(beacon, build, areas, replaces, units)
         .map_err(|_| StepFailure::TargetsUnwritten)
 }
 
@@ -1705,17 +1783,28 @@ where
 /// a live feature: the one test a settings edit can fail at commit time, kept
 /// in one place so the switch that carries the edit can ask it before it
 /// writes anything. Any other row has no targets and answers `true`.
-fn targets_live(world: &World, spec: &Row, bindings: &[Binding], slot: usize) -> bool {
+fn targets_live(
+    world: &World,
+    spec: &Row,
+    bindings: &[Binding],
+    slot: usize,
+    units: &dyn crate::seams::Meter,
+) -> bool {
     let Row::Settings { targets, .. } = spec else {
         return true;
     };
     if targets.is_empty() {
         return true;
     }
-    bound_slice(targets, bindings, slot).is_some_and(|bound| {
-        bound
-            .iter()
-            .all(|binding| feature_live(world, binding.feature))
+    bound_slice(targets, bindings, slot, units).is_some_and(|bound| {
+        // One unit a binding read, beside what each liveness test reads.
+        let mut read: usize = 0;
+        let all = bound.iter().all(|binding| {
+            read += 1;
+            feature_live(world, binding.feature, units)
+        });
+        units.rows(read);
+        all
     })
 }
 
@@ -1725,7 +1814,10 @@ fn bound_slice<'a>(
     targets: &[crate::interpreter::Target],
     bindings: &'a [Binding],
     slot: usize,
+    units: &dyn crate::seams::Meter,
 ) -> Option<&'a [Binding]> {
+    // One unit a target the count reads: every target (dunit part 2).
+    units.rows(targets.len());
     let used = targets
         .iter()
         .filter(|target| target.anchor.binds())
@@ -1735,8 +1827,16 @@ fn bound_slice<'a>(
 
 /// Whether the feature at index `feature` of the map's table is live. An
 /// index past `usize` is no feature, so it is not.
-fn feature_live(world: &World, feature: u32) -> bool {
-    usize::try_from(feature).is_ok_and(|index| world.feature_is_live(index))
+///
+/// Its footprint and depth reads are charged to the decision
+/// ([`crate::features::FeatureTable::is_live_metered`]; dunit part 2): every
+/// caller runs inside one.
+fn feature_live(world: &World, feature: u32, units: &dyn crate::seams::Meter) -> bool {
+    usize::try_from(feature).is_ok_and(|index| {
+        world
+            .features()
+            .is_live_metered(index, world.surface(), world.voxels(), units)
+    })
 }
 
 /// The point a binding's `on` column stands on: `None` for one no voxel
@@ -1752,11 +1852,12 @@ fn run_fallback(
     seat_index: usize,
     state: &mut PlanState,
     plan: &Plan,
+    units: &dyn crate::seams::Meter,
 ) {
     let target = match plan.fallback() {
-        Posture::Hold(place) => resolve_place(world, seat, seat_index, state, *place),
+        Posture::Hold(place) => resolve_place(world, seat, seat_index, state, *place, units),
         Posture::Shadow(beacon) => {
-            let seen = view(world, seat, seat_index, state);
+            let seen = view(world, seat, seat_index, state, units);
             resolve_beacon(&seen, *beacon).and_then(|id| beacon_at(world, id))
         }
         Posture::Patrol(waypoints) => {
@@ -1769,7 +1870,7 @@ fn run_fallback(
             slot_of(state.fallback_leg)
                 .and_then(|at| waypoints.get(at))
                 .copied()
-                .and_then(|place| resolve_place(world, seat, seat_index, state, place))
+                .and_then(|place| resolve_place(world, seat, seat_index, state, place, units))
         }
     };
     let Some(target) = target else {
@@ -1872,12 +1973,19 @@ pub(crate) fn abandon_deploys(
     }
 }
 
-fn view<'a>(world: &'a World, seat: SeatId, seat_index: usize, state: &'a PlanState) -> View<'a> {
+fn view<'a>(
+    world: &'a World,
+    seat: SeatId,
+    seat_index: usize,
+    state: &'a PlanState,
+    units: &'a dyn crate::seams::Meter,
+) -> View<'a> {
     View {
         world,
         seat,
         seat_index,
         state,
+        meter: units,
     }
 }
 
@@ -1888,11 +1996,12 @@ fn pin_place(
     seat_index: usize,
     state: &mut PlanState,
     place: Place,
+    units: &dyn crate::seams::Meter,
 ) -> Result<[Fx; 3], StepFailure> {
     let beacon = match place {
         Place::Beacon(spec) => {
             let resolved = {
-                let seen = view(world, seat, seat_index, state);
+                let seen = view(world, seat, seat_index, state, units);
                 resolve_beacon(&seen, spec)
             };
             match resolved {
@@ -1926,11 +2035,12 @@ fn resolve_place(
     seat_index: usize,
     state: &PlanState,
     place: Place,
+    units: &dyn crate::seams::Meter,
 ) -> Option<[Fx; 3]> {
     match place {
         Place::Voxel(voxel) => ground_point(world, voxel),
         Place::Beacon(spec) => {
-            let seen = view(world, seat, seat_index, state);
+            let seen = view(world, seat, seat_index, state, units);
             resolve_beacon(&seen, spec).and_then(|id| beacon_at(world, id))
         }
         // A fallback never covers or steps toward anything: the compile
@@ -1948,10 +2058,18 @@ fn resolve_place(
 /// first, so the commander's distance from the site is the walk's business,
 /// and the deploy requires the interface range (targeting.md, amending item
 /// 11; `commander.placement_range_voxels` stays in the schema, superseded).
-fn site_is_legal(world: &World, seat: SeatId, site: [Fx; 3]) -> bool {
+fn site_is_legal(
+    world: &World,
+    seat: SeatId,
+    site: [Fx; 3],
+    units: &dyn crate::seams::Meter,
+) -> bool {
     let ground = world.ground();
     let [x, y] = crate::targeting::column_of(site);
-    ground.inside_own_sphere(seat, site) && !ground.stacks_on_own(seat, x, y)
+    // The rows both tests read, charged to the decision (dunit part 2).
+    let meter = units;
+    crate::targeting::metered::inside_own_sphere(&ground, seat, site, meter)
+        && !crate::targeting::metered::stacks_on_own(&ground, seat, [x, y], meter)
 }
 
 /// Send the commander somewhere. The route itself is the router's (T7): this
@@ -2133,12 +2251,388 @@ fn voxels_of(at: [Fx; 3]) -> [i32; 3] {
 /// # Errors
 ///
 /// The first wall's refusal, as a [`StepFailure`].
-fn walls_stand(world: &World, beacon: BeaconId, spec: &Row) -> Result<(), StepFailure> {
+fn walls_stand(
+    world: &World,
+    beacon: BeaconId,
+    spec: &Row,
+    units: &dyn crate::seams::Meter,
+) -> Result<(), StepFailure> {
     let Row::Settings { targets, .. } = spec else {
         return Ok(());
     };
+    // One unit a target read for its wall (dunit part 2).
+    units.rows(targets.len());
     for wall in targets.iter().filter_map(|target| target.wall) {
-        crate::site::check_wall(world, beacon, wall, world.decision_meter())?;
+        crate::site::check_wall(world, beacon, wall, units)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod visits {
+    //! Dunit part 2: the step helpers a decision runs charge one unit a visit
+    //! of each loop, counted here from what they read.
+
+    use super::{
+        Outcome, bindings_live, bound_slice, build_entries, commander_at, commit_row, pinned_point,
+        resolve_protected, run_deploy, site_is_legal, voxels_of, walls_stand,
+    };
+    use crate::features::FeatureKind;
+    use crate::interpreter::state::VisitState;
+    use crate::interpreter::state::{Binding, PlanState};
+    use crate::interpreter::{Anchor, BeaconSpec, Row, Target};
+    use crate::tables::{BuildOrder, SeatId};
+    use crate::world::World;
+
+    fn world() -> World {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let rules = crate::rules::RulesTable::load(&path)
+            .unwrap_or_else(|error| panic!("it loads: {error:?}"));
+        World::new(&crate::world::WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"))
+    }
+
+    /// The units `run` charges to the meter it is handed, from zero.
+    fn charged(world: &World, run: impl FnOnce(&World, &crate::seams::UnitTally)) -> u64 {
+        let meter = crate::seams::UnitTally::new();
+        run(world, &meter);
+        meter
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"))
+    }
+
+    /// A vent's liveness read: its footprint columns up to the live one.
+    fn live_rows(world: &World, feature: usize) -> u64 {
+        let tally = crate::seams::UnitTally::new();
+        let _ = world
+            .features()
+            .is_live_metered(feature, world.surface(), world.voxels(), &tally);
+        tally.read().unwrap_or(0)
+    }
+
+    /// Two `on` targets and a voxel target, and a binding for each `on`.
+    fn targets(world: &World) -> (Vec<Target>, Vec<Binding>, usize) {
+        let vent = world
+            .features()
+            .features()
+            .iter()
+            .position(|feature| feature.kind == FeatureKind::Vent)
+            .unwrap_or_else(|| panic!("a vent"));
+        let anchor = world
+            .features()
+            .get(vent)
+            .map_or_else(|| panic!("the vent"), |feature| feature.anchor);
+        let on = Anchor::On(crate::targeting::FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor,
+        });
+        let target = |anchor| Target {
+            blueprint: crate::tables::StructureKind::Generator.id(),
+            anchor,
+            build: BuildOrder::NONE,
+            wall: None,
+        };
+        let binding = Binding {
+            feature: u32::try_from(vent).unwrap_or(0),
+            at: [anchor[0], anchor[1], 10],
+        };
+        (
+            vec![target(on), target(Anchor::Voxel([3, 3, 3])), target(on)],
+            vec![binding, binding],
+            vent,
+        )
+    }
+
+    #[test]
+    fn the_bindings_and_their_list_charge_what_they_read() {
+        let world = world();
+        let (targets, bindings, vent) = targets(&world);
+        // The count of the list's `on` anchors reads every target.
+        assert_eq!(
+            charged(&world, |_, meter| {
+                assert!(bound_slice(&targets, &bindings, 0, meter).is_some());
+            }),
+            3
+        );
+        // The entries add the binding each point test reads.
+        assert_eq!(
+            charged(&world, |_, meter| {
+                assert!(build_entries(&targets, &bindings, 0, meter).is_ok());
+            }),
+            3 + 2
+        );
+        // A step's look: the bound feature's liveness, then each binding read
+        // with its own.
+        let state = PlanState {
+            bound_feature: u32::try_from(vent).unwrap_or(0),
+            bindings: bindings.clone(),
+            ..PlanState::default()
+        };
+        assert_eq!(
+            charged(&world, |world, meter| assert!(bindings_live(
+                world, &state, meter
+            ))),
+            live_rows(&world, vent) * 3 + 2
+        );
+    }
+
+    #[test]
+    fn a_protect_list_charges_its_entries_and_its_duplicate_test() {
+        let world = world();
+        let seat = SeatId::new(0);
+        let core = BeaconSpec::Own(0);
+        let list = [
+            crate::defend::Protect::Commander,
+            crate::defend::Protect::Beacon(core),
+            crate::defend::Protect::Beacon(core),
+        ];
+        // `b_00` reads the beacon rows up to the core's, each time it is
+        // resolved.
+        let b_00 = u64::try_from(
+            world
+                .beacons()
+                .row_of_ordinal(seat, 0)
+                .unwrap_or_else(|| panic!("a core"))
+                + 1,
+        )
+        .unwrap_or(0);
+        let units = charged(&world, |world, meter| {
+            let (escort, beacons) =
+                resolve_protected(world, seat, &list, meter).unwrap_or_else(|_| panic!("resolved"));
+            assert!(escort);
+            assert_eq!(beacons.len(), 1, "the duplicate is held once");
+        });
+        // Three entries; two resolves; the duplicate test reads nothing for
+        // the first beacon and the one held for the second.
+        assert_eq!(units, 3 + 2 * b_00 + 1);
+    }
+
+    #[test]
+    fn a_settings_rows_walls_charge_their_targets() {
+        let world = world();
+        let (targets, _, _) = targets(&world);
+        let row = Row::Settings {
+            kind: None,
+            fields: 0,
+            targets,
+            protected: Vec::new(),
+            probes: Vec::new(),
+            scouts: 0,
+            mine: None,
+            roe: 0,
+            retreat_hp_pct: None,
+            build: crate::site::BuildEdit::default(),
+            defend: None,
+            attack: None,
+        };
+        let beacon =
+            crate::tables::BeaconId::new(world.beacons().ids().first().copied().unwrap_or(0));
+        // No target is a wall: each is read, and no box is checked.
+        assert_eq!(
+            charged(&world, |world, meter| assert!(
+                walls_stand(world, beacon, &row, meter).is_ok()
+            )),
+            3
+        );
+    }
+
+    /// A settings row with a wall: each target read, then the wall's check,
+    /// which reads the sphere's Spire test once (every structure kind byte,
+    /// with no Spire standing) and, for its one column, the column and each
+    /// voxel of its fall to the ground under walls. Whatever the check
+    /// answers, it has read that column first.
+    #[test]
+    fn a_settings_rows_wall_charges_its_sphere_and_its_columns() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let beacon =
+            crate::tables::BeaconId::new(world.beacons().ids().first().copied().unwrap_or(0));
+        let centre = world
+            .beacons()
+            .positions()
+            .first()
+            .copied()
+            .unwrap_or_else(|| panic!("a beacon"));
+        let [x, y] = crate::targeting::column_of(centre);
+        // A structure stands, so the Spire test reads a row.
+        let far = world.standing_point([x + 30, y, 0]);
+        assert!(
+            world
+                .raise_structure(seat, beacon, crate::tables::StructureKind::Generator, far)
+                .is_some()
+        );
+        let kinds = u64::try_from(world.structures().kinds().len()).unwrap_or(0);
+        assert_eq!(kinds, 1);
+        let [wx, wy] = [x + 3, y];
+        let cell = |v: i32| i16::try_from(v).unwrap_or_else(|_| panic!("on the map"));
+        let wall = crate::site::WallBox {
+            columns: crate::tables::ColumnBox::new([cell(wx), cell(wy)], [cell(wx), cell(wy)])
+                .unwrap_or_else(|| panic!("a box")),
+            floor: 0,
+            top: 40,
+        };
+        // The column's fall, counted here: the voxels from the surface's top
+        // down to the first that is neither air nor a wall's.
+        let node = world
+            .surface()
+            .node_of(wx, wy)
+            .unwrap_or_else(|| panic!("on the map"));
+        let mut z = world.surface().top(node);
+        let mut fall = 0_u64;
+        loop {
+            fall += 1;
+            let fallen = world
+                .voxels()
+                .get([wx, wy, z])
+                .is_some_and(|material| material.wall_of().is_some() || material.is_air());
+            if !fallen || z == 0 {
+                break;
+            }
+            z -= 1;
+        }
+        let (mut targets, _, _) = targets(&world);
+        if let Some(first) = targets.first_mut() {
+            first.wall = Some(wall);
+        }
+        let row = Row::Settings {
+            kind: None,
+            fields: 0,
+            targets,
+            protected: Vec::new(),
+            probes: Vec::new(),
+            scouts: 0,
+            mine: None,
+            roe: 0,
+            retreat_hp_pct: None,
+            build: crate::site::BuildEdit::default(),
+            defend: None,
+            attack: None,
+        };
+        assert_eq!(
+            charged(&world, |world, meter| {
+                let _ = walls_stand(world, beacon, &row, meter);
+            }),
+            3 + kinds + 1 + fall
+        );
+    }
+
+    /// A removal by feature looks the feature's name up (the feature rows up
+    /// to it) and removes the target bound to it (the target rows up to it).
+    #[test]
+    fn a_removal_by_feature_charges_its_lookup_and_its_removal() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let row = world
+            .beacons()
+            .row_of_ordinal(seat, 0)
+            .unwrap_or_else(|| panic!("a core"));
+        let core =
+            crate::tables::BeaconId::new(world.beacons().ids().get(row).copied().unwrap_or(0));
+        let (_, binding_list, vent) = targets(&world);
+        let binding = binding_list
+            .first()
+            .copied()
+            .unwrap_or_else(|| panic!("a binding"));
+        let at = world.standing_point(binding.at);
+        world
+            .add_bound_target(
+                core,
+                crate::tables::StructureKind::Generator.id(),
+                at,
+                (binding.feature, crate::targeting::DESCRIPTION_NAME),
+                BuildOrder::NONE,
+                None,
+            )
+            .unwrap_or_else(|_| panic!("room"));
+        let anchor = world
+            .features()
+            .get(vent)
+            .map_or_else(|| panic!("the vent"), |feature| feature.anchor);
+        let spec = Row::RemoveTarget {
+            anchor: crate::interpreter::Removal::Feature {
+                kind: FeatureKind::Vent,
+                anchor,
+            },
+        };
+        let meter = crate::seams::UnitTally::new();
+        assert!(commit_row(&mut world, row, seat, &spec, &[], 0, &meter).is_ok());
+        assert_eq!(world.targets().row_count(), 0, "the target was removed");
+        // The feature rows up to the vent's, and the one target row.
+        assert_eq!(meter.read(), Ok(u64::try_from(vent + 1).unwrap_or(0) + 1));
+    }
+
+    /// A deploy's decision, with no settings rows: the site test, the
+    /// queued-`set` test on the site's column, then the placement's three
+    /// scans of the beacon rows (none free). Each part is measured on its
+    /// own first, so a placement that stopped charging is a count short.
+    #[test]
+    fn a_deploy_charges_its_site_test_and_its_placement() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let commander = commander_at(&world, seat).unwrap_or_else(|| panic!("a commander"));
+        let [x, y, z] = voxels_of(commander);
+        let pinned = voxels_of(world.standing_point([x + 2, y, z]));
+        let site = pinned_point(pinned).unwrap_or_else(|| panic!("a site"));
+        let legal = charged(&world, |world, meter| {
+            assert!(site_is_legal(world, seat, site, meter), "a legal site");
+        });
+        let queued = charged(&world, |world, meter| {
+            assert!(!world.set_queued_on_metered([pinned[0], pinned[1]], meter));
+        });
+        assert!(world.beacons().frees().iter().all(|free| !*free));
+        let rows = u64::try_from(world.beacons().ids().len()).unwrap_or(0);
+        assert!(legal > 0 && rows > 0, "each part reads rows");
+        let mut state = PlanState {
+            pinned_at: pinned,
+            stage: VisitState::Deploying,
+            visit_due: 0,
+            ..PlanState::default()
+        };
+        let meter = crate::seams::UnitTally::new();
+        let outcome = run_deploy(
+            &mut world,
+            seat,
+            &mut state,
+            crate::seams::MandateKind::Build,
+            &[],
+            &[],
+            0,
+            &meter,
+        );
+        assert_eq!(outcome, Outcome::Complete);
+        assert_eq!(
+            u64::try_from(world.beacons().ids().len()).unwrap_or(0),
+            rows + 1,
+            "the beacon was placed"
+        );
+        assert_eq!(meter.read(), Ok(legal + queued + 3 * rows));
+    }
+
+    /// A recycle row asks whether the beacon is its seat's core: every
+    /// beacon row, charged to the decision that commits the row.
+    #[test]
+    fn a_recycle_row_charges_its_core_search() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let commander = commander_at(&world, seat).unwrap_or_else(|| panic!("a commander"));
+        let [x, y, z] = voxels_of(commander);
+        let site = world.standing_point([x + 2, y, z]);
+        let placed = world
+            .place_beacon(seat, site, crate::seams::MandateKind::Build)
+            .unwrap_or_else(|_| panic!("placed"));
+        let row = world
+            .beacons()
+            .row_of(placed)
+            .unwrap_or_else(|_| panic!("its row"))
+            .index();
+        let rows = u64::try_from(world.beacons().ids().len()).unwrap_or(0);
+        let meter = crate::seams::UnitTally::new();
+        assert!(commit_row(&mut world, row, seat, &Row::Recycle, &[], 0, &meter).is_ok());
+        assert_eq!(meter.read(), Ok(rows));
+    }
 }

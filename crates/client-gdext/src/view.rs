@@ -230,6 +230,68 @@ pub struct Entity {
     /// another seat's beacon, whose radius would show whether its Spire stands (S2's plan,
     /// decision 5), so no ring is drawn for it and none is guessed.
     pub ring: Option<NonZeroU32>,
+    /// How a structure, a wall or a ruin is drawn (`ViewEntity.Look`, S3's `probw`): the
+    /// primitive the gateway's one table names and its size in whole voxels, as sent. `None` on
+    /// everything else, which the schema sends no look for.
+    pub look: Option<Look>,
+    /// Its name in the player's words, the gateway's (`ViewEntity.title`): "Autocannon",
+    /// "Mortar, going up", "Wall". Drawn as sent; the client names nothing from `subtype`.
+    pub title: String,
+    /// Whether the gateway says it is going up (`ViewEntity.building`): set on this seat's own
+    /// structures only (decisions-log item 168 (11)). Drawn as sent, never derived from its hit
+    /// points: another seat's structure at half its hit points is drawn as standing.
+    pub building: bool,
+}
+
+/// A look's primitive, as `ViewEntity.Look.Shape` names it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LookShape {
+    /// A plain block.
+    Block,
+    /// A narrow upright.
+    Tower,
+    /// A low bowl.
+    Dish,
+    /// A flat box filling its size: a wall.
+    Slab,
+}
+
+impl LookShape {
+    /// The lower-case name GDScript reads.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Tower => "tower",
+            Self::Dish => "dish",
+            Self::Slab => "slab",
+        }
+    }
+
+    /// The shape a wire value names; `None` for `SHAPE_UNSPECIFIED` or a number this build has
+    /// no name for, which refuses the entity (S3's `fixq-c`, fix pass 1: a shape drawn as a
+    /// block it is not would be a guess; this supersedes `fixq-brief.md` item 1's "drawn as a
+    /// block").
+    #[must_use]
+    pub fn of_wire(shape: i32) -> Option<Self> {
+        match view_entity::look::Shape::try_from(shape) {
+            Ok(view_entity::look::Shape::Block) => Some(Self::Block),
+            Ok(view_entity::look::Shape::Tower) => Some(Self::Tower),
+            Ok(view_entity::look::Shape::Dish) => Some(Self::Dish),
+            Ok(view_entity::look::Shape::Slab) => Some(Self::Slab),
+            Ok(view_entity::look::Shape::Unspecified) | Err(_) => None,
+        }
+    }
+}
+
+/// A look as the view sent it: its primitive and its size, whole voxels in the SIM's axes
+/// (x east, y north, z up), each at least one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Look {
+    /// The primitive.
+    pub shape: LookShape,
+    /// Its size, x east, y north, z up, measured from the entity's `at`.
+    pub size: [NonZeroU32; 3],
 }
 
 /// An entity's hit points as the view gave them.
@@ -394,6 +456,40 @@ fn entity_of(entity: &ViewEntity) -> Result<Entity, BridgeError> {
             Some(NonZeroU32::new(radius).ok_or_else(|| refused("has a sphere of radius zero"))?)
         }
     };
+    // A look is a structure's, a wall's (a structure entity) or a ruin's, and has a size: one
+    // anywhere else, or with an edge of nothing, is drawn nowhere the gateway said.
+    let look = match entity.look.as_ref() {
+        // The schema sets a look on every structure, wall and ruin: one without is drawn
+        // nowhere the gateway said how.
+        None if matches!(kind, EntityKind::Structure | EntityKind::Ruin) => {
+            return Err(refused("is a structure or a ruin with no look"));
+        }
+        None => None,
+        Some(_) if !matches!(kind, EntityKind::Structure | EntityKind::Ruin) => {
+            return Err(refused("carries a look and is no structure or ruin"));
+        }
+        Some(look) => {
+            let edge = |value: u32| {
+                NonZeroU32::new(value).ok_or_else(|| refused("has a look with an edge of zero"))
+            };
+            Some(Look {
+                shape: LookShape::of_wire(look.shape).ok_or_else(|| {
+                    refused(&format!(
+                        "has a look whose shape this build has no name for ({})",
+                        look.shape
+                    ))
+                })?,
+                size: [edge(look.x)?, edge(look.y)?, edge(look.z)?],
+            })
+        }
+    };
+    let building = match entity.building {
+        None => false,
+        Some(_) if kind != EntityKind::Structure => {
+            return Err(refused("is said to be going up and is no structure"));
+        }
+        Some(building) => building,
+    };
     Ok(Entity {
         id: entity.id.clone(),
         kind,
@@ -403,6 +499,9 @@ fn entity_of(entity: &ViewEntity) -> Result<Entity, BridgeError> {
         hp,
         heading,
         ring,
+        look,
+        title: entity.title.clone(),
+        building,
     })
 }
 
@@ -679,6 +778,26 @@ impl ViewModel {
             return Err(BridgeError::View(format!(
                 "a chunk's origin {:?} is outside the map's extent {:?}",
                 outside.origin, self.extent
+            )));
+        }
+        // A look larger than the map on any axis is drawn nowhere the gateway could have meant
+        // (fix pass 1): the page is refused, as an entity's other impossible fields refuse it.
+        if let Some((entity, look)) = page.entities.iter().find_map(|entity| {
+            entity
+                .look
+                .filter(|look| {
+                    look.size
+                        .iter()
+                        .zip(self.extent)
+                        .any(|(edge, axis)| edge.get() > axis)
+                })
+                .map(|look| (entity, look))
+        }) {
+            return Err(BridgeError::View(format!(
+                "the entity {:?} has a look of {:?} voxels, past the map's extent {:?}",
+                entity.id,
+                look.size.map(NonZeroU32::get),
+                self.extent
             )));
         }
         let chunks = page.chunks.len();
@@ -1243,6 +1362,15 @@ mod tests {
             hp: None,
             max_hp: None,
             heading: None,
+            // The schema sends a look on every structure, wall and ruin.
+            look: matches!(kind, view_entity::Kind::Structure | view_entity::Kind::Ruin).then(
+                || view_entity::Look {
+                    shape: view_entity::look::Shape::Block.into(),
+                    x: 1,
+                    y: 1,
+                    z: 1,
+                },
+            ),
             ..ViewEntity::default()
         }
     }
@@ -1363,6 +1491,136 @@ mod tests {
         assert_eq!(
             ring_of(include_str!("../../../godot/fixtures/view_built.jsonl")),
             [("b_00".to_owned(), 36)]
+        );
+    }
+
+    /// The gateway's built golden, through its byte copy: every structure, the wall and the
+    /// going-up mortar carry the look, the title and the flag exactly as sent (S3's `fixq-c`,
+    /// items 1 to 3), and nothing else carries a look.
+    #[test]
+    fn the_built_view_carries_each_look_title_and_going_up_as_sent() {
+        type Seen = (String, Option<(&'static str, [u32; 3])>, String, bool);
+        let text = include_str!("../../../godot/fixtures/view_built.jsonl");
+        let mut seen: Vec<Seen> = Vec::new();
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            for one in decode_page_text(line).expect("a get_view result").entities {
+                let look = one
+                    .look
+                    .map(|look| (look.shape.name(), look.size.map(NonZeroU32::get)));
+                seen.push((one.id, look, one.title, one.building));
+            }
+        }
+        let find = |id: &str| {
+            seen.iter()
+                .find(|(seen_id, ..)| seen_id == id)
+                .cloned()
+                .expect("in the golden")
+        };
+        assert_eq!(
+            find("s_3"),
+            (
+                "s_3".to_owned(),
+                Some(("tower", [1, 1, 1])),
+                "Autocannon".to_owned(),
+                false
+            )
+        );
+        assert_eq!(
+            find("s_4"),
+            (
+                "s_4".to_owned(),
+                Some(("dish", [1, 1, 1])),
+                "Mortar, going up".to_owned(),
+                true
+            )
+        );
+        assert_eq!(
+            find("l_1"),
+            (
+                "l_1".to_owned(),
+                Some(("slab", [4, 1, 2])),
+                "Wall".to_owned(),
+                false
+            )
+        );
+        // Another seat's structure: its look and its plain title, never going up.
+        assert_eq!(
+            find("s_2"),
+            (
+                "s_2".to_owned(),
+                Some(("tower", [1, 1, 1])),
+                "Survey post".to_owned(),
+                false
+            )
+        );
+        assert_eq!(
+            find("u_1"),
+            ("u_1".to_owned(), None, "Commander".to_owned(), false)
+        );
+    }
+
+    /// A look anywhere but on a structure or a ruin, a look with an edge of nothing, a look whose
+    /// shape this build has no name for (fix pass 1: it is refused, not drawn as a block), and a
+    /// going-up flag on anything but a structure are each refused with the page.
+    #[test]
+    fn a_look_or_a_going_up_where_the_schema_sends_none_is_refused() {
+        let look = |shape: i32, x: u32| view_entity::Look {
+            shape,
+            x,
+            y: 1,
+            z: 1,
+        };
+        let mut unit = entity("u_1", view_entity::Kind::Unit, "seat.0");
+        unit.look = Some(look(1, 1));
+        assert!(
+            decode_page(&with_entities(vec![unit])).is_err(),
+            "a unit's look"
+        );
+        let mut flat = entity("s_1", view_entity::Kind::Structure, "seat.0");
+        flat.look = Some(look(1, 0));
+        assert!(
+            decode_page(&with_entities(vec![flat])).is_err(),
+            "an edge of zero"
+        );
+        let mut rising = entity("u_2", view_entity::Kind::Unit, "seat.0");
+        rising.building = Some(true);
+        assert!(
+            decode_page(&with_entities(vec![rising])).is_err(),
+            "a unit going up"
+        );
+        let mut bare = entity("s_3", view_entity::Kind::Structure, "seat.0");
+        bare.look = None;
+        assert!(
+            decode_page(&with_entities(vec![bare])).is_err(),
+            "a structure with no look"
+        );
+        for shape in [77, 0] {
+            let mut odd = entity("s_2", view_entity::Kind::Ruin, "");
+            odd.look = Some(look(shape, 2));
+            assert!(
+                decode_page(&with_entities(vec![odd])).is_err(),
+                "a shape with no name ({shape})"
+            );
+        }
+        let mut ruin = entity("s_2", view_entity::Kind::Ruin, "");
+        ruin.look = Some(look(1, 2));
+        let page = decode_page(&with_entities(vec![ruin])).expect("a named shape reads");
+        let kept = page
+            .entities
+            .first()
+            .and_then(|one| one.look)
+            .expect("its look");
+        assert_eq!(kept.shape, LookShape::Block);
+        assert_eq!(kept.size.map(NonZeroU32::get), [2, 1, 1]);
+        // Past the map's extent on an axis: the page is refused when it is stored.
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
+        let mut huge = entity("s_9", view_entity::Kind::Structure, "seat.0");
+        huge.look = Some(look(1, EXTENT[0].saturating_add(1)));
+        let page = decode_page(&with_entities(vec![huge])).expect("decodes");
+        let refused = model.apply(page).expect_err("a look past the map");
+        assert!(
+            refused.to_string().contains("past the map's extent"),
+            "refused for its look: {refused}"
         );
     }
 

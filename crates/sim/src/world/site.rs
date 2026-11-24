@@ -399,14 +399,16 @@ pub fn check_wall<M: crate::seams::Meter + ?Sized>(
     meter: &M,
 ) -> Result<(), WallRefused> {
     let rows = world.rules().site();
-    let sphere = crate::mandate::Sphere::of(world, beacon);
+    // The sphere's Spire test, charged once (dunit part 2).
+    let sphere = crate::mandate::Sphere::counted(world, beacon, meter);
     let [lx, ly] = wall.columns.min_column();
     let [hx, hy] = wall.columns.max_column();
     let top = i32::from(wall.top);
     for y in i32::from(ly)..=i32::from(hy) {
         for x in i32::from(lx)..=i32::from(hx) {
             meter.rows(1);
-            let ground = ground_under_walls(world, x, y).ok_or(WallRefused::OffTheGround)?;
+            let ground =
+                ground_under_walls_metered(world, x, y, meter).ok_or(WallRefused::OffTheGround)?;
             if ground < i32::from(wall.floor) {
                 return Err(WallRefused::OffTheGround);
             }
@@ -561,15 +563,30 @@ fn ground_top(world: &World, x: i32, y: i32) -> Option<i32> {
 /// nothing.
 #[must_use]
 pub fn ground_under_walls(world: &World, x: i32, y: i32) -> Option<i32> {
+    ground_under_walls_metered(world, x, y, &())
+}
+
+/// [`ground_under_walls`], one unit to `meter` a voxel of the column's fall
+/// it reads ([`crate::seams::Meter`]; dunit part 2): what [`check_wall`]
+/// charges a decision committing a wall row.
+pub(crate) fn ground_under_walls_metered<M: crate::seams::Meter + ?Sized>(
+    world: &World,
+    x: i32,
+    y: i32,
+    meter: &M,
+) -> Option<i32> {
     let mut z = ground_top(world, x, y)?;
-    while world
-        .voxels()
-        .get([x, y, z])
-        .is_some_and(|material| material.wall_of().is_some() || material.is_air())
-    {
+    loop {
+        meter.rows(1);
+        let fallen = world
+            .voxels()
+            .get([x, y, z])
+            .is_some_and(|material| material.wall_of().is_some() || material.is_air());
+        if !fallen {
+            return Some(z);
+        }
         z = z.checked_sub(1).filter(|below| *below >= 0)?;
     }
-    Some(z)
 }
 
 /// The lowest air voxel of the column `(x, y)` from `ground + 1` up to `top`,
@@ -2236,9 +2253,25 @@ impl World {
     /// owner's footing ruling of 2026-10-20; no paid edit is ever refused).
     #[must_use]
     pub(crate) fn set_queued_on(&self, x: i32, y: i32) -> bool {
-        self.edits.iter().any(
-            |edit| matches!(edit, VoxelEdit::Set { at: [ex, ey, _], .. } if *ex == x && *ey == y),
-        )
+        self.set_queued_on_metered([x, y], &())
+    }
+
+    /// [`World::set_queued_on`], one unit to `meter` a queued edit it reads,
+    /// up to the one on the column ([`crate::seams::Meter`]; decisions-log
+    /// item 175): a placement a decision makes passes the decision's tally.
+    #[must_use]
+    pub(crate) fn set_queued_on_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        [x, y]: [i32; 2],
+        meter: &M,
+    ) -> bool {
+        let mut read: usize = 0;
+        let queued = self.edits.iter().any(|edit| {
+            read += 1;
+            matches!(edit, VoxelEdit::Set { at: [ex, ey, _], .. } if *ex == x && *ey == y)
+        });
+        meter.rows(read);
+        queued
     }
 
     /// The footings as the world stands now ([`crate::footing::Footings`]).
@@ -2340,8 +2373,43 @@ impl World {
         at: [Fx; 3],
         blueprint: u8,
     ) -> Option<StructureId> {
+        self.adopt_paused_metered(beacon, at, blueprint, &())
+    }
+
+    /// [`World::adopt_paused`], reporting the rows its search and its link
+    /// read to `meter` (dunit part 2): a commit a decision makes passes its
+    /// seat's tally.
+    pub(crate) fn adopt_paused_metered(
+        &mut self,
+        beacon: BeaconId,
+        at: [Fx; 3],
+        blueprint: u8,
+        meter: &dyn crate::seams::Meter,
+    ) -> Option<StructureId> {
+        let id = self.paused_at(beacon, at, blueprint, meter)?;
+        self.set_built_at(beacon, at, id, meter);
+        Some(id)
+    }
+
+    /// The half-built structure [`World::adopt_paused`] links, found without
+    /// linking it: one unit to `meter` a structure row it reads, up to that
+    /// structure, and one a target row whose link it compares
+    /// ([`crate::seams::Meter`]; decisions-log item 175). A commit a decision
+    /// makes passes the decision's tally, and then links what it found.
+    pub(crate) fn paused_at<M: crate::seams::Meter + ?Sized>(
+        &self,
+        beacon: BeaconId,
+        at: [Fx; 3],
+        blueprint: u8,
+        meter: &M,
+    ) -> Option<StructureId> {
         let column = crate::targeting::column_of(at);
-        let linked = |world: &World, id: StructureId| world.targets().built().contains(&id);
+        let linked = |world: &World, id: StructureId| {
+            let built = world.targets().built();
+            let at = built.iter().position(|held| *held == id);
+            meter.rows(at.map_or(built.len(), |at| at + 1));
+            at.is_some()
+        };
         let rows = self
             .structures
             .ids()
@@ -2356,7 +2424,9 @@ impl World {
             .zip(self.structures.positions())
             .zip(self.structures.kinds());
         let mut found = None;
+        let mut read: usize = 0;
         for ((((id, home), (building, hp)), place), kind) in rows {
+            read += 1;
             if *home == beacon
                 && *kind == blueprint
                 && *building
@@ -2367,9 +2437,8 @@ impl World {
                 break;
             }
         }
-        let id = found.filter(|id| !linked(self, *id))?;
-        self.set_built_at(beacon, at, id);
-        Some(id)
+        meter.rows(read);
+        found.filter(|id| !linked(self, *id))
     }
 }
 
@@ -2531,7 +2600,7 @@ mod tests {
         };
         assert!(
             world
-                .replace_build_targets(core, core::iter::once(entry))
+                .replace_build_targets(core, core::iter::once(entry), &())
                 .is_ok()
         );
         assert!(
@@ -2545,5 +2614,76 @@ mod tests {
             .and_then(|row| world.structures().hit_points().get(row.index()).copied())
             .is_some_and(crate::math::quantity::Hp::is_alive);
         assert!(alive, "and it was not recycled");
+    }
+
+    /// Dunit part 2: a placement's queued-edit test and a commit's search for
+    /// a paused structure charge one unit a row they read, counted here.
+    #[test]
+    fn the_write_path_scans_charge_what_they_read() {
+        let mut world = world();
+        let tally = |run: &dyn Fn(&crate::seams::UnitTally)| {
+            let tally = crate::seams::UnitTally::new();
+            run(&tally);
+            tally
+                .read()
+                .unwrap_or_else(|error| panic!("a measured count: {error}"))
+        };
+        for x in [10, 11, 12] {
+            assert!(
+                world
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: [x, 10, 3],
+                        material: crate::voxels::Material::STONE,
+                        by: None,
+                    })
+                    .is_ok()
+            );
+        }
+        let queued = world.edits.len();
+        assert!(queued >= 3, "the three edits are queued");
+        assert_eq!(
+            tally(&|meter| assert!(world.set_queued_on_metered([11, 10], meter))),
+            u64::try_from(queued - 1).unwrap_or(0),
+            "the edits up to the second's column"
+        );
+        assert_eq!(
+            tally(&|meter| assert!(!world.set_queued_on_metered([40, 40], meter))),
+            u64::try_from(queued).unwrap_or(0),
+            "every edit"
+        );
+        // No paused structure: every structure row is read.
+        let beacon =
+            crate::tables::BeaconId::new(world.beacons().ids().first().copied().unwrap_or(0));
+        let at = world
+            .beacons()
+            .positions()
+            .first()
+            .copied()
+            .unwrap_or([Fx::ZERO; 3]);
+        // A finished structure stands away from the beacon, so the search
+        // reads a row that is not paused: a zero term is not tested.
+        let [x, y] = crate::targeting::column_of(at);
+        let far = world.standing_point([x + 30, y, 0]);
+        assert!(
+            world
+                .raise_structure(
+                    crate::tables::SeatId::new(0),
+                    beacon,
+                    StructureKind::Generator,
+                    far
+                )
+                .is_some()
+        );
+        assert_eq!(world.structures().ids().len(), 1);
+        assert_eq!(
+            tally(&|meter| {
+                assert!(
+                    world
+                        .paused_at(beacon, at, StructureKind::Autocannon.id(), meter)
+                        .is_none()
+                );
+            }),
+            u64::try_from(world.structures().ids().len()).unwrap_or(0)
+        );
     }
 }

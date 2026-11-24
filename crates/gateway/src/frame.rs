@@ -34,7 +34,7 @@
 /// it is a security parameter rather than a tuning value, so it is deliberately
 /// not a rules-table row today -- a rules row is stamped into `rules_hash` and
 /// a transport cap has no business moving a hash chain.
-pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
+pub const MAX_MESSAGE_BYTES: usize = pharmakos_proto::transport::MAX_MESSAGE_BYTES;
 
 /// The largest single frame the gateway will read.
 ///

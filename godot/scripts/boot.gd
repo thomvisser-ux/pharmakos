@@ -28,4 +28,14 @@ func _ready() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--scene="):
 			target = arg.trim_prefix("--scene=")
-	get_tree().call_deferred("change_scene_to_file", target)
+	_go.call_deferred(target)
+
+
+## Go to `target`, once this frame is done. A scene that cannot be opened is said, and the run
+## ends with a failing exit code rather than standing on an empty main scene (S3's `fixq-c`, fix
+## pass 2's sweep: the deferred call dropped the change's error).
+func _go(target: String) -> void:
+	var changed := get_tree().change_scene_to_file(target)
+	if changed != OK:
+		printerr("[boot] %s could not be opened (error %d); the run ends" % [target, changed])
+		get_tree().quit(1)

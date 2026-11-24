@@ -37,6 +37,13 @@ const TEXT := {
 	"lobby_ready_help": "With nothing sealed, Ready files the safe playbook for you.",
 	# With a seal the gateway accepted this round (S3's `fixp`).
 	"lobby_ready_sealed": "Your seal for this round stands: Ready keeps it.",
+	"ready_failed_refused": "Ready was not taken: the gateway refused it ({detail}). Press Ready again.",
+	"ready_failed_lost": "Ready may have been taken (its answer was lost: {detail}); sending it again.",
+	"ready_failed_lost_spent": "Ready's answers were lost each time it was sent (the last: {detail}). Press Ready again.",
+	"ready_failed_too_large": "Ready was not sent: it was too large to send ({detail} bytes). Press Ready again.",
+	"ready_failed_send_failed": "Ready was not sent: the connection refused to send it (error {detail}). Press Ready again.",
+	"lobby_ready_asking": "Asking the gateway whether you hold a seal this round...",
+	"lobby_ready_not_told": "Not told whether you hold a seal this round: the gateway refused to say ({detail}). Ready still ends your Lull.",
 	"lobby_continue": "Continue",
 	"lobby_follow": "Follow",
 	"lobby_whole_map": "Whole map",
@@ -52,16 +59,29 @@ const TEXT := {
 	"lobby_preset_none": "The match host says it hosts no match.",
 	"lobby_status_refused": "(The match host refused the latest status read: {detail})",
 	"lobby_status_unreadable": "(The latest status read could not be read: {detail})",
+	"lobby_status_too_large": "(The latest status read was too large to send: {detail} bytes)",
+	"lobby_status_send_failed": "(The latest status read could not be sent: error {detail})",
+	"lobby_status_closed_on": "(The connection closed on the latest status read: code {detail})",
+	"lobby_status_timed_out": "(No answer came in time to the latest status read)",
 	# One row per preset the schema names (gp.api.v1.Preset), keyed by its wire name.
 	"preset_custom": "Custom",
 	"preset_probation": "Probation",
 	"lobby_forgotten": "The last match has ended, so there is nothing to resume.",
+	"lobby_not_remembered": "This match is not remembered, so Resume will not offer it after a restart: {why}",
+	"lobby_remembered_note": "This match is remembered. {why}",
+	"lobby_not_forgotten": "The ended match could not be forgotten, so Resume may still offer it; it has ended, so start a new match instead: {why}",
+	"lobby_remembered_unreadable": "The remembered match could not be read ({path}, error {error}), so Resume is not offered.",
 	"lobby_about": "Credits",
 	# The recap: the gateway's own prose - the settlement, the shortfall and why a step
 	# found nothing are its sentences (S1's plan, task `ui`) - under this heading.
 	"lobby_recap": "Recap of round {round}: {prose}",
 	# A refused get_recap: the gateway's refusal, code and message, as it came.
-	"lobby_recap_refused": "The recap could not be read: {refusal}",
+	"recap_failed_refused": "The recap was not read: the gateway refused it ({detail}).",
+	"recap_failed_unreadable": "The recap was not read: its answer could not be read ({detail}).",
+	"recap_failed_too_large": "The recap was not read: its call was too large to send ({detail} bytes).",
+	"recap_failed_send_failed": "The recap was not read: the connection refused to send its call (error {detail}).",
+	"recap_failed_closed_on": "The recap was not read: the connection closed on it (code {detail}).",
+	"recap_failed_timed_out": "The recap was not read: no answer came in time.",
 	# Every seat's tally once the match is decided (item 145 (7)), one frame a seat, each number
 	# as the gateway counted it.
 	"lobby_recap_tallies": "Every seat's tally:",
@@ -134,14 +154,15 @@ const TEXT := {
 	"rule_number_send": "Set this value",
 	# The gateway's bounds for the value, as it sent them ("-" where it set none): the field applies
 	# none of them, and a value past them goes to the gateway, whose answer is drawn (S3's `fixp`).
-	"rule_number_bounds": "The gateway's range here: {min} to {max}.",
+	"rule_number_bounds": "The gateway's range here: {min} to {max}{unit}.",
 	"rule_number_waiting": "Sending...",
 	"rule_conflict": "Never fires while the rule joined above it is true: {sentence}",
 	"rule_refused": "The gateway refused that edit: {detail}",
-	"rule_chip_read_only_ms": "This duration is shown as the gateway wrote it. Editing it here waits on a unit the gateway can send.",
 	"rule_chip_read_only_no_shape": "The gateway sent no way to edit this value.",
-	# The file's value lies outside the gateway's bounds: shown as it is, never clamped (L1).
-	"rule_number_outside": "The file holds {now}, outside the range the gateway gives here ({min} to {max}). It is shown as it is; the checks say what it costs.",
+	# The file's value lies outside its shape, by the gateway's word (`outside`): shown as it is,
+	# never clamped (L1). The bounds are said in the unit the gateway sent them in (S3's `fixq-c`).
+	"rule_number_outside": "The file holds {now}{display_unit}, outside what the gateway takes here ({min} to {max}{unit}). It is shown as it is; the checks say what it costs.",
+	"rule_choice_outside": "The file holds {now}, which is not one of the values the gateway offers here. It is shown as it is; the checks say what it costs.",
 	# Why the rule list took no edit, by the bridge's reason (`RuleEditRefusal`), never in silence.
 	"status_rule_refused_shut": "The rule list takes no edit while planning is closed.",
 	"status_rule_refused_no_text": "Open a playbook first.",
@@ -161,7 +182,8 @@ const TEXT := {
 	"status_rule_refused_rendering_out_of_range": "The rule list cannot be edited until it is drawn again.",
 	"status_rule_refused_not_this_kind": "That is not a {detail}. Click one on the map, or Escape.",
 	"status_rule_refused_arm_not_here": "That cannot go here: the gateway takes no {detail} at this point. Click something else, or Escape.",
-	"status_rule_refused_not_an_integer": "That is not a whole number (digits, with a + or - in front if you write one), so nothing was sent.",
+	"status_rule_refused_no_anchor_shape": "The gateway named no way to place that blueprint, so no click is asked for.",
+	"status_rule_refused_route_unread": "The route in this text could not be read, so the visit's step cannot be named; nothing was sent.",
 	"status_rule_refused_no_vocabulary": "The words to pick from have not come yet this Lull (or were refused); see the picker's line.",
 	"status_rule_refused_not_in_rule": "That condition is not in the rule the picker was opened on.",
 	"status_rule_refused_no_such_entry": "That is not in the list the gateway sent any more.",
@@ -170,8 +192,14 @@ const TEXT := {
 	"status_rule_refused_no_pointer": "The gateway sent a setting this client cannot place.",
 	"status_rule_refused_no_such_slot": "That condition is not in the rule list any more.",
 	"status_rule_refused_group_slot": "That condition is a group: pick one of its items instead.",
-	"status_rule_refused_no_pick_op": "The gateway named no way to put a condition there, so nothing was sent.",
+	"status_rule_refused_no_pick_op": "The gateway named no way to write there, so nothing was sent.",
 	"rule_slot": "Condition: {title}",
+	# Add and Remove a rule (S3's `fixq-c`, item 8): Add asks the gateway for an empty rule with a
+	# fresh id; Remove is one `remove` at the row's pointer, which the verifier then judges.
+	"rule_add": "Add a rule",
+	"rule_remove": "Remove",
+	"status_rule_adding": "Adding a rule...",
+	"status_rule_added": "Rule added: pick its condition.",
 	"status_rule_refused_unnamed": "The gateway's answer named nothing to write for that entry, so nothing was sent.",
 	"rule_chip_read_only_unreadable": "This value does not fit what the gateway says it holds, so it is shown as it came and not edited.",
 	"picker_parameter_unknown": "{title}: the gateway sent no way to edit this value",
@@ -182,11 +210,12 @@ const TEXT := {
 	"picker_heading": "Pick a condition",
 	"picker_family_locked": "{title} (locked: {locked})",
 	"picker_entry": "{title}",
+	# The condition groups (S3's `fixq-c`, item 16): `all`, `any`, `not` as the gateway titles them.
+	"picker_groups": "Groups of conditions",
 	"picker_entry_locked": "{title} (locked: {locked})",
 	"picker_parameter": "{title}",
-	"picker_parameter_number": "{title}: a number{bounds}{unit}",
-	"picker_parameter_bounds": " from {min} to {max}",
-	"picker_parameter_ms": "{title}: a time, edited where the gateway can send its unit",
+	"picker_parameter_number": "{title}: a number{bounds}, typed in{unit}",
+	"picker_parameter_bounds": " from {min} to {max}{unit}",
 	"picker_parameter_choice": "{title}: one of {values}",
 	"picker_parameter_reference": "{title}: picked ({kind})",
 	"picker_use": "Use this condition",
@@ -197,10 +226,14 @@ const TEXT := {
 	"menu_settings": "Change a setting",
 	"menu_setting": "{title}: {value}",
 	"menu_setting_value": "{value}",
+	# A setting's value the gateway's own list does not name, or a row the bridge could not read:
+	# said, never drawn as the value's JSON (S3's `fixq-c`, fix pass 1).
+	"menu_setting_unlisted": "a value the gateway does not list",
+	"menu_setting_unread": "not shown (see why beside it)",
 	"menu_mandate": "Switch mandate",
 	"menu_add_target": "Add a build target (then click the ground)",
 	"menu_remove_target": "Remove a build target",
-	"menu_target_row": "{blueprint} at {anchor}",
+	"menu_target_row": "{line}",
 	"menu_queue": "Queue a structure",
 	# Under a locked entry in the entry list, the gateway's sentence as it came.
 	"menu_entry_locked": "Locked: {locked}",
@@ -242,6 +275,52 @@ const TEXT := {
 	"unchecked_refused": "Not checked: the gateway refused ({detail}).",
 	# The gateway answered, and this client could not read the answer (M4).
 	"unchecked_unreadable": "Not shown: this client could not read the gateway's answer ({detail}).",
+	# A call too large for the gateway to read is not sent (S3's `fixq-c`, fix pass 1): the
+	# connection stays up, and the line says so where the call's answer would have been.
+	"unchecked_too_large": "Not checked: the text is {detail} bytes, past the {limit} bytes the gateway reads.",
+	"status_call_too_large": "Not sent: that is {detail} bytes, and the gateway reads no message past {limit} bytes. Nothing changed; shorten it and send it again.",
+	# The transport refused to send a call (fix pass 2): said at once, never re-sent.
+	"unchecked_send_failed": "Not checked: the connection refused to send this check (error {detail}); it is not sent again.",
+	"unchecked_timed_out": "Not checked: no answer to this check came in time; it is not sent again.",
+	"status_call_send_failed": "Not sent: the connection refused to send that (error {detail}). Nothing changed.",
+	"templates_send_failed": "The template list was not sent: the connection refused it (error {detail}).",
+	"templates_timed_out": "The template list was not read: no answer came in time.",
+	"vocabulary_send_failed": "The words to pick from were not sent: the connection refused them (error {detail}).",
+	"vocabulary_timed_out": "The words to pick from were not read: no answer came in time.",
+	"menu_detail_send_failed": "This beacon's detail was not sent: the connection refused it (error {detail}).",
+	"menu_detail_timed_out": "This beacon's detail was not read: no answer came in time.",
+	"templates_too_large": "The template list was not asked: the call was too large to send ({detail} bytes).",
+	"vocabulary_too_large": "The words to pick from were not asked: the call was too large to send ({detail} bytes).",
+	"menu_detail_too_large": "This beacon's detail was not asked: the call was too large to send ({detail} bytes).",
+	# A close on the message itself (fix pass 3): which connection, the code, the call, and
+	# whether the connection is open again.
+	"lobby_closed_on_message": "The {connection} connection closed on one message (code {code}: too big for one side to read, or unreadable); the {call} call it carried is settled as refused, and the connection {state}.",
+	"connection_admin": "lobby's",
+	"connection_seat": "seat's",
+	"link_open": "is open again",
+	"link_reopening": "is opening again",
+	"call_word_none": "no",
+	"call_word_status": "status",
+	"call_word_view": "map view",
+	"call_word_feed": "event feed",
+	"call_word_advance": "advance",
+	"call_word_clock": "clock report",
+	"call_word_end_lull": "end-of-Lull",
+	"call_word_end_recap": "end-of-recap",
+	"call_word_ready": "Ready",
+	"call_word_plan": "editor",
+	"call_word_meter": "meter",
+	"call_word_recap": "recap",
+	# A connection closed on a call itself (close code 1009 and its kin): that call
+	# is not sent again, and the line says so.
+	"unchecked_closed_on": "Not checked: the connection closed on this check (code {detail}: too big for one side to read, or unreadable); it is not sent again until the text changes or the next phase.",
+	"status_call_answer_too_large": "The gateway's answer to this is too large for this client to read (code {detail}), so nothing changed; shorten the file. It is not sent again until the text changes or the next phase.",
+	"status_call_timed_out": "No answer to that came in time, so nothing changed here; the connection is opened again.",
+	"status_call_unreadable": "The gateway's answer to that could not be read ({detail}); nothing changed, and it is not sent again.",
+	"status_call_closed_on": "The connection closed on that (code {detail}: too big for one side to read, or unreadable), and nothing changed; it is not sent again until the text changes or the next phase.",
+	"templates_closed_on": "The connection closed on the template list (code {detail}).",
+	"vocabulary_closed_on": "The connection closed on the words to pick from (code {detail}).",
+	"menu_detail_closed_on": "The connection closed on this beacon's detail (code {detail}).",
 	"unchecked_ready": "Not checked: after Ready this client sends no planning call for the rest of this Lull.",
 	"unchecked_push": "Not checked: planning is closed during the Push.",
 	"unchecked_recap": "Not checked: planning is closed during the recap.",
@@ -259,6 +338,8 @@ const TEXT := {
 	# A count the bridge sent as its refusal, one past what `int` holds (S3's `fixp`): `what` it
 	# is, and the digits it held.
 	"value_ring": "A beacon's sphere radius",
+	"value_look": "A look's size",
+	"value_limit": "The gateway's message cap",
 	"value_unreadable": "{what} could not be read: the bridge sent {held}, past what this client's numbers hold.",
 	"value_changes": "The editor's change count",
 	"value_undo_depth": "How many edits Undo can take back",
@@ -289,12 +370,48 @@ const TEXT := {
 	"status_carried": "Last round's orders are loaded again and checked against the new map ({detail}).",
 	"status_not_yours": "That beacon is not yours.",
 	"status_saved_file": "Saved to {detail}.",
-	"status_save_failed": "Could not write {path}.",
+	# A save that was not done, or was done with a note: {why} is one of the write_* rows below.
+	"status_save_not_done": "Not saved: {why}",
+	"status_saved_with_note": "Saved to {path}. {why}",
+	# A write by an atomic replace (crates/client-gdext/src/write.rs, fix pass 5): each failure says
+	# what is on disk; the operating system's words are in {error}.
+	"write_no_name": "{path} names no file, so nothing was written.",
+	"write_reserved_name": "{path} is a name this system keeps for a device, so nothing was written. Choose another name.",
+	"write_bad_ending": "{path} ends in a dot or a space, which this system drops from a name, so nothing was written. Choose another name.",
+	"write_illegal_character": "{path} holds a character this system cannot hold in a file name (one of < > : \" | ? * or a control character), so nothing was written. Choose another name.",
+	"write_is_folder": "{path} is a folder, so nothing was written. Choose a file name.",
+	"write_missing_folder": "the folder {path} does not exist, so nothing was written.",
+	"write_read_only": "{path} is read-only, so it is as it was.",
+	"write_inspect": "{path} could not be looked at ({error}), so nothing was written.",
+	"write_stale_temp": "{path}, left by a write that stopped, could not be removed ({error}), so nothing was written. Remove it, then try again.",
+	"write_before_rename": "the {step} step failed ({error}), so {path} is as it was.",
+	"write_rename": "the new file could not replace {path} ({error}), so it is as it was.",
+	"write_sync_folder": "{path} is written, but its folder could not be synced ({error}): a crash now could still lose the save.",
+	"write_remove": "{path} could not be removed ({error}), so it is as it was.",
+	"write_leftover": "{leftover} could not be removed and is still there.",
+	"write_stale": "A temporary file from a write that stopped, {stale}, was removed first.",
 	"status_open_failed": "Could not read {path}.",
 	"status_new_opened": "A new playbook is in the editor; the checks say what it still needs. Undo takes it back.",
 	"status_picking": "Click the map for the new value; Escape stops.",
 	"lobby_zero_refused": "The Lull ran out, and the gateway refused to be told so: {detail}",
+	"lobby_zero_unreadable": "The Lull ran out, and the gateway's answer to being told so could not be read ({detail}); asking it again.",
+	"lobby_zero_too_large": "The Lull ran out, and telling the gateway so was too large to send ({detail} bytes).",
+	"lobby_zero_send_failed": "The Lull ran out, and the connection refused to send that (error {detail}).",
+	"lobby_zero_closed_on": "The Lull ran out, and the connection closed on telling the gateway so (code {detail}).",
+	"lobby_zero_timed_out": "The Lull ran out, and no answer came in time to telling the gateway so.",
+	"lobby_view_held": "The map's last answer was too big for this client to read, so the map will not refresh until the next phase.",
+	"link_gave_up": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last close was code {code}.",
+	# The same, when the last close carried no code: the connection was lost, not closed.
+	"link_gave_up_lost": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last time, the connection was lost with no close.",
+	"status_call_maybe_taken": "The answer to that was lost ({detail}), so it may have been taken; reading it again from the gateway.",
+	"status_lost_notes_read": "Read again from the gateway after a lost answer: the notebook below is what it keeps.",
+	"status_lost_drafts_read": "Read again from the gateway after a lost answer: the drafts listed are what it keeps.",
+	"status_lost_submit_read": "Read again from the gateway after a lost answer: the Ready line says whether this round's seal was taken.",
 	"status_anchoring": "Click the ground where the target goes; Escape stops.",
+	# A wall's box from two clicks (S3's `fixq-c`, item 4); the box itself is the gateway's.
+	"status_wall_first": "Click the ground at one corner of the wall; Escape stops.",
+	"status_wall_second": "Now click the ground at the opposite corner; Escape stops.",
+	"status_wall_composing": "Asking the gateway for the wall's box...",
 	"status_visit_changing": "Adding the visit...",
 	"status_rule_editing": "Editing...",
 	"status_wizard_used": "The template's playbook is in the editor. Undo takes it back.",
@@ -342,7 +459,7 @@ const TEXT := {
 	"chips_none": "No step names a vent or a seam.",
 	# One chip per vent or seam the playbook names or describes. Every number is the
 	# gateway's, as it came; a travel time is game milliseconds (strings.gd's `leg`).
-	"chip_now": "Step {step}: now {feature}, {ms} ms",
+	"chip_now": "Step {step}: now {feature}, {travel}",
 	"chip_now_unreachable": "Step {step}: now {feature}, which no route reaches from where it is read",
 	"attack_heading": "Attack targets",
 	# The Build targets the text writes (S3's `fixp`): each blueprint as the file writes it.
@@ -360,7 +477,7 @@ const TEXT := {
 	"attack_selector": "Step {step}: attacks the enemy beacon its selector picks when the attack runs",
 	"attack_enemy_commander": "Step {step}: hunts an enemy commander your side has seen recently, chosen when the force launches; it waits until there is one",
 	"attack_unknown": "Step {step}: an attack target this panel cannot read; the checks say what is wrong",
-	"chip_next": "; next {feature}, {ms} ms",
+	"chip_next": "; next {feature}, {travel}",
 	"chip_how_description_covering": " - nearest by travel from the commander, read when the step starts",
 	"chip_how_description_on": " - nearest by travel from its beacon, read when the step starts",
 	"chip_how_description_other": " - nearest by travel, read when the step starts",
@@ -402,7 +519,31 @@ const TEXT := {
 
 ## The sentence `key` names, with `args` put into its frame. An unknown key comes back as
 ## itself, so a missing row shows rather than hides.
+## The gateway's message cap in bytes, as the bridge passes it through (`watch_transport_limits`),
+## for the words that name it (`{limit}`): set once the bridge is up. Empty before.
+static var message_limit := ""
+
+
+## The words for a write's or a removal's answer from the bridge (`file_write`, `file_remove`): on a
+## failure its `write_<failure>` row, and its leftover; on a write, a stale temporary file of ours
+## removed first; "" when there is nothing to say.
+static func write_words(answer: Dictionary) -> String:
+	# A failure with the file in place (the folder's sync) is said as well as one without.
+	if answer.has("failure"):
+		var said := text("write_" + String(answer.get("failure", "")), answer)
+		if answer.has("leftover"):
+			said += " " + text("write_leftover", answer)
+		return said
+	if answer.has("stale"):
+		return text("write_stale", answer)
+	return ""
+
+
 static func text(key: String, args: Dictionary = {}) -> String:
 	if not TEXT.has(key):
 		return key
-	return String(TEXT[key]).format(args)
+	var filled := args
+	if not filled.has("limit") and String(TEXT[key]).contains("{limit}"):
+		filled = args.duplicate()
+		filled["limit"] = message_limit
+	return String(TEXT[key]).format(filled)

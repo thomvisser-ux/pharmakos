@@ -22,6 +22,7 @@
 //! | [`descriptor`] | The schema, read back out of the checked-in descriptor set |
 //! | [`scope`] | The method/scope table, and the JSON-RPC wire spellings |
 //! | [`fingerprint`] | The plan fingerprint's rule (the arithmetic is the sim's) |
+//! | [`transport`] | The gateway's transport limits, which client and gateway both read |
 //!
 //! # Regenerating the checked-in tree
 //!
@@ -168,6 +169,7 @@ pub mod descriptor;
 pub mod fingerprint;
 pub mod json;
 pub mod scope;
+pub mod transport;
 
 mod wire;
 

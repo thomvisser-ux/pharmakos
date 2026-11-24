@@ -54,10 +54,11 @@
 //!
 //! Beside the nanoseconds, each decision tick's **counted evaluation units**
 //! (`World::decision_work`: one a primitive step of counted work, charged
-//! where it happens -- a handler tried, a condition node evaluated, a
-//! selector candidate ranked, a feature the "nearest" ranker scans, a column
-//! a site search scans, and a node a search pops, a served walk's and a
-//! `toward`'s grid optimum's alike; `pharmakos_sim::seams::UnitTally`), summed
+//! where it happens -- a visit of each loop the decision runs, at every
+//! level down to the innermost, from a handler tried and a condition node
+//! evaluated to every row, column and cell a scan reads, and a node a search
+//! pops, a served walk's and a `toward`'s grid optimum's alike;
+//! `pharmakos_sim::seams::UnitTally`, decisions-log item 175), summed
 //! over the seats, are read after the tick: item 139 (5)'s "count carried to S3". The
 //! count is the sim's, identical on every machine and every run (a run whose
 //! count differs stops the measurement, as a differing chain does), so it is
@@ -147,6 +148,11 @@ pub struct DecisionTiming {
     /// The most counted evaluation units one decision tick spent, summed over
     /// the seats.
     pub work_max: u64,
+    /// Seat decisions left out of the counted figures, summed over the
+    /// decision ticks: a seat that is eliminated made no decision
+    /// (`NoFigure::Eliminated`), so its seat is not in `work_mean_milli`,
+    /// `work_max` or the per-size-unit figure, and the notice says how many.
+    pub left_out: u64,
 }
 
 impl DecisionTiming {
@@ -246,6 +252,10 @@ struct Sample {
     /// The seats' counted evaluation units, summed, on a decision tick; zero
     /// on an ordinary one, which decides nothing.
     work: u64,
+    /// The seats left out of `work` on a decision tick because they are
+    /// eliminated and made no decision (`NoFigure::Eliminated`); zero on an
+    /// ordinary tick.
+    left_out: u32,
 }
 
 /// Measure a decision tick's cost per size unit on `plan`'s match.
@@ -294,7 +304,10 @@ pub fn measure_playbook(
         };
         if samples.len() != kept.len()
             || samples.iter().zip(kept.iter()).any(|(now, kept)| {
-                now.hash != kept.hash || now.decision != kept.decision || now.work != kept.work
+                now.hash != kept.hash
+                    || now.decision != kept.decision
+                    || now.work != kept.work
+                    || now.left_out != kept.left_out
             })
         {
             return Err(Error::Drift(format!(
@@ -380,28 +393,12 @@ fn summarise(samples: &[Sample], played_on: Match) -> Result<DecisionTiming, Err
         excesses.push(excess);
     }
     let windows = excesses.len();
-    let work: Vec<u64> = played
-        .iter()
-        .filter(|sample| sample.decision)
-        .map(|sample| sample.work)
-        .collect();
-    let decision_ticks = work.len();
-    let work_sum = work
-        .iter()
-        .try_fold(0_u64, |sum, units| sum.checked_add(*units))
-        .ok_or(Error::Overflow("the counted work"))?;
-    let work_mean_milli = work_sum
-        .checked_mul(1_000)
-        .ok_or(Error::Overflow("the counted work"))?
-        .checked_div(
-            u64::try_from(decision_ticks).map_err(|_| Error::Overflow("the decision ticks"))?,
-        )
-        .ok_or_else(|| Error::Empty("no decision tick was played".to_owned()))?;
-    let work_max = work
-        .iter()
-        .copied()
-        .max()
-        .ok_or_else(|| Error::Empty("no decision tick was played".to_owned()))?;
+    let Counted {
+        decision_ticks,
+        work_mean_milli,
+        work_max,
+        left_out,
+    } = counted(&played)?;
     let excess_sum = excesses
         .iter()
         .try_fold(0_i128, |sum, excess| sum.checked_add(*excess))
@@ -436,6 +433,56 @@ fn summarise(samples: &[Sample], played_on: Match) -> Result<DecisionTiming, Err
         decision_ticks,
         work_mean_milli,
         work_max,
+        left_out,
+    })
+}
+
+/// The counted work over the decision ticks played.
+struct Counted {
+    decision_ticks: usize,
+    work_mean_milli: u64,
+    work_max: u64,
+    left_out: u64,
+}
+
+/// The counted work over `played`'s decision ticks: their number, the mean
+/// and the most a decision tick spent over the seats that decided, and the
+/// seat decisions left out because the seat was eliminated.
+fn counted(played: &[&Sample]) -> Result<Counted, Error> {
+    let work: Vec<u64> = played
+        .iter()
+        .filter(|sample| sample.decision)
+        .map(|sample| sample.work)
+        .collect();
+    let left_out = played
+        .iter()
+        .filter(|sample| sample.decision)
+        .try_fold(0_u64, |sum, sample| {
+            sum.checked_add(u64::from(sample.left_out))
+        })
+        .ok_or(Error::Overflow("the seat decisions left out"))?;
+    let decision_ticks = work.len();
+    let work_sum = work
+        .iter()
+        .try_fold(0_u64, |sum, units| sum.checked_add(*units))
+        .ok_or(Error::Overflow("the counted work"))?;
+    let work_mean_milli = work_sum
+        .checked_mul(1_000)
+        .ok_or(Error::Overflow("the counted work"))?
+        .checked_div(
+            u64::try_from(decision_ticks).map_err(|_| Error::Overflow("the decision ticks"))?,
+        )
+        .ok_or_else(|| Error::Empty("no decision tick was played".to_owned()))?;
+    let work_max = work
+        .iter()
+        .copied()
+        .max()
+        .ok_or_else(|| Error::Empty("no decision tick was played".to_owned()))?;
+    Ok(Counted {
+        decision_ticks,
+        work_mean_milli,
+        work_max,
+        left_out,
     })
 }
 
@@ -470,10 +517,10 @@ fn play(
         };
         let world = hosted::world(&surface)?;
         let decision = world.is_decision_tick();
-        let work = if decision {
+        let (work, left_out) = if decision {
             seat_work(world, plan.seats)?
         } else {
-            0
+            (0, 0)
         };
         samples.push(Sample {
             ns,
@@ -481,6 +528,7 @@ fn play(
             decision,
             last: report.segment_ended,
             work,
+            left_out,
         });
         if report.segment_ended {
             break;
@@ -489,30 +537,61 @@ fn play(
     Ok((samples, units_per_seat))
 }
 
-/// The seats' counted evaluation units on the decision just taken, summed.
-fn seat_work(world: &pharmakos_sim::world::World, seats: u32) -> Result<u64, Error> {
+/// The seats' counted evaluation units on the decision just taken, summed
+/// over the seats that decided, and how many seats were left out because
+/// they are eliminated and made no decision.
+fn seat_work(world: &pharmakos_sim::world::World, seats: u32) -> Result<(u64, u32), Error> {
     let mut sum: u64 = 0;
+    let mut left_out: u32 = 0;
     for seat in 0..usize::try_from(seats).map_err(|_| Error::Overflow("the seat count"))? {
-        let spent = seat_units(seat, world.decision_work(seat))?;
-        sum = sum
-            .checked_add(spent)
-            .ok_or(Error::Overflow("the seats' counted work"))?;
+        match seat_units(seat, world.decision_work(seat))? {
+            Some(spent) => {
+                sum = sum
+                    .checked_add(spent)
+                    .ok_or(Error::Overflow("the seats' counted work"))?;
+            }
+            None => {
+                left_out = left_out
+                    .checked_add(1)
+                    .ok_or(Error::Overflow("the seats left out"))?;
+            }
+        }
     }
-    Ok(sum)
+    Ok((sum, left_out))
 }
 
 /// One seat's counted units, as the world answers them
-/// (`World::decision_work`): its count, or why it has none.
+/// (`World::decision_work`): its count, `None` for an eliminated seat, or why
+/// it has none.
 fn seat_units(
     seat: usize,
-    work: Option<Result<u64, pharmakos_sim::seams::Unmeasured>>,
-) -> Result<u64, Error> {
-    work.ok_or_else(|| {
+    work: Option<Result<u64, pharmakos_sim::seams::NoFigure>>,
+) -> Result<Option<u64>, Error> {
+    let figure = work.ok_or_else(|| {
         Error::Drift(format!(
             "the world keeps no counted work for seat {seat}, which sealed a playbook"
         ))
-    })?
-    .map_err(|reason| Error::Unmeasured { seat, reason })
+    })?;
+    read_figure(seat, figure)
+}
+
+/// A seat's decision figure as the bench reads it, each reason by name: a
+/// count; `None` for a seat that is eliminated and made no decision, which
+/// the caller leaves out of its figures and says so, never reads as zero;
+/// and the bench's own error for a decision whose tally stopped being a
+/// count, or for no decision yet.
+pub(crate) fn read_figure(
+    seat: usize,
+    figure: Result<u64, pharmakos_sim::seams::NoFigure>,
+) -> Result<Option<u64>, Error> {
+    match figure {
+        Ok(units) => Ok(Some(units)),
+        Err(pharmakos_sim::seams::NoFigure::Eliminated) => Ok(None),
+        Err(pharmakos_sim::seams::NoFigure::Unmeasured(reason)) => {
+            Err(Error::Unmeasured { seat, reason })
+        }
+        Err(pharmakos_sim::seams::NoFigure::NoDecisionYet) => Err(Error::NoDecisionYet { seat }),
+    }
 }
 
 /// One size of the decision tick's curve.
@@ -603,7 +682,7 @@ pub fn curve_notice(
             format!(
                 "{} units, {} handlers (rules_hash {}): {} ns per size unit, a decision tick {} \
                  against an ordinary {}, {} evaluation units a decision tick (most {}), {} per \
-                 size unit",
+                 size unit{}",
                 point.units,
                 point.handlers,
                 pharmakos_sim::hex(point.rules_hash),
@@ -613,6 +692,7 @@ pub fn curve_notice(
                 thousandths(point.timing.work_mean_milli),
                 point.timing.work_max,
                 per_unit(&point.timing),
+                left_out(&point.timing),
             )
         })
         .collect();
@@ -633,12 +713,35 @@ fn thousandths(milli: u64) -> String {
 }
 
 /// The counted units per decision tick per size unit sealed, with three
-/// places, or the words for a measurement that sealed no unit.
+/// places, or the words for a measurement that sealed no unit. Taken over
+/// the seat decisions made: a seat left out (eliminated, so it made none)
+/// is not in the divisor, as its units are not in the sum.
 fn per_unit(timing: &DecisionTiming) -> String {
-    let units = u64::from(timing.seats).checked_mul(u64::from(timing.units_per_seat));
-    match units.and_then(|units| timing.work_mean_milli.checked_div(units)) {
+    let ticks = u64::try_from(timing.decision_ticks).ok();
+    let made = ticks
+        .and_then(|ticks| u64::from(timing.seats).checked_mul(ticks))
+        .and_then(|seat_ticks| seat_ticks.checked_sub(timing.left_out));
+    let units = made.and_then(|made| made.checked_mul(u64::from(timing.units_per_seat)));
+    let summed = ticks.and_then(|ticks| timing.work_mean_milli.checked_mul(ticks));
+    match summed
+        .zip(units)
+        .and_then(|(summed, units)| summed.checked_div(units))
+    {
         Some(milli) => thousandths(milli),
         None => "none (no unit sealed)".to_owned(),
+    }
+}
+
+/// The words for seat decisions left out of the counted figures, or nothing
+/// when every seat decided.
+fn left_out(timing: &DecisionTiming) -> String {
+    if timing.left_out == 0 {
+        String::new()
+    } else {
+        format!(
+            "; {} seat decisions left out, each an eliminated seat's, which made no decision",
+            timing.left_out
+        )
     }
 }
 
@@ -657,7 +760,7 @@ pub fn notice(timing: &DecisionTiming, os: &str) -> String {
          excess {} ns over {} windows of {} ticks, fastest run per tick); a whole {MS_PER_TICK} \
          ms tick with {BENCH_SEATS} seats would hold {implied}, a ceiling and not a budget. \
          Counted: {} evaluation units a decision tick over the seats (mean over {} decision \
-         ticks, most {}), {} per size unit sealed",
+         ticks, most {}), {} per size unit sealed{}",
         timing.ns_per_unit,
         timing.seed,
         pharmakos_sim::hex(timing.rules_hash),
@@ -672,6 +775,7 @@ pub fn notice(timing: &DecisionTiming, os: &str) -> String {
         timing.decision_ticks,
         timing.work_max,
         per_unit(timing),
+        left_out(timing),
     )
 }
 
@@ -681,11 +785,21 @@ mod tests {
 
     #[test]
     fn an_unmeasured_decision_is_the_benchs_own_error() {
-        use pharmakos_sim::seams::Unmeasured;
-        assert_eq!(seat_units(2, Some(Ok(57))), Ok(57));
+        use pharmakos_sim::seams::{NoFigure, Unmeasured};
+        assert_eq!(seat_units(2, Some(Ok(57))), Ok(Some(57)));
+        assert_eq!(
+            seat_units(2, Some(Err(NoFigure::Eliminated))),
+            Ok(None),
+            "an eliminated seat is left out by name, never read as a count"
+        );
+        assert_eq!(
+            seat_units(2, Some(Err(NoFigure::NoDecisionYet))),
+            Err(Error::NoDecisionYet { seat: 2 }),
+            "a figure no decision has written yet is refused, never read as zero"
+        );
         for reason in [Unmeasured::Overflowed, Unmeasured::SourceUnreadable] {
             assert_eq!(
-                seat_units(2, Some(Err(reason))),
+                seat_units(2, Some(Err(NoFigure::Unmeasured(reason)))),
                 Err(Error::Unmeasured { seat: 2, reason }),
                 "a count the sim could not take is refused, never read as a number"
             );
@@ -700,6 +814,7 @@ mod tests {
             decision,
             last: false,
             work: if decision { 90 } else { 0 },
+            left_out: 0,
         }
     }
 
@@ -720,6 +835,7 @@ mod tests {
                 decision: false,
                 last: true,
                 work: 0,
+                left_out: 0,
             },
         ];
         let on = Match {
@@ -762,6 +878,7 @@ mod tests {
             decision_ticks: 240,
             work_mean_milli: 0,
             work_max: 0,
+            left_out: 0,
         };
         // 50 ms is 50 000 000 ns; three seats at 100 ns a unit is 300 ns a unit-row.
         assert_eq!(timing.implied_units_per_seat(3), Some(166_666));
@@ -793,6 +910,7 @@ mod tests {
             decision_ticks: 240,
             work_mean_milli: 1_234_500,
             work_max: 1_301,
+            left_out: 0,
         };
         assert_eq!(
             notice(&timing, "linux"),
@@ -805,6 +923,44 @@ mod tests {
              tick over the seats (mean over 240 decision ticks, most 1301), 3.214 per size unit \
              sealed"
         );
+    }
+
+    /// Seat decisions an eliminated seat did not make are left out of the
+    /// per-size-unit divisor, as its units are out of the sum, and the
+    /// notice says how many: never read as a seat that counted zero.
+    #[test]
+    fn an_eliminated_seat_is_left_out_and_said() {
+        let timing = DecisionTiming {
+            seed: 0xca5c_aded,
+            rules_hash: 0x1b26_c525_068b_ff61,
+            seats: 3,
+            units_per_seat: 128,
+            ticks: 1_200,
+            windows: 239,
+            decision_ns: 412_345,
+            ordinary_ns: 200_000,
+            excess_ns: 212_345,
+            ns_per_unit: 552,
+            decision_ticks: 240,
+            work_mean_milli: 1_234_500,
+            work_max: 1_301,
+            left_out: 240,
+        };
+        // Two seats decided on each of 240 decision ticks: 1234.5 units a
+        // tick over 2 x 128 units sealed, not over 3 x 128.
+        assert_eq!(per_unit(&timing), "4.822");
+        assert!(
+            notice(&timing, "linux").ends_with(
+                "4.822 per size unit sealed; 240 seat decisions left out, each an eliminated seat's, which made no decision"
+            ),
+            "{}",
+            notice(&timing, "linux")
+        );
+        let every = DecisionTiming {
+            left_out: 0,
+            ..timing
+        };
+        assert_eq!(per_unit(&every), "3.214");
     }
 
     #[test]

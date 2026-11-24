@@ -59,8 +59,19 @@ pub struct FourthSeat {
     pub three_ns: u128,
     /// The same with the fourth, unplaced seat sealed too.
     pub four_ns: u128,
-    /// The fourth seat's evaluation units on its last decision.
-    pub fourth_units: u64,
+    /// The fourth seat's evaluation units on its last decision, or that it
+    /// was eliminated and made none.
+    pub fourth_units: FourthFigure,
+}
+
+/// The fourth seat's figure on its last decision, each reason by name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FourthFigure {
+    /// The evaluation units its last decision spent.
+    Units(u64),
+    /// The seat is eliminated, so it made no decision: left out of the
+    /// line's count and said in it, never read as zero (`NoFigure::Eliminated`).
+    Eliminated,
 }
 
 impl FourthSeat {
@@ -84,7 +95,7 @@ impl FourthSeat {
 struct Run {
     decision: Vec<u128>,
     hashes: Vec<u64>,
-    fourth: Option<u64>,
+    fourth: Option<FourthFigure>,
 }
 
 /// The fourth seat's index.
@@ -92,18 +103,22 @@ const FOURTH: usize = 3;
 
 /// The fourth seat's counted units on its last decision, as the world
 /// answers them (`World::decision_work`): `None` for a world without a fourth
-/// seat.
+/// seat, and [`FourthFigure::Eliminated`] for a seat that made no decision.
 ///
 /// # Errors
 ///
-/// [`Error::Unmeasured`] when the sim holds no count for it.
+/// [`Error::Unmeasured`] when the sim holds no count for it, and
+/// [`Error::NoDecisionYet`] when it has run no decision.
 fn fourth_units(
-    work: Option<Result<u64, pharmakos_sim::seams::Unmeasured>>,
-) -> Result<Option<u64>, Error> {
-    work.transpose().map_err(|reason| Error::Unmeasured {
-        seat: FOURTH,
-        reason,
-    })
+    work: Option<Result<u64, pharmakos_sim::seams::NoFigure>>,
+) -> Result<Option<FourthFigure>, Error> {
+    let Some(figure) = work else {
+        return Ok(None);
+    };
+    Ok(Some(match crate::decision::read_figure(FOURTH, figure)? {
+        Some(units) => FourthFigure::Units(units),
+        None => FourthFigure::Eliminated,
+    }))
 }
 
 /// Play one run.
@@ -202,7 +217,7 @@ fn configuration(
     seats: u32,
     segment_ms: i32,
     playbook: &Playbook,
-) -> Result<(u128, u64, u64, Option<u64>), Error> {
+) -> Result<(u128, u64, u64, Option<FourthFigure>), Error> {
     let first = play(rules, seed, seats, segment_ms, playbook)?;
     let (mut best, mut fourth) = (first.decision, first.fourth);
     for _ in 1..RUNS {
@@ -277,16 +292,29 @@ pub fn measure(
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, FOURTH, fourth_units};
-    use pharmakos_sim::seams::Unmeasured;
+    use super::{Error, FOURTH, FourthFigure, fourth_units};
+    use pharmakos_sim::seams::{NoFigure, Unmeasured};
 
     #[test]
     fn an_unmeasured_fourth_seat_is_the_benchs_own_error() {
-        assert_eq!(fourth_units(Some(Ok(57))), Ok(Some(57)));
+        assert_eq!(
+            fourth_units(Some(Ok(57))),
+            Ok(Some(FourthFigure::Units(57)))
+        );
         assert_eq!(fourth_units(None), Ok(None));
+        assert_eq!(
+            fourth_units(Some(Err(NoFigure::Eliminated))),
+            Ok(Some(FourthFigure::Eliminated)),
+            "an eliminated seat is said by name, never read as a count"
+        );
+        assert_eq!(
+            fourth_units(Some(Err(NoFigure::NoDecisionYet))),
+            Err(Error::NoDecisionYet { seat: FOURTH }),
+            "a figure no decision has written yet is refused, never read as zero"
+        );
         for reason in [Unmeasured::Overflowed, Unmeasured::SourceUnreadable] {
             assert_eq!(
-                fourth_units(Some(Err(reason))),
+                fourth_units(Some(Err(NoFigure::Unmeasured(reason)))),
                 Err(Error::Unmeasured {
                     seat: FOURTH,
                     reason

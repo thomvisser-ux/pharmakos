@@ -168,24 +168,56 @@ impl Feature {
     /// Whether the column `(x, y)` is one of its footprint columns.
     #[must_use]
     pub fn covers(&self, x: i32, y: i32) -> bool {
+        self.covers_metered(x, y, &())
+    }
+
+    /// [`Feature::covers`], reporting to `meter` one unit a footprint column
+    /// it compares ([`crate::seams::Meter`]; decisions-log item 175): none
+    /// for a column outside the bounding box, which is one comparison of the
+    /// feature's own row.
+    pub fn covers_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        x: i32,
+        y: i32,
+        meter: &M,
+    ) -> bool {
         let [min_x, min_y, max_x, max_y] = self.bounds;
         if x < min_x || x > max_x || y < min_y || y > max_y {
             return false;
         }
-        self.footprint
+        let mut compared: usize = 0;
+        let found = self
+            .footprint
             .iter()
-            .any(|column| column.x == x && column.y == y)
+            .inspect(|_| compared += 1)
+            .any(|column| column.x == x && column.y == y);
+        meter.rows(compared);
+        found
     }
 
     /// The footprint column at the anchor, when the generator stamped one.
     #[must_use]
     pub fn anchor_column(&self) -> Option<FootprintColumn> {
+        self.anchor_column_metered(&())
+    }
+
+    /// [`Feature::anchor_column`], reporting to `meter` one unit a footprint
+    /// column it compares, up to the anchor's.
+    pub fn anchor_column_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        meter: &M,
+    ) -> Option<FootprintColumn> {
         let x = self.anchor.first().copied()?;
         let y = self.anchor.get(1).copied()?;
-        self.footprint
+        let mut compared: usize = 0;
+        let found = self
+            .footprint
             .iter()
             .copied()
-            .find(|column| column.x == x && column.y == y)
+            .inspect(|_| compared += 1)
+            .find(|column| column.x == x && column.y == y);
+        meter.rows(compared);
+        found
     }
 }
 
@@ -327,18 +359,52 @@ impl FeatureTable {
     /// The index of the feature of `kind` anchored at `anchor`, or `None`.
     #[must_use]
     pub fn index_of(&self, kind: FeatureKind, anchor: [i32; 2]) -> Option<usize> {
-        self.features
+        self.index_of_metered(kind, anchor, &())
+    }
+
+    /// [`FeatureTable::index_of`], reporting to `meter` one unit a feature
+    /// row it compares, up to the match ([`crate::seams::Meter`];
+    /// decisions-log item 175).
+    pub fn index_of_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        kind: FeatureKind,
+        anchor: [i32; 2],
+        meter: &M,
+    ) -> Option<usize> {
+        let mut compared: usize = 0;
+        let found = self
+            .features
             .iter()
-            .position(|feature| feature.kind == kind && feature.anchor == anchor)
+            .inspect(|_| compared += 1)
+            .position(|feature| feature.kind == kind && feature.anchor == anchor);
+        meter.rows(compared);
+        found
     }
 
     /// The index of the feature whose footprint holds the column `(x, y)`, or
     /// `None`. At most one does ([`FeatureTable::new`]).
     #[must_use]
     pub fn at_column(&self, x: i32, y: i32) -> Option<usize> {
-        self.features
+        self.at_column_metered(x, y, &())
+    }
+
+    /// [`FeatureTable::at_column`], reporting to `meter` one unit a feature
+    /// row it asks, up to the one that covers the column, and the footprint
+    /// columns each asked feature compares ([`Feature::covers_metered`]).
+    pub fn at_column_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        x: i32,
+        y: i32,
+        meter: &M,
+    ) -> Option<usize> {
+        let mut asked: usize = 0;
+        let found = self
+            .features
             .iter()
-            .position(|feature| feature.covers(x, y))
+            .inspect(|_| asked += 1)
+            .position(|feature| feature.covers_metered(x, y, meter));
+        meter.rows(asked);
+        found
     }
 
     /// Whether the feature at `index` is still there: for a vent, some
@@ -350,11 +416,27 @@ impl FeatureTable {
     /// feature that is not in the table is not live.
     #[must_use]
     pub fn is_live(&self, index: usize, surface: &Surface, voxels: &VoxelStore) -> bool {
+        self.is_live_metered(index, surface, voxels, &())
+    }
+
+    /// [`FeatureTable::is_live`], reporting to `meter` one unit a footprint
+    /// column it asks, up to the live one, and for a seam one unit a voxel of
+    /// a column's depth it reads ([`crate::seams::Meter`]; decisions-log item
+    /// 175).
+    pub fn is_live_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        index: usize,
+        surface: &Surface,
+        voxels: &VoxelStore,
+        meter: &M,
+    ) -> bool {
         let Some(feature) = self.features.get(index) else {
             return false;
         };
-        match feature.kind {
+        let mut read: usize = 0;
+        let live = match feature.kind {
             FeatureKind::Vent => feature.footprint.iter().any(|column| {
+                read += 1;
                 surface.node_of(column.x, column.y).is_some_and(|node| {
                     voxels
                         .get([column.x, column.y, surface.top(node)])
@@ -363,8 +445,10 @@ impl FeatureTable {
                 })
             }),
             FeatureKind::Seam => feature.footprint.iter().any(|column| {
+                read += 1;
                 let mut depth: i32 = 0;
                 while depth < SEAM_DEPTH_VOXELS {
+                    read += 1;
                     let z = column.top.saturating_sub(depth);
                     if voxels
                         .get([column.x, column.y, z])
@@ -377,6 +461,132 @@ impl FeatureTable {
                 }
                 false
             }),
+        };
+        meter.rows(read);
+        live
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Dunit part 2: the feature table's scans charge one unit a visit of
+    //! each loop, counted here from the table itself.
+
+    use super::{FeatureKind, SEAM_DEPTH_VOXELS};
+    use crate::seams::UnitTally;
+    use crate::voxels::Material;
+
+    fn world() -> crate::world::World {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let rules = crate::rules::RulesTable::load(&path)
+            .unwrap_or_else(|error| panic!("it loads: {error:?}"));
+        crate::world::World::new(&crate::world::WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"))
+    }
+
+    fn read(tally: &UnitTally) -> u64 {
+        tally
+            .read()
+            .unwrap_or_else(|error| panic!("a measured count: {error}"))
+    }
+
+    #[test]
+    fn the_scans_charge_what_they_visit() {
+        let world = world();
+        let table = world.features();
+        assert!(!table.is_empty(), "the map lays features");
+        for (index, feature) in table.features().iter().enumerate() {
+            // A name's lookup: the rows up to its own.
+            let tally = UnitTally::new();
+            assert_eq!(
+                table.index_of_metered(feature.kind, feature.anchor, &tally),
+                Some(index)
+            );
+            assert_eq!(read(&tally), u64::try_from(index + 1).unwrap_or(0));
+            // A column's owner, for a column of its footprint and one beside
+            // its box: each feature row asked, and the footprint columns of
+            // each whose box holds the column, up to the match.
+            let [min_x, _, _, _] = feature.bounds;
+            for (x, y) in feature
+                .footprint
+                .iter()
+                .map(|column| (column.x, column.y))
+                .chain([(min_x - 1, feature.anchor[1])])
+            {
+                let mut rows: u64 = 0;
+                let mut owner = None;
+                'scan: for (at, other) in table.features().iter().enumerate() {
+                    rows += 1;
+                    let [lx, ly, hx, hy] = other.bounds;
+                    if x < lx || x > hx || y < ly || y > hy {
+                        continue;
+                    }
+                    for column in &other.footprint {
+                        rows += 1;
+                        if column.x == x && column.y == y {
+                            owner = Some(at);
+                            break 'scan;
+                        }
+                    }
+                }
+                let tally = UnitTally::new();
+                assert_eq!(table.at_column_metered(x, y, &tally), owner);
+                assert_eq!(read(&tally), rows, "({x}, {y})");
+            }
+            // Its liveness: the footprint columns asked, up to a live one,
+            // and for a seam the depth voxels each reads.
+            let surface = world.surface();
+            let voxels = world.voxels();
+            let mut rows: u64 = 0;
+            let mut live = false;
+            'columns: for column in &feature.footprint {
+                rows += 1;
+                match feature.kind {
+                    FeatureKind::Vent => {
+                        if surface.node_of(column.x, column.y).is_some_and(|node| {
+                            voxels
+                                .get([column.x, column.y, surface.top(node)])
+                                .and_then(Material::vent_richness)
+                                .is_some()
+                        }) {
+                            live = true;
+                            break 'columns;
+                        }
+                    }
+                    FeatureKind::Seam => {
+                        for depth in 0..SEAM_DEPTH_VOXELS {
+                            rows += 1;
+                            if voxels
+                                .get([column.x, column.y, column.top - depth])
+                                .and_then(Material::ore_richness)
+                                .is_some()
+                            {
+                                live = true;
+                                break 'columns;
+                            }
+                        }
+                    }
+                }
+            }
+            let tally = UnitTally::new();
+            assert_eq!(table.is_live_metered(index, surface, voxels, &tally), live);
+            assert!(live, "a fresh map's features are live");
+            assert_eq!(read(&tally), rows, "{}", feature.name());
+            // Its anchor column: the footprint columns compared up to it.
+            let tally = UnitTally::new();
+            let anchor = feature.anchor_column_metered(&tally);
+            let compared = feature
+                .footprint
+                .iter()
+                .position(|column| [column.x, column.y] == feature.anchor)
+                .map_or(feature.footprint.len(), |at| at + 1);
+            assert_eq!(anchor, feature.anchor_column());
+            assert_eq!(read(&tally), u64::try_from(compared).unwrap_or(0));
         }
     }
 }

@@ -473,16 +473,33 @@ pub(crate) fn buildable(world: &World, beacon: BeaconId, row: usize) -> bool {
 /// outside the area.
 #[must_use]
 pub(crate) fn protected(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
+    protected_metered(world, beacon, at, &())
+}
+
+/// [`protected`], reporting to `meter` one unit a target row it reads, up to
+/// and including the row that answers, or every row when none does
+/// ([`crate::seams::Meter`]; dunit part 2): a Spire's site search inside a
+/// decision passes the seat's tally.
+pub(crate) fn protected_metered(
+    world: &World,
+    beacon: BeaconId,
+    at: [Fx; 3],
+    meter: &dyn crate::seams::Meter,
+) -> bool {
     let [x, y] = crate::targeting::column_of(at);
     let targets = world.targets();
-    targets
+    let mut read: usize = 0;
+    let inside = targets
         .beacons()
         .iter()
         .zip(targets.kinds())
         .zip(targets.areas())
+        .inspect(|_| read += 1)
         .any(|((owner, kind), area)| {
             *owner == beacon && *kind == TargetKind::Protected.id() && area.contains(x, y)
-        })
+        });
+    meter.rows(read);
+    inside
 }
 
 #[cfg(test)]
@@ -610,11 +627,30 @@ impl Sphere {
     /// `beacon`'s sphere, or `None` for an id that names no row the beacon
     /// table still holds.
     pub(crate) fn of(world: &World, beacon: BeaconId) -> Option<Sphere> {
+        Self::counted(world, beacon, &())
+    }
+
+    /// [`Sphere::of`], reporting the Spire test's rows to `meter`
+    /// ([`crate::spire::metered::radius_at_row`]; dunit part 2): a decision
+    /// passes its tally. Named apart from the `_metered` twins because `of`
+    /// is a name the interpreter's sources use for other types.
+    pub(crate) fn counted<M: crate::seams::Meter + ?Sized>(
+        world: &World,
+        beacon: BeaconId,
+        meter: &M,
+    ) -> Option<Sphere> {
         let row = world.beacons().row_of(beacon).ok()?;
         let centre = world.beacons().positions().get(row.index()).copied()?;
+        let radius = crate::spire::metered::radius_at_row(
+            world.rules(),
+            world.beacons(),
+            world.structures(),
+            row.index(),
+            meter,
+        );
         Some(Sphere {
             centre,
-            limit: Sq::of_radius(world.sphere_radius_at_row(row.index())),
+            limit: Sq::of_radius(Fx::from_voxels(radius)),
         })
     }
 

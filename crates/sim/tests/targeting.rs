@@ -1044,17 +1044,28 @@ fn the_feature_table_is_regenerated_identically_on_restore() {
 /// every position when none does. Counted from `World::sensor_at`'s own
 /// positions, not from the sim's walk.
 fn seen_rows(world: &World, seat: SeatId, point: [Fx; 3]) -> u64 {
-    let total = world.beacons().seats().len()
-        + world.units().seats().len()
-        + world.structures().seats().len();
+    let beacons = world.beacons().seats().len();
+    let total = beacons + world.units().seats().len() + world.structures().seats().len();
+    // Each beacon sensor the walk meets sizes its sphere: the Spire test's
+    // kind bytes (dunit part 2; no fixture here holds a Spire).
+    let kinds = world.structures().kinds();
+    assert!(
+        !kinds.contains(&pharmakos_sim::tables::StructureKind::ResonanceSpire.id()),
+        "the fixture holds no Spire"
+    );
+    let sphere = u64::try_from(kinds.len()).unwrap();
+    let mut spheres = 0_u64;
     let mut at = 0_usize;
     while let Some((sensor, next)) = world.sensor_at(at) {
         at = next;
+        if at <= beacons {
+            spheres += sphere;
+        }
         if sensor.seat == seat && sensor.sees(&pharmakos_sim::sight::RadiusOnly, point) {
-            return u64::try_from(at).unwrap();
+            return u64::try_from(at).unwrap() + spheres;
         }
     }
-    u64::try_from(total).unwrap()
+    u64::try_from(total).unwrap() + spheres
 }
 
 /// The rows one known-threat scan for `seat` reads, counted from the tables:
@@ -1152,6 +1163,151 @@ fn repair_rows(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> u64 
     u64::try_from(found.map_or(units.seats().len(), |row| row + 1)).unwrap()
 }
 
+/// The rows a radius test reads on a map with no Resonance Spire: every kind
+/// byte of the structure table, the Spire test's (dunit part 2).
+fn radius_rows(world: &World) -> u64 {
+    let kinds = world.structures().kinds();
+    assert!(
+        !kinds.contains(&pharmakos_sim::tables::StructureKind::ResonanceSpire.id()),
+        "the fixture holds no Spire"
+    );
+    u64::try_from(kinds.len()).unwrap()
+}
+
+/// Kill seat 0's starting mining drone before the Push's first tick, so no
+/// beacon of the seat mines and a decision's seam upkeep is only the scan
+/// [`upkeep_rows`] counts: these tests count what a step or a handler
+/// charges, and a seam kept or chosen would add a dig search to every
+/// decision (`tests/mining.rs` and `mining.rs`'s own tests count those).
+fn without_its_miner(runner: &mut Runner) {
+    let units = runner.world().units();
+    let drones: Vec<u32> = units
+        .kinds()
+        .iter()
+        .zip(units.seats())
+        .zip(units.ids())
+        .zip(units.hit_points())
+        .filter(|(((kind, owner), _), hp)| {
+            **kind == pharmakos_sim::tables::UnitKind::MiningDrone.id()
+                && **owner == SEAT
+                && hp.is_alive()
+        })
+        .map(|(((_, _), id), _)| *id)
+        .collect();
+    assert!(!drones.is_empty(), "seat 0 starts with a miner");
+    for id in drones {
+        runner
+            .world_mut()
+            .request_damage(DamageOrder {
+                target: DamageTarget::Unit(UnitId::new(id)),
+                amount: pharmakos_sim::math::quantity::Damage::new(1_000_000).unwrap(),
+                by: SeatId::NEUTRAL,
+                source: None,
+            })
+            .expect("a damage order between ticks");
+    }
+}
+
+/// What a decision's seam upkeep (`mining::refresh_seams`) reads when no
+/// beacon of seat 0's mines: one unit a beacon row, and for each of the
+/// seat's living beacons whose writ is not Mine, every unit row the miner
+/// test reads (no living miner is homed to it, so it reads them all).
+fn upkeep_rows(world: &World) -> u64 {
+    let beacons = world.beacons();
+    let unit_rows = u64::try_from(world.units().seats().len()).unwrap();
+    let mut rows = u64::try_from(beacons.ids().len()).unwrap();
+    for ((owner, hp), mandate) in beacons
+        .seats()
+        .iter()
+        .zip(beacons.hit_points())
+        .zip(beacons.mandates())
+    {
+        if *owner == SEAT && hp.is_alive() && *mandate != MandateKind::Mine.id() {
+            rows += unit_rows;
+        }
+    }
+    rows
+}
+
+/// The footprint columns a vent's liveness reads: up to the first whose top
+/// solid voxel is still vent material (dunit part 2).
+fn vent_live_rows(world: &World, feature: usize) -> u64 {
+    let vent = world.features().get(feature).expect("the vent");
+    let surface = world.surface();
+    let mut rows = 0;
+    for column in &vent.footprint {
+        rows += 1;
+        if surface.node_of(column.x, column.y).is_some_and(|node| {
+            world
+                .voxels()
+                .get([column.x, column.y, surface.top(node)])
+                .and_then(Material::vent_richness)
+                .is_some()
+        }) {
+            break;
+        }
+    }
+    rows
+}
+
+/// The rows a deploy site's legality test reads (`site_is_legal`, dunit part
+/// 2), counted from the tables: the beacon rows up to the first of `seat`'s
+/// living spheres that holds the site, with the Spire test of each such
+/// sphere the site lies between the base and the grown radius of; then every
+/// beacon row, up to an own living beacon on the site's column.
+fn legal_site_rows(world: &World, seat: SeatId, site: [Fx; 3]) -> u64 {
+    use pharmakos_sim::math::fixed::Sq;
+    let beacons = world.beacons();
+    let rules = world.rules();
+    let base = Sq::of_radius(Fx::from_voxels(rules.sphere_radius_voxels()));
+    let grown = Sq::of_radius(Fx::from_voxels(rules.grown_sphere_radius_voxels()));
+    let rows_of = || {
+        beacons
+            .seats()
+            .iter()
+            .zip(beacons.hit_points())
+            .zip(beacons.positions())
+    };
+    let mut rows = 0_u64;
+    for ((owner, hp), at) in rows_of() {
+        rows += 1;
+        if *owner != seat.raw() || !hp.is_alive() {
+            continue;
+        }
+        let distance = Sq::between(*at, site);
+        if distance <= base {
+            break;
+        }
+        if distance <= grown {
+            rows += radius_rows(world);
+        }
+    }
+    let column = pharmakos_sim::targeting::column_of(site);
+    for ((owner, hp), at) in rows_of() {
+        rows += 1;
+        if *owner == seat.raw()
+            && hp.is_alive()
+            && pharmakos_sim::targeting::column_of(*at) == column
+        {
+            break;
+        }
+    }
+    rows
+}
+
+/// The beacon rows a `b_00` reads to find seat 0's core: every row up to the
+/// core's (dunit part 2: `row_of_ordinal` charges one a row it reads).
+fn b_00_rows(world: &World) -> u64 {
+    u64::try_from(
+        world
+            .beacons()
+            .row_of_ordinal(SeatId::new(SEAT), 0)
+            .expect("a core")
+            + 1,
+    )
+    .unwrap()
+}
+
 /// Seat 0's living beacons, in row order: each one's id and where it stands.
 fn own_beacons(world: &World) -> Vec<(BeaconId, [Fx; 3])> {
     let beacons = world.beacons();
@@ -1189,6 +1345,10 @@ fn with_an_enemy_in_sight(drone: bool) -> World {
     world
         .field_unit(one, outpost, pharmakos_sim::tables::UnitKind::Raider, at)
         .expect("room for the raider");
+    // A structure row, so a sphere's Spire test has kind bytes to read.
+    world
+        .raise_structure(one, outpost, StructureKind::Generator, at)
+        .expect("room for a structure");
     if drone {
         let near = world.standing_point([cx + 2, cy - 2, 0]);
         world
@@ -1225,9 +1385,9 @@ fn safest_decision(world: World, wound: bool) -> Runner {
     let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner.seal_playbook(SeatId::new(SEAT), plan).unwrap();
     assert!(runner.begin_push().unwrap());
-    // The sixth tick, by when the core's seam is held and keeping it costs
-    // nothing (`the_decision_tick_counts_its_evaluation_units`). The wound
-    // lands on the fifth, before the sixth's decision.
+    without_its_miner(&mut runner);
+    // The sixth tick. The wound lands on the fifth, before the sixth's
+    // decision.
     let _ = play(&mut runner, 5, |_, _| {});
     if wound {
         let commander = runner
@@ -1283,8 +1443,11 @@ fn a_safest_selector_counts_the_threat_scan_it_reads() {
     );
     assert_eq!(
         units,
-        3 + beacon_rows + u64::try_from(own.len()).unwrap() * scan,
-        "the handler, its node, the wait's node, the candidates and each candidate's threat scan"
+        3 + beacon_rows
+            + u64::try_from(own.len()).unwrap() * (radius_rows(world) + scan)
+            + upkeep_rows(world),
+        "the handler, its node, the wait's node, the candidates, each candidate's sphere and \
+         threat scan, and the seam upkeep"
     );
 }
 
@@ -1312,30 +1475,81 @@ fn a_wounded_safest_selector_counts_the_repair_search_it_reads() {
     );
     assert_eq!(
         units,
-        3 + beacon_rows + u64::try_from(own.len()).unwrap() * scan + repairs,
-        "the handler, its node, the wait's node, the candidates, the threat scans and the repair searches"
+        3 + beacon_rows
+            + u64::try_from(own.len()).unwrap() * (2 * radius_rows(world) + scan)
+            + repairs
+            + upkeep_rows(world),
+        "the handler, its node, the wait's node, the candidates, each candidate's two spheres, \
+         the threat scans, the repair searches and the seam upkeep"
+    );
+}
+
+/// An enemy predicate reads the sighting table, which every seat shares: one
+/// unit a sighting row it reads, the seat's own and every other seat's (dunit
+/// part 2; before it, the other seats' rows it skipped were charged nothing).
+/// Here seat 0 sees seat 1's outpost and raider, and seat 1 sees seat 0's,
+/// so the table holds rows of both.
+#[test]
+fn an_enemy_predicate_counts_every_sighting_row_it_reads() {
+    let wait = concat!(
+        r#"{"label":"wait","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
+        r#""timeout_ms":600000}"#
+    );
+    // Never true while seat 0 knows of seat 1's outpost: tried (1), its `not`
+    // (1) and the predicate under it (1), with the rows the predicate reads.
+    let handler = concat!(
+        r#"{"id":"never","when":{"not":{"item":{"enemy_beacon_known":{"freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}}}},"#,
+        r#""body":[{"label":"pause","hold":{"ms":1000}}],"resume":"CONTINUE","cooldown_ms":5000,"max_fires":1}"#
+    );
+    let mut book = playbook(wait);
+    book.declarative.as_mut().unwrap().handlers = vec![json::decode(handler).expect("a handler")];
+    let plan = Plan::compile(&book, &rules()).expect("compiles");
+    let mut runner =
+        Runner::new(with_an_enemy_in_sight(false)).unwrap_or_else(|error| panic!("{error}"));
+    runner.seal_playbook(SeatId::new(SEAT), plan).unwrap();
+    assert!(runner.begin_push().unwrap());
+    without_its_miner(&mut runner);
+    let _ = play(&mut runner, 6, |_, _| {});
+    let world = runner.world();
+    let units = world.decision_work(0).expect("seat 0").expect("measured");
+    let sightings = world.sightings().seats();
+    let others = sightings.iter().filter(|by| **by != SEAT).count();
+    println!(
+        "enemy predicate: {units} units; {} sighting rows, {others} of other seats",
+        sightings.len()
+    );
+    assert!(others > 0, "the table holds another seat's rows");
+    assert!(sightings.contains(&SEAT), "and seat 0's own");
+    assert_eq!(
+        units,
+        4 + u64::try_from(sightings.len()).unwrap() + upkeep_rows(world),
+        "the handler, its `not`, the predicate, every sighting row, the wait's node and the seam upkeep"
     );
 }
 
 /// Every decision's figure over a Push of seat 0's `route` followed by a long
 /// wait (so the route never ends and no fallback decides), `ticks` ticks of
-/// it, each value read once (a decision's figure stands until the next
-/// decision), the first decision's left out: it also makes the core's seam
-/// choice.
+/// it, with seat 0's miner killed before the first ([`without_its_miner`])
+/// and each decision's seam upkeep ([`upkeep_rows`]) taken off, each value
+/// read once on its decision's tick and kept when it differs from the last.
 fn later_decisions(world: World, route: &str, ticks: u32) -> Vec<u64> {
     let wait = concat!(
         r#"{"label":"after","wait_until":{"condition":{"segment_elapsed":{"ms":{"op":"GE","value":900000}}}},"#,
         r#""timeout_ms":600000}"#
     );
     let mut runner = open(world, &format!("{route},{wait}"));
+    without_its_miner(&mut runner);
     let mut seen: Vec<u64> = Vec::new();
     let _ = play(&mut runner, ticks, |world, _| {
-        let value = world.decision_work(0).expect("seat 0").expect("measured");
+        if !world.is_decision_tick() {
+            return;
+        }
+        let value = world.decision_work(0).expect("seat 0").expect("measured") - upkeep_rows(world);
         if seen.last() != Some(&value) {
             seen.push(value);
         }
     });
-    seen.into_iter().skip(1).collect()
+    seen
 }
 
 /// A row committing protected boxes writes each box once: one decision unit
@@ -1363,8 +1577,8 @@ fn a_committed_row_counts_the_boxes_it_writes() {
     println!("boxes: {units:?}");
     assert_eq!(
         units,
-        vec![0, 3, 1],
-        "the visit's walk and interface charge nothing, the commit its three boxes, then the wait one node a decision"
+        vec![b_00_rows(&world_at(SEED, 2, &[180_000])) + 1, 0, 3 + 3, 1],
+        "the step's start finds b_00 and reads its one row; the walk and interface charge nothing; the commit writes its three boxes, each placed after the rows before it (0, 1 and 2 read, the protected list held none to clear); then the wait one node a decision"
     );
 }
 
@@ -1393,10 +1607,18 @@ fn a_committed_wall_counts_the_columns_it_checks() {
     println!("wall: {units:?}");
     let columns = u64::try_from(grounds.len()).unwrap();
     assert_eq!(columns, 6, "a three-by-two box");
+    // The sphere's Spire test reads every structure kind byte, with no Spire
+    // on the map (dunit part 2, fix pass 2).
+    let spire = u64::try_from(world_at(SEED, 2, &[180_000]).structures().kinds().len()).unwrap();
     assert_eq!(
         units,
-        vec![0, columns, 1],
-        "the visit's walk and interface charge nothing, the commit its six columns, then the wait one node a decision"
+        vec![
+            b_00_rows(&world_at(SEED, 2, &[180_000])) + 2,
+            0,
+            spire + 2 * columns + 1,
+            1
+        ],
+        "the step's start finds b_00 and reads its row and its target; the walk and interface charge nothing; the commit reads the sphere's Spire test, checks its six columns, each with the one voxel of its fall (its top is ground), and finds the row it wrote to make it a wall (the claim test and the place found nothing to read); then the wait one node a decision"
     );
 }
 
@@ -1417,30 +1639,37 @@ fn a_committed_protect_list_counts_the_ranking_it_reads() {
         r#""timeout_ms":120000}"#
     );
     let mut runner = open(world_at(SEED, 2, &[180_000]), &format!("{route},{wait}"));
-    // Each new figure, with the count the same decision's protect pick
-    // should charge, taken from the world it ran on.
+    without_its_miner(&mut runner);
+    // Each new figure, less the decision's seam upkeep, with the count the
+    // same decision's protect pick should charge, taken from the world it
+    // ran on.
     let mut seen: Vec<(u64, u64)> = Vec::new();
     let _ = play(&mut runner, 1_200, |world, _| {
-        let value = world.decision_work(0).expect("seat 0").expect("measured");
+        if !world.is_decision_tick() {
+            return;
+        }
+        let value = world.decision_work(0).expect("seat 0").expect("measured") - upkeep_rows(world);
         let beacon_rows = u64::try_from(world.beacons().seats().len()).unwrap();
         let own = u64::try_from(own_beacons(world).len()).unwrap();
-        let pick = beacon_rows + own * threat_scan_rows(world, SeatId::new(SEAT));
+        let pick =
+            beacon_rows + own * (radius_rows(world) + threat_scan_rows(world, SeatId::new(SEAT)));
         if seen.last().map(|(units, _)| *units) != Some(value) {
             seen.push((value, pick));
         }
     });
     println!("protect: {seen:?}");
     let units: Vec<u64> = seen.iter().map(|(units, _)| *units).collect();
-    // The first decision is the core's seam choice. The switch to Defend
-    // releases the seam, so the commit's decision makes the same choice
-    // again beside the pick.
-    let seam = *units.first().expect("a first decision");
     let pick = seen.get(2).map(|(_, pick)| *pick).expect("a commit");
     assert!(pick > 0, "the pick ranks and scans");
     assert_eq!(
         units,
-        vec![seam, 0, seam + pick, 1],
-        "the seam choice; nothing while the commander walks and interfaces; at the commit the pick and the seam chosen again; then the wait one node a decision"
+        vec![
+            b_00_rows(&world_at(SEED, 2, &[180_000])) + 1,
+            0,
+            pick + 2,
+            1
+        ],
+        "the step's start finds b_00 and reads its row; nothing while the commander walks and interfaces; at the commit the pick, its one entry read and its one beacon written (no list held before, no target to clear); then the wait one node a decision"
     );
 }
 
@@ -1488,16 +1717,36 @@ fn the_decision_tick_counts_its_evaluation_units() {
     };
     let (narrow_units, narrow_hash) = run(narrow);
     let (wide_units, wide_hash) = run(wide);
+    // The sixth decision's seam upkeep, measured alone: the same world with
+    // no playbook sealed, whose decisions are the upkeep and nothing else.
+    // By the sixth the core holds its seam, and keeping it is a dig search
+    // (dunit part 2; `mining.rs`'s `a_kept_seam_charges_its_dig_search`
+    // counts it).
+    let upkeep = {
+        let mut runner =
+            Runner::new(world_at(SEED, 2, &[180_000])).unwrap_or_else(|error| panic!("{error}"));
+        assert!(runner.begin_push().unwrap());
+        let _ = play(&mut runner, 6, |_, _| {});
+        runner.world().decision_work(0).unwrap().expect("measured")
+    };
+    assert!(upkeep > 0, "keeping a seam searches it");
     assert_eq!(
-        narrow_units, 3,
-        "a handler tried, its node, the wait's node"
+        narrow_units,
+        3 + upkeep,
+        "a handler tried, its node, the wait's node, and the seam upkeep"
     );
-    assert_eq!(wide_units, 4, "and one more for the `all`");
+    assert_eq!(wide_units, 4 + upkeep, "and one more for the `all`");
     assert_eq!(
         narrow_hash, wide_hash,
         "the count is not in the state hash: the same behaviour hashes the same"
     );
+}
 
+/// A covering step's first decision: its resolve, the binding of its
+/// `initial` target and the core's seam choice, each measured alone, and
+/// nothing else.
+#[test]
+fn a_covering_decision_counts_its_resolve_binding_and_seam_choice() {
     // A covering step counts its candidates, its walks' pops and its spiral.
     let fixture = world_at(SEED, 2, &[180_000]);
     // The resolve alone, on a fresh tally and a fresh scratch: one unit a
@@ -1520,7 +1769,7 @@ fn the_decision_tick_counts_its_evaluation_units() {
             ..fixture.ground()
         };
         let mut scratch = Scratch::for_map(fixture.surface(), fixture.clusters().size()).unwrap();
-        pharmakos_sim::targeting::cover_counted(
+        let cover = pharmakos_sim::targeting::cover_counted(
             &ground,
             &mut scratch,
             SeatId::new(SEAT),
@@ -1531,8 +1780,35 @@ fn the_decision_tick_counts_its_evaluation_units() {
             },
         )
         .expect("a covering site");
+        (tally.read().expect("measured"), cover)
+    };
+    // The step's `initial` Build target, `on covered {}`, bound at the step's
+    // start against the site's sphere: the vent's liveness, its anchor in the
+    // sphere, the claims on its footprint, its `on` column and that column in
+    // the sphere (dunit part 2: each charged what it reads), measured alone.
+    let (resolve, cover) = resolve;
+    let bind = {
+        let tally = pharmakos_sim::seams::UnitTally::new();
+        let ground = pharmakos_sim::targeting::Ground {
+            work: &tally,
+            ..fixture.ground()
+        };
+        let mut scratch = Scratch::for_map(fixture.surface(), fixture.clusters().size()).unwrap();
+        let [x, y] = cover.site;
+        let centre = fixture.ground().standing(x, y).expect("the site's column");
+        on_vent_counted(
+            &ground,
+            &mut scratch,
+            SeatId::new(SEAT),
+            centre,
+            None,
+            Some(cover.feature),
+            FeatureSpec::Covered,
+        )
+        .expect("the covered vent binds");
         tally.read().expect("measured")
     };
+    assert!(bind > 0, "binding the covered vent reads its footprint");
     // The core's seam choice, which the first decision also makes (its
     // starting mining drone gives it one, `pharmakos_sim::mining`), measured
     // alone: the same first decision with no playbook sealed
@@ -1544,23 +1820,37 @@ fn the_decision_tick_counts_its_evaluation_units() {
         let _ = play(&mut runner, 1, |_, _| {});
         runner.world().decision_work(0).unwrap().expect("measured")
     };
+    // The step's start, before the binding (dunit part 2): the site's
+    // legality (its beacon rows and sphere tests), and the step's one
+    // settings row with its one target, one unit each.
+    let start = {
+        let [x, y] = cover.site;
+        let site = fixture.ground().standing(x, y).expect("the site's column");
+        legal_site_rows(&fixture, SeatId::new(SEAT), site) + 2
+    };
+    // Then the step's look at its bindings, in the same decision: the bound
+    // vent's liveness, the one binding read and its liveness again (the
+    // binding is to the same vent).
+    let look = 1 + 2 * vent_live_rows(&fixture, cover.feature);
     let mut runner = open(fixture, COVER);
     let _ = play(&mut runner, 1, |_, _| {});
     let covering = runner.world().decision_work(0).unwrap().expect("measured");
-    // The decision is the resolve and the seam choice, and nothing else.
-    assert_eq!(covering, resolve + seam);
+    // The decision is the resolve, the step's start, the binding and the
+    // seam choice, and nothing else.
+    assert_eq!(covering, resolve + start + bind + look + seam);
     // Pinned exactly on the golden seed, so a change to what the resolver
-    // charges shows here rather than drifting under a lower bound. The count
-    // goes past the plan's four categories (S1's plan, section 5 item 3): it
-    // charges one unit per feature the ranker scans, one per node a search
-    // pops and one per spiral column the covering search tries. Before lane
-    // `dunit` a served walk charged 1 whatever it popped, and this read 423
-    // (412 for the resolve and 11 for the seam choice). The narrow and wide
-    // counts above are read at the sixth tick, by when the seam is held and
-    // keeping it costs nothing.
-    println!("covering: {covering} = {resolve} for the resolve + {seam} for the seam choice");
+    // charges shows here rather than drifting under a lower bound: one unit a
+    // visit of each loop the decision runs and one a node a search pops
+    // (dunit part 2). Before lane `dunit` a served walk charged 1 whatever it
+    // popped, and this read 423 (412 for the resolve and 11 for the seam
+    // choice); after its part 1, 4,716 (the predicates each column and
+    // candidate asks, the binding and the seam's dig searches charged
+    // nothing).
+    println!(
+        "covering: {covering} = {resolve} for the resolve + {start} for the start + {bind} for the binding + {look} for the look + {seam} for the seam choice"
+    );
     assert_eq!(
-        covering, 4_716,
+        covering, 10_927,
         "a covering resolution ranks every feature, walks and searches a spiral: {covering}"
     );
 }
@@ -2009,4 +2299,42 @@ fn a_rules_table_without_a_voxel_length_sphere_does_not_load() {
         Err(pharmakos_sim::RulesError::OutOfRange { field, .. })
             if field == "beacon.sphere_radius_voxels"
     ));
+}
+
+/// Each seat's figure is its own (dunit part 2): two seats with different
+/// playbooks decide in one tick, and each seat's published figure equals
+/// that seat's decision with the other seat's playbook left unsealed. A
+/// tally carried from one seat's decision into the next would make the
+/// second seat's figure the sum of both.
+#[test]
+fn each_seats_figure_is_its_own() {
+    const HOLD: &str = r#"{"label":"pause","hold":{"ms":1000}}"#;
+    let seats: [(u8, &str); 2] = [(0, COVER), (1, HOLD)];
+    let first_decision = |sealed: &[(u8, &str)]| {
+        let mut runner =
+            Runner::new(world_at(SEED, 2, &[180_000])).unwrap_or_else(|error| panic!("{error}"));
+        for (seat, route) in sealed {
+            let plan = compile(route).unwrap_or_else(|error| panic!("compiles: {error}"));
+            runner
+                .seal_playbook(SeatId::new(*seat), plan)
+                .expect("a Lull takes a seal");
+        }
+        assert!(runner.begin_push().unwrap());
+        let _ = play(&mut runner, 1, |_, _| {});
+        [0, 1].map(|seat| {
+            runner
+                .world()
+                .decision_work(seat)
+                .expect("a seat")
+                .expect("measured")
+        })
+    };
+    let both = first_decision(&seats);
+    let [cover_alone, _] = first_decision(&seats[..1]);
+    let [_, hold_alone] = first_decision(&seats[1..]);
+    assert_ne!(
+        cover_alone, hold_alone,
+        "the two playbooks do different work, so a mixed-up figure shows"
+    );
+    assert_eq!(both, [cover_alone, hold_alone], "each seat's own decision");
 }

@@ -5,7 +5,8 @@
 //! review of PR #179, item 3).
 //!
 //! The editor reads a report through a socket whose inbound buffer is
-//! `INBOUND_BYTES` (`godot/scripts/host_link.gd`). Decision 8's `I0003` notes
+//! `INBOUND_BUFFER_BYTES` (`crates/client-gdext/src/transport.rs`, which
+//! `godot/scripts/host_link.gd` sets on every peer since S3's `fixq-c`). Decision 8's `I0003` notes
 //! come one per omitted setting, so a long file of bare steps once made a
 //! report of megabytes where it had been one `E0110`. The notes are capped
 //! (`MAX_DEFAULT_NOTES`, then one `I0007` with the count), and none is written
@@ -32,19 +33,30 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The client's inbound buffer, read from the client's own script rather
-/// than written here a second time.
+/// The most a report for the longest file may be: an eighth of the 1 MiB inbound buffer
+/// the client had when this test was written. The report's real cap is lane `vcap`'s to
+/// set (decisions-log item 183 (4)); until then the allowance stays where it was, and
+/// the client's buffer may only grow under it (`the_allowance_is_within_the_clients_buffer`).
+const REPORT_ALLOWANCE_BYTES: usize = 131_072;
+// The ruled 128 KiB, held at compile time: raising it is a ruling, not an edit (fix pass 3).
+const _: () = assert!(REPORT_ALLOWANCE_BYTES == 128 * 1024);
+
+/// The client's inbound buffer, read from the client's own source rather
+/// than written here a second time (the verifier may not depend on the
+/// walled client crate, so the line is read as text).
 fn inbound_bytes() -> usize {
-    let script = std::fs::read_to_string(root().join("godot/scripts/host_link.gd"))
-        .expect("the client's host link");
-    let line = script
+    const DECLARED: &str = "pub const INBOUND_BUFFER_BYTES: usize = ";
+    let source = std::fs::read_to_string(root().join("crates/client-gdext/src/transport.rs"))
+        .expect("the client's transport sizes");
+    let line = source
         .lines()
-        .find(|line| line.starts_with("const INBOUND_BYTES := "))
-        .expect("host_link.gd declares INBOUND_BYTES");
-    line.trim_start_matches("const INBOUND_BYTES := ")
-        .trim()
+        .find(|line| line.starts_with(DECLARED))
+        .expect("transport.rs declares INBOUND_BUFFER_BYTES");
+    line.trim_start_matches(DECLARED)
+        .trim_end_matches(';')
+        .replace('_', "")
         .parse()
-        .expect("INBOUND_BYTES is a whole number")
+        .expect("INBOUND_BUFFER_BYTES is a whole number")
 }
 
 fn report_text(steps: &str) -> String {
@@ -88,15 +100,11 @@ fn the_report_for_the_longest_file_fits_the_clients_buffer_with_room() {
     let steps = longest_route();
     assert!(!is_too_long(&steps));
     let report = report_text(&steps);
-    let budget = inbound_bytes()
-        .checked_div(8)
-        .expect("a buffer of some size");
     assert!(
-        report.len() <= budget,
-        "a report of {} bytes for the longest route, past an eighth of the client's {} \
-         byte buffer",
+        within_allowance(&report),
+        "a report of {} bytes for the longest route, past the {REPORT_ALLOWANCE_BYTES}-byte \
+         allowance",
         report.len(),
-        inbound_bytes()
     );
     // Past the size budget, no per-step note is written at all.
     assert!(
@@ -105,6 +113,56 @@ fn the_report_for_the_longest_file_fits_the_clients_buffer_with_room() {
     );
     let notes = report.matches("\"I0003\"").count();
     assert!(notes <= 1, "{notes} I0003 notes past the size budget");
+}
+
+/// Whether a report is within the allowance: the test's own constant, never the buffer.
+fn within_allowance(report: &str) -> bool {
+    report.len() <= REPORT_ALLOWANCE_BYTES
+}
+
+/// **The allowance is the test's own constant, not the buffer** (fix pass 4, review 3's M7): a
+/// real report just past 128 KiB, made of the per-step `E0104` (a step with no label) that no
+/// cap touches, is past the allowance, where an eighth of the 4 MiB buffer would take it.
+#[test]
+fn a_report_just_past_the_allowance_is_past_it() {
+    let mut count = 200_usize;
+    let report = loop {
+        let steps: Vec<&str> = (0..count).map(|_| r#"{"hold":{"ms":1}}"#).collect();
+        let report = report_text(&steps.join(","));
+        if report.len() > REPORT_ALLOWANCE_BYTES {
+            break report;
+        }
+        count = count.checked_add(20).expect("fits");
+        assert!(
+            count < 5_000,
+            "no route of bare holds reached the allowance"
+        );
+    };
+    assert!(
+        report.len() < REPORT_ALLOWANCE_BYTES.checked_mul(2).expect("fits"),
+        "the report is not just past the allowance: {} bytes",
+        report.len()
+    );
+    assert!(
+        !within_allowance(&report),
+        "a {}-byte report is within the allowance",
+        report.len()
+    );
+}
+
+/// The allowance is no more than an eighth of the client's inbound buffer, so the buffer can
+/// never shrink under it unseen.
+#[test]
+fn the_allowance_is_within_the_clients_buffer() {
+    let eighth = inbound_bytes()
+        .checked_div(8)
+        .expect("a buffer of some size");
+    assert!(
+        REPORT_ALLOWANCE_BYTES <= eighth,
+        "the {REPORT_ALLOWANCE_BYTES}-byte allowance is past an eighth of the client's {} \
+         byte buffer",
+        inbound_bytes()
+    );
 }
 
 #[test]
