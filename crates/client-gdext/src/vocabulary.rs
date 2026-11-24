@@ -54,8 +54,8 @@ pub enum ParameterShape {
     Choice {
         /// The values, in the gateway's order.
         values: Vec<String>,
-        /// Each value in the player's words, one per value; a list the gateway sent short or
-        /// long is kept as sent and drawn as the values (`titles` then names none).
+        /// Each value in the player's words, one per value: an answer whose titles do not
+        /// pair with its values is refused ([`vocabulary_of`]).
         titles: Vec<String>,
     },
     /// A reference picked from the map or the playbook: the reference's kind, by name.
@@ -157,30 +157,32 @@ pub struct Vocabulary {
 ///
 /// # Errors
 ///
-/// [`BridgeError::Schema`] when the answer is not a `GetVocabularyResponse`.
+/// [`BridgeError::Schema`] when the answer is not a `GetVocabularyResponse`, and
+/// [`BridgeError::Rpc`] for a choice whose titles do not pair with its values one for one (S3's
+/// `fixq-c`, fix pass 1: a choice drawn with a title short would draw a value's JSON, or the
+/// wrong words beside a value): the picker's line says why.
 pub fn vocabulary_of(result: &Json) -> Result<Vocabulary, BridgeError> {
     let (answer, _) = split_footer(result);
     let canonical = enums::canonical("gp.api.v1.GetVocabularyResponse", &answer);
     let response: GetVocabularyResponse = json::decode_json(&canonical)?;
+    let entries = |list: Vec<VocabularyEntry>| -> Result<Vec<Entry>, BridgeError> {
+        list.into_iter().map(entry_of).collect()
+    };
+    let mut families = Vec::with_capacity(response.families.len());
+    for family in response.families {
+        families.push(Family {
+            id: family.family,
+            title: family.title,
+            locked: family.locked,
+            predicates: entries(family.predicates)?,
+        });
+    }
     Ok(Vocabulary {
-        families: response
-            .families
-            .into_iter()
-            .map(|family| Family {
-                id: family.family,
-                title: family.title,
-                locked: family.locked,
-                predicates: family.predicates.into_iter().map(entry_of).collect(),
-            })
-            .collect(),
-        mandates: response.mandates.into_iter().map(entry_of).collect(),
-        blueprints: response.blueprints.into_iter().map(entry_of).collect(),
-        queue_blueprints: response
-            .queue_blueprints
-            .into_iter()
-            .map(entry_of)
-            .collect(),
-        groups: response.groups.into_iter().map(entry_of).collect(),
+        families,
+        mandates: entries(response.mandates)?,
+        blueprints: entries(response.blueprints)?,
+        queue_blueprints: entries(response.queue_blueprints)?,
+        groups: entries(response.groups)?,
     })
 }
 
@@ -204,19 +206,19 @@ pub fn vocabulary_of_text(text: &str) -> Result<Vocabulary, BridgeError> {
     }
 }
 
-fn entry_of(entry: VocabularyEntry) -> Entry {
-    Entry {
+fn entry_of(entry: VocabularyEntry) -> Result<Entry, BridgeError> {
+    let mut parameters = Vec::with_capacity(entry.parameters.len());
+    for parameter in entry.parameters {
+        parameters.push(Parameter {
+            shape: parameter_shape(&entry.name, &parameter.pointer, parameter.shape.as_ref())?,
+            pointer: parameter.pointer,
+            title: parameter.title,
+        });
+    }
+    Ok(Entry {
         name: entry.name,
         title: entry.title,
-        parameters: entry
-            .parameters
-            .into_iter()
-            .map(|parameter| Parameter {
-                shape: parameter_shape(parameter.shape.as_ref()),
-                pointer: parameter.pointer,
-                title: parameter.title,
-            })
-            .collect(),
+        parameters,
         skeleton_json: entry.skeleton_json,
         locked: entry.locked,
         anchor_shape: match WireAnchorShape::try_from(entry.anchor_shape) {
@@ -224,11 +226,24 @@ fn entry_of(entry: VocabularyEntry) -> Entry {
             Ok(WireAnchorShape::Box) => AnchorShape::Box,
             Ok(WireAnchorShape::Unspecified) | Err(_) => AnchorShape::Unnamed,
         },
-    }
+    })
 }
 
-fn parameter_shape(shape: Option<&ValueShape>) -> ParameterShape {
-    match shape.and_then(|shape| shape.shape.as_ref()) {
+fn parameter_shape(
+    entry: &str,
+    pointer: &str,
+    shape: Option<&ValueShape>,
+) -> Result<ParameterShape, BridgeError> {
+    if let Some(Shape::Choice(choice)) = shape.and_then(|shape| shape.shape.as_ref())
+        && choice.titles.len() != choice.values.len()
+    {
+        return Err(BridgeError::Rpc(format!(
+            "the choice at {entry}{pointer} names {} values and {} titles",
+            choice.values.len(),
+            choice.titles.len()
+        )));
+    }
+    Ok(match shape.and_then(|shape| shape.shape.as_ref()) {
         Some(Shape::Integer(integer)) => ParameterShape::Number {
             min: integer.min,
             max: integer.max,
@@ -248,7 +263,7 @@ fn parameter_shape(shape: Option<&ValueShape>) -> ParameterShape {
             Ok(Kind::Unspecified) | Err(_) => ParameterShape::Unknown,
         },
         None => ParameterShape::Unknown,
-    }
+    })
 }
 
 /// Why a pick from the vocabulary or the detail composes nothing.
@@ -904,6 +919,24 @@ mod tests {
             compact(&remove_target_row(described)),
             r#"{"remove_build_target":{"anchor":{"on":{"vent":{"rank":"NEAREST"}}}}}"#
         );
+    }
+
+    /// A picker's choice whose titles do not pair with its values refuses the whole answer (fix
+    /// pass 1): the picker's line says why, and no value's JSON is drawn in a title's place.
+    #[test]
+    fn a_choice_whose_titles_do_not_pair_refuses_the_vocabulary() {
+        let answer = |titles: &str| {
+            json::read(&format!(
+                r#"{{"families":[{{"family":"f","title":"F","predicates":[{{"name":"p","title":"P","parameters":[{{"pointer":"/op","title":"Compared","shape":{{"choice":{{"values":["\"LT\"","\"GT\""],"titles":{titles}}}}}}}],"skeleton_json":"{{}}"}}]}}]}}"#
+            ))
+            .expect("json")
+        };
+        assert!(
+            vocabulary_of(&answer(r#"["below"]"#)).is_err(),
+            "one title short"
+        );
+        assert!(vocabulary_of(&answer("[]")).is_err(), "no titles");
+        assert!(vocabulary_of(&answer(r#"["below","above"]"#)).is_ok());
     }
 
     /// The Remove list draws each target's line beside it, so lines that do not pair with the

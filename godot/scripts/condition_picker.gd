@@ -96,7 +96,9 @@ static func parameter_text(parameter: Dictionary) -> String:
 			return Strings.text("picker_parameter_number", {"title": title, "bounds": bounds, "unit": (" " + shown) if shown != "" else ""})
 		"choice":
 			var titles: PackedStringArray = parameter.get("titles", PackedStringArray())
-			return Strings.text("picker_parameter_choice", {"title": title, "values": ", ".join(titles if not titles.is_empty() else parameter.get("values", PackedStringArray()))})
+			# The gateway's words for each value; the bridge refused an answer whose titles do not
+			# pair with its values, so no value's JSON is drawn in their place.
+			return Strings.text("picker_parameter_choice", {"title": title, "values": ", ".join(titles)})
 		"reference":
 			return Strings.text("picker_parameter_reference", {"title": title, "kind": parameter.get("kind", "")})
 		_:

@@ -843,7 +843,7 @@ func _settle() -> void:
 ## open, as the P6a fix asks.
 func _check_an_action_pick_closes_the_menus(stage: SubViewport, editor: CanvasLayer, failures: Array[String]) -> void:
 	var beacon := {"id": "b_00", "owner": "seat.0", "position": Vector3.ZERO}
-	var detail := {"known": true, "id": "b_00", "priority": "normal", "settings": [{"title": "Rebuild", "pointer": "/build/rebuild_destroyed", "value_json": "true", "editor": "choice", "values": PackedStringArray(["true", "false"])}], "targets": []}
+	var detail := {"known": true, "id": "b_00", "priority": "normal", "settings": [{"title": "Rebuild", "pointer": "/build/rebuild_destroyed", "value_json": "true", "editor": "choice", "values": PackedStringArray(["true", "false"]), "titles": PackedStringArray(["yes", "no"])}], "targets": []}
 	for case in ["priority", "setting", "target"]:
 		# A frame between one menu's close and the next click, as a person's hand takes.
 		await get_tree().process_frame

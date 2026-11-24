@@ -1374,7 +1374,7 @@ func _on_rule_chip(index: int) -> void:
 			var values: PackedStringArray = chip.get("values", PackedStringArray())
 			var titles: PackedStringArray = chip.get("titles", PackedStringArray())
 			for which in values.size():
-				_choice_menu.add_radio_check_item(titles[which] if which < titles.size() else values[which], which)
+				_choice_menu.add_radio_check_item(titles[which], which)
 				_choice_menu.set_item_checked(which, values[which] == String(chip.get("value_json", "")))
 			_choice_menu.position = Vector2i(get_viewport().get_mouse_position())
 			_choice_menu.popup()
@@ -1520,7 +1520,7 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 			var listed: PackedStringArray = setting.get("values", PackedStringArray())
 			var titles: PackedStringArray = setting.get("titles", PackedStringArray())
 			for value in listed.size():
-				values.add_radio_check_item(Strings.text("menu_setting_value", {"value": titles[value] if value < titles.size() else listed[value]}), value)
+				values.add_radio_check_item(Strings.text("menu_setting_value", {"value": titles[value]}), value)
 				values.set_item_checked(value, listed[value] == String(setting.get("value_json", "")))
 			var pointer := String(setting.get("pointer", ""))
 			values.id_pressed.connect(func(value: int) -> void: _on_setting_choice(which, pointer, value))
@@ -1539,7 +1539,9 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 
 
 ## A setting's value now as the menu says it, in the gateway's words: a number's `value_text` in
-## its display unit, a choice's title for the value it holds, and anything else as it came.
+## its display unit, and a choice's title for the value it holds, or that it holds a value the
+## gateway does not list. A row the bridge could not read (`read_only`) says so in its own words
+## beside it, and draws no value; no value's JSON is drawn in place of the gateway's words.
 static func setting_value_text(setting: Dictionary) -> String:
 	match String(setting.get("editor", "")):
 		"number":
@@ -1549,9 +1551,10 @@ static func setting_value_text(setting: Dictionary) -> String:
 			var values: PackedStringArray = setting.get("values", PackedStringArray())
 			var titles: PackedStringArray = setting.get("titles", PackedStringArray())
 			var at := values.find(String(setting.get("value_json", "")))
-			if at >= 0 and at < titles.size():
+			if at >= 0:
 				return titles[at]
-	return String(setting.get("value_json", ""))
+			return Strings.text("menu_setting_unlisted")
+	return Strings.text("menu_setting_unread")
 
 
 ## An enum setting took its `value`th value: the bridge's one row, and the map menus close.

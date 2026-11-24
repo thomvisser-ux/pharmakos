@@ -207,6 +207,10 @@ const TEXT := {
 	"menu_settings": "Change a setting",
 	"menu_setting": "{title}: {value}",
 	"menu_setting_value": "{value}",
+	# A setting's value the gateway's own list does not name, or a row the bridge could not read:
+	# said, never drawn as the value's JSON (S3's `fixq-c`, fix pass 1).
+	"menu_setting_unlisted": "a value the gateway does not list",
+	"menu_setting_unread": "not shown (see why beside it)",
 	"menu_mandate": "Switch mandate",
 	"menu_add_target": "Add a build target (then click the ground)",
 	"menu_remove_target": "Remove a build target",
