@@ -1535,7 +1535,9 @@ message MandateSettings {
   // field left out (decisions-log item 177 (3)): a written value, 0
   // included, is one field of the edit and sets the beacon's threshold; an
   // omitted one leaves the beacon's threshold as it is. In a new beacon's
-  // or a switched mandate's settings, omitted is 0, so no unit retreats.
+  // or a switched mandate's settings, omitted is 0, so no unit retreats. A
+  // value past 100 is refused: the verifier's E0501, and the sim's compile
+  // refuses it too (`PlanError::RetreatOutOfRange`).
   optional uint32 retreat_hp_pct = 2;
 
   // RESERVED — the rest of the Common row. `report_kinds` is which beacon

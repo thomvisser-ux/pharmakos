@@ -2172,7 +2172,9 @@ pub struct MandateSettings {
     /// field left out (decisions-log item 177 (3)): a written value, 0
     /// included, is one field of the edit and sets the beacon's threshold; an
     /// omitted one leaves the beacon's threshold as it is. In a new beacon's
-    /// or a switched mandate's settings, omitted is 0, so no unit retreats.
+    /// or a switched mandate's settings, omitted is 0, so no unit retreats. A
+    /// value past 100 is refused: the verifier's E0501, and the sim's compile
+    /// refuses it too (`PlanError::RetreatOutOfRange`).
     #[prost(uint32, optional, tag="2")]
     pub retreat_hp_pct: ::core::option::Option<u32>,
     /// Which writ. Choosing the type is free at place_beacon time; switching it
