@@ -789,6 +789,76 @@ fn a_hurt_unit_retreats_and_says_so() {
     );
 }
 
+/// A retreat ends on the next tick once its home's threshold is set to 0, a
+/// written `retreat_hp_pct` of 0 (decisions-log item 177 (3); the settings
+/// row writes this column through `World::set_beacon_common`, which
+/// `tests/common_settings.rs` holds). It ends by the existing exit rule: a
+/// retreating unit stops once it is back at or above its home's
+/// `retreat_hp_pct` (`programs.rs`, `retreating`), and every unit is at or
+/// above 0. It never starts again, because a threshold of 0 never retreats
+/// (`combat.rs`), so the retreat was announced once, when it began.
+#[test]
+fn a_retreat_ends_when_its_homes_threshold_is_set_to_zero() {
+    let mut world = world(2);
+    let here = field(&world);
+    let home = beacon(&mut world, seat(0), here, HOLD_FIRE);
+    world.set_common(
+        home,
+        Common {
+            roe: HOLD_FIRE,
+            retreat_hp_pct: 50,
+        },
+    );
+    let spot = ground(&world, here, 6, 0);
+    let raider = unit(&mut world, seat(0), home, UnitKind::Raider, spot);
+    let hp = i64::from(unit_hp(&world, raider));
+    assert!(
+        world
+            .request_damage(hit(
+                DamageTarget::Unit(raider),
+                (hp * 2).checked_div(3).unwrap(),
+                seat(1),
+                None
+            ))
+            .is_ok()
+    );
+    let mut runner = pushing(world);
+    let mut feed = Vec::new();
+    play(&mut runner, 1, &mut feed);
+    let row = runner.world().units().row_of(raider).expect("alive");
+    assert_eq!(
+        runner.world().units().retreats()[row.index()],
+        home,
+        "retreating"
+    );
+    runner.world_mut().set_common(
+        home,
+        Common {
+            roe: HOLD_FIRE,
+            retreat_hp_pct: 0,
+        },
+    );
+    play(&mut runner, 1, &mut feed);
+    let row = runner.world().units().row_of(raider).expect("alive");
+    assert_eq!(
+        runner.world().units().retreats()[row.index()],
+        BeaconId::NONE,
+        "the retreat ends on the next tick"
+    );
+    play(&mut runner, 40, &mut feed);
+    let row = runner.world().units().row_of(raider).expect("alive");
+    assert_eq!(
+        runner.world().units().retreats()[row.index()],
+        BeaconId::NONE,
+        "and never starts again"
+    );
+    assert_eq!(
+        count(&feed, EventKind::RetreatAnnounced),
+        1,
+        "announced once, when it began"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Shells and splash
 // ---------------------------------------------------------------------------

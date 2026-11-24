@@ -3278,15 +3278,17 @@ impl World {
     }
 
     /// Write what a committed settings row says about a beacon's Common
-    /// settings: each field the row names (a non-zero wire value), and nothing
-    /// it is silent about, as [`World::set_beacon_mine`] does.
-    pub(crate) fn set_beacon_common(&mut self, row: usize, roe: u8, retreat_hp_pct: u8) {
+    /// settings: each field the row names, and nothing it is silent about, as
+    /// [`World::set_beacon_mine`] does. `roe` is named by a non-zero wire value
+    /// (0 is `ROE_UNSPECIFIED`); `retreat_hp_pct` by its presence, so a
+    /// written 0 turns the beacon's retreat off (decisions-log item 177 (3)).
+    pub(crate) fn set_beacon_common(&mut self, row: usize, roe: u8, retreat_hp_pct: Option<u8>) {
         if let Some(slot) = self.beacons.commons_mut().get_mut(row) {
             if roe != 0 {
                 slot.roe = roe;
             }
-            if retreat_hp_pct != 0 {
-                slot.retreat_hp_pct = retreat_hp_pct;
+            if let Some(pct) = retreat_hp_pct {
+                slot.retreat_hp_pct = pct;
             }
         }
     }
