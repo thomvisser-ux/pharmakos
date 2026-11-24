@@ -441,3 +441,6 @@ edit, where `0.1.0-s3.5` read it as unwritten. No committed case writes
 `retreat_hp_pct` at 0, so no report moved for that; every other byte of every
 report is as before the bump. The same two lines moved in the gateway's
 `demo_*_verify` and `sighting_verify` goldens and in the wizard's five reports.
+As with every bump, a save written under `0.1.0-s3.5` does not resume under
+`0.1.0-s3.6`: `SavedMatch::check` refuses a save stamped by another verifier
+(`crates/gateway/src/save.rs`, spec section 3).
