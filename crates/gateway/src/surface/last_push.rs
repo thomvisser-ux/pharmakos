@@ -65,7 +65,12 @@
 //! * every seat a line, a witness set or the record names is one of the
 //!   match's, a witness set never names its line's owner, and each list the
 //!   record keeps a seat is ordered, unique and no longer than the match's
-//!   seats (the dark beacons no more than the world's beacon rows).
+//!   seats (the dark beacons no more than the world's beacon rows);
+//! * the feed's anchor is the tick its Push began, which the world fixes:
+//!   its round's whole length before the world's tick (`check_anchor`);
+//! * a count of dropped events is any `u64`: the live gateway counts a
+//!   segment's drops in a `u64` with a checked add, so every value the codec
+//!   reads is one it could have held, and none is refused past it.
 
 use super::{DarkAtEnd, RecapFacts, SAFE_PLAYBOOK_FILED_KIND, Surface};
 use crate::error::Error;
@@ -258,23 +263,10 @@ impl Surface {
                 ));
             }
         };
-        let recap_drops = match &saved.recap {
-            SavedRecap::Lost(dropped) => Some(*dropped),
-            SavedRecap::Facts(facts) => Some(facts.dropped),
-            SavedRecap::None => None,
-        };
-        for count in recap_drops
-            .into_iter()
-            .chain(feed.map(|feed| feed.dropped_since))
-        {
-            if count > MAX_SAVED_DROPS {
-                return Err(damaged(said!(
-                    "it counts {} events the bus dropped, past the {} a save holds",
-                    count,
-                    MAX_SAVED_DROPS
-                )));
-            }
-        }
+        // Every count of dropped events is a `u64` the codec read, which is every
+        // count the live gateway could have held ([`Surface::count_drops`]
+        // adds a segment's drops with `checked_add`, a typed `INTERNAL` at its
+        // cause): no further bound applies, and none is written.
         match &saved.recap {
             SavedRecap::None | SavedRecap::Lost(_) => {}
             SavedRecap::Facts(facts) => {
@@ -291,7 +283,13 @@ impl Surface {
         }
         // The record first, then the feed's anchor against it.
         let elapsed = match feed {
-            Some(feed) => Some(check_anchor(feed, &saved.recap, round, now)?),
+            Some(feed) => Some(check_anchor(
+                feed,
+                &saved.recap,
+                round,
+                now,
+                host_ticks_of(self, feed.round)?,
+            )?),
             None => None,
         };
         if let (Some(feed), Some(elapsed)) = (feed, elapsed) {
@@ -443,29 +441,31 @@ impl Surface {
     }
 }
 
-/// The most events the sim's bus dropped that a save's counts may hold: the
-/// segment's drops since its end (`dropped_since`), the record's (`dropped`)
-/// and a lost record's (`lost`). Each counts one segment's drops, to which
-/// the live gateway adds that segment's further drops in a `u64`
-/// (`Surface::count_drops`, a typed `INTERNAL` on overflow at its cause); a
-/// resumed count at this bound leaves that sum `2^64 - 2^32` of room, more
-/// than the bus's own counter could add over any match. A save past it is
-/// one this build did not write.
-pub const MAX_SAVED_DROPS: u64 = 0xFFFF_FFFF;
-
 /// The feed's round, segment and anchor against the world the save restores,
 /// and the ticks its segment has run. The feed was opened for this round (a
 /// Lull whose feed shows no Push, as after a version-3 save's resume) or the
 /// round before (the Push this Lull follows), always as the round's segment 0
-/// (every segment the gateway opens is), at the tick its Push began: as many
-/// ticks before the world's tick as the record says the segment ran, or at
-/// the world's tick when the feed is this round's own.
+/// (every segment the gateway opens is), at the tick its Push began.
+///
+/// That tick is the world's own, whatever the record says: a Push a Lull
+/// follows ran its round's whole length (`full`, the match state's ladder),
+/// because the only other end a Push has, the one-tick rule, decides the
+/// match, and a decided match opens no Lull. So the anchor of the round
+/// before's feed is exactly `full` ticks before the world's tick, with the
+/// record's facts, its loss or none; with facts, they say the same ticks.
+/// The anchor of this round's own feed is the world's tick.
 ///
 /// # Errors
 ///
 /// [`crate::error::Code::InvalidArgument`] for a round, segment or anchor
 /// the match's world does not bear out.
-fn check_anchor(feed: &SavedFeed, recap: &SavedRecap, round: u32, now: Tick) -> Result<u32, Error> {
+fn check_anchor(
+    feed: &SavedFeed,
+    recap: &SavedRecap,
+    round: u32,
+    now: Tick,
+    full: u32,
+) -> Result<u32, Error> {
     let opened_here = feed.round == round;
     let opened_before = feed.round.checked_add(1) == Some(round);
     if feed.segment != 0 || !(opened_here || opened_before) || feed.anchor > now {
@@ -480,20 +480,19 @@ fn check_anchor(feed: &SavedFeed, recap: &SavedRecap, round: u32, now: Tick) -> 
         )));
     }
     let elapsed = now.since(feed.anchor);
-    let ran = if opened_here {
-        Some(0)
-    } else {
-        match recap {
-            SavedRecap::Facts(facts) => Some(facts.ticks),
-            SavedRecap::None | SavedRecap::Lost(_) => None,
-        }
+    let ran = if opened_here { 0 } else { full };
+    let said = match recap {
+        SavedRecap::Facts(facts) if opened_before => Some(facts.ticks),
+        SavedRecap::Facts(_) | SavedRecap::None | SavedRecap::Lost(_) => None,
     };
-    if ran.is_some_and(|ran| ran != elapsed) {
+    if elapsed != ran || said.is_some_and(|said| said != ran) {
         return Err(damaged(said!(
             "its feed's anchor, tick {}, is not where its segment began: the world stands at \
-             tick {}",
+             tick {}, {} ticks after a Push of round {} began",
             feed.anchor.raw(),
-            now.raw()
+            now.raw(),
+            ran,
+            feed.round
         )));
     }
     Ok(elapsed)

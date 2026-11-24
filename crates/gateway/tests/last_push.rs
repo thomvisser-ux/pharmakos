@@ -816,19 +816,31 @@ type Damage = Box<dyn Fn(&mut Json)>;
 /// Each restore-time check's damage: its name, the words its refusal says,
 /// and the damage. `rows` is the world's beacon rows; `anchor` the feed's
 /// anchor.
-fn restore_damages(rows: usize, anchor: i128) -> Vec<(&'static str, &'static str, Damage)> {
-    let mut damages = record_damages(rows);
-    damages.extend(feed_damages(anchor));
+fn restore_damages(
+    rows: usize,
+    anchor: i128,
+    now: i128,
+) -> Vec<(&'static str, &'static str, Damage)> {
+    let mut damages = record_damages(rows, now);
+    damages.extend(feed_damages(anchor, now));
     damages
 }
 
 /// The lines' and the record's damages of [`restore_damages`].
-fn record_damages(rows: usize) -> Vec<(&'static str, &'static str, Damage)> {
+fn record_damages(rows: usize, now: i128) -> Vec<(&'static str, &'static str, Damage)> {
     vec![
         (
-            "M16 the recap's round",
+            "M16 the recap telling the Lull's own round, with a feed of that round",
             "recap tells round",
-            Box::new(|member| *at_path(member, &["recap", "facts", "round"]) = number(7)),
+            Box::new(move |member| {
+                // Everything else agrees with a recap of this round: the feed
+                // is this round's own, opened at the world's tick, with no
+                // line; only the record's round is not the round before.
+                *at_path(member, &["recap", "facts", "round"]) = number(2);
+                *at_path(member, &["feed", "round"]) = number(2);
+                *at_path(member, &["feed", "anchor_tick"]) = number(now);
+                *at_path(member, &["feed", "lines"]) = Json::Array(Vec::new());
+            }),
         ),
         (
             "M17 a line's owner among its witnesses",
@@ -888,7 +900,7 @@ fn record_damages(rows: usize) -> Vec<(&'static str, &'static str, Damage)> {
 }
 
 /// The feed's and the counts' damages of [`restore_damages`].
-fn feed_damages(anchor: i128) -> Vec<(&'static str, &'static str, Damage)> {
+fn feed_damages(anchor: i128, now: i128) -> Vec<(&'static str, &'static str, Damage)> {
     vec![
         (
             "the anchor far past the world's tick",
@@ -933,23 +945,28 @@ fn feed_damages(anchor: i128) -> Vec<(&'static str, &'static str, Damage)> {
             }),
         ),
         (
-            "drops since the segment's end past the bound",
-            "events the bus dropped",
-            Box::new(|member| *at_path(member, &["feed", "dropped_since"]) = number(0x1_0000_0000)),
-        ),
-        (
-            "the record's drops past the bound",
-            "events the bus dropped",
+            "drops since the segment's end past a u64",
+            "`dropped_since` does not fit",
             Box::new(|member| {
-                *at_path(member, &["recap", "facts", "dropped"]) = number(0x1_0000_0000);
+                *at_path(member, &["feed", "dropped_since"]) = number(i128::from(u64::MAX) + 1);
             }),
         ),
         (
-            "a lost record's drops past the bound",
-            "events the bus dropped",
-            Box::new(|member| {
+            "a lost record, the feed anchored a tick before the world's",
+            "is not where its segment began",
+            Box::new(move |member| {
                 *at_path(member, &["recap"]) =
-                    Json::Object(vec![(String::from("lost"), number(0x1_0000_0000))]);
+                    Json::Object(vec![(String::from("lost"), number(0))]);
+                *at_path(member, &["feed", "anchor_tick"]) = number(now - 1);
+            }),
+        ),
+        (
+            "no record, the feed of the round before anchored at its Push's start",
+            "is not where its segment began",
+            Box::new(move |member| {
+                *at_path(member, &["recap"]) =
+                    Json::Object(vec![(String::from("none"), Json::Bool(true))]);
+                *at_path(member, &["feed", "anchor_tick"]) = number(anchor + 1);
             }),
         ),
     ]
@@ -972,8 +989,9 @@ fn each_restore_check_refuses_its_own_damage_and_a_good_member_still_restores() 
         Json::Number(lexeme) => lexeme.parse::<i128>().expect("a tick"),
         other => panic!("an anchor: {other:?}"),
     };
+    let now = i128::from(live.host().expect("a match").world().tick().raw());
     let mut resumed = resume(MATCH_ID, &saved, None);
-    for (what, words, damage) in restore_damages(rows, anchor) {
+    for (what, words, damage) in restore_damages(rows, anchor, now) {
         let mut member = whole.clone();
         damage(&mut member);
         let outcome = LastPush::parse(&member)
@@ -989,13 +1007,25 @@ fn each_restore_check_refuses_its_own_damage_and_a_good_member_still_restores() 
             .restore_last_push(Boundary::Lull, &good)
             .unwrap_or_else(|error| panic!("{what}: the good member then restores: {error:?}"));
     }
-    // Drops at the bound itself are a member this build would write.
-    let mut at_bound = whole.clone();
-    *at_path(&mut at_bound, &["feed", "dropped_since"]) = number(0xFFFF_FFFF);
-    let at_bound = LastPush::parse(&at_bound).expect("it reads");
+    // Every u64 is a count of drops the live gateway could have held, the
+    // largest included: each count restores.
+    for path in [
+        &["feed", "dropped_since"][..],
+        &["recap", "facts", "dropped"][..],
+    ] {
+        let mut at_bound = whole.clone();
+        *at_path(&mut at_bound, path) = number(i128::from(u64::MAX));
+        let at_bound = LastPush::parse(&at_bound).expect("it reads");
+        resumed
+            .restore_last_push(Boundary::Lull, &at_bound)
+            .unwrap_or_else(|error| panic!("{path:?} at u64::MAX restores: {error:?}"));
+    }
+    let mut lost = whole.clone();
+    *at_path(&mut lost, &["recap"]) =
+        Json::Object(vec![(String::from("lost"), number(i128::from(u64::MAX)))]);
     resumed
-        .restore_last_push(Boundary::Lull, &at_bound)
-        .expect("drops at the bound restore");
+        .restore_last_push(Boundary::Lull, &LastPush::parse(&lost).expect("it reads"))
+        .expect("a lost record of u64::MAX drops, its anchor the world's, restores");
     resumed
         .restore_last_push(Boundary::Lull, &good)
         .expect("the good member restores");
