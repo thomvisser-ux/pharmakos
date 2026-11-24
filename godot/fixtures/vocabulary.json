@@ -23,6 +23,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -32,7 +40,8 @@
                 "title": "Time",
                 "shape": {
                   "integer": {
-                    "unit": "ms"
+                    "unit": "ms",
+                    "display_unit": "s"
                   }
                 }
               }
@@ -68,6 +77,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -79,7 +96,8 @@
                   "integer": {
                     "min": 0,
                     "max": 100,
-                    "unit": "%"
+                    "unit": "%",
+                    "display_unit": "%"
                   }
                 }
               }
@@ -96,7 +114,8 @@
                 "shape": {
                   "integer": {
                     "min": 0,
-                    "unit": "ms"
+                    "unit": "ms",
+                    "display_unit": "s"
                   }
                 }
               }
@@ -119,6 +138,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -128,7 +155,8 @@
                 "title": "Count",
                 "shape": {
                   "integer": {
-                    "unit": ""
+                    "unit": "",
+                    "display_unit": ""
                   }
                 }
               }
@@ -180,6 +208,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -191,7 +227,8 @@
                   "integer": {
                     "min": 0,
                     "max": 100,
-                    "unit": "%"
+                    "unit": "%",
+                    "display_unit": "%"
                   }
                 }
               }
@@ -224,7 +261,8 @@
                 "shape": {
                   "integer": {
                     "min": 0,
-                    "unit": "ms"
+                    "unit": "ms",
+                    "display_unit": "s"
                   }
                 }
               }
@@ -259,6 +297,10 @@
                     "values": [
                       "true",
                       "false"
+                    ],
+                    "titles": [
+                      "yes",
+                      "no"
                     ]
                   }
                 }
@@ -297,6 +339,13 @@
                       "\"REPAIR_DRONE\"",
                       "\"RAIDER\"",
                       "\"SCOUT\""
+                    ],
+                    "titles": [
+                      "build drones",
+                      "mining drones",
+                      "repair drones",
+                      "raiders",
+                      "scouts"
                     ]
                   }
                 }
@@ -313,6 +362,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -322,7 +379,8 @@
                 "title": "Count",
                 "shape": {
                   "integer": {
-                    "unit": ""
+                    "unit": "",
+                    "display_unit": ""
                   }
                 }
               }
@@ -360,6 +418,13 @@
                       "\"ATTACK\"",
                       "\"SURVEY\"",
                       "\"MINE\""
+                    ],
+                    "titles": [
+                      "Build",
+                      "Defend",
+                      "Attack",
+                      "Survey",
+                      "Mine"
                     ]
                   }
                 }
@@ -397,6 +462,12 @@
                       "\"autocannon\"",
                       "\"mortar\"",
                       "\"resonance_spire\""
+                    ],
+                    "titles": [
+                      "Generator",
+                      "Autocannon",
+                      "Mortar",
+                      "Resonance Spire"
                     ]
                   }
                 }
@@ -447,7 +518,8 @@
                 "shape": {
                   "integer": {
                     "min": 1,
-                    "unit": "voxels"
+                    "unit": "voxels",
+                    "display_unit": "voxels"
                   }
                 }
               },
@@ -459,6 +531,10 @@
                     "values": [
                       "\"VISIBLE_NOW\"",
                       "\"KNOWN_WITHIN\""
+                    ],
+                    "titles": [
+                      "in sight now",
+                      "seen within a window"
                     ]
                   }
                 }
@@ -469,7 +545,8 @@
                 "shape": {
                   "integer": {
                     "min": 1,
-                    "unit": "ms"
+                    "unit": "ms",
+                    "display_unit": "s"
                   }
                 }
               },
@@ -485,6 +562,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -494,7 +579,8 @@
                 "title": "Count",
                 "shape": {
                   "integer": {
-                    "unit": ""
+                    "unit": "",
+                    "display_unit": ""
                   }
                 }
               }
@@ -513,6 +599,10 @@
                     "values": [
                       "\"VISIBLE_NOW\"",
                       "\"KNOWN_WITHIN\""
+                    ],
+                    "titles": [
+                      "in sight now",
+                      "seen within a window"
                     ]
                   }
                 }
@@ -523,7 +613,8 @@
                 "shape": {
                   "integer": {
                     "min": 1,
-                    "unit": "ms"
+                    "unit": "ms",
+                    "display_unit": "s"
                   }
                 }
               }
@@ -554,7 +645,8 @@
                 "shape": {
                   "integer": {
                     "min": 1,
-                    "unit": "voxels"
+                    "unit": "voxels",
+                    "display_unit": "voxels"
                   }
                 }
               },
@@ -566,6 +658,10 @@
                     "values": [
                       "\"VISIBLE_NOW\"",
                       "\"KNOWN_WITHIN\""
+                    ],
+                    "titles": [
+                      "in sight now",
+                      "seen within a window"
                     ]
                   }
                 }
@@ -576,7 +672,8 @@
                 "shape": {
                   "integer": {
                     "min": 1,
-                    "unit": "ms"
+                    "unit": "ms",
+                    "display_unit": "s"
                   }
                 }
               },
@@ -590,6 +687,12 @@
                       "\"autocannon\"",
                       "\"mortar\"",
                       "\"resonance_spire\""
+                    ],
+                    "titles": [
+                      "Generator",
+                      "Autocannon",
+                      "Mortar",
+                      "Resonance Spire"
                     ]
                   }
                 }
@@ -626,6 +729,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -635,7 +746,8 @@
                 "title": "Amount",
                 "shape": {
                   "integer": {
-                    "unit": "$"
+                    "unit": "$",
+                    "display_unit": "$"
                   }
                 }
               }
@@ -658,6 +770,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -667,7 +787,8 @@
                 "title": "Power",
                 "shape": {
                   "integer": {
-                    "unit": "kW"
+                    "unit": "kW",
+                    "display_unit": "kW"
                   }
                 }
               }
@@ -690,6 +811,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -699,7 +828,8 @@
                 "title": "Power",
                 "shape": {
                   "integer": {
-                    "unit": "kW"
+                    "unit": "kW",
+                    "display_unit": "kW"
                   }
                 }
               }
@@ -722,6 +852,14 @@
                       "\"NE\"",
                       "\"GE\"",
                       "\"GT\""
+                    ],
+                    "titles": [
+                      "below",
+                      "at or below",
+                      "exactly",
+                      "anything but",
+                      "at or above",
+                      "above"
                     ]
                   }
                 }
@@ -731,7 +869,8 @@
                 "title": "Power",
                 "shape": {
                   "integer": {
-                    "unit": "kW"
+                    "unit": "kW",
+                    "display_unit": "kW"
                   }
                 }
               }
@@ -819,7 +958,8 @@
               "integer": {
                 "min": 0,
                 "max": 100,
-                "unit": "%"
+                "unit": "%",
+                "display_unit": "%"
               }
             }
           },
@@ -831,6 +971,10 @@
                 "values": [
                   "true",
                   "false"
+                ],
+                "titles": [
+                  "yes",
+                  "no"
                 ]
               }
             }
@@ -845,6 +989,12 @@
                   "\"FILL\"",
                   "\"DIG\"",
                   "\"BOTH\""
+                ],
+                "titles": [
+                  "leave the ground as it is",
+                  "fill hollows",
+                  "dig out rises",
+                  "fill and dig"
                 ]
               }
             }
@@ -863,7 +1013,8 @@
               "integer": {
                 "min": 1,
                 "max": 100,
-                "unit": "%"
+                "unit": "%",
+                "display_unit": "%"
               }
             }
           },
@@ -876,6 +1027,11 @@
                   "\"NEVER\"",
                   "\"SPHERE_EDGE\"",
                   "\"WHILE_IN_REACH\""
+                ],
+                "titles": [
+                  "never pursuing",
+                  "pursuing to the sphere edge",
+                  "pursuing while in reach"
                 ]
               }
             }
@@ -887,7 +1043,8 @@
               "integer": {
                 "min": 0,
                 "max": 255,
-                "unit": ""
+                "unit": "",
+                "display_unit": ""
               }
             }
           }
@@ -919,6 +1076,10 @@
                 "values": [
                   "\"NONE\"",
                   "\"NEAREST_KNOWN\""
+                ],
+                "titles": [
+                  "keeping its target",
+                  "retargeting the nearest known enemy beacon"
                 ]
               }
             }
@@ -929,7 +1090,8 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": ""
+                "unit": "",
+                "display_unit": ""
               }
             }
           },
@@ -939,7 +1101,8 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             }
           },
@@ -950,7 +1113,8 @@
               "integer": {
                 "min": 1,
                 "max": 100,
-                "unit": "%"
+                "unit": "%",
+                "display_unit": "%"
               }
             }
           },
@@ -960,7 +1124,8 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             }
           },
@@ -972,6 +1137,10 @@
                 "values": [
                   "\"REGROUP_AT_STAGING\"",
                   "\"RETURN_HOME\""
+                ],
+                "titles": [
+                  "regroup at the staging point",
+                  "return home"
                 ]
               }
             }
@@ -984,6 +1153,10 @@
                 "values": [
                   "true",
                   "false"
+                ],
+                "titles": [
+                  "yes",
+                  "no"
                 ]
               }
             }
@@ -994,7 +1167,8 @@
             "shape": {
               "integer": {
                 "min": 1,
-                "unit": ""
+                "unit": "",
+                "display_unit": ""
               }
             }
           }
@@ -1012,7 +1186,8 @@
               "integer": {
                 "min": 0,
                 "max": 255,
-                "unit": ""
+                "unit": "",
+                "display_unit": ""
               }
             }
           }
@@ -1029,7 +1204,8 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "voxels"
+                "unit": "voxels",
+                "display_unit": "voxels"
               }
             }
           },
@@ -1041,6 +1217,10 @@
                 "values": [
                   "true",
                   "false"
+                ],
+                "titles": [
+                  "yes",
+                  "no"
                 ]
               }
             }
@@ -1054,6 +1234,11 @@
                   "\"RICHEST\"",
                   "\"NEAREST\"",
                   "\"SAFEST\""
+                ],
+                "titles": [
+                  "the richest seam",
+                  "the nearest seam",
+                  "the safest seam"
                 ]
               }
             }
@@ -1064,7 +1249,8 @@
             "shape": {
               "integer": {
                 "min": 0,
-                "unit": "voxels"
+                "unit": "voxels",
+                "display_unit": "voxels"
               }
             }
           }
@@ -1099,6 +1285,10 @@
                 "values": [
                   "\"DIRECT\"",
                   "\"AVOID_KNOWN_THREATS\""
+                ],
+                "titles": [
+                  "directly",
+                  "avoiding known threats"
                 ]
               }
             }
@@ -1168,7 +1358,8 @@
             "shape": {
               "integer": {
                 "min": 1,
-                "unit": "ms"
+                "unit": "ms",
+                "display_unit": "s"
               }
             }
           }
@@ -1188,26 +1379,75 @@
         "name": "generator",
         "title": "Generator",
         "parameters": [],
-        "skeleton_json": "\"generator\""
+        "skeleton_json": "\"generator\"",
+        "anchor_shape": "point"
       },
       {
         "name": "autocannon",
         "title": "Autocannon",
         "parameters": [],
-        "skeleton_json": "\"autocannon\""
+        "skeleton_json": "\"autocannon\"",
+        "anchor_shape": "point"
       },
       {
         "name": "mortar",
         "title": "Mortar",
         "parameters": [],
-        "skeleton_json": "\"mortar\""
+        "skeleton_json": "\"mortar\"",
+        "anchor_shape": "point"
       },
       {
         "name": "survey_post",
         "title": "Survey post",
         "parameters": [],
         "skeleton_json": "",
-        "locked": "This building cannot be made by a Build beacon in this build."
+        "locked": "This building cannot be made by a Build beacon in this build.",
+        "anchor_shape": "point"
+      },
+      {
+        "name": "resonance_spire",
+        "title": "Resonance Spire",
+        "parameters": [],
+        "skeleton_json": "",
+        "locked": "This building cannot be made by a Build beacon in this build.",
+        "anchor_shape": "point"
+      },
+      {
+        "name": "wall",
+        "title": "Wall",
+        "parameters": [],
+        "skeleton_json": "\"wall\"",
+        "anchor_shape": "box"
+      }
+    ],
+    "queue_blueprints": [
+      {
+        "name": "generator",
+        "title": "Generator",
+        "parameters": [],
+        "skeleton_json": "",
+        "locked": "Only the Resonance Spire can be queued so far; the other capability buildings come later in the game. Nothing you wrote is dropped: take the row out yourself."
+      },
+      {
+        "name": "autocannon",
+        "title": "Autocannon",
+        "parameters": [],
+        "skeleton_json": "",
+        "locked": "Only the Resonance Spire can be queued so far; the other capability buildings come later in the game. Nothing you wrote is dropped: take the row out yourself."
+      },
+      {
+        "name": "mortar",
+        "title": "Mortar",
+        "parameters": [],
+        "skeleton_json": "",
+        "locked": "Only the Resonance Spire can be queued so far; the other capability buildings come later in the game. Nothing you wrote is dropped: take the row out yourself."
+      },
+      {
+        "name": "survey_post",
+        "title": "Survey post",
+        "parameters": [],
+        "skeleton_json": "",
+        "locked": "Only the Resonance Spire can be queued so far; the other capability buildings come later in the game. Nothing you wrote is dropped: take the row out yourself."
       },
       {
         "name": "resonance_spire",
@@ -1220,7 +1460,28 @@
         "name": "wall",
         "title": "Wall",
         "parameters": [],
-        "skeleton_json": "\"wall\""
+        "skeleton_json": "",
+        "locked": "Only the Resonance Spire can be queued so far; the other capability buildings come later in the game. Nothing you wrote is dropped: take the row out yourself."
+      }
+    ],
+    "groups": [
+      {
+        "name": "all",
+        "title": "All of these",
+        "parameters": [],
+        "skeleton_json": "{\"items\":[{},{}]}"
+      },
+      {
+        "name": "any",
+        "title": "Any of these",
+        "parameters": [],
+        "skeleton_json": "{\"items\":[{},{}]}"
+      },
+      {
+        "name": "not",
+        "title": "Not this",
+        "parameters": [],
+        "skeleton_json": "{\"item\":{}}"
       }
     ],
     "_status": {

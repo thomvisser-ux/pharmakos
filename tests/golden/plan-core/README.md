@@ -76,8 +76,8 @@ Three kinds of golden live here, and they fail for different reasons:
 | `awkward/` | `expected.canonical.json` | that fixture's canonical JSON, comments stripped |
 | `cover_the_nearest_vent/` | `expected.jsonc` | the same, from `crates/plan-core/tests/cases/cover_the_nearest_vent.jsonc` (S1, task `tgtv`) |
 | `cover_the_nearest_vent/` | `expected.prose.txt` | that fixture's `render_plan` |
-| `expand_east/`, `cover_the_nearest_vent/`, `defend_and_attack/`, `predicates_and_toward/` | `expected.chips.txt` | each case's `render`, in `every_rendered_case_has_its_chips_golden_and_keeps_their_promises` (S3's `gwr`) |
-| `expand_east/`, `cover_the_nearest_vent/`, `defend_and_attack/`, `predicates_and_toward/`, `condition_slots/` | `expected.slots.txt` | each case's `render`, in `every_case_has_its_slots_golden_and_each_slot_names_its_place` (S3's `gwu`); `condition_slots/` from `crates/plan-core/tests/cases/condition_slots.jsonc` |
+| `expand_east/`, `cover_the_nearest_vent/`, `defend_and_attack/`, `predicates_and_toward/`, `defaults/` | `expected.chips.txt` | each case's `render`, in `every_rendered_case_has_its_chips_golden_and_keeps_their_promises` (S3's `gwr`) |
+| `expand_east/`, `cover_the_nearest_vent/`, `defend_and_attack/`, `predicates_and_toward/`, `defaults/`, `condition_slots/` | `expected.slots.txt` | each case's `render`, in `every_case_has_its_slots_golden_and_each_slot_names_its_place` (S3's `gwu`); `condition_slots/` from `crates/plan-core/tests/cases/condition_slots.jsonc` |
 
 `expand_east/` has no `expected.canonical.json` of its own on purpose: its
 canonical JSON is byte-identical to `tests/golden/proto/expected.expand_east.json`,
@@ -123,6 +123,13 @@ and the site `toward`, named and described. They were refused until S3's `pred`
 gave them their effect; the case held that a refused file still round-trips and
 renders, and now holds them as accepted constructs. It too carries no SPDX header, and its golden is in
 the permissive tier.
+
+`defaults/` (S3's `fixq`) has only its chips and slots, from
+`crates/plan-core/tests/cases/defaults.jsonc`: values left at their proto3
+defaults where the prose shows their words, each a chip whose edit adds the
+value (`add`), and those outside their shape marked `outside`. Since `fixq`
+every chip line ends with the value as typed in its display unit, `outside`
+where it is, and the op its edit sends; a choice lists each value's title.
 
 `condition_slots/` (S3's `gwu`) has only `expected.slots.txt`: its fixture,
 `crates/plan-core/tests/cases/condition_slots.jsonc`, is built to hold every kind

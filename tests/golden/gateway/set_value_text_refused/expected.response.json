@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32602,
+    "message": "`abc` is not a number",
+    "data": {
+      "code": "INVALID_ARGUMENT"
+    }
+  }
+}

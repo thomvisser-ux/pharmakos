@@ -880,7 +880,7 @@ fn an_invalid_playbook_is_a_full_report_and_never_a_method_error() {
 
     // And a seat that submitted something good keeps it when a later
     // submission is bad: a failed submission must not unseal what was sealed.
-    let good = pharmakos_gateway::host::SAFE_PLAYBOOK;
+    let good = &pharmakos_gateway::host::safe_playbook().expect("the fallback");
     let response = surface.call(
         Some(&token),
         &request(
@@ -928,7 +928,9 @@ fn the_latest_verified_submission_replaces_the_previous_one_any_number_of_times(
     let mut hashes: Vec<String> = Vec::new();
     for ms in [8_000, 9_000, 10_000] {
         // Three playbooks that differ in one number: the flee rule's wait.
-        let playbook = pharmakos_gateway::host::SAFE_PLAYBOOK
+        let playbook = pharmakos_gateway::host::safe_playbook()
+            .expect("the fallback")
+            .as_str()
             .replace("\"ms\": 8000", &format!("\"ms\": {ms}"));
         let response = surface.call(
             Some(&token),
@@ -972,7 +974,7 @@ fn the_latest_verified_submission_replaces_the_previous_one_any_number_of_times(
 fn a_lull_opens_with_last_rounds_playbook_carried_and_re_verified() {
     let mut surface = hosted();
     let token = seat_token(&mut surface, 0);
-    let playbook = pharmakos_gateway::host::SAFE_PLAYBOOK;
+    let playbook = &pharmakos_gateway::host::safe_playbook().expect("the fallback");
     let _ = result(
         &surface.call(
             Some(&token),
@@ -1000,7 +1002,7 @@ fn a_lull_opens_with_last_rounds_playbook_carried_and_re_verified() {
     let carried = state
         .draft("carried")
         .expect("last round's playbook is pre-loaded");
-    assert_eq!(carried.playbook_jsonc, playbook);
+    assert_eq!(&carried.playbook_jsonc, playbook);
     assert_eq!(carried.round, 2, "carried into round 2");
     let continuity = state
         .continuity
@@ -1041,7 +1043,9 @@ fn a_seat_that_seals_nothing_has_the_safe_playbook_filed_for_it() {
         );
         assert_eq!(
             sealed.playbook_jsonc,
-            pharmakos_gateway::host::SAFE_PLAYBOOK
+            pharmakos_gateway::host::safe_playbook()
+                .expect("the fallback")
+                .as_str()
         );
     }
 }
@@ -1482,7 +1486,12 @@ fn get_safe_plan_returns_a_playbook_verify_plan_qualifies() {
         "get_safe_plan",
     );
     let playbook = text_of(&safe, "playbook_jsonc");
-    assert_eq!(playbook, pharmakos_gateway::host::SAFE_PLAYBOOK);
+    assert_eq!(
+        playbook,
+        pharmakos_gateway::host::safe_playbook()
+            .expect("the fallback")
+            .as_str()
+    );
     let report = result(
         &surface.call(
             Some(&token),
@@ -2272,7 +2281,11 @@ fn a_seat_that_submitted_nothing_has_the_safe_playbook_sealed_into_the_world() {
     submit(&mut surface, &zero, &mut left, &playbook);
 
     surface.begin_push().expect("the Push begins");
-    let safe = plan_of(pharmakos_gateway::host::SAFE_PLAYBOOK);
+    let safe = plan_of(
+        pharmakos_gateway::host::safe_playbook()
+            .expect("the fallback")
+            .as_str(),
+    );
     assert_eq!(
         sealed_in_world(&surface, 1).as_ref(),
         Some(&safe),
@@ -2338,7 +2351,11 @@ fn round_twos_submission_replaces_round_ones_in_the_world() {
     );
     assert_eq!(
         sealed_in_world(&surface, 1).as_ref(),
-        Some(&plan_of(pharmakos_gateway::host::SAFE_PLAYBOOK)),
+        Some(&plan_of(
+            pharmakos_gateway::host::safe_playbook()
+                .expect("the fallback")
+                .as_str()
+        )),
         "seat 1 sealed in round one and submitted nothing in round two, and a seal is a round's"
     );
 }
@@ -2750,7 +2767,7 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
     let mut left = FIRST_LULL_MS;
 
     // A seal to protect, made first.
-    let good = pharmakos_gateway::host::SAFE_PLAYBOOK;
+    let good = &pharmakos_gateway::host::safe_playbook().expect("the fallback");
     submit(&mut surface, &token, &mut left, good);
     let held = surface
         .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))

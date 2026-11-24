@@ -261,6 +261,29 @@ enum Method {
   // ranking is an estimate, not a dry run).
   METHOD_RESOLVE_REFS = 58 [(required_scope) = SCOPE_PLAN];
 
+  // "set_value_text" — a value as the player typed it, in the display unit
+  // its shape names (seconds for a duration), written at a chip's pointer and
+  // answered as patch_plan answers. The gateway reads and converts the text;
+  // the client converts nothing (S3's `fixq`). Text in, text out, against the
+  // frozen snapshot and the rules table: it steps nothing (AGENTS.md section 3
+  // rule 2). Phase-gated like every planning method.
+  METHOD_SET_VALUE_TEXT = 59 [(required_scope) = SCOPE_PLAN];
+
+  // "new_rule" — an empty rule added at the end of the playbook's rules, with a
+  // fresh id, answered as patch_plan answers (S3's `fixq`). Text in, text out:
+  // it steps nothing. Phase-gated like every planning method. Its number is
+  // past the commit block's 60 and 61 only because 59 was the planning
+  // block's last free one; a number names a method and orders nothing.
+  METHOD_NEW_RULE = 62 [(required_scope) = SCOPE_PLAN];
+
+  // "compose_wall_box" — a wall's Build target from two map clicks: the box
+  // over the two corners' columns, its top the rules' minimum wall height over
+  // the frozen ground, judged by the sim's own wall check against the beacon's
+  // sphere (S3's `fixq`). PHASE_CLOSED outside a Lull: it reads the frozen
+  // planning world, the true ground (fog over terrain is S4's), and steps
+  // nothing (AGENTS.md section 3 rule 2). The calling seat's own beacons only.
+  METHOD_COMPOSE_WALL_BOX = 63 [(required_scope) = SCOPE_PLAN];
+
   // --- Commit --------------------------------------------------------------
 
   // "submit_plan" — always runs FULL. The latest verified submission replaces
@@ -925,8 +948,15 @@ message GetBeaconResponse {
   // on any other mandate.
   repeated gp.v1.BuildTarget build_targets = 5;
 
+  // Each of `build_targets` as one sentence in the player's words, one per
+  // target and in its order: its blueprint's name, where it stands and a
+  // wall's box ("Generator at a spot on Heat vent (120, 88)"), from plan-core's
+  // words for a Build target, so the Remove list draws a sentence and never an
+  // anchor's JSON (S3's `fixq`). OWN beacons only, as `build_targets` is.
+  repeated string build_target_lines = 6;
+
   // RESERVED — held for a further field of the detail.
-  reserved 6 to 15;
+  reserved 7 to 15;
 }
 
 // One setting of a beacon's mandate, as sent to be drawn and edited: the client
@@ -946,6 +976,12 @@ message BeaconSettingRow {
 
   // What may be written there.
   ValueShape shape = 4;
+
+  // For an integer shape, the value now as it is shown and typed, in the
+  // shape's `display_unit`, as Chip.value_text is: "1.5" for 1500 ms. Empty
+  // for a choice or a reference. OWN beacons only, as every row is. (S3's
+  // `fixq`.)
+  string value_text = 5;
 }
 
 message GetMapSummaryRequest {
@@ -1248,8 +1284,23 @@ message GetVocabularyResponse {
   // The route steps.
   repeated VocabularyEntry steps = 3;
 
-  // The blueprints a Build target or a queued structure may name.
+  // Every blueprint, as a Build target may name it: a kind a Build target
+  // cannot name is locked in the verifier's own sentence for E0010. Each entry
+  // carries its `anchor_shape`. The Add a build target menu draws this list.
   repeated VocabularyEntry blueprints = 4;
+
+  // Every blueprint, as a `queue_structure` row may name it: a kind no queue
+  // takes is locked in the verifier's own sentence for E0009, and a queued kind
+  // whose licence the calling seat does not hold is locked for that. Read from
+  // the same table the verifier's checks read, so the Queue menu draws it and
+  // filters nothing (S3's `fixq`). The calling seat's own licences only, as
+  // `blueprints`' locks are.
+  repeated VocabularyEntry queue_blueprints = 5;
+
+  // The condition groups a picker may insert at a condition slot: `all`, `any`
+  // and `not`, each with a skeleton of empty items whose slots then take
+  // predicates (S3's `fixq`). Static, the same for every seat.
+  repeated VocabularyEntry groups = 6;
 }
 
 message VocabularyFamily {
@@ -1283,6 +1334,22 @@ message VocabularyEntry {
   // Why this seat cannot use the entry yet: a licence it does not hold, or
   // "from S6". Unset when it can.
   optional string locked = 5;
+
+  // On an entry of GetVocabularyResponse.blueprints, how a Build target of that
+  // blueprint is anchored, read from the verifier's own table: POINT (a voxel,
+  // or `on` a feature) or BOX (a wall, which fills a `wall_box` and is anchored
+  // on a voxel inside it). ANCHOR_SHAPE_UNSPECIFIED, left out, on every
+  // other entry. On the JSON-RPC wire it is lower case (decisions-log item 80):
+  // "point", "box". Static, the same for every seat. (S3's `fixq`.)
+  AnchorShape anchor_shape = 6;
+
+  enum AnchorShape {
+    ANCHOR_SHAPE_UNSPECIFIED = 0;
+    // One place: a voxel, or `on` a feature.
+    POINT = 1;
+    // A box filled by a wall, its anchor a voxel inside it.
+    BOX = 2;
+  }
 }
 
 message VocabularyParameter {
@@ -1316,14 +1383,28 @@ message IntegerShape {
   optional int32 max = 2;
 
   // The unit the number is in: `ms`, `%`, `$`, `kW` or `voxels`, or empty for a
-  // bare count. Drawn beside the value; the client converts nothing.
+  // bare count. `min` and `max` are in this unit. The client converts nothing.
   string unit = 3;
+
+  // The unit the value is shown and typed in: `s` for an `ms` value, and
+  // `unit` itself for every other. A Chip's `value_text` is in it, and
+  // `set_value_text` reads a typed value in it and converts it to `unit`, so
+  // the client shows seconds and converts nothing (S3's `fixq`). Static
+  // words, the same for every seat.
+  string display_unit = 4;
 }
 
 // A closed list. Each value is the JSON text to write: `"LE"` with its quotes,
 // `true` without, so a client composes the patch without knowing the type.
 message EnumShape {
   repeated string values = 1;
+
+  // Each value in the player's words, one per `values` entry and in its order:
+  // "at or below" for `"LE"`, "yes" for `true`, "Generator" for `"generator"`.
+  // A menu draws these and sends the value beside it; no drawn choice is a
+  // value's JSON text (S3's `fixq`). Static words from plan-core's string
+  // table, the same for every seat.
+  repeated string titles = 2;
 }
 
 // A value picked from the world or the playbook rather than typed.
@@ -1621,9 +1702,10 @@ message ConditionSlot {
   // Written whether or not the file has the member: an EMPTY slot's pointer
   // with nothing at it is where an `add` puts one. In the canonical snake_case
   // spelling of the proto JSON mapping, as every chip's pointer is: in a file
-  // that writes the member in its camelCase JSON name instead (`skipIf`), a
-  // patch at this pointer is refused by `patch_plan` rather than written beside
-  // it, and a pointer under such a member finds nothing.
+  // that writes the member in its camelCase JSON name instead (`skipIf`),
+  // `patch_plan` addresses the member the file writes, under the file's
+  // spelling, so a patch at this pointer lands on it and never writes the
+  // field a second time.
   string pointer = 1;
 
   // The slot in the player's words, from the renderer's own string table:
@@ -1675,8 +1757,8 @@ message ConditionSlot {
 // One editable value in a rendered sentence. The gateway places it, so a client
 // draws the span and parses no sentence.
 message Chip {
-  // RFC 6901 JSON Pointer of the value in the playbook: the path of a patch's
-  // `replace`.
+  // RFC 6901 JSON Pointer of the value in the playbook: the path of the patch
+  // operation `pick_op` names.
   string pointer = 1;
 
   // The zero-based line of RenderPlanResponse.prose the chip stands on.
@@ -1695,6 +1777,25 @@ message Chip {
   // BeaconSettingRow.value_json is, so the editor pre-fills from the answer
   // and never reads its own file. Filled by the gateway.
   string value_json = 6;
+
+  // For an integer shape, the value now as it is shown and typed, in the
+  // shape's `display_unit`: "1.5" for 1500 ms, "40" for 40 %. What a value
+  // field pre-fills with, and what `set_value_text` reads back to the same
+  // value. Empty for a choice or a reference. (S3's `fixq`.)
+  string value_text = 7;
+
+  // True when the value now lies outside its shape: an integer past a bound,
+  // or a choice's value the choice does not list (an enum's unspecified zero,
+  // a value this build does not name, a blueprint id no slot takes). The
+  // client draws it as it is and says so, and compares nothing. (S3's `fixq`.)
+  bool outside = 8;
+
+  // The JSON Patch op an edit of this chip sends at `pointer`: REPLACE for a
+  // value the file writes, ADD for one at its proto3 default, which the file
+  // may leave out (an `add` of an object member writes it, or replaces it
+  // where it is written). Never PICK_OP_UNSPECIFIED. On the JSON-RPC wire it
+  // is lower case (decisions-log item 80): "add", "replace". (S3's `fixq`.)
+  ConditionSlot.PickOp pick_op = 9;
 }
 
 message PatchPlanRequest {
@@ -1801,8 +1902,9 @@ message ResolvedRef {
   // reads nothing, and `failure` says why.
   string feature_id = 2;
 
-  // Travel from the origin to that feature, game milliseconds, by the
-  // estimator "nearest" ranks with. Meaningful only when `reachable` is true.
+  // Travel from the origin to that feature, game milliseconds: the walk the
+  // router serves there, which is what "nearest" ranks by (decisions-log item
+  // 169 (8)). Written only beside `reachable: true`.
   int32 travel_ms = 3;
 
   // Every candidate that matched the reference's filters and is reachable,
@@ -1822,17 +1924,114 @@ message ResolvedRef {
   // True when a route reaches the feature it reads from the origin; false
   // when it reads nothing, or reads a named pick the origin cannot reach,
   // and `travel_ms` then means nothing (decisions-log item 133 (3) (i), which
-  // retires the `travel_ms` 0 a magic value stood for). S2's `wgw` writes it
-  // from `resolve_refs`; until then the answer lacks it.
+  // retires the `travel_ms` 0 a magic value stood for).
   bool reachable = 7;
+
+  // `travel_ms` as the player reads it, the gateway's rendered figure, as
+  // estimate_route's `travel_text` is: rounded up to a whole second ("41 s",
+  // "2:05"). Written exactly when `travel_ms` is, so the chip draws it and does
+  // no time maths. `resolve_refs` answers only in a Lull, so a written travel
+  // is never withheld. (S3's `fixq`.)
+  string travel_text = 8;
 }
 
 // One feature a reference could read, and how far it is.
 message FeatureCandidate {
   string feature_id = 1;
 
-  // Game milliseconds from the reference's origin.
+  // Game milliseconds from the reference's origin: the walk the router serves
+  // there.
   int32 travel_ms = 2;
+
+  // `travel_ms` as the player reads it, as ResolvedRef.travel_text is. (S3's
+  // `fixq`.)
+  string travel_text = 3;
+}
+
+// A value as the player typed it, written at a pointer (S3's `fixq`). The shape
+// there is the rendering's chip at exactly `pointer` (RenderPlanResponse), whose
+// `pick_op` is the op written; where no chip stands, a mandate setting the
+// rendering does not list (a `set_mandate_settings` row's `retreat_hp_pct`)
+// takes the vocabulary's shape for it, and an `add`. Anywhere else, and for a
+// chip that is not an integer, the call is refused.
+message SetValueTextRequest {
+  // The playbook, JSONC, as patch_plan takes it.
+  string playbook_jsonc = 1;
+
+  // RFC 6901 JSON Pointer of the value: a Chip's `pointer`.
+  string pointer = 2;
+
+  // What the player typed, in the shape's `display_unit`: "3" or "1.5" seconds
+  // for a duration, "40" for a percentage. Read after its leading and trailing
+  // whitespace as an optional `-`, digits, and, for a duration only, a `.`
+  // and digits that name whole milliseconds ("1.5", "1.500"); in any other
+  // unit a `.` is refused ("40.0" is not 40). No `+`, no exponent, no
+  // separators. A duration finer than a millisecond is refused, never rounded,
+  // and so is a value past the shape's bounds or past what the field holds. Every refusal is
+  // INVALID_ARGUMENT in the gateway's words, the typed text quoted.
+  string typed = 3;
+}
+
+// As PatchPlanResponse: the patched file and its undo, the undo produced by the
+// same patch module and valid only against `playbook_jsonc`.
+message SetValueTextResponse {
+  string playbook_jsonc = 1;
+  string inverse_json_patch = 2;
+}
+
+// An empty rule, added (S3's `fixq`).
+message NewRuleRequest {
+  // The playbook, JSONC, as patch_plan takes it. It must have a canonical form,
+  // so its rules can be counted and their ids read.
+  string playbook_jsonc = 1;
+}
+
+// The playbook with one rule more at the end of its rules: a fresh id
+// (`rule_<n>`, the least `n` from one past the count of rules that no rule
+// holds), `resume: CONTINUE`, `max_fires: 1`, the rules table's least
+// cooldown, and no `when` and no body, so its RenderedRule lists one EMPTY slot
+// for the picker. It writes no reserved construct. Refused, in the gateway's
+// words, for a file with no canonical form and for one already holding the most
+// rules a playbook may (the sim's handler ceiling, the verifier's E0113).
+message NewRuleResponse {
+  // As PatchPlanResponse.
+  string playbook_jsonc = 1;
+  string inverse_json_patch = 2;
+
+  // RFC 6901 JSON Pointer of the new rule: "/declarative/handlers/3".
+  string rule_pointer = 3;
+
+  // Its id.
+  string rule_id = 4;
+}
+
+// A wall's box from two map clicks (S3's `fixq`).
+message ComposeWallBoxRequest {
+  // One of the calling seat's own beacons, the one whose Build mandate will
+  // hold the wall: "b_00". Another seat's beacon, a foreign handle and a name
+  // that names nothing are one NOT_FOUND alike.
+  string beacon_id = 1;
+
+  // A blueprint whose VocabularyEntry.anchor_shape is BOX: "wall". Any other
+  // is refused.
+  string blueprint_id = 2;
+
+  // The two clicked voxels, in either order. Only their columns are read: the
+  // box spans every column between them, inclusive.
+  gp.v1.Voxel corner_a = 3;
+  gp.v1.Voxel corner_b = 4;
+}
+
+// The Build target an `add_build_target` row writes as it is. Its `wall_box`
+// spans the corners' columns; `min.z` is the lowest ground under walls among
+// them, and `max.z` the highest plus the rules' `wall_min_height_voxels`; its
+// `anchor` is the box's lowest corner, a voxel inside it. The box is one the
+// sim's wall check takes against the beacon's sphere and the frozen ground at
+// the time of the call. Refusals, INVALID_ARGUMENT in the gateway's words:
+// "no ground here" (a column off the map or with no ground, a corner past the
+// map's coordinates) and "outside the sphere".
+message ComposeWallBoxResponse {
+  gp.v1.BuildTarget target = 1;
 }
 
 // What the operator would file on a timeout, so a seat can see the cost of one
