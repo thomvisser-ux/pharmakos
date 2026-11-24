@@ -321,7 +321,11 @@ func start(gamectl: String, root: String, config_line: String) -> bool:
 	_pid = int(spawned.get("pid", -1))
 	_stdio = spawned.get("stdio")
 	_stderr = spawned.get("stderr")
-	_stdio.store_string(config_line)
+	# A line the host never reads is a host that never announces: said at once (fix pass 2).
+	if not _stdio.store_string(config_line):
+		failed.emit("could not write the config line to %s" % gamectl)
+		reset()
+		return false
 	_stdio.flush()
 	bridge.watch_begin()
 	return true

@@ -1594,3 +1594,150 @@ fn the_conversion_ban_catches_each_conversion() {
         assert!(conversions_in("editor.gd", line).is_empty(), "{line}");
     }
 }
+
+/// Methods whose answer says whether they worked (an `Error`, a `bool`, a handle that is null on
+/// a failure), which a shipped script may never call as a bare statement (S3's `fixq-c`, fix
+/// pass 2: `host_link.gd` ignored `send_text`'s `ERR_OUT_OF_MEMORY`, and the call sat
+/// "Sending..." until the link timed out).
+const ERROR_RETURNING: &[&str] = &[
+    "send_text(",
+    "put_packet(",
+    "connect_to_url(",
+    "store_string(",
+    "store_buffer(",
+    "store_line(",
+    "store_var(",
+    "store_csv_line(",
+    "store_8(",
+    "store_16(",
+    "store_32(",
+    "store_64(",
+    "store_float(",
+    "store_double(",
+    "make_dir(",
+    "make_dir_recursive(",
+    "make_dir_absolute(",
+    "make_dir_recursive_absolute(",
+    "remove_absolute(",
+    "rename(",
+    "rename_absolute(",
+    "copy_absolute(",
+    "save_png(",
+    "create_process(",
+    "execute(",
+    "execute_with_pipe(",
+    "change_scene_to_file(",
+    "change_scene_to_packed(",
+    "reload_current_scene(",
+    "shell_open(",
+    "kill(",
+];
+
+/// The bare-statement calls kept, each with why: the two saves whose honest handling of a write
+/// that fails part-way needs a decision (a temporary file renamed into place, or what the player
+/// is told), and the removal of a remembered line whose failure leaves the lobby offering an
+/// ended match, held for the main session (fix pass 2, item 1d).
+const ERRORS_HELD: &[(&str, &str, &str)] = &[
+    (
+        "editor.gd",
+        "file.store_buffer(bytes)",
+        "held: Save as's write failing part-way",
+    ),
+    (
+        "lobby.gd",
+        r#"file.store_string(_line + "\n")"#,
+        "held: the remembered config line's write failing part-way",
+    ),
+    (
+        "lobby.gd",
+        "DirAccess.remove_absolute(ProjectSettings.globalize_path(REMEMBERED))",
+        "held: an ended match's line that cannot be forgotten (what the lobby offers next)",
+    ),
+];
+
+/// Whether a script is shipped: every one but the checks and the hostless shots (the smoke check
+/// ships).
+fn shipped_script(name: &str) -> bool {
+    name == "smoke_check.gd" || !(name.ends_with("_check.gd") || name.ends_with("_shot.gd"))
+}
+
+/// The lines of `text` that call an [`ERROR_RETURNING`] method as a bare statement.
+fn ignored_errors(name: &str, text: &str) -> Vec<String> {
+    const KEYWORDS: &[&str] = &[
+        "var ", "if ", "elif ", "return", "while ", "for ", "match ", "not ", "await ", "assert",
+    ];
+    text.lines()
+        .filter(|line| {
+            let code = gd_code_only(line);
+            let code = code.trim();
+            if KEYWORDS.iter().any(|keyword| code.starts_with(keyword)) {
+                return false;
+            }
+            ERROR_RETURNING.iter().any(|method| {
+                code.match_indices(method).any(|(at, _)| {
+                    let before = code.get(..at).unwrap_or_default();
+                    // The call's own name, not the tail of a longer one, and at the statement's
+                    // top level: no assignment and no parenthesis left open before it.
+                    let named = before
+                        .chars()
+                        .last()
+                        .is_none_or(|c| c == '.' || c.is_whitespace());
+                    let depth = before.matches('(').count() == before.matches(')').count();
+                    named && depth && !before.contains('=')
+                })
+            })
+        })
+        .filter(|line| {
+            !ERRORS_HELD
+                .iter()
+                .any(|(file, held, _)| *file == name && line.trim() == *held)
+        })
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+#[test]
+fn no_shipped_script_ignores_an_error() {
+    let mut found = Vec::new();
+    for file in gdscript_everywhere() {
+        let name = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a name")
+            .to_owned();
+        if !shipped_script(&name) {
+            continue;
+        }
+        let text = fs::read_to_string(&file).expect("reads");
+        for line in ignored_errors(&name, &text) {
+            found.push(format!("{name}: {line}"));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a shipped script ignores what a call says about its own failure: {found:#?}"
+    );
+}
+
+/// The scan catches a bare call of each kind, on any receiver, and lets a checked one by.
+#[test]
+fn the_error_scan_catches_a_bare_call() {
+    for line in [
+        "\t\t\tpeer.send_text(String(pair[1]))",
+        "\t_stdio.store_string(config_line)",
+        "\tDirAccess.remove_absolute(path)",
+        "\tget_tree().change_scene_to_file(\"res://x.tscn\")",
+        "\tOS.execute(\"x\", [])",
+    ] {
+        assert!(!ignored_errors("host_link.gd", line).is_empty(), "{line}");
+    }
+    for line in [
+        "\t\t\tvar sent := peer.send_text(String(pair[1]))",
+        "\tif not _stdio.store_string(config_line):",
+        "\treturn peer.send_text(x)",
+        "\t# peer.send_text(x)",
+        "\tfile.store_buffer(bytes)",
+    ] {
+        assert!(ignored_errors("editor.gd", line).is_empty(), "{line}");
+    }
+}
