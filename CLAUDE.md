@@ -30,8 +30,9 @@ Read that file before your first edit. What follows is only the Claude Code-spec
    the spec (`docs/spec/pharmakos-spec-v0.6.html`) > `docs/design/co-design-gameplan-api.md`. See
    `docs/design/README.md`. The co-design doc predates the v1 simplification and still describes
    MCP tools, flags/branch/repeat, and a WASM planner — all of which are **not in v1**.
-3. **Confirm nobody else owns your crate.** At most 2–3 agents run at once, each in its own git
-   worktree, and two agents never edit the same crate (AGENTS.md §6).
+3. **Confirm nobody else owns your crate.** At most seven agents run at once (item 183), each in
+   its own git worktree, and two agents never edit the same crate, except that for the rest of S3
+   two lanes whose briefs name disjoint files may (AGENTS.md §6).
 
 ## Stop and ask
 
