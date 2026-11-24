@@ -493,14 +493,17 @@ fn every_vocabulary_parameter_is_the_verifiers() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// Every oneof arm of `message`, by the schema.
+/// Every oneof arm of `message`, by the schema: a real oneof's members, never
+/// a proto3 `optional` field's synthetic oneof, which is presence and no
+/// choice (`Field::is_arm`; `MandateSettings.retreat_hp_pct`, decisions-log
+/// item 177 (3)).
 fn arms_of(message: &str) -> Vec<String> {
     schema()
         .message(message)
         .unwrap_or_else(|| panic!("{message} is a declared message"))
         .fields
         .iter()
-        .filter(|field| field.oneof_index.is_some())
+        .filter(|field| field.is_arm())
         .map(|field| field.name.clone())
         .collect()
 }

@@ -86,7 +86,8 @@ pub type Patched = (String, String);
 /// The shape there is the rendering's chip at exactly that pointer, which
 /// names the patch op too ([`crate::render::Chip::pick`]); where no chip
 /// stands, a mandate setting the rendering does not list (a
-/// `set_mandate_settings` row's `/retreat_hp_pct`) takes the vocabulary's
+/// `set_mandate_settings` row's `/retreat_hp_pct` that the row leaves
+/// unwritten; a written one is a chip) takes the vocabulary's
 /// shape for it, and an `add`. The value must also fit the field the pointer
 /// names, by the schema's type.
 ///

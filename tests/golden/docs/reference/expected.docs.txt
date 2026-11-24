@@ -350,7 +350,7 @@ gp.v1.Mandate
   script                       2   gp.v1.ScriptMandate
 
 gp.v1.MandateSettings
-  oneof: mandate
+  oneof: mandate, _retreat_hp_pct
   roe                          1   gp.v1.MandateSettings.Roe
   retreat_hp_pct               2   uint32
   build                        10  gp.v1.BuildSettings

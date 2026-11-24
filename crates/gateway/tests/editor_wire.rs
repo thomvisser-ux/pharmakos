@@ -622,3 +622,51 @@ fn compose_wall_box_answers_a_dead_beacon_as_get_beacon_does() {
     answers.dedup();
     assert_eq!(answers.len(), 1, "{answers:?}");
 }
+
+/// Decisions-log item 177 (3): `retreat_hp_pct` carries presence. A "0"
+/// typed at a settings row's unwritten `retreat_hp_pct` writes the present 0,
+/// and `render_plan` then says it as retreat off, with its chip at that
+/// pointer holding 0.
+#[test]
+fn a_typed_zero_retreat_is_written_and_said_as_retreat_off() {
+    let visit = ONE_RULE.replace(
+        r#"{"label": "wait", "hold": {"ms": 90000}}"#,
+        r#"{"label": "visit", "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [{"set_mandate_settings": {"roe": "HOLD_FIRE"}}]}, "timeout_ms": 120000}"#,
+    );
+    assert_ne!(visit, ONE_RULE, "the visit replaced the hold");
+    let pointer = "/declarative/route/0/interface/rows/0/set_mandate_settings/retreat_hp_pct";
+    let mut surface = hosted(2, SEGMENT_MS, 3);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let answer = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "set_value_text",
+            &format!(
+                "{{\"playbook_jsonc\":{},\"pointer\":{},\"typed\":\"0\"}}",
+                quote(&visit),
+                quote(pointer)
+            ),
+        ),
+        "set_value_text",
+    );
+    let patched = text_of(&answer, "playbook_jsonc");
+    assert!(patched.contains("\"retreat_hp_pct\":0"), "{patched}");
+    let chip = chip_value(&mut surface, &patched, pointer);
+    assert_eq!(text_of(&chip, "value_json"), "0");
+    assert_eq!(text_of(&chip, "value_text"), "0");
+    let rendered = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "render_plan",
+            &format!("{{\"playbook_jsonc\":{}}}", quote(&patched)),
+        ),
+        "render_plan",
+    );
+    let prose = text_of(&rendered, "prose");
+    assert!(prose.contains("retreat off (0%)"), "{prose}");
+}

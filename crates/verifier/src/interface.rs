@@ -414,7 +414,8 @@ fn each<T>(list: &[T]) -> u64 {
 /// same rule the canonical form, the size meter and the sim's compile count
 /// by; a field with presence counts whenever it is written, its default
 /// included (S3's plan, task `con5b`, for `repair_threshold_pct`,
-/// `rebuild_destroyed` and `flee_on_threat`). The mandate *type* is free (spec
+/// `rebuild_destroyed` and `flee_on_threat`; decisions-log item 177 (3) for
+/// the Common row's `retreat_hp_pct`). The mandate *type* is free (spec
 /// section 5) and is never a field.
 ///
 /// **What "one field" means for a list (S1-23, ruled).** Spec section 5 writes
@@ -443,7 +444,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
         mandate,
     } = settings;
     let mut counted = Counted {
-        fields: add(&[set(*roe != 0), set(*retreat_hp_pct != 0)]),
+        fields: add(&[set(*roe != 0), set(retreat_hp_pct.is_some())]),
         targets: 0,
     };
     let (fields, targets) = match mandate {
@@ -688,7 +689,7 @@ mod tests {
                 priority: 2,
                 mandate: Some(MandateSettings {
                     roe: 2,
-                    retreat_hp_pct: 0,
+                    retreat_hp_pct: None,
                     mandate: Some(mandate_settings::Mandate::Mine(MineSettings {
                         dig_max_depth: 4,
                         flee_on_threat: Some(true),
@@ -716,7 +717,7 @@ mod tests {
     fn each_element_of_a_list_is_one_field_and_the_cap_still_bounds_the_edit() {
         let survey = |areas: usize, scouts: u32| MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Survey(SurveySettings {
                 probe_areas: vec![area(); areas],
                 scout_count: scouts,
@@ -761,7 +762,7 @@ mod tests {
         };
         let settings = MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Build(BuildSettings {
                 targets: vec![target.clone(), target.clone(), target],
                 repair_threshold_pct: None,
@@ -792,7 +793,7 @@ mod tests {
     fn a_written_zero_or_false_is_one_field_and_survives_canonicalisation() {
         let build = |threshold: Option<u32>, rebuild: Option<bool>| MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Build(BuildSettings {
                 repair_threshold_pct: threshold,
                 rebuild_destroyed: rebuild,
@@ -801,7 +802,7 @@ mod tests {
         };
         let mine = |flee: Option<bool>| MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Mine(MineSettings {
                 flee_on_threat: flee,
                 ..MineSettings::default()
@@ -812,11 +813,21 @@ mod tests {
         assert_eq!(fields(&build(None, None)), 0);
         assert_eq!(fields(&mine(Some(false))), 1);
         assert_eq!(fields(&mine(None)), 0);
+        // The Common row's `retreat_hp_pct` has presence too (decisions-log
+        // item 177 (3)): a written 0 is retreat off, and one field.
+        let retreat = |pct: Option<u32>| MandateSettings {
+            retreat_hp_pct: pct,
+            ..MandateSettings::default()
+        };
+        assert_eq!(fields(&retreat(Some(0))), 1, "a written 0 is a field");
+        assert_eq!(fields(&retreat(Some(30))), 1);
+        assert_eq!(fields(&retreat(None)), 0);
 
         for (message, text) in [
             ("gp.v1.MineSettings", r#"{"flee_on_threat":false}"#),
             ("gp.v1.BuildSettings", r#"{"repair_threshold_pct":0}"#),
             ("gp.v1.BuildSettings", r#"{"rebuild_destroyed":false}"#),
+            ("gp.v1.MandateSettings", r#"{"retreat_hp_pct":0}"#),
         ] {
             let canonical =
                 pharmakos_proto::json::canonicalise(message, text).expect("canonicalises");
@@ -845,7 +856,7 @@ mod tests {
         };
         let defend = |picket: Option<u32>| MandateSettings {
             roe: 0,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Defend(DefendSettings {
                 protect: vec![commander(), commander()],
                 engagement_radius_pct: 50,
@@ -857,7 +868,7 @@ mod tests {
         assert_eq!(count(&defend(Some(0))).fields, 5, "a written 0 is a field");
         let attack = MandateSettings {
             roe: 3,
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Attack(AttackSettings {
                 target: Some(AttackTarget {
                     target: Some(attack_target::Target::Voxel(Voxel { x: 1, y: 2, z: 3 })),

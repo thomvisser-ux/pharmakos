@@ -1125,7 +1125,7 @@ mod tests {
             let field = declared
                 .field_by_name(name)
                 .unwrap_or_else(|| panic!("{message} declares no `{name}`"));
-            assert!(field.oneof_index.is_some(), "{message}.{name} is an arm");
+            assert!(field.is_arm(), "{message}.{name} is an arm");
             field.type_name.trim_start_matches('.').to_owned()
         };
         let walk = |message: String, entry: &Entry| {

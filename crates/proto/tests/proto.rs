@@ -410,6 +410,13 @@ fn a_value_with_presence_survives_canonicalisation() {
             "breach_allowed",
             r#"{"breach_allowed": false}"#,
         ),
+        // A written 0 is retreat off, and a field of the edit (decisions-log
+        // item 177 (3)).
+        (
+            "gp.v1.MandateSettings",
+            "retreat_hp_pct",
+            r#"{"retreat_hp_pct": 0}"#,
+        ),
     ] {
         let canonical = json::canonicalise(message, spelled).expect("canonicalises");
         assert!(
@@ -2085,7 +2092,7 @@ fn s2s_defend_settings_round_trip_in_their_documented_spellings() {
     round_trips(
         &MandateSettings {
             roe: mandate_settings::Roe::ReturnFire.into(),
-            retreat_hp_pct: 30,
+            retreat_hp_pct: Some(30),
             mandate: Some(mandate_settings::Mandate::Defend(DefendSettings {
                 protect: vec![
                     ProtectedAsset {
@@ -2143,7 +2150,7 @@ fn s2s_attack_settings_round_trip_in_their_documented_spellings() {
     round_trips(
         &MandateSettings {
             roe: mandate_settings::Roe::FreeFire.into(),
-            retreat_hp_pct: 0,
+            retreat_hp_pct: None,
             mandate: Some(mandate_settings::Mandate::Attack(AttackSettings {
                 target: Some(AttackTarget {
                     target: Some(attack_target::Target::Beacon(BeaconRef {
