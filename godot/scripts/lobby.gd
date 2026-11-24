@@ -91,7 +91,6 @@ extends Node
 const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
 const Values := preload("res://scripts/values.gd")
-const SafeWrite := preload("res://scripts/safe_write.gd")
 ## The credits overlay the chooser's Credits button adds (decisions-log item 117 (11)).
 const AboutScene := preload("res://scenes/credits.tscn")
 
@@ -129,9 +128,6 @@ var _forgotten := false
 ## The file the remembered line is kept in: REMEMBERED, unless a check points the lobby at a
 ## file of its own before it enters the tree.
 var remembered := REMEMBERED
-## The file seam (`safe_write.gd`): the real one unless a check passes its own before the lobby
-## enters the tree.
-var disk: SafeWrite.Disk = SafeWrite.Disk.new()
 ## Why the remembered file, which exists, could not be read, in the string table's words; ""
 ## when it could (or there is none). Said on the chooser's line.
 var _remembered_unreadable := ""
@@ -163,14 +159,16 @@ func _ready() -> void:
 func remembered_line() -> String:
 	var path := ProjectSettings.globalize_path(remembered)
 	_remembered_unreadable = ""
-	if not disk.exists(path):
+	if not FileAccess.file_exists(path):
 		return ""
 	# A file that exists and cannot be read is said, not read as no match (fix pass 4).
-	var read: Dictionary = SafeWrite.read(path, disk)
-	if read["error"] != OK:
-		_remembered_unreadable = Strings.text("lobby_remembered_unreadable", {"path": path, "error": read["error"]})
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		_remembered_unreadable = Strings.text("lobby_remembered_unreadable", {"path": path, "error": FileAccess.get_open_error()})
 		return ""
-	return String(read["text"]).strip_edges()
+	var text := file.get_as_text()
+	file.close()
+	return text.strip_edges()
 
 
 ## Starts a new match under a fresh id, under HostLink.PRESET, which the bridge then holds the
@@ -202,39 +200,31 @@ func _start(line: String, resuming: bool) -> void:
 			vista.bridge.watch_expect_preset(HostLink.PRESET)
 
 
-## Remembers this match's line, whole or not at all; a line that could not be written is said
-## on the status line, which then claims no remembered match.
+## Remembers this match's line, whole or not at all, by an atomic replace through the bridge
+## (`crates/client-gdext/src/write.rs`); a line that could not be written is said on the status
+## line, which then claims no remembered match. The bytes are what `main`'s writer wrote: the
+## six-field line and a newline, UTF-8.
 func _remember() -> void:
-	var written := SafeWrite.write(remembered, (_line + "\n").to_utf8_buffer(), disk)
+	var written: Dictionary = vista.bridge.file_write(ProjectSettings.globalize_path(remembered), (_line + "\n").to_utf8_buffer())
 	_remember_failed = ""
-	if written["failure"] != SafeWrite.Failure.NONE:
-		_remember_failed = Strings.text("lobby_not_remembered", {"why": SafeWrite.why(written)})
-	elif SafeWrite.why(written) != "":
-		_remember_failed = Strings.text("lobby_remembered_note", {"why": SafeWrite.why(written)})
+	if not written.get("written", false):
+		_remember_failed = Strings.text("lobby_not_remembered", {"why": Strings.write_words(written)})
+	elif Strings.write_words(written) != "":
+		_remember_failed = Strings.text("lobby_remembered_note", {"why": Strings.write_words(written)})
 
 
-## Forgets the ended match: its file removed, or, when it cannot be, emptied whole (an empty
-## file is no match to the reader); when neither can be done (a file the player protected is
-## refused before anything moves, `safe_write.gd`), the status line says so and says to start a
-## new match. (A Resume of an ended match is not refused by the host today: reported in PR #229
-## for the gateway's lane, which lane `opsave` carries.)
+## Forgets the ended match: its file removed through the bridge. A removal that fails (a folder,
+## a read-only file, one another program holds) is said on the status line with its cause, and
+## says to start a new match. (A Resume of an ended match is not refused by the host today:
+## reported in PR #229 for the gateway's lane, which lane `opsave` carries.)
 func _forget() -> void:
+	var removed: Dictionary = vista.bridge.file_remove(ProjectSettings.globalize_path(remembered))
 	_forget_failed = ""
-	var path := ProjectSettings.globalize_path(remembered)
-	if not disk.exists(path):
+	if removed.get("written", false):
 		_forgotten = true
 		return
-	var removed := disk.remove(path)
-	if removed == OK:
-		_forgotten = true
-		return
-	var emptied := SafeWrite.write(path, PackedByteArray(), disk)
-	if emptied["failure"] == SafeWrite.Failure.NONE:
-		_forgotten = true
-		if SafeWrite.why(emptied) != "":
-			_forget_failed = Strings.text("lobby_forgotten_note", {"why": SafeWrite.why(emptied)})
-		return
-	_forget_failed = Strings.text("lobby_not_forgotten", {"error": removed, "why": SafeWrite.why(emptied)})
+	_forgotten = false
+	_forget_failed = Strings.text("lobby_not_forgotten", {"why": Strings.write_words(removed)})
 
 
 func _process(_delta: float) -> void:

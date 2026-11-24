@@ -925,6 +925,41 @@ impl PharmakosBridge {
         }
     }
 
+    /// `bytes` written to the file `path` (an absolute path) whole, by an atomic replace
+    /// (`crate::write`, S3's `fixq-c`, fix pass 5): Save and Save as..., and the lobby's remembered
+    /// line. Answers `written`, and on a failure `failure` (the string table's `write_<failure>`
+    /// row), `path`, `step`, `error` (the operating system's words) and `leftover`; on a write,
+    /// `stale` (a temporary file of ours from a stopped write, removed first) when there was one.
+    #[func]
+    fn file_write(&self, path: GString, bytes: PackedByteArray) -> VarDictionary {
+        let path = std::path::PathBuf::from(path.to_string());
+        written_dictionary(
+            crate::write::write_whole(&path, bytes.as_slice()).map(|written| {
+                written
+                    .stale_removed
+                    .map(|stale| stale.display().to_string())
+            }),
+        )
+    }
+
+    /// The names of every write failure (`crate::write::WriteFailure::NAMES`), for the check that
+    /// the string table has a `write_<name>` row for each.
+    #[func]
+    fn file_failure_names(&self) -> godot::builtin::PackedStringArray {
+        crate::write::WriteFailure::NAMES
+            .iter()
+            .map(|name| GString::from(*name))
+            .collect()
+    }
+
+    /// The file `path` (an absolute path) removed: the lobby's forgetting of an ended match.
+    /// Answers as [`Self::file_write`] does (`written` meaning it is gone, or was never there).
+    #[func]
+    fn file_remove(&self, path: GString) -> VarDictionary {
+        let path = std::path::PathBuf::from(path.to_string());
+        written_dictionary(crate::write::remove_whole(&path).map(|_| None))
+    }
+
     /// The playbook the editor holds, as the bytes Save writes; empty before a Load.
     #[func]
     fn editor_bytes(&mut self) -> PackedByteArray {
@@ -1884,6 +1919,39 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     closed_on_into(&mut state, rig);
     status_facts_into(&mut state, rig);
     state
+}
+
+/// A write's or a removal's answer for GDScript (`file_write`, `file_remove`).
+fn written_dictionary(result: Result<Option<String>, crate::write::WriteFailure>) -> VarDictionary {
+    let mut answer = VarDictionary::new();
+    let mut put = |key: &str, value: Variant| answer.set(&key.to_variant(), &value);
+    match result {
+        Ok(stale) => {
+            put("written", true.to_variant());
+            if let Some(stale) = stale {
+                put("stale", stale.to_variant());
+            }
+        }
+        Err(failure) => {
+            // The new file is in place when only the folder's sync failed: written, with words.
+            put(
+                "written",
+                matches!(failure, crate::write::WriteFailure::SyncFolder { .. }).to_variant(),
+            );
+            put("failure", failure.name().to_variant());
+            put("path", failure.path().display().to_string().to_variant());
+            if let Some(step) = failure.step() {
+                put("step", step.to_variant());
+            }
+            if let Some(error) = failure.error() {
+                put("error", error.to_string().to_variant());
+            }
+            if let Some(leftover) = failure.leftover() {
+                put("leftover", leftover.display().to_string().to_variant());
+            }
+        }
+    }
+    answer
 }
 
 /// The last close on a message on the watch state (fix pass 3), as `closed_on`, present only

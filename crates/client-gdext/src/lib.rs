@@ -134,6 +134,7 @@ pub mod upload;
 pub mod view;
 pub mod vocabulary;
 pub mod wizard;
+pub mod write;
 
 mod bridge;
 mod editor_view;

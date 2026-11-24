@@ -309,7 +309,6 @@ const SCRIPTS: &[&str] = &[
     "rows_shot.gd",
     "rule_list.gd",
     "rule_list_shot.gd",
-    "safe_write.gd",
     "smoke_check.gd",
     "strings.gd",
     "templates_shot.gd",
@@ -480,22 +479,28 @@ fn the_lobby_remembers_one_line_and_no_token() {
         text.contains("const REMEMBERED := \"user://"),
         "the lobby's remembered line lives in user://"
     );
-    // Since S3's `fixq-c` (fix pass 3) the lobby opens no file itself: it writes through
-    // `safe_write.gd`, whole or not at all, and only to `remembered`, which is REMEMBERED
-    // unless a check points the lobby elsewhere.
+    // Since S3's `fixq-c` (fix pass 5) the lobby opens no file for writing itself: it writes and
+    // removes through the bridge's atomic replace (`crates/client-gdext/src/write.rs`), and only
+    // `remembered`, which is REMEMBERED unless a check points the lobby elsewhere. Its one open
+    // is the reader's, for reading.
     let opens: Vec<&&str> = code
         .iter()
         .filter(|line| line.contains("FileAccess.WRITE") || line.contains("FileAccess.open("))
         .collect();
-    assert!(opens.is_empty(), "the lobby opens a file itself: {opens:?}");
+    assert!(
+        opens
+            .iter()
+            .all(|line| line.contains("FileAccess.open(path, FileAccess.READ)")),
+        "the lobby opens a file for writing itself: {opens:?}"
+    );
     let writes: Vec<&&str> = code
         .iter()
-        .filter(|line| line.contains("SafeWrite.write("))
+        .filter(|line| line.contains("file_write(") || line.contains("file_remove("))
         .collect();
     assert_eq!(
         writes.len(),
         2,
-        "the lobby writes in two places, remembering and emptying: {writes:?}"
+        "the lobby writes in one place and removes in one: {writes:?}"
     );
     assert!(
         text.contains("var remembered := REMEMBERED"),
@@ -503,17 +508,16 @@ fn the_lobby_remembers_one_line_and_no_token() {
     );
     let remember = gd_function(&text, "_remember");
     assert!(
-        remember
-            .iter()
-            .any(|line| line.contains("SafeWrite.write(remembered, (_line + ")),
+        remember.iter().any(|line| line.contains(
+            "vista.bridge.file_write(ProjectSettings.globalize_path(remembered), (_line + "
+        )),
         "the lobby remembers the line it wrote, whole: {remember:?}"
     );
     let forget = gd_function(&text, "_forget");
     assert!(
-        forget
-            .iter()
-            .any(|line| line.contains("SafeWrite.write(path, PackedByteArray(), disk)")),
-        "the lobby empties, and writes nothing else into, a line it cannot remove: {forget:?}"
+        forget.iter().any(|line| line
+            .contains("vista.bridge.file_remove(ProjectSettings.globalize_path(remembered))")),
+        "the lobby forgets by removing the remembered file: {forget:?}"
     );
     let announced = gd_function(&text, "_on_announced");
     assert!(
@@ -593,7 +597,7 @@ fn the_lobby_forgets_an_ended_match_and_shows_a_refusal_as_the_host_wrote_it() {
     let forget = gd_function(&text, "_forget");
     assert!(
         forget.iter().any(|line| line.contains("remembered"))
-            && forget.iter().any(|line| line.contains("disk.remove(path)")),
+            && forget.iter().any(|line| line.contains("file_remove(")),
         "_forget removes the remembered line: {forget:?}"
     );
     assert!(

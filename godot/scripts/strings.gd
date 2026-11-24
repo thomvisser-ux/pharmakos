@@ -65,8 +65,7 @@ const TEXT := {
 	"lobby_forgotten": "The last match has ended, so there is nothing to resume.",
 	"lobby_not_remembered": "This match is not remembered, so Resume will not offer it after a restart: {why}",
 	"lobby_remembered_note": "This match is remembered. {why}",
-	"lobby_forgotten_note": "{why}",
-	"lobby_not_forgotten": "The ended match could not be forgotten (error {error}), so Resume may still offer it; it has ended, so start a new match instead: {why}",
+	"lobby_not_forgotten": "The ended match could not be forgotten, so Resume may still offer it; it has ended, so start a new match instead: {why}",
 	"lobby_remembered_unreadable": "The remembered match could not be read ({path}, error {error}), so Resume is not offered.",
 	"lobby_about": "Credits",
 	# The recap: the gateway's own prose - the settlement, the shortfall and why a step
@@ -359,18 +358,22 @@ const TEXT := {
 	# A write whole or not at all (safe_write.gd, fix pass 3): each failure says what is on disk.
 	"status_save_not_done": "Not saved: {why}",
 	"status_saved_with_note": "Saved to {path}. {why}",
+	# A write by an atomic replace (crates/client-gdext/src/write.rs, fix pass 5): each failure says
+	# what is on disk; the operating system's words are in {error}.
+	"write_no_name": "{path} names no file, so nothing was written.",
+	"write_reserved_name": "{path} is a name this system keeps for a device, so nothing was written. Choose another name.",
+	"write_bad_ending": "{path} ends in a dot or a space, which this system drops from a name, so nothing was written. Choose another name.",
 	"write_is_folder": "{path} is a folder, so nothing was written. Choose a file name.",
-	"write_not_writable": "{path} cannot be written by you (it is read-only, or another program holds it; error {error}), so nothing was written and it is as it was.",
-	"write_recover_restore": "an earlier write stopped part-way and left the last good copy of {path} in {backup}, which could not be moved back (error {error}). Nothing was written; move {backup} back to {path} by hand.",
-	"write_recover_clear": "an earlier write left an older copy of {path} in {backup}, which could not be removed (error {error}), so nothing was written and {path} is as it was. Remove {backup}, then try again.",
-	"write_recover_temp": "an earlier write left {temp}, which could not be removed (error {error}), so nothing was written and {path} is as it was. Remove {temp}, then try again.",
-	"write_open": "{path} could not be written: the name cannot be used here, or its folder cannot be written (error {error}). Nothing was written, and {path} is as it was.",
-	"write_store": "the text could not all be written (error {error}), so {path} is as it was.",
-	"write_backup": "{path} could not be moved aside to {backup} (error {error}), so it is as it was.",
-	"write_place": "the new text could not be put under {path} (error {error}): the name cannot be used here, or its folder cannot be written. {path} is as it was.",
-	"write_place_lost": "the new text could not be put under {path}, nor the earlier copy back (error {error}): the new text is in {temp} and the earlier one in {backup}. Move them back by hand.",
-	"write_restored": "An earlier write had stopped part-way: {path} was first put back from {backup}.",
+	"write_missing_folder": "the folder {path} does not exist, so nothing was written.",
+	"write_read_only": "{path} is read-only, so it is as it was.",
+	"write_inspect": "{path} could not be looked at ({error}), so nothing was written.",
+	"write_stale_temp": "{path}, left by a write that stopped, could not be removed ({error}), so nothing was written. Remove it, then try again.",
+	"write_before_rename": "the {step} step failed ({error}), so {path} is as it was.",
+	"write_rename": "the new file could not replace {path} ({error}), so it is as it was.",
+	"write_sync_folder": "{path} is written, but its folder could not be synced ({error}): a crash now could still lose the save.",
+	"write_remove": "{path} could not be removed ({error}), so it is as it was.",
 	"write_leftover": "{leftover} could not be removed and is still there.",
+	"write_stale": "A temporary file from a write that stopped, {stale}, was removed first.",
 	"status_open_failed": "Could not read {path}.",
 	"status_new_opened": "A new playbook is in the editor; the checks say what it still needs. Undo takes it back.",
 	"status_picking": "Click the map for the new value; Escape stops.",
@@ -490,6 +493,21 @@ const TEXT := {
 ## The gateway's message cap in bytes, as the bridge passes it through (`watch_transport_limits`),
 ## for the words that name it (`{limit}`): set once the bridge is up. Empty before.
 static var message_limit := ""
+
+
+## The words for a write's or a removal's answer from the bridge (`file_write`, `file_remove`): on a
+## failure its `write_<failure>` row, and its leftover; on a write, a stale temporary file of ours
+## removed first; "" when there is nothing to say.
+static func write_words(answer: Dictionary) -> String:
+	# A failure with the file in place (the folder's sync) is said as well as one without.
+	if answer.has("failure"):
+		var said := text("write_" + String(answer.get("failure", "")), answer)
+		if answer.has("leftover"):
+			said += " " + text("write_leftover", answer)
+		return said
+	if answer.has("stale"):
+		return text("write_stale", answer)
+	return ""
 
 
 static func text(key: String, args: Dictionary = {}) -> String:

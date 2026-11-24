@@ -142,7 +142,6 @@ const RuleList := preload("res://scripts/rule_list.gd")
 const ConditionPicker := preload("res://scripts/condition_picker.gd")
 const ValueField := preload("res://scripts/value_field.gd")
 const Values := preload("res://scripts/values.gd")
-const SafeWrite := preload("res://scripts/safe_write.gd")
 
 ## How close, in screen pixels, a click must land to a beacon to pick it.
 ## PLACEHOLDER: the pick distance — OWNER, at S6.
@@ -402,24 +401,23 @@ func load_bytes(bytes: PackedByteArray) -> bool:
 	return bridge.editor_load(bytes)
 
 
-## Writes the playbook on screen to `path`, byte for byte, whole or not at all
-## (`safe_write.gd`, S3's `fixq-c`, fix pass 3); from then on `path` is the text's file. A
-## write that did not happen is said on the status line under its enumerated failure, and the
-## text keeps its unsaved mark and its file: nothing on screen claims a save that is not on
-## disk.
-## `disk` is the file seam (`safe_write.gd`): the real one unless a check passes its own.
-func save_file(path: String, disk: SafeWrite.Disk = null) -> bool:
+## Writes the playbook on screen to `path`, byte for byte, whole or not at all: an atomic replace
+## by the operating system, through the bridge (`crates/client-gdext/src/write.rs`, S3's `fixq-c`,
+## fix pass 5); from then on `path` is the text's file. A write that did not happen is said on the
+## status line under its failure (`Strings.write_words`), and the text keeps its unsaved mark and
+## its file: nothing on screen claims a save that is not on disk.
+func save_file(path: String) -> bool:
 	var bytes: PackedByteArray = bridge.editor_bytes()
-	var written := SafeWrite.write(path, bytes, disk)
-	if written["failure"] != SafeWrite.Failure.NONE:
-		_say_local("status_save_not_done", {"why": SafeWrite.why(written)})
+	var written: Dictionary = bridge.file_write(ProjectSettings.globalize_path(path), bytes)
+	if not written.get("written", false):
+		_say_local("status_save_not_done", {"why": Strings.write_words(written)})
 		return false
 	# The bridge's editor keeps the file and says so; a line said here alone would be gone at the
 	# next redraw, which that call causes.
 	bridge.editor_saved_to(path)
-	# A save that landed may still have something to say: an earlier save's last good copy put
-	# back first, or a beside-file it could not remove.
-	var note := SafeWrite.why(written)
+	# A save that landed may still have something to say: a temporary file of ours from a stopped
+	# write, removed first.
+	var note := Strings.write_words(written)
 	if note != "":
 		_say_local("status_saved_with_note", {"path": path, "why": note})
 	return true
