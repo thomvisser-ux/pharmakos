@@ -35,17 +35,18 @@
 //! `PushUnread`, never "nothing happened":
 //!
 //! * a Lull after the first whose feed shows no Push, as a Lull resumed from
-//!   a save opens with an empty feed ([`PushUnread::Resumed`]);
+//!   a save made before the save carried the last Push opens with one
+//!   ([`PushUnread::Resumed`]);
 //! * lines past the [`PAGES_MAX`] pages a round reads
 //!   ([`PushUnread::PastPages`]).
 //!
 //! Under it Easy adds no guard post for a death it cannot see, leaves out the
 //! stones it knows failed, and weighs every other stone as if it had not
 //! failed; its "why" says which, and so does `gamectl host`'s standard error
-//! ([`Played::failed_stones`]). A resumed Lull may therefore seal another
-//! stone than the unresumed one would: the save does not carry the last
-//! Push's outcomes yet, which is lane `opsave`'s (the PLACEHOLDER on
-//! [`PushUnread::Resumed`]).
+//! ([`Played::failed_stones`]). A Lull resumed from a save of this build reads
+//! the last Push as the live one did and seals what it would (lane `opsave`):
+//! the save carries the Push's feed. Only a save made before it carried them
+//! may seal another stone.
 //!
 //! # The call budget, derived
 //!
@@ -956,8 +957,8 @@ fn with_stones(why: String, stones: &FailedStones) -> String {
     };
     let cause = match unread {
         StonesUnread::Push(PushUnread::Resumed) => String::from(
-            "the last Push is not in this Lull's feed (a Lull resumed from a save opens with an \
-             empty one)",
+            "the last Push is not in this Lull's feed (a Lull resumed from a save made before \
+             saves carried it)",
         ),
         StonesUnread::Push(PushUnread::PastPages) => {
             format!("the feed's failed steps were not all read within {PAGES_MAX} pages")

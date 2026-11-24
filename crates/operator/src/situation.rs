@@ -309,10 +309,10 @@ pub(crate) enum LastPush {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PushUnread {
     /// The Lull's feed does not show the last Push at all: a Lull resumed
-    /// from a save opens with an empty feed, and the save does not carry the
-    /// last Push's outcomes.
-    ///
-    /// PLACEHOLDER: a resumed Lull reads the last Push's deaths and failed steps as unread until the save carries them, approved by the owner on 2026-11-23 — lane opsave, S3
+    /// from a save made before the save carried the last Push (format
+    /// version 3, which still loads) opens with a feed that shows none. A
+    /// save of this build carries it (lane `opsave`; the owner's approval of
+    /// 2026-11-23), and its resumed Lull reads the Push as the live one did.
     Resumed,
     /// The lines were not all reached within [`PAGES_MAX`] pages.
     PastPages,
@@ -811,8 +811,9 @@ fn started_index(text: &str) -> Result<usize, Refused> {
 /// came last outside a rule's body (`rule_fired` to `rule_ended`).
 ///
 /// What is not known is said, never read as "nothing happened": in a Lull
-/// after the first whose feed shows no Push (one resumed from a save, whose
-/// feed is empty) both the death and the failed steps are
+/// after the first whose feed shows no Push (one resumed from a save made
+/// before the save carried the last Push) both the death and the failed
+/// steps are
 /// [`PushUnread::Resumed`]; deaths or failures past the pages read are
 /// [`PushUnread::PastPages`], with the failed steps that were seen kept.
 ///
@@ -838,7 +839,8 @@ fn read_last_push(
     };
     if !shown {
         // No Push is shown: before the first round's Push there was none,
-        // and after it the feed was not kept (a resumed Lull).
+        // and after it the feed was not kept (a Lull resumed from a save
+        // made before the save carried it).
         return Ok(if round > 1 {
             (
                 LastPush::Unread(PushUnread::Resumed),
