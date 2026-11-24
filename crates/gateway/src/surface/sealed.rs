@@ -8,8 +8,7 @@
 //! value beside the text without reading it. The two must stay one pair, so
 //! the type holds the pair: every field is private to this module, a seal is
 //! made only by [`Sealed::new`], and nothing that holds one, a `&mut Sealed`
-//! included, can change its text, its plan or its fingerprint afterwards. Only
-//! its round moves, and only by [`Sealed::for_round`], which consumes it.
+//! included, can change any of it afterwards.
 
 use pharmakos_sim::interpreter::Plan;
 
@@ -94,14 +93,6 @@ impl Sealed {
             plan,
             plan_fingerprint,
         }
-    }
-
-    /// The same seal, filed for `round`: what the gateway files for a seat
-    /// that sealed nothing this round. The text, the plan and the fingerprint
-    /// go with it unchanged.
-    #[must_use]
-    pub fn for_round(self, round: u32) -> Self {
-        Self { round, ..self }
     }
 
     /// The playbook, as submitted.

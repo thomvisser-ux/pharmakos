@@ -298,6 +298,7 @@ fn the_fallback_is_fingerprinted_once_at_filing() {
     assert!(surface.begin_push().expect("the Push begins"));
     let zero = seal_of(&surface, SeatId::new(0));
     assert!(zero.filed_by_the_gateway(), "the fallback");
+    assert_eq!(zero.round(), 1, "filed for the round it plays");
     carried_is_the_reference(&surface, "a filed fallback");
     let _ = surface.take_persistence();
     while let Some(report) = surface.step().expect("a tick") {

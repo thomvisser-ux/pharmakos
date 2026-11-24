@@ -2658,8 +2658,11 @@ impl Surface {
                 continue;
             }
             let filed = own(seat).or_else(|| fallback.clone());
+            // Both are made for this round (`own` is the advice filed for it,
+            // and the fallback is sealed with it), so a filing changes nothing
+            // in the seal it files.
             if let Some(filed) = filed {
-                seat.sealed = Some(filed.for_round(round));
+                seat.sealed = Some(filed);
             }
         }
         Ok(())
