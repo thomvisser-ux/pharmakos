@@ -536,8 +536,12 @@ fn the_catalogue_is_the_committed_one() {
 /// `an_unreadable_snapshot_is_reported_and_not_swallowed`. And `E0029`, a
 /// player's text past the cap, which the boundary that holds the text reports
 /// through [`Input::too_long`] and no case file reaches, because a case is the
-/// bytes handed to [`Input::new`]: `a_playbook_past_the_cap_is_e0029_and_nothing_else`.
-const HOST_FAULT_CODES: &[&str] = &["W0707", "E0029"];
+/// bytes handed to [`Input::new`]: `a_playbook_past_the_cap_is_e0029_and_nothing_else`. And
+/// `E0030`, a fingerprint the codec could not write, which is the verifier's own
+/// fault and which no file reaches, because the codec writes every playbook it
+/// decodes: `decode.rs`'s
+/// `a_fingerprint_the_codec_could_not_write_is_e0030_and_never_e0008`.
+const HOST_FAULT_CODES: &[&str] = &["W0707", "E0029", "E0030"];
 
 #[test]
 fn every_emitted_code_has_a_case() {
@@ -1286,11 +1290,14 @@ fn the_budget_fixture_sits_exactly_on_the_budget() {
 
 #[test]
 fn the_fingerprint_is_the_rule_crates_proto_writes_down() {
-    let playbook: pharmakos_proto::gp::v1::Playbook =
-        json::decode(&String::from_utf8(case_bytes("expand_east")).expect("UTF-8"))
-            .expect("the worked example decodes");
-    let digest = hash::plan_fingerprint(&playbook).expect("a fingerprint");
-    let canonical = pharmakos_proto::fingerprint::canonical_input(&playbook).expect("canonical");
+    let decoded = json::decode_encoded::<pharmakos_proto::gp::v1::Playbook>(
+        &String::from_utf8(case_bytes("expand_east")).expect("UTF-8"),
+    )
+    .expect("the worked example decodes");
+    let playbook = decoded.message();
+    // The one fingerprint function, from the wire bytes (S3's `fpstream`).
+    let digest = pharmakos_sim::hash::plan_fingerprint_of(&decoded).expect("a fingerprint");
+    let canonical = pharmakos_proto::fingerprint::canonical_input(playbook).expect("canonical");
     let mut bytes = pharmakos_proto::fingerprint::PLAN_FINGERPRINT_DOMAIN.to_vec();
     bytes.extend_from_slice(&canonical);
     assert_eq!(digest, pharmakos_sim::encoding::digest(&bytes));
@@ -2772,6 +2779,7 @@ const CARRIES: &[(&str, Carries)] = &[
     ("E0027", Carries::Engine),
     ("E0028", Carries::Engine),
     ("E0029", Carries::Engine),
+    ("E0030", Carries::Engine),
     ("E0101", Carries::Engine),
     ("E0102", Carries::Engine),
     ("E0103", Carries::Engine),

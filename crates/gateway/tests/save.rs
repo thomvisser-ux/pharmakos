@@ -329,23 +329,30 @@ fn a_resumed_lull_has_the_seats_notebooks_drafts_and_seals() {
         let after = resumed
             .seat_state(Subject::Seat(seat), seat)
             .expect("its own");
-        assert_eq!(after.notebook, before.notebook, "seat {}", seat.raw());
-        assert_eq!(after.drafts, before.drafts, "seat {}", seat.raw());
+        assert_eq!(after.notebook(), before.notebook(), "seat {}", seat.raw());
+        assert_eq!(after.drafts(), before.drafts(), "seat {}", seat.raw());
         assert_eq!(
-            after.sealed,
-            before.sealed,
+            after.sealed(),
+            before.sealed(),
             "seat {}: the seal, recompiled to the same plan",
             seat.raw()
         );
-        assert_eq!(after.continuity, before.continuity, "seat {}", seat.raw());
-        assert!(!after.ready, "ready is the new process's to say");
+        assert_eq!(
+            after.continuity(),
+            before.continuity(),
+            "seat {}",
+            seat.raw()
+        );
+        assert!(!after.ready(), "ready is the new process's to say");
     }
     let zero_after = resumed
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .expect("its own");
-    assert_eq!(zero_after.notebook, "hold the east vent");
+    assert_eq!(zero_after.notebook(), "hold the east vent");
     assert_eq!(
-        zero_after.sealed.as_ref().map(|sealed| sealed.round),
+        zero_after
+            .sealed()
+            .map(pharmakos_gateway::surface::Sealed::round),
         Some(2),
         "this round's verified submission, which the seat may still replace"
     );
@@ -454,9 +461,8 @@ fn zero_after_sealed_plan(surface: &Surface) -> Option<pharmakos_sim::interprete
     surface
         .seat_state(Subject::Seat(SeatId::new(0)), SeatId::new(0))
         .ok()?
-        .sealed
-        .as_ref()
-        .map(|sealed| sealed.plan.clone())
+        .sealed()
+        .map(|sealed| sealed.plan().clone())
 }
 
 /// A `sealed` save lands in its Push with its seals, and no Lull is offered:
@@ -672,8 +678,8 @@ fn every_refusal_of_a_restored_seal_keeps_its_code_and_words() {
     .expect("the committed case")
     .replace("\r\n", "\n");
     let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
-    let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
-        .expect("a fingerprint");
+    let fingerprint =
+        pharmakos_sim::hash::plan_fingerprint_of(canonical.decoded()).expect("a fingerprint");
     let error = with_seat_zero(&text, Some(fingerprint ^ 1));
     assert_eq!(error.code(), Code::InvalidArgument);
     assert_eq!(
@@ -727,8 +733,8 @@ fn a_restored_seals_compile_refusal_quotes_the_label() {
         &pharmakos_proto::json::write(&Json::String(label.to_owned())),
     );
     let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
-    let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
-        .expect("a fingerprint");
+    let fingerprint =
+        pharmakos_sim::hash::plan_fingerprint_of(canonical.decoded()).expect("a fingerprint");
     let mut damaged = saved;
     let seal = damaged
         .seats
@@ -927,4 +933,165 @@ fn a_resumed_match_keeps_its_tick_monotonic() {
     let saved = surface.lull_save().expect("a Lull saves");
     let resumed = resume(MATCH_ID, &saved).expect("resumed");
     assert_eq!(resumed.time().tick, before);
+}
+
+/// The golden case the save's bytes are pinned by: one match's round-1 saves,
+/// a `lull` one with both seats' seals and the `sealed` one its Push begins
+/// with (S3's `fpstream`, part 2).
+const SAVE_GOLDEN: &str = "save_round_one";
+
+/// The committed save of `SAVE_GOLDEN`, `file` being `lull` or `sealed`.
+fn committed_save(file: &str) -> std::path::PathBuf {
+    support::workspace_root()
+        .join("tests")
+        .join("golden")
+        .join("gateway")
+        .join(SAVE_GOLDEN)
+        .join(format!("expected.{file}.json"))
+}
+
+/// A save's file text as the golden holds it: the render and the one newline
+/// every golden ends with (`tests/golden/README.md`, rule 3).
+fn save_text(match_id: &str, state: &SavedMatch) -> String {
+    let mut text = Save {
+        stamp: Stamp::current(rules().rules_hash()),
+        config: config_of(match_id),
+        state: state.clone(),
+    }
+    .render();
+    text.push('\n');
+    text
+}
+
+/// Write the fresh save and compare it with the committed one, byte for byte.
+fn save_golden(file: &str, text: &str) {
+    assert!(!text.contains('\r'), "a save is written with LF endings");
+    let fresh = support::target_dir()
+        .join("golden")
+        .join("gateway")
+        .join(SAVE_GOLDEN);
+    std::fs::create_dir_all(&fresh).expect("the fresh output's folder");
+    std::fs::write(fresh.join(format!("actual.{file}.json")), text).expect("the fresh output");
+    let committed = committed_save(file);
+    let Ok(expected) = std::fs::read_to_string(&committed) else {
+        panic!(
+            "no committed golden at {}. A new case is committed by copying the fresh output \
+             beside it, byte for byte, once it is right; `cargo xtask golden --bless` rewrites \
+             only goldens that exist.",
+            committed.display()
+        );
+    };
+    assert!(
+        expected == text,
+        "the save at {} moved. tests/golden/gateway/README.md says what a diff means; the pull \
+         request has to say which input moved it.",
+        committed.display()
+    );
+}
+
+/// A save is a format on players' disks (AGENTS.md section 5): this build
+/// writes the same bytes for the same match as the build that committed the
+/// golden, and a save that build wrote resumes here, its seals carrying the
+/// fingerprints stamped beside them, and is written again byte for byte.
+///
+/// The golden was written by `main` at `bbddd094`, before the seal carried
+/// its fingerprint (S3's `fpstream`, part 2), so the `plan_fingerprint` lines
+/// it holds are the ones the save writer used to recompute from each seal's
+/// text: this test failing is a fingerprint value, or the save's format,
+/// moving. It was re-blessed once, when lane `retreat` (#230) moved
+/// `VERIFIER_VERSION` from `0.1.0-s3.5` to `0.1.0-s3.6`: the stamp's
+/// `verifier_version` and the two `report_hash` lines moved with it, which
+/// hashes the version, and no `plan_fingerprint` line moved.
+#[test]
+fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
+    const MATCH_ID: &str = "m-fpstream2-save";
+    let mut surface = new_match(MATCH_ID);
+    plan_round(&mut surface);
+    let lull = surface.lull_save().expect("a Lull saves");
+    assert!(lull.seats.iter().all(|seat| seat.seal.is_some()));
+    save_golden("lull", &save_text(MATCH_ID, &lull));
+    assert!(surface.begin_push().expect("the Push begins"));
+    let sealed = surface
+        .take_persistence()
+        .save
+        .expect("a Push's beginning is saved");
+    assert_eq!(sealed.boundary, Boundary::Sealed);
+    save_golden("sealed", &save_text(MATCH_ID, &sealed));
+
+    // The committed files, read as a resume reads them.
+    for file in ["lull", "sealed"] {
+        let text = std::fs::read_to_string(committed_save(file)).expect("the committed save");
+        let save = Save::parse(text.trim_end_matches('\n')).expect("the committed save reads");
+        save.check(&config_of(MATCH_ID), rules().rules_hash())
+            .expect("the same rules, the same verifier, the same match");
+        let resumed = {
+            let host = pristine();
+            Surface::new(
+                MATCH_ID,
+                SEED,
+                host.rules().clone(),
+                FogPolicy::fogged(),
+                &SEATS,
+            )
+            .expect("a surface")
+            .resume(host, &save.state, CONTINUATION)
+        }
+        .expect("the committed save resumes");
+        for (seat, saved) in SEATS.iter().zip(&save.state.seats) {
+            let held = resumed
+                .seat_state(Subject::Seat(*seat), *seat)
+                .expect("its own")
+                .sealed()
+                .expect("the seal is back");
+            let stamped = saved.seal.as_ref().expect("a saved seal");
+            assert_eq!(held.playbook_jsonc(), stamped.playbook_jsonc);
+            assert_eq!(held.report_hash(), stamped.report_hash.as_slice());
+        }
+        // A Lull resumed from main's file is saved again as main saved it.
+        if file == "lull" {
+            let again = resumed.lull_save().expect("a resumed Lull saves");
+            assert!(
+                save_text(MATCH_ID, &again) == text,
+                "a resumed Lull's save is not the save it was resumed from"
+            );
+        }
+    }
+}
+
+/// A saved notebook is held to the rules' bound by its count, never through a
+/// cast that saturates (S3's `fpstream`, part 2, fix pass 3): a notebook at the
+/// bound resumes, and one a character past it is refused as a damaged file,
+/// with the words a save past a bound has always had.
+#[test]
+fn a_saved_notebook_past_its_bound_is_refused() {
+    const MATCH_ID: &str = "m-fpstream2-notebook-bound";
+    let bound = rules()
+        .message()
+        .verifier
+        .as_ref()
+        .map(|verifier| verifier.notebook_max_chars)
+        .expect("a verifier block");
+    let bound = usize::try_from(bound).expect("a size");
+    let surface = new_match(MATCH_ID);
+    let saved = surface.lull_save().expect("a Lull saves");
+    let with_notebook = |characters: usize| {
+        let mut held = saved.clone();
+        let seat = held.seats.first_mut().expect("seat 0");
+        // A two-byte character, so a count of bytes would not pass for one of
+        // characters.
+        seat.notebook = "é".repeat(characters);
+        held
+    };
+    assert!(
+        resume(MATCH_ID, &with_notebook(bound)).is_ok(),
+        "at the bound"
+    );
+    let refused = resume(MATCH_ID, &with_notebook(bound.saturating_add(1)))
+        .expect_err("a character past the bound");
+    assert_eq!(refused.code(), Code::InvalidArgument);
+    assert_eq!(
+        refused.message(),
+        "seat 0's notebook or drafts in this save are over the bounds a seat may hold: the file \
+         is damaged"
+    );
 }

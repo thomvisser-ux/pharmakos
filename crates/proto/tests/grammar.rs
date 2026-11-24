@@ -180,6 +180,65 @@ fn an_overlong_integer_is_out_of_range() {
     );
 }
 
+/// `-0` is a whole zero in every integer field, with presence or without
+/// (the review of PR #230): RFC 8259 writes it as an integer, the codec's
+/// `is_zero` drops it as a plain field's default, and it reads as 0 where
+/// the field has presence, so a written `-0` is the written 0. Before, an
+/// `optional uint32` refused it as negative while a plain `uint32` dropped
+/// it, so `"retreat_hp_pct": -0` verified on main and was refused once the
+/// field took `optional`. A negative unsigned value is still refused.
+#[test]
+fn minus_zero_is_zero_in_every_integer_field() {
+    use pharmakos_proto::gp::v1::{
+        AttackLaunch, BuildSettings, DefendSettings, MandateSettings, MineSettings,
+    };
+    // Presence, unsigned and signed: the written 0.
+    let settings: MandateSettings =
+        json::decode(r#"{"retreat_hp_pct":-0}"#).expect("an optional uint32 takes -0");
+    assert_eq!(settings.retreat_hp_pct, Some(0));
+    let build: BuildSettings =
+        json::decode(r#"{"repair_threshold_pct":-0}"#).expect("an optional uint32 takes -0");
+    assert_eq!(build.repair_threshold_pct, Some(0));
+    let launch: AttackLaunch =
+        json::decode(r#"{"segment_ms":-0}"#).expect("an optional int32 takes -0");
+    assert_eq!(launch.segment_ms, Some(0));
+    // No presence, unsigned and signed: the default, dropped.
+    let mine: MineSettings = json::decode(r#"{"dig_max_depth":-0}"#).expect("a uint32 takes -0");
+    assert_eq!(mine.dig_max_depth, 0);
+    let defend: DefendSettings =
+        json::decode(r#"{"engagement_radius_pct":-0}"#).expect("a uint32 takes -0");
+    assert_eq!(defend.engagement_radius_pct, 0);
+    // The canonical form writes the zero as `0`, never `-0`.
+    for (message, text, kept) in [
+        ("gp.v1.MandateSettings", r#"{"retreat_hp_pct":-0}"#, true),
+        ("gp.v1.DefendSettings", r#"{"picket_scouts":-0}"#, true),
+        ("gp.v1.AttackLaunch", r#"{"segment_ms":-0}"#, true),
+        ("gp.v1.MineSettings", r#"{"dig_max_depth":-0}"#, false),
+    ] {
+        let canonical = json::canonicalise(message, text).expect("canonicalises");
+        assert!(!canonical.contains("-0"), "{message}: {canonical}");
+        assert_eq!(
+            canonical.contains(":0") || canonical.contains(": 0"),
+            kept,
+            "{message}: {canonical}"
+        );
+    }
+    // The direct reader agrees with the exact path.
+    match json::decode_direct::<MandateSettings>(r#"{"retreat_hp_pct":-0}"#) {
+        Direct::Wire(decoded) => assert_eq!(decoded.message().retreat_hp_pct, Some(0)),
+        Direct::NeedsExactPath(why) => panic!("the direct reader left -0: {why:?}"),
+    }
+    // A negative unsigned value is still refused, with presence or without.
+    for text in [r#"{"retreat_hp_pct":-1}"#, r#"{"retreat_hp_pct":"-1"}"#] {
+        let error = json::decode::<MandateSettings>(text).expect_err("negative");
+        assert!(
+            error.message().contains("not a non-negative whole number"),
+            "{}",
+            error.message()
+        );
+    }
+}
+
 /// One quoting rule for a player's text in a refusal (S3's `vfyq2`, fix
 /// pass 1, item 5): controls as `\u00XX`, at most `MAX_QUOTED_CHARS`
 /// characters, the rest `…`.

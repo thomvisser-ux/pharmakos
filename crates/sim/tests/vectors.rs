@@ -366,8 +366,21 @@ fn the_quantities_say_what_they_do_at_the_limit() {
 /// report already written.
 #[test]
 fn the_plan_fingerprint_is_unmoved() {
+    use pharmakos_proto::fingerprint::{PLAN_FINGERPRINT_DOMAIN, canonical_input};
     use pharmakos_proto::gp::v1::Playbook;
-    use pharmakos_sim::hash::{plan_fingerprint, plan_fingerprint_of};
+    use pharmakos_sim::hash::plan_fingerprint_of;
+    // The rule written out whole, as the reference (S3's `fpstream`, part 2,
+    // fix pass 1, deleted the message-encoding function that computed it in
+    // shipped code): the domain, then the canonical text with
+    // `meta.fingerprint` cleared, in one buffer, through the one-shot digest.
+    let whole = |playbook: &Playbook| {
+        let mut bytes = PLAN_FINGERPRINT_DOMAIN.to_vec();
+        bytes.extend_from_slice(
+            &canonical_input(playbook)
+                .unwrap_or_else(|error| panic!("a decoded playbook writes: {error}")),
+        );
+        digest(&bytes)
+    };
     let cases = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("verifier")
@@ -384,8 +397,8 @@ fn the_plan_fingerprint_is_unmoved() {
             .unwrap_or_else(|error| panic!("{case}: a playbook: {error}"));
         let playbook = decoded.message().clone();
         assert_eq!(
-            plan_fingerprint(&playbook).map(hex),
-            Ok(hex(pinned)),
+            hex(whole(&playbook)),
+            hex(pinned),
             "{case}: the fingerprint the verifier golden carries"
         );
         // And from the wire bytes, the text hashed in pieces as it is
@@ -401,7 +414,16 @@ fn the_plan_fingerprint_is_unmoved() {
         if let Some(meta) = stamped.meta.as_mut() {
             meta.fingerprint = vec![0xff; 8];
         }
-        assert_eq!(plan_fingerprint(&stamped), plan_fingerprint(&playbook));
+        let stamped_text = pharmakos_proto::json::encode(&stamped)
+            .unwrap_or_else(|error| panic!("{case}: a stamped playbook writes: {error}"));
+        let stamped_decoded = pharmakos_proto::json::decode_encoded::<Playbook>(&stamped_text)
+            .unwrap_or_else(|error| panic!("{case}: a stamped playbook: {error}"));
+        assert_eq!(whole(&stamped), whole(&playbook));
+        assert_eq!(
+            plan_fingerprint_of(&stamped_decoded).map(hex),
+            Ok(hex(pinned)),
+            "{case}: a stamp is left out of the streamed fingerprint"
+        );
     }
 }
 

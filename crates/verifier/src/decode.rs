@@ -130,9 +130,11 @@ pub(crate) struct Decoded<'a> {
     /// The playbook: the caller's, when it handed one in already decoded
     /// ([`crate::Input::canonical`]), or the one decoded here.
     pub(crate) playbook: Cow<'a, Playbook>,
-    /// Its plan fingerprint, or `None` when it has none
-    /// ([`pharmakos_sim::hash::plan_fingerprint_of`] says when).
-    pub(crate) fingerprint: Option<u64>,
+    /// Its plan fingerprint, or why the codec could not write the canonical
+    /// text it is taken over ([`pharmakos_sim::hash::plan_fingerprint_of`]):
+    /// an engine fault, reported as `E0030` ([`check_fingerprint`]) and never
+    /// swallowed into "no fingerprint" (S3's `fpstream`, part 2, fix pass 2).
+    pub(crate) fingerprint: Result<u64, pharmakos_sim::hash::FingerprintError>,
 }
 
 /// Decode, or say why not.
@@ -168,7 +170,7 @@ pub(crate) fn run<'a>(bytes: &[u8], handed: Handed<'a>, out: &mut Builder) -> Op
     if let Some(decoded) = handed {
         // Decoded from exactly `bytes` by the codec (`Input::canonical`):
         // what the first path below would answer, without reading them again.
-        let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(decoded).ok();
+        let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(decoded);
         return Some(checked(
             Decoded {
                 playbook: Cow::Borrowed(decoded.message()),
@@ -199,7 +201,7 @@ pub(crate) fn run<'a>(bytes: &[u8], handed: Handed<'a>, out: &mut Builder) -> Op
 
     let decoded = match json::decode_direct::<Playbook>(text) {
         json::Direct::Wire(decoded) => {
-            let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded).ok();
+            let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded);
             Decoded {
                 playbook: Cow::Owned(decoded.into_message()),
                 fingerprint,
@@ -215,7 +217,7 @@ fn checked<'a>(decoded: Decoded<'a>, out: &mut Builder) -> Decoded<'a> {
     check_version(&decoded.playbook, out);
     check_kind(&decoded.playbook, out);
     check_author(&decoded.playbook, out);
-    check_fingerprint(&decoded.playbook, decoded.fingerprint, out);
+    check_fingerprint(&decoded.playbook, &decoded.fingerprint, out);
     crate::enums::run(&decoded.playbook, out);
     decoded
 }
@@ -239,7 +241,7 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded<'static>> {
         // first path does, with the fingerprint written from the wire bytes
         // the tree was encoded to, so there is one fingerprint function.
         Ok(decoded) => {
-            let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded).ok();
+            let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded);
             Some(Decoded {
                 playbook: Cow::Owned(decoded.into_message()),
                 fingerprint,
@@ -419,7 +421,23 @@ fn check_author(playbook: &Playbook, out: &mut Builder) {
 /// author's stale copy of a stamp the verifier owns. `computed` is that
 /// fingerprint, which the decode stage computes once for the check and the
 /// report alike.
-fn check_fingerprint(playbook: &Playbook, computed: Option<u64>, out: &mut Builder) {
+///
+/// When the codec could not write the canonical text the fingerprint is taken
+/// over, there is no fingerprint to judge a stamp by, and saying the stamp is
+/// stale (`E0008`) would blame the player's file for the verifier's own
+/// fault. So that is `E0030`, an error about the engine and not the file,
+/// whether or not the file carries a stamp: a report with no fingerprint
+/// never qualifies, so nothing is sealed without one (S3's `fpstream`,
+/// part 2, fix pass 2).
+fn check_fingerprint(
+    playbook: &Playbook,
+    computed: &Result<u64, pharmakos_sim::hash::FingerprintError>,
+    out: &mut Builder,
+) {
+    let Ok(computed) = computed else {
+        out.emit(Diag::new("E0030", pointer::ROOT));
+        return;
+    };
     let Some(meta) = playbook.meta.as_ref() else {
         return;
     };
@@ -430,8 +448,7 @@ fn check_fingerprint(playbook: &Playbook, computed: Option<u64>, out: &mut Build
     // byte order (item 77), so the rule has one home, and a field of the wrong
     // length comes back as `None` there rather than needing a length check here.
     let matches = pharmakos_proto::fingerprint::from_field(&meta.fingerprint)
-        .zip(computed)
-        .is_some_and(|(found, computed)| found == computed);
+        .is_some_and(|found| found == *computed);
     if matches {
         return;
     }
@@ -461,6 +478,57 @@ fn schema_version_json(version: SchemaVersion) -> Json {
 mod tests {
     use super::RESERVED_NAMES;
     use pharmakos_proto::json::{self, ErrorKind};
+
+    /// A fingerprint the codec could not write is `E0030`, an error about the
+    /// verifier, and never `E0008`, which would tell the author to remove a
+    /// stamp that may be right: with a stamp and without one (S3's
+    /// `fpstream`, part 2, fix pass 2). The fault cannot be reached through a
+    /// file, because the codec can write every playbook it decodes, so the
+    /// check is held here with the error made by hand.
+    #[test]
+    fn a_fingerprint_the_codec_could_not_write_is_e0030_and_never_e0008() {
+        let fault = || {
+            Err(pharmakos_sim::hash::FingerprintError::Canonical(
+                json::decode::<pharmakos_proto::gp::v1::Playbook>("{").expect_err("not JSON"),
+            ))
+        };
+        let stamped = pharmakos_proto::gp::v1::Playbook {
+            meta: Some(pharmakos_proto::gp::v1::Meta {
+                fingerprint: pharmakos_proto::fingerprint::to_field(7),
+                ..pharmakos_proto::gp::v1::Meta::default()
+            }),
+            ..pharmakos_proto::gp::v1::Playbook::default()
+        };
+        for playbook in [stamped, pharmakos_proto::gp::v1::Playbook::default()] {
+            let mut out = crate::report::Builder::default();
+            super::check_fingerprint(&playbook, &fault(), &mut out);
+            assert!(out.has_errors(), "an engine fault is an error");
+            let codes: Vec<String> = out
+                .into_diagnostics()
+                .into_iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect();
+            assert_eq!(codes, ["E0030"]);
+        }
+        // And a stamp that matches is left alone; one that does not is `E0008`.
+        let matching = pharmakos_proto::gp::v1::Playbook {
+            meta: Some(pharmakos_proto::gp::v1::Meta {
+                fingerprint: pharmakos_proto::fingerprint::to_field(7),
+                ..pharmakos_proto::gp::v1::Meta::default()
+            }),
+            ..pharmakos_proto::gp::v1::Playbook::default()
+        };
+        for (computed, expected) in [(7_u64, Vec::<&str>::new()), (8, vec!["E0008"])] {
+            let mut out = crate::report::Builder::default();
+            super::check_fingerprint(&matching, &Ok(computed), &mut out);
+            let codes: Vec<String> = out
+                .into_diagnostics()
+                .into_iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect();
+            assert_eq!(codes, expected, "computed {computed}");
+        }
+    }
 
     /// What lets the decode stage's direct path skip the reserved-name scan: a
     /// document the codec accepts has every member resolved to a declared

@@ -25,8 +25,7 @@
 //! `hash` module in S1's `build` lane **with its value unmoved**, and
 //! `the_plan_fingerprint_is_unmoved` (this crate's `tests/vectors.rs`) holds it
 //! to the value the committed verifier goldens carry. The verifier and the
-//! gateway call this module; the verifier's `hash::plan_fingerprint` is a thin
-//! reader of it.
+//! gateway call this module.
 //!
 //! [`plan_fingerprint_of`] computes the value for a playbook decoded from JSON
 //! without encoding it again (S3's `vfyq`, decisions-log item 158), and
@@ -35,18 +34,21 @@
 //! `meta.fingerprint` left out, which is [`canonical_input`]'s clearing, and
 //! each piece of them is hashed as it is written
 //! ([`json::write_wire_into`]), so the fingerprint takes a fixed amount of
-//! memory whatever the playbook's size. [`plan_fingerprint`] is the same value
-//! for a caller that holds only a message: it writes the canonical bytes
-//! whole, because the message must be encoded to reach them, and hashes them
-//! through the same digest. `crates/proto`'s differential tests hold the text
+//! memory whatever the playbook's size. It is the only fingerprint
+//! function: a message-encoding `plan_fingerprint(&Playbook)` stood beside it
+//! until S3's `fpstream` part 2, and was deleted once no shipped code called
+//! it, so a caller holding only a message cannot take a fingerprint without
+//! decoding JSON first. `crates/proto`'s differential tests hold the text
 //! written in pieces to the text written whole on generated playbooks;
 //! `crates/verifier/tests/fingerprint.rs` and
-//! `crates/plan-core/tests/fingerprint.rs` hold both functions to a one-shot
+//! `crates/plan-core/tests/fingerprint.rs` hold it to a one-shot
 //! digest of [`canonical_input`]'s bytes on every committed playbook and on
 //! the shapes P1 is measured at.
+//!
+//! [`canonical_input`]: pharmakos_proto::fingerprint::canonical_input
 
 use crate::encoding::StreamingDigest;
-use pharmakos_proto::fingerprint::{FINGERPRINT_FIELD, PLAN_FINGERPRINT_DOMAIN, canonical_input};
+use pharmakos_proto::fingerprint::{FINGERPRINT_FIELD, PLAN_FINGERPRINT_DOMAIN};
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json::{self, Decoded};
 
@@ -100,33 +102,13 @@ impl<'t> Extend<&'t str> for Fingerprint {
     }
 }
 
-/// The plan fingerprint of a playbook message (decisions-log item 77).
-///
-/// `xxh3-64( PLAN_FINGERPRINT_DOMAIN || canonical_json_bytes )` under the
-/// project's one seed. Clearing `meta.fingerprint` before hashing is
-/// [`canonical_input`]'s, and it is what makes the fingerprint checkable:
-/// recomputing over the file as it stands would hash the old fingerprint into
-/// the new one.
-///
-/// A caller that decoded the playbook from JSON holds its wire bytes and asks
-/// [`plan_fingerprint_of`] instead, which neither clones nor encodes it nor
-/// holds its text; this function does all three, because a message alone has
-/// no other way to its canonical bytes.
-///
-/// # Errors
-///
-/// [`FingerprintError::Canonical`] when the playbook cannot be written as
-/// canonical JSON.
-pub fn plan_fingerprint(playbook: &Playbook) -> Result<u64, FingerprintError> {
-    let canonical = canonical_input(playbook).map_err(FingerprintError::Canonical)?;
-    let mut fingerprint = Fingerprint::new();
-    fingerprint.digest.update(&canonical);
-    Ok(fingerprint.finish())
-}
-
 /// The plan fingerprint of a playbook decoded from JSON, from the wire bytes it
-/// was decoded from: the value [`plan_fingerprint`] gives the playbook, without
-/// encoding it again and without holding its text.
+/// was decoded from: the digest of [`PLAN_FINGERPRINT_DOMAIN`] and the bytes
+/// [`canonical_input`] writes for the playbook, without encoding it again and
+/// without holding its text. It is the one fingerprint function this project
+/// ships (S3's `fpstream`, part 2, fix pass 1): the message-encoding
+/// `plan_fingerprint(&Playbook)` that stood beside it is deleted, and the tests
+/// hold this one to a whole-buffer reference of their own.
 ///
 /// The canonical bytes are [`json::write_wire_into`]'s over those bytes with
 /// `meta.fingerprint` ([`FINGERPRINT_FIELD`]) left out, which is the text
@@ -142,7 +124,9 @@ pub fn plan_fingerprint(playbook: &Playbook) -> Result<u64, FingerprintError> {
 /// # Errors
 ///
 /// [`FingerprintError::Canonical`] when the bytes cannot be written as
-/// canonical JSON, as [`plan_fingerprint`].
+/// canonical JSON.
+///
+/// [`canonical_input`]: pharmakos_proto::fingerprint::canonical_input
 pub fn plan_fingerprint_of(decoded: &Decoded<Playbook>) -> Result<u64, FingerprintError> {
     let mut fingerprint = Fingerprint::new();
     json::write_wire_into(

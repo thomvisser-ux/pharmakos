@@ -350,7 +350,7 @@ gp.v1.Mandate
   script                       2   gp.v1.ScriptMandate
 
 gp.v1.MandateSettings
-  oneof: mandate
+  oneof: mandate, _retreat_hp_pct
   roe                          1   gp.v1.MandateSettings.Roe
   retreat_hp_pct               2   uint32
   build                        10  gp.v1.BuildSettings
@@ -904,7 +904,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-118 codes. A code is language-neutral, append-only and never
+119 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1024,6 +1024,10 @@ E0028  ERROR  decode and version  raised at: none at the skeleton (retired by S3
 E0029  ERROR  decode and version  raised at: decode
   the playbook is longer than {max} characters, so none of it was read.
   This file is longer than a playbook may be, so nothing in it was checked. Take out what it does not need.
+
+E0030  ERROR  decode and version  raised at: decode
+  the verifier could not write this playbook's canonical form to take its plan fingerprint; this is a fault in the verifier, not in the file.
+  Something went wrong inside the checker, not in your file, so this playbook cannot be sealed in this build. Report it.
 
 E0101  ERROR  limits and required blocks  raised at: structure
   {what} is required and is missing.

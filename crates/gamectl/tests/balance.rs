@@ -986,16 +986,16 @@ fn seal_of(surface: &Surface, seat: u8, round: u32, template: Option<&str>) -> S
     let state = surface
         .seat_state(Subject::Seat(SeatId::new(seat)), SeatId::new(seat))
         .expect("its own");
-    let Some(sealed) = state.sealed.as_ref().filter(|sealed| sealed.round == round) else {
+    let Some(sealed) = state.sealed().filter(|sealed| sealed.round() == round) else {
         return String::from("none");
     };
-    if sealed.filed_by_the_gateway {
+    if sealed.filed_by_the_gateway() {
         return String::from("filed-safe");
     }
     if let Some(word) = template {
         return word.to_owned();
     }
-    if sealed.playbook_jsonc.contains("Easy, seat") {
+    if sealed.playbook_jsonc().contains("Easy, seat") {
         String::from("easy-own")
     } else {
         String::from("easy-safe")

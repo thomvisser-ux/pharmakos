@@ -118,8 +118,23 @@ pub struct Field {
     /// Fully-qualified, without the leading dot, for `Message` and `Enum`.
     pub type_name: String,
     /// Which `oneof` this field belongs to, by index into the message's
-    /// `oneofs`.
+    /// `oneofs`. A proto3 `optional` field is in one too: the synthetic
+    /// one-field oneof protoc gives it, which is presence and no choice
+    /// ([`Field::proto3_optional`]).
     pub oneof_index: Option<i32>,
+    /// `FieldDescriptorProto.proto3_optional` (field 17): the field is a
+    /// proto3 `optional`, so its `oneof_index` names a synthetic oneof.
+    pub proto3_optional: bool,
+}
+
+impl Field {
+    /// Whether the field is an arm of a real `oneof`, one of its choices: in
+    /// a oneof and not a proto3 `optional`, whose synthetic oneof is presence
+    /// (the review of PR #230, which found an arm told by its oneof's name).
+    #[must_use]
+    pub const fn is_arm(&self) -> bool {
+        self.oneof_index.is_some() && !self.proto3_optional
+    }
 }
 
 /// One message.
@@ -393,13 +408,15 @@ fn parse_field(bytes: &[u8]) -> Result<Field, WireError> {
     let mut kind = ScalarKind::String;
     let mut type_name = String::new();
     let mut oneof_index: Option<i32> = None;
+    let mut proto3_optional = false;
 
     let mut reader = Reader::new(bytes);
     while !reader.is_done() {
         let (field_number, value) = reader.field()?;
         match (field_number, value) {
             // FieldDescriptorProto: name = 1, number = 3, label = 4,
-            // type = 5, type_name = 6, oneof_index = 9, json_name = 10.
+            // type = 5, type_name = 6, oneof_index = 9, json_name = 10,
+            // proto3_optional = 17.
             (1, Value::Delimited(payload)) => name = utf8(payload)?,
             (3, Value::Varint(raw)) => number = signed32(raw)?,
             (4, Value::Varint(raw)) => label = raw,
@@ -413,6 +430,7 @@ fn parse_field(bytes: &[u8]) -> Result<Field, WireError> {
             }
             (9, Value::Varint(raw)) => oneof_index = Some(signed32(raw)?),
             (10, Value::Delimited(payload)) => json_name = utf8(payload)?,
+            (17, Value::Varint(raw)) => proto3_optional = raw != 0,
             _ => {}
         }
     }
@@ -432,6 +450,7 @@ fn parse_field(bytes: &[u8]) -> Result<Field, WireError> {
         kind,
         type_name,
         oneof_index,
+        proto3_optional,
     })
 }
 
@@ -570,7 +589,31 @@ fn join(scope: &str, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{WireError, enum_reserved_range, message_reserved_range};
+    use super::{WireError, enum_reserved_range, message_reserved_range, schema};
+
+    /// A proto3 `optional` field is no arm; a real oneof's member is one;
+    /// a plain field is neither (the review of PR #230).
+    #[test]
+    fn an_arm_is_a_real_oneofs_member_and_never_a_proto3_optional() {
+        let settings = schema()
+            .message("gp.v1.MandateSettings")
+            .expect("a declared message");
+        let field = |name: &str| settings.field_by_name(name).expect("a declared field");
+        assert!(field("build").is_arm());
+        assert!(!field("build").proto3_optional);
+        assert!(field("retreat_hp_pct").proto3_optional);
+        assert!(field("retreat_hp_pct").oneof_index.is_some());
+        assert!(!field("retreat_hp_pct").is_arm());
+        assert!(!field("roe").is_arm());
+        assert!(!field("roe").proto3_optional);
+        let build = schema()
+            .message("gp.v1.BuildSettings")
+            .expect("a declared message");
+        let threshold = build
+            .field_by_name("repair_threshold_pct")
+            .expect("a declared field");
+        assert!(threshold.proto3_optional && !threshold.is_arm());
+    }
 
     /// A `ReservedRange` as wire bytes: `start` = 1 and `end` = 2, varints.
     fn range_bytes(start: u8, end: u8) -> [u8; 4] {
