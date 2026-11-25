@@ -61,7 +61,7 @@ use pharmakos_proto::{SCHEMA_VERSION, schema_version};
 
 use crate::pointer;
 use crate::report::{
-    Builder, Diag, MAX_POINTER_BYTES, bounded, json_bytes, patch_add, patch_remove, patch_replace,
+    Builder, Diag, MAX_POINTER_BYTES, json_bytes, patch_add, patch_remove, patch_replace,
 };
 
 /// Field names `gp.v1` reserves, in the order the `.proto` files reserve them.
@@ -299,25 +299,22 @@ fn refuse(error: &json::Error, out: &mut Builder) {
     let unknown = (error.kind() == json::ErrorKind::UnknownField)
         .then(|| pointer::last_token(error.pointer()))
         .flatten();
-    let (path, cut) = bounded(error.pointer());
+    // The pointer goes in whole, with its Fix: the report's one door
+    // (`Builder::push`) cuts a pointer past its bound, drops the Fix that
+    // would have to spell it, and counts both (S3's `vcap`, fix pass 2).
+    let path = error.pointer();
     if let Some(name) = unknown {
-        let diag = Diag::new("E0002", path.clone().into_owned()).arg_text("field", &name);
-        // A pointer past the bound addresses the object that holds the
-        // member, the deepest place a report can name; a Fix would have to
-        // spell the whole member name, so none is offered there, and the
-        // message names the member (quoted, cut) and asks the author to take
-        // it out, as E0002's beginner sentence says.
-        out.emit(if cut {
-            diag
-        } else {
-            diag.fix(
-                pharmakos_proto::said!("Delete `{}`", quoted(&name)),
-                patch_remove(&path),
-                Applicability::MaybeIncorrect,
-            )
-        });
+        out.emit(
+            Diag::new("E0002", path.to_owned())
+                .arg_text("field", &name)
+                .fix(
+                    pharmakos_proto::said!("Delete `{}`", quoted(&name)),
+                    patch_remove(path),
+                    Applicability::MaybeIncorrect,
+                ),
+        );
     } else {
-        out.emit(Diag::new("E0001", path.into_owned()).arg("detail", error.said()));
+        out.emit(Diag::new("E0001", path.to_owned()).arg("detail", error.said()));
     }
 }
 

@@ -220,10 +220,14 @@ pub const MAX_MAP_REFS: usize = 2;
 /// over, and a value (the stubs a Fix adds are a few hundred bytes).
 pub const PATCH_BYTES_MAX: usize = 4 * MAX_POINTER_BYTES + 1024;
 
+/// The most bytes one map reference takes as JSON: three `i32`s at their
+/// widest, their keys, braces and indentation at the gateway's nesting.
+pub const MAP_REF_BYTES: usize = 160;
+
 /// What a diagnostic's JSON takes beside the bytes of its strings: its field
 /// names, quotes, commas and indentation (at the gateway's nesting, inside an
-/// answer), its severity, a Fix's applicability and a map reference's three
-/// numbers. `report.rs`'s `the_framing_covers_the_serialiser` holds it to the
+/// answer), its severity and a Fix's applicability; each map reference is
+/// [`MAP_REF_BYTES`] of its own. `report.rs`'s `the_framing_covers_the_serialiser` holds it to the
 /// real serialiser.
 pub const DIAGNOSTIC_FRAMING_BYTES: usize = 1024;
 
@@ -242,7 +246,8 @@ pub fn diagnostic_bytes_max(code: &str) -> Option<usize> {
             .saturating_add(MAX_POINTER_BYTES.saturating_mul(1 + MAX_RELATED))
             .saturating_add(text(row.message))
             .saturating_add(text(row.beginner))
-            .saturating_add(MAX_FIXES.saturating_mul(argument.saturating_add(PATCH_BYTES_MAX))),
+            .saturating_add(MAX_FIXES.saturating_mul(argument.saturating_add(PATCH_BYTES_MAX)))
+            .saturating_add(MAX_MAP_REFS.saturating_mul(MAP_REF_BYTES)),
     )
 }
 
@@ -744,7 +749,7 @@ impl Builder {
                 Severity::Error | Severity::Unspecified => strings::LEFT_OUT_STILL_REFUSE,
                 Severity::Warning | Severity::Info => "",
             };
-            let budget = if gap.code == DEFAULT_NOTE {
+            let budget = if gap.code == DEFAULT_NOTE && self.over_budget {
                 strings::LEFT_OUT_PAST_THE_BUDGET
             } else {
                 ""
@@ -806,7 +811,9 @@ pub fn diagnostic_bytes(diagnostic: &Diagnostic) -> usize {
     )
     .map(json_bytes)
     .fold(0_usize, usize::saturating_add);
-    DIAGNOSTIC_FRAMING_BYTES.saturating_add(strings)
+    DIAGNOSTIC_FRAMING_BYTES
+        .saturating_add(strings)
+        .saturating_add(diagnostic.map_refs.len().saturating_mul(MAP_REF_BYTES))
 }
 
 /// A code's severity, from the catalogue. A code the catalogue does not have
@@ -1077,7 +1084,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        ARGUMENT_BYTES_MAX, Cuts, MAX_PER_CODE, MAX_POINTER_BYTES, ONCE_PER_REPORT,
+        ARGUMENT_BYTES_MAX, Cuts, MAX_MAP_REFS, MAX_PER_CODE, MAX_POINTER_BYTES, ONCE_PER_REPORT,
         PATCH_BYTES_MAX, QUOTED_CHAR_JSON_BYTES_MAX, ReportFault, argument_bytes_max, cut_text,
         diagnostic_bytes, diagnostic_bytes_max, json_bytes,
     };
@@ -1202,7 +1209,7 @@ mod tests {
             json_patch: "p".repeat(PATCH_BYTES_MAX),
             applicability: i32::from(Applicability::MaybeIncorrect),
         });
-        for _ in 0..2 {
+        for _ in 0..=MAX_MAP_REFS {
             diag = diag.map_ref(Voxel {
                 x: i32::MIN,
                 y: i32::MIN,
@@ -1316,6 +1323,9 @@ mod tests {
             Diag::new("E0404", format!("/declarative{deep}"))
                 .related("/a")
                 .related("/b")
+                .map_ref(Voxel { x: 1, y: 1, z: 1 })
+                .map_ref(Voxel { x: 2, y: 2, z: 2 })
+                .map_ref(Voxel { x: 3, y: 3, z: 3 })
                 .fix("t", String::from("[]"), Applicability::MaybeIncorrect),
         );
         let mut long = Diag::new("E0405", "/x");
@@ -1332,7 +1342,7 @@ mod tests {
                 pointers: 1,
                 fixes: 1,
                 related: 1,
-                map_refs: 0,
+                map_refs: 1,
             }
         );
         let first = finished.diagnostics.first().expect("listed");
@@ -1346,6 +1356,15 @@ mod tests {
         );
         let second = finished.diagnostics.get(1).expect("listed");
         assert!(second.message.contains('…'), "{}", second.message);
+        // The argument was cut, not the message: the template's own words after
+        // the argument are whole.
+        assert!(
+            second
+                .message
+                .ends_with("…` is a beacon this seat does not own."),
+            "{}",
+            second.message
+        );
         assert!(cut_text("abc", 4).ends_with('…'));
     }
 
@@ -1380,8 +1399,8 @@ mod tests {
 
     /// `I0007`'s words are true for the code they name: an error's say the
     /// left-out ones still refuse; a warning's and a note's say nothing about
-    /// qualifying; only `I0003`'s name the size budget; a note's beginner
-    /// sentence does not ask to deal with anything.
+    /// qualifying; only `I0003`'s name the size budget, and only once it was
+    /// passed; a note's beginner sentence does not ask to deal with anything.
     #[test]
     fn an_i0007_s_words_are_its_code_s() {
         let words = |code: &'static str| -> Diagnostic {
@@ -1409,8 +1428,23 @@ mod tests {
         assert!(warning.beginner.contains("Deal with"));
         let note = words("I0003");
         assert!(!note.message.contains("qualifying"));
-        assert!(note.message.contains("size budget"));
+        assert!(
+            !note.message.contains("size budget"),
+            "the budget is named only once it was passed: {}",
+            note.message
+        );
         assert!(!note.beginner.contains("Deal with"));
+        // Past the size budget, `I0003`'s words say so.
+        let mut builder = Builder::default();
+        builder.emit(Diag::new("E0110", "/declarative"));
+        builder.emit(Diag::new("I0003", "/declarative/route/0/on_fail"));
+        let past = builder
+            .finish()
+            .diagnostics
+            .into_iter()
+            .find(|found| found.code == "I0007")
+            .expect("an I0007");
+        assert!(past.message.contains("size budget"), "{}", past.message);
         for found in [&error, &warning, &note] {
             assert!(!found.message.contains('{') && !found.beginner.contains('{'));
         }

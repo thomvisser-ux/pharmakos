@@ -235,9 +235,9 @@ pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
 pub use report::{
     ARGUMENT_BYTES_MAX, ARGUMENT_WORDS_BYTES_MAX, CapRead, Cuts, DIAGNOSTIC_FRAMING_BYTES,
-    ENGINE_ARGUMENT_BYTES_MAX, LeftOut, MAX_FIXES, MAX_MAP_REFS, MAX_PER_CODE, MAX_POINTER_BYTES,
-    MAX_RELATED, ONCE_PER_REPORT, PATCH_BYTES_MAX, QUOTED_CHAR_JSON_BYTES_MAX, ReportFault,
-    argument_bytes_max, bounded, diagnostic_bytes, diagnostic_bytes_max, json_bytes,
+    ENGINE_ARGUMENT_BYTES_MAX, LeftOut, MAP_REF_BYTES, MAX_FIXES, MAX_MAP_REFS, MAX_PER_CODE,
+    MAX_POINTER_BYTES, MAX_RELATED, ONCE_PER_REPORT, PATCH_BYTES_MAX, QUOTED_CHAR_JSON_BYTES_MAX,
+    ReportFault, argument_bytes_max, bounded, diagnostic_bytes, diagnostic_bytes_max, json_bytes,
 };
 pub use scope::{
     FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError, Sighted, Sighting,

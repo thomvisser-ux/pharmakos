@@ -101,7 +101,7 @@
     {
       "code": "I0007",
       "severity": "INFO",
-      "message": "172 more `I0003` not listed: a report lists at most 4 of one code one by one, and no `I0003` once the size budget is past.",
+      "message": "172 more `I0003` not listed: a report lists at most 4 of one code one by one.",
       "beginner": "Not shown: 172 more `I0003`. They say the same kind of thing as the ones shown."
     },
     {

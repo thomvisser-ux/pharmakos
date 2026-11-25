@@ -403,3 +403,37 @@ fn a_member_name_of_tag_characters_is_within_its_bounds() {
         diagnostic_bytes(named)
     );
 }
+
+/// **The decode's pointer is cut at the report's door, and counted** (S3's
+/// `vcap`, fix pass 2): a member name of 500 KiB is refused as `E0002` at the
+/// object that holds it, with its Fix dropped, and the report counts one
+/// pointer cut and one Fix dropped.
+#[test]
+fn a_long_member_name_s_pointer_is_cut_and_counted_at_the_door() {
+    let rules =
+        RulesTable::load(&root().join("rules").join("rules.v1.json")).expect("the rules table");
+    let scope = Scope::new(
+        SeatId::new(0),
+        SeatEconomy {
+            treasury: Money::ZERO,
+            supply: Kw::ZERO,
+            draw: Kw::ZERO,
+        },
+    );
+    let long = "k".repeat(500 * 1024);
+    let text = format!(r#"{{"schema_version":{{"major":1}},"{long}":1}}"#);
+    assert!(!is_too_long(&text));
+    let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
+    let counted = verify_counted(&input, Depth::Full);
+    assert!(counted.faults.is_empty(), "{:?}", counted.faults);
+    assert_eq!(counted.cuts.pointers, 1, "{:?}", counted.cuts);
+    assert_eq!(counted.cuts.fixes, 1, "{:?}", counted.cuts);
+    let named = counted
+        .report
+        .diagnostics
+        .iter()
+        .find(|found| found.code == "E0002")
+        .expect("the member is refused by name");
+    assert_eq!(named.path, "", "the object that holds it: the document");
+    assert!(named.suggestions.is_empty());
+}
