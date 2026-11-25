@@ -224,8 +224,8 @@ fn one_entry_two_readers() {
 }
 
 /// An omitted `roe` in a new beacon's settings is said as the value the
-/// verifier's `I0003` note says it reads as, writ by writ, in the words a
-/// menu offers that value in, and as the writ's default: the prose and the
+/// verifier's `I0003` note says it reads as, writ by writ, as what the beacon
+/// is doing, and as the writ's default: the prose and the
 /// note do not disagree (S3's `zerotitle`, carried from `retreat`).
 #[test]
 fn an_omitted_roe_is_said_as_the_note_reads_it() {
@@ -279,8 +279,14 @@ fn an_omitted_roe_is_said_as_the_note_reads_it() {
             .rsplit(' ')
             .next()
             .expect("the note names the value");
-        let words = pharmakos_plan_core::shape::choice_title("gp.v1.MandateSettings.Roe", value)
-            .unwrap_or_else(|| panic!("{writ}: {value} has words"));
+        // The prose says the value as what the beacon is doing, a participle
+        // (S3's `edlists`); the menu's title for it is the order.
+        let words = match value {
+            "HOLD_FIRE" => s::ROE_HOLD_FIRE,
+            "RETURN_FIRE" => s::ROE_RETURN_FIRE,
+            "FREE_FIRE" => s::ROE_FREE_FIRE,
+            other => panic!("{writ}: the note names {other}, which has no words"),
+        };
         let canonical =
             pharmakos_plan_core::canonical::canonicalise_text(&text).expect("the playbook decodes");
         let prose = pharmakos_plan_core::render::render(&canonical.playbook, &context, &rules)

@@ -3,7 +3,7 @@
     /declarative/route/0/place_beacon/at
     reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}, replace
-  4:223-242 "reshaping no ground"
+  4:226-245 "reshaping no ground"
     /declarative/route/0/place_beacon/initial/mandate/build/terraform
     choice "NONE" (leave the ground as it is) | "FILL" (fill hollows) | "DIG" (dig out rises) | "BOTH" (fill and dig)
     = "NONE", replace

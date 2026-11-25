@@ -434,6 +434,17 @@ pub const PICKET_NONE: &str = "no picket";
 
 /// A `roe` value this build does not name, as written.
 pub const ROE_UNSET: &str = "firing as the file does not say";
+/// `MandateSettings.Roe.HOLD_FIRE` in the prose. A settings clause lists what
+/// the beacon is doing, each an "-ing" phrase, so a value is said as a
+/// participle here, while a menu offers it as the order a player gives
+/// ([`CHOICE_HOLD_FIRE`]): two facts, because both are read (S3's `edlists`,
+/// from `zerotitle`'s second review), as Terraform's are
+/// ([`TERRAFORM_FILL`] and [`CHOICE_TERRAFORM_FILL`]).
+pub const ROE_HOLD_FIRE: &str = "holding fire";
+/// `MandateSettings.Roe.RETURN_FIRE` in the prose, as [`ROE_HOLD_FIRE`].
+pub const ROE_RETURN_FIRE: &str = "returning fire";
+/// `MandateSettings.Roe.FREE_FIRE` in the prose, as [`ROE_HOLD_FIRE`].
+pub const ROE_FREE_FIRE: &str = "firing freely";
 /// After an omitted `roe`'s words in a new beacon's or a switched mandate's
 /// settings: the value is its writ's default, not the player's choice
 /// (decisions-log items 144 (11) and 148 (2); the verifier's `I0003`).

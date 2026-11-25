@@ -976,17 +976,17 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
         Some(step::Kind::Interface(visit)) => {
             let visit_at = at(here, "interface");
             let rows_at = at(&visit_at, "rows");
-            let rows: Vec<Text> = visit
+            let rows: Vec<(Text, bool)> = visit
                 .rows
                 .iter()
                 .enumerate()
-                .map(|(index, row)| row_sentence(row, &at(&rows_at, index)))
+                .map(|(index, row)| row_item(row, &at(&rows_at, index)))
                 .collect();
             let spent = interface::interface_ms(visit, ctx.rates).total;
             let what = if rows.is_empty() {
                 Text::default()
             } else {
-                cat!(" and ", join(rows))
+                cat!(" and ", join_items(rows))
             };
             cat!(
                 s::STEP_INTERFACE,
@@ -1019,24 +1019,7 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
                 sentence.push(cat!(", ", s::TAGGED, " ", join(tags)));
             }
             if let Some(initial) = place.initial.as_ref() {
-                let initial_at = at(&place_at, "initial");
-                if let Some(settings) = initial.mandate.as_ref() {
-                    sentence.push(cat!(
-                        ", on ",
-                        article(settings),
-                        " ",
-                        writ(settings),
-                        " mandate",
-                        settings_clause(settings, &at(&initial_at, "mandate"), Clause::Whole)
-                    ));
-                }
-                if initial.priority != 0 {
-                    sentence.push(cat!(
-                        ", at ",
-                        priority_chip(initial.priority, at(&initial_at, "priority")),
-                        " Quartermaster priority"
-                    ));
-                }
+                initial_parts(&mut sentence, initial, &at(&place_at, "initial"));
             }
             sentence.push(cat!(" (", wide_duration(spent), " on site)"));
             sentence
@@ -1051,6 +1034,40 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
         }
         Some(step::Kind::Hold(hold)) => hold_body(hold.ms, &at(&at(here, "hold"), "ms")),
         Some(step::Kind::Broadcast(_)) => cat!(s::STEP_BROADCAST),
+    }
+}
+
+/// A new beacon's initial mandate, with its settings clause, and its
+/// Quartermaster priority, after the place step's location and tags.
+/// `initial_at` is the `initial` block's pointer. The priority after a
+/// mandate's settings clause is set off by a semicolon ([`join_items`]'s
+/// rule), so it does not read as one more setting of the mandate.
+fn initial_parts(
+    sentence: &mut Text,
+    initial: &pharmakos_proto::gp::v1::InitialSettings,
+    initial_at: &str,
+) {
+    let mut after_mandate = ", at ";
+    if let Some(settings) = initial.mandate.as_ref() {
+        let clause = settings_clause(settings, &at(initial_at, "mandate"), Clause::Whole);
+        if !clause.words.is_empty() {
+            after_mandate = "; at ";
+        }
+        sentence.push(cat!(
+            ", on ",
+            article(settings),
+            " ",
+            writ(settings),
+            " mandate",
+            clause
+        ));
+    }
+    if initial.priority != 0 {
+        sentence.push(cat!(
+            after_mandate,
+            priority_chip(initial.priority, at(initial_at, "priority")),
+            " Quartermaster priority"
+        ));
     }
 }
 
@@ -1138,22 +1155,38 @@ fn label_chip(label: &str, pointer: String, kind: ReferenceKind) -> Text {
 // Interface rows
 // ---------------------------------------------------------------------------
 
+/// A row of a visit as a list item, and whether it ends in a settings clause
+/// ([`join_items`]).
+fn row_item(row: &InterfaceRow, here: &str) -> (Text, bool) {
+    let (lead, clause) = match row.row.as_ref() {
+        Some(interface_row::Row::SetMandate(settings)) => (
+            cat!(
+                s::ROW_SET_MANDATE,
+                " ",
+                article(settings),
+                " ",
+                writ(settings),
+                " mandate"
+            ),
+            settings_clause(settings, &at(here, "set_mandate"), Clause::Whole),
+        ),
+        Some(interface_row::Row::SetMandateSettings(settings)) => (
+            cat!(s::ROW_SET_SETTINGS),
+            settings_clause(settings, &at(here, "set_mandate_settings"), Clause::Edit),
+        ),
+        _ => return (row_sentence(row, here), false),
+    };
+    let carries = !clause.words.is_empty();
+    (cat!(lead, clause), carries)
+}
+
+/// A row of a visit that carries no settings clause, as a sentence.
 fn row_sentence(row: &InterfaceRow, here: &str) -> Text {
     match row.row.as_ref() {
         None => cat!(s::ROW_NOTHING),
-        Some(interface_row::Row::SetMandate(settings)) => cat!(
-            s::ROW_SET_MANDATE,
-            " ",
-            article(settings),
-            " ",
-            writ(settings),
-            " mandate",
-            settings_clause(settings, &at(here, "set_mandate"), Clause::Whole)
-        ),
-        Some(interface_row::Row::SetMandateSettings(settings)) => cat!(
-            s::ROW_SET_SETTINGS,
-            settings_clause(settings, &at(here, "set_mandate_settings"), Clause::Edit)
-        ),
+        Some(interface_row::Row::SetMandate(_) | interface_row::Row::SetMandateSettings(_)) => {
+            row_item(row, here).0
+        }
         Some(interface_row::Row::SetPriority(value)) => cat!(
             s::ROW_SET_PRIORITY,
             " ",
@@ -1257,19 +1290,24 @@ fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
     })
 }
 
-/// What the Common row's `retreat_hp_pct` and a Defend or an Attack arm write,
-/// as a clause after the writ: the threshold first ([`common_parts`]), then
-/// the arm's;
-/// empty when the row writes neither, so S1's prose is unchanged for a row
-/// that writes neither (S2's plan, task `vfy2`). Every field is said, in field
-/// order, as the file wrote it; whether it is legal is the verifier's. `here`
-/// is the `MandateSettings`' pointer.
+/// What a settings block writes, as a clause after the writ: the Common row's
+/// `roe` and `retreat_hp_pct` first ([`common_parts`]), then every field the
+/// writ's arm writes, in field order, as the file wrote it, each with its
+/// chip; whether it is legal is the verifier's. Empty when the block says
+/// nothing, so the row reads as its writ alone. `here` is the
+/// `MandateSettings`' pointer.
 ///
-/// A Build, Survey or Mine arm says only what decisions-log item 184 (3)
-/// made writable: a written 0 of `scout_count`, `dig_max_depth` or
-/// `pillar_spacing`, and a set `clear_*` flag ([`s1_arm_parts`]); the rest of
-/// those arms is unsaid, as it was. A Defend or Attack arm's clear is said in
-/// its field order.
+/// Every arm is said whole, a field the block leaves out unsaid: a Build arm
+/// its targets (by count), repair threshold, rebuild flag, terraform,
+/// protected areas (by count) and their clear; a Survey arm its probe areas
+/// (by count), scout count and their clear; a Mine arm its dig depth, flee
+/// flag, seam choice and pillar spacing ([`s1_arm_parts`]); a Defend and an
+/// Attack arm theirs ([`defend_parts`], [`attack_parts`]). A written 0 of a
+/// setting with presence is said in its zero title's words, and a set
+/// `clear_*` flag (decisions-log item 184 (3)) as a boolean chip.
+///
+/// The clause is a list joined by commas and "and", so the list it sits in is
+/// set off by semicolons from then on ([`join_items`]).
 fn settings_clause(settings: &MandateSettings, here: &str, clause: Clause) -> Text {
     let mut parts = common_parts(settings, here, clause);
     parts.extend(match settings.mandate.as_ref() {
@@ -1304,8 +1342,8 @@ enum Clause {
 /// What the Common row writes, beside any writ, in field order: `roe`, then
 /// `retreat_hp_pct` (S3's `zerotitle`, carried from `retreat`).
 ///
-/// * **`roe`**, written, is said with its chip, in the words a menu offers
-///   it in. Omitted, it is said only in a [`Clause::Whole`] row with a writ,
+/// * **`roe`**, written, is said with its chip, as what the beacon is doing
+///   ([`roe_words`]). Omitted, it is said only in a [`Clause::Whole`] row with a writ,
 ///   as the named default the sim reads it as on that writ
 ///   ([`pharmakos_sim::world::Roe::of_setting`]: `FREE_FIRE` on Defend and
 ///   Attack, `RETURN_FIRE` on Build, Mine and Survey; decisions-log items 144
@@ -1354,13 +1392,16 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
     parts
 }
 
-/// A `roe` value in the prose's words. `Unspecified` is said as a value the
-/// file does not name, as a number this build does not name is.
+/// A `roe` value in the prose's words: a participle, what the beacon is
+/// doing, as every other part of a settings clause is ([`s::ROE_HOLD_FIRE`];
+/// a menu offers the value as an order, [`s::CHOICE_HOLD_FIRE`]).
+/// `Unspecified` is said as a value the file does not name, as a number this
+/// build does not name is.
 fn roe_words(roe: mandate_settings::Roe) -> &'static str {
     match roe {
-        mandate_settings::Roe::HoldFire => s::CHOICE_HOLD_FIRE,
-        mandate_settings::Roe::ReturnFire => s::CHOICE_RETURN_FIRE,
-        mandate_settings::Roe::FreeFire => s::CHOICE_FREE_FIRE,
+        mandate_settings::Roe::HoldFire => s::ROE_HOLD_FIRE,
+        mandate_settings::Roe::ReturnFire => s::ROE_RETURN_FIRE,
+        mandate_settings::Roe::FreeFire => s::ROE_FREE_FIRE,
         mandate_settings::Roe::Unspecified => s::ROE_UNSET,
     }
 }
@@ -2839,6 +2880,34 @@ fn join(parts: Vec<Text>) -> Text {
     }
     let mut out = separated(parts, ", ");
     out.push(" and ");
+    out.push(last);
+    out
+}
+
+/// The items of a list any of which may end in a settings clause (each item's
+/// `bool`): [`join`]ed when none does. A clause is itself a list joined by
+/// commas and "and", so when one does, every item is set off by a semicolon
+/// and the last by "; and", and an item after a clause cannot read as one
+/// more setting (S3's `edlists`, from `zerotitle`'s second review: "switch it
+/// to a Defend mandate: firing freely by default for its writ and add a build
+/// target" read the target as a Defend setting). The whole list takes the
+/// one style, whichever item carries the clause. The same rule sets a new
+/// beacon's priority off from its mandate's clause in a `place_beacon` step,
+/// the one other place a clause can sit before more of its sentence's list.
+fn join_items(items: Vec<(Text, bool)>) -> Text {
+    let marked = items.iter().any(|(_, clause)| *clause);
+    let mut parts: Vec<Text> = items.into_iter().map(|(text, _)| text).collect();
+    if !marked {
+        return join(parts);
+    }
+    let Some(last) = parts.pop() else {
+        return Text::default();
+    };
+    if parts.is_empty() {
+        return last;
+    }
+    let mut out = separated(parts, "; ");
+    out.push("; and ");
     out.push(last);
     out
 }

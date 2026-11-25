@@ -3,23 +3,23 @@
     /declarative/route/0/place_beacon/at
     reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"voxel":{"x":96,"y":11,"z":62}}, replace
-  4:69-80 "return fire"
+  4:69-83 "returning fire"
     /declarative/route/0/place_beacon/initial/mandate/roe
     choice "HOLD_FIRE" (hold fire) | "RETURN_FIRE" (return fire) | "FREE_FIRE" (fire freely)
     = "RETURN_FIRE", replace
-  4:93-106 "beacon "b_00""
+  4:96-109 "beacon "b_00""
     /declarative/route/0/place_beacon/initial/mandate/defend/protect/0/beacon
     reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
     = {"beacon_id":"b_00"}, replace
-  4:143-145 "60"
+  4:146-148 "60"
     /declarative/route/0/place_beacon/initial/mandate/defend/engagement_radius_pct
     integer 1..100 %
     = 60 (typed 60), replace
-  4:162-189 "pursuing to the sphere edge"
+  4:165-192 "pursuing to the sphere edge"
     /declarative/route/0/place_beacon/initial/mandate/defend/pursue
     choice "NEVER" (never pursuing) | "SPHERE_EDGE" (pursuing to the sphere edge) | "WHILE_IN_REACH" (pursuing while in reach)
     = "SPHERE_EDGE", replace
-  4:211-212 "2"
+  4:214-215 "2"
     /declarative/route/0/place_beacon/initial/mandate/defend/picket_scouts
     integer 0..255, 0 is "no picket"
     = 2 (typed 2), replace
@@ -28,43 +28,43 @@
     /declarative/route/1/place_beacon/at
     reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"voxel":{"x":100,"y":20,"z":58}}, replace
-  5:70-81 "fire freely"
+  5:70-83 "firing freely"
     /declarative/route/1/place_beacon/initial/mandate/roe
     choice "HOLD_FIRE" (hold fire) | "RETURN_FIRE" (return fire) | "FREE_FIRE" (fire freely)
     = "FREE_FIRE", replace
-  5:93-106 "beacon "e_01""
+  5:95-108 "beacon "e_01""
     /declarative/route/1/place_beacon/initial/mandate/attack/target/beacon
     reference BEACON [beacon_id, nearest]
     = {"beacon_id":"e_01"}, replace
-  5:108-150 "retargeting the nearest known enemy beacon"
+  5:110-152 "retargeting the nearest known enemy beacon"
     /declarative/route/1/place_beacon/initial/mandate/attack/retarget
     choice "NONE" (keeping its target) | "NEAREST_KNOWN" (retargeting the nearest known enemy beacon)
     = "NEAREST_KNOWN", replace
-  5:199-200 "6"
+  5:201-202 "6"
     /declarative/route/1/place_beacon/initial/mandate/attack/launch/force_size
     integer 0.., 0 is "launching at once with its first raider, ungathered"
     = 6 (typed 6), replace
-  5:224-228 "1:30"
+  5:226-230 "1:30"
     /declarative/route/1/place_beacon/initial/mandate/attack/launch/segment_ms
     integer 0.. ms, shown in s
     = 90000 (typed 90), replace
-  5:286-288 "30"
+  5:288-290 "30"
     /declarative/route/1/place_beacon/initial/mandate/attack/retreat/force_below_pct
     integer 1..100 %
     = 30 (typed 30), replace
-  5:313-317 "1:00"
+  5:315-319 "1:00"
     /declarative/route/1/place_beacon/initial/mandate/attack/retreat/after_launch_ms
     integer 0.. ms, shown in s
     = 60000 (typed 60), replace
-  5:332-368 "then regrouping at the staging point"
+  5:334-370 "then regrouping at the staging point"
     /declarative/route/1/place_beacon/initial/mandate/attack/after_action
     choice "REGROUP_AT_STAGING" (regroup at the staging point) | "RETURN_HOME" (return home)
     = "REGROUP_AT_STAGING", replace
-  5:387-413 "breaching walls if it must"
+  5:389-415 "breaching walls if it must"
     /declarative/route/1/place_beacon/initial/mandate/attack/breach_allowed
     choice true (yes) | false (no)
     = true, replace
-  5:421-422 "1"
+  5:423-424 "1"
     /declarative/route/1/place_beacon/initial/mandate/attack/waves
     integer 1..
     = 1 (typed 1), replace
@@ -77,11 +77,11 @@
     /declarative/route/2/interface/rows/0/set_mandate_settings/attack/breach_allowed
     choice true (yes) | false (no)
     = false, replace
-  6:226-230 "wall"
+  6:229-233 "wall"
     /declarative/route/2/interface/rows/2/add_build_target/target/blueprint_id
     choice "generator" (Generator) | "autocannon" (Autocannon) | "mortar" (Mortar) | "wall" (Wall)
     = "wall", replace
-  6:234-250 "voxel 90, 12, 11"
+  6:237-253 "voxel 90, 12, 11"
     /declarative/route/2/interface/rows/2/add_build_target/target/anchor
     reference LOCATION [voxel]
     = {"voxel":{"x":90,"y":12,"z":11}}, replace
