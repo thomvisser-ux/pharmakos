@@ -134,11 +134,12 @@ impl Diag {
 ///
 /// # The bound it is derived from
 ///
-/// The client reads a report in one WebSocket message, and a message past
-/// the peer's **inbound** buffer is never handed over: Godot closes the
-/// connection with 1009 (`crates/client-gdext/src/transport.rs`,
-/// `INBOUND_BUFFER_BYTES`, 4 MiB, itself a PLACEHOLDER for lane `outcap`).
-/// That buffer is the bound. The client's *outbound* cap, the gateway's
+/// The client reads a report in one WebSocket message, and the gateway sends
+/// no answer past `pharmakos_proto::transport::MAX_ANSWER_BYTES` (4 MiB, S3's
+/// `outcap`): one past it is withheld with `RESPONSE_TOO_LARGE`, and the
+/// client's inbound buffer is that cap and a frame's header
+/// (`crates/client-gdext/src/transport.rs`, `INBOUND_BUFFER_BYTES`). That
+/// cap is the bound, read from its one source. The inbound cap,
 /// `pharmakos_proto::transport::MAX_MESSAGE_BYTES` (256 KiB), bounds what a
 /// client sends, the playbook among it, and not a report.
 ///
@@ -157,10 +158,11 @@ impl Diag {
 /// [`ONCE_PER_REPORT`] once), every part at its bound, and one `I0007` per
 /// code. `report.rs`'s `the_cap_is_the_top_of_its_range` builds that report
 /// through this builder and the real serialiser at the cap and at one more,
-/// and holds it to **three quarters** of the inbound buffer (a quarter left
-/// for the answer's envelope): the cap is the largest that fits, and one more
-/// does not. The pull request that set it states the two sizes. If `outcap`
-/// lowers the buffer, the test fails and the cap is derived again; below 2,
+/// and holds it to **three quarters** of the outgoing cap (a quarter left
+/// for the answer's envelope and its indentation): the cap is the largest
+/// that fits, and one more does not. The pull request that set it states the
+/// two sizes. If the outgoing cap is lowered, the test fails and the cap is
+/// derived again; below 2,
 /// Easy's probe has no part to ask in, and a compile-time check fails.
 pub const MAX_PER_CODE: u32 = 4;
 
@@ -1256,26 +1258,79 @@ mod tests {
             .len()
     }
 
-    /// Three quarters of the client's inbound buffer, read from the client's
-    /// own source (the verifier may not depend on the walled client).
+    /// Three quarters of the gateway's outgoing cap, read from its one source
+    /// (S3's `outcap`): the number the gateway's sender and the client's
+    /// inbound buffer both read.
     fn room() -> usize {
-        const DECLARED: &str = "pub const INBOUND_BUFFER_BYTES: usize = ";
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../client-gdext/src/transport.rs");
-        let source = std::fs::read_to_string(path).expect("the client's transport sizes");
-        let buffer: usize = source
-            .lines()
-            .find(|line| line.starts_with(DECLARED))
-            .expect("transport.rs declares INBOUND_BUFFER_BYTES")
-            .trim_start_matches(DECLARED)
-            .trim_end_matches(';')
-            .replace('_', "")
-            .parse()
-            .expect("a whole number");
-        buffer
+        pharmakos_proto::transport::MAX_ANSWER_BYTES
             .checked_div(4)
             .and_then(|quarter| quarter.checked_mul(3))
             .expect("a buffer of some size")
+    }
+
+    /// **The worst report fits the gateway's answer whole** (S3's `outcap`):
+    /// written as `verify_plan` sends it, two levels deep under `result` and
+    /// `report` (each of its lines indented four bytes more), under an id at
+    /// the gateway's cap and with a `_status` footer, it is within the
+    /// gateway's outgoing cap, so the gateway never withholds a report.
+    #[test]
+    fn the_worst_report_fits_the_gateways_answer() {
+        use pharmakos_proto::json::Json;
+        use pharmakos_proto::transport::{MAX_ANSWER_BYTES, MAX_ID_BYTES};
+        let mut builder = Builder::with_cap(MAX_PER_CODE);
+        for row in CATALOGUE {
+            if !matches!(row.emitter, Emitter::Stage(_)) {
+                continue;
+            }
+            let times = if ONCE_PER_REPORT.contains(&row.code) {
+                1
+            } else {
+                MAX_PER_CODE.saturating_add(1)
+            };
+            for _ in 0..times {
+                builder.emit(worst_diag(row.code));
+            }
+        }
+        let report = VerifyReport {
+            qualifies: false,
+            depth: 2,
+            diagnostics: builder.finish().diagnostics,
+            report_hash: vec![0xff; 8],
+            rules_hash: vec![0xff; 8],
+            plan_fingerprint: vec![0xff; 8],
+            verifier_version: crate::VERIFIER_VERSION.to_owned(),
+            size_units: u32::MAX,
+            size_budget: u32::MAX,
+        };
+        let text = pharmakos_proto::json::encode(&report).expect("a report encodes");
+        let value = pharmakos_proto::json::read(&text).expect("a report reads back");
+        let footer = Json::Object(
+            ["phase", "phase_remaining_ms", "segment_length_ms", "round"]
+                .iter()
+                .map(|name| ((*name).to_owned(), Json::Number(i32::MIN.to_string())))
+                .collect(),
+        );
+        let answer = Json::Object(vec![
+            ("jsonrpc".to_owned(), Json::String("2.0".to_owned())),
+            ("id".to_owned(), Json::String("x".repeat(MAX_ID_BYTES))),
+            (
+                "result".to_owned(),
+                Json::Object(vec![
+                    ("report".to_owned(), value),
+                    ("_status".to_owned(), footer),
+                ]),
+            ),
+        ]);
+        let sent = pharmakos_proto::json::write(&answer).len();
+        println!(
+            "the worst report: {} bytes alone, {sent} bytes as `verify_plan` sends it, against \
+             {MAX_ANSWER_BYTES}",
+            text.len()
+        );
+        assert!(
+            sent <= MAX_ANSWER_BYTES,
+            "{sent} bytes past {MAX_ANSWER_BYTES}"
+        );
     }
 
     /// **The cap is the top of its range** (decisions-log item 183 (4); the
