@@ -89,9 +89,11 @@ pub const BUNDLE_ENTRIES: [&str; 4] = [
 
 /// The most Push records kept.
 ///
-/// PLACEHOLDER: the Playtest bundle's caps, 512 Push and 512 Lull records, 4096 log lines, 256
-/// codes a tally, 4000 characters of survey text and a 1 MiB bundle — OWNER,
-/// at S7, with the recording.
+/// The caps below are guesses, held to one marker:
+/// PLACEHOLDER: the Playtest bundle's caps (records, log lines, codes, survey text, bundle size) — OWNER, at S7
+///
+/// They are 512 Push and 512 Lull records, 4096 log lines, 256 codes a tally, 4000 characters of
+/// survey text and a 1 MiB bundle, settled with the recording S7 brings.
 pub const MAX_PUSH_RECORDS: usize = 512;
 /// The most Lull records kept (the PLACEHOLDER on [`MAX_PUSH_RECORDS`]).
 pub const MAX_LULL_RECORDS: usize = 512;
