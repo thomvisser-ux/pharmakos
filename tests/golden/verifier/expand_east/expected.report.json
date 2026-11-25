@@ -49,74 +49,11 @@
       "severity": "INFO",
       "path": "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing",
       "message": "`pillar_spacing` is omitted and reads as 0, no pillars.",
-      "beginner": "A setting left out takes its named default."
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/2/on_fail",
-      "message": "`on_fail` is omitted and reads as SKIP.",
       "beginner": "A setting left out takes its named default.",
       "suggestions": [
         {
           "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/0/body/0/on_fail",
-      "message": "`on_fail` is omitted and reads as SKIP.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/0/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/0/body/1/on_fail",
-      "message": "`on_fail` is omitted and reads as SKIP.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing\",\"value\":0}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -134,12 +71,18 @@
       "path": "/declarative/route",
       "message": "the route is at least 10000 ms of walking, between the places it names.",
       "beginner": "The least time the walking can take; going round anything in the way takes longer."
+    },
+    {
+      "code": "I0007",
+      "severity": "INFO",
+      "message": "5 more `I0003` not listed: a report lists at most 4 of one code one by one.",
+      "beginner": "Not shown: 5 more `I0003`. They say the same kind of thing as the ones shown."
     }
   ],
-  "report_hash": "zohLH1g5CZs=",
+  "report_hash": "XDb5Dpin8+U=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "tPe4E/SBB60=",
-  "verifier_version": "0.1.0-s3.6",
+  "verifier_version": "0.1.0-s3.8",
   "size_units": 6,
   "size_budget": 128
 }

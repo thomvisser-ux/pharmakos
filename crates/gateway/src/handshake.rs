@@ -406,6 +406,43 @@ pub fn response(upgrade: &Upgrade) -> String {
     )
 }
 
+/// The most bytes of a stopped host's words [`stopped_response`] puts in its
+/// body: the words are the gateway's own (what could not be written, a path
+/// under the private match cache, what the disk holds), and a bound keeps one
+/// answer small whatever a path's length.
+pub const MAX_STOPPED_BODY: usize = 4_096;
+
+/// The response to an upgrade after the host stopped on a write it could not
+/// make, for a token of this match (`crate::session::Opened::Stopped`): a 503
+/// whose body is the host's words, at most [`MAX_STOPPED_BODY`] bytes, cut on
+/// a character boundary with a note saying how many bytes were left out, never
+/// silently. No token is in the words: the host never puts one there.
+#[must_use]
+pub fn stopped_response(words: &str) -> String {
+    let mut kept = String::with_capacity(words.len().min(MAX_STOPPED_BODY));
+    for character in words.chars() {
+        if kept.len().saturating_add(character.len_utf8()) > MAX_STOPPED_BODY {
+            break;
+        }
+        kept.push(character);
+    }
+    let left_out = words.len().saturating_sub(kept.len());
+    let body = if left_out > 0 {
+        format!("{kept} [{left_out} more bytes left out]\n")
+    } else {
+        format!("{kept}\n")
+    };
+    let length = body.len();
+    format!(
+        "HTTP/1.1 503 Service Unavailable\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         Content-Length: {length}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}"
+    )
+}
+
 /// The response for a refused upgrade: the status, the reason, and a body a
 /// person reading a terminal can act on.
 #[must_use]
@@ -604,5 +641,30 @@ mod tests {
         let mut lines = good();
         *lines.get_mut(2).expect("connection line") = "Connection: keep-alive, Upgrade";
         review(&request(&lines), &Policy::loopback(PORT)).expect("a list, not a word");
+    }
+
+    /// A stopped host's words go in the 503's body whole when they fit, and
+    /// past `MAX_STOPPED_BODY` bytes are cut on a character boundary with the
+    /// count of bytes left out said, never silently.
+    #[test]
+    fn a_stopped_hosts_words_are_bounded_and_the_cut_is_said() {
+        let short = super::stopped_response("this host has stopped: a save");
+        assert!(short.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert!(short.ends_with("\r\n\r\nthis host has stopped: a save\n"));
+        let long = "\u{e9}".repeat(super::MAX_STOPPED_BODY);
+        let answer = super::stopped_response(&long);
+        let body = answer.split("\r\n\r\n").nth(1).expect("a body");
+        assert!(
+            body.len() <= super::MAX_STOPPED_BODY.saturating_add(64),
+            "{}",
+            body.len()
+        );
+        assert!(
+            body.ends_with(&format!(
+                " [{} more bytes left out]\n",
+                super::MAX_STOPPED_BODY
+            )),
+            "{body}"
+        );
     }
 }

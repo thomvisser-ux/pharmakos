@@ -971,7 +971,7 @@
                 "max": 100,
                 "unit": "%",
                 "display_unit": "%",
-                "zero_title": "structures never repaired",
+                "zero_title": "never repairing structures, beacons or walls",
                 "min_text": "0",
                 "max_text": "100"
               }
@@ -1111,6 +1111,7 @@
                 "min": 0,
                 "unit": "",
                 "display_unit": "",
+                "zero_title": "launching at once with its first raider, ungathered",
                 "min_text": "0"
               }
             }
@@ -1213,6 +1214,7 @@
                 "max": 255,
                 "unit": "",
                 "display_unit": "",
+                "zero_title": "no scouts",
                 "min_text": "0",
                 "max_text": "255"
               }
@@ -1233,6 +1235,7 @@
                 "min": 0,
                 "unit": "voxels",
                 "display_unit": "voxels",
+                "zero_title": "digging the exposed rim only",
                 "min_text": "0"
               }
             }
@@ -1279,6 +1282,7 @@
                 "min": 0,
                 "unit": "voxels",
                 "display_unit": "voxels",
+                "zero_title": "leaving no pillars",
                 "min_text": "0"
               }
             }

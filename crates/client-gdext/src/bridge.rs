@@ -80,7 +80,8 @@ use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
 use crate::pacer::WallClock;
 use crate::panics::PanicCounter;
-use crate::rig::{Answer, EventRow, LullLengths, MatchPreset, PresetCheck, Rig, Speaker};
+use crate::playtest::{self, Another, CameraMove, ExportFailure, Recorder, Understood};
+use crate::rig::{Answer, EventRow, LullLengths, MatchPreset, Phase, PresetCheck, Rig, Speaker};
 use crate::rules::{self, MesherRules};
 use crate::surface::{ColourQuantisation, Surface, SurfaceProbe};
 use crate::upload::{DEFAULT_UPLOAD_PATH, ResidentSurface, UploadCounters, UploadPath, Uploader};
@@ -114,6 +115,9 @@ pub struct PharmakosBridge {
     rig: Option<Rig>,
     /// The one wall clock the client reads (`crate::pacer`).
     wall: WallClock,
+    /// Playtest mode's recorder (`crate::playtest`): off at every launch, kept across matches
+    /// while on, and fed only by the lines below that call it.
+    playtest: Recorder,
 }
 
 impl fmt::Debug for PharmakosBridge {
@@ -147,6 +151,7 @@ impl INode3D for PharmakosBridge {
             view: None,
             rig: None,
             wall: WallClock::start(),
+            playtest: Recorder::new(),
         }
     }
 
@@ -562,6 +567,11 @@ impl PharmakosBridge {
     /// them (a Lull whose row is missing is untimed).
     #[func]
     fn watch_begin(&mut self) {
+        // The rig this replaces is the one teardown of a match in the client: Playtest mode keeps
+        // what was open in it as left, timed to the last frame drawn in it.
+        let _ = self
+            .panics
+            .guard("watch_begin", || self.playtest.match_begun());
         let mut rig = Rig::new();
         rig.set_lull_length(self.lulls);
         self.rig = Some(rig);
@@ -705,16 +715,33 @@ impl PharmakosBridge {
     /// `{clock, kind, text, ledger, line}`: `event_row_dictionary`),
     /// `error` (the gateway's refusal, empty when there was none) and, for a `get_view`
     /// answer, `view`: what `view_apply` returns for the same result. An empty dictionary
-    /// means the frame could not be read, and the reason is in the log.
+    /// means the frame could not be read, and the reason is in the log. A `link` no connection
+    /// has is refused before anything is touched: `{refused: "no_such_link"}`, the rig kept.
     #[func]
     fn watch_receive(&mut self, link: i64, text: GString) -> VarDictionary {
-        let (Some(mut rig), Ok(link)) = (self.rig.take(), usize::try_from(link)) else {
+        let Some(link) = usize::try_from(link)
+            .ok()
+            .filter(|link| *link == crate::rig::ADMIN || *link == crate::rig::SEAT)
+        else {
+            godot_error!("[pharmakos] watch_receive: no connection is link {link}");
+            let mut refused = VarDictionary::new();
+            refused.set(&"refused".to_variant(), &"no_such_link".to_variant());
+            return refused;
+        };
+        let Some(mut rig) = self.rig.take() else {
             return VarDictionary::new();
         };
         let text = text.to_string();
         let read = self
             .panics
             .guard("watch_receive", || rig.receive(link, &text));
+        if let Some(Ok(answer)) = read.as_ref() {
+            // Playtest mode keeps a phase change and a refusal's code; off, it keeps nothing.
+            let now = self.wall.now_us();
+            let _ = self.panics.guard("watch_receive", || {
+                self.playtest.answered(now, &rig, answer)
+            });
+        }
         let phase = rig.phase().name();
         self.rig = Some(rig);
         let answer = match read {
@@ -866,6 +893,12 @@ impl PharmakosBridge {
         let frames = self
             .panics
             .guard_or("watch_outbox", Vec::new(), || rig.poll(now));
+        // Playtest mode takes each frame's reading, so a frame gap is told apart from play, and
+        // counts the verifier's error rows the editor shows, by code.
+        let _ = self.panics.guard("watch_outbox", || {
+            self.playtest.seen(now);
+            self.playtest.shown(rig.editor())
+        });
         let mut out = VarArray::new();
         for frame in frames {
             let mut pair = VarArray::new();
@@ -884,15 +917,28 @@ impl PharmakosBridge {
             return false;
         };
         let command = command.to_string();
+        let now = self.wall.now_us();
+        let playtest = &mut self.playtest;
+        // Each command the rig takes is told to Playtest mode, which counts it and decides
+        // nothing; off, it keeps nothing.
         self.panics
             .guard_or("watch_command", false, || match command.as_str() {
-                "speed" => u32::try_from(value).is_ok_and(|speed| rig.set_speed(speed)),
+                "speed" => u32::try_from(value).is_ok_and(|speed| {
+                    let from = rig.speed();
+                    let taken = rig.set_speed(speed);
+                    if taken {
+                        playtest.speed(now, from, speed);
+                    }
+                    taken
+                }),
                 "skip" => {
                     rig.skip();
+                    playtest.skip(now);
                     true
                 }
                 "ready" => {
                     rig.ready();
+                    playtest.ready(now);
                     true
                 }
                 "end_lull" => {
@@ -921,6 +967,135 @@ impl PharmakosBridge {
             .guard_or("watch_state", VarDictionary::new(), || {
                 rig_state(rig, pending)
             })
+    }
+
+    // --- Playtest mode (S3's `prob`, part 2) -------------------------------------------------
+    //
+    // Off at every launch (`crate::playtest`). The lobby's check button switches it;
+    // `playtest.gd` forwards the window's focus and the camera rig's moves, sends the survey and
+    // asks for the export. The recorder is fed only here and by the three lines above that tell
+    // it a rig answer, a command and the editor's rows; it reads the clock through `self.wall`,
+    // and nothing here is sent to the gateway.
+
+    /// Switches Playtest mode on (`true`) or off, the window having focus now or not
+    /// (`focused`). Off drops everything it kept. Answers whether it is on.
+    #[func]
+    fn playtest_set(&mut self, on: bool, focused: bool) -> bool {
+        let now = self.wall.now_us();
+        let (phase, round) = self
+            .rig
+            .as_ref()
+            .map_or((Phase::Unknown, 0), |rig| (rig.phase(), rig.round()));
+        let _ = self.panics.guard("playtest_set", || {
+            self.playtest.switch(on, now, focused, phase, round)
+        });
+        self.playtest.is_on()
+    }
+
+    /// The window gained (`true`) or lost focus (Godot's application focus notifications).
+    #[func]
+    fn playtest_focus(&mut self, focused: bool) {
+        let now = self.wall.now_us();
+        let _ = self
+            .panics
+            .guard("playtest_focus", || self.playtest.focus(now, focused));
+    }
+
+    /// The tester moved the camera: `kind` is `pan`, `zoom`, `turn` or `follow`. Returns `false`,
+    /// counting nothing, for any other word.
+    #[func]
+    fn playtest_camera(&mut self, kind: GString) -> bool {
+        let Some(kind) = CameraMove::of_name(&kind.to_string()) else {
+            godot_error!("[pharmakos] playtest_camera: `{kind}` is no camera move");
+            return false;
+        };
+        let _ = self
+            .panics
+            .guard("playtest_camera", || self.playtest.camera(kind));
+        true
+    }
+
+    /// Export playtest bundle, with the survey's answers as the screen shows them at this moment:
+    /// `another` (`yes`, `no`, `unanswered`), `understood` (`yes`, `partly`, `no`,
+    /// `unanswered`) and `text`, the tester's own words, sent as written. The bundle is written
+    /// whole to `path` (an absolute path the tester picked in a file dialog), and nowhere else.
+    /// Answers as `file_write` does (`written`, and on a failure `failure`, `path`, `step`,
+    /// `error`, `leftover`), with `bytes` on a write, and `refusal` when no bundle was built:
+    /// `off`, `too_large`, `survey_too_long` (with `limit`, the most characters the text takes;
+    /// no file is written), `unknown_answer`, or `failed` (a caught panic, counted and named).
+    #[func]
+    fn playtest_export(
+        &mut self,
+        path: GString,
+        another: GString,
+        understood: GString,
+        text: GString,
+    ) -> VarDictionary {
+        let refused = |name: &str| {
+            let mut answer = VarDictionary::new();
+            answer.set(&"written".to_variant(), &false.to_variant());
+            answer.set(&"refusal".to_variant(), &name.to_variant());
+            answer.set(
+                &"limit".to_variant(),
+                &count_of(playtest::MAX_SURVEY_TEXT_CHARS),
+            );
+            answer
+        };
+        let (Some(another), Some(understood)) = (
+            Another::of_name(&another.to_string()),
+            Understood::of_name(&understood.to_string()),
+        ) else {
+            return refused("unknown_answer");
+        };
+        let path = std::path::PathBuf::from(path.to_string());
+        let text = text.to_string();
+        let now = self.wall.now_us();
+        match self.panics.guard("playtest_export", || {
+            self.playtest.export(now, &path, another, understood, &text)
+        }) {
+            Some(Ok(exported)) => {
+                let mut answer = written_dictionary(Ok(exported
+                    .stale_removed
+                    .map(|stale| stale.display().to_string())));
+                answer.set(&"bytes".to_variant(), &count_of(exported.bytes));
+                answer
+            }
+            Some(Err(ExportFailure::Write(failure))) => written_dictionary(Err(failure)),
+            Some(Err(ExportFailure::Refused(refusal))) => refused(refusal.name()),
+            None => refused("failed"),
+        }
+    }
+
+    /// What the lobby shows of Playtest mode: `on`, the rig's `phase` (empty before a match),
+    /// and while on `pushes`, `skipped_pushes`, `lulls`, `lines`, `dropped` (whether anything
+    /// was), with `survey_limit`, the most characters the survey's text takes, and `entries`, the
+    /// bundle's file names.
+    #[func]
+    fn playtest_state(&self) -> VarDictionary {
+        let mut state = VarDictionary::new();
+        let mut put = |key: &str, value: Variant| state.set(&key.to_variant(), &value);
+        put("on", self.playtest.is_on().to_variant());
+        put(
+            "phase",
+            self.rig
+                .as_ref()
+                .map_or("", |rig| rig.phase().name())
+                .to_variant(),
+        );
+        put("survey_limit", count_of(playtest::MAX_SURVEY_TEXT_CHARS));
+        let entries: godot::builtin::PackedStringArray = playtest::BUNDLE_ENTRIES
+            .iter()
+            .map(|name| GString::from(*name))
+            .collect();
+        put("entries", entries.to_variant());
+        if let Some(summary) = self.playtest.summary() {
+            put("pushes", counter(summary.pushes));
+            put("skipped_pushes", counter(summary.skipped_pushes));
+            put("lulls", count_of(summary.lulls));
+            put("lines", count_of(summary.lines));
+            put("dropped", summary.dropped.to_variant());
+        }
+        state
     }
 
     // --- The editor (T19, pull requests 1 and 2) ---------------------------------------

@@ -85,6 +85,7 @@ gp.v1.AttackSettings
   avoid_areas                  7   repeated gp.v1.Area
   breach_allowed               8   bool
   waves                        9   uint32
+  clear_avoid_areas            16  bool
   reserved 10 to 15
 
 gp.v1.AttackTarget
@@ -146,6 +147,7 @@ gp.v1.BuildSettings
   rebuild_destroyed            3   bool
   terraform                    4   gp.v1.BuildSettings.Terraform
   protected_areas              5   repeated gp.v1.Area
+  clear_protected_areas        8   bool
   reserved 6
   reserved 7
   reserved reclaim_drones, repair_drones
@@ -235,6 +237,7 @@ gp.v1.DefendSettings
   engagement_radius_pct        2   uint32
   pursue                       3   gp.v1.DefendSettings.Pursue
   picket_scouts                4   uint32
+  clear_protect                16  bool
   reserved 5
   reserved 6
   reserved 7 to 15
@@ -375,7 +378,7 @@ gp.v1.Meta
   reserved team_id
 
 gp.v1.MineSettings
-  oneof: _flee_on_threat
+  oneof: _dig_max_depth, _flee_on_threat, _pillar_spacing
   dig_max_depth                1   uint32
   flee_on_threat               2   bool
   seam_choice                  3   gp.v1.MineSettings.SeamChoice
@@ -722,8 +725,10 @@ gp.v1.StepReached
   label                        1   string
 
 gp.v1.SurveySettings
+  oneof: _scout_count
   probe_areas                  1   repeated gp.v1.Area
   scout_count                  2   uint32
+  clear_probe_areas            4   bool
   reserved 3
   reserved probe_directions
 
@@ -904,7 +909,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-119 codes. A code is language-neutral, append-only and never
+120 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1285,6 +1290,10 @@ E0514  ERROR  settings and recycle  raised at: structure
   `{id}` never stands as a structure in this build, so a predicate asking about one could never be true.
   Walls are built voxel by voxel, and nothing builds a Survey post yet, so neither can be asked about. Ask about a Generator, an autocannon, a mortar or a Resonance Spire.
 
+E0515  ERROR  settings and recycle  raised at: structure
+  `clear_{list}` cannot stand {place}.
+  A `clear_` setting empties a list the beacon already holds, so it goes in a Change settings row on its own: not beside entries of the same list, and not where the beacon or its new mandate starts with no list at all.
+
 W0501  WARNING  settings and recycle  raised at: none at the skeleton (retired by S2's `dfnd`, which built the threat model)
   `seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs the nearest seam no known threat's weapon reaches, and this code is retired and raised by nothing.
   "Safest" digs the nearest seam that no enemy weapon your side sees can reach.
@@ -1381,6 +1390,6 @@ I0006  INFO  information  raised at: structure
   `breach_allowed` is true, and only a mortar whose beacon's `roe` is FREE_FIRE shells a breach: RETURN_FIRE never fires at a wall, and a Build beacon's omitted `roe` reads as RETURN_FIRE. Without one, the demolition charge breaches alone.
   Mortars help a raid through a wall only when their beacon is set to FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself.
 
-I0007  INFO  information  raised at: structure
-  omitted settings not noted one by one: {count}. Each reads as its default; a report notes at most the first few, and none past the size budget.
-  Many settings here are left to their defaults. The first few are noted; the rest work the same way.
+I0007  INFO  information  raised at: the report builder
+  {count} more `{code}` not listed: a report lists at most {max} of one code one by one{budget}.{verdict}
+  Not shown: {count} more `{code}`. {next}

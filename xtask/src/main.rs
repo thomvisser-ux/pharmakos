@@ -7575,7 +7575,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     /// `shard::SPLIT_SALT`'s rule over `shard::HEAVY_UNITS`, at the shard
     /// count ci.yml runs: each heavy unit, and each unit `shard::MEASURED`
     /// records, is a unit of this workspace (so a renamed one is red here, not
-    /// a rule that silently stopped binding),
+    /// a rule that silently stopped binding), there are no more heavy units
+    /// than shards (no salt can set more apart: that needs more shards or a
+    /// shorter unit, and the failure says so rather than sending the reader
+    /// after a salt),
     /// each falls to a shard no other heavy unit falls to, and the heaviest
     /// does not fall to shard 1, which also runs every step that is not
     /// sharded. No salt below `SPLIT_SALT` meets the rule, so the salt is the
@@ -7628,6 +7631,18 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             sorted.dedup();
             sorted.len() == held.len() && held.first().is_some_and(|first| *first != 1)
         };
+        // Before any salt is tried: a salt only relabels the units, so no salt
+        // sets more units apart than there are shards, and a search would
+        // only fail with a message that sends the reader after a salt.
+        let heavy = shard::HEAVY_UNITS.len();
+        assert!(
+            u32::try_from(heavy).is_ok_and(|heavy| heavy <= total),
+            "HEAVY_RULE reads {heavy} heavy units {:?} over MEASURED, and CI runs {total} \
+             shard(s): no salt can set more units apart than there are shards. The fixes are \
+             more shards (ci.yml's CI_SHARDS and the shard matrices, a workflow and \
+             required-check change, which is the owner's) or a heavy unit made shorter",
+            shard::HEAVY_UNITS
+        );
         let held = shards(None);
         assert!(
             apart(&held),

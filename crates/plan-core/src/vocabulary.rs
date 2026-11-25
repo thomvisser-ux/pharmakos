@@ -880,7 +880,7 @@ fn attack_mandate() -> Result<Entry, VocabularyError> {
             parameter(
                 "/launch/force_size",
                 s::VOCABULARY_FORCE,
-                Shape::count(UNIT_COUNT),
+                Shape::force_size(),
             ),
             parameter(
                 "/launch/segment_ms",
@@ -923,7 +923,7 @@ fn survey_mandate() -> Entry {
         vec![parameter(
             "/scout_count",
             s::VOCABULARY_SCOUTS,
-            Shape::integer(Some(0), Some(i32::from(u8::MAX)), UNIT_COUNT),
+            Shape::scout_count(),
         )],
         "{}",
     )
@@ -935,11 +935,7 @@ fn mine_mandate() -> Result<Entry, VocabularyError> {
         "mine",
         s::MANDATE_MINE,
         vec![
-            parameter(
-                "/dig_max_depth",
-                s::VOCABULARY_DIG,
-                Shape::count(UNIT_VOXELS),
-            ),
+            parameter("/dig_max_depth", s::VOCABULARY_DIG, Shape::dig_max_depth()),
             parameter("/flee_on_threat", s::VOCABULARY_FLEE, Shape::boolean()),
             parameter(
                 "/seam_choice",
@@ -949,7 +945,7 @@ fn mine_mandate() -> Result<Entry, VocabularyError> {
             parameter(
                 "/pillar_spacing",
                 s::VOCABULARY_PILLARS,
-                Shape::count(UNIT_VOXELS),
+                Shape::pillar_spacing(),
             ),
         ],
         "{}",

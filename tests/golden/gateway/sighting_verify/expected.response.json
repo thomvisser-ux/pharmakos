@@ -65,38 +65,6 @@
           "map_refs": []
         },
         {
-          "code": "I0003",
-          "severity": "info",
-          "path": "/declarative/route/2/on_fail",
-          "related_paths": [],
-          "message": "`on_fail` is omitted and reads as SKIP.",
-          "beginner": "A setting left out takes its named default.",
-          "suggestions": [
-            {
-              "title": "Write the default out",
-              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-              "applicability": "machine_applicable"
-            }
-          ],
-          "map_refs": []
-        },
-        {
-          "code": "I0003",
-          "severity": "info",
-          "path": "/declarative/route/2/place_beacon/initial/mandate/roe",
-          "related_paths": [],
-          "message": "`roe` is omitted and reads as FREE_FIRE.",
-          "beginner": "A setting left out takes its named default.",
-          "suggestions": [
-            {
-              "title": "Write the default out",
-              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/place_beacon/initial/mandate/roe\",\"value\":\"FREE_FIRE\"}]",
-              "applicability": "machine_applicable"
-            }
-          ],
-          "map_refs": []
-        },
-        {
           "code": "E0421",
           "severity": "error",
           "path": "/declarative/route/0/move/to/beacon_anchor/beacon_id",
@@ -135,12 +103,22 @@
           "beginner": "The least time the walking can take; going round anything in the way takes longer.",
           "suggestions": [],
           "map_refs": []
+        },
+        {
+          "code": "I0007",
+          "severity": "info",
+          "path": "",
+          "related_paths": [],
+          "message": "2 more `I0003` not listed: a report lists at most 4 of one code one by one.",
+          "beginner": "Not shown: 2 more `I0003`. They say the same kind of thing as the ones shown.",
+          "suggestions": [],
+          "map_refs": []
         }
       ],
-      "report_hash": "3pFLoZIvtvE=",
+      "report_hash": "9UM2A6BDZRA=",
       "rules_hash": "GybFJQaL/2E=",
       "plan_fingerprint": "GYBAq9LFb3M=",
-      "verifier_version": "0.1.0-s3.6",
+      "verifier_version": "0.1.0-s3.8",
       "size_units": 3,
       "size_budget": 128
     },

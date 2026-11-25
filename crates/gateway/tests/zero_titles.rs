@@ -242,10 +242,14 @@ fn a_zero_picket_stands_the_picket_down() {
 /// fails.
 #[test]
 fn every_title_is_checked_here() {
-    let checked: [(&str, &str, &str); 3] = [
+    let checked: [(&str, &str, &str); 7] = [
         ("", "/retreat_hp_pct", s::RETREAT_OFF),
         ("build", "/repair_threshold_pct", s::REPAIR_NEVER),
         ("defend", "/picket_scouts", s::PICKET_NONE),
+        ("attack", "/launch/force_size", s::LAUNCH_FIRST_RAIDER),
+        ("survey", "/scout_count", s::SCOUTS_NONE),
+        ("mine", "/dig_max_depth", s::DIG_RIM_ONLY),
+        ("mine", "/pillar_spacing", s::PILLARS_NONE),
     ];
     let mut titled: Vec<(&str, &str, &str)> = Vec::new();
     for parameter in common_parameters().expect("the common settings") {

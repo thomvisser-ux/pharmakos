@@ -143,6 +143,7 @@
                 "min": 0,
                 "unit": "",
                 "display_unit": "",
+                "zero_title": "launching at once with its first raider, ungathered",
                 "min_text": "0"
               }
             },

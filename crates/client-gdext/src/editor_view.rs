@@ -279,7 +279,8 @@ fn dormant_dictionary(editor: &Editor) -> VarDictionary {
 
 /// The rule list's keys of the editor's state (S3's `ed3b`): `rule_list`
 /// ([`rule_list_dictionary`]), `rules_editable`, `rules_blocked` (why it takes no edit, by name; "" when it takes one), `rules_rendering` (the rendering id an editor names back; -1 before one), `picking` (the chip a pick is on for, -1 for
-/// none), `conflicts` (each `{earlier, later, sentence}`, rule indices) and `rule_refusal`
+/// none), `conflicts` (each `{earlier, later, sentence}`, rule indices), `conflicts_more` (the
+/// report's words for conflicts it left out past its per-code cap, "" when none) and `rule_refusal`
 /// (empty, or `{rule, key, detail}`: the refusal of the last rule-list edit, the gateway's or
 /// this client's, the string table's key for its words, and the rule it is shown on, -1 for
 /// none) and `field` (what became of the last value a value field sent).
@@ -334,6 +335,12 @@ fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
         conflicts.push(&one.to_variant());
     }
     put("conflicts", conflicts.to_variant());
+    // The report's own words for conflicts it left out past its per-code cap ("" when it
+    // listed every one): drawn under the list, never read for a count (S3's `vcap`).
+    put(
+        "conflicts_more",
+        text_or_empty(editor.conflicts_left_out().as_deref()).to_variant(),
+    );
     let mut refusal = VarDictionary::new();
     if let Some(refused) = editor.rule_refusal() {
         let rule = editor.rule_list().rule_holding(&refused.pointer);

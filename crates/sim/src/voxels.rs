@@ -50,6 +50,7 @@
 //! reason). [`CHUNK_SHIFT`] and [`CHUNK_MASK`] are that power of two, asserted
 //! against [`CHUNK_EDGE`] by a compile-time check below.
 
+use crate::reserved::Reserved;
 use std::sync::Arc;
 
 use crate::chunks::ChunkDigests;
@@ -717,7 +718,7 @@ impl VoxelEdit {
 /// Not hashed directly: [`VoxelStore::settle`] writes this store's contribution
 /// into the [`ChunkDigests`] table, and *that* is what the canonical encoder
 /// walks (item 66).
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct VoxelStore {
     size: [u32; 3],
     chunks_per_axis: [u32; 3],
@@ -727,42 +728,15 @@ pub struct VoxelStore {
     modified: Vec<bool>,
     /// Edited since the last [`VoxelStore::settle`], with a flag per chunk so a
     /// repeated edit cannot enter the list twice.
-    pending: Vec<u32>,
+    pending: Reserved<u32>,
     pending_flag: Vec<bool>,
     /// What the last [`VoxelStore::settle`] refreshed, ascending. The
     /// presentation side drains this; the drain *queue* (K / B / age / camera)
     /// is the mesher's and is not here (item 54).
-    settled: Vec<u32>,
+    settled: Reserved<u32>,
     /// Scratch for [`VoxelStore::crater`]'s touched set, reset through the
     /// caller's own list so a crater allocates nothing.
     touch_flag: Vec<bool>,
-}
-
-// Written out rather than derived for one reason: a derived `Clone` copies the
-// scratch vectors' *lengths* and not their capacities, so a cloned store — a
-// save, a `world.clone()`, a `research` fork — would allocate on its first
-// settling tick and break the zero-allocations-per-tick property
-// (`crates/sim/tests/allocations.rs`, G3' section 9.17) in the clone rather
-// than in the original, which is exactly where nobody looks. The values are
-// cloned faithfully; only the spare capacity is restored.
-impl Clone for VoxelStore {
-    fn clone(&self) -> VoxelStore {
-        let n = self.chunks.len();
-        let mut pending = Vec::with_capacity(n);
-        pending.extend_from_slice(&self.pending);
-        let mut settled = Vec::with_capacity(n);
-        settled.extend_from_slice(&self.settled);
-        VoxelStore {
-            size: self.size,
-            chunks_per_axis: self.chunks_per_axis,
-            chunks: self.chunks.clone(),
-            modified: self.modified.clone(),
-            pending,
-            pending_flag: self.pending_flag.clone(),
-            settled,
-            touch_flag: self.touch_flag.clone(),
-        }
-    }
 }
 
 // `[u8; 32768]` has a `Debug`, and printing 288 of them into an assertion
@@ -820,9 +794,9 @@ impl VoxelStore {
             chunks_per_axis,
             chunks,
             modified: vec![false; n],
-            pending: Vec::with_capacity(n),
+            pending: Reserved::with_capacity(n),
             pending_flag: vec![false; n],
-            settled: Vec::with_capacity(n),
+            settled: Reserved::with_capacity(n),
             touch_flag: vec![false; n],
         })
     }

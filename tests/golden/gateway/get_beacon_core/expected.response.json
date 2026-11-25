@@ -68,13 +68,13 @@
             "max": 100,
             "unit": "%",
             "display_unit": "%",
-            "zero_title": "structures never repaired",
+            "zero_title": "never repairing structures, beacons or walls",
             "min_text": "0",
             "max_text": "100"
           }
         },
         "value_text": "0",
-        "value_title": "structures never repaired"
+        "value_title": "never repairing structures, beacons or walls"
       },
       {
         "pointer": "/build/rebuild_destroyed",

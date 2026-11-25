@@ -35,25 +35,25 @@ use pharmakos_plan_core::vocabulary::{common_parameters, vocabulary};
 /// | setting | what the sim does at 0 | title |
 /// |---|---|---|
 /// | `retreat_hp_pct` | no unit ever falls below 0 %: retreat off (`below_retreat`) | "retreat off" |
-/// | `build.repair_threshold_pct` | no structure is repair work; units still are (`repair_work`) | "structures never repaired" |
+/// | `build.repair_threshold_pct` | no structure, beacon or cracked wall is repair work; units and the commander still are (`repair_work`) | "never repairing structures, beacons or walls" |
 /// | `defend.picket_scouts` | the Defend mandate asks for no scout (`mandate.rs`) | "no picket" |
-/// | `attack.launch.force_size` | a force of none is one, and the launch is at once (`wanted_force`, `by_size`) | none: the launch is not turned off |
+/// | `attack.launch.force_size` | a force of none is one, launched at once without gathering (`wanted_force`, `by_size`) | "launching at once with its first raider, ungathered" |
 /// | `attack.launch.segment_ms` | launches once the segment has run 0 s, at once | none: a time like any other |
 /// | `attack.retreat.after_launch_ms` | breaks off 0 s after the launch | none: a time like any other |
-/// | `survey.scout_count` | a written 0 leaves the beacon's count as it is (no presence on this `main`) | none until `presence7` gives it presence, then "no scouts" |
-/// | `mine.dig_max_depth` | as `scout_count` | none until `presence7`, then "digging the exposed rim only" |
-/// | `mine.pillar_spacing` | as `scout_count` | none until `presence7`, then "leaving no pillars" |
+/// | `survey.scout_count` | a held 0 fields no scout (the Survey mandate asks for none) | "no scouts" |
+/// | `mine.dig_max_depth` | a held 0 takes no voxel below the seam's top | "digging the exposed rim only" |
+/// | `mine.pillar_spacing` | a held 0 leaves no pillar (`pillar`) | "leaving no pillars" |
 /// | a predicate's percentage, count, `$`, `kW` or window | a comparison against 0 | none: a number like any other |
 const SWEEP: &[(&str, &str, Option<&str>)] = &[
     ("", "/retreat_hp_pct", Some(s::RETREAT_OFF)),
     ("build", "/repair_threshold_pct", Some(s::REPAIR_NEVER)),
     ("defend", "/picket_scouts", Some(s::PICKET_NONE)),
-    ("attack", "/launch/force_size", None),
+    ("attack", "/launch/force_size", Some(s::LAUNCH_FIRST_RAIDER)),
     ("attack", "/launch/segment_ms", None),
     ("attack", "/retreat/after_launch_ms", None),
-    ("survey", "/scout_count", None),
-    ("mine", "/dig_max_depth", None),
-    ("mine", "/pillar_spacing", None),
+    ("survey", "/scout_count", Some(s::SCOUTS_NONE)),
+    ("mine", "/dig_max_depth", Some(s::DIG_RIM_ONLY)),
+    ("mine", "/pillar_spacing", Some(s::PILLARS_NONE)),
 ];
 
 /// Whether an integer shape admits a 0.
@@ -122,7 +122,7 @@ fn every_setting_that_admits_a_zero_is_swept() {
 /// The titles the table names, by pointer, for the gateway's check of the
 /// sim's half: what `crates/gateway/tests/zero_titles.rs` holds itself to.
 #[test]
-fn the_titled_settings_are_the_three_the_sim_turns_off() {
+fn the_titled_settings_are_the_seven_the_sim_reads_apart() {
     let titled: Vec<&str> = SWEEP
         .iter()
         .filter(|(_, _, title)| title.is_some())
@@ -130,7 +130,15 @@ fn the_titled_settings_are_the_three_the_sim_turns_off() {
         .collect();
     assert_eq!(
         titled,
-        ["/retreat_hp_pct", "/repair_threshold_pct", "/picket_scouts"]
+        [
+            "/retreat_hp_pct",
+            "/repair_threshold_pct",
+            "/picket_scouts",
+            "/launch/force_size",
+            "/scout_count",
+            "/dig_max_depth",
+            "/pillar_spacing"
+        ]
     );
 }
 

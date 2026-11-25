@@ -227,9 +227,12 @@ fn check_verifier(
             State::Fail,
             "verifier",
             &format!(
-                "the safe playbook does not qualify against this build ({} diagnostics), so a \
-                 seat that let its Lull run out would have nothing to play",
-                report.diagnostics.len()
+                "the safe playbook does not qualify against this build ({} diagnostics listed, \
+                 {} codes past the report's {} of one code), so a seat that let its Lull run \
+                 out would have nothing to play",
+                report.diagnostics.len(),
+                pharmakos_verifier::CapRead::of(&report).left_out_codes,
+                pharmakos_verifier::MAX_PER_CODE,
             ),
         ),
         Err(error) => note(lines, State::Fail, "verifier", &error.to_string()),

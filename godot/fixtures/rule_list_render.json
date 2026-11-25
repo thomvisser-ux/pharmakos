@@ -2,7 +2,7 @@
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "prose": "Expand & Mine\nWritten from a built-in template.\nPlace a Mine beacon covering a scrap seam you do not cover yet, and walk home while it digs.\n\nRoute\n  1. place_mine: place a beacon at a site covering the nearest scrap seam you do not cover yet (nearest by travel, read when the step starts), tagged \"mine\", on a Mine mandate: return fire, at normal Quartermaster priority (16.5 s on site).\n    Give up after 2:00.\n    On failure, move on to the next step.\n  2. back_home: walk to the safest own beacon.\n\nRules\n  1. \"flee\", when the commander is at or below 40% HP and the commander took damage in the last 3 s:\n    1. flee_to_safety: walk to the safest own beacon.\n    2. flee_wait: hold for 8 s.\n    Then carry on with the route.\n    Fires at most 3 times, and no sooner than every 30 s.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n  After 2 deaths the fallback takes over.\n\nFallback\n  Hold at the safest own beacon.\n\nBudget\n  5 of 128 size units.\n  16.5 s standing at a beacon along the route.\n",
+    "prose": "Expand & Mine\nWritten from a built-in template.\nPlace a Mine beacon covering a scrap seam you do not cover yet, and walk home while it digs.\n\nRoute\n  1. place_mine: place a beacon at a site covering the nearest scrap seam you do not cover yet (nearest by travel, read when the step starts), tagged \"mine\", on a Mine mandate: return fire, digging down to 4 voxels below the seam's top and fleeing known threats, at normal Quartermaster priority (16.5 s on site).\n    Give up after 2:00.\n    On failure, move on to the next step.\n  2. back_home: walk to the safest own beacon.\n\nRules\n  1. \"flee\", when the commander is at or below 40% HP and the commander took damage in the last 3 s:\n    1. flee_to_safety: walk to the safest own beacon.\n    2. flee_wait: hold for 8 s.\n    Then carry on with the route.\n    Fires at most 3 times, and no sooner than every 30 s.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n  After 2 deaths the fallback takes over.\n\nFallback\n  Hold at the safest own beacon.\n\nBudget\n  5 of 128 size units.\n  16.5 s standing at a beacon along the route.\n",
     "rules": [
       {
         "pointer": "/declarative/route/0",
@@ -56,10 +56,51 @@
             "pick_op": "replace"
           },
           {
+            "pointer": "/declarative/route/0/place_beacon/initial/mandate/mine/dig_max_depth",
+            "line": 5,
+            "start": 206,
+            "end": 207,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "voxels",
+                "display_unit": "voxels",
+                "zero_title": "digging the exposed rim only",
+                "min_text": "0"
+              }
+            },
+            "value_json": "4",
+            "value_text": "4",
+            "outside": false,
+            "pick_op": "replace"
+          },
+          {
+            "pointer": "/declarative/route/0/place_beacon/initial/mandate/mine/flee_on_threat",
+            "line": 5,
+            "start": 240,
+            "end": 261,
+            "shape": {
+              "choice": {
+                "values": [
+                  "true",
+                  "false"
+                ],
+                "titles": [
+                  "yes",
+                  "no"
+                ]
+              }
+            },
+            "value_json": "true",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
+          },
+          {
             "pointer": "/declarative/route/0/place_beacon/initial/priority",
             "line": 5,
-            "start": 193,
-            "end": 199,
+            "start": 266,
+            "end": 272,
             "shape": {
               "choice": {
                 "values": [

@@ -2,7 +2,7 @@ Cover the nearest vent
 Written by hand.
 
 Route
-  1. cover: place a beacon at a site covering the nearest heat vent you do not cover yet (nearest by travel, read when the step starts), on a Build mandate: return fire by default for its writ (16.5 s on site).
+  1. cover: place a beacon at a site covering the nearest heat vent you do not cover yet (nearest by travel, read when the step starts), on a Build mandate: return fire by default for its writ, building toward 1 target and reshaping no ground (16.5 s on site).
   2. tap: interface with beacon "b_01" and add a build target: generator at a spot on the nearest heat vent (nearest by travel, read when the step starts) and remove the build target at a spot on Heat vent (120, 88) (6.5 s on site).
   3. dig: place a beacon at a site covering Scrap seam (14, 9) (12 s on site).
 

@@ -349,12 +349,83 @@ pub const RETREAT_BELOW_UNIT: &str = "of their hit points";
 /// `IntegerShape.zero_title` (S3's `zerotitle`: one entry, two readers).
 pub const RETREAT_OFF: &str = "retreat off";
 
+// --- A written 0 and a list's clear (decisions-log item 184 (10)) -----------
+
+/// A written `scout_count` of 0, before its chip.
+pub const SCOUTS_NONE: &str = "no scouts";
+/// A written `dig_max_depth` of 0, before its chip.
+pub const DIG_RIM_ONLY: &str = "digging the exposed rim only";
+/// A written `pillar_spacing` of 0, before its chip.
+pub const PILLARS_NONE: &str = "leaving no pillars";
+/// A written `scout_count` past 0, before its chip.
+pub const SCOUTS_FIELDING: &str = "fielding";
+/// After a written `scout_count`'s chip.
+pub const SCOUTS_UNIT: &str = "scouts";
+/// A written `dig_max_depth` past 0, before its chip.
+pub const DIG_DOWN_TO: &str = "digging down to";
+/// After a written `dig_max_depth`'s chip.
+pub const DIG_DOWN_TO_UNIT: &str = "voxels below the seam's top";
+/// A written `pillar_spacing` past 0, before its chip.
+pub const PILLARS_EVERY: &str = "leaving a pillar every";
+/// After a written `pillar_spacing`'s chip.
+pub const PILLARS_EVERY_UNIT: &str = "columns";
+/// A written `flee_on_threat` of true.
+pub const FLEE_ON: &str = "fleeing known threats";
+/// A written `flee_on_threat` of false.
+pub const FLEE_OFF: &str = "not fleeing threats";
+/// A written `seam_choice` of RICHEST.
+pub const SEAM_RICHEST: &str = "choosing the richest seam";
+/// A written `seam_choice` of NEAREST.
+pub const SEAM_NEAREST: &str = "choosing the nearest seam";
+/// A written `seam_choice` of SAFEST.
+pub const SEAM_SAFEST: &str = "choosing the safest seam";
+/// A `seam_choice` this build does not name (`E0018`).
+pub const SEAM_UNSET: &str = "choosing a seam as the file does not say";
+/// Before a Survey arm's probe-area count.
+pub const SURVEY_PROBING: &str = "probing";
+/// Before a Build arm's target count.
+pub const BUILD_TARGETS: &str = "building toward";
+/// One Build target.
+pub const TARGET_ONE: &str = "target";
+/// Several Build targets.
+pub const TARGET_MANY: &str = "targets";
+/// Before a Build arm's protected-area count.
+pub const BUILD_PROTECTING: &str = "keeping clear of";
+/// A written `repair_threshold_pct` past 0, before its chip.
+pub const REPAIR_BELOW: &str = "repairing structures below";
+/// After a written `repair_threshold_pct`'s percentage.
+pub const REPAIR_BELOW_UNIT: &str = "of their hit points";
+/// A written `repair_threshold_pct` of 0, before its chip; and the setting's
+/// `IntegerShape.zero_title` (S3's `zerotitle`: one entry, two readers). At 0
+/// the sim repairs no structure, no beacon and no cracked wall, while the
+/// beacon's units and the commander are still repaired (decision 38;
+/// `site::repair_work`), so the words name what is not repaired.
+pub const REPAIR_NEVER: &str = "never repairing structures, beacons or walls";
+/// A written `rebuild_destroyed` of true.
+pub const REBUILD_ON: &str = "rebuilding destroyed targets";
+/// A written `rebuild_destroyed` of false.
+pub const REBUILD_OFF: &str = "not rebuilding destroyed targets";
+/// A written `terraform` of NONE.
+pub const TERRAFORM_NONE: &str = "reshaping no ground";
+/// A written `terraform` of FILL.
+pub const TERRAFORM_FILL: &str = "filling ground to build";
+/// A written `terraform` of DIG.
+pub const TERRAFORM_DIG: &str = "digging ground to build";
+/// A written `terraform` of BOTH.
+pub const TERRAFORM_BOTH: &str = "filling and digging ground to build";
+/// A `terraform` this build does not name (`E0018`).
+pub const TERRAFORM_UNSET: &str = "reshaping ground as the file does not say";
+/// A set `clear_protected_areas`.
+pub const CLEAR_PROTECTED: &str = "emptying its protected areas";
+/// A set `clear_probe_areas`.
+pub const CLEAR_PROBES: &str = "emptying its probe areas";
+/// A set `clear_protect`.
+pub const CLEAR_PROTECT: &str = "emptying its protect list";
+/// A set `clear_avoid_areas`.
+pub const CLEAR_AVOID: &str = "emptying its avoid areas";
+
 // --- What a 0 does in a setting (S3's `zerotitle`) ---------------------------
 
-/// A `repair_threshold_pct` of 0: its `IntegerShape.zero_title`. The beacon's
-/// units and the commander are still repaired (decision 38), so the words
-/// name structures.
-pub const REPAIR_NEVER: &str = "structures never repaired";
 /// A `picket_scouts` of 0: its `IntegerShape.zero_title`, and the prose's
 /// words for a written 0, before its chip.
 pub const PICKET_NONE: &str = "no picket";
@@ -414,6 +485,15 @@ pub const LAUNCH_FORCE: &str = "raiders stand there";
 pub const LAUNCH_SEGMENT: &str = "of the segment have passed";
 /// A launch with no condition.
 pub const LAUNCH_NEVER: &str = "never, for no launch condition is written";
+/// A written `force_size` of 0, before its chip; and the setting's
+/// `IntegerShape.zero_title` (S3's `zerotitle`). At 0 the sim fields one
+/// raider and launches it as soon as it stands, without gathering at the
+/// staging point (`attack.rs`: `wanted_force` is at least 1, and `staged >= 0`
+/// always holds).
+pub const LAUNCH_FIRST_RAIDER: &str = "launching at once with its first raider, ungathered";
+/// After [`LAUNCH_FIRST_RAIDER`], before a written `segment_ms`'s chip, which
+/// the sim then never reads: the first raider launches before any time does.
+pub const LAUNCH_TIME_UNREAD: &str = "its launch time unread";
 /// Before the retreat conditions.
 pub const ATTACK_RETREAT: &str = "breaking off once";
 /// A retreat's force threshold, before the percentage.

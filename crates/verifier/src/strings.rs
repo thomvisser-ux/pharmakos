@@ -616,6 +616,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                    or a Resonance Spire.",
     },
     Text {
+        code: "E0515",
+        message: "`clear_{list}` cannot stand {place}.",
+        beginner: "A `clear_` setting empties a list the beacon already holds, so it goes in a \
+                   Change settings row on its own: not beside entries of the same list, and \
+                   not where the beacon or its new mandate starts with no list at all.",
+    },
+    Text {
         code: "W0501",
         message: "`seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs \
                   the nearest seam no known threat's weapon reaches, and this code is retired \
@@ -779,12 +786,27 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "I0007",
-        message: "omitted settings not noted one by one: {count}. Each reads as its default; a \
-                  report notes at most the first few, and none past the size budget.",
-        beginner: "Many settings here are left to their defaults. The first few are noted; the \
-                   rest work the same way.",
+        message: "{count} more `{code}` not listed: a report lists at most {max} of one code \
+                  one by one{budget}.{verdict}",
+        beginner: "Not shown: {count} more `{code}`. {next}",
     },
 ];
+
+// --- The words of `I0007`, by the left-out code's severity -------------------
+//
+// `I0007` closes a report once per code it left diagnostics out of (S3's
+// `vcap`); its words are true for the code it names.
+
+/// `I0007`'s `{verdict}` for an error code: the left-out ones still refuse.
+pub const LEFT_OUT_STILL_REFUSE: &str =
+    " Each left out still stops the playbook qualifying, as the ones listed do.";
+/// `I0007`'s `{budget}` for `I0003` alone: no per-setting note is written once
+/// `E0110` has fired.
+pub const LEFT_OUT_PAST_THE_BUDGET: &str = ", and no `I0003` once the size budget is past";
+/// `I0007`'s `{next}` for an error or a warning.
+pub const LEFT_OUT_NEXT_FIX: &str = "Deal with the ones shown, then check again to see the rest.";
+/// `I0007`'s `{next}` for a note.
+pub const LEFT_OUT_NEXT_NOTE: &str = "They say the same kind of thing as the ones shown.";
 
 // --- Words the templates' arguments use --------------------------------------
 //
@@ -928,6 +950,14 @@ pub const MY_COMMANDER: &str = "my_commander";
 pub const A_LAUNCH_CONDITION: &str = "a launch condition (`force_size` or `segment_ms`)";
 /// E0511's Fix.
 pub const FIX_DROP_ROTATION: &str = "Leave the rotation out";
+/// E0515's `{place}` beside a non-empty list of its own.
+pub const CLEAR_BESIDE_A_LIST: &str =
+    "beside entries of the same list: the row would both replace the list and empty it";
+/// E0515's `{place}` in a new beacon's or a switched mandate's settings.
+pub const CLEAR_FROM_NOTHING: &str = "where the settings start from nothing (a new beacon's or a \
+                                      switched mandate's), which hold no list to empty";
+/// E0515's Fix.
+pub const FIX_DROP_CLEAR: &str = "Leave the clear out";
 
 /// E0418's `{what}` for a beacon the view holds no sighting of.
 #[must_use]
@@ -1050,12 +1080,16 @@ mod tests {
         }
     }
 
+    /// Only `I0007`'s beginner sentence is templated (S3's `vcap`): the client
+    /// shows the beginner sentence, and "some findings are not shown" without
+    /// which and how many would send the player looking for them. Every other
+    /// reads the same every time.
     #[test]
-    fn no_beginner_sentence_is_templated() {
+    fn only_i0007_s_beginner_sentence_is_templated() {
         for row in VERIFIER_STRINGS {
             assert!(
-                !row.beginner.contains('{'),
-                "{}'s beginner sentence is templated; it must read the same every time",
+                row.code == "I0007" || !row.beginner.contains('{'),
+                "{}'s beginner sentence is templated",
                 row.code
             );
         }

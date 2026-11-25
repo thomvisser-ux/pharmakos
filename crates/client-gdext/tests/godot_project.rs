@@ -304,6 +304,8 @@ const SCRIPTS: &[&str] = &[
     "lobby_shot.gd",
     "mesher_rules.gd",
     "picker_shot.gd",
+    "playtest.gd",
+    "playtest_shot.gd",
     "ring_shot.gd",
     "rows.gd",
     "rows_shot.gd",

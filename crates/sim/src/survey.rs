@@ -169,6 +169,7 @@ use crate::math::quantity::Ms;
 use crate::pathing::estimate::{EstimateError, WalkError, walk_cost, walk_ticks};
 use crate::pathing::surface::Node;
 use crate::pathing::{Speed, ticks_for_cost};
+use crate::reserved::Reserved;
 use crate::seams::MandateKind;
 use crate::sight::{RadiusOnly, Sensor};
 use crate::tables::{
@@ -1158,16 +1159,16 @@ pub(crate) struct Memory {
     /// The first tick of the Push this memory is for.
     push: Option<u32>,
     /// (seat, asset, reason, the last decision tick it was dropped on).
-    log: Vec<(u8, u32, Drop, u32)>,
+    log: Reserved<(u8, u32, Drop, u32)>,
     /// (seat, asset, the last decision tick it was listed and fitting, the
     /// unit id of the scout whose list held it then).
-    listed: Vec<(u8, u32, u32, u32)>,
+    listed: Reserved<(u8, u32, u32, u32)>,
     /// (seat, unit id, where it stood at the last decision) of every living
     /// scout a decision decided.
-    scouts: Vec<(u8, u32, [Fx; 3])>,
+    scouts: Reserved<(u8, u32, [Fx; 3])>,
     /// (seat, the decision tick a scout of it was found dead on, where it
     /// stood at the decision before, its unit id).
-    deaths: Vec<(u8, u32, [Fx; 3], u32)>,
+    deaths: Reserved<(u8, u32, [Fx; 3], u32)>,
 }
 
 impl Memory {
@@ -1175,10 +1176,10 @@ impl Memory {
     pub(crate) fn new() -> Self {
         Self {
             push: None,
-            log: Vec::with_capacity(DROP_ROOM),
-            listed: Vec::with_capacity(SEAT_ROOM),
-            scouts: Vec::with_capacity(SEAT_ROOM),
-            deaths: Vec::with_capacity(SEAT_ROOM),
+            log: Reserved::with_capacity(DROP_ROOM),
+            listed: Reserved::with_capacity(SEAT_ROOM),
+            scouts: Reserved::with_capacity(SEAT_ROOM),
+            deaths: Reserved::with_capacity(SEAT_ROOM),
         }
     }
 

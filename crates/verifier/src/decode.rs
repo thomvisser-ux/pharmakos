@@ -60,7 +60,9 @@ use pharmakos_proto::json::{self, Json};
 use pharmakos_proto::{SCHEMA_VERSION, schema_version};
 
 use crate::pointer;
-use crate::report::{Builder, Diag, patch_add, patch_remove, patch_replace};
+use crate::report::{
+    Builder, Diag, MAX_POINTER_BYTES, json_bytes, patch_add, patch_remove, patch_replace,
+};
 
 /// Field names `gp.v1` reserves, in the order the `.proto` files reserve them.
 ///
@@ -297,27 +299,39 @@ fn refuse(error: &json::Error, out: &mut Builder) {
     let unknown = (error.kind() == json::ErrorKind::UnknownField)
         .then(|| pointer::last_token(error.pointer()))
         .flatten();
+    // The pointer goes in whole, with its Fix: the report's one door
+    // (`Builder::push`) cuts a pointer past its bound, drops the Fix that
+    // would have to spell it, and counts both (S3's `vcap`, fix pass 2).
+    let path = error.pointer();
     if let Some(name) = unknown {
         out.emit(
-            Diag::new("E0002", error.pointer().to_owned())
+            Diag::new("E0002", path.to_owned())
                 .arg_text("field", &name)
                 .fix(
                     pharmakos_proto::said!("Delete `{}`", quoted(&name)),
-                    patch_remove(error.pointer()),
+                    patch_remove(path),
                     Applicability::MaybeIncorrect,
                 ),
         );
     } else {
-        out.emit(Diag::new("E0001", error.pointer().to_owned()).arg("detail", error.said()));
+        out.emit(Diag::new("E0001", path.to_owned()).arg("detail", error.said()));
     }
 }
 
-/// Every reserved name anywhere in the document, with the pointer to it.
+/// Every reserved name anywhere in the document, with the pointer to it, as
+/// far as a report can point: a member whose pointer is past
+/// [`MAX_POINTER_BYTES`] is not descended into, because only
+/// a member name of the player's own makes a pointer that long and no
+/// schema name sits beneath one. The document is then refused by the codec
+/// at the first member it does not know, which is never stripped either.
 fn scan_reserved(value: &Json, at: &str, found: &mut Vec<(String, String)>) {
     match value {
         Json::Object(entries) => {
             for (key, item) in entries {
                 let here = pointer::child(at, key);
+                if json_bytes(&here) > MAX_POINTER_BYTES {
+                    continue;
+                }
                 if RESERVED_NAMES.contains(&key.as_str()) {
                     found.push((here.clone(), key.clone()));
                 }

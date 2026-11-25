@@ -56,7 +56,7 @@ use pharmakos_sim::events::EventKind;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::tables::SeatId;
 
-use support::{FIRST_LULL_MS, LULL_MS, MATCH, array_of, call_in_lull, result, text_of};
+use support::{FIRST_LULL_MS, LULL_MS, MATCH, array_of, call_in_lull, code, result, text_of};
 
 /// A Push long enough for the covering beacon to land and its Generator to be
 /// paid for: on the golden seed the beacon lands at tick 721 and the
@@ -956,18 +956,16 @@ fn the_lull_says_what_this_round_will_do_and_round_two_finds_no_vent() {
     assert!(!advised.contains("This round:"), "{advised}");
     assert!(round_two.starts_with(&advised), "{advised} / {round_two}");
 
-    // The carried draft's id is the seat's to overwrite, with anything at
-    // all; the sentence reads the seal, never the draft list, so it neither
-    // moves nor breaks.
-    let saved = call_in_lull(
-        &mut surface,
-        &token,
-        &mut left,
-        "save_draft",
-        r#"{"draft_id":"carried","playbook_jsonc":"{ not json"}"#,
-    );
-    let _ = result(&saved, "save_draft");
-    assert_eq!(briefing(&mut surface, &mut left), round_two);
+    // The carried draft's id is the gateway's, which no seat writes (lane
+    // `opsave`'s draft rule): saving over it is refused, and the sentence,
+    // which reads the seal and never the draft list, neither moves nor breaks;
+    // nor does it when the seat saves the same text under an id of its own.
+    for (id, wanted) in [("carried", "INVALID_ARGUMENT"), ("mine", "<no error>")] {
+        let params = format!("{{\"draft_id\":\"{id}\",\"playbook_jsonc\":\"{{ not json\"}}");
+        let saved = call_in_lull(&mut surface, &token, &mut left, "save_draft", &params);
+        assert_eq!(code(&saved), wanted, "{id}: {saved:?}");
+        assert_eq!(briefing(&mut surface, &mut left), round_two);
+    }
 }
 
 /// A token shaped as the built-in advisor's for `seat`: the seat's subject,

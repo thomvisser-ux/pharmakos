@@ -51,12 +51,12 @@ const DRAWN := "drawn"
 ## Replaces the rows in `container` with the rule list `list` (the bridge's `rule_list`),
 ## rendered as `revision` (the bridge's `rules_rendering`, the rendering id), unless that is
 ## what is drawn already; returns whether it redrew. `editable` is the bridge's `rules_editable`, `picking`
-## the chip a pick is on for (-1 none), `conflicts` and `refusal` the bridge's. `on_chip` is
+## the chip a pick is on for (-1 none), `conflicts`, `refusal` and `conflicts_more` the bridge's. `on_chip` is
 ## called with a chip's index when it is clicked, `on_move` with the dragged rule's index and
 ## pointer, the dropped-on rule's index and pointer, and the rendering, when one is dropped on
 ## the other.
-static func fill(container: Container, list: Dictionary, revision: int, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable, on_slot: Callable = Callable(), on_remove: Callable = Callable(), on_add: Callable = Callable(), has_text: bool = false) -> bool:
-	var drawn := var_to_str([list, revision, editable, picking, conflicts, refusal, has_text])
+static func fill(container: Container, list: Dictionary, revision: int, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable, on_slot: Callable = Callable(), on_remove: Callable = Callable(), on_add: Callable = Callable(), has_text: bool = false, conflicts_more: String = "") -> bool:
+	var drawn := var_to_str([list, revision, editable, picking, conflicts, refusal, has_text, conflicts_more])
 	if container.has_meta(DRAWN) and String(container.get_meta(DRAWN)) == drawn:
 		return false
 	container.set_meta(DRAWN, drawn)
@@ -93,6 +93,10 @@ static func fill(container: Container, list: Dictionary, revision: int, editable
 		if rule >= 0 and _index(refusal.get("rule", -1), unread) == rule:
 			# The gateway's refusal (`rule_refused`) or this client's, by the key the bridge names.
 			container.add_child(_note(Strings.text(String(refusal.get("key", "rule_refused")), {"detail": refusal.get("detail", "")})))
+	# The report left conflicts out past its per-code cap (S3's `vcap`): its own words, under the
+	# list, so the connectors drawn are never read as every conflict there is.
+	if conflicts_more != "":
+		container.add_child(_note(conflicts_more))
 	if not unread.is_empty():
 		container.add_child(_note(Values.unreadable_text(Strings.text("value_index"), unread[0])))
 	# Add a rule, under the list, whenever there is a text to add one to: the gateway writes it.

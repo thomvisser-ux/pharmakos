@@ -217,6 +217,59 @@ impl Shape {
         }
     }
 
+    /// An Attack arm's `launch.force_size`: a count of raiders whose 0 is not
+    /// "none": the sim fields one raider and launches it at once, ungathered
+    /// (`attack.rs`'s `wanted_force` and `by_size`).
+    #[must_use]
+    pub const fn force_size() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: None,
+            unit: UNIT_COUNT,
+            zero: Some(s::LAUNCH_FIRST_RAIDER),
+        }
+    }
+
+    /// A Survey arm's `scout_count`: a count up to a beacon's byte column
+    /// (`E0508`) whose 0 fields no scout (the sim's Survey mandate asks the
+    /// fabricator for none under a count of 0; decisions-log item 184 (10)
+    /// gave the field presence, so a written 0 is held).
+    #[must_use]
+    pub const fn scout_count() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: Some(255),
+            unit: UNIT_COUNT,
+            zero: Some(s::SCOUTS_NONE),
+        }
+    }
+
+    /// A Mine arm's `dig_max_depth`: voxels below the seam's original top,
+    /// whose 0 digs the exposed rim only (the sim's miner takes no voxel
+    /// deeper than the depth; item 184 (10)).
+    #[must_use]
+    pub const fn dig_max_depth() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: None,
+            unit: UNIT_VOXELS,
+            zero: Some(s::DIG_RIM_ONLY),
+        }
+    }
+
+    /// A Mine arm's `pillar_spacing`: columns between pillars, whose 0 leaves
+    /// no pillar (the sim's `pillar` reads a spacing of 0 as none; item 184
+    /// (10)).
+    #[must_use]
+    pub const fn pillar_spacing() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: None,
+            unit: UNIT_VOXELS,
+            zero: Some(s::PILLARS_NONE),
+        }
+    }
+
     /// The words for what a 0 does in this shape
     /// (`gp.api.v1.IntegerShape.zero_title`), `None` for a shape with none or
     /// one that is not an integer.

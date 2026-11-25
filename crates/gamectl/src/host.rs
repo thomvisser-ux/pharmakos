@@ -27,7 +27,9 @@
 //!    the same rules text) to `serve::run`, with the process's own standard
 //!    input and standard output. It returns when standard input reaches end
 //!    of file, which is the whole of the shutdown protocol: no heartbeat and
-//!    no clock.
+//!    no clock; or at once, whatever its parent does, when a write the match
+//!    needs fails (the gateway's boundary rule, `serve`'s `Writer`), saying
+//!    why on standard error.
 //!
 //! # The operator's adapters (T18)
 //!
@@ -73,7 +75,7 @@
 //! | 0 | the parent closed standard input and the match was put down |
 //! | 1 | standard output is a terminal, so nothing was started |
 //! | 2 | the rules table could not be read, the rules table is one the verifier refuses (S3's `vfyq2`, fix pass 5, item L8), or the config line was one this host refuses |
-//! | 4 | the host could not start: no loopback bind, no entropy for a token, no private match cache |
+//! | 4 | the host could not start: no loopback bind, no entropy for a token, no private match cache; or it stopped because a write the match needed (a save, a sealed playbook, a replay chain, the audit log) failed, said with what the disk holds |
 //!
 //! Standard output belongs to the announce line alone. Everything else this
 //! command has to say goes to standard error, which is where the lobby's
@@ -92,7 +94,9 @@ use pharmakos_gateway::Code;
 use pharmakos_gateway::advice::{Advice, StartHere, SuggestedValue, Suggestion};
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::serve::{self, Advisor, BuiltInSeat, Operators, Setup};
-use pharmakos_operator::{Easy, FailedStones, Played, PushUnread, RulesError, StonesUnread};
+use pharmakos_operator::{
+    Easy, FailedStones, Played, PushUnread, RulesError, StonesUnread, TapsUnread,
+};
 use pharmakos_proto::json::Json;
 
 use crate::exit::Failure;
@@ -401,8 +405,30 @@ pub fn refusals_said(seat: u8, played: &Played) -> Option<String> {
     let estimates =
         (!estimates.is_empty()).then(|| strings::operator_estimates_refused(&estimates));
     let stones = stones_unread(&played.failed_stones);
-    let said: Vec<String> = read.into_iter().chain(estimates).chain(stones).collect();
+    let taps = played.taps_unread.as_ref().map(taps_unread);
+    let said: Vec<String> = read
+        .into_iter()
+        .chain(estimates)
+        .chain(stones)
+        .chain(taps)
+        .collect();
     (!said.is_empty()).then(|| strings::operator_round(seat, played.round, &said.join(" ")))
+}
+
+/// Why the tap probe composed no tap, when it could not say (S3's `vcap`).
+fn taps_unread(unread: &TapsUnread) -> String {
+    match unread {
+        TapsUnread::Refused(refused) => {
+            strings::operator_taps_refused(&refused.method, &refused.code, &refused.message)
+        }
+        TapsUnread::PartAtTheCap { part, listed } => {
+            strings::operator_taps_part_at_the_cap(*part, *listed)
+        }
+        TapsUnread::StepPastThePart { part, path } => {
+            strings::operator_taps_step_past_the_part(*part, path)
+        }
+        TapsUnread::PastTheTarget => strings::operator_taps_past_the_target(),
+    }
 }
 
 /// Why last round's failed stones were not all known, when they were not.
@@ -521,11 +547,26 @@ pub fn run(root: &Path) -> Result<String, Failure> {
         // plays and advises the human's (T18).
         operators: Box::new(operators),
     };
-    let served = serve::run(setup, std::io::stdin().lock(), std::io::stdout().lock());
+    let announced = std::cell::Cell::new(false);
+    let served = serve::run(
+        setup,
+        std::io::stdin(),
+        Recorded {
+            inner: std::io::stdout().lock(),
+            wrote: &announced,
+        },
+    );
     // The host has ended: what its seats could not write is said once, in
-    // the message of the failure it ended on or in a last line of its own.
+    // the message of the failure it ended on or in a last line of its own. A
+    // failure before the announce line is a match that could not be hosted;
+    // one after it, a match that stopped.
     served.map_err(|error| {
-        let message = with_unsaid(strings::host_refused(&error.to_string()), &unsaid);
+        let said = if announced.get() {
+            strings::host_stopped(&error.to_string())
+        } else {
+            strings::host_refused(&error.to_string())
+        };
+        let message = with_unsaid(said, &unsaid);
         if error.code() == Code::InvalidArgument {
             Failure::input(message)
         } else {
@@ -536,6 +577,28 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     // Nothing more goes to standard output: the announce line was the whole of
     // what this command writes there.
     Ok(String::new())
+}
+
+/// Standard output, recording whether anything was written to it: the
+/// announce line is the only thing this command writes there, so a byte
+/// written is the match announced. Plumbing only, no gateway type.
+struct Recorded<'a, W: Write> {
+    inner: W,
+    wrote: &'a std::cell::Cell<bool>,
+}
+
+impl<W: Write> Write for Recorded<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        if written > 0 {
+            self.wrote.set(true);
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 #[cfg(test)]
@@ -585,7 +648,23 @@ mod tests {
             estimates_refused,
             fundable: 0,
             failed_stones: FailedStones::None,
+            taps_unread: None,
         }
+    }
+
+    #[test]
+    fn a_tap_probe_that_could_not_say_is_said() {
+        let mut round = played(None, Vec::new());
+        round.taps_unread = Some(TapsUnread::PartAtTheCap { part: 1, listed: 4 });
+        let said = refusals_said(0, &round).expect("said");
+        assert!(said.contains("part 1 listed 4 E0503"), "{said}");
+        round.taps_unread = Some(TapsUnread::Refused(refused(
+            "verify_plan",
+            "INVALID_ARGUMENT",
+            "no",
+        )));
+        let said = refusals_said(0, &round).expect("said");
+        assert!(said.contains("verify_plan with INVALID_ARGUMENT"), "{said}");
     }
 
     #[test]

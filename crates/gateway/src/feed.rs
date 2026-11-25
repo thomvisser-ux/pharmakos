@@ -77,6 +77,18 @@ pub const MAX_PAGE_EVENTS: usize = 256;
 /// The longest a [`Kind`] may be.
 pub const MAX_KIND_CHARS: usize = 48;
 
+/// The longest one line of the feed may be, in characters.
+///
+/// A bound of the feed's own, held at [`SegmentFeed::publish`] for every line
+/// the gateway writes and at a resume for every line a save carries back
+/// ([`crate::surface::last_push`]), so a save's line is never longer than a
+/// line the live feed could hold. The string table's longest line, every
+/// event kind at its widest values and every Ledger memo under the committed
+/// rules, is far below it (`tests::every_line_the_gateway_writes_is_within_the_bound`):
+/// the bound is there so a damaged save cannot hand a seat a line of any
+/// length, not to cut a sentence the gateway meant.
+pub const MAX_LINE_CHARS: usize = 2_048;
+
 /// An event kind: a name a scenario file can assert on.
 ///
 /// Validated at construction, so an unassertable kind cannot reach the feed at
@@ -210,6 +222,41 @@ impl Witnesses {
     #[must_use]
     pub fn contains(self, seat: SeatId) -> bool {
         Witnesses::bit(seat).is_some_and(|bit| self.0 & bit != 0)
+    }
+
+    /// The seats that saw it, ascending: what a save writes.
+    #[must_use]
+    pub fn seats(self) -> Vec<SeatId> {
+        (0_u8..8)
+            .map(SeatId::new)
+            .filter(|seat| self.contains(*seat))
+            .collect()
+    }
+
+    /// The witness set of exactly `seats`, as a save carries it back.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a seat past the eight a
+    /// witness set holds, or one named twice.
+    pub fn of_seats(seats: &[SeatId]) -> Result<Witnesses, Error> {
+        let mut bits = 0_u8;
+        for seat in seats {
+            let bit = Witnesses::bit(*seat).ok_or_else(|| {
+                Error::invalid(said!(
+                    "seat {} is past the eight seats a feed's witness set holds",
+                    seat.raw()
+                ))
+            })?;
+            if bits & bit != 0 {
+                return Err(Error::invalid(said!(
+                    "seat {} witnesses one line twice",
+                    seat.raw()
+                )));
+            }
+            bits |= bit;
+        }
+        Ok(Witnesses(bits))
     }
 
     /// A seat's bit, or `None` past the eighth.
@@ -658,6 +705,11 @@ pub struct Page {
 #[derive(Clone, Debug)]
 pub struct SegmentFeed {
     snapshot: SnapshotId,
+    /// The round and the segment the feed was opened for, which with the
+    /// match seed make its [`SnapshotId`]: what a save writes so a resume
+    /// opens the same feed, cursors and all ([`crate::surface::last_push`]).
+    round: u32,
+    segment: u32,
     events: Vec<Event>,
     /// Who witnessed each event as it was published, index for index with
     /// `events` ([`Witnesses`]).
@@ -665,11 +717,14 @@ pub struct SegmentFeed {
 }
 
 impl SegmentFeed {
-    /// An empty feed for a segment.
+    /// An empty feed for segment `segment` of round `round` of the match
+    /// seeded `match_seed`, tied to that segment's [`SnapshotId`].
     #[must_use]
-    pub const fn new(snapshot: SnapshotId) -> SegmentFeed {
+    pub fn new(match_seed: u64, round: u32, segment: u32) -> SegmentFeed {
         SegmentFeed {
-            snapshot,
+            snapshot: SnapshotId::of(match_seed, round, segment),
+            round,
+            segment,
             events: Vec::new(),
             witnesses: Vec::new(),
         }
@@ -679,6 +734,24 @@ impl SegmentFeed {
     #[must_use]
     pub const fn snapshot(&self) -> SnapshotId {
         self.snapshot
+    }
+
+    /// The round the feed was opened for.
+    #[must_use]
+    pub const fn round(&self) -> u32 {
+        self.round
+    }
+
+    /// The segment of its round the feed was opened for.
+    #[must_use]
+    pub const fn segment(&self) -> u32 {
+        self.segment
+    }
+
+    /// Every line on the bus with its witnesses, in order, unfiltered: what a
+    /// save writes. For the host, never for a client.
+    pub fn lines(&self) -> impl Iterator<Item = (&Event, Witnesses)> {
+        self.events.iter().zip(self.witnesses.iter().copied())
     }
 
     /// How many events are on the bus, before any filtering.
@@ -704,6 +777,14 @@ impl SegmentFeed {
     /// contract: cursors are indices, and an event inserted behind a cursor
     /// would be one a client could never be told about.
     pub fn publish(&mut self, event: Event, witnesses: Witnesses) -> Result<(), Error> {
+        let chars = event.text.chars().count();
+        if chars > MAX_LINE_CHARS {
+            return Err(Error::invalid(said!(
+                "a feed line is at most {} characters and this one is {}",
+                MAX_LINE_CHARS,
+                chars
+            )));
+        }
         if event.at_ms.raw() < 0 {
             return Err(Error::invalid(
                 "an event's time is game milliseconds since the segment began, never negative",
@@ -1010,8 +1091,11 @@ mod tests {
         }
     }
 
+    /// The seed every test feed is opened under.
+    const SNAPSHOT_SEED: u64 = 0x00ca_5cad_ed00_0001;
+
     fn snapshot() -> SnapshotId {
-        SnapshotId::of(0x00ca_5cad_ed00_0001, 1, 0)
+        SnapshotId::of(SNAPSHOT_SEED, 1, 0)
     }
 
     #[test]
@@ -1038,7 +1122,7 @@ mod tests {
 
     #[test]
     fn events_reach_the_bus_in_time_order_or_not_at_all() {
-        let mut feed = SegmentFeed::new(snapshot());
+        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
         put(&mut feed, event(1_000, "commander_moved", Audience::Public)).expect("first");
         put(&mut feed, event(2_000, "beacon_placed", Audience::Public)).expect("later");
         let error = put(&mut feed, event(1_500, "beacon_placed", Audience::Public))
@@ -1104,7 +1188,7 @@ mod tests {
 
     #[test]
     fn a_page_is_fog_filtered_and_its_digests_count_only_what_the_seat_sees() {
-        let mut feed = SegmentFeed::new(snapshot());
+        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
         put(&mut feed, event(0, "phase_changed", Audience::Public)).expect("published");
         put(&mut feed, event(1_000, "beacon_placed", world(1))).expect("published");
         put(&mut feed, event(2_000, "ore_delivered", world(0))).expect("published");
@@ -1139,7 +1223,7 @@ mod tests {
     /// ones (decisions-log item 26).
     #[test]
     fn a_fogged_seats_cursor_does_not_count_events_it_cannot_see() {
-        let mut feed = SegmentFeed::new(snapshot());
+        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
         put(&mut feed, event(0, "phase_changed", Audience::Public)).expect("published");
         for index in 0..7_i32 {
             put(
@@ -1194,7 +1278,7 @@ mod tests {
     /// count that moved with the caller's `limit` would not be assertable.
     #[test]
     fn a_digest_does_not_move_with_the_page_size() {
-        let mut feed = SegmentFeed::new(snapshot());
+        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
         for index in 0..5_i32 {
             put(
                 &mut feed,
@@ -1226,7 +1310,7 @@ mod tests {
 
     #[test]
     fn a_cursor_resumes_where_it_left_off_and_is_opaque() {
-        let mut feed = SegmentFeed::new(snapshot());
+        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
         for index in 0..5_i32 {
             put(
                 &mut feed,
@@ -1255,7 +1339,7 @@ mod tests {
 
     #[test]
     fn a_cursor_from_another_snapshot_is_stale_rather_than_a_silent_restart() {
-        let feed = SegmentFeed::new(snapshot());
+        let feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
         let other = Cursor::start(SnapshotId::of(0x00ca_5cad_ed00_0001, 1, 1));
         let policy = FogPolicy::casual();
         let error = feed
@@ -1329,7 +1413,7 @@ mod tests {
 
     #[test]
     fn a_page_is_capped_however_large_a_limit_is_asked_for() {
-        let mut feed = SegmentFeed::new(snapshot());
+        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
         for _ in 0..(MAX_PAGE_EVENTS + 10) {
             put(&mut feed, event(0, "commander_moved", Audience::Public)).expect("published");
         }
@@ -1464,7 +1548,7 @@ mod tests {
 
     /// The probe's bus, each event published with the sight `seen` gives it.
     fn probe_bus(seen: impl Fn(&str) -> bool) -> SegmentFeed {
-        let mut feed = SegmentFeed::new(snapshot());
+        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
         for (at_ms, name, owner) in [
             (60_000, "own_early", 0),
             (369_000, "theirs_6_09", 1),
@@ -1674,7 +1758,7 @@ mod tests {
             for mask in 0..masks {
                 for limit in [1_usize, 2, 3] {
                     for lift_at in 0..=bus.len() {
-                        let mut feed = SegmentFeed::new(snapshot());
+                        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
                         let mut policy = FogPolicy::fogged();
                         let mut cursor: Option<String> = None;
                         // (bus index, at_ms, given after the lift)
@@ -1733,5 +1817,93 @@ mod tests {
             }
         }
         assert_eq!(cases, 2 * 16 * 3 * 8, "every sequence was played");
+    }
+
+    /// The line bound holds every line the gateway writes: every sim kind at
+    /// its widest values, every Ledger memo under the shipped rules, the
+    /// Survey's collapsed line and the three safe-playbook lines, each far
+    /// below [`super::MAX_LINE_CHARS`].
+    #[test]
+    fn every_line_the_gateway_writes_is_within_the_bound() {
+        use pharmakos_sim::events::{Event as SimEvent, EventKind};
+        use pharmakos_sim::math::quantity::Tick;
+        let rules = pharmakos_sim::rules::RulesTable::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .expect("the shipped rules table");
+        let mut lines: Vec<String> = Vec::new();
+        for kind in EventKind::ALL {
+            for value in [i64::MIN, -1, 0, 1, i64::MAX] {
+                for seat in [None, Some(SeatId::new(u8::MAX))] {
+                    lines.push(crate::strings::event_text(&SimEvent {
+                        tick: Tick::new(u32::MAX),
+                        seq: u32::MAX,
+                        kind,
+                        seat,
+                        subject: None,
+                        at: None,
+                        value,
+                    }));
+                }
+            }
+        }
+        for memo in crate::probation::Memo::ALL {
+            lines.push(memo.text(&rules).expect("a memo's words"));
+        }
+        lines.push(crate::strings::sightings_refreshed(
+            SeatId::new(u8::MAX),
+            usize::MAX,
+            i64::MIN,
+        ));
+        lines.push(String::from(crate::strings::SAFE_PLAYBOOK_FILED));
+        lines.push(String::from(crate::strings::SAFE_PLAYBOOK_FILED_ON_READY));
+        lines.push(String::from(crate::strings::SAFE_PLAYBOOK_FILED_RAN_OUT));
+        let longest = lines
+            .iter()
+            .map(|line| line.chars().count())
+            .max()
+            .expect("lines");
+        assert!(
+            longest.saturating_mul(4) <= super::MAX_LINE_CHARS,
+            "the longest line is {longest} characters, within a quarter of the bound"
+        );
+    }
+
+    /// A line past the bound is refused at publish, so the live feed never
+    /// holds one and a save never needs to.
+    #[test]
+    fn a_line_past_the_bound_is_refused() {
+        let mut feed = SegmentFeed::new(SNAPSHOT_SEED, 1, 0);
+        let mut long = event(0, "commander_moved", Audience::Public);
+        long.text = "x".repeat(super::MAX_LINE_CHARS);
+        put(&mut feed, long.clone()).expect("at the bound");
+        long.text.push('x');
+        let error = put(&mut feed, long).expect_err("past the bound");
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert_eq!(feed.len(), 1);
+    }
+
+    /// A feed knows the segment it was opened for, and its witnesses read back
+    /// as the seats they name.
+    #[test]
+    fn a_feed_knows_its_segment_and_its_witnesses_read_back() {
+        let feed = SegmentFeed::new(SNAPSHOT_SEED, 2, 0);
+        assert_eq!((feed.round(), feed.segment()), (2, 0));
+        assert_eq!(feed.snapshot(), SnapshotId::of(SNAPSHOT_SEED, 2, 0));
+        let seats = [SeatId::new(0), SeatId::new(2)];
+        let witnesses = super::Witnesses::of_seats(&seats).expect("two seats");
+        assert_eq!(witnesses.seats(), seats.to_vec());
+        assert!(
+            super::Witnesses::of_seats(&[SeatId::new(8)]).is_err(),
+            "past eight"
+        );
+        assert!(
+            super::Witnesses::of_seats(&[SeatId::new(1), SeatId::new(1)]).is_err(),
+            "one seat twice"
+        );
     }
 }

@@ -141,6 +141,15 @@
 #     committed bytes; a 300 KB paste into a field is refused before it goes, with the seat
 #     connection kept up (fix pass 1), and the committed playbook is then sealed, which the
 #     carried draft of round 2 checks;
+#   * THE ENDED MATCH (lane `opsave`; `_ended_match_refused`), in the Probation stage before the
+#     lobby's own line: a one-seat match played to its end through each recap's Continue, then
+#     its line resumed through the real lobby, ends in the host's refusal ("this match has
+#     ended"), the chooser back and no host left;
+#   * THE HOST THAT CANNOT SAVE (lane `opsave`, fix pass 2; `_unsaved_host_said`): the real
+#     lobby's new match, its host keeping its private match cache in a folder of the check's
+#     own, its `save.json.partial` made a folder; Ready ends the Lull, the host answers with its
+#     typed error, says why and exits, and the lobby shows the host's words (what could not be
+#     written, what the disk holds) with the chooser back and the host gone;
 #   * across every host: the bridge caught no panic, refused no view page, the gateway
 #     refused no call (so no burst met RATE_LIMITED), entities were drawn, and every host
 #     exited once the client let go of its standard input.
@@ -364,6 +373,7 @@ func _process(_delta: float) -> void:
 
 
 func _run() -> void:
+	_playtest_on()
 	if not await _until(func() -> bool: return _state().get("phase", "") == "lull" and _state().get("view_settled", false), START_WAIT):
 		_failures.append("the host never reached a Lull with a complete keyframe")
 		_finish()
@@ -421,12 +431,14 @@ func _run() -> void:
 	if not await _refused_in_the_push():
 		_finish()
 		return
+	vista.bridge.playtest_focus(false)
 	var follow: Node3D = vista.my_commander()
 	if follow != null:
 		vista.rig.follow(follow)
 	if not await _meter("push"):
 		_finish()
 		return
+	vista.bridge.playtest_focus(true)
 	if not await _until(func() -> bool: return _state().get("phase", "") == "recap", PUSH_WAIT):
 		_failures.append("the Push never reached its recap")
 		_finish()
@@ -451,6 +463,9 @@ func _run() -> void:
 		_finish()
 		return
 	print("[watch-check] recap: %s" % recap.get("prose", ""))
+	if not _playtest_bundle():
+		_finish()
+		return
 
 	# Round 2: Continue, and the carried draft opens through get_draft.
 	vista.bridge.watch_command("end_recap", 0)
@@ -528,6 +543,12 @@ func _run_probation() -> void:
 		_finish()
 		return
 	if not await _cut_line_refused():
+		_finish()
+		return
+	if not await _ended_match_refused():
+		_finish()
+		return
+	if not await _unsaved_host_said():
 		_finish()
 		return
 	if not link.start(_gamectl, _root, _line):
@@ -731,10 +752,6 @@ func _older_line_refused() -> bool:
 ## pointed at a file of the check's own holding a line cut inside its second field, offers it;
 ## Resume ends in the host's refusal in its own words, with the chooser back and no match
 ## started, never a crash or a hang. The line is not parsed here: the host reads it.
-##
-## Not checked here: an ended match's line. Resumed, the host announces the ended match rather
-## than refusing it (measured 2026-11-24 against this branch's `gamectl host`); that is reported
-## in PR #229 for the gateway's lane, and the lobby claims no refusal for it.
 func _cut_line_refused() -> bool:
 	var cut_from := HostLink.config_line(HostLink.match_id("watch-check-cut"), SEGMENT, 1, CHECK_SEED, CHECK_PRESET).strip_edges()
 	if not await _resume_refused("a line cut mid-field", cut_from.get_slice("\t", 0) + "\t" + cut_from.get_slice("\t", 1).left(4)):
@@ -748,8 +765,8 @@ func _cut_line_refused() -> bool:
 
 ## The real lobby, offered `line` from the check's own remembered file: Resume is shown, and
 ## pressing it ends in the host's refusal (`lobby_resumed_failed`), the chooser back, no match
-## started and no host left running.
-func _resume_refused(name: String, line: String) -> bool:
+## started and no host left running. `words`, when given, is what the host's refusal says.
+func _resume_refused(name: String, line: String, words: String = "") -> bool:
 	var file := FileAccess.open(ENDED_REMEMBERED, FileAccess.WRITE)
 	if file == null:
 		_failures.append("the cut-line leg could not open %s (error %d)" % [ENDED_REMEMBERED, FileAccess.get_open_error()])
@@ -776,6 +793,8 @@ func _resume_refused(name: String, line: String) -> bool:
 			_failures.append("Resume of %s neither was refused nor resumed: `%s`" % [name, lobby._status.text])
 		elif not String(lobby._status.text).begins_with(refused_prefix):
 			_failures.append("Resume of %s did not end in the host's refusal: `%s`" % [name, lobby._status.text])
+		elif words != "" and not String(lobby._status.text).contains(words):
+			_failures.append("Resume of %s was refused in other words than `%s`: `%s`" % [name, words, lobby._status.text])
 		else:
 			print("[watch-check] Resume of %s was refused by the host: %s" % [name, String(lobby._status.text).strip_edges().replace("\n", " ")])
 		var pid: int = lobby.link.host_pid()
@@ -2021,19 +2040,23 @@ func _take_asked_refusal(detail: String) -> void:
 
 
 ## **Closes on a message do not end a playable match** (S3's `fixq-c`, fix passes 4 to 6, item
-## 1). Review 3's playbook of 18 000 bare holds (216 056 bytes, under the cap) is loaded six times
-## with no wait between the loads, as a player might click; its answers are past the client's
-## inbound buffer, so the first load closes the seat link on its message (Godot's 1009). That close
-## spends no reconnect attempt, and the same text is held: the five loads after it are refused at
-## once without being sent. Through all six the seat link is never given up, the text on screen
-## stays as it was, the editor's line says the answer is too large to read and to shorten the
-## file, and the leg goes on to seal and Ready.
+## 1; re-aimed by S3's `vcap`). Review 3's playbook of 18 000 bare holds (216 056 bytes, under the
+## cap) is loaded six times with no wait between the loads, as a player might click. Since `vcap`
+## a report lists at most four of a code (the verifier's `MAX_PER_CODE`), so the load's own QUICK
+## answer fits (8 583 bytes as the gateway writes it) and the load lands; its `render_plan`
+## answer does not (15 690 780 bytes, past the client's 4 MiB inbound buffer: lane `outcap`'s
+## finding), so the render closes the seat link on its message (Godot's 1009). That close spends no reconnect attempt, and the same text's
+## render is held after it: never sent again. Through all six, within the wait each one has, the
+## seat link is never given up, the rows are the loaded text's (its QUICK answered), the prose
+## line says the answer closed the link instead of waiting for ever, and the editor's line says
+## the answer is too large to read and to shorten the file. A landed load clears the Undo list,
+## so the committed playbook is then loaded back, as the planning wire began: the legs after this
+## one edit it, Undo takes their edits back to its bytes, and the leg goes on to seal and Ready.
 func _closes_on_a_message() -> bool:
 	var steps: PackedStringArray = []
 	for index in 18000:
 		steps.append("{\"hold\":{}}")
 	var big := ("{\"schema_version\":{\"major\":1},\"declarative\":{\"route\":[" + ",".join(steps) + "]}}").to_utf8_buffer()
-	var text: PackedByteArray = vista.bridge.editor_bytes()
 	var closes := _count(_state(), "message_drops_seat")
 	for attempt in 6:
 		var before := _count(_editor(), "closed_on_calls")
@@ -2051,11 +2074,23 @@ func _closes_on_a_message() -> bool:
 		_failures.append("the planning wire: six big loads never closed the seat link on their message")
 	if vista.bridge.watch_link_attempts(1) != 0:
 		_failures.append("the planning wire: closes on the player's loads spent the seat link's attempts (%d)" % vista.bridge.watch_link_attempts(1))
-	if vista.bridge.editor_bytes() != text:
-		_failures.append("the planning wire: a load refused on its message changed the text on screen")
+	if vista.bridge.editor_bytes() != big:
+		_failures.append("the planning wire: a load whose QUICK answer fits did not land")
+	var unchecked: Dictionary = _editor().get("unchecked", {})
+	if String(unchecked.get("rows", {}).get("key", "?")) != "" or not _editor().get("rows_current", false):
+		_failures.append("the planning wire: the loaded text's rows are not its QUICK answer: %s" % [unchecked.get("rows", {})])
+	if String(unchecked.get("prose", {}).get("key", "")) != "closed_on" or _editor().get("prose_current", true):
+		_failures.append("the planning wire: the render that closed the link is not said on the prose line: %s" % [unchecked.get("prose", {})])
 	if String(_editor().get("status_key", "")) != "call_answer_too_large":
 		_failures.append("the planning wire: the editor's line after the big loads is `%s`" % _editor().get("status_key", ""))
-	print("[watch-check] the planning wire: six loads with no wait, %d close(s) on the message, the rest held; the seat link kept, no attempt spent; the editor says: `%s`" % [dropped, Strings.text("status_" + String(_editor().get("status_key", "")), {"detail": _editor().get("status_detail", "")})])
+	print("[watch-check] the planning wire: six loads with no wait, each landing (QUICK fits), %d close(s) on the render's message, the rest held; the seat link kept, no attempt spent; the editor says: `%s`" % [dropped, Strings.text("status_" + String(_editor().get("status_key", "")), {"detail": _editor().get("status_detail", "")})])
+	# A load that lands clears the Undo list, so the committed playbook is loaded back, as the
+	# planning wire began, checked and rendered: the legs after this one edit it, and Undo takes
+	# their edits back to its bytes.
+	var committed := FileAccess.get_file_as_bytes(COMMITTED)
+	editor.load_file(COMMITTED)
+	if not await _editor_until(func(s: Dictionary) -> bool: return vista.bridge.editor_bytes() == committed and _count(s, "undo_depth") == 0 and s.get("rows_current", false) and s.get("prose_current", false) and s.get("rules_editable", false) and not s.get("busy", true), "the planning wire: the committed playbook never came back after the big loads"):
+		return false
 	return true
 
 
@@ -2114,3 +2149,263 @@ func _count(answer: Dictionary, key: String) -> int:
 		return read
 	_failures.append(Values.unreadable_text(key, read))
 	return -1
+
+
+## How long the ended-match leg may take to play its one-seat match to its end.
+const ENDED_WAIT := 240.0
+
+## **An ended match is the host's to refuse** (lane `opsave`, carried from S3's `fixq-c`): a
+## one-seat match is played to its end, through each recap's Continue, then its line is resumed
+## through the real lobby, which ends in the host's refusal in its own words, the chooser back
+## and no host left. The host announced and served an ended match before.
+func _ended_match_refused() -> bool:
+	var line := HostLink.config_line(HostLink.match_id("watch-check-ended"), "1000", 1, CHECK_SEED, CHECK_PRESET)
+	if not link.start(_gamectl, _root, line):
+		_failures.append("the ended-match leg could not start its host")
+		return false
+	var pid: int = link.host_pid()
+	# One command a phase of a round: Ready in a Lull, Skip in a Push, Continue in a recap.
+	var acted := ""
+	var timer := get_tree().create_timer(ENDED_WAIT)
+	while timer.time_left > 0.0:
+		await get_tree().process_frame
+		var state := _state()
+		var phase := String(state.get("phase", ""))
+		if phase == "ended":
+			break
+		var step := "%s-%s" % [phase, state.get("round", 0)]
+		if step == acted:
+			continue
+		match phase:
+			"lull":
+				vista.bridge.watch_command("ready", 0)
+				acted = step
+			"push":
+				vista.bridge.watch_command("skip", 0)
+				acted = step
+			"recap":
+				vista.bridge.watch_command("end_recap", 0)
+				acted = step
+	if String(_state().get("phase", "")) != "ended":
+		_failures.append("the ended-match leg's one-seat match did not end in %.0f s: %s" % [ENDED_WAIT, _state()])
+		return false
+	link.quit()
+	if not await _until(func() -> bool: return not OS.is_process_running(pid), EXIT_WAIT):
+		_failures.append("the ended match's host (pid %d) was still running after its standard input closed" % pid)
+		return false
+	link.reset()
+	print("[watch-check] a one-seat match was played to its end (pid %d); resuming its line" % pid)
+	if not await _resume_refused("an ended match", line.strip_edges(), "this match has ended"):
+		return false
+	var path := ProjectSettings.globalize_path(ENDED_REMEMBERED)
+	if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+		_failures.append("the ended-match leg could not remove %s" % path)
+		return false
+	return true
+
+
+## The private match cache the unsaved-host leg points its host at: a folder of the check's own.
+const UNSAVED_DATA := "user://watch_check_data"
+## How long the unsaved-host leg may wait for the lobby to say the host stopped: the reconnect
+## policy's give-up, with room for a slow frame.
+const UNSAVED_WAIT := 90.0
+
+## **A host that cannot write a save says why and is gone** (lane `opsave`, fix pass 2): the
+## real lobby starts a new match whose host keeps its private match cache in a folder of the
+## check's own (the per-user data variable set for the child), the match's `save.json.partial`
+## is made a folder, so no save can be written, and Ready ends the Lull: the host answers with
+## its typed error, says why on its standard error and exits, and the lobby shows the host's
+## words (what could not be written and what the disk holds), with the chooser back and the
+## host process gone.
+func _unsaved_host_said() -> bool:
+	var data := ProjectSettings.globalize_path(UNSAVED_DATA)
+	if DirAccess.make_dir_recursive_absolute(data) != OK:
+		_failures.append("the unsaved-host leg could not make %s" % data)
+		return false
+	var variable := "XDG_DATA_HOME"
+	if OS.get_name() == "Windows":
+		variable = "LOCALAPPDATA"
+	elif OS.get_name() == "macOS":
+		variable = "HOME"
+	var held := OS.get_environment(variable)
+	OS.set_environment(variable, data)
+	var lobby: Node = LobbyScene.instantiate()
+	lobby.remembered = ENDED_REMEMBERED
+	add_child(lobby)
+	await get_tree().process_frame
+	lobby.new_match()
+	# The variable is the child's: set for the spawn and put back at once.
+	OS.set_environment(variable, held)
+	var ok := await _unsaved_host_lobby(lobby, data)
+	var pid: int = lobby.link.host_pid()
+	lobby.link.quit()
+	if pid >= 0 and not await _until(func() -> bool: return not OS.is_process_running(pid), EXIT_WAIT):
+		_failures.append("the unsaved-host leg's host (pid %d) was still running" % pid)
+		ok = false
+	lobby.queue_free()
+	await get_tree().process_frame
+	var path := ProjectSettings.globalize_path(ENDED_REMEMBERED)
+	if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+		_failures.append("the unsaved-host leg could not remove %s" % path)
+		ok = false
+	if not _remove_tree(data):
+		_failures.append("the unsaved-host leg could not remove %s" % data)
+		ok = false
+	return ok
+
+
+## The unsaved-host leg's lobby, once its new match is starting under `data`.
+func _unsaved_host_lobby(lobby: Node, data: String) -> bool:
+	var announced := await _until(func() -> bool: return lobby._announced and String(lobby.vista.bridge.watch_state().get("phase", "")) == "lull", START_WAIT)
+	if not announced:
+		_failures.append("the unsaved-host leg's match never reached its Lull: `%s`" % lobby._status.text)
+		return false
+	var pid: int = lobby.link.host_pid()
+	var match_id := String(lobby._line).get_slice("\t", 0)
+	var folder := _folder_named(data, match_id)
+	if folder == "":
+		_failures.append("the unsaved-host leg found no folder of match %s under %s" % [match_id, data])
+		return false
+	if DirAccess.make_dir_recursive_absolute(folder.path_join("save.json.partial")) != OK:
+		_failures.append("the unsaved-host leg could not block %s's save" % folder)
+		return false
+	lobby.vista.bridge.watch_command("ready", 0)
+	var stopped := await _until(func() -> bool: return not lobby._started and lobby._chooser.visible, UNSAVED_WAIT)
+	var said := String(lobby._status.text)
+	if not stopped:
+		_failures.append("the unsaved-host leg: the lobby did not say the host stopped in %.0f s: `%s`" % [UNSAVED_WAIT, said])
+		return false
+	if OS.is_process_running(pid):
+		_failures.append("the unsaved-host leg: the host (pid %d) is still running after the lobby said it failed" % pid)
+		return false
+	if not said.contains("save of round 1 could not be written") or not said.contains("this host stops") or not said.contains(Strings.text("link_host_exited", {"words": ""}).strip_edges()):
+		_failures.append("the unsaved-host leg: the lobby does not show the host's words: `%s`" % said)
+		return false
+	print("[watch-check] a host that could not write its save stopped (pid %d), and the lobby said: %s" % [pid, said.strip_edges().replace("\n", " ")])
+	return true
+
+
+## The folder named `name` under `root`, searched to any depth; "" when there is none.
+func _folder_named(root: String, name: String) -> String:
+	var dir := DirAccess.open(root)
+	if dir == null:
+		return ""
+	for child in dir.get_directories():
+		var path := root.path_join(child)
+		if child == name:
+			return path
+		var found := _folder_named(path, name)
+		if found != "":
+			return found
+	return ""
+
+
+## Remove `path` and everything under it; whether it is gone.
+func _remove_tree(path: String) -> bool:
+	var dir := DirAccess.open(path)
+	if dir == null:
+		return not DirAccess.dir_exists_absolute(path)
+	for child in dir.get_directories():
+		if not _remove_tree(path.path_join(child)):
+			return false
+	for file in dir.get_files():
+		if DirAccess.remove_absolute(path.path_join(file)) != OK:
+			return false
+	return DirAccess.remove_absolute(path) == OK
+
+
+## THE PLAYTEST LEG (S3's `prob`, part 2; the plan's E10 and R6). The first host's match is
+## played with Playtest mode on: switched on before the first Lull opens, with the camera rig's
+## moves counted (the keys and wheel legs make real ones), and the window's focus lost and
+## regained in round 1's Push. After the recap the survey is answered and the bundle exported to a
+## scratch folder, then read back with Godot's own zip reader (`_playtest_bundle`).
+const PLAYTEST_FOLDER := "user://watch_check_playtest"
+const PLAYTEST_WORDS := "I wanted to stop the scouts walking past the vent."
+const PLAYTEST_LINE := "^[1-9][0-9]* (unknown|lobby|lull|push|recap|ended) [a-z_]+( [A-Z0-9_]+)? t=(0|[1-9][0-9]*)$"
+
+
+## Playtest mode on, before anything is read, and the camera rig's moves forwarded as the lobby's
+## `playtest.gd` forwards them.
+func _playtest_on() -> void:
+	if not vista.bridge.playtest_set(true, true):
+		_failures.append("Playtest mode did not switch on")
+	vista.rig.moved.connect(func(kind: String) -> void: vista.bridge.playtest_camera(kind))
+
+
+## The survey answered, the bundle exported to a scratch folder and read back: exactly one file,
+## the four entries, round 1's Push split by focus, its Lull ended by Ready, the camera's moves,
+## the survey's words as written, every log line in its grammar, and no match id, token, port,
+## notebook text, path or user name in any byte of it.
+func _playtest_bundle() -> bool:
+	var folder := ProjectSettings.globalize_path(PLAYTEST_FOLDER)
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		_failures.append("the Playtest leg could not make %s" % folder)
+		return false
+	for old in DirAccess.get_files_at(folder):
+		if DirAccess.remove_absolute(folder + "/" + old) != OK:
+			_failures.append("the Playtest leg could not clear %s" % old)
+			return false
+	var path := folder + "/pharmakos-playtest.zip"
+	# The survey goes with the export, as answered at this moment.
+	var written: Dictionary = vista.bridge.playtest_export(path, "yes", "partly", PLAYTEST_WORDS)
+	if not written.get("written", false):
+		_failures.append("Export playtest bundle did not write: %s" % written)
+		return false
+	if Array(DirAccess.get_files_at(folder)) != ["pharmakos-playtest.zip"]:
+		_failures.append("the export did not write exactly one file: %s" % [DirAccess.get_files_at(folder)])
+	var bytes := FileAccess.get_file_as_bytes(path)
+	var reader := ZIPReader.new()
+	if reader.open(path) != OK:
+		_failures.append("Godot's zip reader cannot open the bundle")
+		return false
+	var entries: PackedStringArray = reader.get_files()
+	var texts := {}
+	for entry in entries:
+		texts[entry] = reader.read_file(entry).get_string_from_utf8()
+	reader.close()
+	if entries != PackedStringArray(["manifest.json", "survey.json", "metrics.json", "diagnostics.log"]):
+		_failures.append("the bundle's entries are %s" % entries)
+		return false
+	var manifest: Dictionary = JSON.parse_string(texts["manifest.json"])
+	var metrics: Dictionary = JSON.parse_string(texts["metrics.json"])
+	var survey: Dictionary = JSON.parse_string(texts["survey.json"])
+	# One match, the one under way: its preset as the gateway named it, its ordinal a count.
+	var matches: Array = manifest.get("matches", [])
+	if int(manifest.get("bundle_format", 0)) != 1 or matches.size() != 1 or String(matches[0].get("preset", "")) != CHECK_PRESET or int(matches[0].get("match", 0)) != 1 or String(matches[0].get("ended", "")) != "under_way":
+		_failures.append("the manifest is not format 1 of one %s match under way: %s" % [CHECK_PRESET, manifest])
+	var pushes: Array = metrics.get("push_time", [])
+	var lulls: Array = metrics.get("lull_time", [])
+	if int(metrics.get("pushes", 0)) != 1 or int(metrics.get("skipped_pushes", -1)) != 0 or pushes.size() != 1:
+		_failures.append("round 1's Push is not the one Push recorded: %s" % metrics)
+	elif int(pushes[0].get("round", 0)) != 1 or int(pushes[0].get("focused_us", 0)) <= 0 or int(pushes[0].get("unfocused_us", 0)) <= 0:
+		_failures.append("round 1's Push is not split by the focus it lost and regained: %s" % pushes[0])
+	if lulls.size() != 1 or String(lulls[0].get("ended_by", "")) != "ready" or int(lulls[0].get("used_us", 0)) <= 0:
+		_failures.append("round 1's Lull is not recorded as ended by Ready: %s" % [lulls])
+	if int(metrics.get("speed_changes", {}).get("4", 0)) < 1:
+		_failures.append("the 4x the check chose is not counted: %s" % metrics.get("speed_changes"))
+	var camera: Dictionary = metrics.get("camera_moves", {})
+	if int(camera.get("pan", 0)) < 1 or int(camera.get("zoom", 0)) < 1 or int(camera.get("follow", 0)) < 1:
+		_failures.append("the camera legs' moves are not counted: %s" % camera)
+	if String(survey.get("wanted_to_change", {}).get("text", "")) != PLAYTEST_WORDS or String(survey.get("understood_why", "")) != "partly":
+		_failures.append("the survey is not as answered: %s" % survey)
+	var shape := RegEx.create_from_string(PLAYTEST_LINE)
+	var log_lines: PackedStringArray = String(texts["diagnostics.log"]).strip_edges().split("\n")
+	var survey_lines := 0
+	for line in log_lines:
+		if shape.search(line) == null:
+			_failures.append("a diagnostics line off its grammar: `%s`" % line)
+		if " survey_answered " in line:
+			survey_lines += 1
+	if survey_lines != 1:
+		_failures.append("the log holds %d survey lines, not the export's one" % survey_lines)
+	# The four files' words and the zip's own entry names: what a reader of the bundle can see.
+	var all := ("\n".join(entries) + "\n" + "\n".join(texts.values())).to_lower()
+	var secrets := [_line.split("\t")[0], String(link._tokens[0]), String(link._tokens[1]), "127.0.0.1:%d" % link._port, ":%d/" % link._port, NOTES, folder, OS.get_environment("USERNAME"), OS.get_environment("USER"), "user://", ":\\", "/home/", "/users/", "appdata"]
+	for secret in secrets:
+		var needle := String(secret).to_lower()
+		if needle.length() >= 4 and all.contains(needle):
+			_failures.append("the bundle holds `%s`" % secret)
+	if DirAccess.remove_absolute(path) != OK or DirAccess.remove_absolute(folder) != OK:
+		_failures.append("the Playtest leg could not remove its bundle")
+	print("[watch-check] Playtest: one %d-byte bundle of %s; round 1's Push %s us focused, %s us not; its Lull %s us to Ready; camera %s; %d log lines in grammar; no id, token, port, notebook, path or name in it" % [bytes.size(), ", ".join(entries), pushes[0].get("focused_us", "?") if not pushes.is_empty() else "?", pushes[0].get("unfocused_us", "?") if not pushes.is_empty() else "?", lulls[0].get("used_us", "?") if not lulls.is_empty() else "?", camera, log_lines.size()])
+	return _failures.is_empty()

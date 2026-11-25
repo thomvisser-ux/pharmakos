@@ -737,7 +737,7 @@ impl Emission {
 /// snapshotted and not in the goldens.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EventBus {
-    events: Vec<Event>,
+    events: crate::reserved::Reserved<Event>,
     capacity: usize,
     /// The tick `seq` is currently counting within.
     tick: Tick,
@@ -752,7 +752,7 @@ impl EventBus {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> EventBus {
         EventBus {
-            events: Vec::with_capacity(capacity),
+            events: crate::reserved::Reserved::with_capacity(capacity),
             capacity,
             tick: Tick::ZERO,
             seq: 0,
@@ -806,9 +806,9 @@ impl EventBus {
     /// which is what `a_restore_re_anchors_the_feed_so_two_resumes_agree`
     /// asserts.
     ///
-    /// It does not make the feed survive a save — see the module docs: a
-    /// resumed match still starts with an empty feed, and that price is the
-    /// decision, not an oversight.
+    /// It does not make the bus survive a save — see the module docs: a
+    /// resumed match's bus starts empty, by decision. The feed a seat reads is
+    /// the gateway's, and its save carries the last Push's lines.
     pub(crate) fn reset(&mut self, tick: Tick) {
         self.events.clear();
         self.tick = tick;

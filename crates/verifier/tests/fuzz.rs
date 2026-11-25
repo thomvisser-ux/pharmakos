@@ -1618,8 +1618,9 @@ fn certain_scout_draw(playbook: &Playbook, per_unit: i128) -> i128 {
                 if let Some(mandate_settings::Mandate::Survey(survey)) =
                     settings.and_then(|settings| settings.mandate.as_ref())
                 {
-                    draw = draw
-                        .saturating_add(per_unit.saturating_mul(i128::from(survey.scout_count)));
+                    draw = draw.saturating_add(
+                        per_unit.saturating_mul(i128::from(survey.scout_count.unwrap_or(0))),
+                    );
                 }
             }
             Some(step::Kind::Interface(visit)) => {

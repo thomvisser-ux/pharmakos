@@ -42,7 +42,7 @@
     = "NEAREST_KNOWN", replace
   5:199-200 "6"
     /declarative/route/1/place_beacon/initial/mandate/attack/launch/force_size
-    integer 0..
+    integer 0.., 0 is "launching at once with its first raider, ungathered"
     = 6 (typed 6), replace
   5:224-228 "1:30"
     /declarative/route/1/place_beacon/initial/mandate/attack/launch/segment_ms

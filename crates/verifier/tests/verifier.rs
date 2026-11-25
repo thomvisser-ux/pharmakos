@@ -45,9 +45,9 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::gp::api::v1::{Diagnostic, VerifyReport};
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
 use pharmakos_proto::gp::v1::by_richness::Richness;
 use pharmakos_proto::gp::v1::{Licence, Voxel};
@@ -59,9 +59,9 @@ use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::{CATALOGUE, Emitter, Stage, catalogue_json};
 use pharmakos_verifier::{
-    FeatureKind, Input, InputError, KnownBeacon, KnownFeature, MAX_PLAYBOOK_CHARS, Ownership,
-    Scope, ScopeError, Sighted, Sighting, VERIFIER_VERSION, hash, is_too_long,
-    is_too_long_in_bytes, verify,
+    FeatureKind, Input, InputError, KnownBeacon, KnownFeature, MAX_PER_CODE, MAX_PLAYBOOK_CHARS,
+    ONCE_PER_REPORT, Ownership, Scope, ScopeError, Sighted, Sighting, VERIFIER_VERSION, hash,
+    is_too_long, is_too_long_in_bytes, verify,
 };
 
 // ---------------------------------------------------------------------------
@@ -558,7 +558,7 @@ fn every_emitted_code_has_a_case() {
     }
     let mut missing: Vec<&str> = Vec::new();
     for row in CATALOGUE {
-        let emitted = matches!(row.emitter, Emitter::Stage(_));
+        let emitted = !matches!(row.emitter, Emitter::NoneYet(_));
         let covered = seen.iter().any(|code| code == row.code);
         if emitted && !covered {
             missing.push(row.code);
@@ -628,25 +628,18 @@ fn full_finds_what_quick_finds() {
     for case in cases() {
         let mut quick = report_for(&case, Depth::Quick);
         let mut full = report_for(&case, Depth::Full);
-        // The count of `I0003` notes left out past the cap (`I0007`, S3's
-        // `vfy6`) closes each report, and FULL's stages may leave out more.
-        let left_out = |report: &mut VerifyReport| {
-            let summary = report
-                .diagnostics
-                .iter()
-                .position(|found| found.code == "I0007")
-                .map(|at| report.diagnostics.remove(at));
-            assert!(
-                !report.diagnostics.iter().any(|found| found.code == "I0007"),
-                "{case}: one summary at most"
-            );
-            summary
+        // The counts left out past the per-code cap (one `I0007` a code, S3's
+        // `vcap`) close each report, and FULL's stages may leave out more.
+        let left_out = |report: &mut VerifyReport| -> usize {
+            let before = report.diagnostics.len();
+            report.diagnostics.retain(|found| found.code != "I0007");
+            before.saturating_sub(report.diagnostics.len())
         };
         let quick_left = left_out(&mut quick);
         let full_left = left_out(&mut full);
         assert!(
-            quick_left.is_none() || full_left.is_some(),
-            "{case}: FULL lost QUICK's count of the notes left out"
+            quick_left <= full_left,
+            "{case}: FULL lost QUICK's count of what was left out"
         );
         assert!(
             full.diagnostics.starts_with(&quick.diagnostics),
@@ -1242,11 +1235,8 @@ fn the_worked_example_qualifies_and_is_six_units() {
                 "I0003",
                 "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing"
             ),
-            ("I0003", "/declarative/route/2/on_fail"),
-            ("I0003", "/declarative/route/2/move/pace"),
-            ("I0003", "/declarative/handlers/0/body/0/on_fail"),
-            ("I0003", "/declarative/handlers/0/body/0/move/pace"),
-            ("I0003", "/declarative/handlers/0/body/1/on_fail"),
+            // The rest of its nine notes are past the per-code cap (S3's
+            // `vcap`: four of one code), and counted in the closing `I0007`.
             // The semantics stage (S2's plan, decision 12, task `vfy3`): the
             // first move avoids known threats, and the plain fixture holds no
             // sighting of another seat, so it would go as DIRECT does now.
@@ -1257,7 +1247,17 @@ fn the_worked_example_qualifies_and_is_six_units() {
             // stopped within and the two of arrive radius the move stops
             // within: ten seconds at a voxel a second.
             ("I0001", "/declarative/route"),
+            ("I0007", ""),
         ]
+    );
+    let left_out = report
+        .diagnostics
+        .last()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .unwrap_or_default();
+    assert!(
+        left_out.starts_with("5 more `I0003`"),
+        "the five notes past the cap are counted: {left_out}"
     );
     assert!(
         report
@@ -1379,10 +1379,41 @@ fn every_reserved_name_the_schema_holds_is_refused_by_name() {
     let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("input");
     let report = verify(&input, Depth::Full);
     assert!(!report.qualifies);
-    assert_eq!(report.diagnostics.len(), held.len());
-    for (diagnostic, name) in report.diagnostics.iter().zip(held) {
-        assert_eq!(diagnostic.code, "E0003");
+    // The first `MAX_PER_CODE` are listed with their pointers (S3's `vcap`,
+    // decisions-log item 183 (4), "Cap all codes"), and the rest counted;
+    // the names past the cap are each held to `E0003` one document at a time
+    // below.
+    let cap = usize::try_from(MAX_PER_CODE).expect("fits");
+    let listed: Vec<&Diagnostic> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "E0003")
+        .collect();
+    assert_eq!(listed.len(), held.len().min(cap));
+    for (diagnostic, name) in listed.iter().zip(held) {
         assert_eq!(diagnostic.path, format!("/meta/{name}"));
+    }
+    let more = held.len().saturating_sub(cap);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "I0007"
+                && diagnostic
+                    .message
+                    .starts_with(&format!("{more} more `E0003`"))),
+        "the names past the cap are counted"
+    );
+    for name in held {
+        let one = format!(r#"{{"schema_version":{{"major":1}},"meta":{{"{name}":1}}}}"#);
+        let input = Input::new(one.as_bytes(), &snapshot, &scope, &rules).expect("input");
+        let report = verify(&input, Depth::Full);
+        let first = report.diagnostics.first().expect("a diagnostic");
+        assert_eq!(
+            (first.code.as_str(), first.path.as_str()),
+            ("E0003", format!("/meta/{name}").as_str()),
+            "{name}"
+        );
     }
 }
 
@@ -1871,12 +1902,17 @@ fn every_half_written_area_is_refused_as_missing_a_corner() {
         let rules = rules();
         let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules)
             .unwrap_or_else(|error| panic!("assembling the input: {error}"));
-        let missing: Vec<String> = verify(&input, Depth::Quick)
-            .diagnostics
-            .into_iter()
-            .filter(|found| found.code == "E0101" && found.path.starts_with("/declarative"))
-            .map(|found| found.path)
-            .collect();
+        // Every `E0101` the stage raises, the per-code cap off: this case
+        // holds which corners are refused, and the one-visit playbook raises
+        // more `E0101` than a report lists (S3's `vcap`).
+        let missing: Vec<String> =
+            pharmakos_verifier::verify_counted_at_cap(&input, Depth::Quick, u32::MAX)
+                .report
+                .diagnostics
+                .into_iter()
+                .filter(|found| found.code == "E0101" && found.path.starts_with("/declarative"))
+                .map(|found| found.path)
+                .collect();
         let at = "/declarative/route/0/interface/rows/0/set_mandate_settings";
         let arm = mandate.split('"').nth(1).expect("the arm's name");
         let mut wanted = vec![format!("{at}/{arm}/{field}/0/max")];
@@ -2683,6 +2719,13 @@ fn input_new_refuses_bytes_past_the_canonical_backstop() {
             max: MAX_CANONICAL_BYTES,
         })
     );
+    // Its words are one line, with one space between words (S3's `vcap`:
+    // the merge-gate check of PR #179 found a newline and seventeen spaces).
+    let said = Input::new(&past, &snapshot, &scope, &rules)
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default();
+    assert!(!said.contains('\n') && !said.contains("  "), "{said:?}");
     // The deepest chain the codec reads, as long as the cap allows, still
     // fits the backstop once canonical: handlers whose `when` is `not`
     // within `not` to the nesting limit.
@@ -2862,6 +2905,7 @@ const CARRIES: &[(&str, Carries)] = &[
     ("E0512", Carries::Engine),
     ("E0513", Carries::Engine),
     ("E0514", Carries::Engine),
+    ("E0515", Carries::Engine),
     ("W0501", Carries::Engine),
     (
         "W0502",
@@ -2992,4 +3036,312 @@ fn every_code_quotes_the_player_text_it_carries() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// The per-code cap (S3's `vcap`): what it lists, what it counts, and the
+// codes it never needs to cap
+// ---------------------------------------------------------------------------
+
+/// A case's playbook text with its route's steps and its handlers written
+/// `copies` times over (labels and ids made unique). `None` for a case that
+/// is not a JSON object (the decode's own cases).
+fn copied_text(case: &str, copies: usize) -> Option<String> {
+    let text = String::from_utf8(case_bytes(case)).ok()?;
+    let Ok(json::Json::Object(mut top)) = json::read(&text) else {
+        return None;
+    };
+    for (key, declarative) in &mut top {
+        if key != "declarative" {
+            continue;
+        }
+        let json::Json::Object(fields) = declarative else {
+            continue;
+        };
+        for (field, list) in fields.iter_mut() {
+            let named = match field.as_str() {
+                "route" => "label",
+                "handlers" => "id",
+                _ => continue,
+            };
+            let json::Json::Array(items) = list else {
+                continue;
+            };
+            let one = items.clone();
+            items.clear();
+            for copy in 0..copies {
+                for item in &one {
+                    let mut item = item.clone();
+                    if let json::Json::Object(members) = &mut item {
+                        for (name, value) in members.iter_mut() {
+                            if let (true, json::Json::String(value)) = (name == named, value) {
+                                value.push('_');
+                                value.push_str(&copy.to_string());
+                            }
+                        }
+                    }
+                    items.push(item);
+                }
+            }
+        }
+    }
+    Some(json::write(&json::Json::Object(top)))
+}
+
+/// The counted report for `text` against `case`'s view, at `cap`.
+fn counted_at(case: &str, text: &str, depth: Depth, cap: u32) -> pharmakos_verifier::Counted {
+    let rules = rules();
+    let scope = scope_for(case);
+    let snapshot = snapshot_for(case);
+    let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules)
+        .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+    pharmakos_verifier::verify_counted_at_cap(&input, depth, cap)
+}
+
+fn count_of(report: &VerifyReport, code: &str) -> usize {
+    report
+        .diagnostics
+        .iter()
+        .filter(|found| found.code == code)
+        .count()
+}
+
+/// Every code `ONCE_PER_REPORT` names is written at one place in the stages'
+/// shipped source (`E0001` at two, the decode's two exits), counted as the
+/// code's string literal anywhere outside the tables (`catalogue.rs`,
+/// `strings.rs`) and the builder (`report.rs`, which names `E0110` for the
+/// size budget's notes and holds the list itself), so a stage that raises
+/// one somewhere else, by a literal or through a constant, fails here before
+/// the cap's derivation, which counts each once, stops holding.
+#[test]
+fn a_code_raised_once_a_report_has_one_raising_place() {
+    const TESTS_MODULE: &str = "\n#[cfg(test)]\nmod tests";
+    let source_dir = workspace_root().join("crates/verifier/src");
+    let mut sources = String::new();
+    // The order does not matter: only counts are read from the sources.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the listing is only counted over, never ordered into output"
+    )]
+    let entries = fs::read_dir(&source_dir).expect("the verifier's sources");
+    for entry in entries {
+        let path = entry.expect("a source").path();
+        let table = path.file_name().is_some_and(|name| {
+            ["catalogue.rs", "strings.rs", "report.rs"].contains(&name.to_string_lossy().as_ref())
+        });
+        if path.extension().is_some_and(|extension| extension == "rs") && !table {
+            let text = fs::read_to_string(&path).expect("a source reads");
+            // The shipped code: a file's unit tests sit in its last module.
+            let shipped = text
+                .split_once(TESTS_MODULE)
+                .map_or(text.as_str(), |(shipped, _)| shipped);
+            sources.push_str(shipped);
+        }
+    }
+    for code in ONCE_PER_REPORT {
+        let places = sources.matches(&format!("\"{code}\"")).count();
+        let expected = if *code == "E0001" { 2 } else { 1 };
+        assert_eq!(places, expected, "{code} is written at {places} places");
+    }
+}
+
+/// How a once-a-report code is provoked many times over, for
+/// [`each_code_raised_once_a_report_is_once_however_often_it_is_provoked`].
+enum Provoke {
+    /// A committed case with its route's steps and handlers written this
+    /// many times over.
+    Case(&'static str, usize),
+    /// A text of its own, against the plain fixture's view.
+    Text(String),
+    /// A text past the size cap on the player's text, read as too long.
+    TooLong,
+    /// Raised by the verifier's own fault taking a fingerprint, which no
+    /// input provokes: `decode.rs`'s unit test
+    /// `a_fingerprint_the_codec_could_not_write_is_e0030_and_never_e0008` holds it to
+    /// one.
+    OwnFault,
+}
+
+/// **Every code `ONCE_PER_REPORT` names is once a report, one row each**
+/// (S3's `vcap`, fix pass 2): the table's codes are exactly the list, and
+/// each is provoked many times over (a case's route and handlers copied
+/// twenty-five times, fifty unknown members, a text past the cap) with the
+/// per-code cap off, so the cap cannot hide a second: exactly one comes out.
+#[test]
+fn each_code_raised_once_a_report_is_once_however_often_it_is_provoked() {
+    let unknown: Vec<String> = (0..50)
+        .map(|index| format!(r#""nope_{index}":1"#))
+        .collect();
+    let rows: Vec<(&str, Provoke)> = vec![
+        ("E0001", Provoke::Text("{ this is not json ".repeat(50))),
+        (
+            "E0002",
+            Provoke::Text(format!(
+                r#"{{"schema_version":{{"major":1}},{}}}"#,
+                unknown.join(",")
+            )),
+        ),
+        ("E0004", Provoke::Case("e0004_unsupported_version", 25)),
+        ("E0005", Provoke::Case("e0005_kind_unset", 25)),
+        ("E0006", Provoke::Case("e0006_author_kind_script", 25)),
+        ("E0007", Provoke::Case("e0007_author_kind_unset", 25)),
+        ("E0008", Provoke::Case("e0008_stale_fingerprint", 25)),
+        ("E0029", Provoke::TooLong),
+        ("E0030", Provoke::OwnFault),
+        ("E0110", Provoke::Case("e0110_over_the_size_budget", 25)),
+        ("E0601", Provoke::Case("e0601_draw_beyond_supply", 25)),
+        ("W0603", Provoke::Case("w0603_a_shortfall_allowed", 25)),
+    ];
+    let codes: Vec<&str> = rows.iter().map(|(code, _)| *code).collect();
+    assert_eq!(
+        codes, ONCE_PER_REPORT,
+        "one row for every code the list names"
+    );
+    let rules = rules();
+    let scope = fixture_scope();
+    for (code, provoke) in rows {
+        let counted = match provoke {
+            Provoke::Case(case, copies) => {
+                let text = copied_text(case, copies).expect("the case is an object");
+                counted_at(case, &text, Depth::Full, u32::MAX)
+            }
+            Provoke::Text(text) => {
+                let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
+                pharmakos_verifier::verify_counted_at_cap(&input, Depth::Full, u32::MAX)
+            }
+            Provoke::TooLong => {
+                let input = Input::too_long(&[], &scope, &rules).expect("the input");
+                pharmakos_verifier::verify_counted_at_cap(&input, Depth::Full, u32::MAX)
+            }
+            Provoke::OwnFault => continue,
+        };
+        assert_eq!(count_of(&counted.report, code), 1, "{code}");
+    }
+}
+
+/// The literal codes of `Diag::new("…")` in `text`, in order.
+fn raised_codes(text: &str) -> Vec<String> {
+    text.split("Diag::new(\"")
+        .skip(1)
+        .filter_map(|tail| tail.split_once('"').map(|(code, _)| code.to_owned()))
+        .collect()
+}
+
+/// The codes in `codes` the catalogue does not give a raiser: absent, or
+/// catalogued as raised by nothing yet.
+fn uncatalogued(codes: &[String]) -> Vec<String> {
+    codes
+        .iter()
+        .filter(|code| {
+            !CATALOGUE
+                .iter()
+                .any(|row| row.code == code.as_str() && !matches!(row.emitter, Emitter::NoneYet(_)))
+        })
+        .cloned()
+        .collect()
+}
+
+/// **Every code a stage raises is in the catalogue with a raiser** (S3's
+/// `vcap`, fix pass 2): the worst report the cap's derivation builds lists
+/// every catalogued code with an emitter, so a code a stage raises and the
+/// catalogue calls unemitted (or does not have) would be missing from it.
+/// The scan reads every `Diag::new("…")` of the shipped stages, and trips on
+/// a code the catalogue gives no raiser.
+#[test]
+fn every_code_a_stage_raises_is_catalogued_with_a_raiser() {
+    const TESTS_MODULE: &str = "\n#[cfg(test)]\nmod tests";
+    assert_eq!(
+        uncatalogued(&raised_codes(
+            "out.emit(Diag::new(\"E0020\", at)); out.emit(Diag::new(\"X9999\", at));"
+        )),
+        vec![String::from("E0020"), String::from("X9999")],
+        "the scan trips on a code raised by nothing yet and on one not catalogued"
+    );
+    let source_dir = workspace_root().join("crates/verifier/src");
+    // The order does not matter: the codes are collected into a set.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the listing is only gathered into a set, never ordered into output"
+    )]
+    let entries = fs::read_dir(&source_dir).expect("the verifier's sources");
+    let mut raised: Vec<String> = Vec::new();
+    for entry in entries {
+        let path = entry.expect("a source").path();
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            let text = fs::read_to_string(&path).expect("a source reads");
+            let shipped = text
+                .split_once(TESTS_MODULE)
+                .map_or(text.as_str(), |(shipped, _)| shipped);
+            raised.extend(raised_codes(shipped));
+        }
+    }
+    raised.sort();
+    raised.dedup();
+    assert!(
+        raised.len() > 80,
+        "the scan found only {} codes",
+        raised.len()
+    );
+    assert_eq!(uncatalogued(&raised), Vec::<String>::new());
+}
+
+/// **The cap never moves a verdict or a total** (the review's comparison):
+/// every committed case, its route's steps and handlers written once, three,
+/// seven and twenty-five times over, at QUICK and at FULL, verified with the
+/// cap and with it off (`u32::MAX`): `qualifies` is the same, and every
+/// code's total, listed plus left out, is the same. And no report lists more
+/// than the cap of a code, nor closes with more than one `I0007` for a code.
+#[test]
+fn the_cap_never_moves_a_verdict_or_a_total() {
+    let totals = |counted: &pharmakos_verifier::Counted| {
+        let mut totals: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+        for found in &counted.report.diagnostics {
+            if found.code != "I0007" {
+                let total = totals.entry(found.code.clone()).or_default();
+                *total = total.checked_add(1).expect("a total");
+            }
+        }
+        for gap in &counted.left_out {
+            let total = totals.entry(gap.code.to_owned()).or_default();
+            *total = total.checked_add(gap.count).expect("a total");
+        }
+        totals
+    };
+    let cap = usize::try_from(MAX_PER_CODE).expect("fits");
+    let mut compared = 0_usize;
+    for case in cases() {
+        for copies in [1_usize, 3, 7, 25] {
+            let Some(text) = copied_text(&case, copies) else {
+                continue;
+            };
+            for depth in [Depth::Quick, Depth::Full] {
+                let capped = counted_at(&case, &text, depth, MAX_PER_CODE);
+                let whole = counted_at(&case, &text, depth, u32::MAX);
+                assert_eq!(
+                    capped.report.qualifies, whole.report.qualifies,
+                    "{case} x{copies} {depth:?}: the verdict"
+                );
+                assert_eq!(
+                    totals(&capped),
+                    totals(&whole),
+                    "{case} x{copies} {depth:?}: the totals"
+                );
+                // Uncapped, only `I0003` notes past the size budget are left out.
+                assert!(
+                    whole.left_out.iter().all(|gap| gap.code == "I0003"),
+                    "{case}: {:?} left out uncapped",
+                    whole.left_out
+                );
+                assert!(capped.faults.is_empty() && whole.faults.is_empty());
+                for code in totals(&whole).into_keys() {
+                    let shown = count_of(&capped.report, &code);
+                    assert!(shown <= cap, "{case}: {shown} {code}");
+                }
+                let markers = count_of(&capped.report, "I0007");
+                assert_eq!(markers, capped.left_out.len(), "{case}: one I0007 a code");
+                compared = compared.saturating_add(1);
+            }
+        }
+    }
+    assert!(compared > 500, "only {compared} reports compared");
 }

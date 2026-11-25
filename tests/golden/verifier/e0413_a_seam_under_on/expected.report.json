@@ -23,10 +23,10 @@
       "beginner": "Buildings stand on vents. A seam is dug, not built on."
     }
   ],
-  "report_hash": "PXmR56EBIuM=",
+  "report_hash": "OdCpptXwGZ0=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "ogwCs6ocO8U=",
-  "verifier_version": "0.1.0-s3.6",
+  "verifier_version": "0.1.0-s3.8",
   "size_units": 2,
   "size_budget": 128
 }

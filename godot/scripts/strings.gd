@@ -69,7 +69,7 @@ const TEXT := {
 	"lobby_forgotten": "The last match has ended, so there is nothing to resume.",
 	"lobby_not_remembered": "This match is not remembered, so Resume will not offer it after a restart: {why}",
 	"lobby_remembered_note": "This match is remembered. {why}",
-	"lobby_not_forgotten": "The ended match could not be forgotten, so Resume may still offer it; it has ended, so start a new match instead: {why}",
+	"lobby_not_forgotten": "The ended match could not be forgotten, so Resume may still offer it, and the host will refuse it, since an ended match cannot be continued: start a new match instead. {why}",
 	"lobby_remembered_unreadable": "The remembered match could not be read ({path}, error {error}), so Resume is not offered.",
 	"lobby_about": "Credits",
 	# The recap: the gateway's own prose - the settlement, the shortfall and why a step
@@ -409,6 +409,13 @@ const TEXT := {
 	"link_gave_up": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last close was code {code}.",
 	# The same, when the last close carried no code: the connection was lost, not closed.
 	"link_gave_up_lost": "The {link} connection was given up after {attempts} attempts in a row, none of which stayed up; the last time, the connection was lost with no close.",
+	# What the match host wrote last on its standard error, added to a give-up once the host
+	# process has exited: its own words for why it stopped (a save it could not write), or
+	# whatever it said last before it was ended.
+	"link_host_exited": "The match host has exited; the last thing it wrote was: {words}",
+	"link_host_exited_silent": "The match host has exited without writing why.",
+	# The last call the gateway refused, as the bridge's rig said it (`last_error`).
+	"lobby_last_refusal": "The last call the gateway refused: {error}",
 	"status_call_maybe_taken": "The answer to that was lost ({detail}), so it may have been taken; reading it again from the gateway.",
 	"status_lost_notes_read": "Read again from the gateway after a lost answer: the notebook below is what it keeps.",
 	"status_lost_drafts_read": "Read again from the gateway after a lost answer: the drafts listed are what it keeps.",
@@ -520,6 +527,34 @@ const TEXT := {
 	"ghost_waiting": "Checking this spot...",
 	"ghost_legal": "A beacon can go here.",
 	"ghost_illegal": "Not here: {sentence}",
+	"ghost_unknown": "Not known yet: the check left some findings out. {sentence}",
+	"ghost_unnamed": "The placement's verdict ({state}) has no drawing.",
+
+	# --- Playtest mode (S3's `prob`, part 2; scripts/playtest.gd) ------------------
+	"playtest_toggle": "Playtest mode",
+	# Shown while it is on: what it records, and that nothing leaves the machine.
+	"playtest_on": "Playtest mode is on. This client keeps, in memory only: the counts and times of each Push and Lull (focused and unfocused, used, skipped), speed changes, camera moves, the verifier's error codes shown, the gateway's refusal codes, and a log of event names. With Export it adds your survey answers, the last one in your own words, exactly as you write them. It keeps no playbook, draft, notebook, path or name. Nothing leaves this computer: Export playtest bundle writes one file where you choose, for you to send by hand.",
+	"playtest_counts": "Recorded so far: {pushes} Push(es), {skipped} of them skipped, {lulls} Lull(s).",
+	"playtest_dropped": "Some of it did not fit and was counted instead; the bundle's manifest says what.",
+	"playtest_survey_heading": "Playtest survey",
+	"playtest_q_another": "Play another round?",
+	"playtest_q_understood": "Did you understand why your playbook did what it did?",
+	"playtest_q_wanted": "What did you most want to change during a Push?",
+	"playtest_wanted_note": "Your words go into the bundle exactly as you write them. Read the four files before you send them.",
+	"playtest_answer_unanswered": "(no answer)",
+	"playtest_answer_yes": "Yes",
+	"playtest_answer_no": "No",
+	"playtest_answer_partly": "Partly",
+	"playtest_wanted_count": "{count} of {limit} characters.",
+	"playtest_export_survey_too_long": "The playtest bundle was not written: your answer is longer than {limit} characters. Shorten it and export again.",
+	"playtest_export_unknown_answer": "The playtest bundle was not written: an answer is not one the survey offers.",
+	"playtest_export": "Export playtest bundle",
+	"playtest_exported": "Playtest bundle written to {path} ({bytes} bytes). Read it, then send it by hand.",
+	"playtest_exported_note": "Playtest bundle written to {path}. {why}",
+	"playtest_export_not_done": "The playtest bundle was not written: {why}",
+	"playtest_export_off": "Playtest mode is off, so there is nothing to export.",
+	"playtest_export_too_large": "The playtest bundle would be too large to write.",
+	"playtest_export_failed": "The export stopped with an error; the log says why.",
 }
 
 

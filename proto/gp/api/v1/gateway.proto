@@ -1401,9 +1401,10 @@ message IntegerShape {
   string display_unit = 4;
 
   // What a 0 does in this setting, in the player's words, from plan-core's
-  // string table: "retreat off", "structures never repaired". Present only
-  // where the sim reads a 0 as turning what the setting governs off, and the
-  // bounds admit a 0; empty where a 0 is just a number. A Chip's or a
+  // string table: "retreat off", "no scouts". Present only where the bounds
+  // admit a 0 and the sim reads it as something other than the number:
+  // turning what the setting governs off, or, for an Attack's `force_size`,
+  // one raider launched at once; empty where a 0 is just a number. A Chip's or a
   // BeaconSettingRow's `value_title` carries it when the value now is that
   // 0, so the client draws it and tests no value. Static words, the same for
   // every seat. (S3's `zerotitle`.)

@@ -109,21 +109,26 @@
 //! What a resume rebuilds, field by field (the notes, A2):
 //!
 //! * **saved** -- every seat's notebook, drafts and seal, and `lull_offset`;
+//!   and, from format version 4, the last Push (lane `opsave`,
+//!   [`last_push`]): in a `lull` save the segment feed (`feed`, its anchor
+//!   `feed_anchor` and the drops since the segment's end), and in every save
+//!   the recap's record (`recap` and `recap_lost`), so a resumed Lull reads
+//!   the last Push and its recap as the live one did;
 //! * **derived** -- `time` (round and phase from the restored runner),
-//!   `host`, `lulls` (the Lulls' lengths, from the rules table), `feed_anchor`, the fog policy's eliminations (from the restored
-//!   seat table), `views` (the generated map re-encoded from the pristine
-//!   world, every chunk an edit touched re-marked, the stamp restarting, and
-//!   the view's id minted with the resume's generation folded in, so every
-//!   cursor and handle from the dead process is stale), and draft
-//!   continuity (the carried draft re-verified against the same snapshot);
+//!   `host`, `lulls` (the Lulls' lengths, from the rules table), the fog
+//!   policy's eliminations (from the restored seat table), `views` (the
+//!   generated map re-encoded from the pristine world, every chunk an edit
+//!   touched re-marked, the stamp restarting, and the view's id minted with
+//!   the resume's generation folded in, so every cursor and handle from the
+//!   dead process is stale), and draft continuity (the carried draft
+//!   re-verified against the same snapshot);
 //! * **reset** -- `tokens` (a new process, a new announce line: spec section
 //!   3's "seat tokens are reissued"), `limits` and `limiters`,
 //!   `lull_remaining_ms`, `reported_elapsed_ms` and `phase_elapsed` (the
 //!   client re-reports its clock), every ready flag, the operator's advice
-//!   (the advisor re-runs at a resumed Lull), `feed`: a replayed Push
-//!   regenerates it, and a resumed Lull's is empty, and `recap`, the last
-//!   segment's facts, which a segment that ends in this process sets again.
-//!   PLACEHOLDER: the last recap's events do not survive a resume — owner, at S7.
+//!   (the advisor re-runs at a resumed Lull), and `feed` in a `sealed` save,
+//!   whose Push replays it. A version-3 save carries no last Push, and its
+//!   Lull's feed shows none, as before.
 //!
 //! # Secrecy
 //!
@@ -136,6 +141,7 @@
 
 pub mod control;
 pub mod knowledge;
+pub mod last_push;
 pub mod plan_words;
 pub mod planning;
 mod sealed;
@@ -146,7 +152,7 @@ pub use sealed::{Sealed, Unfiled};
 use crate::advice::Advice;
 use crate::audit::{AuditLog, Outcome};
 use crate::error::Error;
-use crate::feed::{Event, Kind, SegmentFeed, SnapshotId, Witnesses};
+use crate::feed::{Event, Kind, SegmentFeed, Witnesses};
 use crate::fog::{Audience, FogPolicy, Viewer, Vision};
 use crate::host::{Host, LiveVision, WorldSight};
 use crate::limit::{Limits, RateLimiter};
@@ -237,7 +243,10 @@ pub struct Continuity {
     pub draft_id: String,
     /// Whether it still qualifies against the new snapshot.
     pub qualifies: bool,
-    /// How many diagnostics the re-verification produced.
+    /// How many diagnostics the re-verification's report **lists**: at most
+    /// `pharmakos_verifier::MAX_PER_CODE` of one code, the rest of a code
+    /// counted by the report's closing `I0007`, one per code, which are among
+    /// them (S3's `vcap`).
     pub diagnostics: u32,
     /// `report_hash` of that re-verification.
     pub report_hash: Vec<u8>,
@@ -507,8 +516,8 @@ pub struct Surface {
     chain: Vec<(Tick, u64)>,
     /// What the last segment's end left for its recap, read off the sim's own
     /// events as they arrive ([`Surface::absorb_events`]). `None` until a
-    /// segment has ended in this process: a resume does not carry it, as it
-    /// does not carry the recap's events (the module doc's PLACEHOLDER).
+    /// segment has ended; a resume puts the saved one back
+    /// ([`Surface::restore_last_push`]).
     recap: Option<RecapFacts>,
     /// The `step_failed` events of the segment now being played, as
     /// `(seat, value)` in the order the sim emitted them: moved into the
@@ -536,6 +545,9 @@ pub struct Surface {
     /// beacon its own seat recycled is no dark Stake (decision 4's reading).
     /// Cleared with each segment's feed.
     recycled: Vec<pharmakos_sim::knowledge::AssetId>,
+    /// True once the match's end has been put in the pending slot as an
+    /// `ended` save ([`Surface::persist_end`]), so it is written once.
+    end_saved: bool,
 }
 
 /// What one segment's end told the recap, as the sim reported it: the round,
@@ -765,7 +777,7 @@ impl Surface {
             time: MatchTime::lobby(),
             tokens: TokenStore::new(),
             fog,
-            feed: SegmentFeed::new(SnapshotId::of(match_seed, 0, 0)),
+            feed: SegmentFeed::new(match_seed, 0, 0),
             audit: AuditLog::new(),
             limits: Limits::default(),
             limiters: Vec::new(),
@@ -788,6 +800,7 @@ impl Surface {
             preset: Preset::Custom,
             human_seat: None,
             recycled: Vec::new(),
+            end_saved: false,
         })
     }
 
@@ -886,6 +899,7 @@ impl Surface {
         continuation: Continuation,
     ) -> Result<Surface, Error> {
         let mut surface = self;
+        crate::save::refuse_ended(saved.boundary)?;
         if surface.host.is_some() {
             return Err(Error::internal(
                 "a surface resumes a save once, before it hosts any match",
@@ -933,10 +947,15 @@ impl Surface {
             surface.lull_offset = surface.lull_offset.saturating_add(behind);
             surface.sync_time();
         }
-        // A fresh feed: the recap's events are not in the save.
+        // A fresh feed, which the save's last Push replaces below.
         surface.begin_segment(round, 0);
 
         surface.restore_seats(saved)?;
+        // The last Push's feed and recap, as the saved Lull held them; a
+        // version-3 save holds none, and its Lull shows no Push, as before.
+        if let Some(last_push) = saved.last_push.as_ref() {
+            surface.restore_last_push(saved.boundary, last_push)?;
+        }
         surface.name_sightings()?;
         surface.derive_continuity(round)?;
 
@@ -991,15 +1010,23 @@ impl Surface {
         })?;
         for held in &saved.seats {
             let characters = held.notebook.chars().count();
-            if characters > notebook_bound
-                || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
-            {
+            if characters > notebook_bound {
                 return Err(Error::invalid(said!(
-                    "seat {}'s notebook or drafts in this save are over the bounds a seat may \
-                     hold: the file is damaged",
-                    held.seat
+                    "seat {}'s notebook in this save is {} characters, past the {} a seat's \
+                     notebook may hold: the file is damaged",
+                    held.seat,
+                    characters,
+                    notebook_bound
                 )));
             }
+            // The draft rule, the one every door holds (`drafts_hold`).
+            crate::surface::planning::drafts_hold(&held.drafts).map_err(|broken| {
+                Error::invalid(said!(
+                    "seat {}'s drafts in this save break the draft rule: {}: the file is damaged",
+                    held.seat,
+                    broken.said()
+                ))
+            })?;
             // Decoded once: checked against its stamp, compiled and priced
             // (`Surface::restored_seal`).
             let sealed = match held.seal.as_ref() {
@@ -1144,6 +1171,7 @@ impl Surface {
             lull_offset: self.lull_offset.saturating_add(self.phase_elapsed),
             snapshot,
             seats,
+            last_push: Some(self.last_push(boundary)?),
         })
     }
 
@@ -1227,7 +1255,7 @@ impl Surface {
     /// Start a new segment: a new feed, a new snapshot, and every cursor from
     /// the old segment now stale.
     pub fn begin_segment(&mut self, round: u32, segment: u32) {
-        self.feed = SegmentFeed::new(SnapshotId::of(self.match_seed, round, segment));
+        self.feed = SegmentFeed::new(self.match_seed, round, segment);
         self.recycled.clear();
         // The anchor is the SIM's tick, never [`MatchTime::tick`]: an event's
         // `at_ms` is game milliseconds since the segment began, and the sim
@@ -1737,8 +1765,82 @@ impl Surface {
         Ok(())
     }
 
+    /// Put the save of a match that has just ended in the pending slot: an
+    /// `ended` save, which replaces the final round's `sealed` one on disk so
+    /// a resume is refused rather than replaying the final Push
+    /// ([`Boundary::Ended`]).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the save cannot be built. The
+    /// match has ended in memory, and a tick cannot be un-stepped, so the
+    /// refusal is audited, carried to the host loop
+    /// ([`Persistence::unsaved`]), which answers the call that stepped the
+    /// match with it, says what the disk holds and stops, and returned to
+    /// the caller that stepped the match.
+    fn persist_end(&mut self) -> Result<(), Error> {
+        let round = self.host()?.runner().round();
+        match self.saved_match(Boundary::Ended) {
+            Ok(saved) => {
+                self.pending.save = Some(saved);
+                self.end_saved = true;
+                Ok(())
+            }
+            Err(cause) => Err(self.unsaved(
+                "save ended",
+                said!(
+                    "the `ended` save of round {} could not be built ({})",
+                    round,
+                    cause.said()
+                ),
+            )),
+        }
+    }
+
+    /// The tripwire at the recap's close: a match that has ended with no
+    /// `ended` save written (an end no tick reported, `end_recap`'s doc says
+    /// why none is reachable today) is a typed refusal, audited and carried to
+    /// the host loop, which stops on it ([`Surface::unsaved`]), never silence.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when no `ended` save was written.
+    fn ended_unsaved_tripwire(&mut self) -> Result<(), Error> {
+        if self.end_saved {
+            return Ok(());
+        }
+        let round = self.host()?.runner().round();
+        Err(self.unsaved(
+            "save ended",
+            said!(
+                "the match ended as round {}'s recap closed, an end no tick reported, and no `ended` save was written",
+                round
+            ),
+        ))
+    }
+
+    /// A save the disk needed and could not have: audited under `action`,
+    /// put where the host loop stops on it ([`Persistence::unsaved`]), and
+    /// answered as the typed refusal to return. The words say what could
+    /// not be built and why, and nothing about the disk: the host loop reads
+    /// what the disk holds from the cache and adds it.
+    fn unsaved(&mut self, action: &str, why: pharmakos_proto::json::grammar::Said) -> Error {
+        let error = Error::internal(why);
+        let tick = self.time.tick;
+        self.audit.refused(tick, None, None, action, &error);
+        self.pending.unsaved = Some(error.clone());
+        error
+    }
+
     /// Put a beginning Push's save and seals in the pending slot, and make
     /// room for its chain.
+    ///
+    /// A `sealed` save that cannot be built is audited and carried to the
+    /// host loop ([`Surface::unsaved`]), which answers the call that began
+    /// the Push with it, says what the disk holds and stops. The Push has
+    /// begun in memory by then and is not un-begun: a host with no loop
+    /// behind it (a test, the walled harness) plays on, and writes nothing
+    /// to a disk.
     fn persist_push(&mut self, round: u32) {
         self.pending.sealed = self
             .seats
@@ -1756,9 +1858,17 @@ impl Surface {
             .collect();
         match self.saved_match(Boundary::Sealed) {
             Ok(saved) => self.pending.save = Some(saved),
-            Err(error) => {
-                let tick = self.time.tick;
-                self.audit.refused(tick, None, None, "save sealed", &error);
+            Err(cause) => {
+                // Carried in `pending.unsaved`, which the host loop reads;
+                // the Push has begun and its caller is not refused.
+                let _carried = self.unsaved(
+                    "save sealed",
+                    said!(
+                        "the `sealed` save of round {} could not be built ({})",
+                        round,
+                        cause.said()
+                    ),
+                );
             }
         }
         // Reserved once, here, so that recording the chain allocates nothing
@@ -1908,6 +2018,11 @@ impl Surface {
                 views.stamp(host.world().voxels().settled());
             }
         }
+        // The match's end, where the sim reports it: the `ended` save that
+        // replaces the final round's `sealed` one, once.
+        if report.is_some_and(|report| report.match_ended) && !self.end_saved {
+            self.persist_end()?;
+        }
         Ok(report)
     }
 
@@ -1958,6 +2073,19 @@ impl Surface {
             // `end_match` is idempotent. (Found by T16a's own
             // acceptance test, when every round-limit end came through here.)
             self.fog.end_match();
+            // No save is made here. Every end this build reaches is reported
+            // at the match's final tick, where [`Surface::after_tick`] makes
+            // the `ended` save (`tests/last_push.rs`,
+            // `every_end_is_reported_at_its_final_tick`). The sim's arm that
+            // decides an end only as its recap closes (`Runner::end_recap`'s
+            // `!announced`) is unreachable today: it is reached by a world
+            // restored into an undecided last recap, which no save of this
+            // build holds (a save is made in a Lull, as a Push begins or as
+            // the match ends, never in a recap, and an ended one does not
+            // resume). Should it be reached, the tripwire says so and stops
+            // the host rather than leave the final round's `sealed` save on
+            // disk as if the match went on.
+            self.ended_unsaved_tripwire()?;
         }
         if ended {
             // The recap's own reported clock is the recap's; the Lull that
@@ -2417,6 +2545,20 @@ impl Surface {
         let now = host.world().event_bus().dropped();
         let phase = host.runner().phase();
         let round = host.runner().round();
+        self.take_drops(now, phase, round, ended)
+    }
+
+    /// [`Surface::count_drops`] with the bus's count `now` read: the drops
+    /// since the last read are added to the segment's with a checked add, a
+    /// typed `INTERNAL` at its cause, never a wrap (a resumed count of
+    /// `u64::MAX` and one live drop are that error).
+    fn take_drops(
+        &mut self,
+        now: u64,
+        phase: MatchPhase,
+        round: u32,
+        ended: bool,
+    ) -> Result<(), Error> {
         let lost = now.checked_sub(self.bus_dropped).ok_or_else(|| {
             Error::internal("the sim's event bus counted fewer drops than before")
         })?;
@@ -2959,9 +3101,10 @@ impl Surface {
             sealed::Qualified::Refused { report } => Err(Error::new(
                 crate::error::Code::NoQualifyingPlan,
                 said!(
-                    "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \n                     gateway's fallback is filed instead",
+                    "seat {}'s advised safe playbook does not qualify ({}); the gateway's \
+                     fallback is filed instead",
                     seat.raw(),
-                    report.diagnostics.len()
+                    listed_words(&report)
                 ),
             )),
         }
@@ -3022,6 +3165,15 @@ impl Surface {
             round,
             playbook_jsonc: playbook,
         });
+        // The carried draft replaces last round's, so the rule holds by
+        // construction; held here too, as at every door.
+        crate::surface::planning::drafts_hold(&state.drafts).map_err(|broken| {
+            Error::internal(said!(
+                "carrying seat {}'s draft forward broke the draft rule: {}",
+                seat.raw(),
+                broken.said()
+            ))
+        })?;
         state.continuity = Some(continuity);
         Ok(())
     }
@@ -4166,7 +4318,31 @@ fn tallies_of(
         .collect()
 }
 
-/// How many diagnostics a report carries, as `Continuity.diagnostics`, a
+/// A refusal's words for what a report lists: its rows, and how many codes it
+/// left diagnostics out of past the per-code cap (S3's `vcap`), read from the
+/// rows and never from a sentence ([`pharmakos_verifier::CapRead`]).
+fn listed_words(report: &VerifyReport) -> pharmakos_proto::json::grammar::Said {
+    let read = pharmakos_verifier::CapRead::of(report);
+    let rows = report.diagnostics.len();
+    let listed = if rows == 1 {
+        "diagnostic"
+    } else {
+        "diagnostics"
+    };
+    match read.left_out_codes {
+        0 => said!("{} {}", rows, listed),
+        codes => said!(
+            "{} {} listed, and more of {} {} past the {} of one code a report lists",
+            rows,
+            listed,
+            codes,
+            if codes == 1 { "code" } else { "codes" },
+            pharmakos_verifier::MAX_PER_CODE
+        ),
+    }
+}
+
+/// How many diagnostics a report lists, as `Continuity.diagnostics`, a
 /// `uint32`.
 ///
 /// # Errors
@@ -7037,6 +7213,47 @@ mod tests {
                      now queue a Resonance Spire at any of your beacons."
                 )
             )]
+        );
+    }
+
+    /// The words of a refused advised safe playbook (S3's `vcap`): the rows a
+    /// report lists, singular and plural, and how many codes it left out of.
+    #[test]
+    fn a_refusal_says_what_a_capped_report_lists() {
+        use pharmakos_proto::gp::api::v1::{Diagnostic, VerifyReport};
+        let row = |code: &str| Diagnostic {
+            code: code.to_owned(),
+            ..Diagnostic::default()
+        };
+        let report = |codes: &[&str]| VerifyReport {
+            diagnostics: codes.iter().map(|code| row(code)).collect(),
+            ..VerifyReport::default()
+        };
+        let cap = pharmakos_verifier::MAX_PER_CODE;
+        assert_eq!(
+            super::listed_words(&report(&["E0109"])).as_str(),
+            "1 diagnostic"
+        );
+        assert_eq!(
+            super::listed_words(&report(&["E0109", "E0110"])).as_str(),
+            "2 diagnostics"
+        );
+        let mut one: Vec<&str> = vec!["E0303"; usize::try_from(cap).unwrap_or(0)];
+        one.push("I0007");
+        assert_eq!(
+            super::listed_words(&report(&one)).as_str(),
+            format!(
+                "{} diagnostics listed, and more of 1 code past the {cap} of one code a report lists",
+                one.len()
+            )
+        );
+        one.push("I0007");
+        assert_eq!(
+            super::listed_words(&report(&one)).as_str(),
+            format!(
+                "{} diagnostics listed, and more of 2 codes past the {cap} of one code a report lists",
+                one.len()
+            )
         );
     }
 }

@@ -114,6 +114,7 @@
 
 use crate::pathing::search::Tally;
 use crate::pathing::surface::{NEIGHBOURS, Node, Surface};
+use crate::reserved::Reserved;
 
 /// No column: an empty link.
 const NONE: u32 = u32::MAX;
@@ -177,7 +178,7 @@ pub struct Reach {
     /// The ring's length, `2 × max step + 1`: what a key is taken modulo.
     ring: core::num::NonZeroU32,
     /// The bucket being settled, sorted by column, and where in it.
-    sorted: Vec<Node>,
+    sorted: Reserved<Node>,
     cursor: usize,
     /// The key the search has reached.
     at: i64,
@@ -189,7 +190,7 @@ pub struct Reach {
     sites: Vec<u32>,
     /// The spheres a directed search heads for: each one's centre column and
     /// the most octile cost from it to any column of the sphere.
-    spheres: Vec<([i32; 2], i64)>,
+    spheres: Reserved<([i32; 2], i64)>,
     /// Each column's `h` in this search with the epoch it was computed in,
     /// computed once when the search first reaches the column; valid while
     /// the stamp is the search's epoch.
@@ -247,13 +248,13 @@ impl Reach {
             prev: vec![NONE; n],
             heads: vec![NONE; buckets],
             ring,
-            sorted: Vec::with_capacity(n),
+            sorted: Reserved::with_capacity(n),
             cursor: 0,
             at: 0,
             waiting: 0,
             site_epoch: 0,
             sites: vec![0; n],
-            spheres: Vec::with_capacity(SPHERE_ROOM),
+            spheres: Reserved::with_capacity(SPHERE_ROOM),
             heur: vec![(0, 0); n],
             evaluations: Tally::ZERO,
             turns: Tally::ZERO,

@@ -120,6 +120,9 @@
         },
         "waves": {
           "type": "integer"
+        },
+        "clear_avoid_areas": {
+          "type": "boolean"
         }
       }
     },
@@ -514,6 +517,9 @@
           "items": {
             "$ref": "#/$defs/Area"
           }
+        },
+        "clear_protected_areas": {
+          "type": "boolean"
         }
       }
     },
@@ -2566,6 +2572,9 @@
         },
         "picket_scouts": {
           "type": "integer"
+        },
+        "clear_protect": {
+          "type": "boolean"
         }
       }
     },
@@ -4037,6 +4046,9 @@
         },
         "scout_count": {
           "type": "integer"
+        },
+        "clear_probe_areas": {
+          "type": "boolean"
         }
       }
     },

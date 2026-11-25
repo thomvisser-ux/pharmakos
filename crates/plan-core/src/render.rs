@@ -116,12 +116,13 @@
 
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::{
-    AttackSettings, BeaconFilter, BeaconRef, Condition, DefendSettings, Fallback, FeatureRef,
-    Freshness, Handler, InterfaceRow, Location, MandateSettings, NearPlace, OnDeath, Options,
-    Playbook, Step, Voxel, attack_settings, attack_target, beacon_filter, beacon_ref,
-    beacon_units_by_role, cmdr_hp_pct, condition, defend_settings, enemy_structure_near, fallback,
-    freshness, handler, int_compare, interface_row, location, mandate_settings, meta, near_place,
-    on_death, on_fail, playbook, protected_asset, step,
+    AttackSettings, BeaconFilter, BeaconRef, BuildSettings, Condition, DefendSettings, Fallback,
+    FeatureRef, Freshness, Handler, InterfaceRow, Location, MandateSettings, MineSettings,
+    NearPlace, OnDeath, Options, Playbook, Step, SurveySettings, Voxel, attack_settings,
+    attack_target, beacon_filter, beacon_ref, beacon_units_by_role, build_settings, cmdr_hp_pct,
+    condition, defend_settings, enemy_structure_near, fallback, freshness, handler, int_compare,
+    interface_row, location, mandate_settings, meta, mine_settings, near_place, on_death, on_fail,
+    playbook, protected_asset, step,
 };
 use pharmakos_proto::json::grammar::escaped;
 
@@ -1263,6 +1264,12 @@ fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
 /// that writes neither (S2's plan, task `vfy2`). Every field is said, in field
 /// order, as the file wrote it; whether it is legal is the verifier's. `here`
 /// is the `MandateSettings`' pointer.
+///
+/// A Build, Survey or Mine arm says only what decisions-log item 184 (10)
+/// made writable: a written 0 of `scout_count`, `dig_max_depth` or
+/// `pillar_spacing`, and a set `clear_*` flag ([`s1_arm_parts`]); the rest of
+/// those arms is unsaid, as it was. A Defend or Attack arm's clear is said in
+/// its field order.
 fn settings_clause(settings: &MandateSettings, here: &str, clause: Clause) -> Text {
     let mut parts = common_parts(settings, here, clause);
     parts.extend(match settings.mandate.as_ref() {
@@ -1272,7 +1279,8 @@ fn settings_clause(settings: &MandateSettings, here: &str, clause: Clause) -> Te
         Some(mandate_settings::Mandate::Attack(attack)) => {
             attack_parts(attack, &at(here, "attack"))
         }
-        _ => Vec::new(),
+        Some(mandate) => s1_arm_parts(mandate, here),
+        None => Vec::new(),
     });
     if parts.is_empty() {
         Text::default()
@@ -1365,6 +1373,215 @@ fn omitted_roe(mandate: &mandate_settings::Mandate) -> &'static str {
     }
 }
 
+/// What a Build, Survey or Mine arm writes, every field it writes, in field
+/// order, as the file wrote it, each value with its chip; a field the row
+/// leaves out is not said, as the Defend and Attack arms say none
+/// (decisions-log item 184 (10), fix pass 1). A list is said by its count, as
+/// Attack's avoid areas are, and its clear by a boolean chip; the Build
+/// targets are said by their count, each target being its own row of the
+/// visit (`add_build_target` says one in full).
+fn s1_arm_parts(mandate: &mandate_settings::Mandate, here: &str) -> Vec<Text> {
+    match mandate {
+        mandate_settings::Mandate::Build(build) => build_parts(build, &at(here, "build")),
+        mandate_settings::Mandate::Survey(survey) => survey_parts(survey, &at(here, "survey")),
+        mandate_settings::Mandate::Mine(mine) => mine_parts(mine, &at(here, "mine")),
+        mandate_settings::Mandate::Defend(_) | mandate_settings::Mandate::Attack(_) => Vec::new(),
+    }
+}
+
+/// A list written in a settings row, by its count: `words`, the count, and
+/// the noun for one or many; nothing for an empty or omitted list.
+fn count_part(parts: &mut Vec<Text>, words: &str, count: usize, one: &str, many: &str) {
+    if count > 0 {
+        let noun = if count == 1 { one } else { many };
+        parts.push(cat!(words, " ", count.to_string(), " ", noun));
+    }
+}
+
+/// A Build arm's fields, in field order.
+fn build_parts(build: &BuildSettings, here: &str) -> Vec<Text> {
+    let mut parts = Vec::new();
+    count_part(
+        &mut parts,
+        s::BUILD_TARGETS,
+        build.targets.len(),
+        s::TARGET_ONE,
+        s::TARGET_MANY,
+    );
+    if let Some(pct) = build.repair_threshold_pct {
+        // 0 to 100; past 100 is the range's (`E0501`).
+        // A 0 is said in its shape's zero title ([`Shape::repair_threshold`]).
+        let shape = Shape::repair_threshold();
+        let never = shape.value_title(i64::from(pct));
+        let chip = int_chip(pct, at(here, "repair_threshold_pct"), shape);
+        parts.push(if let Some(never) = never {
+            cat!(never, " (", chip, "%)")
+        } else {
+            cat!(s::REPAIR_BELOW, " ", chip, "% ", s::REPAIR_BELOW_UNIT)
+        });
+    }
+    if let Some(rebuild) = build.rebuild_destroyed {
+        let words = if rebuild {
+            s::REBUILD_ON
+        } else {
+            s::REBUILD_OFF
+        };
+        parts.push(chip(
+            words,
+            at(here, "rebuild_destroyed"),
+            Spec::Ready(Shape::boolean()),
+            Value::int(rebuild),
+        ));
+    }
+    if build.terraform != 0 {
+        let words = match build_settings::Terraform::try_from(build.terraform) {
+            Ok(build_settings::Terraform::None) => s::TERRAFORM_NONE,
+            Ok(build_settings::Terraform::Fill) => s::TERRAFORM_FILL,
+            Ok(build_settings::Terraform::Dig) => s::TERRAFORM_DIG,
+            Ok(build_settings::Terraform::Both) => s::TERRAFORM_BOTH,
+            Ok(build_settings::Terraform::Unspecified) | Err(_) => s::TERRAFORM_UNSET,
+        };
+        parts.push(enum_chip(
+            words,
+            build.terraform,
+            at(here, "terraform"),
+            "gp.v1.BuildSettings.Terraform",
+        ));
+    }
+    count_part(
+        &mut parts,
+        s::BUILD_PROTECTING,
+        build.protected_areas.len(),
+        s::AREA_ONE,
+        s::AREA_MANY,
+    );
+    clear_part(
+        &mut parts,
+        build.clear_protected_areas,
+        s::CLEAR_PROTECTED,
+        here,
+        "clear_protected_areas",
+    );
+    parts
+}
+
+/// A Survey arm's fields, in field order.
+fn survey_parts(survey: &SurveySettings, here: &str) -> Vec<Text> {
+    let mut parts = Vec::new();
+    count_part(
+        &mut parts,
+        s::SURVEY_PROBING,
+        survey.probe_areas.len(),
+        s::AREA_ONE,
+        s::AREA_MANY,
+    );
+    if let Some(scouts) = survey.scout_count {
+        // At most a beacon's byte column (`E0508`).
+        // A 0 is said in its shape's zero title ([`Shape::scout_count`]).
+        let shape = Shape::scout_count();
+        let none = shape.value_title(i64::from(scouts));
+        let chip = int_chip(scouts, at(here, "scout_count"), shape);
+        parts.push(if let Some(none) = none {
+            cat!(none, " (", chip, ")")
+        } else {
+            cat!(s::SCOUTS_FIELDING, " ", chip, " ", s::SCOUTS_UNIT)
+        });
+    }
+    clear_part(
+        &mut parts,
+        survey.clear_probe_areas,
+        s::CLEAR_PROBES,
+        here,
+        "clear_probe_areas",
+    );
+    parts
+}
+
+/// A Mine arm's fields, in field order.
+fn mine_parts(mine: &MineSettings, here: &str) -> Vec<Text> {
+    let mut parts = Vec::new();
+    if let Some(depth) = mine.dig_max_depth {
+        // A 0 is said in its shape's zero title ([`Shape::dig_max_depth`]).
+        let shape = Shape::dig_max_depth();
+        let rim = shape.value_title(i64::from(depth));
+        let chip = int_chip(depth, at(here, "dig_max_depth"), shape);
+        parts.push(if let Some(rim) = rim {
+            cat!(rim, " (", chip, ")")
+        } else {
+            cat!(s::DIG_DOWN_TO, " ", chip, " ", s::DIG_DOWN_TO_UNIT)
+        });
+    }
+    if let Some(flee) = mine.flee_on_threat {
+        let words = if flee { s::FLEE_ON } else { s::FLEE_OFF };
+        parts.push(chip(
+            words,
+            at(here, "flee_on_threat"),
+            Spec::Ready(Shape::boolean()),
+            Value::int(flee),
+        ));
+    }
+    if mine.seam_choice != 0 {
+        let words = match mine_settings::SeamChoice::try_from(mine.seam_choice) {
+            Ok(mine_settings::SeamChoice::Richest) => s::SEAM_RICHEST,
+            Ok(mine_settings::SeamChoice::Nearest) => s::SEAM_NEAREST,
+            Ok(mine_settings::SeamChoice::Safest) => s::SEAM_SAFEST,
+            Ok(mine_settings::SeamChoice::Unspecified) | Err(_) => s::SEAM_UNSET,
+        };
+        parts.push(enum_chip(
+            words,
+            mine.seam_choice,
+            at(here, "seam_choice"),
+            "gp.v1.MineSettings.SeamChoice",
+        ));
+    }
+    if let Some(spacing) = mine.pillar_spacing {
+        // A 0 is said in its shape's zero title ([`Shape::pillar_spacing`]).
+        let shape = Shape::pillar_spacing();
+        let none = shape.value_title(i64::from(spacing));
+        let chip = int_chip(spacing, at(here, "pillar_spacing"), shape);
+        parts.push(if let Some(none) = none {
+            cat!(none, " (", chip, ")")
+        } else {
+            cat!(s::PILLARS_EVERY, " ", chip, " ", s::PILLARS_EVERY_UNIT)
+        });
+    }
+    parts
+}
+
+/// A set `clear_*` flag (decisions-log item 184 (10)), said with a boolean
+/// chip at its pointer; nothing for one left out or written `false`.
+fn clear_part(parts: &mut Vec<Text>, clear: bool, words: &str, here: &str, field: &str) {
+    if clear {
+        parts.push(chip(
+            words,
+            at(here, field),
+            Spec::Ready(Shape::boolean()),
+            Value::int(true),
+        ));
+    }
+}
+
+/// An Attack arm's avoid areas, as a count, and its clear of them, in field
+/// order.
+fn avoid_parts(parts: &mut Vec<Text>, attack: &AttackSettings, here: &str) {
+    if !attack.avoid_areas.is_empty() {
+        let count = attack.avoid_areas.len();
+        let noun = if count == 1 {
+            s::AREA_ONE
+        } else {
+            s::AREA_MANY
+        };
+        parts.push(cat!(s::ATTACK_AVOIDING, " ", count.to_string(), " ", noun));
+    }
+    clear_part(
+        parts,
+        attack.clear_avoid_areas,
+        s::CLEAR_AVOID,
+        here,
+        "clear_avoid_areas",
+    );
+}
+
 /// A Defend arm's fields, in field order.
 fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
@@ -1414,6 +1631,13 @@ fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
             "gp.v1.DefendSettings.Pursue",
         ));
     }
+    clear_part(
+        &mut parts,
+        defend.clear_protect,
+        s::CLEAR_PROTECT,
+        here,
+        "clear_protect",
+    );
     if let Some(pickets) = defend.picket_scouts {
         // At most a beacon's byte column (`E0508`).
         // A written 0 stands the picket down, said in the words its shape's
@@ -1491,15 +1715,7 @@ fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
             "gp.v1.AttackSettings.AfterAction",
         ));
     }
-    if !attack.avoid_areas.is_empty() {
-        let count = attack.avoid_areas.len();
-        let noun = if count == 1 {
-            s::AREA_ONE
-        } else {
-            s::AREA_MANY
-        };
-        parts.push(cat!(s::ATTACK_AVOIDING, " ", count.to_string(), " ", noun));
-    }
+    avoid_parts(&mut parts, attack, here);
     if let Some(breach) = attack.breach_allowed {
         let words = if breach {
             s::BREACH_ALLOWED
@@ -1537,10 +1753,32 @@ fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
 
 /// An Attack's launch conditions; `here` is the `AttackLaunch`' pointer.
 fn launch_part(launch: &pharmakos_proto::gp::v1::AttackLaunch, here: &str) -> Text {
+    // A written 0 is said in its shape's zero title ([`Shape::force_size`]):
+    // the first raider launches at once, so a written time is never read.
+    if let Some(force) = launch.force_size {
+        let shape = Shape::force_size();
+        if let Some(first) = shape.value_title(i64::from(force)) {
+            let chip = int_chip(force, at(here, "force_size"), shape);
+            return if let Some(ms) = launch.segment_ms {
+                cat!(
+                    first,
+                    " (",
+                    chip,
+                    "), ",
+                    s::LAUNCH_TIME_UNREAD,
+                    " (",
+                    duration_chip(ms, at(here, "segment_ms"), Some(0)),
+                    ")"
+                )
+            } else {
+                cat!(first, " (", chip, ")")
+            };
+        }
+    }
     let mut when = Vec::new();
     if let Some(force) = launch.force_size {
         when.push(cat!(
-            int_chip(force, at(here, "force_size"), Shape::count(UNIT_COUNT)),
+            int_chip(force, at(here, "force_size"), Shape::force_size()),
             " ",
             s::LAUNCH_FORCE
         ));

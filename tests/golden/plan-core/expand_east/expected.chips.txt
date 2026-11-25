@@ -16,7 +16,15 @@
     /declarative/route/1/place_beacon/initial/mandate/roe
     choice "HOLD_FIRE" (hold fire) | "RETURN_FIRE" (return fire) | "FREE_FIRE" (fire freely)
     = "RETURN_FIRE", replace
-  6:103-109 "normal"
+  6:116-117 "4"
+    /declarative/route/1/place_beacon/initial/mandate/mine/dig_max_depth
+    integer 0.. voxels, 0 is "digging the exposed rim only"
+    = 4 (typed 4), replace
+  6:150-171 "fleeing known threats"
+    /declarative/route/1/place_beacon/initial/mandate/mine/flee_on_threat
+    choice true (yes) | false (no)
+    = true, replace
+  6:176-182 "normal"
     /declarative/route/1/place_beacon/initial/priority
     choice "LOW" (low) | "NORMAL" (normal) | "HIGH" (high)
     = "NORMAL", replace
