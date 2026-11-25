@@ -62,7 +62,7 @@ const OTHER_MEANINGS: &[(&str, &str, usize, &str)] = &[
     (
         "playtest.rs",
         "survey",
-        10,
+        16,
         "Playtest mode's end-of-match survey and its `survey.json` (S3's plan, decision 11), not \
          the Survey mandate",
     ),

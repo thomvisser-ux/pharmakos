@@ -1366,8 +1366,13 @@ impl Recorder {
     ///
     /// [`BundleRefusal`]: off, or past [`MAX_BUNDLE_BYTES`].
     pub fn bundle(&self, survey: &Survey) -> Result<Vec<u8>, BundleRefusal> {
+        self.bundle_within(survey, MAX_BUNDLE_BYTES)
+    }
+
+    /// The bundle, refused past `cap` bytes.
+    fn bundle_within(&self, survey: &Survey, cap: usize) -> Result<Vec<u8>, BundleRefusal> {
         let zip = stored_zip(&self.files(survey)?)?;
-        if zip.len() > MAX_BUNDLE_BYTES {
+        if zip.len() > cap {
             return Err(BundleRefusal::TooLarge);
         }
         Ok(zip)
@@ -1392,10 +1397,24 @@ impl Recorder {
         understood: Understood,
         text: &str,
     ) -> Result<Exported, ExportFailure> {
+        let survey = Survey::answered(another, understood, text);
+        self.export_within(now_us, path, survey, MAX_BUNDLE_BYTES)
+    }
+
+    /// [`Recorder::export`], with the survey already read and the bundle refused past `cap`
+    /// bytes. A bundle refused for its size keeps no `survey_answered` line: the line it took is
+    /// taken back (its number stays used, so the gap shows) and `export_failed TOO_LARGE` said.
+    fn export_within(
+        &mut self,
+        now_us: u64,
+        path: &Path,
+        survey: Result<Survey, SurveyRefusal>,
+        cap: usize,
+    ) -> Result<Exported, ExportFailure> {
         let Some(recording) = self.on.as_mut() else {
             return Err(ExportFailure::Refused(BundleRefusal::Off));
         };
-        let Ok(survey) = Survey::answered(another, understood, text) else {
+        let Ok(survey) = survey else {
             recording.line(
                 now_us,
                 Event::ExportFailed,
@@ -1403,8 +1422,23 @@ impl Recorder {
             );
             return Err(ExportFailure::Refused(BundleRefusal::SurveyTooLong));
         };
-        recording.line(now_us, Event::SurveyAnswered, None);
-        let zip = self.bundle(&survey).map_err(ExportFailure::Refused)?;
+        let surveyed = recording.line(now_us, Event::SurveyAnswered, None) == Recorded::Taken;
+        let zip = match self.bundle_within(&survey, cap) {
+            Ok(zip) => zip,
+            Err(refusal) => {
+                if let Some(recording) = self.on.as_mut() {
+                    if surveyed {
+                        recording.log.pop();
+                    }
+                    recording.line(
+                        now_us,
+                        Event::ExportFailed,
+                        Some(Code::of_refusal_name(refusal)),
+                    );
+                }
+                return Err(ExportFailure::Refused(refusal));
+            }
+        };
         let written = crate::write::write_whole(path, &zip);
         if let Some(recording) = self.on.as_mut() {
             match &written {
@@ -1763,6 +1797,32 @@ mod tests {
         assert_eq!(
             manifest_json(&recording).get("drops_complete"),
             Some(&Json::Bool(false))
+        );
+    }
+
+    /// A bundle refused for its size writes no file and keeps no survey line: its log says
+    /// `export_failed TOO_LARGE` (fix pass 2, item 6).
+    #[test]
+    fn a_too_large_export_keeps_no_survey_line() {
+        let mut recorder = Recorder::new();
+        recorder.switch(true, 0, true, Phase::Ended, 3);
+        let path = Path::new("pharmakos-no-such-folder").join("never.zip");
+        let survey = Survey::answered(Another::Yes, Understood::Yes, "words");
+        assert!(matches!(
+            recorder.export_within(1, &path, survey, 100),
+            Err(ExportFailure::Refused(BundleRefusal::TooLarge))
+        ));
+        assert!(!path.exists(), "no file is written");
+        let log = recorder
+            .on
+            .as_ref()
+            .map(|recording| log_text(&recording.log))
+            .unwrap_or_default();
+        assert_eq!(
+            log,
+            "1 ended playtest_on t=0
+3 ended export_failed TOO_LARGE t=0
+"
         );
     }
 
