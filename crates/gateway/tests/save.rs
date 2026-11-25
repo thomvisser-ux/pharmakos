@@ -1005,7 +1005,10 @@ fn save_golden(file: &str, text: &str) {
 /// by lane `opsave`, which made the save format version 4: the stamp's
 /// `format_version` moved from 3 to 4 and each file gained its `last_push`
 /// member (the `lull` file the Lull's feed, the `sealed` file none, both no
-/// recap in round 1); no other line moved. Main's version-3 file is kept as
+/// recap in round 1); no other line moved. Re-blessed a third time by lane
+/// `vcap`, which moved `VERIFIER_VERSION` from `0.1.0-s3.6` to `0.1.0-s3.7`:
+/// the stamp's `verifier_version` and the two `report_hash` lines again, and
+/// nothing else. Main's version-3 file is kept as
 /// `tests/fixtures/save-v3-round-one-lull.json`, and still resumes
 /// (`a_version_3_save_written_by_main_still_resumes`).
 #[test]
@@ -1108,7 +1111,11 @@ fn a_saved_notebook_past_its_bound_is_refused() {
 /// A save main wrote before the save carried the last Push (format version 3,
 /// `bbddd094`'s round-1 `lull` file, committed as a fixture) still loads and
 /// resumes into its Lull, with no last Push (lane `opsave`): the format's
-/// version-4 member is additive.
+/// version-4 member is additive. A save loads only under the verifier that
+/// stamped it, so lane `vcap`'s bump to `0.1.0-s3.7` moved the fixture's
+/// `verifier_version` and its two seals' `report_hash` lines (to the
+/// `save_round_one` golden's own, the same seals' reports under s3.7); its
+/// format is untouched.
 #[test]
 fn a_version_3_save_written_by_main_still_resumes() {
     const MATCH_ID: &str = "m-fpstream2-save";
@@ -1289,7 +1296,9 @@ fn each_damage_of_the_draft_rule_is_refused(match_id: &str, saved: &SavedMatch) 
 /// resumes into its Push, as it always did: the Push was sealed, not played,
 /// so replaying it is the Push itself. Its next Lull's feed is that replayed
 /// Push's own, `segment_ended` and all, so the Lull reads the Push it follows
-/// (the operator does not read it as `PushUnread::Resumed`).
+/// (the operator does not read it as `PushUnread::Resumed`). Its stamp and
+/// its seals' `report_hash` lines moved with lane `vcap`'s bump to
+/// `0.1.0-s3.7`, as the `lull` fixture's did.
 #[test]
 fn a_version_3_sealed_save_resumes_into_its_push_and_its_next_lull_shows_it() {
     const MATCH_ID: &str = "m-fpstream2-save";
