@@ -328,7 +328,7 @@ impl MatchCache {
     /// [`MatchCache::valid_match_id`] refuses, and for one with no save to
     /// resume: a lobby's resume line naming a match that was never saved is
     /// the lobby's mistake to show, not the host's failure.
-    pub fn reopen(data_root: &Path, match_id: &str, seats: u32) -> Result<MatchCache, Error> {
+    pub fn reopen(data_root: &Path, match_id: &str) -> Result<MatchCache, Error> {
         let cache = MatchCache::at(data_root, match_id)?;
         if !cache.has_save() {
             return Err(Error::invalid(said!(
@@ -336,11 +336,43 @@ impl MatchCache {
                 pharmakos_proto::json::grammar::quoted(match_id)
             )));
         }
-        // A folder an earlier build wrote may lack a seat's sub-folders (they
-        // were made at its first seal): made here, at this host's start, and
-        // never by a later write.
-        cache.make_layout(seats)?;
         Ok(cache)
+    }
+
+    /// Lay a reopened match's folder out for a resume of `seats` seats, once
+    /// its save has been read, parsed and checked against the config line
+    /// (`crate::serve::run_in`), so a refused resume writes nothing (lane
+    /// `opsave`, fix pass 4, item 3). The match folder holds what the gateway
+    /// wrote and nothing else, so a folder under `seats/` named for a seat
+    /// this match has not got (any seat id, `0` to `255`, at or past `seats`)
+    /// is refused, typed, before anything is made; then
+    /// the fixed layout's folders an earlier build left out (a seat's
+    /// sub-folders were made at its first seal) are made, and never by a
+    /// later write.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a folder under `seats/`
+    /// named for a seat the match has not got;
+    /// [`crate::error::Code::Internal`] for anything the filesystem refuses.
+    pub fn lay_out_for_resume(&self, seats: u32) -> Result<(), Error> {
+        // Probed by name, every seat id a match could hold, rather than listed:
+        // the gateway reads no directory listing (`read_dir` is a disallowed
+        // method, its order the filesystem's), and only a seat id is a name the
+        // gateway ever writes under `seats/`. Another name is no seat's, and no
+        // reader of this crate looks at it.
+        for seat in seats..=u32::from(u8::MAX) {
+            let stranger = self.directory.join("seats").join(seat.to_string());
+            if stranger.exists() {
+                return Err(Error::invalid(said!(
+                    "match `{}`'s folder holds `seats/{}`, a folder for a seat it has not got (it has {}): a match folder holds what the gateway wrote and nothing else",
+                    pharmakos_proto::json::grammar::quoted(&self.match_id),
+                    seat,
+                    seats
+                )));
+            }
+        }
+        self.make_layout(seats)
     }
 
     /// The fixed layout under the match folder, which must exist: `seats/`,
@@ -840,7 +872,7 @@ mod tests {
     #[test]
     fn a_folder_with_a_save_is_reopened_and_never_opened_new() {
         let root = scratch("reopen");
-        let error = MatchCache::reopen(&root, "m-0004", 2).expect_err("nothing saved yet");
+        let error = MatchCache::reopen(&root, "m-0004").expect_err("nothing saved yet");
         assert_eq!(error.code(), Code::InvalidArgument);
 
         let cache = MatchCache::open(&root, "m-0004", &header(4)).expect("opened");
@@ -863,7 +895,7 @@ mod tests {
         assert_eq!(error.code(), Code::InvalidArgument);
         assert!(error.message().contains("resume"), "{}", error.message());
 
-        let again = MatchCache::reopen(&root, "m-0004", 2).expect("reopened");
+        let again = MatchCache::reopen(&root, "m-0004").expect("reopened");
         assert_eq!(again.read_save(64).expect("read"), "second\n");
         assert_eq!(
             std::fs::read_to_string(again.directory().join("match.json")).expect("header"),

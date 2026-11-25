@@ -905,9 +905,12 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
     // what the writer reads the disk to when it says what is there.
     let largest = largest_save(&config, &setup.rules_json)?;
     let (cache, mut surface, seats) = if line.resume {
-        let cache = MatchCache::reopen(data_root, &config.match_id, config.seats)?;
+        // Open and read; parse and check the save against the config line;
+        // only then lay the folder out: a refused resume writes nothing.
+        let cache = MatchCache::reopen(data_root, &config.match_id)?;
         let save = Save::parse(&cache.read_save(largest)?)?;
         save.check(&config, rules_hash.0)?;
+        cache.lay_out_for_resume(config.seats)?;
         // Read before the surface exists: the view's identity folds in the
         // log's last sequence number, so that nothing the dead process served
         // is read as this one's, and the resumed tick starts no lower than the

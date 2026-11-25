@@ -2787,3 +2787,131 @@ fn the_upgrade_that_crosses_the_stop_is_told_why() {
     );
     audit_read_only(&host.folder, false);
 }
+
+/// Every file under `folder`, with its bytes, in path order.
+fn listing(folder: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files: Vec<(PathBuf, Vec<u8>)> = walk(folder)
+        .into_iter()
+        .map(|path| {
+            let bytes = std::fs::read(&path).unwrap_or_default();
+            (path, bytes)
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// Every folder under `folder`, in path order.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "clippy.toml sanctions read_dir when the listing is collected and sorted before use, which is what happens here"
+)]
+fn folders(folder: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![folder.to_path_buf()];
+    while let Some(here) = stack.pop() {
+        if let Ok(entries) = std::fs::read_dir(&here) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    found.push(path.clone());
+                    stack.push(path);
+                }
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// One preparation of a match folder before a refused resume.
+type Prepare = Box<dyn Fn(&Path)>;
+
+/// A refused resume writes nothing (fix pass 4, item 3; review 4's probe
+/// R4D): the save is read, parsed and checked against the config line before
+/// any folder is made, so after each refused resume this test can build (a
+/// wrong seat count, an ended match, a damaged save, another rules table's
+/// hash, a format version from the future, an unknown folder under `seats/`)
+/// the match folder's whole listing, names and bytes and folders, is what it
+/// was.
+#[test]
+fn a_refused_resume_writes_nothing() {
+    const MATCH_ID: &str = "m-opsave-refused-resume";
+    let root = data_root(MATCH_ID);
+    host_and_quit(&root, &new_line(durable_config(MATCH_ID, 2)))
+        .expect("a host that opened and was closed");
+    let folder = folder_of(&root, MATCH_ID);
+    let good = std::fs::read_to_string(folder.join("save.json")).expect("the save");
+    let with = |text: String| {
+        move |folder: &Path| {
+            std::fs::write(folder.join("save.json"), &text).expect("the save rewritten");
+        }
+    };
+    let ended = good.replacen("\"boundary\": \"lull\"", "\"boundary\": \"ended\"", 1);
+    assert_ne!(ended, good, "the boundary is spelt as the test expects");
+    let future = good.replacen("\"format_version\": 4", "\"format_version\": 99", 1);
+    assert_ne!(future, good, "the version is spelt as the test expects");
+    let hash = good
+        .lines()
+        .find(|line| line.trim_start().starts_with("\"rules_hash\""))
+        .expect("the stamp's rules hash")
+        .to_owned();
+    let other_rules = good.replacen(&hash, "    \"rules_hash\": \"0000000000000000\",", 1);
+    assert_ne!(other_rules, good);
+    let damaged = good
+        .get(..good.len().checked_div(2).unwrap_or_default())
+        .unwrap_or_default()
+        .to_owned();
+    let cases: Vec<(&str, Config, Prepare)> = vec![
+        (
+            "a wrong seat count",
+            Config {
+                seats: 3,
+                ..durable_config(MATCH_ID, 2)
+            },
+            Box::new(|_: &Path| {}),
+        ),
+        (
+            "an ended match",
+            durable_config(MATCH_ID, 2),
+            Box::new(with(ended)),
+        ),
+        (
+            "a damaged save",
+            durable_config(MATCH_ID, 2),
+            Box::new(with(damaged)),
+        ),
+        (
+            "another rules table's hash",
+            durable_config(MATCH_ID, 2),
+            Box::new(with(other_rules)),
+        ),
+        (
+            "a format version from the future",
+            durable_config(MATCH_ID, 2),
+            Box::new(with(future)),
+        ),
+        (
+            "an unknown folder under seats/",
+            durable_config(MATCH_ID, 2),
+            Box::new(|folder: &Path| {
+                std::fs::create_dir_all(folder.join("seats").join("7")).expect("seats/7");
+            }),
+        ),
+    ];
+    for (what, config, prepare) in cases {
+        std::fs::write(folder.join("save.json"), &good).expect("the good save back");
+        let _ = std::fs::remove_dir_all(folder.join("seats").join("7"));
+        prepare(&folder);
+        let (files, dirs) = (listing(&folder), folders(&folder));
+        let error = host_and_quit(&root, &resume_line(config)).expect_err(what);
+        assert_eq!(
+            error.code(),
+            pharmakos_gateway::error::Code::InvalidArgument,
+            "{what}: {}",
+            error.message()
+        );
+        assert_eq!(listing(&folder), files, "{what}: no file was written");
+        assert_eq!(folders(&folder), dirs, "{what}: no folder was made");
+    }
+}
