@@ -1415,19 +1415,27 @@ fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
 
 /// What a settings block writes, as a clause after the writ: the Common row's
 /// `roe` and `retreat_hp_pct` first ([`common_parts`]), then every field the
-/// writ's arm writes, in field order, as the file wrote it, each with its
+/// writ's arm writes, in field order but its list last, as the file wrote it, each with its
 /// chip; whether it is legal is the verifier's. Empty when the block says
 /// nothing, so the row reads as its writ alone. `here` is the
 /// `MandateSettings`' pointer.
 ///
 /// Every arm is said whole, a field the block leaves out unsaid: a Build arm
 /// its targets (by count), repair threshold, rebuild flag, terraform,
-/// protected areas (by count) and their clear; a Survey arm its probe areas
-/// (by count), scout count and their clear; a Mine arm its dig depth, flee
+/// protected areas (by count) and their clear; a Survey arm its scout count,
+/// probe areas (by count) and their clear; a Mine arm its dig depth, flee
 /// flag, seam choice and pillar spacing ([`s1_arm_parts`]); a Defend and an
 /// Attack arm theirs ([`defend_parts`], [`attack_parts`]). A written 0 of a
 /// setting with presence is said in its zero title's words, and a set
 /// `clear_*` flag (decisions-log item 184 (3)) as a boolean chip.
+///
+/// **A writ's list setting is said last in its clause** (S3's `edlists`, fix
+/// pass 1, P1): Build's protected areas, Defend's protect list, Attack's avoid
+/// areas and Survey's probe areas, each with its clear, after every other
+/// field, so nothing follows a list and its own "and" cannot run into the next
+/// setting ("... with a picket of 2 scouts and protecting beacon `"b_00"` and
+/// your commander"). A Build arm's targets, said by their count, keep their
+/// place first. Mine holds no list.
 ///
 /// The clause is a list joined by commas and "and", so the list it sits in is
 /// set off by semicolons from then on ([`join_items`]).
@@ -1546,7 +1554,7 @@ fn s1_arm_parts(mandate: &mandate_settings::Mandate, here: &str) -> Vec<Text> {
 }
 
 /// A list written in a settings row, by its count: `words`, the count, and
-/// the noun for one or many; nothing for an empty or omitted list.
+/// A Build arm's fields, in field order, its list last (where the field order has it).
 fn count_part(parts: &mut Vec<Text>, words: &str, count: usize, one: &str, many: &str) {
     if count > 0 {
         let noun = if count == 1 { one } else { many };
@@ -1554,7 +1562,7 @@ fn count_part(parts: &mut Vec<Text>, words: &str, count: usize, one: &str, many:
     }
 }
 
-/// A Build arm's fields, in field order.
+/// A Build arm's fields, in field order, its list last (as the field order already has it).
 fn build_parts(build: &BuildSettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
     count_part(
@@ -1621,16 +1629,9 @@ fn build_parts(build: &BuildSettings, here: &str) -> Vec<Text> {
     parts
 }
 
-/// A Survey arm's fields, in field order.
+/// A Survey arm's fields, in field order, its list last.
 fn survey_parts(survey: &SurveySettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
-    count_part(
-        &mut parts,
-        s::SURVEY_PROBING,
-        survey.probe_areas.len(),
-        s::AREA_ONE,
-        s::AREA_MANY,
-    );
     if let Some(scouts) = survey.scout_count {
         // At most a beacon's byte column (`E0508`).
         // A 0 is said in its shape's zero title ([`Shape::scout_count`]).
@@ -1643,6 +1644,14 @@ fn survey_parts(survey: &SurveySettings, here: &str) -> Vec<Text> {
             cat!(s::SCOUTS_FIELDING, " ", chip, " ", s::SCOUTS_UNIT)
         });
     }
+    // The list last ([`settings_clause`]'s rule).
+    count_part(
+        &mut parts,
+        s::SURVEY_PROBING,
+        survey.probe_areas.len(),
+        s::AREA_ONE,
+        s::AREA_MANY,
+    );
     clear_part(
         &mut parts,
         survey.clear_probe_areas,
@@ -1738,27 +1747,9 @@ fn avoid_parts(parts: &mut Vec<Text>, attack: &AttackSettings, here: &str) {
     );
 }
 
-/// A Defend arm's fields, in field order.
+/// A Defend arm's fields, in field order, its list last.
 fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
-    if !defend.protect.is_empty() {
-        let protect_at = at(here, "protect");
-        let assets: Vec<Text> = defend
-            .protect
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| match entry.asset.as_ref() {
-                Some(protected_asset::Asset::Beacon(reference)) => beacon_chip(
-                    Some(reference),
-                    at(&at(&protect_at, index), "beacon"),
-                    &BEACON_ARMS,
-                ),
-                Some(protected_asset::Asset::MyCommander(_)) => cat!(s::DEFEND_MY_COMMANDER),
-                None => cat!(s::DEFEND_NOTHING),
-            })
-            .collect();
-        parts.push(cat!(s::DEFEND_PROTECTING, " ", join(assets)));
-    }
     if defend.engagement_radius_pct != 0 {
         // 1 to 100: a written 0 is `E0101`'s, past 100 the range's.
         parts.push(cat!(
@@ -1787,13 +1778,6 @@ fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
             "gp.v1.DefendSettings.Pursue",
         ));
     }
-    clear_part(
-        &mut parts,
-        defend.clear_protect,
-        s::CLEAR_PROTECT,
-        here,
-        "clear_protect",
-    );
     if let Some(pickets) = defend.picket_scouts {
         // At most a beacon's byte column (`E0508`).
         // A written 0 stands the picket down, said in the words its shape's
@@ -1807,10 +1791,37 @@ fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
             cat!(s::DEFEND_PICKET, " ", chip, " ", s::DEFEND_PICKET_UNIT)
         });
     }
+    // The list last ([`settings_clause`]'s rule): its own "and" ends the
+    // clause, so no setting follows it.
+    if !defend.protect.is_empty() {
+        let protect_at = at(here, "protect");
+        let assets: Vec<Text> = defend
+            .protect
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| match entry.asset.as_ref() {
+                Some(protected_asset::Asset::Beacon(reference)) => beacon_chip(
+                    Some(reference),
+                    at(&at(&protect_at, index), "beacon"),
+                    &BEACON_ARMS,
+                ),
+                Some(protected_asset::Asset::MyCommander(_)) => cat!(s::DEFEND_MY_COMMANDER),
+                None => cat!(s::DEFEND_NOTHING),
+            })
+            .collect();
+        parts.push(cat!(s::DEFEND_PROTECTING, " ", join(assets)));
+    }
+    clear_part(
+        &mut parts,
+        defend.clear_protect,
+        s::CLEAR_PROTECT,
+        here,
+        "clear_protect",
+    );
     parts
 }
 
-/// An Attack arm's fields, in field order.
+/// An Attack arm's fields, in field order, its list last.
 fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
     if let Some(target) = attack.target.as_ref() {
@@ -1871,7 +1882,6 @@ fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
             "gp.v1.AttackSettings.AfterAction",
         ));
     }
-    avoid_parts(&mut parts, attack, here);
     if let Some(breach) = attack.breach_allowed {
         let words = if breach {
             s::BREACH_ALLOWED
@@ -1904,6 +1914,8 @@ fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
             noun
         ));
     }
+    // The list last ([`settings_clause`]'s rule).
+    avoid_parts(&mut parts, attack, here);
     parts
 }
 

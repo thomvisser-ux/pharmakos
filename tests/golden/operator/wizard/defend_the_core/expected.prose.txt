@@ -4,7 +4,7 @@ Walk to your core, place a Defend beacon beside it that guards the core and your
 
 Route
   1. to_core: walk to beacon "b_00".
-  2. place_guard: place a beacon at a site covering Scrap seam (348, 31), tagged "guard", on a Defend mandate: firing freely, protecting beacon "b_00" and your commander, engaging within 100% of the sphere, pursuing to the sphere edge and with a picket of 1 scouts; at normal Quartermaster priority (18 s on site).
+  2. place_guard: place a beacon at a site covering Scrap seam (348, 31), tagged "guard", on a Defend mandate: firing freely, engaging within 100% of the sphere, pursuing to the sphere edge, with a picket of 1 scouts and protecting beacon "b_00" and your commander; at normal Quartermaster priority (18 s on site).
     Give up after 1:00.
     On failure, move on to the next step.
   3. hold: hold for 1:39.

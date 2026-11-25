@@ -164,3 +164,37 @@ fn a_written_roe_is_said_as_what_the_beacon_is_doing() {
         );
     }
 }
+
+/// A writ's list is said last in its clause, so its own "and" ends the clause
+/// and no setting follows it (fix pass 1, P1): a Defend arm's protect list after
+/// its picket, an Attack arm's avoid areas after its waves, a Survey arm's probe
+/// areas after its scout count.
+#[test]
+fn a_writs_list_is_said_last_in_its_clause() {
+    for (arm, list_words, other_words) in [
+        (
+            r#"{"defend":{"protect":[{"beacon":{"beacon_id":"b_00"}},{"my_commander":{}}],"picket_scouts":2}}"#,
+            format!("{} ", s::DEFEND_PROTECTING),
+            format!("{} 2 ", s::DEFEND_PICKET),
+        ),
+        (
+            r#"{"attack":{"avoid_areas":[{"min":{"x":1,"y":1,"z":0},"max":{"x":2,"y":2,"z":1}}],"waves":2}}"#,
+            format!("{} 1 ", s::ATTACK_AVOIDING),
+            format!(" {} 2 ", s::WAVES_IN),
+        ),
+        (
+            r#"{"survey":{"probe_areas":[{"min":{"x":1,"y":1,"z":0},"max":{"x":2,"y":2,"z":1}}],"scout_count":3}}"#,
+            format!("{} 1 ", s::SURVEY_PROBING),
+            format!("{} 3 ", s::SCOUTS_FIELDING),
+        ),
+    ] {
+        let said = prose(&visit(&format!(r#"[{{"set_mandate_settings":{arm}}}]"#)));
+        let list = said
+            .find(&list_words)
+            .unwrap_or_else(|| panic!("{arm}: {said:?}"));
+        let other = said
+            .find(&other_words)
+            .unwrap_or_else(|| panic!("{arm}: {said:?}"));
+        assert!(other < list, "{arm}: the list is last: {said:?}");
+    }
+}
