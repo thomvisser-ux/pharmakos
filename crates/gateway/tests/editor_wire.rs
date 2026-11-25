@@ -747,3 +747,72 @@ fn a_typed_zero_scout_count_and_a_clear_are_written_and_said() {
         "{prose}"
     );
 }
+
+/// The beacon detail after a Push in which seat 0's core takes `rows` (its
+/// settings rows, by pointer, with the JSON each holds).
+fn detail_after(rows: &str) -> Vec<(String, String)> {
+    let mut surface = hosted(2, 120_000, 3);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let text = ONE_RULE.replace(
+        r#"{"label": "wait", "hold": {"ms": 90000}}"#,
+        &format!(
+            r#"{{"label": "visit", "interface": {{"beacon": {{"beacon_id": "b_00"}}, "rows": [{rows}]}}, "timeout_ms": 120000}}"#
+        ),
+    );
+    let submitted = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "submit_plan",
+        &format!("{{\"playbook_jsonc\":{}}}", quote(&text)),
+    );
+    assert_eq!(
+        result(&submitted, "submit_plan").get("accepted"),
+        Some(&Json::Bool(true)),
+        "{submitted:?}"
+    );
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::ZERO)
+        .expect("a custom match takes a countdown");
+    surface.begin_push().expect("the Push begins");
+    let _ = support::step(&mut surface, 1_200);
+    let detail = result(
+        &call(
+            &mut surface,
+            &token,
+            "get_beacon",
+            r#"{"beacon_id":"b_00"}"#,
+        ),
+        "get_beacon",
+    );
+    array_of(&detail, "settings")
+        .iter()
+        .map(|row| (text_of(row, "pointer"), text_of(row, "value_json")))
+        .collect()
+}
+
+/// Decisions-log item 184 (10): a 0 an edit row writes is the beacon's
+/// setting, and `get_beacon` shows it, for each of the three numbers with
+/// presence (the review's mutant R12: the Survey row hiding a count of 0).
+#[test]
+fn the_beacon_detail_shows_a_written_zero() {
+    let survey = detail_after(concat!(
+        r#"{"set_mandate": {"survey": {"scout_count": 3}}},"#,
+        r#"{"set_mandate_settings": {"survey": {"scout_count": 0}}}"#
+    ));
+    assert!(
+        survey.contains(&("/survey/scout_count".to_owned(), "0".to_owned())),
+        "{survey:?}"
+    );
+    let mine = detail_after(concat!(
+        r#"{"set_mandate": {"mine": {"dig_max_depth": 4, "pillar_spacing": 2}}},"#,
+        r#"{"set_mandate_settings": {"mine": {"dig_max_depth": 0, "pillar_spacing": 0}}}"#
+    ));
+    for pointer in ["/mine/dig_max_depth", "/mine/pillar_spacing"] {
+        assert!(
+            mine.contains(&(pointer.to_owned(), "0".to_owned())),
+            "{pointer}: {mine:?}"
+        );
+    }
+}
