@@ -2636,3 +2636,75 @@ fn a_host_whose_first_write_fails_does_not_announce() {
         (String::from("lull"), 1)
     );
 }
+
+/// A control pipe that hands over the config line and then fails, as a pipe
+/// whose parent broke it does.
+struct BrokenPipe {
+    line: Vec<u8>,
+    at: usize,
+    released: Receiver<()>,
+}
+
+impl Read for BrokenPipe {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if self.at < self.line.len() {
+            let rest = self.line.get(self.at..).unwrap_or_default();
+            let take = rest.len().min(out.len());
+            out.get_mut(..take)
+                .unwrap_or_default()
+                .copy_from_slice(rest.get(..take).unwrap_or_default());
+            self.at = self.at.saturating_add(take);
+            return Ok(take);
+        }
+        // Held until the test has read the announce line, then broken.
+        let _ = self.released.recv();
+        Err(io::Error::other("the parent broke the pipe"))
+    }
+}
+
+/// The control pipe's reader cannot leave the host deaf (fix pass 3, item
+/// 9): a pipe that fails rather than ending is the end of the match too,
+/// put down as at end of file (its Lull saved), and `run_in` returns the
+/// typed error that says the pipe failed.
+#[test]
+fn a_control_pipe_that_fails_stops_the_host_and_says_so() {
+    const MATCH_ID: &str = "m-opsave-durable-pipe";
+    let root = data_root(MATCH_ID);
+    let (release, released) = channel::<()>();
+    let pipe = BrokenPipe {
+        line: new_line(durable_config(MATCH_ID, 2)).render().into_bytes(),
+        at: 0,
+        released,
+    };
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let sink = Sink(Arc::clone(&written));
+    let setup = Setup {
+        rules_json: rules_json(),
+        library: Some(support::library_folder()),
+        operators: Box::new(NoOperators),
+    };
+    let data = root.clone();
+    let thread = std::thread::spawn(move || serve::run_in(setup, &data, pipe, sink));
+    for _ in 0..6_000 {
+        if written.lock().is_ok_and(|held| held.contains(&b'\n')) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(release);
+    let error = thread
+        .join()
+        .expect("the host returned")
+        .expect_err("a failed pipe is said");
+    assert_eq!(error.code(), pharmakos_gateway::error::Code::Internal);
+    assert!(
+        error.message().contains("the control pipe failed ("),
+        "{}",
+        error.message()
+    );
+    assert_eq!(
+        save_on_disk(&folder_of(&root, MATCH_ID)),
+        Some((pharmakos_gateway::save::Boundary::Lull, 1)),
+        "the match was put down as at end of file"
+    );
+}

@@ -720,6 +720,11 @@ enum Job {
     /// message rather than a dropped channel, and the process exiting is what
     /// collects the rest.
     Stop,
+    /// The control pipe's reader ended for another reason than end of file:
+    /// a read error, or a panic caught at its thread's boundary. The match is
+    /// put down as at end of file, and the host stops with this error, so no
+    /// host is left deaf to its parent.
+    PipeFailed(Error),
 }
 
 /// What a host that stopped on a write it could not make leaves behind for
@@ -1059,8 +1064,10 @@ fn first_flush_landed(
     }
 }
 
-/// Read the control pipe to its end on a thread of its own, then tell the
-/// surface thread to put the match down (`Job::Stop`).
+/// Read the control pipe to its end on a thread of its own, holding none of
+/// it, then tell the surface thread to put the match down: `Job::Stop` at end
+/// of file, `Job::PipeFailed` when the read failed or the reader panicked, so
+/// the thread cannot end without the host stopping.
 ///
 /// # Errors
 ///
@@ -1071,12 +1078,23 @@ fn watch_the_control_pipe<C: Read + Send + 'static>(
 ) -> Result<(), Error> {
     pharmakos_plan_core::stack::player_text_thread("gateway control pipe")
         .spawn(move || {
-            // Any read error is the end of the pipe too: the parent is gone
-            // either way, and the match is put down as at end of file.
-            let mut rest: Vec<u8> = Vec::new();
-            let _read = lines.read_to_end(&mut rest);
+            let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                std::io::copy(&mut lines, &mut std::io::sink())
+            }));
+            let job = match read {
+                Ok(Ok(_)) => Job::Stop,
+                Ok(Err(error)) => Job::PipeFailed(Error::internal(said!(
+                    "the control pipe failed ({}): the parent can no longer put the match 
+                     down, so this host did, as at end of file",
+                    crate::error::engine(&error)
+                ))),
+                Err(_) => Job::PipeFailed(Error::internal(
+                    "the control pipe's reader panicked: the parent can no longer put the 
+                     match down, so this host did, as at end of file",
+                )),
+            };
             // A surface thread that has already stopped has nobody to tell.
-            let _told = jobs.send(Job::Stop);
+            let _told = jobs.send(job);
         })
         .map(drop)
         .map_err(|error| {
@@ -2057,6 +2075,15 @@ fn serve_surface(
                     Ok(()) => Ok(()),
                     Err(error) => Err(writer.stop(surface, error, stopped)),
                 };
+            }
+            Job::PipeFailed(pipe) => {
+                let error = match writer.close(surface) {
+                    Ok(()) => pipe,
+                    Err(closed) => {
+                        Error::internal(said!("{}; and before it, {}", closed.said(), pipe.said()))
+                    }
+                };
+                return Err(writer.stop(surface, error, stopped));
             }
             Job::Refused { reason, status } => {
                 let tick = surface.time().tick;
