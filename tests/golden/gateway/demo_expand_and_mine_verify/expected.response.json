@@ -86,7 +86,14 @@
       "plan_fingerprint": "fJVMkef3b4A=",
       "verifier_version": "0.1.0-s3.9",
       "size_units": 5,
-      "size_budget": 128
+      "size_budget": 128,
+      "left_out": [
+        {
+          "code": "I0003",
+          "count": 3,
+          "max": 4
+        }
+      ]
     },
     "_status": {
       "phase": "lull",

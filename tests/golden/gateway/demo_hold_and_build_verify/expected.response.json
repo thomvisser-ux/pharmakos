@@ -80,7 +80,14 @@
       "plan_fingerprint": "lkxho20E80U=",
       "verifier_version": "0.1.0-s3.9",
       "size_units": 6,
-      "size_budget": 128
+      "size_budget": 128,
+      "left_out": [
+        {
+          "code": "I0003",
+          "count": 1,
+          "max": 4
+        }
+      ]
     },
     "_status": {
       "phase": "lull",
