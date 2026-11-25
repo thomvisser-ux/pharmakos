@@ -2029,10 +2029,10 @@ func _take_asked_refusal(detail: String) -> void:
 ## **Closes on a message do not end a playable match** (S3's `fixq-c`, fix passes 4 to 6, item
 ## 1; re-aimed by S3's `vcap`). Review 3's playbook of 18 000 bare holds (216 056 bytes, under the
 ## cap) is loaded six times with no wait between the loads, as a player might click. Since `vcap`
-## a report lists at most six of a code, so the load's own QUICK answer fits (10 668 bytes as the
-## gateway writes it) and the load lands; its `render_plan` answer does not (15 690 780 bytes,
-## past the client's 4 MiB inbound buffer: lane `outcap`'s finding), so the render closes the seat
-## link on its message (Godot's 1009). That close spends no reconnect attempt, and the same text's
+## a report lists at most four of a code (the verifier's `MAX_PER_CODE`), so the load's own QUICK
+## answer fits (8 583 bytes as the gateway writes it) and the load lands; its `render_plan`
+## answer does not (15 690 780 bytes, past the client's 4 MiB inbound buffer: lane `outcap`'s
+## finding), so the render closes the seat link on its message (Godot's 1009). That close spends no reconnect attempt, and the same text's
 ## render is held after it: never sent again. Through all six, within the wait each one has, the
 ## seat link is never given up, the rows are the loaded text's (its QUICK answered), the prose
 ## line says the answer closed the link instead of waiting for ever, and the editor's line says
