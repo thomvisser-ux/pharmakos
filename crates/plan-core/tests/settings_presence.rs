@@ -167,6 +167,32 @@ fn a_clear_written_false_is_the_playbook_that_leaves_it_out() {
             written.json, omitted.json,
             "{member}: false is never written"
         );
+        // The JSONC the player keeps drops it too, and the plan is the same.
+        assert!(
+            !written.text.contains(member),
+            "{member}: the canonical JSONC kept a false:
+{}",
+            written.text
+        );
+        assert_eq!(
+            plan_fingerprint_of(decode_jsonc(&written.text).expect("decodes").decoded())
+                .expect("a fingerprint"),
+            plan_fingerprint_of(decode_jsonc(&omitted.text).expect("decodes").decoded())
+                .expect("a fingerprint"),
+            "{member}: false and left out are one plan"
+        );
+        // And the codec's own canonical form, which the verifier's size meter
+        // and the gateway read, writes no false either.
+        let message = match *arm {
+            "build" => "gp.v1.BuildSettings",
+            "defend" => "gp.v1.DefendSettings",
+            "attack" => "gp.v1.AttackSettings",
+            _ => "gp.v1.SurveySettings",
+        };
+        let codec =
+            pharmakos_proto::json::canonicalise(message, &format!(r#"{{"{member}":false}}"#))
+                .expect("canonicalises");
+        assert!(!codec.contains(member), "{member}: {codec}");
     }
 }
 
