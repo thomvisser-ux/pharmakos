@@ -49,10 +49,14 @@
             "min": 0,
             "max": 100,
             "unit": "%",
-            "display_unit": "%"
+            "display_unit": "%",
+            "zero_title": "retreat off",
+            "min_text": "0",
+            "max_text": "100"
           }
         },
-        "value_text": "0"
+        "value_text": "0",
+        "value_title": "retreat off"
       },
       {
         "pointer": "/build/repair_threshold_pct",
@@ -63,10 +67,14 @@
             "min": 0,
             "max": 100,
             "unit": "%",
-            "display_unit": "%"
+            "display_unit": "%",
+            "zero_title": "structures never repaired",
+            "min_text": "0",
+            "max_text": "100"
           }
         },
-        "value_text": "0"
+        "value_text": "0",
+        "value_title": "structures never repaired"
       },
       {
         "pointer": "/build/rebuild_destroyed",

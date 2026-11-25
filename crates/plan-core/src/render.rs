@@ -264,6 +264,11 @@ pub struct Chip {
     /// unspecified zero, a value this build does not name). Such a chip is
     /// drawn as it is and said to be outside, never clamped.
     pub outside: bool,
+    /// The value now in the player's words, when it has words of its own:
+    /// the shape's [`Shape::zero_title`] when the value is 0
+    /// ([`Shape::value_title`]), `None` otherwise (`gp.api.v1.Chip.value_title`;
+    /// S3's `zerotitle`).
+    pub value_title: Option<&'static str>,
     /// The JSON Patch op an edit of this chip sends at its pointer:
     /// [`PickOp::Replace`] for a value the file writes, and [`PickOp::Add`] for
     /// one at its proto3 default, which the file may leave out (an `add` of an
@@ -762,7 +767,11 @@ impl Pending {
                     Spec::Blueprint(slot) => slot.shape(kinds),
                 };
                 let value_json = placed.value.json()?;
-                let (value_text, outside) = held(&shape, &value_json)
+                let Held {
+                    text: value_text,
+                    outside,
+                    title: value_title,
+                } = held(&shape, &value_json)
                     .map_err(|why| Error::at(placed.pointer.clone(), why))?;
                 Ok(Chip {
                     line: placed.line,
@@ -772,6 +781,7 @@ impl Pending {
                     value_json,
                     value_text,
                     outside,
+                    value_title,
                     pick: placed.op,
                     pointer: placed.pointer,
                 })
@@ -787,30 +797,51 @@ impl Pending {
     }
 }
 
+/// What [`held`] reads off a chip's value.
+struct Held {
+    /// The value as it is shown and typed; empty unless the shape is an
+    /// integer.
+    text: String,
+    /// Whether it lies outside its shape.
+    outside: bool,
+    /// Its words, when it has words of its own ([`Shape::value_title`]).
+    title: Option<&'static str>,
+}
+
 /// A chip's value as it is shown and typed (empty unless its shape is an
-/// integer) and whether it lies outside its shape, read off the value's JSON
-/// text and the shape alone, so the client draws both as sent and compares
-/// nothing (S3's `fixq`, items 7 and 14).
+/// integer), whether it lies outside its shape, and its words when it has
+/// words of its own, read off the value's JSON text and the shape alone, so
+/// the client draws all three as sent and compares nothing (S3's `fixq`,
+/// items 7 and 14; S3's `zerotitle`).
 ///
 /// # Errors
 ///
 /// An integer shape whose value is not a whole number: this crate writing a
 /// chip it cannot read, which never happens.
-fn held(shape: &Shape, value_json: &str) -> Result<(String, bool), &'static str> {
+fn held(shape: &Shape, value_json: &str) -> Result<Held, &'static str> {
     match shape {
-        Shape::Integer { min, max, unit } => {
+        Shape::Integer { min, max, unit, .. } => {
             let value: i64 = value_json
                 .parse()
                 .map_err(|_| s::RENDER_CHIP_NOT_A_NUMBER)?;
             let outside = min.is_some_and(|min| value < i64::from(min))
                 || max.is_some_and(|max| value > i64::from(max));
-            Ok((crate::shape::shown_text(unit, value), outside))
+            Ok(Held {
+                text: crate::shape::shown_text(unit, value),
+                outside,
+                title: shape.value_title(value),
+            })
         }
-        Shape::Choice { options } => Ok((
-            String::new(),
-            !options.iter().any(|option| option.json == value_json),
-        )),
-        Shape::Reference { .. } => Ok((String::new(), false)),
+        Shape::Choice { options } => Ok(Held {
+            text: String::new(),
+            outside: !options.iter().any(|option| option.json == value_json),
+            title: None,
+        }),
+        Shape::Reference { .. } => Ok(Held {
+            text: String::new(),
+            outside: false,
+            title: None,
+        }),
     }
 }
 
@@ -995,7 +1026,7 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
                         " ",
                         writ(settings),
                         " mandate",
-                        settings_clause(settings, &at(&initial_at, "mandate"))
+                        settings_clause(settings, &at(&initial_at, "mandate"), Clause::Whole)
                     ));
                 }
                 if initial.priority != 0 {
@@ -1116,11 +1147,11 @@ fn row_sentence(row: &InterfaceRow, here: &str) -> Text {
             " ",
             writ(settings),
             " mandate",
-            settings_clause(settings, &at(here, "set_mandate"))
+            settings_clause(settings, &at(here, "set_mandate"), Clause::Whole)
         ),
         Some(interface_row::Row::SetMandateSettings(settings)) => cat!(
             s::ROW_SET_SETTINGS,
-            settings_clause(settings, &at(here, "set_mandate_settings"))
+            settings_clause(settings, &at(here, "set_mandate_settings"), Clause::Edit)
         ),
         Some(interface_row::Row::SetPriority(value)) => cat!(
             s::ROW_SET_PRIORITY,
@@ -1232,8 +1263,8 @@ fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
 /// that writes neither (S2's plan, task `vfy2`). Every field is said, in field
 /// order, as the file wrote it; whether it is legal is the verifier's. `here`
 /// is the `MandateSettings`' pointer.
-fn settings_clause(settings: &MandateSettings, here: &str) -> Text {
-    let mut parts = common_parts(settings, here);
+fn settings_clause(settings: &MandateSettings, here: &str, clause: Clause) -> Text {
+    let mut parts = common_parts(settings, here, clause);
     parts.extend(match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Defend(defend)) => {
             defend_parts(defend, &at(here, "defend"))
@@ -1250,23 +1281,88 @@ fn settings_clause(settings: &MandateSettings, here: &str) -> Text {
     }
 }
 
-/// What the Common row writes, beside any writ: `retreat_hp_pct` whenever the
-/// file writes it, a written 0 said as retreat off (decisions-log item 177
-/// (3): the field carries presence, and 0 turns a beacon's retreat off).
-/// `roe` is not said, as it was not before. `here` is the `MandateSettings`'
-/// pointer.
-fn common_parts(settings: &MandateSettings, here: &str) -> Vec<Text> {
+/// Which settings a [`settings_clause`] says: a new beacon's or a switched
+/// mandate's, whole, or an edit's, which changes only what it writes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Clause {
+    /// A deploy's `initial.mandate` or a `set_mandate` row: what it leaves out
+    /// reads as its named default.
+    Whole,
+    /// A `set_mandate_settings` row: what it leaves out leaves the beacon's
+    /// as it is, so nothing it leaves out is said.
+    Edit,
+}
+
+/// What the Common row writes, beside any writ, in field order: `roe`, then
+/// `retreat_hp_pct` (S3's `zerotitle`, carried from `retreat`).
+///
+/// * **`roe`**, written, is said with its chip, in the words a menu offers
+///   it in. Omitted, it is said only in a [`Clause::Whole`] row with a writ,
+///   as the named default the sim reads it as on that writ
+///   ([`pharmakos_sim::world::Roe::of_setting`]: `FREE_FIRE` on Defend and
+///   Attack, `RETURN_FIRE` on Build, Mine and Survey; decisions-log items 144
+///   (11) and 148 (2)), with [`s::ROE_BY_DEFAULT`] after it, so it reads as
+///   the writ's and not the player's, as the verifier's `I0003` note says. An
+///   edit's omitted `roe` leaves the beacon's as it is and is not said.
+/// * **`retreat_hp_pct`** whenever the file writes it, a written 0 said as
+///   retreat off (decisions-log item 177 (3): the field carries presence, and
+///   0 turns a beacon's retreat off), in the words its shape's zero title
+///   uses ([`Shape::retreat_threshold`]).
+///
+/// `here` is the `MandateSettings`' pointer.
+fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<Text> {
     let mut parts = Vec::new();
+    if settings.roe != 0 {
+        let words = match mandate_settings::Roe::try_from(settings.roe) {
+            Ok(mandate_settings::Roe::HoldFire) => s::CHOICE_HOLD_FIRE,
+            Ok(mandate_settings::Roe::ReturnFire) => s::CHOICE_RETURN_FIRE,
+            Ok(mandate_settings::Roe::FreeFire) => s::CHOICE_FREE_FIRE,
+            Ok(mandate_settings::Roe::Unspecified) | Err(_) => s::ROE_UNSET,
+        };
+        parts.push(enum_chip(
+            words,
+            settings.roe,
+            at(here, "roe"),
+            "gp.v1.MandateSettings.Roe",
+        ));
+    } else if clause == Clause::Whole
+        && let Some(words) = settings.mandate.as_ref().map(omitted_roe)
+    {
+        parts.push(cat!(words, " ", s::ROE_BY_DEFAULT));
+    }
     if let Some(pct) = settings.retreat_hp_pct {
         // 0 to 100; past 100 is the range's (`E0501`).
-        let chip = int_chip(pct, at(here, "retreat_hp_pct"), Shape::percent());
-        parts.push(if pct == 0 {
-            cat!(s::RETREAT_OFF, " (", chip, "%)")
+        let shape = Shape::retreat_threshold();
+        let off = shape.value_title(i64::from(pct));
+        let chip = int_chip(pct, at(here, "retreat_hp_pct"), shape);
+        parts.push(if let Some(off) = off {
+            cat!(off, " (", chip, "%)")
         } else {
             cat!(s::RETREAT_BELOW, " ", chip, "% ", s::RETREAT_BELOW_UNIT)
         });
     }
     parts
+}
+
+/// The words for what an omitted `roe` reads as on a beacon of this writ:
+/// the sim's own reading of an unset `roe` ([`pharmakos_sim::world::Roe::of_setting`]
+/// with 0), in the words a menu offers that value in.
+fn omitted_roe(mandate: &mandate_settings::Mandate) -> &'static str {
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::world::Roe;
+    let kind = match mandate {
+        mandate_settings::Mandate::Build(_) => MandateKind::Build,
+        mandate_settings::Mandate::Defend(_) => MandateKind::Defend,
+        mandate_settings::Mandate::Attack(_) => MandateKind::Attack,
+        mandate_settings::Mandate::Survey(_) => MandateKind::Survey,
+        mandate_settings::Mandate::Mine(_) => MandateKind::Mine,
+    };
+    match Roe::of_setting(0, kind) {
+        Some(Roe::Free) => s::CHOICE_FREE_FIRE,
+        Some(Roe::Return) => s::CHOICE_RETURN_FIRE,
+        Some(Roe::Hold) => s::CHOICE_HOLD_FIRE,
+        None => s::ROE_UNSET,
+    }
 }
 
 /// A Defend arm's fields, in field order.
@@ -1320,17 +1416,16 @@ fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
     }
     if let Some(pickets) = defend.picket_scouts {
         // At most a beacon's byte column (`E0508`).
-        parts.push(cat!(
-            s::DEFEND_PICKET,
-            " ",
-            int_chip(
-                pickets,
-                at(here, "picket_scouts"),
-                Shape::integer(Some(0), Some(i32::from(u8::MAX)), UNIT_COUNT)
-            ),
-            " ",
-            s::DEFEND_PICKET_UNIT
-        ));
+        // A written 0 stands the picket down, said in the words its shape's
+        // zero title uses ([`Shape::picket_scouts`]).
+        let shape = Shape::picket_scouts();
+        let none = shape.value_title(i64::from(pickets));
+        let chip = int_chip(pickets, at(here, "picket_scouts"), shape);
+        parts.push(if let Some(none) = none {
+            cat!(none, " (", chip, ")")
+        } else {
+            cat!(s::DEFEND_PICKET, " ", chip, " ", s::DEFEND_PICKET_UNIT)
+        });
     }
     parts
 }

@@ -345,8 +345,28 @@ pub const FRESH_NONE: &str = "at no freshness the file names";
 pub const RETREAT_BELOW: &str = "units retreating below";
 /// After a written retreat threshold's percentage.
 pub const RETREAT_BELOW_UNIT: &str = "of their hit points";
-/// A written `retreat_hp_pct` of 0, before its chip.
+/// A written `retreat_hp_pct` of 0, before its chip; and the setting's
+/// `IntegerShape.zero_title` (S3's `zerotitle`: one entry, two readers).
 pub const RETREAT_OFF: &str = "retreat off";
+
+// --- What a 0 does in a setting (S3's `zerotitle`) ---------------------------
+
+/// A `repair_threshold_pct` of 0: its `IntegerShape.zero_title`. The beacon's
+/// units and the commander are still repaired (decision 38), so the words
+/// name structures.
+pub const REPAIR_NEVER: &str = "structures never repaired";
+/// A `picket_scouts` of 0: its `IntegerShape.zero_title`, and the prose's
+/// words for a written 0, before its chip.
+pub const PICKET_NONE: &str = "no picket";
+
+// --- The Common row's `roe` (S3's `zerotitle`, carried from `retreat`) -------
+
+/// A `roe` value this build does not name, as written.
+pub const ROE_UNSET: &str = "firing as the file does not say";
+/// After an omitted `roe`'s words in a new beacon's or a switched mandate's
+/// settings: the value is its writ's default, not the player's choice
+/// (decisions-log items 144 (11) and 148 (2); the verifier's `I0003`).
+pub const ROE_BY_DEFAULT: &str = "by default for its writ";
 
 // --- S2's Defend and Attack settings (task `vfy2`) ---------------------------
 

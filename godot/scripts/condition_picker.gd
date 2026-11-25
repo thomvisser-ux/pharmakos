@@ -86,13 +86,13 @@ static func parameter_text(parameter: Dictionary) -> String:
 	var title: Variant = parameter.get("title", "")
 	match String(parameter.get("shape", "")):
 		"number":
-			# The bounds in the unit the gateway sent them in, and the number typed, once it is a
-			# chip, in its display unit (seconds for a duration): both as sent, nothing converted.
-			var unit := String(parameter.get("unit", ""))
+			# The bounds and the number typed, once it is a chip, both in its display unit (seconds
+			# for a duration), the bounds as the gateway wrote them (`min_text`, `max_text`; S3's
+			# `zerotitle`): nothing converted.
+			var shown := String(parameter.get("display_unit", ""))
 			var bounds := ""
 			if parameter.get("has_min", false) and parameter.get("has_max", false):
-				bounds = Strings.text("picker_parameter_bounds", {"min": parameter.get("min"), "max": parameter.get("max"), "unit": (" " + unit) if unit != "" else ""})
-			var shown := String(parameter.get("display_unit", ""))
+				bounds = Strings.text("picker_parameter_bounds", {"min": parameter.get("min_text"), "max": parameter.get("max_text"), "unit": (" " + shown) if shown != "" else ""})
 			return Strings.text("picker_parameter_number", {"title": title, "bounds": bounds, "unit": (" " + shown) if shown != "" else ""})
 		"choice":
 			var titles: PackedStringArray = parameter.get("titles", PackedStringArray())

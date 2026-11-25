@@ -2425,8 +2425,9 @@ fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
     }
     let number = gd_code(&editor, "_open_number");
     assert!(
-        number.iter().any(|line| line
-            .contains("_number_note.text = Strings.text(\"rule_number_bounds\", bounds)"))
+        number
+            .iter()
+            .any(|line| line.contains("note = Strings.text(\"rule_number_bounds\", bounds)"))
             && !number
                 .iter()
                 .any(|line| line.contains("min_value") || line.contains("max_value")),

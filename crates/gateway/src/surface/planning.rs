@@ -1842,7 +1842,7 @@ fn rendered_rule(rule: &pharmakos_plan_core::RenderedRule) -> Json {
                 rule.chips
                     .iter()
                     .map(|chip| {
-                        Json::Object(vec![
+                        let mut fields = vec![
                             (String::from("pointer"), Json::String(chip.pointer.clone())),
                             (String::from("line"), number(chip.line)),
                             (String::from("start"), number(chip.start)),
@@ -1866,7 +1866,17 @@ fn rendered_rule(rule: &pharmakos_plan_core::RenderedRule) -> Json {
                                     chip.pick.proto_name(),
                                 )),
                             ),
-                        ])
+                        ];
+                        // S3's `zerotitle`: written only where the value has
+                        // words of its own; proto3's empty string is the
+                        // absence.
+                        if let Some(title) = chip.value_title {
+                            fields.push((
+                                String::from("value_title"),
+                                Json::String(title.to_owned()),
+                            ));
+                        }
+                        Json::Object(fields)
                     })
                     .collect(),
             ),

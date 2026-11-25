@@ -86,7 +86,9 @@
                 "min": 0,
                 "max": 100,
                 "unit": "%",
-                "display_unit": "%"
+                "display_unit": "%",
+                "min_text": "0",
+                "max_text": "100"
               }
             },
             "value_json": "40",
@@ -103,7 +105,8 @@
               "integer": {
                 "min": 0,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0"
               }
             },
             "value_json": "3000",
@@ -140,7 +143,8 @@
               "integer": {
                 "min": 1,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0.001"
               }
             },
             "value_json": "8000",
@@ -158,7 +162,9 @@
                 "min": 1,
                 "max": 8,
                 "unit": "",
-                "display_unit": ""
+                "display_unit": "",
+                "min_text": "1",
+                "max_text": "8"
               }
             },
             "value_json": "3",
@@ -175,7 +181,8 @@
               "integer": {
                 "min": 5000,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "5"
               }
             },
             "value_json": "30000",

@@ -426,9 +426,35 @@ fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
     out
 }
 
+/// A number's bounds into `out`: `min` and `max`, each beside a `has_` flag that is false when the
+/// gateway set no bound, both in `unit`; and `min_text` and `max_text`, each bound as it is shown
+/// and typed in `display_unit`, as sent (empty where no bound is; S3's `zerotitle`).
+fn bounds_into(
+    out: &mut VarDictionary,
+    min: Option<i32>,
+    max: Option<i32>,
+    min_text: Option<&str>,
+    max_text: Option<&str>,
+) {
+    for (key, bound, text) in [("min", min, min_text), ("max", max, max_text)] {
+        out.set(
+            &format!("has_{key}").to_variant(),
+            &bound.is_some().to_variant(),
+        );
+        if let Some(bound) = bound {
+            out.set(&key.to_variant(), &i64::from(bound).to_variant());
+        }
+        out.set(
+            &format!("{key}_text").to_variant(),
+            &text_or_empty(text).to_variant(),
+        );
+    }
+}
+
 /// A chip's or a setting's editor into `out`: `editor` is `number` (with `min` and `max`, each
 /// beside a `has_` flag that is false when the gateway set no bound, both in `unit`; and
-/// `display_unit` and `value_text`, what the field is typed in and pre-fills with, as sent),
+/// `min_text` and `max_text`, the bounds as shown and typed, and `display_unit`, `value_text`
+/// and `value_title`, what the field is typed in, pre-fills with and says beside it, as sent),
 /// `choice` (with `values`, the JSON texts, and `titles`, their words, as sent), `pick` (with
 /// `kind` and `arms`), `name` (with `kind`) or `read_only` (with `why`).
 fn editor_into(out: &mut VarDictionary, editor: &ChipEditor) {
@@ -439,19 +465,18 @@ fn editor_into(out: &mut VarDictionary, editor: &ChipEditor) {
             unit,
             display_unit,
             value_text,
+            min_text,
+            max_text,
+            value_title,
         } => {
-            for (key, bound) in [("min", min), ("max", max)] {
-                out.set(
-                    &format!("has_{key}").to_variant(),
-                    &bound.is_some().to_variant(),
-                );
-                if let Some(bound) = bound {
-                    out.set(&key.to_variant(), &i64::from(*bound).to_variant());
-                }
-            }
+            bounds_into(out, *min, *max, min_text.as_deref(), max_text.as_deref());
             out.set(&"unit".to_variant(), &unit.to_variant());
             out.set(&"display_unit".to_variant(), &display_unit.to_variant());
             out.set(&"value_text".to_variant(), &value_text.to_variant());
+            out.set(
+                &"value_title".to_variant(),
+                &text_or_empty(value_title.as_deref()).to_variant(),
+            );
             "number"
         }
         ChipEditor::Choice { values, titles } => {
@@ -597,7 +622,7 @@ fn failed_into(out: &mut VarDictionary, failed: Option<&ReadFailed>) {
 
 /// One vocabulary entry: `name`, `title`, `locked` and `anchor_shape` (`point`, `box` or `""`)
 /// as sent, and `parameters`, each `{pointer, title, shape}` with `shape` `number` (with
-/// `has_min`/`min`, `has_max`/`max`, `unit` and `display_unit`), `choice` (with `values` and
+/// `has_min`/`min`/`min_text`, `has_max`/`max`/`max_text`, `unit` and `display_unit`), `choice` (with `values` and
 /// `titles`), `reference` (with `kind`) or `unknown`.
 fn entry_dictionary(entry: &Entry) -> VarDictionary {
     let mut one = VarDictionary::new();
@@ -625,16 +650,16 @@ fn entry_dictionary(entry: &Entry) -> VarDictionary {
                 max,
                 unit,
                 display_unit,
+                min_text,
+                max_text,
             } => {
-                for (key, bound) in [("min", min), ("max", max)] {
-                    drawn.set(
-                        &format!("has_{key}").to_variant(),
-                        &bound.is_some().to_variant(),
-                    );
-                    if let Some(bound) = bound {
-                        drawn.set(&key.to_variant(), &i64::from(*bound).to_variant());
-                    }
-                }
+                bounds_into(
+                    &mut drawn,
+                    *min,
+                    *max,
+                    min_text.as_deref(),
+                    max_text.as_deref(),
+                );
                 drawn.set(&"unit".to_variant(), &unit.to_variant());
                 drawn.set(&"display_unit".to_variant(), &display_unit.to_variant());
             }

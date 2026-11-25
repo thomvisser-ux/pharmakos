@@ -787,7 +787,7 @@ pub fn common_parameters() -> Result<Vec<Parameter>, VocabularyError> {
         parameter(
             "/retreat_hp_pct",
             s::VOCABULARY_RETREAT_HP,
-            Shape::percent(),
+            Shape::retreat_threshold(),
         ),
     ])
 }
@@ -811,7 +811,7 @@ fn build_mandate() -> Result<Entry, VocabularyError> {
             parameter(
                 "/repair_threshold_pct",
                 s::VOCABULARY_REPAIR,
-                Shape::percent(),
+                Shape::repair_threshold(),
             ),
             parameter(
                 "/rebuild_destroyed",
@@ -850,7 +850,7 @@ fn defend_mandate() -> Result<Entry, VocabularyError> {
             parameter(
                 "/picket_scouts",
                 s::VOCABULARY_PICKET,
-                Shape::integer(Some(0), Some(i32::from(u8::MAX)), UNIT_COUNT),
+                Shape::picket_scouts(),
             ),
         ],
         "{}",

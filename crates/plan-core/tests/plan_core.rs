@@ -500,7 +500,12 @@ fn rendered_cases() -> Vec<(&'static str, String)> {
 fn shape_text(shape: &Shape) -> String {
     let bound = |value: Option<i32>| value.map_or_else(String::new, |value| value.to_string());
     match shape {
-        Shape::Integer { min, max, unit } => {
+        Shape::Integer {
+            min,
+            max,
+            unit,
+            zero,
+        } => {
             let shown = pharmakos_plan_core::shape::display_unit(unit);
             let unit = if unit.is_empty() {
                 String::new()
@@ -509,7 +514,9 @@ fn shape_text(shape: &Shape) -> String {
             } else {
                 format!(" {unit}, shown in {shown}")
             };
-            format!("integer {}..{}{unit}", bound(*min), bound(*max))
+            // S3's `zerotitle`: what a 0 does, where the shape has words for it.
+            let zero = zero.map_or_else(String::new, |zero| format!(", 0 is \"{zero}\""));
+            format!("integer {}..{}{unit}{zero}", bound(*min), bound(*max))
         }
         Shape::Choice { options } => format!(
             "choice {}",
@@ -556,7 +563,7 @@ fn chips_text(rendering: &Rendering) -> String {
                 .collect();
             let _ = write!(
                 out,
-                "  {}:{}-{} \"{marked}\"\n    {}\n    {}\n    = {}{}{}, {}\n",
+                "  {}:{}-{} \"{marked}\"\n    {}\n    {}\n    = {}{}{}{}, {}\n",
                 chip.line,
                 chip.start,
                 chip.end,
@@ -570,6 +577,9 @@ fn chips_text(rendering: &Rendering) -> String {
                 } else {
                     format!(" (typed {})", chip.value_text)
                 },
+                // S3's `zerotitle`: the value's own words, where it has them.
+                chip.value_title
+                    .map_or_else(String::new, |title| format!(" \"{title}\"")),
                 if chip.outside { ", outside" } else { "" },
                 chip.pick.proto_name().to_lowercase()
             );

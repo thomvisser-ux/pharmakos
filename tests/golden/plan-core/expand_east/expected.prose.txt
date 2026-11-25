@@ -4,7 +4,7 @@ Written by hand.
 Route
   1. to_site: walk to voxel 96, 11, 62, avoiding known threats.
     Give up after 2:00.
-  2. place_east: place a beacon at voxel 96, 11, 62, tagged "east", on a Mine mandate, at normal Quartermaster priority (16.5 s on site).
+  2. place_east: place a beacon at voxel 96, 11, 62, tagged "east", on a Mine mandate: return fire, at normal Quartermaster priority (16.5 s on site).
   3. back_home: walk to beacon "b_01".
 
 Rules

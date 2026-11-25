@@ -12,7 +12,11 @@
     /declarative/route/1/place_beacon/at
     reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"voxel":{"x":96,"y":11,"z":62}}, replace
-  6:90-96 "normal"
+  6:87-98 "return fire"
+    /declarative/route/1/place_beacon/initial/mandate/roe
+    choice "HOLD_FIRE" (hold fire) | "RETURN_FIRE" (return fire) | "FREE_FIRE" (fire freely)
+    = "RETURN_FIRE", replace
+  6:103-109 "normal"
     /declarative/route/1/place_beacon/initial/priority
     choice "LOW" (low) | "NORMAL" (normal) | "HIGH" (high)
     = "NORMAL", replace

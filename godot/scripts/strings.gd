@@ -160,8 +160,14 @@ const TEXT := {
 	"rule_refused": "The gateway refused that edit: {detail}",
 	"rule_chip_read_only_no_shape": "The gateway sent no way to edit this value.",
 	# The file's value lies outside its shape, by the gateway's word (`outside`): shown as it is,
-	# never clamped (L1). The bounds are said in the unit the gateway sent them in (S3's `fixq-c`).
+	# never clamped (L1). The bounds are said as the gateway wrote them, in the unit the value is
+	# typed in (S3's `zerotitle`).
 	"rule_number_outside": "The file holds {now}{display_unit}, outside what the gateway takes here ({min} to {max}{unit}). It is shown as it is; the checks say what it costs.",
+	# S3's `zerotitle`: the gateway's words for the value now, when it has words of its own (a 0
+	# whose shape names what it does), beside the number, which stays.
+	"rule_number_titled": "Now {now}{display_unit}: {title}.",
+	"rule_number_titled_beside": "{now} {note}",
+	"menu_setting_titled": "{value} ({title})",
 	"rule_choice_outside": "The file holds {now}, which is not one of the values the gateway offers here. It is shown as it is; the checks say what it costs.",
 	# Why the rule list took no edit, by the bridge's reason (`RuleEditRefusal`), never in silence.
 	"status_rule_refused_shut": "The rule list takes no edit while planning is closed.",
