@@ -69,6 +69,7 @@ use crate::pathing::clusters::Clusters;
 use crate::pathing::route::{NoPath, RouteOutcome};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
+use crate::reserved::Reserved;
 use crate::tables::UnitKind;
 
 /// What a unit is doing about walking.
@@ -166,30 +167,30 @@ pub struct Router {
     /// silently and freeze that kind in place for ever, which is what
     /// `every_unit_kind_walks_at_the_speed_its_rules_row_names` pins.
     speeds: [i32; 7],
-    state: Vec<u8>,
-    accumulator: Vec<i32>,
-    route_len: Vec<u32>,
-    route_cursor: Vec<u32>,
-    route_hash: Vec<u64>,
-    route_partial: Vec<bool>,
-    nodes: Vec<Node>,
+    state: Reserved<u8>,
+    accumulator: Reserved<i32>,
+    route_len: Reserved<u32>,
+    route_cursor: Reserved<u32>,
+    route_hash: Reserved<u64>,
+    route_partial: Reserved<bool>,
+    nodes: Reserved<Node>,
     cursor: u32,
     /// Route assembly buffer, sized once so a repath allocates nothing.
-    buffer: Vec<Node>,
+    buffer: Reserved<Node>,
     /// The bytes a route is digested over, sized once for the same reason.
     /// Always empty between repaths, so it is never part of a comparison.
-    digest_bytes: Vec<u8>,
+    digest_bytes: Reserved<u8>,
     /// Units that reached the end of a route this tick, in unit-index order.
-    arrived: Vec<u32>,
+    arrived: Reserved<u32>,
     /// Units served this tick, in the order the round robin reached them.
     /// Diagnostic, never hashed: it is what lets a test compare the discipline
     /// against a model of it, and what T10's event bus will carry.
-    served_this_tick: Vec<u32>,
+    served_this_tick: Reserved<u32>,
     /// Units parked as sealed in by this tick's serving, in the order the round
     /// robin reached them. Diagnostic, never hashed — it is what the match
     /// phase turns into `unit_sealed_in` events, which is the "report" half of
     /// item 60's "park and report" that T7 could only offer as a count.
-    sealed_this_tick: Vec<u32>,
+    sealed_this_tick: Reserved<u32>,
     served_total: u64,
     sealed_total: u64,
     /// Every route that found no walk, by [`NoPath`] reason (S2's plan, E27).
@@ -212,19 +213,19 @@ impl Router {
         }
         Router {
             speeds,
-            state: vec![WalkState::Idle.id(); count],
-            accumulator: vec![0; count],
-            route_len: vec![0; count],
-            route_cursor: vec![0; count],
-            route_hash: vec![0; count],
-            route_partial: vec![false; count],
-            nodes: vec![0; count.saturating_mul(stride)],
+            state: vec![WalkState::Idle.id(); count].into(),
+            accumulator: vec![0; count].into(),
+            route_len: vec![0; count].into(),
+            route_cursor: vec![0; count].into(),
+            route_hash: vec![0; count].into(),
+            route_partial: vec![false; count].into(),
+            nodes: vec![0; count.saturating_mul(stride)].into(),
             cursor: 0,
-            buffer: Vec::with_capacity(stride),
-            digest_bytes: Vec::with_capacity(stride.saturating_mul(4)),
-            arrived: Vec::with_capacity(count),
-            served_this_tick: Vec::with_capacity(count),
-            sealed_this_tick: Vec::with_capacity(count),
+            buffer: Reserved::with_capacity(stride),
+            digest_bytes: Reserved::with_capacity(stride.saturating_mul(4)),
+            arrived: Reserved::with_capacity(count),
+            served_this_tick: Reserved::with_capacity(count),
+            sealed_this_tick: Reserved::with_capacity(count),
             served_total: 0,
             sealed_total: 0,
             no_path: NoPathCounts::default(),
@@ -920,18 +921,18 @@ impl Router {
             read = read.saturating_add(len);
         }
 
-        self.state = restored.state;
-        self.accumulator = restored.accumulator;
-        self.route_len = restored.route_len;
-        self.route_cursor = restored.route_cursor;
-        self.route_hash = restored.route_hash;
-        self.route_partial = restored.route_partial;
-        self.nodes = nodes;
+        self.state = restored.state.into();
+        self.accumulator = restored.accumulator.into();
+        self.route_len = restored.route_len.into();
+        self.route_cursor = restored.route_cursor.into();
+        self.route_hash = restored.route_hash.into();
+        self.route_partial = restored.route_partial.into();
+        self.nodes = nodes.into();
         self.cursor = restored.cursor;
-        self.buffer = Vec::with_capacity(stride);
-        self.digest_bytes = Vec::with_capacity(stride.saturating_mul(4));
-        self.arrived = Vec::with_capacity(units);
-        self.served_this_tick = Vec::with_capacity(units);
+        self.buffer = Reserved::with_capacity(stride);
+        self.digest_bytes = Reserved::with_capacity(stride.saturating_mul(4));
+        self.arrived = Reserved::with_capacity(units);
+        self.served_this_tick = Reserved::with_capacity(units);
         true
     }
 }

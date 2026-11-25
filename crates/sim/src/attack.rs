@@ -133,6 +133,7 @@ use crate::knowledge::{AssetId, AssetKind, Position};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::{Damage, Hp, Money, Ms};
 use crate::pathing::surface::{Node, Surface};
+use crate::reserved::Reserved;
 use crate::rules::RulesError;
 use crate::seams::MandateKind;
 use crate::tables::{BeaconId, ColumnBox, SeatId, StructureId, UnitId, UnitKind};
@@ -534,9 +535,9 @@ pub struct Charge {
 /// beacon; a charge outlives both.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct AttackTable {
-    rows: Vec<AttackRow>,
-    avoid: Vec<(BeaconId, ColumnBox)>,
-    charges: Vec<Charge>,
+    rows: Reserved<AttackRow>,
+    avoid: Reserved<(BeaconId, ColumnBox)>,
+    charges: Reserved<Charge>,
 }
 
 impl AttackTable {
@@ -549,9 +550,9 @@ impl AttackTable {
     pub fn with_room(beacons: u32) -> AttackTable {
         let room = crate::math::index::row(beacons);
         AttackTable {
-            rows: Vec::with_capacity(room),
-            avoid: Vec::new(),
-            charges: Vec::with_capacity(room),
+            rows: Reserved::with_capacity(room),
+            avoid: Vec::new().into(),
+            charges: Reserved::with_capacity(room),
         }
     }
 
@@ -716,7 +717,7 @@ impl AttackTable {
         }
         self.rows.clear();
         self.rows.extend(rows);
-        self.avoid = avoid;
+        self.avoid = avoid.into();
         self.charges.clear();
         self.charges.extend(charges);
         true

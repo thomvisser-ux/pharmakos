@@ -39,6 +39,7 @@
 //! order ([`crate::world::World`]'s segment close), for every seat still in
 //! the match, and awards each licence a seat does not yet hold.
 
+use crate::reserved::Reserved;
 use pharmakos_proto::gp::v1::Licence;
 
 use crate::tables::SeatId;
@@ -95,7 +96,7 @@ pub enum LicenceRowError {
 /// Every seat's licences, ascending by seat then licence (S3's plan, E2).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct LicenceTable {
-    rows: Vec<LicenceRow>,
+    rows: Reserved<LicenceRow>,
 }
 
 impl LicenceTable {
@@ -109,7 +110,7 @@ impl LicenceTable {
     #[must_use]
     pub fn with_room(seats: u32) -> LicenceTable {
         LicenceTable {
-            rows: Vec::with_capacity(room_for(seats)),
+            rows: Reserved::with_capacity(room_for(seats)),
         }
     }
 
@@ -210,7 +211,7 @@ impl LicenceTable {
         }
         let mut rows = rows;
         rows.reserve(room_for(seats).saturating_sub(rows.len()));
-        self.rows = rows;
+        self.rows = rows.into();
         Ok(())
     }
 

@@ -42,6 +42,13 @@
 //! still runs it, and it reads the sim's sources and manifest and goes red the
 //! day the feature reaches anything else, when the tests must run under it as
 //! well.
+//!
+//! **What the research build adds, `fork`, is counted in the research build
+//! alone**, in the `fork` module: a forked world's tick allocates exactly the
+//! chunks it un-shares with its parent (copy-on-write, counted by the chunks'
+//! addresses), its parent's tick likewise while the fork lives, and nothing
+//! once the fork is dropped. The match, the warm-up and the edits both builds'
+//! tests file are the shared helpers below.
 
 #![allow(
     clippy::expect_used,
@@ -115,6 +122,676 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
+use pharmakos_sim::encoding::Enc;
+use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, Runner};
+use pharmakos_sim::voxels::VoxelEdit;
+use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
+
+/// How many times this thread has allocated so far. Called only from a test's
+/// own body, where the slot exists; a missing slot is a failure, never a zero
+/// that would read as "nothing was allocated".
+fn allocations() -> u64 {
+    ALLOCATIONS
+        .try_with(Cell::get)
+        .expect("the counting slot exists on a running test's thread")
+}
+
+/// **The counter is itself tested**, in both builds: every assertion in this
+/// file reads [`allocations`], so a hook that stopped counting would turn them
+/// all green at once. A `realloc` matters most: a `Vec` grown past its room
+/// while it holds elements is a `realloc`, not an `alloc`, so a counter blind
+/// to it is blind to exactly the bug this file exists for. One call of each
+/// hook, through the global allocator, on this thread: `alloc`,
+/// `alloc_zeroed` and a growing and a shrinking `realloc` each count one, a
+/// `dealloc` counts none; and a `Vec` pushed past its capacity is seen.
+#[test]
+fn the_counting_allocator_counts_every_hook_it_says_it_counts() {
+    use std::alloc::Layout;
+    let small = Layout::from_size_align(64, 8).expect("a layout");
+    let large = Layout::from_size_align(4096, 8).expect("a layout");
+    let mut figures = [0_u64; 5];
+    #[allow(
+        unsafe_code,
+        reason = "the hooks are reached only through the global allocator's unsafe entry points; each pointer is checked non-null before it is used, used with the layout it was made with, and freed once"
+    )]
+    unsafe {
+        let before = allocations();
+        let block = std::alloc::alloc(small);
+        figures[0] = allocations() - before;
+        assert!(!block.is_null(), "the system allocator answered");
+        let before = allocations();
+        let zeroed = std::alloc::alloc_zeroed(small);
+        figures[1] = allocations() - before;
+        assert!(!zeroed.is_null(), "the system allocator answered");
+        let before = allocations();
+        let block = std::alloc::realloc(block, small, large.size());
+        figures[2] = allocations() - before;
+        assert!(!block.is_null(), "the system allocator answered");
+        let before = allocations();
+        let block = std::alloc::realloc(block, large, small.size());
+        figures[3] = allocations() - before;
+        assert!(!block.is_null(), "the system allocator answered");
+        let before = allocations();
+        std::alloc::dealloc(block, small);
+        std::alloc::dealloc(zeroed, small);
+        figures[4] = allocations() - before;
+    }
+    assert_eq!(
+        figures,
+        [1, 1, 1, 1, 0],
+        "alloc, alloc_zeroed, a growing realloc and a shrinking realloc each count one; dealloc none"
+    );
+
+    let mut vector: Vec<u64> = Vec::with_capacity(4);
+    vector.extend([1, 2, 3, 4]);
+    let before = allocations();
+    vector.push(std::hint::black_box(5));
+    let grown = allocations() - before;
+    assert_eq!(
+        grown, 1,
+        "a Vec pushed past its capacity while it holds elements grows by a realloc, and the \
+         counter sees it"
+    );
+    assert_eq!(std::hint::black_box(vector).len(), 5);
+}
+
+/// The ticks [`warm_up`] runs: every buffer a tick fills is at its steady
+/// capacity after them.
+const WARM_UP_TICKS: u32 = 50;
+
+/// The ticks counted for table growth, after the warm-up: long enough that
+/// every placed seat's deploy, Generator and fabricated drone land inside them
+/// (the last Generator is finished at tick 1 300 at the committed table).
+const GROWTH_TICKS: u32 = 1_400;
+
+/// The determinism harness's match, in its first Push, every seat sealed: the
+/// world both builds' tick tests count. Built outside every counted window.
+fn harness_runner() -> Runner {
+    let rules = RulesTable::load(
+        &std::path::Path::new("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json"),
+    )
+    .expect("the committed rules table loads");
+    let world = World::new(&WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: pharmakos_sim::DETERMINISM_SEATS,
+        // No walkers. The determinism harness fielded fifty a seat until S1's
+        // real segment (decision 16), and this test with it. A probe with
+        // fifty a seat on the committed playbook (S1's `tune` fix pass) held
+        // both allocation assertions below, but not the fixed-stride one: with
+        // walkers wandering through the steady window the encoding's length
+        // changed between ticks, so the window is no longer steady. The
+        // wide-table coverage lives in `tests/determinism.rs` (`TEST_MOVERS`);
+        // this test covers the real playbook's in-tick growth instead.
+        rules,
+        match_settings: MatchSettings {
+            // Long enough that the measured loop never reaches the segment's
+            // end: the segment-end freeze allocates by design (it captures a
+            // whole world) and belongs outside the assertion, exactly like
+            // `Runner::new` below.
+            segment_lengths_ms: vec![600_000],
+            round_limit: DEFAULT_ROUND_LIMIT,
+        },
+    })
+    .expect("the rules table describes a map and a broadphase grid");
+    // Driven through the `Runner`, and **in a Push**, because `World::phase_match`
+    // returns at its first gate outside one: a world stepped by hand stays in
+    // its opening Lull, and everything T10 put in that phase — the beacon
+    // deaths, elimination, the respawns, the one-tick match-end rule, the
+    // segment's end and every event they emit — would sit outside the counted
+    // loop.
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    // Every seat seals the harness playbook, for the same reason: the decision
+    // phase returns immediately for a seat that sealed nothing, so without this
+    // the whole interpreter — the `covering` resolver with its "nearest"
+    // estimates and its spiral, the walk in, the deploy's charge, the initial
+    // settings' interface rows, the Build target written `on` the covered
+    // vent, the hold, the handler scan and the guaranteed tail — would sit
+    // outside the one assertion that a tick allocates nothing (T11). Since
+    // S1's real determinism segment (decision 16) the playbook is the
+    // committed copy of Hold & Build's instantiation the chain runs.
+    let playbook = pharmakos_sim::determinism_playbook(
+        &std::path::Path::new("..")
+            .join("..")
+            .join(pharmakos_sim::DETERMINISM_PLAYBOOK_PATH),
+    )
+    .expect("the committed harness playbook reads");
+    let sealed = pharmakos_sim::seal_determinism_playbooks(runner.world_mut(), &playbook)
+        .expect("the harness playbook compiles");
+    assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
+    runner
+}
+
+/// Warm `runner` up for [`WARM_UP_TICKS`] ticks, cratering and collapsing on
+/// each, outside every counted window.
+fn warm_up(runner: &mut Runner, enc: &mut Enc) {
+    // Warm up: the first tick may still grow the encoder's buffer, and a
+    // capacity that is right for tick 1 is right for tick 10 000 because every
+    // table's count is fixed at construction.
+    // The warm-up craters too, so the voxel phase's own scratch — the edit
+    // queue, the store's pending and settled lists, the crater's touched list —
+    // is paid for out here and the measured loop below sees it at its steady
+    // capacity.
+    for step in 0..WARM_UP_TICKS {
+        crater_at(runner.world_mut(), step);
+        collapse_at(runner.world_mut(), step);
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
+        runner.clear_events();
+        runner.world().encode(enc);
+    }
+}
+
+/// The harness match warmed up ([`warm_up`]), and a second runner restored
+/// from its save at that tick, through the file's bytes: the shipped resume
+/// path (`Host::resume` restores a save into a fresh runner). The restored
+/// world hashes as the original. Built outside every counted window.
+fn warmed_and_restored(enc: &mut Enc) -> (Runner, Runner) {
+    let mut straight = harness_runner();
+    warm_up(&mut straight, enc);
+    let bytes = pharmakos_sim::snapshot::Snapshot::capture(straight.world())
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("the save encodes");
+    let snapshot = pharmakos_sim::snapshot::Snapshot::from_bytes(&bytes).expect("the save decodes");
+    let mut restored = harness_runner();
+    restored.restore(&snapshot).expect("the save restores");
+    assert_eq!(
+        restored.world().state_hash(),
+        straight.world().state_hash(),
+        "a restored world hashes as the world it was saved from"
+    );
+    (straight, restored)
+}
+
+/// Queue one crater on a fresh patch of ground, so the edit actually changes
+/// voxels and the whole voxel phase runs.
+///
+/// The columns walk a coprime stride across the map, so a later tick never
+/// craters air a former tick already removed; the `z` is the column's own
+/// surface, so the ball always has rock to take.
+fn crater_at(world: &mut World, step: u32) {
+    let size = world.voxels().size();
+    let width = i32::try_from(size[0]).expect("the map fits in an i32");
+    let depth = i32::try_from(size[1]).expect("the map fits in an i32");
+    let x = i32::try_from(step.wrapping_mul(37) % 4096).expect("a column index") % width;
+    let y = i32::try_from(step.wrapping_mul(53) % 4096).expect("a column index") % depth;
+    let z = world
+        .voxels()
+        .top_solid_z(x, y)
+        .expect("every column of the determinism map has ground");
+    assert!(
+        world
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: [x, y, z],
+                radius: 3,
+                by: None,
+            })
+            .is_ok(),
+        "the edit queue is full at step {step}"
+    );
+}
+
+/// Queue a collapse on a fresh column: a voxel two above the column's top,
+/// joined to it by one voxel that the same tick's last edit removes, so the
+/// voxel above is a detached region of one that falls a voxel.
+///
+/// The columns walk a different coprime stride from [`crater_at`]'s, offset
+/// across the map, so a collapse and a crater rarely share a column, and a
+/// shared one still collapses: the edits run in the order they are filed.
+fn collapse_at(world: &mut World, step: u32) {
+    let size = world.voxels().size();
+    let width = i32::try_from(size[0]).expect("the map fits in an i32");
+    let depth = i32::try_from(size[1]).expect("the map fits in an i32");
+    let x = (i32::try_from(step.wrapping_mul(41) % 4096).expect("a column index") + 101) % width;
+    let y = (i32::try_from(step.wrapping_mul(59) % 4096).expect("a column index") + 211) % depth;
+    let z = world
+        .voxels()
+        .top_solid_z(x, y)
+        .expect("every column of the determinism map has ground");
+    for (dz, material) in [
+        (2, pharmakos_sim::voxels::Material::STONE),
+        (1, pharmakos_sim::voxels::Material::STONE),
+        (1, pharmakos_sim::voxels::Material::AIR),
+    ] {
+        assert!(
+            world
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: [x, y, z + dz],
+                    material,
+                    by: None,
+                })
+                .is_ok(),
+            "the edit queue is full at step {step}"
+        );
+    }
+}
+
+/// The ticks the attacking crowds are counted over.
+const CROWD_TICKS: u32 = 400;
+
+/// Raiders each crowd fields.
+const CROWD: u32 = 10;
+
+/// Lay out two Attack beacons, of seats 0 and 1, sixty voxels apart in open
+/// ground, each with [`CROWD`] raiders and aimed at the other's beacon; seat
+/// 0's force routes round an avoid area between them. Returns the two
+/// beacons.
+fn crowd(world: &mut World) -> [pharmakos_sim::tables::BeaconId; 2] {
+    use pharmakos_sim::attack::{Aim, AttackSettings};
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::{ColumnBox, PRIORITY_NORMAL, SeatId, UnitKind};
+    let size = world.voxels().size();
+    let mid_x = i32::try_from(size[0].div_euclid(2)).expect("a column");
+    let mid_y = i32::try_from(size[1].div_euclid(2)).expect("a column");
+    let west = world.standing_point([mid_x - 12, mid_y, 0]);
+    let east = world.standing_point([mid_x + 12, mid_y, 0]);
+    let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
+        at.map(|axis| i16::try_from(axis.floor_voxels()).expect("a voxel coordinate"))
+    };
+    let mut lanes = Vec::new();
+    for (seat, here, there) in [(0_u8, west, east), (1_u8, east, west)] {
+        let beacon = world
+            .place_beacon_directly(
+                SeatId::new(seat),
+                here,
+                MandateKind::Attack,
+                PRIORITY_NORMAL,
+            )
+            .expect("an Attack beacon");
+        let avoid = if seat == 0 {
+            let x = i16::try_from(mid_x).expect("a column");
+            let y = i16::try_from(mid_y).expect("a column");
+            vec![ColumnBox::new([x - 4, y - 4], [x + 4, y + 4]).expect("a box")]
+        } else {
+            Vec::new()
+        };
+        assert!(world.set_attack(
+            beacon,
+            AttackSettings {
+                aim: Aim::Voxel(voxel(there)),
+                force_size: Some(CROWD),
+                waves: 1,
+                ..AttackSettings::default()
+            },
+            &avoid,
+        ));
+        for _ in 0..CROWD {
+            world
+                .field_unit(SeatId::new(seat), beacon, UnitKind::Raider, here)
+                .expect("a raider");
+        }
+        lanes.push(beacon);
+    }
+    <[pharmakos_sim::tables::BeaconId; 2]>::try_from(lanes).expect("two lanes")
+}
+
+/// The `research` build's test: a forked world's tick, and its parent's while
+/// the fork lives. Behind `feature = "research"` because `fork` exists only
+/// there; the default build's tick is counted by [`tick`]'s tests.
+#[cfg(feature = "research")]
+mod fork {
+    use super::{
+        CROWD_TICKS, GROWTH_TICKS, WARM_UP_TICKS, allocations, collapse_at, crater_at, crowd,
+        harness_runner, warm_up,
+    };
+
+    use pharmakos_sim::World;
+    use pharmakos_sim::encoding::Enc;
+    use pharmakos_sim::runner::Runner;
+
+    /// The ticks each counted window runs: the child's, the parent's while
+    /// the child lives, and the parent's after the child is dropped.
+    const FORK_TICKS: u32 = 50;
+
+    /// The ticks the parent steps the crowds before the combat test forks it:
+    /// at the committed rules and harness the two forces first fire between
+    /// 1 300 and 1 400 ticks after they are laid out at the end of the
+    /// warm-up (measured), so a fork here holds every shot in its counted
+    /// window; the test asserts both halves, so a tuning change that moves the
+    /// first shot fails it rather than leaving the combat phase uncounted.
+    const COMBAT_LEAD: u32 = 1_250;
+
+    /// Each of `world`'s chunks' bytes, by address, into `into`: what the
+    /// counting compares to find the chunks a tick re-pointed. `into` is
+    /// reserved for every chunk before any window, so this allocates nothing.
+    fn chunk_addresses(world: &World, into: &mut Vec<*const u8>) {
+        into.clear();
+        for chunk in 0..world.voxels().chunk_count() {
+            let bytes = world
+                .voxels()
+                .chunk_bytes(chunk)
+                .expect("every chunk below the count has bytes");
+            into.push(bytes.as_ptr());
+        }
+    }
+
+    /// How many of `world`'s chunks no longer sit at the address `before`
+    /// recorded: the chunks re-pointed since. A chunk shared with another
+    /// world is re-pointed by its first write (copy-on-write,
+    /// `Arc::make_mut`), and that copy is one allocation; a chunk this world
+    /// alone holds is written in place.
+    fn repointed(world: &World, before: &[*const u8]) -> u64 {
+        let mut moved = 0_u64;
+        for (chunk, was) in (0..world.voxels().chunk_count()).zip(before) {
+            let now = world
+                .voxels()
+                .chunk_bytes(chunk)
+                .expect("every chunk below the count has bytes")
+                .as_ptr();
+            if !core::ptr::eq(now, *was) {
+                moved += 1;
+            }
+        }
+        moved
+    }
+
+    /// One window's figures: what the thread allocated, and the chunks the
+    /// stepped world re-pointed, counted tick by tick. Each tick is held to
+    /// the rule on its own as well ([`tick_by_tick`]), so a tick that
+    /// allocated one more than it re-pointed and another one fewer cannot
+    /// cancel into a window that looks right.
+    struct Window {
+        allocated: u64,
+        repointed: u64,
+    }
+
+    /// One counted tick held to the rule: the allocations of tick `step` of
+    /// a window, from the edits filed before it to its encoding, equal the
+    /// chunks it re-pointed. A failure stops the window at that tick; a pass
+    /// allocates nothing.
+    fn tick_by_tick(step: u32, allocated: u64, repointed: u64) {
+        assert_eq!(
+            allocated, repointed,
+            "tick {step} of the window allocated {allocated} times and re-pointed {repointed} chunks"
+        );
+    }
+
+    /// Step the child `child` for `ticks` ticks, cratering and
+    /// collapsing on each from `first`, through the host's door
+    /// (`request_voxel_edit`, between ticks, so the edit queue is counted
+    /// too).
+    fn count_child(
+        child: &mut World,
+        enc: &mut Enc,
+        first: u32,
+        ticks: u32,
+        addresses: &mut Vec<*const u8>,
+    ) -> Window {
+        let mut repointed_total = 0_u64;
+        let before = allocations();
+        for step in 0..ticks {
+            chunk_addresses(child, addresses);
+            let tick_before = allocations();
+            crater_at(child, step + first);
+            collapse_at(child, step + first);
+            child.step(enc).expect("the forked world steps");
+            child.clear_events();
+            child.encode(enc);
+            let moved = repointed(child, addresses);
+            tick_by_tick(step, allocations() - tick_before, moved);
+            repointed_total += moved;
+        }
+        Window {
+            allocated: allocations() - before,
+            repointed: repointed_total,
+        }
+    }
+
+    /// As [`count_child`], for the parent, driven through its `Runner`.
+    fn count_parent(
+        runner: &mut Runner,
+        enc: &mut Enc,
+        first: u32,
+        addresses: &mut Vec<*const u8>,
+    ) -> Window {
+        let mut repointed_total = 0_u64;
+        let before = allocations();
+        for step in 0..FORK_TICKS {
+            chunk_addresses(runner.world(), addresses);
+            let tick_before = allocations();
+            crater_at(runner.world_mut(), step + first);
+            collapse_at(runner.world_mut(), step + first);
+            runner
+                .step()
+                .expect("the parent steps")
+                .expect("the segment outlasts this test");
+            runner.clear_events();
+            runner.world().encode(enc);
+            let moved = repointed(runner.world(), addresses);
+            tick_by_tick(step, allocations() - tick_before, moved);
+            repointed_total += moved;
+        }
+        Window {
+            allocated: allocations() - before,
+            repointed: repointed_total,
+        }
+    }
+
+    /// What the `research` build adds to the tick, it adds through `fork`
+    /// alone, and a fork costs exactly the chunks it un-shares.
+    ///
+    /// A fork is a `World::clone`. It shares every chunk with its parent
+    /// (copy-on-write, by design), so the first write to a shared chunk, in
+    /// either world, copies it: one allocation, which this test counts by the
+    /// chunk's address changing, never by a counter in the code under test.
+    /// Everything else a clone must keep as the original built it: a clone that
+    /// copied a buffer's length and not its reserved room (as a derived `Clone`
+    /// of a `Vec` does) would allocate on the first tick that filled it, in
+    /// the clone rather than in the original, which is exactly where nobody
+    /// looks.
+    ///
+    /// The parent is warmed as the default build's tick test's match is, so
+    /// every buffer is at its steady capacity when it is forked. Then: the
+    /// child's first [`FORK_TICKS`] ticks, the parent's next ones while the
+    /// child lives (on columns the child did not crater, so it meets chunks
+    /// the two still share), and the parent's after the child is dropped,
+    /// when it holds every chunk alone and must allocate nothing, as the
+    /// default build's tick does. Every counted tick craters and collapses,
+    /// through the host's `request_voxel_edit` between ticks.
+    #[test]
+    fn a_forked_worlds_tick_allocates_only_the_chunks_it_re_points() {
+        let mut runner = harness_runner();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        warm_up(&mut runner, &mut enc);
+        let chunks = usize::try_from(runner.world().voxels().chunk_count())
+            .expect("a chunk count fits a usize");
+        let mut addresses: Vec<*const u8> = Vec::with_capacity(chunks);
+
+        let mut child = pharmakos_sim::research::fork(runner.world());
+        let regions_before = child.collapse_counts().regions;
+        let forked = count_child(
+            &mut child,
+            &mut enc,
+            WARM_UP_TICKS,
+            FORK_TICKS,
+            &mut addresses,
+        );
+        let fell = child.collapse_counts().regions - regions_before;
+        assert!(
+            fell >= u64::from(FORK_TICKS),
+            "a region fell on every counted tick of the fork: {fell}"
+        );
+        assert!(
+            forked.repointed > 0,
+            "the child's craters met chunks it shares with its parent, so the count is not vacuous"
+        );
+        assert_eq!(
+            forked.allocated, forked.repointed,
+            "the first {FORK_TICKS} ticks of a forked world allocated {} times and re-pointed {} \
+             chunks: a fork's clone must keep every buffer's reserved room, so the chunks it \
+             un-shares are all it allocates",
+            forked.allocated, forked.repointed
+        );
+
+        // The parent, on columns of its own, while the child still shares
+        // every chunk neither has written since the fork.
+        let parent = count_parent(
+            &mut runner,
+            &mut enc,
+            WARM_UP_TICKS + 4 * FORK_TICKS,
+            &mut addresses,
+        );
+        assert!(
+            parent.repointed > 0,
+            "the parent's craters met chunks it shares with the live child"
+        );
+        assert_eq!(
+            parent.allocated, parent.repointed,
+            "while a fork lives, its parent's {FORK_TICKS} ticks allocated {} times and \
+             re-pointed {} chunks",
+            parent.allocated, parent.repointed
+        );
+
+        drop(child);
+        let alone = count_parent(
+            &mut runner,
+            &mut enc,
+            WARM_UP_TICKS + 8 * FORK_TICKS,
+            &mut addresses,
+        );
+        assert_eq!(
+            (alone.allocated, alone.repointed),
+            (0, 0),
+            "once the fork is dropped the parent holds every chunk alone, and its tick \
+             allocates nothing, as the default build's does"
+        );
+    }
+
+    /// A fork keeps every table's reserved room, as it keeps every scratch
+    /// buffer's: the child of a world forked before its growth window adds a
+    /// beacon, a structure and a fabricated drone per seat (the rows the default
+    /// build's tick test counts in that window) and allocates only the chunks it
+    /// re-points. A table whose room a derived `Clone` dropped would allocate
+    /// at its first row in the child.
+    #[test]
+    fn a_forked_worlds_table_growth_allocates_only_the_chunks_it_re_points() {
+        let mut runner = harness_runner();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        warm_up(&mut runner, &mut enc);
+        let chunks = usize::try_from(runner.world().voxels().chunk_count())
+            .expect("a chunk count fits a usize");
+        let mut addresses: Vec<*const u8> = Vec::with_capacity(chunks);
+
+        let mut child = pharmakos_sim::research::fork(runner.world());
+        drop(runner);
+        let beacons_before = child.beacons().len();
+        let structures_before = child.structures().len();
+        let units_before = child.units().len();
+        let grown = count_child(
+            &mut child,
+            &mut enc,
+            WARM_UP_TICKS,
+            GROWTH_TICKS,
+            &mut addresses,
+        );
+        assert!(
+            child.beacons().len() > beacons_before
+                && child.structures().len() > structures_before
+                && child.units().len() > units_before,
+            "the child's deploy, its Generator and the drone it asks for all landed inside the \
+             counted window"
+        );
+        assert_eq!(
+            grown.allocated, grown.repointed,
+            "the {GROWTH_TICKS} ticks in which a forked world grows its tables allocated {} times \
+             and re-pointed {} chunks",
+            grown.allocated, grown.repointed
+        );
+    }
+
+    /// A fork of a **restored** world keeps the room the restore gave back:
+    /// the harness match is saved after its warm-up and restored into a
+    /// second runner (the shipped resume path), the restored world is forked,
+    /// and the child's growth window allocates only the chunks it re-points.
+    #[test]
+    fn a_fork_of_a_restored_world_allocates_only_the_chunks_it_re_points() {
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let (straight, restored) = super::warmed_and_restored(&mut enc);
+        drop(straight);
+        let chunks = usize::try_from(restored.world().voxels().chunk_count())
+            .expect("a chunk count fits a usize");
+        let mut addresses: Vec<*const u8> = Vec::with_capacity(chunks);
+        let mut child = pharmakos_sim::research::fork(restored.world());
+        let beacons_before = child.beacons().len();
+        let units_before = child.units().len();
+        let grown = count_child(
+            &mut child,
+            &mut enc,
+            WARM_UP_TICKS,
+            GROWTH_TICKS,
+            &mut addresses,
+        );
+        assert!(
+            child.beacons().len() > beacons_before && child.units().len() > units_before,
+            "the fork of the restored world added table rows inside the counted window"
+        );
+        assert!(
+            grown.repointed > 0,
+            "the child met chunks it shares with the restored world, so the count is not vacuous"
+        );
+        assert_eq!(
+            grown.allocated, grown.repointed,
+            "the {GROWTH_TICKS} ticks of a fork of a restored world allocated {} times and re-pointed {} chunks",
+            grown.allocated, grown.repointed
+        );
+    }
+
+    /// A fork keeps the combat phase's room too: the two attacking crowds of
+    /// the default build's tick test are laid out in the parent after its
+    /// warm-up and stepped [`COMBAT_LEAD`] ticks, when neither has fired yet,
+    /// then forked; the child's [`CROWD_TICKS`] ticks hold the first shots
+    /// and their damage, kill credit and deaths, every tick cratering and
+    /// collapsing as well, and allocate only the chunks the child re-points.
+    /// The parent stays alive, so the child meets shared chunks.
+    #[test]
+    fn a_forked_worlds_combat_allocates_only_the_chunks_it_re_points() {
+        let mut runner = harness_runner();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        warm_up(&mut runner, &mut enc);
+        crowd(runner.world_mut());
+        for _ in 0..COMBAT_LEAD {
+            runner
+                .step()
+                .expect("the parent steps")
+                .expect("the segment outlasts this test");
+            runner.clear_events();
+            runner.world().encode(&mut enc);
+        }
+        let chunks = usize::try_from(runner.world().voxels().chunk_count())
+            .expect("a chunk count fits a usize");
+        let mut addresses: Vec<*const u8> = Vec::with_capacity(chunks);
+
+        let mut child = pharmakos_sim::research::fork(runner.world());
+        let shots_before = child.combat_counts().shots();
+        assert_eq!(shots_before, 0, "no crowd has fired before the fork");
+        let fought = count_child(
+            &mut child,
+            &mut enc,
+            WARM_UP_TICKS + 40 * FORK_TICKS,
+            CROWD_TICKS,
+            &mut addresses,
+        );
+        // The fight ends inside the window: seat 0's Attack beacon falls and
+        // its row closes, so the shots, not the rows, say that it happened.
+        assert!(
+            child.combat_counts().shots() > shots_before,
+            "the crowds fought inside the child's counted window"
+        );
+        assert_eq!(
+            fought.allocated, fought.repointed,
+            "the {CROWD_TICKS} ticks of a forked world's crowds allocated {} times and re-pointed \
+             {} chunks",
+            fought.allocated, fought.repointed
+        );
+    }
+}
+
 /// The default build's tests: the tick and the searches, each counted on its
 /// own thread. Behind `not(feature = "research")` because the research build's
 /// tick is this build's, function for function, which
@@ -122,22 +799,15 @@ static ALLOCATOR: Counting = Counting;
 /// builds.
 #[cfg(not(feature = "research"))]
 mod tick {
-    use super::ALLOCATIONS;
-    use std::cell::Cell;
+    use super::{
+        CROWD_TICKS, GROWTH_TICKS, WARM_UP_TICKS, allocations, collapse_at, crater_at, crowd,
+        harness_runner, warm_up,
+    };
 
     use pharmakos_sim::encoding::Enc;
     use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, Runner};
     use pharmakos_sim::voxels::VoxelEdit;
     use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
-
-    /// How many times this thread has allocated so far. Called only from a test's
-    /// own body, where the slot exists; a missing slot is a failure, never a zero
-    /// that would read as "nothing was allocated".
-    fn allocations() -> u64 {
-        ALLOCATIONS
-            .try_with(Cell::get)
-            .expect("the counting slot exists on a running test's thread")
-    }
 
     /// Counts the allocations of a tick. The optimiser deletes an allocation whose
     /// value is never read (a `Vec::with_capacity` dropped at once, a `Box` freed
@@ -151,80 +821,9 @@ mod tick {
     /// there it counts only the allocations the optimiser kept.
     #[test]
     fn a_tick_allocates_nothing() {
-        let rules = RulesTable::load(
-            &std::path::Path::new("..")
-                .join("..")
-                .join("rules")
-                .join("rules.v1.json"),
-        )
-        .expect("the committed rules table loads");
-        let world = World::new(&WorldConfig {
-            match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
-            seats: pharmakos_sim::DETERMINISM_SEATS,
-            // No walkers. The determinism harness fielded fifty a seat until S1's
-            // real segment (decision 16), and this test with it. A probe with
-            // fifty a seat on the committed playbook (S1's `tune` fix pass) held
-            // both allocation assertions below, but not the fixed-stride one: with
-            // walkers wandering through the steady window the encoding's length
-            // changed between ticks, so the window is no longer steady. The
-            // wide-table coverage lives in `tests/determinism.rs` (`TEST_MOVERS`);
-            // this test covers the real playbook's in-tick growth instead.
-            rules,
-            match_settings: MatchSettings {
-                // Long enough that the measured loop never reaches the segment's
-                // end: the segment-end freeze allocates by design (it captures a
-                // whole world) and belongs outside the assertion, exactly like
-                // `Runner::new` below.
-                segment_lengths_ms: vec![600_000],
-                round_limit: DEFAULT_ROUND_LIMIT,
-            },
-        })
-        .expect("the rules table describes a map and a broadphase grid");
-        // Driven through the `Runner`, and **in a Push**, because `World::phase_match`
-        // returns at its first gate outside one: a world stepped by hand stays in
-        // its opening Lull, and everything T10 put in that phase — the beacon
-        // deaths, elimination, the respawns, the one-tick match-end rule, the
-        // segment's end and every event they emit — would sit outside the counted
-        // loop.
-        let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
-        // Every seat seals the harness playbook, for the same reason: the decision
-        // phase returns immediately for a seat that sealed nothing, so without this
-        // the whole interpreter — the `covering` resolver with its "nearest"
-        // estimates and its spiral, the walk in, the deploy's charge, the initial
-        // settings' interface rows, the Build target written `on` the covered
-        // vent, the hold, the handler scan and the guaranteed tail — would sit
-        // outside the one assertion that a tick allocates nothing (T11). Since
-        // S1's real determinism segment (decision 16) the playbook is the
-        // committed copy of Hold & Build's instantiation the chain runs.
-        let playbook = pharmakos_sim::determinism_playbook(
-            &std::path::Path::new("..")
-                .join("..")
-                .join(pharmakos_sim::DETERMINISM_PLAYBOOK_PATH),
-        )
-        .expect("the committed harness playbook reads");
-        let sealed = pharmakos_sim::seal_determinism_playbooks(runner.world_mut(), &playbook)
-            .expect("the harness playbook compiles");
-        assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
-        assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
+        let mut runner = harness_runner();
         let mut enc = Enc::with_capacity(64 * 1024);
-
-        // Warm up: the first tick may still grow the encoder's buffer, and a
-        // capacity that is right for tick 1 is right for tick 10 000 because every
-        // table's count is fixed at construction.
-        // The warm-up craters too, so the voxel phase's own scratch — the edit
-        // queue, the store's pending and settled lists, the crater's touched list —
-        // is paid for out here and the measured loop below sees it at its steady
-        // capacity.
-        for step in 0..50 {
-            crater_at(runner.world_mut(), step);
-            collapse_at(runner.world_mut(), step);
-            runner
-                .step()
-                .unwrap()
-                .expect("the segment outlasts this test");
-            runner.clear_events();
-            runner.world().encode(&mut enc);
-        }
+        warm_up(&mut runner, &mut enc);
         // The growth window. The harness playbook adds **rows to tables** inside
         // a tick: its deploy a beacon (`BeaconTable::reserve`), the Build target it
         // writes a structure (the structure table's room), and the fabricator the
@@ -241,8 +840,8 @@ mod tick {
         let structures_before = runner.world().structures().len();
         let units_before = runner.world().units().len();
         for step in 0..GROWTH_TICKS {
-            crater_at(runner.world_mut(), step + 50);
-            collapse_at(runner.world_mut(), step + 50);
+            crater_at(runner.world_mut(), step + WARM_UP_TICKS);
+            collapse_at(runner.world_mut(), step + WARM_UP_TICKS);
             runner
                 .step()
                 .unwrap()
@@ -275,10 +874,10 @@ mod tick {
             // work in it: a crater is the edit S2 will file by the thousand, and an
             // empty queue would leave `settle`, `mark` and `crater` outside the
             // property this file exists to defend.
-            crater_at(runner.world_mut(), step + 50 + GROWTH_TICKS);
+            crater_at(runner.world_mut(), step + WARM_UP_TICKS + GROWTH_TICKS);
             // And a collapse every tick (S2's plan, `fall`): the support rule's
             // search, its fall and its labels' clearing inside the property too.
-            collapse_at(runner.world_mut(), step + 50 + GROWTH_TICKS);
+            collapse_at(runner.world_mut(), step + WARM_UP_TICKS + GROWTH_TICKS);
             runner
                 .step()
                 .unwrap()
@@ -310,6 +909,135 @@ mod tick {
 
         crowd_allocates_nothing(&mut runner, &mut enc);
         near_estimates_allocate_nothing(runner.world_mut());
+    }
+
+    /// One window of a runner's ticks: cratering and collapsing on each from
+    /// `first` when `edit` holds, each tick's hash pushed to `chain`, which
+    /// is reserved for every tick before any window, so this allocates
+    /// nothing of its own.
+    fn run_window(
+        runner: &mut Runner,
+        enc: &mut Enc,
+        first: u32,
+        ticks: u32,
+        edit: bool,
+        chain: &mut Vec<u64>,
+    ) {
+        for step in 0..ticks {
+            if edit {
+                crater_at(runner.world_mut(), step + first);
+                collapse_at(runner.world_mut(), step + first);
+            }
+            let report = runner
+                .step()
+                .expect("the runner steps")
+                .expect("the segment outlasts this test");
+            chain.push(report.hash);
+            runner.clear_events();
+            runner.world().encode(enc);
+        }
+    }
+
+    /// The ticks a restored world's crowds are stepped before their counted
+    /// window, as [`crowd_allocates_nothing`] steps them.
+    const RESTORED_CROWD_LEAD: u32 = 20;
+
+    /// **A restored world's tick allocates nothing**, as a fresh one's does:
+    /// the shipped resume path (`Host::resume`) restores a save into a fresh
+    /// runner, and a table assigned from the file holds its rows and no room
+    /// for more unless the restore gives its room back
+    /// (`World::reserve_table_rooms`). The harness match is saved after its
+    /// warm-up and restored into a second runner, which then runs the growth
+    /// window (a deploy, a Generator and a drone per seat: rows in the beacon,
+    /// structure, unit and target tables) and the attacking crowds' fight,
+    /// both counted. Capacity is not state: the restored-then-run chain
+    /// equals the run-straight-through chain over every tick of both windows.
+    #[test]
+    fn a_restored_worlds_tick_allocates_nothing() {
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let (mut straight, mut restored) = super::warmed_and_restored(&mut enc);
+        let ticks = GROWTH_TICKS + RESTORED_CROWD_LEAD + CROWD_TICKS;
+        let rows = usize::try_from(ticks).expect("a tick count fits a usize");
+        let mut chain: Vec<u64> = Vec::with_capacity(rows);
+        let mut expected: Vec<u64> = Vec::with_capacity(rows);
+
+        let beacons_before = restored.world().beacons().len();
+        let structures_before = restored.world().structures().len();
+        let units_before = restored.world().units().len();
+        let targets_before = restored.world().targets().len();
+        let before = allocations();
+        run_window(
+            &mut restored,
+            &mut enc,
+            WARM_UP_TICKS,
+            GROWTH_TICKS,
+            true,
+            &mut chain,
+        );
+        let growing = allocations() - before;
+        assert!(
+            restored.world().beacons().len() > beacons_before
+                && restored.world().structures().len() > structures_before
+                && restored.world().units().len() > units_before
+                && restored.world().targets().len() > targets_before,
+            "the restored world's deploys, Build targets, Generators and drones landed inside \
+             the counted window"
+        );
+        assert_eq!(
+            growing, 0,
+            "the {GROWTH_TICKS} ticks in which a restored world grows its tables allocated \
+             {growing} times: a restore gives every table its room again"
+        );
+
+        crowd(restored.world_mut());
+        run_window(
+            &mut restored,
+            &mut enc,
+            0,
+            RESTORED_CROWD_LEAD,
+            false,
+            &mut chain,
+        );
+        let shots_before = restored.world().combat_counts().shots();
+        let before = allocations();
+        run_window(&mut restored, &mut enc, 0, CROWD_TICKS, false, &mut chain);
+        let crowded = allocations() - before;
+        assert!(
+            restored.world().combat_counts().shots() > shots_before,
+            "the restored world's crowds fought inside the counted window"
+        );
+        assert_eq!(
+            crowded, 0,
+            "{CROWD_TICKS} ticks of a restored world's crowds allocated {crowded} times"
+        );
+
+        run_window(
+            &mut straight,
+            &mut enc,
+            WARM_UP_TICKS,
+            GROWTH_TICKS,
+            true,
+            &mut expected,
+        );
+        crowd(straight.world_mut());
+        run_window(
+            &mut straight,
+            &mut enc,
+            0,
+            RESTORED_CROWD_LEAD + CROWD_TICKS,
+            false,
+            &mut expected,
+        );
+        assert_eq!(chain.len(), expected.len());
+        let parted = chain
+            .iter()
+            .zip(&expected)
+            .position(|(restored, straight)| restored != straight);
+        assert_eq!(
+            parted, None,
+            "the restored-then-run chain parts from the run-straight-through chain: capacity \
+             is not state, so a restore that gives its room back moves no hash"
+        );
     }
 
     /// The attacking crowds' half of [`a_tick_allocates_nothing`].
@@ -359,135 +1087,6 @@ mod tick {
             crowded, 0,
             "{CROWD_TICKS} ticks of two attacking crowds allocated {crowded} times"
         );
-    }
-
-    /// The ticks the attacking crowds are counted over.
-    const CROWD_TICKS: u32 = 400;
-
-    /// Raiders each crowd fields.
-    const CROWD: u32 = 10;
-
-    /// Lay out two Attack beacons, of seats 0 and 1, sixty voxels apart in open
-    /// ground, each with [`CROWD`] raiders and aimed at the other's beacon; seat
-    /// 0's force routes round an avoid area between them. Returns the two
-    /// beacons.
-    fn crowd(world: &mut World) -> [pharmakos_sim::tables::BeaconId; 2] {
-        use pharmakos_sim::attack::{Aim, AttackSettings};
-        use pharmakos_sim::seams::MandateKind;
-        use pharmakos_sim::tables::{ColumnBox, PRIORITY_NORMAL, SeatId, UnitKind};
-        let size = world.voxels().size();
-        let mid_x = i32::try_from(size[0].div_euclid(2)).expect("a column");
-        let mid_y = i32::try_from(size[1].div_euclid(2)).expect("a column");
-        let west = world.standing_point([mid_x - 12, mid_y, 0]);
-        let east = world.standing_point([mid_x + 12, mid_y, 0]);
-        let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
-            at.map(|axis| i16::try_from(axis.floor_voxels()).expect("a voxel coordinate"))
-        };
-        let mut lanes = Vec::new();
-        for (seat, here, there) in [(0_u8, west, east), (1_u8, east, west)] {
-            let beacon = world
-                .place_beacon_directly(
-                    SeatId::new(seat),
-                    here,
-                    MandateKind::Attack,
-                    PRIORITY_NORMAL,
-                )
-                .expect("an Attack beacon");
-            let avoid = if seat == 0 {
-                let x = i16::try_from(mid_x).expect("a column");
-                let y = i16::try_from(mid_y).expect("a column");
-                vec![ColumnBox::new([x - 4, y - 4], [x + 4, y + 4]).expect("a box")]
-            } else {
-                Vec::new()
-            };
-            assert!(world.set_attack(
-                beacon,
-                AttackSettings {
-                    aim: Aim::Voxel(voxel(there)),
-                    force_size: Some(CROWD),
-                    waves: 1,
-                    ..AttackSettings::default()
-                },
-                &avoid,
-            ));
-            for _ in 0..CROWD {
-                world
-                    .field_unit(SeatId::new(seat), beacon, UnitKind::Raider, here)
-                    .expect("a raider");
-            }
-            lanes.push(beacon);
-        }
-        <[pharmakos_sim::tables::BeaconId; 2]>::try_from(lanes).expect("two lanes")
-    }
-
-    /// The ticks counted for table growth, after the 50-tick warm-up: long enough
-    /// that every placed seat's deploy, Generator and fabricated drone land inside
-    /// them (the last Generator is finished at tick 1 300 at the committed table).
-    const GROWTH_TICKS: u32 = 1_400;
-
-    /// Queue one crater on a fresh patch of ground, so the edit actually changes
-    /// voxels and the whole voxel phase runs.
-    ///
-    /// The columns walk a coprime stride across the map, so a later tick never
-    /// craters air a former tick already removed; the `z` is the column's own
-    /// surface, so the ball always has rock to take.
-    fn crater_at(world: &mut World, step: u32) {
-        let size = world.voxels().size();
-        let width = i32::try_from(size[0]).expect("the map fits in an i32");
-        let depth = i32::try_from(size[1]).expect("the map fits in an i32");
-        let x = i32::try_from(step.wrapping_mul(37) % 4096).expect("a column index") % width;
-        let y = i32::try_from(step.wrapping_mul(53) % 4096).expect("a column index") % depth;
-        let z = world
-            .voxels()
-            .top_solid_z(x, y)
-            .expect("every column of the determinism map has ground");
-        assert!(
-            world
-                .request_voxel_edit(VoxelEdit::Crater {
-                    centre: [x, y, z],
-                    radius: 3,
-                    by: None,
-                })
-                .is_ok(),
-            "the edit queue is full at step {step}"
-        );
-    }
-
-    /// Queue a collapse on a fresh column: a voxel two above the column's top,
-    /// joined to it by one voxel that the same tick's last edit removes, so the
-    /// voxel above is a detached region of one that falls a voxel.
-    ///
-    /// The columns walk a different coprime stride from [`crater_at`]'s, offset
-    /// across the map, so a collapse and a crater rarely share a column, and a
-    /// shared one still collapses: the edits run in the order they are filed.
-    fn collapse_at(world: &mut World, step: u32) {
-        let size = world.voxels().size();
-        let width = i32::try_from(size[0]).expect("the map fits in an i32");
-        let depth = i32::try_from(size[1]).expect("the map fits in an i32");
-        let x =
-            (i32::try_from(step.wrapping_mul(41) % 4096).expect("a column index") + 101) % width;
-        let y =
-            (i32::try_from(step.wrapping_mul(59) % 4096).expect("a column index") + 211) % depth;
-        let z = world
-            .voxels()
-            .top_solid_z(x, y)
-            .expect("every column of the determinism map has ground");
-        for (dz, material) in [
-            (2, pharmakos_sim::voxels::Material::STONE),
-            (1, pharmakos_sim::voxels::Material::STONE),
-            (1, pharmakos_sim::voxels::Material::AIR),
-        ] {
-            assert!(
-                world
-                    .request_voxel_edit(VoxelEdit::Set {
-                        at: [x, y, z + dz],
-                        material,
-                        by: None,
-                    })
-                    .is_ok(),
-                "the edit queue is full at step {step}"
-            );
-        }
     }
 
     /// The served walk "nearest" ranks by, and the estimator's clear queries
@@ -1393,4 +1992,1197 @@ fn manifest_features() -> Vec<String> {
         }
     }
     features
+}
+
+/// **The source guard's walker.** The types the world owns are not a hand
+/// list: they are found by walking field types from `World` through the
+/// sim's sources, every struct and enum reachable by value (through
+/// `Option`, `Box`, tuples, arrays and every other wrapper), and every `type`
+/// alias expanded. A name is resolved as the compiler would find it, as far
+/// as a reading of the source can: a path names its module (`crate::a::B`,
+/// or `a::B` relative), a bare name is the file's own item or what the
+/// file's `use` declarations bring in; where that still leaves more than one
+/// item, every one of them is walked, so the walk errs towards reading too
+/// much. A field is *plain* when `Vec`, `VecDeque` or `String` names a type
+/// anywhere in it, qualified paths included, or when it holds a `Box<[T]>`;
+/// a type name the walker cannot resolve is an error naming the field, never
+/// a skip.
+mod owned {
+    use super::{Token, tokens};
+
+    /// One field of a struct, or of an enum's variant: its name (a tuple
+    /// field's index) and its type's tokens.
+    #[derive(Clone, Debug)]
+    struct Field {
+        name: String,
+        ty: Vec<Token>,
+    }
+
+    /// A struct or enum defined at module level.
+    #[derive(Clone, Debug)]
+    struct Item {
+        file: String,
+        module: Vec<String>,
+        name: String,
+        generics: Vec<String>,
+        fields: Vec<Field>,
+    }
+
+    /// A module-level `type` alias.
+    #[derive(Clone, Debug)]
+    struct Alias {
+        file: String,
+        name: String,
+        generics: Vec<String>,
+        rhs: Vec<Token>,
+    }
+
+    /// A `use` declaration's binding: in `file`, `name` means `path`; a glob
+    /// binds no name and brings in every item of `path`.
+    #[derive(Clone, Debug)]
+    struct Use {
+        file: String,
+        name: Option<String>,
+        path: Vec<String>,
+    }
+
+    /// Every item, alias and `use` of a set of sources.
+    #[derive(Default, Debug)]
+    pub(super) struct Sources {
+        items: Vec<Item>,
+        aliases: Vec<Alias>,
+        uses: Vec<Use>,
+    }
+
+    /// What the walk found: every plain field `(file, type, field)`, every
+    /// field naming a type it could not resolve `(file, type, field, name)`,
+    /// and the types it walked `(file, type)`.
+    #[derive(Default, Debug)]
+    pub(super) struct Walked {
+        pub(super) plain: Vec<(String, String, String)>,
+        pub(super) unresolved: Vec<(String, String, String, String)>,
+        pub(super) types: Vec<(String, String)>,
+    }
+
+    /// The names that mark a field plain.
+    const PLAIN: &[&str] = &["Vec", "VecDeque", "String"];
+
+    /// Types the walker knows and does not descend into: the language's
+    /// scalars and the standard library's wrappers, whose arguments it walks.
+    const KNOWN: &[&str] = &[
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "usize",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "isize",
+        "bool",
+        "char",
+        "str",
+        "Option",
+        "Box",
+        "Arc",
+        "Rc",
+        "Cell",
+        "RefCell",
+        "Result",
+        "PhantomData",
+        "BTreeMap",
+        "BTreeSet",
+        "AtomicBool",
+        "AtomicU8",
+        "AtomicU32",
+        "AtomicU64",
+        "NonZeroU8",
+        "NonZeroU16",
+        "NonZeroU32",
+        "NonZeroU64",
+        "NonZeroUsize",
+        "NonZeroI32",
+        "NonZeroI64",
+        "Vec",
+        "VecDeque",
+        "String",
+    ];
+
+    fn word(token: Option<&Token>) -> Option<&str> {
+        match token {
+            Some(Token::Word(word)) => Some(word),
+            _ => None,
+        }
+    }
+
+    fn is_punct(token: Option<&Token>, text: &str) -> bool {
+        matches!(token, Some(Token::Punct(p)) if p == text)
+    }
+
+    /// The module path of a source file: `src/a/b.rs` is `a::b`, `src/a.rs`
+    /// is `a`, and `src/lib.rs` the crate root.
+    fn module_of(file: &str) -> Vec<String> {
+        let inner = file.strip_prefix("src/").unwrap_or(file);
+        let inner = inner.strip_suffix(".rs").unwrap_or(inner);
+        let inner = inner.strip_suffix("/mod").unwrap_or(inner);
+        if inner == "lib" {
+            return Vec::new();
+        }
+        inner.split('/').map(str::to_owned).collect()
+    }
+
+    /// The index past the bracketed group that opens at `i` (`(`, `[`,
+    /// `{` or `<`), or the end.
+    fn past_group(tokens: &[Token], i: usize) -> usize {
+        let mut depth = 0_i64;
+        let mut j = i;
+        while let Some(token) = tokens.get(j) {
+            if let Token::Punct(p) = token {
+                match p.as_str() {
+                    "(" | "[" | "{" | "<" => depth += 1,
+                    ")" | "]" | "}" | ">" => depth -= 1,
+                    _ => {}
+                }
+            }
+            j += 1;
+            if depth == 0 {
+                return j;
+            }
+        }
+        j
+    }
+
+    /// The index past an attribute (`#[..]` or `#![..]`) at `i`, if one opens
+    /// there.
+    fn past_attribute(tokens: &[Token], i: usize) -> Option<usize> {
+        if !is_punct(tokens.get(i), "#") {
+            return None;
+        }
+        let open = if is_punct(tokens.get(i + 1), "!") {
+            i + 2
+        } else {
+            i + 1
+        };
+        is_punct(tokens.get(open), "[").then(|| past_group(tokens, open))
+    }
+
+    /// The index past a visibility at `i` (`pub`, `pub(crate)`,
+    /// `pub(in ..)`), or `i`.
+    fn past_visibility(tokens: &[Token], i: usize) -> usize {
+        if word(tokens.get(i)) != Some("pub") {
+            return i;
+        }
+        if is_punct(tokens.get(i + 1), "(") {
+            past_group(tokens, i + 1)
+        } else {
+            i + 1
+        }
+    }
+
+    /// The generic parameters' names of a `<..>` group at `i`, and the index
+    /// past it.
+    fn generics(tokens: &[Token], i: usize) -> (Vec<String>, usize) {
+        if !is_punct(tokens.get(i), "<") {
+            return (Vec::new(), i);
+        }
+        let end = past_group(tokens, i);
+        let mut names = Vec::new();
+        let mut expect = true;
+        let mut depth = 0_i64;
+        for token in tokens.get(i + 1..end.saturating_sub(1)).unwrap_or(&[]) {
+            match token {
+                Token::Punct(p) if p == "<" || p == "(" || p == "[" => depth += 1,
+                Token::Punct(p) if p == ">" || p == ")" || p == "]" => depth -= 1,
+                Token::Punct(p) if p == "," && depth == 0 => expect = true,
+                Token::Word(w) if expect && depth == 0 && w != "const" => {
+                    names.push(w.clone());
+                    expect = false;
+                }
+                Token::Other if depth == 0 => expect = false,
+                _ => {}
+            }
+        }
+        (names, end)
+    }
+
+    /// Split `tokens[from..to]` at its top-level commas.
+    fn split_commas(tokens: &[Token], from: usize, to: usize) -> Vec<Vec<Token>> {
+        let mut parts = Vec::new();
+        let mut part = Vec::new();
+        let mut depth = 0_i64;
+        for token in tokens.get(from..to).unwrap_or(&[]) {
+            if let Token::Punct(p) = token {
+                match p.as_str() {
+                    "(" | "[" | "{" | "<" => depth += 1,
+                    ")" | "]" | "}" | ">" => depth -= 1,
+                    "," if depth == 0 => {
+                        parts.push(core::mem::take(&mut part));
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            part.push(token.clone());
+        }
+        if !part.is_empty() {
+            parts.push(part);
+        }
+        parts
+    }
+
+    /// A part's tokens with its leading attributes and visibility removed.
+    fn bare(part: &[Token]) -> Vec<Token> {
+        let mut i = 0;
+        while let Some(end) = past_attribute(part, i) {
+            i = end;
+        }
+        let i = past_visibility(part, i);
+        part.get(i..).unwrap_or(&[]).to_vec()
+    }
+
+    /// The named fields inside braces, `tokens[from..to]`.
+    fn named_fields(tokens: &[Token], from: usize, to: usize, prefix: &str) -> Vec<Field> {
+        split_commas(tokens, from, to)
+            .into_iter()
+            .filter_map(|part| {
+                let part = bare(&part);
+                let name = word(part.first())?;
+                is_punct(part.get(1), ":").then(|| Field {
+                    name: format!("{prefix}{name}"),
+                    ty: part.get(2..).unwrap_or(&[]).to_vec(),
+                })
+            })
+            .collect()
+    }
+
+    /// The tuple fields inside parentheses, `tokens[from..to]`, named by
+    /// index.
+    fn tuple_fields(tokens: &[Token], from: usize, to: usize, prefix: &str) -> Vec<Field> {
+        split_commas(tokens, from, to)
+            .into_iter()
+            .enumerate()
+            .map(|(index, part)| Field {
+                name: format!("{prefix}{index}"),
+                ty: bare(&part),
+            })
+            .collect()
+    }
+
+    /// The fields of an enum's variants inside braces, `tokens[from..to]`,
+    /// named `Variant.field` (`Variant.0` for a tuple variant's).
+    fn variant_fields(tokens: &[Token], from: usize, to: usize) -> Vec<Field> {
+        let mut fields = Vec::new();
+        for variant in split_commas(tokens, from, to) {
+            let variant = bare(&variant);
+            let Some(name) = word(variant.first()) else {
+                continue;
+            };
+            let prefix = format!("{name}.");
+            let close = past_group(&variant, 1);
+            if is_punct(variant.get(1), "{") {
+                fields.extend(named_fields(&variant, 2, close.saturating_sub(1), &prefix));
+            } else if is_punct(variant.get(1), "(") {
+                fields.extend(tuple_fields(&variant, 2, close.saturating_sub(1), &prefix));
+            }
+        }
+        fields
+    }
+
+    /// Expand a `use` tree, `tokens`, under `base`, into bindings.
+    fn use_tree(tokens: &[Token], base: &[String], file: &str, out: &mut Vec<Use>) {
+        let mut path = base.to_vec();
+        let mut i = 0;
+        while let Some(token) = tokens.get(i) {
+            match token {
+                Token::Word(w) if w == "as" => {
+                    if let Some(alias) = word(tokens.get(i + 1))
+                        && alias != "_"
+                    {
+                        out.push(Use {
+                            file: file.to_owned(),
+                            name: Some(alias.to_owned()),
+                            path: path.clone(),
+                        });
+                    }
+                    return;
+                }
+                Token::Word(w) => path.push(w.clone()),
+                Token::Punct(p) if p == "*" => {
+                    out.push(Use {
+                        file: file.to_owned(),
+                        name: None,
+                        path,
+                    });
+                    return;
+                }
+                Token::Punct(p) if p == "{" => {
+                    let end = past_group(tokens, i);
+                    for part in split_commas(tokens, i + 1, end.saturating_sub(1)) {
+                        use_tree(&part, &path, file, out);
+                    }
+                    return;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if let Some(last) = path.last() {
+            let (name, path) = if last == "self" {
+                let module: Vec<String> = path.iter().take(path.len() - 1).cloned().collect();
+                (module.last().cloned(), module)
+            } else {
+                (Some(last.clone()), path.clone())
+            };
+            if let Some(name) = name {
+                out.push(Use {
+                    file: file.to_owned(),
+                    name: Some(name),
+                    path,
+                });
+            }
+        }
+    }
+
+    /// The struct or enum whose keyword is at `i`, and the index past it.
+    fn read_item(
+        tokens: &[Token],
+        i: usize,
+        is_enum: bool,
+        file: &str,
+        module: &[String],
+    ) -> Option<(Item, usize)> {
+        let name = word(tokens.get(i + 1))?.to_owned();
+        let (generics, mut j) = generics(tokens, i + 2);
+        while let Some(t) = tokens.get(j) {
+            if ["{", "(", ";"].iter().any(|p| is_punct(Some(t), p)) {
+                break;
+            }
+            j += 1;
+        }
+        let end = past_group(tokens, j);
+        let inner = end.saturating_sub(1);
+        let fields = if is_punct(tokens.get(j), "{") {
+            if is_enum {
+                variant_fields(tokens, j + 1, inner)
+            } else {
+                named_fields(tokens, j + 1, inner, "")
+            }
+        } else if is_punct(tokens.get(j), "(") {
+            tuple_fields(tokens, j + 1, inner, "")
+        } else {
+            Vec::new()
+        };
+        Some((
+            Item {
+                file: file.to_owned(),
+                module: module.to_vec(),
+                name,
+                generics,
+                fields,
+            },
+            end,
+        ))
+    }
+
+    /// Read every module-level struct, enum, `type` alias and `use` of
+    /// `text`, the source of `file`, into `out`. Items inside a function, an
+    /// `impl` or a `trait` are not the module's and are left out (an
+    /// associated `type` is not an alias).
+    pub(super) fn read(file: &str, text: &str, out: &mut Sources) {
+        let tokens = tokens(text);
+        let module = module_of(file);
+        // The kind of each open brace: true for a module's.
+        let mut blocks: Vec<bool> = Vec::new();
+        let mut last_keyword = "";
+        let mut i = 0;
+        while let Some(token) = tokens.get(i) {
+            let at_module = blocks.iter().all(|module| *module);
+            match token {
+                Token::Punct(p) if p == "{" => {
+                    blocks.push(last_keyword == "mod");
+                    last_keyword = "";
+                }
+                Token::Punct(p) if p == "}" => {
+                    blocks.pop();
+                }
+                Token::Punct(p) if p == ";" => last_keyword = "",
+                Token::Word(w) if at_module && w == "use" => {
+                    let mut k = i + 1;
+                    while tokens.get(k).is_some_and(|t| !is_punct(Some(t), ";")) {
+                        k += 1;
+                    }
+                    let tree = tokens.get(i + 1..k).unwrap_or(&[]);
+                    use_tree(tree, &[], file, &mut out.uses);
+                    i = k;
+                }
+                Token::Word(w) if at_module && (w == "struct" || w == "enum") => {
+                    if let Some((item, end)) = read_item(&tokens, i, w == "enum", file, &module) {
+                        out.items.push(item);
+                        i = end;
+                        last_keyword = "";
+                        continue;
+                    }
+                }
+                Token::Word(w) if at_module && w == "type" => {
+                    if let Some(name) = word(tokens.get(i + 1)) {
+                        let name = name.to_owned();
+                        let (generics, j) = generics(&tokens, i + 2);
+                        if is_punct(tokens.get(j), "=") {
+                            let mut k = j + 1;
+                            let mut rhs = Vec::new();
+                            while let Some(t) = tokens.get(k) {
+                                if is_punct(Some(t), ";") {
+                                    break;
+                                }
+                                rhs.push(t.clone());
+                                k += 1;
+                            }
+                            out.aliases.push(Alias {
+                                file: file.to_owned(),
+                                name,
+                                generics,
+                                rhs,
+                            });
+                            i = k;
+                        }
+                    }
+                }
+                Token::Word(w)
+                    if [
+                        "mod",
+                        "impl",
+                        "trait",
+                        "fn",
+                        "struct",
+                        "enum",
+                        "union",
+                        "macro_rules",
+                    ]
+                    .contains(&w.as_str()) =>
+                {
+                    last_keyword = if w == "mod" { "mod" } else { "other" };
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
+    /// The type paths a type's tokens name (`a::b::C` is one path), leaving
+    /// out constants (an array's length) and keywords; and whether it holds
+    /// a `Box<[..]>`.
+    fn paths(ty: &[Token]) -> (Vec<Vec<String>>, bool) {
+        let mut paths = Vec::new();
+        let mut boxed_slice = false;
+        let mut current: Vec<String> = Vec::new();
+        for (index, token) in ty.iter().enumerate() {
+            if let Token::Word(w) = token {
+                if is_punct(ty.get(index + 1), "::") {
+                    current.push(w.clone());
+                    continue;
+                }
+                let keyword = ["dyn", "mut", "const", "for", "impl", "Self"].contains(&w.as_str());
+                let constant = w.len() > 1
+                    && w.chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+                if w == "Box"
+                    && is_punct(ty.get(index + 1), "<")
+                    && is_punct(ty.get(index + 2), "[")
+                {
+                    boxed_slice = true;
+                }
+                if !keyword && !constant {
+                    current.push(w.clone());
+                    paths.push(core::mem::take(&mut current));
+                }
+                current.clear();
+            } else if !is_punct(Some(token), "::") {
+                current.clear();
+            }
+        }
+        (paths, boxed_slice)
+    }
+
+    /// Whether `module` is the module a path's prefix names, from a file in
+    /// `from`: the same module (`crate::a::b`), one of its children (an item
+    /// re-exported from a child), or the prefix read relative to `from` or
+    /// to any parent of it.
+    fn names_module(module: &[String], prefix: &[String], from: &[String]) -> bool {
+        let prefix: Vec<String> = prefix
+            .iter()
+            .filter(|s| !["crate", "self", "super"].contains(&s.as_str()))
+            .cloned()
+            .collect();
+        if module.starts_with(&prefix) || module.ends_with(&prefix) {
+            return true;
+        }
+        let mut relative = from.to_vec();
+        relative.extend(prefix.iter().cloned());
+        module.starts_with(&relative)
+    }
+
+    /// The items a type path names, read from the file `from`.
+    fn resolve<'s>(sources: &'s Sources, from: &str, path: &[String]) -> Vec<&'s Item> {
+        let Some(name) = path.last() else {
+            return Vec::new();
+        };
+        // A name a `use .. as` binds in this file is the path it renames.
+        if let [only] = path
+            && let Some(renamed) = sources.uses.iter().find(|u| {
+                u.file == from && u.name.as_ref() == Some(only) && u.path.last() != Some(only)
+            })
+        {
+            return resolve(sources, from, &renamed.path);
+        }
+        let all: Vec<&Item> = sources.items.iter().filter(|i| &i.name == name).collect();
+        if all.len() <= 1 {
+            return all;
+        }
+        let from_module = module_of(from);
+        let narrowed: Vec<&Item> = if path.len() > 1 {
+            let prefix = path.get(..path.len() - 1).unwrap_or(&[]);
+            all.iter()
+                .copied()
+                .filter(|item| names_module(&item.module, prefix, &from_module))
+                .collect()
+        } else {
+            let own: Vec<&Item> = all.iter().copied().filter(|i| i.file == from).collect();
+            if own.is_empty() {
+                let mut found = Vec::new();
+                for binding in sources.uses.iter().filter(|u| u.file == from) {
+                    match &binding.name {
+                        Some(bound) if bound == name => {
+                            let prefix = binding.path.get(..binding.path.len().saturating_sub(1));
+                            found.extend(all.iter().copied().filter(|item| {
+                                Some(&item.name) == binding.path.last()
+                                    && names_module(
+                                        &item.module,
+                                        prefix.unwrap_or(&[]),
+                                        &from_module,
+                                    )
+                            }));
+                        }
+                        None => found.extend(all.iter().copied().filter(|item| {
+                            names_module(&item.module, &binding.path, &from_module)
+                        })),
+                        _ => {}
+                    }
+                }
+                found
+            } else {
+                own
+            }
+        };
+        if narrowed.is_empty() { all } else { narrowed }
+    }
+
+    /// Walk from `root` (`(file, name)`), descending into every type named
+    /// in a field, except `terminal` types, which are reached and not read.
+    pub(super) fn walk(sources: &Sources, root: (&str, &str), terminal: &[&str]) -> Walked {
+        let mut walked = Walked::default();
+        let mut queue: Vec<&Item> = sources
+            .items
+            .iter()
+            .filter(|item| item.file == root.0 && item.name == root.1)
+            .collect();
+        while let Some(item) = queue.pop() {
+            let key = (item.file.clone(), item.name.clone());
+            if walked.types.contains(&key) {
+                continue;
+            }
+            walked.types.push(key);
+            for field in &item.fields {
+                let mut plain = false;
+                let mut pending: Vec<(Vec<Token>, Vec<String>, String)> =
+                    vec![(field.ty.clone(), item.generics.clone(), item.file.clone())];
+                let mut expanded: Vec<String> = Vec::new();
+                while let Some((ty, generics, from)) = pending.pop() {
+                    let (named, boxed_slice) = paths(&ty);
+                    plain |= boxed_slice;
+                    for path in named {
+                        let Some(name) = path.last() else { continue };
+                        if PLAIN.contains(&name.as_str()) {
+                            plain = true;
+                        }
+                        if KNOWN.contains(&name.as_str())
+                            || generics.contains(name)
+                            || terminal.contains(&name.as_str())
+                        {
+                            continue;
+                        }
+                        let aliases: Vec<&Alias> =
+                            sources.aliases.iter().filter(|a| &a.name == name).collect();
+                        let items = resolve(sources, &from, &path);
+                        if aliases.is_empty() && items.is_empty() {
+                            walked.unresolved.push((
+                                item.file.clone(),
+                                item.name.clone(),
+                                field.name.clone(),
+                                name.clone(),
+                            ));
+                            continue;
+                        }
+                        for alias in aliases {
+                            if !expanded.contains(&alias.name) {
+                                expanded.push(alias.name.clone());
+                                let mut scope = generics.clone();
+                                scope.extend(alias.generics.iter().cloned());
+                                pending.push((alias.rhs.clone(), scope, alias.file.clone()));
+                            }
+                        }
+                        queue.extend(items);
+                    }
+                }
+                if plain {
+                    walked
+                        .plain
+                        .push((item.file.clone(), item.name.clone(), field.name.clone()));
+                }
+            }
+        }
+        walked.plain.sort();
+        walked.plain.dedup();
+        walked.unresolved.sort();
+        walked.types.sort();
+        walked
+    }
+
+    /// The walker on sources given as `(file, text)` pairs, from `World`.
+    fn walk_texts(files: &[(&str, &str)], terminal: &[&str]) -> Walked {
+        let mut sources = Sources::default();
+        for (file, text) in files {
+            read(file, text, &mut sources);
+        }
+        walk(&sources, ("src/world.rs", "World"), terminal)
+    }
+
+    /// The walker's own cases: every way a review found to hide a vector
+    /// from a hand list, a name two modules define, and an unresolved type,
+    /// which must fail.
+    #[test]
+    fn the_walker_finds_every_vector_the_world_holds() {
+        let world = r"
+            use crate::ids::Row;
+            use crate::other::{self, Deep as Deeper};
+            pub struct World {
+                plain: Vec<u32>,
+                qualified: std::vec::Vec<u32>,
+                aliased: Rows,
+                optional: Option<Vec<u8>>,
+                pair: (u8, std::collections::VecDeque<u8>),
+                pub(in crate::world) scoped: String,
+                regrown: Box<[u32]>,
+                held: Holder,
+                elsewhere: Deeper,
+                generic: Wrap<Leaf>,
+                #[allow(dead_code)]
+                array: [Leaf; CHUNK_VOXELS],
+                kinds: Kinds,
+                tuple: TupleStruct,
+                reserved: Reserved<Leaf>,
+                rows: Reserved<Row>,
+                fine: u32,
+            }
+            pub(crate) struct Holder { buf: Vec<u32> }
+            type Rows = Vec<Leaf>;
+            struct Wrap<T> { inner: T, count: u32 }
+            pub struct Leaf { x: u8 }
+            pub enum Kinds { A, B(Vec<u8>), C { list: Vec<u8> } }
+            pub struct TupleStruct(pub u8, String);
+            impl World { type Hidden = Vec<u8>; fn f() { struct Local { v: Vec<u8> } } }
+        ";
+        let other = "pub struct Deep { pub(crate) items: Vec<super::world::Leaf> }";
+        let ids = "pub struct Row(u32);";
+        let settings = "pub enum Row { Settings { list: Vec<u8> } }";
+        let walked = walk_texts(
+            &[
+                ("src/world.rs", world),
+                ("src/other.rs", other),
+                ("src/ids.rs", ids),
+                ("src/interpreter.rs", settings),
+            ],
+            &["Reserved"],
+        );
+        let plain: Vec<String> = walked
+            .plain
+            .iter()
+            .map(|(file, ty, field)| format!("{file} {ty}.{field}"))
+            .collect();
+        assert_eq!(
+            plain,
+            [
+                "src/other.rs Deep.items",
+                "src/world.rs Holder.buf",
+                "src/world.rs Kinds.B.0",
+                "src/world.rs Kinds.C.list",
+                "src/world.rs TupleStruct.1",
+                "src/world.rs World.aliased",
+                "src/world.rs World.optional",
+                "src/world.rs World.pair",
+                "src/world.rs World.plain",
+                "src/world.rs World.qualified",
+                "src/world.rs World.regrown",
+                "src/world.rs World.scoped",
+            ],
+            "every vector the world holds, however it is spelled or wherever it lives, and \
+             not the other module's `Row`"
+        );
+        assert!(walked.unresolved.is_empty(), "{:?}", walked.unresolved);
+        assert!(
+            !walked
+                .types
+                .iter()
+                .any(|(_, ty)| ty == "Local" || ty == "Reserved"),
+            "a function's local struct and a terminal type are not walked"
+        );
+
+        let unknown = walk_texts(
+            &[("src/world.rs", "pub struct World { mystery: Mystery<u8> }")],
+            &[],
+        );
+        assert_eq!(
+            unknown.unresolved,
+            [(
+                "src/world.rs".to_owned(),
+                "World".to_owned(),
+                "mystery".to_owned(),
+                "Mystery".to_owned()
+            )],
+            "a type the walker cannot resolve is an error naming the field"
+        );
+    }
+}
+
+/// Types the walker reaches and does not read, each with why a vector inside
+/// it may drop its room in a clone.
+const TERMINAL: &[(&str, &str)] = &[
+    (
+        "Reserved",
+        "the type this guard holds the world to: its clone keeps the room (src/reserved.rs)",
+    ),
+    (
+        "RulesTable",
+        "an input: loaded once and never written by a tick, so no vector of it grows",
+    ),
+    (
+        "Plan",
+        "a sealed playbook, an input as the rules table is: compiled at the seal, then read, \
+         never written by a tick",
+    ),
+];
+
+/// A field sized once to one row a seat (`config.seats`), at construction and
+/// again at a restore, and written by index.
+const PER_SEAT: &str = "one row a seat: sized to the seat count at construction and at a restore, \
+                        written by index, never pushed in a tick";
+
+/// A field sized once to the map: one entry a chunk, column or voxel of it.
+const PER_MAP: &str = "sized once to the map (one a chunk, column or voxel of the rules \
+                       table's map size) where it is built, never pushed in a tick";
+
+/// A field of the pathing graph's search scratch, `vec![..; n]` in its
+/// constructor.
+const PER_NODE: &str = "`vec![..; n]` in its constructor, `n` the surface graph's node count \
+                        (or the abstract node count plus two), and written by index";
+
+/// A field of the cluster decomposition, `vec![..]` in `Clusters::new`.
+const PER_CLUSTER: &str = "`vec![..]` in `Clusters::new`, sized from the cluster count, the \
+                           transitions a border holds (`max_trans`), the intra edges \
+                           (`max_intra`) and the node count; written by index";
+
+/// Why the support rule's lists may be plain: the only clone of the rule a
+/// world makes is the support scratch's written-out one, which builds a fresh
+/// rule with its room.
+const SUPPORT_RULE: &str = "cloned only by the support scratch's written-out Clone, which builds \
+                            a fresh rule with its room (`SupportRule::with_room` of its `Room`)";
+
+/// Every plain field the walker finds, with what bounds it: a field reserved
+/// past its length must be a `Reserved`; a new plain field fails the guard
+/// until it is one or is listed here with its bound.
+const PLAIN_VECTORS: &[(&str, &str, &str, &str)] = &[
+    (
+        "src/world.rs",
+        "World",
+        "spiral",
+        "built once in World::new by `targeting::spiral_offsets` of the sphere radius",
+    ),
+    ("src/world.rs", "World", "decision_work", PER_SEAT),
+    (
+        "src/world.rs",
+        "World",
+        "damage_dealt",
+        "`vec![0; seats * seats]` in World::new and at a restore, written by index",
+    ),
+    (
+        "src/world.rs",
+        "World",
+        "route_spans",
+        "`vec![(0, 0); unit_limit]` in World::new, one a unit row the table may ever hold, \
+         written by index",
+    ),
+    (
+        "src/world.rs",
+        "World",
+        "commanders",
+        "`commander_index(units, seats)`: one a seat, at construction and at a restore",
+    ),
+    ("src/world.rs", "World", "unit_start_of", PER_SEAT),
+    ("src/voxels.rs", "VoxelStore", "chunks", PER_MAP),
+    ("src/voxels.rs", "VoxelStore", "modified", PER_MAP),
+    ("src/voxels.rs", "VoxelStore", "pending_flag", PER_MAP),
+    ("src/voxels.rs", "VoxelStore", "touch_flag", PER_MAP),
+    ("src/chunks.rs", "ChunkDigests", "digests", PER_MAP),
+    ("src/terrain.rs", "GeneratedSurface", "tops", PER_MAP),
+    ("src/pathing/surface.rs", "Surface", "top", PER_MAP),
+    ("src/pathing/surface.rs", "Surface", "walk", PER_MAP),
+    (
+        "src/bore.rs",
+        "Bore",
+        "columns",
+        "the core's bore columns, generated with the map and regenerated at a restore",
+    ),
+    (
+        "src/features.rs",
+        "FeatureTable",
+        "features",
+        "every vent and seam, generated with the map and regenerated at a restore",
+    ),
+    (
+        "src/features.rs",
+        "Feature",
+        "footprint",
+        "the columns the generator stamped the feature into, at map generation",
+    ),
+    (
+        "src/runner.rs",
+        "MatchState",
+        "segment_lengths_ms",
+        "the match settings' segment ladder, set at construction and at a restore",
+    ),
+    (
+        "src/interpreter/state.rs",
+        "Interpreter",
+        "plans",
+        "one a seat (`Interpreter::with_seats`)",
+    ),
+    (
+        "src/interpreter/state.rs",
+        "Interpreter",
+        "states",
+        "one a seat (`Interpreter::with_seats`)",
+    ),
+    (
+        "src/interpreter/state.rs",
+        "PlanState",
+        "fires",
+        "one a handler of the sealed plan, sized at the seal and at a restore",
+    ),
+    (
+        "src/interpreter/state.rs",
+        "PlanState",
+        "ready",
+        "one a handler of the sealed plan, sized at the seal and at a restore",
+    ),
+    (
+        "src/attack.rs",
+        "BreachScratch",
+        "mark",
+        "`vec![0; 2 * nodes]` in BreachScratch::new, two states a surface node",
+    ),
+    (
+        "src/attack.rs",
+        "BreachScratch",
+        "g",
+        "`vec![0; 2 * nodes]` in BreachScratch::new, two states a surface node",
+    ),
+    (
+        "src/attack.rs",
+        "BreachScratch",
+        "came",
+        "`vec![0; 2 * nodes]` in BreachScratch::new, two states a surface node",
+    ),
+    (
+        "src/support.rs",
+        "Scratch",
+        "victims",
+        "the support scratch's written-out Clone reserves it afresh at its `victims_room`",
+    ),
+    ("src/support.rs", "SupportRule", "list", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "materials", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "regions", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "order", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "changed", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "seeds", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "members", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "landed", SUPPORT_RULE),
+    (
+        "src/support.rs",
+        "SupportRule",
+        "column_stamp",
+        SUPPORT_RULE,
+    ),
+    (
+        "src/support.rs",
+        "SupportRule",
+        "column_height",
+        SUPPORT_RULE,
+    ),
+    (
+        "src/support.rs",
+        "Bits",
+        "0",
+        "`vec![0; room.words]` in SupportRule::with_room: a bit a voxel of the map",
+    ),
+    ("src/pathing/search.rs", "Scratch", "stamp", PER_NODE),
+    ("src/pathing/search.rs", "Scratch", "closed", PER_NODE),
+    ("src/pathing/search.rs", "Scratch", "g", PER_NODE),
+    ("src/pathing/search.rs", "Scratch", "came", PER_NODE),
+    (
+        "src/pathing/search.rs",
+        "Scratch",
+        "abstract_stamp",
+        PER_NODE,
+    ),
+    (
+        "src/pathing/search.rs",
+        "Scratch",
+        "abstract_closed",
+        PER_NODE,
+    ),
+    ("src/pathing/search.rs", "Scratch", "abstract_g", PER_NODE),
+    (
+        "src/pathing/search.rs",
+        "Scratch",
+        "abstract_came",
+        PER_NODE,
+    ),
+    ("src/pathing/reach.rs", "Reach", "stamp", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "settled", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "cost", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "key", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "listed", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "next", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "prev", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "sites", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "heur", PER_NODE),
+    (
+        "src/pathing/reach.rs",
+        "Reach",
+        "heads",
+        "`vec![NONE; buckets]` in Reach::new, the bucket ring's length from the dearest step",
+    ),
+    (
+        "src/pathing/repair.rs",
+        "Repairer",
+        "dirty_flag",
+        "`vec![false; clusters]` in Repairer::new, one a cluster",
+    ),
+    (
+        "src/pathing/repair.rs",
+        "Repairer",
+        "transitions_flag",
+        "`vec![false; clusters]` in Repairer::new, one a cluster",
+    ),
+    (
+        "src/pathing/repair.rs",
+        "Repairer",
+        "inter_flag",
+        "`vec![false; clusters]` in Repairer::new, one a cluster",
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "of_node",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "local_comp",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "comp_count",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "vborder_len",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "vborder",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "hborder_len",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "hborder",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "trans_len",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "trans_cell",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "intra_row",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "intra_to",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "intra_cost",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "inter_row",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "inter_to",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "inter_cost",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "comp_offset",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "comp_label",
+        PER_CLUSTER,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "union_find",
+        PER_CLUSTER,
+    ),
+];
+
+/// **The type is the whole fix, so every vector the world owns is held to
+/// it.** A cloned world (a `research` fork) or a restored one keeps a
+/// vector's room only if the vector is a `Reserved`; the fork and restore
+/// tests catch a plain one only where their scenarios fill it past its
+/// length. This guard walks every type the world owns, from `World` through
+/// the sim's sources ([`owned`]), and fails on a plain `Vec`, `VecDeque`,
+/// `String` or `Box<[T]>` field that [`PLAIN_VECTORS`] does not list with its
+/// bound, on a listed one that is gone, and on a field whose type it cannot
+/// resolve. It runs in both builds.
+#[test]
+fn every_vector_the_world_owns_keeps_its_room_or_says_why_not() {
+    let mut files = Vec::new();
+    rust_sources(std::path::Path::new("src"), &mut files);
+    let mut sources = owned::Sources::default();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("a sim source reads");
+        owned::read(file, &text, &mut sources);
+    }
+    let terminal: Vec<&str> = TERMINAL.iter().map(|(name, _)| *name).collect();
+    let walked = owned::walk(&sources, ("src/world.rs", "World"), &terminal);
+    assert!(
+        walked
+            .types
+            .iter()
+            .any(|(file, name)| file == "src/world.rs" && name == "World"),
+        "the walk starts at src/world.rs's World"
+    );
+    for (file, name) in [
+        ("src/tables.rs", "UnitTable"),
+        ("src/tables.rs", "ShellTable"),
+        ("src/events.rs", "EventBus"),
+        ("src/voxels.rs", "VoxelStore"),
+        ("src/support.rs", "SupportRule"),
+        ("src/pathing/router.rs", "Router"),
+        ("src/pathing/search.rs", "Heap"),
+        ("src/pathing/reach.rs", "Reach"),
+        ("src/survey.rs", "Memory"),
+        ("src/interpreter/state.rs", "PlanState"),
+        ("src/licence.rs", "LicenceTable"),
+    ] {
+        assert!(
+            walked.types.iter().any(|(f, n)| f == file && n == name),
+            "the walk from World reaches {file}'s {name}"
+        );
+    }
+    assert!(
+        walked.unresolved.is_empty(),
+        "fields naming a type the walker cannot resolve, (file, type, field, name): {:?}",
+        walked.unresolved
+    );
+    let mut listed: Vec<(String, String, String)> = PLAIN_VECTORS
+        .iter()
+        .map(|(f, s, n, _)| ((*f).to_owned(), (*s).to_owned(), (*n).to_owned()))
+        .collect();
+    listed.sort();
+    let unlisted: Vec<_> = walked
+        .plain
+        .iter()
+        .filter(|p| !listed.contains(p))
+        .collect();
+    let stale: Vec<_> = listed
+        .iter()
+        .filter(|l| !walked.plain.contains(l))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "plain vectors the world owns, neither `Reserved` nor listed with their bound in \
+         PLAIN_VECTORS: {unlisted:?}. A vector a tick fills past its length must be a \
+         `Reserved`, or a cloned or restored world allocates on its first tick that fills it"
+    );
+    assert!(
+        stale.is_empty(),
+        "PLAIN_VECTORS lists fields the walk no longer finds: {stale:?}"
+    );
+    for (file, name, field, reason) in PLAIN_VECTORS {
+        assert!(
+            !reason.is_empty(),
+            "{file} {name}.{field} says what bounds it"
+        );
+    }
+    for (name, reason) in TERMINAL {
+        assert!(!reason.is_empty(), "{name} says why it is not read");
+    }
 }
