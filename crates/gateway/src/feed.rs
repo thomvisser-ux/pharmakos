@@ -561,11 +561,37 @@ pub struct ViewCursor {
     pub to_seq: u64,
     /// The next chunk index to deliver. Zero starts a listing.
     pub index: u32,
+    /// Where in the listing's entities the next page starts, once its chunks
+    /// are all sent and its entities did not fit one page (S3's `outcap`):
+    /// every chunk is behind such a cursor, and `index` is zero.
+    pub entities: Option<EntityPlace>,
+}
+
+/// A place in a listing's entities: the held list it pages and the next
+/// entity to send (S3's `outcap`; `crate::viewfeed::ViewFeed::held_entities`).
+///
+/// The list is the one taken when the listing's chunks were all sent, held by
+/// its digest until its last page goes, so every page of one listing is cut
+/// from one list: no entity twice, none lost at a page's edge, however the
+/// world moves while the client pages.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EntityPlace {
+    /// The held list's digest: the project's one hash over the list as the
+    /// wire spells it, so it says nothing the list does not.
+    pub list: u64,
+    /// The next entity to send.
+    pub offset: u32,
 }
 
 impl ViewCursor {
-    /// How many characters a rendered view cursor has.
+    /// How many characters a rendered view cursor has, while it is a place
+    /// in the listing's chunks.
     pub const CHARS: usize = 64;
+
+    /// How many characters a rendered view cursor has once it is a place in
+    /// the listing's entities: the chunk cursor's sixty-four and the held
+    /// list's digest (sixteen) and the offset (eight), the check last.
+    pub const ENTITY_CHARS: usize = 88;
 
     /// True when this cursor is a keyframe still being paged.
     #[must_use]
@@ -576,14 +602,26 @@ impl ViewCursor {
     /// The opaque text a client receives and hands back.
     #[must_use]
     pub fn render(self) -> String {
-        format!(
-            "{:016x}{:016x}{:016x}{:08x}{:08x}",
-            self.view_id,
-            self.from_seq,
-            self.to_seq,
-            self.index,
-            self.check()
-        )
+        match self.entities {
+            None => format!(
+                "{:016x}{:016x}{:016x}{:08x}{:08x}",
+                self.view_id,
+                self.from_seq,
+                self.to_seq,
+                self.index,
+                self.check()
+            ),
+            Some(place) => format!(
+                "{:016x}{:016x}{:016x}{:08x}{:016x}{:08x}{:08x}",
+                self.view_id,
+                self.from_seq,
+                self.to_seq,
+                self.index,
+                place.list,
+                place.offset,
+                self.check()
+            ),
+        }
     }
 
     /// Read a cursor a client handed back.
@@ -595,10 +633,14 @@ impl ViewCursor {
     /// belongs to a view this gateway no longer has.
     pub fn parse(text: &str, current: u64) -> Result<ViewCursor, Error> {
         let refuse = || Error::invalid("that is not a cursor the view issued");
-        if text.len() != ViewCursor::CHARS
-            || !text
-                .bytes()
-                .all(|digit| matches!(digit, b'0'..=b'9' | b'a'..=b'f'))
+        let paging_entities = match text.len() {
+            ViewCursor::CHARS => false,
+            ViewCursor::ENTITY_CHARS => true,
+            _ => return Err(refuse()),
+        };
+        if !text
+            .bytes()
+            .all(|digit| matches!(digit, b'0'..=b'9' | b'a'..=b'f'))
         {
             return Err(refuse());
         }
@@ -607,12 +649,21 @@ impl ViewCursor {
         let from_seq = u64::from_str_radix(field(16, 32)?, 16).map_err(|_| refuse())?;
         let to_seq = u64::from_str_radix(field(32, 48)?, 16).map_err(|_| refuse())?;
         let index = u32::from_str_radix(field(48, 56)?, 16).map_err(|_| refuse())?;
-        let check = u32::from_str_radix(field(56, 64)?, 16).map_err(|_| refuse())?;
+        let (entities, check) = if paging_entities {
+            let list = u64::from_str_radix(field(56, 72)?, 16).map_err(|_| refuse())?;
+            let offset = u32::from_str_radix(field(72, 80)?, 16).map_err(|_| refuse())?;
+            let check = u32::from_str_radix(field(80, 88)?, 16).map_err(|_| refuse())?;
+            (Some(EntityPlace { list, offset }), check)
+        } else {
+            let check = u32::from_str_radix(field(56, 64)?, 16).map_err(|_| refuse())?;
+            (None, check)
+        };
         let cursor = ViewCursor {
             view_id,
             from_seq,
             to_seq,
             index,
+            entities,
         };
         if cursor.check() != check {
             return Err(refuse());
@@ -629,12 +680,18 @@ impl ViewCursor {
     /// The check value: the low 32 bits of the project's one hash function
     /// over the view id, the listing, both stamps and the index.
     fn check(self) -> u32 {
-        let mut bytes: Vec<u8> = Vec::with_capacity(29);
+        let mut bytes: Vec<u8> = Vec::with_capacity(41);
         bytes.extend_from_slice(&self.view_id.to_le_bytes());
         bytes.push(Listing::View.tag());
         bytes.extend_from_slice(&self.from_seq.to_le_bytes());
         bytes.extend_from_slice(&self.to_seq.to_le_bytes());
         bytes.extend_from_slice(&self.index.to_le_bytes());
+        // Only an entity cursor's bytes grow, so every chunk cursor checks
+        // exactly as it did before entities were paged.
+        if let Some(place) = self.entities {
+            bytes.extend_from_slice(&place.list.to_le_bytes());
+            bytes.extend_from_slice(&place.offset.to_le_bytes());
+        }
         let [a, b, c, d, ..] = pharmakos_sim::digest(&bytes).to_le_bytes();
         u32::from_le_bytes([a, b, c, d])
     }
@@ -1431,6 +1488,7 @@ mod tests {
             from_seq: 12,
             to_seq: 40,
             index: 7,
+            entities: None,
         };
         let text = cursor.render();
         assert_eq!(text.len(), ViewCursor::CHARS);
@@ -1454,6 +1512,37 @@ mod tests {
         );
     }
 
+    /// An entity cursor (S3's `outcap`) round-trips at its own length, its
+    /// check covers the list and the offset, and a chunk cursor is unchanged.
+    #[test]
+    fn an_entity_cursor_round_trips_and_its_check_covers_its_place() {
+        let chunk = ViewCursor {
+            view_id: 5,
+            from_seq: 0,
+            to_seq: 9,
+            index: 0,
+            entities: None,
+        };
+        let cursor = ViewCursor {
+            entities: Some(super::EntityPlace {
+                list: 0x0123_4567_89ab_cdef,
+                offset: 300,
+            }),
+            ..chunk
+        };
+        let text = cursor.render();
+        assert_eq!(text.len(), ViewCursor::ENTITY_CHARS);
+        assert_eq!(ViewCursor::parse(&text, 5).expect("its own view"), cursor);
+        assert_eq!(chunk.render().len(), ViewCursor::CHARS);
+        // The offset moved by hand: the check refuses it.
+        let mut moved = text.clone();
+        moved.replace_range(79..80, "f");
+        assert_eq!(
+            ViewCursor::parse(&moved, 5).expect_err("refused").code(),
+            Code::InvalidArgument
+        );
+    }
+
     #[test]
     fn a_view_cursor_from_another_view_is_stale_and_a_damaged_one_is_refused() {
         let cursor = ViewCursor {
@@ -1461,6 +1550,7 @@ mod tests {
             from_seq: 1,
             to_seq: 1,
             index: 0,
+            entities: None,
         };
         let text = cursor.render();
         assert_eq!(
@@ -1508,6 +1598,7 @@ mod tests {
             from_seq: 3,
             to_seq: 3,
             index: 0,
+            entities: None,
         }
         .render();
         assert_eq!(

@@ -754,10 +754,17 @@ impl PharmakosBridge {
         };
         let Answer {
             view,
+            view_starts,
             events,
             error,
             phase_changed,
         } = answer;
+        if view.is_some()
+            && view_starts
+            && let Some(model) = self.view.as_mut()
+        {
+            model.begin_listing();
+        }
         let mut report = VarDictionary::new();
         report.set(&"phase".to_variant(), &phase.to_variant());
         report.set(&"phase_changed".to_variant(), &phase_changed.to_variant());

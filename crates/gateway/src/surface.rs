@@ -3642,8 +3642,11 @@ impl Surface {
             // unhashed state, so a copy answers exactly what the real one
             // would, and putting the real one back leaves every viewer's state
             // and the feed's stamp as they were.
-            let kept = self.views.clone();
+            let mut kept = self.views.clone();
             let answered = self.dispatch(method, subject, held, request, vision);
+            // Keep the entity lists the scratch call holds for its listings
+            // (S3's `outcap`), so an advisor pages its entities as a socket does.
+            kept.keep_held_of(&mut self.views);
             self.views = kept;
             answered?
         } else {

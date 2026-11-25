@@ -2659,9 +2659,14 @@ pub struct GetViewResponse {
     /// changed since the cursor.
     #[prost(message, repeated, tag="2")]
     pub chunks: ::prost::alloc::vec::Vec<ViewChunk>,
-    /// The complete visible entity list, on the page where `complete` is true and
-    /// on no other. An id absent from it is an entity that is gone or is no
-    /// longer visible; a client holds no list of its own past that.
+    /// The complete visible entity list, after the chunks: on the page where
+    /// `complete` is true, and, when it does not fit that page, on the pages
+    /// before it as well, each page cut by bytes from the one list the listing
+    /// took when its chunks ended, in order, every entity once (S3's `outcap`).
+    /// A client joins the entities of a listing's pages and takes the whole on
+    /// its completing page; a listing it begins again starts the join afresh.
+    /// An id absent from the whole is an entity that is gone or is no longer
+    /// visible; a client holds no list of its own past that.
     ///
     /// A delta mode for entities is deliberately NOT here. It arrives, if it
     /// arrives, as a new field of GetViewRequest that a client opts into, so that

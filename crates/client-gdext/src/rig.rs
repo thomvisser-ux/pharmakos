@@ -870,6 +870,11 @@ pub struct Outgoing {
 pub struct Answer {
     /// A `get_view` result, footer included, for [`crate::view`] to decode and apply.
     pub view: Option<Json>,
+    /// Whether that page begins a listing: a keyframe, or a page asked with any cursor but the
+    /// one the last unfinished page handed back. The model drops what it joined of a listing
+    /// that did not complete ([`crate::view::ViewModel::begin_listing`]). Scheduling: the rig
+    /// knows which cursor it asked with, and the cursor itself is opaque.
+    pub view_starts: bool,
     /// New event-list rows from `get_segment_feed`, in the feed's order.
     pub events: Vec<EventRow>,
     /// The gateway's refusal, as `CODE: message`, when the call was refused.
@@ -1735,6 +1740,9 @@ impl Rig {
             Purpose::View => {
                 let complete = matches!(result.get("complete"), Some(Json::Bool(true)));
                 let next = proto3_text(result, "next_cursor")?.to_owned();
+                // A page asked with the cursor the last unfinished page handed back
+                // continues that listing; any other page begins one (S3's `outcap`).
+                answer.view_starts = self.view_paging.as_deref() != Some(self.view_asking.as_str());
                 if complete {
                     self.due.keyframe = false;
                     self.view_paging = None;
@@ -3054,6 +3062,50 @@ mod tests {
             .find(|frame| frame.link == SEAT)
             .expect("a keyframe");
         assert!(again.text.contains("\"params\": {}"), "{}", again.text);
+    }
+
+    /// **The rig says which page begins a listing** (S3's `outcap`): a page asked with the
+    /// cursor the last unfinished page handed back continues its listing; a keyframe, and the
+    /// first page after a completing one, begin one.
+    #[test]
+    fn a_view_answer_says_whether_it_begins_a_listing() {
+        let mut rig = in_lull();
+        rig.due.view = true;
+        let view_frame = |rig: &mut Rig, now: u64| {
+            rig.poll(now)
+                .into_iter()
+                .find(|frame| frame.link == SEAT && method_of(frame) == "get_view")
+                .expect("a view call")
+        };
+        let page = |id: i64, cursor: &str, complete: bool| {
+            answer(
+                id,
+                &format!(
+                    r#"{{"at_ms":0,"chunks":[],"entities":[],"next_cursor":"{cursor}","complete":{complete}}}"#
+                ),
+                "lull",
+            )
+        };
+        let first = view_frame(&mut rig, 1);
+        let got = rig
+            .receive(SEAT, &page(id_of(&first), "half", false))
+            .expect("reads");
+        assert!(got.view_starts, "the first page of a listing");
+        let second = view_frame(&mut rig, 2);
+        assert!(second.text.contains("half"), "{}", second.text);
+        let got = rig
+            .receive(SEAT, &page(id_of(&second), "end", true))
+            .expect("reads");
+        assert!(
+            !got.view_starts,
+            "a page asked with the unfinished page's cursor"
+        );
+        rig.due.view = true;
+        let third = view_frame(&mut rig, KEEPALIVE_US.saturating_mul(2));
+        let got = rig
+            .receive(SEAT, &page(id_of(&third), "next", true))
+            .expect("reads");
+        assert!(got.view_starts, "the first page after a completing one");
     }
 
     #[test]

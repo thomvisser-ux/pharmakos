@@ -684,8 +684,9 @@ struct Seen {
     own_spire: bool,
 }
 
-/// Read the view to its complete page, which is the one that carries the
-/// entity list. Its chunks are not decoded: the ground is the gateway's.
+/// Read the view to its complete page, taking the entities of every page on
+/// the way: a list past one page is paged (S3's `outcap`). Its chunks are
+/// not decoded: the ground is the gateway's.
 ///
 /// # Errors
 ///
@@ -701,39 +702,40 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
     let mut cursor = String::new();
     for _ in 0..PAGES_MAX {
         let page = wire.call("get_view", object(vec![("cursor", string(&cursor))]))?;
-        if bool_of(&page, "complete").map_err(misread)? {
-            // Read by what each thing is and where it stands, and never by its
-            // id.
-            for entity in array_of(&page, "entities").map_err(misread)? {
-                let at = entity
-                    .get("at")
-                    .ok_or_else(|| malformed("get_view", "an entity with no position"))?;
-                let at = location_voxel(at).map_err(misread)?;
-                let kind = Wire::enum_name("gp.api.v1.ViewEntity.Kind", entity.get("kind"));
-                let subtype = text_of(entity, "subtype").map_err(misread)?;
-                let owner = text_of(entity, "owner").map_err(misread)?;
-                if owner == own {
-                    if kind.as_deref() == Some("STRUCTURE") && subtype == "resonance_spire" {
-                        seen.own_spire = true;
-                    }
-                    if kind.as_deref() == Some("UNIT") && subtype == "commander" {
-                        // The least position when the view shows two, so the
-                        // answer does not hang on the order of the list.
-                        seen.commander = Some(match seen.commander {
-                            Some(held) => held.min(at),
-                            None => at,
-                        });
-                    }
-                } else if !owner.is_empty()
-                    && let Some(asset) = Asset::of(kind.as_deref(), subtype)?
-                {
-                    seen.enemies.push(Enemy {
-                        at,
-                        asset,
-                        seat: seat_of("get_view", owner)?,
+        // Read by what each thing is and where it stands, and never by its
+        // id, from every page: a list past one page goes on over several,
+        // each cut from the one list its listing took (S3's `outcap`).
+        for entity in array_of(&page, "entities").map_err(misread)? {
+            let at = entity
+                .get("at")
+                .ok_or_else(|| malformed("get_view", "an entity with no position"))?;
+            let at = location_voxel(at).map_err(misread)?;
+            let kind = Wire::enum_name("gp.api.v1.ViewEntity.Kind", entity.get("kind"));
+            let subtype = text_of(entity, "subtype").map_err(misread)?;
+            let owner = text_of(entity, "owner").map_err(misread)?;
+            if owner == own {
+                if kind.as_deref() == Some("STRUCTURE") && subtype == "resonance_spire" {
+                    seen.own_spire = true;
+                }
+                if kind.as_deref() == Some("UNIT") && subtype == "commander" {
+                    // The least position when the view shows two, so the
+                    // answer does not hang on the order of the list.
+                    seen.commander = Some(match seen.commander {
+                        Some(held) => held.min(at),
+                        None => at,
                     });
                 }
+            } else if !owner.is_empty()
+                && let Some(asset) = Asset::of(kind.as_deref(), subtype)?
+            {
+                seen.enemies.push(Enemy {
+                    at,
+                    asset,
+                    seat: seat_of("get_view", owner)?,
+                });
             }
+        }
+        if bool_of(&page, "complete").map_err(misread)? {
             seen.complete = true;
             break;
         }
@@ -977,6 +979,46 @@ fn read_templates(wire: &mut Wire<'_, '_>) -> Result<Vec<String>, Refused> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Entities from every page** (S3's `outcap`): a list the gateway
+    /// pages is read whole, the commander on the first page and an enemy on
+    /// the completing one.
+    #[test]
+    fn the_view_is_read_from_every_page() {
+        let page = |entities: &str, cursor: &str, complete: bool| {
+            pharmakos_proto::json::read(&format!(
+                r#"{{"result":{{"at_ms":0,"chunks":[],"entities":[{entities}],"next_cursor":"{cursor}","complete":{complete}}}}}"#
+            ))
+            .expect("a page")
+        };
+        let mut asked: Vec<String> = Vec::new();
+        let mut call = |method: &str, params: Json| -> Json {
+            assert_eq!(method, "get_view");
+            let cursor = match params.get("cursor") {
+                Some(Json::String(cursor)) => cursor.clone(),
+                _ => String::new(),
+            };
+            asked.push(cursor.clone());
+            match cursor.as_str() {
+                "" => page(
+                    r#"{"id":"u_1","kind":"unit","subtype":"commander","owner":"seat.0","at":{"x":1,"y":2,"z":3}}"#,
+                    "next",
+                    false,
+                ),
+                _ => page(
+                    r#"{"id":"u_2","kind":"unit","subtype":"raider","owner":"seat.1","at":{"x":4,"y":5,"z":6}}"#,
+                    "done",
+                    true,
+                ),
+            }
+        };
+        let mut wire = Wire::new(&mut call);
+        let seen = read_view(&mut wire, "seat.0").expect("read");
+        assert!(seen.complete);
+        assert_eq!(seen.commander, Some([1, 2, 3]), "from the first page");
+        assert_eq!(seen.enemies.len(), 1, "from the completing page");
+        assert_eq!(asked, vec![String::new(), String::from("next")]);
+    }
 
     #[test]
     fn an_owner_is_read_in_the_gateways_one_spelling_only() {

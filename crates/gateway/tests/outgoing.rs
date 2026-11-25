@@ -443,6 +443,191 @@ fn an_id_past_its_cap_is_refused_and_never_echoed() {
     }
 }
 
+/// A casual two-seat match in its first Push whose ground carries `walls`
+/// lone wall voxels of seat 1, none touching another by a face, so every seat
+/// sees each as a wall of its own: an entity list far past one page, made the
+/// way a match makes one (walls are voxels, and a cratered wall is many).
+fn crowded(walls: usize) -> Surface {
+    use pharmakos_sim::voxels::{Material, VoxelEdit};
+    let mut surface = support::hosted_casual(2, 60_000, 3);
+    assert!(surface.begin_push().expect("a hosted match"), "the Push");
+    let mut sites: Vec<[i32; 3]> = Vec::new();
+    'columns: for y in (100..300).step_by(2) {
+        for x in (100..300).step_by(2) {
+            if sites.len() == walls {
+                break 'columns;
+            }
+            let world = surface.host().expect("a hosted match").world();
+            let top = (0..64).rev().find(|z| {
+                world
+                    .voxels()
+                    .get([x, y, *z])
+                    .is_some_and(|m| m != Material::AIR)
+            });
+            if let Some(z) = top {
+                sites.push([x, y, z]);
+            }
+        }
+    }
+    assert_eq!(sites.len(), walls, "the map has ground for every wall");
+    for at in sites {
+        loop {
+            let filed =
+                surface
+                    .host_mut()
+                    .expect("a hosted match")
+                    .file_voxel_edit(VoxelEdit::Set {
+                        at,
+                        material: Material::WALL_SEAT_1,
+                        by: None,
+                    });
+            if filed.is_ok() {
+                break;
+            }
+            // The host's share of the edit queue is full: a tick takes it.
+            assert_eq!(support::step(&mut surface, 1), 1, "the Push goes on");
+        }
+    }
+    assert_eq!(support::step(&mut surface, 1), 1, "the last edits land");
+    unlimited(&mut surface);
+    surface
+}
+
+/// The ids of a page's entities.
+fn entity_ids(page: &Json) -> Vec<String> {
+    support::array_of(page, "entities")
+        .iter()
+        .map(|entity| support::text_of(entity, "id"))
+        .collect()
+}
+
+/// One `get_view` page, as its result and its text's length on the wire.
+fn view_page(surface: &mut Surface, token: &Token, cursor: &str) -> (Json, usize) {
+    let text = request_text(
+        "1",
+        "get_view",
+        &Json::Object(vec![(
+            String::from("cursor"),
+            Json::String(cursor.to_owned()),
+        )]),
+    );
+    let answer = answer_text(surface, token, &text);
+    let value = json::read(&answer).expect("JSON");
+    (support::result(&value, "get_view"), answer.len())
+}
+
+/// **Entities are paged** (S3's `outcap`): an entity list past one page goes
+/// on as many pages as it needs, each answer within the page's budget and its
+/// envelope; every entity of the list comes once, none twice and none lost at
+/// a page's edge, in the list's order; and the pages are cut from the one
+/// list taken when the chunks ended, so the world moving between two pages
+/// (the Push stepped) changes nothing in the listing being paged.
+#[test]
+fn an_entity_list_past_a_page_is_paged_from_one_list() {
+    use pharmakos_gateway::viewfeed::VIEW_PAGE_BYTES;
+    const ENVELOPE: usize = 2 * 1024;
+    let mut surface = crowded(3_000);
+    let seat = seat_token(&mut surface, 0);
+
+    // The whole list with nothing stepped between its pages: the reference.
+    let mut reference: Vec<String> = Vec::new();
+    let mut cursor = String::new();
+    let mut pages = 0_u32;
+    loop {
+        let (page, bytes) = view_page(&mut surface, &seat, &cursor);
+        pages = pages.saturating_add(1);
+        assert!(
+            bytes <= VIEW_PAGE_BYTES.saturating_add(ENVELOPE),
+            "page {pages}: {bytes} bytes"
+        );
+        reference.extend(entity_ids(&page));
+        cursor = support::text_of(&page, "next_cursor");
+        if matches!(page.get("complete"), Some(Json::Bool(true))) {
+            break;
+        }
+        assert!(pages < 64, "a view that never completes");
+    }
+    let entity_pages = pages.saturating_sub(1);
+    assert!(
+        entity_pages >= 2,
+        "{} entities on {pages} pages: the list did not need paging",
+        reference.len()
+    );
+    let mut unique = reference.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), reference.len(), "an entity came twice");
+
+    // A second keyframe from the same world, a wall the first page listed
+    // knocked down and the Push stepped before the next: the same list, the
+    // one taken when its chunks ended. A list taken again at each page would
+    // be one shorter before the next page's start, and lose an entity there.
+    let (first, _) = view_page(&mut surface, &seat, "");
+    let gone = support::array_of(&first, "entities")
+        .into_iter()
+        .rev()
+        .find(|entity| entity.get("subtype") == Some(&Json::String(String::from("wall"))))
+        .expect("the first page lists a wall");
+    let at = gone.get("at").expect("a place");
+    let axis = |name: &str| match at.get(name) {
+        Some(Json::Number(lexeme)) => lexeme.parse::<i32>().expect("a whole number"),
+        other => panic!("`{name}` is a number, and it is {other:?}"),
+    };
+    support::erase(&mut surface, [axis("x"), axis("y"), axis("z")]);
+    let mut listed = entity_ids(&first);
+    let mut cursor = support::text_of(&first, "next_cursor");
+    let mut complete = matches!(first.get("complete"), Some(Json::Bool(true)));
+    while !complete {
+        assert_eq!(support::step(&mut surface, 1), 1, "the Push moved");
+        let (page, _) = view_page(&mut surface, &seat, &cursor);
+        listed.extend(entity_ids(&page));
+        cursor = support::text_of(&page, "next_cursor");
+        complete = matches!(page.get("complete"), Some(Json::Bool(true)));
+    }
+    assert_eq!(listed, reference, "every page cut from the one list");
+
+    // And the world did move: a fresh listing no longer lists that wall.
+    let mut fresh: Vec<String> = Vec::new();
+    let mut cursor = String::new();
+    loop {
+        let (page, _) = view_page(&mut surface, &seat, &cursor);
+        fresh.extend(entity_ids(&page));
+        cursor = support::text_of(&page, "next_cursor");
+        if matches!(page.get("complete"), Some(Json::Bool(true))) {
+            break;
+        }
+    }
+    let wall = support::text_of(&gone, "id");
+    assert!(!fresh.contains(&wall), "{wall} still listed");
+}
+
+/// A cursor into an entity list another seat's view holds is stale for this
+/// seat: a list is held for its viewer.
+#[test]
+fn a_cursor_into_another_seats_list_is_stale() {
+    let mut surface = crowded(3_000);
+    let seat = seat_token(&mut surface, 0);
+    let other = seat_token(&mut surface, 1);
+    let (first, _) = view_page(&mut surface, &seat, "");
+    assert!(matches!(first.get("complete"), Some(Json::Bool(false))));
+    let mut cursor = support::text_of(&first, "next_cursor");
+    // Page to the first entity cursor.
+    while cursor.len() == 64 {
+        let (page, _) = view_page(&mut surface, &seat, &cursor);
+        cursor = support::text_of(&page, "next_cursor");
+    }
+    let answer = answer_text(
+        &mut surface,
+        &other,
+        &request_text(
+            "1",
+            "get_view",
+            &Json::Object(vec![(String::from("cursor"), Json::String(cursor))]),
+        ),
+    );
+    assert_eq!(code_of(&answer), "STALE_SNAPSHOT", "{answer}");
+}
+
 /// A built-in seat whose round is one call it is handed, and which keeps
 /// what that call answered.
 struct OneCall {

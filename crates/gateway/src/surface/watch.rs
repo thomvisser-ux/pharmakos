@@ -42,7 +42,7 @@
 use std::collections::BTreeSet;
 
 use pharmakos_proto::gp::v1::Voxel;
-use pharmakos_proto::json::{Json, base64};
+use pharmakos_proto::json::Json;
 use pharmakos_proto::said;
 use pharmakos_sim::sight::SensorKind;
 use pharmakos_sim::tables::{BeaconId, NOT_RUINED, SeatId, StructureKind, UnitKind};
@@ -55,7 +55,7 @@ use crate::rpc::Request;
 use crate::strings;
 use crate::surface::Surface;
 use crate::view;
-use crate::viewfeed::{ShellKey, Sight, ViewFeed, ViewPage, WallKey};
+use crate::viewfeed::{ShellKey, Sight, VIEW_PAGE_BYTES, ViewFeed, WallKey};
 
 /// The full name of the entity-kind enum, for its lower-case wire spelling
 /// (decisions-log item 80).
@@ -99,16 +99,9 @@ impl Surface {
                 from_seq: self.views.seq(),
                 to_seq: self.views.seq(),
                 index: 0,
+                entities: None,
             };
-            return Ok(render(
-                at_ms,
-                &ViewPage {
-                    chunks: Vec::new(),
-                    complete: true,
-                    next: caught_up,
-                },
-                &[],
-            ));
+            return Ok(render(at_ms, &[], &[], caught_up, true));
         }
 
         let cursor = match asked.as_deref() {
@@ -136,12 +129,44 @@ impl Surface {
         let voxels = world.voxels();
         views.refresh(viewer, Sight { unfogged, key }, voxels, vision)?;
         let page = views.page(viewer, cursor, voxels)?;
-        let entities = if page.complete {
-            visible_entities(views, world, fog, vision, viewer)?
-        } else {
-            Vec::new()
+        if !page.complete {
+            return Ok(render(at_ms, &page.chunks, &[], page.next, false));
+        }
+        // The chunks are all sent: the entities follow, on this page and as
+        // many more as they need (S3's `outcap`), each page cut from one list.
+        // A fresh list is taken when the chunks end; a cursor into the
+        // entities pages the list held for its listing.
+        let (list, offset, held) = match cursor {
+            Some(asked) => match asked.entities {
+                Some(place) => (
+                    views.held_entities(viewer, asked)?.to_vec(),
+                    place.offset,
+                    Some(place.list),
+                ),
+                None => (
+                    visible_entities(views, world, fog, vision, viewer)?,
+                    0,
+                    None,
+                ),
+            },
+            None => (
+                visible_entities(views, world, fog, vision, viewer)?,
+                0,
+                None,
+            ),
         };
-        Ok(render(at_ms, &page, &entities))
+        // The listing's own stamps: what it is measured against (a keyframe
+        // is measured against nothing, stamp zero), and the stamp it was
+        // started at, which its last page hands back.
+        let listing = Listing {
+            view_id,
+            from_seq: match cursor {
+                Some(asked) => asked.from_seq,
+                None => 0,
+            },
+            to_seq: page.next.to_seq,
+        };
+        entity_page(views, viewer, listing, &page, at_ms, list, offset, held)
     }
 
     /// A digest of everything besides the fog policy that decides what this
@@ -183,6 +208,93 @@ impl Surface {
         }
         Ok(pharmakos_sim::digest(&bytes))
     }
+}
+
+/// The listing a page belongs to: its view and its two stamps.
+#[derive(Clone, Copy)]
+struct Listing {
+    view_id: u64,
+    from_seq: u64,
+    to_seq: u64,
+}
+
+/// How many of `rest` fit a page that has `spent` of [`VIEW_PAGE_BYTES`]
+/// already, each measured as the wire spells it where it sits
+/// ([`crate::viewfeed::listed_bytes`]). The first item of a page always goes
+/// through, as a chunk does, so a page is never empty while items wait.
+fn entities_that_fit(rest: &[Json], spent: usize, page_empty: bool) -> usize {
+    let mut spent = spent;
+    let mut taken: usize = 0;
+    for entity in rest {
+        let cost = crate::viewfeed::listed_bytes(entity);
+        let first = page_empty && taken == 0;
+        if !first && spent.saturating_add(cost) > VIEW_PAGE_BYTES {
+            break;
+        }
+        spent = spent.saturating_add(cost);
+        taken = taken.saturating_add(1);
+    }
+    taken
+}
+
+/// The page whose chunks are `page`'s and whose entities are the ones of
+/// `list` from `offset` that fit after them (S3's `outcap`). The last page
+/// of the list completes the listing and lets go of a held list; any other
+/// holds the list, if it was fresh, and hands back an entity cursor.
+///
+/// # Errors
+///
+/// [`crate::error::Code::InvalidArgument`] for an offset past the list's
+/// end, and [`crate::error::Code::Internal`] for a list longer than a cursor
+/// can count.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one page's parts, each read once: the feed, the viewer, the listing, the chunk page, the clock and the list with its place"
+)]
+fn entity_page(
+    views: &mut ViewFeed,
+    viewer: Viewer,
+    listing: Listing,
+    page: &crate::viewfeed::ViewPage,
+    at_ms: i32,
+    list: Vec<Json>,
+    offset: u32,
+    held: Option<u64>,
+) -> Result<Json, Error> {
+    let past_the_end = || Error::invalid("that cursor pages past the end of its entity list");
+    let start = usize::try_from(offset).map_err(|_| past_the_end())?;
+    let rest = list.get(start..).ok_or_else(past_the_end)?;
+    let taken = entities_that_fit(rest, page.spent, page.chunks.is_empty());
+    let shown = rest
+        .get(..taken)
+        .ok_or_else(|| Error::internal("a page took more entities than its list holds"))?;
+    let end = start.saturating_add(taken);
+    if end == list.len() {
+        // The listing's end: a held list is let go, and the cursor is the
+        // listing's end, as a page with no entities to page leaves it.
+        if let Some(digest) = held {
+            views.release_entities(viewer, digest);
+        }
+        return Ok(render(at_ms, &page.chunks, shown, page.next, true));
+    }
+    let next_offset = u32::try_from(end)
+        .map_err(|_| Error::internal(said!("an entity list of {} entities", list.len())))?;
+    let shown = shown.to_vec();
+    let place = match held {
+        Some(digest) => crate::feed::EntityPlace {
+            list: digest,
+            offset: next_offset,
+        },
+        None => views.hold_entities(viewer, listing.from_seq, listing.to_seq, list, next_offset),
+    };
+    let next = ViewCursor {
+        view_id: listing.view_id,
+        from_seq: listing.from_seq,
+        to_seq: listing.to_seq,
+        index: 0,
+        entities: Some(place),
+    };
+    Ok(render(at_ms, &page.chunks, &shown, next, false))
 }
 
 /// One byte per kind of sensor, so that a sphere and a unit's vision of the
@@ -1090,31 +1202,25 @@ fn voxel(at: Voxel) -> Json {
 
 /// One `gp.api.v1.GetViewResponse`.
 ///
-/// `voxels_rle` is a `bytes` field, so it travels as standard base64 -- the
-/// proto3 JSON mapping's own rule, through the one base64 this workspace has.
-fn render(at_ms: i32, page: &ViewPage, entities: &[Json]) -> Json {
-    let chunks: Vec<Json> = page
-        .chunks
+/// Each chunk is [`crate::viewfeed::chunk_json`], the shape the page's cut
+/// measured it in ([`crate::viewfeed::listed_bytes`]).
+fn render(
+    at_ms: i32,
+    chunks: &[(Voxel, Vec<u8>)],
+    entities: &[Json],
+    next: ViewCursor,
+    complete: bool,
+) -> Json {
+    let chunks: Vec<Json> = chunks
         .iter()
-        .map(|(origin, bytes)| {
-            Json::Object(vec![
-                (String::from("origin"), voxel(*origin)),
-                (
-                    String::from("voxels_rle"),
-                    Json::String(base64::encode(bytes)),
-                ),
-            ])
-        })
+        .map(|(origin, bytes)| crate::viewfeed::chunk_json(*origin, bytes))
         .collect();
     Json::Object(vec![
         (String::from("at_ms"), Json::Number(at_ms.to_string())),
         (String::from("chunks"), Json::Array(chunks)),
         (String::from("entities"), Json::Array(entities.to_vec())),
-        (
-            String::from("next_cursor"),
-            Json::String(page.next.render()),
-        ),
-        (String::from("complete"), Json::Bool(page.complete)),
+        (String::from("next_cursor"), Json::String(next.render())),
+        (String::from("complete"), Json::Bool(complete)),
     ])
 }
 
