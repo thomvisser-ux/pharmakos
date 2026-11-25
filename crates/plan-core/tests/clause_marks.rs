@@ -93,6 +93,19 @@ fn a_clause_on_the_last_row_sets_the_whole_list_off_too() {
     assert!(!said.contains(", and "), "{said:?}");
 }
 
+/// Each row kind that carries a clause sets the list off on its own: an edit's
+/// row before a row with none, and a switch before one.
+#[test]
+fn each_row_kind_with_a_clause_sets_the_list_off() {
+    for first in [
+        r#"{"set_mandate_settings":{"attack":{"breach_allowed":false}}}"#,
+        r#"{"set_mandate":{"mine":{}}}"#,
+    ] {
+        let said = prose(&visit(&format!(r#"[{first},{{"set_priority":"HIGH"}}]"#)));
+        assert!(said.contains("; and "), "{first}: {said:?}");
+    }
+}
+
 /// Rows with no clause keep the plain list: commas, then "and".
 #[test]
 fn rows_with_no_clause_keep_their_commas() {
