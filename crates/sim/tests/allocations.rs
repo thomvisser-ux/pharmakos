@@ -291,13 +291,73 @@ fn collapse_at(world: &mut World, step: u32) {
     }
 }
 
+/// The ticks the attacking crowds are counted over.
+const CROWD_TICKS: u32 = 400;
+
+/// Raiders each crowd fields.
+const CROWD: u32 = 10;
+
+/// Lay out two Attack beacons, of seats 0 and 1, sixty voxels apart in open
+/// ground, each with [`CROWD`] raiders and aimed at the other's beacon; seat
+/// 0's force routes round an avoid area between them. Returns the two
+/// beacons.
+fn crowd(world: &mut World) -> [pharmakos_sim::tables::BeaconId; 2] {
+    use pharmakos_sim::attack::{Aim, AttackSettings};
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::{ColumnBox, PRIORITY_NORMAL, SeatId, UnitKind};
+    let size = world.voxels().size();
+    let mid_x = i32::try_from(size[0].div_euclid(2)).expect("a column");
+    let mid_y = i32::try_from(size[1].div_euclid(2)).expect("a column");
+    let west = world.standing_point([mid_x - 12, mid_y, 0]);
+    let east = world.standing_point([mid_x + 12, mid_y, 0]);
+    let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
+        at.map(|axis| i16::try_from(axis.floor_voxels()).expect("a voxel coordinate"))
+    };
+    let mut lanes = Vec::new();
+    for (seat, here, there) in [(0_u8, west, east), (1_u8, east, west)] {
+        let beacon = world
+            .place_beacon_directly(
+                SeatId::new(seat),
+                here,
+                MandateKind::Attack,
+                PRIORITY_NORMAL,
+            )
+            .expect("an Attack beacon");
+        let avoid = if seat == 0 {
+            let x = i16::try_from(mid_x).expect("a column");
+            let y = i16::try_from(mid_y).expect("a column");
+            vec![ColumnBox::new([x - 4, y - 4], [x + 4, y + 4]).expect("a box")]
+        } else {
+            Vec::new()
+        };
+        assert!(world.set_attack(
+            beacon,
+            AttackSettings {
+                aim: Aim::Voxel(voxel(there)),
+                force_size: Some(CROWD),
+                waves: 1,
+                ..AttackSettings::default()
+            },
+            &avoid,
+        ));
+        for _ in 0..CROWD {
+            world
+                .field_unit(SeatId::new(seat), beacon, UnitKind::Raider, here)
+                .expect("a raider");
+        }
+        lanes.push(beacon);
+    }
+    <[pharmakos_sim::tables::BeaconId; 2]>::try_from(lanes).expect("two lanes")
+}
+
 /// The `research` build's test: a forked world's tick, and its parent's while
 /// the fork lives. Behind `feature = "research"` because `fork` exists only
 /// there; the default build's tick is counted by [`tick`]'s tests.
 #[cfg(feature = "research")]
 mod fork {
     use super::{
-        GROWTH_TICKS, WARM_UP_TICKS, allocations, collapse_at, crater_at, harness_runner, warm_up,
+        CROWD_TICKS, GROWTH_TICKS, WARM_UP_TICKS, allocations, collapse_at, crater_at, crowd,
+        harness_runner, warm_up,
     };
 
     use pharmakos_sim::World;
@@ -307,6 +367,14 @@ mod fork {
     /// The ticks each counted window runs: the child's, the parent's while
     /// the child lives, and the parent's after the child is dropped.
     const FORK_TICKS: u32 = 50;
+
+    /// The ticks the parent steps the crowds before the combat test forks it:
+    /// at the committed rules and harness the two forces first fire between
+    /// 1 300 and 1 400 ticks after they are laid out at the end of the
+    /// warm-up (measured), so a fork here holds every shot in its counted
+    /// window; the test asserts both halves, so a tuning change that moves the
+    /// first shot fails it rather than leaving the combat phase uncounted.
+    const COMBAT_LEAD: u32 = 1_250;
 
     /// Each of `world`'s chunks' bytes, by address, into `into`: what the
     /// counting compares to find the chunks a tick re-pointed. `into` is
@@ -535,6 +603,55 @@ mod fork {
             grown.allocated, grown.repointed
         );
     }
+
+    /// A fork keeps the combat phase's room too: the two attacking crowds of
+    /// the default build's tick test are laid out in the parent after its
+    /// warm-up and stepped [`COMBAT_LEAD`] ticks, when neither has fired yet,
+    /// then forked; the child's [`CROWD_TICKS`] ticks hold the first shots
+    /// and their damage, kill credit and deaths, every tick cratering and
+    /// collapsing as well, and allocate only the chunks the child re-points.
+    /// The parent stays alive, so the child meets shared chunks.
+    #[test]
+    fn a_forked_worlds_combat_allocates_only_the_chunks_it_re_points() {
+        let mut runner = harness_runner();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        warm_up(&mut runner, &mut enc);
+        crowd(runner.world_mut());
+        for _ in 0..COMBAT_LEAD {
+            runner
+                .step()
+                .expect("the parent steps")
+                .expect("the segment outlasts this test");
+            runner.clear_events();
+            runner.world().encode(&mut enc);
+        }
+        let chunks = usize::try_from(runner.world().voxels().chunk_count())
+            .expect("a chunk count fits a usize");
+        let mut addresses: Vec<*const u8> = Vec::with_capacity(chunks);
+
+        let mut child = pharmakos_sim::research::fork(runner.world());
+        let shots_before = child.combat_counts().shots();
+        assert_eq!(shots_before, 0, "no crowd has fired before the fork");
+        let fought = count_child(
+            &mut child,
+            &mut enc,
+            WARM_UP_TICKS + 40 * FORK_TICKS,
+            CROWD_TICKS,
+            &mut addresses,
+        );
+        // The fight ends inside the window: seat 0's Attack beacon falls and
+        // its row closes, so the shots, not the rows, say that it happened.
+        assert!(
+            child.combat_counts().shots() > shots_before,
+            "the crowds fought inside the child's counted window"
+        );
+        assert_eq!(
+            fought.allocated, fought.repointed,
+            "the {CROWD_TICKS} ticks of a forked world's crowds allocated {} times and re-pointed \
+             {} chunks",
+            fought.allocated, fought.repointed
+        );
+    }
 }
 
 /// The default build's tests: the tick and the searches, each counted on its
@@ -545,7 +662,8 @@ mod fork {
 #[cfg(not(feature = "research"))]
 mod tick {
     use super::{
-        GROWTH_TICKS, WARM_UP_TICKS, allocations, collapse_at, crater_at, harness_runner, warm_up,
+        CROWD_TICKS, GROWTH_TICKS, WARM_UP_TICKS, allocations, collapse_at, crater_at, crowd,
+        harness_runner, warm_up,
     };
 
     use pharmakos_sim::encoding::Enc;
@@ -702,65 +820,6 @@ mod tick {
             crowded, 0,
             "{CROWD_TICKS} ticks of two attacking crowds allocated {crowded} times"
         );
-    }
-
-    /// The ticks the attacking crowds are counted over.
-    const CROWD_TICKS: u32 = 400;
-
-    /// Raiders each crowd fields.
-    const CROWD: u32 = 10;
-
-    /// Lay out two Attack beacons, of seats 0 and 1, sixty voxels apart in open
-    /// ground, each with [`CROWD`] raiders and aimed at the other's beacon; seat
-    /// 0's force routes round an avoid area between them. Returns the two
-    /// beacons.
-    fn crowd(world: &mut World) -> [pharmakos_sim::tables::BeaconId; 2] {
-        use pharmakos_sim::attack::{Aim, AttackSettings};
-        use pharmakos_sim::seams::MandateKind;
-        use pharmakos_sim::tables::{ColumnBox, PRIORITY_NORMAL, SeatId, UnitKind};
-        let size = world.voxels().size();
-        let mid_x = i32::try_from(size[0].div_euclid(2)).expect("a column");
-        let mid_y = i32::try_from(size[1].div_euclid(2)).expect("a column");
-        let west = world.standing_point([mid_x - 12, mid_y, 0]);
-        let east = world.standing_point([mid_x + 12, mid_y, 0]);
-        let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
-            at.map(|axis| i16::try_from(axis.floor_voxels()).expect("a voxel coordinate"))
-        };
-        let mut lanes = Vec::new();
-        for (seat, here, there) in [(0_u8, west, east), (1_u8, east, west)] {
-            let beacon = world
-                .place_beacon_directly(
-                    SeatId::new(seat),
-                    here,
-                    MandateKind::Attack,
-                    PRIORITY_NORMAL,
-                )
-                .expect("an Attack beacon");
-            let avoid = if seat == 0 {
-                let x = i16::try_from(mid_x).expect("a column");
-                let y = i16::try_from(mid_y).expect("a column");
-                vec![ColumnBox::new([x - 4, y - 4], [x + 4, y + 4]).expect("a box")]
-            } else {
-                Vec::new()
-            };
-            assert!(world.set_attack(
-                beacon,
-                AttackSettings {
-                    aim: Aim::Voxel(voxel(there)),
-                    force_size: Some(CROWD),
-                    waves: 1,
-                    ..AttackSettings::default()
-                },
-                &avoid,
-            ));
-            for _ in 0..CROWD {
-                world
-                    .field_unit(SeatId::new(seat), beacon, UnitKind::Raider, here)
-                    .expect("a raider");
-            }
-            lanes.push(beacon);
-        }
-        <[pharmakos_sim::tables::BeaconId; 2]>::try_from(lanes).expect("two lanes")
     }
 
     /// The served walk "nearest" ranks by, and the estimator's clear queries
@@ -1666,4 +1725,390 @@ fn manifest_features() -> Vec<String> {
         }
     }
     features
+}
+
+/// The structs the world owns whose collection fields
+/// [`every_vector_the_world_owns_keeps_its_room_or_says_why_not`] reads, by
+/// file and name, besides every `*Table` struct in the sim's sources, which it
+/// finds on its own.
+const OWNED_STRUCTS: &[(&str, &str)] = &[
+    ("src/world.rs", "World"),
+    ("src/events.rs", "EventBus"),
+    ("src/voxels.rs", "VoxelStore"),
+    ("src/chunks.rs", "ChunkDigests"),
+    ("src/runner.rs", "MatchState"),
+    ("src/bore.rs", "Bore"),
+    ("src/terrain.rs", "GeneratedSurface"),
+    ("src/support.rs", "Scratch"),
+    ("src/support.rs", "SupportRule"),
+    ("src/survey.rs", "Memory"),
+    ("src/attack.rs", "BreachScratch"),
+    ("src/interpreter/state.rs", "Interpreter"),
+    ("src/interpreter/state.rs", "PlanState"),
+    ("src/tables.rs", "Csr"),
+    ("src/pathing/router.rs", "Router"),
+    ("src/pathing/search.rs", "Scratch"),
+    ("src/pathing/search.rs", "Heap"),
+    ("src/pathing/repair.rs", "Repairer"),
+    ("src/pathing/clusters.rs", "Clusters"),
+    ("src/pathing/reach.rs", "Reach"),
+    ("src/pathing/surface.rs", "Surface"),
+];
+
+/// `*Table` structs the scan leaves out, each with why.
+const UNSCANNED_TABLES: &[(&str, &str, &str)] = &[(
+    "src/rules.rs",
+    "RulesTable",
+    "an input: loaded once and never written by a tick, so its vectors never grow in a clone",
+)];
+
+/// Why most fields below may be plain.
+const SIZED_ONCE: &str = "sized once (`vec![..; n]` or a collect) and never pushed past its \
+                          length inside a tick, so a derived clone, whose room is its length, \
+                          holds all it ever uses";
+
+/// Why the support rule's lists may be plain: the only clone of the rule a
+/// world makes is the support scratch's written-out one, which builds a fresh
+/// rule with its room (`SupportRule::with_room`).
+const SUPPORT_RULE: &str = "cloned only by the support scratch's written-out Clone, which \
+                            builds a fresh rule with its room";
+
+/// Every plain `Vec`, `VecDeque` or `String` field of a struct the scan
+/// reads, with why it is not a `Reserved`. A field reserved past its length
+/// must be a `Reserved`; a new plain field fails the scan until it is one or
+/// is listed here with its reason.
+const PLAIN_VECTORS: &[(&str, &str, &str, &str)] = &[
+    ("src/world.rs", "World", "spiral", SIZED_ONCE),
+    ("src/world.rs", "World", "decision_work", SIZED_ONCE),
+    ("src/world.rs", "World", "damage_dealt", SIZED_ONCE),
+    ("src/world.rs", "World", "route_spans", SIZED_ONCE),
+    ("src/world.rs", "World", "commanders", SIZED_ONCE),
+    ("src/world.rs", "World", "unit_start_of", SIZED_ONCE),
+    ("src/voxels.rs", "VoxelStore", "chunks", SIZED_ONCE),
+    ("src/voxels.rs", "VoxelStore", "modified", SIZED_ONCE),
+    ("src/voxels.rs", "VoxelStore", "pending_flag", SIZED_ONCE),
+    ("src/voxels.rs", "VoxelStore", "touch_flag", SIZED_ONCE),
+    ("src/chunks.rs", "ChunkDigests", "digests", SIZED_ONCE),
+    (
+        "src/runner.rs",
+        "MatchState",
+        "segment_lengths_ms",
+        SIZED_ONCE,
+    ),
+    ("src/bore.rs", "Bore", "columns", SIZED_ONCE),
+    ("src/terrain.rs", "GeneratedSurface", "tops", SIZED_ONCE),
+    ("src/features.rs", "FeatureTable", "features", SIZED_ONCE),
+    (
+        "src/support.rs",
+        "Scratch",
+        "victims",
+        "the support scratch's written-out Clone reserves it afresh",
+    ),
+    ("src/support.rs", "SupportRule", "list", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "materials", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "regions", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "order", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "changed", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "seeds", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "members", SUPPORT_RULE),
+    ("src/support.rs", "SupportRule", "landed", SUPPORT_RULE),
+    (
+        "src/support.rs",
+        "SupportRule",
+        "column_stamp",
+        SUPPORT_RULE,
+    ),
+    (
+        "src/support.rs",
+        "SupportRule",
+        "column_height",
+        SUPPORT_RULE,
+    ),
+    ("src/attack.rs", "BreachScratch", "mark", SIZED_ONCE),
+    ("src/attack.rs", "BreachScratch", "g", SIZED_ONCE),
+    ("src/attack.rs", "BreachScratch", "came", SIZED_ONCE),
+    (
+        "src/interpreter/state.rs",
+        "Interpreter",
+        "plans",
+        SIZED_ONCE,
+    ),
+    (
+        "src/interpreter/state.rs",
+        "Interpreter",
+        "states",
+        SIZED_ONCE,
+    ),
+    ("src/interpreter/state.rs", "PlanState", "fires", SIZED_ONCE),
+    ("src/interpreter/state.rs", "PlanState", "ready", SIZED_ONCE),
+    ("src/pathing/search.rs", "Scratch", "stamp", SIZED_ONCE),
+    ("src/pathing/search.rs", "Scratch", "closed", SIZED_ONCE),
+    ("src/pathing/search.rs", "Scratch", "g", SIZED_ONCE),
+    ("src/pathing/search.rs", "Scratch", "came", SIZED_ONCE),
+    (
+        "src/pathing/search.rs",
+        "Scratch",
+        "abstract_stamp",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/search.rs",
+        "Scratch",
+        "abstract_closed",
+        SIZED_ONCE,
+    ),
+    ("src/pathing/search.rs", "Scratch", "abstract_g", SIZED_ONCE),
+    (
+        "src/pathing/search.rs",
+        "Scratch",
+        "abstract_came",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/repair.rs",
+        "Repairer",
+        "dirty_flag",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/repair.rs",
+        "Repairer",
+        "transitions_flag",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/repair.rs",
+        "Repairer",
+        "inter_flag",
+        SIZED_ONCE,
+    ),
+    ("src/pathing/clusters.rs", "Clusters", "of_node", SIZED_ONCE),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "local_comp",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "comp_count",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "vborder_len",
+        SIZED_ONCE,
+    ),
+    ("src/pathing/clusters.rs", "Clusters", "vborder", SIZED_ONCE),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "hborder_len",
+        SIZED_ONCE,
+    ),
+    ("src/pathing/clusters.rs", "Clusters", "hborder", SIZED_ONCE),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "trans_len",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "trans_cell",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "intra_row",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "intra_to",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "intra_cost",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "inter_row",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "inter_to",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "inter_cost",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "comp_offset",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "comp_label",
+        SIZED_ONCE,
+    ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "union_find",
+        SIZED_ONCE,
+    ),
+    ("src/pathing/reach.rs", "Reach", "stamp", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "settled", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "cost", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "key", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "listed", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "next", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "prev", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "heads", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "sites", SIZED_ONCE),
+    ("src/pathing/reach.rs", "Reach", "heur", SIZED_ONCE),
+    ("src/pathing/surface.rs", "Surface", "top", SIZED_ONCE),
+    ("src/pathing/surface.rs", "Surface", "walk", SIZED_ONCE),
+];
+
+/// The name of the struct a line opens, when it opens one at column 0 with
+/// its brace on the same line.
+fn struct_opened(line: &str) -> Option<String> {
+    let rest = ["pub struct ", "pub(crate) struct ", "struct "]
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))?;
+    if !line.trim_end().ends_with('{') {
+        return None;
+    }
+    Some(
+        rest.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect(),
+    )
+}
+
+/// Whether the struct `name` is defined in the source `text`, and the names
+/// of its plain `Vec`, `VecDeque` and `String` fields: lines inside its braces
+/// reading `[pub[(..)] ]field: Vec<..` (or `VecDeque<`, `String`).
+fn plain_fields(text: &str, name: &str) -> (bool, Vec<String>) {
+    let mut found = false;
+    let mut inside = false;
+    let mut fields = Vec::new();
+    for line in text.lines() {
+        if !inside {
+            if struct_opened(line).is_some_and(|opened| opened == name) {
+                found = true;
+                inside = true;
+            }
+            continue;
+        }
+        if line.starts_with('}') {
+            inside = false;
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let field = ["pub(crate) ", "pub(super) ", "pub "]
+            .iter()
+            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            .unwrap_or(trimmed);
+        if let Some((ident, ty)) = field.split_once(": ")
+            && !ident.is_empty()
+            && ident
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            && ["Vec<", "VecDeque<", "std::collections::VecDeque<", "String"]
+                .iter()
+                .any(|plain| ty.starts_with(plain))
+        {
+            fields.push(ident.to_owned());
+        }
+    }
+    (found, fields)
+}
+
+/// **The type is the whole fix, so every vector the world owns is held to
+/// it by name.** A cloned world (a `research` fork) keeps a vector's reserved
+/// room only if the vector is a `Reserved`; the fork tests catch a plain one
+/// only where their scenario fills it past its length at the fork. This scan
+/// reads every `*Table` struct in the sim's sources and the [`OWNED_STRUCTS`]
+/// the world holds besides, and fails on a plain `Vec`, `VecDeque` or `String`
+/// field that [`PLAIN_VECTORS`] does not list with its reason, and on a listed
+/// one that is gone, so the list never outlives its fields. It runs in both
+/// builds.
+#[test]
+fn every_vector_the_world_owns_keeps_its_room_or_says_why_not() {
+    let mut structs: Vec<(String, String)> = OWNED_STRUCTS
+        .iter()
+        .map(|(file, name)| ((*file).to_owned(), (*name).to_owned()))
+        .collect();
+    let mut files = Vec::new();
+    rust_sources(std::path::Path::new("src"), &mut files);
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("a sim source reads");
+        for name in text.lines().filter_map(struct_opened) {
+            let unscanned = UNSCANNED_TABLES
+                .iter()
+                .any(|(f, n, _)| *f == file.as_str() && *n == name.as_str());
+            if name.ends_with("Table") && !unscanned {
+                structs.push((file.clone(), name));
+            }
+        }
+    }
+    structs.sort();
+    structs.dedup();
+
+    let mut plain: Vec<(String, String, String)> = Vec::new();
+    for (file, name) in &structs {
+        let text = std::fs::read_to_string(file).expect("a scanned source reads");
+        let (found, fields) = plain_fields(&text, name);
+        assert!(
+            found,
+            "{file} defines no struct `{name}` for the scan to read"
+        );
+        for field in fields {
+            plain.push((file.clone(), name.clone(), field));
+        }
+    }
+    plain.sort();
+    let mut listed: Vec<(String, String, String)> = PLAIN_VECTORS
+        .iter()
+        .map(|(f, s, n, _)| ((*f).to_owned(), (*s).to_owned(), (*n).to_owned()))
+        .collect();
+    listed.sort();
+    let unlisted: Vec<_> = plain.iter().filter(|p| !listed.contains(p)).collect();
+    let stale: Vec<_> = listed.iter().filter(|l| !plain.contains(l)).collect();
+    assert!(
+        unlisted.is_empty(),
+        "plain vectors in structs the world owns, neither `Reserved` nor listed with a reason \
+         in PLAIN_VECTORS: {unlisted:?}. A vector reserved past its length must be a \
+         `Reserved`, or a cloned world allocates on its first tick that fills it"
+    );
+    assert!(
+        stale.is_empty(),
+        "PLAIN_VECTORS lists fields the scan no longer finds: {stale:?}"
+    );
+    for (file, name, field, reason) in PLAIN_VECTORS {
+        assert!(
+            !reason.is_empty(),
+            "{file} {name}.{field} says why it is plain"
+        );
+    }
 }
