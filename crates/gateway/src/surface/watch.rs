@@ -139,18 +139,18 @@ impl Surface {
         let (list, offset, held) = match cursor {
             Some(asked) => match asked.entities {
                 Some(place) => (
-                    views.held_entities(viewer, asked)?.to_vec(),
+                    views.held_entities(viewer, asked)?,
                     place.offset,
                     Some(place.list),
                 ),
                 None => (
-                    visible_entities(views, world, fog, vision, viewer)?,
+                    std::sync::Arc::from(visible_entities(views, world, fog, vision, viewer)?),
                     0,
                     None,
                 ),
             },
             None => (
-                visible_entities(views, world, fog, vision, viewer)?,
+                std::sync::Arc::from(visible_entities(views, world, fog, vision, viewer)?),
                 0,
                 None,
             ),
@@ -228,7 +228,7 @@ struct Listing {
 /// The entity list a page is cut from: the list, where the page starts in
 /// it, and the digest it is held by when it is a held one.
 struct Entities {
-    list: Vec<Json>,
+    list: std::sync::Arc<[Json]>,
     offset: u32,
     held: Option<u64>,
 }

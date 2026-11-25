@@ -570,14 +570,14 @@ pub struct ViewCursor {
 /// A place in a listing's entities: the held list it pages and the next
 /// entity to send (S3's `outcap`; `crate::viewfeed::ViewFeed::held_entities`).
 ///
-/// The list is the one taken when the listing's chunks were all sent, held by
-/// its digest until its last page goes, so every page of one listing is cut
+/// The list is the one taken when the listing's chunks were all sent, held under
+/// a serial until its last page goes, so every page of one listing is cut
 /// from one list: no entity twice, none lost at a page's edge, however the
 /// world moves while the client pages.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EntityPlace {
-    /// The held list's digest: the project's one hash over the list as the
-    /// wire spells it, so it says nothing the list does not.
+    /// The held list's serial: the viewer's own count of the lists it was
+    /// held, so it says nothing of another viewer's listings.
     pub list: u64,
     /// The next entity to send.
     pub offset: u32,

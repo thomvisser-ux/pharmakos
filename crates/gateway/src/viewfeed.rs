@@ -127,12 +127,22 @@ pub const MAX_CHUNK_LISTED_BYTES: usize = 131_400;
 
 const _: () = assert!(MAX_CHUNK_LISTED_BYTES < VIEW_PAGE_BYTES);
 
-/// The most entity lists the feed holds at once for listings being paged
-/// ([`ViewFeed::hold_entities`]); the oldest goes first, and a cursor into a
-/// list no longer held is [`crate::error::Code::StaleSnapshot`].
+/// How many entity lists one viewer may hold at once for listings being
+/// paged ([`ViewFeed::hold_entities`]); past it that viewer's oldest goes, and
+/// a cursor into a list no longer held is [`crate::error::Code::StaleSnapshot`].
+/// A quota per viewer, so no viewer's listings evict another's.
 ///
-/// PLACEHOLDER: sixteen held entity lists — owner, at hardening, with the rest of the view's bounds.
-pub const MAX_HELD_ENTITY_LISTS: usize = 16;
+/// PLACEHOLDER: four held entity lists a viewer — owner, at hardening, with the rest of the view's bounds.
+pub const HELD_ENTITY_LISTS_PER_VIEWER: usize = 4;
+
+/// The viewers one feed serves at most: the match's seats (three in v1) and
+/// the two spectator readings (with and without `spectate.nofog`); `admin`
+/// watches nothing ([`crate::fog::Viewer`]).
+pub const MAX_VIEWERS: usize = 5;
+
+/// The most entity lists the feed holds at once: [`MAX_VIEWERS`] times
+/// [`HELD_ENTITY_LISTS_PER_VIEWER`].
+pub const MAX_HELD_ENTITY_LISTS: usize = MAX_VIEWERS * HELD_ENTITY_LISTS_PER_VIEWER;
 
 /// The bytes `item` takes listed in a page's array, as the gateway's writer
 /// spells it ([`pharmakos_proto::json::write`], two-space indent, one entry a
@@ -152,17 +162,6 @@ pub fn listed_bytes(item: &Json) -> usize {
         .saturating_add(inner_lines.saturating_mul(indent))
         .saturating_add(indent)
         .saturating_add(2)
-}
-
-/// An entity list's digest: the project's one hash over each entity as the
-/// wire spells it, so a cursor that names a list says nothing the list does
-/// not.
-fn entity_digest(entities: &[Json]) -> u64 {
-    let mut bytes: Vec<u8> = Vec::new();
-    for entity in entities {
-        bytes.extend_from_slice(pharmakos_proto::json::write(entity).as_bytes());
-    }
-    pharmakos_sim::digest(&bytes)
 }
 
 /// One `gp.api.v1.ViewChunk`: its origin and its runs, which a `bytes` field
@@ -303,12 +302,22 @@ pub struct ViewPage {
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct HeldEntities {
     viewer: Viewer,
-    /// The list's digest, which an entity cursor names it by.
+    /// The list's serial: the viewer's own count of the lists it was held
+    /// ([`ViewFeed::hold_entities`]), which an entity cursor names it by. A
+    /// viewer's own count, so a cursor says nothing of another's listings.
     list: u64,
     /// The listing's two stamps, which the cursor carries too.
     from_seq: u64,
     to_seq: u64,
-    entities: Vec<Json>,
+    /// Shared, so a page borrows the list rather than copying it.
+    entities: std::sync::Arc<[Json]>,
+}
+
+/// One viewer's count of the entity lists it was held: the next serial.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct HeldSerial {
+    viewer: Viewer,
+    next: u64,
 }
 
 /// The derived view state for one hosted match.
@@ -345,6 +354,8 @@ pub struct ViewFeed {
     /// The entity lists of listings being paged, oldest first, at most
     /// [`MAX_HELD_ENTITY_LISTS`] (S3's `outcap`).
     held: Vec<HeldEntities>,
+    /// Each viewer's next held-list serial.
+    held_serials: Vec<HeldSerial>,
 }
 
 /// The standing wall voxels of one world tick of one view.
@@ -383,6 +394,7 @@ impl ViewFeed {
             standing_walls: None,
             wall_scans: 0,
             held: Vec::new(),
+            held_serials: Vec::new(),
         }
     }
 
@@ -482,6 +494,7 @@ impl ViewFeed {
         self.viewers = Vec::new();
         // Every cursor goes stale with the view, an entity cursor too.
         self.held = Vec::new();
+        self.held_serials = Vec::new();
         Ok(())
     }
 
@@ -770,21 +783,33 @@ impl ViewFeed {
     /// chunks are all sent and the list does not fit the page (S3's
     /// `outcap`), and answer the place its next page starts at.
     ///
-    /// Held by the list's own digest, so a cursor names a list and nothing
-    /// else: no count of anybody's listings. Holding a list a second time
-    /// keeps one copy. Past [`MAX_HELD_ENTITY_LISTS`] the oldest goes, and a
-    /// cursor into it is stale ([`ViewFeed::held_entities`]).
+    /// Named by a serial, the viewer's own count of the lists it was held, so
+    /// two readers of one viewer (the client paging, an advisor reading as the
+    /// same seat) each hold their own list and never cancel one another, and a
+    /// cursor says nothing of another viewer's listings. Past
+    /// [`HELD_ENTITY_LISTS_PER_VIEWER`] that viewer's oldest list goes, and a
+    /// cursor into it is stale ([`ViewFeed::held_entities`]); no viewer's
+    /// lists evict another's.
     pub fn hold_entities(
         &mut self,
         viewer: Viewer,
         from_seq: u64,
         to_seq: u64,
-        entities: Vec<Json>,
+        entities: std::sync::Arc<[Json]>,
         offset: u32,
     ) -> EntityPlace {
-        let list = entity_digest(&entities);
-        self.held
-            .retain(|held| !(held.viewer == viewer && held.list == list));
+        let list = if let Some(serial) = self
+            .held_serials
+            .iter_mut()
+            .find(|serial| serial.viewer == viewer)
+        {
+            let list = serial.next;
+            serial.next = serial.next.wrapping_add(1);
+            list
+        } else {
+            self.held_serials.push(HeldSerial { viewer, next: 1 });
+            0
+        };
         self.held.push(HeldEntities {
             viewer,
             list,
@@ -792,22 +817,35 @@ impl ViewFeed {
             to_seq,
             entities,
         });
-        while self.held.len() > MAX_HELD_ENTITY_LISTS {
-            self.held.remove(0);
+        while self
+            .held
+            .iter()
+            .filter(|held| held.viewer == viewer)
+            .count()
+            > HELD_ENTITY_LISTS_PER_VIEWER
+        {
+            if let Some(oldest) = self.held.iter().position(|held| held.viewer == viewer) {
+                self.held.remove(oldest);
+            }
         }
         EntityPlace { list, offset }
     }
 
     /// The held list an entity cursor pages, for this viewer and this
-    /// listing.
+    /// listing, shared: the page borrows it.
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::StaleSnapshot`] when no such list is held: it
-    /// was paged to its end, the feed has held [`MAX_HELD_ENTITY_LISTS`] newer
-    /// ones since, or it is another viewer's. The client's answer is a
-    /// keyframe, as for any cursor the view no longer has.
-    pub fn held_entities(&self, viewer: Viewer, cursor: ViewCursor) -> Result<&[Json], Error> {
+    /// was paged to its end, this viewer has held
+    /// [`HELD_ENTITY_LISTS_PER_VIEWER`] newer ones since, or it is another
+    /// viewer's. The client's answer is a keyframe, as for any cursor the view
+    /// no longer has.
+    pub fn held_entities(
+        &self,
+        viewer: Viewer,
+        cursor: ViewCursor,
+    ) -> Result<std::sync::Arc<[Json]>, Error> {
         let Some(place) = cursor.entities else {
             return Err(Error::internal(
                 "an entity page was asked for with a cursor into the listing's chunks",
@@ -821,7 +859,7 @@ impl ViewFeed {
                     && held.from_seq == cursor.from_seq
                     && held.to_seq == cursor.to_seq
             })
-            .map(|held| held.entities.as_slice())
+            .map(|held| std::sync::Arc::clone(&held.entities))
             .ok_or_else(|| {
                 Error::stale_snapshot(
                     "that cursor pages an entity list this view no longer holds; ask for a \
@@ -830,7 +868,8 @@ impl ViewFeed {
             })
     }
 
-    /// Let go of a held list once its last page is sent.
+    /// Let go of a held list once its last page is sent: this viewer's list
+    /// of this serial, and no other.
     pub fn release_entities(&mut self, viewer: Viewer, list: u64) {
         self.held
             .retain(|held| !(held.viewer == viewer && held.list == list));
@@ -839,10 +878,12 @@ impl ViewFeed {
     /// Hold what a scratch copy of this feed holds
     /// (`crate::surface::InProcess::scratch_view`): every other part of the
     /// feed is put back as it was before the scratch call, and its held
-    /// entity lists are what the scratch call left, so an advisor can page
-    /// its own listing's entities across calls as a socket can.
+    /// entity lists and their serials are what the scratch call left, so an
+    /// advisor can page its own listing's entities across calls as a socket
+    /// can, and no serial is minted twice.
     pub fn keep_held_of(&mut self, scratch: &mut ViewFeed) {
         self.held = std::mem::take(&mut scratch.held);
+        self.held_serials = std::mem::take(&mut scratch.held_serials);
     }
 
     /// How many entity lists the feed holds.
@@ -1874,6 +1915,7 @@ mod tests {
         use pharmakos_proto::json::Json;
         let mut feed = ViewFeed::new();
         let viewer = Viewer::Seat(SeatId::new(0));
+        let other = Viewer::Seat(SeatId::new(1));
         let cursor = |place| ViewCursor {
             view_id: 0,
             from_seq: 0,
@@ -1881,7 +1923,8 @@ mod tests {
             index: 0,
             entities: Some(place),
         };
-        let list = |n: usize| vec![Json::Number(n.to_string()); 3];
+        let list =
+            |n: usize| -> std::sync::Arc<[Json]> { vec![Json::Number(n.to_string()); 3].into() };
         let first = feed.hold_entities(viewer, 0, 5, list(0), 1);
         assert_eq!(
             feed.held_entities(viewer, cursor(first))
@@ -1890,26 +1933,41 @@ mod tests {
             3
         );
         assert_eq!(
-            feed.held_entities(Viewer::Seat(SeatId::new(1)), cursor(first))
+            feed.held_entities(other, cursor(first))
                 .expect_err("another viewer's")
                 .code(),
             Code::StaleSnapshot
         );
-        for n in 1..=super::MAX_HELD_ENTITY_LISTS {
+        // The same list held twice is two lists, each its own serial: two
+        // readers of one viewer never cancel one another.
+        let twin = feed.hold_entities(viewer, 0, 5, list(0), 1);
+        assert_ne!(twin.list, first.list);
+        feed.release_entities(viewer, twin.list);
+        assert!(feed.held_entities(viewer, cursor(first)).is_ok(), "kept");
+
+        // Another viewer filling its quota and more leaves this one's good.
+        for n in 0..=super::HELD_ENTITY_LISTS_PER_VIEWER {
+            let _ = feed.hold_entities(other, 0, 5, list(n), 1);
+        }
+        assert!(
+            feed.held_entities(viewer, cursor(first)).is_ok(),
+            "not evicted"
+        );
+
+        // Past this viewer's own quota, its oldest goes.
+        for n in 1..=super::HELD_ENTITY_LISTS_PER_VIEWER {
             let _ = feed.hold_entities(viewer, 0, 5, list(n), 1);
         }
-        assert_eq!(feed.held_count(), super::MAX_HELD_ENTITY_LISTS);
         assert_eq!(
             feed.held_entities(viewer, cursor(first))
                 .expect_err("the oldest went")
                 .code(),
             Code::StaleSnapshot
         );
-        let newest = feed.hold_entities(viewer, 0, 5, list(99), 1);
-        feed.release_entities(viewer, newest.list);
-        assert!(
-            feed.held_entities(viewer, cursor(newest)).is_err(),
-            "let go"
+        assert!(feed.held_count() <= super::MAX_HELD_ENTITY_LISTS);
+        assert_eq!(
+            feed.held_count(),
+            super::HELD_ENTITY_LISTS_PER_VIEWER.saturating_mul(2)
         );
     }
 

@@ -294,18 +294,209 @@ fn in_budget(label: &str, n: usize) -> String {
     )
 }
 
-/// **An in-budget playbook's answers fit** (S3's `outcap`): a playbook within
-/// the size budget and the verifier's limits, at the inbound cap, its labels
-/// plain or of the characters a quoting escapes, is verified at both depths
-/// and submitted with answers within the outgoing cap: the backstop is not
-/// reached by those for a playbook a player can seal. Its render is answered
-/// typed and within the cap too, and printed: its own cut is `outcap` part 2's.
+/// The bytes `render_plan` answers for `text`, or would have answered when
+/// it was withheld (its refusal names the size).
+fn render_bytes(surface: &mut Surface, seat: &Token, text: &str) -> usize {
+    let params = Json::Object(vec![(
+        String::from("playbook_jsonc"),
+        Json::String(text.to_owned()),
+    )]);
+    let answer = answer_text(surface, seat, &request_text("1", "render_plan", &params));
+    if code_of(&answer) != "RESPONSE_TOO_LARGE" {
+        return answer.len();
+    }
+    let value = json::read(&answer).expect("JSON");
+    let words = support::text_of(value.get("error").expect("an error"), "message");
+    words
+        .split(" is ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|bytes| bytes.parse::<usize>().ok())
+        .expect("the refusal names the size")
+}
+
+/// The size units `verify_plan` counts for `text`.
+fn size_units(surface: &mut Surface, seat: &Token, text: &str) -> usize {
+    let params = Json::Object(vec![
+        (
+            String::from("playbook_jsonc"),
+            Json::String(text.to_owned()),
+        ),
+        (String::from("depth"), Json::String(String::from("quick"))),
+    ]);
+    let answer = answer_text(surface, seat, &request_text("1", "verify_plan", &params));
+    let value = json::read(&answer).expect("JSON");
+    let report = support::result(&value, "verify_plan")
+        .get("report")
+        .cloned()
+        .expect("a report");
+    match report.get("size_units") {
+        Some(Json::Number(units)) => units.parse().expect("a count"),
+        _ => 0,
+    }
+}
+
+/// Every route step of the committed library and example playbooks, as
+/// canonical JSON: the step kinds a search of in-budget renders tries.
+fn committed_steps() -> Vec<String> {
+    let root = support::workspace_root();
+    // The library through its own reader, which lists it in id order.
+    let library = root.join("library");
+    let mut files: Vec<std::path::PathBuf> = pharmakos_plan_core::library::listing(&library)
+        .expect("the library")
+        .summaries
+        .iter()
+        .map(|summary| library.join(format!("{}.jsonc", summary.template_id)))
+        .collect();
+    files.push(root.join("examples/playbooks/expand_east.jsonc"));
+    files.push(root.join("crates/verifier/tests/cases/budget_128.json"));
+    let mut steps: Vec<String> = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a playbook");
+        let Ok(canonical) = pharmakos_plan_core::canonical::canonicalise_text(&text) else {
+            continue;
+        };
+        let value = json::read(&canonical.json).expect("canonical JSON");
+        let route = value
+            .get("declarative")
+            .and_then(|body| body.get("route"))
+            .cloned();
+        if let Some(Json::Array(route)) = route {
+            for step in route {
+                let Json::Object(entries) = step else {
+                    continue;
+                };
+                let kept: Vec<(String, Json)> = entries
+                    .into_iter()
+                    .filter(|(key, _)| key != "label" && key != "skip_if")
+                    .collect();
+                let written = json::write(&Json::Object(kept)).replace('\n', "");
+                if !steps.contains(&written) {
+                    steps.push(written);
+                }
+            }
+        }
+    }
+    steps
+}
+
+/// One generated in-budget playbook: `count` copies of `step`, each with the
+/// largest guard a condition may have and a label of `label` repeated `n`
+/// times, in the route or as handler bodies.
+fn in_budget_of(step: &str, count: usize, handlers: bool, label: &str, n: usize) -> String {
+    let leaf = r#"{"cmdr_hp_pct":{"cmp":"LE","pct":40}}"#;
+    let condition = format!(
+        r#"{{"any":{{"items":[{}]}}}}"#,
+        std::iter::repeat_n(leaf, 23).collect::<Vec<_>>().join(",")
+    );
+    let words = label.repeat(n);
+    let body = step.trim_start_matches('{');
+    if handlers {
+        let handlers: Vec<String> = (0..count)
+            .map(|index| {
+                format!(
+                    r#"{{"id":"h{index}","when":{condition},"body":[{{"label":"{words}{index}",{body}]}}"#
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"schema_version":{{"major":1}},"meta":{{"title":"in budget","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{{"label":"r","hold":{{"ms":1000}}}}],"handlers":[{}]}}}}"#,
+            handlers.join(",")
+        )
+    } else {
+        let steps: Vec<String> = (0..count)
+            .map(|index| format!(r#"{{"label":"{words}{index}","skip_if":{condition},{body}"#))
+            .collect();
+        format!(
+            r#"{{"schema_version":{{"major":1}},"meta":{{"title":"in budget","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{}]}}}}"#,
+            steps.join(",")
+        )
+    }
+}
+
+/// **The search for the worst in-budget render** (S3's `outcap`, fix pass
+/// 1, design call A): every committed step kind, in the route with a full
+/// guard and as handler bodies under a full condition, as many copies as the
+/// size budget takes, labels plain or escaped to the request cap. Prints each
+/// figure and the worst; the worst found is the committed case below.
 #[test]
-fn an_in_budget_playbook_at_the_inbound_cap_answers_within_the_cap() {
+#[ignore = "a search run by hand for the pull request's figure; its worst case is committed"]
+fn the_worst_in_budget_render_is_searched() {
     let mut surface = hosted(2, support::SEGMENT_MS, 3);
     unlimited(&mut surface);
     let seat = seat_token(&mut surface, 0);
-    for label in ["x", "\\u0001", "\u{1F600}"] {
+    let budget = 128_usize;
+    let mut worst = (0_usize, String::new());
+    for step in committed_steps() {
+        for handlers in [false, true] {
+            let one = size_units(
+                &mut surface,
+                &seat,
+                &in_budget_of(&step, 1, handlers, "x", 1),
+            );
+            let two = size_units(
+                &mut surface,
+                &seat,
+                &in_budget_of(&step, 2, handlers, "x", 1),
+            );
+            let each = two.saturating_sub(one).max(1);
+            let base = one.saturating_sub(each);
+            let most = if handlers { 64 } else { 128 };
+            let count = budget
+                .saturating_sub(base)
+                .checked_div(each)
+                .unwrap_or(0)
+                .min(most);
+            if count == 0 {
+                continue;
+            }
+            for label in ["x", "\\u0001"] {
+                let params = largest("render_plan", |n| {
+                    in_budget_of(&step, count, handlers, label, n)
+                });
+                let text = support::text_of(&params, "playbook_jsonc");
+                let units = size_units(&mut surface, &seat, &text);
+                if units > budget {
+                    continue;
+                }
+                let bytes = render_bytes(&mut surface, &seat, &text);
+                println!(
+                    "{bytes} bytes: {count} x {} ({} units), handlers {handlers}, label {label:?}",
+                    step.chars().take(80).collect::<String>(),
+                    units
+                );
+                if bytes > worst.0 {
+                    worst = (
+                        bytes,
+                        format!("{count} x {step}, handlers {handlers}, label {label:?}"),
+                    );
+                }
+            }
+        }
+    }
+    println!("WORST: {} bytes: {}", worst.0, worst.1);
+}
+
+/// **An in-budget playbook's answers fit whole** (S3's `outcap`; fix pass 1,
+/// design call A): a playbook within the size budget and the verifier's
+/// limits, at the inbound cap, its labels plain or of characters a quoting
+/// escapes, is verified at both depths, submitted and rendered with answers
+/// sent whole, the render's with at least a quarter of the cap to spare. The
+/// render's cases are the worst the search found
+/// (`the_worst_in_budget_render_is_searched`): every committed `place_beacon`
+/// step, 128 of them each under a full guard (5 667 582 bytes at the worst),
+/// and the 24-node guarded hold. The backstop is not reached by a playbook a
+/// player can seal.
+#[test]
+fn an_in_budget_playbook_at_the_inbound_cap_answers_whole() {
+    let mut surface = hosted(2, support::SEGMENT_MS, 3);
+    unlimited(&mut surface);
+    let seat = seat_token(&mut surface, 0);
+    let spare = MAX_ANSWER_BYTES
+        .saturating_mul(3)
+        .checked_div(4)
+        .expect("a cap");
+    for label in ["x", r"\u0001", "\u{1F600}"] {
         for (method, depth) in [
             ("render_plan", None),
             ("verify_plan", Some("quick")),
@@ -319,31 +510,45 @@ fn an_in_budget_playbook_at_the_inbound_cap_answers_within_the_cap() {
             let text = request_text("1", method, &params);
             let answer = answer_text(&mut surface, &seat, &text);
             println!(
-                "in budget, label {label:?}: {method} {depth:?}: request {} bytes, answer {} bytes: {}",
+                "in budget, label {label:?}: {method} {depth:?}: request {} bytes, answer {} bytes",
                 text.len(),
                 answer.len(),
-                support::code(&json::read(&answer).expect("JSON")),
             );
-            assert!(answer.len() <= MAX_ANSWER_BYTES);
-            if method == "render_plan" {
-                // The prose of an in-budget playbook can pass the cap: the
-                // render's own cut, in plan-core's terms, is `outcap` part 2's
-                // (it needs the typed left-out field). Until it lands the
-                // backstop is what answers, typed, never a cut text.
-                let words = json::read(&answer).expect("JSON");
-                if code_of(&answer) == "RESPONSE_TOO_LARGE" {
-                    println!(
-                        "  withheld: {}",
-                        support::text_of(words.get("error").expect("an error"), "message")
-                    );
-                }
-                continue;
-            }
             assert_ne!(
                 code_of(&answer),
                 "RESPONSE_TOO_LARGE",
                 "{method} {depth:?} withheld an in-budget answer"
             );
+            assert!(
+                answer.len() <= spare,
+                "{} bytes, past {spare}",
+                answer.len()
+            );
+        }
+    }
+    for step in committed_steps()
+        .into_iter()
+        .filter(|step| step.contains("place_beacon"))
+    {
+        let one = size_units(&mut surface, &seat, &in_budget_of(&step, 1, false, "x", 1));
+        let two = size_units(&mut surface, &seat, &in_budget_of(&step, 2, false, "x", 1));
+        let each = two.saturating_sub(one).max(1);
+        let count = 128_usize
+            .saturating_sub(one.saturating_sub(each))
+            .checked_div(each)
+            .unwrap_or(0)
+            .min(128);
+        for label in ["x", r"\u0001"] {
+            let params = largest("render_plan", |n| {
+                in_budget_of(&step, count, false, label, n)
+            });
+            let text = support::text_of(&params, "playbook_jsonc");
+            assert!(size_units(&mut surface, &seat, &text) <= 128, "in budget");
+            let bytes = render_bytes(&mut surface, &seat, &text);
+            println!(
+                "in budget, {count} place_beacon steps, label {label:?}: render {bytes} bytes"
+            );
+            assert!(bytes <= spare, "{bytes} bytes, past {spare}: {step}");
         }
     }
 }
@@ -439,7 +644,7 @@ fn the_largest_render_is_withheld_with_a_typed_error() {
         .audit()
         .entries()
         .iter()
-        .filter(|entry| entry.action == "call render_plan")
+        .filter(|entry| entry.action == "withhold answer render_plan")
         .filter(|entry| entry.outcome.render() == "RESPONSE_TOO_LARGE")
         .count();
     assert_eq!(logged, 2, "each withheld answer is in the audit log");
@@ -490,6 +695,108 @@ fn a_withheld_answer_leaves_the_connection_open() {
     assert!(status.get("result").is_some(), "{status:?}");
 }
 
+/// **The measure includes the footer** (S3's `outcap`, fix pass 1, item F,
+/// mutant m01): an answer made through `Surface::call` whose text, `_status`
+/// footer and all, is exactly the cap is sent; with the cap one byte lower it
+/// is withheld. A measure taken before the footer was added would send it.
+#[test]
+fn the_measured_answer_is_the_one_sent_footer_and_all() {
+    let mut surface = hosted(2, support::SEGMENT_MS, 3);
+    unlimited(&mut surface);
+    let token = seat_token(&mut surface, 0);
+    let text = request_text(
+        "1",
+        "save_notes",
+        &Json::Object(vec![(String::from("notes"), Json::String("n".repeat(100)))]),
+    );
+    let sent = answer_text(&mut surface, &token, &text);
+    assert!(sent.contains("_status"), "the answer carries its footer");
+    surface.lower_answer_cap(sent.len()).expect("lowered");
+    assert_eq!(
+        answer_text(&mut surface, &token, &text),
+        sent,
+        "at the cap: sent"
+    );
+    surface
+        .lower_answer_cap(sent.len().saturating_sub(1))
+        .expect("lowered");
+    assert_eq!(
+        code_of(&answer_text(&mut surface, &token, &text)),
+        "RESPONSE_TOO_LARGE",
+        "one byte under: withheld"
+    );
+    assert_eq!(
+        surface
+            .lower_answer_cap(MAX_ANSWER_BYTES.saturating_add(1))
+            .expect_err("never raised")
+            .code(),
+        Code::InvalidArgument
+    );
+}
+
+/// **The audit log tells the truth about a withheld answer** (S3's
+/// `outcap`, fix pass 1, item E): a `submit_plan` accepted and whose answer is
+/// withheld (the cap lowered for the test, `Surface::lower_answer_cap`, since
+/// no in-budget answer reaches the real one) is logged as the call it was,
+/// `ok`, with a second line saying its answer was withheld; and `get_status`
+/// says the seat holds the seal it was refused the answer to.
+#[test]
+fn a_withheld_submission_is_logged_as_accepted() {
+    let mut surface = hosted(2, support::SEGMENT_MS, 3);
+    unlimited(&mut surface);
+    let seat = seat_token(&mut surface, 0);
+    // The gateway's own safe playbook for the seat: one that qualifies.
+    let playbook = support::text_of(
+        &support::result(
+            &support::call(&mut surface, &seat, "get_safe_plan", "{}"),
+            "get_safe_plan",
+        ),
+        "playbook_jsonc",
+    );
+    let text = request_text(
+        "1",
+        "submit_plan",
+        &Json::Object(vec![(
+            String::from("playbook_jsonc"),
+            Json::String(playbook),
+        )]),
+    );
+    surface.lower_answer_cap(256).expect("lowered");
+    let answer = answer_text(&mut surface, &seat, &text);
+    assert_eq!(code_of(&answer), "RESPONSE_TOO_LARGE", "withheld");
+    let lines: Vec<(String, String)> = surface
+        .audit()
+        .entries()
+        .iter()
+        .map(|entry| (entry.action.clone(), entry.outcome.render()))
+        .collect();
+    assert!(
+        lines.contains(&(String::from("call submit_plan"), String::from("ok"))),
+        "the call is logged as made: {lines:?}"
+    );
+    assert!(
+        lines.contains(&(
+            String::from("withhold answer submit_plan"),
+            String::from("RESPONSE_TOO_LARGE")
+        )),
+        "and its answer as withheld: {lines:?}"
+    );
+    surface
+        .lower_answer_cap(MAX_ANSWER_BYTES)
+        .expect("back at the cap");
+    let status = answer_text(
+        &mut surface,
+        &seat,
+        &request_text("2", "get_status", &Json::Object(Vec::new())),
+    );
+    let status = json::read(&status).expect("JSON");
+    assert_eq!(
+        support::result(&status, "get_status").get("sealed_this_round"),
+        Some(&Json::Bool(true)),
+        "the submission stands: {status:?}"
+    );
+}
+
 /// **The `id` is capped** (echoing a 256 KiB id is amplification): a string
 /// or a number past `MAX_ID_BYTES` is an invalid request, answered under no
 /// id; at the cap it is echoed; and the error answer at the worst id is
@@ -503,6 +810,38 @@ fn an_id_past_its_cap_is_refused_and_never_echoed() {
     let past = "x".repeat(MAX_ID_BYTES.saturating_add(1));
     let digits = "1".repeat(MAX_ID_BYTES.saturating_add(1));
     let huge = "y".repeat(MAX_MESSAGE_BYTES.saturating_sub(200));
+    // The cap is in bytes, not characters: 32 four-byte characters are the
+    // cap and echoed, 33 are past it.
+    let quarter = MAX_ID_BYTES.checked_div(4).expect("a cap");
+    let wide_at = "\u{1F600}".repeat(quarter);
+    let wide_past = "\u{1F600}".repeat(quarter.saturating_add(1));
+    let answer = answer_text(
+        &mut surface,
+        &seat,
+        &request_text(
+            &format!("\"{wide_at}\""),
+            "get_status",
+            &Json::Object(Vec::new()),
+        ),
+    );
+    assert!(
+        answer.contains(&wide_at),
+        "32 four-byte characters are echoed"
+    );
+    let answer = answer_text(
+        &mut surface,
+        &seat,
+        &request_text(
+            &format!("\"{wide_past}\""),
+            "get_status",
+            &Json::Object(Vec::new()),
+        ),
+    );
+    assert_eq!(
+        json::read(&answer).expect("JSON").get("id"),
+        Some(&Json::Null),
+        "33 four-byte characters are past the cap"
+    );
 
     let answer = answer_text(
         &mut surface,
@@ -533,33 +872,25 @@ fn an_id_past_its_cap_is_refused_and_never_echoed() {
     }
 }
 
-/// A casual two-seat match in its first Push whose ground carries `walls`
-/// lone wall voxels of seat 1, none touching another by a face, so every seat
-/// sees each as a wall of its own: an entity list far past one page, made the
-/// way a match makes one (walls are voxels, and a cratered wall is many).
-fn crowded(walls: usize) -> Surface {
-    use pharmakos_sim::voxels::{Material, VoxelEdit};
-    let mut surface = support::hosted_casual(2, 60_000, 3);
-    assert!(surface.begin_push().expect("a hosted match"), "the Push");
-    let mut sites: Vec<[i32; 3]> = Vec::new();
-    'columns: for y in (100..300).step_by(2) {
-        for x in (100..300).step_by(2) {
-            if sites.len() == walls {
-                break 'columns;
-            }
-            let world = surface.host().expect("a hosted match").world();
-            let top = (0..64).rev().find(|z| {
-                world
-                    .voxels()
-                    .get([x, y, *z])
-                    .is_some_and(|m| m != Material::AIR)
-            });
-            if let Some(z) = top {
-                sites.push([x, y, z]);
-            }
-        }
-    }
-    assert_eq!(sites.len(), walls, "the map has ground for every wall");
+/// The ground voxel of column `[x, y]`: the highest that is not air.
+fn ground(surface: &Surface, x: i32, y: i32) -> Option<[i32; 3]> {
+    use pharmakos_sim::voxels::Material;
+    let world = surface.host().expect("a hosted match").world();
+    (0..64)
+        .rev()
+        .find(|z| {
+            world
+                .voxels()
+                .get([x, y, *z])
+                .is_some_and(|m| m != Material::AIR)
+        })
+        .map(|z| [x, y, z])
+}
+
+/// Turn each of `sites` into `material`, through the host's edit queue, a
+/// tick at a time when its share is full, and let the last land.
+fn lay(surface: &mut Surface, sites: &[[i32; 3]], material: pharmakos_sim::voxels::Material) {
+    use pharmakos_sim::voxels::VoxelEdit;
     for at in sites {
         loop {
             let filed =
@@ -567,20 +898,94 @@ fn crowded(walls: usize) -> Surface {
                     .host_mut()
                     .expect("a hosted match")
                     .file_voxel_edit(VoxelEdit::Set {
-                        at,
-                        material: Material::WALL_SEAT_1,
+                        at: *at,
+                        material,
                         by: None,
                     });
             if filed.is_ok() {
                 break;
             }
             // The host's share of the edit queue is full: a tick takes it.
-            assert_eq!(support::step(&mut surface, 1), 1, "the Push goes on");
+            assert_eq!(support::step(surface, 1), 1, "the Push goes on");
         }
     }
-    assert_eq!(support::step(&mut surface, 1), 1, "the last edits land");
+    assert_eq!(support::step(surface, 1), 1, "the last edits land");
+}
+
+/// `count` lone ground columns on a two-voxel grid in `[from, to)` on both
+/// axes, none touching another by a face, skipping any within `clear` of
+/// `away`.
+fn lone_sites(
+    surface: &Surface,
+    count: usize,
+    from: i32,
+    to: i32,
+    away: [i32; 3],
+    clear: i32,
+) -> Vec<[i32; 3]> {
+    let mut sites: Vec<[i32; 3]> = Vec::new();
+    'columns: for y in (from..to).step_by(2) {
+        for x in (from..to).step_by(2) {
+            if sites.len() == count {
+                break 'columns;
+            }
+            let [ax, ay, _] = away;
+            if (x - ax).abs() < clear && (y - ay).abs() < clear {
+                continue;
+            }
+            if let Some(site) = ground(surface, x, y) {
+                sites.push(site);
+            }
+        }
+    }
+    assert_eq!(sites.len(), count, "the map has ground for every wall");
+    sites
+}
+
+/// A casual two-seat match in its first Push whose ground carries `walls`
+/// lone wall voxels of seat 1, none touching another by a face, so every seat
+/// sees each as a wall of its own: an entity list far past one page, made the
+/// way a match makes one (walls are voxels, and a cratered wall is many).
+fn crowded(walls: usize) -> Surface {
+    let mut surface = support::hosted_casual(2, 60_000, 3);
+    assert!(surface.begin_push().expect("a hosted match"), "the Push");
+    let sites = lone_sites(&surface, walls, 100, 300, [-1000, -1000, 0], 0);
+    lay(
+        &mut surface,
+        &sites,
+        pharmakos_sim::voxels::Material::WALL_SEAT_1,
+    );
     unlimited(&mut surface);
     surface
+}
+
+/// A FOGGED two-seat match in its first Push: `own` lone wall voxels of seat
+/// 0 (its own, so listed whatever its sight: a list past one page), and
+/// `theirs` lone wall voxels of seat 1 around seat 1's core, out of seat 0's
+/// sight. Answers the surface and seat 1's walls' columns.
+fn crowded_fogged(own: usize, theirs: usize) -> (Surface, Vec<[i32; 3]>) {
+    use pharmakos_sim::voxels::Material;
+    let mut surface = support::hosted(2, 60_000, 3);
+    assert!(surface.begin_push().expect("a hosted match"), "the Push");
+    let (_, core) = support::core_beacon(&surface, 1);
+    let [cx, cy, _] = core;
+    let mut near: Vec<[i32; 3]> = Vec::new();
+    'columns: for dy in (-12..12).step_by(2) {
+        for dx in (-12..12).step_by(2) {
+            if near.len() == theirs {
+                break 'columns;
+            }
+            if let Some(site) = ground(&surface, cx + dx + 1, cy + dy + 1) {
+                near.push(site);
+            }
+        }
+    }
+    assert_eq!(near.len(), theirs, "ground around seat 1's core");
+    let mine = lone_sites(&surface, own, 4, 380, core, 80);
+    lay(&mut surface, &mine, Material::WALL_SEAT_0);
+    lay(&mut surface, &near, Material::WALL_SEAT_1);
+    unlimited(&mut surface);
+    (surface, near)
 }
 
 /// The ids of a page's entities.
@@ -819,6 +1224,169 @@ fn an_advisor_pages_its_entities_across_calls() {
     assert_eq!(refused, "", "the advisor's paging was refused");
     assert!(pages >= 3, "{pages} pages: the list was paged");
     assert_eq!(walls, 3_000, "every wall, once");
+}
+
+/// Every page of one listing from `cursor` on, as (entities, owners of
+/// walls), and the completing cursor.
+fn listing_from(surface: &mut Surface, token: &Token, cursor: &str) -> (Vec<Json>, String) {
+    let mut all: Vec<Json> = Vec::new();
+    let mut at = cursor.to_owned();
+    for _ in 0..64 {
+        let (page, _) = view_page(surface, token, &at);
+        all.extend(support::array_of(&page, "entities"));
+        at = support::text_of(&page, "next_cursor");
+        if matches!(page.get("complete"), Some(Json::Bool(true))) {
+            return (all, at);
+        }
+    }
+    panic!("a listing that never completes");
+}
+
+/// The first entity cursor of a keyframe listing, and what came before it.
+fn to_first_entity_cursor(surface: &mut Surface, token: &Token) -> (Vec<Json>, String) {
+    let mut seen: Vec<Json> = Vec::new();
+    let mut at = String::new();
+    loop {
+        let (page, _) = view_page(surface, token, &at);
+        assert!(
+            matches!(page.get("complete"), Some(Json::Bool(false))),
+            "a list that needs paging"
+        );
+        seen.extend(support::array_of(&page, "entities"));
+        at = support::text_of(&page, "next_cursor");
+        if at.len() > 64 {
+            return (seen, at);
+        }
+    }
+}
+
+/// **Two readers of one viewer never cancel each other** (S3's `outcap`,
+/// fix pass 1, review F1's probe P1): token A pages halfway through its
+/// listing, token B of the same seat reads a whole listing of its own, and A's
+/// next page goes on from where A was, every wall once.
+#[test]
+fn two_readers_of_one_seat_page_their_own_lists() {
+    let mut surface = crowded(3_000);
+    let first = seat_token(&mut surface, 0);
+    let second = seat_token(&mut surface, 0);
+    let (mut seen, cursor) = to_first_entity_cursor(&mut surface, &first);
+    let (whole, _) = listing_from(&mut surface, &second, "");
+    let (rest, _) = listing_from(&mut surface, &first, &cursor);
+    seen.extend(rest);
+    let walls = |list: &[Json]| {
+        list.iter()
+            .filter(|entity| entity.get("subtype") == Some(&Json::String(String::from("wall"))))
+            .count()
+    };
+    assert_eq!(walls(&whole), 3_000);
+    assert_eq!(walls(&seen), 3_000, "A's listing went on whole");
+}
+
+/// **An advisor reading between two of the client's pages leaves the
+/// client's listing good** (fix pass 1, item C): the client pages to its
+/// first entity cursor, the seat's advisor reads a whole listing of its own
+/// through its scratch view, and the client's listing goes on whole.
+#[test]
+fn an_advisor_reading_between_the_clients_pages_cancels_nothing() {
+    let mut surface = crowded(3_000);
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(surface.end_recap().expect("the recap ends"));
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(support::LULL_MS))
+        .expect("a countdown");
+    surface.open_lull().expect("round 2's Lull");
+    let client = seat_token(&mut surface, 0);
+    let (mut seen, cursor) = to_first_entity_cursor(&mut surface, &client);
+    let read = std::sync::Arc::new(std::sync::Mutex::new((0, 0, String::new())));
+    let mut factory = Advising(Some(Box::new(Reader {
+        seen: std::sync::Arc::clone(&read),
+    })));
+    let mut seats = InProcessSeats::open(
+        &mut surface,
+        &[SeatId::new(0), SeatId::new(1)],
+        Some(0),
+        &mut factory,
+    )
+    .expect("in-process seats");
+    seats.plan(&mut surface);
+    let (advised, _, refused) = read.lock().expect("not poisoned").clone();
+    assert_eq!(
+        (advised, refused.as_str()),
+        (3_000, ""),
+        "the advisor read whole"
+    );
+    let (rest, _) = listing_from(&mut surface, &client, &cursor);
+    seen.extend(rest);
+    let walls = seen
+        .iter()
+        .filter(|entity| entity.get("subtype") == Some(&Json::String(String::from("wall"))))
+        .count();
+    assert_eq!(walls, 3_000, "the client's listing went on whole");
+}
+
+/// **Fog holds on a paged list** (S3's `outcap`, fix pass 1, item D; review
+/// F2): in a fogged match a seat whose own walls take more than a page is
+/// shown none of the other seat's walls on any page, while a no-fog
+/// spectator's list shows them: the held list is the viewer's own, taken
+/// through the fog filter.
+#[test]
+fn a_paged_list_under_fog_shows_no_fogged_entity() {
+    let (mut surface, theirs) = crowded_fogged(3_000, 25);
+    let seat = seat_token(&mut surface, 0);
+    let spectator = support::spectator_token(&mut surface, true);
+    let place = |entity: &Json| -> Option<[i32; 3]> {
+        let at = entity.get("at")?;
+        let axis = |name: &str| match at.get(name) {
+            Some(Json::Number(lexeme)) => lexeme.parse::<i32>().ok(),
+            _ => None,
+        };
+        Some([axis("x")?, axis("y")?, axis("z")?])
+    };
+    let (seen, _) = listing_from(&mut surface, &seat, "");
+    let owners: Vec<String> = seen
+        .iter()
+        .filter(|entity| entity.get("subtype") == Some(&Json::String(String::from("wall"))))
+        .map(|entity| support::text_of(entity, "owner"))
+        .collect();
+    assert!(
+        owners.len() > 2_000,
+        "seat 0's own walls page: {}",
+        owners.len()
+    );
+    assert!(
+        owners.iter().all(|owner| owner == "seat.0"),
+        "a fogged wall of seat 1 was listed for seat 0"
+    );
+    assert!(
+        seen.iter()
+            .filter_map(place)
+            .all(|at| !theirs.contains(&at)),
+        "a fogged wall's place was listed"
+    );
+    let (all, _) = listing_from(&mut surface, &spectator, "");
+    let theirs_listed = all
+        .iter()
+        .filter(|entity| entity.get("subtype") == Some(&Json::String(String::from("wall"))))
+        .filter(|entity| support::text_of(entity, "owner") == "seat.1")
+        .count();
+    assert_eq!(
+        theirs_listed, 25,
+        "the no-fog spectator sees seat 1's walls"
+    );
+    let ours_listed = all
+        .iter()
+        .filter(|entity| entity.get("subtype") == Some(&Json::String(String::from("wall"))))
+        .filter(|entity| support::text_of(entity, "owner") == "seat.0")
+        .count();
+    assert_eq!(
+        ours_listed,
+        owners.len(),
+        "every one of seat 0's walls, once"
+    );
 }
 
 /// A built-in seat whose round is one call it is handed, and which keeps

@@ -465,6 +465,9 @@ pub struct Surface {
     feed: SegmentFeed,
     audit: AuditLog,
     limits: Limits,
+    /// The largest answer this surface sends: `MAX_ANSWER_BYTES`, or less for a
+    /// test ([`Surface::lower_answer_cap`]).
+    answer_cap: usize,
     limiters: Vec<(Handle, RateLimiter)>,
     /// The tokens the host minted for itself, and how each is treated. In
     /// handle order, like `limiters`.
@@ -780,6 +783,7 @@ impl Surface {
             feed: SegmentFeed::new(match_seed, 0, 0),
             audit: AuditLog::new(),
             limits: Limits::default(),
+            answer_cap: pharmakos_proto::transport::MAX_ANSWER_BYTES,
             limiters: Vec::new(),
             in_process: Vec::new(),
             seats: slots,
@@ -1225,6 +1229,27 @@ impl Surface {
     pub fn set_limits(&mut self, limits: Limits) {
         self.limits = limits;
         self.limiters.clear();
+    }
+
+    /// Lower the largest answer this surface sends below
+    /// `pharmakos_proto::transport::MAX_ANSWER_BYTES`: for a test that needs
+    /// a real call's answer withheld (a `submit_plan`, whose in-budget answers
+    /// all fit) without building one of 8 MiB. Never raised past the cap.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a cap past
+    /// `MAX_ANSWER_BYTES`.
+    pub fn lower_answer_cap(&mut self, cap: usize) -> Result<(), Error> {
+        if cap > pharmakos_proto::transport::MAX_ANSWER_BYTES {
+            return Err(Error::invalid(said!(
+                "an answer cap of {} bytes is past the {} this gateway sends",
+                cap,
+                pharmakos_proto::transport::MAX_ANSWER_BYTES
+            )));
+        }
+        self.answer_cap = cap;
+        Ok(())
     }
 
     /// Mark a token as one the host minted for itself, with its own rate limit
@@ -3524,26 +3549,26 @@ impl Surface {
         // The one measure of every answer this surface makes, for a socket and
         // for a seat this process plays or advises alike (S3's `outcap`): an
         // answer past the cap is never sent and never cut. The call stands; its
-        // answer is withheld, said in the error that goes in its place, counted
-        // and logged as that error.
-        match rpc::bounded(&request.id, &request.method, response) {
-            Ok(response) => {
-                self.audit.record(
-                    self.time.tick,
-                    Some(subject),
-                    Some(handle),
-                    action,
-                    recorded,
-                );
-                response
-            }
+        // answer is withheld, said in the error that goes in its place. The
+        // audit log tells the truth: the call's own line keeps its true
+        // outcome, and a second line says its answer was withheld.
+        let bounded = rpc::bounded_within(self.answer_cap, &request.id, &request.method, response);
+        self.audit.record(
+            self.time.tick,
+            Some(subject),
+            Some(handle),
+            action.clone(),
+            recorded,
+        );
+        match bounded {
+            Ok(response) => response,
             Err(withheld) => {
                 self.audit.withheld(crate::audit::Withheld::TooLarge);
                 self.audit.refused(
                     self.time.tick,
                     Some(subject),
                     Some(handle),
-                    action,
+                    action.replacen("call ", "withhold answer ", 1),
                     &withheld.error,
                 );
                 withheld.response

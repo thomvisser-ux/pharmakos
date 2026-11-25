@@ -307,7 +307,7 @@ pub fn render(response: &Json) -> String {
 /// An answer that was made and is not sent ([`bounded`]): the typed error
 /// that goes in its place, and that error as the response.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Withheld {
+pub struct WithheldAnswer {
     /// `RESPONSE_TOO_LARGE`, naming the method and both sizes.
     pub error: Error,
     /// The JSON-RPC response carrying it, under the request's own id.
@@ -332,10 +332,25 @@ pub const fn answer_fits(bytes: usize) -> bool {
 ///
 /// # Errors
 ///
-/// [`Withheld`], with `RESPONSE_TOO_LARGE`, for an answer past the cap.
-pub fn bounded(id: &Json, method: &str, response: Json) -> Result<Json, Withheld> {
+/// [`WithheldAnswer`], with `RESPONSE_TOO_LARGE`, for an answer past the cap.
+pub fn bounded(id: &Json, method: &str, response: Json) -> Result<Json, WithheldAnswer> {
+    bounded_within(MAX_ANSWER_BYTES, id, method, response)
+}
+
+/// [`bounded`] against `cap`, which is `MAX_ANSWER_BYTES` save for a test that
+/// lowered it (`crate::surface::Surface::lower_answer_cap`).
+///
+/// # Errors
+///
+/// As [`bounded`].
+pub fn bounded_within(
+    cap: usize,
+    id: &Json,
+    method: &str,
+    response: Json,
+) -> Result<Json, WithheldAnswer> {
     let bytes = render(&response).len();
-    if answer_fits(bytes) {
+    if answer_fits(bytes) && bytes <= cap {
         return Ok(response);
     }
     let error = Error::response_too_large(said!(
@@ -344,10 +359,10 @@ pub fn bounded(id: &Json, method: &str, response: Json) -> Result<Json, Withheld
          narrower read",
         pharmakos_proto::json::grammar::quoted(method),
         bytes,
-        MAX_ANSWER_BYTES
+        cap
     ));
     let response = failure(id, &error);
-    Err(Withheld { error, response })
+    Err(WithheldAnswer { error, response })
 }
 
 /// A request as a client writes it: `jsonrpc`, `id`, `method`, `params`, in
