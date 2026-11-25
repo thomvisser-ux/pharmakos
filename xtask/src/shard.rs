@@ -490,7 +490,16 @@ mod tests {
     /// the rule's line move the list in the same commit.
     #[test]
     fn the_heavy_units_are_the_rule_over_the_measured_runs() {
-        assert!(!MEASURED.is_empty(), "the rule reads at least one run");
+        // One run cannot say whether its figures are noise: the same tree
+        // differs by up to 2 to 1 in a unit's seconds from run to run, and
+        // the doc comments' claim that the rule's line sits in a gap both runs
+        // stay clear of needs a second run to compare against.
+        assert!(
+            MEASURED.len() >= 2,
+            "MEASURED records {} run(s); the rule reads at least two, because one run cannot \
+             show that its figures' run-to-run noise stays clear of HEAVY_RULE's line",
+            MEASURED.len()
+        );
         let mut heavy: Vec<((&str, &str), u64)> = Vec::new();
         for measured in MEASURED {
             for (index, (name, leg)) in MEASURED_LEGS.iter().zip(measured.leg).enumerate() {
