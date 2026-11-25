@@ -153,6 +153,7 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
                 rebuild_destroyed,
                 terraform,
                 protected_areas,
+                clear_protected_areas,
             } = build;
             (
                 add(&[
@@ -160,6 +161,7 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
                     set(rebuild_destroyed.is_some()),
                     set(*terraform != 0),
                     each(protected_areas)?,
+                    set(*clear_protected_areas),
                 ])?,
                 each(targets)?,
             )
@@ -168,8 +170,16 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
             let SurveySettings {
                 probe_areas,
                 scout_count,
+                clear_probe_areas,
             } = survey;
-            (add(&[each(probe_areas)?, set(*scout_count != 0)])?, 0)
+            (
+                add(&[
+                    each(probe_areas)?,
+                    set(scout_count.is_some()),
+                    set(*clear_probe_areas),
+                ])?,
+                0,
+            )
         }
         Some(mandate_settings::Mandate::Mine(mine)) => {
             let MineSettings {
@@ -180,10 +190,10 @@ fn count(settings: &MandateSettings) -> Option<(i64, i64)> {
             } = mine;
             (
                 add(&[
-                    set(*dig_max_depth != 0),
+                    set(dig_max_depth.is_some()),
                     set(flee_on_threat.is_some()),
                     set(*seam_choice != 0),
-                    set(*pillar_spacing != 0),
+                    set(pillar_spacing.is_some()),
                 ])?,
                 0,
             )
@@ -202,9 +212,11 @@ fn defend_fields(defend: &DefendSettings) -> Option<i64> {
         engagement_radius_pct,
         pursue,
         picket_scouts,
+        clear_protect,
     } = defend;
     add(&[
         each(protect)?,
+        set(*clear_protect),
         set(*engagement_radius_pct != 0),
         set(*pursue != 0),
         set(picket_scouts.is_some()),
@@ -223,6 +235,7 @@ fn attack_fields(attack: &AttackSettings) -> Option<i64> {
         avoid_areas,
         breach_allowed,
         waves,
+        clear_avoid_areas,
     } = attack;
     let launch_fields = match launch {
         Some(AttackLaunch {
@@ -249,6 +262,7 @@ fn attack_fields(attack: &AttackSettings) -> Option<i64> {
         retreat_fields,
         set(*after_action != 0),
         each(avoid_areas)?,
+        set(*clear_avoid_areas),
         set(breach_allowed.is_some()),
         set(*waves != 0),
     ])
@@ -299,6 +313,40 @@ mod tests {
             step_ms(&visit(r#"{"roe":"HOLD_FIRE","retreat_hp_pct":0}"#), &tuning),
             Some(handshake + base + tuning.times.edit_settings_per_field)
         );
+    }
+
+    /// Decisions-log item 184 (10): `scout_count`, `dig_max_depth` and
+    /// `pillar_spacing` carry presence, so a written 0 is one field, as the
+    /// verifier's `count` and the sim's compile charge it; a list's `clear_*`
+    /// flag is one field when set and none at `false`.
+    #[test]
+    fn a_written_zero_or_a_clear_is_one_field() {
+        let tuning = tuning();
+        let handshake = tuning.times.visit_handshake;
+        let base = tuning.times.edit_settings_base;
+        let per = tuning.times.edit_settings_per_field;
+        for (settings, ms) in [
+            (r#"{"survey":{"scout_count":0}}"#, handshake + base),
+            (r#"{"survey":{}}"#, handshake),
+            (r#"{"mine":{"dig_max_depth":0}}"#, handshake + base),
+            (
+                r#"{"mine":{"dig_max_depth":0,"pillar_spacing":0}}"#,
+                handshake + base + per,
+            ),
+            (
+                r#"{"build":{"clear_protected_areas":true}}"#,
+                handshake + base,
+            ),
+            (r#"{"build":{"clear_protected_areas":false}}"#, handshake),
+            (r#"{"defend":{"clear_protect":true}}"#, handshake + base),
+            (r#"{"attack":{"clear_avoid_areas":true}}"#, handshake + base),
+            (
+                r#"{"survey":{"clear_probe_areas":true,"scout_count":0}}"#,
+                handshake + base + per,
+            ),
+        ] {
+            assert_eq!(step_ms(&visit(settings), &tuning), Some(ms), "{settings}");
+        }
     }
 
     /// An edit that writes no field costs nothing beyond the visit, as the

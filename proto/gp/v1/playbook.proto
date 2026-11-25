@@ -1618,8 +1618,20 @@ message BuildSettings {
   // this file's header (decisions-log item 128, decision 11).
   Terraform terraform = 4;
 
-  // Ground the mandate will not dig, fill or build on.
+  // Ground the mandate will not dig, fill or build on. A list written in an
+  // edit row replaces the beacon's; an empty one is the same as one left out
+  // (proto3 cannot tell them apart), so emptying it is `clear_protected_areas`.
   repeated Area protected_areas = 5;
+
+  // Empty the beacon's `protected_areas` (decisions-log item 184 (10)). A
+  // plain proto3 bool: false is the same as leaving it out, and the canonical
+  // form never writes it. True is legal only in a `set_mandate_settings` row
+  // that writes no `protected_areas` of its own, where it is one field of the
+  // edit; with a non-empty list beside it, or in a new beacon's or a switched
+  // mandate's settings (which start with no list, so there is nothing to
+  // clear), it is refused: the verifier's E0515, and the sim's compile refuses
+  // it too (`PlanError::ClearRefused`).
+  bool clear_protected_areas = 8;
 
   // RESERVED — the repair and reclaim drone fields of section 6's Build row.
   // They stay held in S2 (S2's plan's decision 15, ruled by decisions-log
@@ -1654,7 +1666,9 @@ message DefendSettings {
   // Defend beacon holds its sphere whatever this list says (spec section 6:
   // "Hold the sphere and protect listed assets"); the list adds the assets
   // its guards escort first. Empty, it adds none, so an empty list is not a
-  // default of its own.
+  // default of its own. A list written in an edit row replaces the beacon's;
+  // an empty one is the same as one left out (proto3 cannot tell them
+  // apart), so emptying it is `clear_protect`.
   repeated ProtectedAsset protect = 1;
 
   // How far from the beacon its guards engage, as a whole percentage of the
@@ -1682,6 +1696,15 @@ message DefendSettings {
   // RESERVED — the rest of the one-byte tag range, held for a further Defend
   // setting so that none lands on a number a hand-written file already used.
   reserved 7 to 15;
+
+  // Empty the beacon's `protect` list (decisions-log item 184 (10)), as
+  // BuildSettings' `clear_protected_areas` empties its list, under the same
+  // rules: a plain bool, never written as false; one field of a
+  // `set_mandate_settings` row that writes no `protect` entry; refused beside
+  // a non-empty list and in a new beacon's or a switched mandate's settings
+  // (E0515; `PlanError::ClearRefused`). Its number is past the held range
+  // above, which stays held.
+  bool clear_protect = 16;
 
   enum Pursue {
     PURSUE_UNSPECIFIED = 0;
@@ -1752,7 +1775,9 @@ message AttackSettings {
   AfterAction after_action = 6;
 
   // Ground the force routes around, as a route cost. Areas count toward the
-  // playbook size budget.
+  // playbook size budget. A list written in an edit row replaces the
+  // beacon's; an empty one is the same as one left out (proto3 cannot tell
+  // them apart), so emptying it is `clear_avoid_areas`.
   repeated Area avoid_areas = 7;
 
   // Whether the attack may spend mortar or charge time digging or demolishing
@@ -1767,6 +1792,15 @@ message AttackSettings {
   // RESERVED — the rest of the one-byte tag range, held for a further Attack
   // setting.
   reserved 10 to 15;
+
+  // Empty the beacon's `avoid_areas` (decisions-log item 184 (10)), as
+  // BuildSettings' `clear_protected_areas` empties its list, under the same
+  // rules: a plain bool, never written as false; one field of a
+  // `set_mandate_settings` row that writes no avoid area; refused beside a
+  // non-empty list and in a new beacon's or a switched mandate's settings
+  // (E0515; `PlanError::ClearRefused`). Its number is past the held range
+  // above, which stays held.
+  bool clear_avoid_areas = 16;
 
   enum Retarget {
     RETARGET_UNSPECIFIED = 0;
@@ -1859,11 +1893,20 @@ message AttackRetreat {
 // is why this one was filled before Defend and Attack were.
 message SurveySettings {
   // Where to look. Scouts scan unexplored ground inside these first, then
-  // re-check the sightings closest to leaving the reach window.
+  // re-check the sightings closest to leaving the reach window. A list
+  // written in an edit row replaces the beacon's; an empty one is the same as
+  // one left out (proto3 cannot tell them apart), so emptying it is
+  // `clear_probe_areas`.
   repeated Area probe_areas = 1;
 
-  // How many scouts the mandate fields.
-  uint32 scout_count = 2;
+  // How many scouts the mandate fields; 0 fields none. `optional`, so that a
+  // written 0 (stand the scouts down) is told apart from a field left out
+  // (decisions-log item 184 (10)): a written value, 0 included, is one field
+  // of the edit and sets the beacon's count; an omitted one leaves it. In a
+  // new beacon's or a switched mandate's settings, omitted is 0. A count past
+  // what a beacon holds is refused: the verifier's E0508, and the sim's
+  // compile refuses it too (`PlanError::ScoutsOutOfRange`).
+  optional uint32 scout_count = 2;
 
   // RESERVED — probe DIRECTIONS, the other half of section 6's "probe areas
   // or directions". A direction is a heading, headings are the sim's u16
@@ -1871,6 +1914,14 @@ message SurveySettings {
   // of the selector work. Areas cover the skeleton's templates.
   reserved 3;
   reserved "probe_directions";
+
+  // Empty the beacon's `probe_areas` (decisions-log item 184 (10)), as
+  // BuildSettings' `clear_protected_areas` empties its list, under the same
+  // rules: a plain bool, never written as false; one field of a
+  // `set_mandate_settings` row that writes no probe area; refused beside a
+  // non-empty list and in a new beacon's or a switched mandate's settings
+  // (E0515; `PlanError::ClearRefused`).
+  bool clear_probe_areas = 4;
 }
 
 // Spec section 6, the Mine row, which names all four fields with their values:
@@ -1891,8 +1942,12 @@ message SurveySettings {
 // column of any live structure or beacon, of any seat.
 message MineSettings {
   // Voxels below the seam's ORIGINAL top surface the mandate may dig; 0 means
-  // the exposed rim only.
-  uint32 dig_max_depth = 1;
+  // the exposed rim only. `optional`, so that a written 0 is told apart from
+  // a field left out (decisions-log item 184 (10)): a written value, 0
+  // included, is one field of the edit and sets the beacon's depth; an
+  // omitted one leaves it. In a new beacon's or a switched mandate's
+  // settings, omitted is 0, the rim only.
+  optional uint32 dig_max_depth = 1;
 
   // Walk the beacon's mining drones home while a known threat is inside its
   // sphere (S2's plan's decision 12). `optional`, so that an edit row can
@@ -1911,8 +1966,12 @@ message MineSettings {
   // column in x and in y undug; 0 means no pillars, which is also what an
   // omitted spacing reads as, with an I-level note. A dig pattern, not a
   // collapse rule: there is no collapse before S2, so in S1 a non-zero spacing
-  // only costs yield.
-  uint32 pillar_spacing = 4;
+  // only costs yield. `optional`, so that a written 0 (dig the pillars out
+  // too) is told apart from a field left out (decisions-log item 184 (10)): a
+  // written value, 0 included, is one field of the edit and sets the beacon's
+  // spacing; an omitted one leaves it. In a new beacon's or a switched
+  // mandate's settings, omitted is the named default above, with its note.
+  optional uint32 pillar_spacing = 4;
 
   enum SeamChoice {
     SEAM_CHOICE_UNSPECIFIED = 0;
