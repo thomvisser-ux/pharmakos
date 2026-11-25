@@ -619,10 +619,11 @@ its own): the lane that moves one of them re-copies its fixture.
 
 ### `save_round_one/`
 
-Re-blessed twice: lane `retreat` (#230) moved `VERIFIER_VERSION` from `0.1.0-s3.5` to
-`0.1.0-s3.6`, and lane `vcap` from `0.1.0-s3.6` to `0.1.0-s3.7`; each moved the stamp's
+Re-blessed three times: lane `retreat` (#230) moved `VERIFIER_VERSION` from `0.1.0-s3.5`
+to `0.1.0-s3.6`, and lane `vcap` from `0.1.0-s3.6` to `0.1.0-s3.7`, each moving the stamp's
 `verifier_version` and both seals' `report_hash` (the report hash takes the verifier
-version as an input); no `plan_fingerprint` moved.
+version as an input); and lane `opsave` (#227) made the save format version 4, moving the
+stamp's `format_version` and adding each file's `last_push`. No `plan_fingerprint` moved.
 
 A save file, whole: the stamp, the config line, the boundary, the snapshot and
 each seat's seal with the `plan_fingerprint` stamped beside it. A save is a format
