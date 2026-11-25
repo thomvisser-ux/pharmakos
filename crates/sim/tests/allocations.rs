@@ -492,10 +492,24 @@ mod fork {
     }
 
     /// One window's figures: what the thread allocated, and the chunks the
-    /// stepped world re-pointed, counted tick by tick.
+    /// stepped world re-pointed, counted tick by tick. Each tick is held to
+    /// the rule on its own as well ([`tick_by_tick`]), so a tick that
+    /// allocated one more than it re-pointed and another one fewer cannot
+    /// cancel into a window that looks right.
     struct Window {
         allocated: u64,
         repointed: u64,
+    }
+
+    /// One counted tick held to the rule: the allocations of tick `step` of
+    /// a window, from the edits filed before it to its encoding, equal the
+    /// chunks it re-pointed. A failure stops the window at that tick; a pass
+    /// allocates nothing.
+    fn tick_by_tick(step: u32, allocated: u64, repointed: u64) {
+        assert_eq!(
+            allocated, repointed,
+            "tick {step} of the window allocated {allocated} times and re-pointed {repointed} chunks"
+        );
     }
 
     /// Step the child `child` for `ticks` ticks, cratering and
@@ -513,12 +527,15 @@ mod fork {
         let before = allocations();
         for step in 0..ticks {
             chunk_addresses(child, addresses);
+            let tick_before = allocations();
             crater_at(child, step + first);
             collapse_at(child, step + first);
             child.step(enc).expect("the forked world steps");
             child.clear_events();
             child.encode(enc);
-            repointed_total += repointed(child, addresses);
+            let moved = repointed(child, addresses);
+            tick_by_tick(step, allocations() - tick_before, moved);
+            repointed_total += moved;
         }
         Window {
             allocated: allocations() - before,
@@ -537,6 +554,7 @@ mod fork {
         let before = allocations();
         for step in 0..FORK_TICKS {
             chunk_addresses(runner.world(), addresses);
+            let tick_before = allocations();
             crater_at(runner.world_mut(), step + first);
             collapse_at(runner.world_mut(), step + first);
             runner
@@ -545,7 +563,9 @@ mod fork {
                 .expect("the segment outlasts this test");
             runner.clear_events();
             runner.world().encode(enc);
-            repointed_total += repointed(runner.world(), addresses);
+            let moved = repointed(runner.world(), addresses);
+            tick_by_tick(step, allocations() - tick_before, moved);
+            repointed_total += moved;
         }
         Window {
             allocated: allocations() - before,
