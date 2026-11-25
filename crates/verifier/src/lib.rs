@@ -841,6 +841,7 @@ pub fn verify_counted_at_cap(input: &Input<'_>, depth: Depth, cap: u32) -> Count
         verifier_version: VERIFIER_VERSION.to_owned(),
         size_units: units,
         size_budget: limits.size_budget_units(),
+        left_out: Vec::new(),
     };
     Counted {
         report,

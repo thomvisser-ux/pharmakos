@@ -1267,6 +1267,51 @@ message ListTemplatesRequest {
 message ListTemplatesResponse {
   repeated TemplateSummary templates = 1;
   string next_cursor = 2;
+
+  // The library files this listing did not list because the gateway could
+  // not read them as templates, as a reason and a count: one entry per reason
+  // that refused at least one file, in `RefusedTemplates.Reason`'s order, and
+  // empty when the listing refused none. It never names a file or a path: a
+  // library file's name is local state (AGENTS.md section 7). Written by the
+  // gateway from the same reading of the library folder that lists
+  // `templates`, so a caller can tell "no templates" from "templates
+  // refused", and a player whose template vanished from the list is told
+  // why. Filled from S3's `leftout` (decisions-log item 183 (5)).
+  //
+  // The count is the WHOLE LISTING's, never a page's: every call re-reads the
+  // folder and answers with all of it on one page (`next_cursor` is always
+  // empty), so no count is ever sent twice for one listing and none is a sum
+  // to be added across pages. The `tag` filter does not narrow it: a file
+  // that could not be read has no tags to filter by, so every refused file of
+  // the folder is counted.
+  repeated RefusedTemplates refused = 3;
+}
+
+// Library files a template listing refused for one reason (S3's `leftout`).
+message RefusedTemplates {
+  // Why the files were refused. Never REASON_UNSPECIFIED.
+  Reason reason = 1;
+
+  // How many files of the library folder this listing refused for `reason`:
+  // at least 1.
+  uint32 count = 2;
+
+  // One value per reason the gateway's library reader refuses a file for,
+  // named as its audit log counts them. A reason this enum does not name is
+  // never sent as another.
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+
+    // The file could not be opened or read.
+    UNREADABLE = 1;
+
+    // The file is larger than the gateway reads: past the playbook's size
+    // cap in bytes or in characters.
+    TOO_LARGE = 2;
+
+    // The file is not UTF-8 text, or not a playbook this build reads.
+    NOT_A_PLAYBOOK = 3;
+  }
 }
 
 message TemplateSummary {
@@ -1591,6 +1636,42 @@ message VerifyReport {
   // reads the verifier's number rather than counting for itself.
   uint32 size_units = 8;
   uint32 size_budget = 9;
+
+  // What this report counted and did not list, as typed data: one entry per
+  // code with at least one diagnostic left out, in code order (the codes'
+  // byte order), and empty when every diagnostic the verifier raised is
+  // listed. Written by the verifier, from the same tally that caps the
+  // listing; nothing reads it back from a sentence. Filled from S3's
+  // `leftout` (decisions-log item 183 (5)).
+  //
+  // A diagnostic is left out, and counted here, in exactly two ways: it is a
+  // code's diagnostic past the most of one code a report lists
+  // (`LeftOut.max`), or it is an `I0003` note raised after `E0110` (past the
+  // size budget no per-setting note is listed, because the file is not one to
+  // fill in), which can leave `I0003` out with fewer than `max` listed. An
+  // error left out still stops the playbook qualifying: `qualifies` counts
+  // every error raised, listed or not.
+  //
+  // The closing `I0007` diagnostics stay, one per entry, in the same order
+  // and rendered from it, as the player's words for the same facts. Like the
+  // rows, this field is a pure function of the five inputs `report_hash`
+  // covers.
+  repeated LeftOut left_out = 10;
+}
+
+// One code's diagnostics that a report counted and did not list (S3's
+// `leftout`).
+message LeftOut {
+  // The diagnostic code, as `Diagnostic.code` spells it.
+  string code = 1;
+
+  // How many diagnostics of that code the report counted and did not list:
+  // at least 1.
+  uint32 count = 2;
+
+  // The most diagnostics of one code this report lists. The same in every
+  // entry of one report; at least 1.
+  uint32 max = 3;
 }
 
 // Modelled on rustc's JSON output (spec section 11).

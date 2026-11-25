@@ -1257,11 +1257,86 @@ pub struct ListTemplatesResponse {
     pub templates: ::prost::alloc::vec::Vec<TemplateSummary>,
     #[prost(string, tag="2")]
     pub next_cursor: ::prost::alloc::string::String,
+    /// The library files this listing did not list because the gateway could
+    /// not read them as templates, as a reason and a count: one entry per reason
+    /// that refused at least one file, in `RefusedTemplates.Reason`'s order, and
+    /// empty when the listing refused none. It never names a file or a path: a
+    /// library file's name is local state (AGENTS.md section 7). Written by the
+    /// gateway from the same reading of the library folder that lists
+    /// `templates`, so a caller can tell "no templates" from "templates
+    /// refused", and a player whose template vanished from the list is told
+    /// why. Filled from S3's `leftout` (decisions-log item 183 (5)).
+    ///
+    /// The count is the WHOLE LISTING's, never a page's: every call re-reads the
+    /// folder and answers with all of it on one page (`next_cursor` is always
+    /// empty), so no count is ever sent twice for one listing and none is a sum
+    /// to be added across pages. The `tag` filter does not narrow it: a file
+    /// that could not be read has no tags to filter by, so every refused file of
+    /// the folder is counted.
+    #[prost(message, repeated, tag="3")]
+    pub refused: ::prost::alloc::vec::Vec<RefusedTemplates>,
 }
 impl ::prost::Name for ListTemplatesResponse {
 const NAME: &'static str = "ListTemplatesResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListTemplatesResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ListTemplatesResponse".into() }}
+/// Library files a template listing refused for one reason (S3's `leftout`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RefusedTemplates {
+    /// Why the files were refused. Never REASON_UNSPECIFIED.
+    #[prost(enumeration="refused_templates::Reason", tag="1")]
+    pub reason: i32,
+    /// How many files of the library folder this listing refused for `reason`:
+    /// at least 1.
+    #[prost(uint32, tag="2")]
+    pub count: u32,
+}
+/// Nested message and enum types in `RefusedTemplates`.
+pub mod refused_templates {
+    /// One value per reason the gateway's library reader refuses a file for,
+    /// named as its audit log counts them. A reason this enum does not name is
+    /// never sent as another.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Reason {
+        Unspecified = 0,
+        /// The file could not be opened or read.
+        Unreadable = 1,
+        /// The file is larger than the gateway reads: past the playbook's size
+        /// cap in bytes or in characters.
+        TooLarge = 2,
+        /// The file is not UTF-8 text, or not a playbook this build reads.
+        NotAPlaybook = 3,
+    }
+    impl Reason {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::Unreadable => "UNREADABLE",
+                Self::TooLarge => "TOO_LARGE",
+                Self::NotAPlaybook => "NOT_A_PLAYBOOK",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
+                "UNREADABLE" => Some(Self::Unreadable),
+                "TOO_LARGE" => Some(Self::TooLarge),
+                "NOT_A_PLAYBOOK" => Some(Self::NotAPlaybook),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for RefusedTemplates {
+const NAME: &'static str = "RefusedTemplates";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RefusedTemplates".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.RefusedTemplates".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TemplateSummary {
     #[prost(string, tag="1")]
@@ -1728,11 +1803,52 @@ pub struct VerifyReport {
     pub size_units: u32,
     #[prost(uint32, tag="9")]
     pub size_budget: u32,
+    /// What this report counted and did not list, as typed data: one entry per
+    /// code with at least one diagnostic left out, in code order (the codes'
+    /// byte order), and empty when every diagnostic the verifier raised is
+    /// listed. Written by the verifier, from the same tally that caps the
+    /// listing; nothing reads it back from a sentence. Filled from S3's
+    /// `leftout` (decisions-log item 183 (5)).
+    ///
+    /// A diagnostic is left out, and counted here, in exactly two ways: it is a
+    /// code's diagnostic past the most of one code a report lists
+    /// (`LeftOut.max`), or it is an `I0003` note raised after `E0110` (past the
+    /// size budget no per-setting note is listed, because the file is not one to
+    /// fill in), which can leave `I0003` out with fewer than `max` listed. An
+    /// error left out still stops the playbook qualifying: `qualifies` counts
+    /// every error raised, listed or not.
+    ///
+    /// The closing `I0007` diagnostics stay, one per entry, in the same order
+    /// and rendered from it, as the player's words for the same facts. Like the
+    /// rows, this field is a pure function of the five inputs `report_hash`
+    /// covers.
+    #[prost(message, repeated, tag="10")]
+    pub left_out: ::prost::alloc::vec::Vec<LeftOut>,
 }
 impl ::prost::Name for VerifyReport {
 const NAME: &'static str = "VerifyReport";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VerifyReport".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.VerifyReport".into() }}
+/// One code's diagnostics that a report counted and did not list (S3's
+/// `leftout`).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LeftOut {
+    /// The diagnostic code, as `Diagnostic.code` spells it.
+    #[prost(string, tag="1")]
+    pub code: ::prost::alloc::string::String,
+    /// How many diagnostics of that code the report counted and did not list:
+    /// at least 1.
+    #[prost(uint32, tag="2")]
+    pub count: u32,
+    /// The most diagnostics of one code this report lists. The same in every
+    /// entry of one report; at least 1.
+    #[prost(uint32, tag="3")]
+    pub max: u32,
+}
+impl ::prost::Name for LeftOut {
+const NAME: &'static str = "LeftOut";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.LeftOut".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.LeftOut".into() }}
 /// Modelled on rustc's JSON output (spec section 11).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Diagnostic {

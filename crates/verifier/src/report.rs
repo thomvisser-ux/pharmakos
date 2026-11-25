@@ -1258,6 +1258,7 @@ mod tests {
             verifier_version: crate::VERIFIER_VERSION.to_owned(),
             size_units: u32::MAX,
             size_budget: u32::MAX,
+            left_out: Vec::new(),
         }
     }
 
