@@ -165,12 +165,42 @@ impl Entry {
 /// reader skips it ([`crate::cache::MatchCache::continuation`]).
 pub const HEADER: &str = "seq\ttick\tsubject\thandle\taction\toutcome";
 
+/// Why an answer was made and not sent (S3's `outcap`). Each is counted
+/// beside the line the refusal writes, so a reader of a log that dropped its
+/// oldest lines still knows how many there were.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Withheld {
+    /// Its text was past `pharmakos_proto::transport::MAX_ANSWER_BYTES`, and
+    /// `RESPONSE_TOO_LARGE` went in its place.
+    TooLarge,
+}
+
+impl Withheld {
+    /// Every reason, in declared order.
+    pub const ALL: [Withheld; 1] = [Withheld::TooLarge];
+
+    /// Its name, as a log reader sees it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Withheld::TooLarge => "too_large",
+        }
+    }
+}
+
 /// The log itself.
 #[derive(Debug, Default)]
 pub struct AuditLog {
     entries: Vec<Entry>,
     next_seq: u64,
     dropped: u64,
+    /// Answers withheld, by [`Withheld`] reason.
+    withheld_too_large: u64,
+    /// Library files `list_templates` listings refused, by reason (S3's
+    /// `outcap`).
+    library_unreadable: u64,
+    library_too_large: u64,
+    library_not_a_playbook: u64,
 }
 
 impl AuditLog {
@@ -181,6 +211,53 @@ impl AuditLog {
             entries: Vec::new(),
             next_seq: 1,
             dropped: 0,
+            withheld_too_large: 0,
+            library_unreadable: 0,
+            library_too_large: 0,
+            library_not_a_playbook: 0,
+        }
+    }
+
+    /// Count one library file a listing refused, for `reason`.
+    pub const fn library_refused(&mut self, reason: pharmakos_plan_core::library::Refusal) {
+        use pharmakos_plan_core::library::Refusal;
+        let count = match reason {
+            Refusal::Unreadable => &mut self.library_unreadable,
+            Refusal::TooLarge => &mut self.library_too_large,
+            Refusal::NotAPlaybook => &mut self.library_not_a_playbook,
+        };
+        *count = count.saturating_add(1);
+    }
+
+    /// How many library files listings refused for `reason`.
+    #[must_use]
+    pub const fn library_refused_count(
+        &self,
+        reason: pharmakos_plan_core::library::Refusal,
+    ) -> u64 {
+        use pharmakos_plan_core::library::Refusal;
+        match reason {
+            Refusal::Unreadable => self.library_unreadable,
+            Refusal::TooLarge => self.library_too_large,
+            Refusal::NotAPlaybook => self.library_not_a_playbook,
+        }
+    }
+
+    /// Count one answer withheld for `reason`. The refusal's own line is
+    /// written by [`AuditLog::refused`] beside it.
+    pub const fn withheld(&mut self, reason: Withheld) {
+        match reason {
+            Withheld::TooLarge => {
+                self.withheld_too_large = self.withheld_too_large.saturating_add(1);
+            }
+        }
+    }
+
+    /// How many answers were withheld for `reason`.
+    #[must_use]
+    pub const fn withheld_count(&self, reason: Withheld) -> u64 {
+        match reason {
+            Withheld::TooLarge => self.withheld_too_large,
         }
     }
 

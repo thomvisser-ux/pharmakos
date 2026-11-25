@@ -154,6 +154,13 @@ impl Error {
         Error::new(Code::Internal, message)
     }
 
+    /// The call was made and its answer is past the largest answer the
+    /// gateway sends (S3's `outcap`): sent in the answer's place.
+    #[must_use]
+    pub fn response_too_large(message: impl Into<Said>) -> Error {
+        Error::new(Code::ResponseTooLarge, message)
+    }
+
     /// The code's name on the wire: `PHASE_CLOSED`, `FORBIDDEN_SCOPE`.
     #[must_use]
     pub fn name(&self) -> &'static str {

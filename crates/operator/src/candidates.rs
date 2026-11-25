@@ -802,7 +802,7 @@ pub(crate) fn enumerate(
     raid: Post,
     survey: Post,
 ) -> Vec<Goal> {
-    if situation.commander.is_none() {
+    if situation.commander().is_none() {
         return Vec::new();
     }
     let treasury = situation.economy.treasury;
@@ -906,7 +906,7 @@ fn post_beside_core(
     mandate: &str,
     template: &str,
 ) -> Post {
-    let (Some(commander), Some(core)) = (situation.commander, situation.core()) else {
+    let (Some(commander), Some(core)) = (situation.commander(), situation.core()) else {
         return Post::Unknown;
     };
     if !lists(situation, template) {
@@ -1093,7 +1093,7 @@ fn raid_goals(situation: &Situation, tuning: &Tuning) -> Vec<Goal> {
             },
         ));
     }
-    for enemy in &situation.enemies {
+    for enemy in situation.enemies() {
         if enemy.asset != Asset::Unit(UnitKind::Commander) {
             continue;
         }
@@ -1147,7 +1147,7 @@ pub(crate) enum NoVent {
 
 /// Why no vent is a goal worth filling Hold & Build with.
 pub(crate) fn no_vent(situation: &Situation, tuning: &Tuning) -> NoVent {
-    if situation.commander.is_none() {
+    if situation.commander().is_none() {
         return NoVent::NoCommander;
     }
     let reachable: Vec<&Feature> = situation
@@ -1292,7 +1292,7 @@ pub(crate) fn evaluate(
     stones: Option<&[String]>,
 ) -> Evaluated {
     let mut out = Evaluated::default();
-    let Some(commander) = situation.commander else {
+    let Some(commander) = situation.commander() else {
         return out;
     };
     let mut far: Vec<(usize, Goal)> = Vec::new();
@@ -1762,7 +1762,7 @@ pub(crate) fn core_threat(situation: &Situation, tuning: &Tuning) -> Option<u64>
 /// 12's model, as [`core_threat`] reads it); `None` when a sum does not fit.
 fn threat_near(situation: &Situation, tuning: &Tuning, at: [i32; 3], radius: i64) -> Option<u64> {
     situation
-        .enemies
+        .enemies()
         .iter()
         .filter(|enemy| within(at, enemy.at, radius))
         .try_fold(0_u64, |sum, enemy| {
@@ -2017,7 +2017,7 @@ fn score(
         | Goal::Tap { .. }
         | Goal::Raid { .. }
         | Goal::Stone { .. } => situation
-            .enemies
+            .enemies()
             .iter()
             .filter(|enemy| within(place, enemy.at, tuning.sphere_radius_voxels))
             .count(),

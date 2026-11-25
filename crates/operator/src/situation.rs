@@ -358,10 +358,10 @@ pub(crate) struct Situation {
     pub(crate) economy: Economy,
     /// Every vent and seam, in the gateway's feature id order.
     pub(crate) features: Vec<Feature>,
-    /// Where the seat's commander stands, if the view shows it.
-    pub(crate) commander: Option<[i32; 3]>,
-    /// Every asset of another seat that the view shows, sorted.
-    pub(crate) enemies: Vec<Enemy>,
+    /// What the view shows of who stands where: `None` when `get_view` did not
+    /// reach its complete page within [`PAGES_MAX`] pages, so no part of a list
+    /// is ever read as the whole (S3's `outcap`, fix pass 1).
+    view: Option<Seen>,
     /// Whether the seat's commander died in the last Push.
     pub(crate) last_push: LastPush,
     /// The route steps of the seat's own that failed in the last Push
@@ -369,17 +369,9 @@ pub(crate) struct Situation {
     pub(crate) failed_steps: FailedSteps,
     /// The template ids the library lists, ascending.
     pub(crate) templates: Vec<String>,
-    /// False when `get_view` did not reach its complete page within
-    /// [`PAGES_MAX`] pages: the entity list was then never read.
-    pub(crate) view_complete: bool,
     /// True when the briefing's `licences_held` holds the Resonance Spire's
     /// licence (decisions-log item 153 (3); S3's plan, E2).
     pub(crate) spire_licensed: bool,
-    /// True when the view shows a Resonance Spire of the seat's own, finished
-    /// or still going up: a queued Spire stands as a structure from the
-    /// moment it is queued (`crates/sim/src/world.rs`' `queue_capability`).
-    /// Meaningful only when [`Situation::view_complete`].
-    pub(crate) own_spire_seen: bool,
 }
 
 impl Situation {
@@ -391,6 +383,33 @@ impl Situation {
     /// The seat's core, if the seat is shown one.
     pub(crate) fn core(&self) -> Option<&Beacon> {
         self.own_beacons().find(|beacon| beacon.core)
+    }
+
+    /// Whether `get_view` reached its complete page within [`PAGES_MAX`]
+    /// pages: the view is read whole or not at all.
+    pub(crate) const fn view_complete(&self) -> bool {
+        self.view.is_some()
+    }
+
+    /// Where the seat's commander stands, if a complete view shows it.
+    pub(crate) fn commander(&self) -> Option<[i32; 3]> {
+        self.view.as_ref().and_then(|view| view.commander)
+    }
+
+    /// Every asset of another seat that a complete view shows, sorted; none
+    /// when the view did not complete.
+    pub(crate) fn enemies(&self) -> &[Enemy] {
+        match &self.view {
+            Some(view) => view.enemies.as_slice(),
+            None => &[],
+        }
+    }
+
+    /// True when a complete view shows a Resonance Spire of the seat's own,
+    /// finished or still going up: a queued Spire stands as a structure from
+    /// the moment it is queued (`crates/sim/src/world.rs`' `queue_capability`).
+    pub(crate) fn own_spire_seen(&self) -> bool {
+        self.view.as_ref().is_some_and(|view| view.own_spire)
     }
 
     /// Make the fixed reads.
@@ -461,14 +480,11 @@ impl Situation {
             beacons,
             economy,
             features,
-            commander: seen.commander,
-            enemies: seen.enemies,
+            view: seen,
             last_push,
             failed_steps,
             templates,
-            view_complete: seen.complete,
             spire_licensed,
-            own_spire_seen: seen.own_spire,
         })
     }
 }
@@ -676,24 +692,26 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
     Ok(beacons)
 }
 
-/// What `get_view` shows of who stands where.
+/// What a COMPLETE `get_view` shows of who stands where: a view that did
+/// not complete is no `Seen` at all ([`read_view`]), so nothing of a part
+/// of a list reaches a reader.
+#[derive(Clone, PartialEq, Eq, Debug)]
 struct Seen {
-    complete: bool,
     commander: Option<[i32; 3]>,
     enemies: Vec<Enemy>,
     own_spire: bool,
 }
 
-/// Read the view to its complete page, which is the one that carries the
-/// entity list. Its chunks are not decoded: the ground is the gateway's.
+/// Read the view to its complete page, taking the entities of every page on
+/// the way: a list past one page is paged (S3's `outcap`). Its chunks are
+/// not decoded: the ground is the gateway's.
 ///
 /// # Errors
 ///
 /// The refusal, and `MALFORMED` for an entity that does not read.
-fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
+fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Option<Seen>, Refused> {
     let misread = |misread: Misread| misread.refused("get_view");
     let mut seen = Seen {
-        complete: false,
         commander: None,
         enemies: Vec::new(),
         own_spire: false,
@@ -701,41 +719,42 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
     let mut cursor = String::new();
     for _ in 0..PAGES_MAX {
         let page = wire.call("get_view", object(vec![("cursor", string(&cursor))]))?;
-        if bool_of(&page, "complete").map_err(misread)? {
-            // Read by what each thing is and where it stands, and never by its
-            // id.
-            for entity in array_of(&page, "entities").map_err(misread)? {
-                let at = entity
-                    .get("at")
-                    .ok_or_else(|| malformed("get_view", "an entity with no position"))?;
-                let at = location_voxel(at).map_err(misread)?;
-                let kind = Wire::enum_name("gp.api.v1.ViewEntity.Kind", entity.get("kind"));
-                let subtype = text_of(entity, "subtype").map_err(misread)?;
-                let owner = text_of(entity, "owner").map_err(misread)?;
-                if owner == own {
-                    if kind.as_deref() == Some("STRUCTURE") && subtype == "resonance_spire" {
-                        seen.own_spire = true;
-                    }
-                    if kind.as_deref() == Some("UNIT") && subtype == "commander" {
-                        // The least position when the view shows two, so the
-                        // answer does not hang on the order of the list.
-                        seen.commander = Some(match seen.commander {
-                            Some(held) => held.min(at),
-                            None => at,
-                        });
-                    }
-                } else if !owner.is_empty()
-                    && let Some(asset) = Asset::of(kind.as_deref(), subtype)?
-                {
-                    seen.enemies.push(Enemy {
-                        at,
-                        asset,
-                        seat: seat_of("get_view", owner)?,
+        // Read by what each thing is and where it stands, and never by its
+        // id, from every page: a list past one page goes on over several,
+        // each cut from the one list its listing took (S3's `outcap`).
+        for entity in array_of(&page, "entities").map_err(misread)? {
+            let at = entity
+                .get("at")
+                .ok_or_else(|| malformed("get_view", "an entity with no position"))?;
+            let at = location_voxel(at).map_err(misread)?;
+            let kind = Wire::enum_name("gp.api.v1.ViewEntity.Kind", entity.get("kind"));
+            let subtype = text_of(entity, "subtype").map_err(misread)?;
+            let owner = text_of(entity, "owner").map_err(misread)?;
+            if owner == own {
+                if kind.as_deref() == Some("STRUCTURE") && subtype == "resonance_spire" {
+                    seen.own_spire = true;
+                }
+                if kind.as_deref() == Some("UNIT") && subtype == "commander" {
+                    // The least position when the view shows two, so the
+                    // answer does not hang on the order of the list.
+                    seen.commander = Some(match seen.commander {
+                        Some(held) => held.min(at),
+                        None => at,
                     });
                 }
+            } else if !owner.is_empty()
+                && let Some(asset) = Asset::of(kind.as_deref(), subtype)?
+            {
+                seen.enemies.push(Enemy {
+                    at,
+                    asset,
+                    seat: seat_of("get_view", owner)?,
+                });
             }
-            seen.complete = true;
-            break;
+        }
+        if bool_of(&page, "complete").map_err(misread)? {
+            seen.enemies.sort_unstable();
+            return Ok(Some(seen));
         }
         text_of(&page, "next_cursor")
             .map_err(misread)?
@@ -746,8 +765,8 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
             break;
         }
     }
-    seen.enemies.sort_unstable();
-    Ok(seen)
+    // Not complete within `PAGES_MAX` pages: no view, and nothing of the part read.
+    Ok(None)
 }
 
 /// Whether [`Situation::read`] reads the seat's own failed route steps from
@@ -977,6 +996,66 @@ fn read_templates(wire: &mut Wire<'_, '_>) -> Result<Vec<String>, Refused> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Entities from every page** (S3's `outcap`): a list the gateway
+    /// pages is read whole, the commander on the first page and an enemy on
+    /// the completing one.
+    #[test]
+    fn the_view_is_read_from_every_page() {
+        let page = |entities: &str, cursor: &str, complete: bool| {
+            pharmakos_proto::json::read(&format!(
+                r#"{{"result":{{"at_ms":0,"chunks":[],"entities":[{entities}],"next_cursor":"{cursor}","complete":{complete}}}}}"#
+            ))
+            .expect("a page")
+        };
+        let mut asked: Vec<String> = Vec::new();
+        let mut call = |method: &str, params: Json| -> Json {
+            assert_eq!(method, "get_view");
+            let cursor = match params.get("cursor") {
+                Some(Json::String(cursor)) => cursor.clone(),
+                _ => String::new(),
+            };
+            asked.push(cursor.clone());
+            match cursor.as_str() {
+                "" => page(
+                    r#"{"id":"u_1","kind":"unit","subtype":"commander","owner":"seat.0","at":{"x":1,"y":2,"z":3}}"#,
+                    "next",
+                    false,
+                ),
+                _ => page(
+                    r#"{"id":"u_2","kind":"unit","subtype":"raider","owner":"seat.1","at":{"x":4,"y":5,"z":6}}"#,
+                    "done",
+                    true,
+                ),
+            }
+        };
+        let mut wire = Wire::new(&mut call);
+        let seen = read_view(&mut wire, "seat.0")
+            .expect("read")
+            .expect("a complete view");
+        assert_eq!(seen.commander, Some([1, 2, 3]), "from the first page");
+        assert_eq!(seen.enemies.len(), 1, "from the completing page");
+        assert_eq!(asked, vec![String::new(), String::from("next")]);
+    }
+
+    /// **A view that does not complete is no view** (S3's `outcap`, fix pass
+    /// 1, item H): pages that never complete within `PAGES_MAX` give no
+    /// `Seen` at all, so nothing of the entities read reaches a reader.
+    #[test]
+    fn a_view_that_never_completes_is_none() {
+        let mut call = |_: &str, _: Json| -> Json {
+            pharmakos_proto::json::read(
+                r#"{"result":{"at_ms":0,"chunks":[],"entities":[{"id":"u_1","kind":"unit","subtype":"commander","owner":"seat.0","at":{"x":1,"y":2,"z":3}}],"next_cursor":"more","complete":false}}"#,
+            )
+            .expect("a page")
+        };
+        let mut wire = Wire::new(&mut call);
+        assert!(
+            read_view(&mut wire, "seat.0").expect("read").is_none(),
+            "a part is not a view"
+        );
+        assert_eq!(wire.calls(), crate::easy::PAGES_MAX);
+    }
 
     #[test]
     fn an_owner_is_read_in_the_gateways_one_spelling_only() {

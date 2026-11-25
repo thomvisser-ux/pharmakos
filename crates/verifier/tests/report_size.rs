@@ -4,16 +4,18 @@
 //! A report's size, against what the client can take (S3's `vfy6`, the
 //! review of PR #179, item 3; S3's `vcap`, decisions-log item 183 (4)).
 //!
-//! The editor reads a report in one WebSocket message through a peer whose
-//! inbound buffer is `INBOUND_BUFFER_BYTES` (`crates/client-gdext/src/transport.rs`,
-//! which `godot/scripts/host_link.gd` sets on every peer since S3's `fixq-c`),
-//! and a message past it is never handed over. A report lists at most
+//! The editor reads a report in one WebSocket message. The gateway sends no
+//! answer past `pharmakos_proto::transport::MAX_ANSWER_BYTES` (S3's `outcap`),
+//! and the client's inbound buffer is that cap and a frame's header
+//! (`INBOUND_BUFFER_BYTES`, `crates/client-gdext/src/transport.rs`, which
+//! `godot/scripts/host_link.gd` sets on every peer). A report lists at most
 //! `MAX_PER_CODE` diagnostics of one code and closes with one `I0007` per code
 //! it left out of.
 //!
-//! The derivation of the cap is `report.rs`'s own: its unit tests build the
-//! worst report through the builder and the serialiser at the cap and at one
-//! more (`the_cap_is_the_top_of_its_range`). This file holds the reports for
+//! The proof that the cap fits is `report.rs`'s own: its unit tests build the
+//! worst report through the builder and the serialiser, as `verify_plan` sends
+//! it, with room for eight more of its largest codes
+//! (`the_worst_report_fits_the_answer_with_room_to_grow`). This file holds the reports for
 //! the longest real files the text cap admits to the 128 KiB allowance, an
 //! eighth of the buffer or less, and a hostile member name to the bounds.
 
@@ -48,22 +50,11 @@ const REPORT_ALLOWANCE_BYTES: usize = 131_072;
 // The ruled 128 KiB, held at compile time: raising it is a ruling, not an edit (fix pass 3).
 const _: () = assert!(REPORT_ALLOWANCE_BYTES == 128 * 1024);
 
-/// The client's inbound buffer, read from the client's own source rather
-/// than written here a second time (the verifier may not depend on the
-/// walled client crate, so the line is read as text).
+/// The largest answer the gateway sends, from its one source (S3's `outcap`):
+/// the client's inbound buffer is this and a frame's header, so a report the
+/// gateway sends is one the client takes whole.
 fn inbound_bytes() -> usize {
-    const DECLARED: &str = "pub const INBOUND_BUFFER_BYTES: usize = ";
-    let source = std::fs::read_to_string(root().join("crates/client-gdext/src/transport.rs"))
-        .expect("the client's transport sizes");
-    let line = source
-        .lines()
-        .find(|line| line.starts_with(DECLARED))
-        .expect("transport.rs declares INBOUND_BUFFER_BYTES");
-    line.trim_start_matches(DECLARED)
-        .trim_end_matches(';')
-        .replace('_', "")
-        .parse()
-        .expect("INBOUND_BUFFER_BYTES is a whole number")
+    pharmakos_proto::transport::MAX_ANSWER_BYTES
 }
 
 fn cap() -> usize {
@@ -244,7 +235,7 @@ fn a_long_member_name_is_reported_within_the_pointer_bound() {
 
 /// **The allowance is the test's own constant, not the buffer** (fix pass 4 of `fixq-c`,
 /// review 3's M7): a text just past 128 KiB is past the allowance, where an eighth of the
-/// 4 MiB buffer would take it.
+/// buffer (1.5 MiB at the 12 MiB cap) would take it.
 #[test]
 fn a_report_just_past_the_allowance_is_past_it() {
     let just_past = "x".repeat(REPORT_ALLOWANCE_BYTES.saturating_add(1));

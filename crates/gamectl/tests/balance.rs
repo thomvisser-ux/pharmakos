@@ -674,6 +674,9 @@ fn census(
 ) -> (BTreeMap<String, u32>, BTreeMap<String, u32>) {
     let own = format!("seat.{seat}");
     let mut cursor = String::new();
+    // Every page's entities: a list past one page is paged (S3's `outcap`).
+    let mut structures: BTreeMap<String, u32> = BTreeMap::new();
+    let mut units: BTreeMap<String, u32> = BTreeMap::new();
     loop {
         let page = result(
             &call(
@@ -684,23 +687,21 @@ fn census(
             ),
             "get_view",
         );
-        if page.get("complete") == Some(&Json::Bool(true)) {
-            let mut structures: BTreeMap<String, u32> = BTreeMap::new();
-            let mut units: BTreeMap<String, u32> = BTreeMap::new();
-            for entity in array(&page, "entities") {
-                if string(entity, "owner") != own {
-                    continue;
-                }
-                let into = match string(entity, "kind") {
-                    "structure" => &mut structures,
-                    "unit" => &mut units,
-                    _ => continue,
-                };
-                let slot = into
-                    .entry(string(entity, "subtype").to_owned())
-                    .or_default();
-                *slot = slot.saturating_add(1);
+        for entity in array(&page, "entities") {
+            if string(entity, "owner") != own {
+                continue;
             }
+            let into = match string(entity, "kind") {
+                "structure" => &mut structures,
+                "unit" => &mut units,
+                _ => continue,
+            };
+            let slot = into
+                .entry(string(entity, "subtype").to_owned())
+                .or_default();
+            *slot = slot.saturating_add(1);
+        }
+        if page.get("complete") == Some(&Json::Bool(true)) {
             return (structures, units);
         }
         let next = string(&page, "next_cursor").to_owned();

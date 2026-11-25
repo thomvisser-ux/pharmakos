@@ -370,8 +370,9 @@ pub fn spectator_token(surface: &mut Surface, nofog: bool) -> Token {
 
 /// Every page of one `get_view`, following the cursor until it completes.
 ///
-/// Returns the pages in order. The last one is the completing page and is the
-/// only one that carries the entity list.
+/// Returns the pages in order. The last one is the completing page; the
+/// entity list follows the chunks and goes on over as many pages as it needs
+/// (S3's `outcap`), so [`view`] joins it.
 #[must_use]
 pub fn view_pages(surface: &mut Surface, token: &Token, cursor: &str) -> Vec<Json> {
     let mut pages: Vec<Json> = Vec::new();
@@ -397,11 +398,23 @@ pub fn view_pages(surface: &mut Surface, token: &Token, cursor: &str) -> Vec<Jso
     }
 }
 
-/// The completing page of one `get_view`, and the cursor it leaves behind.
+/// The completing page of one `get_view`, carrying the whole entity list
+/// joined from every page of the listing, and the cursor it leaves behind.
 #[must_use]
 pub fn view(surface: &mut Surface, token: &Token, cursor: &str) -> (Json, String) {
     let pages = view_pages(surface, token, cursor);
-    let last = pages.last().cloned().expect("at least one page");
+    let joined: Vec<Json> = pages
+        .iter()
+        .flat_map(|page| array_of(page, "entities"))
+        .collect();
+    let mut last = pages.last().cloned().expect("at least one page");
+    if let Json::Object(entries) = &mut last {
+        for (key, value) in entries.iter_mut() {
+            if key == "entities" {
+                *value = Json::Array(joined.clone());
+            }
+        }
+    }
     let next = text_of(&last, "next_cursor");
     (last, next)
 }
