@@ -2135,7 +2135,6 @@ func _count(answer: Dictionary, key: String) -> int:
 	return -1
 
 
-<<<<<<< HEAD
 ## How long the ended-match leg may take to play its one-seat match to its end.
 const ENDED_WAIT := 240.0
 
@@ -2298,7 +2297,7 @@ func _remove_tree(path: String) -> bool:
 			return false
 	return DirAccess.remove_absolute(path) == OK
 
-2138d
+
 ## THE PLAYTEST LEG (S3's `prob`, part 2; the plan's E10 and R6). The first host's match is
 ## played with Playtest mode on: switched on before the first Lull opens, with the camera rig's
 ## moves counted (the keys and wheel legs make real ones), and the window's focus lost and
