@@ -24,7 +24,7 @@ use pharmakos_gateway::host::{Host, Settings};
 use pharmakos_gateway::save::{Boundary, Continuation, Save, SavedMatch, Stamp};
 use pharmakos_gateway::serve::Config;
 use pharmakos_gateway::surface::Surface;
-use pharmakos_gateway::token::Subject;
+use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::Tick;
@@ -1001,7 +1001,13 @@ fn save_golden(file: &str, text: &str) {
 /// moving. It was re-blessed once, when lane `retreat` (#230) moved
 /// `VERIFIER_VERSION` from `0.1.0-s3.5` to `0.1.0-s3.6`: the stamp's
 /// `verifier_version` and the two `report_hash` lines moved with it, which
-/// hashes the version, and no `plan_fingerprint` line moved.
+/// hashes the version, and no `plan_fingerprint` line moved. Re-blessed again
+/// by lane `opsave`, which made the save format version 4: the stamp's
+/// `format_version` moved from 3 to 4 and each file gained its `last_push`
+/// member (the `lull` file the Lull's feed, the `sealed` file none, both no
+/// recap in round 1); no other line moved. Main's version-3 file is kept as
+/// `tests/fixtures/save-v3-round-one-lull.json`, and still resumes
+/// (`a_version_3_save_written_by_main_still_resumes`).
 #[test]
 fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
     const MATCH_ID: &str = "m-fpstream2-save";
@@ -1091,7 +1097,329 @@ fn a_saved_notebook_past_its_bound_is_refused() {
     assert_eq!(refused.code(), Code::InvalidArgument);
     assert_eq!(
         refused.message(),
-        "seat 0's notebook or drafts in this save are over the bounds a seat may hold: the file \
-         is damaged"
+        format!(
+            "seat 0's notebook in this save is {} characters, past the {bound} a seat's \
+             notebook may hold: the file is damaged",
+            bound.saturating_add(1)
+        )
     );
+}
+
+/// A save main wrote before the save carried the last Push (format version 3,
+/// `bbddd094`'s round-1 `lull` file, committed as a fixture) still loads and
+/// resumes into its Lull, with no last Push (lane `opsave`): the format's
+/// version-4 member is additive.
+#[test]
+fn a_version_3_save_written_by_main_still_resumes() {
+    const MATCH_ID: &str = "m-fpstream2-save";
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("save-v3-round-one-lull.json"),
+    )
+    .expect("the version-3 fixture");
+    assert!(
+        text.contains("\"format_version\": 3"),
+        "the fixture is version 3"
+    );
+    let save = Save::parse(text.trim_end_matches('\n')).expect("a version-3 save reads");
+    assert_eq!(
+        save.stamp.format_version,
+        pharmakos_gateway::save::LAST_PUSH_ABSENT
+    );
+    assert_eq!(save.state.last_push, None);
+    save.check(&config_of(MATCH_ID), rules().rules_hash())
+        .expect("the same rules, the same verifier, the same match");
+    let host = pristine();
+    let resumed = Surface::new(
+        MATCH_ID,
+        SEED,
+        host.rules().clone(),
+        FogPolicy::fogged(),
+        &SEATS,
+    )
+    .expect("a surface")
+    .resume(host, &save.state, CONTINUATION)
+    .expect("a version-3 save resumes");
+    assert_eq!(resumed.time().phase, Phase::Lull);
+    let again = resumed.lull_save().expect("its Lull saves");
+    assert!(again.last_push.is_some(), "and is saved again as version 4");
+}
+
+/// One damage of a seat's saved drafts.
+type DraftsDamage = Box<dyn Fn(&mut Vec<pharmakos_gateway::surface::Draft>)>;
+
+/// The draft rule across a resume (lane `opsave`, fix passes 1 and 2; the
+/// reviews' hosted probes): a seat that keeps 31 drafts of its own and seals
+/// carries its seal into the next Lull as the gateway's `carried` draft; that
+/// Lull saves and resumes and lists 32, and the carried draft is not counted
+/// against the 32 a seat may keep: a 32nd of its own is taken, a 33rd is
+/// refused in words that say what the player can do, and so is a save under
+/// the carried id. The Lull holding 32 of its own and the carried one saves
+/// and resumes and lists all 33; a save holding 33 of its own, or the carried
+/// draft twice, is refused typed.
+#[test]
+fn a_seat_with_every_draft_and_a_seal_resumes_its_next_lull() {
+    const MATCH_ID: &str = "m-opsave-drafts";
+    let max = pharmakos_gateway::surface::planning::MAX_DRAFTS;
+    let mut surface = new_match(MATCH_ID);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let body = walk_east(&surface, 0, 3, 0);
+    let save_draft = |surface: &mut Surface, token: &Token, left: &mut i32, id: &str| {
+        call_in_lull(
+            surface,
+            token,
+            left,
+            "save_draft",
+            &format!(
+                "{{\"draft_id\":\"{id}\",\"playbook_jsonc\":{}}}",
+                quote(&body)
+            ),
+        )
+    };
+    for index in 0..max.saturating_sub(1) {
+        let answer = save_draft(&mut surface, &token, &mut left, &format!("own-{index}"));
+        let _ = result(&answer, "save_draft");
+    }
+    plan_round(&mut surface);
+    assert!(surface.begin_push().expect("the Push begins"));
+    let _ = play_push(&mut surface);
+    close_round(&mut surface);
+    let saved = surface.lull_save().expect("round 2's Lull saves");
+    let held = saved.seats.first().expect("seat 0").drafts.len();
+    assert_eq!(held, 32, "31 of its own and the carried one");
+
+    let mut resumed = resume(MATCH_ID, &saved).expect("the Lull resumes");
+    let token = seat_token(&mut resumed, 0);
+    let mut left = FIRST_LULL_MS;
+    let listed = result(
+        &call_in_lull(&mut resumed, &token, &mut left, "list_drafts", "{}"),
+        "list_drafts",
+    );
+    assert_eq!(support::array_of(&listed, "drafts").len(), 32);
+    // At 31 of its own beside the carried one, the 32nd of its own is taken:
+    // the carried draft is the gateway's and is not counted against the 32.
+    let last = format!("own-{}", max.saturating_sub(1));
+    let _ = result(
+        &save_draft(&mut resumed, &token, &mut left, &last),
+        "the 32nd draft of its own beside the carried one",
+    );
+    let refused = save_draft(&mut resumed, &token, &mut left, &format!("own-{max}"));
+    assert_eq!(code(&refused), "INVALID_ARGUMENT", "{refused:?}");
+    assert_eq!(
+        text_of(refused.get("error").expect("an error"), "message"),
+        format!(
+            "this seat holds {max} drafts of its own, as many as it may, and a draft is never \
+             deleted: save under one of their ids to replace that draft"
+        )
+    );
+    let carried = save_draft(&mut resumed, &token, &mut left, "carried");
+    assert_eq!(
+        code(&carried),
+        "INVALID_ARGUMENT",
+        "the carried id: {carried:?}"
+    );
+    let _ = result(
+        &save_draft(&mut resumed, &token, &mut left, "own-0"),
+        "a save over one of its own ids replaces that draft",
+    );
+
+    let saved = resumed.lull_save().expect("the full Lull saves");
+    let held = saved.seats.first().expect("seat 0").drafts.len();
+    assert_eq!(held, 33, "32 of its own and the carried one");
+    let mut again = resume(MATCH_ID, &saved).expect("the full Lull resumes");
+    let token = seat_token(&mut again, 0);
+    let mut left = FIRST_LULL_MS;
+    let listed = result(
+        &call_in_lull(&mut again, &token, &mut left, "list_drafts", "{}"),
+        "list_drafts",
+    );
+    assert_eq!(support::array_of(&listed, "drafts").len(), 33);
+    each_damage_of_the_draft_rule_is_refused(MATCH_ID, &saved);
+}
+
+/// A save holding 33 drafts of its own, or the carried draft twice, is
+/// refused typed at its read, whatever else it holds.
+fn each_damage_of_the_draft_rule_is_refused(match_id: &str, saved: &SavedMatch) {
+    let cases: [(&str, DraftsDamage); 2] = [
+        (
+            "33 drafts of its own",
+            Box::new(|drafts: &mut Vec<pharmakos_gateway::surface::Draft>| {
+                for draft in drafts.iter_mut() {
+                    if draft.draft_id == "carried" {
+                        draft.draft_id = String::from("own-extra");
+                    }
+                }
+            }),
+        ),
+        (
+            "the carried draft twice",
+            Box::new(|drafts: &mut Vec<pharmakos_gateway::surface::Draft>| {
+                if let Some(own) = drafts.first_mut() {
+                    own.draft_id = String::from("carried");
+                }
+            }),
+        ),
+    ];
+    for (what, mutate) in cases {
+        let mut damaged = saved.clone();
+        if let Some(seat) = damaged.seats.first_mut() {
+            mutate(&mut seat.drafts);
+        }
+        let text = Save {
+            stamp: Stamp::current(rules().rules_hash()),
+            config: config_of(match_id),
+            state: damaged,
+        }
+        .render();
+        let error = Save::parse(&text).expect_err(what);
+        assert_eq!(error.code(), Code::InvalidArgument, "{what}");
+        assert!(
+            error.message().contains("draft"),
+            "{what}: {}",
+            error.message()
+        );
+    }
+}
+
+/// A `sealed` save main wrote before the save carried the last Push (format
+/// version 3, `34e2f427`'s round-1 `sealed` golden, committed as a fixture)
+/// resumes into its Push, as it always did: the Push was sealed, not played,
+/// so replaying it is the Push itself. Its next Lull's feed is that replayed
+/// Push's own, `segment_ended` and all, so the Lull reads the Push it follows
+/// (the operator does not read it as `PushUnread::Resumed`).
+#[test]
+fn a_version_3_sealed_save_resumes_into_its_push_and_its_next_lull_shows_it() {
+    const MATCH_ID: &str = "m-fpstream2-save";
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("save-v3-round-one-sealed.json"),
+    )
+    .expect("the version-3 sealed fixture");
+    let save = Save::parse(text.trim_end_matches('\n')).expect("a version-3 save reads");
+    assert_eq!(save.stamp.format_version, 3);
+    assert_eq!(save.state.boundary, Boundary::Sealed);
+    assert!(
+        u64::try_from(text.len()).expect("small")
+            <= Save::max_bytes(&config_of(MATCH_ID), &rules()).expect("a bound"),
+        "a save this size is within the bound a resume reads to"
+    );
+    save.check(&config_of(MATCH_ID), rules().rules_hash())
+        .expect("the same rules, the same verifier, the same match");
+    let host = pristine();
+    let mut resumed = Surface::new(
+        MATCH_ID,
+        SEED,
+        host.rules().clone(),
+        FogPolicy::fogged(),
+        &SEATS,
+    )
+    .expect("a surface")
+    .resume(host, &save.state, CONTINUATION)
+    .expect("a version-3 sealed save resumes");
+    assert_eq!(resumed.time().phase, Phase::Push, "into its Push");
+    let _ = play_push(&mut resumed);
+    close_round(&mut resumed);
+    assert_eq!(resumed.time().phase, Phase::Lull);
+    let token = seat_token(&mut resumed, 0);
+    let mut left = FIRST_LULL_MS;
+    let feed = call_in_lull(
+        &mut resumed,
+        &token,
+        &mut left,
+        "get_segment_feed",
+        "{\"detail\":\"full\"}",
+    );
+    assert!(
+        pharmakos_proto::json::write(&feed).contains("segment_ended"),
+        "the next Lull's feed shows the replayed Push"
+    );
+}
+
+/// `Save::max_bytes` bounds a match by its own ladder (lane `opsave`, fix
+/// pass 2, item 7): the feed's term is the live feed's retention over the
+/// longest Push **this** match plays, never the rules' ladder chained in. A
+/// match of 1-second Pushes is bounded below one of the rules' own ladder,
+/// rounds past the round limit do not count, and the bound is printed
+/// beside every committed save and the largest save of a played match.
+#[test]
+fn the_save_bound_is_the_matchs_own_and_is_printed_beside_its_saves() {
+    const MATCH_ID: &str = "m-opsave-bound-played";
+    let rules = rules();
+    let with = |segment_lengths_ms: Vec<i32>, round_limit: u32| {
+        let config = Config {
+            segment_lengths_ms,
+            round_limit,
+            ..config_of("m-opsave-bound")
+        };
+        Save::max_bytes(&config, &rules).expect("a bound")
+    };
+    let short = with(vec![1_000], 2);
+    let ladder = with(Vec::new(), 2);
+    assert!(
+        short < ladder,
+        "a 1-second match is bounded by its own Pushes ({short}), not the rules' ladder ({ladder})"
+    );
+    assert_eq!(
+        with(vec![1_000, 480_000], 1),
+        short,
+        "a round the limit never plays does not count"
+    );
+    assert!(
+        with(vec![1_000, 480_000], 2) > short,
+        "a round it plays does"
+    );
+
+    // The committed saves, each beside the bound of its own match.
+    let root = support::workspace_root();
+    for path in [
+        "crates/gateway/tests/fixtures/save-v3-round-one-lull.json",
+        "crates/gateway/tests/fixtures/save-v3-round-one-sealed.json",
+        "crates/gamectl/tests/fixtures/save-v3-round-two-lull.json",
+        "tests/golden/gateway/save_round_one/expected.lull.json",
+        "tests/golden/gateway/save_round_one/expected.sealed.json",
+    ] {
+        let text = std::fs::read_to_string(root.join(path)).expect("a committed save");
+        let save = Save::parse(text.trim_end_matches('\n')).expect("it reads");
+        let bound = Save::max_bytes(&save.config, &rules).expect("a bound");
+        let size = u64::try_from(text.len()).expect("small");
+        println!("{path}: {size} bytes, bound {bound} bytes");
+        assert!(size <= bound, "{path}");
+    }
+
+    // A played match's largest save, at every boundary it saves.
+    let mut surface = new_match(MATCH_ID);
+    let mut largest = 0_usize;
+    let mut measure = |saved: SavedMatch| {
+        let text = Save {
+            stamp: Stamp::current(rules.rules_hash()),
+            config: config_of(MATCH_ID),
+            state: saved,
+        }
+        .render();
+        largest = largest.max(text.len());
+    };
+    for _ in 0..ROUNDS {
+        measure(surface.lull_save().expect("a Lull saves"));
+        plan_round(&mut surface);
+        assert!(surface.begin_push().expect("the Push begins"));
+        if let Some(saved) = surface.take_persistence().save {
+            measure(saved);
+        }
+        let _ = play_push(&mut surface);
+        if let Some(saved) = surface.take_persistence().save {
+            measure(saved);
+        }
+        close_round(&mut surface);
+        if surface.time().phase != Phase::Lull {
+            break;
+        }
+    }
+    let bound = Save::max_bytes(&config_of(MATCH_ID), &rules).expect("a bound");
+    println!("{MATCH_ID}: largest save {largest} bytes, bound {bound} bytes");
+    assert!(u64::try_from(largest).expect("small") <= bound);
 }

@@ -121,6 +121,11 @@ var _stderr: FileAccess = null
 ## What the host wrote on its standard error before it announced, which it keeps free of
 ## tokens.
 var _stderr_text := ""
+## What the host wrote on its standard error since it announced, kept to its last line (and any
+## line still being written): the host's last word, which a give-up shows once the host
+## process has exited (lane `opsave`, fix pass 2: a host that stops on a write it could not make
+## says why there and exits). One line, so a long match does not grow it.
+var _stderr_tail := ""
 var _announce := PackedByteArray()
 var _port := 0
 var _tokens := ["", ""]
@@ -422,6 +427,7 @@ func reset() -> void:
 	_pid = -1
 	_stderr = null
 	_stderr_text = ""
+	_stderr_tail = ""
 	_announce = PackedByteArray()
 	_port = 0
 	_peers = [null, null]
@@ -553,7 +559,7 @@ func _pump_link(link: int) -> void:
 			"give_up":
 				_done = true
 				var why: Dictionary = bridge.watch_give_up(link)
-				failed.emit(gave_up_words(link, why))
+				failed.emit(gave_up_words(link, why) + host_exit_words())
 
 
 ## The words for a link given up: the last close's code, or, when it carried none (the
@@ -572,8 +578,34 @@ func _drain_stderr() -> void:
 		if chunk.size() == 0:
 			return
 		var text := chunk.get_string_from_utf8()
-		# Kept only until the host announces: it is read on the pre-announce failure path
-		# alone, so a long match does not grow it. Everything is still printed.
+		# Kept whole until the host announces, for the pre-announce failure path; after it, only
+		# its last line, for a give-up once the host has exited. Everything is still printed.
 		if _port == 0:
 			_stderr_text += text
+		else:
+			_stderr_tail = last_line_of(_stderr_tail + text)
 		printerr("[host] ", text.strip_edges())
+
+
+## `text`'s last line that holds anything, with whatever follows it (a line still being
+## written, which the next chunk ends): what `_stderr_tail` keeps.
+static func last_line_of(text: String) -> String:
+	var lines := text.split("\n")
+	var last := lines.size() - 1
+	while last > 0 and lines[last].strip_edges() == "":
+		last -= 1
+	return "\n".join(lines.slice(last))
+
+
+## What a give-up adds once the host process has exited: the host's last line on its standard
+## error, its own words for why it stopped, or that it wrote nothing. "" while the host still
+## runs, or when no host process was started (`attach`): a give-up is the rig's to decide, and
+## this only says what the host left behind.
+func host_exit_words() -> String:
+	if _pid < 0 or host_running():
+		return ""
+	_drain_stderr()
+	var said := _stderr_tail.strip_edges()
+	if said == "":
+		return " " + Strings.text("link_host_exited_silent")
+	return " " + Strings.text("link_host_exited", {"words": said})

@@ -778,8 +778,10 @@ impl Host {
                  or it was written by a build whose snapshot differs",
             ));
         }
-        // A resumed match's feed starts empty (the wave-6 notes, A2): the
-        // restore's own events are the host's business, not a seat's.
+        // The sim's bus starts empty after a restore: the events the restore
+        // itself emits are the host's business, not a seat's (the wave-6
+        // notes, A2). The feed a seat reads is the surface's, put back from
+        // the save by `Surface::resume` (`surface::last_push`).
         self.runner.clear_events();
         Ok(())
     }

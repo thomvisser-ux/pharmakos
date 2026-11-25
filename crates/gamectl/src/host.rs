@@ -27,7 +27,9 @@
 //!    the same rules text) to `serve::run`, with the process's own standard
 //!    input and standard output. It returns when standard input reaches end
 //!    of file, which is the whole of the shutdown protocol: no heartbeat and
-//!    no clock.
+//!    no clock; or at once, whatever its parent does, when a write the match
+//!    needs fails (the gateway's boundary rule, `serve`'s `Writer`), saying
+//!    why on standard error.
 //!
 //! # The operator's adapters (T18)
 //!
@@ -73,7 +75,7 @@
 //! | 0 | the parent closed standard input and the match was put down |
 //! | 1 | standard output is a terminal, so nothing was started |
 //! | 2 | the rules table could not be read, the rules table is one the verifier refuses (S3's `vfyq2`, fix pass 5, item L8), or the config line was one this host refuses |
-//! | 4 | the host could not start: no loopback bind, no entropy for a token, no private match cache |
+//! | 4 | the host could not start: no loopback bind, no entropy for a token, no private match cache; or it stopped because a write the match needed (a save, a sealed playbook, a replay chain, the audit log) failed, said with what the disk holds |
 //!
 //! Standard output belongs to the announce line alone. Everything else this
 //! command has to say goes to standard error, which is where the lobby's
@@ -521,11 +523,26 @@ pub fn run(root: &Path) -> Result<String, Failure> {
         // plays and advises the human's (T18).
         operators: Box::new(operators),
     };
-    let served = serve::run(setup, std::io::stdin().lock(), std::io::stdout().lock());
+    let announced = std::cell::Cell::new(false);
+    let served = serve::run(
+        setup,
+        std::io::stdin(),
+        Recorded {
+            inner: std::io::stdout().lock(),
+            wrote: &announced,
+        },
+    );
     // The host has ended: what its seats could not write is said once, in
-    // the message of the failure it ended on or in a last line of its own.
+    // the message of the failure it ended on or in a last line of its own. A
+    // failure before the announce line is a match that could not be hosted;
+    // one after it, a match that stopped.
     served.map_err(|error| {
-        let message = with_unsaid(strings::host_refused(&error.to_string()), &unsaid);
+        let said = if announced.get() {
+            strings::host_stopped(&error.to_string())
+        } else {
+            strings::host_refused(&error.to_string())
+        };
+        let message = with_unsaid(said, &unsaid);
         if error.code() == Code::InvalidArgument {
             Failure::input(message)
         } else {
@@ -536,6 +553,28 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     // Nothing more goes to standard output: the announce line was the whole of
     // what this command writes there.
     Ok(String::new())
+}
+
+/// Standard output, recording whether anything was written to it: the
+/// announce line is the only thing this command writes there, so a byte
+/// written is the match announced. Plumbing only, no gateway type.
+struct Recorded<'a, W: Write> {
+    inner: W,
+    wrote: &'a std::cell::Cell<bool>,
+}
+
+impl<W: Write> Write for Recorded<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        if written > 0 {
+            self.wrote.set(true);
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 #[cfg(test)]

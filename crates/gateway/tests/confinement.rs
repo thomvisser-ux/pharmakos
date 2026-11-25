@@ -412,21 +412,182 @@ fn sources() -> Vec<PathBuf> {
     found
 }
 
+/// What ends a line read from a checkout made with CRLF line ends, and is not
+/// part of it (what `str::lines` drops).
+const CARRIAGE_RETURN: char = '\u{d}';
+
 /// The file's shipped code: comment-only lines removed, so prose *about* a
-/// banned name is not mistaken for a use of it, and everything from the first
-/// `#[cfg(test)]` onward removed, because a unit test is allowed to panic --
-/// that is what a failing assertion is -- and is not compiled into the game.
+/// banned name is not mistaken for a use of it, and every item a real
+/// `#[cfg(test)]` attribute stands on blanked ([`test_item_spans`]), because a
+/// unit test is allowed to panic -- that is what a failing assertion is -- and
+/// is not compiled into the game. An attribute written in a comment or a
+/// string attributes nothing, and the rest of the file is read past it (the
+/// review of #219's T13 and T14; lane `opsave` ported `gamectl`'s reading).
+/// Only the item's own span is blanked, so code after its closing brace on
+/// that brace's line is read (`code_after_a_test_items_closing_brace_is_read`).
+/// A line the blanking leaves empty is dropped. The lines keep their
+/// literals, which the needles of some scans are in.
 fn code_lines(text: &str) -> Vec<(usize, String)> {
-    let shipped = match text.find("#[cfg(test)]") {
-        Some(index) => text.get(..index).unwrap_or(text),
-        None => text,
+    let spans = test_item_spans(text);
+    let covered = |index: usize| {
+        spans
+            .iter()
+            .any(|(from, to)| (*from..=*to).contains(&index))
     };
-    shipped
-        .lines()
+    let mut lines = Vec::new();
+    let mut start = 0_usize;
+    let pieces = text.split('\n').count();
+    for (index, line) in text.split('\n').enumerate() {
+        let length = line.chars().count();
+        // A line a test item touches is dropped only when nothing unblanked is
+        // left on it (an empty line inside an item, whose line feed the item
+        // covers, included): shipped code between two test items on one line
+        // is read (fix pass 3, item 8).
+        let touched = (0..length.max(1)).any(|offset| covered(start.saturating_add(offset)));
+        let shipped: String = line
+            .chars()
+            .enumerate()
+            .map(|(offset, c)| {
+                if covered(start.saturating_add(offset)) {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
+        start = start.saturating_add(length).saturating_add(1);
+        let inside = touched && shipped.trim().is_empty();
+        if inside || shipped.trim_start().starts_with("//") {
+            continue;
+        }
+        if index == pieces.saturating_sub(1) && line.is_empty() {
+            // The empty piece after a final line feed is not a line.
+            continue;
+        }
+        lines.push((
+            index.saturating_add(1),
+            shipped.trim_end_matches(CARRIAGE_RETURN).to_owned(),
+        ));
+    }
+    lines
+}
+
+/// `text` with every character of every item a real `#[cfg(test)]` attribute
+/// stands on blanked to a space, line feeds kept, so a finding names the
+/// file's own line and column, code after a test item's end on its last line
+/// is read, and a literal or a comment of the shipped code is read as
+/// written.
+fn shipped_text(text: &str) -> String {
+    let spans = test_item_spans(text);
+    text.chars()
         .enumerate()
-        .filter(|(_, line)| !line.trim_start().starts_with("//"))
-        .map(|(number, line)| (number.saturating_add(1), (*line).to_owned()))
+        .map(|(index, c)| {
+            if c != '\n'
+                && spans
+                    .iter()
+                    .any(|(from, to)| (*from..=*to).contains(&index))
+            {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
+}
+
+/// `text`'s shipped code as [`code_only`] reads it (every literal emptied,
+/// every comment removed), with every item a `#[cfg(test)]` in that code
+/// stands on blanked: `gamectl`'s `shipped_code`, the same reading.
+fn shipped_code(text: &str) -> String {
+    code_only(&shipped_text(text))
+}
+
+/// The characters, counting from 0 and both ends included, of each item that
+/// a real `#[cfg(test)]` in `text` attributes: from the attribute through any
+/// further attributes to the item's end, which is its first `;` outside
+/// brackets, or the brace that closes its first `{`. Read over [`masked`],
+/// which blanks every comment and literal without moving a character, so an
+/// attribute or a bracket in a comment or a literal counts for nothing and a
+/// span's ends are `text`'s own positions. `gamectl`'s `test_item_lines`,
+/// read by character rather than by line: the gateway's scan blanks the item
+/// and not the rest of its last line.
+fn test_item_spans(text: &str) -> Vec<(usize, usize)> {
+    const ATTRIBUTE: &[char] = &['#', '[', 'c', 'f', 'g', '(', 't', 'e', 's', 't', ')', ']'];
+    let code = masked(text);
+    let mut spans = Vec::new();
+    let mut from = 0_usize;
+    while let Some(start) = (from..code.len())
+        .find(|at| code.get(*at..at.saturating_add(ATTRIBUTE.len())) == Some(ATTRIBUTE))
+    {
+        let mut at = start.saturating_add(ATTRIBUTE.len());
+        let mut depth = 0_usize;
+        let mut braced = false;
+        let end = loop {
+            let Some(c) = code.get(at).copied() else {
+                break code.len().saturating_sub(1);
+            };
+            match c {
+                '(' | '[' => depth = depth.saturating_add(1),
+                ')' | ']' => depth = depth.saturating_sub(1),
+                '{' => {
+                    depth = depth.saturating_add(1);
+                    braced = true;
+                }
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if braced && depth == 0 {
+                        break at;
+                    }
+                }
+                ';' if depth == 0 => break at,
+                _ => {}
+            }
+            at = at.saturating_add(1);
+        };
+        spans.push((start, end));
+        from = end.saturating_add(1);
+    }
+    spans
+}
+
+/// `text`'s characters with every comment and literal blanked to spaces, line
+/// feeds kept: [`code_only`]'s reading, but no character moves, so a position
+/// in it is a position in `text`.
+fn masked(text: &str) -> Vec<char> {
+    let chars: Vec<char> = text.chars().collect();
+    let at_char = |index: usize| chars.get(index).copied();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let mut at = 0_usize;
+    while let Some(c) = at_char(at) {
+        let next = at_char(at.saturating_add(1));
+        let word_before = at
+            .checked_sub(1)
+            .and_then(at_char)
+            .is_some_and(|before| before.is_alphanumeric() || before == '_');
+        let skipped = if c == '/' && next == Some('/') {
+            Some(line_comment_end(&chars, at))
+        } else if c == '/' && next == Some('*') {
+            Some(block_comment_end(&chars, at))
+        } else if word_before {
+            None
+        } else {
+            literal_end(&chars, at).map(|(end, _)| end)
+        };
+        if let Some(end) = skipped {
+            for index in at..end {
+                out.push(if at_char(index) == Some('\n') {
+                    '\n'
+                } else {
+                    ' '
+                });
+            }
+            at = end;
+        } else {
+            out.push(c);
+            at = at.saturating_add(1);
+        }
+    }
+    out
 }
 
 /// True when `line` uses `needle` as a name rather than merely spelling its
@@ -784,14 +945,11 @@ fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        // The shipped code: everything before the first test module, read
-        // whole, so a literal or a comment that spans lines is read as one.
-        let shipped = text
-            .find("#[cfg(test)]")
-            .and_then(|index| text.get(..index))
-            .unwrap_or(&text);
-        for (number, why) in thread_offences(shipped) {
-            let line = shipped.lines().nth(number.saturating_sub(1)).unwrap_or("");
+        // The shipped code, read whole, so a literal or a comment that spans
+        // lines is read as one, less only the items `#[cfg(test)]` attributes
+        // ([`shipped_code`]); its lines are the file's.
+        for (number, why) in thread_offences(&shipped_code(&text)) {
+            let line = text.lines().nth(number.saturating_sub(1)).unwrap_or("");
             findings.push(format!(
                 "{}:{number}: {why}\n    {}",
                 path.display(),
@@ -803,6 +961,125 @@ fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
         findings.is_empty(),
         "every gateway thread is made by player_text_thread:\n{}",
         findings.join("\n")
+    );
+}
+
+/// The review of #219's T13 and T14, re-cast for the gateway (lane
+/// `opsave`): the scans once stopped at the first `#[cfg(test)]` text, even
+/// one in a comment (T13) or a string (T14), so a spawn after it was never
+/// read; now only an item a real attribute stands on is left out, and the
+/// rest of the file is read past it. `gamectl`'s cases, held to the same.
+#[test]
+fn the_scans_read_past_an_attribute_that_attributes_nothing() {
+    for text in [
+        "fn p() {\n    // #[cfg(test)] is where the tests start\n    let _ = std::thread::spawn(|| ());\n}\n",
+        "fn p() {\n    let _s = \"#[cfg(test)]\";\n    let _ = std::thread::spawn(|| ());\n}\n",
+        "/* #[cfg(test)] */\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nmod tests { fn t() {} }\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nfn t() {}\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+        "#[cfg(test)]\nuse std::thread;\nfn p() { let _ = std::thread::spawn(|| ()); }\n",
+    ] {
+        assert!(
+            !thread_offences(&shipped_code(text)).is_empty(),
+            "the thread guard let through: {text}"
+        );
+        // The line scans read past it too: the fallback scan's needle and the
+        // string scan's run, written after the same attribute, are found.
+        let planted = text.replace(
+            "let _ = std::thread::spawn(|| ());",
+            "let x = y.unwrap_or(0);",
+        );
+        assert!(
+            fallback_lines(&planted)
+                .iter()
+                .any(|line| line.contains("unwrap_or")),
+            "the line scans stopped at: {planted}"
+        );
+        let quoted = text.replace("let _ = std::thread::spawn(|| ());", "let s = \"a  b\";");
+        assert!(
+            string_literals(&quoted)
+                .iter()
+                .any(|literal| literal == "a  b"),
+            "the string scan stopped at: {quoted}"
+        );
+    }
+    for text in [
+        "#[cfg(test)]\nmod tests {\n    fn t() { let _ = std::thread::spawn(|| ()); }\n}\n",
+        "#[cfg(test)]\n#[allow(dead_code)]\nfn t() { let _ = std::thread::spawn(|| { \"}\" }); }\n",
+    ] {
+        assert!(
+            thread_offences(&shipped_code(text)).is_empty(),
+            "a test item's own thread is not shipped code: {text}"
+        );
+        assert!(
+            code_lines(text)
+                .iter()
+                .all(|(_, line)| !line.contains("spawn")),
+            "a test item's lines are not shipped code: {text}"
+        );
+    }
+    // The finding names the file's own line.
+    let text = "// one\n#[cfg(test)]\nmod t {\n}\nfn p() { std::thread::spawn(f); }\n";
+    assert_eq!(
+        thread_offences(&shipped_code(text))
+            .first()
+            .map(|(line, _)| *line),
+        Some(5)
+    );
+}
+
+/// Code after a test item's closing brace, on that brace's own line, is
+/// shipped code and is read: only the item's own span is blanked
+/// ([`test_item_spans`]), never the rest of its last line. A layout `cargo fmt
+/// --check` refuses is still a layout the compiler builds, so the scan does
+/// not lean on the formatter.
+#[test]
+fn code_after_a_test_items_closing_brace_is_read() {
+    for text in [
+        "#[cfg(test)]\nmod t {\n} fn p() { std::thread::spawn(f); }\n",
+        "#[cfg(test)]\nfn t() { let _ = \"}\"; } fn p() { std::thread::spawn(f); }\n",
+        "#[cfg(test)]\nuse std::fs; fn p() { std::thread::spawn(f); }\n",
+    ] {
+        assert!(
+            !thread_offences(&shipped_code(text)).is_empty(),
+            "the code after the test item was not read: {text}"
+        );
+        assert!(
+            code_lines(text)
+                .iter()
+                .any(|(_, line)| line.contains("std::thread::spawn(f)")),
+            "the line scans did not read the code after the test item: {text}"
+        );
+        assert!(
+            string_literals(&text.replace("spawn(f)", "spawn(\"a  b\")"))
+                .iter()
+                .any(|literal| literal == "a  b"),
+            "the string scan did not read the code after the test item: {text}"
+        );
+    }
+    // Shipped code between two test items on one line is read too (fix pass
+    // 3, item 8; review 3's evasion probe): a line is dropped only when
+    // nothing unblanked is left on it.
+    let between = "#[cfg(test)] fn a() {} fn p() { std::thread::spawn(f); } #[cfg(test)] fn b() {}
+";
+    assert!(
+        code_lines(between)
+            .iter()
+            .any(|(_, line)| line.contains("std::thread::spawn(f)")),
+        "the line scans dropped the code between two test items"
+    );
+    assert!(!thread_offences(&shipped_code(between)).is_empty());
+    // The test item itself is still blanked, up to and including its end.
+    let text = "#[cfg(test)]\nmod t { fn t() { std::thread::spawn(g); }\n} fn p() {}\n";
+    assert!(
+        thread_offences(&shipped_code(text)).is_empty(),
+        "a test item's own thread is not shipped code"
+    );
+    assert!(
+        code_lines(text)
+            .iter()
+            .all(|(_, line)| !line.contains("spawn")),
+        "a test item's lines are not shipped code"
     );
 }
 
@@ -1788,6 +2065,39 @@ fn the_manifest_declares_no_feature_and_takes_the_sim_without_default_features()
 /// host-side save calls, the save format's reader, or a resume. The names are
 /// allowed where they are defined and in `serve.rs`, the host loop that calls
 /// them.
+/// The surface's host-side save seams (`no_handler_reads_the_save_or_the_replay`).
+const SURFACE_SIDE: &[(&str, &str)] = &[
+    (
+        "take_persistence",
+        "what a Push's beginning and a segment's end leave for the disk is the host loop's",
+    ),
+    (
+        "lull_save",
+        "a Lull is saved by the host loop, on end of file",
+    ),
+    // Since S3's `gwu` the surface's resume is a method, reached as
+    // `.resume(` (the entry below, which also covers `Host::resume`); this
+    // one still blocks the path form, `Surface::resume(..)` or a
+    // `Surface::resume` handed around as a function value.
+    (
+        "Surface::resume",
+        "a surface is built over a save by the host loop's resume, and by nothing else",
+    ),
+    (".resume(", "a restore belongs to the match host"),
+    // Lane `opsave`: the last Push's feed and recap are put back by the
+    // one restore, `Surface::resume`, and by nothing a seat can reach.
+    (
+        "restore_last_push",
+        "the last Push is put back by the surface's resume, and by nothing else",
+    ),
+    // Its capture reads the whole bus, every seat's lines: what a save is
+    // built from (`saved_match`), never what a handler answers.
+    (
+        ".last_push(",
+        "the last Push is captured for a save, and by nothing a seat can reach",
+    ),
+];
+
 #[test]
 fn no_handler_reads_the_save_or_the_replay() {
     const CACHE_SIDE: &[(&str, &str)] = &[
@@ -1817,25 +2127,6 @@ fn no_handler_reads_the_save_or_the_replay() {
             "the save format is read by a resume, in the host loop",
         ),
     ];
-    const SURFACE_SIDE: &[(&str, &str)] = &[
-        (
-            "take_persistence",
-            "what a Push's beginning and a segment's end leave for the disk is the host loop's",
-        ),
-        (
-            "lull_save",
-            "a Lull is saved by the host loop, on end of file",
-        ),
-        // Since S3's `gwu` the surface's resume is a method, reached as
-        // `.resume(` (the entry below, which also covers `Host::resume`); this
-        // one still blocks the path form, `Surface::resume(..)` or a
-        // `Surface::resume` handed around as a function value.
-        (
-            "Surface::resume",
-            "a surface is built over a save by the host loop's resume, and by nothing else",
-        ),
-        (".resume(", "a restore belongs to the match host"),
-    ];
     // Exempted by their path under the crate, as `no_handler_can_file_advice`
     // does, so a file of the same name in a handler directory is scanned.
     const DEFINERS_AND_CALLER: &[&str] = &[
@@ -1843,6 +2134,7 @@ fn no_handler_reads_the_save_or_the_replay() {
         "src/save.rs",
         "src/serve.rs",
         "src/surface.rs",
+        "src/surface/last_push.rs",
         "src/host.rs",
     ];
     let mut needles: Vec<(&str, &str)> = CACHE_SIDE.to_vec();
@@ -1945,7 +2237,9 @@ fn surface_calls_no_save_seam(surface_text: &str, needles: &[(&str, &str)]) {
             if !uses(&line, needle) || definition.is_some() {
                 continue;
             }
-            if method != "resume" {
+            // The save's own builder captures the last Push for it.
+            let builds_the_save = *needle == ".last_push(" && method == "saved_match";
+            if method != "resume" && !builds_the_save {
                 called.push(format!(
                     "surface.rs:{number} (in `{method}`): `{needle}` -- {why}\n    {}",
                     line.trim()
@@ -2032,16 +2326,6 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         "serve.rs",
         "let seat = self.seat_token.clone().unwrap_or_else(|| String::from(\"-\"));",
         "the announce line spells a match with no human seat's token `-`, which `Announce::parse` reads back as none",
-    ),
-    (
-        "serve.rs",
-        "self.opens.1.recv().unwrap_or(false)",
-        "a host loop that has stopped opens no session, which is the answer a refused open gets",
-    ),
-    (
-        "serve.rs",
-        "self.replies.1.recv().unwrap_or_else(|_| {",
-        "a host loop that has stopped answers with the shutting-down refusal, the same one a failed send gets",
     ),
     (
         "serve.rs",
@@ -2530,14 +2814,15 @@ impl Chars {
     }
 }
 
-/// The string literals of `text`'s shipped code (everything before its first
-/// `#[cfg(test)]`), each as the compiler reads it: a `\` at a line's end
+/// The string literals of `text`'s shipped code (less every item a real
+/// `#[cfg(test)]` stands on, [`shipped_text`]), each as the compiler reads
+/// it: a `\` at a line's end
 /// swallows the newline and the next line's leading white space, `\n`, `\r`
 /// and `\t` read as themselves, and every other escape as one character.
 /// Comments, character literals and lifetimes are skipped; a raw string is
 /// read as written.
 fn string_literals(text: &str) -> Vec<String> {
-    let shipped = text.split("#[cfg(test)]").next().unwrap_or_default();
+    let shipped = shipped_text(text);
     let reader = Chars {
         chars: shipped.chars().collect(),
     };

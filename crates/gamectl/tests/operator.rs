@@ -2307,8 +2307,11 @@ fn a_stone_made_to_time_out_is_not_weighed_again() {
 /// Round 2 of [`failed_stone_match`]'s match twice from one save (fix pass 4,
 /// item 2): its Lull saved, Easy plays seat 0 on the live surface, then on a
 /// fresh surface resumed from the save. Answers the live round and the
-/// resumed one.
-fn round_two_live_and_resumed() -> (pharmakos_operator::Played, pharmakos_operator::Played) {
+/// resumed one. With `carried` false the save is the committed format-version-3
+/// one `main`'s build wrote of the same Lull (lane `opsave`).
+fn round_two_live_and_resumed(
+    carried: bool,
+) -> (pharmakos_operator::Played, pharmakos_operator::Played) {
     let rules = rules_json();
     let name = "resumed-stone";
     let (mut surface, mut seats) = failed_stone_surface(name, &rules);
@@ -2328,7 +2331,29 @@ fn round_two_live_and_resumed() -> (pharmakos_operator::Played, pharmakos_operat
     );
     assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
     play_to_next_lull(&mut surface);
-    let saved = surface.lull_save().expect("a Lull saves");
+    let saved = if carried {
+        let saved = surface.lull_save().expect("a Lull saves");
+        assert!(
+            saved.last_push.is_some(),
+            "a save this build makes carries it"
+        );
+        saved
+    } else {
+        // The same Lull as `main`'s build saved it at `34e2f427` (format
+        // version 3, no last Push): `tests/fixtures/save-v3-round-two-lull.json`.
+        let text = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("save-v3-round-two-lull.json"),
+        )
+        .expect("the version-3 fixture");
+        let save = pharmakos_gateway::save::Save::parse(text.trim_end_matches('\n'))
+            .expect("a version-3 save reads");
+        assert_eq!(save.stamp.format_version, 3);
+        assert_eq!(save.state.last_push, None);
+        save.state
+    };
     let as_composed = |text: &str| text.to_owned();
     let mut easy = Easy::new(&rules).expect("the rules text");
     let (_, live) = easy_plays_seat_zero(&mut surface, &mut easy, &as_composed);
@@ -2366,14 +2391,15 @@ fn round_two_live_and_resumed() -> (pharmakos_operator::Played, pharmakos_operat
     (live, again)
 }
 
-/// A resumed Lull reads the last Push as unread, and says so (fix pass 4,
-/// item 2): the live round knows its stone toward `seam_190_124` failed; the
-/// same round resumed from a save, whose feed shows no Push, knows nothing of
-/// it, and its round says so in a typed state and in its "why", never as
-/// "nothing failed".
+/// A Lull resumed from a save made before the save carried the last Push (a
+/// format-version-3 save, which still loads) reads the last Push as unread,
+/// and says so (fix pass 4, item 2; lane `opsave`): the live round knows its
+/// stone toward `seam_190_124` failed; the same round resumed from that save,
+/// whose feed shows no Push, knows nothing of it, and its round says so in a
+/// typed state and in its "why", never as "nothing failed".
 #[test]
 fn a_resumed_lull_reads_the_last_push_as_unread() {
-    let (live, resumed) = round_two_live_and_resumed();
+    let (live, resumed) = round_two_live_and_resumed(false);
     assert_eq!(
         live.failed_stones,
         FailedStones::Known(vec![String::from("seam_190_124")]),
@@ -2397,15 +2423,106 @@ fn a_resumed_lull_reads_the_last_push_as_unread() {
 }
 
 /// The review's probe P1(b) (fix pass 4, item 2): a resumed Lull seals what
-/// the unresumed one does. It cannot until the save carries the last Push's
-/// step outcomes and deaths, which the owner approved on 2026-11-23 and lane
-/// `opsave` builds; this is the red test that lane turns green.
+/// the unresumed one does, now that the save carries the last Push (the
+/// owner's approval of 2026-11-23; lane `opsave`), and reads its failed stone
+/// as the live round did.
 #[test]
-#[ignore = "red until lane opsave: the save carries the last Push's step outcomes and deaths (owner, 2026-11-23)"]
 fn a_resumed_lull_seals_what_the_unresumed_one_does() {
-    let (live, resumed) = round_two_live_and_resumed();
+    let (live, resumed) = round_two_live_and_resumed(true);
     assert_eq!(
         live.playbook_jsonc, resumed.playbook_jsonc,
         "a resumed Lull seals what the unresumed one does"
     );
+    assert_eq!(
+        resumed.failed_stones,
+        FailedStones::Known(vec![String::from("seam_190_124")]),
+        "the resumed Lull reads the failed stone the live one does: {}",
+        resumed.why
+    );
+    assert_eq!(resumed.failed_stones, live.failed_stones, "{}", resumed.why);
+    assert_eq!(resumed.why, live.why);
+}
+
+/// The differential's operator half (lane `opsave`): at every Lull of a
+/// match, Easy's next seal for seat 0 on the live surface and on a fresh
+/// surface resumed from that Lull's save, its last Push carried, are byte for
+/// byte one seal, with one "why". Played on the Probation seed, whose seat 0
+/// meets failed stones, and on the determinism seed, two seats and three
+/// rounds each.
+#[test]
+fn every_resumed_lull_seals_what_the_live_one_does() {
+    let rules = rules_json();
+    for (name, seed) in [
+        ("resumed-every-p", PROBATION_SEED),
+        ("resumed-every-d", SEED),
+    ] {
+        let open_host = || {
+            Host::open_from(
+                &rules,
+                seed,
+                2,
+                &Settings {
+                    segment_lengths_ms: Vec::new(),
+                    round_limit: 3,
+                },
+                Some(root().join(LIBRARY_PATH)),
+            )
+            .expect("a match")
+        };
+        let fresh = || {
+            Surface::new(
+                &match_id(name),
+                seed,
+                RulesTable::from_canonical_json(&rules).expect("a rules table"),
+                FogPolicy::fogged(),
+                &seat_ids(2),
+            )
+            .expect("a surface")
+        };
+        let mut live = fresh();
+        live.attach(open_host()).expect("attached");
+        live.open_lull().expect("the opening Lull");
+        let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
+        let mut seats = InProcessSeats::open(&mut live, &seat_ids(2), Some(0), &mut factory)
+            .expect("in-process seats");
+        let as_composed = |text: &str| text.to_owned();
+        let mut lulls = 0_u32;
+        while live.time().phase == pharmakos_proto::gp::api::v1::status::Phase::Lull {
+            let saved = live.lull_save().expect("a Lull saves");
+            let mut resumed = fresh()
+                .resume(
+                    open_host(),
+                    &saved,
+                    pharmakos_gateway::save::Continuation {
+                        generation: 1,
+                        last_tick: 0,
+                    },
+                )
+                .expect("the Lull resumes");
+            let mut easy = Easy::new(&rules).expect("the rules text");
+            let (_, again) = easy_plays_seat_zero(&mut resumed, &mut easy, &as_composed);
+            let mut easy = Easy::new(&rules).expect("the rules text");
+            let (_, played) = easy_plays_seat_zero(&mut live, &mut easy, &as_composed);
+            seats.plan(&mut live);
+            assert_eq!(
+                again.playbook_jsonc,
+                played.playbook_jsonc,
+                "{name}, round {}: the resumed Lull seals what the live one does",
+                live.time().round
+            );
+            assert_eq!(again.why, played.why, "{name}, round {}", live.time().round);
+            lulls += 1;
+            assert!(live.begin_push().expect("the Push opens"));
+            while let Some(report) = live.step().expect("a tick") {
+                if report.segment_ended {
+                    break;
+                }
+            }
+            live.end_recap().expect("the recap closes");
+            if live.time().phase == pharmakos_proto::gp::api::v1::status::Phase::Lull {
+                live.open_lull().expect("the next Lull");
+            }
+        }
+        assert_eq!(lulls, 3, "{name}: every Lull was compared");
+    }
 }
