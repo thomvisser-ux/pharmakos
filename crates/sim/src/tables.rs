@@ -5118,6 +5118,25 @@ impl DefendTable {
         self.rows.reserve_total(n);
     }
 
+    /// Room for `entries` protect entries in all, whatever the table holds
+    /// now: the protect list's room, stated by the world's one statement of
+    /// its tables' rooms (`World::reserve_table_rooms`, from
+    /// `world::protect_room_of`), so a protect list committed inside a tick
+    /// allocates nothing.
+    pub fn reserve_protected(&mut self, entries: u32) {
+        let n = crate::math::index::row(entries);
+        self.protected.reserve_total(n);
+    }
+
+    /// The protect entries the table has room for without growing: what the
+    /// world's test of its stated room reads, and nothing else (a capacity is
+    /// never state, so no code outside a test reads it).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn protected_room(&self) -> usize {
+        self.protected.capacity()
+    }
+
     /// The table's tag in the state hash (E29), after the shell table's 1 and
     /// the site block's 2.
     pub const HASH_TAG: u8 = 3;
