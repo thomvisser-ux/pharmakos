@@ -1381,6 +1381,6 @@ I0006  INFO  information  raised at: structure
   `breach_allowed` is true, and only a mortar whose beacon's `roe` is FREE_FIRE shells a breach: RETURN_FIRE never fires at a wall, and a Build beacon's omitted `roe` reads as RETURN_FIRE. Without one, the demolition charge breaches alone.
   Mortars help a raid through a wall only when their beacon is set to FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself.
 
-I0007  INFO  information  raised at: structure
+I0007  INFO  information  raised at: the report builder
   {count} more `{code}` not listed: a report lists at most {max} of one code one by one, and no `I0003` once the size budget is past. Each counts as raised: one left out that is an error still stops the playbook qualifying.
   Not shown: {count} more `{code}`. Deal with the ones shown, then check again to see the rest.

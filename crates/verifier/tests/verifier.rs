@@ -558,7 +558,7 @@ fn every_emitted_code_has_a_case() {
     }
     let mut missing: Vec<&str> = Vec::new();
     for row in CATALOGUE {
-        let emitted = matches!(row.emitter, Emitter::Stage(_));
+        let emitted = !matches!(row.emitter, Emitter::NoneYet(_));
         let covered = seen.iter().any(|code| code == row.code);
         if emitted && !covered {
             missing.push(row.code);
