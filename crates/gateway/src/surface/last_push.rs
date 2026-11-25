@@ -1186,4 +1186,26 @@ mod tests {
         assert_eq!(error.code(), Code::Internal);
         assert_eq!(surface.take_persistence().unsaved, Some(error));
     }
+
+    /// The recap's close tripwire (fix pass 3, item 10): a match that has
+    /// ended with no `ended` save written is a typed refusal, carried to the
+    /// host loop, never silence; with the save written, it passes.
+    #[test]
+    fn an_end_with_no_ended_save_at_the_recaps_close_is_refused() {
+        let mut surface = hosted();
+        let error = surface
+            .ended_unsaved_tripwire()
+            .expect_err("no ended save was written");
+        assert_eq!(error.code(), Code::Internal);
+        assert!(
+            error.message().contains("no `ended` save was written"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(surface.take_persistence().unsaved, Some(error));
+        surface.end_saved = true;
+        surface
+            .ended_unsaved_tripwire()
+            .expect("an end that was saved passes");
+    }
 }

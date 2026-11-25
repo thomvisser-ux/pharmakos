@@ -1794,6 +1794,28 @@ impl Surface {
         }
     }
 
+    /// The tripwire at the recap's close: a match that has ended with no
+    /// `ended` save written (an end no tick reported, `end_recap`'s doc says
+    /// why none is reachable today) is a typed refusal, audited and carried to
+    /// the host loop, which stops on it ([`Surface::unsaved`]), never silence.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when no `ended` save was written.
+    fn ended_unsaved_tripwire(&mut self) -> Result<(), Error> {
+        if self.end_saved {
+            return Ok(());
+        }
+        let round = self.host()?.runner().round();
+        Err(self.unsaved(
+            "save ended",
+            said!(
+                "the match ended as round {}'s recap closed, an end no tick reported, and no `ended` save was written",
+                round
+            ),
+        ))
+    }
+
     /// A save the disk needed and could not have: audited under `action`,
     /// put where the host loop stops on it ([`Persistence::unsaved`]), and
     /// answered as the typed refusal to return. The words say what could
@@ -2051,12 +2073,16 @@ impl Surface {
             // No save is made here. Every end this build reaches is reported
             // at the match's final tick, where [`Surface::after_tick`] makes
             // the `ended` save (`tests/last_push.rs`,
-            // `every_end_is_reported_at_its_final_tick`); the sim's arm that
+            // `every_end_is_reported_at_its_final_tick`). The sim's arm that
             // decides an end only as its recap closes (`Runner::end_recap`'s
-            // `!announced`) is reached by a world restored into an undecided
-            // last recap, which no save of this build holds: a save is made
-            // in a Lull, as a Push begins or as the match ends, never in a
-            // recap, and an ended one does not resume.
+            // `!announced`) is unreachable today: it is reached by a world
+            // restored into an undecided last recap, which no save of this
+            // build holds (a save is made in a Lull, as a Push begins or as
+            // the match ends, never in a recap, and an ended one does not
+            // resume). Should it be reached, the tripwire says so and stops
+            // the host rather than leave the final round's `sealed` save on
+            // disk as if the match went on.
+            self.ended_unsaved_tripwire()?;
         }
         if ended {
             // The recap's own reported clock is the recap's; the Lull that
