@@ -81,11 +81,17 @@ pub(crate) const MERGED_STEPS: &[&str] = &["golden"];
 /// tests, at opt-level 0), `test`'s `lib` and `test-research`'s
 /// `test:allocations` (its fork tests, at opt-level 0) are the units over a
 /// tenth of a leg in both runs, and every other recorded unit is far under it.
-/// Each of the first two is one test long, not many tests long: in run
-/// 45549711083 `tick::a_restored_worlds_tick_allocates_nothing` alone took
-/// 383 / 382 / 332 s (windows / macos / ubuntu) of `test:allocations`' 387 /
-/// 385 / 335 s, beside `tick::a_tick_allocates_nothing`'s 277 / 270 / 234 s
-/// on other threads, so a unit's seconds are its slowest test's.
+/// The two allocation units are each as long as their slowest test, because
+/// libtest runs a unit's tests on parallel threads: in run 45549711083
+/// `test`'s `test:allocations` took 387 / 385 / 335 s (windows / macos /
+/// ubuntu), and `tick::a_restored_worlds_tick_allocates_nothing` alone took
+/// 383 / 382 / 332 s of it, beside `tick::a_tick_allocates_nothing`'s 277 /
+/// 270 / 234 s; `test-research`'s took 111 / 205 / 159 s, and
+/// `fork::a_fork_of_a_restored_world_allocates_only_the_chunks_it_re_points`
+/// alone took the same. `lib` is a sum, not one test: the unit tests of ten
+/// crates' libraries run one library after another, and
+/// pharmakos-plan-core's library is most of it (265 / 115 / 228 s of `lib`'s
+/// 306 / 135 / 270 s in the same run).
 ///
 /// History: `shard4` #217 read three heavy units from `main`'s run 45110422470
 /// on windows-latest: `test`'s `lib`, `test`'s `test:allocations` and
