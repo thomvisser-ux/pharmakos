@@ -2620,8 +2620,26 @@ fn a_host_whose_first_write_fails_does_not_announce() {
         .expect("a host that opened and was closed");
     let folder = folder_of(&root, MATCH_ID);
     audit_read_only(&folder, true);
-    let error = resumed(&root, durable_config(MATCH_ID, 2))
-        .expect_err("a host that cannot write does not announce");
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let error = serve::run_in(
+        Setup {
+            rules_json: rules_json(),
+            library: Some(support::library_folder()),
+            operators: Box::new(NoOperators),
+        },
+        &root,
+        std::io::Cursor::new(
+            resume_line(durable_config(MATCH_ID, 2))
+                .render()
+                .into_bytes(),
+        ),
+        Sink(Arc::clone(&written)),
+    )
+    .expect_err("a host that cannot write is refused");
+    assert!(
+        written.lock().expect("the announce sink").is_empty(),
+        "a host that cannot write does not announce"
+    );
     assert_eq!(error.code(), pharmakos_gateway::error::Code::Internal);
     assert!(
         error
