@@ -3999,13 +3999,13 @@ fn patch_plan_addresses_a_field_under_the_spelling_the_file_writes() {
     );
 }
 
-/// **An error the per-code cap left out still refuses at submit** (S3's
-/// `vcap`): ten unlabelled holds raise ten `E0104`s; the report lists the
-/// cap's and counts the rest in an `I0007`, and `submit_plan` accepts
-/// nothing, so a placement the editor's ghost could only call "not known"
-/// is refused where it matters.
+/// **A submission past the cap lists the cap's errors and counts the rest**
+/// (S3's `vcap`): ten unlabelled holds raise ten `E0104`s; `submit_plan`
+/// refuses them, and its report lists the cap's and closes with an `I0007`
+/// for the rest. (That the cap never changes a verdict is the verifier's
+/// `the_cap_never_moves_a_verdict_or_a_total`.)
 #[test]
-fn an_error_the_cap_left_out_still_refuses_at_submit() {
+fn a_submission_past_the_cap_lists_the_cap_s_errors_and_counts_the_rest() {
     let mut surface = hosted();
     let token = seat_token(&mut surface, 0);
     let holds: Vec<&str> = (0..10)
