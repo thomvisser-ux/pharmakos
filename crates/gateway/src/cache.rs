@@ -48,8 +48,10 @@
 //! T9 creates the match folder, writes `README.txt` and `match.json`, and
 //! appends to `audit.log`. `seats/` and `replay/` are created empty at
 //! [`MatchCache::open`] so the layout is visible from the first match rather
-//! than appearing a stage at a time; a seat's own `drafts/` and `sealed/` are
-//! made by [`MatchCache::seat_directory`], when that seat first has state.
+//! than appearing a stage at a time, and so is each seat's own `drafts/` and
+//! `sealed/`; a resume makes any of them a folder from an earlier build lacks
+//! ([`MatchCache::reopen`]). No write makes a folder: one that has gone since
+//! is a typed failure, never a match folder made again (lane `opsave`).
 //!
 //! T17 fills the rest (decisions-log item 84; the wave-6 notes, decisions C8
 //! to C11). `match.json` gains the settings and the rules hash, so that with
@@ -260,10 +262,9 @@ impl MatchCache {
     /// Open -- and if necessary create -- the folder for one **new** match
     /// under `data_root`.
     ///
-    /// Writes [`README_TEXT`] and a `match.json` header, and creates `seats/`
-    /// and `replay/` so the layout is visible from the start. The per-seat
-    /// `drafts/` and `sealed/` are made by [`MatchCache::seat_directory`], when
-    /// a seat first has state.
+    /// Writes [`README_TEXT`] and a `match.json` header, and makes the whole
+    /// fixed layout (`MatchCache::make_layout`): `seats/`, `replay/` and each
+    /// seat's `drafts/` and `sealed/`, so no later write makes a folder.
     ///
     /// # Errors
     ///
@@ -282,19 +283,14 @@ impl MatchCache {
             )));
         }
 
-        for path in [
-            cache.directory.clone(),
-            cache.directory.join("seats"),
-            cache.directory.join("replay"),
-        ] {
-            fs::create_dir_all(&path).map_err(|error| {
-                Error::internal(said!(
-                    "creating {}: {}",
-                    crate::error::shown_path(&path),
-                    crate::error::engine(&error)
-                ))
-            })?;
-        }
+        fs::create_dir_all(&cache.directory).map_err(|error| {
+            Error::internal(said!(
+                "creating {}: {}",
+                crate::error::shown_path(&cache.directory),
+                crate::error::engine(&error)
+            ))
+        })?;
+        cache.make_layout(header.seats)?;
 
         cache.write(Path::new("README.txt"), README_TEXT.as_bytes())?;
         let lengths = header
@@ -321,8 +317,9 @@ impl MatchCache {
 
     /// Open the folder of a **saved** match, to resume it.
     ///
-    /// Writes nothing: `match.json` is the match's, from the day it was
-    /// opened, and a resume does not rewrite it (the wave-6 notes, H16). The
+    /// Writes no file: `match.json` is the match's, from the day it was
+    /// opened, and a resume does not rewrite it; the fixed layout's folders
+    /// are made if an earlier build left one out (the wave-6 notes, H16). The
     /// host loop appends a `resumed` line to `audit.log` once the match is up.
     ///
     /// # Errors
@@ -331,7 +328,7 @@ impl MatchCache {
     /// [`MatchCache::valid_match_id`] refuses, and for one with no save to
     /// resume: a lobby's resume line naming a match that was never saved is
     /// the lobby's mistake to show, not the host's failure.
-    pub fn reopen(data_root: &Path, match_id: &str) -> Result<MatchCache, Error> {
+    pub fn reopen(data_root: &Path, match_id: &str, seats: u32) -> Result<MatchCache, Error> {
         let cache = MatchCache::at(data_root, match_id)?;
         if !cache.has_save() {
             return Err(Error::invalid(said!(
@@ -339,7 +336,48 @@ impl MatchCache {
                 pharmakos_proto::json::grammar::quoted(match_id)
             )));
         }
+        // A folder an earlier build wrote may lack a seat's sub-folders (they
+        // were made at its first seal): made here, at this host's start, and
+        // never by a later write.
+        cache.make_layout(seats)?;
         Ok(cache)
+    }
+
+    /// The fixed layout under the match folder, which must exist: `seats/`,
+    /// `replay/`, and each seat's `drafts/` and `sealed/`, each made with
+    /// `create_dir`, never `create_dir_all`, so a match folder that has gone
+    /// is not made again (lane `opsave`, fix pass 3, item 5). One that is
+    /// already there is kept.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for anything the filesystem refuses,
+    /// a missing match folder included.
+    fn make_layout(&self, seats: u32) -> Result<(), Error> {
+        let mut folders = vec![self.directory.join("seats"), self.directory.join("replay")];
+        for seat in 0..seats {
+            let directory = self.directory.join("seats").join(seat.to_string());
+            folders.push(directory.join("drafts"));
+            folders.push(directory.join("sealed"));
+            folders.push(directory);
+        }
+        // Parents before children.
+        folders.sort();
+        for path in folders {
+            match fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
+                Err(error) => {
+                    return Err(Error::internal(said!(
+                        "creating {}: {}",
+                        crate::error::shown_path(&path),
+                        crate::error::engine(&error)
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The cache for a match id, validated, without touching the disk.
@@ -463,7 +501,7 @@ impl MatchCache {
         playbook_jsonc: &str,
     ) -> Result<(), Error> {
         let path = self
-            .seat_directory(seat)?
+            .seat_directory(seat)
             .join("sealed")
             .join(format!("{round}.jsonc"));
         fs::write(&path, playbook_jsonc.as_bytes()).map_err(|error| {
@@ -481,15 +519,10 @@ impl MatchCache {
     ///
     /// [`crate::error::Code::Internal`] for anything the filesystem refuses.
     pub fn write_replay(&self, round: u32, hashes: &str) -> Result<(), Error> {
-        let folder = self.directory.join("replay");
-        fs::create_dir_all(&folder).map_err(|error| {
-            Error::internal(said!(
-                "creating {}: {}",
-                crate::error::shown_path(&folder),
-                crate::error::engine(&error)
-            ))
-        })?;
-        let path = folder.join(format!("{round}.hashes.txt"));
+        let path = self
+            .directory
+            .join("replay")
+            .join(format!("{round}.hashes.txt"));
         fs::write(&path, hashes.as_bytes()).map_err(|error| {
             Error::internal(said!(
                 "writing {}: {}",
@@ -576,30 +609,14 @@ impl MatchCache {
         &self.match_id
     }
 
-    /// One seat's private subtree, created if it is not there yet.
+    /// One seat's private subtree, which the match's opening made
+    /// (`MatchCache::make_layout`); nothing is made here.
     ///
     /// The seat's number is the only thing that varies, and it is a `u8` from
     /// the sim rather than a string from a caller.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::error::Code::Internal`] for anything the filesystem refuses.
-    pub fn seat_directory(&self, seat: SeatId) -> Result<PathBuf, Error> {
-        let directory = self.directory.join("seats").join(seat.raw().to_string());
-        for path in [
-            directory.clone(),
-            directory.join("drafts"),
-            directory.join("sealed"),
-        ] {
-            fs::create_dir_all(&path).map_err(|error| {
-                Error::internal(said!(
-                    "creating {}: {}",
-                    crate::error::shown_path(&path),
-                    crate::error::engine(&error)
-                ))
-            })?;
-        }
-        Ok(directory)
+    #[must_use]
+    pub fn seat_directory(&self, seat: SeatId) -> PathBuf {
+        self.directory.join("seats").join(seat.raw().to_string())
     }
 
     /// Append audit entries to `audit.log`, writing the header if the file is
@@ -823,7 +840,7 @@ mod tests {
     #[test]
     fn a_folder_with_a_save_is_reopened_and_never_opened_new() {
         let root = scratch("reopen");
-        let error = MatchCache::reopen(&root, "m-0004").expect_err("nothing saved yet");
+        let error = MatchCache::reopen(&root, "m-0004", 2).expect_err("nothing saved yet");
         assert_eq!(error.code(), Code::InvalidArgument);
 
         let cache = MatchCache::open(&root, "m-0004", &header(4)).expect("opened");
@@ -846,7 +863,7 @@ mod tests {
         assert_eq!(error.code(), Code::InvalidArgument);
         assert!(error.message().contains("resume"), "{}", error.message());
 
-        let again = MatchCache::reopen(&root, "m-0004").expect("reopened");
+        let again = MatchCache::reopen(&root, "m-0004", 2).expect("reopened");
         assert_eq!(again.read_save(64).expect("read"), "second\n");
         assert_eq!(
             std::fs::read_to_string(again.directory().join("match.json")).expect("header"),
@@ -892,10 +909,50 @@ mod tests {
         let cache = MatchCache::open(&root, "m-0002", &header(1)).expect("opened");
         assert!(cache.directory().join("seats").is_dir());
         assert!(cache.directory().join("replay").is_dir());
-        let seat = cache.seat_directory(SeatId::new(1)).expect("seat");
+        let seat = cache.seat_directory(SeatId::new(1));
         assert!(seat.join("drafts").is_dir());
         assert!(seat.join("sealed").is_dir());
         assert!(seat.ends_with("1"), "{}", seat.display());
+    }
+
+    /// A write never recreates the match folder (lane `opsave`, fix pass 3, item 5;
+    /// review 3's probe BIN-D): the layout is made once, when the match opens or
+    /// resumes, and a write into a folder that has gone since is a typed failure,
+    /// with nothing made in its place.
+    #[test]
+    fn a_write_into_a_removed_match_folder_fails_and_makes_nothing() {
+        let root = scratch("removed");
+        let cache = MatchCache::open(&root, "m-0006", &header(6)).expect("opened");
+        let seat = cache.directory().join("seats").join("1");
+        assert!(seat.join("sealed").is_dir(), "made when the match opened");
+        assert!(seat.join("drafts").is_dir(), "made when the match opened");
+        std::fs::remove_dir_all(cache.directory()).expect("the folder removed");
+        assert_eq!(
+            cache
+                .write_sealed(
+                    SeatId::new(1),
+                    1,
+                    "{}
+"
+                )
+                .expect_err("no folder")
+                .code(),
+            Code::Internal
+        );
+        assert_eq!(
+            cache
+                .write_replay(
+                    1, "1	00
+"
+                )
+                .expect_err("no folder")
+                .code(),
+            Code::Internal
+        );
+        assert!(
+            !cache.directory().exists(),
+            "no write made the folder again"
+        );
     }
 
     /// The one gate between a string and a path.

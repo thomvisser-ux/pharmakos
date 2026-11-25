@@ -2266,3 +2266,28 @@ fn an_audit_log_that_cannot_be_written_is_answered_with_the_error_and_the_host_s
     permissions.set_readonly(false);
     std::fs::set_permissions(&log, permissions).expect("writable again");
 }
+
+/// A write never makes the match folder again (lane `opsave`, fix pass 3,
+/// item 5; review 3's probe BIN-D): with the folder removed under a running
+/// host, the Push's start is answered with the typed error, the host stops,
+/// and no folder is made in the removed one's place.
+#[test]
+fn a_removed_match_folder_is_not_made_again_and_the_host_stops() {
+    const MATCH_ID: &str = "m-opsave-durable-folder";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 2)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    std::fs::remove_dir_all(&host.folder).expect("the match folder removed");
+    let crossed = lobby.call("end_lull", "{}");
+    let (code, message) = refusal(&crossed);
+    assert_eq!(code, "INTERNAL", "{message}");
+    assert!(message.contains("could not be written ("), "{message}");
+    assert!(message.contains("; on disk is no save yet;"), "{message}");
+    let returned = host.returned_by_itself().expect_err("the host stopped");
+    assert_eq!(returned.code(), pharmakos_gateway::error::Code::Internal);
+    assert!(
+        !host.folder.exists(),
+        "no write made the match folder again"
+    );
+}

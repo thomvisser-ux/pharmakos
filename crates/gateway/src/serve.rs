@@ -864,7 +864,7 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
     // what the writer reads the disk to when it says what is there.
     let largest = largest_save(&config, &setup.rules_json)?;
     let (cache, mut surface, seats) = if line.resume {
-        let cache = MatchCache::reopen(data_root, &config.match_id)?;
+        let cache = MatchCache::reopen(data_root, &config.match_id, config.seats)?;
         let save = Save::parse(&cache.read_save(largest)?)?;
         save.check(&config, rules_hash.0)?;
         // Read before the surface exists: the view's identity folds in the
