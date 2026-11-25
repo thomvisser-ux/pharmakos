@@ -204,32 +204,57 @@ const OTHER_THREADS_BOXES: u64 = 16;
 /// (`tick::a_restored_worlds_tick_allocates_nothing`) holds one of them to
 /// zero allocations while the other allocates as it likes, which is exact
 /// only if an allocation is charged to the thread that made it and to no
-/// other. Two scoped threads, held in step by two barriers: the watching
-/// thread reads its count, the allocating thread makes
-/// [`OTHER_THREADS_BOXES`] boxes between the barriers, and the watching
-/// thread reads its count again. The allocating thread's count moves by
-/// exactly its boxes, and the watching thread's not at all. A counter shared
-/// between threads fails here.
+/// other.
+///
+/// Two scoped threads, held in step by atomics alone: the watching thread
+/// reads its count, raises `started` and spins until `finished`; the
+/// allocating thread spins until `started`, makes [`OTHER_THREADS_BOXES`]
+/// boxes, counting each in `boxes_done`, and raises `finished`; the watching
+/// thread reads its count again. The watcher also reads `boxes_done` when its
+/// span opens (none yet) and when it closes (all of them), so a span that did
+/// not really cover the boxes fails here rather than passing vacuously.
+///
+/// **No scaffolding allocates inside a span, on any OS.** The flags are
+/// atomics waited on by spinning, never a `Barrier`, `Mutex` or `Condvar`:
+/// on macOS std's lock and condition variable allocate their OS object on
+/// first use, which charged the watcher two allocations in CI. The counter's
+/// thread-local is `const`-initialised with no destructor, so touching it
+/// never allocates. The spawns and joins run on the test's thread, outside
+/// both spans.
+///
+/// Orderings: each flag is stored `Release` and loaded `Acquire`, so the
+/// allocator's boxes happen-before the watcher's second read; `boxes_done`
+/// is `Relaxed`, its last value ordered by `finished`'s store and load.
 #[test]
 fn the_counter_counts_each_thread_alone() {
-    let started = std::sync::Barrier::new(2);
-    let finished = std::sync::Barrier::new(2);
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let started = AtomicBool::new(false);
+    let finished = AtomicBool::new(false);
+    let boxes_done = AtomicU64::new(0);
+    let wait = |flag: &AtomicBool| {
+        while !flag.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
+    };
     let (made, watched) = std::thread::scope(|scope| {
         let allocating = scope.spawn(|| {
-            started.wait();
+            wait(&started);
             let before = allocations();
             for index in 0..OTHER_THREADS_BOXES {
                 drop(std::hint::black_box(Box::new(std::hint::black_box(index))));
+                boxes_done.fetch_add(1, Ordering::Relaxed);
             }
             let made = allocations() - before;
-            finished.wait();
+            finished.store(true, Ordering::Release);
             made
         });
         let watching = scope.spawn(|| {
             let before = allocations();
-            started.wait();
-            finished.wait();
-            allocations() - before
+            let at_open = boxes_done.load(Ordering::Relaxed);
+            started.store(true, Ordering::Release);
+            wait(&finished);
+            let at_close = boxes_done.load(Ordering::Relaxed);
+            (allocations() - before, at_open, at_close)
         });
         (
             allocating
@@ -240,6 +265,12 @@ fn the_counter_counts_each_thread_alone() {
                 .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
         )
     });
+    let (watched, at_open, at_close) = watched;
+    assert_eq!(
+        (at_open, at_close),
+        (0, OTHER_THREADS_BOXES),
+        "the watcher's span opened before the first box and closed after the last"
+    );
     assert_eq!(
         (made, watched),
         (OTHER_THREADS_BOXES, 0),
