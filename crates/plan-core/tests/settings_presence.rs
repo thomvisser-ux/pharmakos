@@ -26,11 +26,9 @@ use pharmakos_plan_core::edit::set_value_text;
 use pharmakos_plan_core::{
     PlanContext, Rendering, canonicalise_text, decode_jsonc, patch_text, render,
 };
-use pharmakos_proto::gp::v1::{
-    InterfaceRow, MandateSettings, Playbook, interface_row, mandate_settings, step,
-};
+use pharmakos_proto::gp::v1::{MandateSettings, Playbook, interface_row, mandate_settings, step};
 use pharmakos_sim::hash::plan_fingerprint_of;
-use pharmakos_sim::interpreter::{Action, Plan, Row};
+use pharmakos_sim::interpreter::{Action, Plan, PlanError, Row};
 use pharmakos_sim::math::random::{Stream, StreamRng};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::Snapshot;
@@ -82,26 +80,6 @@ fn playbook(settings: &str) -> String {
 }}
 "#
     )
-}
-
-/// The first row of the first step.
-fn first_row(playbook: &Playbook) -> &InterfaceRow {
-    let step = playbook
-        .declarative
-        .as_ref()
-        .and_then(|declarative| declarative.route.first())
-        .expect("a step");
-    match step.kind.as_ref() {
-        Some(step::Kind::Interface(visit)) => visit.rows.first().expect("a row"),
-        other => panic!("an interface step: {other:?}"),
-    }
-}
-
-fn settings_of(playbook: &Playbook) -> &MandateSettings {
-    match first_row(playbook).row.as_ref() {
-        Some(interface_row::Row::SetMandateSettings(settings)) => settings,
-        other => panic!("a settings row: {other:?}"),
-    }
 }
 
 /// Each of the seven as a written 0 or a set clear, with the arm it lives in
@@ -261,7 +239,7 @@ fn a_typed_zero_or_a_composed_clear_writes_the_present_value() {
 
 /// What the sim's compile reads from one settings row: the three numbers and
 /// whether each list is left, replaced or emptied.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 struct Read {
     scouts: Option<u8>,
     depth: Option<u32>,
@@ -269,14 +247,38 @@ struct Read {
     lists: [Option<usize>; 4],
 }
 
-fn compiled(text: &str) -> Read {
+/// The first step of the route, or of the first rule's body when the route
+/// is only a hold.
+fn first_step(plan: &Plan) -> &Action {
+    match plan.route().first().map(|step| &step.action) {
+        Some(action @ Action::Interface { .. }) => action,
+        _ => plan
+            .handlers()
+            .first()
+            .and_then(|rule| rule.body.first())
+            .map(|step| &step.action)
+            .expect("a rule's step"),
+    }
+}
+
+/// What the compile reads from the case's one row, or its refusal.
+fn compiled(text: &str) -> Result<Read, PlanError> {
     let decoded = decode_jsonc(text).expect("decodes");
-    let plan = Plan::compile(decoded.decoded().message(), &rules()).expect("compiles");
-    let Some(Action::Interface { rows, .. }) = plan.route().first().map(|step| &step.action) else {
+    let plan = Plan::compile(decoded.decoded().message(), &rules())?;
+    let Action::Interface { rows, .. } = first_step(&plan) else {
         panic!("an interface step");
     };
-    match rows.first() {
-        Some(Row::Settings {
+    let row = match rows.first() {
+        Some(Row::Mandate { settings, .. }) => match settings.as_deref() {
+            Some(row) => row,
+            // A switch whose settings write nothing reads nothing.
+            None => return Ok(Read::default()),
+        },
+        Some(row) => row,
+        None => panic!("a row"),
+    };
+    match row {
+        Row::Settings {
             protected,
             probes,
             scouts,
@@ -284,7 +286,7 @@ fn compiled(text: &str) -> Read {
             defend,
             attack,
             ..
-        }) => Read {
+        } => Ok(Read {
             scouts: *scouts,
             depth: mine.as_ref().and_then(|edit| edit.dig_max_depth),
             pillars: mine.as_ref().and_then(|edit| edit.pillar_spacing),
@@ -298,13 +300,21 @@ fn compiled(text: &str) -> Read {
                     .as_ref()
                     .and_then(|edit| edit.avoid.as_ref().map(Vec::len)),
             ],
-        },
+        }),
         other => panic!("a settings row: {other:?}"),
     }
 }
 
-/// A seeded generator of `set_mandate_settings` rows and what the compile
-/// must read from each.
+/// How a generated row writes a list.
+enum Written {
+    Left,
+    Clear,
+    ClearBesideEntries,
+    Entries(usize),
+}
+
+/// A seeded generator of settings rows, edits and switches, in the route or
+/// in a rule's body, and what the compile must read from each or refuse.
 struct Rows {
     rng: StreamRng,
 }
@@ -327,43 +337,54 @@ impl Rows {
         Some(value)
     }
 
-    /// A list: left out, cleared, or written with one or two entries; the
-    /// count the compile must read (`Some(0)` for a clear).
-    fn list(&mut self, members: &mut Vec<String>, name: &str) -> Option<usize> {
+    /// A list: left out, cleared, cleared beside entries, or written with one
+    /// or two entries.
+    fn list(&mut self, members: &mut Vec<String>, name: &str) -> Written {
         let entry = if name == "protect" {
             r#"{"my_commander":{}}"#
         } else {
             r#"{"min":{"x":1,"y":1,"z":1},"max":{"x":2,"y":2,"z":2}}"#
         };
-        match self.draw(3) {
-            0 => None,
+        match self.draw(4) {
+            0 => Written::Left,
             1 => {
                 members.push(format!(r#""clear_{name}": true"#));
-                Some(0)
+                Written::Clear
+            }
+            2 => {
+                members.push(format!(r#""clear_{name}": true, "{name}": [{entry}]"#));
+                Written::ClearBesideEntries
             }
             count => {
-                let entries = vec![entry; usize::try_from(count - 1).expect("small")];
+                let entries = vec![entry; usize::try_from(count - 2).expect("small")];
                 members.push(format!(r#""{name}": [{}]"#, entries.join(",")));
-                Some(entries.len())
+                Written::Entries(entries.len())
             }
         }
     }
 
-    /// One row's text and what the compile must read from it.
-    fn next(&mut self) -> (String, Read) {
+    /// One case's text and what the compile must answer: what it reads, or
+    /// the list a refused clear names.
+    fn next(&mut self) -> (String, Result<Read, &'static str>) {
+        let switch = self.draw(1) == 1;
+        let in_rule = self.draw(1) == 1;
         let mut members: Vec<String> = Vec::new();
-        let mut expected = Read {
-            scouts: None,
-            depth: None,
-            pillars: None,
-            lists: [None; 4],
-        };
+        let mut expected = Read::default();
+        let mut refused: Option<&'static str> = None;
+        let mut take =
+            |written: Written, list: &'static str, slot: &mut Option<usize>| match written {
+                Written::Left => {}
+                Written::Entries(count) => *slot = Some(count),
+                Written::Clear if !switch => *slot = Some(0),
+                Written::Clear | Written::ClearBesideEntries => refused = Some(list),
+            };
         let name = match self.draw(4) {
             0 => {
                 expected.scouts = self
                     .number(&mut members, "scout_count")
                     .map(|n| u8::try_from(n).expect("small"));
-                expected.lists[1] = self.list(&mut members, "probe_areas");
+                let written = self.list(&mut members, "probe_areas");
+                take(written, "probe_areas", &mut expected.lists[1]);
                 "survey"
             }
             1 => {
@@ -372,29 +393,93 @@ impl Rows {
                 "mine"
             }
             2 => {
-                expected.lists[0] = self.list(&mut members, "protected_areas");
+                let written = self.list(&mut members, "protected_areas");
+                take(written, "protected_areas", &mut expected.lists[0]);
                 "build"
             }
             3 => {
-                expected.lists[2] = self.list(&mut members, "protect");
+                let written = self.list(&mut members, "protect");
+                take(written, "protect", &mut expected.lists[2]);
                 "defend"
             }
             _ => {
-                expected.lists[3] = self.list(&mut members, "avoid_areas");
+                let written = self.list(&mut members, "avoid_areas");
+                take(written, "avoid_areas", &mut expected.lists[3]);
                 "attack"
             }
         };
-        let text = playbook(&format!(
-            r#""roe": "HOLD_FIRE", "{name}": {{{}}}"#,
+        let row = if switch {
+            "set_mandate"
+        } else {
+            "set_mandate_settings"
+        };
+        let settings = format!(
+            r#"{{"roe": "HOLD_FIRE", "{name}": {{{}}}}}"#,
             members.join(", ")
-        ));
-        (text, expected)
+        );
+        let answer = match refused {
+            Some(list) => Err(list),
+            None => Ok(expected),
+        };
+        (case_playbook(row, &settings, in_rule), answer)
     }
 }
 
-/// The three numbers as the decoded message holds them.
+/// A playbook whose one visit to the core writes `settings` in a `row`, in
+/// the route or in a rule's body.
+fn case_playbook(row: &str, settings: &str, in_rule: bool) -> String {
+    let visit = format!(
+        r#"{{"label": "visit", "interface": {{"beacon": {{"beacon_id": "b_00"}}, "rows": [{{"{row}": {settings}}}]}}, "timeout_ms": 120000}}"#
+    );
+    let (route, handlers) = if in_rule {
+        (
+            r#"{"label": "wait", "hold": {"ms": 1000}}"#.to_owned(),
+            format!(
+                r#", "handlers": [{{"id": "h0", "when": {{"cmdr_hp_pct": {{"cmp": "LE", "pct": 40}}}}, "body": [{visit}], "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 2}}]"#
+            ),
+        )
+    } else {
+        (visit, String::new())
+    };
+    format!(
+        r#"{{
+  "schema_version": {{"major": 1}},
+  "meta": {{"title": "presence", "author_kind": "HUMAN"}},
+  "kind": "PLAYBOOK",
+  "declarative": {{"route": [{route}]{handlers}}},
+  "on_death": {{"on_respawn": "CONTINUE", "max_deaths_before_fallback": 3}},
+  "fallback": {{"hold": {{"at": {{"safest": {{}}}}}}}}
+}}
+"#
+    )
+}
+
+/// The three numbers as the decoded message holds them, wherever the case's
+/// one row stands.
 fn numbers_of(playbook: &Playbook) -> (Option<u32>, Option<u32>, Option<u32>) {
-    match settings_of(playbook).mandate.as_ref() {
+    let declarative = playbook.declarative.as_ref().expect("a declarative body");
+    let step = declarative
+        .route
+        .iter()
+        .chain(
+            declarative
+                .handlers
+                .iter()
+                .flat_map(|rule| rule.body.iter()),
+        )
+        .find(|step| matches!(step.kind, Some(step::Kind::Interface(_))))
+        .expect("an interface step");
+    let Some(step::Kind::Interface(visit)) = step.kind.as_ref() else {
+        panic!("an interface step");
+    };
+    let settings: &MandateSettings = match visit.rows.first().and_then(|row| row.row.as_ref()) {
+        Some(
+            interface_row::Row::SetMandateSettings(settings)
+            | interface_row::Row::SetMandate(settings),
+        ) => settings,
+        other => panic!("a settings row: {other:?}"),
+    };
+    match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Survey(survey)) => (survey.scout_count, None, None),
         Some(mandate_settings::Mandate::Mine(mine)) => {
             (None, mine.dig_max_depth, mine.pillar_spacing)
@@ -403,33 +488,45 @@ fn numbers_of(playbook: &Playbook) -> (Option<u32>, Option<u32>, Option<u32>) {
     }
 }
 
-/// The property: over seeded edit rows, a field present in the text is
-/// present, with its value, after the codec, the canonical form and the
-/// sim's compile; a field left out is absent at every stage; a set clear is
-/// an emptied list.
+/// The property: over seeded rows (edits and switches, in the route and in a
+/// rule), a field present in the text is present, with its value, after the
+/// codec, the canonical form and the sim's compile; a field left out is
+/// absent at every stage; a set clear is an emptied list in an edit; and a
+/// clear the rules refuse (beside entries, or in a switch) is refused by the
+/// compile as `ClearRefused` naming its list, before and after the canonical
+/// form.
 #[test]
 fn presence_in_is_presence_out_through_the_codec_the_canonical_form_and_the_compile() {
     let mut rows = Rows {
         rng: StreamRng::new(0x0184_0010, Stream::Map, 0, 0, 0),
     };
-    for case in 0..400 {
+    let mut refusals = 0_u32;
+    for case in 0..600 {
         let (text, expected) = rows.next();
         let canonical = canonicalise_text(&text).expect("canonicalises");
-        assert_eq!(
-            numbers_of(&canonical.playbook),
-            (
-                expected.scouts.map(u32::from),
-                expected.depth,
-                expected.pillars
+        let answer = |text: &str| match compiled(text) {
+            Ok(read) => Ok(read),
+            Err(PlanError::ClearRefused { list, .. }) => Err(list),
+            Err(other) => panic!("case {case}: an unexpected refusal {other:?}\n{text}"),
+        };
+        match &expected {
+            Ok(read) => assert_eq!(
+                numbers_of(&canonical.playbook),
+                (read.scouts.map(u32::from), read.depth, read.pillars),
+                "case {case}: {text}"
             ),
-            "case {case}: {text}"
-        );
+            Err(_) => refusals += 1,
+        }
         assert_eq!(
-            compiled(&canonical.text),
+            answer(&canonical.text),
             expected,
             "case {case}: {}",
             canonical.text
         );
-        assert_eq!(compiled(&text), expected, "case {case}: {text}");
+        assert_eq!(answer(&text), expected, "case {case}: {text}");
     }
+    assert!(
+        refusals > 50,
+        "the generator draws refused clears: {refusals}"
+    );
 }
