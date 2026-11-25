@@ -2761,3 +2761,29 @@ fn a_failure_beside_the_audit_logs_own_is_named_not_cited() {
     audit_read_only(&host.folder, false);
     std::fs::remove_dir_all(&sealed).expect("the blocker removed");
 }
+
+/// The upgrade that CROSSES the stop is told the truth (fix pass 4, item 1;
+/// review 4's probe R4B): with the audit log read-only, the upgrade's own
+/// audit line cannot be appended, so its flush stops the host. This match's
+/// own token is answered 503 with the stop's words, never the 401 that says
+/// the token is not this match's.
+#[test]
+fn the_upgrade_that_crosses_the_stop_is_told_why() {
+    const MATCH_ID: &str = "m-opsave-durable-crossing";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 2)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    audit_read_only(&host.folder, true);
+    let answer = upgrade_answer(host.announce.port, &host.announce.admin_token);
+    let returned = host.returned_by_itself().expect_err("the host stopped");
+    assert!(
+        answer.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{answer}"
+    );
+    assert!(
+        answer.contains(returned.message()),
+        "the stop's words: {answer}"
+    );
+    audit_read_only(&host.folder, false);
+}

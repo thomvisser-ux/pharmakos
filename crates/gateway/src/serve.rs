@@ -701,7 +701,7 @@ impl Announce {
 /// One piece of work for the thread that owns the surface.
 enum Job {
     /// Authenticate a connection's token, and record the upgrade.
-    Open { token: Token, reply: Sender<bool> },
+    Open { token: Token, reply: Sender<Opened> },
     /// Answer one JSON-RPC text message.
     Call {
         token: Token,
@@ -736,6 +736,12 @@ struct HostStopped {
     tokens: crate::token::TokenStore,
     match_id: String,
     tick: pharmakos_sim::math::quantity::Tick,
+}
+
+/// What a stopped host says to an upgrade with this match's token: the
+/// stop's own words, the body of its 503 ([`Opened::Stopped`]).
+fn stopped_words(error: &Error) -> String {
+    format!("this host has stopped: {}", error.message())
 }
 
 /// The stop, once: set by the surface thread on its way out, and read by
@@ -793,13 +799,9 @@ impl Door for RemoteDoor {
             reply,
         };
         if self.jobs.send(job).is_ok()
-            && let Ok(granted) = granted.recv()
+            && let Ok(opened) = granted.recv()
         {
-            return if granted {
-                Opened::Granted
-            } else {
-                Opened::Refused
-            };
+            return opened;
         }
         match self.stopped.get() {
             Some(stopped)
@@ -808,10 +810,7 @@ impl Door for RemoteDoor {
                     .authenticate(token, &stopped.match_id, stopped.tick)
                     .is_ok() =>
             {
-                Opened::Stopped(format!(
-                    "this host has stopped: {}",
-                    stopped.error.message()
-                ))
+                Opened::Stopped(stopped_words(&stopped.error))
             }
             Some(_) | None => Opened::Refused,
         }
@@ -1962,7 +1961,10 @@ impl Writer {
 /// The answer a job is owed, held until what the job left pending is on disk.
 enum Owed {
     /// A connection's upgrade.
-    Open { reply: Sender<bool>, granted: bool },
+    Open {
+        reply: Sender<Opened>,
+        granted: bool,
+    },
     /// A call's answer, and the call's id, for the error that replaces the
     /// answer when the disk does not take what the call left.
     Call {
@@ -1978,8 +1980,16 @@ impl Owed {
         // A connection that has gone away is owed nothing: its reply channel
         // is closed, and the send's error says only that.
         match (self, failed) {
+            // A granted upgrade whose own flush failed crosses the stop: it is
+            // told the stop's words (a 503), never refused as if its token
+            // were not this match's (review 4's probe R4B).
             (Owed::Open { reply, granted }, failed) => {
-                let _gone = reply.send(granted && failed.is_none());
+                let opened = match (granted, failed) {
+                    (false, _) => Opened::Refused,
+                    (true, None) => Opened::Granted,
+                    (true, Some(error)) => Opened::Stopped(stopped_words(error)),
+                };
+                let _gone = reply.send(opened);
             }
             (
                 Owed::Call {
