@@ -1291,6 +1291,8 @@ mod tick {
         allocated: u64,
         committed: u32,
         failed: Vec<pharmakos_sim::interpreter::StepFailure>,
+        /// Every counted tick's hash.
+        chain: Vec<u64>,
     }
 
     /// Step `runner` [`LIST_LEAD`] ticks uncounted, then count up to
@@ -1312,12 +1314,14 @@ mod tick {
         }
         let mut committed: u32 = 0;
         let mut failed = Vec::with_capacity(8);
+        let mut chain = Vec::with_capacity(usize::try_from(LIST_TICKS).expect("a count"));
         let before = allocations();
         for _ in 0..LIST_TICKS {
-            runner
+            let report = runner
                 .step()
                 .unwrap()
                 .expect("the segment outlasts this test");
+            chain.push(report.hash);
             for event in runner.events() {
                 if event.seat != seat {
                     continue;
@@ -1342,6 +1346,7 @@ mod tick {
             allocated: allocations() - before,
             committed,
             failed,
+            chain,
         }
     }
 
@@ -1480,6 +1485,10 @@ mod tick {
     /// The avoid areas seat 0's playbook writes on its core, `b_00`.
     const AVOID_WRITTEN: usize = 4;
 
+    // The save [`avoid_runner`] starts from holds more than half the room, so
+    // a restored column's capacity passes the room (P3 of the review).
+    const _: () = assert!(2 * (AVOID_ROOM - AVOID_WRITTEN) > AVOID_ROOM);
+
     /// A [`PROTECT_SEATS`]-seat match whose Attack table holds its room of
     /// avoid areas less [`AVOID_WRITTEN`]: seat 1's core on the Attack writ
     /// with the rest, seat 0's core and a second beacon of its, `b_01`, on
@@ -1532,7 +1541,7 @@ mod tick {
             (
                 "b_01".to_owned(),
                 vec![format!(
-                    "{{\"set_mandate_settings\":{{\"attack\":{{\"avoid_areas\":[{}]}}}}}}",
+                    "{{\"set_mandate_settings\":{{\"roe\":\"HOLD_FIRE\",\"attack\":{{\"avoid_areas\":[{}]}}}}}}",
                     area(-3)
                 )],
             ),
@@ -1544,12 +1553,30 @@ mod tick {
     /// would pass the Attack table's stated room writes nothing and fails its
     /// step** `targets_unwritten`, as a Build list past its room does (lane
     /// `simroom`): [`avoid_runner`]'s first visit fills the room exactly and
-    /// commits; its second would pass it by one area, and fails, the table
-    /// left as it was; and neither allocates. A room one area short fails the
-    /// first commit instead.
+    /// commits; its second would pass it by one area, and fails: nothing of
+    /// its row is written, the `roe` it carries beside the list included
+    /// (P2 of the review: every check before the first write); and neither
+    /// allocates. A room one area short fails the first commit instead.
+    /// Seat 0's `b_01`'s Common settings: what the refused row's `roe` would
+    /// have written.
+    fn b_01_common(runner: &Runner) -> pharmakos_sim::tables::Common {
+        let row = runner
+            .world()
+            .beacons()
+            .row_of_ordinal(pharmakos_sim::tables::SeatId::new(0), 1)
+            .expect("b_01");
+        *runner
+            .world()
+            .beacons()
+            .commons()
+            .get(row)
+            .expect("b_01's settings")
+    }
+
     #[test]
     fn an_avoid_list_commit_allocates_nothing_and_past_the_room_is_refused() {
         let mut runner = avoid_runner();
+        let common_before = b_01_common(&runner);
         let window = list_window(&mut runner, 2);
         assert_eq!(
             (window.committed, window.failed.as_slice()),
@@ -1565,10 +1592,54 @@ mod tick {
             "the table holds its room, and the refused list wrote nothing"
         );
         assert_eq!(
+            b_01_common(&runner),
+            common_before,
+            "the refused row wrote nothing: not its avoid list, and not the `roe` beside it"
+        );
+        assert_eq!(
             window.allocated, 0,
             "the ticks of a commit at the avoid-area room and a refused one past it allocated {} \
              times",
             window.allocated
+        );
+    }
+
+    /// **The avoid refusal decides on the stated room, never on capacity**
+    /// (P3 of `simroom`'s review; #234's rule: capacity is never state). The
+    /// same Push as [`an_avoid_list_commit_allocates_nothing_and_past_the_room_is_refused`],
+    /// restored from its save at the Push's first tick: the file holds more
+    /// than half the room (668 of 672 areas), so the restore's
+    /// `reserve_total` grows the column to about twice its length, past the
+    /// room. The restored run refuses the same row, commits the same one,
+    /// allocates nothing, and its chain is the fresh run's, tick for tick.
+    #[test]
+    fn an_avoid_refusal_decides_on_the_stated_room_and_never_on_capacity() {
+        let mut fresh = avoid_runner();
+        let saved = fresh.capture().expect("a world between ticks");
+        let bytes = saved.to_bytes().expect("the save encodes");
+        let snapshot =
+            pharmakos_sim::snapshot::Snapshot::from_bytes(&bytes).expect("the save decodes");
+        let fresh_window = list_window(&mut fresh, 2);
+        let mut restored = avoid_runner();
+        restored.restore(&snapshot).expect("the save restores");
+        let restored_window = list_window(&mut restored, 2);
+        assert_eq!(
+            (
+                restored_window.committed,
+                restored_window.failed.as_slice(),
+                restored.world().attack().avoid().len(),
+            ),
+            (
+                fresh_window.committed,
+                fresh_window.failed.as_slice(),
+                fresh.world().attack().avoid().len(),
+            ),
+            "the restored world commits and refuses as the fresh one does"
+        );
+        assert_eq!(restored_window.allocated, 0);
+        assert_eq!(
+            restored_window.chain, fresh_window.chain,
+            "the restored run's chain is the fresh run's"
         );
     }
 

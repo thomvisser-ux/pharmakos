@@ -3590,6 +3590,21 @@ impl World {
         })
     }
 
+    /// File a planted charge directly, as a carrier's plant files it, refused
+    /// past the charge table's stated room as a plant is.
+    ///
+    /// Fixture API.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::attack::PlantRefused::Full`], filing nothing.
+    pub fn plant_charge_directly(
+        &mut self,
+        charge: crate::attack::Charge,
+    ) -> Result<(), crate::attack::PlantRefused> {
+        self.attack.plant(charge)
+    }
+
     /// Write a beacon's writ directly, clearing its settings as a visit would.
     ///
     /// Fixture API.
@@ -7806,6 +7821,49 @@ mod tests {
             match_settings: MatchSettings::default(),
         })
         .unwrap_or_else(|error| panic!("the committed table describes a world: {error}"))
+    }
+
+    /// **A dead beacon counts toward its seat's share until its death
+    /// settles** (lane `simroom`, P1 of its review): the protect list's room
+    /// (`protect_room_of`) rests on a seat never holding more than its share
+    /// of rows, dead ones included, since a protect entry naming a dead beacon
+    /// is forgotten only when the death settles. A seat at its full share
+    /// whose beacon has died, its death not yet settled, cannot place another:
+    /// `ShareFull`.
+    #[test]
+    fn a_dead_beacon_holds_its_place_in_the_share_until_its_death_settles() {
+        use crate::seams::MandateKind;
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let share = super::room_per_seat(super::BEACON_TABLE_ROOM, world.seats.len());
+        let at = world.standing_point([200, 200, 0]);
+        let mut placed = Vec::new();
+        for _ in 0..share {
+            placed.push(
+                world
+                    .place_beacon(seat, at, MandateKind::Build)
+                    .unwrap_or_else(|error| panic!("a beacon inside the share: {error:?}")),
+            );
+        }
+        assert_eq!(
+            world.place_beacon(seat, at, MandateKind::Build),
+            Err(super::PlaceRefused::ShareFull),
+            "the share is full"
+        );
+        let first = *placed.first().unwrap_or_else(|| panic!("a placed beacon"));
+        let row = world
+            .beacons
+            .row_of(first)
+            .unwrap_or_else(|_| panic!("a live row"))
+            .index();
+        if let Some(hp) = world.beacons.hit_points_mut().get_mut(row) {
+            *hp = crate::math::quantity::Hp::new(0);
+        }
+        assert_eq!(
+            world.place_beacon(seat, at, MandateKind::Build),
+            Err(super::PlaceRefused::ShareFull),
+            "the dead beacon, its death unsettled, still holds its place"
+        );
     }
 
     /// The beacons [`beacon_churn`] places and destroys, tick by tick: what a
