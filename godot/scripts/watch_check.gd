@@ -2177,8 +2177,10 @@ func _playtest_bundle() -> bool:
 	var manifest: Dictionary = JSON.parse_string(texts["manifest.json"])
 	var metrics: Dictionary = JSON.parse_string(texts["metrics.json"])
 	var survey: Dictionary = JSON.parse_string(texts["survey.json"])
-	if int(manifest.get("bundle_format", 0)) != 1 or String(manifest.get("preset", "")) != CHECK_PRESET:
-		_failures.append("the manifest is not format 1 of the %s match: %s" % [CHECK_PRESET, manifest])
+	# One match, the one under way: its preset as the gateway named it, its ordinal a count.
+	var matches: Array = manifest.get("matches", [])
+	if int(manifest.get("bundle_format", 0)) != 1 or matches.size() != 1 or String(matches[0].get("preset", "")) != CHECK_PRESET or int(matches[0].get("match", 0)) != 1 or String(matches[0].get("ended", "")) != "under_way":
+		_failures.append("the manifest is not format 1 of one %s match under way: %s" % [CHECK_PRESET, manifest])
 	var pushes: Array = metrics.get("push_time", [])
 	var lulls: Array = metrics.get("lull_time", [])
 	if int(metrics.get("pushes", 0)) != 1 or int(metrics.get("skipped_pushes", -1)) != 0 or pushes.size() != 1:
