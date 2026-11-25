@@ -406,7 +406,7 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// one code and closes with one `I0007` per code it left diagnostics out of,
 /// and a decode diagnostic's pointer is bounded ([`MAX_POINTER_BYTES`]), so
 /// its reports are not comparable with `0.1.0-s3.6`'s. `0.1.0-s3.8` from S3's
-/// `presence7` (decisions-log item 184 (10)): `scout_count`, `dig_max_depth`
+/// `presence7` (decisions-log item 184 (3)): `scout_count`, `dig_max_depth`
 /// and `pillar_spacing` carry presence and four lists gain a `clear_*` flag,
 /// so this build prices a written 0 and a set clear as one field each, raises
 /// `E0515` for a misplaced clear, and gives `pillar_spacing`'s `I0003` its

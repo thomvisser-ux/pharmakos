@@ -466,7 +466,7 @@ raised. As with every bump, a save written under `0.1.0-s3.6` does not resume un
 one of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.7` to `0.1.0-s3.8`
 (input 4), because `SurveySettings.scout_count`, `MineSettings.dig_max_depth` and
 `MineSettings.pillar_spacing` carry presence and four lists gain a `clear_*` flag
-(decisions-log item 184 (10)): this build prices a written 0 and a set clear as one
+(decisions-log item 184 (3)): this build prices a written 0 and a set clear as one
 field each and raises `E0515` for a clear beside entries of its own list or in
 settings that start from nothing. Beside the version, the lane's earlier commits moved
 three things, each named: the catalogue gains `E0515`; two new cases,
