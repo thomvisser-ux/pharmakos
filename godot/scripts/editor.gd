@@ -1485,10 +1485,10 @@ func picker_rows() -> Array:
 
 ## The Visit & change submenu for the beacon the map menu is open for: the priority rows (S1's),
 ## then, from the bridge's `beacon_detail` and `vocabulary`, one row per setting (its title and
-## value now, its editor by its shape), Switch mandate, Add and Remove a build target, and Queue a
-## structure, every entry as sent and locked ones greyed with their reason. Each row the player
-## picks is one route step with one row, composed by the bridge. Redrawn only when what it draws
-## from changed.
+## value now, its editor by its shape), Switch mandate, Add and Remove a build target, each list
+## its writ holds with its clear (S3's `edlists`), and Queue a structure, every entry as sent
+## and locked ones greyed with their reason. Each row the player picks is one route step with one
+## row, composed by the bridge. Redrawn only when what it draws from changed.
 func _fill_visit_menu(state: Dictionary) -> void:
 	if _visit_beacon == "":
 		return
@@ -1531,7 +1531,39 @@ func _fill_visit_menu(state: Dictionary) -> void:
 		# The target in the gateway's own words (`build_target_lines`), never its anchor's JSON.
 		remove.add_item(Strings.text("menu_target_row", {"line": targets[which].get("line", "")}), which)
 	remove.id_pressed.connect(func(which: int) -> void: _on_visit_row("remove_target", which))
+	var lists: Array = detail.get("lists", [])
+	for which in lists.size():
+		_list_submenu(which, lists[which])
 	_visit_menu.add_item(Strings.text("menu_queue"), ITEM_LIST_QUEUE)
+
+
+## The id of a list submenu's clear item; its entry lines take the ids after it.
+const LIST_CLEAR_ID := 0
+
+
+## One of the beacon's lists (S3's `edlists`), as a submenu titled with the list's name: each
+## entry line as the gateway sent it, greyed; the gateway's word for an empty list when it sent
+## one; and the clear in the gateway's words when it sent one (it sends the clear only beside
+## entries, and the empty word only with none: fix pass 1, W1), which is one route step with one
+## row, composed by the bridge. The client tests nothing about the list: it draws what was sent.
+func _list_submenu(which: int, list: Dictionary) -> void:
+	var submenu := _visit_submenu(Strings.text("menu_list", {"title": list.get("title", "")}))
+	var lines: PackedStringArray = list.get("lines", PackedStringArray())
+	for line in lines.size():
+		submenu.add_item(Strings.text("menu_list_line", {"line": lines[line]}), LIST_CLEAR_ID + 1 + line)
+		submenu.set_item_disabled(submenu.item_count - 1, true)
+	var empty := String(list.get("empty_title", ""))
+	if empty != "":
+		submenu.add_item(Strings.text("menu_list_empty", {"empty": empty}), LIST_CLEAR_ID + 1 + lines.size())
+		submenu.set_item_disabled(submenu.item_count - 1, true)
+	var clear := String(list.get("clear_title", ""))
+	if clear != "":
+		submenu.add_separator()
+		submenu.add_item(Strings.text("menu_list_clear", {"clear": clear}), LIST_CLEAR_ID)
+		submenu.id_pressed.connect(func(id: int) -> void:
+			if id == LIST_CLEAR_ID:
+				_on_visit_row("clear_list", which)
+		)
 
 
 ## A submenu of the Visit & change menu, titled `title`.

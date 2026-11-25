@@ -2024,6 +2024,19 @@ func _planning_wire() -> bool:
 		var said := Strings.text("menu_setting", {"title": setting.get("title", ""), "value": editor.setting_value_text(setting)})
 		if not drawn.has(said) or "\"" in said:
 			_failures.append("the planning wire: the setting `%s` is not drawn in the gateway's words: %s" % [said, drawn])
+	# The core's list (S3's `edlists`), as the real gateway tells it: the opening core holds none,
+	# so the gateway sends its word for an empty list and no clear (fix pass 1, W1); the panel
+	# draws the word and no clear, and a clear asked for anyway is refused before anything is sent.
+	var lists: Array = _editor().get("beacon_detail", {}).get("lists", [])
+	if lists.size() != 1 or not PackedStringArray(lists[0].get("lines", PackedStringArray())).is_empty() or String(lists[0].get("empty_title", "")) == "" or String(lists[0].get("clear_title", "")) != "":
+		_failures.append("the planning wire: the core's detail holds %s, not its writ's one empty list with the empty word and no clear" % [lists])
+	else:
+		var empty := Strings.text("menu_list_empty", {"empty": lists[0].get("empty_title", "")})
+		if not drawn.has(empty):
+			_failures.append("the planning wire: the core's empty list draws %s, not the gateway's `%s`" % [drawn, empty])
+		var asked := _count(_editor(), "revision")
+		if vista.bridge.editor_visit_row(core, "clear_list", 0) or _editor().get("busy", false) or _count(_editor(), "revision") != asked:
+			_failures.append("the planning wire: a clear of the core's empty list was sent")
 	var blueprints: Array = _editor().get("vocabulary", {}).get("blueprints", [])
 	var wall := -1
 	for index in blueprints.size():
@@ -2068,7 +2081,7 @@ func _planning_wire() -> bool:
 	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("accepted", false) and not s.get("pending", true) and vista.bridge.editor_sealed_bytes() == original, "the planning wire: the same text submitted again was not the same seal"):
 		return false
 	print("[watch-check] the planning wire: the same text submitted twice, accepted twice, the same seal")
-	print("[watch-check] the planning wire: a duration typed in seconds landed, titles drawn, a rule added, filled with a group and removed, a wall's box composed, the Queue's own list, all undone")
+	print("[watch-check] the planning wire: a duration typed in seconds landed, titles drawn, the core's empty list said and not cleared, a rule added, filled with a group and removed, a wall's box composed, the Queue's own list, all undone")
 	return true
 
 

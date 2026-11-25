@@ -117,6 +117,14 @@
         "value_text": ""
       }
     ],
+    "lists": [
+      {
+        "pointer": "/build/protected_areas",
+        "title": "Protected areas",
+        "clear_pointer": "/build/clear_protected_areas",
+        "empty_title": "none"
+      }
+    ],
     "_status": {
       "phase": "lull",
       "phase_remaining_ms": 599950,

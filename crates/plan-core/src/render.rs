@@ -976,17 +976,17 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
         Some(step::Kind::Interface(visit)) => {
             let visit_at = at(here, "interface");
             let rows_at = at(&visit_at, "rows");
-            let rows: Vec<Text> = visit
+            let rows: Vec<(Text, bool)> = visit
                 .rows
                 .iter()
                 .enumerate()
-                .map(|(index, row)| row_sentence(row, &at(&rows_at, index)))
+                .map(|(index, row)| row_item(row, &at(&rows_at, index)))
                 .collect();
             let spent = interface::interface_ms(visit, ctx.rates).total;
             let what = if rows.is_empty() {
                 Text::default()
             } else {
-                cat!(" and ", join(rows))
+                cat!(" and ", join_items(rows))
             };
             cat!(
                 s::STEP_INTERFACE,
@@ -1019,24 +1019,7 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
                 sentence.push(cat!(", ", s::TAGGED, " ", join(tags)));
             }
             if let Some(initial) = place.initial.as_ref() {
-                let initial_at = at(&place_at, "initial");
-                if let Some(settings) = initial.mandate.as_ref() {
-                    sentence.push(cat!(
-                        ", on ",
-                        article(settings),
-                        " ",
-                        writ(settings),
-                        " mandate",
-                        settings_clause(settings, &at(&initial_at, "mandate"), Clause::Whole)
-                    ));
-                }
-                if initial.priority != 0 {
-                    sentence.push(cat!(
-                        ", at ",
-                        priority_chip(initial.priority, at(&initial_at, "priority")),
-                        " Quartermaster priority"
-                    ));
-                }
+                initial_parts(&mut sentence, initial, &at(&place_at, "initial"));
             }
             sentence.push(cat!(" (", wide_duration(spent), " on site)"));
             sentence
@@ -1051,6 +1034,40 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
         }
         Some(step::Kind::Hold(hold)) => hold_body(hold.ms, &at(&at(here, "hold"), "ms")),
         Some(step::Kind::Broadcast(_)) => cat!(s::STEP_BROADCAST),
+    }
+}
+
+/// A new beacon's initial mandate, with its settings clause, and its
+/// Quartermaster priority, after the place step's location and tags.
+/// `initial_at` is the `initial` block's pointer. The priority after a
+/// mandate's settings clause is set off by a semicolon ([`join_items`]'s
+/// rule), so it does not read as one more setting of the mandate.
+fn initial_parts(
+    sentence: &mut Text,
+    initial: &pharmakos_proto::gp::v1::InitialSettings,
+    initial_at: &str,
+) {
+    let mut after_mandate = ", at ";
+    if let Some(settings) = initial.mandate.as_ref() {
+        let clause = settings_clause(settings, &at(initial_at, "mandate"), Clause::Whole);
+        if !clause.words.is_empty() {
+            after_mandate = "; at ";
+        }
+        sentence.push(cat!(
+            ", on ",
+            article(settings),
+            " ",
+            writ(settings),
+            " mandate",
+            clause
+        ));
+    }
+    if initial.priority != 0 {
+        sentence.push(cat!(
+            after_mandate,
+            priority_chip(initial.priority, at(initial_at, "priority")),
+            " Quartermaster priority"
+        ));
     }
 }
 
@@ -1138,22 +1155,38 @@ fn label_chip(label: &str, pointer: String, kind: ReferenceKind) -> Text {
 // Interface rows
 // ---------------------------------------------------------------------------
 
+/// A row of a visit as a list item, and whether it ends in a settings clause
+/// ([`join_items`]).
+fn row_item(row: &InterfaceRow, here: &str) -> (Text, bool) {
+    let (lead, clause) = match row.row.as_ref() {
+        Some(interface_row::Row::SetMandate(settings)) => (
+            cat!(
+                s::ROW_SET_MANDATE,
+                " ",
+                article(settings),
+                " ",
+                writ(settings),
+                " mandate"
+            ),
+            settings_clause(settings, &at(here, "set_mandate"), Clause::Whole),
+        ),
+        Some(interface_row::Row::SetMandateSettings(settings)) => (
+            cat!(s::ROW_SET_SETTINGS),
+            settings_clause(settings, &at(here, "set_mandate_settings"), Clause::Edit),
+        ),
+        _ => return (row_sentence(row, here), false),
+    };
+    let carries = !clause.words.is_empty();
+    (cat!(lead, clause), carries)
+}
+
+/// A row of a visit that carries no settings clause, as a sentence.
 fn row_sentence(row: &InterfaceRow, here: &str) -> Text {
     match row.row.as_ref() {
         None => cat!(s::ROW_NOTHING),
-        Some(interface_row::Row::SetMandate(settings)) => cat!(
-            s::ROW_SET_MANDATE,
-            " ",
-            article(settings),
-            " ",
-            writ(settings),
-            " mandate",
-            settings_clause(settings, &at(here, "set_mandate"), Clause::Whole)
-        ),
-        Some(interface_row::Row::SetMandateSettings(settings)) => cat!(
-            s::ROW_SET_SETTINGS,
-            settings_clause(settings, &at(here, "set_mandate_settings"), Clause::Edit)
-        ),
+        Some(interface_row::Row::SetMandate(_) | interface_row::Row::SetMandateSettings(_)) => {
+            row_item(row, here).0
+        }
         Some(interface_row::Row::SetPriority(value)) => cat!(
             s::ROW_SET_PRIORITY,
             " ",
@@ -1242,6 +1275,129 @@ pub fn target_line(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
     )
 }
 
+/// One of the lists a beacon's mandate holds, which a `set_mandate_settings`
+/// row empties by its clear flag (decisions-log item 184 (3)): its place in
+/// `gp.v1.MandateSettings`, its clear flag's, and its words, for `get_beacon`'s
+/// `lists` (`gp.api.v1.BeaconListRow`; S3's `edlists`). One table, so a list's
+/// pointer, its clear and its words cannot be paired wrongly in two places.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BeaconList {
+    /// A Build beacon's `protected_areas`.
+    ProtectedAreas,
+    /// A Defend beacon's `protect` list.
+    Protect,
+    /// An Attack beacon's `avoid_areas`.
+    AvoidAreas,
+    /// A Survey beacon's `probe_areas`.
+    ProbeAreas,
+}
+
+impl BeaconList {
+    /// Every list, in the writs' field order (Build, Defend, Attack, Survey).
+    pub const ALL: [BeaconList; 4] = [
+        BeaconList::ProtectedAreas,
+        BeaconList::Protect,
+        BeaconList::AvoidAreas,
+        BeaconList::ProbeAreas,
+    ];
+
+    /// The list a beacon of writ `mandate` holds: one for Build, Defend,
+    /// Attack and Survey, none for Mine or a beacon with no writ.
+    #[must_use]
+    pub const fn of(mandate: pharmakos_sim::seams::MandateKind) -> Option<BeaconList> {
+        use pharmakos_sim::seams::MandateKind;
+        match mandate {
+            MandateKind::Build => Some(BeaconList::ProtectedAreas),
+            MandateKind::Defend => Some(BeaconList::Protect),
+            MandateKind::Attack => Some(BeaconList::AvoidAreas),
+            MandateKind::Survey => Some(BeaconList::ProbeAreas),
+            MandateKind::Mine | MandateKind::None => None,
+        }
+    }
+
+    /// The list's RFC 6901 pointer inside `gp.v1.MandateSettings`.
+    #[must_use]
+    pub const fn pointer(self) -> &'static str {
+        match self {
+            BeaconList::ProtectedAreas => "/build/protected_areas",
+            BeaconList::Protect => "/defend/protect",
+            BeaconList::AvoidAreas => "/attack/avoid_areas",
+            BeaconList::ProbeAreas => "/survey/probe_areas",
+        }
+    }
+
+    /// The pointer of the flag that empties the list.
+    #[must_use]
+    pub const fn clear_pointer(self) -> &'static str {
+        match self {
+            BeaconList::ProtectedAreas => "/build/clear_protected_areas",
+            BeaconList::Protect => "/defend/clear_protect",
+            BeaconList::AvoidAreas => "/attack/clear_avoid_areas",
+            BeaconList::ProbeAreas => "/survey/clear_probe_areas",
+        }
+    }
+
+    /// The list's name in the player's words.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            BeaconList::ProtectedAreas => s::LIST_PROTECTED_AREAS,
+            BeaconList::Protect => s::LIST_PROTECT,
+            BeaconList::AvoidAreas => s::LIST_AVOID_AREAS,
+            BeaconList::ProbeAreas => s::LIST_PROBE_AREAS,
+        }
+    }
+
+    /// The clear as an action, in the player's words.
+    #[must_use]
+    pub const fn clear_title(self) -> &'static str {
+        match self {
+            BeaconList::ProtectedAreas => s::LIST_CLEAR_PROTECTED_AREAS,
+            BeaconList::Protect => s::LIST_CLEAR_PROTECT,
+            BeaconList::AvoidAreas => s::LIST_CLEAR_AVOID_AREAS,
+            BeaconList::ProbeAreas => s::LIST_CLEAR_PROBE_AREAS,
+        }
+    }
+}
+
+/// An area entry of a beacon's list as one sentence, by the columns it
+/// covers, both ends inclusive, as the sim holds it: "the ground from column
+/// 30, 40 to column 38, 44". The sim tests an area on the column whatever the
+/// height, and holds no height for it, so the line says none.
+///
+/// **Two facts, not one box said two ways** (S3's `edlists`, fix pass 1, W3):
+/// a wall's box ([`box_words`], "filling the box from voxel 30, 40, 0 to voxel
+/// 38, 40, 7") is the three-dimensional box the author wrote, its heights
+/// part of what is built; an area in a list is ground, which the sim holds as
+/// columns only. Saying an area by voxel corners would claim a height the sim
+/// neither holds nor reads, and saying a wall by columns would drop the
+/// heights it is built to. So each has its own words.
+#[must_use]
+pub fn area_line(min: [i16; 2], max: [i16; 2]) -> String {
+    let [lx, ly] = min;
+    let [hx, hy] = max;
+    format!(
+        "{} {} {lx}, {ly} {} {} {hx}, {hy}",
+        s::LIST_AREA_FROM,
+        s::COLUMN_NOUN,
+        s::LIST_AREA_TO,
+        s::COLUMN_NOUN
+    )
+}
+
+/// A protected beacon of a Defend beacon's protect list as one sentence, by
+/// its name, as the prose names a beacon (`beacon "b_03"`).
+#[must_use]
+pub fn protected_beacon_line(name: &str) -> String {
+    format!("{} \"{}\"", s::BEACON_NOUN, escaped(name))
+}
+
+/// The seat's own commander in a protect list, as the prose says it.
+#[must_use]
+pub fn protected_commander_line() -> String {
+    s::DEFEND_MY_COMMANDER.to_owned()
+}
+
 /// A wall target's box, named as the author wrote it, corner to corner (S2's
 /// plan, task `con4`), after a comma; nothing for a target with no box.
 /// Whether it is legal is the verifier's.
@@ -1257,19 +1413,32 @@ fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
     })
 }
 
-/// What the Common row's `retreat_hp_pct` and a Defend or an Attack arm write,
-/// as a clause after the writ: the threshold first ([`common_parts`]), then
-/// the arm's;
-/// empty when the row writes neither, so S1's prose is unchanged for a row
-/// that writes neither (S2's plan, task `vfy2`). Every field is said, in field
-/// order, as the file wrote it; whether it is legal is the verifier's. `here`
-/// is the `MandateSettings`' pointer.
+/// What a settings block writes, as a clause after the writ: the Common row's
+/// `roe` and `retreat_hp_pct` first ([`common_parts`]), then every field the
+/// writ's arm writes, in field order but its list last, as the file wrote it, each with its
+/// chip; whether it is legal is the verifier's. Empty when the block says
+/// nothing, so the row reads as its writ alone. `here` is the
+/// `MandateSettings`' pointer.
 ///
-/// A Build, Survey or Mine arm says only what decisions-log item 184 (10)
-/// made writable: a written 0 of `scout_count`, `dig_max_depth` or
-/// `pillar_spacing`, and a set `clear_*` flag ([`s1_arm_parts`]); the rest of
-/// those arms is unsaid, as it was. A Defend or Attack arm's clear is said in
-/// its field order.
+/// Every arm is said whole, a field the block leaves out unsaid: a Build arm
+/// its targets (by count), repair threshold, rebuild flag, terraform,
+/// protected areas (by count) and their clear; a Survey arm its scout count,
+/// probe areas (by count) and their clear; a Mine arm its dig depth, flee
+/// flag, seam choice and pillar spacing ([`s1_arm_parts`]); a Defend and an
+/// Attack arm theirs ([`defend_parts`], [`attack_parts`]). A written 0 of a
+/// setting with presence is said in its zero title's words, and a set
+/// `clear_*` flag (decisions-log item 184 (3)) as a boolean chip.
+///
+/// **A writ's list setting is said last in its clause** (S3's `edlists`, fix
+/// pass 1, P1): Build's protected areas, Defend's protect list, Attack's avoid
+/// areas and Survey's probe areas, each with its clear, after every other
+/// field, so nothing follows a list and its own "and" cannot run into the next
+/// setting ("... with a picket of 2 scouts and protecting beacon `"b_00"` and
+/// your commander"). A Build arm's targets, said by their count, keep their
+/// place first. Mine holds no list.
+///
+/// The clause is a list joined by commas and "and", so the list it sits in is
+/// set off by semicolons from then on ([`join_items`]).
 fn settings_clause(settings: &MandateSettings, here: &str, clause: Clause) -> Text {
     let mut parts = common_parts(settings, here, clause);
     parts.extend(match settings.mandate.as_ref() {
@@ -1304,8 +1473,8 @@ enum Clause {
 /// What the Common row writes, beside any writ, in field order: `roe`, then
 /// `retreat_hp_pct` (S3's `zerotitle`, carried from `retreat`).
 ///
-/// * **`roe`**, written, is said with its chip, in the words a menu offers
-///   it in. Omitted, it is said only in a [`Clause::Whole`] row with a writ,
+/// * **`roe`**, written, is said with its chip, as what the beacon is doing
+///   ([`roe_words`]). Omitted, it is said only in a [`Clause::Whole`] row with a writ,
 ///   as the named default the sim reads it as on that writ
 ///   ([`pharmakos_sim::world::Roe::of_setting`]: `FREE_FIRE` on Defend and
 ///   Attack, `RETURN_FIRE` on Build, Mine and Survey; decisions-log items 144
@@ -1322,10 +1491,8 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
     let mut parts = Vec::new();
     if settings.roe != 0 {
         let words = match mandate_settings::Roe::try_from(settings.roe) {
-            Ok(mandate_settings::Roe::HoldFire) => s::CHOICE_HOLD_FIRE,
-            Ok(mandate_settings::Roe::ReturnFire) => s::CHOICE_RETURN_FIRE,
-            Ok(mandate_settings::Roe::FreeFire) => s::CHOICE_FREE_FIRE,
             Ok(mandate_settings::Roe::Unspecified) | Err(_) => s::ROE_UNSET,
+            Ok(roe) => roe_words(roe),
         };
         parts.push(enum_chip(
             words,
@@ -1334,8 +1501,12 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
             "gp.v1.MandateSettings.Roe",
         ));
     } else if clause == Clause::Whole
-        && let Some(words) = settings.mandate.as_ref().and_then(omitted_roe)
+        && let Some(mandate) = settings.mandate.as_ref()
     {
+        // The verifier's reading ([`pharmakos_verifier::omitted_roe`], which
+        // reads the sim's own rule and answers every writ): one rule, read by
+        // the prose and by the `I0003` note alike.
+        let words = roe_words(pharmakos_verifier::omitted_roe(mandate));
         parts.push(cat!(words, " ", s::ROE_BY_DEFAULT));
     }
     if let Some(pct) = settings.retreat_hp_pct {
@@ -1352,19 +1523,24 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
     parts
 }
 
-/// The words for what an omitted `roe` reads as on a beacon of this writ:
-/// the verifier's reading ([`pharmakos_verifier::omitted_roe`], which reads
-/// the sim's own rule), in the words a menu offers that value in. One rule,
-/// read by the prose and by the `I0003` note alike.
-fn omitted_roe(mandate: &mandate_settings::Mandate) -> Option<&'static str> {
-    pharmakos_verifier::omitted_roe(mandate)
-        .and_then(|value| crate::shape::choice_title("gp.v1.MandateSettings.Roe", value))
+/// A `roe` value in the prose's words: a participle, what the beacon is
+/// doing, as every other part of a settings clause is ([`s::ROE_HOLD_FIRE`];
+/// a menu offers the value as an order, [`s::CHOICE_HOLD_FIRE`]).
+/// `Unspecified` is said as a value the file does not name, as a number this
+/// build does not name is.
+fn roe_words(roe: mandate_settings::Roe) -> &'static str {
+    match roe {
+        mandate_settings::Roe::HoldFire => s::ROE_HOLD_FIRE,
+        mandate_settings::Roe::ReturnFire => s::ROE_RETURN_FIRE,
+        mandate_settings::Roe::FreeFire => s::ROE_FREE_FIRE,
+        mandate_settings::Roe::Unspecified => s::ROE_UNSET,
+    }
 }
 
 /// What a Build, Survey or Mine arm writes, every field it writes, in field
 /// order, as the file wrote it, each value with its chip; a field the row
 /// leaves out is not said, as the Defend and Attack arms say none
-/// (decisions-log item 184 (10), fix pass 1). A list is said by its count, as
+/// (decisions-log item 184 (3), fix pass 1). A list is said by its count, as
 /// Attack's avoid areas are, and its clear by a boolean chip; the Build
 /// targets are said by their count, each target being its own row of the
 /// visit (`add_build_target` says one in full).
@@ -1386,7 +1562,7 @@ fn count_part(parts: &mut Vec<Text>, words: &str, count: usize, one: &str, many:
     }
 }
 
-/// A Build arm's fields, in field order.
+/// A Build arm's fields, in field order, its list last (where the field order has it).
 fn build_parts(build: &BuildSettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
     count_part(
@@ -1453,16 +1629,9 @@ fn build_parts(build: &BuildSettings, here: &str) -> Vec<Text> {
     parts
 }
 
-/// A Survey arm's fields, in field order.
+/// A Survey arm's fields, in field order, its list last.
 fn survey_parts(survey: &SurveySettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
-    count_part(
-        &mut parts,
-        s::SURVEY_PROBING,
-        survey.probe_areas.len(),
-        s::AREA_ONE,
-        s::AREA_MANY,
-    );
     if let Some(scouts) = survey.scout_count {
         // At most a beacon's byte column (`E0508`).
         // A 0 is said in its shape's zero title ([`Shape::scout_count`]).
@@ -1475,6 +1644,14 @@ fn survey_parts(survey: &SurveySettings, here: &str) -> Vec<Text> {
             cat!(s::SCOUTS_FIELDING, " ", chip, " ", s::SCOUTS_UNIT)
         });
     }
+    // The list last ([`settings_clause`]'s rule).
+    count_part(
+        &mut parts,
+        s::SURVEY_PROBING,
+        survey.probe_areas.len(),
+        s::AREA_ONE,
+        s::AREA_MANY,
+    );
     clear_part(
         &mut parts,
         survey.clear_probe_areas,
@@ -1536,7 +1713,7 @@ fn mine_parts(mine: &MineSettings, here: &str) -> Vec<Text> {
     parts
 }
 
-/// A set `clear_*` flag (decisions-log item 184 (10)), said with a boolean
+/// A set `clear_*` flag (decisions-log item 184 (3)), said with a boolean
 /// chip at its pointer; nothing for one left out or written `false`.
 fn clear_part(parts: &mut Vec<Text>, clear: bool, words: &str, here: &str, field: &str) {
     if clear {
@@ -1570,27 +1747,9 @@ fn avoid_parts(parts: &mut Vec<Text>, attack: &AttackSettings, here: &str) {
     );
 }
 
-/// A Defend arm's fields, in field order.
+/// A Defend arm's fields, in field order, its list last.
 fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
-    if !defend.protect.is_empty() {
-        let protect_at = at(here, "protect");
-        let assets: Vec<Text> = defend
-            .protect
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| match entry.asset.as_ref() {
-                Some(protected_asset::Asset::Beacon(reference)) => beacon_chip(
-                    Some(reference),
-                    at(&at(&protect_at, index), "beacon"),
-                    &BEACON_ARMS,
-                ),
-                Some(protected_asset::Asset::MyCommander(_)) => cat!(s::DEFEND_MY_COMMANDER),
-                None => cat!(s::DEFEND_NOTHING),
-            })
-            .collect();
-        parts.push(cat!(s::DEFEND_PROTECTING, " ", join(assets)));
-    }
     if defend.engagement_radius_pct != 0 {
         // 1 to 100: a written 0 is `E0101`'s, past 100 the range's.
         parts.push(cat!(
@@ -1619,13 +1778,6 @@ fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
             "gp.v1.DefendSettings.Pursue",
         ));
     }
-    clear_part(
-        &mut parts,
-        defend.clear_protect,
-        s::CLEAR_PROTECT,
-        here,
-        "clear_protect",
-    );
     if let Some(pickets) = defend.picket_scouts {
         // At most a beacon's byte column (`E0508`).
         // A written 0 stands the picket down, said in the words its shape's
@@ -1639,10 +1791,37 @@ fn defend_parts(defend: &DefendSettings, here: &str) -> Vec<Text> {
             cat!(s::DEFEND_PICKET, " ", chip, " ", s::DEFEND_PICKET_UNIT)
         });
     }
+    // The list last ([`settings_clause`]'s rule): its own "and" ends the
+    // clause, so no setting follows it.
+    if !defend.protect.is_empty() {
+        let protect_at = at(here, "protect");
+        let assets: Vec<Text> = defend
+            .protect
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| match entry.asset.as_ref() {
+                Some(protected_asset::Asset::Beacon(reference)) => beacon_chip(
+                    Some(reference),
+                    at(&at(&protect_at, index), "beacon"),
+                    &BEACON_ARMS,
+                ),
+                Some(protected_asset::Asset::MyCommander(_)) => cat!(s::DEFEND_MY_COMMANDER),
+                None => cat!(s::DEFEND_NOTHING),
+            })
+            .collect();
+        parts.push(cat!(s::DEFEND_PROTECTING, " ", join(assets)));
+    }
+    clear_part(
+        &mut parts,
+        defend.clear_protect,
+        s::CLEAR_PROTECT,
+        here,
+        "clear_protect",
+    );
     parts
 }
 
-/// An Attack arm's fields, in field order.
+/// An Attack arm's fields, in field order, its list last.
 fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
     if let Some(target) = attack.target.as_ref() {
@@ -1703,7 +1882,6 @@ fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
             "gp.v1.AttackSettings.AfterAction",
         ));
     }
-    avoid_parts(&mut parts, attack, here);
     if let Some(breach) = attack.breach_allowed {
         let words = if breach {
             s::BREACH_ALLOWED
@@ -1736,6 +1914,8 @@ fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
             noun
         ));
     }
+    // The list last ([`settings_clause`]'s rule).
+    avoid_parts(&mut parts, attack, here);
     parts
 }
 
@@ -2835,6 +3015,34 @@ fn join(parts: Vec<Text>) -> Text {
     }
     let mut out = separated(parts, ", ");
     out.push(" and ");
+    out.push(last);
+    out
+}
+
+/// The items of a list any of which may end in a settings clause (each item's
+/// `bool`): [`join`]ed when none does. A clause is itself a list joined by
+/// commas and "and", so when one does, every item is set off by a semicolon
+/// and the last by "; and", and an item after a clause cannot read as one
+/// more setting (S3's `edlists`, from `zerotitle`'s second review: "switch it
+/// to a Defend mandate: firing freely by default for its writ and add a build
+/// target" read the target as a Defend setting). The whole list takes the
+/// one style, whichever item carries the clause. The same rule sets a new
+/// beacon's priority off from its mandate's clause in a `place_beacon` step,
+/// the one other place a clause can sit before more of its sentence's list.
+fn join_items(items: Vec<(Text, bool)>) -> Text {
+    let marked = items.iter().any(|(_, clause)| *clause);
+    let mut parts: Vec<Text> = items.into_iter().map(|(text, _)| text).collect();
+    if !marked {
+        return join(parts);
+    }
+    let Some(last) = parts.pop() else {
+        return Text::default();
+    };
+    if parts.is_empty() {
+        return last;
+    }
+    let mut out = separated(parts, "; ");
+    out.push("; and ");
     out.push(last);
     out
 }

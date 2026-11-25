@@ -721,10 +721,12 @@ impl Visit for Sites<'_> {
         // whose Defend and Attack arms are S2's `dfnd`'s and `atk`'s),
         // said where the settings start from nothing and the block names a
         // writ (a block with none is `E0502`'s).
-        if let Some(value) = settings.mandate.as_ref().and_then(omitted_roe)
+        // `omitted_roe` answers every writ, so only a block with no writ
+        // goes without the note.
+        if let Some(mandate) = settings.mandate.as_ref()
             && settings.roe == i32::from(Roe::Unspecified)
         {
-            self.default_note(at, "roe", value, true);
+            self.default_note(at, "roe", omitted_roe(mandate).as_str_name(), true);
         }
         match settings.mandate.as_ref() {
             Some(mandate_settings::Mandate::Build(build)) => {
@@ -748,7 +750,7 @@ impl Visit for Sites<'_> {
                     self.default_note(&here, "seam_choice", "NEAREST", true);
                 }
                 // Only an omitted spacing reads as the default: a written 0 is
-                // what the author wrote (decisions-log item 184 (10)), so it is
+                // what the author wrote (decisions-log item 184 (3)), so it is
                 // also the Fix's spelling of the default.
                 if mine.pillar_spacing.is_none() {
                     self.default_note_with(
@@ -1106,7 +1108,7 @@ impl Sites<'_> {
     }
 
     /// `E0515`: a list's `clear_*` flag where it cannot stand (decisions-log
-    /// item 184 (10)), as the sim's compile refuses it
+    /// item 184 (3)), as the sim's compile refuses it
     /// (`PlanError::ClearRefused`). The flag empties a list the beacon holds,
     /// so it stands alone in a `set_mandate_settings` row: beside a non-empty
     /// list of its own the row says two things, and in a new beacon's or a
@@ -1275,24 +1277,42 @@ const SKIP_BLOCK: &str = r#"{"action":"SKIP"}"#;
 /// (`pharmakos_sim::world::Roe::of_setting` with 0; decisions-log item 148
 /// (2): a Defend or an Attack beacon fires freely, and every other returns
 /// fire only), so the verifier's `I0003` note and plan-core's prose read one
-/// rule and keep no copy of it (S3's `zerotitle`, fix pass 1). `None` only if
-/// the sim gave an unset `roe` no reading on that writ.
+/// rule and keep no copy of it (S3's `zerotitle`, fix pass 1).
+///
+/// **Total by type** (S3's `edlists`, from `zerotitle`'s second review): it
+/// answers a value for every writ and has no "no reading" to answer, so no
+/// caller can drop the `I0003` note on one. The sim's reading of an unset
+/// `roe` on each writ is evaluated while this crate compiles (an inline
+/// `const` block per writ): were the sim ever to give a writ no reading, the
+/// build would stop here, never a run.
 #[must_use]
-pub fn omitted_roe(mandate: &mandate_settings::Mandate) -> Option<&'static str> {
+pub fn omitted_roe(mandate: &mandate_settings::Mandate) -> Roe {
     use pharmakos_sim::seams::MandateKind;
     use pharmakos_sim::world::Roe as Reading;
-    let kind = match mandate {
-        mandate_settings::Mandate::Build(_) => MandateKind::Build,
-        mandate_settings::Mandate::Defend(_) => MandateKind::Defend,
-        mandate_settings::Mandate::Attack(_) => MandateKind::Attack,
-        mandate_settings::Mandate::Survey(_) => MandateKind::Survey,
-        mandate_settings::Mandate::Mine(_) => MandateKind::Mine,
+    // Evaluated at compile time only: each use below sits in a `const` block,
+    // where the `None` arm is a compile error, not a run-time panic.
+    macro_rules! unset_reading {
+        ($kind:expr) => {
+            const {
+                match Reading::of_setting(0, $kind) {
+                    Some(reading) => reading,
+                    None => panic!("the sim reads an unset `roe` on every writ"),
+                }
+            }
+        };
+    }
+    let reading = match mandate {
+        mandate_settings::Mandate::Build(_) => unset_reading!(MandateKind::Build),
+        mandate_settings::Mandate::Defend(_) => unset_reading!(MandateKind::Defend),
+        mandate_settings::Mandate::Attack(_) => unset_reading!(MandateKind::Attack),
+        mandate_settings::Mandate::Survey(_) => unset_reading!(MandateKind::Survey),
+        mandate_settings::Mandate::Mine(_) => unset_reading!(MandateKind::Mine),
     };
-    Reading::of_setting(0, kind).map(|reading| match reading {
-        Reading::Hold => Roe::HoldFire.as_str_name(),
-        Reading::Return => Roe::ReturnFire.as_str_name(),
-        Reading::Free => Roe::FreeFire.as_str_name(),
-    })
+    match reading {
+        Reading::Hold => Roe::HoldFire,
+        Reading::Return => Roe::ReturnFire,
+        Reading::Free => Roe::FreeFire,
+    }
 }
 
 /// A ranking selector's JSON name and its filter, if `beacon` is one: the
@@ -2110,7 +2130,7 @@ mod tests {
 
     const AREA: &str = r#"{"min":{"x":1,"y":1,"z":1},"max":{"x":2,"y":2,"z":2}}"#;
 
-    /// Decisions-log item 184 (10): a lone clear in an edit row is legal;
+    /// Decisions-log item 184 (3): a lone clear in an edit row is legal;
     /// beside entries of its own list it is `E0515` with a suggestion, and
     /// in a new beacon's or a switch's settings `E0515` with a
     /// machine-applicable Fix, at every one of the four lists.
@@ -2166,7 +2186,7 @@ mod tests {
         );
     }
 
-    /// Decisions-log item 184 (10): only an omitted `pillar_spacing` is
+    /// Decisions-log item 184 (3): only an omitted `pillar_spacing` is
     /// noted as reading 0, and its Fix writes the 0 now that a written 0 is
     /// told apart from an omitted one.
     #[test]
@@ -2204,5 +2224,27 @@ mod tests {
             vec![vec![format!(r#"[{{"op":"add","path":"{at}","value":0}}]"#)]]
         );
         assert!(notes(&mine(r#"{"seam_choice":"NEAREST","pillar_spacing":0}"#)).is_empty());
+    }
+
+    /// S3's `edlists` (from `zerotitle`'s second review): an omitted `roe`
+    /// reads as a value on every writ, the sim's (decisions-log item 148
+    /// (2)): free fire on Defend and Attack, return fire on the rest. The
+    /// answer is a value, never "none", so the `I0003` note cannot be dropped.
+    #[test]
+    fn an_omitted_roe_reads_as_a_value_on_every_writ() {
+        use pharmakos_proto::gp::v1::mandate_settings::{Mandate, Roe};
+        use pharmakos_proto::gp::v1::{
+            AttackSettings, BuildSettings, DefendSettings, MineSettings, SurveySettings,
+        };
+        let cases = [
+            (Mandate::Build(BuildSettings::default()), Roe::ReturnFire),
+            (Mandate::Defend(DefendSettings::default()), Roe::FreeFire),
+            (Mandate::Attack(AttackSettings::default()), Roe::FreeFire),
+            (Mandate::Survey(SurveySettings::default()), Roe::ReturnFire),
+            (Mandate::Mine(MineSettings::default()), Roe::ReturnFire),
+        ];
+        for (mandate, reading) in cases {
+            assert_eq!(super::omitted_roe(&mandate), reading, "{mandate:?}");
+        }
     }
 }

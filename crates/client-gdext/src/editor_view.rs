@@ -711,8 +711,9 @@ fn entry_dictionary(entry: &Entry) -> VarDictionary {
 
 /// The detail of the beacon last described (decisions-log item 160 (4)): `known`, `failed` with
 /// `detail` as for the vocabulary, `id`, `mandate` (as the wire spells it, `""` for none),
-/// `settings` (each a chip-shaped dictionary, [`setting_dictionary`]) and `targets` (each
-/// `{blueprint_id, line}`, the line the gateway's own words for the target).
+/// `settings` (each a chip-shaped dictionary, [`setting_dictionary`]), `targets` (each
+/// `{blueprint_id, line}`, the line the gateway's own words for the target) and `lists` (each
+/// `{title, lines, clear_title, empty_title}`, every word the gateway's; S3's `edlists`).
 fn beacon_detail_dictionary(
     detail: Option<&BeaconDetail>,
     failed: Option<&ReadFailed>,
@@ -722,6 +723,7 @@ fn beacon_detail_dictionary(
     failed_into(&mut out, failed);
     let mut settings = VarArray::new();
     let mut targets = VarArray::new();
+    let mut lists = VarArray::new();
     if let Some(detail) = detail {
         out.set(&"id".to_variant(), &detail.id.to_variant());
         out.set(&"mandate".to_variant(), &detail.mandate.to_variant());
@@ -738,9 +740,21 @@ fn beacon_detail_dictionary(
             one.set(&"line".to_variant(), &target.line.to_variant());
             targets.push(&one.to_variant());
         }
+        for list in &detail.lists {
+            let mut one = VarDictionary::new();
+            one.set(&"title".to_variant(), &list.title.to_variant());
+            one.set(
+                &"lines".to_variant(),
+                &packed(&list.entry_lines).to_variant(),
+            );
+            one.set(&"clear_title".to_variant(), &list.clear_title.to_variant());
+            one.set(&"empty_title".to_variant(), &list.empty_title.to_variant());
+            lists.push(&one.to_variant());
+        }
     }
     out.set(&"settings".to_variant(), &settings.to_variant());
     out.set(&"targets".to_variant(), &targets.to_variant());
+    out.set(&"lists".to_variant(), &lists.to_variant());
     out
 }
 

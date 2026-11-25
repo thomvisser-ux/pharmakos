@@ -866,7 +866,8 @@ pub struct GetBeaconResponse {
     /// sim reads, so a setting the file leaves unset has a row with its reading
     /// (S3's `gwr` review, item 7). An Attack's launch and retreat triggers, which
     /// are off rather than defaulted when unwritten, have a row only when written;
-    /// a list and an Attack's target and staging point have none.
+    /// an Attack's target and staging point have none. A list has none here
+    /// either: each list a writ holds is a row of `lists` (field 16).
     #[prost(message, repeated, tag="4")]
     pub settings: ::prost::alloc::vec::Vec<BeaconSettingRow>,
     /// A Build beacon's targets, in the order the Quartermaster reads them. Empty
@@ -880,11 +881,69 @@ pub struct GetBeaconResponse {
     /// anchor's JSON (S3's `fixq`). OWN beacons only, as `build_targets` is.
     #[prost(string, repeated, tag="6")]
     pub build_target_lines: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// The lists this beacon's writ holds, as the sim holds them now, so a
+    /// player sees each and can empty it (S3's `edlists`; decisions-log item 184
+    /// (3) made the four lists emptiable): a Build beacon's protected areas, a
+    /// Defend beacon's protect list, an Attack beacon's avoid areas or a Survey
+    /// beacon's probe areas. One row per list the writ holds, present also when
+    /// the list is empty. Every v1 writ holds at most one list, so a seat's OWN
+    /// beacon carries at most one row today; the field is repeated so that a
+    /// writ that comes to hold two needs no new field. No row on a Mine beacon,
+    /// on a beacon with no writ, on another seat's beacon (in sight or
+    /// remembered, under every fog policy) or for a caller that is no seat (a
+    /// spectator, the admin), as `settings` is sent. Field 16, past the held
+    /// range above, which stays held.
+    #[prost(message, repeated, tag="16")]
+    pub lists: ::prost::alloc::vec::Vec<BeaconListRow>,
 }
 impl ::prost::Name for GetBeaconResponse {
 const NAME: &'static str = "GetBeaconResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetBeaconResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetBeaconResponse".into() }}
+/// One list of a beacon's mandate, as sent to be drawn and emptied. The
+/// gateway decides what a client may offer: `clear_title` is sent only for a
+/// list with entries and `empty_title` only for one with none, so the client
+/// draws the lines and offers the clear when `clear_title` is sent, draws
+/// `empty_title` when it is sent, and tests nothing about the list. A clear
+/// composes a `set_mandate_settings` row writing `clear_pointer` true; whether
+/// that row is legal (a clear beside a refill is E0515) is the verifier's.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BeaconListRow {
+    /// RFC 6901 JSON Pointer of the list inside gp.v1.MandateSettings:
+    /// "/build/protected_areas".
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The list's name in the player's words: "Protected areas".
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// One sentence per entry, in the player's words from plan-core's string
+    /// table, in the order the SIM reads the list, which is not always the
+    /// order the playbook wrote it in: an area by the columns it covers ("the
+    /// ground from column 30, 40 to column 38, 44"); in a protect list, "your
+    /// commander" first whenever the list holds it, wherever the playbook wrote
+    /// it (the guards escort the commander first), then each protected beacon by
+    /// its name (`beacon "b_03"`) in the order written. A protected beacon that
+    /// has died has left the list. Empty for an empty list.
+    #[prost(string, repeated, tag="3")]
+    pub entry_lines: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// RFC 6901 JSON Pointer of the flag that empties the list, inside
+    /// gp.v1.MandateSettings: "/build/clear_protected_areas". Sent on every row.
+    #[prost(string, tag="4")]
+    pub clear_pointer: ::prost::alloc::string::String,
+    /// The clear as an action, in the player's words: "Empty the protected
+    /// areas". Sent only when `entry_lines` holds an entry, and empty otherwise:
+    /// there is nothing to empty.
+    #[prost(string, tag="5")]
+    pub clear_title: ::prost::alloc::string::String,
+    /// What an empty list is, in the player's words: "none". Sent only when
+    /// `entry_lines` is empty, and empty otherwise.
+    #[prost(string, tag="6")]
+    pub empty_title: ::prost::alloc::string::String,
+}
+impl ::prost::Name for BeaconListRow {
+const NAME: &'static str = "BeaconListRow";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.BeaconListRow".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.BeaconListRow".into() }}
 /// One setting of a beacon's mandate, as sent to be drawn and edited: the client
 /// composes a `set_mandate_settings` row from it and decides nothing.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

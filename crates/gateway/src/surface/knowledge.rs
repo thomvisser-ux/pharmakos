@@ -2420,7 +2420,7 @@ fn own_tally(
 }
 
 /// The per-beacon detail `get_beacon` tells about one of the seat's own
-/// beacons (`GetBeaconResponse` fields 3 to 5; the register's X-17), read off
+/// beacons (`GetBeaconResponse` fields 3 to 6 and 16; the register's X-17), read off
 /// the hosted world's own columns for the beacon in `row`, whose writ is
 /// `mandate`.
 ///
@@ -2440,14 +2440,17 @@ fn own_tally(
 ///   `retarget_reading`, `after_reading`, `waves_reading`), as the seam
 ///   choice and the terraform already were. An Attack's launch and retreat
 ///   triggers, which are off rather than defaulted when unwritten, have a row
-///   only when written. A list (a protect list, the avoid areas, the probe
-///   areas) and an Attack's target and staging point, which no one shape
-///   describes or which the sim holds resolved, have no row.
+///   only when written. A list (each is a row of `lists` below) and an Attack's
+///   target and staging point, which no one shape describes or which the sim
+///   holds resolved, have no row.
 /// * **`build_targets`**, a Build beacon's targets in the Quartermaster's
 ///   order, each a `gp.v1.BuildTarget`: its blueprint, its anchor as it was
 ///   written (a voxel, `on` a named feature, or `on` the nearest vent, its
 ///   rank in the wire's lower case), its rotation, its order and, for a wall,
 ///   its `wall_box`.
+/// * **`lists`** (field 16; S3's `edlists`), the one list the writ holds,
+///   whatever it holds, empty included, as a `gp.api.v1.BeaconListRow`
+///   ([`list_facts`], [`list_row`]); none for Mine or no writ.
 ///
 /// # Errors
 ///
@@ -2549,7 +2552,133 @@ fn beacon_detail(
             out.push((String::from("build_target_lines"), Json::Array(lines)));
         }
     }
+    if let Some(list) = list_facts(world, id, mandate)? {
+        out.push((String::from("lists"), Json::Array(vec![list_row(list)])));
+    }
     Ok(out)
+}
+
+/// One list of a beacon's mandate, its facts composed once by [`list_facts`]
+/// and written to the wire by [`list_row`] alone (S3's `edlists`): the wire's
+/// shape is the one thin last step, so a change of it touches that function
+/// and the client's reader, and nothing that reads the world.
+#[derive(Debug)]
+struct ListFacts {
+    /// Which list, which names its pointer, its clear's and its words.
+    list: pharmakos_plan_core::render::BeaconList,
+    /// One sentence per entry, in the order the sim reads the list.
+    entry_lines: Vec<String>,
+}
+
+/// The list beacon `id`, of writ `mandate`, holds, as the sim holds it now,
+/// or `None` for a writ that holds none (Mine, or no writ):
+///
+/// * a Build beacon's protected areas and a Survey beacon's probe areas, its
+///   rows of the target table of that kind, in the table's order (the order
+///   they were written in), each by its columns;
+/// * a Defend beacon's protect list: the seat's commander first when the list
+///   holds it (the escort, which the guards serve first), then each protected
+///   beacon in list order by its name, as the seat names its own beacons; a
+///   beacon that died has left the list (`DefendTable::forget`);
+/// * an Attack beacon's avoid areas, in list order, each by its columns.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when a table lacks a row the list names:
+/// a Defend beacon with no Defend row, or a protected beacon the beacon table
+/// does not hold.
+fn list_facts(
+    world: &pharmakos_sim::world::World,
+    id: pharmakos_sim::tables::BeaconId,
+    mandate: pharmakos_sim::seams::MandateKind,
+) -> Result<Option<ListFacts>, Error> {
+    use pharmakos_plan_core::render::{self, BeaconList};
+    use pharmakos_sim::tables::TargetKind;
+    let Some(list) = BeaconList::of(mandate) else {
+        return Ok(None);
+    };
+    let areas = |kind: TargetKind| -> Vec<String> {
+        let targets = world.targets();
+        targets
+            .beacons()
+            .iter()
+            .zip(targets.kinds())
+            .zip(targets.areas())
+            .filter(|((owner, held), _)| **owner == id && **held == kind.id())
+            .map(|(_, area)| render::area_line(area.min_column(), area.max_column()))
+            .collect()
+    };
+    let entry_lines = match list {
+        BeaconList::ProtectedAreas => areas(TargetKind::Protected),
+        BeaconList::ProbeAreas => areas(TargetKind::Probe),
+        BeaconList::AvoidAreas => world
+            .attack()
+            .avoid_of(id)
+            .map(|area| render::area_line(area.min_column(), area.max_column()))
+            .collect(),
+        BeaconList::Protect => {
+            let defend = world.defend();
+            let row = defend.row_of(id).ok_or_else(|| {
+                Error::internal(said!(
+                    "the Defend table has no row for Defend beacon {}",
+                    id.raw()
+                ))
+            })?;
+            let mut lines = Vec::new();
+            if row.settings.escort {
+                lines.push(render::protected_commander_line());
+            }
+            let beacons = world.beacons();
+            for protected in defend.protected_by(id) {
+                let ordinal = beacons
+                    .row_of(protected)
+                    .ok()
+                    .and_then(|at| beacons.ordinals().get(at.index()).copied())
+                    .ok_or_else(|| {
+                        Error::internal(said!(
+                            "the protect list names beacon {}, which the beacon table does not hold",
+                            protected.raw()
+                        ))
+                    })?;
+                lines.push(render::protected_beacon_line(
+                    &pharmakos_sim::tables::own_beacon_name(ordinal),
+                ));
+            }
+            lines
+        }
+    };
+    Ok(Some(ListFacts { list, entry_lines }))
+}
+
+/// `facts` as a `gp.api.v1.BeaconListRow` on the wire: the one place the
+/// list's wire shape is written.
+fn list_row(facts: ListFacts) -> Json {
+    let ListFacts { list, entry_lines } = facts;
+    let text = |value: &str| Json::String(value.to_owned());
+    let mut row = vec![
+        (String::from("pointer"), text(list.pointer())),
+        (String::from("title"), text(list.title())),
+    ];
+    // What a client may offer is decided here (fix pass 1, W1): the clear's
+    // words only beside entries, the empty list's word only with none, so the
+    // client draws what was sent and tests nothing about the list.
+    let has_entries = !entry_lines.is_empty();
+    if has_entries {
+        row.push((
+            String::from("entry_lines"),
+            Json::Array(entry_lines.into_iter().map(Json::String).collect()),
+        ));
+    }
+    row.push((String::from("clear_pointer"), text(list.clear_pointer())));
+    if has_entries {
+        row.push((String::from("clear_title"), text(list.clear_title())));
+    } else {
+        row.push((
+            String::from("empty_title"),
+            text(pharmakos_plan_core::strings::LIST_EMPTY),
+        ));
+    }
+    Json::Object(row)
 }
 
 /// `value`, read as the message `full_name`, with every enum value this
