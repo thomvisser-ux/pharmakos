@@ -787,7 +787,7 @@ pub fn common_parameters() -> Result<Vec<Parameter>, VocabularyError> {
         parameter(
             "/retreat_hp_pct",
             s::VOCABULARY_RETREAT_HP,
-            Shape::percent(),
+            Shape::retreat_threshold(),
         ),
     ])
 }
@@ -811,7 +811,7 @@ fn build_mandate() -> Result<Entry, VocabularyError> {
             parameter(
                 "/repair_threshold_pct",
                 s::VOCABULARY_REPAIR,
-                Shape::percent(),
+                Shape::repair_threshold(),
             ),
             parameter(
                 "/rebuild_destroyed",
@@ -850,7 +850,7 @@ fn defend_mandate() -> Result<Entry, VocabularyError> {
             parameter(
                 "/picket_scouts",
                 s::VOCABULARY_PICKET,
-                Shape::integer(Some(0), Some(i32::from(u8::MAX)), UNIT_COUNT),
+                Shape::picket_scouts(),
             ),
         ],
         "{}",
@@ -880,7 +880,7 @@ fn attack_mandate() -> Result<Entry, VocabularyError> {
             parameter(
                 "/launch/force_size",
                 s::VOCABULARY_FORCE,
-                Shape::count(UNIT_COUNT),
+                Shape::force_size(),
             ),
             parameter(
                 "/launch/segment_ms",
@@ -923,7 +923,7 @@ fn survey_mandate() -> Entry {
         vec![parameter(
             "/scout_count",
             s::VOCABULARY_SCOUTS,
-            Shape::integer(Some(0), Some(i32::from(u8::MAX)), UNIT_COUNT),
+            Shape::scout_count(),
         )],
         "{}",
     )
@@ -935,11 +935,7 @@ fn mine_mandate() -> Result<Entry, VocabularyError> {
         "mine",
         s::MANDATE_MINE,
         vec![
-            parameter(
-                "/dig_max_depth",
-                s::VOCABULARY_DIG,
-                Shape::count(UNIT_VOXELS),
-            ),
+            parameter("/dig_max_depth", s::VOCABULARY_DIG, Shape::dig_max_depth()),
             parameter("/flee_on_threat", s::VOCABULARY_FLEE, Shape::boolean()),
             parameter(
                 "/seam_choice",
@@ -949,7 +945,7 @@ fn mine_mandate() -> Result<Entry, VocabularyError> {
             parameter(
                 "/pillar_spacing",
                 s::VOCABULARY_PILLARS,
-                Shape::count(UNIT_VOXELS),
+                Shape::pillar_spacing(),
             ),
         ],
         "{}",

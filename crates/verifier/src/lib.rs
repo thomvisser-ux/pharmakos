@@ -243,6 +243,7 @@ pub use scope::{
     FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError, Sighted, Sighting,
 };
 pub use size::size_units;
+pub use structure::omitted_roe;
 pub use walking::Walk;
 
 /// The longest playbook text a player's file may be, in characters (S3's

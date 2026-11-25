@@ -588,7 +588,7 @@ fn render_plan_says_every_written_setting_of_the_build_survey_and_mine_arms() {
         ),
         (
             r#""build": {"repair_threshold_pct": 0}"#.to_owned(),
-            vec!["never repairing (0%)"],
+            vec!["never repairing structures, beacons or walls (0%)"],
             vec![("build/repair_threshold_pct", "0")],
         ),
     ];

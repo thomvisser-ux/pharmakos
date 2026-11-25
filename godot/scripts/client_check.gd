@@ -768,7 +768,7 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 	var sent: Array[String] = []
 	var listen := func(text: String) -> void: sent.append(text)
 	editor._number_field.sent.connect(listen)
-	editor._open_number({"index": 0, "revision": 0, "pointer": "/x"}, {"has_min": true, "min": 0, "has_max": true, "max": 100, "value_text": "40", "value_json": "40", "unit": "%", "display_unit": "%", "text": "40"})
+	editor._open_number({"index": 0, "revision": 0, "pointer": "/x"}, {"has_min": true, "min": 0, "min_text": "0", "has_max": true, "max": 100, "max_text": "100", "value_text": "40", "value_title": "", "value_json": "40", "unit": "%", "display_unit": "%", "text": "40"})
 	await _settle()
 	var popup: PopupPanel = editor._number_popup
 	if not popup.visible:
@@ -791,6 +791,46 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 			failures.append("the number popup's note says `%s`, not the gateway's bounds" % editor._number_note.text)
 	editor._number_field.sent.disconnect(listen)
 	popup.hide()
+
+	# S3's `zerotitle`: the bounds are said as the gateway wrote them, in the unit the field is
+	# typed in (a duration's in seconds, never its milliseconds), and a 0 with words of its own is
+	# said beside the number, which stays; the menu row says it too.
+	editor._open_number({"index": 0, "revision": 0, "pointer": "/y"}, {"has_min": true, "min": 500, "min_text": "0.5", "has_max": false, "max_text": "", "value_text": "1.5", "value_title": "", "value_json": "1500", "unit": "ms", "display_unit": "s", "text": "1.5 s"})
+	await _settle()
+	if editor._number_note.text != Strings.text("rule_number_bounds", {"min": "0.5", "max": "-", "unit": " s"}):
+		failures.append("a duration's bounds are said as `%s`, not in seconds as the gateway wrote them" % editor._number_note.text)
+	editor._number_popup.hide()
+	var zero := {"has_min": true, "min": 0, "min_text": "0", "has_max": true, "max": 100, "max_text": "100", "value_text": "0", "value_title": "retreat off", "value_json": "0", "unit": "%", "display_unit": "%", "text": "Retreat below HP", "editor": "number"}
+	editor._open_number({}, zero)
+	await _settle()
+	var titled := Strings.text("rule_number_titled_beside", {"now": Strings.text("rule_number_titled", {"now": "0", "display_unit": " %", "title": "retreat off"}), "note": Strings.text("rule_number_bounds", {"min": "0", "max": "100", "unit": " %"})})
+	if editor._number_note.text != titled:
+		failures.append("a 0 with words of its own is said as `%s`, not `%s`" % [editor._number_note.text, titled])
+	if editor._number_field.field.text != "0":
+		failures.append("the titled value's field shows `%s`, not its number" % editor._number_field.field.text)
+	editor._number_popup.hide()
+	if editor.setting_value_text(zero) != Strings.text("menu_setting_titled", {"value": "0 %", "title": "retreat off"}):
+		failures.append("the settings row says `%s`, not the number and the gateway's words for it" % editor.setting_value_text(zero))
+	# A non-zero value whose shape names what a 0 does: the note says the 0's words beside the
+	# bounds before the player types one (fix pass 1, item 3).
+	var thirty := zero.duplicate()
+	thirty["value_title"] = ""
+	thirty["value_text"] = "30"
+	thirty["zero_title"] = "retreat off"
+	editor._open_number({}, thirty)
+	await _settle()
+	var told := Strings.text("rule_number_titled_beside", {"now": Strings.text("rule_number_bounds", {"min": "0", "max": "100", "unit": " %"}), "note": Strings.text("rule_number_zero", {"title": "retreat off"})})
+	if editor._number_note.text != told:
+		failures.append("a titled shape's 0 is not said before it is typed: `%s`, not `%s`" % [editor._number_note.text, told])
+	editor._number_popup.hide()
+	zero["value_title"] = ""
+	zero["value_text"] = "30"
+	if editor.setting_value_text(zero) != "30 %":
+		failures.append("an untitled value's row says `%s`" % editor.setting_value_text(zero))
+	var window := {"shape": "number", "title": "Within", "has_min": true, "min": 500, "min_text": "0.5", "has_max": true, "max": 90000, "max_text": "90", "unit": "ms", "display_unit": "s"}
+	var line := Strings.text("picker_parameter_number", {"title": "Within", "bounds": Strings.text("picker_parameter_bounds", {"min": "0.5", "max": "90", "unit": " s"}), "unit": " s"})
+	if editor.ConditionPicker.parameter_text(window) != line:
+		failures.append("the picker says a duration's bounds as `%s`, not `%s`" % [editor.ConditionPicker.parameter_text(window), line])
 
 	# A wizard page.
 	var pages := VBoxContainer.new()

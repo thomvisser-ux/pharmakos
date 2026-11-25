@@ -2839,8 +2839,10 @@ impl Settings {
             format!("/{arm}{field}")
         };
         // An integer's value as it is shown and typed, in its display unit,
-        // as a chip's `value_text` is (S3's `fixq`); empty for any other.
-        let value_text = match &parameter.shape {
+        // as a chip's `value_text` is (S3's `fixq`), and its words when it has
+        // words of its own, as a chip's `value_title` is (S3's `zerotitle`);
+        // both empty for any other.
+        let (value_text, value_title) = match &parameter.shape {
             pharmakos_plan_core::shape::Shape::Integer { unit, .. } => {
                 let value: i64 = value_json.parse().map_err(|_| {
                     Error::internal(said!(
@@ -2848,12 +2850,15 @@ impl Settings {
                         pharmakos_proto::json::grammar::quoted(&pointer)
                     ))
                 })?;
-                pharmakos_plan_core::shape::shown_text(unit, value)
+                (
+                    pharmakos_plan_core::shape::shown_text(unit, value),
+                    parameter.shape.value_title(value),
+                )
             }
             pharmakos_plan_core::shape::Shape::Choice { .. }
-            | pharmakos_plan_core::shape::Shape::Reference { .. } => String::new(),
+            | pharmakos_plan_core::shape::Shape::Reference { .. } => (String::new(), None),
         };
-        self.rows.push(Json::Object(vec![
+        let mut row = vec![
             (String::from("pointer"), Json::String(pointer)),
             (
                 String::from("title"),
@@ -2862,7 +2867,13 @@ impl Settings {
             (String::from("value_json"), Json::String(value_json)),
             (String::from("shape"), view::value_shape(&parameter.shape)),
             (String::from("value_text"), Json::String(value_text)),
-        ]));
+        ];
+        // Written only where the value has words of its own; proto3's empty
+        // string is the absence (S3's `zerotitle`).
+        if let Some(title) = value_title {
+            row.push((String::from("value_title"), Json::String(title.to_owned())));
+        }
+        self.rows.push(Json::Object(row));
         Ok(())
     }
 
