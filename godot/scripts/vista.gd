@@ -30,9 +30,18 @@
 # draw in nobody's colour. An id the view keeps but whose kind, subtype or owner changed
 # is drawn afresh, because the marker's shape and colour are read from those three.
 #
-# S3 (S2's stage demo, decisions-log item 155 (3) 4): every structure is the same cube until the
-# art pass, so a structure carries its `subtype`, as the gateway spelt it, over it. The name is
-# drawn only when the camera is close enough to read it, and it decides nothing.
+# S3 (S2's stage demo, decisions-log item 155 (3) 4): a structure carries its name over it, drawn
+# only when the camera is close enough to read it, and it decides nothing.
+#
+# S3 (S3's `fixq-c`, items 1 to 3, on `probw`'s wire): a structure, a wall and a ruin are drawn by
+# the look the view sends (`look`: a block, a tower, a dish or a slab, at its size in whole voxels
+# from the voxel it names), and named by the view's `title`, the gateway's words, "Wall" and
+# "Mortar, going up" included. A structure the view says is going up (`building`, sent for this
+# seat's own only) is drawn see-through; nothing here reads going up from its hit points, so
+# another seat's structure at half its hit points is drawn standing, with its bar. A look the
+# bridge cannot name refused the page before it came here (`view.rs`, fix pass 1); a look this
+# script still cannot draw (no look, an edge it cannot read, a shape it has no primitive for) is
+# not drawn at all, and said in the log: never a guessed block.
 #
 # S3 (S3's `prob`, the plan's E3): a beacon the view gives a sphere radius
 # (`sphere_radius_voxels`, on this seat's own beacons) carries a flat ring of that radius, in
@@ -92,6 +101,14 @@ const NAME_RANGE := 55.0
 const RING_WIDTH := 0.35
 const RING_LIFT := 0.15
 const RING_COLOUR := Color(1.0, 0.62, 0.20, 0.85)
+## A look's primitive within its voxels: a tower's width as a share of its narrower side, a dish's
+## foot as a share of its rim and its height as a share of the look's, and how see-through a
+## structure the gateway says is going up is drawn, all presentation of the view's own words.
+## PLACEHOLDER: the looks' proportions and the going-up see-through — OWNER, at S6.
+const TOWER_SHARE := 0.5
+const DISH_FOOT := 0.4
+const DISH_HEIGHT := 0.5
+const GOING_UP_ALPHA := 0.45
 
 ## The seat this client plays, as the gateway spells a seat: `seat.0`. Empty for a
 ## spectator. Own against other is `owner == my_seat` and nothing more.
@@ -103,7 +120,8 @@ var pending := -1
 
 ## id -> {"node": Node3D, "target": Vector3, "kind": String, "subtype": String,
 ## "owner": String, "at": Vector3i, "yaw": float or null, "fill": MeshInstance3D or null,
-## "ring": int (the radius drawn, voxels; 0 for none)}
+## "ring": int (the radius drawn, voxels; 0 for none), "look": Dictionary (as the bridge sent it,
+## empty for none), "title": String, "building": bool}
 var _markers := {}
 
 @onready var bridge: Node = $Bridge
@@ -246,6 +264,10 @@ func _show(entities: Array, snap: bool) -> void:
 			_markers.erase(id)
 		if not _markers.has(id):
 			var node := _marker_for(entity)
+			# A look this script cannot draw was said in the log; the entity is not drawn.
+			if node == null:
+				seen.erase(id)
+				continue
 			node.position = goal
 			if entity.has("yaw"):
 				node.rotation.y = float(entity["yaw"])
@@ -260,6 +282,9 @@ func _show(entities: Array, snap: bool) -> void:
 				"yaw": null,
 				"fill": node.get_node_or_null("Bar/Fill"),
 				"ring": 0,
+				"look": entity.get("look", {}),
+				"title": String(entity.get("title", "")),
+				"building": entity.get("building", false),
 			}
 		var marker: Dictionary = _markers[id]
 		marker["target"] = goal
@@ -276,13 +301,17 @@ func _show(entities: Array, snap: bool) -> void:
 
 
 ## Whether a drawn marker still has the shape and colour `entity` asks for: its kind, its
-## subtype and its owner are what `_marker_for` reads, and whether it has a bar.
+## subtype, its owner, its look, its title and whether it is going up are what `_marker_for`
+## reads, and whether it has a bar.
 func _same_look(marker: Dictionary, entity: Dictionary) -> bool:
 	return (
 		marker["kind"] == String(entity["kind"])
 		and marker["subtype"] == String(entity["subtype"])
 		and marker["owner"] == String(entity["owner"])
 		and (marker["fill"] != null) == entity.has("hp")
+		and marker["look"] == entity.get("look", {})
+		and marker["title"] == String(entity.get("title", ""))
+		and marker["building"] == entity.get("building", false)
 	)
 
 
@@ -360,13 +389,27 @@ func _marker_for(entity: Dictionary) -> Node3D:
 	material.albedo_color = colour
 	var mesh: PrimitiveMesh = BoxMesh.new()
 	var size := Vector3(1.0, 1.0, 1.0)
+	# Where the body's middle sits over the marker's feet: half its height up, and for a look wider
+	# than one voxel, across the voxels it spans from the one it names.
+	var middle := Vector3.ZERO
 	if kind == "beacon":
 		size = Vector3(2.0, 9.0, 2.0)
 		material.emission_enabled = true
 		material.emission = BEACON_GLOW
 		material.emission_energy_multiplier = 2.5
-	elif kind == "structure":
-		size = Vector3(3.0, 3.0, 3.0)
+	elif kind == "structure" or kind == "ruin":
+		var drawn := _look_mesh(entity)
+		if drawn.is_empty():
+			return null
+		mesh = drawn[0]
+		size = drawn[1]
+		middle = Vector3((size.x - 1.0) * 0.5, 0.0, (size.z - 1.0) * 0.5)
+		if kind == "ruin":
+			material.albedo_color = RUIN_COLOUR
+		if entity.get("building", false):
+			# Going up, in the gateway's word: see-through until it stands.
+			material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			material.albedo_color.a = GOING_UP_ALPHA
 	elif kind == "shell":
 		var ball := SphereMesh.new()
 		ball.radius = 0.4
@@ -379,17 +422,15 @@ func _marker_for(entity: Dictionary) -> Node3D:
 	elif kind == "wreck":
 		size = Vector3(1.6, 0.5, 1.6)
 		material.albedo_color = WRECK_COLOUR
-	elif kind == "ruin":
-		size = Vector3(3.0, 1.4, 3.0)
-		material.albedo_color = RUIN_COLOUR
 	elif kind == "unit" and String(entity["subtype"]) == "commander":
 		size = Vector3(1.6, 2.6, 1.6)
-	if mesh is BoxMesh:
+	if mesh is BoxMesh and not (kind == "structure" or kind == "ruin"):
 		(mesh as BoxMesh).size = size
 	mesh.material = material
 	var body := MeshInstance3D.new()
+	body.name = "Body"
 	body.mesh = mesh
-	body.position = Vector3(0.0, size.y * 0.5, 0.0)
+	body.position = middle + Vector3(0.0, size.y * 0.5, 0.0)
 	var node := Node3D.new()
 	node.name = String(entity["id"])
 	node.add_child(body)
@@ -404,17 +445,58 @@ func _marker_for(entity: Dictionary) -> Node3D:
 		node.add_child(nose)
 	if entity.has("hp"):
 		node.add_child(_bar(size.y + BAR_LIFT))
-	if kind == "structure" and String(entity["subtype"]) != "":
-		node.add_child(_name(String(entity["subtype"]), size.y + BAR_LIFT + NAME_LIFT))
+	var title := String(entity.get("title", ""))
+	if (kind == "structure" or kind == "ruin") and title != "":
+		node.add_child(_name(title, size.y + BAR_LIFT + NAME_LIFT))
 	return node
 
 
-## A structure's name as the gateway spelt it, `lift` voxels over its feet, facing the camera and
-## drawn only within NAME_RANGE of it.
-func _name(subtype: String, lift: float) -> Label3D:
+## The mesh a structure's or a ruin's look names, and its size in the world's axes (x, y up, z
+## north): a block, a tower, a dish or a slab filling the look's whole voxels as the view sent
+## them. A look this build cannot name is a block, said in the log with its number; no look at all
+## is one voxel's block, said too: neither is dropped, since the gateway decided it may be seen.
+func _look_mesh(entity: Dictionary) -> Array:
+	var look: Dictionary = entity.get("look", {})
+	if look.is_empty():
+		push_error("[vista] %s came with no look, and is not drawn" % String(entity["id"]))
+		return []
+	var edges := []
+	for axis in ["x", "y", "z"]:
+		var read: Variant = Values.int_of(look.get(axis))
+		if not read is int:
+			push_error(Values.unreadable_text(Strings.text("value_look"), read))
+			return []
+		edges.append(float(read))
+	# The sim's x east, y north, z up are the world's x, z and y.
+	var size := Vector3(edges[0], edges[2], edges[1])
+	var across := minf(size.x, size.z)
+	match String(look.get("shape", "")):
+		"tower":
+			var tower := CylinderMesh.new()
+			tower.top_radius = across * TOWER_SHARE * 0.5
+			tower.bottom_radius = across * TOWER_SHARE * 0.5
+			tower.height = size.y
+			return [tower, size]
+		"dish":
+			var dish := CylinderMesh.new()
+			dish.top_radius = across * 0.5
+			dish.bottom_radius = across * DISH_FOOT * 0.5
+			dish.height = size.y * DISH_HEIGHT
+			return [dish, Vector3(size.x, size.y * DISH_HEIGHT, size.z)]
+		"block", "slab":
+			var box := BoxMesh.new()
+			box.size = size
+			return [box, size]
+	push_error("[vista] %s's look names no shape this script draws (%s), and is not drawn" % [String(entity["id"]), String(look.get("shape", ""))])
+	return []
+
+
+## A structure's name as the gateway wrote it (its `title`), `lift` voxels over its feet, facing
+## the camera and drawn only within NAME_RANGE of it.
+func _name(title: String, lift: float) -> Label3D:
 	var label := Label3D.new()
 	label.name = "Name"
-	label.text = subtype
+	label.text = title
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.pixel_size = NAME_PIXEL
 	label.position = Vector3(0.0, lift, 0.0)

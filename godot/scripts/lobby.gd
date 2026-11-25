@@ -18,7 +18,8 @@
 # the bridge's `timer` is then empty; decisions-log item 135). Ready is this seat's
 # `set_ready`, and its label and the line under it, shown in a Lull, say what it does: with
 # nothing sealed the gateway files the safe playbook (decisions-log item 143 (4)), and with a
-# seal the gateway accepted this round Ready keeps it (`ready_line`, S3's `fixp`). Continue
+# seal the gateway accepted this round Ready keeps it (`ready_line`, S3's `fixp`; the gateway's own
+# word on the seal, `get_status`'s, since S3's `fixq-c`). Continue
 # leaves the recap.
 #
 # THE RECAP (S1's plan, task `ui`): in a recap and once the match has ended, the column
@@ -96,7 +97,8 @@ const AboutScene := preload("res://scenes/credits.tscn")
 ## How many event rows the list keeps on screen. PLACEHOLDER, UI, OWNER at S6.
 const EVENT_ROWS := 14
 ## The one file the lobby writes: the six-field config line of the last match it started,
-## with no token in it.
+## with no token in it. It is written whole or not at all, by the bridge's `file_write` (an
+## atomic replace, `crates/client-gdext/src/write.rs`, S3's `fixq-c`); its format is unchanged.
 const REMEMBERED := "user://last_match.txt"
 
 @onready var vista: Node3D = $Vista
@@ -123,6 +125,16 @@ var _announced := false
 var _strip: HBoxContainer
 ## Whether the lobby forgot the match because it ended; the status line then says so.
 var _forgotten := false
+## The file the remembered line is kept in: REMEMBERED, unless a check points the lobby at a
+## file of its own before it enters the tree.
+var remembered := REMEMBERED
+## Why the remembered file, which exists, could not be read, in the string table's words; ""
+## when it could (or there is none). Said on the chooser's line.
+var _remembered_unreadable := ""
+## Why this match's line could not be remembered, or why the ended match could not be
+## forgotten, in the string table's words; "" when it was. The status line says it.
+var _remember_failed := ""
+var _forget_failed := ""
 
 
 func _ready() -> void:
@@ -137,13 +149,26 @@ func _ready() -> void:
 	editor.setup(vista)
 	editor.visible = false
 	_status.text = Strings.text("lobby_choose")
+	if _remembered_unreadable != "":
+		_status.text += "  " + _remembered_unreadable
 
 
-## The line the lobby remembered from the last match it started, or "" when none is.
-static func remembered_line() -> String:
-	if not FileAccess.file_exists(REMEMBERED):
+## The line the lobby remembered from the last match it started, or "" when none is: an absent
+## file, an empty one (an ended match forgotten by emptying it) and a folder are all none. The
+## line itself is read by the host, which refuses a short or malformed one in its own words.
+func remembered_line() -> String:
+	var path := ProjectSettings.globalize_path(remembered)
+	_remembered_unreadable = ""
+	if not FileAccess.file_exists(path):
 		return ""
-	return FileAccess.get_file_as_string(REMEMBERED).strip_edges()
+	# A file that exists and cannot be read is said, not read as no match (fix pass 4).
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		_remembered_unreadable = Strings.text("lobby_remembered_unreadable", {"path": path, "error": FileAccess.get_open_error()})
+		return ""
+	var text := file.get_as_text()
+	file.close()
+	return text.strip_edges()
 
 
 ## Starts a new match under a fresh id, under HostLink.PRESET, which the bridge then holds the
@@ -175,17 +200,31 @@ func _start(line: String, resuming: bool) -> void:
 			vista.bridge.watch_expect_preset(HostLink.PRESET)
 
 
+## Remembers this match's line, whole or not at all, by an atomic replace through the bridge
+## (`crates/client-gdext/src/write.rs`); a line that could not be written is said on the status
+## line, which then claims no remembered match. The bytes are what `main`'s writer wrote: the
+## six-field line and a newline, UTF-8.
 func _remember() -> void:
-	var file := FileAccess.open(REMEMBERED, FileAccess.WRITE)
-	if file != null:
-		file.store_string(_line + "\n")
-		file.close()
+	var written: Dictionary = vista.bridge.file_write(ProjectSettings.globalize_path(remembered), (_line + "\n").to_utf8_buffer())
+	_remember_failed = ""
+	if not written.get("written", false):
+		_remember_failed = Strings.text("lobby_not_remembered", {"why": Strings.write_words(written)})
+	elif Strings.write_words(written) != "":
+		_remember_failed = Strings.text("lobby_remembered_note", {"why": Strings.write_words(written)})
 
 
+## Forgets the ended match: its file removed through the bridge. A removal that fails (a folder,
+## a read-only file, one another program holds) is said on the status line with its cause, and
+## says to start a new match. (A Resume of an ended match is not refused by the host today:
+## reported in PR #229 for the gateway's lane, which lane `opsave` carries.)
 func _forget() -> void:
-	if FileAccess.file_exists(REMEMBERED):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(REMEMBERED))
-	_forgotten = true
+	var removed: Dictionary = vista.bridge.file_remove(ProjectSettings.globalize_path(remembered))
+	_forget_failed = ""
+	if removed.get("written", false):
+		_forgotten = true
+		return
+	_forgotten = false
+	_forget_failed = Strings.text("lobby_not_forgotten", {"why": Strings.write_words(removed)})
 
 
 func _process(_delta: float) -> void:
@@ -195,6 +234,18 @@ func _process(_delta: float) -> void:
 	var state: Dictionary = vista.bridge.watch_state()
 	if state.is_empty():
 		return
+	_status.text = status_line(state)
+	_ready_help.visible = String(state.get("phase", "")) == "lull"
+	if _ready_help.visible:
+		_ready_help.text = ready_line(state)
+		_ready_help.accessibility_name = _ready_help.text
+	_draw_recap(String(state.get("phase", "")))
+
+
+## The status line for the watch state `state`: the round and phase, the timer, the speed, and
+## what the lobby and the bridge have to say (a forgotten or unremembered match, a close on a
+## message, the preset, a refused zero), joined.
+func status_line(state: Dictionary) -> String:
 	var parts: PackedStringArray = [Strings.text("lobby_status", {"round": state.get("round", 0), "phase": String(state.get("phase", "")).to_upper()})]
 	var timer := String(state.get("timer", ""))
 	if timer != "":
@@ -207,20 +258,45 @@ func _process(_delta: float) -> void:
 		parts.append(Strings.text("lobby_all_ready"))
 	if _forgotten:
 		parts.append(Strings.text("lobby_forgotten"))
+	var closed_on := closed_on_line(state)
+	if closed_on != "":
+		parts.append(closed_on)
+	if _remember_failed != "":
+		parts.append(_remember_failed)
+	if _forget_failed != "":
+		parts.append(_forget_failed)
+	if _remembered_unreadable != "":
+		parts.append(_remembered_unreadable)
 	var preset := preset_line(state)
 	if preset != "":
 		parts.append(preset)
 	# The gateway kept refusing the Lull's closing countdown at zero: the rig gave it up and
 	# ended the Lull without it, and the line says so in the gateway's words.
-	var zero_refused := String(state.get("zero_refusal", ""))
-	if zero_refused != "":
-		parts.append(Strings.text("lobby_zero_refused", {"detail": zero_refused}))
-	_status.text = "  ".join(parts)
-	_ready_help.visible = String(state.get("phase", "")) == "lull"
-	if _ready_help.visible:
-		_ready_help.text = ready_line(vista.bridge.editor_state())
-		_ready_help.accessibility_name = _ready_help.text
-	_draw_recap(String(state.get("phase", "")))
+	if state.has("zero_cause"):
+		parts.append(Strings.text("lobby_zero_" + String(state["zero_cause"]), {"detail": state.get("zero_refusal", "")}))
+	# The map view's answer was too big to read: it is held until the next phase (fix pass 5).
+	if state.get("view_held", false):
+		parts.append(Strings.text("lobby_view_held"))
+	return "  ".join(parts)
+
+
+## The words for the last close on a message (fix pass 3): which connection, the close code,
+## the call it carried (or none in flight), and whether that connection is open again, all as
+## the bridge's watch state says them (`closed_on`); "" when there was none. A branch on the
+## bridge's words, for display.
+static func closed_on_line(state: Dictionary) -> String:
+	if not state.has("closed_on"):
+		return ""
+	var closed: Dictionary = state["closed_on"]
+	var call := "none"
+	if closed.has("call"):
+		call = String(closed["call"])
+	return Strings.text("lobby_closed_on_message", {
+		"connection": Strings.text("connection_" + String(closed["connection"])),
+		"code": closed["code"],
+		"call": Strings.text("call_word_" + call),
+		"state": Strings.text("link_open" if closed["open"] else "link_reopening"),
+	})
 
 
 ## The preset's name as the string table spells it: the `preset_<name>` row for the wire's
@@ -257,11 +333,23 @@ static func preset_line(state: Dictionary) -> String:
 	return said
 
 
-## What Ready will do now, in a Lull (S3's `fixp`, P6b finding 4): with a seal the gateway
-## accepted this round (the bridge's editor's `sealed_this_round`), Ready keeps it; with none, the
-## gateway files the safe playbook. A branch on the bridge's word, for display.
-static func ready_line(editor_state: Dictionary) -> String:
-	return Strings.text("lobby_ready_sealed" if editor_state.get("sealed_this_round", false) else "lobby_ready_help")
+## What Ready will do now, in a Lull (S3's `fixp`, P6b finding 4), from the gateway's own word on
+## this seat's seal: the watch state's `sealed_this_round`, the rig's reading of the seat's
+## `get_status` for this round and phase, and the one source of it (S3's `fixq-c`, item 13: the
+## editor keeps no record of its own, so a resumed client says what the gateway says). Sealed,
+## Ready keeps it; not sealed, the gateway files the safe playbook; not told yet, the line says the
+## client is asking. A branch on the bridge's word, for display.
+static func ready_line(watch_state: Dictionary) -> String:
+	# A Ready that did not go through, whatever stopped it, is said on this line (fix pass 4).
+	if watch_state.has("ready_failed"):
+		return Strings.text("ready_failed_" + String(watch_state["ready_failed"]), {"detail": watch_state.get("ready_failed_detail", "")})
+	if not watch_state.has("sealed_this_round"):
+		# Asked a few times and refused each time: the gateway's refusal, never "Asking..." while
+		# nobody is asking (fix pass 2).
+		if watch_state.get("seal_not_told", false):
+			return Strings.text("lobby_ready_not_told", {"detail": watch_state.get("status_detail", "")})
+		return Strings.text("lobby_ready_asking")
+	return Strings.text("lobby_ready_sealed" if watch_state.get("sealed_this_round", false) else "lobby_ready_help")
 
 
 ## The recap's prose, as the gateway wrote it, in a recap and after the match has ended;
@@ -280,7 +368,7 @@ func _draw_recap(phase: String) -> void:
 	_recap.visible = shown
 	if shown:
 		if refusal != "":
-			_recap.text = Strings.text("lobby_recap_refused", {"refusal": refusal})
+			_recap.text = Strings.text("recap_failed_" + String(recap.get("refusal_cause", "refused")), {"detail": refusal})
 		else:
 			_recap.text = recap_text_of(recap)
 		_recap.accessibility_name = _recap.text
@@ -366,6 +454,8 @@ func _offer_chooser(resume_too: bool) -> void:
 	_recap.visible = false
 	editor.visible = false
 	_resume_button.visible = resume_too and remembered_line() != ""
+	if _remembered_unreadable != "":
+		_status.text += "  " + _remembered_unreadable
 	_chooser.visible = true
 
 

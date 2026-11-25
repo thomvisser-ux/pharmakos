@@ -39,7 +39,9 @@ static func path_of(process_id: int) -> String:
 ## Opens `path` for this instance. A file that cannot be opened logs nothing, and says so on the
 ## standard error stream: it is the one place left to say it.
 func _init(path: String) -> void:
-	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var made := DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	if made != OK:
+		printerr("[log] %s's folder could not be made (error %d)" % [path, made])
 	_file = FileAccess.open(path, FileAccess.WRITE)
 	if _file == null:
 		printerr("[log] %s could not be opened (error %d), so this instance keeps no log file" % [path, FileAccess.get_open_error()])
@@ -59,8 +61,12 @@ func _write(text: String) -> void:
 	_lock.lock()
 	if not _writing:
 		_writing = true
-		_file.store_line(text)
-		_file.flush()
+		# A line the file would not take ends the file's log: this log cannot say so in itself,
+		# and the line still reaches Godot's own console output (fix pass 2's sweep).
+		if _file.store_line(text):
+			_file.flush()
+		else:
+			_file = null
 		_writing = false
 	_lock.unlock()
 
@@ -79,4 +85,7 @@ static func prune(folder: String) -> void:
 	logs.sort()
 	while logs.size() > KEPT:
 		var oldest: Array = logs.pop_front()
-		DirAccess.remove_absolute(oldest[1])
+		# A log another instance holds open is not removed on Windows (above): said, and kept.
+		var removed := DirAccess.remove_absolute(oldest[1])
+		if removed != OK:
+			printerr("[log] %s was not removed (error %d); it is kept" % [oldest[1], removed])

@@ -130,6 +130,17 @@
 #     Lull, `get_status` names `probation` as asked, and round 1's first `list_templates`
 #     marks exactly one template with a sentence, which the panel draws as sent. The first
 #     host's legs hold `get_status` to `custom` and read the seat's `sealed_this_round`;
+#   * THE PLANNING WIRE (S3's `fixq-c`; `_planning_wire`), in round 1's Lull against the real
+#     gateway, on the committed playbook: a duration chip is a number typed in seconds, pre-filled
+#     with the gateway's own text, and "3" typed into its field and sent lands as 3000 game
+#     milliseconds by `set_value_text`; a choice chip's menu draws the gateway's titles; Add a
+#     rule, clicked, lands a rule whose empty condition slot the picker fills with a group, which
+#     lands too; Remove, clicked, takes the rule out; a wall's Build target on the seat's core takes
+#     two ground clicks beside the commander and lands the gateway's box (`compose_wall_box`);
+#     Queue a structure lists the Queue's own entries; and Undo takes every one back to the
+#     committed bytes; a 300 KB paste into a field is refused before it goes, with the seat
+#     connection kept up (fix pass 1), and the committed playbook is then sealed, which the
+#     carried draft of round 2 checks;
 #   * across every host: the bridge caught no panic, refused no view page, the gateway
 #     refused no call (so no burst met RATE_LIMITED), entities were drawn, and every host
 #     exited once the client let go of its standard input.
@@ -156,6 +167,11 @@ extends Node
 const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
 const Values := preload("res://scripts/values.gd")
+const LobbyScene := preload("res://scenes/lobby.tscn")
+const Lobby := preload("res://scripts/lobby.gd")
+## The remembered file the cut-line leg points the real lobby at: the check's own, never the
+## lobby's `user://last_match.txt`.
+const ENDED_REMEMBERED := "user://watch_check_last_match.txt"
 
 ## The idle stretch: longer than the gateway's 30-second READ_TIMEOUT, so a connection
 ## with no keep-alive would be dropped inside it.
@@ -211,6 +227,10 @@ const CARRY := "pharmakos_watch_check"
 
 var _failures: Array[String] = []
 var _refusals: Array[String] = []
+## The editor's calls the gateway refused on purpose: the planning wire's pastes past what a
+## value holds (fix pass 2). Each is taken off `_refusals` as it comes, and the editor's own count
+## of refusals is held to this number rather than to none.
+var _asked_refusals := 0
 var _events := 0
 var _ended := false
 var _gamectl := ""
@@ -385,6 +405,9 @@ func _run() -> void:
 	if not await _real_wheel():
 		_finish()
 		return
+	if not await _planning_wire():
+		_finish()
+		return
 	var sealed: PackedByteArray = vista.bridge.editor_sealed_bytes()
 	print("[watch-check] round 1's sealed submission is %d bytes; the Lull's timer shows %s at Ready" % [sealed.size(), _state().get("timer", "")])
 
@@ -445,7 +468,9 @@ func _run() -> void:
 	await get_tree().create_timer(IDLE_WAIT).timeout
 	var idle := _state()
 	print("[watch-check] after the idle stretch: %s" % idle)
-	if idle.get("phase", "") != "lull" or int(idle.get("drops_admin", 0)) != 0 or int(idle.get("drops_seat", 0)) != 0:
+	# A close on a message (the planning wire's six big loads, fix pass 4) is not a dropped
+	# connection: what may not happen is a drop of the connection itself.
+	if idle.get("phase", "") != "lull" or _connection_drops(idle, "admin") != 0 or _connection_drops(idle, "seat") != 0:
 		_failures.append("the idle stretch did not stay a Lull with both connections up: %s" % idle)
 		_finish()
 		return
@@ -502,6 +527,9 @@ func _run_probation() -> void:
 	if not await _older_line_refused():
 		_finish()
 		return
+	if not await _cut_line_refused():
+		_finish()
+		return
 	if not link.start(_gamectl, _root, _line):
 		_finish()
 		return
@@ -537,7 +565,134 @@ func _run_probation() -> void:
 	if state.get("phase", "") != "lull":
 		_failures.append("the Probation Lull ended by itself: %s" % state)
 	print("[watch-check] Probation: %.0f s of the Lull, %d clock report(s) answered, %d countdown(s) sent, none shown, untimed by rule %s, %d refusal(s)" % [PROBATION_WATCH, answered, countdowns, state.get("untimed_by_rule"), _refusals.size() - refused_before])
+	await _host_gone()
 	_finish()
+
+
+## **A host that truly goes away ends the link** (fix pass 4, item 1): the host is killed, and
+## the link gives up in words rather than reconnecting for ever.
+func _host_gone() -> void:
+	var pid: int = link.host_pid()
+	# Up to here no connection may have dropped; the drops the host's going makes are this leg's.
+	if _connection_drops(_state(), "admin") != 0 or _connection_drops(_state(), "seat") != 0:
+		_failures.append("a connection dropped before the host went away: %s" % _state())
+	_host_killed = true
+	_refused_reason = ""
+	_expecting_refusal = true
+	if OS.kill(pid) != OK:
+		_failures.append("the host-gone leg could not end the host (pid %d)" % pid)
+		_expecting_refusal = false
+		return
+	var ended := await _until(func() -> bool: return _refused_reason != "", START_WAIT)
+	_expecting_refusal = false
+	if not ended:
+		_failures.append("the host went away and the link never gave up")
+		return
+	# The give-up is the reconnect policy's, in its own words (fix pass 5).
+	if not _refused_reason.contains("connection was given up after") or not Strings.text("link_gave_up").contains("connection was given up after"):
+		_failures.append("the host went away and the link gave up in words that are not the policy's: %s" % _refused_reason)
+	# Never a bare -1 (fix pass 6): a close with no code is said as a lost connection.
+	if _refused_reason.contains("-1"):
+		_failures.append("the give-up says a bare -1: %s" % _refused_reason)
+	var lost := HostLink.gave_up_words(1, {"attempts": 4, "code": -1})
+	var coded := HostLink.gave_up_words(0, {"attempts": 4, "code": 1006})
+	if lost.contains("-1") or not lost.contains("lost with no close") or not coded.contains("code 1006"):
+		_failures.append("the give-up's words by code are wrong: %s | %s" % [lost, coded])
+	print("[watch-check] the host went away (pid %d) and the reconnect policy gave the link up: %s" % [pid, _refused_reason])
+
+## How long the silent-host leg may take to give the link up: six connects aborted at the connect
+## deadline (5 s) and the back-off between them (17.5 s), with room for a slow frame.
+const SILENT_WAIT := 90.0
+
+## **A host that accepts a connection and never answers is given up in words** (fix pass 7,
+## review 6's TCPServer probe): a listener takes every connection and never reads or writes it,
+## so the handshake never completes. The links are attached to it with no host process; the rig
+## has each connect aborted at its deadline, and the policy gives the link up within
+## `SILENT_WAIT`, in the policy's words. Before the fix the peer stayed connecting for ever.
+func _silent_host() -> void:
+	var server := TCPServer.new()
+	if server.listen(0, "127.0.0.1") != OK:
+		_failures.append("the silent-host leg could not listen")
+		return
+	var held: Array[StreamPeerTCP] = []
+	link.reset()
+	_refused_reason = ""
+	_expecting_refusal = true
+	link.attach(server.get_local_port(), ["silent-admin", "silent-seat"])
+	var timer := get_tree().create_timer(SILENT_WAIT)
+	while _refused_reason == "" and timer.time_left > 0.0:
+		while server.is_connection_available():
+			held.append(server.take_connection())
+		link.pump_attached()
+		await get_tree().process_frame
+	_expecting_refusal = false
+	var left := timer.time_left
+	link.reset()
+	server.stop()
+	if held.is_empty():
+		_failures.append("the silent-host leg: the listener took no connection")
+	if _refused_reason == "":
+		_failures.append("the silent-host leg: a host that never answered was not given up in %.0f s" % SILENT_WAIT)
+		return
+	if not _refused_reason.contains("connection was given up after"):
+		_failures.append("the silent-host leg gave up in words that are not the policy's: %s" % _refused_reason)
+	print("[watch-check] a host that accepts and never answers: %d connection(s) taken, given up with %.1f s of the %.0f s bound left: %s" % [held.size(), left, SILENT_WAIT, _refused_reason])
+	await _silent_after_open()
+
+
+## How long the open-then-silent leg waits for its first abort: the call deadline (20 s) and a
+## slow frame's room.
+const DEADLINE_WAIT := 40.0
+## How long an aborted peer may take to read CLOSED (measured: 32 ms).
+const ABORT_WAIT := 2.0
+
+## **A host that opens and then never answers is aborted, not closed by a handshake** (fix pass
+## 7, item 1 (a)): a listener completes each handshake and then never polls again. The call in
+## flight passes its deadline, the rig has the peer aborted, and the aborted peer reads CLOSED
+## within `ABORT_WAIT`. A `close(1000)` would wait for an echo that never comes, and the peer
+## would read CLOSING for ever (review 6 measured 40 s).
+func _silent_after_open() -> void:
+	var server := TCPServer.new()
+	if server.listen(0, "127.0.0.1") != OK:
+		_failures.append("the open-then-silent leg could not listen")
+		return
+	var answering: Array[WebSocketPeer] = []
+	link.reset()
+	_refused_reason = ""
+	_expecting_refusal = true
+	link.attach(server.get_local_port(), ["silent-admin", "silent-seat"])
+	var first: WebSocketPeer = link._peers[0]
+	var timer := get_tree().create_timer(DEADLINE_WAIT)
+	while link._peers[0] == first and _refused_reason == "" and timer.time_left > 0.0:
+		while server.is_connection_available():
+			var peer := WebSocketPeer.new()
+			peer.accept_stream(server.take_connection())
+			answering.append(peer)
+		# Each server peer is polled until its handshake is done, and never after.
+		for peer in answering:
+			if peer.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
+				peer.poll()
+		link.pump_attached()
+		await get_tree().process_frame
+	_expecting_refusal = false
+	var aborted: bool = link._peers[0] != first
+	var closed := false
+	if aborted:
+		var settle := get_tree().create_timer(ABORT_WAIT)
+		while settle.time_left > 0.0 and not closed:
+			first.poll()
+			closed = first.get_ready_state() == WebSocketPeer.STATE_CLOSED
+			await get_tree().process_frame
+	var state := first.get_ready_state()
+	link.reset()
+	server.stop()
+	if not aborted:
+		_failures.append("the open-then-silent leg: the admin link was not aborted in %.0f s (%s)" % [DEADLINE_WAIT, _refused_reason])
+		return
+	if not closed:
+		_failures.append("the open-then-silent leg: the aborted peer still reads state %d after %.0f s, not CLOSED" % [state, ABORT_WAIT])
+		return
+	print("[watch-check] a host that opens and never answers: the call deadline aborted the admin link, and the aborted peer read CLOSED; the link was opened again")
 
 
 ## A line remembered before the preset existed (six fields) is refused by the gateway when it
@@ -545,6 +700,8 @@ func _run_probation() -> void:
 ## lobby's refused Resume leans on. The refusal's words are printed, never read: any refusal
 ## before an announce is the refusal this needs. The refused host is gone once it refused.
 var _refused_reason := ""
+## Whether the host-gone leg ended the host: its drops are the leg's, checked before it.
+var _host_killed := false
 var _expecting_refusal := false
 
 
@@ -567,6 +724,67 @@ func _older_line_refused() -> bool:
 	link.reset()
 	print("[watch-check] a six-field remembered line was refused on resume: %s" % _refused_reason)
 	return true
+
+
+## **A remembered line cut mid-field is the host's to refuse** (S3's `fixq-c`, fix pass 3,
+## item 1b: what the lobby's reader leans on, as the six-field line above is). The real lobby,
+## pointed at a file of the check's own holding a line cut inside its second field, offers it;
+## Resume ends in the host's refusal in its own words, with the chooser back and no match
+## started, never a crash or a hang. The line is not parsed here: the host reads it.
+##
+## Not checked here: an ended match's line. Resumed, the host announces the ended match rather
+## than refusing it (measured 2026-11-24 against this branch's `gamectl host`); that is reported
+## in PR #229 for the gateway's lane, and the lobby claims no refusal for it.
+func _cut_line_refused() -> bool:
+	var cut_from := HostLink.config_line(HostLink.match_id("watch-check-cut"), SEGMENT, 1, CHECK_SEED, CHECK_PRESET).strip_edges()
+	if not await _resume_refused("a line cut mid-field", cut_from.get_slice("\t", 0) + "\t" + cut_from.get_slice("\t", 1).left(4)):
+		return false
+	var path := ProjectSettings.globalize_path(ENDED_REMEMBERED)
+	if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+		_failures.append("the cut-line leg could not remove %s" % path)
+		return false
+	return true
+
+
+## The real lobby, offered `line` from the check's own remembered file: Resume is shown, and
+## pressing it ends in the host's refusal (`lobby_resumed_failed`), the chooser back, no match
+## started and no host left running.
+func _resume_refused(name: String, line: String) -> bool:
+	var file := FileAccess.open(ENDED_REMEMBERED, FileAccess.WRITE)
+	if file == null:
+		_failures.append("the cut-line leg could not open %s (error %d)" % [ENDED_REMEMBERED, FileAccess.get_open_error()])
+		return false
+	var stored := file.store_string(line + "\n")
+	file.close()
+	if not stored:
+		_failures.append("the cut-line leg could not write %s" % ENDED_REMEMBERED)
+		return false
+	var lobby: Node = LobbyScene.instantiate()
+	lobby.remembered = ENDED_REMEMBERED
+	add_child(lobby)
+	await get_tree().process_frame
+	var offered: bool = lobby._resume_button.visible
+	if not offered:
+		_failures.append("the lobby does not offer %s" % name)
+	else:
+		lobby.resume_match()
+		var settled := await _until(func() -> bool: return lobby._announced or (not lobby._started and lobby._chooser.visible), START_WAIT)
+		var refused_prefix := Strings.text("lobby_resumed_failed", {"reason": ""}).get_slice(":", 0)
+		if lobby._announced:
+			_failures.append("STOP: the host resumed %s instead of refusing it: %s" % [name, lobby._status.text])
+		elif not settled:
+			_failures.append("Resume of %s neither was refused nor resumed: `%s`" % [name, lobby._status.text])
+		elif not String(lobby._status.text).begins_with(refused_prefix):
+			_failures.append("Resume of %s did not end in the host's refusal: `%s`" % [name, lobby._status.text])
+		else:
+			print("[watch-check] Resume of %s was refused by the host: %s" % [name, String(lobby._status.text).strip_edges().replace("\n", " ")])
+		var pid: int = lobby.link.host_pid()
+		lobby.link.quit()
+		if pid >= 0 and not await _until(func() -> bool: return not OS.is_process_running(pid), EXIT_WAIT):
+			_failures.append("the host that refused %s (pid %d) was still running" % [name, pid])
+	lobby.queue_free()
+	await get_tree().process_frame
+	return _failures.is_empty()
 
 
 ## The Probation match's frame on a real gateway (S3's `prob`): `get_status` names it
@@ -606,8 +824,8 @@ func _carried(sealed: PackedByteArray, where: String) -> bool:
 	if opened != sealed:
 		_failures.append("%s: the carried draft is not round 1's sealed submission (%d bytes against %d)" % [where, opened.size(), sealed.size()])
 		return false
-	if int(_editor().get("refusals", 0)) != 0:
-		_failures.append("%s: the gateway refused %s of the editor's calls" % [where, _editor().get("refusals")])
+	if int(_editor().get("refusals", 0)) != _asked_refusals:
+		_failures.append("%s: the gateway refused %s of the editor's calls (%d asked for)" % [where, _editor().get("refusals"), _asked_refusals])
 	return await _save_as_offers("", "%s: the carried draft" % where)
 
 
@@ -1510,12 +1728,18 @@ func _has_draft(state: Dictionary, id: String) -> bool:
 
 
 ## What must hold of one client's bridge, whichever host it watched.
+## The drops of `link`'s connection itself: its drops less its closes on a message, which the
+## planning wire's big loads make on purpose and which spend no reconnect (fix pass 4).
+func _connection_drops(state: Dictionary, link: String) -> int:
+	return _count(state, "drops_" + link) - _count(state, "message_drops_" + link)
+
+
 func _check_bridge(who: String) -> void:
 	var state := _state()
 	print("[watch-check] %s's final state: %s" % [who, state])
 	print("[watch-check] %s: %d event rows; %s" % [who, _events, vista.bridge.panic_report()])
-	if int(state.get("drops_admin", 0)) != 0 or int(state.get("drops_seat", 0)) != 0:
-		_failures.append("%s: a connection dropped: admin %s, seat %s" % [who, state.get("drops_admin"), state.get("drops_seat")])
+	if not _host_killed and (_connection_drops(state, "admin") != 0 or _connection_drops(state, "seat") != 0):
+		_failures.append("%s: a connection dropped: admin %s, seat %s (closes on a message: %s, %s)" % [who, state.get("drops_admin"), state.get("drops_seat"), state.get("message_drops_admin"), state.get("message_drops_seat")])
 	if vista.bridge.caught_panics() != 0:
 		_failures.append("%s: %d panic(s) were caught at the bridge boundary" % [who, vista.bridge.caught_panics()])
 	if int(state.get("view_refusals", 0)) != 0:
@@ -1536,6 +1760,8 @@ func _finish() -> void:
 			_failures.append("the host (pid %d) was still running after its standard input closed" % pid)
 		else:
 			print("[watch-check] the host exited once its standard input closed")
+	if _failures.is_empty() and _probation:
+		await _silent_host()
 	if _failures.is_empty() and _probation:
 		var carried: Dictionary = Engine.get_meta(CARRY)
 		print("[watch-check] OK (host pids %d, %d and %d)" % [int(carried.get("first_pid", -1)), int(carried.get("resumed_pid", -1)), pid])
@@ -1582,6 +1808,272 @@ func _on_received(answer: Dictionary) -> void:
 			_failures.append("a get_view page did not decode (the reason is in the log)")
 		else:
 			vista.take_view(answer["view"])
+
+
+## The planning wire against the real gateway (S3's `fixq-c`): see the header.
+func _planning_wire() -> bool:
+	var original := FileAccess.get_file_as_bytes(COMMITTED)
+	editor.load_file(COMMITTED)
+	if not await _editor_until(func(s: Dictionary) -> bool: return vista.bridge.editor_bytes() == original and s.get("prose_current", false) and s.get("rows_current", false) and s.get("rules_editable", false) and s.get("vocabulary", {}).get("known", false), "the planning wire: the committed playbook never rendered"):
+		return false
+	var depth := _count(_editor(), "undo_depth")
+	# A duration, typed in seconds.
+	var timeout := _chip_at(_editor(), "/timeout_ms")
+	var chip: Dictionary = _editor().get("rule_list", {}).get("chips", [])[timeout] if timeout >= 0 else {}
+	if String(chip.get("editor", "")) != "number" or String(chip.get("display_unit", "")) != "s" or String(chip.get("value_text", "")) == "":
+		_failures.append("the planning wire: the duration chip is not a number typed in seconds: %s" % [chip])
+		return false
+	editor._on_rule_chip(timeout)
+	await get_tree().process_frame
+	if editor._number_field.field.text != String(chip.get("value_text", "")) or editor._number_field.unit.text != "s":
+		_failures.append("the planning wire: the duration's field shows `%s %s`, not the gateway's `%s s`" % [editor._number_field.field.text, editor._number_field.unit.text, chip.get("value_text", "")])
+	var before := _count(_editor(), "revision")
+	editor._number_field.field.text = "3"
+	editor._number_field.send.pressed.emit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and not s.get("busy", true) and s.get("prose_current", false), "the planning wire: the duration's \"3\" never landed"):
+		return false
+	var typed: String = vista.bridge.editor_bytes().get_string_from_utf8()
+	if not ("\"timeout_ms\": 3000" in typed):
+		_failures.append("the planning wire: \"3\" seconds did not land as 3000 ms")
+	editor._number_popup.hide()
+	await _editor_until(func(s: Dictionary) -> bool: return s.get("rules_editable", false), "the planning wire: the list never took an edit again")
+	# Pastes against the real gateway (fix pass 2, item 1e): every one leaves the seat link up
+	# with its drops unchanged, and the leg then seals, and Ready ends the Lull as ever.
+	if not await _pastes():
+		return false
+	if not await _closes_on_a_message():
+		return false
+	# Add a rule, through its button; its empty slot takes a group; Remove takes it out.
+	var rules_before: int = _editor().get("rule_list", {}).get("rules", []).size()
+	var add := _rule_button("rule_add")
+	if add == null:
+		_failures.append("the planning wire: no Add a rule button")
+		return false
+	before = _count(_editor(), "revision")
+	add.pressed.emit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and s.get("rules_editable", false) and s.get("rule_list", {}).get("rules", []).size() == rules_before + 1, "the planning wire: Add a rule never landed a rule"):
+		return false
+	var slots: Array = _editor().get("rule_list", {}).get("slots", [])
+	var slot := -1
+	for index in slots.size():
+		if String(slots[index].get("state", "")) == "empty" and int(slots[index].get("rule", -1)) == rules_before and slots[index].get("pickable", false):
+			slot = index
+	if slot < 0:
+		_failures.append("the planning wire: the new rule has no empty slot for the picker: %s" % [slots])
+		return false
+	before = _count(_editor(), "revision")
+	if not vista.bridge.editor_choose_group(slot, String(slots[slot].get("pointer", "")), int(_editor().get("rules_rendering", -1)), 0):
+		_failures.append("the planning wire: the group pick was refused: %s" % _editor().get("status_key", ""))
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and s.get("rules_editable", false), "the planning wire: the group never landed"):
+		return false
+	if not ("\"all\"" in vista.bridge.editor_bytes().get_string_from_utf8()):
+		_failures.append("the planning wire: the group pick wrote no `all`")
+	var remove: Button = null
+	for button in editor._rules_box.find_children("*", "Button", true, false):
+		if (button as Button).has_meta("rule_remove") and int(button.get_meta("rule_remove")) == rules_before:
+			remove = button
+	if remove == null:
+		_failures.append("the planning wire: the new rule has no Remove button")
+		return false
+	before = _count(_editor(), "revision")
+	remove.pressed.emit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "revision") > before and s.get("rules_editable", false) and s.get("rule_list", {}).get("rules", []).size() == rules_before, "the planning wire: Remove never took the rule out"):
+		return false
+	# A wall on the seat's core, by two ground clicks beside the commander.
+	var core := ""
+	for beacon in vista.beacons():
+		if String(beacon["owner"]) == vista.my_seat:
+			core = String(beacon["id"])
+	vista.bridge.editor_describe_beacon(core)
+	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("beacon_detail", {}).get("id", "")) == core, "the planning wire: the core's detail never came"):
+		return false
+	# The core's settings in the gateway's words: a choice by its title, a number in its unit.
+	editor._visit_beacon = core
+	editor._visit_drawn = ""
+	editor._fill_visit_menu(_editor())
+	var drawn: Array[String] = []
+	for submenu in editor._visit_submenus:
+		for item in (submenu as PopupMenu).item_count:
+			drawn.append((submenu as PopupMenu).get_item_text(item))
+	for setting in _editor().get("beacon_detail", {}).get("settings", []):
+		var said := Strings.text("menu_setting", {"title": setting.get("title", ""), "value": editor.setting_value_text(setting)})
+		if not drawn.has(said) or "\"" in said:
+			_failures.append("the planning wire: the setting `%s` is not drawn in the gateway's words: %s" % [said, drawn])
+	var blueprints: Array = _editor().get("vocabulary", {}).get("blueprints", [])
+	var wall := -1
+	for index in blueprints.size():
+		if String(blueprints[index].get("anchor_shape", "")) == "box":
+			wall = index
+	var at: Vector3i = vista.my_commander_at()
+	before = _count(_editor(), "revision")
+	if wall < 0 or not vista.bridge.editor_visit_row(core, "add_target", wall):
+		_failures.append("the planning wire: Add a build target took no wall: %s" % _editor().get("status_key", ""))
+		return false
+	vista.bridge.editor_pick({"voxel": at + Vector3i(2, 2, 0)})
+	vista.bridge.editor_pick({"voxel": at + Vector3i(4, 3, 0)})
+	if not await _editor_until(func(s: Dictionary) -> bool: return (_count(s, "revision") > before or String(s.get("status_key", "")) == "gateway_refused") and not s.get("busy", true) and not s.get("pending", true), "the planning wire: the wall's box never came"):
+		return false
+	if not ("\"wall_box\"" in vista.bridge.editor_bytes().get_string_from_utf8()):
+		_failures.append("the planning wire: the wall's row holds no box: %s %s" % [_editor().get("status_key", ""), _editor().get("status_detail", "")])
+	# The Queue's own list.
+	var queued: Array = _editor().get("vocabulary", {}).get("queue_blueprints", [])
+	editor._visit_beacon = core
+	editor.open_entry_list(editor.ITEM_LIST_QUEUE, _editor().get("vocabulary", {}).get(String(editor.ENTRY_LISTS[editor.ITEM_LIST_QUEUE][1]), []), Rect2(Vector2(200, 300), Vector2(180, 200)))
+	await get_tree().process_frame
+	if editor.entry_rows().size() != queued.size() or queued.is_empty():
+		_failures.append("the planning wire: Queue a structure lists %d rows of the Queue's %d" % [editor.entry_rows().size(), queued.size()])
+	editor._entry_popup.hide()
+	# Undo takes every one of them back to the committed bytes.
+	while _count(_editor(), "undo_depth") > depth:
+		var undone := _count(_editor(), "undo_depth")
+		vista.bridge.editor_undo()
+		if not await _editor_until(func(s: Dictionary) -> bool: return _count(s, "undo_depth") < undone and not s.get("busy", true) and not s.get("pending", true), "the planning wire: Undo never came back"):
+			return false
+	if vista.bridge.editor_bytes() != original:
+		_failures.append("the planning wire: Undo did not give the committed bytes back")
+	# Sealed again after the paste: the submission is accepted, as any other.
+	editor.submit()
+	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("accepted", false) and not s.get("pending", true) and vista.bridge.editor_sealed_bytes() == original, "the planning wire: the seal after the paste was never accepted"):
+		return false
+	# The same text sent again, as the editor re-sends a submission lost with its connection, is
+	# the same seal (fix pass 7, item 7): `submit_plan` replaces the seat's seal with this text's.
+	if not editor.submit() or not _editor().get("pending", false):
+		_failures.append("the planning wire: the same text was not taken for a second submission")
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("accepted", false) and not s.get("pending", true) and vista.bridge.editor_sealed_bytes() == original, "the planning wire: the same text submitted again was not the same seal"):
+		return false
+	print("[watch-check] the planning wire: the same text submitted twice, accepted twice, the same seal")
+	print("[watch-check] the planning wire: a duration typed in seconds landed, titles drawn, a rule added, filled with a group and removed, a wall's box composed, the Queue's own list, all undone")
+	return true
+
+
+## Pastes into the duration field, against the real gateway (S3's `fixq-c`, fix pass 2, item
+## 1e): about 100 KB, under the cap and past Godot's default outbound buffer (sent; the gateway
+## refuses the value in its words); exactly the cap (sent, on a peer sized for it); the cap and one
+## byte more (refused before it goes); 90 000 three-byte characters (over the cap in bytes); and a
+## text of quotes and backslashes over the cap only once JSON escapes it. The seat link stays up
+## and its drops stay as they were through every one; nothing waits "Sending...".
+func _pastes() -> bool:
+	var cap := _count(vista.bridge.watch_transport_limits(), "message_bytes")
+	var drops := _count(_state(), "drops_seat")
+	var paste := func(text: String) -> Dictionary:
+		var at := _chip_at(_editor(), "/timeout_ms")
+		editor._on_rule_chip(at)
+		await get_tree().process_frame
+		editor._number_field.field.text = text
+		editor._number_field.send.pressed.emit()
+		if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("field", {}).get("state", "")) in ["refused", "landed"] and not s.get("busy", true), "the planning wire: a paste of %d characters never settled" % text.length()):
+			return {}
+		var field: Dictionary = _editor().get("field", {})
+		editor._number_popup.hide()
+		await _editor_until(func(s: Dictionary) -> bool: return s.get("rules_editable", false), "the planning wire: the list never took an edit after a paste")
+		return field
+	# The frame's own bytes around the typed text, measured from a refusal that names them.
+	var probe: Dictionary = await paste.call("1".repeat(cap))
+	if String(probe.get("key", "")) != "status_call_too_large":
+		_failures.append("the planning wire: a paste of the cap's length went out: %s" % probe)
+		return false
+	var around := int(String(probe.get("detail", "0"))) - cap
+	var cases := [
+		["about 100 KB", "1".repeat(100000), "gateway"],
+		["exactly the cap", "1".repeat(cap - around), "sent"],
+		["the cap and one byte", "1".repeat(cap - around + 1), "unsent"],
+		["90 000 three-byte characters", "€".repeat(90000), "unsent"],
+		["quotes and backslashes", "\"\\".repeat(70000), "unsent"],
+	]
+	for case in cases:
+		var unsent := _count(_state(), "unsent_seat")
+		var field: Dictionary = await paste.call(String(case[1]))
+		if field.is_empty():
+			return false
+		var key := String(field.get("key", ""))
+		match String(case[2]):
+			"gateway":
+				if key != "rule_refused":
+					_failures.append("the planning wire: %s was not the gateway's to refuse: %s" % [case[0], field])
+				_take_asked_refusal(String(field.get("detail", "")))
+			"sent":
+				if _count(_state(), "unsent_seat") != unsent or key == "status_call_too_large" or key == "status_call_send_failed":
+					_failures.append("the planning wire: %s did not go out: %s" % [case[0], field])
+				# The gateway reads it, and may refuse the value in its words: a refusal asked for.
+				if key == "rule_refused":
+					_take_asked_refusal(String(field.get("detail", "")))
+			"unsent":
+				if key != "status_call_too_large" or _count(_state(), "unsent_seat") != unsent + 1:
+					_failures.append("the planning wire: %s was not refused before it went: %s" % [case[0], field])
+		if _count(_state(), "drops_seat") != drops or _count(_state(), "send_failures_seat") != 0:
+			_failures.append("the planning wire: %s dropped the seat link or the transport refused it: %s" % [case[0], _state()])
+		print("[watch-check] the planning wire: %s: %s (`%s`), drops %d" % [case[0], key, String(field.get("detail", "")).left(80), _count(_state(), "drops_seat")])
+	return true
+
+
+## A refusal the planning wire asked for, taken off `_refusals` (where `_on_received` put it) and
+## counted, so the run's own "the gateway refused no call" stays about the calls nobody asked it to
+## refuse. A refusal that never arrived is this check's failure.
+func _take_asked_refusal(detail: String) -> void:
+	for index in _refusals.size():
+		if _refusals[index] == detail:
+			_refusals.remove_at(index)
+			_asked_refusals += 1
+			return
+	_failures.append("the planning wire: the gateway's refusal `%s` never reached the feed of answers" % detail.left(80))
+
+
+## **Closes on a message do not end a playable match** (S3's `fixq-c`, fix passes 4 to 6, item
+## 1). Review 3's playbook of 18 000 bare holds (216 056 bytes, under the cap) is loaded six times
+## with no wait between the loads, as a player might click; its answers are past the client's
+## inbound buffer, so the first load closes the seat link on its message (Godot's 1009). That close
+## spends no reconnect attempt, and the same text is held: the five loads after it are refused at
+## once without being sent. Through all six the seat link is never given up, the text on screen
+## stays as it was, the editor's line says the answer is too large to read and to shorten the
+## file, and the leg goes on to seal and Ready.
+func _closes_on_a_message() -> bool:
+	var steps: PackedStringArray = []
+	for index in 18000:
+		steps.append("{\"hold\":{}}")
+	var big := ("{\"schema_version\":{\"major\":1},\"declarative\":{\"route\":[" + ",".join(steps) + "]}}").to_utf8_buffer()
+	var text: PackedByteArray = vista.bridge.editor_bytes()
+	var closes := _count(_state(), "message_drops_seat")
+	for attempt in 6:
+		var before := _count(_editor(), "closed_on_calls")
+		if not editor.load_bytes(big):
+			_failures.append("the planning wire: big load %d was not taken to the gateway" % attempt)
+			return false
+		if not await _until(func() -> bool: return _count(_editor(), "closed_on_calls") > before and not _editor().get("busy", true), PUSH_WAIT):
+			_failures.append("the planning wire: big load %d was not settled on its message: %s %s" % [attempt, _state(), _editor().get("status_key", "")])
+			return false
+		if String(vista.bridge.watch_link_action(1)) == "give_up":
+			_failures.append("the planning wire: big load %d gave the seat link up" % attempt)
+			return false
+	var dropped := _count(_state(), "message_drops_seat") - closes
+	if dropped < 1:
+		_failures.append("the planning wire: six big loads never closed the seat link on their message")
+	if vista.bridge.watch_link_attempts(1) != 0:
+		_failures.append("the planning wire: closes on the player's loads spent the seat link's attempts (%d)" % vista.bridge.watch_link_attempts(1))
+	if vista.bridge.editor_bytes() != text:
+		_failures.append("the planning wire: a load refused on its message changed the text on screen")
+	if String(_editor().get("status_key", "")) != "call_answer_too_large":
+		_failures.append("the planning wire: the editor's line after the big loads is `%s`" % _editor().get("status_key", ""))
+	print("[watch-check] the planning wire: six loads with no wait, %d close(s) on the message, the rest held; the seat link kept, no attempt spent; the editor says: `%s`" % [dropped, Strings.text("status_" + String(_editor().get("status_key", "")), {"detail": _editor().get("status_detail", "")})])
+	return true
+
+
+## The rule-list chip whose pointer ends in `suffix`, by its index, or -1.
+func _chip_at(state: Dictionary, suffix: String) -> int:
+	var chips: Array = state.get("rule_list", {}).get("chips", [])
+	for index in chips.size():
+		if String(chips[index].get("pointer", "")).ends_with(suffix):
+			return index
+	return -1
+
+
+## The rule list's button carrying the meta `meta`, or null.
+func _rule_button(meta: String) -> Button:
+	for button in editor._rules_box.find_children("*", "Button", true, false):
+		if (button as Button).has_meta(meta):
+			return button
+	return null
 
 
 func _state() -> Dictionary:

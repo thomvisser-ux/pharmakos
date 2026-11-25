@@ -46,6 +46,12 @@ fn read(relative: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
 }
 
+/// One of the bridge crate's own sources, `src/<name>`.
+fn read_source(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
+}
+
 #[test]
 fn the_gdextension_names_the_library_cargo_builds() {
     let extension = read("pharmakos.gdextension");
@@ -473,23 +479,45 @@ fn the_lobby_remembers_one_line_and_no_token() {
         text.contains("const REMEMBERED := \"user://"),
         "the lobby's remembered line lives in user://"
     );
-    let writes: Vec<&&str> = code
+    // Since S3's `fixq-c` (fix pass 5) the lobby opens no file for writing itself: it writes and
+    // removes through the bridge's atomic replace (`crates/client-gdext/src/write.rs`), and only
+    // `remembered`, which is REMEMBERED unless a check points the lobby elsewhere. Its one open
+    // is the reader's, for reading.
+    let opens: Vec<&&str> = code
         .iter()
         .filter(|line| line.contains("FileAccess.WRITE") || line.contains("FileAccess.open("))
         .collect();
-    assert_eq!(writes.len(), 1, "the lobby opens one file: {writes:?}");
     assert!(
-        writes
+        opens
             .iter()
-            .all(|line| line.contains("FileAccess.open(REMEMBERED, FileAccess.WRITE)")),
-        "the one file the lobby writes is REMEMBERED: {writes:?}"
+            .all(|line| line.contains("FileAccess.open(path, FileAccess.READ)")),
+        "the lobby opens a file for writing itself: {opens:?}"
+    );
+    let writes: Vec<&&str> = code
+        .iter()
+        .filter(|line| line.contains("file_write(") || line.contains("file_remove("))
+        .collect();
+    assert_eq!(
+        writes.len(),
+        2,
+        "the lobby writes in one place and removes in one: {writes:?}"
+    );
+    assert!(
+        text.contains("var remembered := REMEMBERED"),
+        "the file the lobby writes is REMEMBERED by default"
     );
     let remember = gd_function(&text, "_remember");
     assert!(
-        remember
-            .iter()
-            .any(|line| line.contains("store_string(_line")),
-        "the lobby remembers the line it wrote: {remember:?}"
+        remember.iter().any(|line| line.contains(
+            "vista.bridge.file_write(ProjectSettings.globalize_path(remembered), (_line + "
+        )),
+        "the lobby remembers the line it wrote, whole: {remember:?}"
+    );
+    let forget = gd_function(&text, "_forget");
+    assert!(
+        forget.iter().any(|line| line
+            .contains("vista.bridge.file_remove(ProjectSettings.globalize_path(remembered))")),
+        "the lobby forgets by removing the remembered file: {forget:?}"
     );
     let announced = gd_function(&text, "_on_announced");
     assert!(
@@ -568,8 +596,8 @@ fn the_lobby_forgets_an_ended_match_and_shows_a_refusal_as_the_host_wrote_it() {
     );
     let forget = gd_function(&text, "_forget");
     assert!(
-        forget.iter().any(|line| line.contains("REMEMBERED"))
-            && forget.iter().any(|line| line.contains("remove_absolute")),
+        forget.iter().any(|line| line.contains("remembered"))
+            && forget.iter().any(|line| line.contains("file_remove(")),
         "_forget removes the remembered line: {forget:?}"
     );
     assert!(
@@ -743,6 +771,36 @@ fn the_export_ships_the_smoke_check_and_no_other_test_file() {
     ));
 }
 
+/// **A frame reads the links' answers before the rig's poll** (fix pass 7, item 8): in
+/// `host_link.gd`'s `_pump_links`, every `_pump_link` (which reads the peer's packets) comes
+/// before `watch_outbox` (the rig's poll, whose deadline sweep would otherwise run first on a
+/// frame after a stall). The rig also sweeps at the previous poll's time, so either order keeps
+/// a waiting answer; this pins the order the comment promises.
+#[test]
+fn a_frame_reads_the_answers_before_the_rig_polls() {
+    let text = read("scripts/host_link.gd");
+    let body = gd_function(&text, "_pump_links");
+    let read_at = body
+        .iter()
+        .position(|line| line.contains("_pump_link(link)"));
+    let poll_at = body
+        .iter()
+        .position(|line| line.contains("bridge.watch_outbox()"));
+    assert!(
+        matches!((read_at, poll_at), (Some(read), Some(poll)) if read < poll),
+        "_pump_links must read every link's packets before the rig's poll: {body:?}"
+    );
+    // And the shipped pump and the watch check's attached pump both go through it.
+    for pump in ["pump", "pump_attached"] {
+        assert!(
+            gd_function(&text, pump)
+                .iter()
+                .any(|line| line.trim() == "_pump_links()"),
+            "{pump} does not pump through _pump_links"
+        );
+    }
+}
+
 /// **The idle lobby reads no pipe** (decisions-log item 117 (3)). The lobby pumps its host
 /// link every frame, also while it waits for New match; before `start()` has spawned the
 /// host there is no pipe, and reading it is a SCRIPT ERROR each frame in the editor and a
@@ -905,12 +963,20 @@ fn ready_says_what_it_does_and_the_gate_is_the_clients() {
     assert!(
         gd_code(&lobby, "_process")
             .iter()
-            .any(|line| line.contains("_ready_help.text = ready_line(vista.bridge.editor_state())")),
-        "the line says what Ready does now (fixp)"
+            .any(|line| line.contains("_ready_help.text = ready_line(state)")),
+        "the line says what Ready does now (fixp), from the watch state (fixq-c)"
+    );
+    // The gateway's word on the seal is the one source (S3's `fixq-c`, item 13): the editor
+    // keeps none, and its state names none.
+    assert!(
+        !read_source("editor_view.rs").contains("\"sealed_this_round\""),
+        "the editor's state carries no seal of its own"
     );
     assert!(
         gd_code(&lobby, "ready_line").iter().any(|line| line.contains(
-            "\"lobby_ready_sealed\" if editor_state.get(\"sealed_this_round\", false) else \"lobby_ready_help\""
+            "if not watch_state.has(\"sealed_this_round\"):"
+        )) && gd_code(&lobby, "ready_line").iter().any(|line| line.contains(
+            "\"lobby_ready_sealed\" if watch_state.get(\"sealed_this_round\", false) else \"lobby_ready_help\""
         )),
         "the bridge's word picks the line"
     );
@@ -1633,7 +1699,8 @@ fn the_chooser_hides_the_watch_strip_and_the_editor_until_a_match_starts() {
             "`{shown}` once the host has announced: {announced:?}"
         );
     }
-    let process = gd_code(&lobby, "_process");
+    // The status line is drawn by `status_line` since fix pass 3, so the checks can read it.
+    let process = gd_code(&lobby, "status_line");
     let speed = process
         .iter()
         .position(|line| line.contains("\"lobby_speed\""))
@@ -2538,10 +2605,18 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
         );
     }
     // L1, fixp: no float and no bound in the client; the text goes to the bridge as typed.
+    // fixq-c: the field pre-fills with the gateway's own text in its display unit, and whether
+    // the value lies outside is the chip's word, so nothing here converts or compares.
     assert!(
         number.iter().any(|line| line.contains(
-            "_number_field.open(String(chip.get(\"value_json\", \"\")), String(chip.get(\"unit\", \"\")), String(chip.get(\"text\", \"\")))"
+            "_number_field.open(String(chip.get(\"value_text\", \"\")), shown_unit, String(chip.get(\"text\", \"\")))"
         )),
+        "{number:?}"
+    );
+    assert!(
+        number
+            .iter()
+            .any(|line| line.contains("var outside: bool = chip.get(\"outside\", false)")),
         "{number:?}"
     );
     assert!(
@@ -2576,14 +2651,18 @@ fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
     for wanted in [
         "item.set_selectable(0, locked == \"\" and family_locked == \"\")",
         "item.set_text(0, Strings.text(\"picker_entry_locked\", {\"title\": entry.get(\"title\", \"\"), \"locked\": locked}))",
-        "item.set_metadata(0, [family_index, entry_index])",
+        "item.set_metadata(0, {\"family\": family_index, \"entry\": entry_index})",
+        "item.set_metadata(0, {\"group\": group_index})",
+        "heading.set_text(0, Strings.text(\"picker_groups\"))",
     ] {
         assert!(fill.contains(&wanted), "{wanted}: {fill:?}");
     }
     let editor = read("scripts/editor.gd");
     assert!(
         gd_code(&editor, "_on_picker_use").iter().any(|line| line.contains(
-            "bridge.editor_choose_predicate(int(_picker_slot.get(\"slot\", -1)), String(_picker_slot.get(\"pointer\", \"\")), int(_picker_slot.get(\"revision\", -1)), int(picked[0]), int(picked[1]))"
+            "bridge.editor_choose_predicate(slot, pointer, revision, int(picked[\"family\"]), int(picked[\"entry\"]))"
+        )) && gd_code(&editor, "_on_picker_use").iter().any(|line| line.contains(
+            "bridge.editor_choose_group(slot, pointer, revision, int(picked[\"group\"]))"
         )),
         "the pick names the slot by index and pointer, and the rendering"
     );
@@ -3286,4 +3365,95 @@ fn the_guided_mark_is_a_look_and_the_words_are_the_gateways() {
         .filter(|line| line.contains("Strings.text("))
         .count();
     assert_eq!(guided, 0, "no client words in the mark's branch: {draw:?}");
+}
+
+/// **Looks and titles as sent** (S3's `fixq-c`, items 1 to 3): a structure's, a wall's and a
+/// ruin's body is the primitive its `look` names, and its name is the view's `title`, never its
+/// `subtype`; going up is drawn from the view's `building` alone, so no line of the vista reads
+/// going up from hit points (`hp` is read only to fill the bar).
+#[test]
+fn the_vista_draws_each_look_and_title_as_the_view_sent_them() {
+    let vista = read("scripts/vista.gd");
+    let marker = gd_function(&vista, "_marker_for");
+    assert!(
+        marker
+            .iter()
+            .any(|line| line.contains("var drawn := _look_mesh(entity)")),
+        "a structure's body is its look's: {marker:?}"
+    );
+    assert!(
+        marker
+            .iter()
+            .any(|line| line.contains(r#"var title := String(entity.get("title", ""))"#))
+            && marker
+                .iter()
+                .any(|line| line.contains("node.add_child(_name(title, ")),
+        "the name is the view's title: {marker:?}"
+    );
+    assert!(
+        marker
+            .iter()
+            .any(|line| line.contains(r#"if entity.get("building", false):"#)),
+        "going up is the view's own flag: {marker:?}"
+    );
+    for line in &marker {
+        assert!(
+            !line.contains("_name(String(entity[\"subtype\"])"),
+            "no name is read from the subtype: {line}"
+        );
+    }
+    let look = gd_function(&vista, "_look_mesh");
+    for shape in [r#""tower":"#, r#""dish":"#, r#""block", "slab":"#] {
+        assert!(
+            look.iter().any(|line| line.trim() == shape),
+            "{shape}: {look:?}"
+        );
+    }
+    // `hp` is read in the bar's fill alone: nothing else compares it with its maximum.
+    for (number, line) in vista.lines().enumerate() {
+        if line.contains("\"hp\"") && line.contains("max_hp") {
+            assert!(
+                line.contains("var share := float(entity[\"hp\"]) / float(entity[\"max_hp\"])"),
+                "line {number} reads hit points against their maximum outside the bar: {line}"
+            );
+        }
+    }
+    let same = gd_function(&vista, "_same_look");
+    for wanted in [
+        r#"marker["look"] == entity.get("look", {})"#,
+        r#"marker["title"] == String(entity.get("title", ""))"#,
+        r#"marker["building"] == entity.get("building", false)"#,
+    ] {
+        assert!(
+            same.iter().any(|line| line.contains(wanted)),
+            "{wanted}: {same:?}"
+        );
+    }
+}
+
+/// **One message cap, read by both sides** (S3's `fixq-c`, fix pass 1): the gateway's
+/// `MAX_MESSAGE_BYTES` (`crates/gateway/src/frame.rs`) is `pharmakos-proto`'s
+/// `transport::MAX_MESSAGE_BYTES`, the number the rig refuses an outgoing frame past, so the
+/// client can never send what the gateway closes the connection on.
+#[test]
+fn the_client_and_the_gateway_read_one_message_cap() {
+    let frame = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("gateway")
+            .join("src")
+            .join("frame.rs"),
+    )
+    .expect("the gateway's frame module reads");
+    assert!(
+        frame.lines().any(|line| line.trim()
+            == "pub const MAX_MESSAGE_BYTES: usize = pharmakos_proto::transport::MAX_MESSAGE_BYTES;"),
+        "the gateway reads the one cap"
+    );
+    assert!(
+        read_source("rig.rs")
+            .contains("if text.len() > pharmakos_proto::transport::MAX_MESSAGE_BYTES {"),
+        "the rig refuses a frame past it"
+    );
+    assert_eq!(pharmakos_proto::transport::MAX_MESSAGE_BYTES, 256 * 1024);
 }

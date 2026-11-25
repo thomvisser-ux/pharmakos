@@ -55,8 +55,8 @@ const DRAWN := "drawn"
 ## called with a chip's index when it is clicked, `on_move` with the dragged rule's index and
 ## pointer, the dropped-on rule's index and pointer, and the rendering, when one is dropped on
 ## the other.
-static func fill(container: Container, list: Dictionary, revision: int, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable, on_slot: Callable = Callable()) -> bool:
-	var drawn := var_to_str([list, revision, editable, picking, conflicts, refusal])
+static func fill(container: Container, list: Dictionary, revision: int, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable, on_slot: Callable = Callable(), on_remove: Callable = Callable(), on_add: Callable = Callable(), has_text: bool = false) -> bool:
+	var drawn := var_to_str([list, revision, editable, picking, conflicts, refusal, has_text])
 	if container.has_meta(DRAWN) and String(container.get_meta(DRAWN)) == drawn:
 		return false
 	container.set_meta(DRAWN, drawn)
@@ -86,6 +86,8 @@ static func fill(container: Container, list: Dictionary, revision: int, editable
 		container.add_child(row)
 		if rule >= 0 and on_slot.is_valid():
 			_slots(container, list.get("slots", []), rule, editable, on_slot, unread)
+		if rule >= 0 and rule < rules.size() and on_remove.is_valid():
+			container.add_child(_remove_button(rule, String(rules[rule].get("pointer", "")), editable, on_remove))
 		if rule >= 0 and said.has(rule):
 			container.add_child(_note(Strings.text("rule_conflict", {"sentence": said[rule]})))
 		if rule >= 0 and _index(refusal.get("rule", -1), unread) == rule:
@@ -93,8 +95,35 @@ static func fill(container: Container, list: Dictionary, revision: int, editable
 			container.add_child(_note(Strings.text(String(refusal.get("key", "rule_refused")), {"detail": refusal.get("detail", "")})))
 	if not unread.is_empty():
 		container.add_child(_note(Values.unreadable_text(Strings.text("value_index"), unread[0])))
+	# Add a rule, under the list, whenever there is a text to add one to: the gateway writes it.
+	if on_add.is_valid() and has_text:
+		var add := _flat_button(Strings.text("rule_add"), editable)
+		add.set_meta("rule_add", true)
+		add.pressed.connect(func() -> void: on_add.call())
+		container.add_child(add)
 	container.queue_redraw()
 	return true
+
+
+## Remove under rule `rule`'s sentence: the bridge's one `remove` at its pointer.
+static func _remove_button(rule: int, pointer: String, editable: bool, on_remove: Callable) -> Button:
+	var button := _flat_button(Strings.text("rule_remove"), editable)
+	button.set_meta("rule_remove", rule)
+	button.pressed.connect(func() -> void: on_remove.call(rule, pointer))
+	return button
+
+
+## A flat button of the list's width, taking no click while the list takes no edit.
+static func _flat_button(text: String, editable: bool) -> Button:
+	var button := Button.new()
+	button.flat = true
+	button.focus_mode = Control.FOCUS_NONE
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.text = text
+	button.accessibility_name = text
+	button.disabled = not editable
+	button.custom_minimum_size = Vector2(LINE_WIDTH, 0)
+	return button
 
 
 ## An index the bridge sent, or -1, which names nothing, when it sent its refusal; the refusal is

@@ -14,8 +14,9 @@
 #
 # So this field is a `LineEdit` and holds no value but its text: there is no uncommitted state
 # for a button to ignore. Enter and Send both emit `sent` with the text exactly as typed, which
-# goes to the bridge; the bridge reads it (a whole number, for a number field: optional sign and
-# digits, nothing else) and refuses one it cannot read, by its reason. The field has no bounds,
+# goes through the bridge to the gateway's `set_value_text`, which reads it in the field's display
+# unit and refuses one it cannot read, in its own words (S3's `fixq-c`); the bridge reads no
+# number, and refuses only a text too large to send. The field has no bounds,
 # no arrows and no arithmetic: the bounds are shown in the gateway's words beside it, a value past
 # them goes to the gateway, and stepping would be client arithmetic over a step the gateway never
 # sends (decisions-log rulings on `fixp`, TODO 2).

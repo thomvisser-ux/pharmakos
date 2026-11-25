@@ -67,8 +67,9 @@ use std::collections::VecDeque;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::api::v1::{
-    GetBriefingResponse, GetDraftResponse, ListDraftsResponse, PatchPlanResponse,
-    SaveNotesResponse, SubmitPlanResponse, VerifyPlanResponse, VerifyReport,
+    ComposeWallBoxResponse, GetBriefingResponse, GetDraftResponse, ListDraftsResponse,
+    NewRuleResponse, PatchPlanResponse, SaveNotesResponse, SetValueTextResponse,
+    SubmitPlanResponse, VerifyPlanResponse, VerifyReport,
 };
 use pharmakos_proto::json::{self, Json};
 
@@ -493,6 +494,14 @@ pub enum Door {
     Ended,
 }
 
+/// Whether a Ready the player pressed waits to be sent (the rig's word, [`Editor::set_ready_pressed`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum ReadyPress {
+    #[default]
+    Unpressed,
+    Waiting,
+}
+
 impl Door {
     /// The name GDScript reads, and the suffix of the string-table keys that say why the
     /// door is shut (`closed_push`, `unchecked_push`).
@@ -521,6 +530,17 @@ pub enum Unchecked {
     Unreadable(String),
     /// The door is shut, so no check is sent.
     Closed(Door),
+    /// The check's call was too large for the gateway to read, so it was not sent: the
+    /// encoded frame's size, in bytes (S3's `fixq-c`, fix pass 1).
+    TooLarge(String),
+    /// The connection closed on the check's call itself (a close code that says
+    /// "this message", 1009 and its kin): the code. The call is not sent again.
+    ClosedOn(String),
+    /// The transport refused to send the check's call (Godot's `send_text` failed): its error
+    /// code. The call is not sent again.
+    SendFailed(String),
+    /// No answer to the check's call came within its deadline (fix pass 6).
+    TimedOut(String),
 }
 
 /// One check of the text on screen, by the panel line that waits for it: a refusal is
@@ -758,10 +778,12 @@ pub enum RuleEditRefusal {
     NotThisKind(&'static str),
     /// The gateway lists no such arm at this pointer: the arm the click would write.
     ArmNotHere(&'static str),
-    /// The text typed into a value field is not a whole number: an optional `+` or `-` and
-    /// digits, nothing else (no space, no point, no expression). Nothing is sent. Its size is
-    /// never refused here: that is the gateway's to say.
-    NotAnInteger,
+    /// The blueprint names no anchor shape this build knows (`VocabularyEntry.anchor_shape`
+    /// unset or unknown): no anchor pick is guessed for it.
+    NoAnchorShape,
+    /// The route of the text an edit is made against could not be read, so the step a Visit
+    /// & change number row appends cannot be named for the gateway to write its value into.
+    RouteUnread,
     /// The vocabulary has not been read this Lull, or its read was refused.
     NoVocabulary,
     /// The condition slot is not inside the rule the picker was opened on.
@@ -808,7 +830,8 @@ impl RuleEditRefusal {
             Self::RenderingOutOfRange => "rendering_out_of_range",
             Self::NotThisKind(_) => "not_this_kind",
             Self::ArmNotHere(_) => "arm_not_here",
-            Self::NotAnInteger => "not_an_integer",
+            Self::NoAnchorShape => "no_anchor_shape",
+            Self::RouteUnread => "route_unread",
             Self::NoVocabulary => "no_vocabulary",
             Self::NotInRule => "not_in_rule",
             Self::NoSuchEntry => "no_such_entry",
@@ -874,6 +897,13 @@ enum PickOn {
         beacon: String,
         blueprint: usize,
     },
+    /// A wall's box: two map clicks on ground, its corners, for the gateway to compose
+    /// (`compose_wall_box`); `first` is the first click's voxel once it came.
+    WallBox {
+        beacon: String,
+        blueprint: String,
+        first: Option<[i32; 3]>,
+    },
 }
 
 /// What one of the editor's reads of the gateway's words came to, when it did not come: the
@@ -885,6 +915,14 @@ pub enum ReadFailed {
     Refused(String),
     /// The gateway answered, and this client could not read the answer: the decode's reason.
     Unreadable(String),
+    /// The read's call was too large for the gateway to read, so it was not sent: its size.
+    TooLarge(String),
+    /// The connection closed on the read's call itself: the close code.
+    ClosedOn(String),
+    /// The transport refused to send the read's call: its error code.
+    SendFailed(String),
+    /// No answer came within the call's deadline (fix pass 6).
+    TimedOut(String),
 }
 
 impl ReadFailed {
@@ -894,6 +932,10 @@ impl ReadFailed {
         match self {
             Self::Refused(_) => "refused",
             Self::Unreadable(_) => "unreadable",
+            Self::TooLarge(_) => "too_large",
+            Self::ClosedOn(_) => "closed_on",
+            Self::SendFailed(_) => "send_failed",
+            Self::TimedOut(_) => "timed_out",
         }
     }
 
@@ -901,7 +943,12 @@ impl ReadFailed {
     #[must_use]
     pub fn detail(&self) -> &str {
         match self {
-            Self::Refused(detail) | Self::Unreadable(detail) => detail,
+            Self::Refused(detail)
+            | Self::Unreadable(detail)
+            | Self::TooLarge(detail)
+            | Self::ClosedOn(detail)
+            | Self::SendFailed(detail)
+            | Self::TimedOut(detail) => detail,
         }
     }
 }
@@ -966,38 +1013,6 @@ impl FieldAsk {
             Self::Landed => "landed",
         }
     }
-}
-
-/// A value field's text as the whole number it names, written as JSON writes a number: an
-/// optional `-` or `+`, then one or more ASCII digits, and nothing else, of any size. A decoding
-/// of what the player typed, not a rule: the client applies no bound the gateway did not send,
-/// so a number past an `i64` goes to the gateway as its digits, and whether it is legal there,
-/// or fits the field, is the gateway's to say in its own words (S3's `fixp`; fix pass 1,
-/// item 3). The digits come back in JSON's own form: no `+`, no leading zero, and no `-0`.
-///
-/// # Errors
-///
-/// [`RuleEditRefusal::NotAnInteger`] for anything else: an empty text, a sign alone, a space, a
-/// point, a separator, an expression, or a digit that is not ASCII.
-pub fn typed_integer(text: &str) -> Result<String, RuleEditRefusal> {
-    let (negative, digits) = match text.as_bytes() {
-        [b'-', rest @ ..] => (true, rest),
-        [b'+', rest @ ..] => (false, rest),
-        all => (false, all),
-    };
-    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
-        return Err(RuleEditRefusal::NotAnInteger);
-    }
-    let first = digits.iter().position(|digit| *digit != b'0');
-    let magnitude = match first.and_then(|at| digits.get(at..)) {
-        Some(rest) => String::from_utf8_lossy(rest).into_owned(),
-        None => return Ok("0".to_owned()),
-    };
-    Ok(if negative {
-        format!("-{magnitude}")
-    } else {
-        magnitude
-    })
 }
 
 /// What the last `submit_plan` said.
@@ -1122,6 +1137,43 @@ enum Job {
         /// The value field that sent it, as for a rule-list edit.
         field: Option<u64>,
     },
+    /// A number chip's value field sent `typed`, exactly as typed: `set_value_text` at the
+    /// chip's pointer, which reads it in the chip's display unit and writes it with the op the
+    /// chip names (S3's `fixq`: the gateway reads typed numbers, the client none).
+    SetValue {
+        pointer: String,
+        typed: String,
+        field: Option<u64>,
+    },
+    /// Add a rule: `new_rule` against the text on screen.
+    NewRule,
+    /// A Visit & change number row, first half: one route step visiting `beacon` with a
+    /// `set_mandate_settings` row holding the objects the setting at `pointer` sits in and not
+    /// the setting, patched into a copy that is not put on screen.
+    VisitValue {
+        beacon: String,
+        pointer: String,
+        typed: String,
+        field: Option<u64>,
+    },
+    /// Its second half: `set_value_text` writing `typed` at `value_at` of the patched copy
+    /// `staged`; only its answer goes on screen. `base` is the
+    /// revision the first half was patched against, and `first` the job to ask again from.
+    VisitValueText {
+        base: u64,
+        staged: String,
+        value_at: String,
+        typed: String,
+        field: Option<u64>,
+        first: Box<Job>,
+    },
+    /// A wall's box from two clicks: `compose_wall_box`, whose target becomes one Visit &
+    /// change `add_build_target` row at `beacon`.
+    WallBox {
+        beacon: String,
+        blueprint: String,
+        corners: [[i32; 3]; 2],
+    },
 }
 
 impl Job {
@@ -1141,6 +1193,11 @@ impl Job {
                 | Self::GetDraft { .. }
                 | Self::SetOption { .. }
                 | Self::Visit { .. }
+                | Self::SetValue { .. }
+                | Self::NewRule
+                | Self::VisitValue { .. }
+                | Self::VisitValueText { .. }
+                | Self::WallBox { .. }
         )
     }
 }
@@ -1150,6 +1207,13 @@ impl Job {
 enum Undo {
     /// The inverse patch `patch_plan` handed back for an edit.
     Patch(String),
+    /// The text as it was before an edit made in two calls (a Visit & change number row),
+    /// restored as it was, byte for byte, with no call, and the text's file kept as it is now (a
+    /// save between the edit and its Undo names the file the text is in). One Undo takes the
+    /// whole edit back with no text between, which a chain of inverses through `patch_plan` could
+    /// not promise: a refused second inverse, or a Lull closing between the two, would leave on
+    /// screen a text the player never had (S3's `fixq-c`, fix pass 1).
+    Text(String),
     /// The text as it was before the wizard's playbook replaced it (`None`: there was no
     /// text), restored as it was, byte for byte, with no call, and the file it came from.
     Restore {
@@ -1173,6 +1237,8 @@ enum Sent {
     Undo {
         base: u64,
     },
+    /// One of S3's `fixq` wire calls ([`Wire`]).
+    Wire(Wire),
     Preview {
         at: [i32; 3],
         base: u64,
@@ -1221,6 +1287,27 @@ enum Sent {
     Vocabulary {
         round: u32,
     },
+}
+
+/// S3's `fixq` wire calls in flight, whose answers [`Editor::settle_wire`] reads.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Wire {
+    /// The first half of a Visit & change number row ([`Job::VisitValue`]).
+    VisitStaged {
+        base: u64,
+        value_at: String,
+        typed: String,
+        field: Option<u64>,
+        first: Box<Job>,
+    },
+    /// The second half ([`Job::VisitValueText`]).
+    VisitText {
+        base: u64,
+        field: Option<u64>,
+        first: Box<Job>,
+    },
+    /// `compose_wall_box` for the wall named, asked again as `retry` after a drop.
+    WallBox { beacon: String, retry: Box<Job> },
 }
 
 /// One call to send: the method and its params.
@@ -1278,15 +1365,21 @@ pub struct Editor {
     drafts: Vec<DraftRow>,
     known: Known,
     sealed: Option<String>,
-    /// The round of the last submission the gateway accepted, as this process saw it: what the
-    /// Ready line says Ready will do (S3's `fixp`, P6b finding 4).
-    sealed_round: Option<u32>,
     submitted: Option<Submitted>,
     round: u32,
     carried_round: u32,
     beacon_prose: String,
     status: Status,
     refusals: u32,
+    /// The editor's calls that did not complete for another cause ([`Editor::unfinished`]).
+    unfinished: UnfinishedCalls,
+    /// Calls that write (a submission, the notes, a draft) whose answer was lost since the rig
+    /// last asked: the rig reads the seat's seal again ([`Editor::take_lost_write`]).
+    lost_writes: u32,
+    /// The write whose answer was lost and whose effect is being read back, by the string
+    /// table's `status_lost_<what>_read` row: the "may have been taken" line stands until the
+    /// read that returns it answers (fix pass 6).
+    lost_pending: Option<&'static str>,
     changes: u64,
     templates: Vec<TemplateRow>,
     wizard: Option<Wizard>,
@@ -1336,6 +1429,10 @@ pub struct Editor {
     dormant_patch: Option<String>,
     /// Whether the editor's calls can reach the gateway now, as the rig reads it.
     door: Door,
+    /// The player pressed Ready and the rig has not sent it yet: what is queued drains, and a
+    /// new ask is refused as it will be once Ready goes (fix pass 6: a player who kept asking
+    /// held Ready back for as long as they asked).
+    ready_press: ReadyPress,
     /// The gateway's refusal of each check, `CODE: message`, and the revision it checked.
     check_refusals: CheckRefusals,
     /// The file the text on screen was opened from or last saved to; `None` when it came
@@ -1816,7 +1913,7 @@ impl Editor {
         Dormant {
             shown: checked || (self.rows_current() && named),
             checked,
-            enabled: self.door == Door::Open,
+            enabled: self.door() == Door::Open,
             // A refusal stands while its reason does: for the text it was refused for, and a stale
             // or busy one only until the rows describe the text and no edit is on its way (fix
             // pass 1, item 4).
@@ -1908,36 +2005,18 @@ impl Editor {
         self.rules_rendering
     }
 
-    /// Chip `chip`'s number field sent `value`: one `replace` of it at the chip's pointer.
-    /// `revision` and `pointer` are the rendering and the chip the field was opened on. No
-    /// bound is applied here: the bounds are the gateway's, and whether the value is legal is
-    /// its next answer.
-    ///
-    /// # Errors
-    ///
-    /// A [`RuleEditRefusal`], said on the status line and on the chip's rule: the list takes
-    /// no edit now, it was redrawn since the field opened, there is no such chip or it is not a
-    /// number, or the value is the one it holds.
-    pub fn set_number(
-        &mut self,
-        chip: usize,
-        revision: u64,
-        pointer: &str,
-        value: i64,
-    ) -> Result<(), RuleEditRefusal> {
-        let outcome = self.number_patch(chip, revision, pointer, &value.to_string());
-        self.ask_rule_edit(outcome, pointer, None)
-    }
-
-    /// Chip `chip`'s value field sent `text`, exactly as typed: read as a whole number
-    /// ([`typed_integer`]) and sent as [`Editor::set_number`] sends one. What becomes of it is
+    /// Chip `chip`'s value field sent `text`, exactly as typed: `set_value_text` at the chip's
+    /// pointer, which reads it in the chip's display unit (seconds for a duration), checks it
+    /// against the chip's shape and writes it with the op the chip names, or refuses it in its own
+    /// words (S3's `fixq`). `revision` and `pointer` are the rendering and the chip the field was
+    /// opened on. The client reads, converts and bounds nothing. What becomes of it is
     /// [`Editor::field_ask`], for the field's popup.
     ///
     /// # Errors
     ///
-    /// [`RuleEditRefusal::NotAnInteger`] for a text that names no whole number, and every
-    /// refusal [`Editor::set_number`] makes; each is said on the status line, on the chip's
-    /// rule and to the field.
+    /// A [`RuleEditRefusal`], said on the status line, on the chip's rule and to the field: the
+    /// list takes no edit now, it was redrawn since the field opened, there is no such chip or it
+    /// is not a number, or the text is the one the chip shows.
     pub fn set_number_text(
         &mut self,
         chip: usize,
@@ -1945,18 +2024,39 @@ impl Editor {
         pointer: &str,
         text: &str,
     ) -> Result<(), RuleEditRefusal> {
-        let outcome = typed_integer(text)
-            .and_then(|digits| self.number_patch(chip, revision, pointer, &digits));
-        let asked = self.ask_rule_edit(outcome, pointer, Some(self.field_token));
+        let outcome =
+            self.chip_drawn(chip, revision, pointer)
+                .and_then(|found| match &found.editor {
+                    ChipEditor::Number { value_text, .. } if value_text == text => {
+                        Err(RuleEditRefusal::Unchanged)
+                    }
+                    ChipEditor::Number { .. } => Ok(found.pointer.clone()),
+                    _ => Err(RuleEditRefusal::NotThisEditor),
+                });
+        let asked = match outcome {
+            Ok(at) => {
+                self.rule_refusal = None;
+                self.queue.push_back(Job::SetValue {
+                    pointer: at,
+                    typed: text.to_owned(),
+                    field: Some(self.field_token),
+                });
+                self.say("rule_editing", "");
+                Ok(())
+            }
+            Err(refusal) => self.refuse_on(refusal, pointer),
+        };
         self.field_heard(asked)
     }
 
     /// Whether `job` was sent by the value field open now, so its answer is that field's to say.
     fn hears(&self, job: &Job) -> bool {
         match job {
-            Job::RuleEdit { field, .. } | Job::Visit { field, .. } => {
-                *field == Some(self.field_token)
-            }
+            Job::RuleEdit { field, .. }
+            | Job::Visit { field, .. }
+            | Job::SetValue { field, .. }
+            | Job::VisitValue { field, .. }
+            | Job::VisitValueText { field, .. } => *field == Some(self.field_token),
             _ => false,
         }
     }
@@ -1990,34 +2090,13 @@ impl Editor {
         asked
     }
 
-    /// The `replace` writing `digits`, a whole number in JSON's own form ([`typed_integer`]).
-    fn number_patch(
-        &self,
-        chip: usize,
-        revision: u64,
-        pointer: &str,
-        digits: &str,
-    ) -> Result<(String, String), RuleEditRefusal> {
-        let found = self.chip_drawn(chip, revision, pointer)?;
-        let ChipEditor::Number { now, .. } = &found.editor else {
-            return Err(RuleEditRefusal::NotThisEditor);
-        };
-        if now.to_string() == digits {
-            return Err(RuleEditRefusal::Unchanged);
-        }
-        Ok((
-            rule_list::replace_patch(&found.pointer, Json::Number(digits.to_owned())),
-            found.pointer.clone(),
-        ))
-    }
-
-    /// Chip `chip`'s enum took its `which`th value as sent: one `replace` writing that value's
-    /// JSON text, on the rendering and chip named as for [`Editor::set_number`].
+    /// Chip `chip`'s enum took its `which`th value as sent: that value's JSON text written with
+    /// the op the chip names, on the rendering and chip named as for [`Editor::set_number_text`].
     ///
     /// # Errors
     ///
-    /// A [`RuleEditRefusal`], said on the status line, as for [`Editor::set_number`], and for
-    /// a value the chip does not list or a value text that is not JSON.
+    /// A [`RuleEditRefusal`], said on the status line, as for [`Editor::set_number_text`], and
+    /// for a value the chip does not list, a value text that is not JSON, or a chip naming no op.
     pub fn choose(
         &mut self,
         chip: usize,
@@ -2037,7 +2116,7 @@ impl Editor {
         which: usize,
     ) -> Result<(String, String), RuleEditRefusal> {
         let found = self.chip_drawn(chip, revision, pointer)?;
-        let ChipEditor::Choice { values } = &found.editor else {
+        let ChipEditor::Choice { values, .. } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
         let text = values.get(which).ok_or(RuleEditRefusal::NoSuchValue)?;
@@ -2047,17 +2126,18 @@ impl Editor {
         // The gateway's own value text, which its contract says is JSON.
         let value = json::read(text).map_err(|_| RuleEditRefusal::NotJson)?;
         Ok((
-            rule_list::replace_patch(&found.pointer, value),
+            rule_list::chip_patch(found.op, &found.pointer, value)
+                .ok_or(RuleEditRefusal::NoPickOp)?,
             found.pointer.clone(),
         ))
     }
 
     /// The next map click is chip `chip`'s pick, on the rendering and chip named as for
-    /// [`Editor::set_number`].
+    /// [`Editor::set_number_text`].
     ///
     /// # Errors
     ///
-    /// A [`RuleEditRefusal`], said on the status line, as for [`Editor::set_number`], and for
+    /// A [`RuleEditRefusal`], said on the status line, as for [`Editor::set_number_text`], and for
     /// a chip that is not picked on the map.
     pub fn begin_pick(
         &mut self,
@@ -2098,15 +2178,18 @@ impl Editor {
     pub fn picking(&self) -> Option<usize> {
         match self.picking.as_ref() {
             Some(PickOn::Chip { chip, .. }) => Some(*chip),
-            Some(PickOn::Anchor { .. }) | None => None,
+            Some(PickOn::Anchor { .. } | PickOn::WallBox { .. }) | None => None,
         }
     }
 
-    /// Whether the next map click is a Build target's anchor (Visit & change's "Add a build
-    /// target", decisions-log item 160 (4)).
+    /// Whether the next map click is a Build target's anchor, or one of a wall box's two corners
+    /// (Visit & change's "Add a build target", decisions-log item 160 (4); S3's `fixq`).
     #[must_use]
     pub const fn anchoring(&self) -> bool {
-        matches!(self.picking, Some(PickOn::Anchor { .. }))
+        matches!(
+            self.picking,
+            Some(PickOn::Anchor { .. } | PickOn::WallBox { .. })
+        )
     }
 
     /// A map click on `target` while a pick is on: one `replace` of the picked chip with the
@@ -2124,10 +2207,18 @@ impl Editor {
         if let Some(PickOn::Anchor { beacon, blueprint }) = self.picking.clone() {
             return self.pick_anchor(&beacon, blueprint, target);
         }
+        if let Some(PickOn::WallBox {
+            beacon,
+            blueprint,
+            first,
+        }) = self.picking.clone()
+        {
+            return self.pick_corner(&beacon, &blueprint, first, target);
+        }
         let outcome = self.pick_patch(target);
         let on = match self.picking.as_ref() {
             Some(PickOn::Chip { pointer, .. }) => pointer.clone(),
-            Some(PickOn::Anchor { .. }) | None => String::new(),
+            Some(PickOn::Anchor { .. } | PickOn::WallBox { .. }) | None => String::new(),
         };
         if !matches!(
             outcome,
@@ -2174,9 +2265,85 @@ impl Editor {
                 rule_list::PickRefusal::NotThisKind => RuleEditRefusal::NotThisKind(kind.name()),
             })?;
         Ok((
-            rule_list::replace_patch(&found.pointer, value),
+            rule_list::chip_patch(found.op, &found.pointer, value)
+                .ok_or(RuleEditRefusal::NoPickOp)?,
             found.pointer.clone(),
         ))
+    }
+
+    /// A wall box's corner click: ground only. The first is kept and the pick stays on for the
+    /// second; the second asks the gateway for the box (`compose_wall_box`), whose Build target
+    /// becomes the Visit & change row. A click on anything but ground is refused with its words
+    /// and the pick stays on, as for an anchor.
+    fn pick_corner(
+        &mut self,
+        beacon: &str,
+        blueprint: &str,
+        first: Option<[i32; 3]>,
+        target: &Target,
+    ) -> Result<(), RuleEditRefusal> {
+        let Target::Voxel(at) = target else {
+            return Err(self.refuse_rule_edit(RuleEditRefusal::NotThisKind("location")));
+        };
+        if let Err(refusal) = self.visit_gate(beacon) {
+            self.picking = None;
+            return Err(self.refuse_rule_edit(refusal));
+        }
+        match first {
+            None => {
+                self.picking = Some(PickOn::WallBox {
+                    beacon: beacon.to_owned(),
+                    blueprint: blueprint.to_owned(),
+                    first: Some(*at),
+                });
+                self.say("wall_second", "");
+            }
+            Some(corner) => {
+                self.picking = None;
+                self.queue.push_back(Job::WallBox {
+                    beacon: beacon.to_owned(),
+                    blueprint: blueprint.to_owned(),
+                    corners: [corner, *at],
+                });
+                self.say("wall_composing", "");
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove the rule (or route step) `named` of the rendering it was drawn in: one `remove`
+    /// at its pointer. Whether the playbook still reads without it (a label another step names)
+    /// is the verifier's next report.
+    ///
+    /// # Errors
+    ///
+    /// A [`RuleEditRefusal`], said on the status line: the list takes no edit now, it was
+    /// redrawn since, or the rule is not there.
+    pub fn remove_rule(&mut self, named: &RuleNamed) -> Result<(), RuleEditRefusal> {
+        let outcome = match self.rules_blocked() {
+            Some(blocked) => Err(blocked),
+            None => self
+                .rule_drawn(named)
+                .map(|rule| (rule_list::remove_patch(&rule.pointer), rule.pointer.clone())),
+        };
+        self.ask_rule_edit(outcome, &named.pointer, None)
+    }
+
+    /// Add a rule: `new_rule`, which writes an empty rule with a fresh id at the end of the
+    /// rules, its condition slot empty for the picker (S3's `fixq`). The id and the rule's
+    /// legality are the gateway's.
+    ///
+    /// # Errors
+    ///
+    /// A [`RuleEditRefusal`], said on the status line, when the list takes no edit now.
+    pub fn new_rule(&mut self) -> Result<(), RuleEditRefusal> {
+        if let Some(blocked) = self.rules_blocked() {
+            return Err(self.refuse_rule_edit(blocked));
+        }
+        self.rule_refusal = None;
+        self.queue.push_back(Job::NewRule);
+        self.say("rule_adding", "");
+        Ok(())
     }
 
     /// A drag of rule `from` onto rule `to` of the rendering `revision`: one `move` of it to
@@ -2329,19 +2496,22 @@ impl Editor {
                 self.say("rule_editing", "");
                 Ok(())
             }
-            Err(refusal) => {
-                let refusal = self.refuse_rule_edit(refusal);
-                if !on.is_empty() {
-                    self.rule_refusal = Some(RuleRefusal {
-                        pointer: on.to_owned(),
-                        key: format!("status_{}", self.status.key),
-                        detail: self.status.detail.clone(),
-                        revision: self.revision,
-                    });
-                }
-                Err(refusal)
-            }
+            Err(refusal) => self.refuse_on(refusal, on),
         }
+    }
+
+    /// Says `refusal` on the status line and, when `on` names one, on the rule holding it.
+    fn refuse_on(&mut self, refusal: RuleEditRefusal, on: &str) -> Result<(), RuleEditRefusal> {
+        let refusal = self.refuse_rule_edit(refusal);
+        if !on.is_empty() {
+            self.rule_refusal = Some(RuleRefusal {
+                pointer: on.to_owned(),
+                key: format!("status_{}", self.status.key),
+                detail: self.status.detail.clone(),
+                revision: self.revision,
+            });
+        }
+        Err(refusal)
     }
 
     // --- The condition picker and the name picks (S3's `ed3b`, part 2) -------------------
@@ -2372,6 +2542,27 @@ impl Editor {
         self.ask_rule_edit(outcome, pointer, None)
     }
 
+    /// The condition picker took group `which` (`all`, `any` or `not`, as `get_vocabulary` sent
+    /// them) for condition slot `slot`: the group's skeleton under its name, sent with the op the
+    /// slot names, as a predicate is; its items are then slots of their own for the picker (S3's
+    /// `fixq`, item 16).
+    ///
+    /// # Errors
+    ///
+    /// As [`Editor::choose_predicate`], for a group.
+    pub fn choose_group(
+        &mut self,
+        slot: usize,
+        rendering: u64,
+        pointer: &str,
+        which: usize,
+    ) -> Result<(), RuleEditRefusal> {
+        let outcome = self.slot_patch_of(slot, rendering, pointer, |words| {
+            vocabulary::group_value(words, which)
+        });
+        self.ask_rule_edit(outcome, pointer, None)
+    }
+
     fn predicate_patch(
         &self,
         slot: usize,
@@ -2379,6 +2570,20 @@ impl Editor {
         pointer: &str,
         family: usize,
         entry: usize,
+    ) -> Result<(String, String), RuleEditRefusal> {
+        self.slot_patch_of(slot, rendering, pointer, |words| {
+            vocabulary::predicate_value(words, family, entry)
+        })
+    }
+
+    /// The patch putting what `pick` composes from the vocabulary at condition slot `slot`, with
+    /// the op the slot names.
+    fn slot_patch_of(
+        &self,
+        slot: usize,
+        rendering: u64,
+        pointer: &str,
+        pick: impl FnOnce(&Vocabulary) -> Result<Json, PickError>,
     ) -> Result<(String, String), RuleEditRefusal> {
         if let Some(blocked) = self.rules_blocked() {
             return Err(blocked);
@@ -2418,7 +2623,7 @@ impl Editor {
             .vocabulary
             .as_ref()
             .ok_or(RuleEditRefusal::NoVocabulary)?;
-        let value = vocabulary::predicate_value(words, family, entry)?;
+        let value = pick(words)?;
         Ok((
             vocabulary::slot_patch(&found.pointer, value, present),
             found.pointer.clone(),
@@ -2426,8 +2631,8 @@ impl Editor {
     }
 
     /// Name chip `chip` took its `which`th choice, from the labels or rule ids the text on
-    /// screen holds in file order ([`Editor::name_choices`]): one `replace` writing it, on the
-    /// rendering and chip named as for [`Editor::set_number`]. Whether the name is legal there (a
+    /// screen holds in file order ([`Editor::name_choices`]): written with the op the chip names,
+    /// on the rendering and chip named as for [`Editor::set_number_text`]. Whether the name is legal there (a
     /// later step, a rule that exists) is the gateway's check.
     ///
     /// # Errors
@@ -2464,7 +2669,8 @@ impl Editor {
             return Err(RuleEditRefusal::Unchanged);
         }
         Ok((
-            rule_list::replace_patch(&found.pointer, value),
+            rule_list::chip_patch(found.op, &found.pointer, value)
+                .ok_or(RuleEditRefusal::NoPickOp)?,
             found.pointer.clone(),
         ))
     }
@@ -2523,36 +2729,18 @@ impl Editor {
 
     // --- Visit & change rows (S3's `ed3b`, part 2; register row S3-01) ------------------
 
-    /// Setting `setting` of beacon `beacon`'s detail (named by its `pointer` too) to the number
-    /// `value`: one route step visiting the beacon with one `set_mandate_settings` row, nested
-    /// from the setting's pointer.
+    /// Setting `setting` of beacon `beacon`'s detail (named by its `pointer` too) took `text`
+    /// from its value field, exactly as typed: one route step visiting the beacon with one
+    /// `set_mandate_settings` row, whose value the gateway reads from `text` in the setting's
+    /// display unit and writes (`set_value_text`; S3's `fixq`). Two calls: the step is appended
+    /// to a copy with the setting's objects and not the setting, the gateway writes the typed
+    /// value into that copy, and only then does the text on screen change, as one edit Undo takes
+    /// back. What becomes of it is [`Editor::field_ask`].
     ///
     /// # Errors
     ///
-    /// A [`RuleEditRefusal`], said on the status line: the door is shut, there is no text, no
-    /// detail of that beacon is on hand, no such setting, it is not a number, the value cannot
-    /// be held exactly, or it is the value now.
-    pub fn change_setting_number(
-        &mut self,
-        beacon: &str,
-        setting: usize,
-        pointer: &str,
-        value: i64,
-    ) -> Result<(), RuleEditRefusal> {
-        let outcome = self.setting_number_row(beacon, setting, pointer, &value.to_string());
-        self.ask_visit(beacon, outcome, None)
-    }
-
-    /// Setting `setting` of beacon `beacon`'s detail took `text` from its value field, exactly
-    /// as typed: read as a whole number ([`typed_integer`]) and sent as
-    /// [`Editor::change_setting_number`] sends one. What becomes of it is
-    /// [`Editor::field_ask`].
-    ///
-    /// # Errors
-    ///
-    /// [`RuleEditRefusal::NotAnInteger`] for a text that names no whole number, and every
-    /// refusal [`Editor::change_setting_number`] makes; each is said on the status line and to
-    /// the field.
+    /// A [`RuleEditRefusal`], said on the status line and to the field: the door is shut, there
+    /// is no text, no detail of that beacon is on hand, no such setting, or it is not a number.
     pub fn change_setting_number_text(
         &mut self,
         beacon: &str,
@@ -2560,27 +2748,28 @@ impl Editor {
         pointer: &str,
         text: &str,
     ) -> Result<(), RuleEditRefusal> {
-        let outcome = typed_integer(text)
-            .and_then(|digits| self.setting_number_row(beacon, setting, pointer, &digits));
-        let asked = self.ask_visit(beacon, outcome, Some(self.field_token));
-        self.field_heard(asked)
-    }
-
-    fn setting_number_row(
-        &self,
-        beacon: &str,
-        setting: usize,
-        pointer: &str,
-        digits: &str,
-    ) -> Result<Json, RuleEditRefusal> {
-        let found = self.setting_drawn(beacon, setting, pointer)?;
-        let ChipEditor::Number { .. } = &found.editor else {
-            return Err(RuleEditRefusal::NotThisEditor);
+        let outcome = self
+            .setting_drawn(beacon, setting, pointer)
+            .and_then(|found| match &found.editor {
+                // No `Unchanged` here: the detail is the beacon as the Lull sees it, and an
+                // earlier step may change it, so setting it back is a row the verifier judges.
+                ChipEditor::Number { .. } => Ok(found.pointer.clone()),
+                _ => Err(RuleEditRefusal::NotThisEditor),
+            });
+        let asked = match outcome {
+            Ok(at) => {
+                self.queue.push_back(Job::VisitValue {
+                    beacon: beacon.to_owned(),
+                    pointer: at,
+                    typed: text.to_owned(),
+                    field: Some(self.field_token),
+                });
+                self.say("visit_changing", "");
+                Ok(())
+            }
+            Err(refusal) => Err(self.refuse_rule_edit(refusal)),
         };
-        // No `Unchanged` here: the detail is the beacon as the Lull sees it, and an earlier
-        // step may change it, so setting it back is a row the verifier judges.
-        let settings = vocabulary::nested_setting(&found.pointer, Json::Number(digits.to_owned()))?;
-        Ok(vocabulary::settings_row(settings))
+        self.field_heard(asked)
     }
 
     /// Setting `setting` of beacon `beacon`'s detail took its `which`th value as sent: one route
@@ -2588,8 +2777,8 @@ impl Editor {
     ///
     /// # Errors
     ///
-    /// As [`Editor::change_setting_number`], and for a value the setting does not list or one
-    /// that is not JSON.
+    /// As [`Editor::change_setting_number_text`], and for a value the setting does not list or
+    /// one that is not JSON.
     pub fn change_setting_choice(
         &mut self,
         beacon: &str,
@@ -2609,7 +2798,7 @@ impl Editor {
         which: usize,
     ) -> Result<Json, RuleEditRefusal> {
         let found = self.setting_drawn(beacon, setting, pointer)?;
-        let ChipEditor::Choice { values } = &found.editor else {
+        let ChipEditor::Choice { values, .. } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
         // No `Unchanged`, as for a number: the verifier says what the row does.
@@ -2640,15 +2829,17 @@ impl Editor {
     }
 
     /// Add a Build target of blueprint `which` (as `get_vocabulary` sent it) at beacon
-    /// `beacon`: the next map click on ground is its anchor ([`Editor::pick`]). Offered on every
-    /// own beacon: whether the beacon carries a mandate that takes a target is the verifier's
-    /// to say.
+    /// `beacon`, by the anchor shape the gateway names for it: for a point, the next map click on
+    /// ground or a vent is its anchor; for a box (a wall), the next two clicks on ground are its
+    /// corners, and the gateway composes the box (`compose_wall_box`; S3's `fixq`). Offered on
+    /// every own beacon: whether the beacon carries a mandate that takes a target is the
+    /// verifier's to say.
     ///
     /// # Errors
     ///
     /// A [`RuleEditRefusal`], said on the status line: the door is shut, there is no text, no
-    /// detail of that beacon is on hand, the vocabulary was not read, no such blueprint, or the
-    /// gateway locked it.
+    /// detail of that beacon is on hand, the vocabulary was not read, no such blueprint, the
+    /// gateway locked it, or it names no anchor shape this build knows.
     pub fn begin_build_target(
         &mut self,
         beacon: &str,
@@ -2660,17 +2851,29 @@ impl Editor {
                 .blueprints
                 .get(which)
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
-            vocabulary::usable_name(blueprint)?;
-            Ok(())
+            let name = vocabulary::usable_name(blueprint)?;
+            Ok((name, blueprint.anchor_shape))
         });
         match outcome {
-            Ok(()) => {
+            Ok((_, vocabulary::AnchorShape::Point)) => {
                 self.picking = Some(PickOn::Anchor {
                     beacon: beacon.to_owned(),
                     blueprint: which,
                 });
                 self.say("anchoring", "");
                 Ok(())
+            }
+            Ok((name, vocabulary::AnchorShape::Box)) => {
+                self.picking = Some(PickOn::WallBox {
+                    beacon: beacon.to_owned(),
+                    blueprint: name,
+                    first: None,
+                });
+                self.say("wall_first", "");
+                Ok(())
+            }
+            Ok((_, vocabulary::AnchorShape::Unnamed)) => {
+                Err(self.refuse_rule_edit(RuleEditRefusal::NoAnchorShape))
             }
             Err(refusal) => Err(self.refuse_rule_edit(refusal)),
         }
@@ -2728,8 +2931,9 @@ impl Editor {
         self.ask_visit(beacon, outcome, None)
     }
 
-    /// Queue blueprint `which`, as `get_vocabulary` sent it, at beacon `beacon`: one route step
-    /// with one `queue_structure` row.
+    /// Queue blueprint `which` of the Queue's own list, as `get_vocabulary` sent it
+    /// (`queue_blueprints`, each locked by the verifier's rule for a queue), at beacon `beacon`:
+    /// one route step with one `queue_structure` row.
     ///
     /// # Errors
     ///
@@ -2738,7 +2942,7 @@ impl Editor {
         let outcome = self.visit_gate(beacon).and_then(|()| {
             let blueprint = self
                 .words()?
-                .blueprints
+                .queue_blueprints
                 .get(which)
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
             Ok(vocabulary::queue_row(blueprint)?)
@@ -2913,10 +3117,29 @@ impl Editor {
         self.size.as_ref()
     }
 
-    /// The door, as the rig last set it.
+    /// The rig says whether a pressed Ready waits to be sent: the editor then refuses new asks
+    /// while what is queued drains ahead of Ready.
+    pub fn set_ready_pressed(&mut self, pressed: bool) {
+        let press = if pressed {
+            ReadyPress::Waiting
+        } else {
+            ReadyPress::Unpressed
+        };
+        if press != self.ready_press {
+            self.ready_press = press;
+            self.touch();
+        }
+    }
+
+    /// The door the player's asks meet: the rig's, except that a pressed Ready not yet sent
+    /// shuts it as the sent Ready will (fix pass 7, item 4: the panel's Fix buttons and E0601
+    /// checkbox read this, so they show what `shut_to_asks` enforces).
     #[must_use]
     pub const fn door(&self) -> Door {
-        self.door
+        match (self.door, self.ready_press) {
+            (Door::Open, ReadyPress::Waiting) => Door::Ready,
+            (door, _) => door,
+        }
     }
 
     /// The gateway filed this seat's safe playbook for the round: its `safe_playbook_filed`
@@ -3074,6 +3297,12 @@ impl Editor {
         !self.queue.is_empty() || self.in_flight.is_some()
     }
 
+    /// Whether one of the editor's calls is in flight: what "Sending..." means.
+    #[must_use]
+    pub const fn call_in_flight(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
     /// Whether an edit is waiting or in flight.
     #[must_use]
     pub fn busy(&self) -> bool {
@@ -3087,6 +3316,7 @@ impl Editor {
                         | Sent::Preview { .. }
                         | Sent::PreviewCheck
                         | Sent::GetDraft { .. }
+                        | Sent::Wire(_)
                 )
             )
     }
@@ -3132,10 +3362,21 @@ impl Editor {
         };
         self.touch();
         let check = check_of(&sent);
+        let wrote = writes(&sent).then(|| sent.clone());
         let settled = match answer {
             Ok(result) => self.settle(sent, result).map(|()| Settled::Answered),
             Err((code, message)) => Ok(self.refused(&sent, code, message)),
         };
+        // A write whose answer could not be read may have been taken; any other call's answer
+        // that could not be read is said on the status line, unless it was a check of the text,
+        // whose own line says it below (fix pass 5: a read's unreadable answer was said nowhere).
+        if let Err(error) = &settled {
+            match wrote {
+                Some(wrote) => self.write_lost(&wrote, &error.to_string()),
+                None if check.is_none() => self.say("call_unreadable", &error.to_string()),
+                None => {}
+            }
+        }
         // An answer to a check of the text on screen that this client could not read will not
         // be asked again by itself: its line says so rather than wait for ever (M4).
         if let (Err(error), Some((check, revision))) = (&settled, check)
@@ -3178,6 +3419,19 @@ impl Editor {
                     };
                 }
             }
+            Sent::Wire(
+                Wire::VisitStaged { base, first, .. } | Wire::VisitText { base, first, .. },
+            ) => {
+                if base == self.revision {
+                    self.queue.push_front(*first);
+                } else if self.hears(&first) {
+                    self.field_ask = FieldAsk::Refused {
+                        key: "status_rule_refused_changed".to_owned(),
+                        detail: String::new(),
+                    };
+                }
+            }
+            Sent::Wire(Wire::WallBox { retry, .. }) => self.queue.push_front(*retry),
             Sent::Undo { base } => {
                 if base == self.revision {
                     self.queue.push_front(Job::Undo);
@@ -3325,15 +3579,6 @@ impl Editor {
         self.submitted
     }
 
-    /// Whether the gateway accepted a submission from this editor in the round under way, so
-    /// Ready keeps this round's seal rather than file the safe playbook. What this process saw;
-    /// a resumed process learns it from the gateway's own word on `get_status`, which the wire
-    /// does not carry yet (lane `probw`; S3's `fixp`, TODO 1).
-    #[must_use]
-    pub fn sealed_this_round(&self) -> bool {
-        self.sealed_round == Some(self.round)
-    }
-
     /// What `get_beacon` said about the beacon last clicked.
     #[must_use]
     pub fn beacon_prose(&self) -> &str {
@@ -3419,12 +3664,14 @@ impl Editor {
     }
 
     /// An ask made with the door shut: refused at once, with the reason on the status line,
-    /// rather than queued behind a door the rig will not open (finding K).
+    /// rather than queued behind a door the rig will not open (finding K). A pressed Ready
+    /// shuts it to asks as the sent Ready will.
     fn shut_to_asks(&mut self) -> bool {
-        if self.door == Door::Open {
+        let door = self.door();
+        if door == Door::Open {
             return false;
         }
-        let key = format!("closed_{}", self.door.name());
+        let key = format!("closed_{}", door.name());
         self.say(&key, "");
         true
     }
@@ -3593,17 +3840,8 @@ impl Editor {
                     ]),
                 )
             }
-            job @ (Job::Beacon { .. }
-            | Job::Templates
-            | Job::Instantiate
-            | Job::UseWizard { .. }
-            | Job::New { .. }
-            | Job::RuleEdit { .. }
-            | Job::GetDraft { .. }
-            | Job::MapSummary
-            | Job::SetOption { .. }
-            | Job::Vocabulary
-            | Job::Visit { .. }) => return self.render_pr2(job),
+            // Pull request 2's jobs, and S3's `fixq` wire jobs after them.
+            job => return self.render_pr2(job),
         })
     }
 
@@ -3612,6 +3850,15 @@ impl Editor {
     fn render_undo(&mut self) -> Option<Call> {
         let patch = match self.undo.last()? {
             Undo::Patch(patch) => patch.clone(),
+            Undo::Text(_) => {
+                if let Some(Undo::Text(text)) = self.undo.pop() {
+                    self.drop_settled_ghost();
+                    let file = self.file.clone();
+                    self.restore(Some(text), file);
+                    self.say("undone", "");
+                }
+                return None;
+            }
             Undo::Restore { .. } => {
                 if let Some(Undo::Restore { text, file }) = self.undo.pop() {
                     self.drop_settled_ghost();
@@ -3728,8 +3975,171 @@ impl Editor {
                     params,
                 ))
             }
+            job @ (Job::SetValue { .. }
+            | Job::NewRule
+            | Job::VisitValue { .. }
+            | Job::VisitValueText { .. }
+            | Job::WallBox { .. }) => self.render_wire(job),
             other => self.render(other),
         }
+    }
+
+    /// S3's `fixq` jobs, each a call the gateway composes the edit for: a typed value, a new
+    /// rule, a Visit & change number row's two halves, and a wall's box.
+    fn render_wire(&mut self, job: Job) -> Option<Call> {
+        match job {
+            Job::SetValue {
+                pointer,
+                typed,
+                field,
+            } => {
+                let params = object(vec![
+                    ("playbook_jsonc", Json::String(self.text.clone()?)),
+                    ("pointer", Json::String(pointer.clone())),
+                    ("typed", Json::String(typed.clone())),
+                ]);
+                let base = self.revision;
+                let retry = Job::SetValue {
+                    pointer,
+                    typed,
+                    field,
+                };
+                Some(self.send(
+                    Sent::Edit {
+                        base,
+                        retry: Box::new(retry),
+                    },
+                    "set_value_text",
+                    params,
+                ))
+            }
+            Job::NewRule => {
+                let params = object(vec![("playbook_jsonc", Json::String(self.text.clone()?))]);
+                let base = self.revision;
+                Some(self.send(
+                    Sent::Edit {
+                        base,
+                        retry: Box::new(Job::NewRule),
+                    },
+                    "new_rule",
+                    params,
+                ))
+            }
+            Job::VisitValue {
+                beacon,
+                pointer,
+                typed,
+                field,
+            } => self.render_visit_value(&beacon, &pointer, typed, field),
+            Job::VisitValueText {
+                base,
+                staged,
+                value_at,
+                typed,
+                field,
+                first,
+            } => {
+                let params = object(vec![
+                    ("playbook_jsonc", Json::String(staged)),
+                    ("pointer", Json::String(value_at)),
+                    ("typed", Json::String(typed)),
+                ]);
+                Some(self.send(
+                    Sent::Wire(Wire::VisitText { base, field, first }),
+                    "set_value_text",
+                    params,
+                ))
+            }
+            Job::WallBox {
+                beacon,
+                blueprint,
+                corners,
+            } => Some(self.render_wall_box(beacon, blueprint, corners)),
+            other => self.render(other),
+        }
+    }
+
+    /// A Visit & change number row's first half ([`Job::VisitValue`]).
+    fn render_visit_value(
+        &mut self,
+        beacon: &str,
+        pointer: &str,
+        typed: String,
+        field: Option<u64>,
+    ) -> Option<Call> {
+        let playbook = self.text.clone()?;
+        let first = Job::VisitValue {
+            beacon: beacon.to_owned(),
+            pointer: pointer.to_owned(),
+            typed: typed.clone(),
+            field,
+        };
+        // The step lands at the route's end: its index names where the gateway writes the
+        // typed value. A route this client cannot read names nowhere, and a setting's pointer
+        // that names no field nests nothing: each is said, to the field and on the status line.
+        let parents = vocabulary::setting_parents(pointer).map_err(RuleEditRefusal::from);
+        let place = route_len(&playbook).ok_or(RuleEditRefusal::RouteUnread);
+        let (index, parents) = match (place, parents) {
+            (Ok(index), Ok(parents)) => (index, parents),
+            (Err(refusal), _) | (_, Err(refusal)) => {
+                self.refuse_rule_edit(refusal);
+                // The field that sent it hears the refusal; nothing goes out.
+                if field == Some(self.field_token) {
+                    self.field_ask = FieldAsk::Refused {
+                        key: format!("status_{}", self.status.key),
+                        detail: self.status.detail.clone(),
+                    };
+                    self.touch();
+                }
+                return None;
+            }
+        };
+        let label = fresh_label(&playbook, Action::Visit(Priority::Normal).stem());
+        let step = vocabulary::visit_step(beacon, vocabulary::settings_row(parents), &label);
+        let value_at =
+            format!("{ROUTE_POINTER}/{index}/interface/rows/0/set_mandate_settings{pointer}");
+        let params = patch_params(&playbook, &append_patch(step));
+        let base = self.revision;
+        Some(self.send(
+            Sent::Wire(Wire::VisitStaged {
+                base,
+                value_at,
+                typed,
+                field,
+                first: Box::new(first),
+            }),
+            "patch_plan",
+            params,
+        ))
+    }
+
+    /// A wall's box ([`Job::WallBox`]): `compose_wall_box` with both corners.
+    fn render_wall_box(
+        &mut self,
+        beacon: String,
+        blueprint: String,
+        corners: [[i32; 3]; 2],
+    ) -> Call {
+        let [corner_a, corner_b] = corners;
+        let params = object(vec![
+            ("beacon_id", Json::String(beacon.clone())),
+            ("blueprint_id", Json::String(blueprint.clone())),
+            ("corner_a", voxel_params(corner_a)),
+            ("corner_b", voxel_params(corner_b)),
+        ]);
+        let retry = Job::WallBox {
+            beacon: beacon.clone(),
+            blueprint,
+            corners,
+        };
+        self.send(
+            Sent::Wire(Wire::WallBox {
+                beacon,
+                retry: Box::new(retry),
+            }),
+            "compose_wall_box",
+            params,
+        )
     }
 
     /// An edit's `patch_plan` call with `params`, against the text as it is now, with `retry`
@@ -3805,6 +4215,7 @@ impl Editor {
                     self.say("undone", "");
                 }
             }
+            Sent::Wire(wire) => self.settle_wire(wire, result)?,
             Sent::Preview { at, base, step } => {
                 let answer = patch_of(result)?;
                 if self.ghost.as_ref().is_some_and(|ghost| ghost.at == at) {
@@ -3849,6 +4260,7 @@ impl Editor {
                 self.notes = response.notes;
                 self.known.notes = true;
                 self.this_round = targeting::this_round_of(&response.prose);
+                self.lost_resolved("notes");
             }
             Sent::Notes { .. } => {
                 let response: SaveNotesResponse =
@@ -3860,6 +4272,7 @@ impl Editor {
                 let response: ListDraftsResponse =
                     json::decode_json(&body(result, "gp.api.v1.ListDraftsResponse"))?;
                 self.settle_drafts(response);
+                self.lost_resolved("drafts");
             }
             Sent::SaveDraft => {
                 self.queue.push_back(Job::Drafts);
@@ -3996,8 +4409,79 @@ impl Editor {
     /// An edit's patched text: taken when the text it was patched against is still the one on
     /// screen. A Fix's lands with "fixed" on the status line, after the "fixing" its click
     /// put there.
+    /// The answers to S3's `fixq` wire calls: a Visit & change number row's two halves and a
+    /// wall's box.
+    fn settle_wire(&mut self, wire: Wire, result: &Json) -> Result<(), BridgeError> {
+        match wire {
+            Wire::VisitStaged {
+                base,
+                value_at,
+                typed,
+                field,
+                first,
+            } => {
+                let answer = patch_of(result)?;
+                // The copy waits for its value; only the second half's answer goes on screen.
+                if base == self.revision {
+                    self.queue.push_front(Job::VisitValueText {
+                        base,
+                        staged: answer.playbook_jsonc,
+                        value_at,
+                        typed,
+                        field,
+                        first,
+                    });
+                } else if self.hears(&first) {
+                    self.field_ask = FieldAsk::Refused {
+                        key: "status_rule_refused_changed".to_owned(),
+                        detail: String::new(),
+                    };
+                }
+            }
+            Wire::VisitText { base, first, .. } => {
+                let answer: SetValueTextResponse =
+                    json::decode_json(&body(result, "gp.api.v1.SetValueTextResponse"))?;
+                if self.hears(&first) {
+                    self.field_ask = if base == self.revision {
+                        FieldAsk::Landed
+                    } else {
+                        FieldAsk::Refused {
+                            key: "status_rule_refused_changed".to_owned(),
+                            detail: String::new(),
+                        }
+                    };
+                }
+                if base == self.revision {
+                    // Undo puts the text from before the edit back, with no call and no text
+                    // between: the copy the first half patched never reached the screen.
+                    if let Some(before) = self.text.clone() {
+                        self.undo.push(Undo::Text(before));
+                    }
+                    self.drop_settled_ghost();
+                    self.accept_text(answer.playbook_jsonc);
+                    self.say("", "");
+                }
+            }
+            Wire::WallBox { beacon, .. } => {
+                let answer: ComposeWallBoxResponse =
+                    json::decode_json(&body(result, "gp.api.v1.ComposeWallBoxResponse"))?;
+                let target = answer.target.ok_or_else(|| {
+                    BridgeError::Rpc("compose_wall_box answered no target".to_owned())
+                })?;
+                // The target as the gateway composed it, in the playbook's canonical spelling.
+                let target = json::encode_json(&target)?;
+                self.queue.push_front(Job::Visit {
+                    beacon,
+                    row: vocabulary::add_composed_target_row(target),
+                    field: None,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn settle_edit(&mut self, base: u64, job: &Job, result: &Json) -> Result<(), BridgeError> {
-        let answer = patch_of(result)?;
+        let answer = edit_of(job, result)?;
         // A value field's edit landed, or another landed first and it was not taken: its popup
         // hears which.
         if self.hears(job) {
@@ -4018,6 +4502,7 @@ impl Editor {
                 Job::Edit { .. } => self.say("fixed", ""),
                 Job::SetOption { on: true, .. } => self.say("dormant_allowed", ""),
                 Job::SetOption { on: false, .. } => self.say("dormant_disallowed", ""),
+                Job::NewRule => self.say("rule_added", ""),
                 // A map action has no line of its own, and the last one (a submission, a
                 // Fix, a template's playbook) no longer describes the text on screen.
                 _ => self.say("", ""),
@@ -4093,7 +4578,6 @@ impl Editor {
         }
         if response.accepted {
             self.sealed = Some(text);
-            self.sealed_round = Some(self.round);
             self.seal_to_ask = Some(self.round);
             // A re-seal changes the Lull's "this round" sentence at once (targeting.md,
             // "Messages"), so the briefing is read again.
@@ -4279,8 +4763,102 @@ impl Editor {
             }
             return Settled::Answered;
         }
-        self.refusals = self.refusals.saturating_add(1);
-        let detail = format!("{code}: {message}");
+        self.refused_by(sent, Refuser::Gateway, &format!("{code}: {message}"))
+    }
+
+    /// The call in flight did not complete for a reason that is not the gateway's refusal
+    /// (S3's `fixq-c`, fix pass 4: one door for every such reason, the rig's
+    /// `Rig::unfinished`): too large to send, the transport refused to send it, the connection
+    /// closed on the message itself, or the gateway's answer could not be read. It is settled
+    /// as refused where that call's refusal is shown, at once and never asked again, and
+    /// counted under its own cause ([`Editor::unfinished_calls`]), never as the gateway's.
+    pub fn unfinished(&mut self, cause: Cause, detail: &str) -> Settled {
+        let Some(sent) = self.in_flight.take() else {
+            return Settled::Answered;
+        };
+        self.touch();
+        let count = match cause {
+            Cause::TooLarge => &mut self.unfinished.too_large,
+            Cause::SendFailed => &mut self.unfinished.send_failed,
+            Cause::ClosedOn | Cause::AnswerTooLarge => &mut self.unfinished.closed_on,
+            Cause::Unreadable => &mut self.unfinished.unreadable,
+            Cause::TimedOut => &mut self.unfinished.timed_out,
+        };
+        *count = count.saturating_add(1);
+        let refuser = match cause {
+            Cause::TooLarge => Refuser::TooLarge,
+            Cause::SendFailed => Refuser::SendFailed,
+            Cause::ClosedOn => Refuser::ClosedOn,
+            Cause::AnswerTooLarge => Refuser::AnswerTooLarge,
+            Cause::Unreadable => Refuser::Unreadable,
+            Cause::TimedOut => Refuser::TimedOut,
+        };
+        let settled = self.refused_by(&sent, refuser, detail);
+        // A write whose answer was lost (the link closed on it, or it could not be read) may have
+        // been taken: never "nothing changed" (fix pass 5).
+        if matches!(
+            cause,
+            Cause::ClosedOn | Cause::AnswerTooLarge | Cause::Unreadable | Cause::TimedOut
+        ) && writes(&sent)
+        {
+            self.write_lost(&sent, detail);
+        }
+        if self.door != Door::Open {
+            self.shut();
+        }
+        settled
+    }
+
+    /// A write's answer was lost: said as possibly taken, and what it would have changed read
+    /// again (the notebook and the briefing, the drafts; a submission's seal by the rig).
+    fn write_lost(&mut self, sent: &Sent, detail: &str) {
+        self.say("call_maybe_taken", detail);
+        self.lost_writes = self.lost_writes.saturating_add(1);
+        // What reads the write's effect back: the draft list for a draft, the briefing (which
+        // carries the notebook) for the notes, the seat's status (its seal, read by the rig) for
+        // a submission.
+        let (reread, what) = match sent {
+            Sent::SaveDraft => (Job::Drafts, "drafts"),
+            Sent::Submit { .. } => (Job::Briefing, "submit"),
+            _ => (Job::Briefing, "notes"),
+        };
+        self.lost_pending = Some(what);
+        if !self.queue.contains(&reread) {
+            self.queue.push_back(reread);
+        }
+    }
+
+    /// The read that returns a lost write's effect answered (`what`: `notes`, `drafts` or
+    /// `submit`): the "may have been taken" line gives way to what the gateway has now.
+    pub fn lost_resolved(&mut self, what: &str) {
+        if self.lost_pending == Some(what) {
+            self.lost_pending = None;
+            self.say(&format!("lost_{what}_read"), "");
+        }
+    }
+
+    /// Whether a write's answer was lost since the last ask, and forgets it: the rig then reads
+    /// the seat's seal again.
+    pub fn take_lost_write(&mut self) -> bool {
+        std::mem::take(&mut self.lost_writes) > 0
+    }
+
+    /// The editor's calls that did not complete for a reason other than the gateway's
+    /// refusal, by cause ([`Editor::unfinished`]); [`Editor::refusals`] counts the gateway's.
+    #[must_use]
+    pub const fn unfinished_calls(&self) -> UnfinishedCalls {
+        self.unfinished
+    }
+
+    /// A refused call, the gateway's or this client's own, said where that call's refusal is
+    /// shown, with `detail` filling the words.
+    fn refused_by(&mut self, sent: &Sent, refuser: Refuser, detail: &str) -> Settled {
+        // `refusals` counts the gateway's alone; every other cause has its own count
+        // (`Editor::unfinished_calls`, fix pass 4).
+        if refuser == Refuser::Gateway {
+            self.refusals = self.refusals.saturating_add(1);
+        }
+        let field_key = refuser.field_key();
         // A refused check of the text on screen will not come back by itself: the panel
         // says so, with the gateway's words, rather than "Checking..." for ever (finding K).
         // Each check's refusal is its own line's: a refused estimate leaves the chips'
@@ -4288,47 +4866,62 @@ impl Editor {
         if let Some((check, revision)) = check_of(sent)
             && revision == self.revision
         {
-            *self.check_refusals.slot(check) = Some((revision, Unchecked::Refused(detail.clone())));
+            *self.check_refusals.slot(check) = Some((revision, refuser.unchecked(detail)));
         }
         // A refused read of the gateway's words is said on its own line, and nothing waits on it.
+        let failed = || refuser.read_failed(detail);
         match sent {
             Sent::Vocabulary { round } if *round == self.round => {
-                self.vocabulary_failed = Some(ReadFailed::Refused(detail.clone()));
+                self.vocabulary_failed = Some(failed());
             }
             Sent::Beacon { .. } => {
                 self.beacon = None;
-                self.beacon_failed = Some(ReadFailed::Refused(detail.clone()));
+                self.beacon_failed = Some(failed());
             }
             Sent::Templates => {
                 self.templates.clear();
-                self.templates_failed = Some(ReadFailed::Refused(detail.clone()));
+                self.templates_failed = Some(failed());
             }
             _ => {}
         }
-        if let Sent::Edit { retry, .. } = sent
-            && self.hears(retry)
+        if let Some(asked) = sent_job(sent)
+            && self.hears(asked)
         {
             self.field_ask = FieldAsk::Refused {
-                key: GATEWAY_REFUSED_KEY.to_owned(),
-                detail: detail.clone(),
+                key: field_key.to_owned(),
+                detail: detail.to_owned(),
             };
         }
         if let Sent::Edit { base, retry } = sent
-            && let Job::RuleEdit { pointer, .. } = retry.as_ref()
+            && let Job::RuleEdit { pointer, .. } | Job::SetValue { pointer, .. } = retry.as_ref()
         {
             self.rule_refusal = Some(RuleRefusal {
                 pointer: pointer.clone(),
-                key: GATEWAY_REFUSED_KEY.to_owned(),
-                detail: detail.clone(),
+                key: field_key.to_owned(),
+                detail: detail.to_owned(),
                 revision: *base,
             });
         }
+        if refuser != Refuser::Gateway {
+            if let Sent::Instantiate { asked } = sent
+                && let Some(wizard) = self.wizard.as_mut()
+                && wizard.asked == *asked
+            {
+                wizard.refusal = Some(detail.to_owned());
+            }
+            if matches!(sent, Sent::Preview { .. } | Sent::PreviewCheck) {
+                self.ghost = None;
+                self.preview = None;
+            }
+            self.say(refuser.status_key(), detail);
+            return Settled::Refused;
+        }
         match sent {
-            Sent::Load { .. } => self.say("load_refused_by_gateway", &detail),
+            Sent::Load { .. } => self.say("load_refused_by_gateway", detail),
             Sent::Preview { .. } | Sent::PreviewCheck => {
                 self.ghost = None;
                 self.preview = None;
-                self.say("gateway_refused", &detail);
+                self.say("gateway_refused", detail);
             }
             Sent::Instantiate { asked } => {
                 // Shown as the gateway wrote it; the value stays as typed, for the player
@@ -4336,14 +4929,185 @@ impl Editor {
                 if let Some(wizard) = self.wizard.as_mut()
                     && wizard.asked == *asked
                 {
-                    wizard.refusal = Some(detail.clone());
+                    wizard.refusal = Some(detail.to_owned());
                 }
-                self.say("wizard_refused", &detail);
+                self.say("wizard_refused", detail);
             }
-            _ => self.say("gateway_refused", &detail),
+            _ => self.say("gateway_refused", detail),
         }
         Settled::Refused
     }
+}
+
+/// Who refused a call: the gateway in words, or one of the causes of [`Cause`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Refuser {
+    Gateway,
+    TooLarge,
+    ClosedOn,
+    AnswerTooLarge,
+    SendFailed,
+    Unreadable,
+    TimedOut,
+}
+
+impl Refuser {
+    /// The string table's key for this refusal on a rule's line and in a value field.
+    const fn field_key(self) -> &'static str {
+        match self {
+            Self::Gateway => GATEWAY_REFUSED_KEY,
+            Self::TooLarge => TOO_LARGE_KEY,
+            Self::ClosedOn => CLOSED_ON_KEY,
+            Self::AnswerTooLarge => ANSWER_TOO_LARGE_KEY,
+            Self::SendFailed => SEND_FAILED_KEY,
+            Self::Unreadable => UNREADABLE_KEY,
+            Self::TimedOut => TIMED_OUT_KEY,
+        }
+    }
+
+    /// The status line's key for a refusal that is not the gateway's (`status_<key>`).
+    const fn status_key(self) -> &'static str {
+        match self {
+            Self::TooLarge => "call_too_large",
+            Self::SendFailed => "call_send_failed",
+            Self::Unreadable => "call_unreadable",
+            Self::AnswerTooLarge => "call_answer_too_large",
+            Self::TimedOut => "call_timed_out",
+            Self::Gateway | Self::ClosedOn => "call_closed_on",
+        }
+    }
+
+    /// A check's line for this refusal.
+    fn unchecked(self, detail: &str) -> Unchecked {
+        let detail = detail.to_owned();
+        match self {
+            Self::Gateway => Unchecked::Refused(detail),
+            Self::TooLarge => Unchecked::TooLarge(detail),
+            Self::ClosedOn | Self::AnswerTooLarge => Unchecked::ClosedOn(detail),
+            Self::SendFailed => Unchecked::SendFailed(detail),
+            Self::Unreadable => Unchecked::Unreadable(detail),
+            Self::TimedOut => Unchecked::TimedOut(detail),
+        }
+    }
+
+    /// A read's line for this refusal.
+    fn read_failed(self, detail: &str) -> ReadFailed {
+        let detail = detail.to_owned();
+        match self {
+            Self::Gateway => ReadFailed::Refused(detail),
+            Self::TooLarge => ReadFailed::TooLarge(detail),
+            Self::ClosedOn | Self::AnswerTooLarge => ReadFailed::ClosedOn(detail),
+            Self::SendFailed => ReadFailed::SendFailed(detail),
+            Self::Unreadable => ReadFailed::Unreadable(detail),
+            Self::TimedOut => ReadFailed::TimedOut(detail),
+        }
+    }
+}
+
+/// Why one of the editor's calls did not complete, when it was not the gateway's refusal
+/// ([`Editor::unfinished`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Cause {
+    /// Its frame was past the gateway's message cap, so it was not sent.
+    TooLarge,
+    /// The transport refused to send it.
+    SendFailed,
+    /// The connection closed on the message itself.
+    ClosedOn,
+    /// The gateway's answer to it was too large for this client to read (the client's own close,
+    /// 1009), or the same request did that before and is held until it changes.
+    AnswerTooLarge,
+    /// The gateway's answer to it could not be read as an answer at all.
+    Unreadable,
+    /// No answer came within the call's deadline (fix pass 6).
+    TimedOut,
+}
+
+/// The editor's calls that did not complete, by [`Cause`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct UnfinishedCalls {
+    /// [`Cause::TooLarge`].
+    pub too_large: u32,
+    /// [`Cause::SendFailed`].
+    pub send_failed: u32,
+    /// [`Cause::ClosedOn`].
+    pub closed_on: u32,
+    /// [`Cause::Unreadable`].
+    pub unreadable: u32,
+    /// [`Cause::TimedOut`].
+    pub timed_out: u32,
+}
+
+/// Whether `sent` is a call that changes something at the gateway: a submission, the notes, a
+/// draft. Every other editor call reads or computes.
+const fn writes(sent: &Sent) -> bool {
+    matches!(
+        sent,
+        Sent::Submit { .. } | Sent::Notes { .. } | Sent::SaveDraft
+    )
+}
+
+/// The string table's key for a call whose answer was too large for this client to read.
+pub const ANSWER_TOO_LARGE_KEY: &str = "status_call_answer_too_large";
+
+/// The string table's key for a call no answer came to within its deadline.
+pub const TIMED_OUT_KEY: &str = "status_call_timed_out";
+
+/// The string table's key for a call whose answer could not be read.
+pub const UNREADABLE_KEY: &str = "status_call_unreadable";
+
+/// The string table's key for a call the transport refused to send.
+pub const SEND_FAILED_KEY: &str = "status_call_send_failed";
+
+/// The string table's key for a call the connection closed on (either side's close).
+pub const CLOSED_ON_KEY: &str = "status_call_closed_on";
+
+/// The string table's key for a call this client did not send because the gateway could not
+/// read one that large, drawn on its rule and in a value field's popup.
+pub const TOO_LARGE_KEY: &str = "status_call_too_large";
+
+/// The job a call was sent for, when an answer to it may be a value field's to say.
+fn sent_job(sent: &Sent) -> Option<&Job> {
+    match sent {
+        Sent::Edit { retry, .. } => Some(retry),
+        Sent::Wire(Wire::VisitStaged { first, .. } | Wire::VisitText { first, .. }) => Some(first),
+        _ => None,
+    }
+}
+
+/// The patched text and its undo, from the answer of the call `job` was sent as: a typed value's
+/// (`set_value_text`), a new rule's (`new_rule`) or any other edit's (`patch_plan`), each its own
+/// message, all answering the patched file and its undo.
+fn edit_of(job: &Job, result: &Json) -> Result<PatchPlanResponse, BridgeError> {
+    Ok(match job {
+        Job::SetValue { .. } => {
+            let answer: SetValueTextResponse =
+                json::decode_json(&body(result, "gp.api.v1.SetValueTextResponse"))?;
+            PatchPlanResponse {
+                playbook_jsonc: answer.playbook_jsonc,
+                inverse_json_patch: answer.inverse_json_patch,
+            }
+        }
+        Job::NewRule => {
+            let answer: NewRuleResponse =
+                json::decode_json(&body(result, "gp.api.v1.NewRuleResponse"))?;
+            PatchPlanResponse {
+                playbook_jsonc: answer.playbook_jsonc,
+                inverse_json_patch: answer.inverse_json_patch,
+            }
+        }
+        _ => patch_of(result)?,
+    })
+}
+
+/// A voxel as a `gp.v1.Voxel`, `{x, y, z}`.
+fn voxel_params(at: [i32; 3]) -> Json {
+    let [x, y, z] = at;
+    object(vec![
+        ("x", Json::Number(x.to_string())),
+        ("y", Json::Number(y.to_string())),
+        ("z", Json::Number(z.to_string())),
+    ])
 }
 
 /// The check of the text a call is, and the revision it checks; `None` for a call that checks
@@ -4916,6 +5680,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         // The load itself owes a route estimate.
         let call = editor.next_call(false).expect("the estimate");
@@ -5003,12 +5770,16 @@ mod tests {
         assert_eq!(editor.status().key, "fixed", "and again when it lands");
     }
 
+    /// The editor keeps no seal of its own (S3's `fixq-c`, item 13): an accepted submission only
+    /// marks, once, that the rig is to ask the gateway (`get_status`'s `sealed_this_round`, the one
+    /// source the Ready line reads); a refused one marks nothing. Two sources could disagree, and
+    /// a resumed client would hold only one of them.
     #[test]
-    fn an_accepted_seal_is_this_rounds_until_the_next_round() {
+    fn an_accepted_seal_asks_the_gateway_and_is_kept_nowhere_here() {
         let submit = |accepted: bool| {
             let mut editor = loaded(EXPAND_EAST);
             editor.lull_opened(2);
-            assert!(!editor.sealed_this_round());
+            assert!(!editor.take_sealed_mark());
             assert!(editor.submit());
             for _ in 0..12 {
                 match editor.next_call(false) {
@@ -5030,17 +5801,14 @@ mod tests {
         };
         let mut editor = submit(true);
         assert!(
-            editor.sealed_this_round(),
-            "an accepted seal is this round's"
+            editor.take_sealed_mark(),
+            "an accepted seal asks the gateway"
         );
-        editor.lull_opened(2);
+        assert!(!editor.take_sealed_mark(), "once");
         assert!(
-            editor.sealed_this_round(),
-            "the same Lull opened again keeps it"
+            !submit(false).take_sealed_mark(),
+            "a refused seal asks nothing"
         );
-        editor.lull_opened(3);
-        assert!(!editor.sealed_this_round(), "a new round holds no seal yet");
-        assert!(!submit(false).sealed_this_round(), "a refused seal is none");
     }
 
     #[test]
@@ -5231,6 +5999,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -5385,19 +6156,24 @@ mod tests {
         panic!("the editor never went quiet");
     }
 
-    /// **A chip's edit is one `replace`** (S3's `ed3b`): a number within the bounds sent, an
-    /// enum's value as sent, each at the chip's pointer; the patched text is `patch_plan`'s.
+    /// **A chip's edit is the gateway's** (S3's `ed3b`; `fixq`): a number's text goes to
+    /// `set_value_text` at the chip's pointer, as typed, and an enum's value as sent is written
+    /// with the op the chip names; the patched text is the gateway's.
     #[test]
     fn a_chip_edit_is_one_replace_at_its_pointer() {
         let mut editor = rendered(EXPAND_EAST);
         let (pct, revision, pointer) = drawn(&editor, "/cmdr_hp_pct/pct");
         assert!(editor.rules_editable());
         assert_eq!(editor.set_number(pct, revision, &pointer, 35), Ok(()));
-        let call = editor.next_call(false).expect("the patch");
-        assert_eq!(call.method, "patch_plan");
+        let call = editor.next_call(false).expect("the call");
+        let (playbook, at, typed) = typed_of_call(&call);
+        assert_eq!(playbook.as_bytes(), editor.bytes());
         assert_eq!(
-            patch_of_call(&call),
-            r#"[{"op":"replace","path":"/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct","value":35}]"#
+            (at.as_str(), typed.as_str()),
+            (
+                "/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct",
+                "35"
+            )
         );
         assert_eq!(
             editor.set_number(pct, revision, &pointer, 36),
@@ -5431,11 +6207,8 @@ mod tests {
         let mut editor = rendered(EXPAND_EAST);
         let (pct, revision, pointer) = drawn(&editor, "/cmdr_hp_pct/pct");
         assert_eq!(editor.set_number(pct, revision, &pointer, 0), Ok(()));
-        let call = editor.next_call(false).expect("the patch");
-        assert_eq!(
-            patch_of_call(&call),
-            r#"[{"op":"replace","path":"/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct","value":0}]"#
-        );
+        let call = editor.next_call(false).expect("the call");
+        assert_eq!(typed_of_call(&call).2, "0");
     }
 
     /// **An edit never lands on another chip** (M1). A drag is in flight; a click on a chip of
@@ -5568,9 +6341,10 @@ mod tests {
                 editor.set_number(priority, revision, &at, 3),
                 RuleEditRefusal::NotThisEditor,
             ),
+            // A duration is a number shown in seconds: its own text again is unchanged.
             (
-                editor.set_number(timeout, revision, &timeout_at, 60_000),
-                RuleEditRefusal::NotThisEditor,
+                editor.set_number(timeout, revision, &timeout_at, 120),
+                RuleEditRefusal::Unchanged,
             ),
             (
                 editor.begin_pick(priority, revision, &at),
@@ -5921,13 +6695,16 @@ mod tests {
         assert!(!editor.chips_current());
         editor
             .answered(Ok(&read(
-                r#"{"refs":[{"pointer":"/declarative/route/0/place_beacon/at/covering","feature_id":"vent_120_88","travel_ms":14000,"candidates":[{"feature_id":"vent_120_88","travel_ms":14000}],"matched":1,"failure":""}]}"#,
+                r#"{"refs":[{"pointer":"/declarative/route/0/place_beacon/at/covering","feature_id":"vent_120_88","travel_ms":14000,"travel_text":"14 s","candidates":[{"feature_id":"vent_120_88","travel_ms":14000,"travel_text":"14 s"}],"matched":1,"failure":""}]}"#,
             )))
             .expect("reads");
         assert!(editor.chips_current());
         let chip = editor.chips().first().expect("one chip");
         assert_eq!(chip.form, crate::targeting::ChipForm::Name);
-        assert_eq!(chip.now.as_ref().map(|now| now.travel_ms), Some(14_000));
+        assert_eq!(
+            chip.now.as_ref().map(|now| now.travel_text.as_str()),
+            Some("14 s")
+        );
         // A dropped connection asks for the chips again.
         assert!(editor.undo());
         let _ = editor.next_call(false);
@@ -6570,6 +7347,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -6834,6 +7614,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -6954,6 +7737,28 @@ mod tests {
         assert_eq!(editor.status().key, "closed_push");
         editor.set_door(Door::Open);
         assert_eq!(editor.status().key, "", "the door is open again");
+    }
+
+    /// **The panel shows the door the asks meet** (fix pass 7, item 4; review 6's F2): between a
+    /// pressed Ready and its send, the Fix buttons and the E0601 checkbox read the door that
+    /// refuses the asks, not the rig's open one.
+    #[test]
+    fn a_pressed_ready_shuts_the_panels_door_before_it_is_sent() {
+        let mut editor = loaded("{}");
+        editor.lull_opened(1);
+        assert_eq!(editor.door(), Door::Open);
+        assert!(editor.dormant().enabled);
+        editor.set_ready_pressed(true);
+        assert_eq!(editor.door(), Door::Ready);
+        assert!(
+            !editor.dormant().enabled,
+            "the checkbox takes an ask the door refuses"
+        );
+        editor.save_notes("after Ready");
+        assert_eq!(editor.status().key, "closed_ready");
+        editor.set_ready_pressed(false);
+        assert_eq!(editor.door(), Door::Open);
+        assert!(editor.dormant().enabled);
     }
 
     /// A shut door's line goes when the door moves on to another shut door: an ask after Ready
@@ -7113,6 +7918,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let said = "waypoint 1 covers nothing: its step would fail `illegal_site`";
@@ -7148,6 +7956,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let settled = editor
@@ -7173,6 +7984,9 @@ mod tests {
             hp: None,
             heading: None,
             ring: None,
+            look: None,
+            title: String::new(),
+            building: false,
         };
         for door in [Door::Push, Door::Recap, Door::Ended, Door::Ready] {
             let mut editor = loaded(EXPAND_EAST);
@@ -7550,6 +8364,39 @@ mod tests {
         .1
     }
 
+    /// A test's typed whole number, as the value field sends it: its digits as text.
+    impl Editor {
+        fn set_number(
+            &mut self,
+            chip: usize,
+            revision: u64,
+            pointer: &str,
+            value: i64,
+        ) -> Result<(), RuleEditRefusal> {
+            self.set_number_text(chip, revision, pointer, &value.to_string())
+        }
+
+        fn change_setting_number(
+            &mut self,
+            beacon: &str,
+            setting: usize,
+            pointer: &str,
+            value: i64,
+        ) -> Result<(), RuleEditRefusal> {
+            self.change_setting_number_text(beacon, setting, pointer, &value.to_string())
+        }
+    }
+
+    /// The `set_value_text` call's pointer and typed text, after its playbook.
+    fn typed_of_call(call: &Call) -> (String, String, String) {
+        assert_eq!(call.method, "set_value_text");
+        let field = |key: &str| match call.params.get(key) {
+            Some(Json::String(text)) => text.clone(),
+            other => panic!("{key}: {other:?}"),
+        };
+        (field("playbook_jsonc"), field("pointer"), field("typed"))
+    }
+
     fn setting_named(editor: &Editor, pointer: &str) -> (usize, String) {
         let at = editor
             .beacon_detail()
@@ -7619,7 +8466,7 @@ mod tests {
         let text = r#"{"declarative":{"route":[{"label":"go_1","hold_ms":1},{"hold_ms":2},{"label":"go_2","hold_ms":3},{"label":"go_1","hold_ms":4}],"handlers":[{"id":"r1","when":{"step_reached":{"label":"go_1"}}},{"id":"r2"}]}}"#;
         let mut editor = loaded(text);
         let render = read(
-            r#"{"prose":"Rules\n  r1: when step go_1 is reached.\n","rules":[{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"chips":[{"pointer":"/declarative/handlers/0/when/step_reached/label","line":1,"start":16,"end":20,"shape":{"reference":{"kind":"step_label"}},"value_json":"\"go_1\""},{"pointer":"/declarative/handlers/0/id","line":1,"start":2,"end":4,"shape":{"reference":{"kind":"handler_id"}},"value_json":"\"r1\""}]}],"_status":{"phase":"lull"}}"#,
+            r#"{"prose":"Rules\n  r1: when step go_1 is reached.\n","rules":[{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"chips":[{"pointer":"/declarative/handlers/0/when/step_reached/label","line":1,"start":16,"end":20,"shape":{"reference":{"kind":"step_label"}},"value_json":"\"go_1\"","pick_op":"replace"},{"pointer":"/declarative/handlers/0/id","line":1,"start":2,"end":4,"shape":{"reference":{"kind":"handler_id"}},"value_json":"\"r1\"","pick_op":"replace"}]}],"_status":{"phase":"lull"}}"#,
         );
         rerender(&mut editor, &render);
         assert!(editor.prose_current());
@@ -7672,267 +8519,162 @@ mod tests {
         );
     }
 
-    /// **A value field's text is read as a whole number, or refused by its reason** (S3's
-    /// `fixp`, fix 1; fix pass 1, item 3): an optional `+` or `-` and digits, nothing else, and of
-    /// any size: the client applies no bound the gateway did not send, so a number past an `i64`
-    /// is written to the wire as its digits and the gateway answers it in its own words. The digits
-    /// go out in JSON's own form: no `+`, no leading zero, no "-0".
+    /// **A typed value goes to the gateway as typed, and its answer is what the person reads**
+    /// (S3's `fixq-c`, item 7: one reader of typed numbers, the gateway's `set_value_text`): any
+    /// text, "abc", "1.5" and 30 digits alike, goes out exactly as typed and is the gateway's to
+    /// read or refuse; its refusal is said in the popup and on the chip's rule in its words; a
+    /// value that lands is the gateway's text, one edit Undo takes back. The text the chip shows,
+    /// sent back, is unchanged and nothing goes out. A duration's chip is typed in seconds.
     #[test]
-    fn a_typed_value_is_a_whole_number_or_refused() {
-        for (typed, wire) in [
-            ("30", "30"),
-            ("-5", "-5"),
-            ("+7", "7"),
-            ("007", "7"),
-            ("-0", "0"),
-            ("0", "0"),
-            ("-007", "-7"),
-            ("9007199254740993", "9007199254740993"),
-            ("-9223372036854775808", "-9223372036854775808"),
-            ("9223372036854775807", "9223372036854775807"),
-            ("9223372036854775808", "9223372036854775808"),
-            (
-                "123456789012345678901234567890",
-                "123456789012345678901234567890",
-            ),
-        ] {
-            assert_eq!(typed_integer(typed), Ok(wire.to_owned()), "{typed:?}");
-        }
-        for refused in [
-            " 3", "3 ", "3.0", "5*2", "", "-", "+", "--3", "+-3", "0x10", "1,000", "\u{0663}",
-            "\u{FF13}",
-        ] {
-            assert_eq!(
-                typed_integer(refused),
-                Err(RuleEditRefusal::NotAnInteger),
-                "{refused:?}"
-            );
-        }
-    }
-
-    /// **A number past an `i64` reaches the wire as typed, and the gateway's answer is what the
-    /// person reads** (fix pass 1, item 3): at `i64::MAX`, one past it, and 30 digits.
-    #[test]
-    fn a_number_past_i64_goes_to_the_gateway_as_its_digits() {
-        for digits in [
-            "9223372036854775807",
-            "9223372036854775808",
-            "123456789012345678901234567890",
-        ] {
+    fn a_typed_value_goes_to_the_gateway_as_typed() {
+        for typed in ["abc", "1.5", "123456789012345678901234567890", "-5", " 2 "] {
             let mut editor = rendered(EXPAND_EAST);
             let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+            let rule = editor.rule_list().rule_holding(&at);
             editor.field_opened();
+            assert_eq!(editor.set_number_text(pct, revision, &at, typed), Ok(()));
+            assert_eq!(editor.status().key, "rule_editing");
+            assert_eq!(editor.field_ask(), &FieldAsk::Waiting);
+            let call = editor.next_call(false).expect("the call");
             assert_eq!(
-                editor.set_number_text(pct, revision, &at, digits),
-                Ok(()),
-                "{digits}"
-            );
-            assert_eq!(
-                editor.status().key,
-                "rule_editing",
-                "the person reads Editing..."
-            );
-            let call = editor.next_call(false).expect("the patch");
-            assert_eq!(
-                patch_of_call(&call),
-                format!(r#"[{{"op":"replace","path":"{at}","value":{digits}}}]"#)
+                typed_of_call(&call),
+                (EXPAND_EAST.to_owned(), at.clone(), typed.to_owned())
             );
             editor
-                .answered(Err((
-                    "INVALID_ARGUMENT",
-                    "the value at /declarative/handlers/0/when is out of range",
-                )))
+                .answered(Err(("INVALID_ARGUMENT", "`abc` is not a number")))
                 .expect("settled");
             assert_eq!(
                 editor.field_ask(),
                 &FieldAsk::Refused {
                     key: GATEWAY_REFUSED_KEY.to_owned(),
-                    detail: "INVALID_ARGUMENT: the value at /declarative/handlers/0/when is out of range"
-                        .to_owned()
+                    detail: "INVALID_ARGUMENT: `abc` is not a number".to_owned()
                 },
-                "the person reads the gateway's words in the popup"
+                "{typed}: the gateway's words in the popup"
             );
+            let refused = editor.rule_refusal().expect("on the chip's rule");
+            assert_eq!(refused.key, GATEWAY_REFUSED_KEY);
+            assert_eq!(editor.rule_list().rule_holding(&refused.pointer), rule);
         }
-        let mut editor = visit_editor();
-        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
-        assert_eq!(
-            editor.change_setting_number_text(
-                "b_00",
-                at,
-                &pointer,
-                "123456789012345678901234567890"
-            ),
-            Ok(())
-        );
-        assert_eq!(
-            visit_patch(&mut editor),
-            visit_step_patch(
-                r#"{"set_mandate_settings":{"retreat_hp_pct":123456789012345678901234567890}}"#
-            )
-        );
-    }
-
-    /// **The text goes to its patch exactly, or is refused where the player looks**: on the
-    /// status line, on the chip's rule, and to the field's popup.
-    #[test]
-    fn a_typed_value_reaches_its_patch_or_its_refusal() {
         let mut editor = rendered(EXPAND_EAST);
         let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
-        let rule = editor.rule_list().rule_holding(&at);
-        assert_eq!(
-            editor.set_number_text(pct, revision, &at, "abc"),
-            Err(RuleEditRefusal::NotAnInteger)
-        );
-        assert_eq!(editor.status().key, "rule_refused_not_an_integer");
-        assert!(!editor.has_pending_jobs(), "nothing is sent");
-        let refused = editor.rule_refusal().expect("on the chip's rule");
-        assert_eq!(refused.key, "status_rule_refused_not_an_integer");
-        assert_eq!(editor.rule_list().rule_holding(&refused.pointer), rule);
-        assert_eq!(
-            editor.field_ask(),
-            &FieldAsk::Refused {
-                key: "status_rule_refused_not_an_integer".to_owned(),
-                detail: String::new()
-            },
-            "the popup hears it while it is open"
-        );
-        // The value the chip holds now, typed again: Unchanged, on the rule and to the field.
-        let now = match editor.rule_list().chips.get(pct).map(|chip| &chip.editor) {
-            Some(ChipEditor::Number { now, .. }) => *now,
-            other => panic!("not a number chip: {other:?}"),
-        };
-        assert_eq!(
-            editor.set_number_text(pct, revision, &at, &now.to_string()),
-            Err(RuleEditRefusal::Unchanged)
-        );
-        assert_eq!(
-            editor.rule_refusal().map(|refusal| refusal.key.as_str()),
-            Some("status_rule_refused_unchanged")
-        );
-        // A new field forgets what the last one heard.
         editor.field_opened();
-        assert_eq!(editor.field_ask(), &FieldAsk::Nothing);
-        // Past 2^53, exactly; past the gateway's bounds too: the gateway judges it.
         assert_eq!(
-            editor.set_number_text(pct, revision, &at, "9007199254740993"),
+            editor.set_number_text(pct, revision, &at, "40"),
+            Err(RuleEditRefusal::Unchanged),
+            "the text the chip shows"
+        );
+        assert!(!editor.has_pending_jobs());
+        assert_eq!(editor.set_number_text(pct, revision, &at, "35"), Ok(()));
+        let _ = editor.next_call(false).expect("the call");
+        editor
+            .answered(Ok(&read(
+                r#"{"playbook_jsonc":"{\"set\": 35}","inverse_json_patch":"[]"}"#,
+            )))
+            .expect("settled");
+        assert_eq!(editor.bytes(), b"{\"set\": 35}");
+        assert_eq!(editor.field_ask(), &FieldAsk::Landed);
+        assert_eq!(editor.undo_depth(), 1);
+        let mut editor = rendered(EXPAND_EAST);
+        let (timeout, revision, at) = drawn(&editor, "/route/0/timeout_ms");
+        assert_eq!(editor.set_number_text(timeout, revision, &at, "3"), Ok(()));
+        let call = editor.next_call(false).expect("the call");
+        assert_eq!(typed_of_call(&call).2, "3", "seconds, as typed");
+    }
+
+    /// **A Visit & change number setting is two calls and one edit** (S3's `fixq-c`, item 7):
+    /// the step is appended to a copy with the setting's objects and not the setting, the gateway
+    /// writes the typed text into that copy at the new step's setting, and only then does the text
+    /// on screen change; one Undo sends the value's undo and then the step's, each against the text
+    /// the one before it produced. A refusal of the value leaves the text as it was, said in the
+    /// popup in the gateway's words.
+    #[test]
+    fn a_visit_number_is_two_calls_and_one_undo() {
+        let mut editor = visit_editor();
+        let before = editor.text.clone().expect("a text");
+        let index = route_len(&before).expect("a route");
+        let (at, pointer) = setting_named(&editor, "/build/repair_threshold_pct");
+        editor.field_opened();
+        assert_eq!(
+            editor.change_setting_number_text("b_00", at, &pointer, "25"),
             Ok(())
         );
         assert_eq!(editor.field_ask(), &FieldAsk::Waiting);
-        assert!(
-            editor.rule_refusal().is_none(),
-            "a sent edit clears the rule's line"
-        );
-        let call = editor.next_call(false).expect("the patch");
         assert_eq!(
-            patch_of_call(&call),
-            format!(r#"[{{"op":"replace","path":"{at}","value":9007199254740993}}]"#)
+            visit_patch(&mut editor),
+            visit_step_patch(r#"{"set_mandate_settings":{"build":{}}}"#)
         );
-        // The gateway refuses it: the popup and the rule both say so in its words.
         editor
-            .answered(Err(("INVALID_ARGUMENT", "out of range")))
+            .answered(Ok(&patched("{\"staged\": 1}", "[\"undo-step\"]")))
             .expect("settled");
+        assert_eq!(
+            editor.text.as_deref(),
+            Some(before.as_str()),
+            "not on screen yet"
+        );
+        let call = editor.next_call(false).expect("the value");
+        assert_eq!(
+            typed_of_call(&call),
+            (
+                "{\"staged\": 1}".to_owned(),
+                format!(
+                    "/declarative/route/{index}/interface/rows/0/set_mandate_settings/build/repair_threshold_pct"
+                ),
+                "25".to_owned()
+            )
+        );
+        editor
+            .answered(Ok(&patched("{\"written\": 25}", "[\"undo-value\"]")))
+            .expect("settled");
+        assert_eq!(editor.bytes(), b"{\"written\": 25}");
+        assert_eq!(editor.field_ask(), &FieldAsk::Landed);
+        assert_eq!(editor.undo_depth(), 1, "one edit");
+        // One Undo puts the text from before back with no call: no text between ever reaches
+        // the screen (fix pass 1).
+        assert!(editor.undo());
+        assert!(
+            editor
+                .next_call(false)
+                .is_none_or(|call| call.method != "patch_plan"),
+            "no inverse goes out"
+        );
+        assert_eq!(editor.bytes(), before.as_bytes());
+        assert_eq!(editor.undo_depth(), 0, "the whole edit taken back");
+        // The gateway refuses the value: nothing changes on screen, and the popup says why.
+        let mut editor = visit_editor();
+        editor.field_opened();
+        assert_eq!(
+            editor.change_setting_number_text("b_00", at, &pointer, "5*2"),
+            Ok(())
+        );
+        let _ = visit_patch(&mut editor);
+        editor
+            .answered(Ok(&patched("{\"staged\": 1}", "[]")))
+            .expect("settled");
+        let _ = editor.next_call(false).expect("the value");
+        editor
+            .answered(Err(("INVALID_ARGUMENT", "`5*2` is not a number")))
+            .expect("settled");
+        assert_eq!(editor.text.as_deref(), Some(before.as_str()));
         assert_eq!(
             editor.field_ask(),
             &FieldAsk::Refused {
                 key: GATEWAY_REFUSED_KEY.to_owned(),
-                detail: "INVALID_ARGUMENT: out of range".to_owned()
+                detail: "INVALID_ARGUMENT: `5*2` is not a number".to_owned()
             }
         );
-        assert_eq!(
-            editor.rule_refusal().map(|refusal| refusal.key.as_str()),
-            Some(GATEWAY_REFUSED_KEY)
-        );
-        // A value that lands: the field hears it landed.
-        assert_eq!(editor.set_number_text(pct, revision, &at, "-5"), Ok(()));
-        let call = editor.next_call(false).expect("the patch");
-        assert_eq!(
-            patch_of_call(&call),
-            format!(r#"[{{"op":"replace","path":"{at}","value":-5}}]"#)
-        );
-        let text = editor.text.clone().expect("a text");
-        editor.answered(Ok(&patched(&text, "[]"))).expect("settled");
-        assert_eq!(editor.field_ask(), &FieldAsk::Landed);
-    }
-
-    /// **A field's answer is the field's that asked** (fix pass 1, item 1): chip A sends, the
-    /// person opens field B before the gateway answers, and A's refusal or landing is not B's to
-    /// say; B, which sent nothing, still hears nothing, and stays open with what was typed in it.
-    #[test]
-    fn a_fields_answer_goes_to_the_field_that_asked() {
-        for refused in [true, false] {
-            let mut editor = rendered(EXPAND_EAST);
-            let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
-            editor.field_opened();
-            assert_eq!(editor.set_number_text(pct, revision, &at, "500"), Ok(()));
-            let _call = editor.next_call(false).expect("the patch");
-            // The person opens another field before the answer.
-            editor.field_opened();
-            assert_eq!(editor.field_ask(), &FieldAsk::Nothing);
-            if refused {
-                editor
-                    .answered(Err(("INVALID_ARGUMENT", "out of range")))
-                    .expect("settled");
-            } else {
-                let text = editor.text.clone().expect("a text");
-                editor.answered(Ok(&patched(&text, "[]"))).expect("settled");
-            }
-            assert_eq!(
-                editor.field_ask(),
-                &FieldAsk::Nothing,
-                "the second field sent nothing, yet it hears A's answer (refused: {refused})"
-            );
-        }
-        // A field's own answer still reaches it.
-        let mut editor = rendered(EXPAND_EAST);
-        let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
-        editor.field_opened();
-        assert_eq!(editor.set_number_text(pct, revision, &at, "500"), Ok(()));
-        let _call = editor.next_call(false).expect("the patch");
-        editor
-            .answered(Err(("INVALID_ARGUMENT", "out of range")))
-            .expect("settled");
-        assert_eq!(editor.field_ask().name(), "refused");
-    }
-
-    /// **A Visit & change number setting reads its text the same way**, and sends a value past
-    /// 2^53 exactly.
-    #[test]
-    fn a_typed_setting_value_is_read_the_same_way() {
-        let mut editor = visit_editor();
-        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
-        assert_eq!(
-            editor.change_setting_number_text("b_00", at, &pointer, "5*2"),
-            Err(RuleEditRefusal::NotAnInteger)
-        );
-        assert_eq!(editor.status().key, "rule_refused_not_an_integer");
-        assert_eq!(editor.field_ask().name(), "refused");
-        assert!(!editor.has_pending_jobs());
-        assert_eq!(
-            editor.change_setting_number_text("b_00", at, &pointer, "9007199254740993"),
-            Ok(())
-        );
-        assert_eq!(editor.field_ask(), &FieldAsk::Waiting);
-        assert_eq!(
-            visit_patch(&mut editor),
-            visit_step_patch(r#"{"set_mandate_settings":{"retreat_hp_pct":9007199254740993}}"#)
-        );
+        assert_eq!(editor.undo_depth(), 0);
         // A shut door drops a field's edit that waited, and the popup says why.
         let mut editor = visit_editor();
+        editor.field_opened();
         assert_eq!(
             editor.change_setting_number_text("b_00", at, &pointer, "3"),
             Ok(())
         );
         editor.set_door(Door::Push);
-        assert_eq!(
-            editor.field_ask(),
-            &FieldAsk::Refused {
-                key: "status_closed_push".to_owned(),
-                detail: String::new()
-            }
-        );
+        assert!(!editor.has_pending_jobs());
+        assert_eq!(editor.field_ask().name(), "refused");
     }
 
-    /// The patch a Visit & change row became, after the editor's next call.
     fn visit_patch(editor: &mut Editor) -> String {
         let call = editor.next_call(false).expect("the patch");
         assert_eq!(call.method, "patch_plan");
@@ -7951,6 +8693,267 @@ mod tests {
         format!(
             r#"[{{"op":"add","path":"/declarative/route/-","value":{{"label":"visit_1","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{row}]}}}}}}]"#
         )
+    }
+
+    /// **A two-call edit is atomic both ways** (S3's `fixq-c`, fix pass 1; the review's probes
+    /// `probe_chain_undo_second_half_refused` and `probe_chain_undo_door_shuts_between`): the
+    /// first half's copy never reaches the screen, whether the second half is refused, or the
+    /// door shuts between the two, or a Fix asked while the first half is on its way waits
+    /// behind the second; and its Undo, after a save in between, restores the text from before
+    /// with no call and keeps the file the text was saved to.
+    #[test]
+    fn a_two_call_edit_and_its_undo_show_no_half() {
+        let half = |editor: &mut Editor| {
+            let (at, pointer) = setting_named(editor, "/retreat_hp_pct");
+            editor.field_opened();
+            assert_eq!(
+                editor.change_setting_number_text("b_00", at, &pointer, "25"),
+                Ok(())
+            );
+            let _ = visit_patch(editor);
+            editor
+                .answered(Ok(&patched("{\"half\": 1}", "[]")))
+                .expect("settled");
+        };
+        // The door shuts between the halves: the second is dropped and the text is as it was.
+        let mut editor = visit_editor();
+        let before = editor.text.clone().expect("a text");
+        half(&mut editor);
+        editor.set_door(Door::Push);
+        assert!(
+            !editor.has_pending_jobs(),
+            "the second half went with the door"
+        );
+        assert_eq!(editor.text.as_deref(), Some(before.as_str()));
+        assert_eq!(editor.undo_depth(), 0);
+        assert_eq!(editor.field_ask().name(), "refused");
+        // A Fix is not taken while the first half is on its way (the editor is busy until the
+        // second half lands), so nothing can come between the halves.
+        let mut editor = visit_editor();
+        let unedited = editor.text.clone().expect("a text");
+        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
+        assert_eq!(
+            editor.change_setting_number_text("b_00", at, &pointer, "25"),
+            Ok(())
+        );
+        let _ = visit_patch(&mut editor);
+        assert!(editor.busy(), "the first half is an edit on its way");
+        assert!(!editor.fix(0, 0), "no Fix between the halves");
+        editor
+            .answered(Ok(&patched("{\"half\": 1}", "[]")))
+            .expect("settled");
+        assert!(editor.busy(), "the second half is owed");
+        let second = editor.next_call(false).expect("the second half");
+        assert_eq!(second.method, "set_value_text");
+        editor
+            .answered(Ok(&patched("{\"whole\": 25}", "[]")))
+            .expect("settled");
+        assert_eq!(editor.bytes(), b"{\"whole\": 25}");
+        // Saved between the edit and its Undo: the text comes back, the file stays the saved one.
+        editor.saved_to("C:/elsewhere/saved.jsonc");
+        assert!(editor.undo());
+        // A Fix may be queued ahead; Undo's own job puts the text back with no inverse.
+        for _ in 0..4 {
+            match editor.next_call(false) {
+                Some(call) if call.method == "patch_plan" && patch_of_call(&call) == "[]" => {
+                    panic!("an inverse went out")
+                }
+                Some(_) => {
+                    editor
+                        .answered(Err(("INTERNAL", "not this test's call")))
+                        .expect("settled");
+                }
+                None => break,
+            }
+        }
+        assert_eq!(editor.file(), Some("C:/elsewhere/saved.jsonc"));
+        assert_eq!(
+            editor.bytes(),
+            unedited.as_bytes(),
+            "the two-call edit was taken back to the text from before it, exactly"
+        );
+        assert_eq!(editor.undo_depth(), 0);
+    }
+
+    /// **A wall's Build target is two ground clicks and the gateway's box** (S3's `fixq-c`, item
+    /// 4): the blueprint the vocabulary anchors by a BOX asks for two corners, a click on anything
+    /// but ground keeps the pick on, the second corner asks `compose_wall_box` with both corners
+    /// and the beacon, and the row is the target exactly as the gateway composed it.
+    #[test]
+    fn a_walls_target_is_two_clicks_and_the_gateways_box() {
+        let mut editor = visit_editor();
+        let blueprints = editor
+            .vocabulary()
+            .map(|words| words.blueprints.clone())
+            .expect("words");
+        let wall = blueprints
+            .iter()
+            .position(|entry| entry.anchor_shape == vocabulary::AnchorShape::Box)
+            .expect("the wall");
+        if let Some(words) = editor.vocabulary.as_mut()
+            && let Some(entry) = words.blueprints.get_mut(wall)
+        {
+            entry.locked = None;
+        }
+        assert_eq!(editor.begin_build_target("b_00", wall), Ok(()));
+        assert_eq!(editor.status().key, "wall_first");
+        assert!(editor.anchoring());
+        assert_eq!(
+            editor.pick(&Target::Feature("vent_120_88".to_owned())),
+            Err(RuleEditRefusal::NotThisKind("location")),
+            "a corner is ground"
+        );
+        assert!(editor.anchoring(), "the pick stays on");
+        assert_eq!(editor.pick(&Target::Voxel([10, 20, 4])), Ok(()));
+        assert_eq!(editor.status().key, "wall_second");
+        assert!(!editor.has_pending_jobs(), "one corner asks nothing");
+        assert_eq!(editor.pick(&Target::Voxel([13, 18, 5])), Ok(()));
+        assert!(!editor.anchoring());
+        let call = editor.next_call(false).expect("the box");
+        assert_eq!(call.method, "compose_wall_box");
+        assert_eq!(
+            compact(&call.params),
+            r#"{"beacon_id":"b_00","blueprint_id":"wall","corner_a":{"x":10,"y":20,"z":4},"corner_b":{"x":13,"y":18,"z":5}}"#
+        );
+        editor
+            .answered(Ok(&read(
+                r#"{"target":{"blueprint_id":"wall","anchor":{"voxel":{"x":10,"y":18,"z":4}},"wall_box":{"min":{"x":10,"y":18,"z":4},"max":{"x":13,"y":20,"z":7}}}}"#,
+            )))
+            .expect("settled");
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(
+                r#"{"add_build_target":{"target":{"blueprint_id":"wall","anchor":{"voxel":{"x":10,"y":18,"z":4}},"wall_box":{"min":{"x":10,"y":18,"z":4},"max":{"x":13,"y":20,"z":7}}}}}"#
+            )
+        );
+        // The gateway refuses the box: said in its words, and nothing is appended.
+        let mut editor = visit_editor();
+        if let Some(words) = editor.vocabulary.as_mut()
+            && let Some(entry) = words.blueprints.get_mut(wall)
+        {
+            entry.locked = None;
+        }
+        assert_eq!(editor.begin_build_target("b_00", wall), Ok(()));
+        assert_eq!(editor.pick(&Target::Voxel([1, 1, 1])), Ok(()));
+        assert_eq!(editor.pick(&Target::Voxel([2, 2, 1])), Ok(()));
+        let _ = editor.next_call(false).expect("the box");
+        editor
+            .answered(Err(("INVALID_ARGUMENT", "outside the sphere")))
+            .expect("settled");
+        assert_eq!(
+            editor.status().detail,
+            "INVALID_ARGUMENT: outside the sphere"
+        );
+        assert!(!editor.has_pending_jobs());
+        // A blueprint whose anchor shape this build cannot name asks for no click.
+        let mut editor = visit_editor();
+        if let Some(words) = editor.vocabulary.as_mut()
+            && let Some(entry) = words.blueprints.get_mut(wall)
+        {
+            entry.locked = None;
+            entry.anchor_shape = vocabulary::AnchorShape::Unnamed;
+        }
+        assert_eq!(
+            editor.begin_build_target("b_00", wall),
+            Err(RuleEditRefusal::NoAnchorShape)
+        );
+        assert!(!editor.anchoring());
+    }
+
+    /// **Add a rule asks the gateway; Remove is one `remove`** (S3's `fixq-c`, item 8): Add sends
+    /// `new_rule` with the text on screen and puts its answer on screen as one edit; Remove
+    /// sends one `remove` at the row's pointer; both are refused while the list takes no edit.
+    #[test]
+    fn add_rule_asks_the_gateway_and_remove_is_one_remove() {
+        let mut editor = rendered(EXPAND_EAST);
+        assert_eq!(editor.new_rule(), Ok(()));
+        assert_eq!(editor.status().key, "rule_adding");
+        let call = editor.next_call(false).expect("new_rule");
+        assert_eq!(call.method, "new_rule");
+        assert_eq!(
+            call.params.get("playbook_jsonc"),
+            Some(&Json::String(EXPAND_EAST.to_owned()))
+        );
+        assert_eq!(editor.new_rule(), Err(RuleEditRefusal::Busy));
+        editor
+            .answered(Ok(&read(
+                r#"{"playbook_jsonc":"{\"added\": 1}","inverse_json_patch":"[]","rule_pointer":"/declarative/handlers/2","rule_id":"rule_3"}"#,
+            )))
+            .expect("settled");
+        assert_eq!(editor.bytes(), b"{\"added\": 1}");
+        assert_eq!(editor.status().key, "rule_added");
+        assert_eq!(editor.undo_depth(), 1);
+        let mut editor = rendered(EXPAND_EAST);
+        let rule = rule_named(&editor, rule_index(&editor, "/declarative/handlers/0"));
+        assert_eq!(editor.remove_rule(&rule), Ok(()));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"remove","path":"/declarative/handlers/0"}]"#
+        );
+        let mut editor = rendered(EXPAND_EAST);
+        let stale = RuleNamed {
+            rendering: rule.rendering.wrapping_add(1),
+            ..rule
+        };
+        assert_eq!(editor.remove_rule(&stale), Err(RuleEditRefusal::Changed));
+        editor.set_door(Door::Push);
+        assert_eq!(editor.new_rule(), Err(RuleEditRefusal::Shut));
+        assert!(!editor.has_pending_jobs());
+    }
+
+    /// **A group is picked as a predicate is** (S3's `fixq-c`, item 16): its skeleton under its
+    /// name, with the op the slot names.
+    #[test]
+    fn a_group_pick_writes_its_skeleton_with_the_slots_op() {
+        let mut editor = visit_editor();
+        let rendering = editor.rules_rendering().expect("a rendering");
+        let (slot, pointer) = editor
+            .rule_list()
+            .slots
+            .iter()
+            .enumerate()
+            .find(|(_, slot)| slot.pickable() && slot.op == rule_list::SlotOp::Add)
+            .map(|(index, slot)| (index, slot.pointer.clone()))
+            .expect("an empty slot");
+        assert_eq!(editor.choose_group(slot, rendering, &pointer, 0), Ok(()));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            format!(
+                r#"[{{"op":"add","path":"{pointer}","value":{{"all":{{"items":[{{}},{{}}]}}}}}}]"#
+            )
+        );
+        let mut editor = visit_editor();
+        assert_eq!(
+            editor.choose_group(slot, rendering, &pointer, 9),
+            Err(RuleEditRefusal::NoSuchEntry)
+        );
+    }
+
+    /// **A chip at its proto3 default is written with an `add`** (S3's `fixq-c`, item 11): the op
+    /// is the chip's, as the gateway named it, for a choice as for any other edit.
+    #[test]
+    fn a_default_chip_is_written_with_the_op_it_names() {
+        let mut editor = rendered(EXPAND_EAST);
+        let (priority, revision, at) = drawn(&editor, "/initial/priority");
+        if let Some(chip) = editor.rule_list.chips.get_mut(priority) {
+            chip.op = rule_list::SlotOp::Add;
+        }
+        assert_eq!(editor.choose(priority, revision, &at, 2), Ok(()));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"add","path":"/declarative/route/0/place_beacon/initial/priority","value":"HIGH"}]"#
+        );
+        let mut editor = rendered(EXPAND_EAST);
+        if let Some(chip) = editor.rule_list.chips.get_mut(priority) {
+            chip.op = rule_list::SlotOp::None;
+        }
+        assert_eq!(
+            editor.choose(priority, revision, &at, 2),
+            Err(RuleEditRefusal::NoPickOp)
+        );
     }
 
     /// **Item 6: each Visit & change row is one route step with one row**, each exact.
@@ -7972,9 +8975,10 @@ mod tests {
             editor.change_setting_number("b_00", at, &pointer, 30),
             Ok(())
         );
+        // A number's first half: the step with the setting's objects, its value the gateway's.
         assert_eq!(
             visit_patch(&mut editor),
-            visit_step_patch(r#"{"set_mandate_settings":{"retreat_hp_pct":30}}"#)
+            visit_step_patch(r#"{"set_mandate_settings":{}}"#)
         );
         let mut editor = visit_editor();
         let mandates = editor
@@ -8021,7 +9025,7 @@ mod tests {
             detail.targets.push(vocabulary::HeldTarget {
                 blueprint_id: "generator".to_owned(),
                 anchor: read(r#"{"on":{"feature_id":"vent_120_88"}}"#),
-                anchor_text: String::new(),
+                line: "Generator on Heat vent (120, 88)".to_owned(),
             });
         }
         assert_eq!(editor.remove_build_target("b_00", 0), Ok(()));
@@ -8031,12 +9035,31 @@ mod tests {
                 r#"{"remove_build_target":{"anchor":{"on":{"feature_id":"vent_120_88"}}}}"#
             )
         );
+    }
+
+    /// **Item 6 and S3's `fixq-c` item 5: Queue a structure reads the Queue's own list**, each
+    /// entry as sent, and its row is one exact step.
+    #[test]
+    fn a_queue_row_names_an_entry_of_the_queues_own_list() {
         let mut editor = visit_editor();
-        let usable = blueprints
+        // The golden's seat holds no licence, so the Spire is locked there too: lifted here, as
+        // a licence would.
+        if let Some(words) = editor.vocabulary.as_mut() {
+            for entry in &mut words.queue_blueprints {
+                if entry.name == "resonance_spire" {
+                    entry.locked = None;
+                }
+            }
+        }
+        let queued = editor
+            .vocabulary()
+            .map(|words| words.queue_blueprints.clone())
+            .expect("words");
+        let usable = queued
             .iter()
             .position(|entry| entry.locked.is_none() && !entry.name.is_empty())
-            .expect("a usable blueprint");
-        let name = blueprints
+            .expect("a blueprint a queue takes");
+        let name = queued
             .get(usable)
             .map(|entry| entry.name.clone())
             .expect("a name");
@@ -8063,8 +9086,17 @@ mod tests {
             .iter()
             .position(|entry| entry.locked.is_some())
             .expect("a locked blueprint");
+        let queue_locked = editor
+            .vocabulary()
+            .and_then(|words| {
+                words
+                    .queue_blueprints
+                    .iter()
+                    .position(|entry| entry.locked.is_some())
+            })
+            .expect("a kind no queue takes");
         assert_eq!(
-            editor.queue_structure("b_00", locked),
+            editor.queue_structure("b_00", queue_locked),
             Err(RuleEditRefusal::Locked)
         );
         assert_eq!(
@@ -8128,7 +9160,7 @@ mod tests {
         );
         assert_eq!(
             visit_patch(&mut editor),
-            visit_step_patch(r#"{"set_mandate_settings":{"retreat_hp_pct":0}}"#)
+            visit_step_patch(r#"{"set_mandate_settings":{}}"#)
         );
     }
 
@@ -8144,11 +9176,19 @@ mod tests {
                 parameters: Vec::new(),
                 skeleton_json: String::new(),
                 locked: None,
+                anchor_shape: vocabulary::AnchorShape::Point,
             });
+            let nameless = words.blueprints.last().cloned();
+            words.queue_blueprints.extend(nameless);
         }
-        let nameless = editor
+        let (nameless, queued) = editor
             .vocabulary()
-            .map(|words| words.blueprints.len().saturating_sub(1))
+            .map(|words| {
+                (
+                    words.blueprints.len().saturating_sub(1),
+                    words.queue_blueprints.len().saturating_sub(1),
+                )
+            })
             .expect("words");
         assert_eq!(
             editor.begin_build_target("b_00", nameless),
@@ -8156,7 +9196,7 @@ mod tests {
         );
         assert_eq!(editor.status().key, "rule_refused_unnamed");
         assert_eq!(
-            editor.queue_structure("b_00", nameless),
+            editor.queue_structure("b_00", queued),
             Err(RuleEditRefusal::Unnamed)
         );
     }
@@ -8213,7 +9253,7 @@ mod tests {
         editor.describe_beacon("b_00");
         let _ = editor.next_call(false).expect("get_beacon");
         let answer = read(
-            r#"{"prose":"Yours.","mandate":"build","settings":[{"pointer":"/retreat_hp_pct","title":"Retreat below HP","value_json":"\"many\"","shape":{"integer":{"min":0,"max":100,"unit":"%"}}},{"pointer":"/roe","title":"Rules of engagement","value_json":"\"RETURN_FIRE\"","shape":{"choice":{"values":["\"HOLD_FIRE\"","\"RETURN_FIRE\""]}}}]}"#,
+            r#"{"prose":"Yours.","mandate":"build","settings":[{"pointer":"/retreat_hp_pct","title":"Retreat below HP","value_json":"\"many\"","shape":{"choice":{"values":["\"few\"","\"many\""],"titles":["few"]}}},{"pointer":"/roe","title":"Rules of engagement","value_json":"\"RETURN_FIRE\"","shape":{"choice":{"values":["\"HOLD_FIRE\"","\"RETURN_FIRE\""],"titles":["hold fire","return fire"]}}}]}"#,
         );
         editor.answered(Ok(&answer)).expect("reads");
         assert_eq!(editor.beacon_prose(), "Yours.");
@@ -8236,7 +9276,7 @@ mod tests {
             .and_then(|setting| setting.unreadable.clone())
             .expect("the cause");
         assert!(
-            why.contains("/retreat_hp_pct") && why.contains("many"),
+            why.contains("/retreat_hp_pct") && why.contains("titles"),
             "{why}"
         );
         assert_eq!(
