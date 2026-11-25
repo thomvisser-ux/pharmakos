@@ -138,7 +138,7 @@ impl Diag {
 /// pattern and fix it, and few enough that a report stays a page. It is
 /// PROVEN to fit, not derived as the most that fits. The client reads a
 /// report in one WebSocket message, and the gateway sends no answer past
-/// `pharmakos_proto::transport::MAX_ANSWER_BYTES` (8 MiB, S3's `outcap`):
+/// `pharmakos_proto::transport::MAX_ANSWER_BYTES` (12 MiB, S3's `outcap`):
 /// one past it is withheld with `RESPONSE_TOO_LARGE`, and the client's
 /// inbound buffer is that cap and a frame's header
 /// (`crates/client-gdext/src/transport.rs`, `INBOUND_BUFFER_BYTES`). The

@@ -1234,7 +1234,7 @@ impl Surface {
     /// Lower the largest answer this surface sends below
     /// `pharmakos_proto::transport::MAX_ANSWER_BYTES`: for a test that needs
     /// a real call's answer withheld (a `submit_plan`, whose in-budget answers
-    /// all fit) without building one of 8 MiB. Never raised past the cap.
+    /// all fit) without building one of 12 MiB. Never raised past the cap.
     ///
     /// # Errors
     ///

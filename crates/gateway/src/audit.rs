@@ -196,6 +196,11 @@ pub struct AuditLog {
     dropped: u64,
     /// Answers withheld, by [`Withheld`] reason.
     withheld_too_large: u64,
+    /// Library files `list_templates` listings refused, by reason (S3's
+    /// `outcap`).
+    library_unreadable: u64,
+    library_too_large: u64,
+    library_not_a_playbook: u64,
 }
 
 impl AuditLog {
@@ -207,6 +212,34 @@ impl AuditLog {
             next_seq: 1,
             dropped: 0,
             withheld_too_large: 0,
+            library_unreadable: 0,
+            library_too_large: 0,
+            library_not_a_playbook: 0,
+        }
+    }
+
+    /// Count one library file a listing refused, for `reason`.
+    pub const fn library_refused(&mut self, reason: pharmakos_plan_core::library::Refusal) {
+        use pharmakos_plan_core::library::Refusal;
+        let count = match reason {
+            Refusal::Unreadable => &mut self.library_unreadable,
+            Refusal::TooLarge => &mut self.library_too_large,
+            Refusal::NotAPlaybook => &mut self.library_not_a_playbook,
+        };
+        *count = count.saturating_add(1);
+    }
+
+    /// How many library files listings refused for `reason`.
+    #[must_use]
+    pub const fn library_refused_count(
+        &self,
+        reason: pharmakos_plan_core::library::Refusal,
+    ) -> u64 {
+        use pharmakos_plan_core::library::Refusal;
+        match reason {
+            Refusal::Unreadable => self.library_unreadable,
+            Refusal::TooLarge => self.library_too_large,
+            Refusal::NotAPlaybook => self.library_not_a_playbook,
         }
     }
 

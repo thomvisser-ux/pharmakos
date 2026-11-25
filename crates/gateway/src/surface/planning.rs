@@ -308,24 +308,31 @@ impl Surface {
     /// missing folder is an INTERNAL error, and an empty list means its
     /// templates were removed or no longer parse.
     pub(super) fn list_templates(
-        &self,
+        &mut self,
         subject: crate::token::Subject,
         request: &Request,
     ) -> Result<Json, Error> {
         let tag = request.string_param("tag")?.unwrap_or_default();
-        let guided = self.guided_pick(subject)?;
         let Some(folder) = self.host()?.library() else {
             return Ok(Json::Object(vec![
                 (String::from("templates"), Json::Array(Vec::new())),
                 (String::from("next_cursor"), Json::String(String::new())),
             ]));
         };
-        let found = pharmakos_plan_core::library::list(folder).map_err(|error| {
+        let listed = pharmakos_plan_core::library::listing(folder).map_err(|error| {
             Error::internal(said!(
                 "the template folder could not be read: {}",
                 error.said()
             ))
         })?;
+        // Each file the listing refused is counted by its reason, once per
+        // listing (S3's `outcap`); the answer says nothing of them until the
+        // typed left-out field (the owner's, with `outcap` part 2).
+        for (_, reason) in &listed.refused {
+            self.audit.library_refused(*reason);
+        }
+        let guided = self.guided_pick(subject)?;
+        let found = listed.summaries;
         let templates: Vec<Json> = found
             .iter()
             // A worked playbook in the library is a sample and not a template,

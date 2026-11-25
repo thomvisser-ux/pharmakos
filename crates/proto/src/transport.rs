@@ -22,19 +22,24 @@
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 
 /// The largest answer text the gateway sends, in UTF-8 bytes as the wire spells it (the
-/// canonical writer, `pharmakos_proto::json::write`): 8 MiB.
+/// canonical writer, `pharmakos_proto::json::write`): 12 MiB.
 ///
-/// Chosen so that every answer a playbook inside the size budget and a map at the gate's load
-/// can produce fits with room: the worst in-budget render found (5 667 582 bytes) has more than a
-/// quarter of it to spare (`crates/gateway/tests/outgoing.rs`); the worst verifier report as
-/// `verify_plan` sends it, and eight more of the catalogue's largest codes, fit it
-/// (`pharmakos_verifier`'s `the_worst_report_fits_the_answer_with_room_to_grow`); a view page is
-/// cut at `pharmakos_gateway::viewfeed::VIEW_PAGE_BYTES` of chunks and entities, an id at
-/// [`MAX_ID_BYTES`], and `crates/gateway/tests/outgoing.rs` measures each method's worst answer
-/// against it. A larger answer is a typed refusal, never a cut text.
+/// The rule it is set by (S3's `outcap`, fix pass 2): **the worst in-budget answer is at most
+/// three quarters of the cap.** The worst found is a `render_plan` of 7 723 838 bytes: 128
+/// committed `place_beacon` steps (a covering seam, a raid's settings), each under a guard of 23
+/// `enemy_structure_near` leaves near the safest place, labels to the inbound cap; a seeded search
+/// over every condition kind, step kind and handler slot found it
+/// (`crates/gateway/tests/outgoing.rs`, `the_worst_in_budget_render_is_searched`), and
+/// `an_in_budget_playbook_at_the_inbound_cap_answers_whole` holds it to three quarters of this
+/// cap. The cap is sized to today's render, not a design for it: the render's own cut is
+/// `outcap` part 2's. The worst verifier report as `verify_plan` sends it, and eight more of the
+/// catalogue's largest codes, fit it (`pharmakos_verifier`'s
+/// `the_worst_report_fits_the_answer_with_room_to_grow`); a view page is cut at
+/// `pharmakos_gateway::viewfeed::VIEW_PAGE_BYTES` of chunks and entities, an id at
+/// [`MAX_ID_BYTES`]. A larger answer is a typed refusal, never a cut text.
 ///
-/// PLACEHOLDER: the largest answer, 8 MiB — owner, at hardening, alongside the rate limits.
-pub const MAX_ANSWER_BYTES: usize = 8 * 1024 * 1024;
+/// PLACEHOLDER: the largest answer, 12 MiB by the rule that the worst in-budget answer is at most three quarters of it — owner, at hardening, alongside the rate limits.
+pub const MAX_ANSWER_BYTES: usize = 12 * 1024 * 1024;
 
 /// The most bytes a server frame's header takes: RFC 6455 section 5.2's first two bytes and an
 /// eight-byte extended length. Server frames are never masked, so there is no masking key.

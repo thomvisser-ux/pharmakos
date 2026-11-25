@@ -383,8 +383,14 @@ fn committed_steps() -> Vec<String> {
 /// One generated in-budget playbook: `count` copies of `step`, each with the
 /// largest guard a condition may have and a label of `label` repeated `n`
 /// times, in the route or as handler bodies.
-fn in_budget_of(step: &str, count: usize, handlers: bool, label: &str, n: usize) -> String {
-    let leaf = r#"{"cmdr_hp_pct":{"cmp":"LE","pct":40}}"#;
+fn in_budget_of(
+    step: &str,
+    leaf: &str,
+    count: usize,
+    handlers: bool,
+    label: &str,
+    n: usize,
+) -> String {
     let condition = format!(
         r#"{{"any":{{"items":[{}]}}}}"#,
         std::iter::repeat_n(leaf, 23).collect::<Vec<_>>().join(",")
@@ -414,78 +420,204 @@ fn in_budget_of(step: &str, count: usize, handlers: bool, label: &str, n: usize)
     }
 }
 
-/// **The search for the worst in-budget render** (S3's `outcap`, fix pass
-/// 1, design call A): every committed step kind, in the route with a full
-/// guard and as handler bodies under a full condition, as many copies as the
-/// size budget takes, labels plain or escaped to the request cap. Prints each
-/// figure and the worst; the worst found is the committed case below.
+/// Every condition kind of `gp.v1.Condition` a leaf can be, each empty (a
+/// leaf missing its required fields still renders), and each with the
+/// selectors a leaf may carry at their largest-rendering (`near`, `beacon`,
+/// `at`: the safest place), and the committed leaves with their values.
+fn every_leaf() -> Vec<String> {
+    const KINDS: [&str; 19] = [
+        "cmdr_hp_pct",
+        "cmdr_took_damage_within",
+        "cmdr_deaths",
+        "segment_elapsed",
+        "beacon_hp_pct",
+        "beacon_under_attack",
+        "beacon_powered",
+        "beacon_units_by_role",
+        "beacon_mandate",
+        "beacon_has_structure",
+        "enemy_units_near",
+        "enemy_beacon_known",
+        "enemy_structure_near",
+        "treasury",
+        "kw_headroom",
+        "kw_supply",
+        "kw_draw",
+        "step_reached",
+        "rule_fired",
+    ];
+    let mut leaves: Vec<String> = Vec::new();
+    for kind in KINDS {
+        leaves.push(format!(r#"{{"{kind}":{{}}}}"#));
+        for field in ["near", "beacon", "at"] {
+            leaves.push(format!(r#"{{"{kind}":{{"{field}":{{"safest":{{}}}}}}}}"#));
+        }
+    }
+    leaves.push(String::from(r#"{"cmdr_hp_pct":{"cmp":"LE","pct":40}}"#));
+    leaves.push(String::from(r#"{"cmdr_took_damage_within":{"ms":3000}}"#));
+    leaves.push(String::from(
+        r#"{"treasury":{"dollars":{"op":"LT","value":50}}}"#,
+    ));
+    leaves.push(String::from(
+        r#"{"segment_elapsed":{"ms":{"op":"GE","value":60000}}}"#,
+    ));
+    leaves
+}
+
+/// How many copies of `step` under full guards of `leaf` the size budget
+/// takes, in the route or as handler bodies: 0 when none does.
+fn copies_in_budget(
+    surface: &mut Surface,
+    seat: &Token,
+    step: &str,
+    leaf: &str,
+    handlers: bool,
+) -> usize {
+    let one = size_units(
+        surface,
+        seat,
+        &in_budget_of(step, leaf, 1, handlers, "x", 1),
+    );
+    let two = size_units(
+        surface,
+        seat,
+        &in_budget_of(step, leaf, 2, handlers, "x", 1),
+    );
+    if one == 0 || two == 0 {
+        return 0;
+    }
+    let each = two.saturating_sub(one).max(1);
+    let most = if handlers { 64 } else { 128 };
+    128_usize
+        .saturating_sub(one.saturating_sub(each))
+        .checked_div(each)
+        .unwrap_or(0)
+        .min(most)
+}
+
+/// The render of `count` copies of `step` under full guards of `leaf`, its
+/// labels to the inbound cap, when the playbook is within the size budget.
+fn render_in_budget(
+    surface: &mut Surface,
+    seat: &Token,
+    step: &str,
+    leaf: &str,
+    count: usize,
+    handlers: bool,
+    label: &str,
+) -> Option<usize> {
+    let params = largest("render_plan", |n| {
+        in_budget_of(step, leaf, count, handlers, label, n)
+    });
+    let text = support::text_of(&params, "playbook_jsonc");
+    let units = size_units(surface, seat, &text);
+    (units > 0 && units <= 128).then(|| render_bytes(surface, seat, &text))
+}
+
+/// The worst in-budget render the search found, committed: copies of the
+/// committed step `WORST_STEP` names, each under a guard of 23 `WORST_LEAF`s,
+/// in the route, as many as the size budget takes, labels to the inbound cap.
+const WORST_LEAF: &str = r#"{"enemy_structure_near":{"near":{"safest":{}}}}"#;
+/// A text only the worst case's committed step holds.
+const WORST_STEP: &str = r#""covering": {        "seam": {          "rank": "NEAREST",          "coverage": "ANY"        }      }    },    "tags": [      "raid"    ]"#;
+
+/// The committed worst case's step.
+fn worst_step() -> String {
+    committed_steps()
+        .into_iter()
+        .find(|step| step.contains(WORST_STEP))
+        .expect("the committed worst case's step")
+}
+
+/// **The search for the worst in-budget render** (S3's `outcap`, fix passes
+/// 1 and 2): every condition kind as the guards' leaf (empty, with each
+/// selector, and the committed leaves), on every committed `place_beacon`
+/// step in the route; then the three worst leaves on every committed step
+/// kind, in the route and as handler bodies, labels plain and escaped. Its
+/// worst must be no worse than the committed case (`WORST_LEAF`,
+/// `WORST_STEP`). Run by hand: `cargo test -p pharmakos-gateway --test
+/// outgoing the_worst_in_budget_render_is_searched -- --ignored --nocapture`.
 #[test]
-#[ignore = "a search run by hand for the pull request's figure; its worst case is committed"]
+#[ignore = "a search run by hand (several minutes); its worst case is committed and tested"]
 fn the_worst_in_budget_render_is_searched() {
     let mut surface = hosted(2, support::SEGMENT_MS, 3);
     unlimited(&mut surface);
     let seat = seat_token(&mut surface, 0);
-    let budget = 128_usize;
-    let mut worst = (0_usize, String::new());
-    for step in committed_steps() {
-        for handlers in [false, true] {
-            let one = size_units(
-                &mut surface,
-                &seat,
-                &in_budget_of(&step, 1, handlers, "x", 1),
-            );
-            let two = size_units(
-                &mut surface,
-                &seat,
-                &in_budget_of(&step, 2, handlers, "x", 1),
-            );
-            let each = two.saturating_sub(one).max(1);
-            let base = one.saturating_sub(each);
-            let most = if handlers { 64 } else { 128 };
-            let count = budget
-                .saturating_sub(base)
-                .checked_div(each)
-                .unwrap_or(0)
-                .min(most);
+    let steps = committed_steps();
+    let mut by_leaf: Vec<(usize, String)> = Vec::new();
+    for leaf in every_leaf() {
+        let mut leaf_worst = 0_usize;
+        for step in steps.iter().filter(|step| step.contains("place_beacon")) {
+            let count = copies_in_budget(&mut surface, &seat, step, &leaf, false);
             if count == 0 {
                 continue;
             }
-            for label in ["x", "\\u0001"] {
-                let params = largest("render_plan", |n| {
-                    in_budget_of(&step, count, handlers, label, n)
-                });
-                let text = support::text_of(&params, "playbook_jsonc");
-                let units = size_units(&mut surface, &seat, &text);
-                if units > budget {
+            if let Some(bytes) =
+                render_in_budget(&mut surface, &seat, step, &leaf, count, false, "x")
+            {
+                leaf_worst = leaf_worst.max(bytes);
+            }
+        }
+        println!("leaf {leaf}: {leaf_worst} bytes");
+        by_leaf.push((leaf_worst, leaf));
+    }
+    by_leaf.sort();
+    let mut worst = (0_usize, String::new(), String::new(), false);
+    for (_, leaf) in by_leaf.iter().rev().take(3) {
+        for step in &steps {
+            for handlers in [false, true] {
+                let count = copies_in_budget(&mut surface, &seat, step, leaf, handlers);
+                if count == 0 {
                     continue;
                 }
-                let bytes = render_bytes(&mut surface, &seat, &text);
-                println!(
-                    "{bytes} bytes: {count} x {} ({} units), handlers {handlers}, label {label:?}",
-                    step.chars().take(80).collect::<String>(),
-                    units
-                );
-                if bytes > worst.0 {
-                    worst = (
-                        bytes,
-                        format!("{count} x {step}, handlers {handlers}, label {label:?}"),
-                    );
+                for label in ["x", r"\u0001"] {
+                    if let Some(bytes) =
+                        render_in_budget(&mut surface, &seat, step, leaf, count, handlers, label)
+                        && bytes > worst.0
+                    {
+                        worst = (bytes, leaf.clone(), step.clone(), handlers);
+                    }
                 }
             }
         }
     }
-    println!("WORST: {} bytes: {}", worst.0, worst.1);
+    println!(
+        "WORST: {} bytes; leaf {}; handlers {}; step {}",
+        worst.0, worst.1, worst.3, worst.2
+    );
+    let committed = worst_step();
+    let count = copies_in_budget(&mut surface, &seat, &committed, WORST_LEAF, false);
+    let committed_bytes = ["x", r"\u0001"]
+        .iter()
+        .filter_map(|label| {
+            render_in_budget(
+                &mut surface,
+                &seat,
+                &committed,
+                WORST_LEAF,
+                count,
+                false,
+                label,
+            )
+        })
+        .max()
+        .expect("the committed case is in budget");
+    assert!(
+        worst.0 <= committed_bytes,
+        "the search found a worse in-budget render ({} bytes) than the committed case \
+         ({committed_bytes}): commit it",
+        worst.0
+    );
 }
 
 /// **An in-budget playbook's answers fit whole** (S3's `outcap`; fix pass 1,
 /// design call A): a playbook within the size budget and the verifier's
 /// limits, at the inbound cap, its labels plain or of characters a quoting
 /// escapes, is verified at both depths, submitted and rendered with answers
-/// sent whole, the render's with at least a quarter of the cap to spare. The
-/// render's cases are the worst the search found
-/// (`the_worst_in_budget_render_is_searched`): every committed `place_beacon`
-/// step, 128 of them each under a full guard (5 667 582 bytes at the worst),
-/// and the 24-node guarded hold. The backstop is not reached by a playbook a
+/// sent whole, every one at most three quarters of the cap (the cap's stated
+/// rule). The render's cases are the 24-node guarded hold and the worst the
+/// search found (`the_worst_in_budget_render_is_searched`), committed as
+/// `WORST_LEAF` on `WORST_STEP`. The backstop is not reached by a playbook a
 /// player can seal.
 #[test]
 fn an_in_budget_playbook_at_the_inbound_cap_answers_whole() {
@@ -526,30 +658,19 @@ fn an_in_budget_playbook_at_the_inbound_cap_answers_whole() {
             );
         }
     }
-    for step in committed_steps()
-        .into_iter()
-        .filter(|step| step.contains("place_beacon"))
-    {
-        let one = size_units(&mut surface, &seat, &in_budget_of(&step, 1, false, "x", 1));
-        let two = size_units(&mut surface, &seat, &in_budget_of(&step, 2, false, "x", 1));
-        let each = two.saturating_sub(one).max(1);
-        let count = 128_usize
-            .saturating_sub(one.saturating_sub(each))
-            .checked_div(each)
-            .unwrap_or(0)
-            .min(128);
-        for label in ["x", r"\u0001"] {
-            let params = largest("render_plan", |n| {
-                in_budget_of(&step, count, false, label, n)
-            });
-            let text = support::text_of(&params, "playbook_jsonc");
-            assert!(size_units(&mut surface, &seat, &text) <= 128, "in budget");
-            let bytes = render_bytes(&mut surface, &seat, &text);
-            println!(
-                "in budget, {count} place_beacon steps, label {label:?}: render {bytes} bytes"
-            );
-            assert!(bytes <= spare, "{bytes} bytes, past {spare}: {step}");
-        }
+    let step = worst_step();
+    let count = copies_in_budget(&mut surface, &seat, &step, WORST_LEAF, false);
+    assert!(count > 0, "the committed worst case fits the size budget");
+    for label in ["x", r"\u0001"] {
+        let bytes = render_in_budget(&mut surface, &seat, &step, WORST_LEAF, count, false, label)
+            .expect("in budget");
+        println!(
+            "in budget, the committed worst: {count} steps, label {label:?}: render {bytes} bytes"
+        );
+        assert!(
+            bytes <= spare,
+            "the worst in-budget render is {bytes} bytes, past three quarters of the cap ({spare})"
+        );
     }
 }
 
@@ -1575,6 +1696,7 @@ fn server_frames(output: &[u8]) -> Vec<(Opcode, Vec<u8>)> {
 /// a template that is not there is still `NOT_FOUND`; no path is named.
 #[test]
 fn a_library_file_past_the_cap_is_refused_in_words() {
+    use pharmakos_plan_core::library::Refusal;
     let folder = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("outcap-library");
     std::fs::create_dir_all(&folder).expect("a folder");
     std::fs::write(
@@ -1611,4 +1733,23 @@ fn a_library_file_past_the_cap_is_refused_in_words() {
     );
     let missing = answer_text(&mut surface, &seat, &ask("missing"));
     assert_eq!(code_of(&missing), "NOT_FOUND", "{missing}");
+
+    // A listing counts the file it refused, once per listing, by its reason
+    // (fix pass 2, item F1); the answer lists nothing of it.
+    for listings in 1..=2_u64 {
+        let listed = answer_text(
+            &mut surface,
+            &seat,
+            &request_text("2", "list_templates", &Json::Object(Vec::new())),
+        );
+        assert!(!listed.contains("\"big\""), "{listed}");
+        assert_eq!(
+            surface.audit().library_refused_count(Refusal::TooLarge),
+            listings
+        );
+        assert_eq!(
+            surface.audit().library_refused_count(Refusal::Unreadable),
+            0
+        );
+    }
 }

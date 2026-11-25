@@ -191,7 +191,7 @@ pub mod gateway_error {
         /// avoided.
         Internal = 15,
         /// The call was made, and its answer is past the largest answer the
-        /// gateway sends in one message: 8 MiB (8 388 608 bytes of UTF-8 text) in
+        /// gateway sends in one message: 12 MiB (12 582 912 bytes of UTF-8 text) in
         /// v1, `pharmakos_proto::transport::MAX_ANSWER_BYTES` in the code. This
         /// error is sent in its place: never a cut answer, and the connection stays
         /// open. Whatever the call did stands (a submission it accepted is

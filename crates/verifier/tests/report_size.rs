@@ -235,7 +235,7 @@ fn a_long_member_name_is_reported_within_the_pointer_bound() {
 
 /// **The allowance is the test's own constant, not the buffer** (fix pass 4 of `fixq-c`,
 /// review 3's M7): a text just past 128 KiB is past the allowance, where an eighth of the
-/// buffer (1 MiB at the 8 MiB cap) would take it.
+/// buffer (1.5 MiB at the 12 MiB cap) would take it.
 #[test]
 fn a_report_just_past_the_allowance_is_past_it() {
     let just_past = "x".repeat(REPORT_ALLOWANCE_BYTES.saturating_add(1));
