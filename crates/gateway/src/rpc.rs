@@ -460,6 +460,33 @@ mod tests {
         assert!(error.message().contains("boolean"), "{}", error.message());
     }
 
+    /// **The cap is inclusive and exact** (S3's `outcap`): an answer whose
+    /// text is exactly the cap is sent as it is; one byte more is withheld,
+    /// typed, under the request's id, and the refusal is small.
+    #[test]
+    fn an_answer_at_the_cap_is_sent_and_one_byte_past_it_is_withheld() {
+        use pharmakos_proto::transport::MAX_ANSWER_BYTES;
+        let id = Json::Number(String::from("7"));
+        let with = |pad: usize| super::success(&id, Json::String("x".repeat(pad)));
+        let overhead = super::render(&with(0)).len();
+        let at = with(MAX_ANSWER_BYTES.saturating_sub(overhead));
+        assert_eq!(super::render(&at).len(), MAX_ANSWER_BYTES);
+        assert_eq!(super::bounded(&id, "get_status", at.clone()), Ok(at));
+        let past = with(MAX_ANSWER_BYTES.saturating_sub(overhead).saturating_add(1));
+        let withheld = super::bounded(&id, "get_status", past).expect_err("one byte past");
+        assert_eq!(withheld.error.code(), crate::error::Code::ResponseTooLarge);
+        assert_eq!(withheld.response.get("id"), Some(&id));
+        assert!(super::render(&withheld.response).len() < 1024);
+        assert!(
+            withheld
+                .error
+                .message()
+                .contains(&MAX_ANSWER_BYTES.saturating_add(1).to_string()),
+            "{}",
+            withheld.error.message()
+        );
+    }
+
     #[test]
     fn a_response_echoes_the_id_and_names_the_version() {
         let id = Json::String(String::from("call-1"));

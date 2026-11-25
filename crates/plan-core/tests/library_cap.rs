@@ -32,6 +32,14 @@ fn a_library_file_past_the_cap_is_refused_typed() {
     std::fs::write(folder.join("big.jsonc"), vec![b' '; MAX_FILE_BYTES + 1]).expect("written");
     let refused = read(&folder, "big").expect_err("past the bytes");
     assert_eq!(refused.bound(), Some(Bound::LibraryFile), "{refused:?}");
+    // Refused at its length, before it is read: the refusal names the length.
+    assert!(
+        refused
+            .message()
+            .contains(&(MAX_FILE_BYTES + 1).to_string()),
+        "{}",
+        refused.message()
+    );
 
     // Within the bytes, past the characters: four-byte characters to the
     // byte cap is a quarter of it in characters, so use one-byte ones.

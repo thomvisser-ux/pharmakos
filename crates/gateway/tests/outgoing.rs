@@ -247,10 +247,16 @@ fn playbook(step: &str, steps: usize) -> String {
 /// The params `{"playbook_jsonc": <the most copies of step a request at the
 /// inbound cap carries>}` for `method`.
 fn largest_playbook(method: &str, step: &str) -> Json {
-    let at = |steps: usize| {
+    largest(method, |steps| playbook(step, steps))
+}
+
+/// The params `{"playbook_jsonc": text(n)}` for the largest `n` whose request
+/// is within the inbound cap; `text` grows with `n`.
+fn largest(method: &str, text: impl Fn(usize) -> String) -> Json {
+    let at = |n: usize| {
         Json::Object(vec![(
             String::from("playbook_jsonc"),
-            Json::String(playbook(step, steps)),
+            Json::String(text(n)),
         )])
     };
     let (mut low, mut high) = (1_usize, MAX_MESSAGE_BYTES);
@@ -263,6 +269,83 @@ fn largest_playbook(method: &str, step: &str) -> Json {
         }
     }
     at(low)
+}
+
+/// A playbook inside the size budget (`verifier.size_budget_units`, 128: the
+/// rules table's) and the verifier's limits, as large as a request carries:
+/// 128 route steps, each with a condition of the most nodes a condition may
+/// have (24: one `any` and 23 leaves) and a label of `label` repeated `n`
+/// times. Free text is what a unit does not bound.
+fn in_budget(label: &str, n: usize) -> String {
+    let leaf = r#"{"cmdr_hp_pct":{"cmp":"LE","pct":40}}"#;
+    let condition = format!(
+        r#"{{"any":{{"items":[{}]}}}}"#,
+        std::iter::repeat_n(leaf, 23).collect::<Vec<_>>().join(",")
+    );
+    let words = label.repeat(n);
+    let steps: Vec<String> = (0..128)
+        .map(|index| {
+            format!(r#"{{"label":"{words}{index}","skip_if":{condition},"hold":{{"ms":1000}}}}"#)
+        })
+        .collect();
+    format!(
+        r#"{{"schema_version":{{"major":1}},"meta":{{"title":"in budget","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{}]}}}}"#,
+        steps.join(",")
+    )
+}
+
+/// **An in-budget playbook's answers fit** (S3's `outcap`): a playbook within
+/// the size budget and the verifier's limits, at the inbound cap, its labels
+/// plain or of the characters a quoting escapes, is verified at both depths
+/// and submitted with answers within the outgoing cap: the backstop is not
+/// reached by those for a playbook a player can seal. Its render is answered
+/// typed and within the cap too, and printed: its own cut is `outcap` part 2's.
+#[test]
+fn an_in_budget_playbook_at_the_inbound_cap_answers_within_the_cap() {
+    let mut surface = hosted(2, support::SEGMENT_MS, 3);
+    unlimited(&mut surface);
+    let seat = seat_token(&mut surface, 0);
+    for label in ["x", "\\u0001", "\u{1F600}"] {
+        for (method, depth) in [
+            ("render_plan", None),
+            ("verify_plan", Some("quick")),
+            ("verify_plan", Some("full")),
+            ("submit_plan", None),
+        ] {
+            let mut params = largest(method, |n| in_budget(label, n));
+            if let (Some(depth), Json::Object(entries)) = (depth, &mut params) {
+                entries.push((String::from("depth"), Json::String(depth.to_owned())));
+            }
+            let text = request_text("1", method, &params);
+            let answer = answer_text(&mut surface, &seat, &text);
+            println!(
+                "in budget, label {label:?}: {method} {depth:?}: request {} bytes, answer {} bytes: {}",
+                text.len(),
+                answer.len(),
+                support::code(&json::read(&answer).expect("JSON")),
+            );
+            assert!(answer.len() <= MAX_ANSWER_BYTES);
+            if method == "render_plan" {
+                // The prose of an in-budget playbook can pass the cap: the
+                // render's own cut, in plan-core's terms, is `outcap` part 2's
+                // (it needs the typed left-out field). Until it lands the
+                // backstop is what answers, typed, never a cut text.
+                let words = json::read(&answer).expect("JSON");
+                if code_of(&answer) == "RESPONSE_TOO_LARGE" {
+                    println!(
+                        "  withheld: {}",
+                        support::text_of(words.get("error").expect("an error"), "message")
+                    );
+                }
+                continue;
+            }
+            assert_ne!(
+                code_of(&answer),
+                "RESPONSE_TOO_LARGE",
+                "{method} {depth:?} withheld an in-budget answer"
+            );
+        }
+    }
 }
 
 /// **The property** (the brief's Finish): for every method, over generated
@@ -281,6 +364,8 @@ fn every_answer_of_every_method_fits_the_outgoing_cap() {
         // cap, which is where `render_plan` and the reports grow most.
         let constructed =
             [r#"{"hold":{}}"#, r#"{"hold":{"ms":1}}"#].map(|step| largest_playbook(&method, step));
+        let mut largest_sent = 0_usize;
+        let mut withheld = 0_u32;
         for case in 0..CASES.saturating_add(2) {
             let mut rng = Rng(0x9e37_79b9_7f4a_7c15 ^ case.wrapping_mul(0x0100_0000_01b3));
             let params = match case.checked_sub(CASES) {
@@ -304,8 +389,13 @@ fn every_answer_of_every_method_fits_the_outgoing_cap() {
                     answer.len()
                 );
                 assert_typed(&answer, &what);
+                largest_sent = largest_sent.max(answer.len());
+                if code_of(&answer) == "RESPONSE_TOO_LARGE" {
+                    withheld = withheld.saturating_add(1);
+                }
             }
         }
+        println!("{method}: largest answer sent {largest_sent} bytes; {withheld} withheld");
     }
 }
 
@@ -531,6 +621,7 @@ fn an_entity_list_past_a_page_is_paged_from_one_list() {
 
     // The whole list with nothing stepped between its pages: the reference.
     let mut reference: Vec<String> = Vec::new();
+    let mut walls = 0_usize;
     let mut cursor = String::new();
     let mut pages = 0_u32;
     loop {
@@ -541,6 +632,12 @@ fn an_entity_list_past_a_page_is_paged_from_one_list() {
             "page {pages}: {bytes} bytes"
         );
         reference.extend(entity_ids(&page));
+        walls = walls.saturating_add(
+            support::array_of(&page, "entities")
+                .iter()
+                .filter(|entity| entity.get("subtype") == Some(&Json::String(String::from("wall"))))
+                .count(),
+        );
         cursor = support::text_of(&page, "next_cursor");
         if matches!(page.get("complete"), Some(Json::Bool(true))) {
             break;
@@ -557,6 +654,8 @@ fn an_entity_list_past_a_page_is_paged_from_one_list() {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), reference.len(), "an entity came twice");
+    // Every lone wall voxel is a wall of its own: none lost at a page's edge.
+    assert_eq!(walls, 3_000, "every wall, once");
 
     // A second keyframe from the same world, a wall the first page listed
     // knocked down and the Push stepped before the next: the same list, the
@@ -626,6 +725,100 @@ fn a_cursor_into_another_seats_list_is_stale() {
         ),
     );
     assert_eq!(code_of(&answer), "STALE_SNAPSHOT", "{answer}");
+}
+
+/// An advisor that reads the view to its completing page and keeps what it
+/// saw: how many walls, how many pages, and any refusal.
+struct Reader {
+    seen: std::sync::Arc<std::sync::Mutex<(usize, u32, String)>>,
+}
+
+impl Advisor for Reader {
+    fn advise(
+        &mut self,
+        _seat: u8,
+        call: &mut dyn FnMut(&rpc::Request) -> Json,
+    ) -> pharmakos_gateway::advice::Advice {
+        let mut cursor = String::new();
+        let (mut walls, mut pages, mut refused) = (0_usize, 0_u32, String::new());
+        while pages < 64 {
+            let text = request_text(
+                "1",
+                "get_view",
+                &Json::Object(vec![(String::from("cursor"), Json::String(cursor.clone()))]),
+            );
+            let answer = call(&rpc::parse(&text).expect("a request"));
+            pages = pages.saturating_add(1);
+            let Some(page) = answer.get("result") else {
+                refused = support::code(&answer);
+                break;
+            };
+            walls = walls.saturating_add(
+                support::array_of(page, "entities")
+                    .iter()
+                    .filter(|entity| {
+                        entity.get("subtype") == Some(&Json::String(String::from("wall")))
+                    })
+                    .count(),
+            );
+            cursor = support::text_of(page, "next_cursor");
+            if matches!(page.get("complete"), Some(Json::Bool(true))) {
+                break;
+            }
+        }
+        if let Ok(mut held) = self.seen.lock() {
+            *held = (walls, pages, refused);
+        }
+        pharmakos_gateway::advice::Advice::default()
+    }
+}
+
+/// Advises seat 0 with a [`Reader`], and plays nobody.
+struct Advising(Option<Box<dyn Advisor>>);
+
+impl Operators for Advising {
+    fn built_in(&mut self, _seat: u8) -> Option<Box<dyn BuiltInSeat>> {
+        None
+    }
+
+    fn advisor(&mut self, seat: u8) -> Option<Box<dyn Advisor>> {
+        if seat == 0 { self.0.take() } else { None }
+    }
+}
+
+/// **An advisor pages its entities as a socket does** (S3's `outcap`): its
+/// `get_view` is answered from a scratch copy of the feed, which is put back
+/// after each call, and the entity list its listing holds is kept across its
+/// calls, so its read reaches the completing page with every wall once.
+#[test]
+fn an_advisor_pages_its_entities_across_calls() {
+    let mut surface = crowded(3_000);
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(surface.end_recap().expect("the recap ends"));
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(support::LULL_MS))
+        .expect("a countdown");
+    surface.open_lull().expect("round 2's Lull");
+    let seen = std::sync::Arc::new(std::sync::Mutex::new((0, 0, String::new())));
+    let mut factory = Advising(Some(Box::new(Reader {
+        seen: std::sync::Arc::clone(&seen),
+    })));
+    let mut seats = InProcessSeats::open(
+        &mut surface,
+        &[SeatId::new(0), SeatId::new(1)],
+        Some(0),
+        &mut factory,
+    )
+    .expect("in-process seats");
+    seats.plan(&mut surface);
+    let (walls, pages, refused) = seen.lock().expect("not poisoned").clone();
+    assert_eq!(refused, "", "the advisor's paging was refused");
+    assert!(pages >= 3, "{pages} pages: the list was paged");
+    assert_eq!(walls, 3_000, "every wall, once");
 }
 
 /// A built-in seat whose round is one call it is handed, and which keeps
