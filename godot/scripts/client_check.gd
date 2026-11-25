@@ -341,6 +341,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_playtest_lobby(failures)
 	await _check_playtest_off_costs_nothing(failures)
 	await _check_a_lost_release_counts_the_next_turn(failures)
+	await _check_a_bad_link_keeps_the_rig(failures)
 
 
 ## **The wheel reaches a readable structure** (item 155 (3) 4). From the whole map's framing,
@@ -2226,3 +2227,22 @@ func _check_a_lost_release_counts_the_next_turn(failures: Array[String]) -> void
 	stage.queue_free()
 	await get_tree().process_frame
 	print("[client-check] the camera's turn: said once a drag, again after a lost focus and after a new press")
+
+
+## **A frame on a link no connection has is refused, and the rig is kept** (fix pass 2, item 7):
+## `watch_receive` checks the link before it takes the rig.
+func _check_a_bad_link_keeps_the_rig(failures: Array[String]) -> void:
+	var vista: Node3D = VistaScene.instantiate()
+	add_child(vista)
+	vista.set_process(false)
+	var bridge: Node = vista.bridge
+	bridge.watch_begin()
+	for link in [-1, 2, 7]:
+		var answer: Dictionary = bridge.watch_receive(link, "{}")
+		if String(answer.get("refused", "")) != "no_such_link":
+			failures.append("a frame on link %d was not refused: %s" % [link, answer])
+	if bridge.watch_state().is_empty():
+		failures.append("a frame on a link no connection has dropped the rig")
+	vista.queue_free()
+	await get_tree().process_frame
+	print("[client-check] a frame on a link no connection has: refused, the rig kept")

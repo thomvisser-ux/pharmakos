@@ -715,10 +715,20 @@ impl PharmakosBridge {
     /// `{clock, kind, text, ledger, line}`: `event_row_dictionary`),
     /// `error` (the gateway's refusal, empty when there was none) and, for a `get_view`
     /// answer, `view`: what `view_apply` returns for the same result. An empty dictionary
-    /// means the frame could not be read, and the reason is in the log.
+    /// means the frame could not be read, and the reason is in the log. A `link` no connection
+    /// has is refused before anything is touched: `{refused: "no_such_link"}`, the rig kept.
     #[func]
     fn watch_receive(&mut self, link: i64, text: GString) -> VarDictionary {
-        let (Some(mut rig), Ok(link)) = (self.rig.take(), usize::try_from(link)) else {
+        let Some(link) = usize::try_from(link)
+            .ok()
+            .filter(|link| *link == crate::rig::ADMIN || *link == crate::rig::SEAT)
+        else {
+            godot_error!("[pharmakos] watch_receive: no connection is link {link}");
+            let mut refused = VarDictionary::new();
+            refused.set(&"refused".to_variant(), &"no_such_link".to_variant());
+            return refused;
+        };
+        let Some(mut rig) = self.rig.take() else {
             return VarDictionary::new();
         };
         let text = text.to_string();
