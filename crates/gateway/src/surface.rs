@@ -2542,6 +2542,20 @@ impl Surface {
         let now = host.world().event_bus().dropped();
         let phase = host.runner().phase();
         let round = host.runner().round();
+        self.take_drops(now, phase, round, ended)
+    }
+
+    /// [`Surface::count_drops`] with the bus's count `now` read: the drops
+    /// since the last read are added to the segment's with a checked add, a
+    /// typed `INTERNAL` at its cause, never a wrap (a resumed count of
+    /// `u64::MAX` and one live drop are that error).
+    fn take_drops(
+        &mut self,
+        now: u64,
+        phase: MatchPhase,
+        round: u32,
+        ended: bool,
+    ) -> Result<(), Error> {
         let lost = now.checked_sub(self.bus_dropped).ok_or_else(|| {
             Error::internal("the sim's event bus counted fewer drops than before")
         })?;

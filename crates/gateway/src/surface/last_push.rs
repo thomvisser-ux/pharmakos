@@ -1208,4 +1208,34 @@ mod tests {
             .ended_unsaved_tripwire()
             .expect("an end that was saved passes");
     }
+
+    /// A save that holds `u64::MAX` drops since its segment's end restores
+    /// (every `u64` is a count the live gateway could have held), and one live
+    /// drop after it is the typed `INTERNAL` at its cause, the count left as
+    /// it was, never wrapped (fix pass 3, item 12).
+    #[test]
+    fn a_resumed_count_at_u64_max_and_one_live_drop_is_refused_not_wrapped() {
+        let mut surface = hosted();
+        let mut last = surface
+            .last_push(crate::save::Boundary::Lull)
+            .expect("the opening Lull's last Push");
+        last.feed
+            .as_mut()
+            .expect("a Lull carries its feed")
+            .dropped_since = u64::MAX;
+        surface
+            .restore_last_push(crate::save::Boundary::Lull, &last)
+            .expect("u64::MAX drops restore");
+        assert_eq!(surface.segment_dropped, u64::MAX);
+        let error = surface
+            .take_drops(
+                surface.bus_dropped.saturating_add(1),
+                pharmakos_sim::runner::MatchPhase::Lull,
+                1,
+                false,
+            )
+            .expect_err("one more drop does not fit");
+        assert_eq!(error.code(), Code::Internal);
+        assert_eq!(surface.segment_dropped, u64::MAX, "never wrapped");
+    }
 }
