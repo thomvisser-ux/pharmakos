@@ -1554,7 +1554,7 @@ fn s1_arm_parts(mandate: &mandate_settings::Mandate, here: &str) -> Vec<Text> {
 }
 
 /// A list written in a settings row, by its count: `words`, the count, and
-/// A Build arm's fields, in field order, its list last (where the field order has it).
+/// the noun for one or many; nothing for an empty or omitted list.
 fn count_part(parts: &mut Vec<Text>, words: &str, count: usize, one: &str, many: &str) {
     if count > 0 {
         let noun = if count == 1 { one } else { many };
@@ -1562,7 +1562,7 @@ fn count_part(parts: &mut Vec<Text>, words: &str, count: usize, one: &str, many:
     }
 }
 
-/// A Build arm's fields, in field order, its list last (as the field order already has it).
+/// A Build arm's fields, in field order, its list last (where the field order has it).
 fn build_parts(build: &BuildSettings, here: &str) -> Vec<Text> {
     let mut parts = Vec::new();
     count_part(
