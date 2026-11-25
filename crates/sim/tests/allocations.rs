@@ -195,6 +195,59 @@ fn the_counting_allocator_counts_every_hook_it_says_it_counts() {
     assert_eq!(std::hint::black_box(vector).len(), 5);
 }
 
+/// How many boxes [`the_counter_counts_each_thread_alone`]'s allocating
+/// thread makes while the other thread watches.
+const OTHER_THREADS_BOXES: u64 = 16;
+
+/// **The counter counts each thread alone**, in both builds: a test that
+/// steps two worlds on two threads side by side
+/// (`tick::a_restored_worlds_tick_allocates_nothing`) holds one of them to
+/// zero allocations while the other allocates as it likes, which is exact
+/// only if an allocation is charged to the thread that made it and to no
+/// other. Two scoped threads, held in step by two barriers: the watching
+/// thread reads its count, the allocating thread makes
+/// [`OTHER_THREADS_BOXES`] boxes between the barriers, and the watching
+/// thread reads its count again. The allocating thread's count moves by
+/// exactly its boxes, and the watching thread's not at all. A counter shared
+/// between threads fails here.
+#[test]
+fn the_counter_counts_each_thread_alone() {
+    let started = std::sync::Barrier::new(2);
+    let finished = std::sync::Barrier::new(2);
+    let (made, watched) = std::thread::scope(|scope| {
+        let allocating = scope.spawn(|| {
+            started.wait();
+            let before = allocations();
+            for index in 0..OTHER_THREADS_BOXES {
+                drop(std::hint::black_box(Box::new(std::hint::black_box(index))));
+            }
+            let made = allocations() - before;
+            finished.wait();
+            made
+        });
+        let watching = scope.spawn(|| {
+            let before = allocations();
+            started.wait();
+            finished.wait();
+            allocations() - before
+        });
+        (
+            allocating
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            watching
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        )
+    });
+    assert_eq!(
+        (made, watched),
+        (OTHER_THREADS_BOXES, 0),
+        "the allocating thread is charged its own boxes and the watching thread, which made \
+         none in the same span, is charged nothing"
+    );
+}
+
 /// The ticks [`warm_up`] runs: every buffer a tick fills is at its steady
 /// capacity after them.
 const WARM_UP_TICKS: u32 = 50;
@@ -952,15 +1005,56 @@ mod tick {
     /// structure, unit and target tables) and the attacking crowds' fight,
     /// both counted. Capacity is not state: the restored-then-run chain
     /// equals the run-straight-through chain over every tick of both windows.
+    ///
+    /// **The two runners step side by side**, each on a scoped thread of its
+    /// own (lane `simroom`): once the restored runner is built from the
+    /// straight one's save, neither reads the other, so only the comparison
+    /// of their chains waits for both. The counter is per thread
+    /// ([`super::the_counter_counts_each_thread_alone`] proves it), so the
+    /// restored runner's thread counts its own ticks exactly, whatever the
+    /// straight runner's thread allocates meanwhile. Each thread's panic is
+    /// resumed on the test's thread, and each hands back its chain, so a
+    /// thread whose result was dropped leaves a chain short and fails the
+    /// comparison.
     #[test]
     fn a_restored_worlds_tick_allocates_nothing() {
         let mut enc = Enc::with_capacity(64 * 1024);
-        let (mut straight, mut restored) = super::warmed_and_restored(&mut enc);
+        let (straight, restored) = super::warmed_and_restored(&mut enc);
         let ticks = GROWTH_TICKS + RESTORED_CROWD_LEAD + CROWD_TICKS;
         let rows = usize::try_from(ticks).expect("a tick count fits a usize");
-        let mut chain: Vec<u64> = Vec::with_capacity(rows);
-        let mut expected: Vec<u64> = Vec::with_capacity(rows);
+        let (chain, expected) = std::thread::scope(|scope| {
+            let restored = scope.spawn(move || restored_windows(restored, enc, rows));
+            let straight = scope.spawn(move || straight_windows(straight, rows));
+            (
+                restored
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                straight
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            )
+        });
+        assert_eq!(
+            (chain.len(), expected.len()),
+            (rows, rows),
+            "each runner hands back a hash for every tick it stepped"
+        );
+        let parted = chain
+            .iter()
+            .zip(&expected)
+            .position(|(restored, straight)| restored != straight);
+        assert_eq!(
+            parted, None,
+            "the restored-then-run chain parts from the run-straight-through chain: capacity \
+             is not state, so a restore that gives its room back moves no hash"
+        );
+    }
 
+    /// The restored runner's half of [`a_restored_worlds_tick_allocates_nothing`],
+    /// on its own thread: the growth window and the crowds' fight, each
+    /// counted on this thread, and the chain of every tick it stepped.
+    fn restored_windows(mut restored: Runner, mut enc: Enc, rows: usize) -> Vec<u64> {
+        let mut chain: Vec<u64> = Vec::with_capacity(rows);
         let beacons_before = restored.world().beacons().len();
         let structures_before = restored.world().structures().len();
         let units_before = restored.world().units().len();
@@ -1010,7 +1104,16 @@ mod tick {
             crowded, 0,
             "{CROWD_TICKS} ticks of a restored world's crowds allocated {crowded} times"
         );
+        chain
+    }
 
+    /// The straight runner's half of [`a_restored_worlds_tick_allocates_nothing`],
+    /// on its own thread: the same windows, uncounted, and the chain the
+    /// restored runner's must equal. Its encoder is its own; what it
+    /// allocates is this thread's and reaches no count.
+    fn straight_windows(mut straight: Runner, rows: usize) -> Vec<u64> {
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let mut expected: Vec<u64> = Vec::with_capacity(rows);
         run_window(
             &mut straight,
             &mut enc,
@@ -1028,16 +1131,7 @@ mod tick {
             false,
             &mut expected,
         );
-        assert_eq!(chain.len(), expected.len());
-        let parted = chain
-            .iter()
-            .zip(&expected)
-            .position(|(restored, straight)| restored != straight);
-        assert_eq!(
-            parted, None,
-            "the restored-then-run chain parts from the run-straight-through chain: capacity \
-             is not state, so a restore that gives its room back moves no hash"
-        );
+        expected
     }
 
     /// The attacking crowds' half of [`a_tick_allocates_nothing`].
