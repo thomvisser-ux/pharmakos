@@ -170,7 +170,7 @@ use crate::probation::Preset;
 use crate::rpc::{self, Request};
 use crate::save::{Save, Stamp};
 use crate::scopes::{Scope, ScopeSet};
-use crate::session::{self, Door};
+use crate::session::{self, Door, Opened};
 use crate::surface::{InProcess, Surface};
 use crate::token::{Handle, Subject, Token};
 
@@ -722,10 +722,21 @@ enum Job {
     Stop,
 }
 
-/// The persistence failure the host stopped on, once: set by the surface
-/// thread on its way out ([`Writer::stop`]), and read by every connection's
-/// door, which answers each later call with it ([`RemoteDoor::answer`]).
-type Stopped = Arc<OnceLock<Error>>;
+/// What a host that stopped on a write it could not make leaves behind for
+/// its connections ([`Writer::stop`]): the typed error, and the match's
+/// tokens, so a connection opened after the stop is told why only when its
+/// token is this match's ([`RemoteDoor::open`]).
+struct HostStopped {
+    error: Error,
+    tokens: crate::token::TokenStore,
+    match_id: String,
+    tick: pharmakos_sim::math::quantity::Tick,
+}
+
+/// The stop, once: set by the surface thread on its way out, and read by
+/// every connection's door, which answers each later call and upgrade with
+/// it ([`RemoteDoor::answer`], [`RemoteDoor::open`]).
+type Stopped = Arc<OnceLock<HostStopped>>;
 
 /// A connection's door: everything goes to the one thread that owns the
 /// surface, and the connection waits for the answer.
@@ -745,7 +756,7 @@ impl RemoteDoor {
     /// otherwise the host is shutting down because its parent closed the
     /// control pipe, and says so.
     fn after_the_surface(&self, text: &str) -> String {
-        let Some(error) = self.stopped.get() else {
+        let Some(HostStopped { error, .. }) = self.stopped.get() else {
             return rpc::render(&rpc::malformed_response(&rpc::Malformed::Invalid(
                 String::from("this host is shutting down"),
             )));
@@ -764,16 +775,41 @@ impl Door for RemoteDoor {
     /// A channel of its own for each job, whose only sender travels with the
     /// job: a job the surface thread never answers (it stopped with the job
     /// still queued) drops that sender, and the wait ends rather than hanging.
-    fn open(&mut self, token: &Token) -> bool {
+    ///
+    /// Once the surface has stopped on a write it could not make, a token of
+    /// this match is told why ([`Opened::Stopped`], a 503 with the stop's
+    /// words), and any other token is refused as before: the token is
+    /// authenticated against the match's own tokens, which the stop left
+    /// here, so a stranger learns nothing of the host's state.
+    fn open(&mut self, token: &Token) -> Opened {
         let (reply, granted) = channel();
         let job = Job::Open {
             token: token.clone(),
             reply,
         };
-        if self.jobs.send(job).is_err() {
-            return false;
+        if self.jobs.send(job).is_ok()
+            && let Ok(granted) = granted.recv()
+        {
+            return if granted {
+                Opened::Granted
+            } else {
+                Opened::Refused
+            };
         }
-        granted.recv().unwrap_or(false)
+        match self.stopped.get() {
+            Some(stopped)
+                if stopped
+                    .tokens
+                    .authenticate(token, &stopped.match_id, stopped.tick)
+                    .is_ok() =>
+            {
+                Opened::Stopped(format!(
+                    "this host has stopped: {}",
+                    stopped.error.message()
+                ))
+            }
+            Some(_) | None => Opened::Refused,
+        }
     }
 
     fn answer(&mut self, token: &Token, text: &str) -> String {
@@ -1843,7 +1879,7 @@ impl Writer {
     /// ([`RemoteDoor::after_the_surface`]). Returns the error the host stops
     /// with, which names the audit log too when only now its last lines
     /// could not be written.
-    fn stop(&self, surface: &mut Surface, error: Error, stopped: &OnceLock<Error>) -> Error {
+    fn stop(&self, surface: &mut Surface, error: Error, stopped: &OnceLock<HostStopped>) -> Error {
         self.record_drops(surface);
         let mut failures: Vec<Failure> = Vec::new();
         self.append(surface, &mut failures);
@@ -1858,8 +1894,15 @@ impl Writer {
                 }
             )),
         };
-        // Set once: only this thread sets it, and only on its way out.
-        let _first = stopped.set(error.clone());
+        // Set once: only this thread sets it, and only on its way out. The
+        // tokens go with it: the surface serves nothing more.
+        let tick = surface.time().tick;
+        let _first = stopped.set(HostStopped {
+            error: error.clone(),
+            tokens: std::mem::take(surface.tokens()),
+            match_id: surface.match_id().to_owned(),
+            tick,
+        });
         error
     }
 }
@@ -1917,7 +1960,7 @@ fn serve_surface(
     writer: &Writer,
     in_process: &mut InProcessSeats,
     work: &Receiver<Job>,
-    stopped: &OnceLock<Error>,
+    stopped: &OnceLock<HostStopped>,
 ) -> Result<(), Error> {
     in_process.plan(surface);
     if let Err(error) = writer.flush(surface) {

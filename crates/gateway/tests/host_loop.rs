@@ -2538,3 +2538,71 @@ fn a_close_whose_audit_lines_cannot_be_written_writes_no_lull_save() {
         (String::from("push"), 1)
     );
 }
+
+/// The whole answer to an upgrade, read to the connection's close.
+fn upgrade_answer(port: u16, token: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("a loopback connection");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .expect("a read timeout");
+    let upgrade = format!(
+        "GET /seat HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\
+         Authorization: Bearer {token}\r\n\
+         \r\n"
+    );
+    stream.write_all(upgrade.as_bytes()).expect("the upgrade");
+    let mut answer = Vec::new();
+    let _ = stream.read_to_end(&mut answer);
+    String::from_utf8(answer).expect("UTF-8")
+}
+
+/// A connection opened after the host stopped is told why (fix pass 3, item
+/// 3; review 3's mutant R3-2b): a token of this match is answered 503 with the
+/// stored error's words; a token that is not this match's still learns
+/// nothing but that (401), so the stop is no oracle; and the host's checks of
+/// `Host` and `Origin` run first, as before.
+#[test]
+fn a_connection_opened_after_the_stop_is_told_why() {
+    const MATCH_ID: &str = "m-opsave-durable-after";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 2)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    block_the_save(&host.folder);
+    let crossed = lobby.call("end_lull", "{}");
+    let message = assert_the_host_stopped(
+        &mut host,
+        &crossed,
+        &mut [&mut lobby],
+        "the `sealed` save of round 1 could not be written (",
+        "no save yet",
+    );
+    let port = host.announce.port;
+    for token in [
+        host.announce.admin_token.clone(),
+        host.announce.seat_token.clone().expect("the human's token"),
+    ] {
+        let answer = upgrade_answer(port, &token);
+        assert!(
+            answer.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "{answer}"
+        );
+        assert!(answer.contains(&message), "the stored words: {answer}");
+        assert!(!answer.contains(&token), "no token echoed: {answer}");
+    }
+    let stranger = "ab".repeat(32);
+    let answer = upgrade_answer(port, &stranger);
+    assert!(
+        answer.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+        "{answer}"
+    );
+    assert!(
+        !answer.contains("stopped"),
+        "a stranger learns nothing: {answer}"
+    );
+    unblock_the_save(&host.folder);
+}

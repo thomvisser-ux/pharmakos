@@ -2315,11 +2315,6 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "serve.rs",
-        "granted.recv().unwrap_or(false)",
-        "a host loop that has stopped, or stopped with the open still queued (its reply channel then closes), opens no session, which is the answer a refused open gets",
-    ),
-    (
-        "serve.rs",
         "method.map_or_else(",
         "a refusal names a method the wire does not know `<unknown>`, rather than echoing an unbounded name",
     ),
