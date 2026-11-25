@@ -42,6 +42,7 @@
 
 use crate::math::fixed::{Angle, Fx, Sq};
 use crate::math::quantity::{Hp, Kw, Money};
+use crate::reserved::Reserved;
 use crate::seams::BeaconMandate;
 
 /// A unit's identity: its row in the unit table and the row's generation
@@ -131,19 +132,19 @@ impl SeatId {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct UnitTable {
     count: u32,
-    id: Vec<u32>,
-    seat: Vec<u8>,
-    kind: Vec<u8>,
-    pos: Vec<[Fx; 3]>,
-    dest: Vec<[Fx; 3]>,
-    heading: Vec<Angle>,
-    hp: Vec<Hp>,
-    home: Vec<BeaconId>,
-    carrying: Vec<Money>,
-    busy_until: Vec<u32>,
-    arms: Vec<Arms>,
-    retreat: Vec<BeaconId>,
-    free: Vec<bool>,
+    id: Reserved<u32>,
+    seat: Reserved<u8>,
+    kind: Reserved<u8>,
+    pos: Reserved<[Fx; 3]>,
+    dest: Reserved<[Fx; 3]>,
+    heading: Reserved<Angle>,
+    hp: Reserved<Hp>,
+    home: Reserved<BeaconId>,
+    carrying: Reserved<Money>,
+    busy_until: Reserved<u32>,
+    arms: Reserved<Arms>,
+    retreat: Reserved<BeaconId>,
+    free: Reserved<bool>,
 }
 
 /// Why a row could not be placed in a table: it holds all the rows it may,
@@ -325,19 +326,19 @@ impl UnitTable {
         let n = crate::math::index::row(count);
         UnitTable {
             count: 0,
-            id: Vec::with_capacity(n),
-            seat: Vec::with_capacity(n),
-            kind: Vec::with_capacity(n),
-            pos: Vec::with_capacity(n),
-            dest: Vec::with_capacity(n),
-            heading: Vec::with_capacity(n),
-            hp: Vec::with_capacity(n),
-            home: Vec::with_capacity(n),
-            carrying: Vec::with_capacity(n),
-            busy_until: Vec::with_capacity(n),
-            arms: Vec::with_capacity(n),
-            retreat: Vec::with_capacity(n),
-            free: Vec::with_capacity(n),
+            id: Reserved::with_capacity(n),
+            seat: Reserved::with_capacity(n),
+            kind: Reserved::with_capacity(n),
+            pos: Reserved::with_capacity(n),
+            dest: Reserved::with_capacity(n),
+            heading: Reserved::with_capacity(n),
+            hp: Reserved::with_capacity(n),
+            home: Reserved::with_capacity(n),
+            carrying: Reserved::with_capacity(n),
+            busy_until: Reserved::with_capacity(n),
+            arms: Reserved::with_capacity(n),
+            retreat: Reserved::with_capacity(n),
+            free: Reserved::with_capacity(n),
         }
     }
 
@@ -750,19 +751,19 @@ impl UnitTable {
             return false;
         };
         self.count = count;
-        self.id = columns.id;
-        self.seat = columns.seat;
-        self.kind = columns.kind;
-        self.pos = columns.pos;
-        self.dest = columns.dest;
-        self.heading = columns.heading;
-        self.hp = columns.hp;
-        self.home = columns.home;
-        self.carrying = columns.carrying;
-        self.busy_until = columns.busy_until;
-        self.arms = columns.arms;
-        self.retreat = columns.retreat;
-        self.free = columns.free;
+        self.id = columns.id.into();
+        self.seat = columns.seat.into();
+        self.kind = columns.kind.into();
+        self.pos = columns.pos.into();
+        self.dest = columns.dest.into();
+        self.heading = columns.heading.into();
+        self.hp = columns.hp.into();
+        self.home = columns.home.into();
+        self.carrying = columns.carrying.into();
+        self.busy_until = columns.busy_until.into();
+        self.arms = columns.arms.into();
+        self.retreat = columns.retreat.into();
+        self.free = columns.free.into();
         true
     }
 }
@@ -965,18 +966,18 @@ pub struct Tally {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SeatTable {
     count: u32,
-    seat: Vec<u8>,
-    treasury: Vec<Money>,
-    supply: Vec<Kw>,
-    draw: Vec<Kw>,
-    eliminated_at: Vec<u32>,
-    commander_deaths: Vec<u32>,
-    respawn_due: Vec<u32>,
-    qm_cursor: Vec<u32>,
-    placed: Vec<u32>,
-    beacons_lost: Vec<u32>,
-    tally: Vec<Tally>,
-    attack: Vec<Arms>,
+    seat: Reserved<u8>,
+    treasury: Reserved<Money>,
+    supply: Reserved<Kw>,
+    draw: Reserved<Kw>,
+    eliminated_at: Reserved<u32>,
+    commander_deaths: Reserved<u32>,
+    respawn_due: Reserved<u32>,
+    qm_cursor: Reserved<u32>,
+    placed: Reserved<u32>,
+    beacons_lost: Reserved<u32>,
+    tally: Reserved<Tally>,
+    attack: Reserved<Arms>,
 }
 
 impl SeatTable {
@@ -986,18 +987,18 @@ impl SeatTable {
         let n = crate::math::index::row(count);
         SeatTable {
             count: 0,
-            seat: Vec::with_capacity(n),
-            treasury: Vec::with_capacity(n),
-            supply: Vec::with_capacity(n),
-            draw: Vec::with_capacity(n),
-            eliminated_at: Vec::with_capacity(n),
-            commander_deaths: Vec::with_capacity(n),
-            respawn_due: Vec::with_capacity(n),
-            qm_cursor: Vec::with_capacity(n),
-            placed: Vec::with_capacity(n),
-            beacons_lost: Vec::with_capacity(n),
-            tally: Vec::with_capacity(n),
-            attack: Vec::with_capacity(n),
+            seat: Reserved::with_capacity(n),
+            treasury: Reserved::with_capacity(n),
+            supply: Reserved::with_capacity(n),
+            draw: Reserved::with_capacity(n),
+            eliminated_at: Reserved::with_capacity(n),
+            commander_deaths: Reserved::with_capacity(n),
+            respawn_due: Reserved::with_capacity(n),
+            qm_cursor: Reserved::with_capacity(n),
+            placed: Reserved::with_capacity(n),
+            beacons_lost: Reserved::with_capacity(n),
+            tally: Reserved::with_capacity(n),
+            attack: Reserved::with_capacity(n),
         }
     }
 
@@ -1227,18 +1228,18 @@ impl SeatTable {
             return false;
         };
         self.count = count;
-        self.seat = columns.seat;
-        self.treasury = columns.treasury;
-        self.supply = columns.supply;
-        self.draw = columns.draw;
-        self.eliminated_at = columns.eliminated_at;
-        self.commander_deaths = columns.commander_deaths;
-        self.respawn_due = columns.respawn_due;
-        self.qm_cursor = columns.qm_cursor;
-        self.placed = columns.placed;
-        self.beacons_lost = columns.beacons_lost;
-        self.tally = columns.tally;
-        self.attack = columns.attack;
+        self.seat = columns.seat.into();
+        self.treasury = columns.treasury.into();
+        self.supply = columns.supply.into();
+        self.draw = columns.draw.into();
+        self.eliminated_at = columns.eliminated_at.into();
+        self.commander_deaths = columns.commander_deaths.into();
+        self.respawn_due = columns.respawn_due.into();
+        self.qm_cursor = columns.qm_cursor.into();
+        self.placed = columns.placed.into();
+        self.beacons_lost = columns.beacons_lost.into();
+        self.tally = columns.tally.into();
+        self.attack = columns.attack.into();
         true
     }
 }
@@ -1511,22 +1512,42 @@ impl std::error::Error for TargetsFull {}
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TargetTable {
     count: u32,
-    beacon: Vec<BeaconId>,
-    kind: Vec<u8>,
-    blueprint: Vec<u8>,
-    at: Vec<[Fx; 3]>,
-    area: Vec<ColumnBox>,
-    built: Vec<StructureId>,
-    feature: Vec<u32>,
-    desc: Vec<u8>,
-    order: Vec<u32>,
-    rotation: Vec<u8>,
-    wall_top: Vec<i16>,
-    wall_done: Vec<bool>,
+    beacon: Reserved<BeaconId>,
+    kind: Reserved<u8>,
+    blueprint: Reserved<u8>,
+    at: Reserved<[Fx; 3]>,
+    area: Reserved<ColumnBox>,
+    built: Reserved<StructureId>,
+    feature: Reserved<u32>,
+    desc: Reserved<u8>,
+    order: Reserved<u32>,
+    rotation: Reserved<u8>,
+    wall_top: Reserved<i16>,
+    wall_done: Reserved<bool>,
     capacity: u32,
 }
 
 impl TargetTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.beacon.reserve_total(n);
+        self.kind.reserve_total(n);
+        self.blueprint.reserve_total(n);
+        self.at.reserve_total(n);
+        self.area.reserve_total(n);
+        self.built.reserve_total(n);
+        self.feature.reserve_total(n);
+        self.desc.reserve_total(n);
+        self.order.reserve_total(n);
+        self.rotation.reserve_total(n);
+        self.wall_top.reserve_total(n);
+        self.wall_done.reserve_total(n);
+    }
+
     /// How many rows the table holds, as a column index: the length of its
     /// columns, which every writer keeps equal, so a walk over `0..row_count()`
     /// needs no conversion and no fallback.
@@ -1541,18 +1562,18 @@ impl TargetTable {
         let n = crate::math::index::row(capacity);
         TargetTable {
             count: 0,
-            beacon: Vec::with_capacity(n),
-            kind: Vec::with_capacity(n),
-            blueprint: Vec::with_capacity(n),
-            at: Vec::with_capacity(n),
-            area: Vec::with_capacity(n),
-            built: Vec::with_capacity(n),
-            feature: Vec::with_capacity(n),
-            desc: Vec::with_capacity(n),
-            order: Vec::with_capacity(n),
-            rotation: Vec::with_capacity(n),
-            wall_top: Vec::with_capacity(n),
-            wall_done: Vec::with_capacity(n),
+            beacon: Reserved::with_capacity(n),
+            kind: Reserved::with_capacity(n),
+            blueprint: Reserved::with_capacity(n),
+            at: Reserved::with_capacity(n),
+            area: Reserved::with_capacity(n),
+            built: Reserved::with_capacity(n),
+            feature: Reserved::with_capacity(n),
+            desc: Reserved::with_capacity(n),
+            order: Reserved::with_capacity(n),
+            rotation: Reserved::with_capacity(n),
+            wall_top: Reserved::with_capacity(n),
+            wall_done: Reserved::with_capacity(n),
             capacity,
         }
     }
@@ -1986,18 +2007,18 @@ impl TargetTable {
         }
         self.count = count;
         self.capacity = capacity;
-        self.beacon = columns.beacon;
-        self.kind = columns.kind;
-        self.blueprint = columns.blueprint;
-        self.at = columns.at;
-        self.area = columns.area;
-        self.built = columns.built;
-        self.feature = columns.feature;
-        self.desc = columns.desc;
-        self.order = columns.order;
-        self.rotation = columns.rotation;
-        self.wall_top = columns.wall_top;
-        self.wall_done = columns.wall_done;
+        self.beacon = columns.beacon.into();
+        self.kind = columns.kind.into();
+        self.blueprint = columns.blueprint.into();
+        self.at = columns.at.into();
+        self.area = columns.area.into();
+        self.built = columns.built.into();
+        self.feature = columns.feature.into();
+        self.desc = columns.desc.into();
+        self.order = columns.order.into();
+        self.rotation = columns.rotation.into();
+        self.wall_top = columns.wall_top.into();
+        self.wall_done = columns.wall_done.into();
         true
     }
 }
@@ -2043,15 +2064,15 @@ pub struct TargetColumns {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SightingTable {
     count: u32,
-    seat: Vec<u8>,
-    asset: Vec<u32>,
-    owner: Vec<u8>,
-    kind: Vec<u8>,
+    seat: Reserved<u8>,
+    asset: Reserved<u32>,
+    owner: Reserved<u8>,
+    kind: Reserved<u8>,
     /// The blueprint a structure was seen as, or [`NO_BLUEPRINT`] (S3's
     /// `pred`).
-    blueprint: Vec<u8>,
-    at: Vec<[Fx; 3]>,
-    seen_at: Vec<u32>,
+    blueprint: Reserved<u8>,
+    at: Reserved<[Fx; 3]>,
+    seen_at: Reserved<u32>,
     capacity: u32,
     per_seat: u32,
 }
@@ -2061,6 +2082,21 @@ pub struct SightingTable {
 pub const NO_BLUEPRINT: u8 = 0;
 
 impl SightingTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.seat.reserve_total(n);
+        self.asset.reserve_total(n);
+        self.owner.reserve_total(n);
+        self.kind.reserve_total(n);
+        self.blueprint.reserve_total(n);
+        self.at.reserve_total(n);
+        self.seen_at.reserve_total(n);
+    }
+
     /// The blueprint block's tag in the state hash, after the explore-tick
     /// block's 8 (S3's `pred`).
     pub const BLUEPRINT_HASH_TAG: u8 = 9;
@@ -2079,13 +2115,13 @@ impl SightingTable {
         let n = crate::math::index::row(capacity);
         SightingTable {
             count: 0,
-            seat: Vec::with_capacity(n),
-            asset: Vec::with_capacity(n),
-            owner: Vec::with_capacity(n),
-            kind: Vec::with_capacity(n),
-            blueprint: Vec::with_capacity(n),
-            at: Vec::with_capacity(n),
-            seen_at: Vec::with_capacity(n),
+            seat: Reserved::with_capacity(n),
+            asset: Reserved::with_capacity(n),
+            owner: Reserved::with_capacity(n),
+            kind: Reserved::with_capacity(n),
+            blueprint: Reserved::with_capacity(n),
+            at: Reserved::with_capacity(n),
+            seen_at: Reserved::with_capacity(n),
             capacity,
             per_seat,
         }
@@ -2333,13 +2369,13 @@ impl SightingTable {
         }
         self.count = count;
         self.capacity = capacity;
-        self.seat = columns.seat;
-        self.asset = columns.asset;
-        self.owner = columns.owner;
-        self.kind = columns.kind;
-        self.blueprint = columns.blueprint;
-        self.at = columns.at;
-        self.seen_at = columns.seen_at;
+        self.seat = columns.seat.into();
+        self.asset = columns.asset.into();
+        self.owner = columns.owner.into();
+        self.kind = columns.kind.into();
+        self.blueprint = columns.blueprint.into();
+        self.at = columns.at.into();
+        self.seen_at = columns.seen_at.into();
         true
     }
 }
@@ -2408,13 +2444,24 @@ pub const CREDIT_SLOTS: usize = 3;
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CreditTable {
     count: u32,
-    asset: Vec<u32>,
-    seat: Vec<[u8; CREDIT_SLOTS]>,
-    damage: Vec<[i32; CREDIT_SLOTS]>,
+    asset: Reserved<u32>,
+    seat: Reserved<[u8; CREDIT_SLOTS]>,
+    damage: Reserved<[i32; CREDIT_SLOTS]>,
     capacity: u32,
 }
 
 impl CreditTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.asset.reserve_total(n);
+        self.seat.reserve_total(n);
+        self.damage.reserve_total(n);
+    }
+
     /// A table that will hold credit against `capacity` assets at once and
     /// never grow.
     #[must_use]
@@ -2422,9 +2469,9 @@ impl CreditTable {
         let n = crate::math::index::row(capacity);
         CreditTable {
             count: 0,
-            asset: Vec::with_capacity(n),
-            seat: Vec::with_capacity(n),
-            damage: Vec::with_capacity(n),
+            asset: Reserved::with_capacity(n),
+            seat: Reserved::with_capacity(n),
+            damage: Reserved::with_capacity(n),
             capacity,
         }
     }
@@ -2598,9 +2645,9 @@ impl CreditTable {
         }
         self.count = count;
         self.capacity = capacity;
-        self.asset = asset;
-        self.seat = seat;
-        self.damage = damage;
+        self.asset = asset.into();
+        self.seat = seat.into();
+        self.damage = damage.into();
         true
     }
 }
@@ -2619,12 +2666,12 @@ pub struct Csr {
     origin_y: i32,
     /// `cells_x * cells_y + 1` entries; `starts[c]..starts[c + 1]` indexes
     /// [`Csr::items`].
-    starts: Vec<u32>,
+    starts: Reserved<u32>,
     /// One entry per item, holding the item's row in the table the grid was
     /// built from: typed, so it is never read as an id (S2's plan, E1).
-    items: Vec<crate::ids::Row>,
+    items: Reserved<crate::ids::Row>,
     /// Scratch for the counting sort, `cells_x * cells_y` entries.
-    cursor: Vec<u32>,
+    cursor: Reserved<u32>,
 }
 
 impl Csr {
@@ -2655,9 +2702,9 @@ impl Csr {
             cells_y,
             origin_x: *origin.first()?,
             origin_y: *origin.get(1)?,
-            starts: vec![0; cells_usize.checked_add(1)?],
-            items: vec![crate::ids::Row::FIRST; capacity_usize],
-            cursor: vec![0; cells_usize],
+            starts: vec![0; cells_usize.checked_add(1)?].into(),
+            items: vec![crate::ids::Row::FIRST; capacity_usize].into(),
+            cursor: vec![0; cells_usize].into(),
         })
     }
 
@@ -3302,26 +3349,26 @@ pub struct StructureColumns {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BeaconTable {
     count: u32,
-    id: Vec<u32>,
-    seat: Vec<u8>,
-    pos: Vec<[Fx; 3]>,
-    mandate: Vec<u8>,
-    program: Vec<u32>,
-    hp: Vec<Hp>,
-    dormant: Vec<bool>,
-    priority: Vec<u8>,
-    scouts: Vec<u8>,
-    ordinal: Vec<u32>,
-    dig_depth: Vec<u32>,
-    pillars: Vec<u32>,
-    seam_choice: Vec<u8>,
-    flee: Vec<bool>,
-    seam: Vec<u32>,
-    arms: Vec<Arms>,
-    common: Vec<Common>,
-    site: Vec<crate::site::BeaconSite>,
-    free: Vec<bool>,
-    grown: Vec<bool>,
+    id: Reserved<u32>,
+    seat: Reserved<u8>,
+    pos: Reserved<[Fx; 3]>,
+    mandate: Reserved<u8>,
+    program: Reserved<u32>,
+    hp: Reserved<Hp>,
+    dormant: Reserved<bool>,
+    priority: Reserved<u8>,
+    scouts: Reserved<u8>,
+    ordinal: Reserved<u32>,
+    dig_depth: Reserved<u32>,
+    pillars: Reserved<u32>,
+    seam_choice: Reserved<u8>,
+    flee: Reserved<bool>,
+    seam: Reserved<u32>,
+    arms: Reserved<Arms>,
+    common: Reserved<Common>,
+    site: Reserved<crate::site::BeaconSite>,
+    free: Reserved<bool>,
+    grown: Reserved<bool>,
 }
 
 impl BeaconTable {
@@ -3331,26 +3378,26 @@ impl BeaconTable {
         let n = crate::math::index::row(count);
         BeaconTable {
             count: 0,
-            id: Vec::with_capacity(n),
-            seat: Vec::with_capacity(n),
-            pos: Vec::with_capacity(n),
-            mandate: Vec::with_capacity(n),
-            program: Vec::with_capacity(n),
-            hp: Vec::with_capacity(n),
-            dormant: Vec::with_capacity(n),
-            priority: Vec::with_capacity(n),
-            scouts: Vec::with_capacity(n),
-            ordinal: Vec::with_capacity(n),
-            dig_depth: Vec::with_capacity(n),
-            pillars: Vec::with_capacity(n),
-            seam_choice: Vec::with_capacity(n),
-            flee: Vec::with_capacity(n),
-            seam: Vec::with_capacity(n),
-            arms: Vec::with_capacity(n),
-            common: Vec::with_capacity(n),
-            site: Vec::with_capacity(n),
-            free: Vec::with_capacity(n),
-            grown: Vec::with_capacity(n),
+            id: Reserved::with_capacity(n),
+            seat: Reserved::with_capacity(n),
+            pos: Reserved::with_capacity(n),
+            mandate: Reserved::with_capacity(n),
+            program: Reserved::with_capacity(n),
+            hp: Reserved::with_capacity(n),
+            dormant: Reserved::with_capacity(n),
+            priority: Reserved::with_capacity(n),
+            scouts: Reserved::with_capacity(n),
+            ordinal: Reserved::with_capacity(n),
+            dig_depth: Reserved::with_capacity(n),
+            pillars: Reserved::with_capacity(n),
+            seam_choice: Reserved::with_capacity(n),
+            flee: Reserved::with_capacity(n),
+            seam: Reserved::with_capacity(n),
+            arms: Reserved::with_capacity(n),
+            common: Reserved::with_capacity(n),
+            site: Reserved::with_capacity(n),
+            free: Reserved::with_capacity(n),
+            grown: Reserved::with_capacity(n),
         }
     }
 
@@ -3977,26 +4024,26 @@ impl BeaconTable {
             return false;
         };
         self.count = count;
-        self.id = columns.id;
-        self.seat = columns.seat;
-        self.pos = columns.pos;
-        self.mandate = columns.mandate;
-        self.program = columns.program;
-        self.hp = columns.hp;
-        self.dormant = columns.dormant;
-        self.priority = columns.priority;
-        self.scouts = columns.scouts;
-        self.ordinal = columns.ordinal;
-        self.dig_depth = columns.dig_depth;
-        self.pillars = columns.pillars;
-        self.seam_choice = columns.seam_choice;
-        self.flee = columns.flee;
-        self.seam = columns.seam;
-        self.arms = columns.arms;
-        self.common = columns.common;
-        self.site = columns.site;
-        self.free = columns.free;
-        self.grown = columns.grown;
+        self.id = columns.id.into();
+        self.seat = columns.seat.into();
+        self.pos = columns.pos.into();
+        self.mandate = columns.mandate.into();
+        self.program = columns.program.into();
+        self.hp = columns.hp.into();
+        self.dormant = columns.dormant.into();
+        self.priority = columns.priority.into();
+        self.scouts = columns.scouts.into();
+        self.ordinal = columns.ordinal.into();
+        self.dig_depth = columns.dig_depth.into();
+        self.pillars = columns.pillars.into();
+        self.seam_choice = columns.seam_choice.into();
+        self.flee = columns.flee.into();
+        self.seam = columns.seam.into();
+        self.arms = columns.arms.into();
+        self.common = columns.common.into();
+        self.site = columns.site.into();
+        self.free = columns.free.into();
+        self.grown = columns.grown.into();
         true
     }
 }
@@ -4037,17 +4084,17 @@ pub enum Ordinal {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StructureTable {
     count: u32,
-    id: Vec<u32>,
-    seat: Vec<u8>,
-    kind: Vec<u8>,
-    pos: Vec<[Fx; 3]>,
-    hp: Vec<Hp>,
-    home: Vec<BeaconId>,
-    building: Vec<bool>,
-    rotation: Vec<u8>,
-    ruined_at: Vec<u32>,
-    arms: Vec<Arms>,
-    free: Vec<bool>,
+    id: Reserved<u32>,
+    seat: Reserved<u8>,
+    kind: Reserved<u8>,
+    pos: Reserved<[Fx; 3]>,
+    hp: Reserved<Hp>,
+    home: Reserved<BeaconId>,
+    building: Reserved<bool>,
+    rotation: Reserved<u8>,
+    ruined_at: Reserved<u32>,
+    arms: Reserved<Arms>,
+    free: Reserved<bool>,
 }
 
 /// "This structure is not a ruin" — the value [`StructureTable::ruined_at`]
@@ -4062,17 +4109,17 @@ impl StructureTable {
         let n = crate::math::index::row(count);
         StructureTable {
             count: 0,
-            id: Vec::with_capacity(n),
-            seat: Vec::with_capacity(n),
-            kind: Vec::with_capacity(n),
-            pos: Vec::with_capacity(n),
-            hp: Vec::with_capacity(n),
-            home: Vec::with_capacity(n),
-            building: Vec::with_capacity(n),
-            rotation: Vec::with_capacity(n),
-            ruined_at: Vec::with_capacity(n),
-            arms: Vec::with_capacity(n),
-            free: Vec::with_capacity(n),
+            id: Reserved::with_capacity(n),
+            seat: Reserved::with_capacity(n),
+            kind: Reserved::with_capacity(n),
+            pos: Reserved::with_capacity(n),
+            hp: Reserved::with_capacity(n),
+            home: Reserved::with_capacity(n),
+            building: Reserved::with_capacity(n),
+            rotation: Reserved::with_capacity(n),
+            ruined_at: Reserved::with_capacity(n),
+            arms: Reserved::with_capacity(n),
+            free: Reserved::with_capacity(n),
         }
     }
 
@@ -4415,17 +4462,17 @@ impl StructureTable {
             return false;
         };
         self.count = count;
-        self.id = columns.id;
-        self.seat = columns.seat;
-        self.kind = columns.kind;
-        self.pos = columns.pos;
-        self.hp = columns.hp;
-        self.home = columns.home;
-        self.building = columns.building;
-        self.rotation = columns.rotation;
-        self.ruined_at = columns.ruined_at;
-        self.arms = columns.arms;
-        self.free = columns.free;
+        self.id = columns.id.into();
+        self.seat = columns.seat.into();
+        self.kind = columns.kind.into();
+        self.pos = columns.pos.into();
+        self.hp = columns.hp.into();
+        self.home = columns.home.into();
+        self.building = columns.building.into();
+        self.rotation = columns.rotation.into();
+        self.ruined_at = columns.ruined_at.into();
+        self.arms = columns.arms.into();
+        self.free = columns.free.into();
         true
     }
 }
@@ -4438,11 +4485,11 @@ impl StructureTable {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WreckTable {
     count: u32,
-    id: Vec<u32>,
-    pos: Vec<[Fx; 3]>,
-    salvage: Vec<Money>,
-    left_at: Vec<u32>,
-    free: Vec<bool>,
+    id: Reserved<u32>,
+    pos: Reserved<[Fx; 3]>,
+    salvage: Reserved<Money>,
+    left_at: Reserved<u32>,
+    free: Reserved<bool>,
 }
 
 impl WreckTable {
@@ -4452,11 +4499,11 @@ impl WreckTable {
         let n = crate::math::index::row(count);
         WreckTable {
             count: 0,
-            id: Vec::with_capacity(n),
-            pos: Vec::with_capacity(n),
-            salvage: Vec::with_capacity(n),
-            left_at: Vec::with_capacity(n),
-            free: Vec::with_capacity(n),
+            id: Reserved::with_capacity(n),
+            pos: Reserved::with_capacity(n),
+            salvage: Reserved::with_capacity(n),
+            left_at: Reserved::with_capacity(n),
+            free: Reserved::with_capacity(n),
         }
     }
 
@@ -4602,11 +4649,11 @@ impl WreckTable {
             return false;
         };
         self.count = count;
-        self.id = id;
-        self.pos = pos;
-        self.salvage = salvage;
-        self.left_at = left_at;
-        self.free = free;
+        self.id = id.into();
+        self.pos = pos.into();
+        self.salvage = salvage.into();
+        self.left_at = left_at.into();
+        self.free = free.into();
         true
     }
 }
@@ -4687,16 +4734,31 @@ impl std::error::Error for ShellsFull {}
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ShellTable {
     room: u32,
-    aim: Vec<[Fx; 3]>,
-    lands_at: Vec<u32>,
-    launch: Vec<[Fx; 3]>,
-    fired_at: Vec<u32>,
-    seat: Vec<u8>,
-    firer: Vec<u32>,
-    weapon: Vec<u8>,
+    aim: Reserved<[Fx; 3]>,
+    lands_at: Reserved<u32>,
+    launch: Reserved<[Fx; 3]>,
+    fired_at: Reserved<u32>,
+    seat: Reserved<u8>,
+    firer: Reserved<u32>,
+    weapon: Reserved<u8>,
 }
 
 impl ShellTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.aim.reserve_total(n);
+        self.lands_at.reserve_total(n);
+        self.launch.reserve_total(n);
+        self.fired_at.reserve_total(n);
+        self.seat.reserve_total(n);
+        self.firer.reserve_total(n);
+        self.weapon.reserve_total(n);
+    }
+
     /// The table's tag in the state hash (S2's plan, E29): a non-empty table
     /// writes it before its count, so two new tables of one row shape never
     /// hash alike.
@@ -4709,13 +4771,13 @@ impl ShellTable {
         let n = crate::math::index::row(room);
         ShellTable {
             room,
-            aim: Vec::with_capacity(n),
-            lands_at: Vec::with_capacity(n),
-            launch: Vec::with_capacity(n),
-            fired_at: Vec::with_capacity(n),
-            seat: Vec::with_capacity(n),
-            firer: Vec::with_capacity(n),
-            weapon: Vec::with_capacity(n),
+            aim: Reserved::with_capacity(n),
+            lands_at: Reserved::with_capacity(n),
+            launch: Reserved::with_capacity(n),
+            fired_at: Reserved::with_capacity(n),
+            seat: Reserved::with_capacity(n),
+            firer: Reserved::with_capacity(n),
+            weapon: Reserved::with_capacity(n),
         }
     }
 
@@ -5042,11 +5104,20 @@ pub struct DefendRow {
 /// beacon.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct DefendTable {
-    rows: Vec<DefendRow>,
-    protected: Vec<(BeaconId, BeaconId)>,
+    rows: Reserved<DefendRow>,
+    protected: Reserved<(BeaconId, BeaconId)>,
 }
 
 impl DefendTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.rows.reserve_total(n);
+    }
+
     /// The table's tag in the state hash (E29), after the shell table's 1 and
     /// the site block's 2.
     pub const HASH_TAG: u8 = 3;
@@ -5056,8 +5127,8 @@ impl DefendTable {
     #[must_use]
     pub fn with_room(beacons: u32) -> DefendTable {
         DefendTable {
-            rows: Vec::with_capacity(crate::math::index::row(beacons)),
-            protected: Vec::new(),
+            rows: Reserved::with_capacity(crate::math::index::row(beacons)),
+            protected: Vec::new().into(),
         }
     }
 
@@ -5195,7 +5266,7 @@ impl DefendTable {
         }
         self.rows.clear();
         self.rows.extend(rows);
-        self.protected = protected;
+        self.protected = protected.into();
         true
     }
 }
@@ -5214,12 +5285,22 @@ impl DefendTable {
 /// the column.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct ExploredTable {
-    rows: Vec<(u8, u32)>,
+    rows: Reserved<(u8, u32)>,
     /// The tick each row was last explored on, parallel to `rows`.
-    at: Vec<u32>,
+    at: Reserved<u32>,
 }
 
 impl ExploredTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.rows.reserve_total(n);
+        self.at.reserve_total(n);
+    }
+
     /// The table's tag in the state hash (E29).
     pub const HASH_TAG: u8 = 4;
 
@@ -5283,8 +5364,8 @@ impl ExploredTable {
         if rows.len() != at.len() || !rows.windows(2).all(|pair| matches!(pair, [a, b] if a < b)) {
             return false;
         }
-        self.rows = rows;
-        self.at = at;
+        self.rows = rows.into();
+        self.at = at.into();
         true
     }
 }

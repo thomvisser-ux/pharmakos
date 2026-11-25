@@ -405,6 +405,10 @@ struct Walk<'a, V: Solidity> {
     max_region: usize,
     /// The list's length the search may not pass: the tick's budget.
     limit: usize,
+    /// The list's room as the rule asked for it ([`Room::list`]): the
+    /// length past which a push is an error. Never the vector's
+    /// `capacity()`, which the allocator may make larger than asked.
+    room: usize,
 }
 
 /// One breadth-first search from `seed`, its voxels appended to `list`.
@@ -441,7 +445,7 @@ fn walk_from<V: Solidity, L: Labels>(
     if list.len() >= walk.limit {
         return Ok(Outcome::Budget);
     }
-    if list.len() >= list.capacity() {
+    if list.len() >= walk.room {
         return Err(CollapseError::Room { list: "search" });
     }
     list.push(seed);
@@ -483,7 +487,7 @@ fn walk_from<V: Solidity, L: Labels>(
             if list.len() >= walk.limit {
                 return Ok(Outcome::Budget);
             }
-            if list.len() >= list.capacity() {
+            if list.len() >= walk.room {
                 return Err(CollapseError::Room { list: "search" });
             }
             list.push(index);
@@ -506,6 +510,11 @@ struct Room {
 }
 
 impl Room {
+    /// The seeds' room: a changed voxel seeds itself or its six neighbours.
+    const fn seeds(&self) -> usize {
+        self.changed.saturating_mul(6)
+    }
+
     /// The rooms for a map of `size` voxels under the rules table's
     /// `collapse` rows, with an edit queue of `edits` edits.
     fn of(rules: &RulesTable, size: [i32; 3], edits: usize) -> Result<Room, MapError> {
@@ -648,7 +657,7 @@ impl SupportRule {
             regions: Vec::with_capacity(room.list),
             order: Vec::with_capacity(room.list),
             changed: Vec::with_capacity(room.changed),
-            seeds: Vec::with_capacity(room.changed.saturating_mul(6)),
+            seeds: Vec::with_capacity(room.seeds()),
             members: Vec::with_capacity(room.list),
             landed: Vec::with_capacity(room.list),
             column_stamp: vec![0; room.columns],
@@ -662,7 +671,7 @@ impl SupportRule {
 
     /// Note one changed voxel, with its seed mark.
     fn record(&mut self, at: [i32; 3], mark: u8) {
-        if self.changed.len() >= self.changed.capacity() {
+        if self.changed.len() >= self.room.changed {
             self.overflow = true;
             return;
         }
@@ -712,7 +721,7 @@ impl SupportRule {
                 // still solid once every edit has landed.
                 if view.solid(at) {
                     let index = index_of(store, at).ok_or(CollapseError::OffTheMap)?;
-                    if self.seeds.len() >= self.seeds.capacity() {
+                    if self.seeds.len() >= self.room.seeds() {
                         return Err(CollapseError::Room { list: "seed" });
                     }
                     self.seeds.push((index, PLACED));
@@ -727,7 +736,7 @@ impl SupportRule {
                 let Some(index) = index_of(store, next) else {
                     continue;
                 };
-                if self.seeds.len() >= self.seeds.capacity() {
+                if self.seeds.len() >= self.room.seeds() {
                     return Err(CollapseError::Room { list: "seed" });
                 }
                 self.seeds.push((index, *mark));
@@ -753,6 +762,7 @@ impl SupportRule {
             bore,
             max_region: crate::math::index::row(self.room.max_region),
             limit: crate::math::index::row(self.room.max_visits),
+            room: self.room.list,
         };
         let [sx, _, sz] = self.room.size;
         let stamp = self.stamp;
@@ -839,7 +849,7 @@ impl SupportRule {
         }
         let len =
             u32::try_from(voxels.len()).map_err(|_| CollapseError::Room { list: "region" })?;
-        if self.regions.len() >= self.regions.capacity() {
+        if self.regions.len() >= self.room.list {
             return Err(CollapseError::Room { list: "region" });
         }
         self.regions.push(Region {
@@ -859,7 +869,7 @@ impl SupportRule {
         // material, before anything moves.
         for (number, region) in self.regions.iter().enumerate() {
             for voxel in self.list.get(region.range()).into_iter().flatten() {
-                if self.members.len() >= self.members.capacity() {
+                if self.members.len() >= self.room.list {
                     return Err(CollapseError::Room { list: "member" });
                 }
                 self.members.push((*voxel, number));
@@ -915,7 +925,7 @@ impl SupportRule {
                 continue;
             }
             for voxel in self.list.get(region.range()).into_iter().flatten() {
-                if self.landed.len() >= self.landed.capacity() {
+                if self.landed.len() >= self.room.list {
                     return Err(CollapseError::Room { list: "landed" });
                 }
                 self.landed.push((*voxel, number));
@@ -1135,6 +1145,9 @@ pub struct Scratch {
     headroom: i32,
     /// Assets the tick's falls damage: `(target, the cutters to credit)`.
     victims: Vec<(DamageTarget, Cutters)>,
+    /// The victims' room as asked for (one a damageable row): the length
+    /// past which a push is an error, never the vector's `capacity()`.
+    victims_room: usize,
 }
 
 // Written out rather than derived, as `VoxelStore`'s is: a derived clone
@@ -1149,7 +1162,8 @@ impl Clone for Scratch {
             counts: self.counts,
             fall_damage: self.fall_damage,
             headroom: self.headroom,
-            victims: Vec::with_capacity(self.victims.capacity()),
+            victims: Vec::with_capacity(self.victims_room),
+            victims_room: self.victims_room,
         }
     }
 }
@@ -1206,6 +1220,7 @@ impl Scratch {
             // An asset stands in one cell at least, whatever the row says.
             headroom: rules.headroom_voxels().max(1),
             victims: Vec::with_capacity(crate::math::index::row(assets)),
+            victims_room: crate::math::index::row(assets),
         })
     }
 
@@ -1393,7 +1408,7 @@ impl World {
                 if let Some(target) = target
                     && damage > 0
                 {
-                    if scratch.victims.len() >= scratch.victims.capacity() {
+                    if scratch.victims.len() >= scratch.victims_room {
                         return Err(CollapseError::Room { list: "victim" });
                     }
                     scratch.victims.push((target, cutters));
@@ -1621,5 +1636,39 @@ impl World {
         self.apply_damage();
         self.settle_deaths();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Collapse, Room, SupportRule};
+
+    /// The rule's limits are the rooms it asked for, never a vector's
+    /// `capacity()`, which `Vec::with_capacity` promises only at least: a
+    /// rule whose list the allocator (or anything else) made roomier than
+    /// asked refuses the same change, at the same count, as one with exactly
+    /// the room it asked for.
+    #[test]
+    fn more_room_than_asked_changes_no_decision() {
+        let room = Room {
+            list: 4,
+            changed: 4,
+            ..Room::default()
+        };
+        let mut exact = SupportRule::with_room(room);
+        let mut roomy = SupportRule::with_room(room);
+        roomy.changed = Vec::with_capacity(64);
+        roomy.seeds = Vec::with_capacity(64);
+        for step in 0..6_i32 {
+            exact.note_placed([step, 0, 0]);
+            roomy.note_placed([step, 0, 0]);
+            let full = step >= 4;
+            assert_eq!(exact.overflow, full, "the exact rule at change {step}");
+            assert_eq!(
+                roomy.overflow, exact.overflow,
+                "a roomier list decides as the asked room does, at change {step}"
+            );
+            assert_eq!(roomy.changed.len(), exact.changed.len());
+        }
     }
 }

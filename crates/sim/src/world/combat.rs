@@ -856,12 +856,12 @@ impl World {
     /// The fire step's attacker scratch, empty between phases: lent to the
     /// Defend mandate's update so it allocates nothing.
     pub(crate) fn take_attacker_scratch(&mut self) -> Vec<(u8, u32)> {
-        core::mem::take(&mut self.attackers)
+        core::mem::take(&mut self.attackers).into_inner()
     }
 
     /// Give the attacker scratch back, cleared.
     pub(crate) fn put_attacker_scratch(&mut self, scratch: Vec<(u8, u32)>) {
-        self.attackers = scratch;
+        self.attackers = scratch.into();
     }
 
     /// Whether `asset`, owned by an enemy of `seat`, may be fired at under

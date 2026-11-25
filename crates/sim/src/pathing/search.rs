@@ -36,6 +36,7 @@
 //! run inside a tick.
 
 use crate::pathing::surface::{DEFAULT_ORDER, NEIGHBOURS, Node, Surface};
+use crate::reserved::Reserved;
 
 /// One heap entry. `f` is `g + h`; `h` is kept so the tiebreak can use it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -52,27 +53,18 @@ impl Item {
     }
 }
 
-/// A hand-written binary min-heap over [`Item::key`].
-#[derive(PartialEq, Eq, Debug, Default)]
+/// A hand-written binary min-heap over [`Item::key`]. Its items are
+/// [`Reserved`]: a heap is reserved once so a search never allocates, and a
+/// cloned or forked world's first search must not either.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(crate) struct Heap {
-    items: Vec<Item>,
-}
-
-/// A clone keeps the reservation, not only the entries: a heap is reserved
-/// once so a search never allocates, and a cloned or forked world's first
-/// search must not either (a derived clone would reserve only the length).
-impl Clone for Heap {
-    fn clone(&self) -> Heap {
-        let mut items = Vec::with_capacity(self.items.capacity());
-        items.extend_from_slice(&self.items);
-        Heap { items }
-    }
+    items: Reserved<Item>,
 }
 
 impl Heap {
     pub(crate) fn with_capacity(capacity: usize) -> Heap {
         Heap {
-            items: Vec::with_capacity(capacity),
+            items: Reserved::with_capacity(capacity),
         }
     }
 
@@ -182,21 +174,21 @@ pub struct Scratch {
     pub(crate) abstract_g: Vec<i32>,
     pub(crate) abstract_came: Vec<u32>,
     pub(crate) abstract_heap: Heap,
-    pub(crate) start_edges: Vec<(u32, i32)>,
-    pub(crate) goal_edges: Vec<(u32, i32)>,
-    pub(crate) abstract_path: Vec<u32>,
+    pub(crate) start_edges: Reserved<(u32, i32)>,
+    pub(crate) goal_edges: Reserved<(u32, i32)>,
+    pub(crate) abstract_path: Reserved<u32>,
 
     // --- route assembly ---
-    pub(crate) raw: Vec<u32>,
-    pub(crate) leg: Vec<u32>,
-    pub(crate) line: Vec<u32>,
-    pub(crate) prefix: Vec<i32>,
+    pub(crate) raw: Reserved<u32>,
+    pub(crate) leg: Reserved<u32>,
+    pub(crate) line: Reserved<u32>,
+    pub(crate) prefix: Reserved<i32>,
     /// The route a served walk prices, for a clear estimate and for every
     /// "nearest" ([`crate::pathing::estimate`]'s "A clear query"): the
     /// router's own route,
     /// written here rather than into a caller's buffer so that an estimate,
     /// inside a tick or out of one, allocates nothing.
-    pub(crate) served: Vec<u32>,
+    pub(crate) served: Reserved<u32>,
     /// The grid optimum's search ([`crate::pathing::reach`]): what a `toward`
     /// step's sites are bounded by.
     pub(crate) reach: crate::pathing::reach::Reach,
@@ -319,25 +311,27 @@ impl Scratch {
             // Four entries per abstract node: measured graphs carry about ten
             // directed edges a node and a query touches a fraction of them.
             abstract_heap: Heap::with_capacity(a.saturating_mul(4)),
-            start_edges: Vec::with_capacity(a.min(1024)),
-            goal_edges: Vec::with_capacity(a.min(1024)),
+            start_edges: Reserved::with_capacity(a.min(1024)),
+            goal_edges: Reserved::with_capacity(a.min(1024)),
             // A reconstructed abstract path visits each abstract node at most
             // once and the two temporary endpoint nodes besides, and the
             // reconstruction's own guard is that same `a`, so this is a bound
             // and not a measurement — unlike `abstract_heap` above, which is a
             // measured capacity and says so.
-            abstract_path: Vec::with_capacity(a.saturating_add(2)),
-            raw: Vec::with_capacity(crate::math::index::row(crate::pathing::MAX_ROUTE_NODES)),
-            leg: Vec::with_capacity(crate::math::index::row(cluster_cells)),
-            line: Vec::with_capacity(crate::math::index::row(cluster_cells)),
-            prefix: Vec::with_capacity(
+            abstract_path: Reserved::with_capacity(a.saturating_add(2)),
+            raw: Reserved::with_capacity(crate::math::index::row(crate::pathing::MAX_ROUTE_NODES)),
+            leg: Reserved::with_capacity(crate::math::index::row(cluster_cells)),
+            line: Reserved::with_capacity(crate::math::index::row(cluster_cells)),
+            prefix: Reserved::with_capacity(
                 crate::math::index::row(crate::pathing::MAX_ROUTE_NODES).saturating_add(1),
             ),
             // A smoothed route holds no more nodes than the raw walk it
             // smooths (each shortcut is a straight walk no longer than the
             // stretch it replaces), and the raw walk stops at
             // `MAX_ROUTE_NODES`: the same bound as `raw`.
-            served: Vec::with_capacity(crate::math::index::row(crate::pathing::MAX_ROUTE_NODES)),
+            served: Reserved::with_capacity(crate::math::index::row(
+                crate::pathing::MAX_ROUTE_NODES,
+            )),
             reach,
             expansions: Tally::ZERO,
             endpoint_expansions: Tally::ZERO,

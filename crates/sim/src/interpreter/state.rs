@@ -32,6 +32,7 @@
 use crate::encoding::Enc;
 use crate::interpreter::Plan;
 use crate::math::quantity::Tick;
+use crate::reserved::Reserved;
 use crate::tables::BeaconId;
 
 /// "No tick": a deadline that is not set, a respawn that is not due, damage
@@ -184,7 +185,7 @@ pub struct PlanState {
     /// order its rows write them. Reserved at the seal to the plan's
     /// [`crate::interpreter::Plan::max_bindings`], so binding allocates
     /// nothing inside a tick.
-    pub bindings: Vec<Binding>,
+    pub bindings: Reserved<Binding>,
     /// Whether the step in progress is a placement **resumed as a visit** to
     /// the beacon it placed (targeting.md, "Companion changes": restart keeps
     /// the placed beacon).
@@ -234,7 +235,7 @@ impl Default for PlanState {
             fires: Vec::new(),
             ready: Vec::new(),
             bound_feature: NO_INDEX,
-            bindings: Vec::new(),
+            bindings: Vec::new().into(),
             resumed: false,
             restart_beacon: NO_INDEX,
             restart_rule: NO_INDEX,
@@ -277,7 +278,7 @@ impl PlanState {
             fires: vec![0; plan.handlers().len()],
             ready: vec![0; plan.handlers().len()],
             bound_feature: NO_INDEX,
-            bindings: Vec::with_capacity(plan.max_bindings()),
+            bindings: Reserved::with_capacity(plan.max_bindings()),
             resumed: false,
             restart_beacon: NO_INDEX,
             restart_rule: NO_INDEX,
@@ -819,7 +820,7 @@ fn restored_state(
         fires: fires.to_vec(),
         ready: ready.to_vec(),
         bound_feature: *parts.bound_feature.get(at)?,
-        bindings,
+        bindings: bindings.into(),
         resumed: *parts.resumed.get(at)? != 0,
         restart_beacon: *parts.restart_beacon.get(at)?,
         restart_rule: *parts.restart_rule.get(at)?,

@@ -737,7 +737,7 @@ impl Emission {
 /// snapshotted and not in the goldens.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EventBus {
-    events: Vec<Event>,
+    events: crate::reserved::Reserved<Event>,
     capacity: usize,
     /// The tick `seq` is currently counting within.
     tick: Tick,
@@ -752,7 +752,7 @@ impl EventBus {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> EventBus {
         EventBus {
-            events: Vec::with_capacity(capacity),
+            events: crate::reserved::Reserved::with_capacity(capacity),
             capacity,
             tick: Tick::ZERO,
             seq: 0,
