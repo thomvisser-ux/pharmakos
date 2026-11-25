@@ -248,7 +248,7 @@ fn to_raise(wire: &mut Wire<'_, '_>, situation: &Situation) -> Vec<String> {
     if !power_short(situation) {
         return Vec::new();
     }
-    let Some(commander) = situation.commander else {
+    let Some(commander) = situation.commander() else {
         return Vec::new();
     };
     let core = situation.core().map(|core| core.at);
@@ -360,7 +360,7 @@ pub(crate) fn why_safe(situation: &Situation, plan: Option<&SafePlan>) -> String
             crate::easy::CORE_DIG_MAX_DEPTH
         );
     }
-    if !situation.view_complete {
+    if !situation.view_complete() {
         let _ = write!(
             why,
             " (The view did not complete within {} pages, so the commander was not read and \
@@ -407,7 +407,7 @@ fn shortage(situation: &Situation) -> String {
 /// Why nothing is raised although power is short.
 fn nothing_raised(situation: &Situation) -> String {
     if situation.own_beacons().any(at_risk) {
-        if situation.commander.is_none() {
+        if situation.commander().is_none() {
             return String::from("your commander is not in view, so no beacon was estimated");
         }
         return format!(

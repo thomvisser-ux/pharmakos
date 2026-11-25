@@ -167,8 +167,11 @@ pub const SAFE_ESTIMATES: u32 = 4;
 pub const CORE_DIG_MAX_DEPTH: u32 = 4;
 
 /// How many pages of `list_beacons`, `get_view` and `list_templates` a round
-/// reads at most. Each is one page today: the whole map's keyframe is one
-/// 256 KiB page (201 558 bytes at the golden seed).
+/// reads at most. Each is one page today: since S3's `outcap` a view page
+/// carries chunks and entities up to 512 KiB as the wire spells them, and the
+/// whole map's keyframe at the gate's load (320 entities) is one page
+/// (`crates/gamectl/tests/view_pages.rs`). A view not complete within
+/// these pages is no view (`situation::read_view`).
 ///
 /// PLACEHOLDER: a bound on paging, with the gateway's page sizes — owner, hardening, with the rate limits
 pub const PAGES_MAX: u32 = 4;
