@@ -4,17 +4,19 @@
 //! The verifier's per-code cap (S3's `vcap`; decisions-log item 183 (4)) as the
 //! crates that host and read a report meet it.
 //!
-//! * The operator restates the cap, because its library names nothing of the
-//!   verifier's (AGENTS.md section 3, rule 3); this crate links both and holds
-//!   the two equal.
+//! * The operator holds no copy of the cap: its tap probe reads each report's
+//!   typed `left_out` field (S3's `leftout`). Its call budget assumes a report
+//!   lists at least `TAP_PROBE_LISTED_FLOOR` of a code; this crate links both
+//!   and holds that floor, and the budget it sizes, to the verifier's own cap.
 //! * Easy's tap probe through the real gateway and verifier: seat 0's nearest
 //!   vent is ringed, in the lobby, by twelve of its own Mine beacons and one
 //!   Build beacon, so more pairs are off the Build mandate than a report lists
 //!   `E0503`s. A probe that read an `E0503` the cap left out as absent would
 //!   weigh a tap at a Mine beacon; Easy weighs one at the Build beacon alone,
-//!   and asks in parts to know it. (The set-aside hosted case of PR #179's
-//!   review, `67897578`, re-fitted to the probe in parts; it lives here, not in
-//!   `operator.rs`, which another lane holds.)
+//!   and asks again from the first unanswered pair, on the report's word, to
+//!   know it. (The set-aside hosted case of PR #179's review, `67897578`,
+//!   re-fitted to the probe; it lives here, not in `operator.rs`, which
+//!   another lane holds.)
 
 #![allow(
     clippy::expect_used,
@@ -34,7 +36,9 @@ use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::surface::{InProcess, Surface};
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_operator::Easy;
-use pharmakos_operator::easy::{EASY_CALL_BUDGET, REPORT_CAP_PER_CODE, TAP_PROBE_PART_MAX};
+use pharmakos_operator::easy::{
+    EASY_CALL_BUDGET, EASY_CANDIDATES, TAP_PROBE_LISTED_FLOOR, TAP_PROBE_VERIFIES,
+};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
@@ -54,13 +58,19 @@ fn rules_json() -> String {
     std::fs::read_to_string(root().join("rules").join("rules.v1.json")).expect("the rules text")
 }
 
-/// The operator's restated cap is the verifier's, and its probe's part is one
-/// smaller, so no part's report can meet the cap.
-#[test]
-fn the_operators_cap_is_the_verifiers() {
-    assert_eq!(REPORT_CAP_PER_CODE, pharmakos_verifier::MAX_PER_CODE);
-    assert_eq!(TAP_PROBE_PART_MAX + 1, pharmakos_verifier::MAX_PER_CODE);
-}
+/// The probe's budget is enough at the verifier's own cap: a report lists at
+/// least the floor the budget was sized at, so every one of Easy's candidate
+/// pairs is answered within its verifies. Fails the day the cap drops below
+/// the floor, which is when Easy's budget must be sized again. Held at
+/// compile time: this test target does not build past a cap under the floor.
+const _: () = assert!(
+    pharmakos_verifier::MAX_PER_CODE >= TAP_PROBE_LISTED_FLOOR,
+    "the verifier lists fewer of a code than Easy's probe budget is sized at"
+);
+const _: () = assert!(
+    EASY_CANDIDATES.div_ceil(pharmakos_verifier::MAX_PER_CODE) <= TAP_PROBE_VERIFIES,
+    "Easy's probe cannot answer every candidate pair at the verifier's cap"
+);
 
 /// The squared ground distance between two columns.
 fn ground(a: [i32; 2], b: [i32; 2]) -> i64 {
@@ -265,7 +275,8 @@ fn easy_taps_no_beacon_off_the_build_mandate_past_the_verifiers_cap() {
 
     let mut taps: BTreeSet<String> = BTreeSet::new();
     let mut probes = 0_u32;
-    let mut most_e0503 = 0_usize;
+    // Each probe report's `E0503` rows and whether its `left_out` names it.
+    let mut reads: Vec<(usize, bool)> = Vec::new();
     let played = {
         let mut bridged = |method: &str, params: Json| {
             if method == "estimate_route"
@@ -280,17 +291,18 @@ fn easy_taps_no_beacon_off_the_build_mandate_past_the_verifiers_cap() {
             let answer = call(&mut surface, &token, method, params);
             if probe {
                 probes += 1;
-                if let Some(Json::Array(rows)) = answer
-                    .get("result")
-                    .and_then(|result| result.get("report"))
-                    .and_then(|report| report.get("diagnostics"))
-                {
-                    let e0503 = rows
-                        .iter()
-                        .filter(|row| matches!(row.get("code"), Some(Json::String(code)) if code == "E0503"))
-                        .count();
-                    most_e0503 = most_e0503.max(e0503);
-                }
+                let report = answer.get("result").and_then(|result| result.get("report"));
+                let e0503 = |key: &str| -> Vec<Json> {
+                    match report.and_then(|report| report.get(key)) {
+                        Some(Json::Array(rows)) => rows
+                            .iter()
+                            .filter(|row| matches!(row.get("code"), Some(Json::String(code)) if code == "E0503"))
+                            .cloned()
+                            .collect(),
+                        _ => Vec::new(),
+                    }
+                };
+                reads.push((e0503("diagnostics").len(), !e0503("left_out").is_empty()));
             }
             answer
         };
@@ -305,12 +317,28 @@ fn easy_taps_no_beacon_off_the_build_mandate_past_the_verifiers_cap() {
         tapped_in_ring, builds,
         "a tap is weighed on the ring's Build beacon alone"
     );
-    // Twelve Mine beacons' pairs and more: at least three parts of five.
-    assert!(probes >= 3, "the pairs were asked in {probes} parts");
+    // The first report left `E0503`s out, on the field's word, and the probe
+    // asked again; the last left none out; each that did listed the cap's
+    // number, as the real verifier writes it.
+    let cap = usize::try_from(pharmakos_verifier::MAX_PER_CODE).expect("fits");
     assert!(
-        most_e0503 < usize::try_from(REPORT_CAP_PER_CODE).expect("fits"),
-        "a part's report met the cap: {most_e0503} E0503 listed"
+        probes >= 2,
+        "the pairs were asked in {probes} verifies: {reads:?}"
     );
+    assert!(probes <= pharmakos_operator::easy::TAP_PROBE_VERIFIES);
+    assert!(
+        reads.first().is_some_and(|(_, left_out)| *left_out),
+        "the ring's first report left nothing out: {reads:?}"
+    );
+    assert!(
+        reads.last().is_some_and(|(_, left_out)| !*left_out),
+        "the probe stopped on a report that left an E0503 out: {reads:?}"
+    );
+    for (listed, left_out) in &reads {
+        if *left_out {
+            assert_eq!(*listed, cap, "{reads:?}");
+        }
+    }
 }
 
 /// **The probe says why it made no tap** (S3's `vcap`, fix pass 1): through

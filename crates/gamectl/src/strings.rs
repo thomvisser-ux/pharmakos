@@ -261,13 +261,22 @@ pub fn operator_taps_refused(method: &str, code: &str, message: &str) -> String 
     )
 }
 
-/// A built-in seat's tap probe read a part's report listing as many `E0503`s
-/// as a report lists of one code, so one may have been left out: no tap.
+/// A built-in seat's tap probe asked all its verifies and the last report
+/// still left an `E0503` out: no tap.
 #[must_use]
-pub fn operator_taps_part_at_the_cap(part: usize, listed: usize) -> String {
+pub fn operator_taps_spent(answered: usize, pairs: usize) -> String {
     format!(
-        "The tap probe's part {part} listed {listed} E0503, as many as a report lists of one \
-         code, so one may have been left out and no tap was composed."
+        "The tap probe asked all its verifies and had answered {answered} of its {pairs} pairs, \
+         each report leaving an E0503 out, so no tap was composed."
+    )
+}
+
+/// A built-in seat's tap probe read a part's report that left an `E0503` out
+/// and listed none: no tap.
+#[must_use]
+pub fn operator_taps_left_out_with_none_listed(part: usize) -> String {
+    format!(
+        "The tap probe's part {part} left an E0503 out and listed none, so no tap was composed."
     )
 }
 
