@@ -198,3 +198,19 @@ fn a_writs_list_is_said_last_in_its_clause() {
         assert!(other < list, "{arm}: the list is last: {said:?}");
     }
 }
+
+/// Fix pass 1, T4: a new beacon given only a priority, no mandate, keeps the
+/// comma: no clause precedes it (the review's R12, the priority always set off
+/// by a semicolon, is red here).
+#[test]
+fn a_priority_with_no_mandate_keeps_its_comma() {
+    let said = prose(
+        r#"[{"label":"p","place_beacon":{"at":{"voxel":{"x":1,"y":1,"z":0}},
+            "initial":{"priority":"HIGH"}}}]"#,
+    );
+    assert!(
+        said.contains(", at high Quartermaster priority"),
+        "{said:?}"
+    );
+    assert!(!said.contains(';'), "{said:?}");
+}

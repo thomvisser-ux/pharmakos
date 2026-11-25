@@ -43,7 +43,13 @@ use support::{
 /// gives a beacon a list only a played Push would, through the save's one
 /// restore.
 fn resumed(policy: FogPolicy, edit: impl FnOnce(&mut World)) -> Surface {
-    let opening = support::hosted_as(MATCH, policy.clone(), 2, SEGMENT_MS, 3);
+    resumed_for(policy, SEGMENT_MS, edit)
+}
+
+/// [`resumed`], with segments of `segment_ms`: a test that plays a Push needs one long
+/// enough to act in.
+fn resumed_for(policy: FogPolicy, segment_ms: i32, edit: impl FnOnce(&mut World)) -> Surface {
+    let opening = support::hosted_as(MATCH, policy.clone(), 2, segment_ms, 3);
     let mut world = opening.host().expect("hosted").world().clone();
     edit(&mut world);
     let bytes = Snapshot::capture(&world)
@@ -63,7 +69,7 @@ fn resumed(policy: FogPolicy, edit: impl FnOnce(&mut World)) -> Surface {
         seats: 2,
         rules: rules(),
         match_settings: MatchSettings {
-            segment_lengths_ms: vec![SEGMENT_MS],
+            segment_lengths_ms: vec![segment_ms],
             round_limit: 3,
         },
     };
@@ -450,4 +456,182 @@ fn get_beacon_of_a_beacon_with_a_list_answers_its_golden() {
     let rendered = pharmakos_gateway::rpc::render(&answer);
     assert!(rendered.contains(r#""entry_lines""#), "{rendered}");
     support::write_golden("get_beacon_lists", &rendered);
+}
+
+/// The lines of seat 0's `beacon`, by a call in a Lull (`in_lull`) or in a Push.
+fn lines_of(surface: &mut Surface, beacon: &str, in_lull: bool) -> Vec<String> {
+    let token = seat_token(surface, 0);
+    let params = format!(r#"{{"beacon_id":"{beacon}"}}"#);
+    let answer = if in_lull {
+        let mut left = FIRST_LULL_MS;
+        call_in_lull(surface, &token, &mut left, "get_beacon", &params)
+    } else {
+        support::call(surface, &token, "get_beacon", &params)
+    };
+    let rows = lists(&answer);
+    assert_eq!(rows.len(), 1, "{beacon}: {rows:?}");
+    match rows[0].get("entry_lines") {
+        None => Vec::new(),
+        Some(Json::Array(lines)) => lines
+            .iter()
+            .map(|line| match line {
+                Json::String(line) => line.clone(),
+                other => panic!("a line is a string: {other:?}"),
+            })
+            .collect(),
+        Some(other) => panic!("{other:?}"),
+    }
+}
+
+/// Fix pass 1, T1 and T3: two Build beacons of one seat, each with its own
+/// protected area: each row lists its own area only, in the string table's
+/// literal words (the review's R01, the owner check dropped, and R07, the
+/// corners swapped, are red here).
+#[test]
+fn each_beacons_row_lists_its_own_areas_in_their_words() {
+    let mut surface = resumed(FogPolicy::casual(), |world| {
+        let id = switched(world, MandateKind::Build);
+        let at = world.beacons().positions()[core(world, 0).0];
+        let other = world
+            .place_beacon_directly(SeatId::new(0), at, MandateKind::Build, 2)
+            .expect("b_01");
+        let centre = [Fx::from_voxels(0); 3];
+        let theirs = ColumnBox::new([20, 20], [21, 21]).expect("a box");
+        let mine = ColumnBox::new([10, 10], [11, 11]).expect("a box");
+        world
+            .add_area(other, AreaKind::Protected, centre, theirs)
+            .expect("b_01's area");
+        world
+            .add_area(id, AreaKind::Protected, centre, mine)
+            .expect("b_00's area");
+    });
+    assert_eq!(
+        lines_of(&mut surface, "b_00", true),
+        vec![String::from(
+            "the ground from column 10, 10 to column 11, 11"
+        )]
+    );
+    assert_eq!(
+        lines_of(&mut surface, "b_01", true),
+        vec![String::from(
+            "the ground from column 20, 20 to column 21, 21"
+        )]
+    );
+}
+
+/// Fix pass 1, T2: a Defend core protecting `b_01` and the commander, the
+/// playbook writing the commander last: after the Push that commits it the
+/// row says the commander first; and once `b_01` is killed in the next Push,
+/// `get_beacon` in that Push lists the commander alone, with no internal
+/// error (the review's R14, the sim's `forget` made a no-op, is red here).
+#[test]
+fn a_dead_protected_beacon_leaves_the_list_in_the_push() {
+    let mut extra = None;
+    let mut surface = resumed_for(FogPolicy::casual(), 30_000, |world| {
+        let (row, _) = core(world, 0);
+        world.switch_mandate_directly(row, MandateKind::Defend);
+        let at = world.beacons().positions()[row];
+        extra = world.place_beacon_directly(SeatId::new(0), at, MandateKind::Build, 2);
+    });
+    let extra = extra.expect("b_01 placed");
+    let text = r#"{"schema_version":{"major":1},"kind":"PLAYBOOK","meta":{"title":"p","author_kind":"HUMAN"},"declarative":{"route":[{"label":"v","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"defend":{"protect":[{"beacon":{"beacon_id":"b_01"}},{"my_commander":{}}]}}}]},"timeout_ms":60000,"on_fail":{"action":"SKIP"}}]},"on_death":{"on_respawn":"CONTINUE"},"fallback":{"hold":{"at":{"beacon_anchor":{"safest":{}}}}}}"#;
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let submitted = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "submit_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(text)),
+        ),
+        "submit_plan",
+    );
+    assert_eq!(
+        submitted.get("accepted"),
+        Some(&Json::Bool(true)),
+        "{submitted:?}"
+    );
+    play_round(&mut surface);
+    assert_eq!(
+        lines_of(&mut surface, "b_00", true),
+        vec![protected_commander_line(), protected_beacon_line("b_01")]
+    );
+    assert!(surface.begin_push().expect("a Push"));
+    surface
+        .host_mut()
+        .expect("hosted")
+        .file_damage(pharmakos_sim::world::DamageOrder {
+            target: pharmakos_sim::world::DamageTarget::Beacon(extra),
+            amount: pharmakos_sim::math::quantity::Damage::new(i64::from(i32::MAX))
+                .expect("an amount"),
+            by: SeatId::NEUTRAL,
+            source: None,
+        })
+        .expect("filed");
+    for _ in 0..5 {
+        let _ = surface.step().expect("a tick");
+    }
+    assert_eq!(
+        lines_of(&mut surface, "b_00", false),
+        vec![protected_commander_line()]
+    );
+}
+
+/// One Push and its recap, then the next Lull opened.
+fn play_round(surface: &mut Surface) {
+    assert!(surface.begin_push().expect("a Push"));
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(surface.end_recap().expect("the recap"));
+    surface
+        .set_phase_remaining_ms(Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
+    surface.open_lull().expect("the Lull");
+}
+
+/// Fix pass 1, T5: the gateway alone holds each list's clear pointer, and on
+/// the wire each row's `clear_pointer` is the schema's `clear_<list>` bool
+/// beside its `pointer`'s repeated field, for every writ.
+#[test]
+fn each_rows_clear_pointer_is_the_schemas_pair_of_its_pointer() {
+    use pharmakos_proto::descriptor::{ScalarKind, schema};
+    let field = |pointer: &str| {
+        let mut message = String::from("gp.v1.MandateSettings");
+        let mut found = None;
+        for segment in pointer.trim_start_matches('/').split('/') {
+            let held = schema()
+                .message(&message)
+                .and_then(|held| held.field_by_name(segment))
+                .unwrap_or_else(|| panic!("{pointer}: no `{segment}` in {message}"))
+                .clone();
+            message.clone_from(&held.type_name);
+            found = Some(held);
+        }
+        found.expect("a field")
+    };
+    for writ in [
+        MandateKind::Build,
+        MandateKind::Defend,
+        MandateKind::Attack,
+        MandateKind::Survey,
+    ] {
+        let mut surface = resumed(FogPolicy::casual(), |world| {
+            let _ = switched(world, writ);
+        });
+        let rows = lists(&beacon_answer(&mut surface, "b_00"));
+        let pointer = text_of(&rows[0], "pointer");
+        let clear = text_of(&rows[0], "clear_pointer");
+        assert!(field(&pointer).repeated, "{writ:?}: {pointer} is a list");
+        let flag = field(&clear);
+        assert!(
+            !flag.repeated && flag.kind == ScalarKind::Bool,
+            "{writ:?}: {clear}"
+        );
+        let (arm, name) = pointer.rsplit_once('/').expect("an arm and a field");
+        assert_eq!(clear, format!("{arm}/clear_{name}"), "{writ:?}");
+    }
 }

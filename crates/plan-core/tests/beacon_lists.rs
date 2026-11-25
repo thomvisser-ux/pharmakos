@@ -112,3 +112,17 @@ fn the_lines_are_the_string_tables() {
     distinct.dedup();
     assert_eq!(distinct.len(), titles.len(), "{titles:?}");
 }
+
+/// Fix pass 1, T3: an area's line pinned by its literal words, its lowest
+/// column first (the review's R07, the corners swapped, is red here).
+#[test]
+fn an_area_is_said_lowest_column_first_in_these_words() {
+    assert_eq!(
+        area_line([10, 10], [11, 11]),
+        "the ground from column 10, 10 to column 11, 11"
+    );
+    assert_eq!(
+        area_line([-4, -2], [-2, 1]),
+        "the ground from column -4, -2 to column -2, 1"
+    );
+}
