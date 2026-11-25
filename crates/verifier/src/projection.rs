@@ -599,9 +599,12 @@ fn settings_tally(settings: &MandateSettings, prices: &Prices) -> Result<Orders,
             }
             Ok(ordered(total))
         }
-        Some(mandate_settings::Mandate::Survey(survey)) => {
-            Ok(ordered(Tally::times(prices.scout(), survey.scout_count)))
-        }
+        // An omitted count orders no scout, and neither does a written 0
+        // (decisions-log item 184 (10)).
+        Some(mandate_settings::Mandate::Survey(survey)) => match survey.scout_count {
+            Some(scouts) => Ok(ordered(Tally::times(prices.scout(), scouts))),
+            None => Ok(ordered(Tally::ZERO)),
+        },
         // S2's picket (decision 13): the count is a setting, as Survey's is,
         // so the scouts it orders are priced as Survey's are.
         Some(mandate_settings::Mandate::Defend(defend)) => match defend.picket_scouts {
@@ -864,7 +867,8 @@ mod tests {
     fn ordered_scouts_cost_their_price_and_draw_a_unit_each() {
         let survey = mandate_settings::Mandate::Survey(SurveySettings {
             probe_areas: Vec::new(),
-            scout_count: 9,
+            scout_count: Some(9),
+            clear_probe_areas: false,
         });
         let projection =
             project(&playbook(vec![place(Some(survey))]), economy(), &prices()).expect("priced");
@@ -931,7 +935,8 @@ mod tests {
         // refuses it; the tally the estimate stage reads holds it exactly.
         let survey = mandate_settings::Mandate::Survey(SurveySettings {
             probe_areas: Vec::new(),
-            scout_count: u32::MAX,
+            scout_count: Some(u32::MAX),
+            clear_probe_areas: false,
         });
         let playbook = playbook(vec![place(Some(survey))]);
         assert_eq!(

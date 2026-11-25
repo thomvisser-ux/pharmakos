@@ -752,6 +752,14 @@
     "beginner": "Walls are built voxel by voxel, and nothing builds a Survey post yet, so neither can be asked about. Ask about a Generator, an autocannon, a mortar or a Resonance Spire."
   },
   {
+    "code": "E0515",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`clear_{list}` cannot stand {place}.",
+    "beginner": "A `clear_` setting empties a list the beacon already holds, so it goes in a Change settings row on its own: not beside entries of the same list, and not where the beacon or its new mandate starts with no list at all."
+  },
+  {
     "code": "W0501",
     "family": "settings and recycle",
     "severity": "WARNING",

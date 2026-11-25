@@ -45,7 +45,7 @@ pub(crate) fn beacon_spec(
 )]
 #[must_use]
 pub fn plan_refusal(error: &pharmakos_sim::interpreter::PlanError) -> Said {
-    use pharmakos_sim::interpreter::PlanError as E;
+    use pharmakos_sim::interpreter::{ClearRefusal, PlanError as E};
     match error {
         E::MissingBlock(name) => said!(
             "the `{}` block is missing; the interpreter reads it and will not substitute a \
@@ -125,6 +125,20 @@ pub fn plan_refusal(error: &pharmakos_sim::interpreter::PlanError) -> Said {
              radius, 1 to 100",
             *found
         ),
+        E::ClearRefused { list, why } => match why {
+            ClearRefusal::BesideAList => said!(
+                "`clear_{}` stands beside a `{}` that names entries; a row either replaces the \
+                 list or empties it",
+                *list,
+                *list
+            ),
+            ClearRefusal::NothingToClear => said!(
+                "`clear_{}` stands in settings that start from nothing, where there is no `{}` \
+                 to empty; it belongs in a `set_mandate_settings` row",
+                *list,
+                *list
+            ),
+        },
         E::RetreatOutOfRange { found } => said!(
             "a `retreat_hp_pct` of {} is past 100 percent of a unit's hit points",
             *found

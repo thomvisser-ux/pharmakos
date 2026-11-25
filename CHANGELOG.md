@@ -39,3 +39,11 @@ S1, the economy, added to the same development builds:
 - The verifier's money and time checks: the `$` and `kW` projection, the interface times, and a
   lower bound on walking against the coming segment.
 - A first Lull of 10 minutes and later ones of 5, and Easy playing under the new rules.
+
+S3, authoring, so far in the same development builds:
+
+- A Survey's scout count, a Mine's dig depth and its pillar spacing can be set to 0 by an edit
+  row, and `clear_protected_areas`, `clear_protect`, `clear_avoid_areas` and
+  `clear_probe_areas` empty a beacon's lists. **A hand-written file that wrote one of those
+  three numbers as 0 in an edit row now sets it to 0** (before, the 0 did nothing), and in a new
+  beacon's or a switched mandate's settings the 0 is now charged one field.

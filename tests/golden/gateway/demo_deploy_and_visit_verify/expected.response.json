@@ -29,7 +29,13 @@
           "related_paths": [],
           "message": "`pillar_spacing` is omitted and reads as 0, no pillars.",
           "beginner": "A setting left out takes its named default.",
-          "suggestions": [],
+          "suggestions": [
+            {
+              "title": "Write the default out",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing\",\"value\":0}]",
+              "applicability": "machine_applicable"
+            }
+          ],
           "map_refs": []
         },
         {
@@ -43,10 +49,10 @@
           "map_refs": []
         }
       ],
-      "report_hash": "5f58agcmxNw=",
+      "report_hash": "c75p8vRPiao=",
       "rules_hash": "GybFJQaL/2E=",
       "plan_fingerprint": "HsSv5nrPa8Y=",
-      "verifier_version": "0.1.0-s3.7",
+      "verifier_version": "0.1.0-s3.8",
       "size_units": 4,
       "size_budget": 128
     },

@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pharmakos_sim::interpreter::PlanError;
+use pharmakos_sim::interpreter::{ClearRefusal, PlanError};
 
 /// How a variant stands to the verifier.
 pub(crate) enum Row {
@@ -80,6 +80,7 @@ pub(crate) fn classify(error: &PlanError) -> (&'static str, Row) {
         }
         PlanError::ScoutsOutOfRange { .. } => ("ScoutsOutOfRange", Row::Refused(&["E0508"])),
         PlanError::RetreatOutOfRange { .. } => ("RetreatOutOfRange", Row::Refused(&["E0501"])),
+        PlanError::ClearRefused { .. } => ("ClearRefused", Row::Refused(&["E0515"])),
         PlanError::RotationOutOfRange { .. } => ("RotationOutOfRange", Row::Refused(&["E0505"])),
         PlanError::WallBoxOffAWall { .. } => ("WallBoxOffAWall", Row::Refused(&["E0509"])),
         PlanError::AreaInsideOut => ("AreaInsideOut", Row::Refused(&["E0406"])),
@@ -122,7 +123,7 @@ pub(crate) fn classify(error: &PlanError) -> (&'static str, Row) {
 /// How many variants `PlanError` has: `classify`'s arms. A variant added to
 /// the sim fails `classify` to compile; this count then fails the test until
 /// the variant has its text or its unreachable sample below.
-pub(crate) const VARIANTS: usize = 41;
+pub(crate) const VARIANTS: usize = 42;
 
 /// One instance of each unreachable variant, so its row is asserted.
 pub(crate) fn unreachable_samples() -> Vec<PlanError> {
@@ -200,6 +201,8 @@ pub(crate) fn texts() -> Vec<(String, String)> {
         "e0510_an_engagement_radius_past_the_sphere",
         "e0511_a_turned_wall",
         "e0514_a_predicate_about_a_wall",
+        "e0515_a_clear_beside_its_own_list",
+        "e0515_a_clear_in_a_new_beacon",
         "e0010_a_blueprint_other_than_the_generator",
     ]
     .into_iter()
@@ -270,6 +273,10 @@ pub(crate) fn every_variant() -> Vec<PlanError> {
         PlanError::EngagementOutOfRange { found: 0 },
         PlanError::ScoutsOutOfRange { found: 0, most: 0 },
         PlanError::RetreatOutOfRange { found: 0 },
+        PlanError::ClearRefused {
+            list: "x",
+            why: ClearRefusal::BesideAList,
+        },
         PlanError::RotationOutOfRange { found: 0 },
         PlanError::WallBoxOffAWall {
             blueprint: String::new(),
@@ -345,6 +352,7 @@ pub(crate) fn rules_of(error: &PlanError) -> Rules {
         | PlanError::EngagementOutOfRange { .. }
         | PlanError::ScoutsOutOfRange { .. }
         | PlanError::RetreatOutOfRange { .. }
+        | PlanError::ClearRefused { .. }
         | PlanError::RotationOutOfRange { .. }
         | PlanError::WallBoxOffAWall { .. }
         | PlanError::AreaInsideOut

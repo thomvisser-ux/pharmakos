@@ -2,7 +2,7 @@
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "prose": "Deploy beside the core\nWritten by hand.\nWalk a little west, deploy a Mine beacon inside the core's sphere, walk back and re-prioritise the core.\n\nRoute\n  1. to_site: walk to voxel 350, 22, 36, directly.\n    Give up after 30 s.\n    On failure, abandon the route.\n  2. place_west: place a beacon at voxel 350, 22, 36, tagged \"west\", on a Mine mandate, at normal Quartermaster priority (16.5 s on site).\n    Give up after 30 s.\n    On failure, abandon the route.\n  3. back_home: walk to beacon \"b_00\", directly.\n    Give up after 1:00.\n    On failure, abandon the route.\n  4. touch_core: interface with beacon \"b_00\" and set its Quartermaster priority to low (3 s on site).\n    Give up after 20 s.\n    On failure, abandon the route.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n  After 2 deaths the fallback takes over.\n\nFallback\n  Hold at the safest own beacon.\n\nBudget\n  4 of 128 size units.\n  19.5 s standing at a beacon along the route.\n",
+    "prose": "Deploy beside the core\nWritten by hand.\nWalk a little west, deploy a Mine beacon inside the core's sphere, walk back and re-prioritise the core.\n\nRoute\n  1. to_site: walk to voxel 350, 22, 36, directly.\n    Give up after 30 s.\n    On failure, abandon the route.\n  2. place_west: place a beacon at voxel 350, 22, 36, tagged \"west\", on a Mine mandate: digging down to 4 voxels below the seam's top and fleeing known threats, at normal Quartermaster priority (16.5 s on site).\n    Give up after 30 s.\n    On failure, abandon the route.\n  3. back_home: walk to beacon \"b_00\", directly.\n    Give up after 1:00.\n    On failure, abandon the route.\n  4. touch_core: interface with beacon \"b_00\" and set its Quartermaster priority to low (3 s on site).\n    Give up after 20 s.\n    On failure, abandon the route.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n  After 2 deaths the fallback takes over.\n\nFallback\n  Hold at the safest own beacon.\n\nBudget\n  4 of 128 size units.\n  19.5 s standing at a beacon along the route.\n",
     "rules": [
       {
         "pointer": "/declarative/route/0",
@@ -86,10 +86,49 @@
             "pick_op": "replace"
           },
           {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/mine/dig_max_depth",
+            "line": 8,
+            "start": 104,
+            "end": 105,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "voxels",
+                "display_unit": "voxels"
+              }
+            },
+            "value_json": "4",
+            "value_text": "4",
+            "outside": false,
+            "pick_op": "replace"
+          },
+          {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/mine/flee_on_threat",
+            "line": 8,
+            "start": 138,
+            "end": 159,
+            "shape": {
+              "choice": {
+                "values": [
+                  "true",
+                  "false"
+                ],
+                "titles": [
+                  "yes",
+                  "no"
+                ]
+              }
+            },
+            "value_json": "true",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
+          },
+          {
             "pointer": "/declarative/route/1/place_beacon/initial/priority",
             "line": 8,
-            "start": 91,
-            "end": 97,
+            "start": 164,
+            "end": 170,
             "shape": {
               "choice": {
                 "values": [

@@ -2107,6 +2107,7 @@ fn s2s_defend_settings_round_trip_in_their_documented_spellings() {
                 engagement_radius_pct: 80,
                 pursue: Pursue::SphereEdge.into(),
                 picket_scouts: Some(2),
+                clear_protect: false,
             })),
         },
         concat!(
@@ -2174,6 +2175,7 @@ fn s2s_attack_settings_round_trip_in_their_documented_spellings() {
                 }],
                 breach_allowed: Some(true),
                 waves: 1,
+                clear_avoid_areas: false,
             })),
         },
         concat!(

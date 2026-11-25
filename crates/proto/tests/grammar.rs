@@ -202,9 +202,11 @@ fn minus_zero_is_zero_in_every_integer_field() {
     let launch: AttackLaunch =
         json::decode(r#"{"segment_ms":-0}"#).expect("an optional int32 takes -0");
     assert_eq!(launch.segment_ms, Some(0));
+    // `dig_max_depth` has presence too (decisions-log item 184 (10)).
+    let mine: MineSettings =
+        json::decode(r#"{"dig_max_depth":-0}"#).expect("an optional uint32 takes -0");
+    assert_eq!(mine.dig_max_depth, Some(0));
     // No presence, unsigned and signed: the default, dropped.
-    let mine: MineSettings = json::decode(r#"{"dig_max_depth":-0}"#).expect("a uint32 takes -0");
-    assert_eq!(mine.dig_max_depth, 0);
     let defend: DefendSettings =
         json::decode(r#"{"engagement_radius_pct":-0}"#).expect("a uint32 takes -0");
     assert_eq!(defend.engagement_radius_pct, 0);
@@ -213,7 +215,12 @@ fn minus_zero_is_zero_in_every_integer_field() {
         ("gp.v1.MandateSettings", r#"{"retreat_hp_pct":-0}"#, true),
         ("gp.v1.DefendSettings", r#"{"picket_scouts":-0}"#, true),
         ("gp.v1.AttackLaunch", r#"{"segment_ms":-0}"#, true),
-        ("gp.v1.MineSettings", r#"{"dig_max_depth":-0}"#, false),
+        ("gp.v1.MineSettings", r#"{"dig_max_depth":-0}"#, true),
+        (
+            "gp.v1.DefendSettings",
+            r#"{"engagement_radius_pct":-0}"#,
+            false,
+        ),
     ] {
         let canonical = json::canonicalise(message, text).expect("canonicalises");
         assert!(!canonical.contains("-0"), "{message}: {canonical}");
