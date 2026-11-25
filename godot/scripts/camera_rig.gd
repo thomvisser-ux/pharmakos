@@ -34,6 +34,13 @@
 
 extends Node3D
 
+## A camera move the player made, by kind: `pan` when a free-look key starts a move, `zoom` for a
+## wheel notch, `turn` when a right-button drag starts turning, `follow` when Follow is switched
+## on or off. Playtest mode (`scripts/playtest.gd`, S3's `prob`, part 2) counts them through the
+## bridge; the rig itself decides nothing from them, and a move the client makes for the player
+## (framing the map, opening on the commander) is not one.
+signal moved(kind: String)
+
 ## Pan speed over the ground, in voxels per second at the default zoom.
 ##
 ## PLACEHOLDER: camera speeds and easing — OWNER, ruled at the demo to stand for now.
@@ -75,6 +82,10 @@ var map_extent := Vector3.ZERO
 ## The ground under a ray, for the wheel to zoom on: called with the ray's origin and normal,
 ## answers `{"hit": bool, "at": Vector3}`. The vista binds it to the view's own pick.
 var ground_under := Callable()
+## Whether a free-look key moved the camera last frame, and whether a right-button drag is
+## turning it: a move is said once when it starts (`moved`), not once a frame.
+var _panning := false
+var _turning := false
 
 @onready var camera: Camera3D = $Camera
 
@@ -122,6 +133,7 @@ func open_on(point: Vector3, cover: float) -> void:
 ## Starts or stops following `node`.
 func follow(node: Node3D) -> void:
 	target = node
+	moved.emit("follow")
 
 
 func _process(delta: float) -> void:
@@ -131,6 +143,9 @@ func _process(delta: float) -> void:
 	else:
 		target = null
 		var move := _key_move()
+		if move != Vector3.ZERO and not _panning:
+			moved.emit("pan")
+		_panning = move != Vector3.ZERO
 		if move != Vector3.ZERO:
 			var scale_now := distance / 420.0
 			focus += move.rotated(Vector3.UP, yaw) * PAN_RATE * scale_now * delta
@@ -175,10 +190,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		# A press on the view that no control took gives the keys back to the camera.
 		get_viewport().gui_release_focus()
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			moved.emit("zoom")
 			zoom_at(event.position, -notches_of(event))
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			moved.emit("zoom")
 			zoom_at(event.position, notches_of(event))
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		_turning = false
 	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		if not _turning:
+			moved.emit("turn")
+		_turning = true
 		yaw -= event.relative.x * TURN_RATE
 		pitch = clampf(pitch - event.relative.y * TURN_RATE, -1.5, -0.1)
 
