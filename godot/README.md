@@ -157,33 +157,47 @@ template with a sentence, and that the panel draws the mark and the sentence as 
 
 The lobby's chooser carries a **Playtest mode** check button (`scripts/playtest.gd`). It is
 off at every launch and is not remembered: nothing is collected unless the tester turns it on
-in that session, and turning it off again drops everything it kept. While it is on, a line
-under the event list says so, says what it counts and says that nothing leaves the computer.
+in that session, and turning it off again drops everything it kept. Off, it costs nothing: no
+call reaches the bridge. While it is on, a line under the event list says so, says what is kept
+and says that nothing leaves the computer.
 
-**What it records**, in memory only, in the bridge (`crates/client-gdext/src/playtest.rs`):
-per Push, the wall time the window had focus and the time it did not, or that the Push was
-skipped (a skipped Push carries no times); per Lull, the wall time used up to this seat's
-Ready or the Lull's end; the count of Pushes and of skipped ones; speed changes by speed;
-camera moves by kind (a free-look key starting a move, a wheel notch, a right-button turn,
-Follow); the verifier's error rows shown, by code, once per text revision; the gateway's
-refusals, by code; the client's own diagnostics log; and the survey's answers.
+**What it keeps**, in memory only, in the bridge (`crates/client-gdext/src/playtest.rs`): per
+Push, the wall time the window had focus and the time it did not, or that the Push was skipped
+(a skipped Push carries no times); per Lull, the wall time used up to this seat's Ready or the
+Lull's end; the count of Pushes and of skipped ones; speed changes by speed; camera moves by
+kind (a free-look key starting a move, a wheel notch, a right-button turn, Follow); the
+verifier's error rows shown, by code, once per text revision; the gateway's refusals, by code;
+and the client's own diagnostics log, a line per event named from a closed list. Every Push and
+Lull row names its match by a count from 1, never the match's id. A step between two frames
+longer than 2 s (the window stalled, the machine slept) is not attention: it is kept apart as a
+gap and counted. A Push or Lull still open when the client leaves its match (a new match, a
+host that stopped) is kept, timed to the last frame drawn in that match, as `match_left`.
 
 **What it never holds:** a playbook, a draft, the notebook, the private match cache or replay,
 a match id, a seed, a token, a port, a path or a user name. Its inputs are typed facts and
 codes from closed sets (the gateway's error codes, the verifier's code shape, the write
 failures' names); a refusal's message, which can quote a player's text, is dropped. The raw
 `user://logs/godot.log` and `client-<pid>.log` are never read. The one free text is the
-survey's third answer, which goes into the bundle exactly as the tester wrote it, as the
-survey screen says beside the box.
+survey's third answer, the tester's own words, which goes into the bundle exactly as written,
+as the survey screen says beside the box.
 
-**The survey** is drawn once the match has ended: "Play another round?" (yes / no), "Did you
-understand why your playbook did what it did?" (yes / partly / no) and "What did you most want
-to change during a Push?" (free text). A question left alone is sent as `unanswered`.
+**The survey and Export appear only once a match has ended**, with Playtest mode on: "Play
+another round?" (yes / no), "Did you understand why your playbook did what it did?" (yes /
+partly / no) and "What did you most want to change during a Push?" (free text, with a count
+against its cap). Nothing of the survey is kept while it is filled in: the answers go into the
+bundle with Export, as the screen shows them then, and a question left alone is sent as
+`unanswered`. An answer past its cap refuses the whole export, writes no file, and says so
+until the answer changes.
+
+**A match that stopped early** (the host failed, or the tester started again): keep Playtest
+mode on (switching it off drops what was kept), start a New match from the chooser and play it
+to its end; the survey and Export then appear, and the bundle holds both matches, the stopped
+one's open Push or Lull marked `match_left`.
 
 **Export playtest bundle** opens the operating system's save dialog, offering
 `pharmakos-playtest.zip` and no folder of ours. The bridge builds one zip and writes it whole,
-by the same atomic replace as Save, to the file the tester picked and nowhere else; the status
-line under the survey names that file. The zip holds exactly `manifest.json`, `survey.json`,
+by the same atomic replace as Save, to the file the tester picked and nowhere else; the line
+under the survey names that file. The zip holds exactly `manifest.json`, `survey.json`,
 `metrics.json` and `diagnostics.log` (`bundle_format` 1; the recording is absent until S7).
 No time of day, no path and no build id is in it; its times are wall microseconds, and the
 log's `t=` is milliseconds since Playtest mode was switched on. Nothing is sent anywhere: the
@@ -191,9 +205,11 @@ tester reads the four files and sends the zip by hand. The client opens no netwo
 localhost link to the host it spawned (`crates/client-gdext/tests/no_network.rs`).
 
 The headless watch check switches Playtest mode on for its first match, plays round 1 with the
-window's focus lost and regained in the Push, exports to a scratch folder and reads the bundle
-back; the headless client check does the same through the real lobby's check button; and
-`scenes/playtest_shot.tscn` draws the line and the survey with no host.
+window's focus lost and regained in the Push, exports to a scratch folder with the survey and
+reads the bundle back; the headless client check drives the real lobby's check button, the
+cap's refusal typed key by key, the export, a stand-in bridge that counts calls while off, and
+the camera's turn after a lost release; and `scenes/playtest_shot.tscn` draws the line and the
+survey with no host.
 
 ## The editor (T19, pull request 1)
 
