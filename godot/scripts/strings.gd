@@ -521,6 +521,32 @@ const TEXT := {
 	"ghost_waiting": "Checking this spot...",
 	"ghost_legal": "A beacon can go here.",
 	"ghost_illegal": "Not here: {sentence}",
+
+	# --- Playtest mode (S3's `prob`, part 2; scripts/playtest.gd) ------------------
+	"playtest_toggle": "Playtest mode",
+	# Shown while it is on: what it records, and that nothing leaves the machine.
+	"playtest_on": "Playtest mode is on. This client keeps, in memory only: the counts and times of each Push and Lull (focused and unfocused, used, skipped), speed changes, camera moves, the verifier's error codes shown, the gateway's refusal codes, and a log of event names. With Export it adds your survey answers, the last one in your own words, exactly as you write them. It keeps no playbook, draft, notebook, path or name. Nothing leaves this computer: Export playtest bundle writes one file where you choose, for you to send by hand.",
+	"playtest_counts": "Recorded so far: {pushes} Push(es), {skipped} of them skipped, {lulls} Lull(s).",
+	"playtest_dropped": "Some of it did not fit and was counted instead; the bundle's manifest says what.",
+	"playtest_survey_heading": "Playtest survey",
+	"playtest_q_another": "Play another round?",
+	"playtest_q_understood": "Did you understand why your playbook did what it did?",
+	"playtest_q_wanted": "What did you most want to change during a Push?",
+	"playtest_wanted_note": "Your words go into the bundle exactly as you write them. Read the four files before you send them.",
+	"playtest_answer_unanswered": "(no answer)",
+	"playtest_answer_yes": "Yes",
+	"playtest_answer_no": "No",
+	"playtest_answer_partly": "Partly",
+	"playtest_wanted_count": "{count} of {limit} characters.",
+	"playtest_export_survey_too_long": "The playtest bundle was not written: your answer is longer than {limit} characters. Shorten it and export again.",
+	"playtest_export_unknown_answer": "The playtest bundle was not written: an answer is not one the survey offers.",
+	"playtest_export": "Export playtest bundle",
+	"playtest_exported": "Playtest bundle written to {path} ({bytes} bytes). Read it, then send it by hand.",
+	"playtest_exported_note": "Playtest bundle written to {path}. {why}",
+	"playtest_export_not_done": "The playtest bundle was not written: {why}",
+	"playtest_export_off": "Playtest mode is off, so there is nothing to export.",
+	"playtest_export_too_large": "The playtest bundle would be too large to write.",
+	"playtest_export_failed": "The export stopped with an error; the log says why.",
 }
 
 

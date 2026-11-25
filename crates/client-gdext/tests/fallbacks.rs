@@ -131,6 +131,16 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         "items.get(token.parse::<usize>().ok()?)?",
         "RFC 6901: a token that is not a decimal index names no array element",
     ),
+    (
+        "bridge.rs",
+        ".map_or((Phase::Unknown, 0), |rig| (rig.phase(), rig.round()))",
+        "before `watch_begin` there is no rig and so no match: Playtest mode switched on then starts in no phase of no round, which is the truth, and the first phase a rig reads opens its first record (S3's `prob`, part 2)",
+    ),
+    (
+        "bridge.rs",
+        ".map_or(\"\", |rig| rig.phase().name())",
+        "before `watch_begin` there is no rig and so no phase: `playtest_state`'s documented `\"\"`, which `playtest.gd` reads as no match ended (S3's `prob`, part 2)",
+    ),
 ];
 
 /// The needles a fallback is written with, as the gateway's scan names them:
