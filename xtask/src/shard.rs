@@ -78,19 +78,31 @@ pub(crate) const MERGED_STEPS: &[&str] = &["golden"];
 /// sharded.
 ///
 /// The figures are [`MEASURED`]'s: `test`'s `test:allocations` (its tick
-/// tests, at opt-level 0) and `test`'s `lib` are the units over a tenth of a
-/// leg in both runs, and every other recorded unit is far under it.
+/// tests, at opt-level 0), `test`'s `lib` and `test-research`'s
+/// `test:allocations` (its fork tests, at opt-level 0) are the units over a
+/// tenth of a leg in both runs, and every other recorded unit is far under it.
+/// Each of the first two is one test long, not many tests long: in run
+/// 45549711083 `tick::a_restored_worlds_tick_allocates_nothing` alone took
+/// 383 / 382 / 332 s (windows / macos / ubuntu) of `test:allocations`' 387 /
+/// 385 / 335 s, beside `tick::a_tick_allocates_nothing`'s 277 / 270 / 234 s
+/// on other threads, so a unit's seconds are its slowest test's.
 ///
 /// History: `shard4` #217 read three heavy units from `main`'s run 45110422470
 /// on windows-latest: `test`'s `lib`, `test`'s `test:allocations` and
 /// `test-research`'s `test:allocations`. Then `simtest` #225 gated the tick
 /// tests out of the research build, which left `test-research`'s
-/// `test:allocations` one test (under 30 s on every leg of both runs, so not
-/// in [`MEASURED`]), and `pcsplit` #224 split pharmakos-plan-core's one serial
-/// test into 16.
+/// `test:allocations` one test, and `pcsplit` #224 split
+/// pharmakos-plan-core's one serial test into 16, so `shard5` #232 read two.
+/// `forkalloc` #234 then gave `test-research`'s `test:allocations` its fork
+/// tests (111 to 228 s a leg) and `test`'s `test:allocations` a restored
+/// world's tick test, so `shard6` reads three again.
 // PLACEHOLDER: which units are heavy, read from CI's step timings — main session, when a unit's cost moves
 #[cfg(test)]
-pub(crate) const HEAVY_UNITS: &[(&str, &str)] = &[("test", "test:allocations"), ("test", "lib")];
+pub(crate) const HEAVY_UNITS: &[(&str, &str)] = &[
+    ("test", "test:allocations"),
+    ("test", "lib"),
+    ("test-research", "test:allocations"),
+];
 
 /// The rule that reads [`HEAVY_UNITS`] from [`MEASURED`]: a unit is heavy when,
 /// on some operating system in some measured run, its seconds are more than
@@ -98,11 +110,13 @@ pub(crate) const HEAVY_UNITS: &[(&str, &str)] = &[("test", "test:allocations"), 
 /// `test-research` on that operating system in that run, together). Heaviest
 /// first is by the sum of its seconds over every run and operating system,
 /// ties by step and key, and each recorded run on its own reads the same set.
-/// On [`MEASURED`]'s figures each heavy unit takes 17.7 % to 32.3 % of every
-/// leg, and no other recorded unit more than 4.2 % of any, so the line sits in
-/// a wide gap: the two runs differ by up to 2 to 1 in a unit's seconds
-/// (windows-latest's `lib`: 183 s in run 45332694060, 364 s in run
-/// 45342940283), and neither crosses it.
+/// On [`MEASURED`]'s figures each heavy unit takes at least 18.2 % of some leg
+/// in each run (8.5 % to 34.3 % of a leg over every leg), and no other
+/// recorded unit more than 3.3 % of any, so the line sits in a wide gap: the
+/// two runs differ by up to 2 to 1 in a unit's seconds (windows-latest's
+/// `test-research` `test:allocations`: 111 s in run 45549711083, 215 s in run
+/// 45551721219; macos-latest's `lib`: 135 s, then 220 s), and neither crosses
+/// it.
 #[cfg(test)]
 pub(crate) const HEAVY_RULE: u32 = 10;
 
@@ -127,32 +141,35 @@ pub(crate) struct Measured {
     pub(crate) units: &'static [(&'static str, &'static str, [u32; 3])],
 }
 
-/// The runs [`HEAVY_UNITS`] were read from: `main`'s push run of `bdfe7b72`
-/// (the merge of `pcsplit` #224, after `simtest` #225), and the last pull
-/// request run of #224, whose tree is the same.
+/// The runs [`HEAVY_UNITS`] were read from: `main`'s push run of `e3ee8200`
+/// (the merge of `forkalloc` #234), and `main`'s push run of `85937f55` (the
+/// merge of `opsave` #227, which added gateway and gamectl tests and moved no
+/// heavy unit's code).
 #[cfg(test)]
 pub(crate) const MEASURED: &[Measured] = &[
     Measured {
-        run: 45_342_940_283,
-        head: "bdfe7b72",
-        leg: [1127, 1020, 988],
+        run: 45_549_711_083,
+        head: "e3ee8200",
+        leg: [1312, 1124, 1284],
         units: &[
-            ("test", "test:allocations", [199, 324, 229]),
-            ("test", "lib", [364, 220, 227]),
-            ("test", "test:operator", [43, 34, 38]),
-            ("test", "test:ladder", [31, 36, 29]),
+            ("test", "test:allocations", [387, 385, 335]),
+            ("test", "lib", [306, 135, 270]),
+            ("test-research", "test:allocations", [111, 205, 159]),
+            ("test", "test:operator", [41, 22, 39]),
+            ("test", "test:fuzz", [33, 30, 28]),
         ],
     },
     Measured {
-        run: 45_332_694_060,
-        head: "1a0ae693",
-        leg: [907, 806, 943],
+        run: 45_551_721_219,
+        head: "85937f55",
+        leg: [1598, 1214, 1259],
         units: &[
-            ("test", "test:allocations", [259, 205, 282]),
-            ("test", "lib", [183, 207, 168]),
-            ("test", "test:operator", [27, 34, 30]),
-            ("test", "test:fuzz", [34, 19, 28]),
-            ("test", "test:ladder", [26, 31, 30]),
+            ("test", "test:allocations", [379, 304, 340]),
+            ("test", "lib", [368, 220, 170]),
+            ("test-research", "test:allocations", [215, 228, 205]),
+            ("test", "test:operator", [44, 40, 31]),
+            ("test", "test:fuzz", [40, 20, 30]),
+            ("test", "test:ladder", [34, 34, 31]),
         ],
     },
 ];
@@ -162,11 +179,13 @@ pub(crate) const MEASURED: &[Measured] = &[
 /// count by the rule `the_heavy_units_fall_apart_on_ci` checks. Over
 /// `shard4`'s three heavy units that salt was 0, where the unsalted hash had
 /// put `lib` and `test`'s `test:allocations` both on shard 2 of 3 (a
-/// 20-minute windows-latest job in run 45110422470). Over today's two it is
-/// still 0
-/// (`test:allocations` on shard 2 of 3, `lib` on shard 3), so `shard5`'s
-/// re-derivation moved no unit. A new salt moves every unit at once, so it
-/// changes only with [`HEAVY_UNITS`] or the shard count.
+/// 20-minute windows-latest job in run 45110422470). Over `shard5`'s two it
+/// was still 0, and over today's three it is 0 again (`test`'s
+/// `test:allocations` on shard 2 of 3, `lib` on shard 3, `test-research`'s
+/// `test:allocations` on shard 1), so neither re-derivation moved a unit:
+/// with three heavy units on three shards one of them shares shard 1 with the
+/// unsharded steps, and at 0 it is the lightest. A new salt moves every unit
+/// at once, so it changes only with [`HEAVY_UNITS`] or the shard count.
 // PLACEHOLDER: the split's salt, chosen from CI's step timings through HEAVY_UNITS — main session, when a unit's cost moves
 pub(crate) const SPLIT_SALT: u32 = 0;
 
