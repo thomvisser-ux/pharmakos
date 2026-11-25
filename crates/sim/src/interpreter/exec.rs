@@ -1513,6 +1513,18 @@ fn commit_row(
             // a box that cannot stand writes nothing (decisions-log item 146
             // (4)).
             walls_stand(world, beacon, spec, units)?;
+            // The area lists the row names are emptied before anything is
+            // written, so the rows they free are free for the Build list too:
+            // the room test above counted them freed, and writing the targets
+            // first would meet a table still holding them (a clear beside a
+            // Build list, decisions-log item 184 (10), found it). Removal
+            // keeps the table's order, so the rows end where they did.
+            if protected.is_some() {
+                world.clear_targets(beacon, TargetKind::Protected, units);
+            }
+            if probes.is_some() {
+                world.clear_targets(beacon, TargetKind::Probe, units);
+            }
             if !targets.is_empty() {
                 // Replacing is not abandoning: an anchor that survives the
                 // edit keeps the structure it has already been paid for, or
@@ -1528,7 +1540,6 @@ fn commit_row(
             // row's `clear_*` flag, which empties it (decisions-log item 184
             // (10)).
             if let Some(protected) = protected {
-                world.clear_targets(beacon, TargetKind::Protected, units);
                 for (centre, area) in protected {
                     // One decision unit a box written (lane `dunit`).
                     units.rows(1);
@@ -1544,7 +1555,6 @@ fn commit_row(
                 }
             }
             if let Some(probes) = probes {
-                world.clear_targets(beacon, TargetKind::Probe, units);
                 for (centre, area) in probes {
                     // One decision unit a box written (lane `dunit`).
                     units.rows(1);

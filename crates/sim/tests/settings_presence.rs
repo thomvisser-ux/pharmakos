@@ -651,3 +651,131 @@ fn a_clear_in_settings_that_start_from_nothing_is_refused() {
         assert_eq!(compile(&deploy), nothing(list), "a deploy: {arm}");
     }
 }
+
+/// A cleared list frees its rows for the list-settings table's room test as a
+/// replaced list does (ruling 10, decisions-log item 139 (1)): with the table
+/// full and the core holding one protected area, a row that clears the area
+/// and names one Build target fits, and is written whole.
+fn full_table_edit(held: i32, build: impl Fn([i32; 3]) -> String) -> World {
+    use pharmakos_sim::math::fixed::Fx;
+    use pharmakos_sim::tables::{AreaKind, ColumnBox, StructureKind};
+    let mut fixture = world(&[180_000]);
+    let beacon = core(&fixture);
+    let [x, y, z] = core_voxel(&fixture);
+    let at = |x: i32, y: i32, z: i32| {
+        [x, y, z].map(|v| Fx::from_voxels(i16::try_from(v).expect("on the map")))
+    };
+    let column = |v: i32| i16::try_from(v).expect("on the map");
+    for dx in 0..held {
+        let area = ColumnBox::new(
+            [column(x + 4 + dx), column(y)],
+            [column(x + 4 + dx), column(y)],
+        )
+        .expect("a box");
+        assert!(
+            fixture
+                .add_area(beacon, AreaKind::Protected, at(x + 4 + dx, y, z), area)
+                .is_ok()
+        );
+    }
+    let other = fixture
+        .beacons()
+        .row_of_ordinal(SeatId::new(1), 0)
+        .map(|row| BeaconId::new(u32::try_from(row).expect("a beacon row")))
+        .expect("seat 1 has a core");
+    let capacity = fixture.targets().capacity();
+    let mut step: i16 = 0;
+    while fixture.targets().len() < capacity {
+        let spot = [Fx::from_voxels(step), Fx::ZERO, Fx::ZERO];
+        assert!(
+            fixture
+                .add_target(other, StructureKind::Generator.id(), spot)
+                .is_ok()
+        );
+        step = step.saturating_add(1);
+    }
+    fixture.set_treasury(SEAT, Money::new(0));
+    let row = format!(
+        r#"{{"set_mandate_settings":{{"build":{}}}}}"#,
+        build([x, y, z])
+    );
+    let plan = Plan::compile(&playbook(&visit_with(&[&row])), &rules()).expect("compiles");
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
+    runner
+        .seal_playbook(SEAT, plan)
+        .expect("a Lull takes a seal");
+    assert!(runner.begin_push().unwrap());
+    let mut seen = Vec::new();
+    for _ in 0..3_000 {
+        if runner.step().unwrap().is_none() {
+            break;
+        }
+        for event in runner.events() {
+            if event.seat == Some(SEAT)
+                && matches!(event.kind, EventKind::StepFailed | EventKind::VisitEnded)
+            {
+                seen.push((event.kind, event.value));
+            }
+        }
+        runner.clear_events();
+        if seen.iter().any(|(kind, _)| *kind == EventKind::VisitEnded) {
+            break;
+        }
+    }
+    assert_eq!(
+        seen.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+        vec![EventKind::VisitEnded],
+        "the row commits whole: {seen:?}"
+    );
+    runner.into_world()
+}
+
+/// A Build target beside the core, as JSON.
+fn generator([x, y, z]: [i32; 3]) -> String {
+    format!(
+        r#"{{"blueprint_id":"generator","anchor":{{"voxel":{{"x":{},"y":{},"z":{z}}}}},"order":0,"rotation_quarter_turns":0}}"#,
+        x + 3,
+        y + 2
+    )
+}
+
+#[test]
+fn a_cleared_list_frees_its_room_for_the_rest_of_the_row() {
+    let after = full_table_edit(1, |at| {
+        format!(
+            r#"{{"clear_protected_areas":true,"targets":[{}]}}"#,
+            generator(at)
+        )
+    });
+    assert_eq!(
+        listed(&after, TargetKind::Protected),
+        0,
+        "the area is cleared"
+    );
+    assert_eq!(
+        listed(&after, TargetKind::Build),
+        1,
+        "the target is written"
+    );
+    assert_eq!(
+        after.targets().len(),
+        after.targets().capacity(),
+        "the table is exactly full"
+    );
+}
+
+/// The same for a list replaced by a shorter one: two areas replaced by one
+/// free a row for the target beside them.
+#[test]
+fn a_replaced_list_frees_its_room_for_the_rest_of_the_row() {
+    let after = full_table_edit(2, |[x, y, z]| {
+        format!(
+            r#"{{"protected_areas":[{{"min":{{"x":{ax},"y":{y},"z":{z}}},"max":{{"x":{ax},"y":{y},"z":{z}}}}}],"targets":[{}]}}"#,
+            generator([x, y, z]),
+            ax = x - 4
+        )
+    });
+    assert_eq!(listed(&after, TargetKind::Protected), 1);
+    assert_eq!(listed(&after, TargetKind::Build), 1);
+    assert_eq!(after.targets().len(), after.targets().capacity());
+}
