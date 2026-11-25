@@ -364,6 +364,7 @@ func _process(_delta: float) -> void:
 
 
 func _run() -> void:
+	_playtest_on()
 	if not await _until(func() -> bool: return _state().get("phase", "") == "lull" and _state().get("view_settled", false), START_WAIT):
 		_failures.append("the host never reached a Lull with a complete keyframe")
 		_finish()
@@ -421,12 +422,14 @@ func _run() -> void:
 	if not await _refused_in_the_push():
 		_finish()
 		return
+	vista.bridge.playtest_focus(false)
 	var follow: Node3D = vista.my_commander()
 	if follow != null:
 		vista.rig.follow(follow)
 	if not await _meter("push"):
 		_finish()
 		return
+	vista.bridge.playtest_focus(true)
 	if not await _until(func() -> bool: return _state().get("phase", "") == "recap", PUSH_WAIT):
 		_failures.append("the Push never reached its recap")
 		_finish()
@@ -451,6 +454,9 @@ func _run() -> void:
 		_finish()
 		return
 	print("[watch-check] recap: %s" % recap.get("prose", ""))
+	if not _playtest_bundle():
+		_finish()
+		return
 
 	# Round 2: Continue, and the carried draft opens through get_draft.
 	vista.bridge.watch_command("end_recap", 0)
@@ -2114,3 +2120,100 @@ func _count(answer: Dictionary, key: String) -> int:
 		return read
 	_failures.append(Values.unreadable_text(key, read))
 	return -1
+
+
+## THE PLAYTEST LEG (S3's `prob`, part 2; the plan's E10 and R6). The first host's match is
+## played with Playtest mode on: switched on before the first Lull opens, with the camera rig's
+## moves counted (the keys and wheel legs make real ones), and the window's focus lost and
+## regained in round 1's Push. After the recap the survey is answered and the bundle exported to a
+## scratch folder, then read back with Godot's own zip reader (`_playtest_bundle`).
+const PLAYTEST_FOLDER := "user://watch_check_playtest"
+const PLAYTEST_WORDS := "I wanted to stop the scouts walking past the vent."
+const PLAYTEST_LINE := "^[1-9][0-9]* (unknown|lobby|lull|push|recap|ended) [a-z_]+( [A-Z0-9_]+)? t=(0|[1-9][0-9]*)$"
+
+
+## Playtest mode on, before anything is read, and the camera rig's moves forwarded as the lobby's
+## `playtest.gd` forwards them.
+func _playtest_on() -> void:
+	if not vista.bridge.playtest_set(true, true):
+		_failures.append("Playtest mode did not switch on")
+	vista.rig.moved.connect(func(kind: String) -> void: vista.bridge.playtest_camera(kind))
+
+
+## The survey answered, the bundle exported to a scratch folder and read back: exactly one file,
+## the four entries, round 1's Push split by focus, its Lull ended by Ready, the camera's moves,
+## the survey's words as written, every log line in its grammar, and no match id, token, port,
+## notebook text, path or user name in any byte of it.
+func _playtest_bundle() -> bool:
+	var folder := ProjectSettings.globalize_path(PLAYTEST_FOLDER)
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		_failures.append("the Playtest leg could not make %s" % folder)
+		return false
+	for old in DirAccess.get_files_at(folder):
+		if DirAccess.remove_absolute(folder + "/" + old) != OK:
+			_failures.append("the Playtest leg could not clear %s" % old)
+			return false
+	var path := folder + "/pharmakos-playtest.zip"
+	# The survey goes with the export, as answered at this moment.
+	var written: Dictionary = vista.bridge.playtest_export(path, "yes", "partly", PLAYTEST_WORDS)
+	if not written.get("written", false):
+		_failures.append("Export playtest bundle did not write: %s" % written)
+		return false
+	if Array(DirAccess.get_files_at(folder)) != ["pharmakos-playtest.zip"]:
+		_failures.append("the export did not write exactly one file: %s" % [DirAccess.get_files_at(folder)])
+	var bytes := FileAccess.get_file_as_bytes(path)
+	var reader := ZIPReader.new()
+	if reader.open(path) != OK:
+		_failures.append("Godot's zip reader cannot open the bundle")
+		return false
+	var entries: PackedStringArray = reader.get_files()
+	var texts := {}
+	for entry in entries:
+		texts[entry] = reader.read_file(entry).get_string_from_utf8()
+	reader.close()
+	if entries != PackedStringArray(["manifest.json", "survey.json", "metrics.json", "diagnostics.log"]):
+		_failures.append("the bundle's entries are %s" % entries)
+		return false
+	var manifest: Dictionary = JSON.parse_string(texts["manifest.json"])
+	var metrics: Dictionary = JSON.parse_string(texts["metrics.json"])
+	var survey: Dictionary = JSON.parse_string(texts["survey.json"])
+	# One match, the one under way: its preset as the gateway named it, its ordinal a count.
+	var matches: Array = manifest.get("matches", [])
+	if int(manifest.get("bundle_format", 0)) != 1 or matches.size() != 1 or String(matches[0].get("preset", "")) != CHECK_PRESET or int(matches[0].get("match", 0)) != 1 or String(matches[0].get("ended", "")) != "under_way":
+		_failures.append("the manifest is not format 1 of one %s match under way: %s" % [CHECK_PRESET, manifest])
+	var pushes: Array = metrics.get("push_time", [])
+	var lulls: Array = metrics.get("lull_time", [])
+	if int(metrics.get("pushes", 0)) != 1 or int(metrics.get("skipped_pushes", -1)) != 0 or pushes.size() != 1:
+		_failures.append("round 1's Push is not the one Push recorded: %s" % metrics)
+	elif int(pushes[0].get("round", 0)) != 1 or int(pushes[0].get("focused_us", 0)) <= 0 or int(pushes[0].get("unfocused_us", 0)) <= 0:
+		_failures.append("round 1's Push is not split by the focus it lost and regained: %s" % pushes[0])
+	if lulls.size() != 1 or String(lulls[0].get("ended_by", "")) != "ready" or int(lulls[0].get("used_us", 0)) <= 0:
+		_failures.append("round 1's Lull is not recorded as ended by Ready: %s" % [lulls])
+	if int(metrics.get("speed_changes", {}).get("4", 0)) < 1:
+		_failures.append("the 4x the check chose is not counted: %s" % metrics.get("speed_changes"))
+	var camera: Dictionary = metrics.get("camera_moves", {})
+	if int(camera.get("pan", 0)) < 1 or int(camera.get("zoom", 0)) < 1 or int(camera.get("follow", 0)) < 1:
+		_failures.append("the camera legs' moves are not counted: %s" % camera)
+	if String(survey.get("wanted_to_change", {}).get("text", "")) != PLAYTEST_WORDS or String(survey.get("understood_why", "")) != "partly":
+		_failures.append("the survey is not as answered: %s" % survey)
+	var shape := RegEx.create_from_string(PLAYTEST_LINE)
+	var log_lines: PackedStringArray = String(texts["diagnostics.log"]).strip_edges().split("\n")
+	var survey_lines := 0
+	for line in log_lines:
+		if shape.search(line) == null:
+			_failures.append("a diagnostics line off its grammar: `%s`" % line)
+		if " survey_answered " in line:
+			survey_lines += 1
+	if survey_lines != 1:
+		_failures.append("the log holds %d survey lines, not the export's one" % survey_lines)
+	# The four files' words and the zip's own entry names: what a reader of the bundle can see.
+	var all := ("\n".join(entries) + "\n" + "\n".join(texts.values())).to_lower()
+	var secrets := [_line.split("\t")[0], String(link._tokens[0]), String(link._tokens[1]), "127.0.0.1:%d" % link._port, ":%d/" % link._port, NOTES, folder, OS.get_environment("USERNAME"), OS.get_environment("USER"), "user://", ":\\", "/home/", "/users/", "appdata"]
+	for secret in secrets:
+		var needle := String(secret).to_lower()
+		if needle.length() >= 4 and all.contains(needle):
+			_failures.append("the bundle holds `%s`" % secret)
+	if DirAccess.remove_absolute(path) != OK or DirAccess.remove_absolute(folder) != OK:
+		_failures.append("the Playtest leg could not remove its bundle")
+	print("[watch-check] Playtest: one %d-byte bundle of %s; round 1's Push %s us focused, %s us not; its Lull %s us to Ready; camera %s; %d log lines in grammar; no id, token, port, notebook, path or name in it" % [bytes.size(), ", ".join(entries), pushes[0].get("focused_us", "?") if not pushes.is_empty() else "?", pushes[0].get("unfocused_us", "?") if not pushes.is_empty() else "?", lulls[0].get("used_us", "?") if not lulls.is_empty() else "?", camera, log_lines.size()])
+	return _failures.is_empty()

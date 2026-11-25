@@ -151,6 +151,7 @@ func _ready() -> void:
 	_status.text = Strings.text("lobby_choose")
 	if _remembered_unreadable != "":
 		_status.text += "  " + _remembered_unreadable
+	_playtest_ready()
 
 
 ## The line the lobby remembered from the last match it started, or "" when none is: an absent
@@ -559,3 +560,14 @@ func _toggle_follow() -> void:
 		vista.rig.follow(vista.my_commander())
 	else:
 		vista.rig.follow(null)
+
+
+## PLAYTEST MODE (S3's `prob`, part 2): `scripts/playtest.gd`'s check button in the chooser, off at
+## every launch and not remembered, and its line and end-of-match survey in the column. The lobby
+## only places it; it forwards the window's focus and the camera rig's moves to the bridge itself,
+## and this file still writes only its one remembered line.
+func _playtest_ready() -> void:
+	var playtest: Node = preload("res://scripts/playtest.gd").new()
+	playtest.name = "Playtest"
+	add_child(playtest)
+	playtest.setup(vista.bridge, vista.rig, _chooser, _status.get_parent())

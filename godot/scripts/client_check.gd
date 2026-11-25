@@ -338,6 +338,11 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_lobby_after_a_failure(failures)
 	await _check_the_remembered_line(failures)
 	_check_the_logs(failures)
+	await _check_the_playtest_lobby(failures)
+	await _check_playtest_off_costs_nothing(failures)
+	await _check_a_lost_release_counts_the_next_turn(failures)
+	await _check_a_bad_link_keeps_the_rig(failures)
+	await _check_export_after_a_stopped_match(failures)
 
 
 ## **The wheel reaches a readable structure** (item 155 (3) 4). From the whole map's framing,
@@ -2004,3 +2009,296 @@ func _check_the_logs(failures: Array[String]) -> void:
 	for name in left:
 		DirAccess.remove_absolute("%s/%s" % [folder, name])
 	DirAccess.remove_absolute(folder)
+
+
+## **Playtest mode in the real lobby** (S3's `prob`, part 2; the plan's E10): the chooser's check
+## button is off at launch and the bridge's recorder with it; switched on, the line says so; the
+## window's focus reaches the recorder through the scene tree's own notification and a camera move
+## through the rig's `moved`; Export playtest bundle writes exactly one file, at the path chosen,
+## whose entries Godot's own zip reader lists as the bundle's four and whose log and metrics carry
+## what was forwarded; an export to a folder that is not there writes nothing and is said; and
+## switched off, the recorder holds nothing.
+func _check_the_playtest_lobby(failures: Array[String]) -> void:
+	var lobby: Node = LobbyScene.instantiate()
+	add_child(lobby)
+	await get_tree().process_frame
+	var playtest: Node = lobby.get_node_or_null("Playtest")
+	var bridge: Node = lobby.vista.bridge
+	var toggle: CheckButton = null
+	for child in lobby._chooser.get_children():
+		if child is CheckButton and (child as CheckButton).text == Strings.text("playtest_toggle"):
+			toggle = child
+	if playtest == null or toggle == null:
+		failures.append("the lobby has no Playtest mode check button in its chooser")
+		lobby.queue_free()
+		return
+	if toggle.button_pressed or bridge.playtest_state().get("on", true):
+		failures.append("Playtest mode is on at launch: %s" % bridge.playtest_state())
+	toggle.button_pressed = true
+	await get_tree().process_frame
+	if not bridge.playtest_state().get("on", false) or not playtest._note.visible:
+		failures.append("the check button did not switch Playtest mode on, or its line is hidden")
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+	lobby.vista.rig.follow(null)
+	var name: String = preload("res://scripts/playtest.gd").BUNDLE_NAME
+	var folder := ProjectSettings.globalize_path("user://client_check_playtest")
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		failures.append("the Playtest check could not make %s" % folder)
+		lobby.queue_free()
+		return
+	for old in DirAccess.get_files_at(folder):
+		if DirAccess.remove_absolute(folder + "/" + old) != OK:
+			failures.append("the Playtest check could not clear %s" % old)
+	var path := folder + "/" + name
+	# Review 1's probe: the answer typed one key at a time to the cap and one past it, then
+	# Export. The whole export is refused, no file is written, and the words stay until the text
+	# changes; no keystroke reached the recorder.
+	var limit: int = int(bridge.playtest_state().get("survey_limit", 0))
+	var typed := ""
+	for i in limit + 1:
+		typed += "a"
+		playtest._wanted.text = typed
+		playtest._wanted_changed()
+	var refused: Dictionary = playtest.export_to(path)
+	if refused.get("written", true) or String(refused.get("refusal", "")) != "survey_too_long":
+		failures.append("an answer past its cap did not refuse the export: %s" % refused)
+	if not DirAccess.get_files_at(folder).is_empty():
+		failures.append("a refused export wrote a file: %s" % [DirAccess.get_files_at(folder)])
+	var words := Strings.text("playtest_export_survey_too_long", {"limit": limit})
+	if playtest._said.text != words:
+		failures.append("the refusal is not said in the string table's words: `%s`" % playtest._said.text)
+	await get_tree().process_frame
+	if playtest._said.text != words:
+		failures.append("the refusal's words went before the answer changed")
+	# A 300-character answer, typed key by key, then Export: the log holds one survey line.
+	typed = ""
+	for i in 300:
+		typed += "b"
+		playtest._wanted.text = typed
+		playtest._wanted_changed()
+	if playtest._said.text != "":
+		failures.append("the refusal's words stayed after the answer changed")
+	var written: Dictionary = playtest.export_to(path)
+	if not written.get("written", false):
+		failures.append("Export playtest bundle did not write: %s" % written)
+	if Array(DirAccess.get_files_at(folder)) != [name]:
+		failures.append("the export did not write exactly one file where it was asked: %s" % [DirAccess.get_files_at(folder)])
+	if not String(playtest._said.text).contains(path):
+		failures.append("the export's line does not name the file the tester chose: `%s`" % playtest._said.text)
+	var reader := ZIPReader.new()
+	if reader.open(path) != OK:
+		failures.append("Godot's zip reader cannot open the bundle")
+	else:
+		var entries: PackedStringArray = reader.get_files()
+		if entries != PackedStringArray(bridge.playtest_state().get("entries", [])):
+			failures.append("the bundle's entries are %s" % entries)
+		var log := reader.read_file("diagnostics.log").get_string_from_utf8()
+		if not (" focus_out " in log and " focus_in " in log and " playtest_on " in log):
+			failures.append("the focus did not reach the diagnostics log: `%s`" % log)
+		if log.count(" survey_answered ") != 1 or log.count(" export_failed SURVEY_TOO_LONG ") != 1:
+			failures.append("the log does not hold one survey line and the one refusal: `%s`" % log.left(400))
+		# 4 301 keystrokes were typed: none of them is a line (a handful of events are).
+		if log.count("\n") > 20:
+			failures.append("the log holds %d lines after typing: a keystroke reached it" % log.count("\n"))
+		var survey: Variant = JSON.parse_string(reader.read_file("survey.json").get_string_from_utf8())
+		if not (survey is Dictionary) or String((survey as Dictionary).get("wanted_to_change", {}).get("text", "")) != typed:
+			failures.append("the bundle's survey is not the answer exported: %s" % survey)
+		var metrics: Variant = JSON.parse_string(reader.read_file("metrics.json").get_string_from_utf8())
+		if not (metrics is Dictionary) or int((metrics as Dictionary).get("camera_moves", {}).get("follow", 0)) != 1:
+			failures.append("the camera rig's move did not reach the metrics: %s" % metrics)
+		reader.close()
+	var missing: Dictionary = playtest.export_to(folder + "/no such folder/" + name)
+	if missing.get("written", true) or String(playtest._said.text) == "":
+		failures.append("an export to a missing folder was not said as not written: %s" % missing)
+	if Array(DirAccess.get_files_at(folder)) != [name]:
+		failures.append("a refused export left a file: %s" % [DirAccess.get_files_at(folder)])
+	toggle.button_pressed = false
+	await get_tree().process_frame
+	if bridge.playtest_state().get("on", true) or bridge.playtest_state().has("pushes") or playtest._note.visible:
+		failures.append("switched off, Playtest mode still holds or shows something: %s" % bridge.playtest_state())
+	if DirAccess.remove_absolute(path) != OK or DirAccess.remove_absolute(folder) != OK:
+		failures.append("the Playtest check could not remove its bundle")
+	lobby.queue_free()
+	await get_tree().process_frame
+	print("[client-check] Playtest mode: off at launch, on by its button, focus and a camera move forwarded, one bundle written and read back, a missing folder said, off and cleared")
+
+
+## A stand-in for the bridge that counts every Playtest call made to it.
+class CountingBridge extends Node:
+	var calls := 0
+	var on := false
+
+	func playtest_set(wanted: bool, _focused: bool) -> bool:
+		calls += 1
+		on = wanted
+		return on
+
+	func playtest_state() -> Dictionary:
+		calls += 1
+		return {"on": on, "phase": "", "survey_limit": 4000}
+
+	func playtest_focus(_focused: bool) -> void:
+		calls += 1
+
+	func playtest_camera(_kind: String) -> bool:
+		calls += 1
+		return true
+
+	func playtest_export(_path: String, _another: String, _understood: String, _text: String) -> Dictionary:
+		calls += 1
+		return {"written": false, "refusal": "off"}
+
+
+## **Playtest mode off costs nothing** (fix pass 1, item 5): with the check button off, frames,
+## focus changes and camera moves make no bridge call at all; switched on, they do.
+func _check_playtest_off_costs_nothing(failures: Array[String]) -> void:
+	# The stand-in answers every bridge method playtest.gd calls, read from its source: a new
+	# call is a failure naming it, never a script error that counts nothing.
+	var source := FileAccess.get_file_as_string("res://scripts/playtest.gd")
+	var called := RegEx.create_from_string("bridge\\.([a-z_]+)\\(")
+	var probe := CountingBridge.new()
+	for found in called.search_all(source):
+		if not probe.has_method(found.get_string(1)):
+			failures.append("playtest.gd calls bridge.%s, which the counting stand-in does not count" % found.get_string(1))
+	probe.free()
+	var counting := CountingBridge.new()
+	add_child(counting)
+	var chooser := HBoxContainer.new()
+	var column := VBoxContainer.new()
+	add_child(chooser)
+	add_child(column)
+	var playtest: Node = preload("res://scripts/playtest.gd").new()
+	add_child(playtest)
+	playtest.setup(counting, null, chooser, column)
+	for i in SETTLE_FRAMES:
+		await get_tree().process_frame
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+	playtest.camera_moved("zoom")
+	if counting.calls != 0:
+		failures.append("Playtest mode off made %d bridge call(s)" % counting.calls)
+	playtest._toggle.button_pressed = true
+	for i in SETTLE_FRAMES:
+		await get_tree().process_frame
+	if counting.calls < SETTLE_FRAMES:
+		failures.append("Playtest mode on made %d bridge call(s) in %d frames" % [counting.calls, SETTLE_FRAMES])
+	playtest.queue_free()
+	counting.queue_free()
+	chooser.queue_free()
+	column.queue_free()
+	await get_tree().process_frame
+	print("[client-check] Playtest mode off: no bridge call in %d frames, a focus change and a camera move" % SETTLE_FRAMES)
+
+
+## **A lost release does not swallow the next turn's count** (fix pass 1, item 6): a right-button
+## drag says `turn` once; after the window loses focus with the button still held, the next drag
+## says it again; and a new press starts a new turn even with no release between.
+func _check_a_lost_release_counts_the_next_turn(failures: Array[String]) -> void:
+	var stage := SubViewport.new()
+	stage.size = OWNERS_WINDOW
+	stage.own_world_3d = true
+	stage.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(stage)
+	var vista: Node3D = VistaScene.instantiate()
+	stage.add_child(vista)
+	vista.set_process(false)
+	var rig: Node3D = vista.rig
+	var turns: Array[String] = []
+	rig.moved.connect(func(kind: String) -> void:
+		if kind == "turn":
+			turns.append(kind))
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_RIGHT
+	press.pressed = true
+	press.position = Vector2(400, 300)
+	# The button held, as the input singleton reads it.
+	Input.parse_input_event(press)
+	await get_tree().process_frame
+	var drag := InputEventMouseMotion.new()
+	drag.button_mask = MOUSE_BUTTON_MASK_RIGHT
+	drag.position = Vector2(410, 300)
+	drag.relative = Vector2(10, 0)
+	stage.push_input(press)
+	stage.push_input(drag)
+	stage.push_input(drag)
+	if turns.size() != 1:
+		failures.append("one drag said `turn` %d time(s)" % turns.size())
+	# Focus lost with the button held: its release lands elsewhere.
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	stage.push_input(drag)
+	if turns.size() != 2:
+		failures.append("the drag after a lost focus was not a new turn: %d" % turns.size())
+	# A new press with no release between starts a new turn.
+	stage.push_input(press)
+	stage.push_input(drag)
+	if turns.size() != 3:
+		failures.append("the drag after a new press was not a new turn: %d" % turns.size())
+	var release := press.duplicate()
+	release.pressed = false
+	Input.parse_input_event(release)
+	await get_tree().process_frame
+	stage.queue_free()
+	await get_tree().process_frame
+	print("[client-check] the camera's turn: said once a drag, again after a lost focus and after a new press")
+
+
+## **A frame on a link no connection has is refused, and the rig is kept** (fix pass 2, item 7):
+## `watch_receive` checks the link before it takes the rig.
+func _check_a_bad_link_keeps_the_rig(failures: Array[String]) -> void:
+	var vista: Node3D = VistaScene.instantiate()
+	add_child(vista)
+	vista.set_process(false)
+	var bridge: Node = vista.bridge
+	bridge.watch_begin()
+	for link in [-1, 2, 7]:
+		var answer: Dictionary = bridge.watch_receive(link, "{}")
+		if String(answer.get("refused", "")) != "no_such_link":
+			failures.append("a frame on link %d was not refused: %s" % [link, answer])
+	if bridge.watch_state().is_empty():
+		failures.append("a frame on a link no connection has dropped the rig")
+	vista.queue_free()
+	await get_tree().process_frame
+	print("[client-check] a frame on a link no connection has: refused, the rig kept")
+
+
+## **A stopped match can be exported** (fix pass 2, item 9): with Playtest mode on, the survey and
+## Export show whenever no match is running (the chooser shown), hide while one runs, and show
+## again once its host stops; the export then writes its bundle.
+func _check_export_after_a_stopped_match(failures: Array[String]) -> void:
+	var lobby: Node = LobbyScene.instantiate()
+	add_child(lobby)
+	await get_tree().process_frame
+	var playtest: Node = lobby.get_node("Playtest")
+	playtest._toggle.button_pressed = true
+	await get_tree().process_frame
+	if not playtest._survey.visible:
+		failures.append("Export is not offered with Playtest on and no match running")
+	# A match runs: the chooser is hidden, as the lobby hides it when a match starts.
+	lobby._started = true
+	lobby._chooser.visible = false
+	await get_tree().process_frame
+	if playtest._survey.visible:
+		failures.append("Export is offered while a match runs")
+	# Its host stops: the lobby says why and shows the chooser again.
+	lobby._on_failed("the host stopped")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not playtest._survey.visible:
+		failures.append("Export is not offered after the host stopped")
+	var folder := ProjectSettings.globalize_path("user://client_check_playtest_stopped")
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		failures.append("the stopped-match check could not make %s" % folder)
+	else:
+		var path := folder + "/stopped.zip"
+		var written: Dictionary = playtest.export_to(path)
+		if not written.get("written", false):
+			failures.append("a stopped match's bundle was not written: %s" % written)
+		if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+			failures.append("the stopped-match check could not remove its bundle")
+		if DirAccess.remove_absolute(folder) != OK:
+			failures.append("the stopped-match check could not remove its folder")
+	playtest._toggle.button_pressed = false
+	lobby.queue_free()
+	await get_tree().process_frame
+	print("[client-check] Playtest mode: Export offered with no match running, hidden while one runs, offered and written after its host stopped")
