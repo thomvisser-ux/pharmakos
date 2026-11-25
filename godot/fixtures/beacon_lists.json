@@ -1,0 +1,140 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "summary": {
+      "beacon_id": "b_00",
+      "at": {
+        "x": 358,
+        "y": 24,
+        "z": 36
+      },
+      "owner": "seat.0",
+      "core": true,
+      "priority": "normal",
+      "powered": true,
+      "hp": 3000,
+      "max_hp": 3000,
+      "sphere_radius_voxels": 24
+    },
+    "prose": "Yours. Beacon b_00 carries the Build mandate and has 3000 HP.",
+    "mandate": "build",
+    "settings": [
+      {
+        "pointer": "/roe",
+        "title": "Rules of engagement",
+        "value_json": "\"RETURN_FIRE\"",
+        "shape": {
+          "choice": {
+            "values": [
+              "\"HOLD_FIRE\"",
+              "\"RETURN_FIRE\"",
+              "\"FREE_FIRE\""
+            ],
+            "titles": [
+              "hold fire",
+              "return fire",
+              "fire freely"
+            ]
+          }
+        },
+        "value_text": ""
+      },
+      {
+        "pointer": "/retreat_hp_pct",
+        "title": "Retreat below HP",
+        "value_json": "0",
+        "shape": {
+          "integer": {
+            "min": 0,
+            "max": 100,
+            "unit": "%",
+            "display_unit": "%",
+            "zero_title": "retreat off",
+            "min_text": "0",
+            "max_text": "100"
+          }
+        },
+        "value_text": "0",
+        "value_title": "retreat off"
+      },
+      {
+        "pointer": "/build/repair_threshold_pct",
+        "title": "Repair below",
+        "value_json": "0",
+        "shape": {
+          "integer": {
+            "min": 0,
+            "max": 100,
+            "unit": "%",
+            "display_unit": "%",
+            "zero_title": "never repairing structures, beacons or walls",
+            "min_text": "0",
+            "max_text": "100"
+          }
+        },
+        "value_text": "0",
+        "value_title": "never repairing structures, beacons or walls"
+      },
+      {
+        "pointer": "/build/rebuild_destroyed",
+        "title": "Rebuild destroyed",
+        "value_json": "false",
+        "shape": {
+          "choice": {
+            "values": [
+              "true",
+              "false"
+            ],
+            "titles": [
+              "yes",
+              "no"
+            ]
+          }
+        },
+        "value_text": ""
+      },
+      {
+        "pointer": "/build/terraform",
+        "title": "Terraform",
+        "value_json": "\"NONE\"",
+        "shape": {
+          "choice": {
+            "values": [
+              "\"NONE\"",
+              "\"FILL\"",
+              "\"DIG\"",
+              "\"BOTH\""
+            ],
+            "titles": [
+              "leave the ground as it is",
+              "fill hollows",
+              "dig out rises",
+              "fill and dig"
+            ]
+          }
+        },
+        "value_text": ""
+      }
+    ],
+    "lists": [
+      {
+        "pointer": "/build/protected_areas",
+        "title": "Protected areas",
+        "entry_lines": [
+          "the ground from column -4, -2 to column -2, 1",
+          "the ground from column -1, -2 to column 1, 2"
+        ],
+        "clear_pointer": "/build/clear_protected_areas",
+        "clear_title": "Empty the protected areas",
+        "empty_title": "none"
+      }
+    ],
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 599950,
+      "segment_length_ms": 1000,
+      "round": 1
+    }
+  }
+}

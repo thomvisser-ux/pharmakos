@@ -200,6 +200,7 @@ const TEXT := {
 	"status_rule_refused_no_such_slot": "That condition is not in the rule list any more.",
 	"status_rule_refused_group_slot": "That condition is a group: pick one of its items instead.",
 	"status_rule_refused_no_pick_op": "The gateway named no way to write there, so nothing was sent.",
+	"status_rule_refused_empty_list": "That list holds nothing, so there is nothing to empty.",
 	"rule_slot": "Condition: {title}",
 	# Add and Remove a rule (S3's `fixq-c`, item 8): Add asks the gateway for an empty rule with a
 	# fresh id; Remove is one `remove` at the row's pointer, which the verifier then judges.
@@ -241,6 +242,12 @@ const TEXT := {
 	"menu_add_target": "Add a build target (then click the ground)",
 	"menu_remove_target": "Remove a build target",
 	"menu_target_row": "{line}",
+	# A beacon's lists (S3's `edlists`): the list's title, each entry, the clear and what an empty
+	# list is, every word the gateway's (`get_beacon`'s `lists`).
+	"menu_list": "{title}",
+	"menu_list_line": "{line}",
+	"menu_list_empty": "{empty}",
+	"menu_list_clear": "{clear}",
 	"menu_queue": "Queue a structure",
 	# Under a locked entry in the entry list, the gateway's sentence as it came.
 	"menu_entry_locked": "Locked: {locked}",

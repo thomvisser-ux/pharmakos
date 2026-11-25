@@ -1,3 +1,4 @@
+| `fixtures/beacon_lists.json` | a byte-identical copy of `tests/golden/gateway/get_beacon_lists/expected.response.json` (a Build beacon holding two protected areas: a list row with its lines and its clear, S3's `edlists`), for the clear's tests and the client check's Visit & change leg; `tests/vocabulary.rs` keeps it identical. The lane that moves the golden re-copies it |
 <!--
 SPDX-FileCopyrightText: 2026 Pharmakos contributors
 SPDX-License-Identifier: GPL-3.0-or-later

@@ -1459,10 +1459,10 @@ func picker_rows() -> Array:
 
 ## The Visit & change submenu for the beacon the map menu is open for: the priority rows (S1's),
 ## then, from the bridge's `beacon_detail` and `vocabulary`, one row per setting (its title and
-## value now, its editor by its shape), Switch mandate, Add and Remove a build target, and Queue a
-## structure, every entry as sent and locked ones greyed with their reason. Each row the player
-## picks is one route step with one row, composed by the bridge. Redrawn only when what it draws
-## from changed.
+## value now, its editor by its shape), Switch mandate, Add and Remove a build target, each list
+## its writ holds with its clear (S3's `edlists`), and Queue a structure, every entry as sent
+## and locked ones greyed with their reason. Each row the player picks is one route step with one
+## row, composed by the bridge. Redrawn only when what it draws from changed.
 func _fill_visit_menu(state: Dictionary) -> void:
 	if _visit_beacon == "":
 		return
@@ -1505,7 +1505,37 @@ func _fill_visit_menu(state: Dictionary) -> void:
 		# The target in the gateway's own words (`build_target_lines`), never its anchor's JSON.
 		remove.add_item(Strings.text("menu_target_row", {"line": targets[which].get("line", "")}), which)
 	remove.id_pressed.connect(func(which: int) -> void: _on_visit_row("remove_target", which))
+	var lists: Array = detail.get("lists", [])
+	for which in lists.size():
+		_list_submenu(which, lists[which])
 	_visit_menu.add_item(Strings.text("menu_queue"), ITEM_LIST_QUEUE)
+
+
+## The id of a list submenu's clear item; its entry lines take the ids after it.
+const LIST_CLEAR_ID := 0
+
+
+## One of the beacon's lists (S3's `edlists`), as a submenu titled with the list's name: each
+## entry line as the gateway sent it, greyed, or the gateway's word for an empty list; and, for a
+## list the gateway sent with lines, the clear in the gateway's words, which is one route step with
+## one row, composed by the bridge. A list with no lines offers no clear. Every word is the
+## gateway's; the client counts nothing.
+func _list_submenu(which: int, list: Dictionary) -> void:
+	var submenu := _visit_submenu(Strings.text("menu_list", {"title": list.get("title", "")}))
+	var lines: PackedStringArray = list.get("lines", PackedStringArray())
+	if lines.is_empty():
+		submenu.add_item(Strings.text("menu_list_empty", {"empty": list.get("empty_title", "")}), LIST_CLEAR_ID + 1)
+		submenu.set_item_disabled(submenu.item_count - 1, true)
+		return
+	for line in lines.size():
+		submenu.add_item(Strings.text("menu_list_line", {"line": lines[line]}), LIST_CLEAR_ID + 1 + line)
+		submenu.set_item_disabled(submenu.item_count - 1, true)
+	submenu.add_separator()
+	submenu.add_item(Strings.text("menu_list_clear", {"clear": list.get("clear_title", "")}), LIST_CLEAR_ID)
+	submenu.id_pressed.connect(func(id: int) -> void:
+		if id == LIST_CLEAR_ID:
+			_on_visit_row("clear_list", which)
+	)
 
 
 ## A submenu of the Visit & change menu, titled `title`.

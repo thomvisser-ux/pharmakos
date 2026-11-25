@@ -370,6 +370,22 @@ pub struct HeldTarget {
     pub line: String,
 }
 
+/// One list of a beacon's mandate, as sent (`gp.api.v1.BeaconListRow`; S3's `edlists`): drawn
+/// and emptied, never read for a rule.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct HeldList {
+    /// Its name in the player's words.
+    pub title: String,
+    /// One sentence per entry, the gateway's, in its order. Empty for an empty list.
+    pub entry_lines: Vec<String>,
+    /// The flag that empties it: what the clear writes `true`.
+    pub clear_pointer: String,
+    /// The clear as an action, in the gateway's words.
+    pub clear_title: String,
+    /// What an empty list is, in the gateway's words, drawn in place of the lines.
+    pub empty_title: String,
+}
+
 /// What `get_beacon` said about one of this seat's beacons.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BeaconDetail {
@@ -385,6 +401,8 @@ pub struct BeaconDetail {
     pub settings: Vec<Setting>,
     /// A Build beacon's targets, in the gateway's order.
     pub targets: Vec<HeldTarget>,
+    /// The lists its mandate holds, in the gateway's order (S3's `edlists`).
+    pub lists: Vec<HeldList>,
 }
 
 /// A `get_beacon` answer's detail, for the beacon `id`. Another seat's beacon has none of it:
@@ -465,6 +483,26 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
             });
         }
     }
+    let lists = response
+        .lists
+        .into_iter()
+        .map(|row| {
+            // A clear the gateway named no flag for clears nothing: refused, never guessed.
+            if row.clear_pointer.is_empty() {
+                return Err(BridgeError::Rpc(format!(
+                    "the list `{}` came with no clear pointer",
+                    row.title
+                )));
+            }
+            Ok(HeldList {
+                title: row.title,
+                entry_lines: row.entry_lines,
+                clear_pointer: row.clear_pointer,
+                clear_title: row.clear_title,
+                empty_title: row.empty_title,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok((
         response.prose,
         BeaconDetail {
@@ -473,6 +511,7 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
             priority,
             settings,
             targets,
+            lists,
         },
     ))
 }
@@ -581,6 +620,19 @@ pub fn remove_target_row(target: &HeldTarget) -> Json {
         "remove_build_target".to_owned(),
         Json::Object(vec![("anchor".to_owned(), target.anchor.clone())]),
     )])
+}
+
+/// The interface row that empties `list`: one `set_mandate_settings` row writing its clear
+/// pointer, as sent, `true` (S3's `edlists`). Whether the row is legal is the verifier's.
+///
+/// # Errors
+///
+/// [`PickError::NoPointer`] for a clear pointer that names no field.
+pub fn clear_row(list: &HeldList) -> Result<Json, PickError> {
+    Ok(settings_row(nested_setting(
+        &list.clear_pointer,
+        Json::Bool(true),
+    )?))
 }
 
 /// The interface row that adds the Build target `target` as the gateway composed it

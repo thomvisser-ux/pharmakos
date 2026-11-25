@@ -276,6 +276,7 @@ fn the_fixtures_are_byte_copies_of_the_gateways_goldens() {
         ("vocabulary.json", "get_vocabulary"),
         ("beacon_core.json", "get_beacon_core"),
         ("beacon_build.json", "get_beacon_build"),
+        ("beacon_lists.json", "get_beacon_lists"),
     ] {
         let copy = fs::read(root().join("godot").join("fixtures").join(fixture)).expect("the copy");
         let original = fs::read(

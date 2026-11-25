@@ -1650,7 +1650,8 @@ impl PharmakosBridge {
     /// Visit & change: one row on beacon `beacon` naming entry `which` of what `row` names:
     /// `mandate` (switch to the vocabulary's mandate `which`), `add_target` (the next ground
     /// click anchors the vocabulary's blueprint `which`), `remove_target` (the detail's target
-    /// `which`) or `queue` (queue the vocabulary's blueprint `which`).
+    /// `which`), `queue` (queue the vocabulary's blueprint `which`) or `clear_list` (empty the
+    /// detail's list `which`, S3's `edlists`).
     #[func]
     fn editor_visit_row(&mut self, beacon: GString, row: GString, which: i64) -> bool {
         let Some(rig) = self.rig.as_mut() else {
@@ -1665,6 +1666,7 @@ impl PharmakosBridge {
                 (Ok(which), "add_target") => editor.begin_build_target(&beacon, which).is_ok(),
                 (Ok(which), "remove_target") => editor.remove_build_target(&beacon, which).is_ok(),
                 (Ok(which), "queue") => editor.queue_structure(&beacon, which).is_ok(),
+                (Ok(which), "clear_list") => editor.clear_list(&beacon, which).is_ok(),
                 (Ok(_), _) => refused(editor, RuleEditRefusal::NotThisEditor),
             }
         })
