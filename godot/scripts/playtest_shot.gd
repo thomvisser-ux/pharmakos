@@ -7,8 +7,8 @@
 # the bridge's own recorder.
 #
 # Without `--shot=` it is a check: the button switched the bridge's recorder on, the line and the
-# survey are shown, an unanswered survey is taken, a too-long answer is refused in the string
-# table's words, the check button switched off clears the recorder, and the scene quits 0. NOT
+# survey are shown, an answer past its cap refuses the export in the string table's words until
+# the answer changes, the check button switched off clears the recorder, and the scene quits 0. NOT
 # YET COMPARED: `cargo xtask screenshot` renders only the shots `xtask`'s SHOTS lists, and its row
 # is S3's `cert3`'s first commit (proposed golden `tests/golden/vista/expected.playtest.png`);
 # until then it is run by hand (godot/README.md):
@@ -57,17 +57,24 @@ func _ready() -> void:
 	if not playtest._note.text.begins_with(Strings.text("playtest_on")):
 		_fail("the line does not say what Playtest mode records: %s" % playtest._note.text)
 		return
-	var unanswered: Dictionary = bridge.playtest_survey("unanswered", "unanswered", "")
-	if not unanswered.get("taken", false):
-		_fail("an unanswered survey was refused: %s" % unanswered)
-		return
+	# A refused export: the answer past the cap the bridge states, to a folder that is not there,
+	# so nothing could be written even if the refusal failed. Its words stay until the text changes.
 	var limit: int = int(state.get("survey_limit", 0))
-	var long: Dictionary = bridge.playtest_survey("yes", "partly", "x".repeat(limit + 1))
-	if long.get("taken", true) or Playtest.survey_words(long) != Strings.text("playtest_survey_too_long", {"limit": limit}):
-		_fail("a survey text past its cap was not refused in the string table's words: %s" % long)
+	playtest._wanted.text = "x".repeat(limit + 1)
+	playtest._wanted_changed()
+	var refused: Dictionary = playtest.export_to(ProjectSettings.globalize_path("user://playtest_shot_no_such_folder/x.zip"))
+	var words := Strings.text("playtest_export_survey_too_long", {"limit": limit})
+	if refused.get("written", true) or String(refused.get("refusal", "")) != "survey_too_long" or playtest._said.text != words:
+		_fail("an answer past its cap did not refuse the export in the string table's words: %s, `%s`" % [refused, playtest._said.text])
 		return
 	playtest._wanted.text = "The rule list: I wanted to see why my scout turned back."
-	playtest._send_survey()
+	playtest._wanted_changed()
+	if playtest._said.text != "":
+		_fail("the refusal's words stayed after the answer changed")
+		return
+	if playtest._count.text != Strings.text("playtest_wanted_count", {"count": playtest._wanted.text.length(), "limit": limit}):
+		_fail("the answer's count is not drawn against the bridge's cap: `%s`" % playtest._count.text)
+		return
 	for i in SETTLE_DRAWS:
 		await get_tree().process_frame
 	var caught: Variant = bridge.caught_panics()

@@ -39,7 +39,7 @@ use pharmakos_client_gdext::pacer::{LullEnd, MAX_ATTENTION_STEP_US, PushTime, SP
 use pharmakos_client_gdext::playtest::{
     Another, BUNDLE_ENTRIES, BUNDLE_FORMAT, BundleRefusal, CameraMove, Code, DropReason, Event,
     ExportFailure, MAX_BUNDLE_BYTES, MAX_CODES, MAX_LOG_LINES, MAX_LULL_RECORDS, MAX_PUSH_RECORDS,
-    MAX_SURVEY_TEXT_CHARS, PushOutcome, Recorded, Recorder, SurveyRefusal, Understood,
+    MAX_SURVEY_TEXT_CHARS, PushOutcome, Recorded, Recorder, Survey, SurveyRefusal, Understood,
 };
 use pharmakos_client_gdext::rig::{ADMIN, LullLengths, Outgoing, Phase, Rig, SEAT};
 use pharmakos_proto::json::{self, Json};
@@ -330,16 +330,12 @@ fn nothing_is_kept_while_off_and_switching_off_clears() {
         recorder.rows(1, [Code::of_verifier("E0104")]),
         Recorded::Off
     );
-    assert_eq!(
-        recorder.survey(6, Another::Yes, Understood::Yes, "words"),
-        Err(SurveyRefusal::Off)
-    );
     assert!(recorder.summary().is_none());
-    assert_eq!(recorder.bundle(), Err(BundleRefusal::Off));
+    assert_eq!(recorder.bundle(&Survey::default()), Err(BundleRefusal::Off));
     let at = folder("off");
     let chosen = at.join("pharmakos-playtest.zip");
     assert!(matches!(
-        recorder.export(7, &chosen),
+        recorder.export(7, &chosen, Another::Yes, Understood::Yes, "words"),
         Err(ExportFailure::Refused(BundleRefusal::Off))
     ));
     assert!(listing(&at).is_empty(), "nothing written while off");
@@ -368,7 +364,7 @@ fn nothing_is_kept_while_off_and_switching_off_clears() {
     assert!(recorder.push_records().is_none() && recorder.lull_records().is_none());
 
     recorder.switch(true, 70, true, Phase::Recap, 1);
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     assert_eq!(
         file(&files, "diagnostics.log"),
         "1 recap playtest_on t=0\n",
@@ -387,14 +383,32 @@ fn the_export_writes_exactly_one_file_where_the_tester_chose() {
     recorder.switch(true, 0, true, Phase::Unknown, 0);
     recorder.phase(1_000, Phase::Lull, 1, None);
     assert!(listing(&at).is_empty(), "nothing is written before Export");
-    let bundle = recorder.bundle().expect("on");
-    let exported = recorder.export(5_000, &chosen).expect("written");
+    let exported = recorder
+        .export(
+            5_000,
+            &chosen,
+            Another::Unanswered,
+            Understood::Unanswered,
+            "",
+        )
+        .expect("written");
     assert_eq!(listing(&at), ["pharmakos-playtest.zip"]);
-    assert_eq!(fs::read(&chosen).expect("the file"), bundle);
-    assert_eq!(exported.bytes, bundle.len());
+    // What was written is the bundle as it stood at the export, its survey line included.
+    let written = fs::read(&chosen).expect("the file");
+    assert_eq!(written.len(), exported.bytes);
+    let files = files_of(&written);
+    assert!(file(&files, "diagnostics.log").ends_with(" survey_answered t=5\n"));
 
     // A second export replaces the file whole; the first export's line is in it.
-    recorder.export(6_000, &chosen).expect("written again");
+    recorder
+        .export(
+            6_000,
+            &chosen,
+            Another::Unanswered,
+            Understood::Unanswered,
+            "",
+        )
+        .expect("written again");
     assert_eq!(listing(&at), ["pharmakos-playtest.zip"]);
     let files = files_of(&fs::read(&chosen).expect("the file"));
     assert!(
@@ -406,11 +420,17 @@ fn the_export_writes_exactly_one_file_where_the_tester_chose() {
     // A folder that is not there: nothing is written anywhere, and the failure is a typed line.
     let missing = at.join("no such folder").join("bundle.zip");
     assert!(matches!(
-        recorder.export(7_000, &missing),
+        recorder.export(
+            7_000,
+            &missing,
+            Another::Unanswered,
+            Understood::Unanswered,
+            ""
+        ),
         Err(ExportFailure::Write(_))
     ));
     assert_eq!(listing(&at), ["pharmakos-playtest.zip"]);
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     let log = file(&files, "diagnostics.log");
     let failed = log
         .lines()
@@ -438,7 +458,7 @@ fn the_bundle_holds_exactly_its_four_entries() {
     );
     let mut recorder = Recorder::new();
     recorder.switch(true, 0, true, Phase::Unknown, 0);
-    let zip = recorder.bundle().expect("on");
+    let zip = recorder.bundle(&Survey::default()).expect("on");
     let names: Vec<String> = entries(&zip).into_iter().map(|(name, _)| name).collect();
     assert_eq!(names, BUNDLE_ENTRIES);
     let files = files_of(&zip);
@@ -677,7 +697,8 @@ const TEXT_TAKERS: &[(&str, &str)] = &[
     ("of_refusal", "said"),
     ("of_verifier", "code"),
     ("of_name", "name"),
-    ("survey", "text"),
+    ("answered", "text"),
+    ("export", "text"),
 ];
 
 #[test]
@@ -806,7 +827,7 @@ fn a_skipped_push_carries_no_times_and_is_counted() {
         [(1, 10_000, LullEnd::PhaseLeft), (2, 4_000, LullEnd::Ready)]
     );
 
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     let metrics = json_of(file(&files, "metrics.json"));
     assert_eq!(number_at(&metrics, "pushes"), 2);
     assert_eq!(number_at(&metrics, "skipped_pushes"), 1);
@@ -851,7 +872,7 @@ fn speeds_camera_rows_and_refusals_are_counted_by_kind() {
     recorder.refused(2, &Code::of_refusal("RATE_LIMITED: slow down"));
     recorder.refused(3, &Code::of_refusal("RATE_LIMITED: slow down"));
     recorder.refused(4, &Code::of_refusal("not a code"));
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     let metrics = json_of(file(&files, "metrics.json"));
     let object = |key: &str| -> Vec<(String, u64)> {
         let Some(Json::Object(entries)) = metrics.get(key) else {
@@ -901,11 +922,19 @@ fn speeds_camera_rows_and_refusals_are_counted_by_kind() {
     }
 }
 
+/// The survey goes into the bundle with the export, as the screen shows it at that moment, and
+/// only then: an unanswered question says so, the text goes as written, and the log carries one
+/// `survey_answered` line per export, never one per edit (fix pass 1, item 1).
 #[test]
-fn the_survey_text_goes_as_written_and_a_long_one_is_refused_whole() {
+fn the_survey_is_taken_with_the_export_as_written() {
+    let at = folder("survey");
+    let chosen = at.join("pharmakos-playtest.zip");
     let mut recorder = Recorder::new();
     recorder.switch(true, 0, true, Phase::Ended, 3);
-    let files = files_of(&recorder.bundle().expect("on"));
+    recorder
+        .export(1, &chosen, Another::Unanswered, Understood::Unanswered, "")
+        .expect("written");
+    let files = files_of(&fs::read(&chosen).expect("the bundle"));
     let survey = json_of(file(&files, "survey.json"));
     assert_eq!(
         survey.get("play_another_round"),
@@ -921,11 +950,14 @@ fn the_survey_text_goes_as_written_and_a_long_one_is_refused_whole() {
         Some(&json_of(r#"{"answered":false}"#))
     );
 
-    let words = "Pause, and \"aim\" at C:\\Users\\me — ✓\nline two";
+    let words = format!(
+        "Pause, and \"aim\" at C:\\Users\\me — ✓\nline two {}",
+        "w".repeat(250)
+    );
     recorder
-        .survey(1, Another::Yes, Understood::Partly, words)
-        .expect("taken");
-    let files = files_of(&recorder.bundle().expect("on"));
+        .export(2, &chosen, Another::Yes, Understood::Partly, &words)
+        .expect("written");
+    let files = files_of(&fs::read(&chosen).expect("the bundle"));
     let survey = json_of(file(&files, "survey.json"));
     assert_eq!(
         survey.get("play_another_round"),
@@ -937,28 +969,66 @@ fn the_survey_text_goes_as_written_and_a_long_one_is_refused_whole() {
     );
     assert_eq!(
         survey.get("wanted_to_change").and_then(|w| w.get("text")),
-        Some(&Json::String(words.to_owned())),
+        Some(&Json::String(words.clone())),
         "as the tester wrote it"
     );
-    let manifest = file(&files, "manifest.json");
-    assert!(manifest.contains("sent as written"), "{manifest}");
-
-    let long = "x".repeat(MAX_SURVEY_TEXT_CHARS + 1);
+    assert!(file(&files, "manifest.json").contains("sent as written"));
+    let log = file(&files, "diagnostics.log");
     assert_eq!(
-        recorder.survey(2, Another::No, Understood::No, &long),
+        log.lines()
+            .filter(|line| line.contains(" survey_answered "))
+            .count(),
+        2,
+        "one line for each of the two exports, none for an edit: {log}"
+    );
+    let at_the_cap = "é".repeat(MAX_SURVEY_TEXT_CHARS);
+    assert!(
+        Survey::answered(Another::No, Understood::No, &at_the_cap).is_ok(),
+        "the cap counts characters"
+    );
+}
+
+/// Review 1's probe: 4 000 characters typed, then one more, then Export. Today's answer ships
+/// nothing: the whole export is refused with its reason, no file is written (an older bundle at
+/// the path is left as it was), the refusal is one typed line, and no keystroke ever was one.
+#[test]
+fn a_survey_text_past_its_cap_refuses_the_whole_export() {
+    let at = folder("survey_too_long");
+    let chosen = at.join("pharmakos-playtest.zip");
+    let mut recorder = Recorder::new();
+    recorder.switch(true, 0, true, Phase::Ended, 3);
+    let typed = "a".repeat(MAX_SURVEY_TEXT_CHARS + 1);
+    assert!(matches!(
+        recorder.export(1, &chosen, Another::Yes, Understood::Yes, &typed),
+        Err(ExportFailure::Refused(BundleRefusal::SurveyTooLong))
+    ));
+    assert!(listing(&at).is_empty(), "no file is written");
+    assert_eq!(
+        Survey::answered(Another::Yes, Understood::Yes, &typed),
         Err(SurveyRefusal::TooLong)
     );
-    let files = files_of(&recorder.bundle().expect("on"));
+    // Shortened, the next export goes, and carries the refusal as one line and no keystroke.
+    let short = "b".repeat(MAX_SURVEY_TEXT_CHARS);
+    recorder
+        .export(2, &chosen, Another::Yes, Understood::Yes, &short)
+        .expect("written");
+    let files = files_of(&fs::read(&chosen).expect("the bundle"));
+    let log = file(&files, "diagnostics.log");
+    assert_eq!(
+        log.lines().collect::<Vec<_>>(),
+        [
+            "1 ended playtest_on t=0",
+            "2 ended export_failed SURVEY_TOO_LONG t=0",
+            "3 ended survey_answered t=0",
+        ],
+        "{log}"
+    );
     let survey = json_of(file(&files, "survey.json"));
     assert_eq!(
         survey.get("wanted_to_change").and_then(|w| w.get("text")),
-        Some(&Json::String(words.to_owned())),
-        "a refused answer changes nothing, and nothing is cut"
+        Some(&Json::String(short)),
+        "the answer exported, never a prefix of an older one"
     );
-    let at_the_cap = "é".repeat(MAX_SURVEY_TEXT_CHARS);
-    recorder
-        .survey(3, Another::No, Understood::No, &at_the_cap)
-        .expect("the cap counts characters");
 }
 
 /// A frame gap is not attention (fix pass 1, item 3): a Push whose frames stop for 64 s carries
@@ -973,7 +1043,7 @@ fn a_frame_gap_is_summed_apart_in_the_bundle() {
     recorder.seen(64_016_000);
     recorder.seen(64_032_000);
     recorder.phase(64_032_000, Phase::Recap, 1, None);
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     let metrics = json_of(file(&files, "metrics.json"));
     let [push] = array_at(&metrics, "push_time") else {
         panic!("one Push");
@@ -1033,7 +1103,7 @@ fn a_push_left_is_timed_to_its_matchs_last_frame() {
     recorder.phase(605_000_000, Phase::Lull, 1, None);
     frames(&mut recorder, 605_000_000, 606_000_000);
     recorder.phase(606_000_000, Phase::Push, 1, None);
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     let metrics = json_of(file(&files, "metrics.json"));
     assert_eq!(
         rows(&metrics, "push_time", "focused_us"),
@@ -1082,7 +1152,7 @@ fn a_lull_left_is_timed_to_its_matchs_last_frame() {
     recorder.phase(300_000_000, Phase::Lull, 1, None);
     frames(&mut recorder, 300_000_000, 301_000_000);
     recorder.phase(301_000_000, Phase::Push, 1, None);
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     let metrics = json_of(file(&files, "metrics.json"));
     assert_eq!(
         rows(&metrics, "lull_time", "used_us"),
@@ -1104,7 +1174,7 @@ fn a_start_with_no_phase_is_no_match() {
     recorder.phase(10, Phase::Ended, 3, None);
     recorder.match_begun();
     recorder.phase(20, Phase::Lull, 1, None);
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     let manifest = json_of(file(&files, "manifest.json"));
     let [first, second] = array_at(&manifest, "matches") else {
         panic!("two matches");
@@ -1145,10 +1215,12 @@ fn a_full_recorder_says_what_it_dropped_and_fits_its_bound() {
     for _ in 0..MAX_LOG_LINES {
         recorder.refused(step(), &Code::of_refusal("UNSUPPORTED_SCHEMA_VERSION: x"));
     }
-    let longest = "\u{1}".repeat(MAX_SURVEY_TEXT_CHARS);
-    recorder
-        .survey(step(), Another::Yes, Understood::Yes, &longest)
-        .expect("at the cap");
+    let longest = Survey::answered(
+        Another::Yes,
+        Understood::Yes,
+        &"\u{1}".repeat(MAX_SURVEY_TEXT_CHARS),
+    )
+    .expect("at the cap");
 
     for reason in [
         DropReason::PushRecordsFull,
@@ -1163,7 +1235,7 @@ fn a_full_recorder_says_what_it_dropped_and_fits_its_bound() {
     }
     assert_eq!(recorder.push_records().expect("on").len(), MAX_PUSH_RECORDS);
     assert_eq!(recorder.lull_records().expect("on").len(), MAX_LULL_RECORDS);
-    let zip = recorder.bundle().expect("fits");
+    let zip = recorder.bundle(&longest).expect("fits");
     assert!(
         zip.len() <= MAX_BUNDLE_BYTES,
         "{} bytes past {MAX_BUNDLE_BYTES}",
@@ -1222,7 +1294,7 @@ fn a_dropped_code_is_counted_once_a_revision_not_once_a_frame() {
     for _ in 0..3 {
         recorder.rows(3, codes(0, 1));
     }
-    let files = files_of(&recorder.bundle().expect("on"));
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
     let metrics = json_of(file(&files, "metrics.json"));
     let rows = metrics.get("verifier_error_rows").expect("rows");
     assert_eq!(number_at(rows, "E0000"), 2, "revisions 1 and 3");
@@ -1425,7 +1497,7 @@ fn no_marker_reaches_the_bundle() {
     let mut recorder = Recorder::new();
     play_a_laced_round(&mut recorder);
 
-    let zip = recorder.bundle().expect("on");
+    let zip = recorder.bundle(&Survey::default()).expect("on");
     let files = files_of(&zip);
     // The recorder did record: the drive is not empty.
     let metrics = json_of(file(&files, "metrics.json"));

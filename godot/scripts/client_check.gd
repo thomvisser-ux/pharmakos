@@ -2047,6 +2047,34 @@ func _check_the_playtest_lobby(failures: Array[String]) -> void:
 		if DirAccess.remove_absolute(folder + "/" + old) != OK:
 			failures.append("the Playtest check could not clear %s" % old)
 	var path := folder + "/" + name
+	# Review 1's probe: the answer typed one key at a time to the cap and one past it, then
+	# Export. The whole export is refused, no file is written, and the words stay until the text
+	# changes; no keystroke reached the recorder.
+	var limit: int = int(bridge.playtest_state().get("survey_limit", 0))
+	var typed := ""
+	for i in limit + 1:
+		typed += "a"
+		playtest._wanted.text = typed
+		playtest._wanted_changed()
+	var refused: Dictionary = playtest.export_to(path)
+	if refused.get("written", true) or String(refused.get("refusal", "")) != "survey_too_long":
+		failures.append("an answer past its cap did not refuse the export: %s" % refused)
+	if not DirAccess.get_files_at(folder).is_empty():
+		failures.append("a refused export wrote a file: %s" % [DirAccess.get_files_at(folder)])
+	var words := Strings.text("playtest_export_survey_too_long", {"limit": limit})
+	if playtest._said.text != words:
+		failures.append("the refusal is not said in the string table's words: `%s`" % playtest._said.text)
+	await get_tree().process_frame
+	if playtest._said.text != words:
+		failures.append("the refusal's words went before the answer changed")
+	# A 300-character answer, typed key by key, then Export: the log holds one survey line.
+	typed = ""
+	for i in 300:
+		typed += "b"
+		playtest._wanted.text = typed
+		playtest._wanted_changed()
+	if playtest._said.text != "":
+		failures.append("the refusal's words stayed after the answer changed")
 	var written: Dictionary = playtest.export_to(path)
 	if not written.get("written", false):
 		failures.append("Export playtest bundle did not write: %s" % written)
@@ -2064,6 +2092,11 @@ func _check_the_playtest_lobby(failures: Array[String]) -> void:
 		var log := reader.read_file("diagnostics.log").get_string_from_utf8()
 		if not (" focus_out " in log and " focus_in " in log and " playtest_on " in log):
 			failures.append("the focus did not reach the diagnostics log: `%s`" % log)
+		if log.count(" survey_answered ") != 1 or log.count(" export_failed SURVEY_TOO_LONG ") != 1:
+			failures.append("the log does not hold one survey line and the one refusal: `%s`" % log)
+		var survey: Variant = JSON.parse_string(reader.read_file("survey.json").get_string_from_utf8())
+		if not (survey is Dictionary) or String((survey as Dictionary).get("wanted_to_change", {}).get("text", "")) != typed:
+			failures.append("the bundle's survey is not the answer exported: %s" % survey)
 		var metrics: Variant = JSON.parse_string(reader.read_file("metrics.json").get_string_from_utf8())
 		if not (metrics is Dictionary) or int((metrics as Dictionary).get("camera_moves", {}).get("follow", 0)) != 1:
 			failures.append("the camera rig's move did not reach the metrics: %s" % metrics)

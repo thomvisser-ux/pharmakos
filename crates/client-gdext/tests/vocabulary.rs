@@ -55,21 +55,14 @@ const OTHER_MEANINGS: &[(&str, &str, usize, &str)] = &[
     (
         "bridge.rs",
         "wall",
-        9,
-        "the bridge's wall clock, read by the watch rig and by Playtest mode's six calls (S3's \
+        8,
+        "the bridge's wall clock, read by the watch rig and by Playtest mode's calls (S3's \
          `prob`, part 2)",
-    ),
-    (
-        "bridge.rs",
-        "survey",
-        1,
-        "`playtest_survey`, Playtest mode's end-of-match survey (S3's `prob`, part 2), not the \
-         Survey mandate",
     ),
     (
         "playtest.rs",
         "survey",
-        11,
+        10,
         "Playtest mode's end-of-match survey and its `survey.json` (S3's plan, decision 11), not \
          the Survey mandate",
     ),

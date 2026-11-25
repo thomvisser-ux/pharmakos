@@ -155,6 +155,11 @@ impl Code {
         }
     }
 
+    /// A refused bundle's name, in capitals.
+    fn of_refusal_name(refusal: BundleRefusal) -> Self {
+        Self(refusal.name().to_ascii_uppercase())
+    }
+
     /// A write failure's name, in capitals.
     fn of_failure(failure: &WriteFailure) -> Self {
         Self(failure.name().to_ascii_uppercase())
@@ -632,9 +637,11 @@ impl Understood {
     }
 }
 
-/// The survey's answers (decision 11).
+/// The survey's answers (decision 11), as the tester gives them with Export: the recorder holds
+/// none between exports, so the bundle carries what the screen shows at the moment of the export
+/// and nothing older.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-struct Survey {
+pub struct Survey {
     another: Another,
     understood: Understood,
     /// "What did you most want to change during a Push?", as the tester wrote it; `None` when
@@ -642,24 +649,35 @@ struct Survey {
     wanted: Option<String>,
 }
 
+impl Survey {
+    /// The answers: the first two as chosen, the third `text` as the tester wrote it, none when
+    /// empty.
+    ///
+    /// # Errors
+    ///
+    /// [`SurveyRefusal::TooLong`] for a text past [`MAX_SURVEY_TEXT_CHARS`] characters, which
+    /// is refused whole and never cut.
+    pub fn answered(
+        another: Another,
+        understood: Understood,
+        text: &str,
+    ) -> Result<Self, SurveyRefusal> {
+        if text.chars().count() > MAX_SURVEY_TEXT_CHARS {
+            return Err(SurveyRefusal::TooLong);
+        }
+        Ok(Self {
+            another,
+            understood,
+            wanted: (!text.is_empty()).then(|| text.to_owned()),
+        })
+    }
+}
+
 /// Why the survey's answers were not taken.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SurveyRefusal {
-    /// Playtest mode is off.
-    Off,
     /// The text is longer than [`MAX_SURVEY_TEXT_CHARS`]; nothing was taken.
     TooLong,
-}
-
-impl SurveyRefusal {
-    /// The string table's `playtest_survey_<name>` row.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::TooLong => "too_long",
-        }
-    }
 }
 
 /// Why no bundle was built.
@@ -669,6 +687,9 @@ pub enum BundleRefusal {
     Off,
     /// The zip would be past [`MAX_BUNDLE_BYTES`], or past what a zip's 32-bit sizes hold.
     TooLarge,
+    /// The survey's text is past [`MAX_SURVEY_TEXT_CHARS`]: the whole export is refused and no
+    /// file is written, so a cut answer never ships.
+    SurveyTooLong,
 }
 
 impl BundleRefusal {
@@ -678,6 +699,7 @@ impl BundleRefusal {
         match self {
             Self::Off => "off",
             Self::TooLarge => "too_large",
+            Self::SurveyTooLong => "survey_too_long",
         }
     }
 }
@@ -748,7 +770,6 @@ struct Recording {
     log: Vec<Line>,
     seq: u64,
     dropped: DropCounts,
-    survey: Survey,
 }
 
 /// One more, or the reason it cannot be.
@@ -784,7 +805,6 @@ impl Recording {
             log: Vec::new(),
             seq: 0,
             dropped: DropCounts::default(),
-            survey: Survey::default(),
         }
     }
 
@@ -1251,35 +1271,6 @@ impl Recorder {
         answer
     }
 
-    /// The survey's answers at `now_us`: the third is `text` as the tester wrote it, none when
-    /// empty.
-    ///
-    /// # Errors
-    ///
-    /// [`SurveyRefusal`]: off, or a text past [`MAX_SURVEY_TEXT_CHARS`], which is refused whole
-    /// and never cut.
-    pub fn survey(
-        &mut self,
-        now_us: u64,
-        another: Another,
-        understood: Understood,
-        text: &str,
-    ) -> Result<(), SurveyRefusal> {
-        let Some(recording) = self.on.as_mut() else {
-            return Err(SurveyRefusal::Off);
-        };
-        if text.chars().count() > MAX_SURVEY_TEXT_CHARS {
-            return Err(SurveyRefusal::TooLong);
-        }
-        recording.survey = Survey {
-            another,
-            understood,
-            wanted: (!text.is_empty()).then(|| text.to_owned()),
-        };
-        recording.line(now_us, Event::SurveyAnswered, None);
-        Ok(())
-    }
-
     /// What the lobby shows; `None` while off.
     #[must_use]
     pub fn summary(&self) -> Option<Summary> {
@@ -1316,50 +1307,70 @@ impl Recorder {
             .map(|recording| recording.dropped.of(reason))
     }
 
-    /// The bundle's four files, in [`BUNDLE_ENTRIES`]' order, as `(name, bytes)`.
+    /// The bundle's four files, in [`BUNDLE_ENTRIES`]' order, as `(name, bytes)`, with `survey`.
     ///
     /// # Errors
     ///
     /// [`BundleRefusal::Off`] while off.
-    pub fn files(&self) -> Result<Vec<(&'static str, Vec<u8>)>, BundleRefusal> {
+    pub fn files(&self, survey: &Survey) -> Result<Vec<(&'static str, Vec<u8>)>, BundleRefusal> {
         let recording = self.on.as_ref().ok_or(BundleRefusal::Off)?;
-        let [manifest, survey, metrics, log] = BUNDLE_ENTRIES;
+        let [manifest, answers, metrics, log] = BUNDLE_ENTRIES;
         Ok(vec![
             (
                 manifest,
                 json::write(&manifest_json(recording)).into_bytes(),
             ),
-            (
-                survey,
-                json::write(&survey_json(&recording.survey)).into_bytes(),
-            ),
+            (answers, json::write(&survey_json(survey)).into_bytes()),
             (metrics, json::write(&metrics_json(recording)).into_bytes()),
             (log, log_text(&recording.log).into_bytes()),
         ])
     }
 
-    /// The bundle: one zip of [`Recorder::files`].
+    /// The bundle: one zip of [`Recorder::files`], with `survey`.
     ///
     /// # Errors
     ///
     /// [`BundleRefusal`]: off, or past [`MAX_BUNDLE_BYTES`].
-    pub fn bundle(&self) -> Result<Vec<u8>, BundleRefusal> {
-        let zip = stored_zip(&self.files()?)?;
+    pub fn bundle(&self, survey: &Survey) -> Result<Vec<u8>, BundleRefusal> {
+        let zip = stored_zip(&self.files(survey)?)?;
         if zip.len() > MAX_BUNDLE_BYTES {
             return Err(BundleRefusal::TooLarge);
         }
         Ok(zip)
     }
 
-    /// Export playtest bundle: the bundle written whole to `path`, the file the tester picked,
-    /// and nowhere else; then a line saying it was (`export_done`) or why not (`export_failed`,
-    /// the failure's name as its code), for the next export.
+    /// Export playtest bundle at `now_us`, with the survey's answers as the screen shows them:
+    /// `another`, `understood`, and `text` as the tester wrote it. The bundle is written whole to
+    /// `path`, the file the tester picked, and nowhere else. One `survey_answered` line goes into
+    /// it; after the write a line says it was (`export_done`) or why not (`export_failed`, the
+    /// failure's name as its code), for the next export.
     ///
     /// # Errors
     ///
-    /// [`ExportFailure`]: no bundle, or the write's failure.
-    pub fn export(&mut self, now_us: u64, path: &Path) -> Result<Exported, ExportFailure> {
-        let zip = self.bundle().map_err(ExportFailure::Refused)?;
+    /// [`ExportFailure`]: off; a survey text past [`MAX_SURVEY_TEXT_CHARS`], which refuses the
+    /// whole export, writes no file and is a typed `export_failed` line; a bundle too large; or
+    /// the write's failure.
+    pub fn export(
+        &mut self,
+        now_us: u64,
+        path: &Path,
+        another: Another,
+        understood: Understood,
+        text: &str,
+    ) -> Result<Exported, ExportFailure> {
+        let Some(recording) = self.on.as_mut() else {
+            return Err(ExportFailure::Refused(BundleRefusal::Off));
+        };
+        let Ok(survey) = Survey::answered(another, understood, text) else {
+            recording.line(
+                now_us,
+                Event::ExportFailed,
+                Some(Code::of_refusal_name(BundleRefusal::SurveyTooLong)),
+            );
+            return Err(ExportFailure::Refused(BundleRefusal::SurveyTooLong));
+        };
+        recording.line(now_us, Event::SurveyAnswered, None);
+        let zip = self.bundle(&survey).map_err(ExportFailure::Refused)?;
         let written = crate::write::write_whole(path, &zip);
         if let Some(recording) = self.on.as_mut() {
             match &written {

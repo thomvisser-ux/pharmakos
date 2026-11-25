@@ -45,7 +45,12 @@ var _survey: VBoxContainer
 var _another: OptionButton
 var _understood: OptionButton
 var _wanted: TextEdit
-## What the survey or the export last said.
+## How many characters the answer holds, against the most the bridge takes.
+var _count: Label
+## The most characters the answer may hold, as the bridge states it (`playtest_state`'s
+## `survey_limit`); -1 before the bridge has said.
+var _limit := -1
+## What the export last said; it stays until the answer's text changes.
 var _said: Label
 var _export: Button
 var _dialog: FileDialog
@@ -92,8 +97,10 @@ func _build_survey(column: Container) -> void:
 	_wanted = TextEdit.new()
 	_wanted.custom_minimum_size = Vector2(560, 80)
 	_wanted.accessibility_name = Strings.text("playtest_q_wanted")
-	_wanted.text_changed.connect(_send_survey)
+	_wanted.text_changed.connect(_wanted_changed)
 	_survey.add_child(_wanted)
+	_count = _label("")
+	_survey.add_child(_count)
 	_survey.add_child(_label(Strings.text("playtest_wanted_note")))
 	_export = Button.new()
 	_export.text = Strings.text("playtest_export")
@@ -121,7 +128,6 @@ func _choices(names: Array, question: String) -> OptionButton:
 	for name in names:
 		choices.add_item(Strings.text("playtest_answer_" + String(name)))
 	choices.select(0)
-	choices.item_selected.connect(func(_index: int) -> void: _send_survey())
 	_survey.add_child(choices)
 	return choices
 
@@ -168,6 +174,10 @@ func show_state(state: Dictionary) -> void:
 		_note.text = note_text(state)
 		_note.accessibility_name = _note.text
 	_survey.visible = on and String(state.get("phase", "")) == "ended"
+	var limit: Variant = Values.int_of(state.get("survey_limit", -1))
+	if limit is int and limit != _limit:
+		_limit = limit
+		_count_text()
 
 
 ## The line shown while Playtest mode is on: what it records, and the counts so far, as sent.
@@ -183,31 +193,32 @@ static func note_text(state: Dictionary) -> String:
 	return "\n".join(lines)
 
 
-## Sends the survey's answers as they stand; a refusal is said under the survey.
-func _send_survey() -> void:
-	var taken: Dictionary = bridge.playtest_survey(ANOTHER[_another.selected], UNDERSTOOD[_understood.selected], _wanted.text)
-	_said.text = survey_words(taken)
-	_said.accessibility_name = _said.text
+## The answer's text changed: the export's last words go, and the count is drawn again. The text
+## goes nowhere until Export.
+func _wanted_changed() -> void:
+	_said.text = ""
+	_said.accessibility_name = ""
+	_count_text()
 
 
-## The words for the bridge's answer to the survey: "" when it was taken.
-static func survey_words(taken: Dictionary) -> String:
-	if taken.get("taken", false):
-		return ""
-	return Strings.text("playtest_survey_" + String(taken.get("refusal", "")), {"limit": taken.get("limit", "")})
+## The answer's length against the most the bridge takes, as the bridge states the cap.
+func _count_text() -> void:
+	_count.text = Strings.text("playtest_wanted_count", {"count": _wanted.text.length(), "limit": _limit})
+	_count.accessibility_name = _count.text
 
 
 ## Export playtest bundle: the save dialog, offering the bundle's name in no folder of ours.
 func open_export() -> void:
-	_send_survey()
 	_dialog.current_file = BUNDLE_NAME
 	_dialog.popup_centered_ratio(0.6)
 
 
-## The bundle written to `path`, the file the tester picked, by the bridge; what happened is said
-## under the survey, the path shown to the tester and sent nowhere.
+## The bundle written to `path`, the file the tester picked, by the bridge, with the survey's
+## answers as the screen shows them now; what happened is said under the survey, the path shown to
+## the tester and sent nowhere. A refused export writes no file, and its words stay until the
+## answer's text changes.
 func export_to(path: String) -> Dictionary:
-	var written: Dictionary = bridge.playtest_export(ProjectSettings.globalize_path(path))
+	var written: Dictionary = bridge.playtest_export(ProjectSettings.globalize_path(path), ANOTHER[_another.selected], UNDERSTOOD[_understood.selected], _wanted.text)
 	_said.text = export_words(written, path)
 	_said.accessibility_name = _said.text
 	return written
@@ -216,7 +227,7 @@ func export_to(path: String) -> Dictionary:
 ## The words for the bridge's answer to an export of `path`.
 static func export_words(written: Dictionary, path: String) -> String:
 	if written.has("refusal"):
-		return Strings.text("playtest_export_" + String(written["refusal"]))
+		return Strings.text("playtest_export_" + String(written["refusal"]), {"limit": written.get("limit", "")})
 	var why := Strings.write_words(written)
 	if not written.get("written", false):
 		return Strings.text("playtest_export_not_done", {"why": why})

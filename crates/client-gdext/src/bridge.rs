@@ -1004,57 +1004,44 @@ impl PharmakosBridge {
         true
     }
 
-    /// The survey's answers: `another` (`yes`, `no`, `unanswered`), `understood` (`yes`,
-    /// `partly`, `no`, `unanswered`) and `text`, the tester's own words, kept as written. Answers
-    /// `taken`, and on a refusal `refusal`: `off`, `too_long` (with `limit`, the most characters
-    /// taken) or `unknown_answer`.
+    /// Export playtest bundle, with the survey's answers as the screen shows them at this moment:
+    /// `another` (`yes`, `no`, `unanswered`), `understood` (`yes`, `partly`, `no`,
+    /// `unanswered`) and `text`, the tester's own words, sent as written. The bundle is written
+    /// whole to `path` (an absolute path the tester picked in a file dialog), and nowhere else.
+    /// Answers as `file_write` does (`written`, and on a failure `failure`, `path`, `step`,
+    /// `error`, `leftover`), with `bytes` on a write, and `refusal` when no bundle was built:
+    /// `off`, `too_large`, `survey_too_long` (with `limit`, the most characters the text takes;
+    /// no file is written), `unknown_answer`, or `failed` (a caught panic, counted and named).
     #[func]
-    fn playtest_survey(
+    fn playtest_export(
         &mut self,
+        path: GString,
         another: GString,
         understood: GString,
         text: GString,
     ) -> VarDictionary {
-        let mut answer = VarDictionary::new();
-        let (Some(another), Some(understood)) = (
-            Another::of_name(&another.to_string()),
-            Understood::of_name(&understood.to_string()),
-        ) else {
-            answer.set(&"taken".to_variant(), &false.to_variant());
-            answer.set(&"refusal".to_variant(), &"unknown_answer".to_variant());
-            return answer;
-        };
-        let now = self.wall.now_us();
-        let text = text.to_string();
-        let taken = self.panics.guard("playtest_survey", || {
-            self.playtest.survey(now, another, understood, &text)
-        });
-        answer.set(
-            &"taken".to_variant(),
-            &matches!(taken, Some(Ok(()))).to_variant(),
-        );
-        if let Some(Err(refusal)) = taken {
-            answer.set(&"refusal".to_variant(), &refusal.name().to_variant());
+        let refused = |name: &str| {
+            let mut answer = VarDictionary::new();
+            answer.set(&"written".to_variant(), &false.to_variant());
+            answer.set(&"refusal".to_variant(), &name.to_variant());
             answer.set(
                 &"limit".to_variant(),
                 &count_of(playtest::MAX_SURVEY_TEXT_CHARS),
             );
-        }
-        answer
-    }
-
-    /// Export playtest bundle: the bundle written whole to `path` (an absolute path the tester
-    /// picked in a file dialog), and nowhere else. Answers as `file_write` does (`written`, and
-    /// on a failure `failure`, `path`, `step`, `error`, `leftover`), with `bytes` on a write, and
-    /// `refusal` (`off`, `too_large`) when no bundle was built.
-    #[func]
-    fn playtest_export(&mut self, path: GString) -> VarDictionary {
+            answer
+        };
+        let (Some(another), Some(understood)) = (
+            Another::of_name(&another.to_string()),
+            Understood::of_name(&understood.to_string()),
+        ) else {
+            return refused("unknown_answer");
+        };
         let path = std::path::PathBuf::from(path.to_string());
+        let text = text.to_string();
         let now = self.wall.now_us();
-        match self
-            .panics
-            .guard("playtest_export", || self.playtest.export(now, &path))
-        {
+        match self.panics.guard("playtest_export", || {
+            self.playtest.export(now, &path, another, understood, &text)
+        }) {
             Some(Ok(exported)) => {
                 let mut answer = written_dictionary(Ok(exported
                     .stale_removed
@@ -1063,18 +1050,8 @@ impl PharmakosBridge {
                 answer
             }
             Some(Err(ExportFailure::Write(failure))) => written_dictionary(Err(failure)),
-            Some(Err(ExportFailure::Refused(refusal))) => {
-                let mut answer = VarDictionary::new();
-                answer.set(&"written".to_variant(), &false.to_variant());
-                answer.set(&"refusal".to_variant(), &refusal.name().to_variant());
-                answer
-            }
-            None => {
-                let mut answer = VarDictionary::new();
-                answer.set(&"written".to_variant(), &false.to_variant());
-                answer.set(&"refusal".to_variant(), &"failed".to_variant());
-                answer
-            }
+            Some(Err(ExportFailure::Refused(refusal))) => refused(refusal.name()),
+            None => refused("failed"),
         }
     }
 

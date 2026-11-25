@@ -2145,10 +2145,6 @@ func _playtest_on() -> void:
 ## the survey's words as written, every log line in its grammar, and no match id, token, port,
 ## notebook text, path or user name in any byte of it.
 func _playtest_bundle() -> bool:
-	var answered: Dictionary = vista.bridge.playtest_survey("yes", "partly", PLAYTEST_WORDS)
-	if not answered.get("taken", false):
-		_failures.append("the survey was not taken: %s" % answered)
-		return false
 	var folder := ProjectSettings.globalize_path(PLAYTEST_FOLDER)
 	if DirAccess.make_dir_recursive_absolute(folder) != OK:
 		_failures.append("the Playtest leg could not make %s" % folder)
@@ -2158,7 +2154,8 @@ func _playtest_bundle() -> bool:
 			_failures.append("the Playtest leg could not clear %s" % old)
 			return false
 	var path := folder + "/pharmakos-playtest.zip"
-	var written: Dictionary = vista.bridge.playtest_export(path)
+	# The survey goes with the export, as answered at this moment.
+	var written: Dictionary = vista.bridge.playtest_export(path, "yes", "partly", PLAYTEST_WORDS)
 	if not written.get("written", false):
 		_failures.append("Export playtest bundle did not write: %s" % written)
 		return false
@@ -2199,9 +2196,14 @@ func _playtest_bundle() -> bool:
 		_failures.append("the survey is not as answered: %s" % survey)
 	var shape := RegEx.create_from_string(PLAYTEST_LINE)
 	var log_lines: PackedStringArray = String(texts["diagnostics.log"]).strip_edges().split("\n")
+	var survey_lines := 0
 	for line in log_lines:
 		if shape.search(line) == null:
 			_failures.append("a diagnostics line off its grammar: `%s`" % line)
+		if " survey_answered " in line:
+			survey_lines += 1
+	if survey_lines != 1:
+		_failures.append("the log holds %d survey lines, not the export's one" % survey_lines)
 	# The four files' words and the zip's own entry names: what a reader of the bundle can see.
 	var all := ("\n".join(entries) + "\n" + "\n".join(texts.values())).to_lower()
 	var secrets := [_line.split("\t")[0], String(link._tokens[0]), String(link._tokens[1]), "127.0.0.1:%d" % link._port, ":%d/" % link._port, NOTES, folder, OS.get_environment("USERNAME"), OS.get_environment("USER"), "user://", ":\\", "/home/", "/users/", "appdata"]
