@@ -166,7 +166,14 @@ impl Surface {
             },
             to_seq: page.next.to_seq,
         };
-        entity_page(views, viewer, listing, &page, at_ms, list, offset, held)
+        entity_page(
+            views,
+            viewer,
+            listing,
+            &page,
+            at_ms,
+            Entities { list, offset, held },
+        )
     }
 
     /// A digest of everything besides the fog policy that decides what this
@@ -218,6 +225,14 @@ struct Listing {
     to_seq: u64,
 }
 
+/// The entity list a page is cut from: the list, where the page starts in
+/// it, and the digest it is held by when it is a held one.
+struct Entities {
+    list: Vec<Json>,
+    offset: u32,
+    held: Option<u64>,
+}
+
 /// How many of `rest` fit a page that has `spent` of [`VIEW_PAGE_BYTES`]
 /// already, each measured as the wire spells it where it sits
 /// ([`crate::viewfeed::listed_bytes`]). The first item of a page always goes
@@ -247,20 +262,15 @@ fn entities_that_fit(rest: &[Json], spent: usize, page_empty: bool) -> usize {
 /// [`crate::error::Code::InvalidArgument`] for an offset past the list's
 /// end, and [`crate::error::Code::Internal`] for a list longer than a cursor
 /// can count.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one page's parts, each read once: the feed, the viewer, the listing, the chunk page, the clock and the list with its place"
-)]
 fn entity_page(
     views: &mut ViewFeed,
     viewer: Viewer,
     listing: Listing,
     page: &crate::viewfeed::ViewPage,
     at_ms: i32,
-    list: Vec<Json>,
-    offset: u32,
-    held: Option<u64>,
+    entities: Entities,
 ) -> Result<Json, Error> {
+    let Entities { list, offset, held } = entities;
     let past_the_end = || Error::invalid("that cursor pages past the end of its entity list");
     let start = usize::try_from(offset).map_err(|_| past_the_end())?;
     let rest = list.get(start..).ok_or_else(past_the_end)?;
