@@ -2095,7 +2095,10 @@ func _check_the_playtest_lobby(failures: Array[String]) -> void:
 		if not (" focus_out " in log and " focus_in " in log and " playtest_on " in log):
 			failures.append("the focus did not reach the diagnostics log: `%s`" % log)
 		if log.count(" survey_answered ") != 1 or log.count(" export_failed SURVEY_TOO_LONG ") != 1:
-			failures.append("the log does not hold one survey line and the one refusal: `%s`" % log)
+			failures.append("the log does not hold one survey line and the one refusal: `%s`" % log.left(400))
+		# 4 301 keystrokes were typed: none of them is a line (a handful of events are).
+		if log.count("\n") > 20:
+			failures.append("the log holds %d lines after typing: a keystroke reached it" % log.count("\n"))
 		var survey: Variant = JSON.parse_string(reader.read_file("survey.json").get_string_from_utf8())
 		if not (survey is Dictionary) or String((survey as Dictionary).get("wanted_to_change", {}).get("text", "")) != typed:
 			failures.append("the bundle's survey is not the answer exported: %s" % survey)
