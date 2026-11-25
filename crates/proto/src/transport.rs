@@ -22,17 +22,19 @@
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 
 /// The largest answer text the gateway sends, in UTF-8 bytes as the wire spells it (the
-/// canonical writer, `pharmakos_proto::json::write`): 4 MiB.
+/// canonical writer, `pharmakos_proto::json::write`): 8 MiB.
 ///
 /// Chosen so that every answer a playbook inside the size budget and a map at the gate's load
-/// can produce fits with room: the worst verifier report is held to three quarters of it
-/// (`pharmakos_verifier`'s `the_cap_is_the_top_of_its_range` reads this constant), a view page
-/// is cut at `pharmakos_gateway::viewfeed::VIEW_PAGE_BYTES` of chunks and entities, an id at
+/// can produce fits with room: the worst in-budget render found (5 667 582 bytes) has more than a
+/// quarter of it to spare (`crates/gateway/tests/outgoing.rs`); the worst verifier report as
+/// `verify_plan` sends it, and eight more of the catalogue's largest codes, fit it
+/// (`pharmakos_verifier`'s `the_worst_report_fits_the_answer_with_room_to_grow`); a view page is
+/// cut at `pharmakos_gateway::viewfeed::VIEW_PAGE_BYTES` of chunks and entities, an id at
 /// [`MAX_ID_BYTES`], and `crates/gateway/tests/outgoing.rs` measures each method's worst answer
 /// against it. A larger answer is a typed refusal, never a cut text.
 ///
-/// PLACEHOLDER: the largest answer, 4 MiB — owner, at hardening, alongside the rate limits.
-pub const MAX_ANSWER_BYTES: usize = 4 * 1024 * 1024;
+/// PLACEHOLDER: the largest answer, 8 MiB — owner, at hardening, alongside the rate limits.
+pub const MAX_ANSWER_BYTES: usize = 8 * 1024 * 1024;
 
 /// The most bytes a server frame's header takes: RFC 6455 section 5.2's first two bytes and an
 /// eight-byte extended length. Server frames are never masked, so there is no masking key.
@@ -42,8 +44,10 @@ pub const SERVER_FRAME_HEADER_BYTES: usize = 10;
 /// largest header. What a client's inbound buffer must hold so that every answer arrives whole.
 pub const MAX_ANSWER_FRAME_BYTES: usize = MAX_ANSWER_BYTES + SERVER_FRAME_HEADER_BYTES;
 
-/// The longest request `id` the gateway reads, in bytes of its JSON lexeme (a string's text
-/// without its quotes, or a number's digits). Every answer echoes its request's id, so an
+/// The longest request `id` the gateway reads, in UTF-8 bytes of its value as read: a string's
+/// text once its escapes are read (an escaped `é` is two bytes, a four-byte character four),
+/// or a number's digits: what `pharmakos_gateway::rpc::parse` measures. Every answer echoes its
+/// request's id, so an
 /// unbounded id would be an answer the size of the request, sent back: the amplification this
 /// cap refuses. A request with a longer id is an `Invalid Request`, answered under no id.
 ///
