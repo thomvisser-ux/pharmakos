@@ -95,6 +95,10 @@ pub enum Bound {
     /// More undo operations in one patch than
     /// [`crate::patch::MAX_UNDO_OPERATIONS`] (S3's `vfyq2`, fix pass 5).
     UndoOperations,
+    /// A library file past the playbook's text cap, refused when it is
+    /// read and never read whole ([`crate::library::MAX_FILE_BYTES`]; S3's
+    /// `outcap`).
+    LibraryFile,
 }
 
 impl Error {

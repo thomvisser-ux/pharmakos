@@ -123,14 +123,77 @@ pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
     Ok(found)
 }
 
-/// Reads one library file.
+/// The most bytes a library file may hold: a text at the playbook's cap,
+/// `pharmakos_verifier::MAX_PLAYBOOK_CHARS` characters, at UTF-8's four
+/// bytes a character (S3's `outcap`). A file past it is refused at its
+/// length, before anything is read, and nothing past it is ever read.
+pub const MAX_FILE_BYTES: usize = pharmakos_verifier::MAX_PLAYBOOK_CHARS.saturating_mul(4);
+
+/// Reads one library file, within the playbook's text cap (S3's `outcap`):
+/// the library is a local folder anyone can drop a file in, and a file read
+/// whole whatever its size would be memory the gateway spends for it.
 ///
 /// # Errors
 ///
-/// When `template_id` is not a plain name, or the file cannot be read.
+/// When `template_id` is not a plain name, or the file cannot be read; and
+/// [`crate::error::Bound::LibraryFile`] for a file past [`MAX_FILE_BYTES`]
+/// or past `MAX_PLAYBOOK_CHARS` characters.
 pub fn read(folder: &Path, template_id: &str) -> Result<String, Error> {
+    use std::io::Read as _;
     let path = resolve(folder, template_id)?;
-    std::fs::read_to_string(&path).map_err(|error| reading(&path.display().to_string(), &error))
+    let shown = path.display().to_string();
+    let too_large = |size: pharmakos_proto::json::grammar::Said| {
+        Error::bounded(
+            crate::error::Bound::LibraryFile,
+            "",
+            pharmakos_proto::said!(
+                "the template `{}` is {}, past the {} bytes and {} characters a library file may \
+                 hold",
+                pharmakos_proto::json::grammar::quoted(template_id),
+                size,
+                MAX_FILE_BYTES,
+                pharmakos_verifier::MAX_PLAYBOOK_CHARS
+            ),
+        )
+    };
+    let file = std::fs::File::open(&path).map_err(|error| reading(&shown, &error))?;
+    let length = file
+        .metadata()
+        .map_err(|error| reading(&shown, &error))?
+        .len();
+    let cap = u64::try_from(MAX_FILE_BYTES)
+        .map_err(|_| too_large(pharmakos_proto::said!("{} bytes", length)))?;
+    if length > cap {
+        return Err(too_large(pharmakos_proto::said!("{} bytes", length)));
+    }
+    // The length a file had when it was opened is not a promise: read at
+    // most one byte past the cap, so a file that grew is refused too.
+    let mut bytes: Vec<u8> = Vec::new();
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| reading(&shown, &error))?;
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(too_large(pharmakos_proto::said!(
+            "longer than it said when it was opened"
+        )));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        Error::at(
+            "",
+            pharmakos_proto::said!(
+                "reading {}: the file is not UTF-8 text",
+                pharmakos_proto::json::grammar::quoted(&shown)
+            ),
+        )
+    })?;
+    let characters = text.chars().count();
+    if characters > pharmakos_verifier::MAX_PLAYBOOK_CHARS {
+        return Err(too_large(pharmakos_proto::said!(
+            "{} characters",
+            characters
+        )));
+    }
+    Ok(text)
 }
 
 /// The Win32 device names. `<dir>\CON.jsonc` resolves to the console device on
