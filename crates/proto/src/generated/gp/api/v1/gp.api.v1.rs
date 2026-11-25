@@ -867,13 +867,15 @@ pub struct GetBeaconResponse {
     /// anchor's JSON (S3's `fixq`). OWN beacons only, as `build_targets` is.
     #[prost(string, repeated, tag="6")]
     pub build_target_lines: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// The list this beacon's writ holds, as the sim holds it now, so a player
-    /// sees it and can empty it (S3's `edlists`; decisions-log item 184 (3) made
-    /// the four lists emptiable): a Build beacon's protected areas, a Defend
-    /// beacon's protect list, an Attack beacon's avoid areas or a Survey
-    /// beacon's probe areas. Exactly one row on a seat's OWN beacon whose writ
-    /// holds a list, present also when the list is empty; no row on a Mine
-    /// beacon, on a beacon with no writ, on another seat's beacon (in sight or
+    /// The lists this beacon's writ holds, as the sim holds them now, so a
+    /// player sees each and can empty it (S3's `edlists`; decisions-log item 184
+    /// (3) made the four lists emptiable): a Build beacon's protected areas, a
+    /// Defend beacon's protect list, an Attack beacon's avoid areas or a Survey
+    /// beacon's probe areas. One row per list the writ holds, present also when
+    /// the list is empty. Every v1 writ holds at most one list, so a seat's OWN
+    /// beacon carries at most one row today; the field is repeated so that a
+    /// writ that comes to hold two needs no new field. No row on a Mine beacon,
+    /// on a beacon with no writ, on another seat's beacon (in sight or
     /// remembered, under every fog policy) or for a caller that is no seat (a
     /// spectator, the admin), as `settings` is sent. Field 16, past the held
     /// range above, which stays held.
