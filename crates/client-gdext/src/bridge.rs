@@ -604,21 +604,43 @@ impl PharmakosBridge {
     }
 
     /// Why connection `link` was given up: `attempts` (in a row, none of which stayed up) and
-    /// `code` (the last close's code, -1 for a connection lost with none); empty when it was not.
+    /// `code` (the last close's code, -1 for a connection lost with none), and, when the host
+    /// process exited, `host_exited` (true) with `host_words`, its last line ("" for none), which
+    /// the lobby leads with (S3's `outcap`); empty when it was not given up.
     #[func]
     fn watch_give_up(&self, link: i64) -> VarDictionary {
         let mut words = VarDictionary::new();
         if let (Some(rig), Ok(link)) = (self.rig.as_ref(), usize::try_from(link))
-            && let Some((attempts, last)) = rig.give_up(link)
+            && let Some(why) = rig.give_up(link)
         {
-            words.set(&"attempts".to_variant(), &i64::from(attempts).to_variant());
-            let code = match last {
+            words.set(
+                &"attempts".to_variant(),
+                &i64::from(why.attempts).to_variant(),
+            );
+            let code = match why.last {
                 Some(crate::rig::Close::ThisMessage(code)) => i64::from(code),
                 Some(crate::rig::Close::Connection) | None => -1,
             };
             words.set(&"code".to_variant(), &code.to_variant());
+            if let Some(host) = why.host_exited {
+                words.set(&"host_exited".to_variant(), &true.to_variant());
+                words.set(&"host_words".to_variant(), &host.to_variant());
+            }
         }
         words
+    }
+
+    /// The host process has exited, and `words` is the last line it wrote on its standard error
+    /// ("" for none), as `host_link.gd` read it (S3's `outcap`): the rig gives every closed link up
+    /// at once and hands the words back through `watch_give_up`. Passed through: the rig decides.
+    #[func]
+    fn watch_host_exited(&mut self, words: GString) {
+        if let Some(rig) = self.rig.as_mut() {
+            let words = words.to_string();
+            let _ = self
+                .panics
+                .guard("watch_host_exited", || rig.host_exited(&words));
+        }
     }
 
     /// Connection `link`'s state as its `WebSocketPeer` reports it (`get_ready_state`), every

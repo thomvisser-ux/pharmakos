@@ -149,7 +149,13 @@
 #     lobby's new match, its host keeping its private match cache in a folder of the check's
 #     own, its `save.json.partial` made a folder; Ready ends the Lull, the host answers with its
 #     typed error, says why and exits, and the lobby shows the host's words (what could not be
-#     written, what the disk holds) with the chooser back and the host gone;
+#     written, what the disk holds) with the chooser back and the host gone, at once once the
+#     host has exited, with no reconnect budget waited out (S3's `outcap`);
+#   * EVERY ANSWER BOUNDED (S3's `outcap`): the planning wire's six loads of 18 000 bare holds
+#     land, and each render, past the gateway's outgoing cap, is refused with RESPONSE_TOO_LARGE
+#     on the prose line with the seat link kept (`_a_render_past_the_cap_is_refused`); and in the
+#     Probation stage a test-only sender sends each link one message a byte past the client's
+#     inbound buffer, which closes it on that message (`_closes_on_a_message`);
 #   * across every host: the bridge caught no panic, refused no view page, the gateway
 #     refused no call (so no burst met RATE_LIMITED), entities were drawn, and every host
 #     exited once the client let go of its standard input.
@@ -483,8 +489,8 @@ func _run() -> void:
 	await get_tree().create_timer(IDLE_WAIT).timeout
 	var idle := _state()
 	print("[watch-check] after the idle stretch: %s" % idle)
-	# A close on a message (the planning wire's six big loads, fix pass 4) is not a dropped
-	# connection: what may not happen is a drop of the connection itself.
+	# A close on a message is not a dropped connection: what may not happen is a drop of the
+	# connection itself.
 	if idle.get("phase", "") != "lull" or _connection_drops(idle, "admin") != 0 or _connection_drops(idle, "seat") != 0:
 		_failures.append("the idle stretch did not stay a Lull with both connections up: %s" % idle)
 		_finish()
@@ -609,17 +615,23 @@ func _host_gone() -> void:
 	if not ended:
 		_failures.append("the host went away and the link never gave up")
 		return
-	# The give-up is the reconnect policy's, in its own words (fix pass 5).
-	if not _refused_reason.contains("connection was given up after") or not Strings.text("link_gave_up").contains("connection was given up after"):
-		_failures.append("the host went away and the link gave up in words that are not the policy's: %s" % _refused_reason)
+	# A host process that exited is given up at once, in the host's words (S3's `outcap`): a
+	# killed host wrote nothing, so the words say so. A link with no exited process behind it is
+	# given up by the reconnect policy, in its own words: the silent-host leg holds that.
+	var exited_words := Strings.text("link_host_exited", {"words": ""}).strip_edges()
+	if not _refused_reason.begins_with(Strings.text("link_host_exited_silent")) and not _refused_reason.begins_with(exited_words):
+		_failures.append("the host went away and the link gave up in words that are not the host's: %s" % _refused_reason)
+	if _refused_reason.contains("connection was given up after"):
+		_failures.append("the host went away and the link waited out its reconnect budget: %s" % _refused_reason)
 	# Never a bare -1 (fix pass 6): a close with no code is said as a lost connection.
 	if _refused_reason.contains("-1"):
 		_failures.append("the give-up says a bare -1: %s" % _refused_reason)
 	var lost := HostLink.gave_up_words(1, {"attempts": 4, "code": -1})
 	var coded := HostLink.gave_up_words(0, {"attempts": 4, "code": 1006})
-	if lost.contains("-1") or not lost.contains("lost with no close") or not coded.contains("code 1006"):
-		_failures.append("the give-up's words by code are wrong: %s | %s" % [lost, coded])
-	print("[watch-check] the host went away (pid %d) and the reconnect policy gave the link up: %s" % [pid, _refused_reason])
+	var host := HostLink.gave_up_words(0, {"attempts": 1, "code": -1, "host_exited": true, "host_words": "disk full"})
+	if lost.contains("-1") or not lost.contains("lost with no close") or not coded.contains("code 1006") or not host.begins_with(exited_words) or not host.contains("disk full"):
+		_failures.append("the give-up's words by code are wrong: %s | %s | %s" % [lost, coded, host])
+	print("[watch-check] the host went away (pid %d) and its links were given up at once, in its words: %s" % [pid, _refused_reason])
 
 ## How long the silent-host leg may take to give the link up: six connects aborted at the connect
 ## deadline (5 s) and the back-off between them (17.5 s), with room for a slow frame.
@@ -1747,8 +1759,8 @@ func _has_draft(state: Dictionary, id: String) -> bool:
 
 
 ## What must hold of one client's bridge, whichever host it watched.
-## The drops of `link`'s connection itself: its drops less its closes on a message, which the
-## planning wire's big loads make on purpose and which spend no reconnect (fix pass 4).
+## The drops of `link`'s connection itself: its drops less its closes on a message (fix pass 4),
+## which since S3's `outcap` only the test-only sender makes, on purpose.
 func _connection_drops(state: Dictionary, link: String) -> int:
 	return _count(state, "drops_" + link) - _count(state, "message_drops_" + link)
 
@@ -1781,6 +1793,8 @@ func _finish() -> void:
 			print("[watch-check] the host exited once its standard input closed")
 	if _failures.is_empty() and _probation:
 		await _silent_host()
+	if _failures.is_empty() and _probation:
+		await _closes_on_a_message()
 	if _failures.is_empty() and _probation:
 		var carried: Dictionary = Engine.get_meta(CARRY)
 		print("[watch-check] OK (host pids %d, %d and %d)" % [int(carried.get("first_pid", -1)), int(carried.get("resumed_pid", -1)), pid])
@@ -1860,7 +1874,7 @@ func _planning_wire() -> bool:
 	# with its drops unchanged, and the leg then seals, and Ready ends the Lull as ever.
 	if not await _pastes():
 		return false
-	if not await _closes_on_a_message():
+	if not await _a_render_past_the_cap_is_refused():
 		return false
 	# Add a rule, through its button; its empty slot takes a group; Remove takes it out.
 	var rules_before: int = _editor().get("rule_list", {}).get("rules", []).size()
@@ -2039,59 +2053,128 @@ func _take_asked_refusal(detail: String) -> void:
 	_failures.append("the planning wire: the gateway's refusal `%s` never reached the feed of answers" % detail.left(80))
 
 
-## **Closes on a message do not end a playable match** (S3's `fixq-c`, fix passes 4 to 6, item
-## 1; re-aimed by S3's `vcap`). Review 3's playbook of 18 000 bare holds (216 056 bytes, under the
-## cap) is loaded six times with no wait between the loads, as a player might click. Since `vcap`
-## a report lists at most four of a code (the verifier's `MAX_PER_CODE`), so the load's own QUICK
-## answer fits (8 583 bytes as the gateway writes it) and the load lands; its `render_plan`
-## answer does not (15 690 780 bytes, past the client's 4 MiB inbound buffer: lane `outcap`'s
-## finding), so the render closes the seat link on its message (Godot's 1009). That close spends no reconnect attempt, and the same text's
-## render is held after it: never sent again. Through all six, within the wait each one has, the
-## seat link is never given up, the rows are the loaded text's (its QUICK answered), the prose
-## line says the answer closed the link instead of waiting for ever, and the editor's line says
-## the answer is too large to read and to shorten the file. A landed load clears the Undo list,
-## so the committed playbook is then loaded back, as the planning wire began: the legs after this
-## one edit it, Undo takes their edits back to its bytes, and the leg goes on to seal and Ready.
-func _closes_on_a_message() -> bool:
+## **An answer past the gateway's cap is refused in words, and the match plays on** (S3's
+## `outcap`; this leg was `fixq-c`'s close on a message, fix passes 4 to 6, re-aimed by `vcap`).
+## Review 3's playbook of 18 000 bare holds (216 056 bytes, under the inbound cap) is loaded six
+## times with no wait between the loads, as a player might click. A report lists at most four of
+## a code (`vcap`), so the load's own QUICK answer fits and the load lands; its `render_plan`
+## answer would be 15 690 780 bytes, past the gateway's outgoing cap
+## (`pharmakos_proto::transport::MAX_ANSWER_BYTES`), so the gateway sends `RESPONSE_TOO_LARGE` in
+## its place and never the answer. Through all six the seat link is never closed or given up and
+## spends no attempt, the rows are the loaded text's, and the prose line says the gateway's
+## refusal instead of waiting for ever. The refusals are the leg's own, taken off the run's count.
+## A landed load clears the Undo list, so the committed playbook is then loaded back, as the
+## planning wire began: the legs after this one edit it, Undo takes their edits back to its bytes,
+## and the leg goes on to seal and Ready.
+func _a_render_past_the_cap_is_refused() -> bool:
 	var steps: PackedStringArray = []
 	for index in 18000:
 		steps.append("{\"hold\":{}}")
 	var big := ("{\"schema_version\":{\"major\":1},\"declarative\":{\"route\":[" + ",".join(steps) + "]}}").to_utf8_buffer()
 	var closes := _count(_state(), "message_drops_seat")
+	var drops := _count(_state(), "drops_seat")
+	var refused_before := _refusals.size()
 	for attempt in 6:
-		var before := _count(_editor(), "closed_on_calls")
 		if not editor.load_bytes(big):
 			_failures.append("the planning wire: big load %d was not taken to the gateway" % attempt)
 			return false
-		if not await _until(func() -> bool: return _count(_editor(), "closed_on_calls") > before and not _editor().get("busy", true), PUSH_WAIT):
-			_failures.append("the planning wire: big load %d was not settled on its message: %s %s" % [attempt, _state(), _editor().get("status_key", "")])
+		if not await _until(func() -> bool: return _prose_refused() and not _editor().get("busy", true), PUSH_WAIT):
+			_failures.append("the planning wire: big load %d's render was not refused on the prose line: %s %s" % [attempt, _state(), _editor().get("unchecked", {})])
 			return false
 		if String(vista.bridge.watch_link_action(1)) == "give_up":
 			_failures.append("the planning wire: big load %d gave the seat link up" % attempt)
 			return false
-	var dropped := _count(_state(), "message_drops_seat") - closes
-	if dropped < 1:
-		_failures.append("the planning wire: six big loads never closed the seat link on their message")
+	if _count(_state(), "message_drops_seat") != closes or _count(_state(), "drops_seat") != drops:
+		_failures.append("the planning wire: an answer past the cap closed or dropped the seat link: %s" % _state())
 	if vista.bridge.watch_link_attempts(1) != 0:
-		_failures.append("the planning wire: closes on the player's loads spent the seat link's attempts (%d)" % vista.bridge.watch_link_attempts(1))
+		_failures.append("the planning wire: the big loads spent the seat link's attempts (%d)" % vista.bridge.watch_link_attempts(1))
 	if vista.bridge.editor_bytes() != big:
 		_failures.append("the planning wire: a load whose QUICK answer fits did not land")
 	var unchecked: Dictionary = _editor().get("unchecked", {})
 	if String(unchecked.get("rows", {}).get("key", "?")) != "" or not _editor().get("rows_current", false):
 		_failures.append("the planning wire: the loaded text's rows are not its QUICK answer: %s" % [unchecked.get("rows", {})])
-	if String(unchecked.get("prose", {}).get("key", "")) != "closed_on" or _editor().get("prose_current", true):
-		_failures.append("the planning wire: the render that closed the link is not said on the prose line: %s" % [unchecked.get("prose", {})])
-	if String(_editor().get("status_key", "")) != "call_answer_too_large":
-		_failures.append("the planning wire: the editor's line after the big loads is `%s`" % _editor().get("status_key", ""))
-	print("[watch-check] the planning wire: six loads with no wait, each landing (QUICK fits), %d close(s) on the render's message, the rest held; the seat link kept, no attempt spent; the editor says: `%s`" % [dropped, Strings.text("status_" + String(_editor().get("status_key", "")), {"detail": _editor().get("status_detail", "")})])
-	# A load that lands clears the Undo list, so the committed playbook is loaded back, as the
-	# planning wire began, checked and rendered: the legs after this one edit it, and Undo takes
-	# their edits back to its bytes.
+	var withheld := 0
+	for index in range(_refusals.size() - 1, refused_before - 1, -1):
+		if _refusals[index].begins_with("RESPONSE_TOO_LARGE"):
+			_refusals.remove_at(index)
+			_asked_refusals += 1
+			withheld += 1
+	if withheld < 1:
+		_failures.append("the planning wire: no render was refused with RESPONSE_TOO_LARGE")
+	print("[watch-check] the planning wire: six loads with no wait, each landing (QUICK fits), %d render(s) withheld with RESPONSE_TOO_LARGE, the seat link kept with no close, drop or attempt; the prose line says: `%s`" % [withheld, String(unchecked.get("prose", {}).get("detail", "")).left(120)])
 	var committed := FileAccess.get_file_as_bytes(COMMITTED)
 	editor.load_file(COMMITTED)
 	if not await _editor_until(func(s: Dictionary) -> bool: return vista.bridge.editor_bytes() == committed and _count(s, "undo_depth") == 0 and s.get("rows_current", false) and s.get("prose_current", false) and s.get("rules_editable", false) and not s.get("busy", true), "the planning wire: the committed playbook never came back after the big loads"):
 		return false
 	return true
+
+
+## Whether the prose line says the gateway refused the render with `RESPONSE_TOO_LARGE`.
+func _prose_refused() -> bool:
+	var prose: Dictionary = _editor().get("unchecked", {}).get("prose", {})
+	return String(prose.get("key", "")) == "refused" and String(prose.get("detail", "")).begins_with("RESPONSE_TOO_LARGE")
+
+
+## How long the oversize-message leg waits for its close.
+const OVERSIZE_WAIT := 20.0
+
+## **A message past the client's inbound buffer closes the link, and the rig says so** (S3's
+## `fixq-c`, fix pass 3; since `outcap` the gateway sends no such message, so this leg makes one
+## on purpose). A test-only sender: a listener completes each handshake on a server peer sized to
+## send it, and sends the seat link one text message a byte past the inbound buffer the bridge
+## gives every peer (`watch_transport_limits`, the gateway's outgoing cap and a frame's header).
+## Godot hands over nothing of it and closes with 1009, and the rig counts a close on a message
+## (`message_drops_seat`), so a message the client cannot read is said, never cut.
+func _closes_on_a_message() -> void:
+	var limits: Dictionary = vista.bridge.watch_transport_limits()
+	var inbound := int(limits.get("inbound_bytes", 0))
+	if inbound <= 0:
+		_failures.append("the oversize-message leg: no inbound buffer from the bridge: %s" % limits)
+		return
+	var server := TCPServer.new()
+	if server.listen(0, "127.0.0.1") != OK:
+		_failures.append("the oversize-message leg could not listen")
+		return
+	var senders: Array[WebSocketPeer] = []
+	var told: Array[WebSocketPeer] = []
+	var sent := false
+	link.reset()
+	_refused_reason = ""
+	_expecting_refusal = true
+	link.attach(server.get_local_port(), ["oversize-admin", "oversize-seat"])
+	var past := "x".repeat(inbound + 1)
+	var timer := get_tree().create_timer(OVERSIZE_WAIT)
+	while timer.time_left > 0.0 and _count(_state(), "message_drops_seat") == 0:
+		while server.is_connection_available():
+			var peer := WebSocketPeer.new()
+			peer.outbound_buffer_size = inbound + 64
+			if peer.accept_stream(server.take_connection()) != OK:
+				_failures.append("the oversize-message leg: a server peer would not take its stream")
+			senders.append(peer)
+		# Each connection, the admin's and the seat's, is sent the message once it is open on both
+		# sides: bytes sent before the client has read the handshake's end are not its to read.
+		var both_open: bool = link._open[0] and link._open[1]
+		for peer in senders:
+			peer.poll()
+			if both_open and peer.get_ready_state() == WebSocketPeer.STATE_OPEN and not told.has(peer):
+				told.append(peer)
+				if peer.send_text(past) != OK:
+					_failures.append("the oversize-message leg: the test sender could not queue %d bytes" % past.length())
+				sent = true
+		link.pump_attached()
+		await get_tree().process_frame
+	_expecting_refusal = false
+	var closes := _count(_state(), "message_drops_seat")
+	var closed_on: Dictionary = _state().get("closed_on", {})
+	link.reset()
+	server.stop()
+	if not sent:
+		_failures.append("the oversize-message leg: the seat link never opened to be sent the message")
+		return
+	if closes < 1:
+		_failures.append("the oversize-message leg: a message of %d bytes, past the %d-byte buffer, did not close the seat link on its message: %s" % [past.length(), inbound, _state()])
+		return
+	print("[watch-check] a message one byte past the %d-byte inbound buffer, sent on purpose: the seat link closed on it (%d close(s) on a message, %s)" % [inbound, closes, closed_on])
 
 
 ## The rule-list chip whose pointer ends in `suffix`, by its index, or -1.
@@ -2209,6 +2292,9 @@ const UNSAVED_DATA := "user://watch_check_data"
 ## How long the unsaved-host leg may wait for the lobby to say the host stopped: the reconnect
 ## policy's give-up, with room for a slow frame.
 const UNSAVED_WAIT := 90.0
+## How long after the host process exited the lobby may take to say so: a few frames, under the
+## reconnect back-off's first spaced wait (0.5 s) and far under its sum (17.5 s) (S3's `outcap`).
+const UNSAVED_SAID := 0.4
 
 ## **A host that cannot write a save says why and is gone** (lane `opsave`, fix pass 2): the
 ## real lobby starts a new match whose host keeps its private match cache in a folder of the
@@ -2270,10 +2356,20 @@ func _unsaved_host_lobby(lobby: Node, data: String) -> bool:
 		_failures.append("the unsaved-host leg could not block %s's save" % folder)
 		return false
 	lobby.vista.bridge.watch_command("ready", 0)
-	var stopped := await _until(func() -> bool: return not lobby._started and lobby._chooser.visible, UNSAVED_WAIT)
+	# The host exits first; the lobby then says so at once (S3's `outcap`): the rig gives a link of
+	# a host that exited up on its first close, with the host's words, and waits out no reconnect
+	# budget (its back-off alone sums to 17.5 s).
+	var exited := await _until(func() -> bool: return not OS.is_process_running(pid), UNSAVED_WAIT)
+	if not exited:
+		_failures.append("the unsaved-host leg: the host (pid %d) did not exit in %.0f s" % [pid, UNSAVED_WAIT])
+		return false
+	var stopped := await _until(func() -> bool: return not lobby._started and lobby._chooser.visible, UNSAVED_SAID)
 	var said := String(lobby._status.text)
 	if not stopped:
-		_failures.append("the unsaved-host leg: the lobby did not say the host stopped in %.0f s: `%s`" % [UNSAVED_WAIT, said])
+		_failures.append("the unsaved-host leg: the lobby did not say the host stopped within %.1f s of its exit, so it waited out the reconnects: `%s`" % [UNSAVED_SAID, said])
+		return false
+	if said.contains("connection was given up after"):
+		_failures.append("the unsaved-host leg: the lobby says a reconnect budget was spent, not the host's words: `%s`" % said)
 		return false
 	if OS.is_process_running(pid):
 		_failures.append("the unsaved-host leg: the host (pid %d) is still running after the lobby said it failed" % pid)
