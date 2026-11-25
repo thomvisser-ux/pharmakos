@@ -262,3 +262,96 @@ fn a_plant_past_the_charge_room_holds_the_charge_and_plants_once_one_fires() {
     assert!(runner.world().attack_counts().plant_held >= 1);
     assert_eq!(runner.world().attack().charges().len(), CHARGE_ROOM);
 }
+
+/// **A save at every tick of a Push with plants and firings restores**
+/// (lane `simroom`, fix pass 2): the walled raid's charge is bought,
+/// carried, planted and fires; a save is taken between every two ticks from
+/// five ticks before the plant to past the firing. Every save restores, through
+/// its bytes, and every restored chain equals the straight run's from that
+/// tick. Every charge a save holds fires after the save's tick and no later
+/// than a fuse after it: what the restore's charge check admits.
+#[test]
+fn a_save_at_every_tick_around_a_plant_and_a_firing_restores() {
+    use pharmakos_sim::snapshot::Snapshot;
+    const AFTER: u32 = 4;
+    // A first run finds the plant's tick; the second saves from a few ticks
+    // before it to a few after the firing, at every tick.
+    let (mut probe, _) = walled();
+    let mut log = Vec::new();
+    let planted = play_until(&mut probe, 4_000, &mut log, |_, log| {
+        first_tick(log, EventKind::ChargePlanted).is_some()
+    });
+    assert!(
+        planted,
+        "the breach's charge is bought, carried and planted"
+    );
+    let plant = first_tick(&log, EventKind::ChargePlanted).expect("planted");
+    let (mut straight, _) = walled();
+    let mut log = Vec::new();
+    let near = play_until(&mut straight, 4_000, &mut log, |world, _| {
+        world.tick().raw() + 5 >= plant
+    });
+    assert!(near);
+    let fuse = straight
+        .world()
+        .rules()
+        .attack()
+        .charge_fuse
+        .to_ticks_ceil();
+    let mut saves: Vec<(u32, Vec<u8>)> = Vec::new();
+    let mut chain: Vec<(u32, u64)> = Vec::new();
+    let mut held = 0_usize;
+    let mut fired_at: Option<u32> = None;
+    loop {
+        let snapshot = straight.capture().expect("a save between ticks");
+        for fires in &snapshot.attack.charge_fires {
+            assert!(
+                *fires > snapshot.tick && *fires <= snapshot.tick + fuse,
+                "a save at tick {} holds a charge firing at {fires}, outside (tick, tick + {fuse}]",
+                snapshot.tick
+            );
+            held += 1;
+        }
+        saves.push((
+            snapshot.tick,
+            snapshot.to_bytes().expect("the save encodes"),
+        ));
+        let report = straight
+            .step()
+            .expect("the tick runs")
+            .expect("still in the Push");
+        let tick = straight.world().tick().raw();
+        chain.push((tick, report.hash));
+        log.extend_from_slice(straight.events());
+        straight.clear_events();
+        if fired_at.is_none() {
+            fired_at = first_tick(&log, EventKind::ChargeDetonated);
+        }
+        if fired_at.is_some_and(|fired| tick > fired + AFTER + 2) {
+            break;
+        }
+        assert!(saves.len() < 4_000, "the charge fires");
+    }
+    assert!(held > 0, "the saves held the planted charge");
+    // One runner takes every save in turn: a restore replaces the world whole.
+    let (mut restored, _) = walled();
+    for (index, (_, bytes)) in saves.iter().enumerate() {
+        let save = Snapshot::from_bytes(bytes).expect("the save decodes");
+        restored.restore(&save).expect("every save restores");
+        for step in 0..AFTER {
+            let Some(expected) = chain.get(index + usize::try_from(step).unwrap()) else {
+                break;
+            };
+            let report = restored
+                .step()
+                .expect("the tick runs")
+                .expect("still in the Push");
+            restored.clear_events();
+            assert_eq!(
+                (restored.world().tick().raw(), report.hash),
+                *expected,
+                "restored from save {index}, the chain parts at step {step}"
+            );
+        }
+    }
+}

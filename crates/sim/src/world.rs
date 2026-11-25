@@ -7823,6 +7823,82 @@ mod tests {
         .unwrap_or_else(|error| panic!("the committed table describes a world: {error}"))
     }
 
+    /// A save of a fresh two-seat world with `charges` planted charges, each
+    /// firing at `fires_at`: what the charge check reads.
+    fn save_with_charges(fires_at: u32, charges: usize) -> crate::snapshot::Snapshot {
+        let mut save = crate::snapshot::Snapshot::capture(&world())
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
+        let core = *save
+            .beacon_id
+            .first()
+            .unwrap_or_else(|| panic!("seat 0's core"));
+        for _ in 0..charges {
+            save.attack.charge_beacon.push(core);
+            save.attack.charge_seat.push(0);
+            save.attack.charge_fires.push(fires_at);
+            save.attack.charge_at.extend([200, 200, 30]);
+        }
+        save
+    }
+
+    /// **A save holding a charge no run plants is refused** (lane `simroom`,
+    /// fix pass 2): in play a charge fires a fuse after its plant and leaves
+    /// the table on the tick it fires, so every charge a save holds fires
+    /// after the save's tick and no later than a fuse after it
+    /// (`tests/charge_room.rs`'s
+    /// `a_save_at_every_tick_around_a_plant_and_a_firing_restores` reads every
+    /// save of a Push with a plant and a firing). A charge firing at
+    /// `u32::MAX` would hold a carrier at a full table for ever, and one at
+    /// the save's own tick would never fire; both are refused, as is a file
+    /// holding more charges than the table's room, and a refused restore
+    /// writes nothing. A charge inside the window restores.
+    #[test]
+    fn a_save_with_a_charge_no_run_plants_is_refused() {
+        use crate::snapshot::SnapshotError;
+        let fuse = world().rules().attack().charge_fuse.to_ticks_ceil();
+        let tick = save_with_charges(0, 0).tick;
+        let mut target = world();
+        assert_eq!(
+            save_with_charges(tick + fuse, 1).restore_into(&mut target),
+            Ok(()),
+            "a charge a fuse away is one a plant files"
+        );
+        for fires_at in [u32::MAX, tick + fuse + 1, tick] {
+            let mut target = world();
+            let before = target.state_hash();
+            assert_eq!(
+                save_with_charges(fires_at, 1).restore_into(&mut target),
+                Err(SnapshotError::ChargeOutOfPlay {
+                    fires_at,
+                    tick,
+                    fuse,
+                }),
+                "a charge firing at {fires_at}"
+            );
+            assert_eq!(
+                target.state_hash(),
+                before,
+                "a refused restore writes nothing"
+            );
+        }
+        let room = super::beacon_limit_of(2);
+        let mut target = world();
+        let before = target.state_hash();
+        assert_eq!(
+            save_with_charges(tick + 1, crate::math::index::row(room) + 1)
+                .restore_into(&mut target),
+            Err(SnapshotError::ChargesOverRoom {
+                charges: room + 1,
+                room,
+            })
+        );
+        assert_eq!(
+            target.state_hash(),
+            before,
+            "a refused restore writes nothing"
+        );
+    }
+
     /// **A dead beacon counts toward its seat's share until its death
     /// settles** (lane `simroom`, P1 of its review): the protect list's room
     /// (`protect_room_of`) rests on a seat never holding more than its share
