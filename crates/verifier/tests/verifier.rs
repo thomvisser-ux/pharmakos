@@ -3097,13 +3097,6 @@ fn counted_at(case: &str, text: &str, depth: Depth, cap: u32) -> pharmakos_verif
     pharmakos_verifier::verify_counted_at_cap(&input, depth, cap)
 }
 
-/// The report for a case's playbook with its route's steps written
-/// `copies` times over, against the case's own view.
-fn report_with_route_copies(case: &str, copies: usize) -> Option<VerifyReport> {
-    let text = copied_text(case, copies)?;
-    Some(counted_at(case, &text, Depth::Full, MAX_PER_CODE).report)
-}
-
 fn count_of(report: &VerifyReport, code: &str) -> usize {
     report
         .diagnostics
@@ -3151,35 +3144,144 @@ fn a_code_raised_once_a_report_has_one_raising_place() {
     }
 }
 
-/// The codes the derivation counts once a report are once a report however
-/// often the playbook repeats what raises them: the estimate's one
-/// comparison of draw with supply (`E0601`, `W0603`), the decode's first
-/// refusal (`E0001`, `E0002`) and the size budget (`E0110`).
+/// How a once-a-report code is provoked many times over, for
+/// [`each_code_raised_once_a_report_is_once_however_often_it_is_provoked`].
+enum Provoke {
+    /// A committed case with its route's steps and handlers written this
+    /// many times over.
+    Case(&'static str, usize),
+    /// A text of its own, against the plain fixture's view.
+    Text(String),
+    /// A text past the size cap on the player's text, read as too long.
+    TooLong,
+    /// Raised by the verifier's own fault taking a fingerprint, which no
+    /// input provokes: `decode.rs`'s unit test
+    /// `a_fingerprint_the_codec_could_not_write_is_e0030_and_never_e0008` holds it to
+    /// one.
+    OwnFault,
+}
+
+/// **Every code `ONCE_PER_REPORT` names is once a report, one row each**
+/// (S3's `vcap`, fix pass 2): the table's codes are exactly the list, and
+/// each is provoked many times over (a case's route and handlers copied
+/// twenty-five times, fifty unknown members, a text past the cap) with the
+/// per-code cap off, so the cap cannot hide a second: exactly one comes out.
 #[test]
-fn a_code_raised_once_a_report_is_once_however_often_it_is_provoked() {
-    for (case, code) in [
-        ("e0601_draw_beyond_supply", "E0601"),
-        ("e0601_a_scout_count_past_every_supply", "E0601"),
-        ("w0603_a_shortfall_allowed", "W0603"),
-        ("e0110_over_the_size_budget", "E0110"),
-    ] {
-        let once = report_for(case, Depth::Full);
-        assert_eq!(count_of(&once, code), 1, "{case}");
-        let many = report_with_route_copies(case, 5).expect("the case is an object");
-        assert_eq!(count_of(&many, code), 1, "{case} five times over");
-    }
+fn each_code_raised_once_a_report_is_once_however_often_it_is_provoked() {
+    let unknown: Vec<String> = (0..50)
+        .map(|index| format!(r#""nope_{index}":1"#))
+        .collect();
+    let rows: Vec<(&str, Provoke)> = vec![
+        ("E0001", Provoke::Text("{ this is not json ".repeat(50))),
+        (
+            "E0002",
+            Provoke::Text(format!(
+                r#"{{"schema_version":{{"major":1}},{}}}"#,
+                unknown.join(",")
+            )),
+        ),
+        ("E0004", Provoke::Case("e0004_unsupported_version", 25)),
+        ("E0005", Provoke::Case("e0005_kind_unset", 25)),
+        ("E0006", Provoke::Case("e0006_author_kind_script", 25)),
+        ("E0007", Provoke::Case("e0007_author_kind_unset", 25)),
+        ("E0008", Provoke::Case("e0008_stale_fingerprint", 25)),
+        ("E0029", Provoke::TooLong),
+        ("E0030", Provoke::OwnFault),
+        ("E0110", Provoke::Case("e0110_over_the_size_budget", 25)),
+        ("E0601", Provoke::Case("e0601_draw_beyond_supply", 25)),
+        ("W0603", Provoke::Case("w0603_a_shortfall_allowed", 25)),
+    ];
+    let codes: Vec<&str> = rows.iter().map(|(code, _)| *code).collect();
+    assert_eq!(
+        codes, ONCE_PER_REPORT,
+        "one row for every code the list names"
+    );
     let rules = rules();
     let scope = fixture_scope();
-    for (text, code) in [
-        (
-            r#"{"schema_version":{"major":1},"nope":1,"also_nope":2,"meta":{"what":1}}"#,
-            "E0002",
-        ),
-        (r#"{"schema_version":{"major":"one"},"kind":7}"#, "E0001"),
-    ] {
-        let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
-        assert_eq!(count_of(&verify(&input, Depth::Full), code), 1, "{text}");
+    for (code, provoke) in rows {
+        let counted = match provoke {
+            Provoke::Case(case, copies) => {
+                let text = copied_text(case, copies).expect("the case is an object");
+                counted_at(case, &text, Depth::Full, u32::MAX)
+            }
+            Provoke::Text(text) => {
+                let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
+                pharmakos_verifier::verify_counted_at_cap(&input, Depth::Full, u32::MAX)
+            }
+            Provoke::TooLong => {
+                let input = Input::too_long(&[], &scope, &rules).expect("the input");
+                pharmakos_verifier::verify_counted_at_cap(&input, Depth::Full, u32::MAX)
+            }
+            Provoke::OwnFault => continue,
+        };
+        assert_eq!(count_of(&counted.report, code), 1, "{code}");
     }
+}
+
+/// The literal codes of `Diag::new("…")` in `text`, in order.
+fn raised_codes(text: &str) -> Vec<String> {
+    text.split("Diag::new(\"")
+        .skip(1)
+        .filter_map(|tail| tail.split_once('"').map(|(code, _)| code.to_owned()))
+        .collect()
+}
+
+/// The codes in `codes` the catalogue does not give a raiser: absent, or
+/// catalogued as raised by nothing yet.
+fn uncatalogued(codes: &[String]) -> Vec<String> {
+    codes
+        .iter()
+        .filter(|code| {
+            !CATALOGUE
+                .iter()
+                .any(|row| row.code == code.as_str() && !matches!(row.emitter, Emitter::NoneYet(_)))
+        })
+        .cloned()
+        .collect()
+}
+
+/// **Every code a stage raises is in the catalogue with a raiser** (S3's
+/// `vcap`, fix pass 2): the worst report the cap's derivation builds lists
+/// every catalogued code with an emitter, so a code a stage raises and the
+/// catalogue calls unemitted (or does not have) would be missing from it.
+/// The scan reads every `Diag::new("…")` of the shipped stages, and trips on
+/// a code the catalogue gives no raiser.
+#[test]
+fn every_code_a_stage_raises_is_catalogued_with_a_raiser() {
+    const TESTS_MODULE: &str = "\n#[cfg(test)]\nmod tests";
+    assert_eq!(
+        uncatalogued(&raised_codes(
+            "out.emit(Diag::new(\"E0020\", at)); out.emit(Diag::new(\"X9999\", at));"
+        )),
+        vec![String::from("E0020"), String::from("X9999")],
+        "the scan trips on a code raised by nothing yet and on one not catalogued"
+    );
+    let source_dir = workspace_root().join("crates/verifier/src");
+    // The order does not matter: the codes are collected into a set.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the listing is only gathered into a set, never ordered into output"
+    )]
+    let entries = fs::read_dir(&source_dir).expect("the verifier's sources");
+    let mut raised: Vec<String> = Vec::new();
+    for entry in entries {
+        let path = entry.expect("a source").path();
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            let text = fs::read_to_string(&path).expect("a source reads");
+            let shipped = text
+                .split_once(TESTS_MODULE)
+                .map_or(text.as_str(), |(shipped, _)| shipped);
+            raised.extend(raised_codes(shipped));
+        }
+    }
+    raised.sort();
+    raised.dedup();
+    assert!(
+        raised.len() > 80,
+        "the scan found only {} codes",
+        raised.len()
+    );
+    assert_eq!(uncatalogued(&raised), Vec::<String>::new());
 }
 
 /// **The cap never moves a verdict or a total** (the review's comparison):
