@@ -148,6 +148,69 @@ fn network_crates_in(reachable: &BTreeSet<String>) -> Vec<&'static str> {
         .collect()
 }
 
+/// The crates the client may reach in `Cargo.lock`, by name: its closure today, normal, build
+/// and dev edges alike (the lock does not tell them apart). The denylist below names what speaks
+/// to a network; this is the proof: a crate added anywhere under the client, whatever it does,
+/// fails here with its name, and adding it to this list is a change a reviewer reads.
+const ALLOWED_CRATES: &[&str] = &[
+    "anyhow",
+    "bytes",
+    "either",
+    "gdextension-api",
+    "glam",
+    "godot",
+    "godot-bindings",
+    "godot-cell",
+    "godot-codegen",
+    "godot-core",
+    "godot-ffi",
+    "godot-macros",
+    "heck",
+    "itertools",
+    "libc",
+    "nanoserde",
+    "nanoserde-derive",
+    "pharmakos-client-gdext",
+    "pharmakos-mesher",
+    "pharmakos-proto",
+    "proc-macro2",
+    "prost",
+    "prost-derive",
+    "quote",
+    "syn",
+    "unicode-ident",
+    "venial",
+    "xxhash-rust",
+];
+
+#[test]
+fn the_resolved_graph_is_the_allowed_list() {
+    let text = fs::read_to_string(workspace_root().join("Cargo.lock")).expect("Cargo.lock");
+    let reachable = closure(&lock_graph(&text), SELF);
+    let allowed: BTreeSet<String> = ALLOWED_CRATES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    let added: Vec<&String> = reachable.difference(&allowed).collect();
+    let gone: Vec<&String> = allowed.difference(&reachable).collect();
+    assert!(
+        added.is_empty() && gone.is_empty(),
+        "the client's dependency closure moved: added {added:?}, gone {gone:?}; a new crate is \
+         an owner decision (AGENTS.md section 3 rule 5), and the list is updated with it"
+    );
+}
+
+/// The allow-list's own check sees a crate added two hops out.
+#[test]
+fn a_crate_outside_the_allowed_list_is_named() {
+    let sample = "\
+[[package]]\nname = \"pharmakos-client-gdext\"\nversion = \"0.1.0\"\ndependencies = [\n \"godot\",\n]\n\n\
+[[package]]\nname = \"godot\"\nversion = \"1.0.0\"\ndependencies = [\n \"newcomer\",\n]\n\n\
+[[package]]\nname = \"newcomer\"\nversion = \"1.0.0\"\n";
+    let reachable = closure(&lock_graph(sample), SELF);
+    assert!(reachable.contains("newcomer"));
+    assert!(!ALLOWED_CRATES.contains(&"newcomer"));
+}
 #[test]
 fn the_resolved_graph_holds_no_network_crate() {
     let text = fs::read_to_string(workspace_root().join("Cargo.lock")).expect("Cargo.lock");
@@ -203,6 +266,7 @@ const RUST_NETWORK_NAMES: &[&str] = &[
     "Enet",
     "shell_open",
     "JavaScriptBridge",
+    "MultiplayerPeer",
 ];
 
 /// URL schemes, in a string literal or in GDScript.
@@ -229,7 +293,28 @@ const RUST_NETWORK_CLASSES: &[&str] = &[
 /// A process spawned from Rust: the client spawns none (`host_link.gd` spawns `gamectl`).
 /// `std::process::id()`, which names this process in a temporary file's name (`write.rs`), is
 /// the one `std::process` read allowed.
-const RUST_PROCESS_NAMES: &[&str] = &["Command::new", "process::Command", "Command;", "Command}"];
+const RUST_PROCESS_NAMES: &[&str] = &[
+    "Command::new",
+    "process::Command",
+    "Command;",
+    "Command}",
+    // Godot's own process and shell doors, called through gdext's `Os`.
+    "create_process",
+    "execute_with_pipe",
+    ".execute(",
+];
+
+/// What could carry code or a name past the scan in shipped Rust: a class name built by
+/// `concat!`, and code or data reached from outside `src/` by `include!`, `include_str!`,
+/// `include_bytes!` or `#[path]`. Shipped code uses none of them (the unit tests' fixtures are
+/// test code).
+const RUST_REACH: &[&str] = &[
+    "concat!(",
+    "include!(",
+    "include_str!(",
+    "include_bytes!(",
+    "#[path",
+];
 
 /// Why the Rust source `text` names a network or a process. A `#[cfg(test)]` the shared reader
 /// cannot place is itself a finding: the scan never stops early at one.
@@ -245,7 +330,11 @@ fn rust_offences(text: &str) -> Vec<String> {
     };
     for (index, line) in views.code.iter().enumerate().take(shipped) {
         let number = index + 1;
-        for name in RUST_NETWORK_NAMES.iter().chain(RUST_PROCESS_NAMES) {
+        for name in RUST_NETWORK_NAMES
+            .iter()
+            .chain(RUST_PROCESS_NAMES)
+            .chain(RUST_REACH)
+        {
             if line.contains(name) {
                 out.push(format!("line {number}: names `{name}`"));
             }
@@ -352,9 +441,19 @@ fn the_rust_source_names_no_socket_and_no_url() {
                 .map(|name| format!("{name}.rs"))
         })
         .collect();
-    assert!(
-        declared.len() > 20,
-        "the reader found lib.rs's modules: {declared:?}"
+    // The modules lib.rs declares are exactly the files beside it: the reader sees every
+    // declaration, and every scanned top-level file is a module the crate compiles.
+    let mut top: Vec<String> = scanned
+        .iter()
+        .filter(|relative| !relative.contains('/') && relative.as_str() != "lib.rs")
+        .cloned()
+        .collect();
+    top.sort();
+    let mut declared_sorted = declared.clone();
+    declared_sorted.sort();
+    assert_eq!(
+        declared_sorted, top,
+        "lib.rs's modules and the files under src/ disagree"
     );
     for module in &declared {
         assert!(
@@ -417,6 +516,15 @@ fn b() { let _ = std::net::UdpSocket::bind(x); }",
         "let node = ClassDB::singleton().instantiate(\"HTTPRequest\");",
         "let peer = object.call(\"x\", &[\"WebSocketPeer\".to_variant()]);",
         "let name = \"PacketPeerUDP\";",
+        // Review 2's scan probe: Godot's doors from Rust, a built class name, code from outside.
+        "let n = ClassDb::singleton().instantiate(&StringName::from(concat!(\"HTTP\", \"Request\")));",
+        "let pid = godot::classes::Os::singleton().create_process(\"curl\", &args);",
+        "let d = godot::classes::Os::singleton().execute_with_pipe(\"curl\", &args);",
+        "let code = godot::classes::Os::singleton().execute(\"curl\", &args);",
+        "include!(\"../../../outside/evil.rs\");",
+        "#[path = \"../../outside/evil.rs\"]
+mod evil;",
+        "const DATA: &str = include_str!(\"../../outside/data.txt\");",
     ] {
         assert!(
             !rust_offences(snippet).is_empty(),
@@ -492,14 +600,6 @@ fn gd_code(text: &str, comment: char) -> Vec<String> {
         .collect()
 }
 
-/// Whether `line`'s call of `method` carries `wanted` as its first argument's opening text.
-fn calls_with(line: &str, method: &str, wanted: &str) -> bool {
-    line.match_indices(method).all(|(at, _)| {
-        line.get(at + method.len()..)
-            .is_some_and(|rest| rest.trim_start().starts_with(wanted))
-    })
-}
-
 /// Methods whose names, said as a string, call a network or a process by name (`call`,
 /// `callv`, `call_deferred`, a `Callable`): no file under `godot/` says one in a string.
 const NAMED_CALLS: &[&str] = &[
@@ -512,6 +612,79 @@ const NAMED_CALLS: &[&str] = &[
     "\"instantiate\"",
     "\"put_packet\"",
 ];
+
+/// The `connect_to_url` calls allowed, whole: the file, and the call with its literal and its one
+/// format argument, as the squeezed line spells it. `host_link.gd`'s link to the host it spawned,
+/// and the client check's to the listener it opened on 127.0.0.1.
+const CONNECT_TO_URL: &[(&str, &str)] = &[
+    (
+        "host_link.gd",
+        "connect_to_url(\"ws://127.0.0.1:%d/\"%_port)",
+    ),
+    (
+        "client_check.gd",
+        "connect_to_url(\"ws://127.0.0.1:%d/\"%server.get_local_port())",
+    ),
+];
+
+/// Whether `squeezed` names `word` as a whole word not followed by `follow`: `ClassDB` or `OS`
+/// taken as a value (`var db = ClassDB`), or `OS.execute` taken as a callable.
+fn bare(squeezed: &str, word: &str, follow: char) -> bool {
+    squeezed.match_indices(word).any(|(at, _)| {
+        let before = squeezed.get(..at).and_then(|head| head.chars().last());
+        let after = squeezed
+            .get(at + word.len()..)
+            .and_then(|tail| tail.chars().next());
+        let joins = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        !joins(before) && !joins(after) && after != Some(follow)
+    })
+}
+
+/// The doors a script could open a network or a process through without naming one: `ClassDB`,
+/// `OS` or `Engine` taken as a value, a process door taken as a callable, `callv` (a method by a
+/// built name), `Engine.get_singleton` (a singleton by name), and `load` of anything but a
+/// literal `res://` path.
+fn door_offences(squeezed: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for singleton in ["ClassDB", "OS", "Engine"] {
+        if bare(squeezed, singleton, '.') {
+            out.push(format!("`{singleton}` taken as a value"));
+        }
+    }
+    for door in [
+        "OS.execute",
+        "OS.execute_with_pipe",
+        "OS.shell_open",
+        "OS.create_process",
+    ] {
+        if bare(squeezed, door, '(') {
+            out.push(format!("`{door}` taken as a callable"));
+        }
+    }
+    if squeezed.contains("callv(") {
+        out.push("`callv`, which calls a method by a built name".to_owned());
+    }
+    // No script asks the engine for a singleton by name: a name can be built, and every
+    // singleton a script uses it names as itself.
+    if squeezed.contains("Engine.get_singleton") {
+        out.push("`Engine.get_singleton`, a singleton by name".to_owned());
+    }
+    for loader in ["load(", "ResourceLoader.load("] {
+        let calls = squeezed.match_indices(loader).any(|(at, _)| {
+            let before = squeezed.get(..at).and_then(|head| head.chars().last());
+            let whole = loader.starts_with('R')
+                || !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.');
+            whole
+                && !squeezed
+                    .get(at + loader.len()..)
+                    .is_some_and(|rest| rest.starts_with("\"res://"))
+        });
+        if calls {
+            out.push(format!("`{loader}` of anything but a literal res:// path"));
+        }
+    }
+    out
+}
 
 /// Why the file `name`, holding `text`, breaks the no-network rule. Each line is read with its
 /// comment removed and with every space and tab removed, so no spacing before a parenthesis or
@@ -548,8 +721,11 @@ fn godot_offences(name: &str, text: &str) -> Vec<String> {
             ));
         }
         if squeezed.contains("connect_to_url")
-            && !(squeezed.contains("connect_to_url(")
-                && calls_with(&squeezed, "connect_to_url(", "\"ws://127.0.0.1:"))
+            && !CONNECT_TO_URL.iter().any(|(owner, call)| {
+                *owner == name
+                    && squeezed.matches("connect_to_url").count() == 1
+                    && squeezed.contains(call)
+            })
         {
             out.push(format!(
                 "line {number}: connect_to_url to anything but a literal ws://127.0.0.1:"
@@ -569,6 +745,9 @@ fn godot_offences(name: &str, text: &str) -> Vec<String> {
             out.push(format!(
                 "line {number}: a process spawned outside host_link.gd"
             ));
+        }
+        for why in door_offences(&squeezed) {
+            out.push(format!("line {number}: {why}"));
         }
         if squeezed.contains("OS.execute(") && name != "watch_check.gd" {
             out.push(format!(
@@ -610,98 +789,147 @@ fn the_godot_project_opens_no_network_but_the_hosts_link() {
     );
 }
 
+/// Lines each rule must trip, as `(file, line)`.
+const GODOT_MUST_TRIP: &[(&str, &str)] = &[
+    ("playtest.gd", "var request := HTTPRequest.new()"),
+    ("playtest.gd", "var client := HTTPClient.new()"),
+    ("lobby.gd", "var peer := PacketPeerUDP.new()"),
+    ("lobby.gd", "var tls := StreamPeerTLS.new()"),
+    ("lobby.gd", "var server := UDPServer.new()"),
+    ("lobby.gd", "var e := ENetMultiplayerPeer.new()"),
+    ("lobby.gd", "var r := WebRTCPeerConnection.new()"),
+    ("lobby.gd", "OS.shell_open(\"x\")"),
+    ("lobby.gd", "var at := \"https://example.invalid\""),
+    ("lobby.gd", "var at := \"http://127.0.0.1:80\""),
+    ("lobby.gd", "var peer := WebSocketPeer.new()"),
+    (
+        "host_link.gd",
+        "peer.connect_to_url(\"ws://10.0.0.1:%d/\" % port)",
+    ),
+    ("host_link.gd", "peer.connect_to_url(url)"),
+    (
+        "host_link.gd",
+        "peer.connect_to_url(\"wss://127.0.0.1:1/\")",
+    ),
+    ("lobby.gd", "var server := TCPServer.new()"),
+    ("lobby.gd", "var tcp := StreamPeerTCP.new()"),
+    ("watch_check.gd", "server.listen(0, \"0.0.0.0\")"),
+    ("watch_check.gd", "server.listen(0)"),
+    ("watch_check.gd", "tcp.connect_to_host(\"192.168.0.1\", 1)"),
+    ("lobby.gd", "OS.execute_with_pipe(path, [])"),
+    ("lobby.gd", "OS.execute(path, [])"),
+    ("lobby.gd", "OS.create_process(path, [])"),
+    (
+        "lobby.tscn",
+        "[node name=\"Http\" type=\"HTTPRequest\" parent=\".\"]",
+    ),
+    // Review 1's follow-up: spacing, a name built in a string, a call by name.
+    ("lobby.gd", "OS.execute (path, [])"),
+    ("lobby.gd", "OS . shell_open (\"x\")"),
+    ("lobby.gd", "OS.create_process\t(p, [])"),
+    (
+        "lobby.gd",
+        "var r: Node = ClassDB.instantiate(\"HTTP\" + \"Request\")",
+    ),
+    ("lobby.gd", "var r: Variant = ClassDB . instantiate (kind)"),
+    ("host_link.gd", "peer.call(\"connect_to_url\", url)"),
+    (
+        "host_link.gd",
+        "peer.callv(\"connect_to_host\", [host, port])",
+    ),
+    (
+        "host_link.gd",
+        "var go := Callable(peer, \"connect_to_url\")",
+    ),
+    ("host_link.gd", "peer.connect_to_url (\"ws://10.0.0.1:1/\")"),
+    ("host_link.gd", "var go := peer.connect_to_url"),
+    ("watch_check.gd", "server.listen (0, \"0.0.0.0\")"),
+    ("lobby.gd", "node.call_deferred(\"execute\", path)"),
+    // Review 2's scan probe.
+    (
+        "host_link.gd",
+        "peer.connect_to_url(\"ws://127.0.0.1:80@example.invalid/\")",
+    ),
+    (
+        "host_link.gd",
+        "peer.connect_to_url(\"ws://127.0.0.1:%s\" % tail)",
+    ),
+    (
+        "host_link.gd",
+        "peer.connect_to_url(\"ws://127.0.0.1:%d/\" % _port); peer.connect_to_url(url)",
+    ),
+    ("lobby.gd", "var db = ClassDB; var r = db.instantiate(kind)"),
+    ("lobby.gd", "var os = OS; os.execute(\"curl\", [])"),
+    ("lobby.gd", "var f := OS.execute; f.call(\"curl\", [])"),
+    ("lobby.gd", "var f := OS.shell_open"),
+    ("lobby.gd", "ClassDB.callv(\"instan\" + \"tiate\", [kind])"),
+    (
+        "lobby.gd",
+        "var j = Engine.get_singleton(\"JavaScript\" + \"Bridge\")",
+    ),
+    ("lobby.gd", "var j = Engine.get_singleton(name)"),
+    ("lobby.gd", "var s = load(\"user://evil.gd\").new()"),
+    ("lobby.gd", "var s = ResourceLoader.load(path).new()"),
+    ("lobby.gd", "var s = load(path)"),
+];
+
+/// Lines no rule may trip, as `(file, line)`.
+const GODOT_MUST_PASS: &[(&str, &str)] = &[
+    (
+        "host_link.gd",
+        "var error := peer.connect_to_url(\"ws://127.0.0.1:%d/\" % _port)",
+    ),
+    ("host_link.gd", "var peer := WebSocketPeer.new()"),
+    ("host_link.gd", "OS.execute_with_pipe(gamectl, args, false)"),
+    (
+        "host_link.gd",
+        "var error := peer.connect_to_url (\"ws://127.0.0.1:%d/\" % _port)",
+    ),
+    (
+        "client_check.gd",
+        "if not ClassDB.class_exists(\"PharmakosBridge\"):",
+    ),
+    (
+        "client_check.gd",
+        "if client.connect_to_url(\"ws://127.0.0.1:%d/\" % server.get_local_port()) != OK:",
+    ),
+    (
+        "lobby.gd",
+        "const Strings := preload(\"res://scripts/strings.gd\")",
+    ),
+    (
+        "lobby.gd",
+        "var scene: PackedScene = load(\"res://scenes/lobby.tscn\")",
+    ),
+    ("watch_check.gd", "_resumed = Engine.has_meta(CARRY)"),
+    (
+        "credits.gd",
+        "var words := \"Godot Engine, by its contributors\"",
+    ),
+    (
+        "watch_check.gd",
+        "if server.listen(0, \"127.0.0.1\") != OK:",
+    ),
+    ("watch_check.gd", "var held: Array[StreamPeerTCP] = []"),
+    (
+        "watch_check.gd",
+        "var code := OS.execute(_gamectl, args, output, true)",
+    ),
+    ("client_check.gd", "var server := TCPServer.new()"),
+    ("lobby.gd", "# No HTTPRequest here, and no https:// either."),
+    ("lobby.gd", "var hash := \"#\" # a HTTPClient in a comment"),
+    ("project.godot", "; HTTPRequest in a comment"),
+];
+
 #[test]
 fn the_godot_scanner_catches_what_it_is_for() {
-    for (name, snippet) in [
-        ("playtest.gd", "var request := HTTPRequest.new()"),
-        ("playtest.gd", "var client := HTTPClient.new()"),
-        ("lobby.gd", "var peer := PacketPeerUDP.new()"),
-        ("lobby.gd", "var tls := StreamPeerTLS.new()"),
-        ("lobby.gd", "var server := UDPServer.new()"),
-        ("lobby.gd", "var e := ENetMultiplayerPeer.new()"),
-        ("lobby.gd", "var r := WebRTCPeerConnection.new()"),
-        ("lobby.gd", "OS.shell_open(\"x\")"),
-        ("lobby.gd", "var at := \"https://example.invalid\""),
-        ("lobby.gd", "var at := \"http://127.0.0.1:80\""),
-        ("lobby.gd", "var peer := WebSocketPeer.new()"),
-        (
-            "host_link.gd",
-            "peer.connect_to_url(\"ws://10.0.0.1:%d/\" % port)",
-        ),
-        ("host_link.gd", "peer.connect_to_url(url)"),
-        (
-            "host_link.gd",
-            "peer.connect_to_url(\"wss://127.0.0.1:1/\")",
-        ),
-        ("lobby.gd", "var server := TCPServer.new()"),
-        ("lobby.gd", "var tcp := StreamPeerTCP.new()"),
-        ("watch_check.gd", "server.listen(0, \"0.0.0.0\")"),
-        ("watch_check.gd", "server.listen(0)"),
-        ("watch_check.gd", "tcp.connect_to_host(\"192.168.0.1\", 1)"),
-        ("lobby.gd", "OS.execute_with_pipe(path, [])"),
-        ("lobby.gd", "OS.execute(path, [])"),
-        ("lobby.gd", "OS.create_process(path, [])"),
-        (
-            "lobby.tscn",
-            "[node name=\"Http\" type=\"HTTPRequest\" parent=\".\"]",
-        ),
-        // Review 1's follow-up: spacing, a name built in a string, a call by name.
-        ("lobby.gd", "OS.execute (path, [])"),
-        ("lobby.gd", "OS . shell_open (\"x\")"),
-        ("lobby.gd", "OS.create_process\t(p, [])"),
-        (
-            "lobby.gd",
-            "var r: Node = ClassDB.instantiate(\"HTTP\" + \"Request\")",
-        ),
-        ("lobby.gd", "var r: Variant = ClassDB . instantiate (kind)"),
-        ("host_link.gd", "peer.call(\"connect_to_url\", url)"),
-        (
-            "host_link.gd",
-            "peer.callv(\"connect_to_host\", [host, port])",
-        ),
-        (
-            "host_link.gd",
-            "var go := Callable(peer, \"connect_to_url\")",
-        ),
-        ("host_link.gd", "peer.connect_to_url (\"ws://10.0.0.1:1/\")"),
-        ("host_link.gd", "var go := peer.connect_to_url"),
-        ("watch_check.gd", "server.listen (0, \"0.0.0.0\")"),
-        ("lobby.gd", "node.call_deferred(\"execute\", path)"),
-    ] {
+    for (name, snippet) in GODOT_MUST_TRIP {
         assert!(
             !godot_offences(name, snippet).is_empty(),
             "the scanner let through, in {name}: {snippet}"
         );
     }
-    for (name, snippet) in [
-        (
-            "host_link.gd",
-            "var error := peer.connect_to_url(\"ws://127.0.0.1:%d/\" % _port)",
-        ),
-        ("host_link.gd", "var peer := WebSocketPeer.new()"),
-        ("host_link.gd", "OS.execute_with_pipe(gamectl, args, false)"),
-        (
-            "host_link.gd",
-            "var error := peer.connect_to_url (\"ws://127.0.0.1:%d/\" % _port)",
-        ),
-        (
-            "client_check.gd",
-            "if not ClassDB.class_exists(\"PharmakosBridge\"):",
-        ),
-        (
-            "watch_check.gd",
-            "if server.listen(0, \"127.0.0.1\") != OK:",
-        ),
-        ("watch_check.gd", "var held: Array[StreamPeerTCP] = []"),
-        (
-            "watch_check.gd",
-            "var code := OS.execute(_gamectl, args, output, true)",
-        ),
-        ("client_check.gd", "var server := TCPServer.new()"),
-        ("lobby.gd", "# No HTTPRequest here, and no https:// either."),
-        ("lobby.gd", "var hash := \"#\" # a HTTPClient in a comment"),
-        ("project.godot", "; HTTPRequest in a comment"),
-    ] {
+    for (name, snippet) in GODOT_MUST_PASS {
         assert!(
             godot_offences(name, snippet).is_empty(),
             "the scanner tripped, in {name}: {snippet}: {:?}",
