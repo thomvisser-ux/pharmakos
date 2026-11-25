@@ -1179,6 +1179,32 @@ fn a_left_match_ends_at_its_last_frame() {
     assert!(log.contains(" match_left t=3000\n"), "{log}");
 }
 
+/// Switching on while on is no change and resets nothing (review 2's Y4a): the matches keep
+/// their ordinals across it.
+#[test]
+fn switching_on_while_on_resets_nothing() {
+    let mut recorder = Recorder::new();
+    recorder.switch(true, 0, true, Phase::Unknown, 0);
+    recorder.phase(0, Phase::Lull, 1, None);
+    assert_eq!(recorder.match_begun(), Recorded::Taken);
+    recorder.phase(10, Phase::Lull, 1, None);
+    assert_eq!(
+        recorder.switch(true, 20, true, Phase::Lull, 1),
+        Recorded::Unchanged
+    );
+    recorder.match_begun();
+    recorder.phase(30, Phase::Lull, 1, None);
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
+    let manifest = json_of(file(&files, "manifest.json"));
+    let ordinals: Vec<u64> = array_at(&manifest, "matches")
+        .iter()
+        .map(|row| number_at(row, "match"))
+        .collect();
+    assert_eq!(ordinals, [1, 2, 3]);
+    let log = file(&files, "diagnostics.log");
+    assert_eq!(log.matches(" playtest_on ").count(), 1, "{log}");
+}
+
 /// Review 1's second probe: round 3's Lull left 2 s in, the new match's Lull at 300 s.
 #[test]
 fn a_lull_left_is_timed_to_its_matchs_last_frame() {

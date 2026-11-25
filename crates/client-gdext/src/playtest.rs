@@ -374,7 +374,8 @@ pub enum Recorded {
     Dropped(DropReason),
     /// Not kept, and its drop count already full: the manifest's `drops_complete` says so.
     Uncounted(DropReason),
-    /// The speed chosen is the one already in force: no change, nothing counted.
+    /// No change: the speed already in force chosen again, or Playtest mode switched on while on.
+    /// Nothing is counted or reset.
     Unchanged,
 }
 
@@ -1058,7 +1059,7 @@ impl Recorder {
 
     /// Switches Playtest mode on or off at `now_us`. On, it starts from nothing, in `phase` of
     /// `round` (a phase already under way is not recorded), with the window's focus as
-    /// `focused`; already on, nothing changes. Off, everything kept is dropped.
+    /// `focused`; already on, it is [`Recorded::Unchanged`] and resets nothing. Off, everything kept is dropped.
     pub fn switch(
         &mut self,
         on: bool,
@@ -1072,7 +1073,7 @@ impl Recorder {
             return Recorded::Off;
         }
         if self.on.is_some() {
-            return Recorded::Taken;
+            return Recorded::Unchanged;
         }
         let mut recording =
             Recording::new(PlaytestClock::start(now_us, focused), phase, round, None);
