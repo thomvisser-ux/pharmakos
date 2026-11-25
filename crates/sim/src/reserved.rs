@@ -172,6 +172,45 @@ mod tests {
         }
     }
 
+    /// Records every byte a `Hash` impl writes, so two hashes compare as the
+    /// bytes that make them.
+    #[derive(Default)]
+    struct Bytes(Vec<u8>);
+
+    impl core::hash::Hasher for Bytes {
+        fn finish(&self) -> u64 {
+            0
+        }
+
+        fn write(&mut self, bytes: &[u8]) {
+            self.0.extend_from_slice(bytes);
+        }
+    }
+
+    /// Room is not state: two vectors with the same elements and different
+    /// rooms compare equal, order equal and hash the same bytes, and a
+    /// different element is still a difference.
+    #[test]
+    fn room_is_never_compared_ordered_or_hashed() {
+        use core::hash::Hash;
+        let mut small: Reserved<u32> = Reserved::with_capacity(3);
+        small.extend([5, 6, 7]);
+        let mut large: Reserved<u32> = Reserved::with_capacity(4096);
+        large.extend([5, 6, 7]);
+        assert!(large.capacity() > small.capacity());
+        assert_eq!(small, large);
+        assert_eq!(small.cmp(&large), core::cmp::Ordering::Equal);
+        assert_eq!(small.partial_cmp(&large), Some(core::cmp::Ordering::Equal));
+        let (mut a, mut b) = (Bytes::default(), Bytes::default());
+        small.hash(&mut a);
+        large.hash(&mut b);
+        assert_eq!(a.0, b.0, "the same elements hash the same bytes");
+        let mut other: Reserved<u32> = Reserved::with_capacity(4096);
+        other.extend([5, 6, 8]);
+        assert_ne!(small, other);
+        assert_eq!(small.cmp(&other), core::cmp::Ordering::Less);
+    }
+
     /// A clone of a clone keeps the room as well: a fork of a fork.
     #[test]
     fn a_clone_of_a_clone_keeps_the_room() {
