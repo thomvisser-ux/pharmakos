@@ -62,8 +62,10 @@
 //! retires `W0703`: a handle that could rest on an old sighting now stands
 //! only where `E0418` judges its age. It also adds `E0029` (a player's text
 //! past [`crate::MAX_PLAYBOOK_CHARS`]) at the end of the decode family, and
-//! `I0007` (the count of `I0003` notes past [`crate::MAX_DEFAULT_NOTES`]) at
-//! the end of the information codes. S3's `fpstream` (part 2) adds `E0030` (the
+//! `I0007` (the count of `I0003` notes past a cap) at the end of the
+//! information codes, which S3's `vcap` makes the count of any code's
+//! diagnostics past [`crate::MAX_PER_CODE`], raised by the report builder
+//! ([`Emitter::Report`]). S3's `fpstream` (part 2) adds `E0030` (the
 //! verifier could not take a decoded playbook's plan fingerprint: its own
 //! fault, not the file's) at the end of the decode family. S3's `presence7`
 //! (decisions-log item 184 (10)) adds `E0515` (a list's `clear_*` flag beside
@@ -172,6 +174,10 @@ impl Stage {
 pub enum Emitter {
     /// The stage that raises it today.
     Stage(Stage),
+    /// The report builder itself, after every stage, for any code (S3's
+    /// `vcap`): `I0007`, which closes a report once per code it left
+    /// diagnostics out of past `MAX_PER_CODE`.
+    Report,
     /// Nothing raises it at the walking skeleton. The string names the task or
     /// the stage that owes it, and it is printed into the catalogue golden.
     NoneYet(&'static str),
@@ -183,6 +189,7 @@ impl Emitter {
     pub fn label(self) -> String {
         match self {
             Emitter::Stage(stage) => stage.name().to_owned(),
+            Emitter::Report => String::from("the report builder"),
             Emitter::NoneYet(owed) => format!("none at the skeleton ({owed})"),
         }
     }
@@ -1140,12 +1147,13 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Info,
         emitter: Emitter::Stage(Stage::Structure),
     },
-    // S3's `vfy6` (the review of PR #179): the `I0003` notes past the cap.
+    // S3's `vfy6` (the review of PR #179), widened by S3's `vcap`: one per
+    // code a report left diagnostics out of, raised by the report builder.
     Entry {
         code: "I0007",
         family: Family::Information,
         severity: Severity::Info,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::Report,
     },
 ];
 

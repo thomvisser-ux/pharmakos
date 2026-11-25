@@ -58,20 +58,6 @@
       ]
     },
     {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/1/place_beacon/initial/mandate/build/terraform",
-      "message": "`terraform` is omitted and reads as NONE.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/place_beacon/initial/mandate/build/terraform\",\"value\":\"NONE\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
       "code": "I0004",
       "severity": "INFO",
       "path": "/declarative/route/1/place_beacon/initial/mandate/build/repair_threshold_pct",
@@ -98,6 +84,12 @@
           "applicability": "MAYBE_INCORRECT"
         }
       ]
+    },
+    {
+      "code": "I0007",
+      "severity": "INFO",
+      "message": "1 more `I0003` not listed: a report lists at most 4 of one code one by one.",
+      "beginner": "Not shown: 1 more `I0003`. They say the same kind of thing as the ones shown."
     }
   ],
   "report_hash": "kQqrr2/zpFQ=",

@@ -3998,3 +3998,49 @@ fn patch_plan_addresses_a_field_under_the_spelling_the_file_writes() {
         "the verifier names both spellings: {shown}"
     );
 }
+
+/// **A submission past the cap lists the cap's errors and counts the rest**
+/// (S3's `vcap`): ten unlabelled holds raise ten `E0104`s; `submit_plan`
+/// refuses them, and its report lists the cap's and closes with an `I0007`
+/// for the rest. (That the cap never changes a verdict is the verifier's
+/// `the_cap_never_moves_a_verdict_or_a_total`.)
+#[test]
+fn a_submission_past_the_cap_lists_the_cap_s_errors_and_counts_the_rest() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let holds: Vec<&str> = (0..10)
+        .map(|_| r#"{"hold":{"ms":1},"on_fail":{"action":"SKIP"}}"#)
+        .collect();
+    let playbook = format!(
+        r#"{{"schema_version":{{"major":1}},"meta":{{"title":"ten","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{}]}},"on_death":{{"on_respawn":"CONTINUE","max_deaths_before_fallback":1}},"fallback":{{"hold":{{"at":{{"beacon_anchor":{{"safest":{{}}}}}}}}}}}}"#,
+        holds.join(",")
+    );
+    let response = surface.call(
+        Some(&token),
+        &request(
+            "submit_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&playbook)),
+        ),
+        &Blind,
+    );
+    let answered = result(&response, "submit_plan");
+    assert_eq!(answered.get("accepted"), Some(&Json::Bool(false)));
+    let report = answered.get("report").expect("a report");
+    assert_eq!(report.get("qualifies"), Some(&Json::Bool(false)));
+    let Some(Json::Array(rows)) = report.get("diagnostics") else {
+        panic!("rows: {report:?}");
+    };
+    let code = |row: &Json| match row.get("code") {
+        Some(Json::String(code)) => code.clone(),
+        _ => String::new(),
+    };
+    let listed = rows.iter().filter(|row| code(row) == "E0104").count();
+    assert_eq!(
+        listed,
+        usize::try_from(pharmakos_verifier::MAX_PER_CODE).expect("fits")
+    );
+    assert!(
+        rows.iter().any(|row| code(row) == "I0007"),
+        "the rest are counted: {rows:?}"
+    );
+}

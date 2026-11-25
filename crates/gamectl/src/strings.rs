@@ -251,6 +251,42 @@ pub fn operator_carried_unread(method: &str, code: &str, message: &str) -> Strin
     )
 }
 
+/// A built-in seat's tap probe was refused, so it composed no tap (S3's
+/// `vcap`).
+#[must_use]
+pub fn operator_taps_refused(method: &str, code: &str, message: &str) -> String {
+    format!(
+        "The gateway refused {method} with {code} ({message}) while the tap probe asked which \
+         taps are legal, so no tap was composed."
+    )
+}
+
+/// A built-in seat's tap probe read a part's report listing as many `E0503`s
+/// as a report lists of one code, so one may have been left out: no tap.
+#[must_use]
+pub fn operator_taps_part_at_the_cap(part: usize, listed: usize) -> String {
+    format!(
+        "The tap probe's part {part} listed {listed} E0503, as many as a report lists of one \
+         code, so one may have been left out and no tap was composed."
+    )
+}
+
+/// A built-in seat's tap probe read an `E0503` at a step its part does not
+/// hold: no tap.
+#[must_use]
+pub fn operator_taps_step_past_the_part(part: usize, path: &str) -> String {
+    format!(
+        "The tap probe's part {part} answered an E0503 at {path}, a step it does not hold, so \
+         no tap was composed."
+    )
+}
+
+/// A built-in seat's tap probe's arithmetic passed this machine's word size.
+#[must_use]
+pub fn operator_taps_past_the_target() -> String {
+    String::from("The tap probe's steps passed what this machine counts, so no tap was composed.")
+}
+
 /// The route estimates a built-in seat's round had refused for another reason
 /// than `NOT_FOUND`, each as its code and message.
 #[must_use]
@@ -478,11 +514,21 @@ pub fn verify_qualifies(size_units: u32, budget: u32) -> String {
     format!("  qualifies    yes ({size_units} of {budget} size units)")
 }
 
-/// The line that says it may not.
+/// The line that says it may not: how many errors the report **lists**, and,
+/// when a code of error is at the report's per-code cap and something was
+/// left out of it (S3's `vcap`), that more are counted on the report's
+/// `I0007` lines below. The verdict is the verifier's `qualifies`, never this
+/// count.
 #[must_use]
-pub fn verify_refuses(errors: usize) -> String {
+pub fn verify_refuses(errors: usize, cap: Option<u32>) -> String {
     let plural = if errors == 1 { "" } else { "s" };
-    format!("  qualifies    no ({errors} error{plural})")
+    match cap {
+        None => format!("  qualifies    no ({errors} error{plural})"),
+        Some(cap) => format!(
+            "  qualifies    no ({errors} error{plural} listed; a report lists at most {cap} of \
+             one code, and its I0007 lines count the rest)"
+        ),
+    }
 }
 
 /// The `report_hash` line: the number a pre-check and the check at submit
@@ -504,7 +550,13 @@ pub fn verify_report_hash(hash: &str) -> String {
 #[must_use]
 pub fn verify_diagnostic(severity: &str, code: &str, path: &str, message: &str) -> String {
     let path = pharmakos_proto::json::grammar::quoted_pointer(path);
-    format!("  {severity:<7} {code} {path}\n          {message}")
+    // The root pointer is spelt as nothing, so it leaves no space behind.
+    let path = if path.as_str().is_empty() {
+        String::new()
+    } else {
+        format!(" {}", path.as_str())
+    };
+    format!("  {severity:<7} {code}{path}\n          {message}")
 }
 
 /// The sentence under a report verified against a preset's match, saying

@@ -445,20 +445,19 @@ As with every bump, a save written under `0.1.0-s3.5` does not resume under
 `0.1.0-s3.6`: `SavedMatch::check` refuses a save stamped by another verifier
 (`crates/gateway/src/save.rs`, spec section 3).
 
-**S3's `presence7` (`VERIFIER_VERSION` 0.1.0-s3.7).** Every `report_hash` moved, for
-one of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.6` to `0.1.0-s3.7`
-(input 4), because `SurveySettings.scout_count`, `MineSettings.dig_max_depth` and
-`MineSettings.pillar_spacing` carry presence and four lists gain a `clear_*` flag
-(decisions-log item 184 (10)): this build prices a written 0 and a set clear as one
-field each and raises `E0515` for a clear beside entries of its own list or in
-settings that start from nothing. Beside the version, three things moved, each named:
-the catalogue gains `E0515`; two new cases, `e0515_a_clear_beside_its_own_list` and
-`e0515_a_clear_in_a_new_beacon`, have their first reports; and `I0003` for an omitted
-`pillar_spacing` now carries the Fix that writes the 0 (its message is unchanged), which
-moved `e0501_setting_percentage_out_of_range` and `expand_east` here, and the
-gateway's `demo_deploy_and_visit_verify` and `demo_expand_and_mine_verify` and the
-wizard's `expand_and_mine` report beside the version lines. No committed case writes
-any of the seven at 0, and only the two `E0515` cases set a clear. As with every bump,
-a save written under `0.1.0-s3.6` does not resume under `0.1.0-s3.7`:
-`SavedMatch::check` refuses a save stamped by another verifier
+**S3's `vcap` (`VERIFIER_VERSION` 0.1.0-s3.7).** Every `report_hash` moved, for one
+of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.6` to `0.1.0-s3.7` (input
+4), because a report now lists at most `MAX_PER_CODE` (6) diagnostics of one code and
+closes with one `I0007` per code it left diagnostics out of (decisions-log item 183
+(4), "Cap all codes"), and a decode diagnostic's pointer is bounded at
+`MAX_POINTER_BYTES`. The cap moved the bodies of `budget_128`,
+`e0110_over_the_size_budget`, `e0114_more_route_steps_than_this_build_compiles` and
+`expand_east` (the first six of a code listed, the rest counted), the catalogue's
+`I0007` row, and the gateway's three `demo_*_verify` answers and the wizard's three
+reports (their seventh `I0003` note is now an `I0007`), in the commit before the
+bump; the bump moved only `report_hash` and `verifier_version`. A reader of an older
+report sees every diagnostic and no `I0007` for a code; a reader of a new one sees at
+most six of a code, and a closing `I0007` names the code and how many more were
+raised. As with every bump, a save written under `0.1.0-s3.6` does not resume under
+`0.1.0-s3.7`: `SavedMatch::check` refuses a save stamped by another verifier
 (`crates/gateway/src/save.rs`, spec section 3).

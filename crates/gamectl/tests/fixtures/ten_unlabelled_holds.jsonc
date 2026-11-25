@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Ten unlabelled holds: one E0104 each, more than a report lists of one
+// code (S3's `vcap`), so the report lists the first and counts the rest.
+{
+  "schema_version": { "major": 1 },
+  "meta": { "title": "ten unlabelled holds", "author_kind": "HUMAN" },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } },
+      { "hold": { "ms": 1 }, "on_fail": { "action": "SKIP" } }
+    ]
+  },
+  "on_death": { "on_respawn": "CONTINUE", "max_deaths_before_fallback": 1 },
+  "fallback": { "hold": { "at": { "beacon_anchor": { "safest": {} } } } }
+}

@@ -30,7 +30,7 @@
         "playbook_jsonc": "// Walk east, then stand.\n{\"schema_version\": {\"major\": 1},\n \"meta\": {\"title\": \"East\", \"author_kind\": \"HUMAN\"},\n \"declarative\": {\"route\": [{\"label\": \"east\", \"move\": {\"to\": {\"voxel\": {\"x\": 362, \"y\": 22, \"z\": 36}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 60000, \"on_fail\": {\"action\": \"SKIP\"}}]},\n \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n \"kind\": \"PLAYBOOK\"}\n",
         "round": 1,
         "filed_by_the_gateway": false,
-        "report_hash": "731c89171086ec66",
+        "report_hash": "d2ca5ff8eb5049f7",
         "plan_fingerprint": "76debd683352224d"
       },
       "handles": [],
@@ -44,7 +44,7 @@
         "playbook_jsonc": "// Walk east, then stand.\n{\"schema_version\": {\"major\": 1},\n \"meta\": {\"title\": \"East\", \"author_kind\": \"HUMAN\"},\n \"declarative\": {\"route\": [{\"label\": \"wait0\", \"hold\": {\"ms\": 250}}, {\"label\": \"east\", \"move\": {\"to\": {\"voxel\": {\"x\": 360, \"y\": 357, \"z\": 29}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 60000, \"on_fail\": {\"action\": \"SKIP\"}}]},\n \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n \"kind\": \"PLAYBOOK\"}\n",
         "round": 1,
         "filed_by_the_gateway": false,
-        "report_hash": "d6f34c3a195f2e44",
+        "report_hash": "87da4ade64defdc0",
         "plan_fingerprint": "1831e30f46e07604"
       },
       "handles": [],

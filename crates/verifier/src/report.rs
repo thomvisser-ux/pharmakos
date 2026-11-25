@@ -24,10 +24,11 @@
 
 use core::fmt::Write as _;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
-use pharmakos_proto::gp::api::v1::{Diagnostic, PatchSuggestion};
+use pharmakos_proto::gp::api::v1::{Diagnostic, PatchSuggestion, VerifyReport};
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
 use pharmakos_proto::json::grammar::Said;
@@ -126,114 +127,706 @@ impl Diag {
     }
 }
 
-/// The most `I0003` notes one report carries (S3's `vfy6`, the review of PR
-/// #179, item 3).
+/// The most diagnostics of one code a report lists one by one (S3's `vcap`;
+/// decisions-log item 183 (4), "Cap all codes"). Past it the rest of that
+/// code are counted, not built, and the report closes with one `I0007` for
+/// the code saying how many were left out ([`LeftOut`]).
 ///
-/// Decision 8's notes come one per omitted setting, so a long file of bare
-/// steps made a report of megabytes, past the client's inbound buffer (1 MiB
-/// then; 4 MiB since S3's `fixq-c`, `crates/client-gdext/src/transport.rs`'s
-/// `INBOUND_BUFFER_BYTES`). Past this many the rest are counted, and one
-/// `I0007` says how many were left out. A note with its Fix is about 450 bytes
-/// of JSON, so the notes of the worst capped report are about 29 KB.
-/// `tests/report_size.rs` holds the longest file's report to 128 KiB, which
-/// it holds to no more than an eighth of the client's buffer.
-pub const MAX_DEFAULT_NOTES: u32 = 64;
+/// # The bound it is derived from
+///
+/// The client reads a report in one WebSocket message, and a message past
+/// the peer's **inbound** buffer is never handed over: Godot closes the
+/// connection with 1009 (`crates/client-gdext/src/transport.rs`,
+/// `INBOUND_BUFFER_BYTES`, 4 MiB, itself a PLACEHOLDER for lane `outcap`).
+/// That buffer is the bound. The client's *outbound* cap, the gateway's
+/// `pharmakos_proto::transport::MAX_MESSAGE_BYTES` (256 KiB), bounds what a
+/// client sends, the playbook among it, and not a report.
+///
+/// # The derivation
+///
+/// Every part of a diagnostic is bounded where it enters the report
+/// ([`Builder`]'s one door, `push`): each argument at
+/// [`argument_bytes_max`], the path and a related path at
+/// [`MAX_POINTER_BYTES`], at most [`MAX_RELATED`] related paths,
+/// [`MAX_FIXES`] Fixes (a title at the argument bound, a patch at
+/// [`PATCH_BYTES_MAX`]) and [`MAX_MAP_REFS`] map references, each measured
+/// in the bytes the report's JSON carries ([`json_bytes`]); so a diagnostic
+/// is at most [`diagnostic_bytes_max`] by construction, and one past it is a
+/// [`ReportFault`], never a longer report. The worst report this build can
+/// write lists **every code a stage raises at the cap** (each of
+/// [`ONCE_PER_REPORT`] once), every part at its bound, and one `I0007` per
+/// code. `report.rs`'s `the_cap_is_the_top_of_its_range` builds that report
+/// through this builder and the real serialiser at the cap and at one more,
+/// and holds it to **three quarters** of the inbound buffer (a quarter left
+/// for the answer's envelope): the cap is the largest that fits, and one more
+/// does not. The pull request that set it states the two sizes. If `outcap`
+/// lowers the buffer, the test fails and the cap is derived again; below 2,
+/// Easy's probe has no part to ask in, and a compile-time check fails.
+pub const MAX_PER_CODE: u32 = 4;
+
+/// The most bytes one character of a player's text takes in a report once
+/// [`pharmakos_proto::json::grammar::quoted`] has written it and the report's
+/// JSON has escaped that: a character `quoted` escapes outside the Basic
+/// Multilingual Plane is two `\uXXXX` escapes, twelve characters, each `\`
+/// doubled by the JSON, so fourteen bytes. `report.rs`'s
+/// `the_quoting_rule_s_worst_character_is_the_bound` measures it over every
+/// Unicode scalar value.
+pub const QUOTED_CHAR_JSON_BYTES_MAX: usize = 14;
+
+/// The most bytes of the string table's own words one argument carries around
+/// a quoted piece of player text (a composed `said!`: "the seat has no
+/// sighting of `…`"): the longest such composition is about 60 bytes.
+pub const ARGUMENT_WORDS_BYTES_MAX: usize = 256;
+
+/// The most bytes one argument of a message adds once the report is JSON: the
+/// quoting rule's bound (`MAX_QUOTED_CHARS` characters at
+/// [`QUOTED_CHAR_JSON_BYTES_MAX`] each, and the cut's `…`, three bytes) and
+/// the words around it ([`ARGUMENT_WORDS_BYTES_MAX`]). It also bounds a
+/// number, a word of the string table and a code. An argument past it is cut
+/// where it enters the report, and counted ([`Cuts::texts`]).
+pub const ARGUMENT_BYTES_MAX: usize = pharmakos_proto::json::grammar::MAX_QUOTED_CHARS
+    * QUOTED_CHAR_JSON_BYTES_MAX
+    + ELLIPSIS_BYTES
+    + ARGUMENT_WORDS_BYTES_MAX;
+
+/// The most bytes `E0001`'s one argument, the codec's own words
+/// (`MAX_ENGINE_CHARS` characters, already quoted), adds once the report is
+/// JSON: four bytes a character, the most UTF-8 takes, which is also more
+/// than a doubled `\`.
+pub const ENGINE_ARGUMENT_BYTES_MAX: usize = pharmakos_proto::json::grammar::MAX_ENGINE_CHARS * 4;
+
+/// The bytes of the `…` that marks a cut.
+const ELLIPSIS_BYTES: usize = 3;
+
+/// The most bytes a pointer a report names takes as JSON. The schema's own
+/// pointers are far shorter (its names, indices and at most
+/// [`crate::CONDITION_MAX_DEPTH`] condition levels); only a member name of the
+/// player's own makes a longer one, and a pointer past this is cut where it
+/// enters the report ([`bounded`]: the deepest object whose pointer fits, the
+/// Fix dropped), and counted ([`Cuts::pointers`]).
+pub const MAX_POINTER_BYTES: usize = 512;
+
+/// The most related paths a diagnostic lists (every raiser names one at most).
+pub const MAX_RELATED: usize = 1;
+
+/// The most Fixes a diagnostic offers (every raiser offers one at most).
+pub const MAX_FIXES: usize = 1;
+
+/// The most map references a diagnostic carries (an area's two corners).
+pub const MAX_MAP_REFS: usize = 2;
+
+/// The most bytes a Fix's patch takes as JSON inside the report: a pointer at
+/// [`MAX_POINTER_BYTES`], escaped once more by the patch's own string, twice
+/// over, and a value (the stubs a Fix adds are a few hundred bytes).
+pub const PATCH_BYTES_MAX: usize = 4 * MAX_POINTER_BYTES + 1024;
+
+/// The most bytes one map reference takes as JSON: three `i32`s at their
+/// widest, their keys, braces and indentation at the gateway's nesting.
+pub const MAP_REF_BYTES: usize = 160;
+
+/// What a diagnostic's JSON takes beside the bytes of its strings: its field
+/// names, quotes, commas and indentation (at the gateway's nesting, inside an
+/// answer), its severity and a Fix's applicability; each map reference is
+/// [`MAP_REF_BYTES`] of its own. `report.rs`'s `the_framing_covers_the_serialiser` holds it to the
+/// real serialiser.
+pub const DIAGNOSTIC_FRAMING_BYTES: usize = 1024;
+
+/// The most bytes one diagnostic of `code` takes as JSON, by its parts'
+/// bounds; `None` for a code the string table does not have.
+#[must_use]
+pub fn diagnostic_bytes_max(code: &str) -> Option<usize> {
+    let row = strings::text(code)?;
+    let argument = argument_bytes_max(code);
+    let text = |template: &str| {
+        json_bytes(template).saturating_add(placeholders(template).saturating_mul(argument))
+    };
+    Some(
+        DIAGNOSTIC_FRAMING_BYTES
+            .saturating_add(json_bytes(code))
+            .saturating_add(MAX_POINTER_BYTES.saturating_mul(1 + MAX_RELATED))
+            .saturating_add(text(row.message))
+            .saturating_add(text(row.beginner))
+            .saturating_add(MAX_FIXES.saturating_mul(argument.saturating_add(PATCH_BYTES_MAX)))
+            .saturating_add(MAX_MAP_REFS.saturating_mul(MAP_REF_BYTES)),
+    )
+}
+
+/// The most bytes one argument of `code`'s message takes as JSON.
+#[must_use]
+pub fn argument_bytes_max(code: &str) -> usize {
+    if code == "E0001" {
+        ENGINE_ARGUMENT_BYTES_MAX
+    } else {
+        ARGUMENT_BYTES_MAX
+    }
+}
+
+/// How many `{name}` arguments a template names.
+fn placeholders(template: &str) -> usize {
+    template.matches('{').count()
+}
+
+/// How many bytes `text` takes as the body of a JSON string, as
+/// `pharmakos_proto::json`'s writer writes it: `"`, `\` and the five short
+/// escapes in two bytes, every other C0 control in six, anything else its
+/// UTF-8. `report.rs`'s `json_bytes_is_the_serialiser_s` holds it to the
+/// writer on every Unicode scalar value.
+#[must_use]
+pub fn json_bytes(text: &str) -> usize {
+    text.chars().fold(0_usize, |total, character| {
+        total.saturating_add(json_char_bytes(character))
+    })
+}
+
+/// [`json_bytes`] of one character.
+const fn json_char_bytes(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+        '\u{0}'..='\u{1f}' => 6,
+        other => other.len_utf8(),
+    }
+}
+
+/// `text` cut on a character boundary, with a `…`, so that it takes at most
+/// `bound` bytes as JSON: the quoting rule's own mark for a cut.
+fn cut_text(text: &str, bound: usize) -> String {
+    let room = bound.saturating_sub(ELLIPSIS_BYTES);
+    let mut out = String::new();
+    let mut taken = 0_usize;
+    for character in text.chars() {
+        let bytes = json_char_bytes(character);
+        if taken.saturating_add(bytes) > room {
+            break;
+        }
+        taken = taken.saturating_add(bytes);
+        out.push(character);
+    }
+    out.push('…');
+    out
+}
+
+/// `pointer`, or the longest run of its whole tokens whose JSON is within
+/// [`MAX_POINTER_BYTES`] when it is not, and whether it was cut. A cut pointer
+/// addresses an ancestor of the place, never a different place: only a member
+/// name of the player's own makes a pointer that long.
+#[must_use]
+pub fn bounded(pointer: &str) -> (Cow<'_, str>, bool) {
+    if json_bytes(pointer) <= MAX_POINTER_BYTES {
+        return (Cow::Borrowed(pointer), false);
+    }
+    let mut kept = String::new();
+    let mut bytes = 0_usize;
+    // A pointer is empty or starts with `/`, so the piece before the first
+    // `/` is empty and skipped.
+    for token in pointer.split('/').skip(1) {
+        bytes = bytes.saturating_add(json_bytes(token)).saturating_add(1);
+        if bytes > MAX_POINTER_BYTES {
+            break;
+        }
+        kept.push('/');
+        kept.push_str(token);
+    }
+    (Cow::Owned(kept), true)
+}
+
+/// How many diagnostics' parts the report cut or dropped where they entered
+/// it to keep each within its bound: a typed fact, never a silent `min`. Each
+/// cut text ends with `…`; a dropped Fix, related path or map reference is
+/// counted here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Cuts {
+    /// Arguments, messages, beginner sentences and Fix titles cut.
+    pub texts: u64,
+    /// Paths and related paths cut to an ancestor ([`bounded`]).
+    pub pointers: u64,
+    /// Fixes dropped: past [`MAX_FIXES`], a patch past [`PATCH_BYTES_MAX`],
+    /// or a path cut (a Fix would have to spell it whole).
+    pub fixes: u64,
+    /// Related paths past [`MAX_RELATED`] dropped.
+    pub related: u64,
+    /// Map references past [`MAX_MAP_REFS`] dropped.
+    pub map_refs: u64,
+}
+
+/// The report builder's own failures, kept as typed data beside the report
+/// ([`crate::Counted::faults`]): each is unreachable by construction, and a
+/// test holds every report to none.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReportFault {
+    /// A count past `u64`: the diagnostic counted no further.
+    CountPastU64 {
+        /// The code counted.
+        code: &'static str,
+    },
+    /// A diagnostic past [`diagnostic_bytes_max`] after every part was
+    /// bounded: counted as left out instead of listed.
+    DiagnosticPastItsBound {
+        /// Its code.
+        code: &'static str,
+        /// Its bytes.
+        bytes: usize,
+        /// Its bound.
+        max: usize,
+    },
+}
+
+/// The codes a report raises at most once, whatever the playbook: each is
+/// raised at one fixed place by a stage that runs once (the decode family's
+/// refusals, which end the decode; the version, kind, author and fingerprint
+/// checks; the size budget; the estimate's one comparison of draw with
+/// supply). The derivation of [`MAX_PER_CODE`] counts each once, and
+/// `tests/verifier.rs` holds every one of them to it
+/// (`a_code_raised_once_a_report_has_one_raising_place`,
+/// `a_code_raised_once_a_report_is_once_however_often_it_is_provoked`), so a
+/// stage that starts raising one per step fails there before it can pass the
+/// bound.
+pub const ONCE_PER_REPORT: &[&str] = &[
+    "E0001", "E0002", "E0004", "E0005", "E0006", "E0007", "E0008", "E0029", "E0030", "E0110",
+    "E0601", "W0603",
+];
+
+const _: () = assert!(
+    MAX_PER_CODE >= 2,
+    "a cap under two leaves Easy's probe no part"
+);
 
 /// The code of decision 8's per-setting note.
 const DEFAULT_NOTE: &str = "I0003";
 
+/// The code that closes a report, once per code with diagnostics left out.
+pub(crate) const LEFT_OUT: &str = "I0007";
+
+/// What a finished report's **rows** say about the cap, for a reader that has
+/// only the report (`gp.api.v1.VerifyReport` carries no left-out field until
+/// the contract change after S3's `vcap`): read from codes and counts, never
+/// from a sentence.
+///
+/// The rule, exact by construction of [`Builder`]: a code is left out of only
+/// once [`MAX_PER_CODE`] of it are listed, so a code with fewer rows listed
+/// is complete, and a report with no `I0007` is complete for every code. The
+/// one other way a row is left out, an `I0003` note past `E0110`, is a note
+/// no reader infers from.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct CapRead {
+    /// How many `I0007` rows close the report: how many codes were left out
+    /// of.
+    pub left_out_codes: usize,
+    /// The codes listed [`MAX_PER_CODE`] times or more, in code order: the
+    /// only codes anything can have been left out of.
+    pub at_cap: Vec<String>,
+}
+
+impl CapRead {
+    /// Reads `report`'s rows. Counted by grouping, with no arithmetic that
+    /// could overflow: a count is a group's length.
+    #[must_use]
+    pub fn of(report: &VerifyReport) -> CapRead {
+        let mut codes: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|found| found.code.as_str())
+            .filter(|code| *code != LEFT_OUT)
+            .collect();
+        codes.sort_unstable();
+        // A group too long for a `u32` is past the cap as surely as any.
+        let mut at_cap: Vec<String> = codes
+            .chunk_by(|a, b| a == b)
+            .filter(|group| match u32::try_from(group.len()) {
+                Ok(len) => len >= MAX_PER_CODE,
+                Err(_) => true,
+            })
+            .filter_map(|group| group.first().map(|code| (*code).to_owned()))
+            .collect();
+        at_cap.dedup();
+        CapRead {
+            left_out_codes: report
+                .diagnostics
+                .iter()
+                .filter(|found| found.code == LEFT_OUT)
+                .count(),
+            at_cap,
+        }
+    }
+
+    /// Whether every diagnostic of `code` the verifier raised is listed.
+    #[must_use]
+    pub fn complete(&self, code: &str) -> bool {
+        self.left_out_codes == 0 || !self.at_cap.iter().any(|at| at == code)
+    }
+
+    /// Whether any code at the cap may have been left out of: some `I0007`
+    /// closes the report.
+    #[must_use]
+    pub fn any_left_out(&self) -> bool {
+        self.left_out_codes > 0
+    }
+}
+
+/// One code's diagnostics that a report counted and did not list, as typed
+/// data: the `I0007` that closes the report for that code is rendered from
+/// it, and nothing reads the sentence back.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LeftOut {
+    /// The code left out.
+    pub code: &'static str,
+    /// How many of that code the report counted and did not list.
+    pub count: u64,
+    /// The cap: how many of the code the report could list.
+    pub max: u32,
+}
+
+/// How many diagnostics of one code a report has listed and left out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Tally {
+    /// Whether the code is an error, read from the catalogue once per code.
+    error: bool,
+    /// Listed one by one, at most the cap.
+    listed: u64,
+    /// Counted and not built: past the cap, or (for `I0003`) after `E0110`.
+    /// A count past `u64` is a [`ReportFault::CountPastU64`].
+    left_out: u64,
+}
+
+/// What [`Builder::admit`] is asked: whether a diagnostic would be listed
+/// (a writer's question before it builds one), or to list one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Admit {
+    /// Ask only: nothing is counted as listed.
+    Ask,
+    /// The diagnostic is built and listed when admitted.
+    List,
+}
+
 /// The report under construction, shared by every stage.
-#[derive(Clone, PartialEq, Debug, Default)]
+#[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Builder {
     diagnostics: Vec<Diagnostic>,
-    /// `I0003` notes written so far, at most [`MAX_DEFAULT_NOTES`].
-    notes: u32,
-    /// `I0003` notes left out: past the cap, or after `E0110`.
-    withheld: u32,
+    /// The cap: [`MAX_PER_CODE`], or another for a comparison
+    /// ([`crate::verify_counted_at_cap`]).
+    cap: u32,
+    /// Per code, what the cap has listed and left out. An ordered map
+    /// (AGENTS.md section 4.4), so the closing `I0007`s come in code order.
+    tallies: BTreeMap<&'static str, Tally>,
+    /// Whether any error was raised, listed or left out: the verdict is the
+    /// raising, never the listing, so the cap cannot move it.
+    errors: bool,
     /// Whether `E0110` has fired: past the size budget, no per-setting
-    /// note is written, because the file is not one to fill in.
+    /// note is written, because the file is not one to fill in. Those notes
+    /// are counted as left out like any other.
     over_budget: bool,
+    /// What was cut to keep each diagnostic within its bound.
+    cuts: Cuts,
+    /// The builder's own failures.
+    faults: Vec<ReportFault>,
+}
+
+impl Default for Builder {
+    fn default() -> Builder {
+        Builder::with_cap(MAX_PER_CODE)
+    }
+}
+
+/// One more of a count, or the fault that it cannot be.
+fn bump(count: &mut u64, code: &'static str, faults: &mut Vec<ReportFault>) {
+    match count.checked_add(1) {
+        Some(next) => *count = next,
+        None => faults.push(ReportFault::CountPastU64 { code }),
+    }
 }
 
 impl Builder {
-    /// Finish a diagnostic and append it.
-    pub(crate) fn emit(&mut self, diag: Diag) {
-        if diag.code == DEFAULT_NOTE {
-            // Every writer asks `takes_default_note` before it builds the
-            // note, so that a note left out costs nothing; this keeps the cap
-            // whole should one not.
-            if self.notes >= MAX_DEFAULT_NOTES {
-                self.withheld = self.withheld.saturating_add(1);
-                return;
-            }
-            self.notes = self.notes.saturating_add(1);
+    /// A builder listing at most `cap` diagnostics of one code: the
+    /// verifier's own is [`MAX_PER_CODE`] ([`Builder::default`]); another is
+    /// for a comparison of reports with and without the cap.
+    pub(crate) fn with_cap(cap: u32) -> Builder {
+        Builder {
+            diagnostics: Vec::new(),
+            cap,
+            tallies: BTreeMap::new(),
+            errors: false,
+            over_budget: false,
+            cuts: Cuts::default(),
+            faults: Vec::new(),
         }
+    }
+
+    /// Finish a diagnostic and append it, unless its code is at its cap, when
+    /// it is counted instead.
+    pub(crate) fn emit(&mut self, diag: Diag) {
         if diag.code == "E0110" {
             self.over_budget = true;
         }
-        self.push(diag);
+        if self.admit(diag.code, Admit::List) {
+            self.push(diag);
+        }
     }
 
-    /// Whether an `I0003` note is to be written: `false`, and the note
-    /// counted as left out, past [`MAX_DEFAULT_NOTES`] or once `E0110` has
-    /// fired. A writer asks before it builds the note, so a note left out
-    /// costs no allocation.
-    pub(crate) fn takes_default_note(&mut self) -> bool {
-        if self.over_budget || self.notes >= MAX_DEFAULT_NOTES {
-            self.withheld = self.withheld.saturating_add(1);
+    /// Whether a diagnostic of `code` is to be listed: `false`, and it is
+    /// counted as left out, once the cap's number of that code are listed,
+    /// or for an `I0003` note once `E0110` has fired. A writer whose
+    /// diagnostic is raised once per step asks before it builds it, so one
+    /// left out costs no allocation; [`Builder::emit`] asks again, so a
+    /// writer that does not ask is capped all the same. The verdict counts an
+    /// error left out as raised.
+    pub(crate) fn takes(&mut self, code: &'static str) -> bool {
+        self.admit(code, Admit::Ask)
+    }
+
+    /// The one place the cap is applied: whether one more diagnostic of
+    /// `code` is listed, counting it as left out when it is not, and as
+    /// listed when `admit` is [`Admit::List`].
+    fn admit(&mut self, code: &'static str, admit: Admit) -> bool {
+        let over_budget = self.over_budget && code == DEFAULT_NOTE;
+        let cap = self.cap;
+        let tally = self.tallies.entry(code).or_insert_with(|| Tally {
+            error: is_error(code),
+            ..Tally::default()
+        });
+        self.errors |= tally.error;
+        if over_budget || tally.listed >= u64::from(cap) {
+            bump(&mut tally.left_out, code, &mut self.faults);
             return false;
+        }
+        if admit == Admit::List {
+            bump(&mut tally.listed, code, &mut self.faults);
         }
         true
     }
 
-    /// Finish a diagnostic and append it, uncounted.
+    /// Whether an `I0003` note is to be written (see [`Builder::takes`]).
+    pub(crate) fn takes_default_note(&mut self) -> bool {
+        self.takes(DEFAULT_NOTE)
+    }
+
+    /// Counts one cut of `kind`.
+    fn cut(&mut self, kind: fn(&mut Cuts) -> &mut u64, code: &'static str) {
+        bump(kind(&mut self.cuts), code, &mut self.faults);
+    }
+
+    /// `text` within `bound` bytes of JSON: cut, and counted, when it is
+    /// past it.
+    fn within(&mut self, text: String, bound: usize, code: &'static str) -> String {
+        if json_bytes(&text) <= bound {
+            return text;
+        }
+        self.cut(|cuts| &mut cuts.texts, code);
+        cut_text(&text, bound)
+    }
+
+    /// `pointer` within [`MAX_POINTER_BYTES`]: cut to an ancestor, and
+    /// counted, when it is past it; and whether it was.
+    fn within_pointer(&mut self, pointer: String, code: &'static str) -> (String, bool) {
+        let kept = match bounded(&pointer) {
+            (Cow::Owned(kept), true) => kept,
+            (Cow::Borrowed(_) | Cow::Owned(_), _) => return (pointer, false),
+        };
+        self.cut(|cuts| &mut cuts.pointers, code);
+        (kept, true)
+    }
+
+    /// Finish a diagnostic and append it, uncounted: the one door every
+    /// diagnostic enters the report by, where each of its parts is held to
+    /// its bound (see [`MAX_PER_CODE`]'s derivation).
     fn push(&mut self, diag: Diag) {
-        let severity = catalogue::entry(diag.code).map_or(Severity::Error, |row| row.severity);
-        let (message, beginner) = match strings::text(diag.code) {
-            Some(row) => (
-                strings::fill(row.message, &diag.args),
-                row.beginner.to_owned(),
-            ),
+        let code = diag.code;
+        let severity = severity_of(code);
+        let argument = argument_bytes_max(code);
+        let mut args = diag.args;
+        for (_, value) in &mut args {
+            if json_bytes(value) > argument {
+                self.cut(|cuts| &mut cuts.texts, code);
+                *value = Cow::Owned(cut_text(value, argument));
+            }
+        }
+        let (path, path_cut) = self.within_pointer(diag.path, code);
+        let mut related: Vec<String> = Vec::new();
+        for (index, one) in diag.related.into_iter().enumerate() {
+            if index >= MAX_RELATED {
+                self.cut(|cuts| &mut cuts.related, code);
+                continue;
+            }
+            related.push(self.within_pointer(one, code).0);
+        }
+        let mut map_refs = diag.map_refs;
+        while map_refs.len() > MAX_MAP_REFS {
+            map_refs.pop();
+            self.cut(|cuts| &mut cuts.map_refs, code);
+        }
+        let mut suggestions: Vec<PatchSuggestion> = Vec::new();
+        for (index, mut suggestion) in diag.suggestions.into_iter().enumerate() {
+            if path_cut
+                || index >= MAX_FIXES
+                || json_bytes(&suggestion.json_patch) > PATCH_BYTES_MAX
+            {
+                self.cut(|cuts| &mut cuts.fixes, code);
+                continue;
+            }
+            suggestion.title = self.within(suggestion.title, argument, code);
+            suggestions.push(suggestion);
+        }
+        let (message, beginner) = match strings::text(code) {
+            Some(row) => {
+                let bound = |template: &str| {
+                    json_bytes(template)
+                        .saturating_add(placeholders(template).saturating_mul(argument))
+                };
+                let message = strings::fill(row.message, &args);
+                let beginner = strings::fill(row.beginner, &args);
+                (
+                    self.within(message, bound(row.message), code),
+                    self.within(beginner, bound(row.beginner), code),
+                )
+            }
             // Unreachable while `the_two_tables_name_the_same_codes` passes. It
             // is written out rather than asserted because a verifier that
             // panics on a playbook is worse than one that reports an ugly
             // message about itself.
             None => (
-                format!("`{}` is not in the diagnostic catalogue", diag.code),
+                format!("`{code}` is not in the diagnostic catalogue"),
                 String::new(),
             ),
         };
-        self.diagnostics.push(Diagnostic {
-            code: diag.code.to_owned(),
+        let diagnostic = Diagnostic {
+            code: code.to_owned(),
             severity: i32::from(severity),
-            path: diag.path,
-            related_paths: diag.related,
+            path,
+            related_paths: related,
             message,
             beginner,
-            suggestions: diag.suggestions,
-            map_refs: diag.map_refs,
-        });
+            suggestions,
+            map_refs,
+        };
+        let bytes = diagnostic_bytes(&diagnostic);
+        // A code the string table does not have is unreachable (see the
+        // message above); its diagnostic is listed as it is.
+        if let Some(max) = diagnostic_bytes_max(code)
+            && bytes > max
+        {
+            self.faults
+                .push(ReportFault::DiagnosticPastItsBound { code, bytes, max });
+            if let Some(tally) = self.tallies.get_mut(code) {
+                bump(&mut tally.left_out, code, &mut self.faults);
+            }
+            return;
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     /// Whether anything so far stops the playbook qualifying.
     ///
     /// Spec section 11: a playbook qualifies when it has **zero errors**. A
     /// warning is information, not a refusal.
+    ///
+    /// Every error raised counts, listed or left out past the cap: the cap
+    /// changes what a report lists and never whether it qualifies.
     pub(crate) fn has_errors(&self) -> bool {
-        self.diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == i32::from(Severity::Error))
+        self.errors
     }
 
-    /// The diagnostics, in the order they were emitted, then one `I0007` with
-    /// the count of `I0003` notes left out, when any were.
-    pub(crate) fn into_diagnostics(mut self) -> Vec<Diagnostic> {
-        if self.withheld > 0 {
-            let withheld = self.withheld;
-            self.push(Diag::new("I0007", crate::pointer::ROOT).arg("count", withheld));
-        }
-        self.diagnostics
+    /// What the cap left out, per code in code order: the typed data each
+    /// closing `I0007` is rendered from.
+    pub(crate) fn left_out(&self) -> Vec<LeftOut> {
+        self.tallies
+            .iter()
+            .filter(|(_, tally)| tally.left_out > 0)
+            .map(|(code, tally)| LeftOut {
+                code,
+                count: tally.left_out,
+                max: self.cap,
+            })
+            .collect()
     }
+
+    /// The diagnostics, in the order they were emitted, then, in code order,
+    /// one `I0007` for each code with diagnostics left out, rendered from its
+    /// [`LeftOut`] and worded by the left-out code's severity; and the
+    /// report's typed facts. An `I0007` never passes through the cap and is
+    /// never counted against one: there is at most one per code.
+    pub(crate) fn finish(mut self) -> Finished {
+        let left_out = self.left_out();
+        for gap in &left_out {
+            let verdict = match severity_of(gap.code) {
+                Severity::Error | Severity::Unspecified => strings::LEFT_OUT_STILL_REFUSE,
+                Severity::Warning | Severity::Info => "",
+            };
+            let budget = if gap.code == DEFAULT_NOTE && self.over_budget {
+                strings::LEFT_OUT_PAST_THE_BUDGET
+            } else {
+                ""
+            };
+            let next = match severity_of(gap.code) {
+                Severity::Info => strings::LEFT_OUT_NEXT_NOTE,
+                Severity::Error | Severity::Warning | Severity::Unspecified => {
+                    strings::LEFT_OUT_NEXT_FIX
+                }
+            };
+            self.push(
+                Diag::new(LEFT_OUT, crate::pointer::ROOT)
+                    .arg_word("code", gap.code)
+                    .arg("count", gap.count)
+                    .arg("max", gap.max)
+                    .arg_word("verdict", verdict)
+                    .arg_word("budget", budget)
+                    .arg_word("next", next),
+            );
+        }
+        Finished {
+            diagnostics: self.diagnostics,
+            left_out,
+            cuts: self.cuts,
+            faults: self.faults,
+        }
+    }
+}
+
+/// A finished report's diagnostics and its typed facts.
+pub(crate) struct Finished {
+    /// The diagnostics, the closing `I0007`s last.
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    /// What the cap left out, per code.
+    pub(crate) left_out: Vec<LeftOut>,
+    /// What was cut to keep each diagnostic within its bound.
+    pub(crate) cuts: Cuts,
+    /// The builder's own failures.
+    pub(crate) faults: Vec<ReportFault>,
+}
+
+/// The bytes a diagnostic takes as JSON, by its strings' [`json_bytes`] and
+/// [`DIAGNOSTIC_FRAMING_BYTES`].
+#[must_use]
+pub fn diagnostic_bytes(diagnostic: &Diagnostic) -> usize {
+    let strings = [
+        diagnostic.code.as_str(),
+        diagnostic.path.as_str(),
+        diagnostic.message.as_str(),
+        diagnostic.beginner.as_str(),
+    ]
+    .into_iter()
+    .chain(diagnostic.related_paths.iter().map(String::as_str))
+    .chain(
+        diagnostic
+            .suggestions
+            .iter()
+            .flat_map(|fix| [fix.title.as_str(), fix.json_patch.as_str()]),
+    )
+    .map(json_bytes)
+    .fold(0_usize, usize::saturating_add);
+    DIAGNOSTIC_FRAMING_BYTES
+        .saturating_add(strings)
+        .saturating_add(diagnostic.map_refs.len().saturating_mul(MAP_REF_BYTES))
+}
+
+/// A code's severity, from the catalogue. A code the catalogue does not have
+/// is reported as an error, the safe reading, and
+/// `the_two_tables_name_the_same_codes` keeps every code the stages raise in
+/// it.
+fn severity_of(code: &str) -> Severity {
+    catalogue::entry(code).map_or(Severity::Error, |row| row.severity)
+}
+
+/// Whether `code` is an error, which stops a playbook qualifying.
+fn is_error(code: &str) -> bool {
+    severity_of(code) == Severity::Error
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +992,14 @@ fn write_string(text: &str, out: &mut String) {
     out.push('"');
 }
 
+/// [`Builder::finish`]'s diagnostics alone, for the stages' unit tests.
+#[cfg(test)]
+impl Builder {
+    pub(crate) fn into_diagnostics(self) -> Vec<Diagnostic> {
+        self.finish().diagnostics
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Builder, Diag, number, patch_add, patch_remove, patch_replace};
@@ -476,5 +1077,386 @@ mod tests {
         let mut builder = Builder::default();
         builder.emit(Diag::new("E0008", "/meta/fingerprint"));
         assert!(!builder.has_errors());
+    }
+
+    // -----------------------------------------------------------------------
+    // The cap, its bounds and its derivation (S3's `vcap`)
+    // -----------------------------------------------------------------------
+
+    use super::{
+        ARGUMENT_BYTES_MAX, Cuts, MAX_MAP_REFS, MAX_PER_CODE, MAX_POINTER_BYTES, ONCE_PER_REPORT,
+        PATCH_BYTES_MAX, QUOTED_CHAR_JSON_BYTES_MAX, ReportFault, argument_bytes_max, cut_text,
+        diagnostic_bytes, diagnostic_bytes_max, json_bytes,
+    };
+    use crate::catalogue::{CATALOGUE, Emitter};
+    use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
+    use pharmakos_proto::gp::api::v1::{Diagnostic, PatchSuggestion, VerifyReport};
+    use pharmakos_proto::gp::v1::Voxel;
+    use pharmakos_proto::json::grammar::{MAX_QUOTED_CHARS, quoted};
+    use std::borrow::Cow;
+
+    /// Every Unicode scalar value, in runs the tests below take a string of.
+    fn scalar_runs() -> Vec<String> {
+        let mut runs = Vec::new();
+        let mut run = String::new();
+        for code in 0_u32..=0x10_ffff {
+            if let Some(character) = char::from_u32(code) {
+                run.push(character);
+                if run.len() > 16_000 {
+                    runs.push(core::mem::take(&mut run));
+                }
+            }
+        }
+        runs.push(run);
+        runs
+    }
+
+    /// `json_bytes` is the bytes the serialiser writes, on every scalar value.
+    #[test]
+    fn json_bytes_is_the_serialiser_s() {
+        // The writer ends a document with a newline; the string is the rest.
+        let body = |text: &str| -> usize {
+            pharmakos_proto::json::write(&Json::String(text.to_owned()))
+                .trim_end_matches('\n')
+                .len()
+                .saturating_sub(2)
+        };
+        for run in scalar_runs() {
+            assert_eq!(body(&run), json_bytes(&run));
+        }
+    }
+
+    /// The quoting rule's worst character, over every scalar value, is
+    /// `QUOTED_CHAR_JSON_BYTES_MAX` bytes in a report; a quoted text at the
+    /// rule's cut is within the argument bound.
+    #[test]
+    fn the_quoting_rule_s_worst_character_is_the_bound() {
+        let mut worst = 0_usize;
+        for code in 0_u32..=0x10_ffff {
+            if let Some(character) = char::from_u32(code) {
+                let one = quoted(&character.to_string());
+                worst = worst.max(json_bytes(one.as_str()));
+            }
+        }
+        assert_eq!(worst, QUOTED_CHAR_JSON_BYTES_MAX);
+        let tags: String = core::iter::repeat_n('\u{e0041}', 200).collect();
+        let cut = quoted(&tags);
+        assert_eq!(
+            json_bytes(cut.as_str()),
+            MAX_QUOTED_CHARS * QUOTED_CHAR_JSON_BYTES_MAX + 3
+        );
+        assert!(json_bytes(cut.as_str()) <= ARGUMENT_BYTES_MAX);
+    }
+
+    /// `diagnostic_bytes` covers what the serialiser writes for a
+    /// diagnostic, at the gateway's nesting (an answer's `result`, its
+    /// `report`, its `diagnostics`: three more levels of two spaces on every
+    /// line), on a diagnostic at every bound.
+    #[test]
+    fn the_framing_covers_the_serialiser() {
+        for code in ["E0003", "E0404", "W0702", "I0007"] {
+            let mut builder = Builder::with_cap(MAX_PER_CODE);
+            builder.push(worst_diag(code));
+            let finished = builder.finish();
+            let diagnostic = finished.diagnostics.first().expect("listed").clone();
+            let empty = VerifyReport::default();
+            let one = VerifyReport {
+                diagnostics: vec![diagnostic.clone()],
+                ..VerifyReport::default()
+            };
+            let alone = pharmakos_proto::json::encode(&empty).expect("encodes");
+            let with = pharmakos_proto::json::encode(&one).expect("encodes");
+            let lines = with.lines().count().saturating_sub(alone.lines().count());
+            let written = with
+                .len()
+                .saturating_sub(alone.len())
+                .saturating_add(lines.saturating_mul(6));
+            assert!(
+                written <= diagnostic_bytes(&diagnostic),
+                "{code}: {written} bytes written, {} counted",
+                diagnostic_bytes(&diagnostic)
+            );
+        }
+    }
+
+    /// A diagnostic of `code` with every part at or past its bound: every
+    /// argument its strings name past the argument bound, a path and a
+    /// related path exactly at the pointer bound (so its Fix is kept), a Fix
+    /// whose title is past the argument bound and whose patch is at its
+    /// bound, two map references at the widest numbers.
+    fn worst_diag(code: &'static str) -> Diag {
+        let row = crate::strings::text(code).expect("a code with strings");
+        let mut diag = Diag::new(
+            code,
+            format!("/{}", "a".repeat(MAX_POINTER_BYTES.saturating_sub(1))),
+        )
+        .related(format!(
+            "/{}",
+            "b".repeat(MAX_POINTER_BYTES.saturating_sub(1))
+        ));
+        let long = "x".repeat(argument_bytes_max(code).saturating_mul(2));
+        for template in [row.message, row.beginner] {
+            for name in template
+                .split('{')
+                .skip(1)
+                .filter_map(|tail| tail.split_once('}').map(|(name, _)| name))
+            {
+                diag.args.push((name, Cow::Owned(long.clone())));
+            }
+        }
+        diag.suggestions.push(PatchSuggestion {
+            title: long,
+            json_patch: "p".repeat(PATCH_BYTES_MAX),
+            applicability: i32::from(Applicability::MaybeIncorrect),
+        });
+        for _ in 0..=MAX_MAP_REFS {
+            diag = diag.map_ref(Voxel {
+                x: i32::MIN,
+                y: i32::MIN,
+                z: i32::MIN,
+            });
+        }
+        diag
+    }
+
+    /// The bytes of the worst report a cap of `cap` allows, built through
+    /// the builder and written by the serialiser: every code a stage raises
+    /// at every bound, one more than the cap of each (once for a code raised
+    /// once a report), so each closes with its `I0007`.
+    fn worst_report_bytes(cap: u32) -> usize {
+        let mut builder = Builder::with_cap(cap);
+        for row in CATALOGUE {
+            if !matches!(row.emitter, Emitter::Stage(_)) {
+                continue;
+            }
+            let times = if ONCE_PER_REPORT.contains(&row.code) {
+                1
+            } else {
+                cap.saturating_add(1)
+            };
+            for _ in 0..times {
+                builder.emit(worst_diag(row.code));
+            }
+        }
+        let finished = builder.finish();
+        assert!(finished.faults.is_empty(), "{:?}", finished.faults);
+        let report = VerifyReport {
+            qualifies: false,
+            depth: 2,
+            diagnostics: finished.diagnostics,
+            report_hash: vec![0xff; 8],
+            rules_hash: vec![0xff; 8],
+            plan_fingerprint: vec![0xff; 8],
+            verifier_version: crate::VERIFIER_VERSION.to_owned(),
+            size_units: u32::MAX,
+            size_budget: u32::MAX,
+        };
+        pharmakos_proto::json::encode(&report)
+            .expect("a report encodes")
+            .len()
+    }
+
+    /// Three quarters of the client's inbound buffer, read from the client's
+    /// own source (the verifier may not depend on the walled client).
+    fn room() -> usize {
+        const DECLARED: &str = "pub const INBOUND_BUFFER_BYTES: usize = ";
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../client-gdext/src/transport.rs");
+        let source = std::fs::read_to_string(path).expect("the client's transport sizes");
+        let buffer: usize = source
+            .lines()
+            .find(|line| line.starts_with(DECLARED))
+            .expect("transport.rs declares INBOUND_BUFFER_BYTES")
+            .trim_start_matches(DECLARED)
+            .trim_end_matches(';')
+            .replace('_', "")
+            .parse()
+            .expect("a whole number");
+        buffer
+            .checked_div(4)
+            .and_then(|quarter| quarter.checked_mul(3))
+            .expect("a buffer of some size")
+    }
+
+    /// **The cap is the top of its range** (decisions-log item 183 (4); the
+    /// rulings' item 2): the worst report the builder can write fits three
+    /// quarters of the client's inbound buffer at `MAX_PER_CODE` and not at
+    /// one more, both measured through the real builder and serialiser.
+    #[test]
+    fn the_cap_is_the_top_of_its_range() {
+        let room = room();
+        let at = worst_report_bytes(MAX_PER_CODE);
+        let past = worst_report_bytes(MAX_PER_CODE.saturating_add(1));
+        println!("worst report at {MAX_PER_CODE}: {at} bytes; at one more: {past}; room {room}");
+        assert!(at <= room, "{at} bytes at the cap, past {room}");
+        assert!(past > room, "{past} bytes at one more, within {room}");
+    }
+
+    /// The model is an upper bound: no diagnostic the builder lists is past
+    /// `diagnostic_bytes_max`, so the builder records no fault on any code's
+    /// worst diagnostic.
+    #[test]
+    fn every_code_s_worst_diagnostic_is_within_its_bound() {
+        for row in CATALOGUE {
+            let mut builder = Builder::default();
+            builder.emit(worst_diag(row.code));
+            let finished = builder.finish();
+            assert!(
+                finished.faults.is_empty(),
+                "{}: {:?}",
+                row.code,
+                finished.faults
+            );
+            for diagnostic in &finished.diagnostics {
+                let max = diagnostic_bytes_max(&diagnostic.code).expect("a bound");
+                assert!(diagnostic_bytes(diagnostic) <= max, "{}", diagnostic.code);
+            }
+        }
+    }
+
+    /// Each part past its bound is cut and counted: never a silent `min`.
+    #[test]
+    fn a_part_past_its_bound_is_cut_and_counted() {
+        let mut builder = Builder::default();
+        let deep = format!("/{}", "k".repeat(MAX_POINTER_BYTES.saturating_mul(3)));
+        builder.emit(
+            Diag::new("E0404", format!("/declarative{deep}"))
+                .related("/a")
+                .related("/b")
+                .map_ref(Voxel { x: 1, y: 1, z: 1 })
+                .map_ref(Voxel { x: 2, y: 2, z: 2 })
+                .map_ref(Voxel { x: 3, y: 3, z: 3 })
+                .fix("t", String::from("[]"), Applicability::MaybeIncorrect),
+        );
+        let mut long = Diag::new("E0405", "/x");
+        long.args.push((
+            "id",
+            Cow::Owned("y".repeat(ARGUMENT_BYTES_MAX.saturating_mul(3))),
+        ));
+        builder.emit(long);
+        let finished = builder.finish();
+        assert_eq!(
+            finished.cuts,
+            Cuts {
+                texts: 1,
+                pointers: 1,
+                fixes: 1,
+                related: 1,
+                map_refs: 1,
+            }
+        );
+        let first = finished.diagnostics.first().expect("listed");
+        assert_eq!(
+            first.path, "/declarative",
+            "cut to the deepest fitting ancestor"
+        );
+        assert!(
+            first.suggestions.is_empty(),
+            "the Fix of a cut path is dropped"
+        );
+        let second = finished.diagnostics.get(1).expect("listed");
+        assert!(second.message.contains('…'), "{}", second.message);
+        // The argument was cut, not the message: the template's own words after
+        // the argument are whole.
+        assert!(
+            second
+                .message
+                .ends_with("…` is a beacon this seat does not own."),
+            "{}",
+            second.message
+        );
+        assert!(cut_text("abc", 4).ends_with('…'));
+    }
+
+    /// The closing `I0007`s never pass through the cap: seven codes past the
+    /// cap close with seven, one per code, in code order.
+    #[test]
+    fn every_code_left_out_of_has_its_i0007() {
+        let mut builder = Builder::default();
+        let codes = [
+            "E0301", "E0302", "E0303", "E0305", "E0401", "E0403", "W0702",
+        ];
+        for code in codes {
+            for _ in 0..=MAX_PER_CODE {
+                builder.emit(Diag::new(code, "/declarative/route/0"));
+            }
+        }
+        let finished = builder.finish();
+        let markers: Vec<&Diagnostic> = finished
+            .diagnostics
+            .iter()
+            .filter(|found| found.code == "I0007")
+            .collect();
+        assert_eq!(markers.len(), codes.len());
+        for (marker, code) in markers.iter().zip(codes) {
+            assert!(
+                marker.message.starts_with(&format!("1 more `{code}`")),
+                "{}",
+                marker.message
+            );
+        }
+    }
+
+    /// `I0007`'s words are true for the code they name: an error's say the
+    /// left-out ones still refuse; a warning's and a note's say nothing about
+    /// qualifying; only `I0003`'s name the size budget, and only once it was
+    /// passed; a note's beginner sentence does not ask to deal with anything.
+    #[test]
+    fn an_i0007_s_words_are_its_code_s() {
+        let words = |code: &'static str| -> Diagnostic {
+            let mut builder = Builder::default();
+            for _ in 0..=MAX_PER_CODE {
+                builder.emit(Diag::new(code, "/declarative/route/0"));
+            }
+            builder
+                .finish()
+                .diagnostics
+                .into_iter()
+                .find(|found| found.code == "I0007")
+                .expect("an I0007")
+        };
+        let error = words("E0303");
+        assert!(
+            error
+                .message
+                .contains("still stops the playbook qualifying")
+        );
+        assert!(!error.message.contains("size budget"));
+        assert!(error.beginner.contains("Deal with"));
+        let warning = words("W0702");
+        assert!(!warning.message.contains("qualifying"));
+        assert!(warning.beginner.contains("Deal with"));
+        let note = words("I0003");
+        assert!(!note.message.contains("qualifying"));
+        assert!(
+            !note.message.contains("size budget"),
+            "the budget is named only once it was passed: {}",
+            note.message
+        );
+        assert!(!note.beginner.contains("Deal with"));
+        // Past the size budget, `I0003`'s words say so.
+        let mut builder = Builder::default();
+        builder.emit(Diag::new("E0110", "/declarative"));
+        builder.emit(Diag::new("I0003", "/declarative/route/0/on_fail"));
+        let past = builder
+            .finish()
+            .diagnostics
+            .into_iter()
+            .find(|found| found.code == "I0007")
+            .expect("an I0007");
+        assert!(past.message.contains("size budget"), "{}", past.message);
+        for found in [&error, &warning, &note] {
+            assert!(!found.message.contains('{') && !found.beginner.contains('{'));
+        }
+    }
+
+    /// A count past `u64` is a fault, not a wrap or a silent stop.
+    #[test]
+    fn a_count_past_u64_is_a_fault() {
+        let mut count = u64::MAX;
+        let mut faults = Vec::new();
+        super::bump(&mut count, "E0303", &mut faults);
+        assert_eq!(count, u64::MAX);
+        assert_eq!(faults, vec![ReportFault::CountPastU64 { code: "E0303" }]);
     }
 }

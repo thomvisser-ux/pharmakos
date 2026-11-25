@@ -243,7 +243,10 @@ pub struct Continuity {
     pub draft_id: String,
     /// Whether it still qualifies against the new snapshot.
     pub qualifies: bool,
-    /// How many diagnostics the re-verification produced.
+    /// How many diagnostics the re-verification's report **lists**: at most
+    /// `pharmakos_verifier::MAX_PER_CODE` of one code, the rest of a code
+    /// counted by the report's closing `I0007`, one per code, which are among
+    /// them (S3's `vcap`).
     pub diagnostics: u32,
     /// `report_hash` of that re-verification.
     pub report_hash: Vec<u8>,
@@ -3098,9 +3101,10 @@ impl Surface {
             sealed::Qualified::Refused { report } => Err(Error::new(
                 crate::error::Code::NoQualifyingPlan,
                 said!(
-                    "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \n                     gateway's fallback is filed instead",
+                    "seat {}'s advised safe playbook does not qualify ({}); the gateway's \
+                     fallback is filed instead",
                     seat.raw(),
-                    report.diagnostics.len()
+                    listed_words(&report)
                 ),
             )),
         }
@@ -4314,7 +4318,31 @@ fn tallies_of(
         .collect()
 }
 
-/// How many diagnostics a report carries, as `Continuity.diagnostics`, a
+/// A refusal's words for what a report lists: its rows, and how many codes it
+/// left diagnostics out of past the per-code cap (S3's `vcap`), read from the
+/// rows and never from a sentence ([`pharmakos_verifier::CapRead`]).
+fn listed_words(report: &VerifyReport) -> pharmakos_proto::json::grammar::Said {
+    let read = pharmakos_verifier::CapRead::of(report);
+    let rows = report.diagnostics.len();
+    let listed = if rows == 1 {
+        "diagnostic"
+    } else {
+        "diagnostics"
+    };
+    match read.left_out_codes {
+        0 => said!("{} {}", rows, listed),
+        codes => said!(
+            "{} {} listed, and more of {} {} past the {} of one code a report lists",
+            rows,
+            listed,
+            codes,
+            if codes == 1 { "code" } else { "codes" },
+            pharmakos_verifier::MAX_PER_CODE
+        ),
+    }
+}
+
+/// How many diagnostics a report lists, as `Continuity.diagnostics`, a
 /// `uint32`.
 ///
 /// # Errors
@@ -7185,6 +7213,47 @@ mod tests {
                      now queue a Resonance Spire at any of your beacons."
                 )
             )]
+        );
+    }
+
+    /// The words of a refused advised safe playbook (S3's `vcap`): the rows a
+    /// report lists, singular and plural, and how many codes it left out of.
+    #[test]
+    fn a_refusal_says_what_a_capped_report_lists() {
+        use pharmakos_proto::gp::api::v1::{Diagnostic, VerifyReport};
+        let row = |code: &str| Diagnostic {
+            code: code.to_owned(),
+            ..Diagnostic::default()
+        };
+        let report = |codes: &[&str]| VerifyReport {
+            diagnostics: codes.iter().map(|code| row(code)).collect(),
+            ..VerifyReport::default()
+        };
+        let cap = pharmakos_verifier::MAX_PER_CODE;
+        assert_eq!(
+            super::listed_words(&report(&["E0109"])).as_str(),
+            "1 diagnostic"
+        );
+        assert_eq!(
+            super::listed_words(&report(&["E0109", "E0110"])).as_str(),
+            "2 diagnostics"
+        );
+        let mut one: Vec<&str> = vec!["E0303"; usize::try_from(cap).unwrap_or(0)];
+        one.push("I0007");
+        assert_eq!(
+            super::listed_words(&report(&one)).as_str(),
+            format!(
+                "{} diagnostics listed, and more of 1 code past the {cap} of one code a report lists",
+                one.len()
+            )
+        );
+        one.push("I0007");
+        assert_eq!(
+            super::listed_words(&report(&one)).as_str(),
+            format!(
+                "{} diagnostics listed, and more of 2 codes past the {cap} of one code a report lists",
+                one.len()
+            )
         );
     }
 }

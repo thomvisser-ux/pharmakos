@@ -65,60 +65,22 @@
           "map_refs": []
         },
         {
-          "code": "I0003",
-          "severity": "info",
-          "path": "/declarative/handlers/0/body/0/on_fail",
-          "related_paths": [],
-          "message": "`on_fail` is omitted and reads as SKIP.",
-          "beginner": "A setting left out takes its named default.",
-          "suggestions": [
-            {
-              "title": "Write the default out",
-              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-              "applicability": "machine_applicable"
-            }
-          ],
-          "map_refs": []
-        },
-        {
-          "code": "I0003",
-          "severity": "info",
-          "path": "/declarative/handlers/0/body/0/move/pace",
-          "related_paths": [],
-          "message": "`pace` is omitted and reads as DIRECT.",
-          "beginner": "A setting left out takes its named default.",
-          "suggestions": [
-            {
-              "title": "Write the default out",
-              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-              "applicability": "machine_applicable"
-            }
-          ],
-          "map_refs": []
-        },
-        {
-          "code": "I0003",
-          "severity": "info",
-          "path": "/declarative/handlers/0/body/1/on_fail",
-          "related_paths": [],
-          "message": "`on_fail` is omitted and reads as SKIP.",
-          "beginner": "A setting left out takes its named default.",
-          "suggestions": [
-            {
-              "title": "Write the default out",
-              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-              "applicability": "machine_applicable"
-            }
-          ],
-          "map_refs": []
-        },
-        {
           "code": "W0709",
           "severity": "warning",
           "path": "/declarative/route/1/place_beacon/initial/mandate/attack/target/beacon/nearest",
           "related_paths": [],
           "message": "the seat has no sighting of an enemy beacon, and the reach window is 180000 ms; the Attack raids the enemy beacon seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.",
           "beginner": "This Attack beacon's raiders wait until your side has recently seen an enemy beacon, then raid the nearest one. Scouts help them find one sooner.",
+          "suggestions": [],
+          "map_refs": []
+        },
+        {
+          "code": "I0007",
+          "severity": "info",
+          "path": "",
+          "related_paths": [],
+          "message": "3 more `I0003` not listed: a report lists at most 4 of one code one by one.",
+          "beginner": "Not shown: 3 more `I0003`. They say the same kind of thing as the ones shown.",
           "suggestions": [],
           "map_refs": []
         }

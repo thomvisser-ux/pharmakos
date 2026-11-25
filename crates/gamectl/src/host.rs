@@ -94,7 +94,9 @@ use pharmakos_gateway::Code;
 use pharmakos_gateway::advice::{Advice, StartHere, SuggestedValue, Suggestion};
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::serve::{self, Advisor, BuiltInSeat, Operators, Setup};
-use pharmakos_operator::{Easy, FailedStones, Played, PushUnread, RulesError, StonesUnread};
+use pharmakos_operator::{
+    Easy, FailedStones, Played, PushUnread, RulesError, StonesUnread, TapsUnread,
+};
 use pharmakos_proto::json::Json;
 
 use crate::exit::Failure;
@@ -403,8 +405,30 @@ pub fn refusals_said(seat: u8, played: &Played) -> Option<String> {
     let estimates =
         (!estimates.is_empty()).then(|| strings::operator_estimates_refused(&estimates));
     let stones = stones_unread(&played.failed_stones);
-    let said: Vec<String> = read.into_iter().chain(estimates).chain(stones).collect();
+    let taps = played.taps_unread.as_ref().map(taps_unread);
+    let said: Vec<String> = read
+        .into_iter()
+        .chain(estimates)
+        .chain(stones)
+        .chain(taps)
+        .collect();
     (!said.is_empty()).then(|| strings::operator_round(seat, played.round, &said.join(" ")))
+}
+
+/// Why the tap probe composed no tap, when it could not say (S3's `vcap`).
+fn taps_unread(unread: &TapsUnread) -> String {
+    match unread {
+        TapsUnread::Refused(refused) => {
+            strings::operator_taps_refused(&refused.method, &refused.code, &refused.message)
+        }
+        TapsUnread::PartAtTheCap { part, listed } => {
+            strings::operator_taps_part_at_the_cap(*part, *listed)
+        }
+        TapsUnread::StepPastThePart { part, path } => {
+            strings::operator_taps_step_past_the_part(*part, path)
+        }
+        TapsUnread::PastTheTarget => strings::operator_taps_past_the_target(),
+    }
 }
 
 /// Why last round's failed stones were not all known, when they were not.
@@ -624,7 +648,23 @@ mod tests {
             estimates_refused,
             fundable: 0,
             failed_stones: FailedStones::None,
+            taps_unread: None,
         }
+    }
+
+    #[test]
+    fn a_tap_probe_that_could_not_say_is_said() {
+        let mut round = played(None, Vec::new());
+        round.taps_unread = Some(TapsUnread::PartAtTheCap { part: 1, listed: 4 });
+        let said = refusals_said(0, &round).expect("said");
+        assert!(said.contains("part 1 listed 4 E0503"), "{said}");
+        round.taps_unread = Some(TapsUnread::Refused(refused(
+            "verify_plan",
+            "INVALID_ARGUMENT",
+            "no",
+        )));
+        let said = refusals_said(0, &round).expect("said");
+        assert!(said.contains("verify_plan with INVALID_ARGUMENT"), "{said}");
     }
 
     #[test]
