@@ -398,8 +398,12 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// `retreat` (decisions-log item 177 (3)): `MandateSettings.retreat_hp_pct`
 /// carries presence, so this build prices a written 0 (retreat off) as one
 /// field of its edit, where `0.1.0-s3.5` read it as unwritten, and its reports
-/// are not comparable with `0.1.0-s3.5`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.6";
+/// are not comparable with `0.1.0-s3.5`'s. `0.1.0-s3.7` from S3's `vcap`
+/// (decisions-log item 183 (4)): a report lists at most [`MAX_PER_CODE`] of
+/// one code and closes with one `I0007` per code it left diagnostics out of,
+/// and a decode diagnostic's pointer is bounded ([`MAX_POINTER_BYTES`]), so
+/// its reports are not comparable with `0.1.0-s3.6`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.7";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
