@@ -72,8 +72,24 @@ pub enum Ended {
     UpgradeRefused(Refusal),
     /// The socket went away without a close frame.
     Disconnected,
+    /// The upgrade came after the host stopped, with a token of this match:
+    /// a 503 said why ([`Opened::Stopped`]).
+    HostStopped,
     /// Reading or writing failed.
     Io(String),
+}
+
+/// What a [`Door`] says of the token that rode an upgrade.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Opened {
+    /// The token is this match's: the connection is served.
+    Granted,
+    /// The token is not this match's, or not live: a 401, which says nothing
+    /// more, so a stranger's token learns nothing of the host's state.
+    Refused,
+    /// The token is this match's and the host has stopped on a write it
+    /// could not make (`crate::serve`): a 503 whose body is these words.
+    Stopped(String),
 }
 
 /// Where a connection's token is authenticated and its messages are answered.
@@ -86,10 +102,10 @@ pub enum Ended {
 pub trait Door {
     /// Authenticate the token that rode the upgrade and record it.
     ///
-    /// `false` ends the connection with a 401 before a single frame is read,
-    /// which is what makes every frame this gateway parses one the rate
-    /// limiter can count.
-    fn open(&mut self, token: &Token) -> bool;
+    /// Anything but [`Opened::Granted`] ends the connection before a single
+    /// frame is read, which is what makes every frame this gateway parses one
+    /// the rate limiter can count.
+    fn open(&mut self, token: &Token) -> Opened;
 
     /// Answer one JSON-RPC text message, as the text that goes back.
     fn answer(&mut self, token: &Token, text: &str) -> String;
@@ -125,11 +141,11 @@ impl<'a, V: crate::fog::Vision> SurfaceDoor<'a, V> {
 }
 
 impl<V: crate::fog::Vision> Door for SurfaceDoor<'_, V> {
-    fn open(&mut self, token: &Token) -> bool {
+    fn open(&mut self, token: &Token) -> Opened {
         let tick = self.surface.time().tick;
         let match_id = self.surface.match_id().to_owned();
         let Ok(grant) = self.surface.tokens().authenticate(token, &match_id, tick) else {
-            return false;
+            return Opened::Refused;
         };
         let (subject, handle) = (grant.subject, grant.handle);
         self.surface.audit().record(
@@ -139,7 +155,7 @@ impl<V: crate::fog::Vision> Door for SurfaceDoor<'_, V> {
             "upgrade",
             crate::audit::Outcome::Ok,
         );
-        true
+        Opened::Granted
     }
 
     fn answer(&mut self, token: &Token, text: &str) -> String {
@@ -205,8 +221,17 @@ pub fn serve_through<S: Read + Write, D: Door + ?Sized>(
     let Some(token) = Token::parse(&upgrade.bearer) else {
         return refuse(stream, door, &Refusal::MalformedToken);
     };
-    if !door.open(&token) {
-        return refuse(stream, door, &Refusal::Unauthenticated);
+    // The token is checked after the upgrade's own checks (`Host`, `Origin`,
+    // the key, the token's form), and a stopped host answers why only to a
+    // token of this match: a request that fails any check learns nothing of
+    // the host's state.
+    match door.open(&token) {
+        Opened::Granted => {}
+        Opened::Refused => return refuse(stream, door, &Refusal::Unauthenticated),
+        Opened::Stopped(words) => {
+            let _ = stream.write_all(handshake::stopped_response(&words).as_bytes());
+            return Ended::HostStopped;
+        }
     }
 
     if let Err(error) = stream.write_all(handshake::response(&upgrade).as_bytes()) {

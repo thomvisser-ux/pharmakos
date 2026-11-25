@@ -149,6 +149,14 @@ impl RateLimiter {
 
     /// Count one call at `tick`.
     ///
+    /// Every method is one call here, `estimate_route` included, whatever its
+    /// waypoints cost the gateway's one surface thread: at its 64-waypoint
+    /// maximum an estimate costs 37 to 45 ms a call, near the 50 ms tick, and
+    /// one seat can queue several within its limit (decisions-log item
+    /// 169 (14)). Charging the limit by waypoints was the recommendation; the
+    /// owner left it for hardening (item 183 (6)), and nothing is built.
+    /// PLACEHOLDER: `estimate_route` charged one call at 64 waypoints, 37 to 45 ms each — owner, at hardening.
+    ///
     /// # Errors
     ///
     /// [`crate::error::Code::RateLimited`], with a message saying which cap was

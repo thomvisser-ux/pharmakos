@@ -90,8 +90,9 @@ use serde::{Deserialize, Serialize};
 /// `plan-core`'s `context::segment_length_ms` reads.
 ///
 /// The event bus is deliberately **not** in the file: it is derived output that
-/// nothing in a tick reads, so a resumed match starts with an empty feed
-/// ([`crate::events`]).
+/// nothing in a tick reads, so a resumed match's bus starts empty
+/// ([`crate::events`]). The feed a seat reads is the gateway's, which carries
+/// the last Push's lines in its own save, beside this snapshot.
 ///
 /// **Version 5 is T11's**: it adds the interpreter's per-seat state — the route
 /// cursor, the highest step reached, the stage of the step in progress with its

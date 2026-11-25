@@ -556,6 +556,10 @@ struct Link {
     open: bool,
     next_id: i64,
     in_flight: Option<(i64, Purpose)>,
+    /// The method of the call in flight, so its refusal is held under its own name and
+    /// cleared only by an answer to the same method (`last_error`; lane `opsave`, fix pass
+    /// 4, item 4).
+    in_flight_method: String,
     drops: u32,
     /// Drops closed on the message in flight, by either side ([`Close::ThisMessage`]): counted
     /// under their own reason, never asked again.
@@ -986,7 +990,13 @@ pub struct Rig {
     due: Due,
     wants: Wants,
     all_ready: bool,
-    last_error: Option<String>,
+    /// The last refused call, by its method, in the rig's words: what the lobby says
+    /// (`last_error`). Cleared when a later call to the same method is answered, or when the
+    /// phase changes (lane `opsave`, fix passes 3 and 4): a refusal the player can no longer
+    /// act on, such as one rate-limited clock report, does not sit on the line all session,
+    /// and one the player can (a refused `save_draft`) is not wiped by another planning
+    /// call's answer, such as the editor's idle `verify_plan`.
+    last_error: Option<(String, String)>,
     /// The last close on a message itself, for the player's words.
     closed_on: Option<ClosedOnMessage>,
     /// The map view's argument (the cursor; "" for a keyframe) whose answer closed the seat link
@@ -1449,11 +1459,12 @@ impl Rig {
         if self.timing.clock.unreportable() && self.last_error.is_none() {
             // Said once, where the lobby reads the rig's errors: the gateway's clock stops
             // here rather than being reported at a bound it would read as time not passing.
-            self.last_error = Some(
+            self.last_error = Some((
+                "report_host_clock".to_owned(),
                 "this phase has run longer than report_host_clock can carry (i32::MAX ms), \
                  so the host clock is no longer reported"
                     .to_owned(),
-            );
+            ));
         }
         if self.admin_reread.is_some() || self.timing.keepalive_due(ADMIN) {
             self.admin_reread = None;
@@ -1585,6 +1596,7 @@ impl Rig {
             return None;
         }
         state.in_flight = Some((id, purpose));
+        method.clone_into(&mut state.in_flight_method);
         state.in_flight_since = self.timing.now_us();
         state.calls = state.calls.saturating_add(1);
         self.ledger.sent = self.ledger.sent.saturating_add(1);
@@ -1621,12 +1633,13 @@ impl Rig {
         let Some(state) = self.links.get_mut(link) else {
             return Err(BridgeError::Rpc(format!("there is no connection {link}")));
         };
-        let purpose = match state.in_flight {
+        let (purpose, method) = match state.in_flight {
             Some((waiting, purpose)) if waiting == id => {
                 state.in_flight = None;
+                let method = std::mem::take(&mut state.in_flight_method);
                 // An answer: the policy's count returns once the link has stayed up with one.
                 state.reconnect.answered();
-                purpose
+                (purpose, method)
             }
             // From before a reconnect, or after its call timed out: nobody is waiting for it.
             // Dropped and counted, never applied to another call (fix pass 6).
@@ -1662,7 +1675,7 @@ impl Rig {
                 return Ok(answer);
             }
             let said = why.said();
-            self.last_error = Some(said.clone());
+            self.last_error = Some((method, said.clone()));
             answer.error = Some(said);
             return Ok(answer);
         }
@@ -1694,6 +1707,14 @@ impl Rig {
             }
         }
         settled?;
+        // An answered call clears the refusal of the last call to the same method.
+        if self
+            .last_error
+            .as_ref()
+            .is_some_and(|(refused, _)| *refused == method)
+        {
+            self.last_error = None;
+        }
         if link == ADMIN
             && let (_, Some(footer)) = split_footer(result)
         {
@@ -2221,6 +2242,8 @@ impl Rig {
             return Ok(false);
         }
         self.phase = phase;
+        // A refusal is the phase's: the next phase starts with none to say.
+        self.last_error = None;
         // The status reads' retries are a round's phase's: a phase spent them, the next asks
         // afresh (fix pass 2).
         self.status_retries = 0;
@@ -2489,7 +2512,7 @@ impl Rig {
     /// The last refusal the gateway answered with, if any.
     #[must_use]
     pub fn last_error(&self) -> Option<&str> {
-        self.last_error.as_deref()
+        self.last_error.as_ref().map(|(_, said)| said.as_str())
     }
 
     /// The last close on a message itself, if any (fix pass 3).
@@ -4487,6 +4510,64 @@ mod tests {
         assert_eq!(editor.status().key, "gateway_refused");
     }
 
+    /// The lobby's refusal line is cleared per METHOD (fix pass 4, item 4): a refused
+    /// `save_draft` stays said when other planning calls (`patch_plan`, the editor's own
+    /// `verify_plan`) are answered. That an answer to the same method clears it is held by
+    /// `a_refused_zero_is_sent_again` (a clock report).
+    #[test]
+    fn a_refused_save_draft_stays_said_when_other_planning_calls_are_answered() {
+        let mut rig = editing();
+        let seat_frame = |rig: &mut Rig, at: u64| {
+            rig.poll(at)
+                .into_iter()
+                .find(|frame| frame.link == SEAT)
+                .expect("a seat call")
+        };
+        assert!(rig.editor_mut().save_draft("mine"));
+        let save = seat_frame(&mut rig, 3);
+        assert_eq!(method_of(&save), "save_draft");
+        rig.receive(
+            SEAT,
+            &refusal(id_of(&save), "RATE_LIMITED", "too many saves"),
+        )
+        .expect("reads");
+        assert_eq!(rig.last_error(), Some("RATE_LIMITED: too many saves"));
+        assert!(rig.editor_mut().act(
+            crate::editor::Action::Go,
+            &crate::editor::Target::Beacon("b_00".to_owned())
+        ));
+        let patch = seat_frame(&mut rig, 4);
+        assert_eq!(method_of(&patch), "patch_plan");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(&patch),
+                r#"{"playbook_jsonc":"{ }","inverse_json_patch":"[]"}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        assert_eq!(
+            rig.last_error(),
+            Some("RATE_LIMITED: too many saves"),
+            "another method's answer leaves the refusal said"
+        );
+        // The patch is followed by the editor's own check, `verify_plan`: answered, and the
+        // refusal still said.
+        let check = seat_frame(&mut rig, 5);
+        assert_eq!(method_of(&check), "verify_plan");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(&check),
+                r#"{"report":{"qualifies":true,"depth":"quick"}}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        assert_eq!(rig.last_error(), Some("RATE_LIMITED: too many saves"));
+    }
+
     /// Once the match has ended no planning call will ever go out: an ask is refused at
     /// once, and a placement ghost queued as it ended is dropped rather than left on
     /// "Checking this spot..." (finding K).
@@ -5138,6 +5219,11 @@ mod tests {
             None,
             "an answered zero is no refusal to say"
         );
+        assert_eq!(
+            rig.last_error(),
+            None,
+            "a later answered clock report clears the refused one's line"
+        );
     }
 
     /// **A zero the gateway keeps refusing is given up after `ZERO_REFUSALS`**: no further
@@ -5159,7 +5245,14 @@ mod tests {
             rig.zero_refusal(),
             Some(("refused", "RATE_LIMITED: too many reports"))
         );
-        assert_eq!(rig.last_error(), Some("RATE_LIMITED: too many reports"));
+        // The Lull ended (`end_lull` answered "push"): its refusal is the Lull's, so the
+        // lobby's refusal line clears with the phase (fix pass 3, item 11), while the zero's
+        // own line above still says it.
+        assert_eq!(
+            rig.last_error(),
+            None,
+            "a new phase clears the refusal's line"
+        );
         // The next Lull starts its count again.
         let next = read_status(
             &json::read(r#"{"phase":"lull","phase_remaining_ms":1000,"round":3}"#).expect("json"),

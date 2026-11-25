@@ -305,10 +305,18 @@ pub fn operator_estimates_refused(refused: &[(&str, &str)]) -> String {
     )
 }
 
-/// `gamectl host` could not start or keep its match.
+/// `gamectl host` could not start its match: a failure before it wrote the
+/// announce line.
 #[must_use]
 pub fn host_refused(why: &str) -> String {
     format!("{BINARY} host: the match could not be hosted: {why}")
+}
+
+/// `gamectl host` stopped a match it had announced: a failure after the
+/// announce line (a write the match needed and could not have, lane `opsave`).
+#[must_use]
+pub fn host_stopped(why: &str) -> String {
+    format!("{BINARY} host: the match stopped: {why}")
 }
 
 /// A subcommand of a command this build does not have.

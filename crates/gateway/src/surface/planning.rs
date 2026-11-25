@@ -105,6 +105,96 @@ pub const MAX_DRAFT_LABEL_CHARS: usize = 120;
 /// limits.
 pub const MAX_DRAFTS: usize = 32;
 
+/// The most drafts one seat holds in all: [`MAX_DRAFTS`] of its own and the
+/// one carried draft ([`crate::surface::CARRIED_DRAFT_ID`]), the draft rule's
+/// whole ([`drafts_hold`]). What a save's read refuses past before it reads a
+/// draft (`crate::save`).
+pub const MAX_HELD_DRAFTS: usize = MAX_DRAFTS + 1;
+
+/// How many numbered ids `save_draft` tries when it names a draft
+/// (`d<round>-<n>`): one more than a seat's own drafts can hold, so one of
+/// them is always free.
+const DRAFT_NUMBERS: usize = MAX_DRAFTS + 1;
+
+/// Why a seat's drafts break the draft rule ([`drafts_hold`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum DraftsRefused {
+    /// More than [`MAX_DRAFTS`] of the seat's own.
+    TooMany {
+        /// How many of its own it holds.
+        own: usize,
+    },
+    /// The gateway's carried draft more than once.
+    CarriedTwice,
+    /// One id on two drafts.
+    IdTwice {
+        /// The id.
+        id: String,
+    },
+}
+
+impl DraftsRefused {
+    /// The rule broken, in words.
+    #[must_use]
+    pub fn said(&self) -> Said {
+        match self {
+            DraftsRefused::TooMany { own } => said!(
+                "it holds {} drafts of its own, past the {} a seat may beside the carried one",
+                own,
+                MAX_DRAFTS
+            ),
+            DraftsRefused::CarriedTwice => said!(
+                "it holds the carried draft `{}` twice",
+                crate::surface::CARRIED_DRAFT_ID
+            ),
+            DraftsRefused::IdTwice { id } => said!(
+                "it holds two drafts named `{}`",
+                pharmakos_proto::json::grammar::quoted(id)
+            ),
+        }
+    }
+}
+
+/// How many of `drafts` are the seat's own: every draft but the gateway's
+/// carried one ([`crate::surface::CARRIED_DRAFT_ID`]), which the gateway
+/// writes, `save_draft` cannot, and no count of the seat's holds.
+#[must_use]
+pub fn own_drafts(drafts: &[Draft]) -> usize {
+    drafts
+        .iter()
+        .filter(|draft| draft.draft_id != crate::surface::CARRIED_DRAFT_ID)
+        .count()
+}
+
+/// The draft rule, stated once: a seat holds at most [`MAX_DRAFTS`] drafts of
+/// its own **plus** the one carried draft, and no id twice. Held by
+/// `save_draft` (which can neither write nor count the carried id), draft
+/// continuity (which replaces the carried draft), a save's read
+/// (`crate::save`) and the resume's restore.
+///
+/// # Errors
+///
+/// [`DraftsRefused`], naming the rule broken.
+pub fn drafts_hold(drafts: &[Draft]) -> Result<(), DraftsRefused> {
+    let own = own_drafts(drafts);
+    if own > MAX_DRAFTS {
+        return Err(DraftsRefused::TooMany { own });
+    }
+    let mut ids: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for draft in drafts {
+        if !ids.insert(draft.draft_id.as_str()) {
+            return Err(if draft.draft_id == crate::surface::CARRIED_DRAFT_ID {
+                DraftsRefused::CarriedTwice
+            } else {
+                DraftsRefused::IdTwice {
+                    id: draft.draft_id.clone(),
+                }
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The longest playbook text a method will take, in characters: the
 /// verifier's [`pharmakos_verifier::MAX_PLAYBOOK_CHARS`], re-exported here, where it
 /// was defined until S3's `vfy6`, so this path still names it (the walled
@@ -769,12 +859,22 @@ impl Surface {
             )));
         }
 
+        // The carried draft is the gateway's (draft continuity): a seat reads
+        // it and saves its edit under an id of its own.
+        if draft_id == crate::surface::CARRIED_DRAFT_ID {
+            return Err(Error::invalid(said!(
+                "`{}` is the draft the gateway carries last round's seal in; save your edit \
+                 under another id",
+                crate::surface::CARRIED_DRAFT_ID
+            )));
+        }
+
         let state = self.seat_state_mut(subject, seat)?;
         let replacing = state.draft(&draft_id).is_some();
-        if !replacing && state.drafts.len() >= MAX_DRAFTS {
+        if !replacing && own_drafts(&state.drafts) >= MAX_DRAFTS {
             return Err(Error::invalid(said!(
-                "this seat holds {} drafts, which is as many as it may; delete one by \
-                 saving over it",
+                "this seat holds {} drafts of its own, as many as it may, and a draft is \
+                 never deleted: save under one of their ids to replace that draft",
                 MAX_DRAFTS
             )));
         }
@@ -1165,7 +1265,7 @@ impl Surface {
     /// # Errors
     ///
     /// As [`Surface::seat_state`], and [`crate::error::Code::Internal`] when
-    /// none of the first `MAX_DRAFTS + 1` numbers is free, which holding at
+    /// none of the first [`DRAFT_NUMBERS`] numbers is free, which holding at
     /// most `MAX_DRAFTS` drafts makes impossible.
     fn next_draft_number(
         &self,
@@ -1173,9 +1273,9 @@ impl Surface {
         round: u32,
     ) -> Result<usize, Error> {
         let state = self.seat_state(crate::token::Subject::Seat(seat), seat)?;
-        // Bounded by MAX_DRAFTS + 1 by construction: at most MAX_DRAFTS ids are
-        // held, so one of the first MAX_DRAFTS + 1 candidates is free.
-        (1..=MAX_DRAFTS.saturating_add(1))
+        // Bounded by DRAFT_NUMBERS by construction: at most MAX_DRAFTS ids are
+        // held, so one of the first DRAFT_NUMBERS candidates is free.
+        (1..=DRAFT_NUMBERS)
             .find(|number| state.draft(&format!("d{round}-{number}")).is_none())
             .ok_or_else(|| {
                 Error::internal(said!(
@@ -1369,7 +1469,7 @@ fn is_template_id(text: &str) -> bool {
 /// reason: a draft id reaches the private match cache's filesystem layout, and
 /// a rule that leaned on the host's path parsing would answer differently on
 /// Windows (decisions-log item 100's closing note).
-fn is_draft_id(text: &str) -> bool {
+pub(crate) fn is_draft_id(text: &str) -> bool {
     !text.is_empty()
         && text.chars().count() <= 64
         && text
