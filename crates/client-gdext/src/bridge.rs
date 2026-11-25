@@ -878,10 +878,12 @@ impl PharmakosBridge {
         let frames = self
             .panics
             .guard_or("watch_outbox", Vec::new(), || rig.poll(now));
-        // Playtest mode counts the verifier's error rows the editor shows, by code.
-        let _ = self
-            .panics
-            .guard("watch_outbox", || self.playtest.shown(rig.editor()));
+        // Playtest mode takes each frame's reading, so a frame gap is told apart from play, and
+        // counts the verifier's error rows the editor shows, by code.
+        let _ = self.panics.guard("watch_outbox", || {
+            self.playtest.seen(now);
+            self.playtest.shown(rig.editor())
+        });
         let mut out = VarArray::new();
         for frame in frames {
             let mut pair = VarArray::new();

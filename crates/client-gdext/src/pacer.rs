@@ -698,14 +698,25 @@ impl ClockFault {
     }
 }
 
+/// The longest step between two readings that counts as play: a longer one is a frame gap (the
+/// window stalled, the machine slept, a dialog held the loop), summed apart and never counted as
+/// focused or unfocused attention.
+///
+/// PLACEHOLDER: the frame gap that is not attention, 2 s — OWNER, at S7
+pub const MAX_ATTENTION_STEP_US: u64 = 2_000_000;
+
 /// One Push's wall time, split by whether the window had focus (the fun gate's second metric,
-/// decisions-log item 153 (1); S3's plan, E10).
+/// decisions-log item 153 (1); S3's plan, E10), and the frame gaps summed apart.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct PushTime {
     /// Wall microseconds the window had focus.
     pub focused_us: u64,
     /// Wall microseconds it did not.
     pub unfocused_us: u64,
+    /// Wall microseconds in steps longer than [`MAX_ATTENTION_STEP_US`].
+    pub gap_us: u64,
+    /// How many such steps.
+    pub gaps: u64,
 }
 
 /// How a Lull's used time ended.
@@ -729,29 +740,45 @@ impl LullEnd {
     }
 }
 
-/// One Lull's used time: wall time from its opening to this seat's Ready, or to its end.
+/// One Lull's used time: wall time from its opening to this seat's Ready, or to its end, with
+/// the frame gaps in it summed apart.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LullTime {
-    /// Wall microseconds used.
+    /// Wall microseconds used, frame gaps excluded.
     pub used_us: u64,
+    /// Wall microseconds in steps longer than [`MAX_ATTENTION_STEP_US`] before Ready.
+    pub gap_us: u64,
+    /// How many such steps.
+    pub gaps: u64,
     /// What ended it.
     pub ended_by: LullEnd,
 }
 
-/// The open Lull: when it opened, and when this seat pressed Ready.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// The open Lull: its time so far, and whether this seat pressed Ready, which stops it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 struct LullSpan {
-    opened_us: u64,
-    ready_us: Option<u64>,
+    used_us: u64,
+    gap_us: u64,
+    gaps: u64,
+    ready: bool,
+}
+
+/// `share` grown by `step_us`, or [`ClockFault::Overflow`].
+fn grow(share: &mut u64, step_us: u64) -> Result<(), ClockFault> {
+    *share = share.checked_add(step_us).ok_or(ClockFault::Overflow)?;
+    Ok(())
 }
 
 /// Playtest mode's wall time (S3's `prob`, part 2; the plan's E10, decision 1): the sums of
 /// durations its metrics need, here because this module is the one place in the client that
-/// computes time (`tests/no_arithmetic.rs`'s `PACING_MODULE`). It is fed [`WallClock`] readings
-/// and answers durations; it decides nothing and reaches neither the gateway nor the sim.
+/// computes time (`tests/no_arithmetic.rs`'s `PACING_MODULE`). It is fed [`WallClock`] readings,
+/// one every frame the client draws ([`PlaytestClock::seen`]) and one at every event, and answers
+/// durations; it decides nothing and reaches neither the gateway nor the sim.
 ///
 /// It counts only while a Push or a Lull is open: focus changes outside a Push move no Push
-/// time, and a Push's time is split at each focus change by the focus it had before it.
+/// time, and a Push's time is split at each focus change by the focus it had before it. A step
+/// between two readings longer than [`MAX_ATTENTION_STEP_US`] is a frame gap: summed apart and
+/// counted, never attention.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PlaytestClock {
     /// The reading Playtest mode was switched on at: the zero of [`PlaytestClock::stamp_ms`].
@@ -791,19 +818,42 @@ impl PlaytestClock {
             .ok_or(ClockFault::Backwards)
     }
 
+    /// A frame was drawn at `now_us`: the time since the last reading is taken.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClockFault`].
+    pub fn seen(&mut self, now_us: u64) -> Result<(), ClockFault> {
+        self.take(now_us)
+    }
+
     /// Takes the reading `now_us`: the time since the last one goes to the open Push's share for
-    /// the focus it had.
+    /// the focus it had and to the open Lull before its Ready, or, for a step past
+    /// [`MAX_ATTENTION_STEP_US`], to each one's gap.
     fn take(&mut self, now_us: u64) -> Result<(), ClockFault> {
-        let gone_us = now_us
+        let step_us = now_us
             .checked_sub(self.last_us)
             .ok_or(ClockFault::Backwards)?;
+        let gap = step_us > MAX_ATTENTION_STEP_US;
         if let Some(push) = self.push.as_mut() {
-            let share = if self.focused {
-                &mut push.focused_us
+            if gap {
+                grow(&mut push.gap_us, step_us)?;
+                grow(&mut push.gaps, 1)?;
+            } else if self.focused {
+                grow(&mut push.focused_us, step_us)?;
             } else {
-                &mut push.unfocused_us
-            };
-            *share = share.checked_add(gone_us).ok_or(ClockFault::Overflow)?;
+                grow(&mut push.unfocused_us, step_us)?;
+            }
+        }
+        if let Some(lull) = self.lull.as_mut()
+            && !lull.ready
+        {
+            if gap {
+                grow(&mut lull.gap_us, step_us)?;
+                grow(&mut lull.gaps, 1)?;
+            } else {
+                grow(&mut lull.used_us, step_us)?;
+            }
         }
         self.last_us = now_us;
         Ok(())
@@ -849,25 +899,20 @@ impl PlaytestClock {
     /// A [`ClockFault`]; the Lull is open either way.
     pub fn lull_began(&mut self, now_us: u64) -> Result<(), ClockFault> {
         let taken = self.take(now_us);
-        self.lull = Some(LullSpan {
-            opened_us: now_us,
-            ready_us: None,
-        });
+        self.lull = Some(LullSpan::default());
         taken
     }
 
-    /// This seat pressed Ready at `now_us`; a second Ready in the same Lull moves nothing, and
-    /// outside a Lull it is nothing.
+    /// This seat pressed Ready at `now_us`: the Lull's time stops. A second Ready in the same
+    /// Lull moves nothing, and outside a Lull it is nothing.
     ///
     /// # Errors
     ///
     /// A [`ClockFault`].
     pub fn lull_ready(&mut self, now_us: u64) -> Result<(), ClockFault> {
         self.take(now_us)?;
-        if let Some(lull) = self.lull.as_mut()
-            && lull.ready_us.is_none()
-        {
-            lull.ready_us = Some(now_us);
+        if let Some(lull) = self.lull.as_mut() {
+            lull.ready = true;
         }
         Ok(())
     }
@@ -879,18 +924,18 @@ impl PlaytestClock {
     /// A [`ClockFault`]; the Lull is closed either way, and its time is not answered.
     pub fn lull_ended(&mut self, now_us: u64) -> Result<Option<LullTime>, ClockFault> {
         let taken = self.take(now_us);
-        let Some(lull) = self.lull.take() else {
-            return taken.map(|()| None);
-        };
+        let lull = self.lull.take();
         taken?;
-        let (until_us, ended_by) = match lull.ready_us {
-            Some(ready_us) => (ready_us, LullEnd::Ready),
-            None => (now_us, LullEnd::PhaseLeft),
-        };
-        let used_us = until_us
-            .checked_sub(lull.opened_us)
-            .ok_or(ClockFault::Backwards)?;
-        Ok(Some(LullTime { used_us, ended_by }))
+        Ok(lull.map(|lull| LullTime {
+            used_us: lull.used_us,
+            gap_us: lull.gap_us,
+            gaps: lull.gaps,
+            ended_by: if lull.ready {
+                LullEnd::Ready
+            } else {
+                LullEnd::PhaseLeft
+            },
+        }))
     }
 
     /// Whether a Push is open.
@@ -1137,6 +1182,25 @@ mod tests {
         );
     }
 
+    /// A Push's split, with no frame gap.
+    fn split(focused_us: u64, unfocused_us: u64) -> PushTime {
+        PushTime {
+            focused_us,
+            unfocused_us,
+            ..PushTime::default()
+        }
+    }
+
+    /// A Lull's time, with no frame gap.
+    fn used(used_us: u64, ended_by: LullEnd) -> LullTime {
+        LullTime {
+            used_us,
+            gap_us: 0,
+            gaps: 0,
+            ended_by,
+        }
+    }
+
     /// A Push's time is split at each focus change by the focus it had before it (E10).
     #[test]
     fn a_push_is_split_by_focus_exactly() {
@@ -1144,13 +1208,7 @@ mod tests {
         clock.push_began(2_000).expect("forward");
         clock.focus(5_000, false).expect("forward");
         clock.focus(12_000, true).expect("forward");
-        assert_eq!(
-            clock.push_ended(20_000),
-            Ok(Some(PushTime {
-                focused_us: 11_000,
-                unfocused_us: 7_000
-            }))
-        );
+        assert_eq!(clock.push_ended(20_000), Ok(Some(split(11_000, 7_000))));
         assert!(!clock.in_push());
     }
 
@@ -1163,13 +1221,7 @@ mod tests {
         clock.focus(9_000, true).expect("forward");
         clock.focus(10_000, false).expect("forward");
         clock.push_began(50_000).expect("forward");
-        assert_eq!(
-            clock.push_ended(53_000),
-            Ok(Some(PushTime {
-                focused_us: 0,
-                unfocused_us: 3_000
-            }))
-        );
+        assert_eq!(clock.push_ended(53_000), Ok(Some(split(0, 3_000))));
         assert_eq!(clock.push_ended(60_000), Ok(None), "no Push is open");
     }
 
@@ -1183,16 +1235,7 @@ mod tests {
         let second = clock.push_ended(11_000).expect("forward");
         assert_eq!(
             (first, second),
-            (
-                Some(PushTime {
-                    focused_us: 4_000,
-                    unfocused_us: 0
-                }),
-                Some(PushTime {
-                    focused_us: 1_000,
-                    unfocused_us: 0
-                })
-            )
+            (Some(split(4_000, 0)), Some(split(1_000, 0)))
         );
     }
 
@@ -1207,24 +1250,54 @@ mod tests {
             .expect("a second Ready moves nothing");
         assert_eq!(
             clock.lull_ended(9_000),
-            Ok(Some(LullTime {
-                used_us: 3_000,
-                ended_by: LullEnd::Ready
-            }))
+            Ok(Some(used(3_000, LullEnd::Ready)))
         );
         clock.lull_began(10_000).expect("forward");
         assert_eq!(
             clock.lull_ended(15_500),
-            Ok(Some(LullTime {
-                used_us: 5_500,
-                ended_by: LullEnd::PhaseLeft
-            }))
+            Ok(Some(used(5_500, LullEnd::PhaseLeft)))
         );
         assert_eq!(clock.lull_ended(16_000), Ok(None), "no Lull is open");
         clock
             .lull_ready(17_000)
             .expect("a Ready outside a Lull is nothing");
         assert!(!clock.in_lull());
+    }
+
+    /// A frame gap is not attention (fix pass 1, item 3): a 60 s frame in a focused Push and in
+    /// a Lull is summed apart as a gap and counted, never added to focused, unfocused or used
+    /// time; frames at the bound still count.
+    #[test]
+    fn a_frame_gap_is_not_attention() {
+        let mut clock = PlaytestClock::start(0, true);
+        clock.lull_began(0).expect("forward");
+        clock.seen(16_000).expect("forward");
+        clock.seen(60_016_000).expect("a 60 s frame");
+        clock.seen(60_032_000).expect("forward");
+        assert_eq!(
+            clock.lull_ended(60_032_000),
+            Ok(Some(LullTime {
+                used_us: 32_000,
+                gap_us: 60_000_000,
+                gaps: 1,
+                ended_by: LullEnd::PhaseLeft
+            }))
+        );
+        clock.push_began(70_000_000).expect("forward");
+        clock
+            .seen(70_000_000 + MAX_ATTENTION_STEP_US)
+            .expect("a frame at the bound is play");
+        clock.focus(80_000_000, false).expect("a gap, focused");
+        clock.seen(80_016_000).expect("forward");
+        assert_eq!(
+            clock.push_ended(80_016_000),
+            Ok(Some(PushTime {
+                focused_us: MAX_ATTENTION_STEP_US,
+                unfocused_us: 16_000,
+                gap_us: 10_000_000 - MAX_ATTENTION_STEP_US,
+                gaps: 1
+            }))
+        );
     }
 
     /// A reading before the last is refused as backwards, and a sum past `u64` as an overflow:
@@ -1238,19 +1311,13 @@ mod tests {
         clock.push_began(2_000).expect("forward");
         assert_eq!(clock.focus(1_500, false), Err(ClockFault::Backwards));
         assert_eq!(
-            clock.push_ended(u64::MAX),
-            Ok(Some(PushTime {
-                focused_us: 0,
-                unfocused_us: u64::MAX - 2_000
-            })),
+            clock.push_ended(3_000),
+            Ok(Some(split(0, 1_000))),
             "the focus is taken as told, and the refused reading moved nothing"
         );
         // A share that is already full cannot take another microsecond.
         let mut grown = PlaytestClock {
-            push: Some(PushTime {
-                focused_us: u64::MAX,
-                unfocused_us: 0,
-            }),
+            push: Some(split(u64::MAX, 0)),
             ..PlaytestClock::start(0, true)
         };
         assert_eq!(grown.push_ended(1), Err(ClockFault::Overflow));

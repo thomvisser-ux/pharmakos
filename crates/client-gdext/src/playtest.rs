@@ -70,7 +70,7 @@ use pharmakos_proto::gp::api::v1::gateway_error;
 use pharmakos_proto::json::{self, Json};
 
 use crate::editor::{Editor, RowSeverity};
-use crate::pacer::{ClockFault, LullTime, PlaytestClock, PushTime, SPEEDS};
+use crate::pacer::{ClockFault, LullTime, MAX_ATTENTION_STEP_US, PlaytestClock, PushTime, SPEEDS};
 use crate::rig::{Answer, Phase, Rig, ServedPreset};
 use crate::write::WriteFailure;
 
@@ -1000,6 +1000,17 @@ impl Recorder {
         tallied
     }
 
+    /// The client drew a frame at `now_us`: the open Push's and Lull's time is taken up to it, so
+    /// a step longer than [`MAX_ATTENTION_STEP_US`] is told apart as a frame gap. No line.
+    pub fn seen(&mut self, now_us: u64) -> Recorded {
+        let Some(recording) = self.on.as_mut() else {
+            return Recorded::Off;
+        };
+        let taken = recording.clock.seen(now_us);
+        recording.clocked(taken);
+        Recorded::Taken
+    }
+
     /// The window gained (`true`) or lost focus at `now_us`.
     pub fn focus(&mut self, now_us: u64, focused: bool) -> Recorded {
         let Some(recording) = self.on.as_mut() else {
@@ -1254,7 +1265,10 @@ fn manifest_json(recording: &Recording) -> Json {
         (
             "times",
             string(
-                "metrics.json's times are wall microseconds on the tester's computer; \
+                "metrics.json's times are wall microseconds on the tester's computer; a step \
+                 between two frames longer than max_attention_step_us (a stalled window, a \
+                 sleeping machine) is no attention: it is summed in its Push's or Lull's gap_us \
+                 and counted in its gaps, never in focused_us, unfocused_us or used_us; \
                  diagnostics.log's t= is whole milliseconds since Playtest mode was switched on",
             ),
         ),
@@ -1267,6 +1281,7 @@ fn manifest_json(recording: &Recording) -> Json {
                 ("codes_per_tally", count_number(MAX_CODES)),
                 ("survey_text_chars", count_number(MAX_SURVEY_TEXT_CHARS)),
                 ("bundle_bytes", count_number(MAX_BUNDLE_BYTES)),
+                ("max_attention_step_us", number(MAX_ATTENTION_STEP_US)),
             ]),
         ),
         (
@@ -1312,6 +1327,8 @@ fn metrics_json(recording: &Recording) -> Json {
                     ("skipped", Json::Bool(false)),
                     ("focused_us", number(time.focused_us)),
                     ("unfocused_us", number(time.unfocused_us)),
+                    ("gap_us", number(time.gap_us)),
+                    ("gaps", number(time.gaps)),
                 ]),
                 PushOutcome::Skipped => object([round, ("skipped", Json::Bool(true))]),
                 PushOutcome::Untimed(fault) => object([
@@ -1329,6 +1346,8 @@ fn metrics_json(recording: &Recording) -> Json {
             object([
                 ("round", number(u64::from(record.round))),
                 ("used_us", number(record.time.used_us)),
+                ("gap_us", number(record.time.gap_us)),
+                ("gaps", number(record.time.gaps)),
                 ("ended_by", string(record.time.ended_by.name())),
             ])
         })

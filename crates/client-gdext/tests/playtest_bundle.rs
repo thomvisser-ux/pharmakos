@@ -35,7 +35,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pharmakos_client_gdext::pacer::{LullEnd, PushTime, SPEEDS};
+use pharmakos_client_gdext::pacer::{LullEnd, MAX_ATTENTION_STEP_US, PushTime, SPEEDS};
 use pharmakos_client_gdext::playtest::{
     Another, BUNDLE_ENTRIES, BUNDLE_FORMAT, BundleRefusal, CameraMove, Code, DropReason, Event,
     ExportFailure, MAX_BUNDLE_BYTES, MAX_CODES, MAX_LOG_LINES, MAX_LULL_RECORDS, MAX_PUSH_RECORDS,
@@ -787,7 +787,9 @@ fn a_skipped_push_carries_no_times_and_is_counted() {
                 1,
                 PushOutcome::Timed(PushTime {
                     focused_us: 7_000,
-                    unfocused_us: 3_000
+                    unfocused_us: 3_000,
+                    gap_us: 0,
+                    gaps: 0
                 })
             ),
             (2, PushOutcome::Skipped)
@@ -957,6 +959,34 @@ fn the_survey_text_goes_as_written_and_a_long_one_is_refused_whole() {
     recorder
         .survey(3, Another::No, Understood::No, &at_the_cap)
         .expect("the cap counts characters");
+}
+
+/// A frame gap is not attention (fix pass 1, item 3): a Push whose frames stop for 64 s carries
+/// those 64 s as its `gap_us`, counted in `gaps`, and not in `focused_us`; the manifest says what
+/// a gap is and states the bound.
+#[test]
+fn a_frame_gap_is_summed_apart_in_the_bundle() {
+    let mut recorder = Recorder::new();
+    recorder.switch(true, 0, true, Phase::Unknown, 0);
+    recorder.phase(0, Phase::Push, 1, None);
+    recorder.seen(16_000);
+    recorder.seen(64_016_000);
+    recorder.seen(64_032_000);
+    recorder.phase(64_032_000, Phase::Recap, 1, None);
+    let files = files_of(&recorder.bundle().expect("on"));
+    let metrics = json_of(file(&files, "metrics.json"));
+    let [push] = array_at(&metrics, "push_time") else {
+        panic!("one Push");
+    };
+    assert_eq!(number_at(push, "focused_us"), 32_000);
+    assert_eq!(number_at(push, "gap_us"), 64_000_000);
+    assert_eq!(number_at(push, "gaps"), 1);
+    let manifest = json_of(file(&files, "manifest.json"));
+    assert_eq!(
+        number_at(manifest.get("caps").expect("caps"), "max_attention_step_us"),
+        MAX_ATTENTION_STEP_US
+    );
+    assert!(file(&files, "manifest.json").contains("gap_us"));
 }
 
 // --- Bounded --------------------------------------------------------------------------------
@@ -1251,6 +1281,7 @@ fn play_a_laced_round(recorder: &mut Recorder) {
                 recorder.answered(now, &rig, &answer);
             }
         }
+        recorder.seen(now);
         recorder.shown(rig.editor());
         if gateway.round == 2 && rig.phase() == Phase::Lull {
             break;
