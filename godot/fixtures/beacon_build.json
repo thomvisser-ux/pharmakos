@@ -183,7 +183,6 @@
         "pointer": "/build/protected_areas",
         "title": "Protected areas",
         "clear_pointer": "/build/clear_protected_areas",
-        "clear_title": "Empty the protected areas",
         "empty_title": "none"
       }
     ],

@@ -380,9 +380,11 @@ pub struct HeldList {
     pub entry_lines: Vec<String>,
     /// The flag that empties it: what the clear writes `true`.
     pub clear_pointer: String,
-    /// The clear as an action, in the gateway's words.
+    /// The clear as an action, in the gateway's words: sent only for a list with entries, and
+    /// empty otherwise. The clear is offered exactly when it is not empty.
     pub clear_title: String,
-    /// What an empty list is, in the gateway's words, drawn in place of the lines.
+    /// What an empty list is, in the gateway's words: sent only for a list with none, and
+    /// empty otherwise. Drawn when it is not empty.
     pub empty_title: String,
 }
 

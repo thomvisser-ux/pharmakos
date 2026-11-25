@@ -1489,18 +1489,27 @@ func _check_the_lists(editor: CanvasLayer, bridge: Node, failures: Array[String]
 			if not submenu.is_item_separator(item):
 				drawn.append(submenu.get_item_text(item))
 		var lines: PackedStringArray = list.get("lines", PackedStringArray())
-		var clear := Strings.text("menu_list_clear", {"clear": list.get("clear_title", "")})
-		if lines.is_empty():
-			if drawn != [Strings.text("menu_list_empty", {"empty": list.get("empty_title", "")})] or String(list.get("empty_title", "")) == "":
-				failures.append("the lists: %s's empty list draws %s, not the gateway's word alone" % [beacon, drawn])
-			continue
+		var empty := String(list.get("empty_title", ""))
+		var clear_title := String(list.get("clear_title", ""))
+		# The gateway sends the clear only beside entries and the empty word only with none (fix
+		# pass 1, W1); the panel draws what was sent.
+		if (lines.is_empty() and (empty == "" or clear_title != "")) or (not lines.is_empty() and (empty != "" or clear_title == "")):
+			failures.append("the lists: %s's row sends lines %s, empty `%s`, clear `%s`" % [beacon, lines, empty, clear_title])
+			return
 		var expected: Array[String] = []
 		for line in lines:
 			expected.append(Strings.text("menu_list_line", {"line": line}))
-		expected.append(clear)
-		if drawn != expected or String(list.get("clear_title", "")) == "":
+		if empty != "":
+			expected.append(Strings.text("menu_list_empty", {"empty": empty}))
+		if clear_title != "":
+			expected.append(Strings.text("menu_list_clear", {"clear": clear_title}))
+		if drawn != expected:
 			failures.append("the lists: %s draws %s, not %s" % [beacon, drawn, expected])
 			return
+		if clear_title == "":
+			if bridge.editor_visit_row(beacon, "clear_list", 0):
+				failures.append("the lists: %s's list offers no clear, and one asked for anyway was taken" % beacon)
+			continue
 		_patches.clear()
 		submenu.id_pressed.emit(EditorPanel.LIST_CLEAR_ID)
 		await _rig_until(bridge, func(state: Dictionary) -> bool: return not _patches.is_empty() and not state.get("busy", true))

@@ -200,7 +200,7 @@ const TEXT := {
 	"status_rule_refused_no_such_slot": "That condition is not in the rule list any more.",
 	"status_rule_refused_group_slot": "That condition is a group: pick one of its items instead.",
 	"status_rule_refused_no_pick_op": "The gateway named no way to write there, so nothing was sent.",
-	"status_rule_refused_empty_list": "That list holds nothing, so there is nothing to empty.",
+	"status_rule_refused_no_clear_offered": "The gateway offers no way to empty that list, so nothing was sent.",
 	"rule_slot": "Condition: {title}",
 	# Add and Remove a rule (S3's `fixq-c`, item 8): Add asks the gateway for an empty rule with a
 	# fresh id; Remove is one `remove` at the row's pointer, which the verifier then judges.

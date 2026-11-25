@@ -123,9 +123,10 @@ fn the_row(surface: &mut Surface, list: BeaconList) -> Vec<String> {
     assert_eq!(text_of(row, "pointer"), list.pointer());
     assert_eq!(text_of(row, "title"), list.title());
     assert_eq!(text_of(row, "clear_pointer"), list.clear_pointer());
-    assert_eq!(text_of(row, "clear_title"), list.clear_title());
-    assert_eq!(text_of(row, "empty_title"), s::LIST_EMPTY);
-    match row.get("entry_lines") {
+    // The two pieces of the gateway's words a client may draw, one each way (S3's `edlists`,
+    // fix pass 1, W1): the clear only beside entries, the empty word only with none, so the
+    // client tests nothing about the list.
+    let lines: Vec<String> = match row.get("entry_lines") {
         None => Vec::new(),
         Some(Json::Array(lines)) => lines
             .iter()
@@ -135,7 +136,23 @@ fn the_row(surface: &mut Surface, list: BeaconList) -> Vec<String> {
             })
             .collect(),
         Some(other) => panic!("entry_lines is an array: {other:?}"),
+    };
+    if lines.is_empty() {
+        assert_eq!(
+            row.get("clear_title"),
+            None,
+            "no clear on an empty list: {row:?}"
+        );
+        assert_eq!(text_of(row, "empty_title"), s::LIST_EMPTY);
+    } else {
+        assert_eq!(text_of(row, "clear_title"), list.clear_title());
+        assert_eq!(
+            row.get("empty_title"),
+            None,
+            "no empty word beside entries: {row:?}"
+        );
     }
+    lines
 }
 
 /// Seat 0's core switched to `writ`.
@@ -305,6 +322,34 @@ fn another_seats_beacon_carries_no_list() {
             r#"{"beacon_id":"b_00"}"#,
         );
         assert_eq!(lists(&answer).len(), 1, "{policy:?}");
+        // A caller that is no seat (a spectator, unfogged so it is told every beacon) is told
+        // no list of any.
+        let token = support::spectator_token(&mut surface, true);
+        let listed = result(
+            &call_in_lull(&mut surface, &token, &mut left, "list_beacons", "{}"),
+            "list_beacons",
+        );
+        let all = array_of(&listed, "beacons");
+        assert!(
+            !all.is_empty(),
+            "{policy:?}: the spectator is told the beacons"
+        );
+        for row in &all {
+            let name = text_of(row, "beacon_id");
+            let answer = call_in_lull(
+                &mut surface,
+                &token,
+                &mut left,
+                "get_beacon",
+                &format!(r#"{{"beacon_id":"{name}"}}"#),
+            );
+            let told = result(&answer, "get_beacon");
+            assert_eq!(
+                told.get("lists"),
+                None,
+                "spectator, {policy:?} {name}: {told:?}"
+            );
+        }
         if policy == FogPolicy::casual() {
             assert!(!theirs.is_empty(), "a casual match lists the other core");
         }

@@ -2659,20 +2659,25 @@ fn list_row(facts: ListFacts) -> Json {
         (String::from("pointer"), text(list.pointer())),
         (String::from("title"), text(list.title())),
     ];
-    if !entry_lines.is_empty() {
+    // What a client may offer is decided here (fix pass 1, W1): the clear's
+    // words only beside entries, the empty list's word only with none, so the
+    // client draws what was sent and tests nothing about the list.
+    let has_entries = !entry_lines.is_empty();
+    if has_entries {
         row.push((
             String::from("entry_lines"),
             Json::Array(entry_lines.into_iter().map(Json::String).collect()),
         ));
     }
-    row.extend([
-        (String::from("clear_pointer"), text(list.clear_pointer())),
-        (String::from("clear_title"), text(list.clear_title())),
-        (
+    row.push((String::from("clear_pointer"), text(list.clear_pointer())));
+    if has_entries {
+        row.push((String::from("clear_title"), text(list.clear_title())));
+    } else {
+        row.push((
             String::from("empty_title"),
             text(pharmakos_plan_core::strings::LIST_EMPTY),
-        ),
-    ]);
+        ));
+    }
     Json::Object(row)
 }
 

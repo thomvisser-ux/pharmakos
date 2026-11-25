@@ -836,9 +836,9 @@ pub enum RuleEditRefusal {
     GroupSlot,
     /// The slot names no op this build knows (or none at all): no pick is guessed.
     NoPickOp,
-    /// The list holds no entry, as the gateway sent it: there is nothing to empty, and no clear
-    /// is offered (S3's `edlists`).
-    EmptyList,
+    /// The gateway offered no clear for that list (its row carried no `clear_title`, which it
+    /// sends only for a list with entries): nothing is composed (S3's `edlists`, fix pass 1).
+    NoClearOffered,
 }
 
 impl RuleEditRefusal {
@@ -876,7 +876,7 @@ impl RuleEditRefusal {
             Self::NoSuchSlot => "no_such_slot",
             Self::GroupSlot => "group_slot",
             Self::NoPickOp => "no_pick_op",
-            Self::EmptyList => "empty_list",
+            Self::NoClearOffered => "no_clear_offered",
         }
     }
 
@@ -2987,13 +2987,13 @@ impl Editor {
 
     /// Empty beacon `beacon`'s list `which`, as its detail lists it: one route step with one
     /// `set_mandate_settings` row writing the list's clear pointer, as sent, `true` (S3's
-    /// `edlists`). Refused for a list the gateway sent with no entry line: the client tests no
-    /// list's emptiness beyond that.
+    /// `edlists`). Offered, and composed, only for a list whose row carried the gateway's
+    /// `clear_title`: the client tests nothing about the list itself.
     ///
     /// # Errors
     ///
     /// A [`RuleEditRefusal`], said on the status line: the door is shut, there is no text, no
-    /// detail of that beacon is on hand, it lists no such list, the list holds no entry, or its
+    /// detail of that beacon is on hand, it lists no such list, the gateway offered no clear for it, or its
     /// clear pointer names no field.
     pub fn clear_list(&mut self, beacon: &str, which: usize) -> Result<(), RuleEditRefusal> {
         let outcome = self.visit_gate(beacon).and_then(|()| {
@@ -3002,8 +3002,8 @@ impl Editor {
                 .as_ref()
                 .and_then(|detail| detail.lists.get(which))
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
-            if list.entry_lines.is_empty() {
-                return Err(RuleEditRefusal::EmptyList);
+            if list.clear_title.is_empty() {
+                return Err(RuleEditRefusal::NoClearOffered);
             }
             Ok(vocabulary::clear_row(list)?)
         });
@@ -9294,10 +9294,10 @@ mod tests {
     }
 
     /// **S3's `edlists`: a list's clear is one exact step**, writing the list's clear pointer as
-    /// the gateway sent it, `true`, and nothing else; a list sent with no line offers no clear and
-    /// refuses one; a list the detail does not hold is refused; and the door gates it.
+    /// the gateway sent it, `true`, and nothing else; a row the gateway sent no `clear_title` for
+    /// offers no clear and refuses one; a list the detail does not hold is refused; and the door gates it.
     #[test]
-    fn a_lists_clear_writes_its_own_flag_and_only_on_a_list_with_lines() {
+    fn a_lists_clear_writes_its_own_flag_and_only_where_the_gateway_offers_it() {
         let mut editor = lists_editor();
         let held = editor.beacon_detail().expect("a detail").lists.clone();
         assert_eq!(held.len(), 1, "{held:?}");
@@ -9325,16 +9325,17 @@ mod tests {
             visit_patch(&mut editor),
             visit_step_patch(r#"{"set_mandate_settings":{"survey":{"clear_probe_areas":true}}}"#)
         );
-        // An empty list: nothing to empty, nothing sent.
+        // A row the gateway offered no clear for (it sends `clear_title` only beside entries):
+        // nothing is composed, whatever lines the row holds; the client tests no list.
         let mut editor = lists_editor();
         if let Some(detail) = editor.beacon.as_mut()
             && let Some(list) = detail.lists.first_mut()
         {
-            list.entry_lines.clear();
+            list.clear_title.clear();
         }
         assert_eq!(
             editor.clear_list("b_00", 0),
-            Err(RuleEditRefusal::EmptyList)
+            Err(RuleEditRefusal::NoClearOffered)
         );
         assert_eq!(
             editor.clear_list("b_00", 1),
@@ -9358,7 +9359,8 @@ mod tests {
         let list = detail.lists.first().expect("a list");
         assert_eq!(list.title, "Protected areas");
         assert_eq!(list.clear_title, "Empty the protected areas");
-        assert_eq!(list.empty_title, "none");
+        // The gateway sends the empty word only for an empty list (fix pass 1, W1).
+        assert_eq!(list.empty_title, "");
         assert!(
             list.entry_lines
                 .iter()

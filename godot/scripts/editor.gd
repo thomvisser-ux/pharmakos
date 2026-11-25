@@ -1516,26 +1516,28 @@ const LIST_CLEAR_ID := 0
 
 
 ## One of the beacon's lists (S3's `edlists`), as a submenu titled with the list's name: each
-## entry line as the gateway sent it, greyed, or the gateway's word for an empty list; and, for a
-## list the gateway sent with lines, the clear in the gateway's words, which is one route step with
-## one row, composed by the bridge. A list with no lines offers no clear. Every word is the
-## gateway's; the client counts nothing.
+## entry line as the gateway sent it, greyed; the gateway's word for an empty list when it sent
+## one; and the clear in the gateway's words when it sent one (it sends the clear only beside
+## entries, and the empty word only with none: fix pass 1, W1), which is one route step with one
+## row, composed by the bridge. The client tests nothing about the list: it draws what was sent.
 func _list_submenu(which: int, list: Dictionary) -> void:
 	var submenu := _visit_submenu(Strings.text("menu_list", {"title": list.get("title", "")}))
 	var lines: PackedStringArray = list.get("lines", PackedStringArray())
-	if lines.is_empty():
-		submenu.add_item(Strings.text("menu_list_empty", {"empty": list.get("empty_title", "")}), LIST_CLEAR_ID + 1)
-		submenu.set_item_disabled(submenu.item_count - 1, true)
-		return
 	for line in lines.size():
 		submenu.add_item(Strings.text("menu_list_line", {"line": lines[line]}), LIST_CLEAR_ID + 1 + line)
 		submenu.set_item_disabled(submenu.item_count - 1, true)
-	submenu.add_separator()
-	submenu.add_item(Strings.text("menu_list_clear", {"clear": list.get("clear_title", "")}), LIST_CLEAR_ID)
-	submenu.id_pressed.connect(func(id: int) -> void:
-		if id == LIST_CLEAR_ID:
-			_on_visit_row("clear_list", which)
-	)
+	var empty := String(list.get("empty_title", ""))
+	if empty != "":
+		submenu.add_item(Strings.text("menu_list_empty", {"empty": empty}), LIST_CLEAR_ID + 1 + lines.size())
+		submenu.set_item_disabled(submenu.item_count - 1, true)
+	var clear := String(list.get("clear_title", ""))
+	if clear != "":
+		submenu.add_separator()
+		submenu.add_item(Strings.text("menu_list_clear", {"clear": clear}), LIST_CLEAR_ID)
+		submenu.id_pressed.connect(func(id: int) -> void:
+			if id == LIST_CLEAR_ID:
+				_on_visit_row("clear_list", which)
+		)
 
 
 ## A submenu of the Visit & change menu, titled `title`.

@@ -126,8 +126,7 @@
           "the ground from column -1, -2 to column 1, 2"
         ],
         "clear_pointer": "/build/clear_protected_areas",
-        "clear_title": "Empty the protected areas",
-        "empty_title": "none"
+        "clear_title": "Empty the protected areas"
       }
     ],
     "_status": {

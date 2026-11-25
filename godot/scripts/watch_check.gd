@@ -1920,16 +1920,15 @@ func _planning_wire() -> bool:
 		if not drawn.has(said) or "\"" in said:
 			_failures.append("the planning wire: the setting `%s` is not drawn in the gateway's words: %s" % [said, drawn])
 	# The core's list (S3's `edlists`), as the real gateway tells it: the opening core holds none,
-	# so the list says the gateway's word for an empty list, no clear is drawn, and one asked for
-	# anyway is refused before anything is sent.
+	# so the gateway sends its word for an empty list and no clear (fix pass 1, W1); the panel
+	# draws the word and no clear, and a clear asked for anyway is refused before anything is sent.
 	var lists: Array = _editor().get("beacon_detail", {}).get("lists", [])
-	if lists.size() != 1 or not PackedStringArray(lists[0].get("lines", PackedStringArray())).is_empty():
-		_failures.append("the planning wire: the core's detail holds %s, not its writ's one empty list" % [lists])
+	if lists.size() != 1 or not PackedStringArray(lists[0].get("lines", PackedStringArray())).is_empty() or String(lists[0].get("empty_title", "")) == "" or String(lists[0].get("clear_title", "")) != "":
+		_failures.append("the planning wire: the core's detail holds %s, not its writ's one empty list with the empty word and no clear" % [lists])
 	else:
 		var empty := Strings.text("menu_list_empty", {"empty": lists[0].get("empty_title", "")})
-		var clear := Strings.text("menu_list_clear", {"clear": lists[0].get("clear_title", "")})
-		if String(lists[0].get("empty_title", "")) == "" or not drawn.has(empty) or drawn.has(clear):
-			_failures.append("the planning wire: the core's empty list draws %s, not the gateway's `%s` alone" % [drawn, empty])
+		if not drawn.has(empty):
+			_failures.append("the planning wire: the core's empty list draws %s, not the gateway's `%s`" % [drawn, empty])
 		var asked := _count(_editor(), "revision")
 		if vista.bridge.editor_visit_row(core, "clear_list", 0) or _editor().get("busy", false) or _count(_editor(), "revision") != asked:
 			_failures.append("the planning wire: a clear of the core's empty list was sent")
