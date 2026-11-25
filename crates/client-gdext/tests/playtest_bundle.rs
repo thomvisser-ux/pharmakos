@@ -319,7 +319,7 @@ fn nothing_is_kept_while_off_and_switching_off_clears() {
     assert_eq!(recorder.phase(0, Phase::Lull, 1, None), Recorded::Off);
     assert_eq!(recorder.ready(1), Recorded::Off);
     assert_eq!(recorder.skip(2), Recorded::Off);
-    assert_eq!(recorder.speed(3, 2), Recorded::Off);
+    assert_eq!(recorder.speed(3, 1, 2), Recorded::Off);
     assert_eq!(recorder.focus(4, false), Recorded::Off);
     assert_eq!(recorder.camera(CameraMove::Zoom), Recorded::Off);
     assert_eq!(
@@ -857,11 +857,23 @@ fn speeds_camera_rows_and_refusals_are_counted_by_kind() {
     let mut recorder = Recorder::new();
     recorder.switch(true, 0, true, Phase::Unknown, 0);
     recorder.phase(0, Phase::Push, 1, None);
+    let mut from = 4;
     for speed in SPEEDS {
-        assert_eq!(recorder.speed(1, speed), Recorded::Taken);
+        assert_eq!(recorder.speed(1, from, speed), Recorded::Taken);
+        from = speed;
     }
-    assert_eq!(recorder.speed(1, 4), Recorded::Taken);
-    assert_eq!(recorder.speed(1, 3), Recorded::Refused, "3x is no speed");
+    assert_eq!(
+        recorder.speed(1, 4, 4),
+        Recorded::Unchanged,
+        "the speed in force chosen again is no change"
+    );
+    assert_eq!(recorder.speed(1, 1, 4), Recorded::Taken);
+    assert_eq!(
+        recorder.speed(1, 4, 3),
+        Recorded::Dropped(DropReason::SpeedOutsideSet),
+        "3x is no speed, and is counted"
+    );
+    assert_eq!(recorder.dropped(DropReason::SpeedOutsideSet), Some(1));
     for kind in CameraMove::ALL {
         recorder.camera(kind);
     }
@@ -1463,7 +1475,7 @@ fn play_a_laced_round(recorder: &mut Recorder) {
         if rig.phase() == Phase::Push && !sped {
             sped = true;
             assert!(rig.set_speed(2));
-            recorder.speed(now, 2);
+            recorder.speed(now, 1, 2);
             recorder.focus(now, false);
             recorder.camera(CameraMove::Turn);
         }

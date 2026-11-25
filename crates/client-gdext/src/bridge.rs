@@ -914,9 +914,10 @@ impl PharmakosBridge {
         self.panics
             .guard_or("watch_command", false, || match command.as_str() {
                 "speed" => u32::try_from(value).is_ok_and(|speed| {
+                    let from = rig.speed();
                     let taken = rig.set_speed(speed);
                     if taken {
-                        playtest.speed(now, speed);
+                        playtest.speed(now, from, speed);
                     }
                     taken
                 }),

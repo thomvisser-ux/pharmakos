@@ -145,6 +145,10 @@ impl Code {
     /// A verifier code (`E0104`, `W0702`, `I0003`) as itself, else [`Code::UNNAMED`].
     #[must_use]
     pub fn of_verifier(code: &str) -> Self {
+        // Five bytes or nothing, checked before anything is collected: a long text costs nothing.
+        if code.len() != 5 {
+            return Self::unnamed();
+        }
         let mut chars = code.chars();
         let letter = chars.next().is_some_and(|c| matches!(c, 'E' | 'W' | 'I'));
         let digits: Vec<char> = chars.collect();
@@ -260,11 +264,14 @@ pub enum DropReason {
     ClockBackwards,
     /// A sum of time past `u64` ([`ClockFault::Overflow`]).
     ClockOverflow,
+    /// A speed outside the pacer's set: the rig refuses one before the recorder is told, and it
+    /// is counted all the same rather than dropped unsaid.
+    SpeedOutsideSet,
 }
 
 impl DropReason {
     /// Every reason, in the manifest's order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::PushRecordsFull,
         Self::LullRecordsFull,
         Self::MatchRecordsFull,
@@ -273,6 +280,7 @@ impl DropReason {
         Self::CounterFull,
         Self::ClockBackwards,
         Self::ClockOverflow,
+        Self::SpeedOutsideSet,
     ];
 
     /// The reason's name in the manifest.
@@ -287,6 +295,7 @@ impl DropReason {
             Self::CounterFull => "counter_full",
             Self::ClockBackwards => "clock_backwards",
             Self::ClockOverflow => "clock_overflow",
+            Self::SpeedOutsideSet => "speed_outside_set",
         }
     }
 
@@ -309,6 +318,10 @@ struct DropCounts {
     counter_full: u64,
     clock_backwards: u64,
     clock_overflow: u64,
+    speed_outside_set: u64,
+    /// Whether a drop found its count full with `counter_full` full too ([`Recording::drop_for`]):
+    /// the manifest's `drops_complete` is then false.
+    uncounted: bool,
 }
 
 impl DropCounts {
@@ -322,6 +335,7 @@ impl DropCounts {
             DropReason::CounterFull => self.counter_full,
             DropReason::ClockBackwards => self.clock_backwards,
             DropReason::ClockOverflow => self.clock_overflow,
+            DropReason::SpeedOutsideSet => self.speed_outside_set,
         }
     }
 
@@ -335,11 +349,12 @@ impl DropCounts {
             DropReason::CounterFull => &mut self.counter_full,
             DropReason::ClockBackwards => &mut self.clock_backwards,
             DropReason::ClockOverflow => &mut self.clock_overflow,
+            DropReason::SpeedOutsideSet => &mut self.speed_outside_set,
         }
     }
 
     fn any(&self) -> bool {
-        DropReason::ALL.iter().any(|reason| self.of(*reason) != 0)
+        self.uncounted || DropReason::ALL.iter().any(|reason| self.of(*reason) != 0)
     }
 }
 
@@ -357,6 +372,10 @@ pub enum Recorded {
     Refused,
     /// Not kept, and counted under this reason.
     Dropped(DropReason),
+    /// Not kept, and its drop count already full: the manifest's `drops_complete` says so.
+    Uncounted(DropReason),
+    /// The speed chosen is the one already in force: no change, nothing counted.
+    Unchanged,
 }
 
 /// One kind of diagnostics line: the client's own occurrences, closed.
@@ -808,15 +827,25 @@ impl Recording {
         }
     }
 
-    /// Counts `reason` once more. A drop count already at `u64::MAX` is left there: the manifest
-    /// then says `u64::MAX`, which reads as "at least this many", and the reason is still
-    /// answered.
+    /// Counts `reason` once more. A drop count already at `u64::MAX` cannot take another: that is
+    /// itself counted under [`DropReason::CounterFull`], and should that count be full too, the
+    /// manifest's `drops_complete` turns false and the answer is [`Recorded::Uncounted`]. No
+    /// count is ever held at its end unsaid.
     fn drop_for(&mut self, reason: DropReason) -> Recorded {
         let count = self.dropped.of_mut(reason);
         if let Some(next) = count.checked_add(1) {
             *count = next;
+            return Recorded::Dropped(reason);
         }
-        Recorded::Dropped(reason)
+        let full = self.dropped.of_mut(DropReason::CounterFull);
+        if reason != DropReason::CounterFull
+            && let Some(next) = full.checked_add(1)
+        {
+            *full = next;
+            return Recorded::Dropped(DropReason::CounterFull);
+        }
+        self.dropped.uncounted = true;
+        Recorded::Uncounted(reason)
     }
 
     /// The result `result` as recorded: a fault counted under its reason.
@@ -1136,13 +1165,17 @@ impl Recorder {
         recording.line(now_us, Event::Skipped, None)
     }
 
-    /// The tester chose `speed` at `now_us`; a speed outside the pacer's set is refused.
-    pub fn speed(&mut self, now_us: u64, speed: u32) -> Recorded {
+    /// The tester chose `speed` at `now_us`, the speed in force being `from`: the same speed is no
+    /// change and counts nothing; a speed outside the pacer's set is counted under its reason.
+    pub fn speed(&mut self, now_us: u64, from: u32, speed: u32) -> Recorded {
         let Some(recording) = self.on.as_mut() else {
             return Recorded::Off;
         };
+        if from == speed {
+            return Recorded::Unchanged;
+        }
         let Some(count) = recording.speed_changes.get_mut(&speed) else {
-            return Recorded::Refused;
+            return recording.drop_for(DropReason::SpeedOutsideSet);
         };
         let counted = bump(count);
         let noted = recording.noted(counted);
@@ -1516,6 +1549,7 @@ fn manifest_json(recording: &Recording) -> Json {
                     .collect(),
             ),
         ),
+        ("drops_complete", Json::Bool(!recording.dropped.uncounted)),
     ])
 }
 
@@ -1696,4 +1730,49 @@ fn stored_zip(files: &[(&str, Vec<u8>)]) -> Result<Vec<u8>, BundleRefusal> {
     out.extend_from_slice(&central_offset.to_le_bytes());
     out.extend_from_slice(&0_u16.to_le_bytes());
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A drop count at its end is never held there unsaid (fix pass 1, item 7): the next drop
+    /// is counted under `counter_full`, and with that full too the manifest says the drops are
+    /// not complete.
+    #[test]
+    fn a_full_drop_count_is_said_never_held_unsaid() {
+        let mut recording = Recording::new(PlaytestClock::start(0, true), Phase::Lull, 1, None);
+        recording.dropped.log_full = u64::MAX;
+        assert_eq!(
+            recording.drop_for(DropReason::LogFull),
+            Recorded::Dropped(DropReason::CounterFull)
+        );
+        assert_eq!(recording.dropped.counter_full, 1);
+        assert!(!recording.dropped.uncounted);
+        recording.dropped.counter_full = u64::MAX;
+        assert_eq!(
+            recording.drop_for(DropReason::LogFull),
+            Recorded::Uncounted(DropReason::LogFull)
+        );
+        assert_eq!(
+            recording.drop_for(DropReason::CounterFull),
+            Recorded::Uncounted(DropReason::CounterFull)
+        );
+        assert!(recording.dropped.uncounted);
+        assert_eq!(
+            manifest_json(&recording).get("drops_complete"),
+            Some(&Json::Bool(false))
+        );
+    }
+
+    /// A verifier code is five bytes: a long text is refused before anything is collected.
+    #[test]
+    fn a_verifier_code_is_five_bytes() {
+        assert_eq!(Code::of_verifier("E0104").as_str(), "E0104");
+        assert_eq!(
+            Code::of_verifier(&"E".repeat(1 << 20)).as_str(),
+            Code::UNNAMED
+        );
+        assert_eq!(Code::of_verifier("É010").as_str(), Code::UNNAMED);
+    }
 }
