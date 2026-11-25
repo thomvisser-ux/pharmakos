@@ -300,14 +300,80 @@ const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
 /// detail budget (owner, at S3).
 pub(crate) const SIGHTINGS_PER_SEAT: u32 = 64;
 
-/// How many Attack avoid areas the world reserves room for, so committing an
-/// avoid list allocates nothing inside a tick until the reserve is spent:
-/// the playbook size budget's 128 units, each area costing one, for each of
-/// four seats (E19). Past it a commit grows the list, which is correct and
-/// only allocates.
+/// PLACEHOLDER: the avoid-area room, how many Attack avoid areas one beacon row may carry on average — owner, at S3, with P1's size budget.
 ///
-/// PLACEHOLDER: the avoid-area reserve, a size budget's worth per seat — owner, at S3, with P1's size budget.
-const AVOID_AREA_ROOM: usize = 512;
+/// The Attack table's avoid-area room is the beacon limit times this, stated
+/// in the form [`TARGETS_PER_BEACON`] gives the Build lists: the table's own
+/// ceiling, reserved with every other table's room
+/// (`World::reserve_table_rooms`), and a commit that would pass it writes
+/// nothing and fails its step `targets_unwritten`, as a Build list past its
+/// room does. Neither the rules nor the proto bound an avoid list in the
+/// sim: `verifier.size_budget_units` bounds what one playbook writes, but a
+/// list is kept from round to round, so the budget bounds no table. Sixteen
+/// an Attack beacon is more than the 512 areas a three-seat match reserved
+/// before (42 beacon rows, 672 areas).
+const AVOID_AREAS_PER_BEACON: u32 = 16;
+
+/// How many beacon rows one seat may hold at once in a match of `seats`
+/// seats: its core and its share of [`BEACON_TABLE_ROOM`]. A deploy that
+/// would pass it is refused `ShareFull` ([`World::place_beacon`]), and the
+/// rows a seat holds count its dead beacons until their deaths settle, so
+/// it is never passed. [`beacon_limit_of`] is this times the seat count.
+pub(crate) const fn seat_beacon_limit_of(seats: u32) -> u32 {
+    room_per_seat(BEACON_TABLE_ROOM, seats).saturating_add(1)
+}
+
+/// A protect list a commit resolved into the world's protect scratch
+/// ([`World::resolve_into_protect_scratch`]), and whether it names
+/// `my_commander`: what [`World::set_defend_settings`] writes. Only that
+/// function makes one, so a list is written only after it was resolved.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct ResolvedProtect {
+    escort: bool,
+}
+
+/// How many protect entries the Defend table may ever hold at once in a match
+/// of `seats` seats: [`beacon_limit_of`] times [`seat_beacon_limit_of`], so
+/// that committing a protect list inside a tick allocates nothing, however
+/// many lists the match commits, while every seat keeps to its share.
+///
+/// **Where the bound comes from.** An entry is a pair `(defending beacon,
+/// protected beacon)` of **one seat's** beacons, and the table never holds a
+/// pair twice:
+///
+/// * the defending beacon holds a Defend row, and a row names a beacon the
+///   beacon table holds (it is closed when the beacon leaves the writ or dies,
+///   `World::end_mandate`, before the dead beacon's row is freed);
+/// * the protected beacon is a beacon the same seat holds: a commit resolves
+///   each entry to a **live** beacon of the seat's own
+///   (`interpreter::exec`'s `resolve_protected`, through the sim's beacon
+///   resolver: a name counts the seat's own beacons, a selector ranks them),
+///   and an entry naming a beacon is forgotten when that beacon dies
+///   (`DefendTable::forget`, from `World::end_mandate`);
+/// * one list never names a beacon twice: the commit drops a repeat, and a
+///   restore refuses a file whose list repeats one, names a dead beacon or
+///   names another seat's (the snapshot's `defend_cross_checks`).
+///
+/// So a seat holding `n` beacon rows holds at most `n` lists of at most `n`
+/// entries, and `n` is at most [`seat_beacon_limit_of`] (play refuses a deploy
+/// past it, and the snapshot's door a save that holds more,
+/// `SnapshotError::OverBeaconShare`): the table holds at
+/// most the seat count times its square, which is the beacon limit times one
+/// seat's rows. A match reaches it exactly when every seat holds its whole
+/// share, every beacon on the Defend writ protecting every beacon of its
+/// seat (`tests/allocations.rs`'s
+/// `a_protect_list_commit_allocates_nothing_up_to_the_tables_room`). The
+/// playbooks cannot pass it, and the verifier's size budget does not bound
+/// it: a protect entry costs one of `verifier.size_budget_units`, but the
+/// lists are kept from round to round, so the budget bounds one Push's
+/// commits and not the table.
+///
+/// `None` when the product does not fit a `u32`, which no seat count the
+/// world takes reaches (at most [`u8::MAX`] seats, so at most 255 beacon
+/// rows).
+pub(crate) const fn protect_room_of(seats: u32) -> Option<u32> {
+    beacon_limit_of(seats).checked_mul(seat_beacon_limit_of(seats))
+}
 
 /// How many beacon rows a match of `seats` seats may ever hold.
 ///
@@ -523,6 +589,14 @@ pub struct World {
     /// Scratch for the charges that fire on one tick, sized to the beacon
     /// ceiling (a charge per breach).
     charge_scratch: Reserved<crate::attack::Charge>,
+    /// Scratch for a protect list resolved at a commit (lane `simroom`): the
+    /// beacons it names, distinct and the seat's own, so at most
+    /// [`seat_beacon_limit_of`] the seat count, its room. Lent out only by
+    /// [`World::resolve_into_protect_scratch`], which takes it back itself,
+    /// and read by [`World::set_defend_settings`]. Derived scratch: never
+    /// hashed, never in the snapshot, and what it holds between commits
+    /// decides nothing.
+    protect_scratch: Reserved<BeaconId>,
     /// The Attack mandate's counters (S2's `atk`). Diagnostic; never hashed.
     attack_counts: crate::attack::AttackCounts,
     /// Scratch for the pathing phase's route surcharges (S2's `atk`): every
@@ -642,6 +716,11 @@ pub struct World {
     /// construction and kept by a restore, as [`World::unit_limit`] is; read
     /// by [`World::reserve_table_rooms`].
     explored_room: u32,
+    /// How many protect entries the Defend table may ever hold at once:
+    /// [`protect_room_of`] the seat count. Derived at construction and
+    /// re-derived by a restore from the restored seat count, as
+    /// [`World::beacon_limit`] is; read by [`World::reserve_table_rooms`].
+    protect_room: u32,
     /// How many beacon rows the table may ever hold: [`beacon_limit_of`] of the
     /// seat count.
     ///
@@ -1323,6 +1402,8 @@ impl World {
         )?;
 
         let explored_room = explored_room_of(&config.rules, config.seats)?;
+        let protect_room =
+            protect_room_of(config.seats).ok_or(MapError::Unsized { queue: "protect" })?;
         let breach_nodes = surface.node_count();
         let mut world = World {
             match_seed: config.match_seed,
@@ -1342,11 +1423,7 @@ impl World {
             shells: ShellTable::with_room(shell_room),
             defend: crate::tables::DefendTable::with_room(beacon_limit),
             explored: crate::tables::ExploredTable::default(),
-            attack: {
-                let mut table = crate::attack::AttackTable::with_room(beacon_limit);
-                table.reserve(beacon_limit, AVOID_AREA_ROOM);
-                table
-            },
+            attack: crate::attack::AttackTable::with_room(beacon_limit),
             licences: crate::licence::LicenceTable::with_room(config.seats),
             voided: Reserved::with_capacity(crate::licence::AWARDED.len()),
             chunks,
@@ -1389,12 +1466,11 @@ impl World {
             stone_scratch: Reserved::with_capacity(crate::math::index::row(breach_nodes)),
             breach_scratch: crate::attack::BreachScratch::new(breach_nodes),
             charge_scratch: Reserved::with_capacity(crate::math::index::row(beacon_limit)),
+            protect_scratch: Reserved::with_capacity(crate::math::index::row(
+                seat_beacon_limit_of(config.seats),
+            )),
             attack_counts: crate::attack::AttackCounts::default(),
-            route_zones: Reserved::with_capacity(
-                armed_rows
-                    .saturating_mul(seat_rows.max(1))
-                    .saturating_add(AVOID_AREA_ROOM),
-            ),
+            route_zones: Reserved::with_capacity(armed_rows.saturating_mul(seat_rows.max(1))),
             route_spans: vec![(0, 0); crate::math::index::row(unit_ceiling)],
             zone_base: armed_rows.saturating_mul(seat_rows.max(1)),
             fire_rows: Reserved::with_capacity(crate::math::index::row(unit_ceiling)),
@@ -1434,6 +1510,7 @@ impl World {
             unit_start_of,
             beacon_start,
             explored_room,
+            protect_room,
             beacon_limit,
         };
         world.reserve_table_rooms();
@@ -1621,6 +1698,12 @@ impl World {
         self.attack_counts.cut_refused = self.attack_counts.cut_refused.saturating_add(1);
     }
 
+    /// Count a plant the charge table had no room for (lane `simroom`): the
+    /// carrier holds its charge until one fires ([`crate::attack::PlantRefused`]).
+    pub(crate) const fn count_plant_held(&mut self) {
+        self.attack_counts.plant_held = self.attack_counts.plant_held.saturating_add(1);
+    }
+
     /// **Every table's room, stated once**: the rows each table may hold, from
     /// the world's limits, reserved whatever the table holds now. `World::new`
     /// and every restore end here, so a table restored from a file has the
@@ -1653,8 +1736,16 @@ impl World {
         let shell_room = self.shells.room();
         self.shells.reserve_rows(shell_room);
         self.defend.reserve_rows(self.beacon_limit);
+        self.defend.reserve_protected(self.protect_room);
         self.explored.reserve_rows(self.explored_room);
-        self.attack.reserve(self.beacon_limit, AVOID_AREA_ROOM);
+        self.attack.reserve(
+            self.beacon_limit,
+            self.beacon_limit.saturating_mul(AVOID_AREAS_PER_BEACON),
+        );
+        self.protect_scratch
+            .reserve_total(crate::math::index::row(seat_beacon_limit_of(
+                self.seats.len(),
+            )));
         self.licences.reserve_for(self.seats.len());
         self.reserve_route_zones();
     }
@@ -1666,7 +1757,7 @@ impl World {
             .attack
             .avoid()
             .len()
-            .max(AVOID_AREA_ROOM)
+            .max(self.attack.avoid_room())
             .saturating_add(self.zone_base);
         self.route_zones
             .reserve(need.saturating_sub(self.route_zones.len()));
@@ -1681,6 +1772,28 @@ impl World {
     /// Give the breach search's scratch back.
     pub(crate) fn put_breach_scratch(&mut self, scratch: crate::attack::BreachScratch) {
         self.breach_scratch = scratch;
+    }
+
+    /// Resolve a protect list into the world's protect scratch, with
+    /// `resolve`, which reads the world and fills the scratch it is lent,
+    /// emptied (lane `simroom`). **The scratch comes back by shape**: this
+    /// function takes it, calls `resolve` and puts it back before it returns,
+    /// whatever `resolve` answers, so no early return in the caller can lose
+    /// its room. The answer, on success, is the token
+    /// [`World::set_defend_settings`] takes to write the list.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `resolve` answers; the scratch is back either way.
+    pub(crate) fn resolve_into_protect_scratch<E>(
+        &mut self,
+        resolve: impl FnOnce(&World, &mut Vec<BeaconId>) -> Result<bool, E>,
+    ) -> Result<ResolvedProtect, E> {
+        let mut scratch = core::mem::take(&mut self.protect_scratch).into_inner();
+        scratch.clear();
+        let resolved = resolve(self, &mut scratch);
+        self.protect_scratch = scratch.into();
+        resolved.map(|escort| ResolvedProtect { escort })
     }
 
     /// The fired-charge scratch, empty between uses.
@@ -2160,8 +2273,10 @@ impl World {
 
     /// Write what a committed settings row says about a Defend beacon's
     /// settings (S2's `dfnd`): each field the row names, and nothing it is
-    /// silent about; `protect`, when the row names a protect list, is whether
-    /// it holds `my_commander` and its beacons, resolved at the commit. A
+    /// silent about; `protect`, when the row names a protect list, is the
+    /// commit's resolution of it ([`World::resolve_into_protect_scratch`]):
+    /// whether it holds `my_commander`, its beacons being the protect
+    /// scratch's, which nothing writes between the two calls. A
     /// beacon on another writ has no Defend row, and the edit writes nothing
     /// there, as a Survey count written to a Build beacon is read by nothing.
     ///
@@ -2172,7 +2287,7 @@ impl World {
         &mut self,
         beacon: BeaconId,
         edit: &crate::defend::DefendEdit,
-        protect: Option<&(bool, Vec<BeaconId>)>,
+        protect: Option<ResolvedProtect>,
         meter: &dyn crate::seams::Meter,
     ) {
         let Some(row) = self.defend.row_mut(beacon) else {
@@ -2187,9 +2302,10 @@ impl World {
         if let Some(pickets) = edit.pickets {
             row.settings.pickets = pickets;
         }
-        if let Some((escort, beacons)) = protect {
-            row.settings.escort = *escort;
-            self.defend.set_protected_metered(beacon, beacons, meter);
+        if let Some(ResolvedProtect { escort }) = protect {
+            row.settings.escort = escort;
+            self.defend
+                .set_protected_metered(beacon, &self.protect_scratch, meter);
         }
     }
 
@@ -7217,6 +7333,10 @@ impl World {
         ) else {
             return false;
         };
+        // And the Defend protect list's room, from the same ceiling.
+        let Some(protect_room) = protect_room_of(restored.seats.len()) else {
+            return false;
+        };
         // The support rule's scratch is sized from the restored rooms too.
         let Ok(support) = support::Scratch::new(
             &self.rules,
@@ -7287,6 +7407,7 @@ impl World {
         // the unbroken run refused and the two chains would part (see
         // [`beacon_limit_of`]).
         self.beacon_limit = beacon_limit_of(self.seats.len());
+        self.protect_room = protect_room;
         self.beacon_alive = Reserved::with_capacity(crate::math::index::row(self.beacon_limit));
         self.beacon_alive
             .extend(self.beacons.hit_points().iter().map(|hp| hp.is_alive()));
@@ -7685,6 +7806,116 @@ mod tests {
             match_settings: MatchSettings::default(),
         })
         .unwrap_or_else(|error| panic!("the committed table describes a world: {error}"))
+    }
+
+    /// **A save in which one seat holds more beacon rows than its share is
+    /// refused at the door** (lane `simroom`), with
+    /// `SnapshotError::OverBeaconShare`, before anything is restored: play
+    /// never lets a seat hold more (`World::place_beacon` refuses
+    /// `ShareFull`), and the rooms derived from the share would not hold it.
+    /// The crafted save gives seat 0 its whole share and one of seat 1's
+    /// beacons, inside the world's total ceiling; the same save untouched
+    /// restores.
+    #[test]
+    fn a_save_with_a_seat_over_its_beacon_share_is_refused() {
+        use crate::seams::MandateKind;
+        use crate::snapshot::{Snapshot, SnapshotError};
+        let mut full = world();
+        let share = super::seat_beacon_limit_of(full.seats.len());
+        let at = full.standing_point([200, 200, 0]);
+        for _ in 1..share {
+            full.place_beacon_directly(SeatId::new(0), at, MandateKind::Build, 1)
+                .unwrap_or_else(|| panic!("a beacon inside seat 0's share"));
+        }
+        full.place_beacon_directly(SeatId::new(1), at, MandateKind::Build, 1)
+            .unwrap_or_else(|| panic!("a beacon inside seat 1's share"));
+        let saved = Snapshot::capture(&full)
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
+        let mut target = world();
+        assert_eq!(saved.restore_into(&mut target), Ok(()));
+
+        let mut crafted = saved;
+        let last = crafted
+            .beacon_seat
+            .iter()
+            .rposition(|seat| *seat == 1)
+            .unwrap_or_else(|| panic!("seat 1's placed beacon"));
+        if let Some(seat) = crafted.beacon_seat.get_mut(last) {
+            *seat = 0;
+        }
+        // A name seat 0 holds no other beacon by, and its placement counter
+        // past it, so the file is consistent but for the share.
+        if let Some(ordinal) = crafted.beacon_ordinal.get_mut(last) {
+            *ordinal = share;
+        }
+        if let Some(placed) = crafted.seat_placed.get_mut(0) {
+            *placed = share + 1;
+        }
+        let mut target = world();
+        let before = target.state_hash();
+        assert_eq!(
+            crafted.restore_into(&mut target),
+            Err(SnapshotError::OverBeaconShare {
+                seat: 0,
+                beacons: share + 1,
+                limit: share,
+            })
+        );
+        assert_eq!(
+            target.state_hash(),
+            before,
+            "a refused restore writes nothing"
+        );
+    }
+
+    /// **The Defend protect list's room is held to its source** (lane
+    /// `simroom`): `protect_room_of` is, for every seat count the world
+    /// takes, the seat count times the square of one seat's beacon rows (the
+    /// most distinct same-seat `(defending beacon, protected beacon)` pairs
+    /// the beacon table's per-seat shares admit), which is the beacon limit
+    /// times one seat's rows; and a fresh world and a restored one both have
+    /// room for that many entries.
+    #[test]
+    fn the_protect_lists_room_is_every_seats_rows_squared() {
+        for seats in 0..=u32::from(u8::MAX) {
+            let per_seat = u64::from(super::room_per_seat(super::BEACON_TABLE_ROOM, seats)) + 1;
+            assert_eq!(
+                super::protect_room_of(seats).map(u64::from),
+                Some(u64::from(seats) * per_seat * per_seat),
+                "{seats} seats"
+            );
+            assert_eq!(
+                u64::from(super::beacon_limit_of(seats)),
+                u64::from(seats) * per_seat,
+                "{seats} seats: the beacon limit is every seat's rows"
+            );
+        }
+
+        let fresh = world();
+        let room = super::protect_room_of(fresh.seats.len())
+            .unwrap_or_else(|| panic!("a two-seat world's room fits"));
+        assert_eq!(room, 2 * 21 * 21, "two seats of 21 beacon rows each");
+        assert_eq!(fresh.protect_room, room);
+        assert!(
+            fresh.defend.protected_room() >= crate::math::index::row(room),
+            "a fresh world has room for {room} protect entries"
+        );
+        let saved = crate::snapshot::Snapshot::capture(&fresh)
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
+        let bytes = saved
+            .to_bytes()
+            .unwrap_or_else(|error| panic!("the save encodes: {error}"));
+        let read = crate::snapshot::Snapshot::from_bytes(&bytes)
+            .unwrap_or_else(|error| panic!("the save decodes: {error}"));
+        let mut restored = world();
+        restored.defend = crate::tables::DefendTable::default();
+        read.restore_into(&mut restored)
+            .unwrap_or_else(|error| panic!("the save restores: {error}"));
+        assert_eq!(restored.protect_room, room);
+        assert!(
+            restored.defend.protected_room() >= crate::math::index::row(room),
+            "a restored world has room for {room} protect entries again"
+        );
     }
 
     /// S3's `pred`, the E22 carry: a chunk the store does not hold is a typed

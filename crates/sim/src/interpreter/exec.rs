@@ -1389,6 +1389,7 @@ fn commit_row(
                     &TargetKind::ALL,
                     units,
                 )?;
+                avoid_room(world, beacon, settings, units)?;
                 walls_stand(world, beacon, settings, units)?;
             }
             world.set_beacon_mandate_metered(row, *kind, units);
@@ -1488,8 +1489,14 @@ fn commit_row(
             // and are held from then on (S2's `dfnd`), as a step pins its
             // selector; one that resolves to nothing fails the step
             // `no_target` before anything is written.
+            // Resolved into the world's protect scratch, which the world lends
+            // and takes back itself, so nothing here allocates inside a tick
+            // and no early return below can lose the scratch's room (lane
+            // `simroom`).
             let guarded = match defend.as_ref().and_then(|edit| edit.protect.as_ref()) {
-                Some(list) => Some(resolve_protected(world, seat, list, units)?),
+                Some(list) => Some(world.resolve_into_protect_scratch(|world, into| {
+                    resolve_protected(world, seat, list, units, into)
+                })?),
                 None => None,
             };
             // A settings edit **replaces** the lists it names, because spec
@@ -1509,6 +1516,7 @@ fn commit_row(
             }
             let replaced = replaced_kinds(spec);
             settings_room(world, beacon, spec, bindings, slot, &replaced.iter(), units)?;
+            avoid_room(world, beacon, spec, units)?;
             // Every wall the list names is checked against the ground first, so
             // a box that cannot stand writes nothing (decisions-log item 146
             // (4)).
@@ -1591,7 +1599,7 @@ fn commit_row(
             // The Defend settings the row names (S2's `dfnd`), and nothing it
             // is silent about.
             if let Some(edit) = defend {
-                world.set_defend_settings(beacon, edit, guarded.as_ref(), units);
+                world.set_defend_settings(beacon, edit, guarded, units);
             }
             // The Attack settings the row names (S2's `atk`), and nothing it
             // is silent about.
@@ -1620,8 +1628,10 @@ fn attack_aim(target: crate::attack::TargetSpec) -> Result<crate::attack::Aim, S
     })
 }
 
-/// A protect list as the Defend table holds it: whether it names
-/// `my_commander`, and its beacons, each resolved for `seat` now.
+/// A protect list as the Defend table holds it: its beacons, each resolved
+/// for `seat` now, into `beacons` (the world's protect scratch, lent empty
+/// by [`World::resolve_into_protect_scratch`]: at most one seat's beacon
+/// rows, distinct, its room), and whether it names `my_commander`.
 ///
 /// # Errors
 ///
@@ -1631,9 +1641,9 @@ fn resolve_protected(
     seat: SeatId,
     list: &[crate::defend::Protect],
     units: &dyn crate::seams::Meter,
-) -> Result<(bool, Vec<BeaconId>), StepFailure> {
+    beacons: &mut Vec<BeaconId>,
+) -> Result<bool, StepFailure> {
     let mut escort = false;
-    let mut beacons: Vec<BeaconId> = Vec::with_capacity(list.len());
     for entry in list {
         units.rows(1);
         match entry {
@@ -1650,7 +1660,7 @@ fn resolve_protected(
             }
         }
     }
-    Ok((escort, beacons))
+    Ok(escort)
 }
 
 /// The Build entries a settings row's target list writes, in list order, as
@@ -1798,6 +1808,35 @@ where
     world
         .check_list_room(beacon, build, areas, replaces, units)
         .map_err(|_| StepFailure::TargetsUnwritten)
+}
+
+/// Whether the Attack table can hold the avoid list a [`Row::Settings`] row
+/// writes, in place of the beacon's (lane `simroom`): the same all-or-nothing
+/// test [`settings_room`] gives the Build lists, asked before anything is
+/// written, failing the step with the same reason. A row that names no avoid
+/// list, and any other row, passes; a cleared list writes none.
+///
+/// # Errors
+///
+/// [`StepFailure::TargetsUnwritten`] when the list would pass the table's
+/// stated room ([`crate::attack::AttackTable::avoid_fits_metered`]).
+fn avoid_room(
+    world: &World,
+    beacon: BeaconId,
+    spec: &Row,
+    units: &dyn crate::seams::Meter,
+) -> Result<(), StepFailure> {
+    let Row::Settings { attack, .. } = spec else {
+        return Ok(());
+    };
+    let Some(list) = attack.as_ref().and_then(|edit| edit.avoid.as_ref()) else {
+        return Ok(());
+    };
+    if world.attack().avoid_fits_metered(beacon, list.len(), units) {
+        Ok(())
+    } else {
+        Err(StepFailure::TargetsUnwritten)
+    }
 }
 
 /// Whether every `on` target a [`Row::Settings`] row writes is still bound to
@@ -2423,8 +2462,9 @@ mod visits {
         )
         .unwrap_or(0);
         let units = charged(&world, |world, meter| {
-            let (escort, beacons) =
-                resolve_protected(world, seat, &list, meter).unwrap_or_else(|_| panic!("resolved"));
+            let mut beacons = Vec::new();
+            let escort = resolve_protected(world, seat, &list, meter, &mut beacons)
+                .unwrap_or_else(|_| panic!("resolved"));
             assert!(escort);
             assert_eq!(beacons.len(), 1, "the duplicate is held once");
         });

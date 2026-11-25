@@ -1134,6 +1134,413 @@ mod tick {
         expected
     }
 
+    /// The seats of the protect-list match: the fewest a Push runs with (one
+    /// seat alone ends its match at once, the last seat standing), and so
+    /// the largest share of the beacon room a seat can hold.
+    const PROTECT_SEATS: u32 = 2;
+
+    /// The beacon rows each of the [`PROTECT_SEATS`] seats holds at most: its
+    /// core and its share of the beacon room (`seat_beacon_limit_of(2)`,
+    /// 1 + 20).
+    const SEAT_BEACONS: usize = 21;
+
+    /// The protect entries the Defend table can hold at most in a
+    /// [`PROTECT_SEATS`]-seat match: every seat's [`SEAT_BEACONS`] Defend
+    /// beacons, each protecting every one of its seat's beacons
+    /// (`world::protect_room_of(2)`).
+    const FULL_PROTECT: usize = 2 * SEAT_BEACONS * SEAT_BEACONS;
+
+    /// The ticks a list-room Push runs before its counted window: the
+    /// commander starts its walk to the beacon it will interface with.
+    const LIST_LEAD: u32 = 20;
+
+    /// The most ticks a list-room Push's counted window runs: the rest of the
+    /// walk, every visit's handshake and rows (a settings edit at most six
+    /// seconds, 120 ticks), and room to spare. The window ends early once the
+    /// playbook's last row has committed or failed.
+    const LIST_TICKS: u32 = 1_200;
+
+    /// The committed rules table.
+    fn committed_rules() -> RulesTable {
+        RulesTable::load(
+            &std::path::Path::new("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .expect("the committed rules table loads")
+    }
+
+    /// A [`PROTECT_SEATS`]-seat match, in its opening Lull.
+    fn list_world(rules: &RulesTable) -> World {
+        World::new(&WorldConfig {
+            match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+            seats: PROTECT_SEATS,
+            rules: rules.clone(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![600_000],
+                round_limit: DEFAULT_ROUND_LIMIT,
+            },
+        })
+        .expect("the rules table describes a two-seat map")
+    }
+
+    /// `seat`'s core: its id and its column.
+    fn core_of(world: &World, seat: u8) -> (pharmakos_sim::tables::BeaconId, [i32; 2]) {
+        let row = world
+            .beacons()
+            .seats()
+            .iter()
+            .position(|owner| *owner == seat)
+            .expect("the seat's core");
+        let id = *world.beacons().ids().get(row).expect("the core's id");
+        let at = *world
+            .beacons()
+            .positions()
+            .get(row)
+            .expect("the core's position");
+        (
+            pharmakos_sim::tables::BeaconId::new(id),
+            pharmakos_sim::targeting::column_of(at),
+        )
+    }
+
+    /// A playbook whose route is one interface visit per `(beacon, rows)`
+    /// pair, each skipped on a failure, then a hold.
+    fn visits(steps: &[(String, Vec<String>)]) -> pharmakos_proto::gp::v1::Playbook {
+        let route: Vec<String> = steps
+            .iter()
+            .enumerate()
+            .map(|(index, (beacon, rows))| {
+                format!(
+                    concat!(
+                        "{{\"label\":\"visit_{index}\",\"interface\":{{\"beacon\":",
+                        "{{\"beacon_id\":\"{beacon}\"}},\"rows\":[{rows}]}},",
+                        "\"timeout_ms\":60000,\"on_fail\":{{\"action\":\"SKIP\"}}}}"
+                    ),
+                    index = index,
+                    beacon = beacon,
+                    rows = rows.join(","),
+                )
+            })
+            .collect();
+        let text = format!(
+            concat!(
+                "{{\"schema_version\":{{\"major\":1}},",
+                "\"meta\":{{\"title\":\"lists\",\"author_kind\":\"HUMAN\"}},",
+                "\"declarative\":{{\"route\":[{route},",
+                "{{\"label\":\"stand\",\"hold\":{{\"ms\":60000}}}}]}},",
+                "\"on_death\":{{\"on_respawn\":\"CONTINUE\",\"max_deaths_before_fallback\":3}},",
+                "\"fallback\":{{\"hold\":{{\"at\":{{\"safest\":{{}}}}}}}},",
+                "\"kind\":\"PLAYBOOK\"}}"
+            ),
+            route = route.join(","),
+        );
+        pharmakos_proto::json::decode(&text).expect("the playbook decodes")
+    }
+
+    /// Seal `playbook` for seat 0 of `world` and open the Push.
+    fn pushing(
+        world: World,
+        rules: &RulesTable,
+        playbook: &pharmakos_proto::gp::v1::Playbook,
+    ) -> Runner {
+        let plan = pharmakos_sim::interpreter::Plan::compile(playbook, rules).expect("it compiles");
+        let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+        runner
+            .seal_playbook(pharmakos_sim::tables::SeatId::new(0), plan)
+            .expect("a Lull takes a seal");
+        assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
+        runner
+    }
+
+    /// What a list-room Push's counted window saw: what it allocated, and
+    /// seat 0's committed rows and failed steps, by reason.
+    struct ListWindow {
+        allocated: u64,
+        committed: u32,
+        failed: Vec<pharmakos_sim::interpreter::StepFailure>,
+    }
+
+    /// Step `runner` [`LIST_LEAD`] ticks uncounted, then count up to
+    /// [`LIST_TICKS`] more, until seat 0 has committed or failed `outcomes`
+    /// rows and steps in all. A refused step is read from its `step_failed`
+    /// event; the events are read before they are drained, outside nothing
+    /// (reading a slice allocates nothing).
+    fn list_window(runner: &mut Runner, outcomes: u32) -> ListWindow {
+        use pharmakos_sim::events::EventKind;
+        let seat = Some(pharmakos_sim::tables::SeatId::new(0));
+        let mut enc = Enc::with_capacity(64 * 1024);
+        for _ in 0..LIST_LEAD {
+            runner
+                .step()
+                .unwrap()
+                .expect("the segment outlasts this test");
+            runner.clear_events();
+            runner.world().encode(&mut enc);
+        }
+        let mut committed: u32 = 0;
+        let mut failed = Vec::with_capacity(8);
+        let before = allocations();
+        for _ in 0..LIST_TICKS {
+            runner
+                .step()
+                .unwrap()
+                .expect("the segment outlasts this test");
+            for event in runner.events() {
+                if event.seat != seat {
+                    continue;
+                }
+                if event.kind == EventKind::RowCommitted {
+                    committed += 1;
+                } else if event.kind == EventKind::StepFailed {
+                    failed.push(
+                        pharmakos_sim::interpreter::StepFailed::decode(event.value)
+                            .expect("a step_failed value decodes")
+                            .reason,
+                    );
+                }
+            }
+            runner.clear_events();
+            runner.world().encode(&mut enc);
+            if committed + u32::try_from(failed.len()).expect("a count") >= outcomes {
+                break;
+            }
+        }
+        ListWindow {
+            allocated: allocations() - before,
+            committed,
+            failed,
+        }
+    }
+
+    /// A [`PROTECT_SEATS`]-seat match whose Defend table ends the Push
+    /// holding [`FULL_PROTECT`] entries, the most it can hold: each seat holds
+    /// its whole share of the beacon rows, every beacon on the Defend writ
+    /// protecting every beacon of its seat (the lists of earlier rounds:
+    /// lists are kept from round to round), but for seat 0's last beacon,
+    /// `b_20`, whose list names one. Seat 0's playbook visits `b_20` with two
+    /// rows: the first clears its list, the second writes it whole, so the
+    /// table falls by one entry and grows to its room inside the Push.
+    fn protect_runner() -> Runner {
+        use pharmakos_sim::seams::MandateKind;
+        use pharmakos_sim::tables::{BeaconId, DefendSettings, PRIORITY_NORMAL, SeatId};
+        let rules = committed_rules();
+        let mut world = list_world(&rules);
+        for raw in 0..u8::try_from(PROTECT_SEATS).expect("a seat id") {
+            let seat = SeatId::new(raw);
+            let (core, [cx, cy]) = core_of(&world, raw);
+            world.set_writ(core, MandateKind::Defend);
+            let mut beacons = vec![core];
+            for index in 0..i32::try_from(SEAT_BEACONS - 1).expect("a count") {
+                let at = world.standing_point([
+                    cx - 12 + (index % 7) * 4,
+                    cy + 6 + index.div_euclid(7) * 4,
+                    0,
+                ]);
+                beacons.push(
+                    world
+                        .place_beacon_directly(seat, at, MandateKind::Defend, PRIORITY_NORMAL)
+                        .expect("a beacon inside the seat's share"),
+                );
+            }
+            let spare = world.standing_point([cx - 12, cy - 6, 0]);
+            assert_eq!(
+                world.place_beacon_directly(seat, spare, MandateKind::Defend, PRIORITY_NORMAL),
+                None,
+                "the seat holds its whole share of the beacon rows: no list can name more beacons"
+            );
+            for beacon in &beacons {
+                // Seat 0's last beacon holds one entry, which its visit clears
+                // and writes whole: the table grows by all but one entry inside
+                // the Push, past what a table restored from the save holds.
+                let list: &[BeaconId] = if raw == 0 && Some(beacon) == beacons.last() {
+                    beacons.get(..1).expect("the core")
+                } else {
+                    &beacons
+                };
+                assert!(
+                    world.set_defend(*beacon, DefendSettings::default(), list),
+                    "a Defend row"
+                );
+            }
+        }
+        assert_eq!(
+            world.defend().protected().len(),
+            FULL_PROTECT - (SEAT_BEACONS - 1),
+            "every list but seat 0's last is written whole before the match opens"
+        );
+        let entries: Vec<String> = (0..SEAT_BEACONS)
+            .map(|ordinal| format!("{{\"beacon\":{{\"beacon_id\":\"b_{ordinal:02}\"}}}}"))
+            .collect();
+        let playbook = visits(&[(
+            format!("b_{:02}", SEAT_BEACONS - 1),
+            vec![
+                "{\"set_mandate_settings\":{\"defend\":{\"clear_protect\":true}}}".to_owned(),
+                format!(
+                    "{{\"set_mandate_settings\":{{\"defend\":{{\"protect\":[{}]}}}}}}",
+                    entries.join(",")
+                ),
+            ],
+        )]);
+        pushing(world, &rules, &playbook)
+    }
+
+    /// The protect-list Push's counted window, held to what it must show:
+    /// both rows committed, nothing failed, the table back at
+    /// [`FULL_PROTECT`]. Answers what the window allocated.
+    fn protect_commit_allocations(runner: &mut Runner) -> u64 {
+        let window = list_window(runner, 2);
+        assert_eq!(
+            (window.committed, window.failed.as_slice()),
+            (2, &[][..]),
+            "the visit's clear and its refill both committed inside the counted window"
+        );
+        assert_eq!(
+            runner.world().defend().protected().len(),
+            FULL_PROTECT,
+            "b_20's list is written whole again, so each seat's {SEAT_BEACONS} Defend beacons \
+             protect all {SEAT_BEACONS} of its beacons: the most entries the table can hold"
+        );
+        window.allocated
+    }
+
+    /// **A protect list committed inside a tick allocates nothing**, up to
+    /// the most entries the Defend table can hold (lane `simroom`): the
+    /// table's room is stated, `world::protect_room_of` the seat count,
+    /// reserved with every other table's (`World::reserve_table_rooms`); the
+    /// commit resolves the list into the world's protect scratch, which the
+    /// world lends and takes back (`World::resolve_into_protect_scratch`);
+    /// and [`protect_runner`]'s match clears a list and writes it whole, so
+    /// the table ends its counted window holding exactly its room, and a room
+    /// one entry short grows the list inside the tick. Then the same Push
+    /// restored from its save, taken at the Push's first tick: a table
+    /// restored from the file holds exactly its rows, and no room for more
+    /// unless the restore states the room again.
+    #[test]
+    fn a_protect_list_commit_allocates_nothing_up_to_the_tables_room() {
+        let mut fresh = protect_runner();
+        let saved = fresh.capture().expect("a world between ticks");
+        let bytes = saved.to_bytes().expect("the save encodes");
+        let snapshot =
+            pharmakos_sim::snapshot::Snapshot::from_bytes(&bytes).expect("the save decodes");
+        let fresh_allocations = protect_commit_allocations(&mut fresh);
+        assert_eq!(
+            fresh_allocations, 0,
+            "the ticks in which a commander's interface clears a protect list and writes it \
+             again to fill the Defend table allocated {fresh_allocations} times"
+        );
+
+        let mut restored = protect_runner();
+        restored.restore(&snapshot).expect("the save restores");
+        let restored_allocations = protect_commit_allocations(&mut restored);
+        assert_eq!(
+            restored_allocations, 0,
+            "the same ticks in a restored world allocated {restored_allocations} times: a \
+             restore states the table's room again"
+        );
+    }
+
+    /// The avoid areas the Attack table can hold in a [`PROTECT_SEATS`]-seat
+    /// match: the beacon limit (42) times the per-beacon figure (16), the
+    /// stated room `World::reserve_table_rooms` gives it.
+    const AVOID_ROOM: usize = 42 * 16;
+
+    /// The avoid areas seat 0's playbook writes on its core, `b_00`.
+    const AVOID_WRITTEN: usize = 4;
+
+    /// A [`PROTECT_SEATS`]-seat match whose Attack table holds its room of
+    /// avoid areas less [`AVOID_WRITTEN`]: seat 1's core on the Attack writ
+    /// with the rest, seat 0's core and a second beacon of its, `b_01`, on
+    /// the Attack writ with none. Seat 0's playbook visits `b_00` and writes
+    /// [`AVOID_WRITTEN`] areas, which fills the room exactly, then `b_01` and
+    /// writes one, which would pass it.
+    fn avoid_runner() -> Runner {
+        use pharmakos_sim::attack::AttackSettings;
+        use pharmakos_sim::seams::MandateKind;
+        use pharmakos_sim::tables::{ColumnBox, PRIORITY_NORMAL, SeatId};
+        let rules = committed_rules();
+        let mut world = list_world(&rules);
+        let (core, [cx, cy]) = core_of(&world, 0);
+        world.set_writ(core, MandateKind::Attack);
+        let at = world.standing_point([cx + 6, cy + 6, 0]);
+        world
+            .place_beacon_directly(SeatId::new(0), at, MandateKind::Attack, PRIORITY_NORMAL)
+            .expect("a second Attack beacon");
+        let (other, [ox, oy]) = core_of(&world, 1);
+        world.set_writ(other, MandateKind::Attack);
+        let boxes: Vec<ColumnBox> = (0..AVOID_ROOM - AVOID_WRITTEN)
+            .map(|index| {
+                let x = i16::try_from(ox).expect("a column")
+                    + i16::try_from(index % 32).expect("a column");
+                let y = i16::try_from(oy).expect("a column")
+                    + i16::try_from(index.div_euclid(32)).expect("a column");
+                ColumnBox::new([x, y], [x, y]).expect("a box")
+            })
+            .collect();
+        assert!(world.set_attack(other, AttackSettings::default(), &boxes));
+        assert_eq!(world.attack().avoid().len(), AVOID_ROOM - AVOID_WRITTEN);
+        let z = 0;
+        let area = |dx: i32| {
+            format!(
+                "{{\"min\":{{\"x\":{x},\"y\":{cy},\"z\":{z}}},\"max\":{{\"x\":{x},\"y\":{cy},\"z\":{z}}}}}",
+                x = cx + dx,
+            )
+        };
+        let written: Vec<String> = (0..i32::try_from(AVOID_WRITTEN).expect("a count"))
+            .map(|index| area(index * 2 + 3))
+            .collect();
+        let playbook = visits(&[
+            (
+                "b_00".to_owned(),
+                vec![format!(
+                    "{{\"set_mandate_settings\":{{\"attack\":{{\"avoid_areas\":[{}]}}}}}}",
+                    written.join(",")
+                )],
+            ),
+            (
+                "b_01".to_owned(),
+                vec![format!(
+                    "{{\"set_mandate_settings\":{{\"attack\":{{\"avoid_areas\":[{}]}}}}}}",
+                    area(-3)
+                )],
+            ),
+        ]);
+        pushing(world, &rules, &playbook)
+    }
+
+    /// **An avoid list committed inside a tick allocates nothing, and one that
+    /// would pass the Attack table's stated room writes nothing and fails its
+    /// step** `targets_unwritten`, as a Build list past its room does (lane
+    /// `simroom`): [`avoid_runner`]'s first visit fills the room exactly and
+    /// commits; its second would pass it by one area, and fails, the table
+    /// left as it was; and neither allocates. A room one area short fails the
+    /// first commit instead.
+    #[test]
+    fn an_avoid_list_commit_allocates_nothing_and_past_the_room_is_refused() {
+        let mut runner = avoid_runner();
+        let window = list_window(&mut runner, 2);
+        assert_eq!(
+            (window.committed, window.failed.as_slice()),
+            (
+                1,
+                &[pharmakos_sim::interpreter::StepFailure::TargetsUnwritten][..]
+            ),
+            "the commit at the room commits, and the one past it fails `targets_unwritten`"
+        );
+        assert_eq!(
+            runner.world().attack().avoid().len(),
+            AVOID_ROOM,
+            "the table holds its room, and the refused list wrote nothing"
+        );
+        assert_eq!(
+            window.allocated, 0,
+            "the ticks of a commit at the avoid-area room and a refused one past it allocated {} \
+             times",
+            window.allocated
+        );
+    }
+
     /// The attacking crowds' half of [`a_tick_allocates_nothing`].
     fn crowd_allocates_nothing(runner: &mut Runner, enc: &mut Enc) {
         // **A moving crowd under combat** (S2's `atk`; decisions-log item 137 (2)
@@ -2146,6 +2553,8 @@ mod owned {
         items: Vec<Item>,
         aliases: Vec<Alias>,
         uses: Vec<Use>,
+        /// Every file's tokens, for [`room_unstated`]'s search of its impls.
+        texts: Vec<(String, Vec<Token>)>,
     }
 
     /// What the walk found: every plain field `(file, type, field)`, every
@@ -2156,6 +2565,9 @@ mod owned {
         pub(super) plain: Vec<(String, String, String)>,
         pub(super) unresolved: Vec<(String, String, String, String)>,
         pub(super) types: Vec<(String, String)>,
+        /// Every field whose type names [`RESERVED`] `(file, type, field)`:
+        /// a vector that keeps its room, whose room [`room_unstated`] looks for.
+        pub(super) reserved: Vec<(String, String, String)>,
     }
 
     /// The names that mark a field plain.
@@ -2487,6 +2899,7 @@ mod owned {
     /// associated `type` is not an alias).
     pub(super) fn read(file: &str, text: &str, out: &mut Sources) {
         let tokens = tokens(text);
+        out.texts.push((file.to_owned(), tokens.clone()));
         let module = module_of(file);
         // The kind of each open brace: true for a module's.
         let mut blocks: Vec<bool> = Vec::new();
@@ -2690,6 +3103,7 @@ mod owned {
             walked.types.push(key);
             for field in &item.fields {
                 let mut plain = false;
+                let mut reserved = false;
                 let mut pending: Vec<(Vec<Token>, Vec<String>, String)> =
                     vec![(field.ty.clone(), item.generics.clone(), item.file.clone())];
                 let mut expanded: Vec<String> = Vec::new();
@@ -2700,6 +3114,9 @@ mod owned {
                         let Some(name) = path.last() else { continue };
                         if PLAIN.contains(&name.as_str()) {
                             plain = true;
+                        }
+                        if name == RESERVED {
+                            reserved = true;
                         }
                         if KNOWN.contains(&name.as_str())
                             || generics.contains(name)
@@ -2735,13 +3152,193 @@ mod owned {
                         .plain
                         .push((item.file.clone(), item.name.clone(), field.name.clone()));
                 }
+                if reserved {
+                    walked.reserved.push((
+                        item.file.clone(),
+                        item.name.clone(),
+                        field.name.clone(),
+                    ));
+                }
             }
         }
         walked.plain.sort();
         walked.plain.dedup();
+        walked.reserved.sort();
+        walked.reserved.dedup();
         walked.unresolved.sort();
         walked.types.sort();
         walked
+    }
+
+    /// The type whose fields keep their room in a clone ([`Walked::reserved`]).
+    pub(super) const RESERVED: &str = "Reserved";
+
+    /// The methods that state a vector's room on it: `field.reserve(..)` or
+    /// `field.reserve_total(..)` inside an impl of the field's type.
+    const ROOM_METHODS: &[&str] = &["reserve", "reserve_total"];
+
+    /// Each `{ .. }` body of an `impl` whose self type is named `ty`, in
+    /// every source, as token ranges: `impl Ty`, `impl<T> Ty<T>` and
+    /// `impl Trait for Ty`. Braces alone are counted, so a `<` in a body is
+    /// never read as a bracket.
+    fn impl_bodies<'s>(sources: &'s Sources, ty: &str) -> Vec<&'s [Token]> {
+        let mut bodies = Vec::new();
+        for (_, tokens) in &sources.texts {
+            let mut i = 0;
+            while let Some(token) = tokens.get(i) {
+                if word(Some(token)) != Some("impl") {
+                    i += 1;
+                    continue;
+                }
+                // The header: every word up to the body's brace, the self
+                // type being the last path's head after `for`, if any.
+                let mut j = i + 1;
+                let mut angle = 0_i64;
+                let mut self_name: Option<&str> = None;
+                while let Some(t) = tokens.get(j) {
+                    match t {
+                        Token::Punct(p) if p == "{" && angle == 0 => break,
+                        Token::Punct(p) if p == ";" => break,
+                        Token::Punct(p) if p == "<" => angle += 1,
+                        Token::Punct(p) if p == ">" => angle -= 1,
+                        Token::Word(w) if angle == 0 && w == "for" => self_name = None,
+                        Token::Word(w) if angle == 0 && w != "where" => {
+                            if self_name.is_none() || is_punct(tokens.get(j - 1), "::") {
+                                self_name = Some(w.as_str());
+                            }
+                        }
+                        Token::Word(w) if w == "where" => break,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                // Past a `where` clause, to the body's brace.
+                while tokens.get(j).is_some_and(|t| !is_punct(Some(t), "{")) {
+                    j += 1;
+                }
+                let start = j;
+                let mut depth = 0_i64;
+                while let Some(t) = tokens.get(j) {
+                    if is_punct(Some(t), "{") {
+                        depth += 1;
+                    } else if is_punct(Some(t), "}") {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+                if self_name == Some(ty)
+                    && let Some(body) = tokens.get(start..=j.min(tokens.len().saturating_sub(1)))
+                {
+                    bodies.push(body);
+                }
+                i = j.max(i + 1);
+            }
+        }
+        bodies
+    }
+
+    /// Whether `body` states `field`'s room: a struct literal's
+    /// `field: ..::with_capacity(..)` or a `field: vec![value; n]` buffer
+    /// (its whole length is its room, written by index), or
+    /// `.field.reserve(..)` / `.field.reserve_total(..)`.
+    fn states_room(body: &[Token], field: &str) -> bool {
+        body.iter().enumerate().any(|(i, token)| {
+            if word(Some(token)) != Some(field) {
+                return false;
+            }
+            let literal = is_punct(body.get(i + 1), ":") && {
+                let mut k = i + 2;
+                while body
+                    .get(k)
+                    .is_some_and(|t| matches!(t, Token::Word(_)) || is_punct(Some(t), "::"))
+                {
+                    k += 1;
+                }
+                word(body.get(k.wrapping_sub(1))) == Some("with_capacity")
+                    && is_punct(body.get(k), "(")
+            };
+            // A `vec![value; n]` literal: a buffer of its whole length, written
+            // by index and never pushed past it.
+            let sized = is_punct(body.get(i + 1), ":")
+                && word(body.get(i + 2)) == Some("vec")
+                && is_punct(body.get(i + 3), "!");
+            let method = is_punct(body.get(i.wrapping_sub(1)), ".")
+                && is_punct(body.get(i + 1), ".")
+                && word(body.get(i + 2)).is_some_and(|m| ROOM_METHODS.contains(&m))
+                && is_punct(body.get(i + 3), "(");
+            literal || sized || method
+        })
+    }
+
+    /// The `Reserved` fields the walk found whose room no impl of their type
+    /// states ([`states_room`]): a vector that keeps a room it was never
+    /// given, so its first `push` inside a tick allocates.
+    pub(super) fn room_unstated(
+        sources: &Sources,
+        walked: &Walked,
+    ) -> Vec<(String, String, String)> {
+        walked
+            .reserved
+            .iter()
+            .filter(|(_, ty, field)| {
+                !impl_bodies(sources, ty)
+                    .iter()
+                    .any(|body| states_room(body, field))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The room check on sources given as `(file, text)` pairs, from `World`.
+    fn unstated_texts(files: &[(&str, &str)]) -> Vec<String> {
+        let mut sources = Sources::default();
+        for (file, text) in files {
+            read(file, text, &mut sources);
+        }
+        let walked = walk(&sources, ("src/world.rs", "World"), &[RESERVED]);
+        room_unstated(&sources, &walked)
+            .iter()
+            .map(|(file, ty, field)| format!("{file} {ty}.{field}"))
+            .collect()
+    }
+
+    /// The room check's own cases: a `Reserved` field given room by a
+    /// struct literal's `with_capacity` or `vec!` buffer, by `reserve` or `reserve_total` in
+    /// an inherent or a trait impl, passes; one built from an empty `Vec` or
+    /// a default, or reserved only in another type's impl, or by a method
+    /// of the same name on another field, fails, naming the field.
+    #[test]
+    fn the_room_check_finds_every_reserved_vector_given_no_room() {
+        let world = r"
+            pub struct World { given: Reserved<u8>, sized: Reserved<u8>, grown: Reserved<u8>, table: Table, bare: Reserved<u8> }
+            impl World {
+                fn new() -> World {
+                    World {
+                        given: crate::reserved::Reserved::with_capacity(4),
+                        sized: vec![0; 4].into(),
+                        grown: Reserved::default(),
+                        table: Table::default(),
+                        bare: Vec::new().into(),
+                    }
+                }
+                fn rooms(&mut self) { if 1 < 2 { self.grown.reserve_total(8); } self.table.reserve_rows(3); }
+            }
+            pub struct Table { rows: Reserved<u32>, protected: Reserved<u32>, other: Other }
+            impl Default for Table {
+                fn default() -> Table { Table { rows: Vec::new().into(), protected: Vec::new().into(), other: Other::default() } }
+            }
+            impl Table { pub fn reserve_rows(&mut self, n: usize) { self.rows.reserve(n); } }
+            pub struct Other { protected: Reserved<u8> }
+            impl<T> Fill<T> for Other where T: Copy { fn fill(&mut self) { self.protected.reserve(2); } }
+        ";
+        assert_eq!(
+            unstated_texts(&[("src/world.rs", world)]),
+            ["src/world.rs Table.protected", "src/world.rs World.bare"],
+            "the fields no impl of their own type gives room"
+        );
     }
 
     /// The walker on sources given as `(file, text)` pairs, from `World`.
@@ -3279,4 +3876,26 @@ fn every_vector_the_world_owns_keeps_its_room_or_says_why_not() {
     for (name, reason) in TERMINAL {
         assert!(!reason.is_empty(), "{name} says why it is not read");
     }
+    // And a `Reserved` keeps only the room it was given (lane `simroom`):
+    // the Defend protect list was a `Reserved` built from an empty `Vec`,
+    // never reserved, so its clone and its restore kept a room of nothing
+    // and a commit grew it inside a tick. Every `Reserved` field the walk
+    // finds has its room stated in an impl of its own type.
+    let unstated = owned::room_unstated(&sources, &walked);
+    assert!(
+        unstated.is_empty(),
+        "`Reserved` fields the world owns whose room no impl of their type states (a struct \
+         literal's `with_capacity`, or `reserve` or `reserve_total` on the field), \
+         (file, type, field): {unstated:?}. A vector a tick fills needs a stated room, derived \
+         from what bounds it, or its first push inside a tick allocates"
+    );
+    assert!(
+        walked
+            .reserved
+            .iter()
+            .any(|(file, ty, field)| file == "src/tables.rs"
+                && ty == "DefendTable"
+                && field == "protected"),
+        "the room check reaches the Defend protect list"
+    );
 }

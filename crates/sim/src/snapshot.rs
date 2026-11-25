@@ -1034,6 +1034,22 @@ pub enum SnapshotError {
         /// The end-reason byte the file carried.
         end_reason: u8,
     },
+    /// One seat holds more beacon rows than its share of the beacon room
+    /// allows: its core and its share ([`crate::world::seat_beacon_limit_of`]
+    /// the snapshot's seat count), which play enforces at every deploy
+    /// (`World::place_beacon` refuses `ShareFull`, counting the rows a seat
+    /// holds, dead ones until their deaths settle). The file describes no
+    /// match this sim plays, and the rooms the world derives from the share
+    /// (the Defend protect list's, `world::protect_room_of`) would not hold
+    /// it (lane `simroom`).
+    OverBeaconShare {
+        /// The seat.
+        seat: u8,
+        /// How many beacon rows the snapshot gives it.
+        beacons: u32,
+        /// The most one seat holds at the snapshot's seat count.
+        limit: u32,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -1089,6 +1105,15 @@ impl core::fmt::Display for SnapshotError {
                 f,
                 "the snapshot's match phase {phase} or end reason {end_reason} is not one this \
                  build defines"
+            ),
+            SnapshotError::OverBeaconShare {
+                seat,
+                beacons,
+                limit,
+            } => write!(
+                f,
+                "the snapshot gives seat {seat} {beacons} beacons and one seat of a match of its \
+                 seat count holds at most {limit}"
             ),
         }
     }
@@ -1619,6 +1644,28 @@ impl Snapshot {
                 beacons: beacon_count,
                 limit: beacon_limit,
             });
+        }
+        // And each seat's share of it, which play enforces at every deploy
+        // (lane `simroom`): refused here, before the table is built, for the
+        // same reason.
+        let share = crate::world::seat_beacon_limit_of(seat_count);
+        for seat in 0..=u8::MAX {
+            // At most `beacon_count` rows, checked against the ceiling above,
+            // so the count never reaches the saturation it is written with.
+            let held = self.beacon_seat.iter().fold(0_u32, |sum, owner| {
+                if *owner == seat {
+                    sum.saturating_add(1)
+                } else {
+                    sum
+                }
+            });
+            if held > share {
+                return Err(SnapshotError::OverBeaconShare {
+                    seat,
+                    beacons: held,
+                    limit: share,
+                });
+            }
         }
         let mut beacons = BeaconTable::with_capacity(beacon_count);
         if !beacons.restore(BeaconColumns {
