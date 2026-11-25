@@ -439,10 +439,11 @@ fn code_lines(text: &str) -> Vec<(usize, String)> {
     let pieces = text.split('\n').count();
     for (index, line) in text.split('\n').enumerate() {
         let length = line.chars().count();
-        // A line wholly inside a test item, an empty one included (its line
-        // feed is then inside the item), is not shipped code.
-        let last = start.saturating_add(length.saturating_sub(1));
-        let inside = covered(start) && covered(last);
+        // A line a test item touches is dropped only when nothing unblanked is
+        // left on it (an empty line inside an item, whose line feed the item
+        // covers, included): shipped code between two test items on one line
+        // is read (fix pass 3, item 8).
+        let touched = (0..length.max(1)).any(|offset| covered(start.saturating_add(offset)));
         let shipped: String = line
             .chars()
             .enumerate()
@@ -455,6 +456,7 @@ fn code_lines(text: &str) -> Vec<(usize, String)> {
             })
             .collect();
         start = start.saturating_add(length).saturating_add(1);
+        let inside = touched && shipped.trim().is_empty();
         if inside || shipped.trim_start().starts_with("//") {
             continue;
         }
@@ -1055,6 +1057,18 @@ fn code_after_a_test_items_closing_brace_is_read() {
             "the string scan did not read the code after the test item: {text}"
         );
     }
+    // Shipped code between two test items on one line is read too (fix pass
+    // 3, item 8; review 3's evasion probe): a line is dropped only when
+    // nothing unblanked is left on it.
+    let between = "#[cfg(test)] fn a() {} fn p() { std::thread::spawn(f); } #[cfg(test)] fn b() {}
+";
+    assert!(
+        code_lines(between)
+            .iter()
+            .any(|(_, line)| line.contains("std::thread::spawn(f)")),
+        "the line scans dropped the code between two test items"
+    );
+    assert!(!thread_offences(&shipped_code(between)).is_empty());
     // The test item itself is still blanked, up to and including its end.
     let text = "#[cfg(test)]\nmod t { fn t() { std::thread::spawn(g); }\n} fn p() {}\n";
     assert!(
