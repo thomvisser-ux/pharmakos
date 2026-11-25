@@ -1558,7 +1558,13 @@ static func setting_value_text(setting: Dictionary) -> String:
 	match String(setting.get("editor", "")):
 		"number":
 			var unit := String(setting.get("display_unit", ""))
-			return String(setting.get("value_text", "")) + ((" " + unit) if unit != "" else "")
+			var shown := String(setting.get("value_text", "")) + ((" " + unit) if unit != "" else "")
+			# The gateway's words for the value now, when it has words of its own ("retreat off"):
+			# beside the number, which stays (S3's `zerotitle`).
+			var title := String(setting.get("value_title", ""))
+			if title != "":
+				return Strings.text("menu_setting_titled", {"value": shown, "title": title})
+			return shown
 		"choice":
 			var values: PackedStringArray = setting.get("values", PackedStringArray())
 			var titles: PackedStringArray = setting.get("titles", PackedStringArray())
@@ -1685,18 +1691,31 @@ func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	bridge.editor_field_opened()
 	# `outside` is the gateway's word, sent on a rule-list chip; a setting row carries none.
 	var outside: bool = chip.get("outside", false)
-	var unit := String(chip.get("unit", ""))
 	var shown_unit := String(chip.get("display_unit", ""))
-	var bounds := {"now": chip.get("value_text", ""), "display_unit": (" " + shown_unit) if shown_unit != "" else "", "unit": (" " + unit) if unit != "" else "", "min": chip.get("min", "-") if chip.get("has_min", false) else "-", "max": chip.get("max", "-") if chip.get("has_max", false) else "-"}
+	# The bounds as the gateway wrote them in the unit the field is typed in (`min_text`,
+	# `max_text`; S3's `zerotitle`), "-" where it set none.
+	var bounds := {"now": chip.get("value_text", ""), "display_unit": (" " + shown_unit) if shown_unit != "" else "", "unit": (" " + shown_unit) if shown_unit != "" else "", "min": chip.get("min_text", "-") if chip.get("has_min", false) else "-", "max": chip.get("max_text", "-") if chip.get("has_max", false) else "-"}
 	_number_heading.text = Strings.text("rule_number_heading", {"text": chip.get("text", "")})
 	var bounded: bool = chip.get("has_min", false) or chip.get("has_max", false)
-	_number_note.visible = outside or bounded
+	# The value now in the gateway's words when it has words of its own ("retreat off"), drawn
+	# beside the number as sent; the bridge refused a title its shape does not name.
+	var title := String(chip.get("value_title", ""))
+	# What a 0 does here, as the gateway sent it, said beside the bounds before the player types
+	# one, when the value now is not that 0 (whose words `value_title` already says).
+	var zero := String(chip.get("zero_title", ""))
+	_number_note.visible = outside or bounded or title != "" or zero != ""
+	var note := ""
 	if outside:
-		_number_note.text = Strings.text("rule_number_outside", bounds)
+		note = Strings.text("rule_number_outside", bounds)
 	elif bounded:
-		_number_note.text = Strings.text("rule_number_bounds", bounds)
-	else:
-		_number_note.text = ""
+		note = Strings.text("rule_number_bounds", bounds)
+	if zero != "" and title == "":
+		var said := Strings.text("rule_number_zero", {"title": zero})
+		note = said if note == "" else Strings.text("rule_number_titled_beside", {"now": note, "note": said})
+	if title != "":
+		var now := Strings.text("rule_number_titled", {"now": bounds["now"], "display_unit": bounds["display_unit"], "title": title})
+		note = now if note == "" else Strings.text("rule_number_titled_beside", {"now": now, "note": note})
+	_number_note.text = note
 	_number_said.text = ""
 	_number_said.visible = false
 	# Pre-filled with the gateway's own text of the value, in the unit it is typed in (seconds for

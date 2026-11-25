@@ -995,6 +995,13 @@ message BeaconSettingRow {
   // for a choice or a reference. OWN beacons only, as every row is. (S3's
   // `fixq`.)
   string value_text = 5;
+
+  // The value now in the player's words, when it has words of its own: the
+  // shape's IntegerShape.zero_title when the value is 0 and the shape carries
+  // one ("retreat off"), and empty otherwise, as Chip.value_title is. The
+  // gateway decides it; the client draws it beside `value_text` and tests no
+  // value. OWN beacons only, as every row is. (S3's `zerotitle`.)
+  string value_title = 6;
 }
 
 message GetMapSummaryRequest {
@@ -1405,6 +1412,24 @@ message IntegerShape {
   // the client shows seconds and converts nothing (S3's `fixq`). Static
   // words, the same for every seat.
   string display_unit = 4;
+
+  // What a 0 does in this setting, in the player's words, from plan-core's
+  // string table: "retreat off", "no scouts". Present only where the bounds
+  // admit a 0 and the sim reads it as something other than the number:
+  // turning what the setting governs off, or, for an Attack's `force_size`,
+  // one raider launched at once; empty where a 0 is just a number. A Chip's or a
+  // BeaconSettingRow's `value_title` carries it when the value now is that
+  // 0, so the client draws it and tests no value. Static words, the same for
+  // every seat. (S3's `zerotitle`.)
+  string zero_title = 5;
+
+  // `min` and `max` as they are shown and typed, in `display_unit`, written
+  // by the gateway's one writer of a Chip's `value_text`: "0.5" for a `min`
+  // of 500 ms. Each present exactly when its bound is, so the client says the
+  // bounds in the unit the player types and converts nothing. (S3's
+  // `zerotitle`.)
+  string min_text = 6;
+  string max_text = 7;
 }
 
 // A closed list. Each value is the JSON text to write: `"LE"` with its quotes,
@@ -1809,6 +1834,13 @@ message Chip {
   // where it is written). Never PICK_OP_UNSPECIFIED. On the JSON-RPC wire it
   // is lower case (decisions-log item 80): "add", "replace". (S3's `fixq`.)
   ConditionSlot.PickOp pick_op = 9;
+
+  // The value now in the player's words, when it has words of its own: the
+  // shape's IntegerShape.zero_title when the value is 0 and the shape carries
+  // one ("retreat off"), and empty otherwise. The gateway decides it from the
+  // value and the shape; the client draws it beside `value_text` and tests no
+  // value. (S3's `zerotitle`.)
+  string value_title = 10;
 }
 
 message PatchPlanRequest {

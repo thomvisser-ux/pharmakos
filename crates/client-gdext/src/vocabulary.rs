@@ -49,6 +49,11 @@ pub enum ParameterShape {
         unit: String,
         /// The unit it is shown and typed in, as sent.
         display_unit: String,
+        /// `min` as it is shown and typed, in `display_unit`, as sent: present exactly when `min`
+        /// is (S3's `zerotitle`).
+        min_text: Option<String>,
+        /// `max` as it is shown and typed, in `display_unit`, as sent, paired with `max`.
+        max_text: Option<String>,
     },
     /// A closed list: each value the JSON text the gateway sent, and its title.
     Choice {
@@ -244,12 +249,17 @@ fn parameter_shape(
         )));
     }
     Ok(match shape.and_then(|shape| shape.shape.as_ref()) {
-        Some(Shape::Integer(integer)) => ParameterShape::Number {
-            min: integer.min,
-            max: integer.max,
-            unit: integer.unit.clone(),
-            display_unit: integer.display_unit.clone(),
-        },
+        Some(Shape::Integer(integer)) => {
+            let at = format!("{entry}{pointer}");
+            ParameterShape::Number {
+                min: integer.min,
+                max: integer.max,
+                unit: integer.unit.clone(),
+                display_unit: integer.display_unit.clone(),
+                min_text: rule_list::bound_text(&at, "least", integer.min, &integer.min_text)?,
+                max_text: rule_list::bound_text(&at, "most", integer.max, &integer.max_text)?,
+            }
+        }
         Some(Shape::Choice(choice)) => ParameterShape::Choice {
             values: choice.values.clone(),
             titles: choice.titles.clone(),
@@ -410,6 +420,7 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
                 pointer: row.pointer.clone(),
                 value_json: row.value_json.clone(),
                 value_text: row.value_text.clone(),
+                value_title: row.value_title.clone(),
                 shape: row.shape,
                 ..Chip::default()
             };

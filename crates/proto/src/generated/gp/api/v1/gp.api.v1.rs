@@ -910,6 +910,13 @@ pub struct BeaconSettingRow {
     /// `fixq`.)
     #[prost(string, tag="5")]
     pub value_text: ::prost::alloc::string::String,
+    /// The value now in the player's words, when it has words of its own: the
+    /// shape's IntegerShape.zero_title when the value is 0 and the shape carries
+    /// one ("retreat off"), and empty otherwise, as Chip.value_title is. The
+    /// gateway decides it; the client draws it beside `value_text` and tests no
+    /// value. OWN beacons only, as every row is. (S3's `zerotitle`.)
+    #[prost(string, tag="6")]
+    pub value_title: ::prost::alloc::string::String,
 }
 impl ::prost::Name for BeaconSettingRow {
 const NAME: &'static str = "BeaconSettingRow";
@@ -1472,6 +1479,25 @@ pub struct IntegerShape {
     /// words, the same for every seat.
     #[prost(string, tag="4")]
     pub display_unit: ::prost::alloc::string::String,
+    /// What a 0 does in this setting, in the player's words, from plan-core's
+    /// string table: "retreat off", "no scouts". Present only where the bounds
+    /// admit a 0 and the sim reads it as something other than the number:
+    /// turning what the setting governs off, or, for an Attack's `force_size`,
+    /// one raider launched at once; empty where a 0 is just a number. A Chip's or a
+    /// BeaconSettingRow's `value_title` carries it when the value now is that
+    /// 0, so the client draws it and tests no value. Static words, the same for
+    /// every seat. (S3's `zerotitle`.)
+    #[prost(string, tag="5")]
+    pub zero_title: ::prost::alloc::string::String,
+    /// `min` and `max` as they are shown and typed, in `display_unit`, written
+    /// by the gateway's one writer of a Chip's `value_text`: "0.5" for a `min`
+    /// of 500 ms. Each present exactly when its bound is, so the client says the
+    /// bounds in the unit the player types and converts nothing. (S3's
+    /// `zerotitle`.)
+    #[prost(string, tag="6")]
+    pub min_text: ::prost::alloc::string::String,
+    #[prost(string, tag="7")]
+    pub max_text: ::prost::alloc::string::String,
 }
 impl ::prost::Name for IntegerShape {
 const NAME: &'static str = "IntegerShape";
@@ -2085,6 +2111,13 @@ pub struct Chip {
     /// is lower case (decisions-log item 80): "add", "replace". (S3's `fixq`.)
     #[prost(enumeration="condition_slot::PickOp", tag="9")]
     pub pick_op: i32,
+    /// The value now in the player's words, when it has words of its own: the
+    /// shape's IntegerShape.zero_title when the value is 0 and the shape carries
+    /// one ("retreat off"), and empty otherwise. The gateway decides it from the
+    /// value and the shape; the client draws it beside `value_text` and tests no
+    /// value. (S3's `zerotitle`.)
+    #[prost(string, tag="10")]
+    pub value_title: ::prost::alloc::string::String,
 }
 impl ::prost::Name for Chip {
 const NAME: &'static str = "Chip";
