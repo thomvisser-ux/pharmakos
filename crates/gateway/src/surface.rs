@@ -239,10 +239,9 @@ pub struct Continuity {
     pub qualifies: bool,
     /// How many diagnostics the re-verification's report **lists**: at most
     /// `pharmakos_verifier::MAX_PER_CODE` of one code, the rest of a code
-    /// counted by the report's closing `I0007`, one per code (S3's `vcap`).
+    /// counted by the report's closing `I0007`, one per code, which are among
+    /// them (S3's `vcap`).
     pub diagnostics: u32,
-    /// How many codes that report left diagnostics out of: its `I0007` rows.
-    pub codes_left_out: u32,
     /// `report_hash` of that re-verification.
     pub report_hash: Vec<u8>,
 }
@@ -1074,7 +1073,6 @@ impl Surface {
                 draft_id: String::from(CARRIED_DRAFT_ID),
                 qualifies: report.qualifies,
                 diagnostics: diagnostic_count(&report)?,
-                codes_left_out: codes_left_out(&report)?,
                 report_hash: report.report_hash,
             });
         }
@@ -3016,7 +3014,6 @@ impl Surface {
             draft_id: String::from(CARRIED_DRAFT_ID),
             qualifies: report.qualifies,
             diagnostics: diagnostic_count(&report)?,
-            codes_left_out: codes_left_out(&report)?,
             report_hash: report.report_hash.clone(),
         };
         let state = self.seat_state_mut(Subject::Seat(seat), seat)?;
@@ -4178,29 +4175,23 @@ fn tallies_of(
 /// rows and never from a sentence ([`pharmakos_verifier::CapRead`]).
 fn listed_words(report: &VerifyReport) -> pharmakos_proto::json::grammar::Said {
     let read = pharmakos_verifier::CapRead::of(report);
-    if read.any_left_out() {
-        said!(
-            "{} diagnostics listed, and more of {} codes past the {} of one code a report lists",
-            report.diagnostics.len(),
-            read.left_out_codes,
-            pharmakos_verifier::MAX_PER_CODE
-        )
+    let rows = report.diagnostics.len();
+    let listed = if rows == 1 {
+        "diagnostic"
     } else {
-        said!("{} diagnostics", report.diagnostics.len())
+        "diagnostics"
+    };
+    match read.left_out_codes {
+        0 => said!("{} {}", rows, listed),
+        codes => said!(
+            "{} {} listed, and more of {} {} past the {} of one code a report lists",
+            rows,
+            listed,
+            codes,
+            if codes == 1 { "code" } else { "codes" },
+            pharmakos_verifier::MAX_PER_CODE
+        ),
     }
-}
-
-/// How many codes a report left diagnostics out of, as
-/// `Continuity.codes_left_out`, a `uint32`.
-///
-/// # Errors
-///
-/// [`crate::error::Code::Internal`] past a `u32`, which the catalogue's size
-/// keeps far below; never clamped.
-fn codes_left_out(report: &VerifyReport) -> Result<u32, Error> {
-    let codes = pharmakos_verifier::CapRead::of(report).left_out_codes;
-    u32::try_from(codes)
-        .map_err(|_| Error::internal(said!("a report left out {} codes, past a uint32", codes)))
 }
 
 /// How many diagnostics a report lists, as `Continuity.diagnostics`, a
@@ -7074,6 +7065,47 @@ mod tests {
                      now queue a Resonance Spire at any of your beacons."
                 )
             )]
+        );
+    }
+
+    /// The words of a refused advised safe playbook (S3's `vcap`): the rows a
+    /// report lists, singular and plural, and how many codes it left out of.
+    #[test]
+    fn a_refusal_says_what_a_capped_report_lists() {
+        use pharmakos_proto::gp::api::v1::{Diagnostic, VerifyReport};
+        let row = |code: &str| Diagnostic {
+            code: code.to_owned(),
+            ..Diagnostic::default()
+        };
+        let report = |codes: &[&str]| VerifyReport {
+            diagnostics: codes.iter().map(|code| row(code)).collect(),
+            ..VerifyReport::default()
+        };
+        let cap = pharmakos_verifier::MAX_PER_CODE;
+        assert_eq!(
+            super::listed_words(&report(&["E0109"])).as_str(),
+            "1 diagnostic"
+        );
+        assert_eq!(
+            super::listed_words(&report(&["E0109", "E0110"])).as_str(),
+            "2 diagnostics"
+        );
+        let mut one: Vec<&str> = vec!["E0303"; usize::try_from(cap).unwrap_or(0)];
+        one.push("I0007");
+        assert_eq!(
+            super::listed_words(&report(&one)).as_str(),
+            format!(
+                "{} diagnostics listed, and more of 1 code past the {cap} of one code a report lists",
+                one.len()
+            )
+        );
+        one.push("I0007");
+        assert_eq!(
+            super::listed_words(&report(&one)).as_str(),
+            format!(
+                "{} diagnostics listed, and more of 2 codes past the {cap} of one code a report lists",
+                one.len()
+            )
         );
     }
 }
