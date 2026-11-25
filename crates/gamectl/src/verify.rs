@@ -363,7 +363,7 @@ fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> Result
         if report.qualifies {
             strings::verify_qualifies(report.size_units, report.size_budget)
         } else {
-            strings::verify_refuses(errors)
+            strings::verify_refuses(errors, errors_left_out(report))
         }
     );
     let _ = writeln!(
@@ -405,6 +405,18 @@ fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> Result
     };
     let _ = writeln!(text, "{footer}");
     Ok(text)
+}
+
+/// The report's per-code cap when an error code is at it and the report
+/// closes with an `I0007`: then more errors may have been raised than are
+/// listed (`pharmakos_verifier::CapRead`, read from the rows, never from a
+/// sentence).
+fn errors_left_out(report: &VerifyReport) -> Option<u32> {
+    let read = pharmakos_verifier::CapRead::of(report);
+    let error_at_cap = report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == i32::from(Severity::Error) && !read.complete(&diagnostic.code)
+    });
+    error_at_cap.then_some(pharmakos_verifier::MAX_PER_CODE)
 }
 
 /// `report_hash` and `rules_hash` are bytes on the wire; a person reads hex.

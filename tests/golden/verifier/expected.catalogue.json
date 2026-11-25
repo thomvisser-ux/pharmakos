@@ -947,9 +947,9 @@
     "code": "I0007",
     "family": "information",
     "severity": "INFO",
-    "emitter": "structure",
-    "message": "omitted settings not noted one by one: {count}. Each reads as its default; a report notes at most the first few, and none past the size budget.",
-    "beginner": "Many settings here are left to their defaults. The first few are noted; the rest work the same way."
+    "emitter": "the report builder",
+    "message": "{count} more `{code}` not listed: a report lists at most {max} of one code one by one{budget}.{verdict}",
+    "beginner": "Not shown: {count} more `{code}`. {next}"
   }
 ]
 

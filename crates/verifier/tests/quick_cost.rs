@@ -35,7 +35,7 @@ use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
-use pharmakos_verifier::{Input, MAX_DEFAULT_NOTES, Scope, verify};
+use pharmakos_verifier::{Input, MAX_PER_CODE, Scope, verify};
 
 thread_local! {
     /// How many times **this thread** has allocated.
@@ -205,7 +205,7 @@ fn quick_allocations(playbook: &[u8]) -> (u64, u32, bool) {
 /// `vfy6`'s fix pass (the review of PR #179, item 6) from 1,571 and 1,961 on
 /// the shapes and 1,614 on `budget_128` in canonical form with every `on_fail`
 /// written; as committed the file now costs 1,663, its notes capped at
-/// `MAX_DEFAULT_NOTES` (2,628 before the cap).
+/// `MAX_PER_CODE` (2,628 before any cap).
 const HANDLER_SHAPE_BOUND: u64 = 1_975; // measured 1,571
 const ROUTE_SHAPE_BOUND: u64 = 2_450; // measured 1,961
 const BUDGET_CASE_BOUND: u64 = 2_050; // measured 1,614 with every on_fail written
@@ -331,7 +331,7 @@ fn every_omitted_on_fail_is_noted_within_its_own_bound() {
         // One note a step, to the cap, which the other `I0003` notes share
         // (`tests/report_size.rs` holds the cap itself).
         assert!(
-            notes > 0 && notes <= steps.min(u64::from(MAX_DEFAULT_NOTES)),
+            notes > 0 && notes <= steps.min(u64::from(MAX_PER_CODE)),
             "{name}: {notes} notes for {steps} steps"
         );
         let bound = bound.saturating_add(notes.saturating_mul(NOTE_BOUND));

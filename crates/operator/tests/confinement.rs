@@ -317,7 +317,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
          did not fit is a candidate dropped, as `score`'s docs say",
     ),
     ("src/candidates.rs", "Err(_) => Post::Unknown,", 1, POLICY),
-    ("src/candidates.rs", "Err(_) => Vec::new(),", 1, POLICY),
     (
         "src/candidates.rs",
         "let Ok(&Some((place, travel, lead))) = read.as_ref() else {",

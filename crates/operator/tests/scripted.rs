@@ -31,9 +31,10 @@ use std::path::PathBuf;
 use pharmakos_operator::easy::{
     CARRIED_DRAFT_ID, CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET,
     EASY_CANDIDATES, LAST_SEAL_CALLS, PAGES_MAX, RAID_FORCE_SIZE, RAID_TARGETS_MAX,
-    SAFE_MAX_RAISED, STONE_CALLS, STONE_TARGETS_MAX, SURVEY_PROBE_CALLS,
+    REPORT_CAP_PER_CODE, SAFE_MAX_RAISED, STONE_CALLS, STONE_TARGETS_MAX, SURVEY_PROBE_CALLS,
+    TAP_PROBE_PART_MAX, TAP_PROBE_VERIFIES,
 };
-use pharmakos_operator::{Easy, FailedStones, PushUnread, StonesUnread, Submitted};
+use pharmakos_operator::{Easy, FailedStones, PushUnread, StonesUnread, Submitted, TapsUnread};
 use pharmakos_proto::json::{Json, read, write};
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,19 @@ enum Verify {
     NeverUnfixed,
 }
 
+/// What goes wrong with the scripted QUICK verify (S3's `vcap`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuickFault {
+    /// Nothing.
+    None,
+    /// The QUICK verify with this number (from 1) is refused.
+    Refuse(u32),
+    /// Every `E0503` is raised twice, so a part's report can meet the cap.
+    Twice,
+    /// One more `E0503` names a step no part holds.
+    PastThePart,
+}
+
 /// How the scripted map summary writes a feature's travel.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Travel {
@@ -175,6 +189,10 @@ struct Script {
     on_reads: BTreeSet<(String, String)>,
     /// The beacons on the Build mandate; a tap at any other answers `E0503`.
     build_beacons: BTreeSet<String>,
+    /// What goes wrong with a QUICK verify, if anything (S3's `vcap`).
+    quick_fault: QuickFault,
+    /// How many QUICK verifies were answered.
+    quick_verifies: std::cell::Cell<u32>,
     /// How the paged reads page.
     paging: Paging,
     verify: Verify,
@@ -265,6 +283,8 @@ impl Script {
             to_beacon_ms: BTreeMap::new(),
             on_reads: BTreeSet::new(),
             build_beacons: BTreeSet::from([String::from("b_00")]),
+            quick_fault: QuickFault::None,
+            quick_verifies: std::cell::Cell::new(0),
             paging: Paging::One,
             verify: Verify::Qualifies,
             accept_submit: true,
@@ -898,6 +918,47 @@ impl Script {
         let quick = params.get("depth").and_then(text) == Some("quick");
         if quick && self.verify == Verify::QuickUnreported {
             return self.ok(obj(vec![]));
+        }
+        if quick {
+            self.quick_verifies.set(self.quick_verifies.get() + 1);
+            match self.quick_fault {
+                QuickFault::Refuse(at) if at == self.quick_verifies.get() => {
+                    return Script::refuse("INTERNAL");
+                }
+                QuickFault::None | QuickFault::Refuse(_) => {}
+                QuickFault::Twice => {
+                    diagnostics = diagnostics
+                        .into_iter()
+                        .flat_map(|one| [one.clone(), one])
+                        .collect();
+                }
+                QuickFault::PastThePart => diagnostics.push(obj(vec![
+                    ("code", Json::String(String::from("E0503"))),
+                    ("severity", Json::String(String::from("error"))),
+                    (
+                        "path",
+                        Json::String(String::from(
+                            "/declarative/route/99/interface/rows/0/add_build_target",
+                        )),
+                    ),
+                ])),
+            }
+        }
+        // The verifier's per-code cap (S3's `vcap`): the first
+        // `REPORT_CAP_PER_CODE` of a code listed, the rest counted by one
+        // `I0007`, as `pharmakos_verifier::Builder` writes a report.
+        let cap = usize::try_from(REPORT_CAP_PER_CODE).unwrap();
+        if diagnostics.len() > cap {
+            let more = diagnostics.len() - cap;
+            diagnostics.truncate(cap);
+            diagnostics.push(obj(vec![
+                ("code", Json::String(String::from("I0007"))),
+                ("severity", Json::String(String::from("info"))),
+                (
+                    "message",
+                    Json::String(format!("{more} more `E0503` not listed")),
+                ),
+            ]));
         }
         let qualifies = diagnostics.is_empty()
             && (quick
@@ -1727,6 +1788,13 @@ fn worst_round() -> Script {
     worst
         .on_reads
         .insert((String::from("b_00"), String::from("vent_40_40")));
+    // Thirty covered vents inside the core's sphere: as many tap pairs as Easy
+    // probes, so the probe asks every part it can (S3's `vcap`).
+    for n in 0..30 {
+        let mut tapped = Feature::new("vent", "standard", [20 + n, 44]);
+        tapped.covered = true;
+        worst.features.push(tapped);
+    }
     for n in 8..12 {
         worst.beacons.push(Beacon {
             id: format!("b_{n:02}"),
@@ -2144,6 +2212,118 @@ fn a_covered_or_uncoverable_vent_offers_no_placement_and_the_page_says_why() {
             .contains("Every heat vent within reach is inside a sphere of yours already"),
         "{}",
         page.why
+    );
+}
+
+/// Twelve covered vents inside `beacon`'s sphere, each `on` reading from it.
+fn twelve_taps(beacon: &str, at: [i32; 2]) -> Script {
+    let mut world = Script::new(0);
+    if beacon != "b_00" {
+        world.beacons.push(Beacon {
+            id: beacon.to_owned(),
+            at: [at[0], at[1], GROUND],
+            owner: 0,
+            core: false,
+            powered: true,
+            priority: "normal",
+        });
+    }
+    for n in 0..12 {
+        let mut vent = Feature::new("vent", "standard", [at[0] - 6 + n, at[1] - 2]);
+        vent.covered = true;
+        world.on_reads.insert((beacon.to_owned(), vent.id.clone()));
+        world.features.push(vent);
+    }
+    world
+}
+
+/// The QUICK verifies of the tap probe in a transcript.
+fn probe_verifies(transcript: &[String]) -> usize {
+    transcript
+        .iter()
+        .filter(|line| line.starts_with("verify_plan") && line.contains("Easy's tap probe"))
+        .count()
+}
+
+/// **The tap probe asks in parts the report's cap cannot cut** (S3's `vcap`):
+/// a report lists at most `REPORT_CAP_PER_CODE` `E0503`s, so the probe asks
+/// about at most `TAP_PROBE_PART_MAX` pairs a verify, and a beacon off the
+/// Build mandate is refused at every one of its twelve pairs, never read as
+/// legal past the cap.
+#[test]
+fn the_tap_probe_asks_in_parts_and_reads_every_e0503() {
+    assert_eq!(TAP_PROBE_PART_MAX + 1, REPORT_CAP_PER_CODE);
+    assert_eq!(
+        TAP_PROBE_VERIFIES,
+        EASY_CANDIDATES.div_ceil(TAP_PROBE_PART_MAX)
+    );
+    // Off the Build mandate: twelve pairs, four parts of three, no tap.
+    let (script, played) = play(twelve_taps("b_02", [32, 60]));
+    assert_eq!(probe_verifies(&script.transcript), 4);
+    assert_eq!(played.taps_unread, None, "every part answered");
+    assert!(
+        !beacon_estimated(&script.transcript),
+        "a pair the cap left out was read as legal: {:#?}",
+        script.transcript
+    );
+    // On it: the same four parts, and the taps are weighed.
+    let (script, _) = play(twelve_taps("b_00", [32, 42]));
+    assert_eq!(probe_verifies(&script.transcript), 4);
+    assert!(beacon_estimated(&script.transcript));
+}
+
+/// A refusal of any part leaves no tap, and asks no further part; so does a
+/// part whose report names a step it does not hold, and a part whose report
+/// lists the cap's `E0503`s (one may have been left out); each says why
+/// (`Played::taps_unread`), never a silent "no tap".
+#[test]
+fn a_part_that_cannot_say_leaves_no_tap_and_says_why() {
+    let legal = twelve_taps("b_00", [32, 42]);
+    let mut refused = legal.clone();
+    refused.quick_fault = QuickFault::Refuse(2);
+    let (script, played) = play(refused);
+    assert_eq!(probe_verifies(&script.transcript), 2);
+    assert!(
+        !beacon_estimated(&script.transcript),
+        "a refused part still tapped"
+    );
+    assert!(
+        matches!(&played.taps_unread, Some(TapsUnread::Refused(refusal)) if refusal.method == "verify_plan"),
+        "{:?}",
+        played.taps_unread
+    );
+
+    let mut past = legal;
+    past.quick_fault = QuickFault::PastThePart;
+    let (script, played) = play(past);
+    assert_eq!(probe_verifies(&script.transcript), 1);
+    assert!(
+        !beacon_estimated(&script.transcript),
+        "a stray E0503 still tapped"
+    );
+    assert_eq!(
+        played.taps_unread,
+        Some(TapsUnread::StepPastThePart {
+            part: 0,
+            path: String::from("/declarative/route/99/interface/rows/0/add_build_target"),
+        })
+    );
+
+    let mut twice = twelve_taps("b_02", [32, 60]);
+    twice.quick_fault = QuickFault::Twice;
+    let (script, played) = play(twice);
+    assert_eq!(
+        probe_verifies(&script.transcript),
+        1,
+        "a part at the cap was read as complete"
+    );
+    assert!(!beacon_estimated(&script.transcript));
+    assert_eq!(
+        played.taps_unread,
+        Some(TapsUnread::PartAtTheCap {
+            part: 0,
+            listed: usize::try_from(REPORT_CAP_PER_CODE).unwrap(),
+        })
     );
 }
 
@@ -3228,6 +3408,13 @@ fn the_worst_stone_round_spends_every_term() {
     let mut covered = Feature::new("vent", "rich", [40, 40]);
     covered.covered = true;
     worst.features.push(covered);
+    // Thirty covered vents inside the core's sphere, none whose `on` reads:
+    // the tap probe asks every part it can (S3's `vcap`) and leaves no tap.
+    for n in 0..30 {
+        let mut tapped = Feature::new("vent", "standard", [20 + n, 44]);
+        tapped.covered = true;
+        worst.features.push(tapped);
+    }
     // More beacons at risk than the safe playbook estimates.
     for n in 8..12 {
         worst.beacons.push(Beacon {

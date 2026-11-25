@@ -627,44 +627,82 @@ pub(crate) fn route_index(pointer: &str) -> Option<usize> {
         .ok()
 }
 
-/// The taps the gateway says are legal, at most two calls: one
-/// `resolve_refs` and one QUICK `verify_plan` over a probe playbook holding
-/// every candidate pair, and none when there is no pair.
+/// The taps the gateway says are legal: one `resolve_refs` over a probe
+/// playbook holding every candidate pair, then one QUICK `verify_plan` per
+/// part of at most [`crate::easy::TAP_PROBE_PART_MAX`] pairs, and none when
+/// there is no pair; and, when the probe could not say, why.
 ///
 /// A pair is legal when its `on` reads the vent it names from that beacon
 /// (`resolve_refs`: the sim's own `on_vent` rules) and the verifier raises no
-/// `E0503` at its step (the beacon is on the Build mandate). A refusal of
-/// either call leaves no tap: the operator cannot then say a tap would hold,
-/// so it composes none. An answer that does not read ([`Misread`]), and an
-/// answer to `verify_plan` that carries no `report`, are refusals too:
-/// without them the operator cannot say the `on` reads or no `E0503` was
-/// raised.
+/// `E0503` at its step (the beacon is on the Build mandate). A report lists
+/// at most [`crate::easy::REPORT_CAP_PER_CODE`] diagnostics of one code (S3's
+/// `vcap`), and a probe step raises at most one `E0503`, so a part one
+/// smaller than the cap lists every `E0503` it raised: none is read as
+/// absent because the cap left it out, and nothing is read from a sentence.
+/// When the probe cannot say ([`TapsUnread`]), the operator cannot say a tap
+/// would hold, so it composes none, and the reason is kept
+/// ([`crate::Played::taps_unread`]).
 pub(crate) fn legal_taps(
     wire: &mut Wire<'_, '_>,
     situation: &Situation,
     tuning: &Tuning,
-) -> Vec<Tap> {
+) -> (Vec<Tap>, Option<TapsUnread>) {
     let pairs = tap_pairs(situation, tuning);
     if pairs.is_empty() {
-        return Vec::new();
+        return (Vec::new(), None);
     }
     match probe(wire, &pairs) {
-        Ok(legal) => pairs
-            .into_iter()
-            .zip(legal)
-            .filter(|(_, legal)| *legal)
-            .map(|((beacon, vent), _)| Tap { beacon, vent })
-            .collect(),
-        Err(_) => Vec::new(),
+        Ok(legal) => (
+            pairs
+                .into_iter()
+                .zip(legal)
+                .filter(|(_, legal)| *legal)
+                .map(|((beacon, vent), _)| Tap { beacon, vent })
+                .collect(),
+            None,
+        ),
+        Err(unread) => (Vec::new(), Some(unread)),
     }
 }
 
-/// The probe's two calls, and which pairs they leave legal.
+/// Why the tap probe could not say which taps are legal, so none is composed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum TapsUnread {
+    /// A call was refused, or its answer did not read (`MALFORMED`), or
+    /// `verify_plan` answered with no report.
+    Refused(Refused),
+    /// A part's report lists as many `E0503`s as a report lists of one code,
+    /// so the cap may have left one out: the part (from 0) and how many.
+    PartAtTheCap {
+        /// The part, from 0.
+        part: usize,
+        /// The `E0503`s it listed.
+        listed: usize,
+    },
+    /// A part's report names an `E0503` at a step the part does not hold.
+    StepPastThePart {
+        /// The part, from 0.
+        part: usize,
+        /// The pointer the `E0503` names.
+        path: String,
+    },
+    /// The probe's arithmetic is past this target's `usize`.
+    PastTheTarget,
+}
+
+impl From<Refused> for TapsUnread {
+    fn from(refused: Refused) -> TapsUnread {
+        TapsUnread::Refused(refused)
+    }
+}
+
+/// The probe's calls, and which pairs they leave legal.
 ///
 /// # Errors
 ///
-/// The first refusal, and `MALFORMED` for an answer that does not read.
-fn probe(wire: &mut Wire<'_, '_>, pairs: &[(String, Feature)]) -> Result<Vec<bool>, Refused> {
+/// [`TapsUnread`]: the first refusal, an answer that does not read, or one
+/// the cap could have cut.
+fn probe(wire: &mut Wire<'_, '_>, pairs: &[(String, Feature)]) -> Result<Vec<bool>, TapsUnread> {
     let text = probe_text(pairs);
     let resolved = wire.call(
         "resolve_refs",
@@ -682,10 +720,44 @@ fn probe(wire: &mut Wire<'_, '_>, pairs: &[(String, Feature)]) -> Result<Vec<boo
             *slot = !reads.is_empty() && reads == vent.id && failure.is_empty();
         }
     }
+    // At least one by `crate::easy`'s compile-time check, so `chunks` has a
+    // length to cut at.
+    let part_len =
+        usize::try_from(crate::easy::TAP_PROBE_PART_MAX).map_err(|_| TapsUnread::PastTheTarget)?;
+    let mut start = 0_usize;
+    for (number, part) in pairs.chunks(part_len).enumerate() {
+        for index in off_the_build_mandate(wire, number, part)? {
+            let at = start.checked_add(index).ok_or(TapsUnread::PastTheTarget)?;
+            if let Some(slot) = legal.get_mut(at) {
+                *slot = false;
+            }
+        }
+        start = start
+            .checked_add(part.len())
+            .ok_or(TapsUnread::PastTheTarget)?;
+    }
+    Ok(legal)
+}
+
+/// One part's QUICK `verify_plan`: the steps of `part` (indices into it)
+/// whose beacon is not on the Build mandate, every one of them, or why the
+/// answer cannot say so.
+///
+/// # Errors
+///
+/// [`TapsUnread`]: the call's refusal, an answer that does not read or
+/// carries no `report`, a report that lists
+/// [`crate::easy::REPORT_CAP_PER_CODE`] `E0503`s or more (the cap could have
+/// left one out), or one that names a step the part does not hold.
+fn off_the_build_mandate(
+    wire: &mut Wire<'_, '_>,
+    number: usize,
+    part: &[(String, Feature)],
+) -> Result<Vec<usize>, TapsUnread> {
     let verified = wire.call(
         "verify_plan",
         object(vec![
-            ("playbook_jsonc", string(&text)),
+            ("playbook_jsonc", string(&probe_text(part))),
             ("depth", string("quick")),
         ]),
     )?;
@@ -693,17 +765,29 @@ fn probe(wire: &mut Wire<'_, '_>, pairs: &[(String, Feature)]) -> Result<Vec<boo
         .get("report")
         .ok_or_else(|| malformed("verify_plan", "the answer carries no report"))?;
     let diagnostics = |misread: Misread| misread.refused("verify_plan");
+    let mut off: Vec<usize> = Vec::new();
     for diagnostic in array_of(report, "diagnostics").map_err(diagnostics)? {
         if text_of(diagnostic, "code").map_err(diagnostics)? != "E0503" {
             continue;
         }
-        if let Some(slot) = route_index(text_of(diagnostic, "path").map_err(diagnostics)?)
-            .and_then(|index| legal.get_mut(index))
-        {
-            *slot = false;
-        }
+        let path = text_of(diagnostic, "path").map_err(diagnostics)?;
+        let index = route_index(path)
+            .filter(|index| *index < part.len())
+            .ok_or_else(|| TapsUnread::StepPastThePart {
+                part: number,
+                path: path.to_owned(),
+            })?;
+        off.push(index);
     }
-    Ok(legal)
+    let cap =
+        usize::try_from(crate::easy::REPORT_CAP_PER_CODE).map_err(|_| TapsUnread::PastTheTarget)?;
+    if off.len() >= cap {
+        return Err(TapsUnread::PartAtTheCap {
+            part: number,
+            listed: off.len(),
+        });
+    }
+    Ok(off)
 }
 
 /// The goals the map offers this seat, before any estimate: live, affordable,

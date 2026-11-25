@@ -815,3 +815,112 @@ fn the_hidden_escape_writes_utf16_units() {
         "plain \u{e9}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The per-code cap (S3's `vcap`)
+// ---------------------------------------------------------------------------
+
+const TEN_UNLABELLED: &str = "crates/gamectl/tests/fixtures/ten_unlabelled_holds.jsonc";
+
+/// A report that left errors out says the errors it **lists**, and that the
+/// rest are counted on its `I0007` lines; the exit code is the verdict, not
+/// the count.
+#[test]
+fn a_capped_report_says_its_errors_are_listed_and_counts_the_rest() {
+    let outcome = gamectl(&["verify", TEN_UNLABELLED]);
+    assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
+    let cap = pharmakos_verifier::MAX_PER_CODE;
+    let lines = report_lines(&outcome);
+    let verdict = lines
+        .iter()
+        .find(|line| line.trim_start().starts_with("qualifies"))
+        .expect("a verdict line");
+    assert_eq!(
+        verdict,
+        &format!(
+            "  qualifies    no ({cap} errors listed; a report lists at most {cap} of one code, \
+             and its I0007 lines count the rest)"
+        )
+    );
+    let listed = lines
+        .iter()
+        .filter(|line| line.trim_start().starts_with("error") && line.contains("E0104"))
+        .count();
+    assert_eq!(listed, usize::try_from(cap).expect("fits"));
+    let more = 10_u32 - cap;
+    assert!(
+        said(&outcome).contains(&format!("{more} more `E0104` not listed")),
+        "{}",
+        said(&outcome)
+    );
+}
+
+/// Under the cap the verdict line is as it was: the count is every error.
+#[test]
+fn an_uncapped_report_counts_every_error() {
+    let outcome = gamectl(&[
+        "verify",
+        "crates/verifier/tests/cases/e0102_empty_route.json",
+    ]);
+    let lines = report_lines(&outcome);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  qualifies    no (1 error)"),
+        "{lines:?}"
+    );
+}
+
+/// **The shape of the human report's `error` lines** (decisions-log item 185
+/// (7)): `godot/scripts/watch_check.gd` reads every line whose first word is
+/// `error` as a diagnostic, its second word the code and its third the
+/// pointer. So each such line is exactly `  error   <code> <pointer>`, a code
+/// of the catalogue, and no other line of the report, the verdict line, the
+/// `I0007` lines and the notes included, begins with that word.
+#[test]
+fn every_line_that_begins_with_error_is_a_diagnostic() {
+    for file in [
+        TEN_UNLABELLED,
+        "crates/verifier/tests/cases/e0102_empty_route.json",
+        "crates/verifier/tests/cases/e0001_not_json.json",
+        "crates/verifier/tests/cases/expand_east.json",
+        NAMES_B_00,
+    ] {
+        let outcome = gamectl(&["verify", file]);
+        let lines = report_lines(&outcome);
+        let mut errors = 0_usize;
+        for line in &lines {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            if words.first() != Some(&"error") {
+                continue;
+            }
+            errors += 1;
+            assert!(
+                line.starts_with("  error   "),
+                "{file}: an error line out of shape: {line:?}"
+            );
+            assert!(
+                !line.ends_with(' '),
+                "{file}: an error line ends with a space: {line:?}"
+            );
+            let code = words.get(1).copied().unwrap_or_default();
+            assert!(
+                pharmakos_verifier::catalogue::entry(code).is_some_and(|row| {
+                    row.severity == pharmakos_proto::gp::api::v1::diagnostic::Severity::Error
+                }),
+                "{file}: `{code}` on an error line is no error code: {line:?}"
+            );
+            assert!(
+                words.len() == 3 || (words.len() == 2 && code == "E0001"),
+                "{file}: an error line has more than a code and a pointer: {line:?}"
+            );
+            assert!(
+                words.get(2).is_none_or(|pointer| pointer.starts_with('/')),
+                "{file}: the third word is no pointer: {line:?}"
+            );
+        }
+        if outcome.code == Exit::Failed {
+            assert!(errors > 0, "{file}: refused with no error line: {lines:?}");
+        }
+    }
+}

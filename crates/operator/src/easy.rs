@@ -57,7 +57,7 @@
 //! | term | calls |
 //! |---|---|
 //! | the fixed reads ([`FIXED_READS`]) | `get_status`, `get_briefing`, `get_economy_forecast`, `get_map_summary`, and at most [`PAGES_MAX`] pages each of `list_beacons`, `get_view`, `get_segment_feed` and `list_templates` |
-//! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` and one QUICK `verify_plan` over every tap Easy could make, when there is one (the register's S1-15) |
+//! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` over every tap Easy could make, when there is one (the register's S1-15), and one QUICK `verify_plan` per part of at most [`TAP_PROBE_PART_MAX`] of them, one fewer than a report's per-code cap (S3's `vcap`) |
 //! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
 //! | the raid probe ([`RAID_PROBE_CALLS`]) | one `estimate_route` to the nearest own Attack beacon, so a raid post is never placed twice |
 //! | the Survey probe ([`SURVEY_PROBE_CALLS`]) | one `estimate_route` to the nearest own Survey beacon, in a round whose enemy sightings are stale or missing, so a Survey post is never placed twice; a built-in seat's only |
@@ -250,8 +250,9 @@ pub const SURVEY_RAID_ROUNDS: i64 = 2;
 /// at most, and Easy evaluates [`EASY_CANDIDATES`] candidates, so no round
 /// can have more refused placements than that: the largest retry count there
 /// can be is [`EASY_CANDIDATES`], and its worst case fits. With it the
-/// built-in seat's budget is [`EASY_CALL_BUDGET`], 110 calls, 18 under the
-/// limit (14 %);
+/// built-in seat's budget is [`EASY_CALL_BUDGET`], 119 calls, 9 under the
+/// limit (7 %), which is the stated margin (110 and 18 before S3's `vcap`
+/// asked the tap probe in parts of three);
 /// `crates/gamectl/tests/operator.rs`' `easy_fits_the_in_process_limits`
 /// holds the two together when it compiles, and
 /// `easy_never_exceeds_its_derived_call_budget` builds the worst case (every
@@ -341,8 +342,29 @@ pub const RAID_POINTS: i64 = 300;
 /// `get_view`, the segment feed and `list_templates`).
 pub const FIXED_READS: u32 = 4 + 4 * PAGES_MAX;
 
-/// The tap probe: one `resolve_refs` and one QUICK `verify_plan`.
-pub const TAP_PROBE_CALLS: u32 = 2;
+/// The most diagnostics of one code a verifier report lists one by one (S3's
+/// `vcap`): the verifier's `MAX_PER_CODE`, restated because the operator
+/// names nothing of the verifier's (AGENTS.md section 3, rule 3), and held
+/// to the verifier's by `crates/gamectl/tests/report_cap.rs`.
+pub const REPORT_CAP_PER_CODE: u32 = 4;
+
+/// The most pairs one of the tap probe's QUICK `verify_plan`s asks about: one
+/// fewer than the cap, since a probe step raises at most one `E0503`, so a
+/// part's report lists every `E0503` it raised and fewer than the cap's.
+pub const TAP_PROBE_PART_MAX: u32 = REPORT_CAP_PER_CODE - 1;
+
+const _: () = assert!(
+    TAP_PROBE_PART_MAX >= 1,
+    "a cap under two leaves the probe no part"
+);
+
+/// The tap probe's verifies: one per part of at most [`TAP_PROBE_PART_MAX`]
+/// of the at most [`EASY_CANDIDATES`] pairs.
+pub const TAP_PROBE_VERIFIES: u32 = EASY_CANDIDATES.div_ceil(TAP_PROBE_PART_MAX);
+
+/// The tap probe: one `resolve_refs` over every pair, and one QUICK
+/// `verify_plan` per part ([`TAP_PROBE_VERIFIES`]).
+pub const TAP_PROBE_CALLS: u32 = 1 + TAP_PROBE_VERIFIES;
 
 /// The guard probe: one `estimate_route` to the nearest own Defend beacon,
 /// which says whether a post already stands beside the core.
@@ -464,6 +486,9 @@ pub struct Played {
     /// (fix pass 3, item 6; fix pass 4): the ones it knows are not weighed
     /// again this round.
     pub failed_stones: FailedStones,
+    /// Why the tap probe could not say which taps are legal, when it could
+    /// not (S3's `vcap`): no tap was composed this round.
+    pub taps_unread: Option<crate::TapsUnread>,
 }
 
 /// Which of last round's stones failed, read from the last Push's feed and
@@ -568,6 +593,9 @@ pub struct Advice {
     /// Every `estimate_route` refused for a reason other than `NOT_FOUND`, as
     /// [`Played::estimates_refused`].
     pub estimates_refused: Vec<Refused>,
+    /// Why the tap probe could not say which taps are legal, as
+    /// [`Played::taps_unread`].
+    pub taps_unread: Option<crate::TapsUnread>,
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +658,7 @@ impl Easy {
             estimates_refused: Vec::new(),
             fundable: 0,
             failed_stones: FailedStones::None,
+            taps_unread: None,
         };
         match Situation::read(&mut wire, seat, Steps::Read) {
             Ok(situation) => {
@@ -649,7 +678,8 @@ impl Easy {
 
     /// Plan and submit.
     fn plan(&self, wire: &mut Wire<'_, '_>, situation: &Situation, round: &mut Played) {
-        let taps = candidates::legal_taps(wire, situation, &self.tuning);
+        let (taps, taps_unread) = candidates::legal_taps(wire, situation, &self.tuning);
+        round.taps_unread = taps_unread;
         let post = candidates::defend_post(wire, situation);
         let raid = candidates::raid_post(wire, situation);
         let survey = candidates::survey_post(wire, situation, &self.tuning);
@@ -713,7 +743,8 @@ impl Easy {
             advice.refused = Some(refused.clone());
         }
         if let Ok(situation) = read {
-            let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
+            let (taps, taps_unread) = candidates::legal_taps(&mut wire, &situation, &self.tuning);
+            advice.taps_unread = taps_unread;
             let post = candidates::defend_post(&mut wire, &situation);
             let raid = candidates::raid_post(&mut wire, &situation);
             // The advisor offers no Survey post, so it never probes for one.

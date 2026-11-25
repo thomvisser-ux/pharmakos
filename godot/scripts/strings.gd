@@ -521,6 +521,8 @@ const TEXT := {
 	"ghost_waiting": "Checking this spot...",
 	"ghost_legal": "A beacon can go here.",
 	"ghost_illegal": "Not here: {sentence}",
+	"ghost_unknown": "Not known yet: the check left some findings out. {sentence}",
+	"ghost_unnamed": "The placement's verdict ({state}) has no drawing.",
 
 	# --- Playtest mode (S3's `prob`, part 2; scripts/playtest.gd) ------------------
 	"playtest_toggle": "Playtest mode",
