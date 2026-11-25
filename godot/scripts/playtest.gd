@@ -17,7 +17,10 @@
 # move the camera rig says (`camera_rig.gd`'s `moved`), and the survey's answers. Each is one
 # bridge call; the sums of time are the pacer's, in Rust, and this script does no arithmetic.
 #
-# THE SURVEY is drawn once the match has ended, while Playtest mode is on: "Play another round?"
+# THE SURVEY AND EXPORT are offered whenever Playtest mode is on and no match is running: once a
+# match has ended, and whenever the lobby's chooser is shown (after a host gave up or stopped, or
+# before any match), since the session a playtest most wants is the one that broke. What a
+# stopped match left open is in the bundle as `match_left`. The survey asks: "Play another round?"
 # (yes / no), "Did you understand why your playbook did what it did?" (yes / partly / no), and
 # "What did you most want to change during a Push?" (free text). An unanswered question is sent
 # as unanswered, never as a default answer. The free text goes into the bundle exactly as written,
@@ -54,12 +57,15 @@ var _limit := -1
 var _said: Label
 var _export: Button
 var _dialog: FileDialog
+## The lobby's chooser: shown exactly while no match is running.
+var _chooser: Container = null
 
 
 ## Builds the controls: the check button in `chooser` (the lobby's New match row), the line that
 ## says it is on and the survey in `column`. Camera moves are counted from `rig`'s `moved`.
 func setup(vista_bridge: Node, rig: Node, chooser: Container, column: Container) -> void:
 	bridge = vista_bridge
+	_chooser = chooser
 	_toggle = CheckButton.new()
 	_toggle.text = Strings.text("playtest_toggle")
 	_toggle.accessibility_name = _toggle.text
@@ -170,14 +176,16 @@ func _process(_delta: float) -> void:
 
 
 ## Draws Playtest mode's line and the survey from the bridge's `playtest_state`: the line while it
-## is on, the survey once the match has ended. A branch on the bridge's phase word, for display.
+## is on, the survey and Export while no match is running (the match ended, or the chooser is
+## shown). A branch on the bridge's phase word and the chooser's visibility, for display.
 func show_state(state: Dictionary) -> void:
 	var on: bool = state.get("on", false)
 	_note.visible = on
 	if on:
 		_note.text = note_text(state)
 		_note.accessibility_name = _note.text
-	_survey.visible = on and String(state.get("phase", "")) == "ended"
+	var stopped := _chooser != null and _chooser.is_visible_in_tree()
+	_survey.visible = on and (String(state.get("phase", "")) == "ended" or stopped)
 	var limit: Variant = Values.int_of(state.get("survey_limit", -1))
 	if limit is int and limit != _limit:
 		_limit = limit

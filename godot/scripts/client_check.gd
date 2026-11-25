@@ -342,6 +342,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_playtest_off_costs_nothing(failures)
 	await _check_a_lost_release_counts_the_next_turn(failures)
 	await _check_a_bad_link_keeps_the_rig(failures)
+	await _check_export_after_a_stopped_match(failures)
 
 
 ## **The wheel reaches a readable structure** (item 155 (3) 4). From the whole map's framing,
@@ -2259,3 +2260,45 @@ func _check_a_bad_link_keeps_the_rig(failures: Array[String]) -> void:
 	vista.queue_free()
 	await get_tree().process_frame
 	print("[client-check] a frame on a link no connection has: refused, the rig kept")
+
+
+## **A stopped match can be exported** (fix pass 2, item 9): with Playtest mode on, the survey and
+## Export show whenever no match is running (the chooser shown), hide while one runs, and show
+## again once its host stops; the export then writes its bundle.
+func _check_export_after_a_stopped_match(failures: Array[String]) -> void:
+	var lobby: Node = LobbyScene.instantiate()
+	add_child(lobby)
+	await get_tree().process_frame
+	var playtest: Node = lobby.get_node("Playtest")
+	playtest._toggle.button_pressed = true
+	await get_tree().process_frame
+	if not playtest._survey.visible:
+		failures.append("Export is not offered with Playtest on and no match running")
+	# A match runs: the chooser is hidden, as the lobby hides it when a match starts.
+	lobby._started = true
+	lobby._chooser.visible = false
+	await get_tree().process_frame
+	if playtest._survey.visible:
+		failures.append("Export is offered while a match runs")
+	# Its host stops: the lobby says why and shows the chooser again.
+	lobby._on_failed("the host stopped")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not playtest._survey.visible:
+		failures.append("Export is not offered after the host stopped")
+	var folder := ProjectSettings.globalize_path("user://client_check_playtest_stopped")
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		failures.append("the stopped-match check could not make %s" % folder)
+	else:
+		var path := folder + "/stopped.zip"
+		var written: Dictionary = playtest.export_to(path)
+		if not written.get("written", false):
+			failures.append("a stopped match's bundle was not written: %s" % written)
+		if FileAccess.file_exists(path) and DirAccess.remove_absolute(path) != OK:
+			failures.append("the stopped-match check could not remove its bundle")
+		if DirAccess.remove_absolute(folder) != OK:
+			failures.append("the stopped-match check could not remove its folder")
+	playtest._toggle.button_pressed = false
+	lobby.queue_free()
+	await get_tree().process_frame
+	print("[client-check] Playtest mode: Export offered with no match running, hidden while one runs, offered and written after its host stopped")

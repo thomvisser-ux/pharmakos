@@ -181,7 +181,9 @@ failures' names); a refusal's message, which can quote a player's text, is dropp
 survey's third answer, the tester's own words, which goes into the bundle exactly as written,
 as the survey screen says beside the box.
 
-**The survey and Export appear only once a match has ended**, with Playtest mode on: "Play
+**The survey and Export appear whenever Playtest mode is on and no match is running**: once a
+match has ended, and whenever the chooser is shown, after a host gave up or stopped. The session
+a playtest most wants is often the one that broke, so it can be exported as it stands. "Play
 another round?" (yes / no), "Did you understand why your playbook did what it did?" (yes /
 partly / no) and "What did you most want to change during a Push?" (free text, with a count
 against its cap). Nothing of the survey is kept while it is filled in: the answers go into the
@@ -189,10 +191,10 @@ bundle with Export, as the screen shows them then, and a question left alone is 
 `unanswered`. An answer past its cap refuses the whole export, writes no file, and says so
 until the answer changes.
 
-**A match that stopped early** (the host failed, or the tester started again): keep Playtest
-mode on (switching it off drops what was kept), start a New match from the chooser and play it
-to its end; the survey and Export then appear, and the bundle holds both matches, the stopped
-one's open Push or Lull marked `match_left`.
+**A match that stopped early** (its host gave up or stopped): keep Playtest mode on (switching it
+off drops what was kept); the chooser comes back with the survey and Export under it, and the
+bundle holds the stopped match, its open Push or Lull marked `match_left`. A tester may instead
+start a New match first; the bundle then holds both.
 
 **Export playtest bundle** opens the operating system's save dialog, offering
 `pharmakos-playtest.zip` and no folder of ours. The bridge builds one zip and writes it whole,

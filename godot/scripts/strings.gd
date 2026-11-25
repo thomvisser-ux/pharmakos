@@ -518,7 +518,7 @@ const TEXT := {
 	# --- Playtest mode (S3's `prob`, part 2; scripts/playtest.gd) ------------------
 	"playtest_toggle": "Playtest mode",
 	# Shown while it is on: what it records, and that nothing leaves the machine.
-	"playtest_on": "Playtest mode is on. This client keeps, in memory only: the counts and times of each Push and Lull (focused and unfocused, used, skipped), speed changes, camera moves, the verifier's error codes shown, the gateway's refusal codes, and a log of event names. At the match's end it adds your survey answers, the last one in your own words, exactly as you write them. It keeps no playbook, draft, notebook, path or name. Nothing leaves this computer: Export playtest bundle writes one file where you choose, for you to send by hand.",
+	"playtest_on": "Playtest mode is on. This client keeps, in memory only: the counts and times of each Push and Lull (focused and unfocused, used, skipped), speed changes, camera moves, the verifier's error codes shown, the gateway's refusal codes, and a log of event names. With Export it adds your survey answers, the last one in your own words, exactly as you write them. It keeps no playbook, draft, notebook, path or name. Nothing leaves this computer: Export playtest bundle writes one file where you choose, for you to send by hand.",
 	"playtest_counts": "Recorded so far: {pushes} Push(es), {skipped} of them skipped, {lulls} Lull(s).",
 	"playtest_dropped": "Some of it did not fit and was counted instead; the bundle's manifest says what.",
 	"playtest_survey_heading": "Playtest survey",
