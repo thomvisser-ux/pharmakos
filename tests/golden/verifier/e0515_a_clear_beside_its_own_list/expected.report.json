@@ -28,25 +28,11 @@
           "applicability": "MAYBE_INCORRECT"
         }
       ]
-    },
-    {
-      "code": "E0402",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/interface/rows/0/set_mandate_settings/survey/probe_areas/0/max",
-      "message": "the voxel (94, 14, 64) lies outside the map, which is 384 by 384 by 64.",
-      "beginner": "That place is off the edge of the world.",
-      "map_refs": [
-        {
-          "x": 94,
-          "y": 14,
-          "z": 64
-        }
-      ]
     }
   ],
-  "report_hash": "imFqEtQTSkM=",
+  "report_hash": "UMaZICcYxt0=",
   "rules_hash": "GybFJQaL/2E=",
-  "plan_fingerprint": "Ufync1+h6Fs=",
+  "plan_fingerprint": "keemLJEA6Qk=",
   "verifier_version": "0.1.0-s3.7",
   "size_units": 1,
   "size_budget": 128
