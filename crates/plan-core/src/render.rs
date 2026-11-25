@@ -1322,10 +1322,8 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
     let mut parts = Vec::new();
     if settings.roe != 0 {
         let words = match mandate_settings::Roe::try_from(settings.roe) {
-            Ok(mandate_settings::Roe::HoldFire) => s::CHOICE_HOLD_FIRE,
-            Ok(mandate_settings::Roe::ReturnFire) => s::CHOICE_RETURN_FIRE,
-            Ok(mandate_settings::Roe::FreeFire) => s::CHOICE_FREE_FIRE,
             Ok(mandate_settings::Roe::Unspecified) | Err(_) => s::ROE_UNSET,
+            Ok(roe) => roe_words(roe),
         };
         parts.push(enum_chip(
             words,
@@ -1334,8 +1332,12 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
             "gp.v1.MandateSettings.Roe",
         ));
     } else if clause == Clause::Whole
-        && let Some(words) = settings.mandate.as_ref().and_then(omitted_roe)
+        && let Some(mandate) = settings.mandate.as_ref()
     {
+        // The verifier's reading ([`pharmakos_verifier::omitted_roe`], which
+        // reads the sim's own rule and answers every writ): one rule, read by
+        // the prose and by the `I0003` note alike.
+        let words = roe_words(pharmakos_verifier::omitted_roe(mandate));
         parts.push(cat!(words, " ", s::ROE_BY_DEFAULT));
     }
     if let Some(pct) = settings.retreat_hp_pct {
@@ -1352,13 +1354,15 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
     parts
 }
 
-/// The words for what an omitted `roe` reads as on a beacon of this writ:
-/// the verifier's reading ([`pharmakos_verifier::omitted_roe`], which reads
-/// the sim's own rule), in the words a menu offers that value in. One rule,
-/// read by the prose and by the `I0003` note alike.
-fn omitted_roe(mandate: &mandate_settings::Mandate) -> Option<&'static str> {
-    pharmakos_verifier::omitted_roe(mandate)
-        .and_then(|value| crate::shape::choice_title("gp.v1.MandateSettings.Roe", value))
+/// A `roe` value in the prose's words. `Unspecified` is said as a value the
+/// file does not name, as a number this build does not name is.
+fn roe_words(roe: mandate_settings::Roe) -> &'static str {
+    match roe {
+        mandate_settings::Roe::HoldFire => s::CHOICE_HOLD_FIRE,
+        mandate_settings::Roe::ReturnFire => s::CHOICE_RETURN_FIRE,
+        mandate_settings::Roe::FreeFire => s::CHOICE_FREE_FIRE,
+        mandate_settings::Roe::Unspecified => s::ROE_UNSET,
+    }
 }
 
 /// What a Build, Survey or Mine arm writes, every field it writes, in field
