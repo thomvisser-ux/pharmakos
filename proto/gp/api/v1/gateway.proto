@@ -941,7 +941,8 @@ message GetBeaconResponse {
   // sim reads, so a setting the file leaves unset has a row with its reading
   // (S3's `gwr` review, item 7). An Attack's launch and retreat triggers, which
   // are off rather than defaulted when unwritten, have a row only when written;
-  // a list and an Attack's target and staging point have none.
+  // an Attack's target and staging point have none. A list has none here
+  // either: each list a writ holds is a row of `lists` (field 16).
   repeated BeaconSettingRow settings = 4;
 
   // A Build beacon's targets, in the order the Quartermaster reads them. Empty
@@ -957,6 +958,49 @@ message GetBeaconResponse {
 
   // RESERVED — held for a further field of the detail.
   reserved 7 to 15;
+
+  // Each list this beacon's writ holds, as it holds it now, so a player sees
+  // it and can empty it (S3's `edlists`; decisions-log item 184 (3) made the
+  // four lists emptiable): a Build beacon's protected areas, a Defend
+  // beacon's protect list, an Attack beacon's avoid areas, a Survey beacon's
+  // probe areas, in that field order within the writ; a Mine beacon holds
+  // none. One row per list the writ holds, present also when the list is
+  // empty (no entry lines). OWN beacons only, as `settings` is: empty on
+  // another seat's beacon and on a beacon with no writ. Field 16, past the
+  // held range above, which stays held.
+  repeated BeaconListRow lists = 16;
+}
+
+// One list of a beacon's mandate, as sent to be drawn and emptied: the client
+// draws its lines and, for a list with any, offers its clear, composing a
+// `set_mandate_settings` row that writes `clear_pointer` true; it decides
+// nothing (whether a clear beside a refill is legal is the verifier's, E0515).
+message BeaconListRow {
+  // RFC 6901 JSON Pointer of the list inside gp.v1.MandateSettings:
+  // "/build/protected_areas".
+  string pointer = 1;
+
+  // The list's name in the player's words: "Protected areas".
+  string title = 2;
+
+  // One sentence per entry, in the order the sim reads the list, in the
+  // player's words from plan-core's string table: an area by its columns
+  // ("the ground from column 30, 40 to column 38, 44"), a protected beacon by
+  // its name (`beacon "b_03"`), the seat's own commander as "your commander"
+  // (first, as the guards escort it first). Empty for an empty list.
+  repeated string entry_lines = 3;
+
+  // RFC 6901 JSON Pointer of the flag that empties the list, inside
+  // gp.v1.MandateSettings: "/build/clear_protected_areas".
+  string clear_pointer = 4;
+
+  // The clear as an action, in the player's words: "Empty the protected
+  // areas". What the client offers for a list with entry lines.
+  string clear_title = 5;
+
+  // What an empty list is, in the player's words: "none". What the client
+  // draws in place of the lines when `entry_lines` is empty.
+  string empty_title = 6;
 }
 
 // One setting of a beacon's mandate, as sent to be drawn and edited: the client

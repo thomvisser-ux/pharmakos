@@ -1,3 +1,4 @@
+| `get_beacon_lists/` | `expected.response.json` | The same of a Build core holding two protected areas (`tests/beacon_lists.rs`): a list row with its entry lines, its clear and its words (S3's `edlists`) — **the fixture the client's clear copies** |
 <!--
 SPDX-FileCopyrightText: 2026 Pharmakos contributors
 SPDX-License-Identifier: GPL-3.0-or-later
@@ -38,7 +39,7 @@ item 178 (5)). The last five are S3's `fixq`'s: the editor's planning edits
 `fpstream`'s: a save's bytes, the format a match leaves on a player's disk (AGENTS.md
 section 5), produced by `crates/gateway/tests/save.rs`.
 
-## The forty-four cases
+## The forty-five cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -613,7 +614,13 @@ its own): the lane that moves one of them re-copies its fixture.
   moves a row here although no file wrote it; a new row is a setting the writ
   gained. `get_beacon_build`'s targets are the Build table's, in the
   Quartermaster's order, each as it was written. Another seat's beacon carries
-  no detail, and no case here asks for one.
+  no detail, and no case here asks for one. A **list row** (S3's `edlists`,
+  `lists`) is the one list the writ holds, empty included (the core's and the
+  Build case's protected areas carry no line); `get_beacon_lists` (made by
+  `crates/gateway/tests/beacon_lists.rs` on a casual match resumed from an
+  edited world) holds two protected areas. A moved line is plan-core's words
+  for an entry moving, or the sim's order of the list; a moved pointer, title
+  or clear is plan-core's `BeaconList` table.
 * **The context moved.** The golden seed's map, the rules table, or the
   snapshot's shape, as for the demo cases.
 

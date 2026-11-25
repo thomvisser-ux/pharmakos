@@ -178,6 +178,15 @@
       "Generator at a spot on the nearest heat vent (nearest by travel, read when the step starts)",
       "Mortar at voxel 360, 24, 36"
     ],
+    "lists": [
+      {
+        "pointer": "/build/protected_areas",
+        "title": "Protected areas",
+        "clear_pointer": "/build/clear_protected_areas",
+        "clear_title": "Empty the protected areas",
+        "empty_title": "none"
+      }
+    ],
     "_status": {
       "phase": "lull",
       "phase_remaining_ms": 599950,

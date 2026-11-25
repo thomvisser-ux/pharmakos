@@ -1275,6 +1275,121 @@ pub fn target_line(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
     )
 }
 
+/// One of the lists a beacon's mandate holds, which a `set_mandate_settings`
+/// row empties by its clear flag (decisions-log item 184 (3)): its place in
+/// `gp.v1.MandateSettings`, its clear flag's, and its words, for `get_beacon`'s
+/// `lists` (`gp.api.v1.BeaconListRow`; S3's `edlists`). One table, so a list's
+/// pointer, its clear and its words cannot be paired wrongly in two places.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BeaconList {
+    /// A Build beacon's `protected_areas`.
+    ProtectedAreas,
+    /// A Defend beacon's `protect` list.
+    Protect,
+    /// An Attack beacon's `avoid_areas`.
+    AvoidAreas,
+    /// A Survey beacon's `probe_areas`.
+    ProbeAreas,
+}
+
+impl BeaconList {
+    /// Every list, in the writs' field order (Build, Defend, Attack, Survey).
+    pub const ALL: [BeaconList; 4] = [
+        BeaconList::ProtectedAreas,
+        BeaconList::Protect,
+        BeaconList::AvoidAreas,
+        BeaconList::ProbeAreas,
+    ];
+
+    /// The list a beacon of writ `mandate` holds: one for Build, Defend,
+    /// Attack and Survey, none for Mine or a beacon with no writ.
+    #[must_use]
+    pub const fn of(mandate: pharmakos_sim::seams::MandateKind) -> Option<BeaconList> {
+        use pharmakos_sim::seams::MandateKind;
+        match mandate {
+            MandateKind::Build => Some(BeaconList::ProtectedAreas),
+            MandateKind::Defend => Some(BeaconList::Protect),
+            MandateKind::Attack => Some(BeaconList::AvoidAreas),
+            MandateKind::Survey => Some(BeaconList::ProbeAreas),
+            MandateKind::Mine | MandateKind::None => None,
+        }
+    }
+
+    /// The list's RFC 6901 pointer inside `gp.v1.MandateSettings`.
+    #[must_use]
+    pub const fn pointer(self) -> &'static str {
+        match self {
+            BeaconList::ProtectedAreas => "/build/protected_areas",
+            BeaconList::Protect => "/defend/protect",
+            BeaconList::AvoidAreas => "/attack/avoid_areas",
+            BeaconList::ProbeAreas => "/survey/probe_areas",
+        }
+    }
+
+    /// The pointer of the flag that empties the list.
+    #[must_use]
+    pub const fn clear_pointer(self) -> &'static str {
+        match self {
+            BeaconList::ProtectedAreas => "/build/clear_protected_areas",
+            BeaconList::Protect => "/defend/clear_protect",
+            BeaconList::AvoidAreas => "/attack/clear_avoid_areas",
+            BeaconList::ProbeAreas => "/survey/clear_probe_areas",
+        }
+    }
+
+    /// The list's name in the player's words.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            BeaconList::ProtectedAreas => s::LIST_PROTECTED_AREAS,
+            BeaconList::Protect => s::LIST_PROTECT,
+            BeaconList::AvoidAreas => s::LIST_AVOID_AREAS,
+            BeaconList::ProbeAreas => s::LIST_PROBE_AREAS,
+        }
+    }
+
+    /// The clear as an action, in the player's words.
+    #[must_use]
+    pub const fn clear_title(self) -> &'static str {
+        match self {
+            BeaconList::ProtectedAreas => s::LIST_CLEAR_PROTECTED_AREAS,
+            BeaconList::Protect => s::LIST_CLEAR_PROTECT,
+            BeaconList::AvoidAreas => s::LIST_CLEAR_AVOID_AREAS,
+            BeaconList::ProbeAreas => s::LIST_CLEAR_PROBE_AREAS,
+        }
+    }
+}
+
+/// An area entry of a beacon's list as one sentence, by the columns it
+/// covers, both ends inclusive, as the sim holds it: "the ground from column
+/// 30, 40 to column 38, 44". The sim tests an area on the column whatever the
+/// height, and holds no height for it, so the line says none.
+#[must_use]
+pub fn area_line(min: [i16; 2], max: [i16; 2]) -> String {
+    let [lx, ly] = min;
+    let [hx, hy] = max;
+    format!(
+        "{} {} {lx}, {ly} {} {} {hx}, {hy}",
+        s::LIST_AREA_FROM,
+        s::COLUMN_NOUN,
+        s::LIST_AREA_TO,
+        s::COLUMN_NOUN
+    )
+}
+
+/// A protected beacon of a Defend beacon's protect list as one sentence, by
+/// its name, as the prose names a beacon (`beacon "b_03"`).
+#[must_use]
+pub fn protected_beacon_line(name: &str) -> String {
+    format!("{} \"{}\"", s::BEACON_NOUN, escaped(name))
+}
+
+/// The seat's own commander in a protect list, as the prose says it.
+#[must_use]
+pub fn protected_commander_line() -> String {
+    s::DEFEND_MY_COMMANDER.to_owned()
+}
+
 /// A wall target's box, named as the author wrote it, corner to corner (S2's
 /// plan, task `con4`), after a comma; nothing for a target with no box.
 /// Whether it is legal is the verifier's.

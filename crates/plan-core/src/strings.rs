@@ -424,6 +424,34 @@ pub const CLEAR_PROTECT: &str = "emptying its protect list";
 /// A set `clear_avoid_areas`.
 pub const CLEAR_AVOID: &str = "emptying its avoid areas";
 
+// --- A beacon's lists, as `get_beacon` sends them (S3's `edlists`) -----------
+
+/// `gp.api.v1.BeaconListRow.title` of a Build beacon's protected areas.
+pub const LIST_PROTECTED_AREAS: &str = "Protected areas";
+/// `BeaconListRow.title` of a Defend beacon's protect list.
+pub const LIST_PROTECT: &str = "Protect list";
+/// `BeaconListRow.title` of an Attack beacon's avoid areas.
+pub const LIST_AVOID_AREAS: &str = "Avoid areas";
+/// `BeaconListRow.title` of a Survey beacon's probe areas.
+pub const LIST_PROBE_AREAS: &str = "Probe areas";
+/// `BeaconListRow.clear_title` of the protected areas: the action that
+/// writes `clear_protected_areas`.
+pub const LIST_CLEAR_PROTECTED_AREAS: &str = "Empty the protected areas";
+/// `BeaconListRow.clear_title` of the protect list.
+pub const LIST_CLEAR_PROTECT: &str = "Empty the protect list";
+/// `BeaconListRow.clear_title` of the avoid areas.
+pub const LIST_CLEAR_AVOID_AREAS: &str = "Empty the avoid areas";
+/// `BeaconListRow.clear_title` of the probe areas.
+pub const LIST_CLEAR_PROBE_AREAS: &str = "Empty the probe areas";
+/// `BeaconListRow.empty_title`: what a list with no entry is.
+pub const LIST_EMPTY: &str = "none";
+/// An area entry's line, before its lowest column.
+pub const LIST_AREA_FROM: &str = "the ground from";
+/// An area entry's line, between its two columns.
+pub const LIST_AREA_TO: &str = "to";
+/// A column, before its `x, y`.
+pub const COLUMN_NOUN: &str = "column";
+
 // --- What a 0 does in a setting (S3's `zerotitle`) ---------------------------
 
 /// A `picket_scouts` of 0: its `IntegerShape.zero_title`, and the prose's
