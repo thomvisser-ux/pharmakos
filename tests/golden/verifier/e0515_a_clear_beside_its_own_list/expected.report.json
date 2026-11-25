@@ -1,0 +1,40 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "E0515",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/set_mandate_settings/survey/clear_probe_areas",
+      "message": "`clear_probe_areas` cannot stand beside entries of the same list: the row would both replace the list and empty it.",
+      "beginner": "A `clear_` setting empties a list the beacon already holds, so it goes in a Change settings row on its own: not beside entries of the same list, and not where the beacon or its new mandate starts with no list at all.",
+      "suggestions": [
+        {
+          "title": "Leave the clear out",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/declarative/route/0/interface/rows/0/set_mandate_settings/survey/clear_probe_areas\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "j94l2REea5s=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "keemLJEA6Qk=",
+  "verifier_version": "0.1.0-s3.8",
+  "size_units": 1,
+  "size_budget": 128
+}
+

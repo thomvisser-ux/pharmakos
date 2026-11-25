@@ -26,10 +26,10 @@
       "beginner": "The core is where the seat begins, and it cannot be taken apart."
     }
   ],
-  "report_hash": "blgj3D7v7dA=",
+  "report_hash": "YEOOUvDxK5E=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "0aEKIcNQiD8=",
-  "verifier_version": "0.1.0-s3.7",
+  "verifier_version": "0.1.0-s3.8",
   "size_units": 1,
   "size_budget": 128
 }

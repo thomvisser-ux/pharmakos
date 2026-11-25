@@ -12,7 +12,15 @@
     /declarative/route/1/place_beacon/at
     reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"voxel":{"x":96,"y":11,"z":62}}, replace
-  6:90-96 "normal"
+  6:103-104 "4"
+    /declarative/route/1/place_beacon/initial/mandate/mine/dig_max_depth
+    integer 0.. voxels
+    = 4 (typed 4), replace
+  6:137-158 "fleeing known threats"
+    /declarative/route/1/place_beacon/initial/mandate/mine/flee_on_threat
+    choice true (yes) | false (no)
+    = true, replace
+  6:163-169 "normal"
     /declarative/route/1/place_beacon/initial/priority
     choice "LOW" (low) | "NORMAL" (normal) | "HIGH" (high)
     = "NORMAL", replace

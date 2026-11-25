@@ -1010,7 +1010,10 @@ fn save_golden(file: &str, text: &str) {
 /// the stamp's `verifier_version` and the two `report_hash` lines again, and
 /// nothing else. Main's version-3 file is kept as
 /// `tests/fixtures/save-v3-round-one-lull.json`, and still resumes
-/// (`a_version_3_save_written_by_main_still_resumes`).
+/// (`a_version_3_save_written_by_main_still_resumes`). Re-blessed a fourth
+/// time by lane `presence7`, which moved `VERIFIER_VERSION` from `0.1.0-s3.7`
+/// to `0.1.0-s3.8` (decisions-log item 184 (10)): the stamp's
+/// `verifier_version` and the `report_hash` lines, and no other line.
 #[test]
 fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
     const MATCH_ID: &str = "m-fpstream2-save";
@@ -1108,24 +1111,52 @@ fn a_saved_notebook_past_its_bound_is_refused() {
     );
 }
 
-/// A save main wrote before the save carried the last Push (format version 3,
-/// `bbddd094`'s round-1 `lull` file, committed as a fixture) still loads and
-/// resumes into its Lull, with no last Push (lane `opsave`): the format's
-/// version-4 member is additive. A save loads only under the verifier that
-/// stamped it, so lane `vcap`'s bump to `0.1.0-s3.7` moved the fixture's
-/// `verifier_version` and its two seals' `report_hash` lines (to the
-/// `save_round_one` golden's own, the same seals' reports under s3.7); its
-/// format is untouched.
-#[test]
-fn a_version_3_save_written_by_main_still_resumes() {
-    const MATCH_ID: &str = "m-fpstream2-save";
+/// A committed version-3 save fixture's text, its stamp's `verifier_version`
+/// written as this build's (`pharmakos_verifier::VERIFIER_VERSION`).
+///
+/// The fixtures pin the save FORMAT, version 3, as main wrote it; the
+/// verifier stamp is not what they test, and `SavedMatch::check` refuses a
+/// save stamped by another verifier (spec section 3), so without this every
+/// `VERIFIER_VERSION` bump would have to edit them. `check` reads no seal's
+/// `report_hash` (its stamp half compares the rules hash, the verifier
+/// version and the snapshot version), so those lines are left as written.
+/// The member must stand exactly once, or the fixture is not the file this
+/// reads, and the test fails saying so.
+fn version_3_fixture(name: &str) -> String {
+    const MEMBER: &str = "\"verifier_version\": \"";
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("fixtures")
-            .join("save-v3-round-one-lull.json"),
+            .join(name),
     )
-    .expect("the version-3 fixture");
+    .unwrap_or_else(|error| panic!("the version-3 fixture {name}: {error}"));
+    assert_eq!(
+        text.matches(MEMBER).count(),
+        1,
+        "{name} carries its stamp's `verifier_version` exactly once"
+    );
+    let (before, after) = text.split_once(MEMBER).expect("counted once above");
+    let (_, rest) = after
+        .split_once('"')
+        .unwrap_or_else(|| panic!("{name}: the `verifier_version` value is unterminated"));
+    format!(
+        "{before}{MEMBER}{}\"{rest}",
+        pharmakos_verifier::VERIFIER_VERSION
+    )
+}
+
+/// A save main wrote before the save carried the last Push (format version 3,
+/// `bbddd094`'s round-1 `lull` file, committed as a fixture) still loads and
+/// resumes into its Lull, with no last Push (lane `opsave`): the format's
+/// version-4 member is additive. The fixture pins the save's FORMAT (version
+/// 3); the test supplies the verifier stamp ([`version_3_fixture`]), because
+/// a save loads only under the verifier that stamped it and this test is not
+/// about the verifier.
+#[test]
+fn a_version_3_save_written_by_main_still_resumes() {
+    const MATCH_ID: &str = "m-fpstream2-save";
+    let text = version_3_fixture("save-v3-round-one-lull.json");
     assert!(
         text.contains("\"format_version\": 3"),
         "the fixture is version 3"
@@ -1296,19 +1327,13 @@ fn each_damage_of_the_draft_rule_is_refused(match_id: &str, saved: &SavedMatch) 
 /// resumes into its Push, as it always did: the Push was sealed, not played,
 /// so replaying it is the Push itself. Its next Lull's feed is that replayed
 /// Push's own, `segment_ended` and all, so the Lull reads the Push it follows
-/// (the operator does not read it as `PushUnread::Resumed`). Its stamp and
-/// its seals' `report_hash` lines moved with lane `vcap`'s bump to
-/// `0.1.0-s3.7`, as the `lull` fixture's did.
+/// (the operator does not read it as `PushUnread::Resumed`). As the `lull`
+/// fixture, it pins the FORMAT and the test supplies the verifier stamp
+/// ([`version_3_fixture`]).
 #[test]
 fn a_version_3_sealed_save_resumes_into_its_push_and_its_next_lull_shows_it() {
     const MATCH_ID: &str = "m-fpstream2-save";
-    let text = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("save-v3-round-one-sealed.json"),
-    )
-    .expect("the version-3 sealed fixture");
+    let text = version_3_fixture("save-v3-round-one-sealed.json");
     let save = Save::parse(text.trim_end_matches('\n')).expect("a version-3 save reads");
     assert_eq!(save.stamp.format_version, 3);
     assert_eq!(save.state.boundary, Boundary::Sealed);
