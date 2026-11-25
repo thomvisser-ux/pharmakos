@@ -349,7 +349,7 @@ pub const RETREAT_BELOW_UNIT: &str = "of their hit points";
 /// `IntegerShape.zero_title` (S3's `zerotitle`: one entry, two readers).
 pub const RETREAT_OFF: &str = "retreat off";
 
-// --- A written 0 and a list's clear (decisions-log item 184 (10)) -----------
+// --- A written 0 and a list's clear (decisions-log item 184 (3)) ------------
 
 /// A written `scout_count` of 0, before its chip.
 pub const SCOUTS_NONE: &str = "no scouts";
@@ -424,6 +424,34 @@ pub const CLEAR_PROTECT: &str = "emptying its protect list";
 /// A set `clear_avoid_areas`.
 pub const CLEAR_AVOID: &str = "emptying its avoid areas";
 
+// --- A beacon's lists, as `get_beacon` sends them (S3's `edlists`) -----------
+
+/// `gp.api.v1.BeaconListRow.title` of a Build beacon's protected areas.
+pub const LIST_PROTECTED_AREAS: &str = "Protected areas";
+/// `BeaconListRow.title` of a Defend beacon's protect list.
+pub const LIST_PROTECT: &str = "Protect list";
+/// `BeaconListRow.title` of an Attack beacon's avoid areas.
+pub const LIST_AVOID_AREAS: &str = "Avoid areas";
+/// `BeaconListRow.title` of a Survey beacon's probe areas.
+pub const LIST_PROBE_AREAS: &str = "Probe areas";
+/// `BeaconListRow.clear_title` of the protected areas: the action that
+/// writes `clear_protected_areas`.
+pub const LIST_CLEAR_PROTECTED_AREAS: &str = "Empty the protected areas";
+/// `BeaconListRow.clear_title` of the protect list.
+pub const LIST_CLEAR_PROTECT: &str = "Empty the protect list";
+/// `BeaconListRow.clear_title` of the avoid areas.
+pub const LIST_CLEAR_AVOID_AREAS: &str = "Empty the avoid areas";
+/// `BeaconListRow.clear_title` of the probe areas.
+pub const LIST_CLEAR_PROBE_AREAS: &str = "Empty the probe areas";
+/// `BeaconListRow.empty_title`: what a list with no entry is.
+pub const LIST_EMPTY: &str = "none";
+/// An area entry's line, before its lowest column.
+pub const LIST_AREA_FROM: &str = "the ground from";
+/// An area entry's line, between its two columns.
+pub const LIST_AREA_TO: &str = "to";
+/// A column, before its `x, y`.
+pub const COLUMN_NOUN: &str = "column";
+
 // --- What a 0 does in a setting (S3's `zerotitle`) ---------------------------
 
 /// A `picket_scouts` of 0: its `IntegerShape.zero_title`, and the prose's
@@ -434,6 +462,17 @@ pub const PICKET_NONE: &str = "no picket";
 
 /// A `roe` value this build does not name, as written.
 pub const ROE_UNSET: &str = "firing as the file does not say";
+/// `MandateSettings.Roe.HOLD_FIRE` in the prose. A settings clause lists what
+/// the beacon is doing, each an "-ing" phrase, so a value is said as a
+/// participle here, while a menu offers it as the order a player gives
+/// ([`CHOICE_HOLD_FIRE`]): two facts, because both are read (S3's `edlists`,
+/// from `zerotitle`'s second review), as Terraform's are
+/// ([`TERRAFORM_FILL`] and [`CHOICE_TERRAFORM_FILL`]).
+pub const ROE_HOLD_FIRE: &str = "holding fire";
+/// `MandateSettings.Roe.RETURN_FIRE` in the prose, as [`ROE_HOLD_FIRE`].
+pub const ROE_RETURN_FIRE: &str = "returning fire";
+/// `MandateSettings.Roe.FREE_FIRE` in the prose, as [`ROE_HOLD_FIRE`].
+pub const ROE_FREE_FIRE: &str = "firing freely";
 /// After an omitted `roe`'s words in a new beacon's or a switched mandate's
 /// settings: the value is its writ's default, not the player's choice
 /// (decisions-log items 144 (11) and 148 (2); the verifier's `I0003`).

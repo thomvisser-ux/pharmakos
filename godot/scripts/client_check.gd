@@ -1135,6 +1135,7 @@ func _check_the_rig_backed_panel(stage: SubViewport, editor: CanvasLayer, failur
 	await _check_the_field_refusal_and_its_owner(stage, editor, bridge, failures)
 	await _check_the_dormant_box_through_the_rig(stage, editor, bridge, failures)
 	await _check_the_planning_wire(stage, editor, bridge, failures)
+	await _check_the_lists(editor, bridge, failures)
 	await _check_the_ready_line_through_the_rig(bridge, failures)
 	await _check_load_through_its_button(stage, editor, bridge, failures)
 	await _check_the_transport(bridge, failures)
@@ -1457,6 +1458,71 @@ func _check_the_planning_wire(stage: SubViewport, editor: CanvasLayer, bridge: N
 	print("[client-check] the planning wire: a duration typed in seconds, titles, the Queue's list, target lines, Add and Remove rule, a group, a wall's box")
 
 
+## A beacon's lists (S3's `edlists`), through the rig: the core's empty protected areas draw the
+## gateway's word for an empty list and offer no clear; `b_02`'s two areas draw each line as sent
+## and the clear in the gateway's words, and the clear's click sends one visit whose row writes the
+## list's own clear flag, `true`.
+func _check_the_lists(editor: CanvasLayer, bridge: Node, failures: Array[String]) -> void:
+	for beacon in ["b_00", "b_02"]:
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return state.get("rules_editable", false))
+		bridge.editor_describe_beacon(beacon)
+		if not await _rig_until(bridge, func(state: Dictionary) -> bool: return String(state.get("beacon_detail", {}).get("id", "")) == beacon):
+			failures.append("the lists: %s's detail never came" % beacon)
+			return
+		var lists: Array = bridge.editor_state().get("beacon_detail", {}).get("lists", [])
+		if lists.size() != 1:
+			failures.append("the lists: %s's detail holds %d lists, not its writ's one" % [beacon, lists.size()])
+			return
+		var list: Dictionary = lists[0]
+		editor._visit_beacon = beacon
+		editor._visit_drawn = ""
+		editor._fill_visit_menu(bridge.editor_state())
+		var submenu: PopupMenu = null
+		for at in editor._visit_menu.item_count:
+			if editor._visit_menu.get_item_text(at) == Strings.text("menu_list", {"title": list.get("title", "")}):
+				submenu = editor._visit_menu.get_item_submenu_node(at)
+		if submenu == null:
+			failures.append("the lists: %s's menu has no `%s`" % [beacon, list.get("title", "")])
+			return
+		var drawn: Array[String] = []
+		for item in submenu.item_count:
+			if not submenu.is_item_separator(item):
+				drawn.append(submenu.get_item_text(item))
+		var lines: PackedStringArray = list.get("lines", PackedStringArray())
+		var empty := String(list.get("empty_title", ""))
+		var clear_title := String(list.get("clear_title", ""))
+		# The gateway sends the clear only beside entries and the empty word only with none (fix
+		# pass 1, W1); the panel draws what was sent.
+		if (lines.is_empty() and (empty == "" or clear_title != "")) or (not lines.is_empty() and (empty != "" or clear_title == "")):
+			failures.append("the lists: %s's row sends lines %s, empty `%s`, clear `%s`" % [beacon, lines, empty, clear_title])
+			return
+		var expected: Array[String] = []
+		for line in lines:
+			expected.append(Strings.text("menu_list_line", {"line": line}))
+		if empty != "":
+			expected.append(Strings.text("menu_list_empty", {"empty": empty}))
+		if clear_title != "":
+			expected.append(Strings.text("menu_list_clear", {"clear": clear_title}))
+		if drawn != expected:
+			failures.append("the lists: %s draws %s, not %s" % [beacon, drawn, expected])
+			return
+		if clear_title == "":
+			if bridge.editor_visit_row(beacon, "clear_list", 0):
+				failures.append("the lists: %s's list offers no clear, and one asked for anyway was taken" % beacon)
+			continue
+		_patches.clear()
+		submenu.id_pressed.emit(EditorPanel.LIST_CLEAR_ID)
+		await _rig_until(bridge, func(state: Dictionary) -> bool: return not _patches.is_empty() and not state.get("busy", true))
+		var sent: Variant = JSON.parse_string(_patches[0]) if not _patches.is_empty() else null
+		var row: Variant = null
+		if sent is Array and sent.size() == 1:
+			var rows: Array = sent[0].get("value", {}).get("interface", {}).get("rows", [])
+			row = rows[0] if rows.size() == 1 else null
+		if not (row is Dictionary and JSON.stringify(row) == JSON.stringify({"set_mandate_settings": {"build": {"clear_protected_areas": true}}})):
+			failures.append("the lists: the clear sent %s, not one row writing its own flag" % [_patches])
+	print("[client-check] the lists: an empty list says the gateway's word and offers no clear; a list draws its lines and its clear, which writes its own flag")
+
+
 ## The Ready line from the gateway's word on the seal (S3's `fixq-c`, item 13: the rig's reading of
 ## the seat's `get_status`, the one source): the filing sentence before a seal, and after the
 ## gateway accepted one this round, and said so on `get_status`, that Ready keeps it. The editor
@@ -1628,8 +1694,12 @@ func _answer(text: String, error: String) -> String:
 		"get_map_summary":
 			body = "\"features\":[],"
 		"get_beacon":
-			# Seat 0's Build beacon `b_01`, with its targets; any other, the core.
-			return _fixture("res://fixtures/beacon_build.json" if String(params.get("beacon_id", "")) == "b_01" else "res://fixtures/beacon_core.json", id)
+			# Seat 0's Build beacon `b_01`, with its targets; `b_02`, with two protected areas (S3's
+			# `edlists`); any other, the core.
+			var asked := String(params.get("beacon_id", ""))
+			if asked == "b_02":
+				return _fixture("res://fixtures/beacon_lists.json", id)
+			return _fixture("res://fixtures/beacon_build.json" if asked == "b_01" else "res://fixtures/beacon_core.json", id)
 		"set_value_text":
 			# The gateway reads the typed text (S3's `fixq`): digits are written, anything else
 			# refused in its words, as `set_value_text` refuses.
