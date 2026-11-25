@@ -534,7 +534,7 @@ fn worst_step() -> String {
 /// selector, and the committed leaves), on every committed `place_beacon`
 /// step in the route; then the three worst leaves on every committed step
 /// kind, in the route and as handler bodies, labels plain and escaped. Its
-/// worst must be no worse than the committed case (`WORST_LEAF`,
+/// worst must be the committed case (`WORST_LEAF`,
 /// `WORST_STEP`). Run by hand: `cargo test -p pharmakos-gateway --test
 /// outgoing the_worst_in_budget_render_is_searched -- --ignored --nocapture`.
 #[test]
@@ -602,11 +602,10 @@ fn the_worst_in_budget_render_is_searched() {
         })
         .max()
         .expect("the committed case is in budget");
-    assert!(
-        worst.0 <= committed_bytes,
-        "the search found a worse in-budget render ({} bytes) than the committed case \
-         ({committed_bytes}): commit it",
-        worst.0
+    assert_eq!(
+        worst.0, committed_bytes,
+        "the search's worst in-budget render is not the committed case ({committed_bytes} \
+         bytes): commit the worse one, or find why the search no longer reaches it"
     );
 }
 
