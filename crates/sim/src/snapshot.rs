@@ -2668,13 +2668,6 @@ impl Snapshot {
         Ok(table)
     }
 
-    /// The Attack table (S2's `atk`), checked before anything is written
-    /// ([`crate::attack::AttackColumns::restore`]): every row names a live
-    /// beacon of the file on the Attack writ, and every such beacon holds one.
-    ///
-    /// # Errors
-    ///
-    /// [`SnapshotError::OutOfRange`] naming the column a check refuses.
     /// The planted charges are ones a run plants (lane `simroom`): at most the
     /// charge table's room, one a beacon row (`beacon_limit`, which
     /// `World::reserve_table_rooms` gives the table and a plant never passes),
@@ -2720,6 +2713,13 @@ impl Snapshot {
         Ok(())
     }
 
+    /// The Attack table (S2's `atk`), checked before anything is written
+    /// ([`crate::attack::AttackColumns::restore`]): every row names a live
+    /// beacon of the file on the Attack writ, and every such beacon holds one.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::OutOfRange`] naming the column a check refuses.
     fn restore_attack(
         &self,
         beacons: &BeaconTable,
