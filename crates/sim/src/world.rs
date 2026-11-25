@@ -637,6 +637,11 @@ pub struct World {
     /// by a restore, as [`World::unit_limit`] is; read by
     /// [`World::is_laid_out`].
     beacon_start: u32,
+    /// How many explored rows the table may ever hold: one a seat and coarse
+    /// cell of the map ([`crate::survey::CELL_VOXELS`]). Derived at
+    /// construction and kept by a restore, as [`World::unit_limit`] is; read
+    /// by [`World::reserve_table_rooms`].
+    explored_room: u32,
     /// How many beacon rows the table may ever hold: [`beacon_limit_of`] of the
     /// seat count.
     ///
@@ -1317,8 +1322,9 @@ impl World {
             QueueRooms::capacity(rooms.edits, "voxel edit")?,
         )?;
 
+        let explored_room = explored_room_of(&config.rules, config.seats)?;
         let breach_nodes = surface.node_count();
-        Ok(World {
+        let mut world = World {
             match_seed: config.match_seed,
             tick: Tick::ZERO,
             seats,
@@ -1427,8 +1433,11 @@ impl World {
             unit_start: unit_count,
             unit_start_of,
             beacon_start,
+            explored_room,
             beacon_limit,
-        })
+        };
+        world.reserve_table_rooms();
+        Ok(world)
     }
 
     /// The match seed, which is also the map seed ([`WorldConfig::match_seed`]).
@@ -1610,6 +1619,44 @@ impl World {
     /// Count a charge's cut the edit queue refused (E4).
     pub(crate) const fn count_cut_refused(&mut self) {
         self.attack_counts.cut_refused = self.attack_counts.cut_refused.saturating_add(1);
+    }
+
+    /// **Every table's room, stated once**: the rows each table may hold, from
+    /// the world's limits, reserved whatever the table holds now. `World::new`
+    /// and every restore end here, so a table restored from a file has the
+    /// room its construction gave it, and a tick that adds a row allocates
+    /// nothing in a restored world as in a fresh one. Reserving is idempotent:
+    /// a table that has its room already is not touched.
+    fn reserve_table_rooms(&mut self) {
+        let unit_count = self.units.len();
+        self.units
+            .reserve(self.unit_limit.saturating_sub(unit_count));
+        self.router
+            .reserve(self.unit_limit.saturating_sub(self.router.len()));
+        self.beacons
+            .reserve(self.beacon_limit.saturating_sub(self.beacons.len()));
+        self.beacon_alive
+            .reserve_total(crate::math::index::row(self.beacon_limit));
+        self.structures
+            .reserve(STRUCTURE_ROWS.saturating_sub(self.structures.len()));
+        self.wrecks
+            .reserve(self.wreck_limit.saturating_sub(self.wrecks.len()));
+        self.targets
+            .reserve_rows(self.beacon_limit.saturating_mul(TARGETS_PER_BEACON));
+        self.sightings
+            .reserve_rows(self.seats.len().saturating_mul(SIGHTINGS_PER_SEAT));
+        self.credit.reserve_rows(
+            self.unit_limit
+                .saturating_add(self.beacon_limit)
+                .saturating_add(STRUCTURE_ROWS),
+        );
+        let shell_room = self.shells.room();
+        self.shells.reserve_rows(shell_room);
+        self.defend.reserve_rows(self.beacon_limit);
+        self.explored.reserve_rows(self.explored_room);
+        self.attack.reserve(self.beacon_limit, AVOID_AREA_ROOM);
+        self.licences.reserve_for(self.seats.len());
+        self.reserve_route_zones();
     }
 
     /// Reserve the route zones for every avoid area and every threat zone,
@@ -7228,10 +7275,6 @@ impl World {
         // holding more units than this world's ceiling was saved under another
         // configuration, and is refused above rather than restored into a
         // table it would overflow.
-        self.units
-            .reserve(self.unit_limit.saturating_sub(unit_count));
-        self.router
-            .reserve(self.unit_limit.saturating_sub(unit_count));
         self.commanders = commander_index(&self.units, self.seats.len());
         self.beacons = restored.beacons;
         // Room for the beacons the resumed match may still deploy, reserved on
@@ -7244,18 +7287,12 @@ impl World {
         // the unbroken run refused and the two chains would part (see
         // [`beacon_limit_of`]).
         self.beacon_limit = beacon_limit_of(self.seats.len());
-        self.beacons
-            .reserve(self.beacon_limit.saturating_sub(self.beacons.len()));
         self.beacon_alive = Reserved::with_capacity(crate::math::index::row(self.beacon_limit));
         self.beacon_alive
             .extend(self.beacons.hit_points().iter().map(|hp| hp.is_alive()));
         self.match_state.restore(restored.match_state);
         self.structures = restored.structures;
-        self.structures
-            .reserve(STRUCTURE_ROWS.saturating_sub(self.structures.len()));
         self.wrecks = restored.wrecks;
-        self.wrecks
-            .reserve(self.wreck_limit.saturating_sub(self.wrecks.len()));
         self.targets = restored.targets;
         self.sightings = restored.sightings;
         self.credit = restored.credit;
@@ -7263,10 +7300,11 @@ impl World {
         self.defend = restored.defend;
         self.explored = restored.explored;
         self.attack = restored.attack;
-        self.attack.reserve(self.beacon_limit, AVOID_AREA_ROOM);
         self.licences = restored.licences;
-        self.licences.reserve_for(self.seats.len());
-        self.reserve_route_zones();
+        // Every table's room, from the one statement of it
+        // ([`World::reserve_table_rooms`]): a table assigned from the file
+        // above holds its rows and no room for more.
+        self.reserve_table_rooms();
         self.bore = restored.bore;
         self.generated = restored.generated;
         self.voxels = restored.voxels;
@@ -7440,6 +7478,29 @@ fn table_len(len: usize) -> u32 {
 /// ceiling, structure rows to the table's rows, and every beacon row for a
 /// core. Every sum and product is checked and refused at load when it
 /// overflows (E5).
+/// The explored table's room: one row a seat and coarse cell of the map
+/// ([`crate::survey::CELL_VOXELS`] columns square, a part cell counting
+/// whole).
+///
+/// # Errors
+///
+/// [`MapError::Unsized`] when the count does not fit a `u32`.
+fn explored_room_of(rules: &RulesTable, seats: u32) -> Result<u32, MapError> {
+    let unsized_room = MapError::Unsized { queue: "explored" };
+    let [x, y, _] = rules.map_size_voxels();
+    let cells = |extent: i32| -> Result<u32, MapError> {
+        let cells = extent
+            .checked_add(crate::survey::CELL_VOXELS - 1)
+            .and_then(|sum| sum.checked_div(crate::survey::CELL_VOXELS))
+            .ok_or(MapError::Unsized { queue: "explored" })?;
+        u32::try_from(cells).map_err(|_| MapError::Unsized { queue: "explored" })
+    };
+    cells(x)?
+        .checked_mul(cells(y)?)
+        .and_then(|cells| cells.checked_mul(seats))
+        .ok_or(unsized_room)
+}
+
 fn shell_bounds(rules: &RulesTable, units: u32, beacons: u32) -> Result<(u32, u32), MapError> {
     let unsized_shells = MapError::Unsized { queue: "shell" };
     let ratio = |weapon: Option<crate::arms::WeaponRow>| -> Result<u32, MapError> {

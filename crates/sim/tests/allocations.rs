@@ -287,6 +287,28 @@ fn warm_up(runner: &mut Runner, enc: &mut Enc) {
     }
 }
 
+/// The harness match warmed up ([`warm_up`]), and a second runner restored
+/// from its save at that tick, through the file's bytes: the shipped resume
+/// path (`Host::resume` restores a save into a fresh runner). The restored
+/// world hashes as the original. Built outside every counted window.
+fn warmed_and_restored(enc: &mut Enc) -> (Runner, Runner) {
+    let mut straight = harness_runner();
+    warm_up(&mut straight, enc);
+    let bytes = pharmakos_sim::snapshot::Snapshot::capture(straight.world())
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("the save encodes");
+    let snapshot = pharmakos_sim::snapshot::Snapshot::from_bytes(&bytes).expect("the save decodes");
+    let mut restored = harness_runner();
+    restored.restore(&snapshot).expect("the save restores");
+    assert_eq!(
+        restored.world().state_hash(),
+        straight.world().state_hash(),
+        "a restored world hashes as the world it was saved from"
+    );
+    (straight, restored)
+}
+
 /// Queue one crater on a fresh patch of ground, so the edit actually changes
 /// voxels and the whole voxel phase runs.
 ///
@@ -663,6 +685,43 @@ mod fork {
         );
     }
 
+    /// A fork of a **restored** world keeps the room the restore gave back:
+    /// the harness match is saved after its warm-up and restored into a
+    /// second runner (the shipped resume path), the restored world is forked,
+    /// and the child's growth window allocates only the chunks it re-points.
+    #[test]
+    fn a_fork_of_a_restored_world_allocates_only_the_chunks_it_re_points() {
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let (straight, restored) = super::warmed_and_restored(&mut enc);
+        drop(straight);
+        let chunks = usize::try_from(restored.world().voxels().chunk_count())
+            .expect("a chunk count fits a usize");
+        let mut addresses: Vec<*const u8> = Vec::with_capacity(chunks);
+        let mut child = pharmakos_sim::research::fork(restored.world());
+        let beacons_before = child.beacons().len();
+        let units_before = child.units().len();
+        let grown = count_child(
+            &mut child,
+            &mut enc,
+            WARM_UP_TICKS,
+            GROWTH_TICKS,
+            &mut addresses,
+        );
+        assert!(
+            child.beacons().len() > beacons_before && child.units().len() > units_before,
+            "the fork of the restored world added table rows inside the counted window"
+        );
+        assert!(
+            grown.repointed > 0,
+            "the child met chunks it shares with the restored world, so the count is not vacuous"
+        );
+        assert_eq!(
+            grown.allocated, grown.repointed,
+            "the {GROWTH_TICKS} ticks of a fork of a restored world allocated {} times and re-pointed {} chunks",
+            grown.allocated, grown.repointed
+        );
+    }
+
     /// A fork keeps the combat phase's room too: the two attacking crowds of
     /// the default build's tick test are laid out in the parent after its
     /// warm-up and stepped [`COMBAT_LEAD`] ticks, when neither has fired yet,
@@ -830,6 +889,135 @@ mod tick {
 
         crowd_allocates_nothing(&mut runner, &mut enc);
         near_estimates_allocate_nothing(runner.world_mut());
+    }
+
+    /// One window of a runner's ticks: cratering and collapsing on each from
+    /// `first` when `edit` holds, each tick's hash pushed to `chain`, which
+    /// is reserved for every tick before any window, so this allocates
+    /// nothing of its own.
+    fn run_window(
+        runner: &mut Runner,
+        enc: &mut Enc,
+        first: u32,
+        ticks: u32,
+        edit: bool,
+        chain: &mut Vec<u64>,
+    ) {
+        for step in 0..ticks {
+            if edit {
+                crater_at(runner.world_mut(), step + first);
+                collapse_at(runner.world_mut(), step + first);
+            }
+            let report = runner
+                .step()
+                .expect("the runner steps")
+                .expect("the segment outlasts this test");
+            chain.push(report.hash);
+            runner.clear_events();
+            runner.world().encode(enc);
+        }
+    }
+
+    /// The ticks a restored world's crowds are stepped before their counted
+    /// window, as [`crowd_allocates_nothing`] steps them.
+    const RESTORED_CROWD_LEAD: u32 = 20;
+
+    /// **A restored world's tick allocates nothing**, as a fresh one's does:
+    /// the shipped resume path (`Host::resume`) restores a save into a fresh
+    /// runner, and a table assigned from the file holds its rows and no room
+    /// for more unless the restore gives its room back
+    /// (`World::reserve_table_rooms`). The harness match is saved after its
+    /// warm-up and restored into a second runner, which then runs the growth
+    /// window (a deploy, a Generator and a drone per seat: rows in the beacon,
+    /// structure, unit and target tables) and the attacking crowds' fight,
+    /// both counted. Capacity is not state: the restored-then-run chain
+    /// equals the run-straight-through chain over every tick of both windows.
+    #[test]
+    fn a_restored_worlds_tick_allocates_nothing() {
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let (mut straight, mut restored) = super::warmed_and_restored(&mut enc);
+        let ticks = GROWTH_TICKS + RESTORED_CROWD_LEAD + CROWD_TICKS;
+        let rows = usize::try_from(ticks).expect("a tick count fits a usize");
+        let mut chain: Vec<u64> = Vec::with_capacity(rows);
+        let mut expected: Vec<u64> = Vec::with_capacity(rows);
+
+        let beacons_before = restored.world().beacons().len();
+        let structures_before = restored.world().structures().len();
+        let units_before = restored.world().units().len();
+        let targets_before = restored.world().targets().len();
+        let before = allocations();
+        run_window(
+            &mut restored,
+            &mut enc,
+            WARM_UP_TICKS,
+            GROWTH_TICKS,
+            true,
+            &mut chain,
+        );
+        let growing = allocations() - before;
+        assert!(
+            restored.world().beacons().len() > beacons_before
+                && restored.world().structures().len() > structures_before
+                && restored.world().units().len() > units_before
+                && restored.world().targets().len() > targets_before,
+            "the restored world's deploys, Build targets, Generators and drones landed inside \
+             the counted window"
+        );
+        assert_eq!(
+            growing, 0,
+            "the {GROWTH_TICKS} ticks in which a restored world grows its tables allocated \
+             {growing} times: a restore gives every table its room again"
+        );
+
+        crowd(restored.world_mut());
+        run_window(
+            &mut restored,
+            &mut enc,
+            0,
+            RESTORED_CROWD_LEAD,
+            false,
+            &mut chain,
+        );
+        let shots_before = restored.world().combat_counts().shots();
+        let before = allocations();
+        run_window(&mut restored, &mut enc, 0, CROWD_TICKS, false, &mut chain);
+        let crowded = allocations() - before;
+        assert!(
+            restored.world().combat_counts().shots() > shots_before,
+            "the restored world's crowds fought inside the counted window"
+        );
+        assert_eq!(
+            crowded, 0,
+            "{CROWD_TICKS} ticks of a restored world's crowds allocated {crowded} times"
+        );
+
+        run_window(
+            &mut straight,
+            &mut enc,
+            WARM_UP_TICKS,
+            GROWTH_TICKS,
+            true,
+            &mut expected,
+        );
+        crowd(straight.world_mut());
+        run_window(
+            &mut straight,
+            &mut enc,
+            0,
+            RESTORED_CROWD_LEAD + CROWD_TICKS,
+            false,
+            &mut expected,
+        );
+        assert_eq!(chain.len(), expected.len());
+        let parted = chain
+            .iter()
+            .zip(&expected)
+            .position(|(restored, straight)| restored != straight);
+        assert_eq!(
+            parted, None,
+            "the restored-then-run chain parts from the run-straight-through chain: capacity \
+             is not state, so a restore that gives its room back moves no hash"
+        );
     }
 
     /// The attacking crowds' half of [`a_tick_allocates_nothing`].

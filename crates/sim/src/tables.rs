@@ -1528,6 +1528,26 @@ pub struct TargetTable {
 }
 
 impl TargetTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.beacon.reserve_total(n);
+        self.kind.reserve_total(n);
+        self.blueprint.reserve_total(n);
+        self.at.reserve_total(n);
+        self.area.reserve_total(n);
+        self.built.reserve_total(n);
+        self.feature.reserve_total(n);
+        self.desc.reserve_total(n);
+        self.order.reserve_total(n);
+        self.rotation.reserve_total(n);
+        self.wall_top.reserve_total(n);
+        self.wall_done.reserve_total(n);
+    }
+
     /// How many rows the table holds, as a column index: the length of its
     /// columns, which every writer keeps equal, so a walk over `0..row_count()`
     /// needs no conversion and no fallback.
@@ -2062,6 +2082,21 @@ pub struct SightingTable {
 pub const NO_BLUEPRINT: u8 = 0;
 
 impl SightingTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.seat.reserve_total(n);
+        self.asset.reserve_total(n);
+        self.owner.reserve_total(n);
+        self.kind.reserve_total(n);
+        self.blueprint.reserve_total(n);
+        self.at.reserve_total(n);
+        self.seen_at.reserve_total(n);
+    }
+
     /// The blueprint block's tag in the state hash, after the explore-tick
     /// block's 8 (S3's `pred`).
     pub const BLUEPRINT_HASH_TAG: u8 = 9;
@@ -2416,6 +2451,17 @@ pub struct CreditTable {
 }
 
 impl CreditTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.asset.reserve_total(n);
+        self.seat.reserve_total(n);
+        self.damage.reserve_total(n);
+    }
+
     /// A table that will hold credit against `capacity` assets at once and
     /// never grow.
     #[must_use]
@@ -4698,6 +4744,21 @@ pub struct ShellTable {
 }
 
 impl ShellTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.aim.reserve_total(n);
+        self.lands_at.reserve_total(n);
+        self.launch.reserve_total(n);
+        self.fired_at.reserve_total(n);
+        self.seat.reserve_total(n);
+        self.firer.reserve_total(n);
+        self.weapon.reserve_total(n);
+    }
+
     /// The table's tag in the state hash (S2's plan, E29): a non-empty table
     /// writes it before its count, so two new tables of one row shape never
     /// hash alike.
@@ -5048,6 +5109,15 @@ pub struct DefendTable {
 }
 
 impl DefendTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.rows.reserve_total(n);
+    }
+
     /// The table's tag in the state hash (E29), after the shell table's 1 and
     /// the site block's 2.
     pub const HASH_TAG: u8 = 3;
@@ -5221,6 +5291,16 @@ pub struct ExploredTable {
 }
 
 impl ExploredTable {
+    /// Room for `rows` rows in all, whatever the table holds now: what
+    /// the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore, so a restored table has the room its constructor's rule gave.
+    pub fn reserve_rows(&mut self, rows: u32) {
+        let n = crate::math::index::row(rows);
+        self.rows.reserve_total(n);
+        self.at.reserve_total(n);
+    }
+
     /// The table's tag in the state hash (E29).
     pub const HASH_TAG: u8 = 4;
 

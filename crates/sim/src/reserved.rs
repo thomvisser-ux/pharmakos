@@ -49,6 +49,16 @@ impl<T> Reserved<T> {
         self.0.reserve(additional);
     }
 
+    /// Room for at least `total` elements in all, whatever it holds now: a
+    /// table's room stated as the rows it may hold, not as rows beyond its
+    /// current length. Nothing is reserved when it has room for `total`
+    /// already.
+    pub fn reserve_total(&mut self, total: usize) {
+        if let Some(more) = total.checked_sub(self.0.len()) {
+            self.0.reserve(more);
+        }
+    }
+
     /// The `Vec` itself, room included.
     #[must_use]
     pub fn into_inner(self) -> Vec<T> {
