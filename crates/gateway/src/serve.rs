@@ -1834,9 +1834,14 @@ impl Writer {
     }
 
     /// What the disk holds of this match's save, read back from the cache:
-    /// `no save yet`, `the `<boundary>` save of round N`, or a save this build
-    /// cannot read and why. What a resume of this match would read.
+    /// `nothing: the match folder is gone`, `no save yet`, `the `<boundary>`
+    /// save of round N`, or a save this build cannot read and why. What a resume of this match would read.
     fn on_disk(&self) -> Said {
+        // A match folder that has gone holds no save, and saying "no save yet"
+        // would say the match never saved (review 4, R4A [12] and [13]).
+        if !self.cache.directory().is_dir() {
+            return said!("nothing: the match folder is gone");
+        }
         if !self.cache.has_save() {
             return said!("no save yet");
         }

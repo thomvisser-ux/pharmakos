@@ -2304,7 +2304,10 @@ fn a_removed_match_folder_is_not_made_again_and_the_host_stops() {
     let (code, message) = refusal(&crossed);
     assert_eq!(code, "INTERNAL", "{message}");
     assert!(message.contains("could not be written ("), "{message}");
-    assert!(message.contains("; on disk is no save yet;"), "{message}");
+    assert!(
+        message.ends_with("; on disk is nothing: the match folder is gone; this host stops"),
+        "the words say the folder is gone, not that no save was made yet: {message}"
+    );
     let returned = host.returned_by_itself().expect_err("the host stopped");
     assert_eq!(returned.code(), pharmakos_gateway::error::Code::Internal);
     assert!(
