@@ -2193,6 +2193,14 @@ fn a_lull_whose_save_cannot_be_written_on_close_is_returned_as_the_error() {
         "{}",
         error.message()
     );
+    // The drop counts are recorded once, though both the close and the stop
+    // ran (review 3, probe C).
+    let log = std::fs::read_to_string(host.folder.join("audit.log")).expect("the log");
+    assert_eq!(
+        log.matches("connections dropped over_capacity").count(),
+        1,
+        "{log}"
+    );
     unblock_the_save(&host.folder);
     assert_eq!(
         resumed(&root, durable_config(MATCH_ID, 2)).expect("a resume"),
@@ -2201,9 +2209,11 @@ fn a_lull_whose_save_cannot_be_written_on_close_is_returned_as_the_error() {
 }
 
 /// The Push's start, a seat's sealed playbook (a private replay input, which
-/// the player's disk keeps): its file cannot be written. Every other write is
-/// still made, so the disk holds the Push's `sealed` save, which the words
-/// name, and a resume lands in that Push.
+/// the player's disk keeps): its file cannot be written. The save is the
+/// boundary's commit record and is written only over a disk that holds what
+/// it depends on (fix pass 3, item 1), so no `sealed` save is written; in
+/// round 1 there is none before it, which the words say, and a resume finds
+/// none.
 #[test]
 fn a_sealed_playbook_that_cannot_be_written_is_answered_with_the_error_and_the_host_stops() {
     const MATCH_ID: &str = "m-opsave-durable-sealed";
@@ -2223,18 +2233,24 @@ fn a_sealed_playbook_that_cannot_be_written_is_answered_with_the_error_and_the_h
         &crossed,
         &mut [&mut lobby],
         "seat 0's sealed playbook of round 1 could not be written (",
-        "the `sealed` save of round 1",
+        "no save yet",
     );
     std::fs::remove_dir_all(&sealed).expect("the blocker removed");
+    assert!(
+        !host.folder.join("save.json").exists(),
+        "no save was written"
+    );
+    let error = resumed(&root, durable_config(MATCH_ID, 2)).expect_err("no save to resume");
     assert_eq!(
-        resumed(&root, durable_config(MATCH_ID, 2)).expect("a resume"),
-        (String::from("push"), 1)
+        error.code(),
+        pharmakos_gateway::error::Code::InvalidArgument
     );
 }
 
 /// The audit log, whose last sequence number and tick a resume continues
 /// from: a call whose audit line cannot be appended is answered with the
-/// error, and the host stops, saying that the log's last lines are lost too.
+/// error, and the host stops; the log's failure is said once, and the words
+/// cite no log (review 3, probe R3H).
 #[test]
 fn an_audit_log_that_cannot_be_written_is_answered_with_the_error_and_the_host_stops() {
     const MATCH_ID: &str = "m-opsave-durable-audit";
@@ -2254,8 +2270,13 @@ fn an_audit_log_that_cannot_be_written_is_answered_with_the_error_and_the_host_s
         "{message}"
     );
     assert!(
-        message.contains("; on disk is no save yet; this host stops; and the audit log's last lines could not be written ("),
+        message.ends_with("; on disk is no save yet; this host stops"),
         "{message}"
+    );
+    assert_eq!(
+        message.matches("the audit log").count(),
+        1,
+        "the log's failure is said once: {message}"
     );
     let returned = host.returned_by_itself().expect_err("the host stopped");
     assert_eq!(returned.message(), message);
@@ -2289,5 +2310,231 @@ fn a_removed_match_folder_is_not_made_again_and_the_host_stops() {
     assert!(
         !host.folder.exists(),
         "no write made the match folder again"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The save is the boundary's commit record (fix pass 3, item 1): a failure
+// at each write position of each boundary, the disk, the words, the resume
+// ---------------------------------------------------------------------------
+
+/// Make the match's audit log read-only, or writable again.
+fn audit_read_only(folder: &Path, read_only: bool) {
+    let log = folder.join("audit.log");
+    let mut permissions = std::fs::metadata(&log).expect("the log").permissions();
+    #[allow(
+        clippy::permissions_set_readonly_false,
+        reason = "the test's own file, made writable again so the match can go on and its folder be removed"
+    )]
+    permissions.set_readonly(read_only);
+    std::fs::set_permissions(&log, permissions).expect("the log's permissions");
+}
+
+/// The save on disk, as its boundary and round, or none.
+fn save_on_disk(folder: &Path) -> Option<(pharmakos_gateway::save::Boundary, u32)> {
+    folder.join("save.json").is_file().then(|| {
+        let save = saved(folder);
+        (save.state.boundary, save.state.round)
+    })
+}
+
+/// The Push's start, its audit lines: the sealed playbooks are written, the
+/// `sealed` save is not, and the words cite no log.
+#[test]
+fn a_push_whose_audit_lines_cannot_be_written_writes_no_save() {
+    const MATCH_ID: &str = "m-opsave-order-push-audit";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 2)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    audit_read_only(&host.folder, true);
+    let crossed = lobby.call("end_lull", "{}");
+    let message = assert_the_host_stopped(
+        &mut host,
+        &crossed,
+        &mut [&mut lobby],
+        "the audit log could not be written (",
+        "no save yet",
+    );
+    assert!(!message.contains("names"), "no log is cited: {message}");
+    assert_eq!(save_on_disk(&host.folder), None, "the save is written last");
+    assert!(
+        host.folder
+            .join("seats")
+            .join("0")
+            .join("sealed")
+            .join("1.jsonc")
+            .is_file(),
+        "the replay inputs go first"
+    );
+    audit_read_only(&host.folder, false);
+    let error = resumed(&root, durable_config(MATCH_ID, 2)).expect_err("no save to resume");
+    assert_eq!(
+        error.code(),
+        pharmakos_gateway::error::Code::InvalidArgument
+    );
+}
+
+/// A segment's end, its audit lines: the chain is written, the disk holds
+/// the round's `sealed` save, and a resume replays the Push.
+#[test]
+fn a_segment_whose_audit_lines_cannot_be_written_leaves_its_sealed_save() {
+    const MATCH_ID: &str = "m-opsave-order-segment-audit";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 2)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    audit_read_only(&host.folder, true);
+    let crossed = lobby.call("advance_push", r#"{"ms":60000}"#);
+    assert_the_host_stopped(
+        &mut host,
+        &crossed,
+        &mut [&mut lobby],
+        "the audit log could not be written (",
+        "the `sealed` save of round 1",
+    );
+    assert!(host.folder.join("replay").join("1.hashes.txt").is_file());
+    audit_read_only(&host.folder, false);
+    assert_eq!(
+        resumed(&root, durable_config(MATCH_ID, 2)).expect("a resume"),
+        (String::from("push"), 1)
+    );
+}
+
+/// A one-round match played to its end on a host of its own, and the bytes
+/// it leaves: the final chain and the `ended` save.
+fn ended_bytes(root: &Path, match_id: &str) -> (Vec<u8>, Vec<u8>) {
+    let mut host = Stoppable::start(root, &new_line(durable_config(match_id, 1)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    skip_to_recap(&mut lobby);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    host.quit().expect("a host that ended cleanly");
+    (
+        std::fs::read(host.folder.join("replay").join("1.hashes.txt")).expect("the chain"),
+        std::fs::read(host.folder.join("save.json")).expect("the ended save"),
+    )
+}
+
+/// The match's end, its final chain (review 3's probe R3D): the `ended` save
+/// is not written over a lost chain, the final round's `sealed` save stands,
+/// the words name it, and a resume replays the final Push and writes the
+/// chain and the `ended` save byte for byte as a run that never failed did.
+#[test]
+fn an_end_whose_chain_cannot_be_written_writes_no_ended_save_and_a_resume_rebuilds_both() {
+    const MATCH_ID: &str = "m-opsave-order-end-chain";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 1)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    let chain = host.folder.join("replay").join("1.hashes.txt");
+    std::fs::create_dir_all(&chain).expect("the blocker");
+    let crossed = lobby.call("advance_push", r#"{"ms":60000}"#);
+    assert_the_host_stopped(
+        &mut host,
+        &crossed,
+        &mut [&mut lobby],
+        "round 1's replay chain could not be written (",
+        "the `sealed` save of round 1",
+    );
+    assert_eq!(
+        save_on_disk(&host.folder),
+        Some((pharmakos_gateway::save::Boundary::Sealed, 1)),
+        "no `ended` save over a lost chain"
+    );
+    std::fs::remove_dir_all(&chain).expect("the blocker removed");
+
+    let mut again = Stoppable::start(&root, &resume_line(durable_config(MATCH_ID, 1)));
+    let mut lobby = Client::open(again.announce.port, &again.announce.admin_token);
+    skip_to_recap(&mut lobby);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    again.quit().expect("the resumed host ended cleanly");
+    let rebuilt = (
+        std::fs::read(&chain).expect("the chain, written by the replay"),
+        std::fs::read(host.folder.join("save.json")).expect("the ended save"),
+    );
+    let reference = ended_bytes(&data_root("m-opsave-order-end-reference"), MATCH_ID);
+    assert_eq!(rebuilt.0, reference.0, "the chain, byte for byte");
+    // The `ended` save is the same but for `lull_offset`, the gateway's clock
+    // offset, which a resume moves past the dead process's last audited tick
+    // so the match's time never runs backwards (`MatchCache::continuation`);
+    // with it set equal, the two render byte for byte.
+    let parse = |bytes: Vec<u8>| {
+        pharmakos_gateway::save::Save::parse(&String::from_utf8(bytes).expect("UTF-8"))
+            .expect("a save")
+    };
+    let (mut rebuilt, reference) = (parse(rebuilt.1), parse(reference.1));
+    assert!(rebuilt.state.lull_offset >= reference.state.lull_offset);
+    rebuilt.state.lull_offset = reference.state.lull_offset;
+    assert_eq!(
+        rebuilt.render(),
+        reference.render(),
+        "the `ended` save, byte for byte but for its clock offset"
+    );
+}
+
+/// The match's end, its audit lines: the chain is written, the `ended` save
+/// is not, and a resume replays the final Push.
+#[test]
+fn an_end_whose_audit_lines_cannot_be_written_writes_no_ended_save() {
+    const MATCH_ID: &str = "m-opsave-order-end-audit";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 1)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    audit_read_only(&host.folder, true);
+    let crossed = lobby.call("advance_push", r#"{"ms":60000}"#);
+    assert_the_host_stopped(
+        &mut host,
+        &crossed,
+        &mut [&mut lobby],
+        "the audit log could not be written (",
+        "the `sealed` save of round 1",
+    );
+    assert!(host.folder.join("replay").join("1.hashes.txt").is_file());
+    audit_read_only(&host.folder, false);
+    assert_eq!(
+        resumed(&root, durable_config(MATCH_ID, 1)).expect("a resume"),
+        (String::from("push"), 1)
+    );
+}
+
+/// The close in a Lull, its audit lines: no `lull` save is written, and the
+/// round's `sealed` save stands.
+#[test]
+fn a_close_whose_audit_lines_cannot_be_written_writes_no_lull_save() {
+    const MATCH_ID: &str = "m-opsave-order-close-audit";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 2)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    skip_to_recap(&mut lobby);
+    let _ = result(&lobby.call("end_recap", "{}"), "end_recap");
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    audit_read_only(&host.folder, true);
+    let error = host.quit().expect_err("the close could not be written");
+    assert!(
+        error
+            .message()
+            .starts_with("the audit log could not be written ("),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .ends_with("; on disk is the `sealed` save of round 1; this host stops"),
+        "{}",
+        error.message()
+    );
+    assert_eq!(
+        save_on_disk(&host.folder),
+        Some((pharmakos_gateway::save::Boundary::Sealed, 1)),
+        "no `lull` save over lost audit lines"
+    );
+    audit_read_only(&host.folder, false);
+    assert_eq!(
+        resumed(&root, durable_config(MATCH_ID, 2)).expect("a resume"),
+        (String::from("push"), 1)
     );
 }

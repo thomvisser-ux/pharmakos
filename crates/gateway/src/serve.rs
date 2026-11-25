@@ -148,6 +148,7 @@
 
 use pharmakos_proto::json::grammar::Said;
 use pharmakos_proto::said;
+use std::cell::Cell;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -939,6 +940,8 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
         rules_hash: rules_hash.0,
         largest,
         drops: Arc::clone(&drops),
+        drops_recorded: Cell::new(false),
+        audit_broken: Cell::new(false),
     };
     let held = Arc::clone(&stopped);
     let surface_thread = pharmakos_plan_core::stack::player_text_thread("gateway surface")
@@ -1511,8 +1514,8 @@ fn spawn_dispatcher(
 /// it. When a write fails, the call is answered with the typed
 /// [`crate::error::Code::Internal`] instead, whose words say what could not
 /// be written, why, and what the disk holds, read back from the cache
-/// ([`Writer::on_disk`]), never assumed; every later call, seat and lobby
-/// alike, is answered with the same error; and the host stops
+/// ([`Writer::on_disk`]), never assumed ([`stop_words`]); every later call,
+/// seat and lobby alike, is answered with the same error; and the host stops
 /// ([`Writer::stop`], `run_in` returning it, `gamectl host` saying it on
 /// standard error and exiting non-zero).
 ///
@@ -1520,11 +1523,44 @@ fn spawn_dispatcher(
 /// cannot be un-stepped. Nobody is served that memory again, so what a
 /// resume reads is the disk, which the words describe.
 ///
-/// Every write is held to this, because a resume reads all of them: the
-/// save, each seat's sealed playbook and each segment's chain (the private
-/// replay's inputs, a format on the player's disk, AGENTS.md section 5), and
-/// the audit log (whose last sequence number and tick a resume continues
-/// from, `MatchCache::continuation`).
+/// # The save is the boundary's commit record: written last, or not at all
+///
+/// A boundary's writes go in one order, held by [`Writer::flush`]'s shape:
+/// the replay inputs first (each seat's sealed playbook, each ended
+/// segment's chain), then the audit log (whose last sequence number and tick
+/// a resume continues from, `MatchCache::continuation`), and **the save
+/// last, only when every write before it landed**. An earlier failure means
+/// the save is not written, the previous save stands, and a resume of it
+/// replays what was lost, byte for byte (the sim is a pure function of its
+/// inputs). So the disk never holds a save whose replay inputs are missing,
+/// which a resume could not rebuild (review 3's probe R3D: an `ended` save
+/// over a lost final chain, which no resume can ever reach again). For each
+/// boundary, after a failure at each write:
+///
+/// * **the Push's start** (`end_lull`): a seat's sealed playbook, or the
+///   audit log: the `sealed` save is not written, and the save before it
+///   stands (none in round 1; the round before's `sealed` one, or a `lull`
+///   save made on a quit, after it), so a resume goes back to it and the
+///   Lull is planned again; the `sealed` save itself: the same save before
+///   it stands, the sealed playbooks written are overwritten byte for byte
+///   when the Push is sealed again;
+/// * **a segment's end** (the `advance_push` that ends it, no save): its
+///   chain, or the audit log: the round's `sealed` save stands, and a resume
+///   replays the Push and writes the chain again, the same bytes;
+/// * **the match's end**: the final chain, or the audit log: the `ended`
+///   save is not written, the final round's `sealed` save stands, and a
+///   resume replays the final Push and writes the chain and the `ended`
+///   save: the chain's bytes the first run would have written, and the
+///   save's but for `lull_offset`, the gateway's clock offset, which a
+///   resume moves past the dead process's last audited tick (tested); the
+///   `ended` save itself: the same;
+/// * **the close in a Lull** (end of file): the audit log, or the `lull`
+///   save: the save before it stands (the round's `sealed` one, or none in
+///   round 1), and a resume replays from it.
+///
+/// Every write is held to this, because a resume or the private replay
+/// reads each: the save, the sealed playbooks and the chains (a format on
+/// the player's disk, AGENTS.md section 5), and the audit log.
 struct Writer {
     cache: MatchCache,
     config: Config,
@@ -1533,102 +1569,178 @@ struct Writer {
     /// [`Writer::on_disk`] reads the save to.
     largest: u64,
     /// The dispatcher's counts of the connections it dropped, written into
-    /// the audit log as it closes.
+    /// the audit log once, as the match closes or stops.
     drops: Arc<Drops>,
+    /// Whether the drop counts have been recorded: once, whichever of the
+    /// close and the stop comes first (review 3: probe C's log held them
+    /// twice).
+    drops_recorded: Cell<bool>,
+    /// Whether an append to the audit log has failed: no later append is
+    /// tried, and the words never cite the log after its own failure.
+    audit_broken: Cell<bool>,
+}
+
+/// One write that did not land: what, and why. `cause` is none when `what`
+/// already says it (the surface's own refusal to build a save), so no cause
+/// is said twice.
+struct Failure {
+    what: Said,
+    cause: Option<Said>,
+}
+
+/// How many of the other failures [`stop_words`] names when the audit log,
+/// which would name them all, could not be written; past it, a count.
+const NAMED_BESIDE: usize = 3;
+
+/// The words a host stops with, built from what happened (review 3, item 2):
+/// the first failure and its cause; the others, cited to the audit log only
+/// when its append landed (`audit_written`), otherwise named here, at most
+/// [`NAMED_BESIDE`] of them and a count of the rest; and what the disk holds.
+fn stop_words(first: &Failure, others: &[Failure], audit_written: bool, on_disk: &Said) -> Said {
+    let said_one = |failure: &Failure| match &failure.cause {
+        Some(cause) => said!("{} ({})", failure.what.clone(), cause.clone()),
+        None => said!("{}", failure.what.clone()),
+    };
+    let beside = match (others.len(), audit_written) {
+        (0, _) => said!(""),
+        (1, true) => said!(" (1 more write failed beside it: the audit log names it)"),
+        (more, true) => said!(
+            " ({} more writes failed beside it: the audit log names them)",
+            more
+        ),
+        (more, false) => {
+            let mut named = said!("");
+            for (index, failure) in others.iter().take(NAMED_BESIDE).enumerate() {
+                named = if index == 0 {
+                    said_one(failure)
+                } else {
+                    said!("{}; {}", named, said_one(failure))
+                };
+            }
+            let rest = more.saturating_sub(NAMED_BESIDE);
+            match rest {
+                0 => said!(" (beside it, {})", named),
+                1 => said!(" (beside it, {}; and 1 more write)", named),
+                _ => said!(" (beside it, {}; and {} more writes)", named, rest),
+            }
+        }
+    };
+    said!(
+        "{}{}; on disk is {}; this host stops",
+        said_one(first),
+        beside,
+        on_disk.clone()
+    )
 }
 
 impl Writer {
-    /// Write whatever the surface has pending -- the seals and the save a
-    /// Push's beginning left, the chain a segment's end left, the save a
-    /// match's end left -- and then the audit log, so that a write that failed
-    /// is itself in the log.
+    /// Write whatever the surface has pending, in the boundary's order (the
+    /// type's doc): the sealed playbooks and the chains, then the audit log,
+    /// then the save, which is written only when everything before it
+    /// landed. Every replay input is still tried, so the disk holds as much
+    /// as it can.
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::Internal`] when a write the match needs could not
-    /// be made, or the surface could not build the save it needed
-    /// ([`crate::save::Persistence::unsaved`]): the first of them, in words
-    /// that say what the disk holds ([`Writer::failed`]). Every write is still
-    /// tried, so the disk holds as much as it can.
+    /// [`crate::error::Code::Internal`] when a write the match needs could
+    /// not be made, or the surface could not build the save it needed
+    /// ([`crate::save::Persistence::unsaved`]), in words that say what the
+    /// disk holds ([`stop_words`]).
     fn flush(&self, surface: &mut Surface) -> Result<(), Error> {
         let pending = surface.take_persistence();
-        let mut failures: Vec<(Said, Error)> = Vec::new();
+        let mut failures: Vec<Failure> = Vec::new();
         if let Some(unsaved) = pending.unsaved {
-            failures.push((said!("{}", unsaved.said()), unsaved));
+            failures.push(Failure {
+                what: unsaved.said(),
+                cause: None,
+            });
         }
-        let mut refused: Vec<(&'static str, Error)> = Vec::new();
+        let tick = surface.time().tick;
+        // 1. The replay inputs.
         for file in &pending.sealed {
             if let Err(error) = self
                 .cache
                 .write_sealed(file.seat, file.round, &file.playbook_jsonc)
             {
-                failures.push((
-                    said!(
+                surface
+                    .audit()
+                    .refused(tick, None, None, "write sealed playbook", &error);
+                failures.push(Failure {
+                    what: said!(
                         "seat {}'s sealed playbook of round {} could not be written",
                         file.seat.raw(),
                         file.round
                     ),
-                    error.clone(),
-                ));
-                refused.push(("write sealed playbook", error));
+                    cause: Some(error.said()),
+                });
             }
         }
         for chain in &pending.chains {
             if let Err(error) = self.cache.write_replay(chain.round, &chain.render()) {
-                failures.push((
-                    said!("round {}'s replay chain could not be written", chain.round),
-                    error.clone(),
-                ));
-                refused.push(("write replay chain", error));
+                surface
+                    .audit()
+                    .refused(tick, None, None, "write replay chain", &error);
+                failures.push(Failure {
+                    what: said!("round {}'s replay chain could not be written", chain.round),
+                    cause: Some(error.said()),
+                });
             }
         }
-        if let Some(state) = pending.save {
+        // 2. The audit log, which a resume continues from.
+        self.append(surface, &mut failures);
+        // 3. The save, last: only over a disk that holds everything it
+        // depends on.
+        if let Some(state) = pending.save
+            && failures.is_empty()
+        {
             let (boundary, round) = (state.boundary, state.round);
             if let Err(error) = self.write_save(state) {
-                failures.push((
-                    said!(
+                surface
+                    .audit()
+                    .refused(tick, None, None, "write save", &error);
+                failures.push(Failure {
+                    what: said!(
                         "the `{}` save of round {} could not be written",
                         boundary.name(),
                         round
                     ),
-                    error.clone(),
-                ));
-                refused.push(("write save", error));
+                    cause: Some(error.said()),
+                });
+                self.append(surface, &mut failures);
             }
         }
-        let tick = surface.time().tick;
-        for (action, error) in &refused {
-            surface.audit().refused(tick, None, None, *action, error);
+        self.failed(failures)
+    }
+
+    /// Append what the audit log holds pending, unless an append has failed
+    /// before; a failure is added to `failures` and marks the log broken.
+    fn append(&self, surface: &mut Surface, failures: &mut Vec<Failure>) {
+        if self.audit_broken.get() {
+            return;
         }
         if let Err(error) = self.cache.append_audit(&surface.audit().take()) {
-            failures.push((said!("the audit log could not be written"), error));
-        }
-        let mut failures = failures.into_iter();
-        match failures.next() {
-            None => Ok(()),
-            Some((what, cause)) => Err(self.failed(&what, &cause, failures.len())),
+            self.audit_broken.set(true);
+            failures.push(Failure {
+                what: said!("the audit log could not be written"),
+                cause: Some(error.said()),
+            });
         }
     }
 
-    /// The typed error a failed write stops the host with: what could not be
-    /// written, why, how many more writes failed beside it, and what the disk
-    /// holds now ([`Writer::on_disk`]).
-    fn failed(&self, what: &Said, cause: &Error, more: usize) -> Error {
-        let beside = if more == 0 {
-            said!("")
-        } else {
-            said!(
-                " ({} more writes failed beside it: the audit log names them)",
-                more
-            )
+    /// `Ok` when nothing failed; otherwise the typed error the host stops
+    /// with, in [`stop_words`]' words over what the disk holds now.
+    fn failed(&self, failures: Vec<Failure>) -> Result<(), Error> {
+        let mut failures = failures.into_iter();
+        let Some(first) = failures.next() else {
+            return Ok(());
         };
-        Error::internal(said!(
-            "{} ({}){}; on disk is {}; this host stops",
-            what,
-            cause.said(),
-            beside,
-            self.on_disk()
-        ))
+        let others: Vec<Failure> = failures.collect();
+        Err(Error::internal(stop_words(
+            &first,
+            &others,
+            !self.audit_broken.get(),
+            &self.on_disk(),
+        )))
     }
 
     /// What the disk holds of this match's save, read back from the cache:
@@ -1661,8 +1773,15 @@ impl Writer {
         self.cache.write_save(&save.render())
     }
 
-    /// The control pipe reached end of file: save a Lull, and write what is
-    /// pending.
+    /// Record the dropped connections' counts in the audit log, once.
+    fn record_drops(&self, surface: &mut Surface) {
+        if !self.drops_recorded.replace(true) {
+            self.drops.record(surface);
+        }
+    }
+
+    /// The control pipe reached end of file: write what is pending, and then
+    /// save a Lull, last, as every boundary's save is.
     ///
     /// Item 84's second boundary. A Push, a recap and an ended match are not
     /// saved here: the save made when the Push began stands, and resuming it
@@ -1670,63 +1789,73 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::Internal`] when the Lull's save could not be
-    /// built or written, or a pending write failed ([`Writer::flush`]): a
-    /// Lull lost on quit is said, never dropped, in words that say what the
-    /// disk holds.
+    /// [`crate::error::Code::Internal`] when a pending write failed
+    /// ([`Writer::flush`]; no Lull save is then written), or the Lull's save
+    /// could not be built or written: a Lull lost on quit is said, never
+    /// dropped, in words that say what the disk holds.
     fn close(&self, surface: &mut Surface) -> Result<(), Error> {
-        let mut lost: Option<Error> = None;
-        if surface.time().phase == pharmakos_proto::gp::api::v1::status::Phase::Lull {
-            let tick = surface.time().tick;
-            let round = surface.time().round;
-            let what = said!("the `lull` save of round {} could not be written", round);
-            match surface.lull_save() {
-                Ok(state) => match self.write_save(state) {
-                    Ok(()) => {
-                        surface.audit().record(
-                            tick,
-                            None,
-                            None,
-                            "save lull",
-                            crate::audit::Outcome::Ok,
-                        );
-                    }
-                    Err(error) => {
-                        surface
-                            .audit()
-                            .refused(tick, None, None, "save lull", &error);
-                        lost = Some(self.failed(&what, &error, 0));
-                    }
-                },
+        self.record_drops(surface);
+        self.flush(surface)?;
+        if surface.time().phase != pharmakos_proto::gp::api::v1::status::Phase::Lull {
+            return Ok(());
+        }
+        let tick = surface.time().tick;
+        let round = surface.time().round;
+        let mut failures: Vec<Failure> = Vec::new();
+        match surface.lull_save() {
+            Ok(state) => match self.write_save(state) {
+                Ok(()) => {
+                    surface.audit().record(
+                        tick,
+                        None,
+                        None,
+                        "save lull",
+                        crate::audit::Outcome::Ok,
+                    );
+                }
                 Err(error) => {
                     surface
                         .audit()
                         .refused(tick, None, None, "save lull", &error);
-                    lost = Some(self.failed(&what, &error, 0));
+                    failures.push(Failure {
+                        what: said!("the `lull` save of round {} could not be written", round),
+                        cause: Some(error.said()),
+                    });
                 }
+            },
+            Err(error) => {
+                surface
+                    .audit()
+                    .refused(tick, None, None, "save lull", &error);
+                failures.push(Failure {
+                    what: said!("the `lull` save of round {} could not be built", round),
+                    cause: Some(error.said()),
+                });
             }
         }
-        self.drops.record(surface);
-        let flushed = self.flush(surface);
-        match lost {
-            Some(error) => Err(error),
-            None => flushed,
-        }
+        self.append(surface, &mut failures);
+        self.failed(failures)
     }
 
-    /// Stop on `error`: count the dropped connections into the audit log and
-    /// write it, and leave the error where every connection's door answers
-    /// with it ([`RemoteDoor::after_the_surface`]). Returns the error the host
-    /// stops with, which names the audit log too when its last lines could
-    /// not be written.
+    /// Stop on `error`: count the dropped connections into the audit log
+    /// (once) and write it, unless it is already broken, and leave the error
+    /// where every connection's door answers with it
+    /// ([`RemoteDoor::after_the_surface`]). Returns the error the host stops
+    /// with, which names the audit log too when only now its last lines
+    /// could not be written.
     fn stop(&self, surface: &mut Surface, error: Error, stopped: &OnceLock<Error>) -> Error {
-        self.drops.record(surface);
-        let error = match self.cache.append_audit(&surface.audit().take()) {
-            Ok(()) => error,
-            Err(lost) => Error::internal(said!(
-                "{}; and the audit log's last lines could not be written ({})",
+        self.record_drops(surface);
+        let mut failures: Vec<Failure> = Vec::new();
+        self.append(surface, &mut failures);
+        let error = match failures.first() {
+            None => error,
+            Some(lost) => Error::internal(said!(
+                "{}; and the audit log's last lines could not be written{}",
                 error.said(),
-                lost.said()
+                match &lost.cause {
+                    Some(cause) => said!(" ({})", cause),
+                    None => said!(""),
+                }
             )),
         };
         // Set once: only this thread sets it, and only on its way out.
@@ -1966,6 +2095,8 @@ mod tests {
             config,
             rules_hash: 0,
             drops: Arc::new(Drops::default()),
+            drops_recorded: std::cell::Cell::new(false),
+            audit_broken: std::cell::Cell::new(false),
         };
         let error = writer
             .flush(&mut surface)
@@ -1985,6 +2116,109 @@ mod tests {
             "{}",
             error.message()
         );
+        assert_eq!(
+            error.message().matches("could not be built").count(),
+            1,
+            "the cause is said once (review 3, probe R3I): {}",
+            error.message()
+        );
         let _cleaned = std::fs::remove_dir_all(&root);
+    }
+
+    /// The stop's words over every combination (fix pass 3, item 2): each
+    /// kind of first failure, none to five others, the audit log written or
+    /// not. The log is cited only when it was written; otherwise the others
+    /// are named, at most `NAMED_BESIDE`, with a count of the rest; singular
+    /// and plural are right; no cause is said twice; the disk is said last.
+    #[test]
+    fn the_stop_words_say_what_happened_and_cite_no_unwritten_log() {
+        use super::{Failure, NAMED_BESIDE, stop_words};
+        use pharmakos_proto::said;
+        let write = |what: pharmakos_proto::json::grammar::Said, cause: &'static str| Failure {
+            what,
+            cause: Some(pharmakos_proto::json::grammar::Said::from(cause)),
+        };
+        let firsts = [
+            write(
+                said!("the `sealed` save of round 1 could not be written"),
+                "disk full",
+            ),
+            write(
+                said!("seat 0's sealed playbook of round 1 could not be written"),
+                "denied",
+            ),
+            write(
+                said!("round 1's replay chain could not be written"),
+                "denied",
+            ),
+            write(said!("the audit log could not be written"), "read-only"),
+            Failure {
+                what: said!("the `sealed` save of round 1 could not be built (an order waits)"),
+                cause: None,
+            },
+        ];
+        let other = |index: usize| write(said!("other write {} failed", index), "cause");
+        for first in &firsts {
+            for count in 0..=5 {
+                for audit_written in [true, false] {
+                    let others: Vec<Failure> = (0..count).map(other).collect();
+                    let words = stop_words(first, &others, audit_written, &said!("no save yet"))
+                        .to_string();
+                    let case = format!("{count} others, log written {audit_written}: {words}");
+                    assert!(words.starts_with(&first.what.to_string()), "{case}");
+                    assert!(
+                        words.ends_with("; on disk is no save yet; this host stops"),
+                        "{case}"
+                    );
+                    if let Some(cause) = &first.cause {
+                        assert_eq!(words.matches(&format!("({cause})")).count(), 1, "{case}");
+                    }
+                    assert_eq!(
+                        words.matches(&first.what.to_string()).count(),
+                        1,
+                        "the first failure once: {case}"
+                    );
+                    let cites = words.contains("the audit log names");
+                    assert_eq!(cites, audit_written && count > 0, "{case}");
+                    match (count, audit_written) {
+                        (0, _) => assert!(!words.contains("beside"), "{case}"),
+                        (1, true) => assert!(
+                            words.contains(
+                                "(1 more write failed beside it: the audit log names it)"
+                            ),
+                            "{case}"
+                        ),
+                        (_, true) => assert!(
+                            words.contains(&format!(
+                                "({count} more writes failed beside it: the audit log names them)"
+                            )),
+                            "{case}"
+                        ),
+                        (_, false) => {
+                            for index in 0..count.min(NAMED_BESIDE) {
+                                assert!(
+                                    words.contains(&format!("other write {index} failed (cause)")),
+                                    "{case}"
+                                );
+                            }
+                            for index in NAMED_BESIDE..count {
+                                assert!(
+                                    !words.contains(&format!("other write {index} failed")),
+                                    "{case}"
+                                );
+                            }
+                            match count.saturating_sub(NAMED_BESIDE) {
+                                0 => assert!(!words.contains("more write"), "{case}"),
+                                1 => assert!(words.contains("; and 1 more write)"), "{case}"),
+                                rest => assert!(
+                                    words.contains(&format!("; and {rest} more writes)")),
+                                    "{case}"
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
