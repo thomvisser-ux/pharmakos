@@ -131,6 +131,10 @@ pub enum ChipEditor {
         /// `max` as it is shown and typed, in `display_unit`, as sent, paired with `max` as
         /// `min_text` is with `min`.
         max_text: Option<String>,
+        /// What a 0 does here, in the gateway's words, as sent (`IntegerShape.zero_title`):
+        /// said beside the bounds before the player types a value, never decided here (S3's
+        /// `zerotitle`, fix pass 1).
+        zero_title: Option<String>,
         /// The value now in the gateway's words, as sent, when it has words of its own (a 0
         /// whose shape names what it does: "retreat off"); drawn beside `value_text`, never
         /// decided here (S3's `zerotitle`).
@@ -528,6 +532,7 @@ pub(crate) fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
                 value_text: chip.value_text.clone(),
                 min_text,
                 max_text,
+                zero_title: (!integer.zero_title.is_empty()).then(|| integer.zero_title.clone()),
                 value_title,
             }
         }
@@ -819,6 +824,7 @@ mod tests {
                 value_text: "40".to_owned(),
                 min_text: Some("0".to_owned()),
                 max_text: Some("100".to_owned()),
+                zero_title: None,
                 value_title: None,
             }
         );
@@ -834,6 +840,7 @@ mod tests {
                 value_text: "120".to_owned(),
                 min_text: Some("0".to_owned()),
                 max_text: None,
+                zero_title: None,
                 value_title: None,
             }
         );
@@ -909,17 +916,21 @@ mod tests {
                 value_text: "0".to_owned(),
                 min_text: Some("0".to_owned()),
                 max_text: Some("100".to_owned()),
+                zero_title: Some("retreat off".to_owned()),
                 value_title: Some("retreat off".to_owned()),
             })
         );
-        // No title sent: none drawn, and the client tests no value to make one.
+        // No title sent for the value: none drawn, and the client tests no value to make one;
+        // the shape's words for a 0 are still carried, for the bounds note to say before the
+        // player types one (fix pass 1, item 3).
         let read = rule_list_of(&answer(&chip(titled, ""))).expect("reads");
         assert!(matches!(
             read.chips.first().map(|chip| &chip.editor),
             Some(ChipEditor::Number {
                 value_title: None,
+                zero_title: Some(zero),
                 ..
-            })
+            }) if zero == "retreat off"
         ));
         for (shape, title, why) in [
             (

@@ -1700,12 +1700,18 @@ func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	# The value now in the gateway's words when it has words of its own ("retreat off"), drawn
 	# beside the number as sent; the bridge refused a title its shape does not name.
 	var title := String(chip.get("value_title", ""))
-	_number_note.visible = outside or bounded or title != ""
+	# What a 0 does here, as the gateway sent it, said beside the bounds before the player types
+	# one, when the value now is not that 0 (whose words `value_title` already says).
+	var zero := String(chip.get("zero_title", ""))
+	_number_note.visible = outside or bounded or title != "" or zero != ""
 	var note := ""
 	if outside:
 		note = Strings.text("rule_number_outside", bounds)
 	elif bounded:
 		note = Strings.text("rule_number_bounds", bounds)
+	if zero != "" and title == "":
+		var said := Strings.text("rule_number_zero", {"title": zero})
+		note = said if note == "" else Strings.text("rule_number_titled_beside", {"now": note, "note": said})
 	if title != "":
 		var now := Strings.text("rule_number_titled", {"now": bounds["now"], "display_unit": bounds["display_unit"], "title": title})
 		note = now if note == "" else Strings.text("rule_number_titled_beside", {"now": now, "note": note})

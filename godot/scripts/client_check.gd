@@ -811,6 +811,18 @@ func _check_the_value_field(stage: SubViewport, editor: CanvasLayer, failures: A
 	editor._number_popup.hide()
 	if editor.setting_value_text(zero) != Strings.text("menu_setting_titled", {"value": "0 %", "title": "retreat off"}):
 		failures.append("the settings row says `%s`, not the number and the gateway's words for it" % editor.setting_value_text(zero))
+	# A non-zero value whose shape names what a 0 does: the note says the 0's words beside the
+	# bounds before the player types one (fix pass 1, item 3).
+	var thirty := zero.duplicate()
+	thirty["value_title"] = ""
+	thirty["value_text"] = "30"
+	thirty["zero_title"] = "retreat off"
+	editor._open_number({}, thirty)
+	await _settle()
+	var told := Strings.text("rule_number_titled_beside", {"now": Strings.text("rule_number_bounds", {"min": "0", "max": "100", "unit": " %"}), "note": Strings.text("rule_number_zero", {"title": "retreat off"})})
+	if editor._number_note.text != told:
+		failures.append("a titled shape's 0 is not said before it is typed: `%s`, not `%s`" % [editor._number_note.text, told])
+	editor._number_popup.hide()
 	zero["value_title"] = ""
 	zero["value_text"] = "30"
 	if editor.setting_value_text(zero) != "30 %":

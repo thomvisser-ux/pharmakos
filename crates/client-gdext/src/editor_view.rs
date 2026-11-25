@@ -461,7 +461,8 @@ fn bounds_into(
 /// A chip's or a setting's editor into `out`: `editor` is `number` (with `min` and `max`, each
 /// beside a `has_` flag that is false when the gateway set no bound, both in `unit`; and
 /// `min_text` and `max_text`, the bounds as shown and typed, and `display_unit`, `value_text`
-/// and `value_title`, what the field is typed in, pre-fills with and says beside it, as sent),
+/// and `value_title`, what the field is typed in, pre-fills with and says beside it, and
+/// `zero_title`, what a 0 does there, all as sent),
 /// `choice` (with `values`, the JSON texts, and `titles`, their words, as sent), `pick` (with
 /// `kind` and `arms`), `name` (with `kind`) or `read_only` (with `why`).
 fn editor_into(out: &mut VarDictionary, editor: &ChipEditor) {
@@ -474,6 +475,7 @@ fn editor_into(out: &mut VarDictionary, editor: &ChipEditor) {
             value_text,
             min_text,
             max_text,
+            zero_title,
             value_title,
         } => {
             bounds_into(out, *min, *max, min_text.as_deref(), max_text.as_deref());
@@ -483,6 +485,10 @@ fn editor_into(out: &mut VarDictionary, editor: &ChipEditor) {
             out.set(
                 &"value_title".to_variant(),
                 &text_or_empty(value_title.as_deref()).to_variant(),
+            );
+            out.set(
+                &"zero_title".to_variant(),
+                &text_or_empty(zero_title.as_deref()).to_variant(),
             );
             "number"
         }

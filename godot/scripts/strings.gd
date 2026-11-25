@@ -168,6 +168,7 @@ const TEXT := {
 	"rule_number_titled": "Now {now}{display_unit}: {title}.",
 	"rule_number_titled_beside": "{now} {note}",
 	"menu_setting_titled": "{value} ({title})",
+	"rule_number_zero": "0 here: {title}.",
 	"rule_choice_outside": "The file holds {now}, which is not one of the values the gateway offers here. It is shown as it is; the checks say what it costs.",
 	# Why the rule list took no edit, by the bridge's reason (`RuleEditRefusal`), never in silence.
 	"status_rule_refused_shut": "The rule list takes no edit while planning is closed.",
