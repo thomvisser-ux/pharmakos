@@ -7808,6 +7808,134 @@ mod tests {
         .unwrap_or_else(|error| panic!("the committed table describes a world: {error}"))
     }
 
+    /// The beacons [`beacon_churn`] places and destroys, tick by tick: what a
+    /// Push in which beacons die and are placed again files between ticks.
+    /// Answers nothing; every call with the same tick files the same orders.
+    fn beacon_churn(world: &mut World, tick: u32) {
+        use crate::seams::MandateKind;
+        let place = |world: &mut World, seat: u8, count: i32| {
+            for index in 0..count {
+                let at = world.standing_point([150 + index * 3, 150 + i32::from(seat) * 40, 0]);
+                world
+                    .place_beacon_directly(SeatId::new(seat), at, MandateKind::Build, 1)
+                    .unwrap_or_else(|| panic!("a beacon inside seat {seat}'s share at {tick}"));
+            }
+        };
+        let destroy_all_but_cores = |world: &mut World, of: u8, by: u8| {
+            let doomed: Vec<super::BeaconId> = world
+                .beacons()
+                .ids()
+                .iter()
+                .zip(world.beacons().seats())
+                .zip(world.beacons().ordinals())
+                .zip(world.beacons().hit_points())
+                .filter(|(((_, seat), ordinal), hp)| **seat == of && **ordinal > 0 && hp.is_alive())
+                .map(|(((id, _), _), _)| super::BeaconId::new(*id))
+                .collect();
+            for beacon in doomed {
+                world
+                    .request_damage(DamageOrder {
+                        target: DamageTarget::Beacon(beacon),
+                        amount: Damage::new(1_000_000)
+                            .unwrap_or_else(|_| panic!("a positive amount")),
+                        by: SeatId::new(by),
+                        source: None,
+                    })
+                    .unwrap_or_else(|error| panic!("the order is filed: {error:?}"));
+            }
+        };
+        let share = i32::try_from(super::room_per_seat(super::BEACON_TABLE_ROOM, 2))
+            .unwrap_or_else(|_| panic!("a share"));
+        match tick {
+            // Seat 0 places its whole share, seat 1 two: 22 placed rows.
+            1 => {
+                place(world, 0, share);
+                place(world, 1, 2);
+            }
+            // All 22 destroyed: their rows go to nobody as the deaths settle.
+            3 => {
+                destroy_all_but_cores(world, 0, 1);
+                destroy_all_but_cores(world, 1, 0);
+            }
+            // Seat 0 places its whole share again into the freed rows, and
+            // loses it again.
+            12 => place(world, 0, share),
+            15 => destroy_all_but_cores(world, 0, 1),
+            // And places five more.
+            22 => place(world, 0, 5),
+            _ => {}
+        }
+    }
+
+    /// **H1 of `simroom`'s review: the share check counts the match's real
+    /// seats, as play counts them.** A beacon whose death settles gives its row
+    /// to nobody (`SeatId::NEUTRAL`), and the restore's share check once counted
+    /// that as a seat, refusing a legal save once more rows had been freed than
+    /// one seat's share (`OverBeaconShare { seat: 255, .. }`). A Push in which
+    /// [`beacon_churn`] places and destroys beacons is saved at **every** tick:
+    /// each save restores, through its bytes, and each restored run's chain
+    /// equals the straight run's from that tick on.
+    #[test]
+    fn a_save_at_every_tick_of_a_push_where_beacons_die_restores() {
+        use crate::runner::Runner;
+        use crate::snapshot::Snapshot;
+        const TICKS: u32 = 30;
+        const AFTER: u32 = 6;
+        let open = |world: World| {
+            let mut runner =
+                Runner::new(world).unwrap_or_else(|error| panic!("a fresh world: {error}"));
+            assert_eq!(runner.begin_push(), Ok(true), "the Push opens");
+            runner
+        };
+        let step = |runner: &mut Runner, tick: u32| -> u64 {
+            beacon_churn(runner.world_mut(), tick);
+            let report = runner
+                .step()
+                .unwrap_or_else(|error| panic!("tick {tick}: {error}"))
+                .unwrap_or_else(|| panic!("the segment outlasts tick {tick}"));
+            runner.clear_events();
+            report.hash
+        };
+        let mut straight = open(world());
+        let mut saves = Vec::new();
+        let mut chain = Vec::new();
+        let mut most_freed: u32 = 0;
+        for tick in 0..TICKS + AFTER {
+            if tick < TICKS {
+                let freed = straight.world().beacons().count_of(SeatId::NEUTRAL);
+                most_freed = most_freed.max(freed);
+                let bytes = straight
+                    .capture()
+                    .unwrap_or_else(|error| panic!("a save at tick {tick}: {error}"))
+                    .to_bytes()
+                    .unwrap_or_else(|error| panic!("the save encodes: {error}"));
+                saves.push(bytes);
+            }
+            chain.push(step(&mut straight, tick));
+        }
+        assert!(
+            most_freed > 21,
+            "a save holds more freed rows than one seat's share ({most_freed}), so a check \
+             counting the freed rows as a seat would refuse it"
+        );
+        for (from, bytes) in (0..TICKS).zip(&saves) {
+            let save = Snapshot::from_bytes(bytes)
+                .unwrap_or_else(|error| panic!("the save at {from} decodes: {error}"));
+            let mut restored = open(world());
+            restored
+                .restore(&save)
+                .unwrap_or_else(|error| panic!("the save at tick {from} restores: {error}"));
+            for tick in from..from + AFTER {
+                let hash = step(&mut restored, tick);
+                assert_eq!(
+                    Some(&hash),
+                    chain.get(usize::try_from(tick).unwrap_or(usize::MAX)),
+                    "restored at tick {from}, the chain parts at tick {tick}"
+                );
+            }
+        }
+    }
+
     /// **A save in which one seat holds more beacon rows than its share is
     /// refused at the door** (lane `simroom`), with
     /// `SnapshotError::OverBeaconShare`, before anything is restored: play

@@ -1034,16 +1034,18 @@ pub enum SnapshotError {
         /// The end-reason byte the file carried.
         end_reason: u8,
     },
-    /// One seat holds more beacon rows than its share of the beacon room
-    /// allows: its core and its share ([`crate::world::seat_beacon_limit_of`]
-    /// the snapshot's seat count), which play enforces at every deploy
+    /// One of the match's seats holds more beacon rows than its share of the
+    /// beacon room allows: its core and its share, which is
+    /// [`crate::world::seat_beacon_limit_of`] of the snapshot's seat count,
+    /// and which play enforces at every deploy
     /// (`World::place_beacon` refuses `ShareFull`, counting the rows a seat
     /// holds, dead ones until their deaths settle). The file describes no
     /// match this sim plays, and the rooms the world derives from the share
     /// (the Defend protect list's, `world::protect_room_of`) would not hold
     /// it (lane `simroom`).
     OverBeaconShare {
-        /// The seat.
+        /// The seat: one of the match's, never `SeatId::NEUTRAL`, whose rows
+        /// (beacons whose deaths have settled) are no seat's share.
         seat: u8,
         /// How many beacon rows the snapshot gives it.
         beacons: u32,
@@ -1112,8 +1114,8 @@ impl core::fmt::Display for SnapshotError {
                 limit,
             } => write!(
                 f,
-                "the snapshot gives seat {seat} {beacons} beacons and one seat of a match of its \
-                 seat count holds at most {limit}"
+                "the snapshot gives seat {seat} {beacons} beacon rows, past its share: a seat \
+                 of a match of its seat count holds at most {limit}"
             ),
         }
     }
@@ -1645,28 +1647,6 @@ impl Snapshot {
                 limit: beacon_limit,
             });
         }
-        // And each seat's share of it, which play enforces at every deploy
-        // (lane `simroom`): refused here, before the table is built, for the
-        // same reason.
-        let share = crate::world::seat_beacon_limit_of(seat_count);
-        for seat in 0..=u8::MAX {
-            // At most `beacon_count` rows, checked against the ceiling above,
-            // so the count never reaches the saturation it is written with.
-            let held = self.beacon_seat.iter().fold(0_u32, |sum, owner| {
-                if *owner == seat {
-                    sum.saturating_add(1)
-                } else {
-                    sum
-                }
-            });
-            if held > share {
-                return Err(SnapshotError::OverBeaconShare {
-                    seat,
-                    beacons: held,
-                    limit: share,
-                });
-            }
-        }
         let mut beacons = BeaconTable::with_capacity(beacon_count);
         if !beacons.restore(BeaconColumns {
             id: self.beacon_id.clone(),
@@ -1698,6 +1678,24 @@ impl Snapshot {
             grown: flags(&self.beacon_grown, "beacon_grown")?,
         }) {
             return Err(SnapshotError::Ragged("beacon"));
+        }
+        // And each of the match's seats keeps to its share of the rows (lane
+        // `simroom`), counted by the function play's deploy counts with
+        // (`BeaconTable::count_of`, which `World::place_beacon` reads through
+        // `count_of_metered`): the rows a seat holds, dead ones until their
+        // deaths settle. A row whose death has settled is nobody's
+        // (`SeatId::NEUTRAL`), no seat's share, and bounded by the total
+        // ceiling checked above.
+        let share = crate::world::seat_beacon_limit_of(seat_count);
+        for raw in (0..=u8::MAX).take(crate::math::index::row(seat_count)) {
+            let held = beacons.count_of(SeatId::new(raw));
+            if held > share {
+                return Err(SnapshotError::OverBeaconShare {
+                    seat: raw,
+                    beacons: held,
+                    limit: share,
+                });
+            }
         }
         // Every beacon a seat holds carries an ordinal below the seat's
         // placement counter (S2's plan, E1): a name is taken from the counter
