@@ -171,9 +171,15 @@ fn one_entry_two_readers() {
         .lines()
         .find(|line| line.contains("voxel 1, 1"))
         .expect("the first beacon's line");
-    for shape in [Shape::retreat_threshold(), Shape::picket_scouts()] {
+    // Each titled 0 is said as its shape's words and then its chip, in one
+    // span: ": retreat off (0%)", ", no picket (0)".
+    for (shape, after) in [
+        (Shape::retreat_threshold(), " (0%)"),
+        (Shape::picket_scouts(), " (0)"),
+    ] {
         let title = shape.zero_title().expect("a title");
-        assert!(first.contains(title), "{first:?} says {title:?}");
+        let said = format!(" {title}{after}");
+        assert!(first.contains(&said), "{first:?} says {said:?}");
     }
     let second = rendering
         .prose
