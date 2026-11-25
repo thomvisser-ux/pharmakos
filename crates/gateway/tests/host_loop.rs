@@ -2708,3 +2708,38 @@ fn a_control_pipe_that_fails_stops_the_host_and_says_so() {
         "the match was put down as at end of file"
     );
 }
+
+/// Two failures, the audit log among them (review 3's probe R3J, what a full
+/// disk produces): the words name the audit log's failure beside the first
+/// and cite no log, since the log could not be written.
+#[test]
+fn a_failure_beside_the_audit_logs_own_is_named_not_cited() {
+    const MATCH_ID: &str = "m-opsave-order-two-failures";
+    let root = data_root(MATCH_ID);
+    let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 2)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    let sealed = host
+        .folder
+        .join("seats")
+        .join("0")
+        .join("sealed")
+        .join("1.jsonc");
+    std::fs::create_dir_all(&sealed).expect("the blocker");
+    audit_read_only(&host.folder, true);
+    let crossed = lobby.call("end_lull", "{}");
+    let message = assert_the_host_stopped(
+        &mut host,
+        &crossed,
+        &mut [&mut lobby],
+        "seat 0's sealed playbook of round 1 could not be written (",
+        "no save yet",
+    );
+    assert!(
+        message.contains(" (beside it, the audit log could not be written ("),
+        "{message}"
+    );
+    assert!(!message.contains("names"), "no log is cited: {message}");
+    audit_read_only(&host.folder, false);
+    std::fs::remove_dir_all(&sealed).expect("the blocker removed");
+}
