@@ -233,7 +233,12 @@ pub fn read_rules(rules: &RulesTable) -> Result<RulesRead, RulesGap> {
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
-pub use report::MAX_DEFAULT_NOTES;
+pub use report::{
+    ARGUMENT_BYTES_MAX, ARGUMENT_WORDS_BYTES_MAX, CapRead, Cuts, DIAGNOSTIC_FRAMING_BYTES,
+    ENGINE_ARGUMENT_BYTES_MAX, LeftOut, MAP_REF_BYTES, MAX_FIXES, MAX_MAP_REFS, MAX_PER_CODE,
+    MAX_POINTER_BYTES, MAX_RELATED, ONCE_PER_REPORT, PATCH_BYTES_MAX, QUOTED_CHAR_JSON_BYTES_MAX,
+    ReportFault, argument_bytes_max, bounded, diagnostic_bytes, diagnostic_bytes_max, json_bytes,
+};
 pub use scope::{
     FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError, Sighted, Sighting,
 };
@@ -395,8 +400,12 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// `retreat` (decisions-log item 177 (3)): `MandateSettings.retreat_hp_pct`
 /// carries presence, so this build prices a written 0 (retreat off) as one
 /// field of its edit, where `0.1.0-s3.5` read it as unwritten, and its reports
-/// are not comparable with `0.1.0-s3.5`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.6";
+/// are not comparable with `0.1.0-s3.5`'s. `0.1.0-s3.7` from S3's `vcap`
+/// (decisions-log item 183 (4)): a report lists at most [`MAX_PER_CODE`] of
+/// one code and closes with one `I0007` per code it left diagnostics out of,
+/// and a decode diagnostic's pointer is bounded ([`MAX_POINTER_BYTES`]), so
+/// its reports are not comparable with `0.1.0-s3.6`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.7";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
@@ -461,7 +470,7 @@ impl core::fmt::Display for InputError {
         match self {
             InputError::Oversize { bytes, max } => write!(
                 formatter,
-                "the playbook bytes are {bytes} long, past the {max} the canonical text of the 
+                "the playbook bytes are {bytes} long, past the {max} the canonical text of the \
                  longest player's text can be"
             ),
             InputError::Rules(gap) => write!(formatter, "{gap}"),
@@ -739,12 +748,47 @@ impl<'a> Input<'a> {
 /// parser.
 #[must_use]
 pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
+    verify_counted(input, depth).report
+}
+
+/// A report, and what its per-code cap ([`MAX_PER_CODE`]) left out as typed
+/// data: one [`LeftOut`] per code, in code order, each the data the report's
+/// closing `I0007` for that code is rendered from.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Counted {
+    /// The report, exactly as [`verify`] returns it.
+    pub report: VerifyReport,
+    /// What the cap left out, per code; empty when nothing was.
+    pub left_out: Vec<LeftOut>,
+    /// What was cut to keep each diagnostic within its bound.
+    pub cuts: Cuts,
+    /// The report builder's own failures; empty, by construction.
+    pub faults: Vec<ReportFault>,
+}
+
+/// [`verify`], with what the cap left out as typed data beside the report.
+/// `gp.api.v1.VerifyReport` carries it only as the closing `I0007`s until the
+/// contract change after S3's `vcap` adds a field for it (decisions-log item
+/// 183 (5)); that change fills the field from [`Counted::left_out`].
+#[must_use]
+pub fn verify_counted(input: &Input<'_>, depth: Depth) -> Counted {
+    verify_counted_at_cap(input, depth, MAX_PER_CODE)
+}
+
+/// [`verify_counted`] with a report that lists at most `cap` diagnostics of
+/// one code in place of [`MAX_PER_CODE`]: for a comparison of reports with
+/// the cap and without it (`u32::MAX`), which holds the verdict and every
+/// code's total equal. Every caller that answers a seat uses
+/// [`verify`]; this report's `report_hash` is the same input's, so it is
+/// never one to hand a seat.
+#[must_use]
+pub fn verify_counted_at_cap(input: &Input<'_>, depth: Depth, cap: u32) -> Counted {
     let depth = match depth {
         Depth::Unspecified | Depth::Full => Depth::Full,
         Depth::Quick => Depth::Quick,
     };
     let limits = input.limits();
-    let mut out = report::Builder::default();
+    let mut out = report::Builder::with_cap(cap);
 
     let mut units: u32 = 0;
     let mut fingerprint: Vec<u8> = Vec::new();
@@ -773,16 +817,29 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
     }
 
     let report_hash = input.report_hashes.at(depth);
+    let qualifies = !out.has_errors();
+    let report::Finished {
+        diagnostics,
+        left_out,
+        cuts,
+        faults,
+    } = out.finish();
 
-    VerifyReport {
-        qualifies: !out.has_errors(),
+    let report = VerifyReport {
+        qualifies,
         depth: i32::from(depth),
-        diagnostics: out.into_diagnostics(),
+        diagnostics,
         report_hash: report_hash.to_be_bytes().to_vec(),
         rules_hash: input.rules_hash.to_be_bytes().to_vec(),
         plan_fingerprint: fingerprint,
         verifier_version: VERIFIER_VERSION.to_owned(),
         size_units: units,
         size_budget: limits.size_budget_units(),
+    };
+    Counted {
+        report,
+        left_out,
+        cuts,
+        faults,
     }
 }

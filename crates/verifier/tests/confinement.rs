@@ -430,7 +430,7 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "report.rs",
-        "catalogue::entry(diag.code).map_or(Severity::Error, |row| row.severity);",
+        "catalogue::entry(code).map_or(Severity::Error, |row| row.severity)",
         "unreachable: `nothing_outside_the_catalogue_is_ever_emitted` holds every emitted code \
          to a row, and an unknown code would refuse rather than pass",
     ),

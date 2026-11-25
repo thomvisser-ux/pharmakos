@@ -25,7 +25,7 @@ use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::quantity::{Kw, Money};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::{SeatId, StructureKind};
-use pharmakos_verifier::{Anchor, BLUEPRINT_SLOTS, Input, Scope, slots_of, verify};
+use pharmakos_verifier::{Anchor, BLUEPRINT_SLOTS, Input, Scope, slots_of};
 
 fn rules() -> RulesTable {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -35,8 +35,10 @@ fn rules() -> RulesTable {
 /// Where the interface step's rows stand.
 const ROWS: &str = "/declarative/route/0/interface/rows";
 
-/// The `(code, path)` pairs QUICK reports for a playbook whose one interface
-/// step holds `rows`.
+/// The `(code, path)` pairs QUICK raises for a playbook whose one interface
+/// step holds `rows`, every one listed: the per-code cap is off (S3's
+/// `vcap`), because these tests hold each row's code, and a table row past
+/// the cap is still raised (`the_cap_never_moves_a_verdict_or_a_total`).
 fn codes(rows: &[String]) -> Vec<(String, String)> {
     let text = format!(
         r#"{{"schema_version":{{"major":1}},"meta":{{"title":"slots","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{{"label":"probe","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{}]}}}}]}},"on_death":{{"on_respawn":"CONTINUE"}},"fallback":{{"hold":{{"at":{{"safest":{{}}}}}}}}}}"#,
@@ -52,7 +54,8 @@ fn codes(rows: &[String]) -> Vec<(String, String)> {
         },
     );
     let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
-    verify(&input, Depth::Quick)
+    pharmakos_verifier::verify_counted_at_cap(&input, Depth::Quick, u32::MAX)
+        .report
         .diagnostics
         .into_iter()
         .map(|diagnostic| (diagnostic.code, diagnostic.path))

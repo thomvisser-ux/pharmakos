@@ -23,10 +23,10 @@
       "beginner": "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave the seat out to hunt the nearest enemy commander seen."
     }
   ],
-  "report_hash": "kvlvtDBzpag=",
+  "report_hash": "JDzdA+EAH7w=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "xFeUfj09Xcs=",
-  "verifier_version": "0.1.0-s3.6",
+  "verifier_version": "0.1.0-s3.7",
   "size_units": 1,
   "size_budget": 128
 }

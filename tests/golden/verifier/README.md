@@ -444,3 +444,20 @@ report is as before the bump. The same two lines moved in the gateway's
 As with every bump, a save written under `0.1.0-s3.5` does not resume under
 `0.1.0-s3.6`: `SavedMatch::check` refuses a save stamped by another verifier
 (`crates/gateway/src/save.rs`, spec section 3).
+
+**S3's `vcap` (`VERIFIER_VERSION` 0.1.0-s3.7).** Every `report_hash` moved, for one
+of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.6` to `0.1.0-s3.7` (input
+4), because a report now lists at most `MAX_PER_CODE` (6) diagnostics of one code and
+closes with one `I0007` per code it left diagnostics out of (decisions-log item 183
+(4), "Cap all codes"), and a decode diagnostic's pointer is bounded at
+`MAX_POINTER_BYTES`. The cap moved the bodies of `budget_128`,
+`e0110_over_the_size_budget`, `e0114_more_route_steps_than_this_build_compiles` and
+`expand_east` (the first six of a code listed, the rest counted), the catalogue's
+`I0007` row, and the gateway's three `demo_*_verify` answers and the wizard's three
+reports (their seventh `I0003` note is now an `I0007`), in the commit before the
+bump; the bump moved only `report_hash` and `verifier_version`. A reader of an older
+report sees every diagnostic and no `I0007` for a code; a reader of a new one sees at
+most six of a code, and a closing `I0007` names the code and how many more were
+raised. As with every bump, a save written under `0.1.0-s3.6` does not resume under
+`0.1.0-s3.7`: `SavedMatch::check` refuses a save stamped by another verifier
+(`crates/gateway/src/save.rs`, spec section 3).
