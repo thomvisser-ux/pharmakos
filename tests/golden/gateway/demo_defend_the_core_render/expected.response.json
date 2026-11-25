@@ -2,7 +2,7 @@
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "prose": "Defend the Core\nWritten from a built-in template.\nWalk to your core, place a Defend beacon beside it that guards the core and your commander, and stay inside its sphere.\n\nRoute\n  1. to_core: walk to beacon \"b_00\".\n  2. place_guard: place a beacon at a site covering the nearest scrap seam (nearest by travel, read when the step starts), tagged \"guard\", on a Defend mandate: protecting beacon \"b_00\" and your commander, engaging within 100% of the sphere, pursuing to the sphere edge and with a picket of 1 scouts, at normal Quartermaster priority (18 s on site).\n    Give up after 1:00.\n    On failure, move on to the next step.\n  3. hold: hold for 30 s.\n\nRules\n  1. \"flee\", when the commander is at or below 40% HP and the commander took damage in the last 3 s:\n    1. flee_to_safety: walk to the safest own beacon.\n    2. flee_wait: hold for 8 s.\n    Then carry on with the route.\n    Fires at most 3 times, and no sooner than every 30 s.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n\nFallback\n  Stay with the nearest own Defend beacon (resolves when the step starts).\n\nBudget\n  8 of 128 size units.\n  18 s standing at a beacon along the route.\n",
+    "prose": "Defend the Core\nWritten from a built-in template.\nWalk to your core, place a Defend beacon beside it that guards the core and your commander, and stay inside its sphere.\n\nRoute\n  1. to_core: walk to beacon \"b_00\".\n  2. place_guard: place a beacon at a site covering the nearest scrap seam (nearest by travel, read when the step starts), tagged \"guard\", on a Defend mandate: fire freely, protecting beacon \"b_00\" and your commander, engaging within 100% of the sphere, pursuing to the sphere edge and with a picket of 1 scouts, at normal Quartermaster priority (18 s on site).\n    Give up after 1:00.\n    On failure, move on to the next step.\n  3. hold: hold for 30 s.\n\nRules\n  1. \"flee\", when the commander is at or below 40% HP and the commander took damage in the last 3 s:\n    1. flee_to_safety: walk to the safest own beacon.\n    2. flee_wait: hold for 8 s.\n    Then carry on with the route.\n    Fires at most 3 times, and no sooner than every 30 s.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n\nFallback\n  Stay with the nearest own Defend beacon (resolves when the step starts).\n\nBudget\n  8 of 128 size units.\n  18 s standing at a beacon along the route.\n",
     "rules": [
       {
         "pointer": "/declarative/route/0",
@@ -69,10 +69,34 @@
             "pick_op": "replace"
           },
           {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/roe",
+            "line": 6,
+            "start": 160,
+            "end": 171,
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"HOLD_FIRE\"",
+                  "\"RETURN_FIRE\"",
+                  "\"FREE_FIRE\""
+                ],
+                "titles": [
+                  "hold fire",
+                  "return fire",
+                  "fire freely"
+                ]
+              }
+            },
+            "value_json": "\"FREE_FIRE\"",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
+          },
+          {
             "pointer": "/declarative/route/1/place_beacon/initial/mandate/defend/protect/0/beacon",
             "line": 6,
-            "start": 171,
-            "end": 184,
+            "start": 184,
+            "end": 197,
             "shape": {
               "reference": {
                 "kind": "beacon",
@@ -93,14 +117,16 @@
           {
             "pointer": "/declarative/route/1/place_beacon/initial/mandate/defend/engagement_radius_pct",
             "line": 6,
-            "start": 221,
-            "end": 224,
+            "start": 234,
+            "end": 237,
             "shape": {
               "integer": {
                 "min": 1,
                 "max": 100,
                 "unit": "%",
-                "display_unit": "%"
+                "display_unit": "%",
+                "min_text": "1",
+                "max_text": "100"
               }
             },
             "value_json": "100",
@@ -111,8 +137,8 @@
           {
             "pointer": "/declarative/route/1/place_beacon/initial/mandate/defend/pursue",
             "line": 6,
-            "start": 241,
-            "end": 268,
+            "start": 254,
+            "end": 281,
             "shape": {
               "choice": {
                 "values": [
@@ -135,14 +161,17 @@
           {
             "pointer": "/declarative/route/1/place_beacon/initial/mandate/defend/picket_scouts",
             "line": 6,
-            "start": 290,
-            "end": 291,
+            "start": 303,
+            "end": 304,
             "shape": {
               "integer": {
                 "min": 0,
                 "max": 255,
                 "unit": "",
-                "display_unit": ""
+                "display_unit": "",
+                "zero_title": "no picket",
+                "min_text": "0",
+                "max_text": "255"
               }
             },
             "value_json": "1",
@@ -153,8 +182,8 @@
           {
             "pointer": "/declarative/route/1/place_beacon/initial/priority",
             "line": 6,
-            "start": 303,
-            "end": 309,
+            "start": 316,
+            "end": 322,
             "shape": {
               "choice": {
                 "values": [
@@ -183,7 +212,8 @@
               "integer": {
                 "min": 0,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0"
               }
             },
             "value_json": "60000",
@@ -217,7 +247,8 @@
               "integer": {
                 "min": 1,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0.001"
               }
             },
             "value_json": "30000",
@@ -282,7 +313,9 @@
                 "min": 0,
                 "max": 100,
                 "unit": "%",
-                "display_unit": "%"
+                "display_unit": "%",
+                "min_text": "0",
+                "max_text": "100"
               }
             },
             "value_json": "40",
@@ -299,7 +332,8 @@
               "integer": {
                 "min": 0,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0"
               }
             },
             "value_json": "3000",
@@ -336,7 +370,8 @@
               "integer": {
                 "min": 1,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0.001"
               }
             },
             "value_json": "8000",
@@ -354,7 +389,9 @@
                 "min": 1,
                 "max": 8,
                 "unit": "",
-                "display_unit": ""
+                "display_unit": "",
+                "min_text": "1",
+                "max_text": "8"
               }
             },
             "value_json": "3",
@@ -371,7 +408,8 @@
               "integer": {
                 "min": 5000,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "5"
               }
             },
             "value_json": "30000",

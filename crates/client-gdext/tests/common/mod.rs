@@ -339,7 +339,7 @@ fn fixq_answer(method: &str, params: &Json) -> String {
             "compose_wall_box" => r#"{"target":{"blueprint_id":"wall","anchor":{"voxel":{"x":1,"y":1,"z":1}},"wall_box":{"min":{"x":1,"y":1,"z":1},"max":{"x":2,"y":2,"z":3}}}}"#.to_owned(),
             // One own beacon's detail with a number setting, and a vocabulary with the wall, for
             // the burst's typed values and wall box.
-            "get_beacon" => r#"{"summary":{"beacon_id":"b_00"},"mandate":"build","settings":[{"pointer":"/retreat_hp_pct","title":"Retreat","value_json":"0","value_text":"0","shape":{"integer":{"min":0,"max":100,"unit":"%","display_unit":"%"}}}]}"#.to_owned(),
+            "get_beacon" => r#"{"summary":{"beacon_id":"b_00"},"mandate":"build","settings":[{"pointer":"/retreat_hp_pct","title":"Retreat","value_json":"0","value_text":"0","shape":{"integer":{"min":0,"max":100,"unit":"%","display_unit":"%","zero_title":"retreat off","min_text":"0","max_text":"100"}},"value_title":"retreat off"}]}"#.to_owned(),
             "get_vocabulary" => r#"{"blueprints":[{"name":"wall","title":"Wall","anchor_shape":"box"}]}"#.to_owned(),
         other => panic!("not a fixq method: {other}"),
     }

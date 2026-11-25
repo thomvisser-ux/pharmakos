@@ -125,6 +125,20 @@ pub enum ChipEditor {
         display_unit: String,
         /// The value now in `display_unit`, as sent: what the field pre-fills with.
         value_text: String,
+        /// `min` as it is shown and typed, in `display_unit`, as sent: present exactly when `min`
+        /// is (an answer that pairs them otherwise is refused, [`editor_of`]).
+        min_text: Option<String>,
+        /// `max` as it is shown and typed, in `display_unit`, as sent, paired with `max` as
+        /// `min_text` is with `min`.
+        max_text: Option<String>,
+        /// What a 0 does here, in the gateway's words, as sent (`IntegerShape.zero_title`):
+        /// said beside the bounds before the player types a value, never decided here (S3's
+        /// `zerotitle`, fix pass 1).
+        zero_title: Option<String>,
+        /// The value now in the gateway's words, as sent, when it has words of its own (a 0
+        /// whose shape names what it does: "retreat off"); drawn beside `value_text`, never
+        /// decided here (S3's `zerotitle`).
+        value_title: Option<String>,
     },
     /// A closed list: each value the JSON text to write, and its title, as sent.
     Choice {
@@ -447,24 +461,81 @@ fn rule_chip(chip: &Chip, lines: &[String]) -> Result<RuleChip, BridgeError> {
     })
 }
 
+/// A number's bound as the gateway sent its text: the text when both the bound and its text are
+/// sent, `None` when neither is.
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] when one is sent without the other (S3's `zerotitle`).
+pub(crate) fn bound_text(
+    pointer: &str,
+    which: &str,
+    bound: Option<i32>,
+    text: &str,
+) -> Result<Option<String>, BridgeError> {
+    match (bound, text.is_empty()) {
+        (Some(_), false) => Ok(Some(text.to_owned())),
+        (None, true) => Ok(None),
+        (Some(_), true) => Err(BridgeError::Rpc(format!(
+            "the number at {pointer} sends its {which} bound without the bound's text"
+        ))),
+        (None, false) => Err(BridgeError::Rpc(format!(
+            "the number at {pointer} sends text for a {which} bound it does not set"
+        ))),
+    }
+}
+
+/// The refusal of a value title the chip's shape does not name as its zero's.
+fn untitled(pointer: &str) -> BridgeError {
+    BridgeError::Rpc(format!(
+        "the value at {pointer} carries a title its shape does not name for a zero"
+    ))
+}
+
 /// The editor a chip's shape asks for: a rule-list chip's, and a beacon setting's, which shares
 /// the shape (`gp.api.v1.ValueShape`: "one editor per shape").
 ///
 /// # Errors
 ///
-/// [`BridgeError::Rpc`] for a choice whose titles do not pair with its values, one for one.
+/// [`BridgeError::Rpc`] for a choice whose titles do not pair with its values, one for one; for
+/// a number whose bound and the bound's text are not both sent or both left out; and for a value
+/// title that is not its shape's zero title (a title on a non-number, or one the shape does not
+/// name). Each is the gateway's answer disagreeing with itself, refused rather than drawn with a
+/// piece missing (S3's `zerotitle`).
 pub(crate) fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
     let Some(shape) = chip.shape.as_ref().and_then(|shape| shape.shape.as_ref()) else {
-        return Ok(ChipEditor::ReadOnly(ReadOnly::NoShape));
+        return if chip.value_title.is_empty() {
+            Ok(ChipEditor::ReadOnly(ReadOnly::NoShape))
+        } else {
+            Err(untitled(&chip.pointer))
+        };
     };
+    if !chip.value_title.is_empty() && !matches!(shape, Shape::Integer(_)) {
+        return Err(untitled(&chip.pointer));
+    }
     Ok(match shape {
-        Shape::Integer(integer) => ChipEditor::Number {
-            min: integer.min,
-            max: integer.max,
-            unit: integer.unit.clone(),
-            display_unit: integer.display_unit.clone(),
-            value_text: chip.value_text.clone(),
-        },
+        Shape::Integer(integer) => {
+            let min_text = bound_text(&chip.pointer, "least", integer.min, &integer.min_text)?;
+            let max_text = bound_text(&chip.pointer, "most", integer.max, &integer.max_text)?;
+            let value_title = if chip.value_title.is_empty() {
+                None
+            } else if chip.value_title == integer.zero_title {
+                Some(chip.value_title.clone())
+            } else {
+                return Err(untitled(&chip.pointer));
+            };
+            ChipEditor::Number {
+                min: integer.min,
+                max: integer.max,
+                unit: integer.unit.clone(),
+                display_unit: integer.display_unit.clone(),
+                value_text: chip.value_text.clone(),
+                min_text,
+                max_text,
+                zero_title: (!integer.zero_title.is_empty()).then(|| integer.zero_title.clone()),
+                value_title,
+            }
+        }
         Shape::Choice(choice) => {
             if choice.titles.len() != choice.values.len() {
                 return Err(BridgeError::Rpc(format!(
@@ -751,6 +822,10 @@ mod tests {
                 unit: "%".to_owned(),
                 display_unit: "%".to_owned(),
                 value_text: "40".to_owned(),
+                min_text: Some("0".to_owned()),
+                max_text: Some("100".to_owned()),
+                zero_title: None,
+                value_title: None,
             }
         );
         // A duration is a number like any other, shown and typed in the gateway's seconds
@@ -763,6 +838,10 @@ mod tests {
                 unit: "ms".to_owned(),
                 display_unit: "s".to_owned(),
                 value_text: "120".to_owned(),
+                min_text: Some("0".to_owned()),
+                max_text: None,
+                zero_title: None,
+                value_title: None,
             }
         );
         assert_eq!(
@@ -809,6 +888,82 @@ mod tests {
         assert!(rule_list_of(&json::read(bad_rule).expect("json")).is_err());
     }
 
+    /// A number's bounds come with their text in the unit it is typed in, and its value with the
+    /// gateway's words for it when it has words of its own; each piece is carried as sent, and one
+    /// sent without its pair is refused, never drawn with the piece missing (S3's `zerotitle`).
+    #[test]
+    fn a_numbers_bound_texts_and_value_title_are_the_gateways_and_paired() {
+        let answer = |chip: &str| {
+            json::read(&format!(
+                r#"{{"prose":"Route\n  1. go: retreat off (0%).\n","rules":[{{"pointer":"/declarative/route/0","line":1,"line_count":1,"chips":[{chip}]}}]}}"#
+            ))
+            .expect("json")
+        };
+        let chip = |shape: &str, title: &str| {
+            format!(
+                r#"{{"pointer":"/r","line":1,"start":22,"end":23,"shape":{shape},"value_json":"0","value_text":"0","value_title":"{title}","pick_op":"replace"}}"#
+            )
+        };
+        let titled = r#"{"integer":{"min":0,"max":100,"unit":"%","display_unit":"%","zero_title":"retreat off","min_text":"0","max_text":"100"}}"#;
+        let read = rule_list_of(&answer(&chip(titled, "retreat off"))).expect("reads");
+        assert_eq!(
+            read.chips.first().map(|chip| chip.editor.clone()),
+            Some(ChipEditor::Number {
+                min: Some(0),
+                max: Some(100),
+                unit: "%".to_owned(),
+                display_unit: "%".to_owned(),
+                value_text: "0".to_owned(),
+                min_text: Some("0".to_owned()),
+                max_text: Some("100".to_owned()),
+                zero_title: Some("retreat off".to_owned()),
+                value_title: Some("retreat off".to_owned()),
+            })
+        );
+        // No title sent for the value: none drawn, and the client tests no value to make one;
+        // the shape's words for a 0 are still carried, for the bounds note to say before the
+        // player types one (fix pass 1, item 3).
+        let read = rule_list_of(&answer(&chip(titled, ""))).expect("reads");
+        assert!(matches!(
+            read.chips.first().map(|chip| &chip.editor),
+            Some(ChipEditor::Number {
+                value_title: None,
+                zero_title: Some(zero),
+                ..
+            }) if zero == "retreat off"
+        ));
+        for (shape, title, why) in [
+            (
+                r#"{"integer":{"min":0,"max":100,"unit":"%","display_unit":"%","max_text":"100"}}"#,
+                "",
+                "a least without its text",
+            ),
+            (
+                r#"{"integer":{"max":100,"unit":"%","display_unit":"%","min_text":"0","max_text":"100"}}"#,
+                "",
+                "text for a least it does not set",
+            ),
+            (
+                r#"{"integer":{"min":0,"max":100,"unit":"%","display_unit":"%","min_text":"0"}}"#,
+                "",
+                "a most without its text",
+            ),
+            (
+                r#"{"integer":{"min":0,"max":100,"unit":"%","display_unit":"%","min_text":"0","max_text":"100"}}"#,
+                "retreat off",
+                "a title its shape does not name",
+            ),
+            (titled, "no picket", "a title that is not the shape's"),
+            (
+                r#"{"choice":{"values":["true"],"titles":["yes"]}}"#,
+                "retreat off",
+                "a title on a choice",
+            ),
+        ] {
+            assert!(rule_list_of(&answer(&chip(shape, title))).is_err(), "{why}");
+        }
+    }
+
     /// Whether a value lies outside its shape is the gateway's `outside`, carried as sent, and the
     /// op a chip's edit sends is its `pick_op`: `add` for a value at its proto3 default, and no op
     /// for one this build does not know (S3's `fixq-c`, items 11 and 14). A choice whose titles do
@@ -830,11 +985,11 @@ mod tests {
                 .expect("a chip")
         };
         let past = read(
-            r#"{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{"integer":{"max":5}},"value_json":"12","value_text":"12","outside":true,"pick_op":"replace"}"#,
+            r#"{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{"integer":{"max":5,"max_text":"5"}},"value_json":"12","value_text":"12","outside":true,"pick_op":"replace"}"#,
         );
         assert!(past.outside, "the gateway's word, carried");
         let inside = read(
-            r#"{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{"integer":{"max":5}},"value_json":"12","value_text":"12","pick_op":"replace"}"#,
+            r#"{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{"integer":{"max":5,"max_text":"5"}},"value_json":"12","value_text":"12","pick_op":"replace"}"#,
         );
         assert!(!inside.outside, "no comparison of the client's own");
         let default = read(

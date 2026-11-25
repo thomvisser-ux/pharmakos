@@ -2,7 +2,7 @@
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "prose": "Hold & Build\nWritten from a built-in template.\nGrow the grid: place a Build beacon covering a heat vent you do not cover yet, with a Generator on the vent as its first target, and hold by it.\n\nRoute\n  1. place_power: place a beacon at a site covering the nearest heat vent you do not cover yet (nearest by travel, read when the step starts), tagged \"power\", on a Build mandate: building toward 1 target, repairing structures below 50% of their hit points and reshaping no ground (17.5 s on site).\n    Give up after 1:00.\n    On failure, move on to the next step.\n  2. hold: hold for 30 s.\n\nRules\n  1. \"flee\", when the commander is at or below 40% HP and the commander took damage in the last 3 s:\n    1. flee_to_safety: walk to the safest own beacon.\n    2. flee_wait: hold for 8 s.\n    Then carry on with the route.\n    Fires at most 3 times, and no sooner than every 30 s.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n\nFallback\n  Stay with the safest own beacon.\n\nBudget\n  6 of 128 size units.\n  17.5 s standing at a beacon along the route.\n",
+    "prose": "Hold & Build\nWritten from a built-in template.\nGrow the grid: place a Build beacon covering a heat vent you do not cover yet, with a Generator on the vent as its first target, and hold by it.\n\nRoute\n  1. place_power: place a beacon at a site covering the nearest heat vent you do not cover yet (nearest by travel, read when the step starts), tagged \"power\", on a Build mandate: return fire, building toward 1 target, repairing structures below 50% of their hit points and reshaping no ground (17.5 s on site).\n    Give up after 1:00.\n    On failure, move on to the next step.\n  2. hold: hold for 30 s.\n\nRules\n  1. \"flee\", when the commander is at or below 40% HP and the commander took damage in the last 3 s:\n    1. flee_to_safety: walk to the safest own beacon.\n    2. flee_wait: hold for 8 s.\n    Then carry on with the route.\n    Fires at most 3 times, and no sooner than every 30 s.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n\nFallback\n  Stay with the safest own beacon.\n\nBudget\n  6 of 128 size units.\n  17.5 s standing at a beacon along the route.\n",
     "rules": [
       {
         "pointer": "/declarative/route/0",
@@ -32,16 +32,43 @@
             "pick_op": "replace"
           },
           {
+            "pointer": "/declarative/route/0/place_beacon/initial/mandate/roe",
+            "line": 5,
+            "start": 179,
+            "end": 190,
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"HOLD_FIRE\"",
+                  "\"RETURN_FIRE\"",
+                  "\"FREE_FIRE\""
+                ],
+                "titles": [
+                  "hold fire",
+                  "return fire",
+                  "fire freely"
+                ]
+              }
+            },
+            "value_json": "\"RETURN_FIRE\"",
+            "value_text": "",
+            "outside": false,
+            "pick_op": "replace"
+          },
+          {
             "pointer": "/declarative/route/0/place_beacon/initial/mandate/build/repair_threshold_pct",
             "line": 5,
-            "start": 232,
-            "end": 234,
+            "start": 245,
+            "end": 247,
             "shape": {
               "integer": {
                 "min": 0,
                 "max": 100,
                 "unit": "%",
-                "display_unit": "%"
+                "display_unit": "%",
+                "zero_title": "never repairing structures, beacons or walls",
+                "min_text": "0",
+                "max_text": "100"
               }
             },
             "value_json": "50",
@@ -52,8 +79,8 @@
           {
             "pointer": "/declarative/route/0/place_beacon/initial/mandate/build/terraform",
             "line": 5,
-            "start": 260,
-            "end": 279,
+            "start": 273,
+            "end": 292,
             "shape": {
               "choice": {
                 "values": [
@@ -84,7 +111,8 @@
               "integer": {
                 "min": 0,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0"
               }
             },
             "value_json": "60000",
@@ -118,7 +146,8 @@
               "integer": {
                 "min": 1,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0.001"
               }
             },
             "value_json": "30000",
@@ -183,7 +212,9 @@
                 "min": 0,
                 "max": 100,
                 "unit": "%",
-                "display_unit": "%"
+                "display_unit": "%",
+                "min_text": "0",
+                "max_text": "100"
               }
             },
             "value_json": "40",
@@ -200,7 +231,8 @@
               "integer": {
                 "min": 0,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0"
               }
             },
             "value_json": "3000",
@@ -237,7 +269,8 @@
               "integer": {
                 "min": 1,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "0.001"
               }
             },
             "value_json": "8000",
@@ -255,7 +288,9 @@
                 "min": 1,
                 "max": 8,
                 "unit": "",
-                "display_unit": ""
+                "display_unit": "",
+                "min_text": "1",
+                "max_text": "8"
               }
             },
             "value_json": "3",
@@ -272,7 +307,8 @@
               "integer": {
                 "min": 5000,
                 "unit": "ms",
-                "display_unit": "s"
+                "display_unit": "s",
+                "min_text": "5"
               }
             },
             "value_json": "30000",

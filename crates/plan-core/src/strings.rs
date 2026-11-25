@@ -345,7 +345,8 @@ pub const FRESH_NONE: &str = "at no freshness the file names";
 pub const RETREAT_BELOW: &str = "units retreating below";
 /// After a written retreat threshold's percentage.
 pub const RETREAT_BELOW_UNIT: &str = "of their hit points";
-/// A written `retreat_hp_pct` of 0, before its chip.
+/// A written `retreat_hp_pct` of 0, before its chip; and the setting's
+/// `IntegerShape.zero_title` (S3's `zerotitle`: one entry, two readers).
 pub const RETREAT_OFF: &str = "retreat off";
 
 // --- A written 0 and a list's clear (decisions-log item 184 (10)) -----------
@@ -394,8 +395,12 @@ pub const BUILD_PROTECTING: &str = "keeping clear of";
 pub const REPAIR_BELOW: &str = "repairing structures below";
 /// After a written `repair_threshold_pct`'s percentage.
 pub const REPAIR_BELOW_UNIT: &str = "of their hit points";
-/// A written `repair_threshold_pct` of 0, before its chip.
-pub const REPAIR_NEVER: &str = "never repairing";
+/// A written `repair_threshold_pct` of 0, before its chip; and the setting's
+/// `IntegerShape.zero_title` (S3's `zerotitle`: one entry, two readers). At 0
+/// the sim repairs no structure, no beacon and no cracked wall, while the
+/// beacon's units and the commander are still repaired (decision 38;
+/// `site::repair_work`), so the words name what is not repaired.
+pub const REPAIR_NEVER: &str = "never repairing structures, beacons or walls";
 /// A written `rebuild_destroyed` of true.
 pub const REBUILD_ON: &str = "rebuilding destroyed targets";
 /// A written `rebuild_destroyed` of false.
@@ -418,6 +423,21 @@ pub const CLEAR_PROBES: &str = "emptying its probe areas";
 pub const CLEAR_PROTECT: &str = "emptying its protect list";
 /// A set `clear_avoid_areas`.
 pub const CLEAR_AVOID: &str = "emptying its avoid areas";
+
+// --- What a 0 does in a setting (S3's `zerotitle`) ---------------------------
+
+/// A `picket_scouts` of 0: its `IntegerShape.zero_title`, and the prose's
+/// words for a written 0, before its chip.
+pub const PICKET_NONE: &str = "no picket";
+
+// --- The Common row's `roe` (S3's `zerotitle`, carried from `retreat`) -------
+
+/// A `roe` value this build does not name, as written.
+pub const ROE_UNSET: &str = "firing as the file does not say";
+/// After an omitted `roe`'s words in a new beacon's or a switched mandate's
+/// settings: the value is its writ's default, not the player's choice
+/// (decisions-log items 144 (11) and 148 (2); the verifier's `I0003`).
+pub const ROE_BY_DEFAULT: &str = "by default for its writ";
 
 // --- S2's Defend and Attack settings (task `vfy2`) ---------------------------
 
@@ -465,6 +485,15 @@ pub const LAUNCH_FORCE: &str = "raiders stand there";
 pub const LAUNCH_SEGMENT: &str = "of the segment have passed";
 /// A launch with no condition.
 pub const LAUNCH_NEVER: &str = "never, for no launch condition is written";
+/// A written `force_size` of 0, before its chip; and the setting's
+/// `IntegerShape.zero_title` (S3's `zerotitle`). At 0 the sim fields one
+/// raider and launches it as soon as it stands, without gathering at the
+/// staging point (`attack.rs`: `wanted_force` is at least 1, and `staged >= 0`
+/// always holds).
+pub const LAUNCH_FIRST_RAIDER: &str = "launching at once with its first raider, ungathered";
+/// After [`LAUNCH_FIRST_RAIDER`], before a written `segment_ms`'s chip, which
+/// the sim then never reads: the first raider launches before any time does.
+pub const LAUNCH_TIME_UNREAD: &str = "its launch time unread";
 /// Before the retreat conditions.
 pub const ATTACK_RETREAT: &str = "breaking off once";
 /// A retreat's force threshold, before the percentage.

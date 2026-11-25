@@ -90,6 +90,12 @@ pub enum Shape {
         /// [`UNIT_MS`], [`UNIT_PERCENT`], [`UNIT_DOLLARS`], [`UNIT_KW`],
         /// [`UNIT_VOXELS`] or [`UNIT_COUNT`].
         unit: &'static str,
+        /// What a 0 does here, in the player's words ([`crate::strings`]),
+        /// where the sim reads a 0 as turning what the setting governs off
+        /// (`gp.api.v1.IntegerShape.zero_title`); `None` where a 0 is just a
+        /// number. Only the named constructors below set it, each for a
+        /// setting whose bounds admit a 0 (S3's `zerotitle`).
+        zero: Option<&'static str>,
     },
     /// A closed list, each value the JSON text to write with its words.
     Choice {
@@ -164,7 +170,140 @@ impl Shape {
     /// An integer shape.
     #[must_use]
     pub const fn integer(min: Option<i32>, max: Option<i32>, unit: &'static str) -> Shape {
-        Shape::Integer { min, max, unit }
+        Shape::Integer {
+            min,
+            max,
+            unit,
+            zero: None,
+        }
+    }
+
+    /// The Common row's `retreat_hp_pct`: a percentage whose 0 turns the
+    /// beacon's retreat off (decisions-log item 177 (3); the sim's
+    /// `below_retreat` reads a threshold of 0 as never below).
+    #[must_use]
+    pub const fn retreat_threshold() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: Some(100),
+            unit: UNIT_PERCENT,
+            zero: Some(s::RETREAT_OFF),
+        }
+    }
+
+    /// A Build arm's `repair_threshold_pct`: a percentage whose 0 never
+    /// repairs a structure (decision 38; the sim's `repair_work` counts no
+    /// structure under a threshold of 0, and its units are still repaired).
+    #[must_use]
+    pub const fn repair_threshold() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: Some(100),
+            unit: UNIT_PERCENT,
+            zero: Some(s::REPAIR_NEVER),
+        }
+    }
+
+    /// A Defend arm's `picket_scouts`: a count up to a beacon's byte column
+    /// (`E0508`) whose 0 stands the picket down (the sim's Defend mandate
+    /// asks the fabricator for no scout under a count of 0).
+    #[must_use]
+    pub const fn picket_scouts() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: Some(255),
+            unit: UNIT_COUNT,
+            zero: Some(s::PICKET_NONE),
+        }
+    }
+
+    /// An Attack arm's `launch.force_size`: a count of raiders whose 0 is not
+    /// "none": the sim fields one raider and launches it at once, ungathered
+    /// (`attack.rs`'s `wanted_force` and `by_size`).
+    #[must_use]
+    pub const fn force_size() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: None,
+            unit: UNIT_COUNT,
+            zero: Some(s::LAUNCH_FIRST_RAIDER),
+        }
+    }
+
+    /// A Survey arm's `scout_count`: a count up to a beacon's byte column
+    /// (`E0508`) whose 0 fields no scout (the sim's Survey mandate asks the
+    /// fabricator for none under a count of 0; decisions-log item 184 (10)
+    /// gave the field presence, so a written 0 is held).
+    #[must_use]
+    pub const fn scout_count() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: Some(255),
+            unit: UNIT_COUNT,
+            zero: Some(s::SCOUTS_NONE),
+        }
+    }
+
+    /// A Mine arm's `dig_max_depth`: voxels below the seam's original top,
+    /// whose 0 digs the exposed rim only (the sim's miner takes no voxel
+    /// deeper than the depth; item 184 (10)).
+    #[must_use]
+    pub const fn dig_max_depth() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: None,
+            unit: UNIT_VOXELS,
+            zero: Some(s::DIG_RIM_ONLY),
+        }
+    }
+
+    /// A Mine arm's `pillar_spacing`: columns between pillars, whose 0 leaves
+    /// no pillar (the sim's `pillar` reads a spacing of 0 as none; item 184
+    /// (10)).
+    #[must_use]
+    pub const fn pillar_spacing() -> Shape {
+        Shape::Integer {
+            min: Some(0),
+            max: None,
+            unit: UNIT_VOXELS,
+            zero: Some(s::PILLARS_NONE),
+        }
+    }
+
+    /// The words for what a 0 does in this shape
+    /// (`gp.api.v1.IntegerShape.zero_title`), `None` for a shape with none or
+    /// one that is not an integer.
+    #[must_use]
+    pub const fn zero_title(&self) -> Option<&'static str> {
+        match self {
+            Shape::Integer { zero, .. } => *zero,
+            Shape::Choice { .. } | Shape::Reference { .. } => None,
+        }
+    }
+
+    /// The words for `value` in this shape, when it has words of its own: the
+    /// shape's [`Shape::zero_title`] when `value` is 0, `None` otherwise
+    /// (`gp.api.v1.Chip.value_title` and `BeaconSettingRow.value_title`). The
+    /// gateway's one decision of it, so a client tests no value.
+    #[must_use]
+    pub const fn value_title(&self, value: i64) -> Option<&'static str> {
+        if value == 0 { self.zero_title() } else { None }
+    }
+
+    /// The least and the most as they are shown and typed, in
+    /// [`Shape::display_unit`], each `None` exactly when its bound is
+    /// (`gp.api.v1.IntegerShape.min_text`, `max_text`), written by
+    /// [`shown_text`], the one writer of a chip's `value_text`; both `None`
+    /// for a shape that is not an integer.
+    #[must_use]
+    pub fn bound_texts(&self) -> (Option<String>, Option<String>) {
+        match self {
+            Shape::Integer { min, max, unit, .. } => (
+                min.map(|least| shown_text(unit, i64::from(least))),
+                max.map(|most| shown_text(unit, i64::from(most))),
+            ),
+            Shape::Choice { .. } | Shape::Reference { .. } => (None, None),
+        }
     }
 
     /// A whole percentage, 0 to 100 (spec section 10: "Percent, integer.
@@ -311,7 +450,7 @@ pub enum Typed {
 ///
 /// [`Typed`]; and [`Typed::NotANumber`] for a shape that is not an integer.
 pub fn typed_value(shape: &Shape, typed: &str) -> Result<i64, Typed> {
-    let Shape::Integer { min, max, unit } = shape else {
+    let Shape::Integer { min, max, unit, .. } = shape else {
         return Err(Typed::NotANumber);
     };
     let text = typed.trim();
@@ -639,6 +778,87 @@ mod tests {
         assert_eq!(Shape::percent().display_unit(), Some("%"));
         assert_eq!(Shape::count("").display_unit(), Some(""));
         assert_eq!(Shape::boolean().display_unit(), None);
+    }
+
+    /// A zero's title is said only for a 0, only by the three settings whose 0
+    /// turns what they govern off, and each of their bounds admits the 0 it
+    /// names (S3's `zerotitle`).
+    #[test]
+    fn a_zero_title_names_only_a_zero_its_bounds_admit() {
+        use crate::strings as s;
+        for (shape, title) in [
+            (Shape::retreat_threshold(), s::RETREAT_OFF),
+            (Shape::repair_threshold(), s::REPAIR_NEVER),
+            (Shape::picket_scouts(), s::PICKET_NONE),
+        ] {
+            assert_eq!(shape.zero_title(), Some(title));
+            assert_eq!(shape.value_title(0), Some(title));
+            assert_eq!(shape.value_title(1), None, "{title}: 1 is just a number");
+            assert_eq!(shape.value_title(-1), None, "{title}: -1 is no zero");
+            let Shape::Integer { min, max, .. } = shape else {
+                panic!("an integer");
+            };
+            assert!(
+                min.is_some_and(|least| least <= 0),
+                "{title}: 0 is admitted"
+            );
+            assert!(max.is_none_or(|most| most >= 0), "{title}: 0 is admitted");
+        }
+        for plain in [
+            Shape::percent(),
+            Shape::duration(),
+            Shape::count(super::UNIT_COUNT),
+            Shape::integer(None, None, super::UNIT_KW),
+        ] {
+            assert_eq!(plain.zero_title(), None);
+            assert_eq!(plain.value_title(0), None);
+        }
+        assert_eq!(Shape::boolean().value_title(0), None);
+        // The picket's ceiling is the beacon's byte column, as the verifier's
+        // `E0508` holds it.
+        assert_eq!(
+            Shape::picket_scouts(),
+            Shape::Integer {
+                min: Some(0),
+                max: Some(i32::from(u8::MAX)),
+                unit: super::UNIT_COUNT,
+                zero: Some(s::PICKET_NONE),
+            }
+        );
+    }
+
+    /// Each bound's text is the bound as `shown_text` writes a chip's value,
+    /// in the unit it is typed in, and present exactly when the bound is (S3's
+    /// `zerotitle`: a duration's bounds were said in milliseconds beside a
+    /// field typed in seconds).
+    #[test]
+    fn a_bound_is_said_in_the_unit_it_is_typed_in() {
+        assert_eq!(
+            Shape::integer(Some(500), Some(90_000), super::UNIT_MS).bound_texts(),
+            (Some(String::from("0.5")), Some(String::from("90")))
+        );
+        assert_eq!(
+            Shape::duration().bound_texts(),
+            (Some(String::from("0")), None)
+        );
+        assert_eq!(
+            Shape::percent().bound_texts(),
+            (Some(String::from("0")), Some(String::from("100")))
+        );
+        assert_eq!(
+            Shape::integer(None, None, super::UNIT_DOLLARS).bound_texts(),
+            (None, None)
+        );
+        assert_eq!(Shape::boolean().bound_texts(), (None, None));
+        for value in [-1_500_i32, -1, 0, 1, 999, 1_000, 1_500, 86_400_000] {
+            let (least, most) =
+                Shape::integer(Some(value), Some(value), super::UNIT_MS).bound_texts();
+            assert_eq!(
+                least,
+                Some(super::shown_text(super::UNIT_MS, i64::from(value)))
+            );
+            assert_eq!(least, most);
+        }
     }
 
     /// Every arm list names arms its message's oneof declares, so a rename in

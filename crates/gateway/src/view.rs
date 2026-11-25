@@ -265,7 +265,7 @@ pub fn value_shape(shape: &pharmakos_plan_core::shape::Shape) -> pharmakos_proto
     use pharmakos_plan_core::shape::Shape;
     use pharmakos_proto::json::Json;
     let (arm, body) = match shape {
-        Shape::Integer { min, max, unit } => {
+        Shape::Integer { min, max, unit, .. } => {
             let mut entries = Vec::new();
             if let Some(min) = min {
                 entries.push((String::from("min"), Json::Number(min.to_string())));
@@ -280,6 +280,20 @@ pub fn value_shape(shape: &pharmakos_plan_core::shape::Shape) -> pharmakos_proto
                 String::from("display_unit"),
                 Json::String(pharmakos_plan_core::shape::display_unit(unit).to_owned()),
             ));
+            // What a 0 does here, written only where the shape has words for
+            // it; and each bound as it is shown and typed, in `display_unit`,
+            // written exactly when the bound is, by the writer of a chip's
+            // `value_text` (S3's `zerotitle`).
+            if let Some(zero) = shape.zero_title() {
+                entries.push((String::from("zero_title"), Json::String(zero.to_owned())));
+            }
+            let (min_text, max_text) = shape.bound_texts();
+            if let Some(min_text) = min_text {
+                entries.push((String::from("min_text"), Json::String(min_text)));
+            }
+            if let Some(max_text) = max_text {
+                entries.push((String::from("max_text"), Json::String(max_text)));
+            }
             ("integer", Json::Object(entries))
         }
         Shape::Choice { options } => (
