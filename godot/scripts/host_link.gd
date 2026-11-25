@@ -12,9 +12,10 @@
 #
 # Then two connections, both to 127.0.0.1 at the announced port, each with its own token
 # in an `Authorization: Bearer` handshake header: the ADMIN connection, which controls the
-# match, and the SEAT connection, which watches it. Before connecting, each peer's inbound
-# buffer is raised to 1 MiB, because Godot's default of about 64 KiB is smaller than one
-# page of the view.
+# match, and the SEAT connection, which watches it. Before connecting, each peer's buffers
+# are sized from the bridge's `watch_transport_limits`: inbound, the largest answer the gateway
+# sends and a frame's header (`pharmakos_proto::transport::MAX_ANSWER_FRAME_BYTES`); outbound,
+# the largest message it reads. Godot's default of about 64 KiB holds neither.
 #
 # THE TOKENS LIVE IN THIS SCRIPT'S VARIABLES AND NOWHERE ELSE: never printed, never
 # logged, never written to a file, a scene or a resource, never put on the config line or
