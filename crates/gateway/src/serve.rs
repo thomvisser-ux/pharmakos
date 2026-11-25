@@ -980,8 +980,13 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
         audit_broken: Cell::new(false),
     };
     let held = Arc::clone(&stopped);
+    // The surface thread says when its first flush has landed: the announce
+    // waits for it (a host that cannot serve does not announce), and that
+    // flush holds whatever the opening left, a `sealed` save's resumed Push
+    // start included.
+    let (first, first_flushed) = channel::<Result<(), Error>>();
     let surface_thread = pharmakos_plan_core::stack::player_text_thread("gateway surface")
-        .spawn(move || serve_surface(&mut surface, &writer, &mut in_process, &work, &held))
+        .spawn(move || serve_surface(&mut surface, &writer, &mut in_process, &work, &held, &first))
         .map_err(|error| {
             Error::internal(said!(
                 "starting the surface thread: {}",
@@ -989,6 +994,7 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
             ))
         })?;
     let dispatcher = spawn_dispatcher(listener.accept()?, policy, jobs.clone(), drops, stopped)?;
+    let surface_thread = first_flush_landed(&first_flushed, surface_thread)?;
     announce
         .write_all(written.as_bytes())
         .and_then(|()| announce.flush())
@@ -1022,6 +1028,34 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
         Err(_) => Err(Error::internal(
             "the surface thread ended in a panic, and the match it served is not saved past it",
         )),
+    }
+}
+
+/// Wait for the surface thread's first flush, and hand its handle back once
+/// it has landed.
+///
+/// # Errors
+///
+/// The first flush's own error when it failed, said before any announce
+/// line, as a line the host refuses is; [`crate::error::Code::Internal`]
+/// when the thread ended without saying.
+fn first_flush_landed(
+    first_flushed: &Receiver<Result<(), Error>>,
+    surface_thread: std::thread::JoinHandle<Result<(), Error>>,
+) -> Result<std::thread::JoinHandle<Result<(), Error>>, Error> {
+    match first_flushed.recv() {
+        Ok(Ok(())) => Ok(surface_thread),
+        Ok(Err(error)) => Err(error),
+        // The thread ended without saying: what it returned says why.
+        Err(_) => match surface_thread.join() {
+            Ok(Err(error)) => Err(error),
+            Ok(Ok(())) => Err(Error::internal(
+                "the surface thread ended before its first write was made",
+            )),
+            Err(_) => Err(Error::internal(
+                "the surface thread ended in a panic before the match was announced",
+            )),
+        },
     }
 }
 
@@ -1961,11 +1995,17 @@ fn serve_surface(
     in_process: &mut InProcessSeats,
     work: &Receiver<Job>,
     stopped: &OnceLock<HostStopped>,
+    first: &Sender<Result<(), Error>>,
 ) -> Result<(), Error> {
     in_process.plan(surface);
     if let Err(error) = writer.flush(surface) {
-        return Err(writer.stop(surface, error, stopped));
+        let error = writer.stop(surface, error, stopped);
+        // `run_in` waits on this before it announces; a `run_in` that has
+        // gone has nobody to tell.
+        let _told = first.send(Err(error.clone()));
+        return Err(error);
     }
+    let _told = first.send(Ok(()));
     while let Ok(job) = work.recv() {
         let owed = match job {
             Job::Open { token, reply } => {

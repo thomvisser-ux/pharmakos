@@ -2606,3 +2606,33 @@ fn a_connection_opened_after_the_stop_is_told_why() {
     );
     unblock_the_save(&host.folder);
 }
+
+/// A host that cannot serve does not announce (fix pass 3, item 4; review
+/// 3's probe R3H, which saw it announce and then stop): a resume whose first
+/// write fails (its audit log read-only, the `resumed` line the first thing
+/// written) returns the typed error before any announce line, and a resume
+/// once the log is writable again announces as usual.
+#[test]
+fn a_host_whose_first_write_fails_does_not_announce() {
+    const MATCH_ID: &str = "m-opsave-durable-first";
+    let root = data_root(MATCH_ID);
+    host_and_quit(&root, &new_line(durable_config(MATCH_ID, 2)))
+        .expect("a host that opened and was closed");
+    let folder = folder_of(&root, MATCH_ID);
+    audit_read_only(&folder, true);
+    let error = resumed(&root, durable_config(MATCH_ID, 2))
+        .expect_err("a host that cannot write does not announce");
+    assert_eq!(error.code(), pharmakos_gateway::error::Code::Internal);
+    assert!(
+        error
+            .message()
+            .starts_with("the audit log could not be written ("),
+        "{}",
+        error.message()
+    );
+    audit_read_only(&folder, false);
+    assert_eq!(
+        resumed(&root, durable_config(MATCH_ID, 2)).expect("a resume"),
+        (String::from("lull"), 1)
+    );
+}
