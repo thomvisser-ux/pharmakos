@@ -1994,82 +1994,921 @@ fn manifest_features() -> Vec<String> {
     features
 }
 
-/// The structs the world owns whose collection fields
-/// [`every_vector_the_world_owns_keeps_its_room_or_says_why_not`] reads, by
-/// file and name, besides every `*Table` struct in the sim's sources, which it
-/// finds on its own.
-const OWNED_STRUCTS: &[(&str, &str)] = &[
-    ("src/world.rs", "World"),
-    ("src/events.rs", "EventBus"),
-    ("src/voxels.rs", "VoxelStore"),
-    ("src/chunks.rs", "ChunkDigests"),
-    ("src/runner.rs", "MatchState"),
-    ("src/bore.rs", "Bore"),
-    ("src/terrain.rs", "GeneratedSurface"),
-    ("src/support.rs", "Scratch"),
-    ("src/support.rs", "SupportRule"),
-    ("src/survey.rs", "Memory"),
-    ("src/attack.rs", "BreachScratch"),
-    ("src/interpreter/state.rs", "Interpreter"),
-    ("src/interpreter/state.rs", "PlanState"),
-    ("src/tables.rs", "Csr"),
-    ("src/pathing/router.rs", "Router"),
-    ("src/pathing/search.rs", "Scratch"),
-    ("src/pathing/search.rs", "Heap"),
-    ("src/pathing/repair.rs", "Repairer"),
-    ("src/pathing/clusters.rs", "Clusters"),
-    ("src/pathing/reach.rs", "Reach"),
-    ("src/pathing/surface.rs", "Surface"),
+/// **The source guard's walker.** The types the world owns are not a hand
+/// list: they are found by walking field types from `World` through the
+/// sim's sources, every struct and enum reachable by value (through
+/// `Option`, `Box`, tuples, arrays and every other wrapper), and every `type`
+/// alias expanded. A name is resolved as the compiler would find it, as far
+/// as a reading of the source can: a path names its module (`crate::a::B`,
+/// or `a::B` relative), a bare name is the file's own item or what the
+/// file's `use` declarations bring in; where that still leaves more than one
+/// item, every one of them is walked, so the walk errs towards reading too
+/// much. A field is *plain* when `Vec`, `VecDeque` or `String` names a type
+/// anywhere in it, qualified paths included, or when it holds a `Box<[T]>`;
+/// a type name the walker cannot resolve is an error naming the field, never
+/// a skip.
+mod owned {
+    use super::{Token, tokens};
+
+    /// One field of a struct, or of an enum's variant: its name (a tuple
+    /// field's index) and its type's tokens.
+    #[derive(Clone, Debug)]
+    struct Field {
+        name: String,
+        ty: Vec<Token>,
+    }
+
+    /// A struct or enum defined at module level.
+    #[derive(Clone, Debug)]
+    struct Item {
+        file: String,
+        module: Vec<String>,
+        name: String,
+        generics: Vec<String>,
+        fields: Vec<Field>,
+    }
+
+    /// A module-level `type` alias.
+    #[derive(Clone, Debug)]
+    struct Alias {
+        file: String,
+        name: String,
+        generics: Vec<String>,
+        rhs: Vec<Token>,
+    }
+
+    /// A `use` declaration's binding: in `file`, `name` means `path`; a glob
+    /// binds no name and brings in every item of `path`.
+    #[derive(Clone, Debug)]
+    struct Use {
+        file: String,
+        name: Option<String>,
+        path: Vec<String>,
+    }
+
+    /// Every item, alias and `use` of a set of sources.
+    #[derive(Default, Debug)]
+    pub(super) struct Sources {
+        items: Vec<Item>,
+        aliases: Vec<Alias>,
+        uses: Vec<Use>,
+    }
+
+    /// What the walk found: every plain field `(file, type, field)`, every
+    /// field naming a type it could not resolve `(file, type, field, name)`,
+    /// and the types it walked `(file, type)`.
+    #[derive(Default, Debug)]
+    pub(super) struct Walked {
+        pub(super) plain: Vec<(String, String, String)>,
+        pub(super) unresolved: Vec<(String, String, String, String)>,
+        pub(super) types: Vec<(String, String)>,
+    }
+
+    /// The names that mark a field plain.
+    const PLAIN: &[&str] = &["Vec", "VecDeque", "String"];
+
+    /// Types the walker knows and does not descend into: the language's
+    /// scalars and the standard library's wrappers, whose arguments it walks.
+    const KNOWN: &[&str] = &[
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "usize",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "isize",
+        "bool",
+        "char",
+        "str",
+        "Option",
+        "Box",
+        "Arc",
+        "Rc",
+        "Cell",
+        "RefCell",
+        "Result",
+        "PhantomData",
+        "BTreeMap",
+        "BTreeSet",
+        "AtomicBool",
+        "AtomicU8",
+        "AtomicU32",
+        "AtomicU64",
+        "NonZeroU8",
+        "NonZeroU16",
+        "NonZeroU32",
+        "NonZeroU64",
+        "NonZeroUsize",
+        "NonZeroI32",
+        "NonZeroI64",
+        "Vec",
+        "VecDeque",
+        "String",
+    ];
+
+    fn word(token: Option<&Token>) -> Option<&str> {
+        match token {
+            Some(Token::Word(word)) => Some(word),
+            _ => None,
+        }
+    }
+
+    fn is_punct(token: Option<&Token>, text: &str) -> bool {
+        matches!(token, Some(Token::Punct(p)) if p == text)
+    }
+
+    /// The module path of a source file: `src/a/b.rs` is `a::b`, `src/a.rs`
+    /// is `a`, and `src/lib.rs` the crate root.
+    fn module_of(file: &str) -> Vec<String> {
+        let inner = file.strip_prefix("src/").unwrap_or(file);
+        let inner = inner.strip_suffix(".rs").unwrap_or(inner);
+        let inner = inner.strip_suffix("/mod").unwrap_or(inner);
+        if inner == "lib" {
+            return Vec::new();
+        }
+        inner.split('/').map(str::to_owned).collect()
+    }
+
+    /// The index past the bracketed group that opens at `i` (`(`, `[`,
+    /// `{` or `<`), or the end.
+    fn past_group(tokens: &[Token], i: usize) -> usize {
+        let mut depth = 0_i64;
+        let mut j = i;
+        while let Some(token) = tokens.get(j) {
+            if let Token::Punct(p) = token {
+                match p.as_str() {
+                    "(" | "[" | "{" | "<" => depth += 1,
+                    ")" | "]" | "}" | ">" => depth -= 1,
+                    _ => {}
+                }
+            }
+            j += 1;
+            if depth == 0 {
+                return j;
+            }
+        }
+        j
+    }
+
+    /// The index past an attribute (`#[..]` or `#![..]`) at `i`, if one opens
+    /// there.
+    fn past_attribute(tokens: &[Token], i: usize) -> Option<usize> {
+        if !is_punct(tokens.get(i), "#") {
+            return None;
+        }
+        let open = if is_punct(tokens.get(i + 1), "!") {
+            i + 2
+        } else {
+            i + 1
+        };
+        is_punct(tokens.get(open), "[").then(|| past_group(tokens, open))
+    }
+
+    /// The index past a visibility at `i` (`pub`, `pub(crate)`,
+    /// `pub(in ..)`), or `i`.
+    fn past_visibility(tokens: &[Token], i: usize) -> usize {
+        if word(tokens.get(i)) != Some("pub") {
+            return i;
+        }
+        if is_punct(tokens.get(i + 1), "(") {
+            past_group(tokens, i + 1)
+        } else {
+            i + 1
+        }
+    }
+
+    /// The generic parameters' names of a `<..>` group at `i`, and the index
+    /// past it.
+    fn generics(tokens: &[Token], i: usize) -> (Vec<String>, usize) {
+        if !is_punct(tokens.get(i), "<") {
+            return (Vec::new(), i);
+        }
+        let end = past_group(tokens, i);
+        let mut names = Vec::new();
+        let mut expect = true;
+        let mut depth = 0_i64;
+        for token in tokens.get(i + 1..end.saturating_sub(1)).unwrap_or(&[]) {
+            match token {
+                Token::Punct(p) if p == "<" || p == "(" || p == "[" => depth += 1,
+                Token::Punct(p) if p == ">" || p == ")" || p == "]" => depth -= 1,
+                Token::Punct(p) if p == "," && depth == 0 => expect = true,
+                Token::Word(w) if expect && depth == 0 && w != "const" => {
+                    names.push(w.clone());
+                    expect = false;
+                }
+                Token::Other if depth == 0 => expect = false,
+                _ => {}
+            }
+        }
+        (names, end)
+    }
+
+    /// Split `tokens[from..to]` at its top-level commas.
+    fn split_commas(tokens: &[Token], from: usize, to: usize) -> Vec<Vec<Token>> {
+        let mut parts = Vec::new();
+        let mut part = Vec::new();
+        let mut depth = 0_i64;
+        for token in tokens.get(from..to).unwrap_or(&[]) {
+            if let Token::Punct(p) = token {
+                match p.as_str() {
+                    "(" | "[" | "{" | "<" => depth += 1,
+                    ")" | "]" | "}" | ">" => depth -= 1,
+                    "," if depth == 0 => {
+                        parts.push(core::mem::take(&mut part));
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            part.push(token.clone());
+        }
+        if !part.is_empty() {
+            parts.push(part);
+        }
+        parts
+    }
+
+    /// A part's tokens with its leading attributes and visibility removed.
+    fn bare(part: &[Token]) -> Vec<Token> {
+        let mut i = 0;
+        while let Some(end) = past_attribute(part, i) {
+            i = end;
+        }
+        let i = past_visibility(part, i);
+        part.get(i..).unwrap_or(&[]).to_vec()
+    }
+
+    /// The named fields inside braces, `tokens[from..to]`.
+    fn named_fields(tokens: &[Token], from: usize, to: usize, prefix: &str) -> Vec<Field> {
+        split_commas(tokens, from, to)
+            .into_iter()
+            .filter_map(|part| {
+                let part = bare(&part);
+                let name = word(part.first())?;
+                is_punct(part.get(1), ":").then(|| Field {
+                    name: format!("{prefix}{name}"),
+                    ty: part.get(2..).unwrap_or(&[]).to_vec(),
+                })
+            })
+            .collect()
+    }
+
+    /// The tuple fields inside parentheses, `tokens[from..to]`, named by
+    /// index.
+    fn tuple_fields(tokens: &[Token], from: usize, to: usize, prefix: &str) -> Vec<Field> {
+        split_commas(tokens, from, to)
+            .into_iter()
+            .enumerate()
+            .map(|(index, part)| Field {
+                name: format!("{prefix}{index}"),
+                ty: bare(&part),
+            })
+            .collect()
+    }
+
+    /// The fields of an enum's variants inside braces, `tokens[from..to]`,
+    /// named `Variant.field` (`Variant.0` for a tuple variant's).
+    fn variant_fields(tokens: &[Token], from: usize, to: usize) -> Vec<Field> {
+        let mut fields = Vec::new();
+        for variant in split_commas(tokens, from, to) {
+            let variant = bare(&variant);
+            let Some(name) = word(variant.first()) else {
+                continue;
+            };
+            let prefix = format!("{name}.");
+            let close = past_group(&variant, 1);
+            if is_punct(variant.get(1), "{") {
+                fields.extend(named_fields(&variant, 2, close.saturating_sub(1), &prefix));
+            } else if is_punct(variant.get(1), "(") {
+                fields.extend(tuple_fields(&variant, 2, close.saturating_sub(1), &prefix));
+            }
+        }
+        fields
+    }
+
+    /// Expand a `use` tree, `tokens`, under `base`, into bindings.
+    fn use_tree(tokens: &[Token], base: &[String], file: &str, out: &mut Vec<Use>) {
+        let mut path = base.to_vec();
+        let mut i = 0;
+        while let Some(token) = tokens.get(i) {
+            match token {
+                Token::Word(w) if w == "as" => {
+                    if let Some(alias) = word(tokens.get(i + 1))
+                        && alias != "_"
+                    {
+                        out.push(Use {
+                            file: file.to_owned(),
+                            name: Some(alias.to_owned()),
+                            path: path.clone(),
+                        });
+                    }
+                    return;
+                }
+                Token::Word(w) => path.push(w.clone()),
+                Token::Punct(p) if p == "*" => {
+                    out.push(Use {
+                        file: file.to_owned(),
+                        name: None,
+                        path,
+                    });
+                    return;
+                }
+                Token::Punct(p) if p == "{" => {
+                    let end = past_group(tokens, i);
+                    for part in split_commas(tokens, i + 1, end.saturating_sub(1)) {
+                        use_tree(&part, &path, file, out);
+                    }
+                    return;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if let Some(last) = path.last() {
+            let (name, path) = if last == "self" {
+                let module: Vec<String> = path.iter().take(path.len() - 1).cloned().collect();
+                (module.last().cloned(), module)
+            } else {
+                (Some(last.clone()), path.clone())
+            };
+            if let Some(name) = name {
+                out.push(Use {
+                    file: file.to_owned(),
+                    name: Some(name),
+                    path,
+                });
+            }
+        }
+    }
+
+    /// The struct or enum whose keyword is at `i`, and the index past it.
+    fn read_item(
+        tokens: &[Token],
+        i: usize,
+        is_enum: bool,
+        file: &str,
+        module: &[String],
+    ) -> Option<(Item, usize)> {
+        let name = word(tokens.get(i + 1))?.to_owned();
+        let (generics, mut j) = generics(tokens, i + 2);
+        while let Some(t) = tokens.get(j) {
+            if ["{", "(", ";"].iter().any(|p| is_punct(Some(t), p)) {
+                break;
+            }
+            j += 1;
+        }
+        let end = past_group(tokens, j);
+        let inner = end.saturating_sub(1);
+        let fields = if is_punct(tokens.get(j), "{") {
+            if is_enum {
+                variant_fields(tokens, j + 1, inner)
+            } else {
+                named_fields(tokens, j + 1, inner, "")
+            }
+        } else if is_punct(tokens.get(j), "(") {
+            tuple_fields(tokens, j + 1, inner, "")
+        } else {
+            Vec::new()
+        };
+        Some((
+            Item {
+                file: file.to_owned(),
+                module: module.to_vec(),
+                name,
+                generics,
+                fields,
+            },
+            end,
+        ))
+    }
+
+    /// Read every module-level struct, enum, `type` alias and `use` of
+    /// `text`, the source of `file`, into `out`. Items inside a function, an
+    /// `impl` or a `trait` are not the module's and are left out (an
+    /// associated `type` is not an alias).
+    pub(super) fn read(file: &str, text: &str, out: &mut Sources) {
+        let tokens = tokens(text);
+        let module = module_of(file);
+        // The kind of each open brace: true for a module's.
+        let mut blocks: Vec<bool> = Vec::new();
+        let mut last_keyword = "";
+        let mut i = 0;
+        while let Some(token) = tokens.get(i) {
+            let at_module = blocks.iter().all(|module| *module);
+            match token {
+                Token::Punct(p) if p == "{" => {
+                    blocks.push(last_keyword == "mod");
+                    last_keyword = "";
+                }
+                Token::Punct(p) if p == "}" => {
+                    blocks.pop();
+                }
+                Token::Punct(p) if p == ";" => last_keyword = "",
+                Token::Word(w) if at_module && w == "use" => {
+                    let mut k = i + 1;
+                    while tokens.get(k).is_some_and(|t| !is_punct(Some(t), ";")) {
+                        k += 1;
+                    }
+                    let tree = tokens.get(i + 1..k).unwrap_or(&[]);
+                    use_tree(tree, &[], file, &mut out.uses);
+                    i = k;
+                }
+                Token::Word(w) if at_module && (w == "struct" || w == "enum") => {
+                    if let Some((item, end)) = read_item(&tokens, i, w == "enum", file, &module) {
+                        out.items.push(item);
+                        i = end;
+                        last_keyword = "";
+                        continue;
+                    }
+                }
+                Token::Word(w) if at_module && w == "type" => {
+                    if let Some(name) = word(tokens.get(i + 1)) {
+                        let name = name.to_owned();
+                        let (generics, j) = generics(&tokens, i + 2);
+                        if is_punct(tokens.get(j), "=") {
+                            let mut k = j + 1;
+                            let mut rhs = Vec::new();
+                            while let Some(t) = tokens.get(k) {
+                                if is_punct(Some(t), ";") {
+                                    break;
+                                }
+                                rhs.push(t.clone());
+                                k += 1;
+                            }
+                            out.aliases.push(Alias {
+                                file: file.to_owned(),
+                                name,
+                                generics,
+                                rhs,
+                            });
+                            i = k;
+                        }
+                    }
+                }
+                Token::Word(w)
+                    if [
+                        "mod",
+                        "impl",
+                        "trait",
+                        "fn",
+                        "struct",
+                        "enum",
+                        "union",
+                        "macro_rules",
+                    ]
+                    .contains(&w.as_str()) =>
+                {
+                    last_keyword = if w == "mod" { "mod" } else { "other" };
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
+    /// The type paths a type's tokens name (`a::b::C` is one path), leaving
+    /// out constants (an array's length) and keywords; and whether it holds
+    /// a `Box<[..]>`.
+    fn paths(ty: &[Token]) -> (Vec<Vec<String>>, bool) {
+        let mut paths = Vec::new();
+        let mut boxed_slice = false;
+        let mut current: Vec<String> = Vec::new();
+        for (index, token) in ty.iter().enumerate() {
+            if let Token::Word(w) = token {
+                if is_punct(ty.get(index + 1), "::") {
+                    current.push(w.clone());
+                    continue;
+                }
+                let keyword = ["dyn", "mut", "const", "for", "impl", "Self"].contains(&w.as_str());
+                let constant = w.len() > 1
+                    && w.chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+                if w == "Box"
+                    && is_punct(ty.get(index + 1), "<")
+                    && is_punct(ty.get(index + 2), "[")
+                {
+                    boxed_slice = true;
+                }
+                if !keyword && !constant {
+                    current.push(w.clone());
+                    paths.push(core::mem::take(&mut current));
+                }
+                current.clear();
+            } else if !is_punct(Some(token), "::") {
+                current.clear();
+            }
+        }
+        (paths, boxed_slice)
+    }
+
+    /// Whether `module` is the module a path's prefix names, from a file in
+    /// `from`: the same module (`crate::a::b`), one of its children (an item
+    /// re-exported from a child), or the prefix read relative to `from` or
+    /// to any parent of it.
+    fn names_module(module: &[String], prefix: &[String], from: &[String]) -> bool {
+        let prefix: Vec<String> = prefix
+            .iter()
+            .filter(|s| !["crate", "self", "super"].contains(&s.as_str()))
+            .cloned()
+            .collect();
+        if module.starts_with(&prefix) || module.ends_with(&prefix) {
+            return true;
+        }
+        let mut relative = from.to_vec();
+        relative.extend(prefix.iter().cloned());
+        module.starts_with(&relative)
+    }
+
+    /// The items a type path names, read from the file `from`.
+    fn resolve<'s>(sources: &'s Sources, from: &str, path: &[String]) -> Vec<&'s Item> {
+        let Some(name) = path.last() else {
+            return Vec::new();
+        };
+        // A name a `use .. as` binds in this file is the path it renames.
+        if let [only] = path
+            && let Some(renamed) = sources.uses.iter().find(|u| {
+                u.file == from && u.name.as_ref() == Some(only) && u.path.last() != Some(only)
+            })
+        {
+            return resolve(sources, from, &renamed.path);
+        }
+        let all: Vec<&Item> = sources.items.iter().filter(|i| &i.name == name).collect();
+        if all.len() <= 1 {
+            return all;
+        }
+        let from_module = module_of(from);
+        let narrowed: Vec<&Item> = if path.len() > 1 {
+            let prefix = path.get(..path.len() - 1).unwrap_or(&[]);
+            all.iter()
+                .copied()
+                .filter(|item| names_module(&item.module, prefix, &from_module))
+                .collect()
+        } else {
+            let own: Vec<&Item> = all.iter().copied().filter(|i| i.file == from).collect();
+            if own.is_empty() {
+                let mut found = Vec::new();
+                for binding in sources.uses.iter().filter(|u| u.file == from) {
+                    match &binding.name {
+                        Some(bound) if bound == name => {
+                            let prefix = binding.path.get(..binding.path.len().saturating_sub(1));
+                            found.extend(all.iter().copied().filter(|item| {
+                                Some(&item.name) == binding.path.last()
+                                    && names_module(
+                                        &item.module,
+                                        prefix.unwrap_or(&[]),
+                                        &from_module,
+                                    )
+                            }));
+                        }
+                        None => found.extend(all.iter().copied().filter(|item| {
+                            names_module(&item.module, &binding.path, &from_module)
+                        })),
+                        _ => {}
+                    }
+                }
+                found
+            } else {
+                own
+            }
+        };
+        if narrowed.is_empty() { all } else { narrowed }
+    }
+
+    /// Walk from `root` (`(file, name)`), descending into every type named
+    /// in a field, except `terminal` types, which are reached and not read.
+    pub(super) fn walk(sources: &Sources, root: (&str, &str), terminal: &[&str]) -> Walked {
+        let mut walked = Walked::default();
+        let mut queue: Vec<&Item> = sources
+            .items
+            .iter()
+            .filter(|item| item.file == root.0 && item.name == root.1)
+            .collect();
+        while let Some(item) = queue.pop() {
+            let key = (item.file.clone(), item.name.clone());
+            if walked.types.contains(&key) {
+                continue;
+            }
+            walked.types.push(key);
+            for field in &item.fields {
+                let mut plain = false;
+                let mut pending: Vec<(Vec<Token>, Vec<String>, String)> =
+                    vec![(field.ty.clone(), item.generics.clone(), item.file.clone())];
+                let mut expanded: Vec<String> = Vec::new();
+                while let Some((ty, generics, from)) = pending.pop() {
+                    let (named, boxed_slice) = paths(&ty);
+                    plain |= boxed_slice;
+                    for path in named {
+                        let Some(name) = path.last() else { continue };
+                        if PLAIN.contains(&name.as_str()) {
+                            plain = true;
+                        }
+                        if KNOWN.contains(&name.as_str())
+                            || generics.contains(name)
+                            || terminal.contains(&name.as_str())
+                        {
+                            continue;
+                        }
+                        let aliases: Vec<&Alias> =
+                            sources.aliases.iter().filter(|a| &a.name == name).collect();
+                        let items = resolve(sources, &from, &path);
+                        if aliases.is_empty() && items.is_empty() {
+                            walked.unresolved.push((
+                                item.file.clone(),
+                                item.name.clone(),
+                                field.name.clone(),
+                                name.clone(),
+                            ));
+                            continue;
+                        }
+                        for alias in aliases {
+                            if !expanded.contains(&alias.name) {
+                                expanded.push(alias.name.clone());
+                                let mut scope = generics.clone();
+                                scope.extend(alias.generics.iter().cloned());
+                                pending.push((alias.rhs.clone(), scope, alias.file.clone()));
+                            }
+                        }
+                        queue.extend(items);
+                    }
+                }
+                if plain {
+                    walked
+                        .plain
+                        .push((item.file.clone(), item.name.clone(), field.name.clone()));
+                }
+            }
+        }
+        walked.plain.sort();
+        walked.plain.dedup();
+        walked.unresolved.sort();
+        walked.types.sort();
+        walked
+    }
+
+    /// The walker on sources given as `(file, text)` pairs, from `World`.
+    fn walk_texts(files: &[(&str, &str)], terminal: &[&str]) -> Walked {
+        let mut sources = Sources::default();
+        for (file, text) in files {
+            read(file, text, &mut sources);
+        }
+        walk(&sources, ("src/world.rs", "World"), terminal)
+    }
+
+    /// The walker's own cases: every way a review found to hide a vector
+    /// from a hand list, a name two modules define, and an unresolved type,
+    /// which must fail.
+    #[test]
+    fn the_walker_finds_every_vector_the_world_holds() {
+        let world = r"
+            use crate::ids::Row;
+            use crate::other::{self, Deep as Deeper};
+            pub struct World {
+                plain: Vec<u32>,
+                qualified: std::vec::Vec<u32>,
+                aliased: Rows,
+                optional: Option<Vec<u8>>,
+                pair: (u8, std::collections::VecDeque<u8>),
+                pub(in crate::world) scoped: String,
+                regrown: Box<[u32]>,
+                held: Holder,
+                elsewhere: Deeper,
+                generic: Wrap<Leaf>,
+                #[allow(dead_code)]
+                array: [Leaf; CHUNK_VOXELS],
+                kinds: Kinds,
+                tuple: TupleStruct,
+                reserved: Reserved<Leaf>,
+                rows: Reserved<Row>,
+                fine: u32,
+            }
+            pub(crate) struct Holder { buf: Vec<u32> }
+            type Rows = Vec<Leaf>;
+            struct Wrap<T> { inner: T, count: u32 }
+            pub struct Leaf { x: u8 }
+            pub enum Kinds { A, B(Vec<u8>), C { list: Vec<u8> } }
+            pub struct TupleStruct(pub u8, String);
+            impl World { type Hidden = Vec<u8>; fn f() { struct Local { v: Vec<u8> } } }
+        ";
+        let other = "pub struct Deep { pub(crate) items: Vec<super::world::Leaf> }";
+        let ids = "pub struct Row(u32);";
+        let settings = "pub enum Row { Settings { list: Vec<u8> } }";
+        let walked = walk_texts(
+            &[
+                ("src/world.rs", world),
+                ("src/other.rs", other),
+                ("src/ids.rs", ids),
+                ("src/interpreter.rs", settings),
+            ],
+            &["Reserved"],
+        );
+        let plain: Vec<String> = walked
+            .plain
+            .iter()
+            .map(|(file, ty, field)| format!("{file} {ty}.{field}"))
+            .collect();
+        assert_eq!(
+            plain,
+            [
+                "src/other.rs Deep.items",
+                "src/world.rs Holder.buf",
+                "src/world.rs Kinds.B.0",
+                "src/world.rs Kinds.C.list",
+                "src/world.rs TupleStruct.1",
+                "src/world.rs World.aliased",
+                "src/world.rs World.optional",
+                "src/world.rs World.pair",
+                "src/world.rs World.plain",
+                "src/world.rs World.qualified",
+                "src/world.rs World.regrown",
+                "src/world.rs World.scoped",
+            ],
+            "every vector the world holds, however it is spelled or wherever it lives, and \
+             not the other module's `Row`"
+        );
+        assert!(walked.unresolved.is_empty(), "{:?}", walked.unresolved);
+        assert!(
+            !walked
+                .types
+                .iter()
+                .any(|(_, ty)| ty == "Local" || ty == "Reserved"),
+            "a function's local struct and a terminal type are not walked"
+        );
+
+        let unknown = walk_texts(
+            &[("src/world.rs", "pub struct World { mystery: Mystery<u8> }")],
+            &[],
+        );
+        assert_eq!(
+            unknown.unresolved,
+            [(
+                "src/world.rs".to_owned(),
+                "World".to_owned(),
+                "mystery".to_owned(),
+                "Mystery".to_owned()
+            )],
+            "a type the walker cannot resolve is an error naming the field"
+        );
+    }
+}
+
+/// Types the walker reaches and does not read, each with why a vector inside
+/// it may drop its room in a clone.
+const TERMINAL: &[(&str, &str)] = &[
+    (
+        "Reserved",
+        "the type this guard holds the world to: its clone keeps the room (src/reserved.rs)",
+    ),
+    (
+        "RulesTable",
+        "an input: loaded once and never written by a tick, so no vector of it grows",
+    ),
+    (
+        "Plan",
+        "a sealed playbook, an input as the rules table is: compiled at the seal, then read, \
+         never written by a tick",
+    ),
 ];
 
-/// `*Table` structs the scan leaves out, each with why.
-const UNSCANNED_TABLES: &[(&str, &str, &str)] = &[(
-    "src/rules.rs",
-    "RulesTable",
-    "an input: loaded once and never written by a tick, so its vectors never grow in a clone",
-)];
+/// A field sized once to one row a seat (`config.seats`), at construction and
+/// again at a restore, and written by index.
+const PER_SEAT: &str = "one row a seat: sized to the seat count at construction and at a restore, \
+                        written by index, never pushed in a tick";
 
-/// Why most fields below may be plain.
-const SIZED_ONCE: &str = "sized once (`vec![..; n]` or a collect) and never pushed past its \
-                          length inside a tick, so a derived clone, whose room is its length, \
-                          holds all it ever uses";
+/// A field sized once to the map: one entry a chunk, column or voxel of it.
+const PER_MAP: &str = "sized once to the map (one a chunk, column or voxel of the rules \
+                       table's map size) where it is built, never pushed in a tick";
+
+/// A field of the pathing graph's search scratch, `vec![..; n]` in its
+/// constructor.
+const PER_NODE: &str = "`vec![..; n]` in its constructor, `n` the surface graph's node count \
+                        (or the abstract node count plus two), and written by index";
+
+/// A field of the cluster decomposition, `vec![..]` in `Clusters::new`.
+const PER_CLUSTER: &str = "`vec![..]` in `Clusters::new`, sized from the cluster count, the \
+                           transitions a border holds (`max_trans`), the intra edges \
+                           (`max_intra`) and the node count; written by index";
 
 /// Why the support rule's lists may be plain: the only clone of the rule a
 /// world makes is the support scratch's written-out one, which builds a fresh
-/// rule with its room (`SupportRule::with_room`).
-const SUPPORT_RULE: &str = "cloned only by the support scratch's written-out Clone, which \
-                            builds a fresh rule with its room";
+/// rule with its room.
+const SUPPORT_RULE: &str = "cloned only by the support scratch's written-out Clone, which builds \
+                            a fresh rule with its room (`SupportRule::with_room` of its `Room`)";
 
-/// Every plain `Vec`, `VecDeque` or `String` field of a struct the scan
-/// reads, with why it is not a `Reserved`. A field reserved past its length
-/// must be a `Reserved`; a new plain field fails the scan until it is one or
-/// is listed here with its reason.
+/// Every plain field the walker finds, with what bounds it: a field reserved
+/// past its length must be a `Reserved`; a new plain field fails the guard
+/// until it is one or is listed here with its bound.
 const PLAIN_VECTORS: &[(&str, &str, &str, &str)] = &[
-    ("src/world.rs", "World", "spiral", SIZED_ONCE),
-    ("src/world.rs", "World", "decision_work", SIZED_ONCE),
-    ("src/world.rs", "World", "damage_dealt", SIZED_ONCE),
-    ("src/world.rs", "World", "route_spans", SIZED_ONCE),
-    ("src/world.rs", "World", "commanders", SIZED_ONCE),
-    ("src/world.rs", "World", "unit_start_of", SIZED_ONCE),
-    ("src/voxels.rs", "VoxelStore", "chunks", SIZED_ONCE),
-    ("src/voxels.rs", "VoxelStore", "modified", SIZED_ONCE),
-    ("src/voxels.rs", "VoxelStore", "pending_flag", SIZED_ONCE),
-    ("src/voxels.rs", "VoxelStore", "touch_flag", SIZED_ONCE),
-    ("src/chunks.rs", "ChunkDigests", "digests", SIZED_ONCE),
+    (
+        "src/world.rs",
+        "World",
+        "spiral",
+        "built once in World::new by `targeting::spiral_offsets` of the sphere radius",
+    ),
+    ("src/world.rs", "World", "decision_work", PER_SEAT),
+    (
+        "src/world.rs",
+        "World",
+        "damage_dealt",
+        "`vec![0; seats * seats]` in World::new and at a restore, written by index",
+    ),
+    (
+        "src/world.rs",
+        "World",
+        "route_spans",
+        "`vec![(0, 0); unit_limit]` in World::new, one a unit row the table may ever hold, \
+         written by index",
+    ),
+    (
+        "src/world.rs",
+        "World",
+        "commanders",
+        "`commander_index(units, seats)`: one a seat, at construction and at a restore",
+    ),
+    ("src/world.rs", "World", "unit_start_of", PER_SEAT),
+    ("src/voxels.rs", "VoxelStore", "chunks", PER_MAP),
+    ("src/voxels.rs", "VoxelStore", "modified", PER_MAP),
+    ("src/voxels.rs", "VoxelStore", "pending_flag", PER_MAP),
+    ("src/voxels.rs", "VoxelStore", "touch_flag", PER_MAP),
+    ("src/chunks.rs", "ChunkDigests", "digests", PER_MAP),
+    ("src/terrain.rs", "GeneratedSurface", "tops", PER_MAP),
+    ("src/pathing/surface.rs", "Surface", "top", PER_MAP),
+    ("src/pathing/surface.rs", "Surface", "walk", PER_MAP),
+    (
+        "src/bore.rs",
+        "Bore",
+        "columns",
+        "the core's bore columns, generated with the map and regenerated at a restore",
+    ),
+    (
+        "src/features.rs",
+        "FeatureTable",
+        "features",
+        "every vent and seam, generated with the map and regenerated at a restore",
+    ),
+    (
+        "src/features.rs",
+        "Feature",
+        "footprint",
+        "the columns the generator stamped the feature into, at map generation",
+    ),
     (
         "src/runner.rs",
         "MatchState",
         "segment_lengths_ms",
-        SIZED_ONCE,
+        "the match settings' segment ladder, set at construction and at a restore",
     ),
-    ("src/bore.rs", "Bore", "columns", SIZED_ONCE),
-    ("src/terrain.rs", "GeneratedSurface", "tops", SIZED_ONCE),
-    ("src/features.rs", "FeatureTable", "features", SIZED_ONCE),
+    (
+        "src/interpreter/state.rs",
+        "Interpreter",
+        "plans",
+        "one a seat (`Interpreter::with_seats`)",
+    ),
+    (
+        "src/interpreter/state.rs",
+        "Interpreter",
+        "states",
+        "one a seat (`Interpreter::with_seats`)",
+    ),
+    (
+        "src/interpreter/state.rs",
+        "PlanState",
+        "fires",
+        "one a handler of the sealed plan, sized at the seal and at a restore",
+    ),
+    (
+        "src/interpreter/state.rs",
+        "PlanState",
+        "ready",
+        "one a handler of the sealed plan, sized at the seal and at a restore",
+    ),
+    (
+        "src/attack.rs",
+        "BreachScratch",
+        "mark",
+        "`vec![0; 2 * nodes]` in BreachScratch::new, two states a surface node",
+    ),
+    (
+        "src/attack.rs",
+        "BreachScratch",
+        "g",
+        "`vec![0; 2 * nodes]` in BreachScratch::new, two states a surface node",
+    ),
+    (
+        "src/attack.rs",
+        "BreachScratch",
+        "came",
+        "`vec![0; 2 * nodes]` in BreachScratch::new, two states a surface node",
+    ),
     (
         "src/support.rs",
         "Scratch",
         "victims",
-        "the support scratch's written-out Clone reserves it afresh",
+        "the support scratch's written-out Clone reserves it afresh at its `victims_room`",
     ),
     ("src/support.rs", "SupportRule", "list", SUPPORT_RULE),
     ("src/support.rs", "SupportRule", "materials", SUPPORT_RULE),
@@ -2091,291 +2930,259 @@ const PLAIN_VECTORS: &[(&str, &str, &str, &str)] = &[
         "column_height",
         SUPPORT_RULE,
     ),
-    ("src/attack.rs", "BreachScratch", "mark", SIZED_ONCE),
-    ("src/attack.rs", "BreachScratch", "g", SIZED_ONCE),
-    ("src/attack.rs", "BreachScratch", "came", SIZED_ONCE),
     (
-        "src/interpreter/state.rs",
-        "Interpreter",
-        "plans",
-        SIZED_ONCE,
+        "src/support.rs",
+        "Bits",
+        "0",
+        "`vec![0; room.words]` in SupportRule::with_room: a bit a voxel of the map",
     ),
-    (
-        "src/interpreter/state.rs",
-        "Interpreter",
-        "states",
-        SIZED_ONCE,
-    ),
-    ("src/interpreter/state.rs", "PlanState", "fires", SIZED_ONCE),
-    ("src/interpreter/state.rs", "PlanState", "ready", SIZED_ONCE),
-    ("src/pathing/search.rs", "Scratch", "stamp", SIZED_ONCE),
-    ("src/pathing/search.rs", "Scratch", "closed", SIZED_ONCE),
-    ("src/pathing/search.rs", "Scratch", "g", SIZED_ONCE),
-    ("src/pathing/search.rs", "Scratch", "came", SIZED_ONCE),
+    ("src/pathing/search.rs", "Scratch", "stamp", PER_NODE),
+    ("src/pathing/search.rs", "Scratch", "closed", PER_NODE),
+    ("src/pathing/search.rs", "Scratch", "g", PER_NODE),
+    ("src/pathing/search.rs", "Scratch", "came", PER_NODE),
     (
         "src/pathing/search.rs",
         "Scratch",
         "abstract_stamp",
-        SIZED_ONCE,
+        PER_NODE,
     ),
     (
         "src/pathing/search.rs",
         "Scratch",
         "abstract_closed",
-        SIZED_ONCE,
+        PER_NODE,
     ),
-    ("src/pathing/search.rs", "Scratch", "abstract_g", SIZED_ONCE),
+    ("src/pathing/search.rs", "Scratch", "abstract_g", PER_NODE),
     (
         "src/pathing/search.rs",
         "Scratch",
         "abstract_came",
-        SIZED_ONCE,
+        PER_NODE,
+    ),
+    ("src/pathing/reach.rs", "Reach", "stamp", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "settled", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "cost", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "key", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "listed", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "next", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "prev", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "sites", PER_NODE),
+    ("src/pathing/reach.rs", "Reach", "heur", PER_NODE),
+    (
+        "src/pathing/reach.rs",
+        "Reach",
+        "heads",
+        "`vec![NONE; buckets]` in Reach::new, the bucket ring's length from the dearest step",
     ),
     (
         "src/pathing/repair.rs",
         "Repairer",
         "dirty_flag",
-        SIZED_ONCE,
+        "`vec![false; clusters]` in Repairer::new, one a cluster",
     ),
     (
         "src/pathing/repair.rs",
         "Repairer",
         "transitions_flag",
-        SIZED_ONCE,
+        "`vec![false; clusters]` in Repairer::new, one a cluster",
     ),
     (
         "src/pathing/repair.rs",
         "Repairer",
         "inter_flag",
-        SIZED_ONCE,
+        "`vec![false; clusters]` in Repairer::new, one a cluster",
     ),
-    ("src/pathing/clusters.rs", "Clusters", "of_node", SIZED_ONCE),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "of_node",
+        PER_CLUSTER,
+    ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "local_comp",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "comp_count",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "vborder_len",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
-    ("src/pathing/clusters.rs", "Clusters", "vborder", SIZED_ONCE),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "vborder",
+        PER_CLUSTER,
+    ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "hborder_len",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
-    ("src/pathing/clusters.rs", "Clusters", "hborder", SIZED_ONCE),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "hborder",
+        PER_CLUSTER,
+    ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "trans_len",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "trans_cell",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "intra_row",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "intra_to",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "intra_cost",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "inter_row",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "inter_to",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "inter_cost",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "comp_offset",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "comp_label",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
     (
         "src/pathing/clusters.rs",
         "Clusters",
         "union_find",
-        SIZED_ONCE,
+        PER_CLUSTER,
     ),
-    ("src/pathing/reach.rs", "Reach", "stamp", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "settled", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "cost", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "key", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "listed", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "next", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "prev", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "heads", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "sites", SIZED_ONCE),
-    ("src/pathing/reach.rs", "Reach", "heur", SIZED_ONCE),
-    ("src/pathing/surface.rs", "Surface", "top", SIZED_ONCE),
-    ("src/pathing/surface.rs", "Surface", "walk", SIZED_ONCE),
 ];
 
-/// The name of the struct a line opens, when it opens one at column 0 with
-/// its brace on the same line.
-fn struct_opened(line: &str) -> Option<String> {
-    let rest = ["pub struct ", "pub(crate) struct ", "struct "]
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix))?;
-    if !line.trim_end().ends_with('{') {
-        return None;
-    }
-    Some(
-        rest.chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect(),
-    )
-}
-
-/// Whether the struct `name` is defined in the source `text`, and the names
-/// of its plain `Vec`, `VecDeque` and `String` fields: lines inside its braces
-/// reading `[pub[(..)] ]field: Vec<..` (or `VecDeque<`, `String`).
-fn plain_fields(text: &str, name: &str) -> (bool, Vec<String>) {
-    let mut found = false;
-    let mut inside = false;
-    let mut fields = Vec::new();
-    for line in text.lines() {
-        if !inside {
-            if struct_opened(line).is_some_and(|opened| opened == name) {
-                found = true;
-                inside = true;
-            }
-            continue;
-        }
-        if line.starts_with('}') {
-            inside = false;
-            continue;
-        }
-        let trimmed = line.trim_start();
-        let field = ["pub(crate) ", "pub(super) ", "pub "]
-            .iter()
-            .find_map(|prefix| trimmed.strip_prefix(prefix))
-            .unwrap_or(trimmed);
-        if let Some((ident, ty)) = field.split_once(": ")
-            && !ident.is_empty()
-            && ident
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-            && ["Vec<", "VecDeque<", "std::collections::VecDeque<", "String"]
-                .iter()
-                .any(|plain| ty.starts_with(plain))
-        {
-            fields.push(ident.to_owned());
-        }
-    }
-    (found, fields)
-}
-
 /// **The type is the whole fix, so every vector the world owns is held to
-/// it by name.** A cloned world (a `research` fork) keeps a vector's reserved
-/// room only if the vector is a `Reserved`; the fork tests catch a plain one
-/// only where their scenario fills it past its length at the fork. This scan
-/// reads every `*Table` struct in the sim's sources and the [`OWNED_STRUCTS`]
-/// the world holds besides, and fails on a plain `Vec`, `VecDeque` or `String`
-/// field that [`PLAIN_VECTORS`] does not list with its reason, and on a listed
-/// one that is gone, so the list never outlives its fields. It runs in both
-/// builds.
+/// it.** A cloned world (a `research` fork) or a restored one keeps a
+/// vector's room only if the vector is a `Reserved`; the fork and restore
+/// tests catch a plain one only where their scenarios fill it past its
+/// length. This guard walks every type the world owns, from `World` through
+/// the sim's sources ([`owned`]), and fails on a plain `Vec`, `VecDeque`,
+/// `String` or `Box<[T]>` field that [`PLAIN_VECTORS`] does not list with its
+/// bound, on a listed one that is gone, and on a field whose type it cannot
+/// resolve. It runs in both builds.
 #[test]
 fn every_vector_the_world_owns_keeps_its_room_or_says_why_not() {
-    let mut structs: Vec<(String, String)> = OWNED_STRUCTS
-        .iter()
-        .map(|(file, name)| ((*file).to_owned(), (*name).to_owned()))
-        .collect();
     let mut files = Vec::new();
     rust_sources(std::path::Path::new("src"), &mut files);
+    let mut sources = owned::Sources::default();
     for file in &files {
         let text = std::fs::read_to_string(file).expect("a sim source reads");
-        for name in text.lines().filter_map(struct_opened) {
-            let unscanned = UNSCANNED_TABLES
-                .iter()
-                .any(|(f, n, _)| *f == file.as_str() && *n == name.as_str());
-            if name.ends_with("Table") && !unscanned {
-                structs.push((file.clone(), name));
-            }
-        }
+        owned::read(file, &text, &mut sources);
     }
-    structs.sort();
-    structs.dedup();
-
-    let mut plain: Vec<(String, String, String)> = Vec::new();
-    for (file, name) in &structs {
-        let text = std::fs::read_to_string(file).expect("a scanned source reads");
-        let (found, fields) = plain_fields(&text, name);
+    let terminal: Vec<&str> = TERMINAL.iter().map(|(name, _)| *name).collect();
+    let walked = owned::walk(&sources, ("src/world.rs", "World"), &terminal);
+    assert!(
+        walked
+            .types
+            .iter()
+            .any(|(file, name)| file == "src/world.rs" && name == "World"),
+        "the walk starts at src/world.rs's World"
+    );
+    for (file, name) in [
+        ("src/tables.rs", "UnitTable"),
+        ("src/tables.rs", "ShellTable"),
+        ("src/events.rs", "EventBus"),
+        ("src/voxels.rs", "VoxelStore"),
+        ("src/support.rs", "SupportRule"),
+        ("src/pathing/router.rs", "Router"),
+        ("src/pathing/search.rs", "Heap"),
+        ("src/pathing/reach.rs", "Reach"),
+        ("src/survey.rs", "Memory"),
+        ("src/interpreter/state.rs", "PlanState"),
+        ("src/licence.rs", "LicenceTable"),
+    ] {
         assert!(
-            found,
-            "{file} defines no struct `{name}` for the scan to read"
+            walked.types.iter().any(|(f, n)| f == file && n == name),
+            "the walk from World reaches {file}'s {name}"
         );
-        for field in fields {
-            plain.push((file.clone(), name.clone(), field));
-        }
     }
-    plain.sort();
+    assert!(
+        walked.unresolved.is_empty(),
+        "fields naming a type the walker cannot resolve, (file, type, field, name): {:?}",
+        walked.unresolved
+    );
     let mut listed: Vec<(String, String, String)> = PLAIN_VECTORS
         .iter()
         .map(|(f, s, n, _)| ((*f).to_owned(), (*s).to_owned(), (*n).to_owned()))
         .collect();
     listed.sort();
-    let unlisted: Vec<_> = plain.iter().filter(|p| !listed.contains(p)).collect();
-    let stale: Vec<_> = listed.iter().filter(|l| !plain.contains(l)).collect();
+    let unlisted: Vec<_> = walked
+        .plain
+        .iter()
+        .filter(|p| !listed.contains(p))
+        .collect();
+    let stale: Vec<_> = listed
+        .iter()
+        .filter(|l| !walked.plain.contains(l))
+        .collect();
     assert!(
         unlisted.is_empty(),
-        "plain vectors in structs the world owns, neither `Reserved` nor listed with a reason \
-         in PLAIN_VECTORS: {unlisted:?}. A vector reserved past its length must be a \
-         `Reserved`, or a cloned world allocates on its first tick that fills it"
+        "plain vectors the world owns, neither `Reserved` nor listed with their bound in \
+         PLAIN_VECTORS: {unlisted:?}. A vector a tick fills past its length must be a \
+         `Reserved`, or a cloned or restored world allocates on its first tick that fills it"
     );
     assert!(
         stale.is_empty(),
-        "PLAIN_VECTORS lists fields the scan no longer finds: {stale:?}"
+        "PLAIN_VECTORS lists fields the walk no longer finds: {stale:?}"
     );
     for (file, name, field, reason) in PLAIN_VECTORS {
         assert!(
             !reason.is_empty(),
-            "{file} {name}.{field} says why it is plain"
+            "{file} {name}.{field} says what bounds it"
         );
+    }
+    for (name, reason) in TERMINAL {
+        assert!(!reason.is_empty(), "{name} says why it is not read");
     }
 }
