@@ -2144,10 +2144,23 @@ class CountingBridge extends Node:
 		calls += 1
 		return true
 
+	func playtest_export(_path: String, _another: String, _understood: String, _text: String) -> Dictionary:
+		calls += 1
+		return {"written": false, "refusal": "off"}
+
 
 ## **Playtest mode off costs nothing** (fix pass 1, item 5): with the check button off, frames,
 ## focus changes and camera moves make no bridge call at all; switched on, they do.
 func _check_playtest_off_costs_nothing(failures: Array[String]) -> void:
+	# The stand-in answers every bridge method playtest.gd calls, read from its source: a new
+	# call is a failure naming it, never a script error that counts nothing.
+	var source := FileAccess.get_file_as_string("res://scripts/playtest.gd")
+	var called := RegEx.create_from_string("bridge\\.([a-z_]+)\\(")
+	var probe := CountingBridge.new()
+	for found in called.search_all(source):
+		if not probe.has_method(found.get_string(1)):
+			failures.append("playtest.gd calls bridge.%s, which the counting stand-in does not count" % found.get_string(1))
+	probe.free()
 	var counting := CountingBridge.new()
 	add_child(counting)
 	var chooser := HBoxContainer.new()

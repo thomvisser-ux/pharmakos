@@ -1488,7 +1488,7 @@ fn playbook() -> String {
 /// Plays round 1 and opens round 2's Lull through a real rig against the laced stand-in,
 /// feeding `recorder` exactly as the bridge does: `Recorder::answered` on each answer,
 /// `Recorder::shown` each frame, and each human command beside the rig's own.
-fn play_a_laced_round(recorder: &mut Recorder) {
+fn play_a_laced_round(recorder: &mut Recorder, on: bool) -> Vec<(usize, String)> {
     let mut gateway = Laced {
         phase: "lull",
         round: 1,
@@ -1500,7 +1500,10 @@ fn play_a_laced_round(recorder: &mut Recorder) {
     rig.opened(ADMIN);
     rig.opened(SEAT);
     rig.editor_mut().set_seat("seat.0");
-    recorder.switch(true, 0, true, rig.phase(), rig.round());
+    if on {
+        recorder.switch(true, 0, true, rig.phase(), rig.round());
+    }
+    let mut sent: Vec<(usize, String)> = Vec::new();
     let text = playbook();
 
     let mut now = 0_u64;
@@ -1537,6 +1540,7 @@ fn play_a_laced_round(recorder: &mut Recorder) {
             rig.end_recap();
         }
         for frame in rig.poll(now) {
+            sent.push((frame.link, frame.text.clone()));
             let answer_text = gateway.serve(&frame);
             if let Ok(answer) = rig.receive(frame.link, &answer_text) {
                 answers += 1;
@@ -1552,6 +1556,7 @@ fn play_a_laced_round(recorder: &mut Recorder) {
     assert!(continued, "the rig reached the recap and went on");
     assert_eq!(rig.phase(), Phase::Lull, "round 2's Lull");
     assert!(answers > 20, "the rig was answered: {answers}");
+    sent
 }
 
 /// A whole round and the next Lull through a real rig, every answer laced: the recorder, fed
@@ -1559,7 +1564,7 @@ fn play_a_laced_round(recorder: &mut Recorder) {
 #[test]
 fn no_marker_reaches_the_bundle() {
     let mut recorder = Recorder::new();
-    play_a_laced_round(&mut recorder);
+    play_a_laced_round(&mut recorder, true);
 
     let zip = recorder.bundle(&Survey::default()).expect("on");
     let files = files_of(&zip);
@@ -1606,4 +1611,18 @@ fn no_marker_reaches_the_bundle() {
     for marker in MARKERS {
         assert!(!lowered.contains(&marker.to_ascii_lowercase()), "{marker}");
     }
+}
+
+/// The recorder only reads (fix pass 2, item 8): two rigs driven alike through the same laced
+/// round, one with Playtest mode on and fed as the bridge feeds it and one with it off, send
+/// the same frames, byte for byte, in the same order.
+#[test]
+fn recording_changes_nothing_the_rig_sends() {
+    let mut recorded = Recorder::new();
+    let with = play_a_laced_round(&mut recorded, true);
+    let mut off = Recorder::new();
+    let without = play_a_laced_round(&mut off, false);
+    assert!(recorded.is_on() && !off.is_on());
+    assert!(with.len() > 20, "the round sent frames: {}", with.len());
+    assert_eq!(with, without);
 }
