@@ -349,7 +349,7 @@ pub const RETREAT_BELOW_UNIT: &str = "of their hit points";
 /// `IntegerShape.zero_title` (S3's `zerotitle`: one entry, two readers).
 pub const RETREAT_OFF: &str = "retreat off";
 
-// --- A written 0 and a list's clear (decisions-log item 184 (10)) -----------
+// --- A written 0 and a list's clear (decisions-log item 184 (3)) ------------
 
 /// A written `scout_count` of 0, before its chip.
 pub const SCOUTS_NONE: &str = "no scouts";

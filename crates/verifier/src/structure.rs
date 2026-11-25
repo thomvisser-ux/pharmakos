@@ -748,7 +748,7 @@ impl Visit for Sites<'_> {
                     self.default_note(&here, "seam_choice", "NEAREST", true);
                 }
                 // Only an omitted spacing reads as the default: a written 0 is
-                // what the author wrote (decisions-log item 184 (10)), so it is
+                // what the author wrote (decisions-log item 184 (3)), so it is
                 // also the Fix's spelling of the default.
                 if mine.pillar_spacing.is_none() {
                     self.default_note_with(
@@ -1106,7 +1106,7 @@ impl Sites<'_> {
     }
 
     /// `E0515`: a list's `clear_*` flag where it cannot stand (decisions-log
-    /// item 184 (10)), as the sim's compile refuses it
+    /// item 184 (3)), as the sim's compile refuses it
     /// (`PlanError::ClearRefused`). The flag empties a list the beacon holds,
     /// so it stands alone in a `set_mandate_settings` row: beside a non-empty
     /// list of its own the row says two things, and in a new beacon's or a
@@ -2110,7 +2110,7 @@ mod tests {
 
     const AREA: &str = r#"{"min":{"x":1,"y":1,"z":1},"max":{"x":2,"y":2,"z":2}}"#;
 
-    /// Decisions-log item 184 (10): a lone clear in an edit row is legal;
+    /// Decisions-log item 184 (3): a lone clear in an edit row is legal;
     /// beside entries of its own list it is `E0515` with a suggestion, and
     /// in a new beacon's or a switch's settings `E0515` with a
     /// machine-applicable Fix, at every one of the four lists.
@@ -2166,7 +2166,7 @@ mod tests {
         );
     }
 
-    /// Decisions-log item 184 (10): only an omitted `pillar_spacing` is
+    /// Decisions-log item 184 (3): only an omitted `pillar_spacing` is
     /// noted as reading 0, and its Fix writes the 0 now that a written 0 is
     /// told apart from an omitted one.
     #[test]

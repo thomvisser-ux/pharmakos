@@ -1265,7 +1265,7 @@ fn box_words(target: &pharmakos_proto::gp::v1::BuildTarget) -> String {
 /// order, as the file wrote it; whether it is legal is the verifier's. `here`
 /// is the `MandateSettings`' pointer.
 ///
-/// A Build, Survey or Mine arm says only what decisions-log item 184 (10)
+/// A Build, Survey or Mine arm says only what decisions-log item 184 (3)
 /// made writable: a written 0 of `scout_count`, `dig_max_depth` or
 /// `pillar_spacing`, and a set `clear_*` flag ([`s1_arm_parts`]); the rest of
 /// those arms is unsaid, as it was. A Defend or Attack arm's clear is said in
@@ -1364,7 +1364,7 @@ fn omitted_roe(mandate: &mandate_settings::Mandate) -> Option<&'static str> {
 /// What a Build, Survey or Mine arm writes, every field it writes, in field
 /// order, as the file wrote it, each value with its chip; a field the row
 /// leaves out is not said, as the Defend and Attack arms say none
-/// (decisions-log item 184 (10), fix pass 1). A list is said by its count, as
+/// (decisions-log item 184 (3), fix pass 1). A list is said by its count, as
 /// Attack's avoid areas are, and its clear by a boolean chip; the Build
 /// targets are said by their count, each target being its own row of the
 /// visit (`add_build_target` says one in full).
@@ -1536,7 +1536,7 @@ fn mine_parts(mine: &MineSettings, here: &str) -> Vec<Text> {
     parts
 }
 
-/// A set `clear_*` flag (decisions-log item 184 (10)), said with a boolean
+/// A set `clear_*` flag (decisions-log item 184 (3)), said with a boolean
 /// chip at its pointer; nothing for one left out or written `false`.
 fn clear_part(parts: &mut Vec<Text>, clear: bool, words: &str, here: &str, field: &str) {
     if clear {

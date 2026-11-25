@@ -1623,7 +1623,7 @@ message BuildSettings {
   // (proto3 cannot tell them apart), so emptying it is `clear_protected_areas`.
   repeated Area protected_areas = 5;
 
-  // Empty the beacon's `protected_areas` (decisions-log item 184 (10)). A
+  // Empty the beacon's `protected_areas` (decisions-log item 184 (3)). A
   // plain proto3 bool: false is the same as leaving it out, and the canonical
   // form never writes it. True is legal only in a `set_mandate_settings` row
   // that writes no `protected_areas` of its own, where it is one field of the
@@ -1697,7 +1697,7 @@ message DefendSettings {
   // setting so that none lands on a number a hand-written file already used.
   reserved 7 to 15;
 
-  // Empty the beacon's `protect` list (decisions-log item 184 (10)), as
+  // Empty the beacon's `protect` list (decisions-log item 184 (3)), as
   // BuildSettings' `clear_protected_areas` empties its list, under the same
   // rules: a plain bool, never written as false; one field of a
   // `set_mandate_settings` row that writes no `protect` entry; refused beside
@@ -1793,7 +1793,7 @@ message AttackSettings {
   // setting.
   reserved 10 to 15;
 
-  // Empty the beacon's `avoid_areas` (decisions-log item 184 (10)), as
+  // Empty the beacon's `avoid_areas` (decisions-log item 184 (3)), as
   // BuildSettings' `clear_protected_areas` empties its list, under the same
   // rules: a plain bool, never written as false; one field of a
   // `set_mandate_settings` row that writes no avoid area; refused beside a
@@ -1901,7 +1901,7 @@ message SurveySettings {
 
   // How many scouts the mandate fields; 0 fields none. `optional`, so that a
   // written 0 (stand the scouts down) is told apart from a field left out
-  // (decisions-log item 184 (10)): a written value, 0 included, is one field
+  // (decisions-log item 184 (3)): a written value, 0 included, is one field
   // of the edit and sets the beacon's count; an omitted one leaves it. In a
   // new beacon's or a switched mandate's settings, omitted is 0. A count past
   // what a beacon holds is refused: the verifier's E0508, and the sim's
@@ -1915,7 +1915,7 @@ message SurveySettings {
   reserved 3;
   reserved "probe_directions";
 
-  // Empty the beacon's `probe_areas` (decisions-log item 184 (10)), as
+  // Empty the beacon's `probe_areas` (decisions-log item 184 (3)), as
   // BuildSettings' `clear_protected_areas` empties its list, under the same
   // rules: a plain bool, never written as false; one field of a
   // `set_mandate_settings` row that writes no probe area; refused beside a
@@ -1943,7 +1943,7 @@ message SurveySettings {
 message MineSettings {
   // Voxels below the seam's ORIGINAL top surface the mandate may dig; 0 means
   // the exposed rim only. `optional`, so that a written 0 is told apart from
-  // a field left out (decisions-log item 184 (10)): a written value, 0
+  // a field left out (decisions-log item 184 (3)): a written value, 0
   // included, is one field of the edit and sets the beacon's depth; an
   // omitted one leaves it. In a new beacon's or a switched mandate's
   // settings, omitted is 0, the rim only.
@@ -1967,7 +1967,7 @@ message MineSettings {
   // omitted spacing reads as, with an I-level note. A dig pattern, not a
   // collapse rule: there is no collapse before S2, so in S1 a non-zero spacing
   // only costs yield. `optional`, so that a written 0 (dig the pillars out
-  // too) is told apart from a field left out (decisions-log item 184 (10)): a
+  // too) is told apart from a field left out (decisions-log item 184 (3)): a
   // written value, 0 included, is one field of the edit and sets the beacon's
   // spacing; an omitted one leaves it. In a new beacon's or a switched
   // mandate's settings, omitted is the named default above, with its note.
