@@ -3514,21 +3514,39 @@ impl Surface {
         }
 
         let outcome = self.serve(handle, subject, scopes, request, vision);
-        match outcome {
-            Ok(result) => {
+        let (response, recorded) = match outcome {
+            Ok(result) => (rpc::success(&request.id, result), Outcome::Ok),
+            Err(error) => {
+                let refused = Outcome::Refused(error.code());
+                (rpc::failure(&request.id, &error), refused)
+            }
+        };
+        // The one measure of every answer this surface makes, for a socket and
+        // for a seat this process plays or advises alike (S3's `outcap`): an
+        // answer past the cap is never sent and never cut. The call stands; its
+        // answer is withheld, said in the error that goes in its place, counted
+        // and logged as that error.
+        match rpc::bounded(&request.id, &request.method, response) {
+            Ok(response) => {
                 self.audit.record(
                     self.time.tick,
                     Some(subject),
                     Some(handle),
                     action,
-                    Outcome::Ok,
+                    recorded,
                 );
-                rpc::success(&request.id, result)
+                response
             }
-            Err(error) => {
-                self.audit
-                    .refused(self.time.tick, Some(subject), Some(handle), action, &error);
-                rpc::failure(&request.id, &error)
+            Err(withheld) => {
+                self.audit.withheld(crate::audit::Withheld::TooLarge);
+                self.audit.refused(
+                    self.time.tick,
+                    Some(subject),
+                    Some(handle),
+                    action,
+                    &withheld.error,
+                );
+                withheld.response
             }
         }
     }

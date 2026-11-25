@@ -34,6 +34,7 @@
 use crate::error::Error;
 use pharmakos_proto::json::{Json, read, write};
 use pharmakos_proto::said;
+use pharmakos_proto::transport::{MAX_ANSWER_BYTES, MAX_ID_BYTES};
 
 /// The version string every request and response carries.
 pub const VERSION: &str = "2.0";
@@ -197,6 +198,15 @@ pub fn parse(text: &str) -> Result<Request, Malformed> {
     }
 
     let id = match value.get("id") {
+        // Every answer echoes its id, so an id is capped where it is read
+        // (S3's `outcap`): one past the cap is refused here and the refusal
+        // goes back under no id, so no answer carries more of it than this.
+        Some(Json::String(text) | Json::Number(text)) if text.len() > MAX_ID_BYTES => {
+            return Err(Malformed::Invalid(format!(
+                "`id` is at most {MAX_ID_BYTES} bytes, and this one is {}",
+                text.len()
+            )));
+        }
         Some(id @ (Json::String(_) | Json::Number(_))) => id.clone(),
         Some(Json::Null) | None => {
             return Err(Malformed::Invalid(String::from(
@@ -292,6 +302,52 @@ pub fn malformed_response(malformed: &Malformed) -> Json {
 #[must_use]
 pub fn render(response: &Json) -> String {
     write(response)
+}
+
+/// An answer that was made and is not sent ([`bounded`]): the typed error
+/// that goes in its place, and that error as the response.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Withheld {
+    /// `RESPONSE_TOO_LARGE`, naming the method and both sizes.
+    pub error: Error,
+    /// The JSON-RPC response carrying it, under the request's own id.
+    pub response: Json,
+}
+
+/// Whether an answer whose text is `bytes` long is one the gateway sends: the
+/// outgoing cap, in one place (S3's `outcap`).
+#[must_use]
+pub const fn answer_fits(bytes: usize) -> bool {
+    bytes <= MAX_ANSWER_BYTES
+}
+
+/// `response` when its text, as the wire spells it ([`render`]), is within
+/// the outgoing cap; otherwise the typed refusal that is sent in its place
+/// (S3's `outcap`). Never a cut answer.
+///
+/// The refusal is bounded by construction: the id is at most
+/// [`MAX_ID_BYTES`] ([`parse`] refuses a longer one), the method is
+/// [`quoted`](pharmakos_proto::json::grammar::quoted) and so at most 64
+/// characters, and the two sizes are numbers.
+///
+/// # Errors
+///
+/// [`Withheld`], with `RESPONSE_TOO_LARGE`, for an answer past the cap.
+pub fn bounded(id: &Json, method: &str, response: Json) -> Result<Json, Withheld> {
+    let bytes = render(&response).len();
+    if answer_fits(bytes) {
+        return Ok(response);
+    }
+    let error = Error::response_too_large(said!(
+        "the answer to `{}` is {} bytes, past the {} bytes this gateway sends in one message, \
+         so it is not sent; whatever the call did stands. Ask for less: a shorter text, or a \
+         narrower read",
+        pharmakos_proto::json::grammar::quoted(method),
+        bytes,
+        MAX_ANSWER_BYTES
+    ));
+    let response = failure(id, &error);
+    Err(Withheld { error, response })
 }
 
 /// A request as a client writes it: `jsonrpc`, `id`, `method`, `params`, in

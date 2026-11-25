@@ -190,6 +190,16 @@ pub mod gateway_error {
         /// The gateway failed. Never used to report anything the caller could have
         /// avoided.
         Internal = 15,
+        /// The call was made, and its answer is past the largest answer the
+        /// gateway sends (`pharmakos_proto::transport::MAX_ANSWER_BYTES`), so this
+        /// error is sent in its place: never a cut answer, and the connection stays
+        /// open. Whatever the call did stands (a submission it accepted is
+        /// accepted); only its answer is withheld. The message names the method and
+        /// both sizes. A client acts on it differently from every code above: the
+        /// request was well formed and authorised, and retrying it unchanged gets
+        /// the same answer, so it asks for less (a shorter text, a narrower read).
+        /// S3's `outcap`.
+        ResponseTooLarge = 16,
     }
     impl Code {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -209,6 +219,7 @@ pub mod gateway_error {
                 Self::InvalidArgument => "INVALID_ARGUMENT",
                 Self::UnsupportedSchemaVersion => "UNSUPPORTED_SCHEMA_VERSION",
                 Self::Internal => "INTERNAL",
+                Self::ResponseTooLarge => "RESPONSE_TOO_LARGE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -225,6 +236,7 @@ pub mod gateway_error {
                 "INVALID_ARGUMENT" => Some(Self::InvalidArgument),
                 "UNSUPPORTED_SCHEMA_VERSION" => Some(Self::UnsupportedSchemaVersion),
                 "INTERNAL" => Some(Self::Internal),
+                "RESPONSE_TOO_LARGE" => Some(Self::ResponseTooLarge),
                 _ => None,
             }
         }

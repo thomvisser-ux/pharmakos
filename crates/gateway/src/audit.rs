@@ -165,12 +165,37 @@ impl Entry {
 /// reader skips it ([`crate::cache::MatchCache::continuation`]).
 pub const HEADER: &str = "seq\ttick\tsubject\thandle\taction\toutcome";
 
+/// Why an answer was made and not sent (S3's `outcap`). Each is counted
+/// beside the line the refusal writes, so a reader of a log that dropped its
+/// oldest lines still knows how many there were.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Withheld {
+    /// Its text was past `pharmakos_proto::transport::MAX_ANSWER_BYTES`, and
+    /// `RESPONSE_TOO_LARGE` went in its place.
+    TooLarge,
+}
+
+impl Withheld {
+    /// Every reason, in declared order.
+    pub const ALL: [Withheld; 1] = [Withheld::TooLarge];
+
+    /// Its name, as a log reader sees it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Withheld::TooLarge => "too_large",
+        }
+    }
+}
+
 /// The log itself.
 #[derive(Debug, Default)]
 pub struct AuditLog {
     entries: Vec<Entry>,
     next_seq: u64,
     dropped: u64,
+    /// Answers withheld, by [`Withheld`] reason.
+    withheld_too_large: u64,
 }
 
 impl AuditLog {
@@ -181,6 +206,25 @@ impl AuditLog {
             entries: Vec::new(),
             next_seq: 1,
             dropped: 0,
+            withheld_too_large: 0,
+        }
+    }
+
+    /// Count one answer withheld for `reason`. The refusal's own line is
+    /// written by [`AuditLog::refused`] beside it.
+    pub const fn withheld(&mut self, reason: Withheld) {
+        match reason {
+            Withheld::TooLarge => {
+                self.withheld_too_large = self.withheld_too_large.saturating_add(1);
+            }
+        }
+    }
+
+    /// How many answers were withheld for `reason`.
+    #[must_use]
+    pub const fn withheld_count(&self, reason: Withheld) -> u64 {
+        match reason {
+            Withheld::TooLarge => self.withheld_too_large,
         }
     }
 
