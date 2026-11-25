@@ -338,6 +338,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_lobby_after_a_failure(failures)
 	await _check_the_remembered_line(failures)
 	_check_the_logs(failures)
+	await _check_the_playtest_lobby(failures)
 
 
 ## **The wheel reaches a readable structure** (item 155 (3) 4). From the whole map's framing,
@@ -2004,3 +2005,80 @@ func _check_the_logs(failures: Array[String]) -> void:
 	for name in left:
 		DirAccess.remove_absolute("%s/%s" % [folder, name])
 	DirAccess.remove_absolute(folder)
+
+
+## **Playtest mode in the real lobby** (S3's `prob`, part 2; the plan's E10): the chooser's check
+## button is off at launch and the bridge's recorder with it; switched on, the line says so; the
+## window's focus reaches the recorder through the scene tree's own notification and a camera move
+## through the rig's `moved`; Export playtest bundle writes exactly one file, at the path chosen,
+## whose entries Godot's own zip reader lists as the bundle's four and whose log and metrics carry
+## what was forwarded; an export to a folder that is not there writes nothing and is said; and
+## switched off, the recorder holds nothing.
+func _check_the_playtest_lobby(failures: Array[String]) -> void:
+	var lobby: Node = LobbyScene.instantiate()
+	add_child(lobby)
+	await get_tree().process_frame
+	var playtest: Node = lobby.get_node_or_null("Playtest")
+	var bridge: Node = lobby.vista.bridge
+	var toggle: CheckButton = null
+	for child in lobby._chooser.get_children():
+		if child is CheckButton and (child as CheckButton).text == Strings.text("playtest_toggle"):
+			toggle = child
+	if playtest == null or toggle == null:
+		failures.append("the lobby has no Playtest mode check button in its chooser")
+		lobby.queue_free()
+		return
+	if toggle.button_pressed or bridge.playtest_state().get("on", true):
+		failures.append("Playtest mode is on at launch: %s" % bridge.playtest_state())
+	toggle.button_pressed = true
+	await get_tree().process_frame
+	if not bridge.playtest_state().get("on", false) or not playtest._note.visible:
+		failures.append("the check button did not switch Playtest mode on, or its line is hidden")
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+	lobby.vista.rig.follow(null)
+	var name: String = preload("res://scripts/playtest.gd").BUNDLE_NAME
+	var folder := ProjectSettings.globalize_path("user://client_check_playtest")
+	if DirAccess.make_dir_recursive_absolute(folder) != OK:
+		failures.append("the Playtest check could not make %s" % folder)
+		lobby.queue_free()
+		return
+	for old in DirAccess.get_files_at(folder):
+		if DirAccess.remove_absolute(folder + "/" + old) != OK:
+			failures.append("the Playtest check could not clear %s" % old)
+	var path := folder + "/" + name
+	var written: Dictionary = playtest.export_to(path)
+	if not written.get("written", false):
+		failures.append("Export playtest bundle did not write: %s" % written)
+	if Array(DirAccess.get_files_at(folder)) != [name]:
+		failures.append("the export did not write exactly one file where it was asked: %s" % [DirAccess.get_files_at(folder)])
+	if not String(playtest._said.text).contains(path):
+		failures.append("the export's line does not name the file the tester chose: `%s`" % playtest._said.text)
+	var reader := ZIPReader.new()
+	if reader.open(path) != OK:
+		failures.append("Godot's zip reader cannot open the bundle")
+	else:
+		var entries: PackedStringArray = reader.get_files()
+		if entries != PackedStringArray(bridge.playtest_state().get("entries", [])):
+			failures.append("the bundle's entries are %s" % entries)
+		var log := reader.read_file("diagnostics.log").get_string_from_utf8()
+		if not (" focus_out " in log and " focus_in " in log and " playtest_on " in log):
+			failures.append("the focus did not reach the diagnostics log: `%s`" % log)
+		var metrics: Variant = JSON.parse_string(reader.read_file("metrics.json").get_string_from_utf8())
+		if not (metrics is Dictionary) or int((metrics as Dictionary).get("camera_moves", {}).get("follow", 0)) != 1:
+			failures.append("the camera rig's move did not reach the metrics: %s" % metrics)
+		reader.close()
+	var missing: Dictionary = playtest.export_to(folder + "/no such folder/" + name)
+	if missing.get("written", true) or String(playtest._said.text) == "":
+		failures.append("an export to a missing folder was not said as not written: %s" % missing)
+	if Array(DirAccess.get_files_at(folder)) != [name]:
+		failures.append("a refused export left a file: %s" % [DirAccess.get_files_at(folder)])
+	toggle.button_pressed = false
+	await get_tree().process_frame
+	if bridge.playtest_state().get("on", true) or bridge.playtest_state().has("pushes") or playtest._note.visible:
+		failures.append("switched off, Playtest mode still holds or shows something: %s" % bridge.playtest_state())
+	if DirAccess.remove_absolute(path) != OK or DirAccess.remove_absolute(folder) != OK:
+		failures.append("the Playtest check could not remove its bundle")
+	lobby.queue_free()
+	await get_tree().process_frame
+	print("[client-check] Playtest mode: off at launch, on by its button, focus and a camera move forwarded, one bundle written and read back, a missing folder said, off and cleared")
