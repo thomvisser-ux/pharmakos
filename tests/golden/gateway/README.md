@@ -1,4 +1,3 @@
-| `get_beacon_lists/` | `expected.response.json` | The same of a Build core holding two protected areas (`tests/beacon_lists.rs`): a list row with its entry lines, its clear and its words (S3's `edlists`) — **the fixture the client's clear copies** |
 <!--
 SPDX-FileCopyrightText: 2026 Pharmakos contributors
 SPDX-License-Identifier: GPL-3.0-or-later
@@ -75,6 +74,7 @@ section 5), produced by `crates/gateway/tests/save.rs`.
 | `get_vocabulary/` | `expected.response.json` | Seat 0's `get_vocabulary` as its first call in the opening Lull of `tests/methods.rs`' golden match: every family, predicate, step, mandate and blueprint with its locks, the Resonance Spire locked — **the fixture `ed3b` part 2's picker copies** |
 | `get_beacon_core/` | `expected.response.json` | Seat 0's `get_beacon` of its opening core, `b_00`, in the same Lull: its summary, prose, writ and settings rows |
 | `get_beacon_build/` | `expected.response.json` | The same of a Build core holding one target of each way a target is written (`four_targets`: a wall with its box, `on` a named feature, `on` the nearest vent, a voxel) — with the core's, **the fixtures `ed3b` part 2's Visit & change rows copy** |
+| `get_beacon_lists/` | `expected.response.json` | The same of a Build core holding two protected areas (`tests/beacon_lists.rs`): a list row with its entry lines, its clear and its words (S3's `edlists`) — **the fixture the client's clear copies** |
 | `list_templates_guided/` | `expected.response.json` | The human seat's `list_templates` in a Probation match's first Lull (`tests/probation.rs`): the advisor's start marked `guided_pick` with its reason, on that one entry (S3's `probw`) |
 | `feed_ledger_memo/` | `expected.response.json` | Seat 0's first `get_segment_feed` page that carries a `ledger_memo` line, in a Probation match where seat 0 earns the Resonance Spire's licence: the line and its typed payload (S3's plan, E5) |
 | `recap_probation_round/` | `expected.response.json` | Seat 0's `get_recap` in that match's round 1 recap: its settlement line, its licence line and its prose |
