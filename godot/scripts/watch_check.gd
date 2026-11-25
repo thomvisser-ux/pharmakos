@@ -2021,19 +2021,23 @@ func _take_asked_refusal(detail: String) -> void:
 
 
 ## **Closes on a message do not end a playable match** (S3's `fixq-c`, fix passes 4 to 6, item
-## 1). Review 3's playbook of 18 000 bare holds (216 056 bytes, under the cap) is loaded six times
-## with no wait between the loads, as a player might click; its answers are past the client's
-## inbound buffer, so the first load closes the seat link on its message (Godot's 1009). That close
-## spends no reconnect attempt, and the same text is held: the five loads after it are refused at
-## once without being sent. Through all six the seat link is never given up, the text on screen
-## stays as it was, the editor's line says the answer is too large to read and to shorten the
-## file, and the leg goes on to seal and Ready.
+## 1; re-aimed by S3's `vcap`). Review 3's playbook of 18 000 bare holds (216 056 bytes, under the
+## cap) is loaded six times with no wait between the loads, as a player might click. Since `vcap`
+## a report lists at most six of a code, so the load's own QUICK answer fits (10 668 bytes as the
+## gateway writes it) and the load lands; its `render_plan` answer does not (15 690 780 bytes,
+## past the client's 4 MiB inbound buffer: lane `outcap`'s finding), so the render closes the seat
+## link on its message (Godot's 1009). That close spends no reconnect attempt, and the same text's
+## render is held after it: never sent again. Through all six, within the wait each one has, the
+## seat link is never given up, the rows are the loaded text's (its QUICK answered), the prose
+## line says the answer closed the link instead of waiting for ever, and the editor's line says
+## the answer is too large to read and to shorten the file. A landed load clears the Undo list,
+## so the committed playbook is then loaded back, as the planning wire began: the legs after this
+## one edit it, Undo takes their edits back to its bytes, and the leg goes on to seal and Ready.
 func _closes_on_a_message() -> bool:
 	var steps: PackedStringArray = []
 	for index in 18000:
 		steps.append("{\"hold\":{}}")
 	var big := ("{\"schema_version\":{\"major\":1},\"declarative\":{\"route\":[" + ",".join(steps) + "]}}").to_utf8_buffer()
-	var text: PackedByteArray = vista.bridge.editor_bytes()
 	var closes := _count(_state(), "message_drops_seat")
 	for attempt in 6:
 		var before := _count(_editor(), "closed_on_calls")
@@ -2051,11 +2055,23 @@ func _closes_on_a_message() -> bool:
 		_failures.append("the planning wire: six big loads never closed the seat link on their message")
 	if vista.bridge.watch_link_attempts(1) != 0:
 		_failures.append("the planning wire: closes on the player's loads spent the seat link's attempts (%d)" % vista.bridge.watch_link_attempts(1))
-	if vista.bridge.editor_bytes() != text:
-		_failures.append("the planning wire: a load refused on its message changed the text on screen")
+	if vista.bridge.editor_bytes() != big:
+		_failures.append("the planning wire: a load whose QUICK answer fits did not land")
+	var unchecked: Dictionary = _editor().get("unchecked", {})
+	if String(unchecked.get("rows", {}).get("key", "?")) != "" or not _editor().get("rows_current", false):
+		_failures.append("the planning wire: the loaded text's rows are not its QUICK answer: %s" % [unchecked.get("rows", {})])
+	if String(unchecked.get("prose", {}).get("key", "")) != "closed_on" or _editor().get("prose_current", true):
+		_failures.append("the planning wire: the render that closed the link is not said on the prose line: %s" % [unchecked.get("prose", {})])
 	if String(_editor().get("status_key", "")) != "call_answer_too_large":
 		_failures.append("the planning wire: the editor's line after the big loads is `%s`" % _editor().get("status_key", ""))
-	print("[watch-check] the planning wire: six loads with no wait, %d close(s) on the message, the rest held; the seat link kept, no attempt spent; the editor says: `%s`" % [dropped, Strings.text("status_" + String(_editor().get("status_key", "")), {"detail": _editor().get("status_detail", "")})])
+	print("[watch-check] the planning wire: six loads with no wait, each landing (QUICK fits), %d close(s) on the render's message, the rest held; the seat link kept, no attempt spent; the editor says: `%s`" % [dropped, Strings.text("status_" + String(_editor().get("status_key", "")), {"detail": _editor().get("status_detail", "")})])
+	# A load that lands clears the Undo list, so the committed playbook is loaded back, as the
+	# planning wire began, checked and rendered: the legs after this one edit it, and Undo takes
+	# their edits back to its bytes.
+	var committed := FileAccess.get_file_as_bytes(COMMITTED)
+	editor.load_file(COMMITTED)
+	if not await _editor_until(func(s: Dictionary) -> bool: return vista.bridge.editor_bytes() == committed and _count(s, "undo_depth") == 0 and s.get("rows_current", false) and s.get("prose_current", false) and s.get("rules_editable", false) and not s.get("busy", true), "the planning wire: the committed playbook never came back after the big loads"):
+		return false
 	return true
 
 
