@@ -1334,7 +1334,7 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
             "gp.v1.MandateSettings.Roe",
         ));
     } else if clause == Clause::Whole
-        && let Some(words) = settings.mandate.as_ref().map(omitted_roe)
+        && let Some(words) = settings.mandate.as_ref().and_then(omitted_roe)
     {
         parts.push(cat!(words, " ", s::ROE_BY_DEFAULT));
     }
@@ -1353,24 +1353,12 @@ fn common_parts(settings: &MandateSettings, here: &str, clause: Clause) -> Vec<T
 }
 
 /// The words for what an omitted `roe` reads as on a beacon of this writ:
-/// the sim's own reading of an unset `roe` ([`pharmakos_sim::world::Roe::of_setting`]
-/// with 0), in the words a menu offers that value in.
-fn omitted_roe(mandate: &mandate_settings::Mandate) -> &'static str {
-    use pharmakos_sim::seams::MandateKind;
-    use pharmakos_sim::world::Roe;
-    let kind = match mandate {
-        mandate_settings::Mandate::Build(_) => MandateKind::Build,
-        mandate_settings::Mandate::Defend(_) => MandateKind::Defend,
-        mandate_settings::Mandate::Attack(_) => MandateKind::Attack,
-        mandate_settings::Mandate::Survey(_) => MandateKind::Survey,
-        mandate_settings::Mandate::Mine(_) => MandateKind::Mine,
-    };
-    match Roe::of_setting(0, kind) {
-        Some(Roe::Free) => s::CHOICE_FREE_FIRE,
-        Some(Roe::Return) => s::CHOICE_RETURN_FIRE,
-        Some(Roe::Hold) => s::CHOICE_HOLD_FIRE,
-        None => s::ROE_UNSET,
-    }
+/// the verifier's reading ([`pharmakos_verifier::omitted_roe`], which reads
+/// the sim's own rule), in the words a menu offers that value in. One rule,
+/// read by the prose and by the `I0003` note alike.
+fn omitted_roe(mandate: &mandate_settings::Mandate) -> Option<&'static str> {
+    pharmakos_verifier::omitted_roe(mandate)
+        .and_then(|value| crate::shape::choice_title("gp.v1.MandateSettings.Roe", value))
 }
 
 /// What a Build, Survey or Mine arm writes, every field it writes, in field

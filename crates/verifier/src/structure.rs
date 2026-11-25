@@ -721,10 +721,10 @@ impl Visit for Sites<'_> {
         // whose Defend and Attack arms are S2's `dfnd`'s and `atk`'s),
         // said where the settings start from nothing and the block names a
         // writ (a block with none is `E0502`'s).
-        if let Some(mandate) = settings.mandate.as_ref()
+        if let Some(value) = settings.mandate.as_ref().and_then(omitted_roe)
             && settings.roe == i32::from(Roe::Unspecified)
         {
-            self.default_note(at, "roe", omitted_roe(mandate), true);
+            self.default_note(at, "roe", value, true);
         }
         match settings.mandate.as_ref() {
             Some(mandate_settings::Mandate::Build(build)) => {
@@ -1270,18 +1270,29 @@ impl Sites<'_> {
 /// as compact JSON text; `tests` holds it to `Action::Skip`'s name.
 const SKIP_BLOCK: &str = r#"{"action":"SKIP"}"#;
 
-/// What an omitted `roe` reads as on a beacon of this writ (decisions-log
-/// item 148 (2)): a Defend or an Attack beacon fires freely, and every other
-/// returns fire only.
-fn omitted_roe(mandate: &mandate_settings::Mandate) -> &'static str {
-    match mandate {
-        mandate_settings::Mandate::Defend(_) | mandate_settings::Mandate::Attack(_) => {
-            Roe::FreeFire.as_str_name()
-        }
-        mandate_settings::Mandate::Build(_)
-        | mandate_settings::Mandate::Mine(_)
-        | mandate_settings::Mandate::Survey(_) => Roe::ReturnFire.as_str_name(),
-    }
+/// What an omitted `roe` reads as on a beacon of this writ, as the schema
+/// names the value (`"FREE_FIRE"`): the sim's own reading of an unset `roe`
+/// (`pharmakos_sim::world::Roe::of_setting` with 0; decisions-log item 148
+/// (2): a Defend or an Attack beacon fires freely, and every other returns
+/// fire only), so the verifier's `I0003` note and plan-core's prose read one
+/// rule and keep no copy of it (S3's `zerotitle`, fix pass 1). `None` only if
+/// the sim gave an unset `roe` no reading on that writ.
+#[must_use]
+pub fn omitted_roe(mandate: &mandate_settings::Mandate) -> Option<&'static str> {
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::world::Roe as Reading;
+    let kind = match mandate {
+        mandate_settings::Mandate::Build(_) => MandateKind::Build,
+        mandate_settings::Mandate::Defend(_) => MandateKind::Defend,
+        mandate_settings::Mandate::Attack(_) => MandateKind::Attack,
+        mandate_settings::Mandate::Survey(_) => MandateKind::Survey,
+        mandate_settings::Mandate::Mine(_) => MandateKind::Mine,
+    };
+    Reading::of_setting(0, kind).map(|reading| match reading {
+        Reading::Hold => Roe::HoldFire.as_str_name(),
+        Reading::Return => Roe::ReturnFire.as_str_name(),
+        Reading::Free => Roe::FreeFire.as_str_name(),
+    })
 }
 
 /// A ranking selector's JSON name and its filter, if `beacon` is one: the
