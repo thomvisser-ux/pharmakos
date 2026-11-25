@@ -340,6 +340,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	_check_the_logs(failures)
 	await _check_the_playtest_lobby(failures)
 	await _check_playtest_off_costs_nothing(failures)
+	await _check_a_lost_release_counts_the_next_turn(failures)
 
 
 ## **The wheel reaches a readable structure** (item 155 (3) 4). From the whole map's framing,
@@ -2170,3 +2171,55 @@ func _check_playtest_off_costs_nothing(failures: Array[String]) -> void:
 	column.queue_free()
 	await get_tree().process_frame
 	print("[client-check] Playtest mode off: no bridge call in %d frames, a focus change and a camera move" % SETTLE_FRAMES)
+
+
+## **A lost release does not swallow the next turn's count** (fix pass 1, item 6): a right-button
+## drag says `turn` once; after the window loses focus with the button still held, the next drag
+## says it again; and a new press starts a new turn even with no release between.
+func _check_a_lost_release_counts_the_next_turn(failures: Array[String]) -> void:
+	var stage := SubViewport.new()
+	stage.size = OWNERS_WINDOW
+	stage.own_world_3d = true
+	stage.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(stage)
+	var vista: Node3D = VistaScene.instantiate()
+	stage.add_child(vista)
+	vista.set_process(false)
+	var rig: Node3D = vista.rig
+	var turns: Array[String] = []
+	rig.moved.connect(func(kind: String) -> void:
+		if kind == "turn":
+			turns.append(kind))
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_RIGHT
+	press.pressed = true
+	press.position = Vector2(400, 300)
+	# The button held, as the input singleton reads it.
+	Input.parse_input_event(press)
+	await get_tree().process_frame
+	var drag := InputEventMouseMotion.new()
+	drag.button_mask = MOUSE_BUTTON_MASK_RIGHT
+	drag.position = Vector2(410, 300)
+	drag.relative = Vector2(10, 0)
+	stage.push_input(press)
+	stage.push_input(drag)
+	stage.push_input(drag)
+	if turns.size() != 1:
+		failures.append("one drag said `turn` %d time(s)" % turns.size())
+	# Focus lost with the button held: its release lands elsewhere.
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	stage.push_input(drag)
+	if turns.size() != 2:
+		failures.append("the drag after a lost focus was not a new turn: %d" % turns.size())
+	# A new press with no release between starts a new turn.
+	stage.push_input(press)
+	stage.push_input(drag)
+	if turns.size() != 3:
+		failures.append("the drag after a new press was not a new turn: %d" % turns.size())
+	var release := press.duplicate()
+	release.pressed = false
+	Input.parse_input_event(release)
+	await get_tree().process_frame
+	stage.queue_free()
+	await get_tree().process_frame
+	print("[client-check] the camera's turn: said once a drag, again after a lost focus and after a new press")

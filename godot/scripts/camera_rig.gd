@@ -189,6 +189,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		# A press on the view that no control took gives the keys back to the camera.
 		get_viewport().gui_release_focus()
+		# A new right-button press starts a new turn, whether or not the last one's release came.
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			_turning = false
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			moved.emit("zoom")
 			zoom_at(event.position, -notches_of(event))
@@ -203,6 +206,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		_turning = true
 		yaw -= event.relative.x * TURN_RATE
 		pitch = clampf(pitch - event.relative.y * TURN_RATE, -1.5, -0.1)
+
+
+## The window lost focus: a release or a key-up that lands elsewhere is lost, so the next drag or
+## key starts a new move, said once, rather than being taken for the old one.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_turning = false
+		_panning = false
 
 
 ## How many notches one wheel event is: its `factor` where the platform reports one, a whole
