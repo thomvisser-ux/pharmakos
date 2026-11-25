@@ -733,7 +733,10 @@ fn the_largest_render_is_withheld_with_a_typed_error() {
     let mut surface = hosted(2, support::SEGMENT_MS, 3);
     unlimited(&mut surface);
     let seat = seat_token(&mut surface, 0);
-    for step in [r#"{"hold":{}}"#, r#"{"hold":{"ms":1}}"#] {
+    // Bare holds: 16 315 366 bytes, past the cap; the timed holds (10.0 MiB)
+    // fit the 12 MiB cap since fix pass 2, and are answered whole.
+    {
+        let step = r#"{"hold":{}}"#;
         let text = request_text(
             "\"render-1\"",
             "render_plan",
@@ -767,12 +770,12 @@ fn the_largest_render_is_withheld_with_a_typed_error() {
         .filter(|entry| entry.action == "withhold answer render_plan")
         .filter(|entry| entry.outcome.render() == "RESPONSE_TOO_LARGE")
         .count();
-    assert_eq!(logged, 2, "each withheld answer is in the audit log");
+    assert_eq!(logged, 1, "the withheld answer is in the audit log");
     assert_eq!(
         surface
             .audit()
             .withheld_count(pharmakos_gateway::audit::Withheld::TooLarge),
-        2,
+        1,
         "and counted under its reason"
     );
 }
