@@ -136,6 +136,65 @@ fn allocations() -> u64 {
         .expect("the counting slot exists on a running test's thread")
 }
 
+/// **The counter is itself tested**, in both builds: every assertion in this
+/// file reads [`allocations`], so a hook that stopped counting would turn them
+/// all green at once. A `realloc` matters most: a `Vec` grown past its room
+/// while it holds elements is a `realloc`, not an `alloc`, so a counter blind
+/// to it is blind to exactly the bug this file exists for. One call of each
+/// hook, through the global allocator, on this thread: `alloc`,
+/// `alloc_zeroed` and a growing and a shrinking `realloc` each count one, a
+/// `dealloc` counts none; and a `Vec` pushed past its capacity is seen.
+#[test]
+fn the_counting_allocator_counts_every_hook_it_says_it_counts() {
+    use std::alloc::Layout;
+    let small = Layout::from_size_align(64, 8).expect("a layout");
+    let large = Layout::from_size_align(4096, 8).expect("a layout");
+    let mut figures = [0_u64; 5];
+    #[allow(
+        unsafe_code,
+        reason = "the hooks are reached only through the global allocator's unsafe entry points; each pointer is checked non-null before it is used, used with the layout it was made with, and freed once"
+    )]
+    unsafe {
+        let before = allocations();
+        let block = std::alloc::alloc(small);
+        figures[0] = allocations() - before;
+        assert!(!block.is_null(), "the system allocator answered");
+        let before = allocations();
+        let zeroed = std::alloc::alloc_zeroed(small);
+        figures[1] = allocations() - before;
+        assert!(!zeroed.is_null(), "the system allocator answered");
+        let before = allocations();
+        let block = std::alloc::realloc(block, small, large.size());
+        figures[2] = allocations() - before;
+        assert!(!block.is_null(), "the system allocator answered");
+        let before = allocations();
+        let block = std::alloc::realloc(block, large, small.size());
+        figures[3] = allocations() - before;
+        assert!(!block.is_null(), "the system allocator answered");
+        let before = allocations();
+        std::alloc::dealloc(block, small);
+        std::alloc::dealloc(zeroed, small);
+        figures[4] = allocations() - before;
+    }
+    assert_eq!(
+        figures,
+        [1, 1, 1, 1, 0],
+        "alloc, alloc_zeroed, a growing realloc and a shrinking realloc each count one; dealloc none"
+    );
+
+    let mut vector: Vec<u64> = Vec::with_capacity(4);
+    vector.extend([1, 2, 3, 4]);
+    let before = allocations();
+    vector.push(std::hint::black_box(5));
+    let grown = allocations() - before;
+    assert_eq!(
+        grown, 1,
+        "a Vec pushed past its capacity while it holds elements grows by a realloc, and the \
+         counter sees it"
+    );
+    assert_eq!(std::hint::black_box(vector).len(), 5);
+}
+
 /// The ticks [`warm_up`] runs: every buffer a tick fills is at its steady
 /// capacity after them.
 const WARM_UP_TICKS: u32 = 50;
