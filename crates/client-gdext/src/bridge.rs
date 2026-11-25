@@ -1899,7 +1899,7 @@ impl PharmakosBridge {
         match self.panics.guard("editor_templates_of_response", || {
             crate::wizard::templates_of_text(&text)
         }) {
-            Some(Ok(rows)) => crate::editor_view::templates_array(&rows),
+            Some(Ok(list)) => crate::editor_view::templates_array(&list.rows),
             Some(Err(error)) => {
                 godot_error!("[pharmakos] editor_templates_of_response: {error}");
                 VarArray::new()

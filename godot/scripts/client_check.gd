@@ -336,6 +336,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	_check_the_refused_ghost_line(editor, failures)
 	_check_the_ghost_states(editor, failures)
 	_check_the_conflicts_left_out(failures)
+	_check_the_refused_library_files(failures)
 	stage.queue_free()
 	_check_the_recap_words(failures)
 	await _check_the_lobby_after_a_failure(failures)
@@ -1730,6 +1731,36 @@ func _check_the_conflicts_left_out(failures: Array[String]) -> void:
 		if said != (more != ""):
 			failures.append("conflicts left out `%s`: the note is %s" % [more, "drawn" if said else "missing"])
 		box.queue_free()
+
+
+## **The library files the template list refused are said, as sent** (S3's `leftout`): one line
+## per entry of the editor state's `templates_refused`, first and in its order, each in its
+## reason's words with the count as it came, beside the templates or with none; with no entry,
+## no line.
+func _check_the_refused_library_files(failures: Array[String]) -> void:
+	var refused := [{"reason": "too_large", "count": 2}, {"reason": "not_a_playbook", "count": 1}, {"reason": "unreadable", "count": 3}]
+	var expected: Array[String] = [
+		Strings.text("library_refused_too_large", {"count": "2"}),
+		Strings.text("library_refused_not_a_playbook", {"count": "1"}),
+		Strings.text("library_refused_unreadable", {"count": "3"}),
+	]
+	for line in expected:
+		if line.begins_with("library_refused_") or line.contains("{count}"):
+			failures.append("a refused-file line has no words of its own: `%s`" % line)
+	var templates := [{"id": "a_template", "title": "A", "summary": "One."}]
+	for listed in [templates, []]:
+		for sent in [refused, []]:
+			var box := VBoxContainer.new()
+			add_child(box)
+			EditorPanel.fill_templates(box, listed, true, {}, {}, func(_id: String) -> void: pass, sent)
+			var drawn := EditorPanel.refused_in(box)
+			var want: Array[String] = expected if not sent.is_empty() else ([] as Array[String])
+			if drawn != want:
+				failures.append("with %d templates and %d refused entries the lines are %s, not %s" % [listed.size(), sent.size(), drawn, want])
+			var first: Node = box.get_child(0) if box.get_child_count() > 0 else null
+			if not sent.is_empty() and not (first is Label and first.has_meta("reason")):
+				failures.append("the refused-file lines are not drawn first")
+			box.queue_free()
 
 
 ## **Every seat's tally at the match's end** (item 155 (3) 7): the gateway's prose, then one frame

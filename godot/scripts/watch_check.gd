@@ -128,7 +128,10 @@
 #     refuse it before announcing, lets the refused host go (`host_link.gd`'s `reset`) and
 #     starts the lobby's line on the same link, as the lobby's refused Resume does; in the
 #     Lull, `get_status` names `probation` as asked, and round 1's first `list_templates`
-#     marks exactly one template with a sentence, which the panel draws as sent. The first
+#     marks exactly one template with a sentence, which the panel draws as sent. That host
+#     reads a root of the check's own whose library adds one file of each kind the gateway
+#     refuses (S3's `leftout`; `_refused_files_said`): the list says each reason once with
+#     its count, and the panel draws one line each, naming no file. The first
 #     host's legs hold `get_status` to `custom` and read the seat's `sealed_this_round`;
 #   * THE PLANNING WIRE (S3's `fixq-c`; `_planning_wire`), in round 1's Lull against the real
 #     gateway, on the committed playbook: a duration chip is a number typed in seconds, pre-filled
@@ -557,7 +560,13 @@ func _run_probation() -> void:
 	if not await _unsaved_host_said():
 		_finish()
 		return
-	if not link.start(_gamectl, _root, _line):
+	# The Probation host reads a root of the check's own: the checkout's rules and library,
+	# and one library file of each kind the gateway refuses (S3's `leftout`).
+	var refusing_root := _refusing_root()
+	if refusing_root == "":
+		_finish()
+		return
+	if not link.start(_gamectl, refusing_root, _line):
 		_finish()
 		return
 	editor.begin(HostLink.my_seat())
@@ -843,7 +852,89 @@ func _probation_frame() -> bool:
 		_failures.append("the panel does not draw the guided mark as sent: %s against %s" % [drawn, marked[0]])
 		return false
 	print("[watch-check] Probation: get_status names `probation`; round 1 marks %s: %s" % [marked[0].get("id"), marked[0].get("guided_reason")])
+	return _refused_files_said()
+
+
+## **The library files the gateway refused are said, by reason and count** (S3's `leftout`): the
+## Probation host's root holds one directory named like a template, one file past the library's
+## size cap and two files that are not playbooks (`_refusing_root`); the real gateway's
+## `list_templates` says each reason once with its count, which the editor state carries as
+## sent, in the enum's order, and the panel draws one line each, in its reason's words. No line
+## names a file.
+func _refused_files_said() -> bool:
+	var expected := [{"reason": "unreadable", "count": 1}, {"reason": "too_large", "count": 1}, {"reason": "not_a_playbook", "count": 2}]
+	var sent: Array = _editor().get("templates_refused", [])
+	if var_to_str(sent) != var_to_str(expected):
+		_failures.append("the template list's refused files are %s, not %s" % [sent, expected])
+		return false
+	editor.refresh()
+	var lines: Array[String] = editor.refused_drawn()
+	var want: Array[String] = []
+	for entry in expected:
+		want.append(Strings.text("library_refused_" + String(entry["reason"]), {"count": str(entry["count"])}))
+	if lines != want:
+		_failures.append("the panel draws the refused files as %s, not %s" % [lines, want])
+		return false
+	for line in lines:
+		for named in REFUSING_FILES:
+			if line.contains(String(named).get_basename()):
+				_failures.append("a refused-file line names `%s`: %s" % [named, line])
+				return false
+	print("[watch-check] Probation: the template list says its refused files: %s" % " ".join(lines))
 	return true
+
+
+## The Probation host's root: the check's own folder, holding the checkout's rules table and
+## library, and the refused files; "" (with the failure said) when it could not be made.
+const REFUSING_ROOT := "user://watch_check_root"
+## The files the refusing library adds, by name: a directory, a file past the cap, and two files
+## that are not playbooks.
+const REFUSING_FILES := ["a_folder.jsonc", "big.jsonc", "not_text.jsonc", "not_json.jsonc"]
+## Past the library's 2 MiB size cap (plan-core's `MAX_FILE_BYTES`), with room for the cap to
+## grow fourfold; a cap past it fails this leg's count, never passes it.
+const BIG_FILE_BYTES := 8 * 1024 * 1024 + 1
+
+
+func _refusing_root() -> String:
+	var root := ProjectSettings.globalize_path(REFUSING_ROOT)
+	if not _remove_tree(root):
+		_failures.append("the refusing root %s could not be cleared" % root)
+		return ""
+	var library := root.path_join("library")
+	var rules := root.path_join("rules")
+	if DirAccess.make_dir_recursive_absolute(library) != OK or DirAccess.make_dir_recursive_absolute(rules) != OK:
+		_failures.append("the refusing root %s could not be made" % root)
+		return ""
+	if DirAccess.copy_absolute(_root.path_join("rules/rules.v1.json"), rules.path_join("rules.v1.json")) != OK:
+		_failures.append("the rules table could not be copied into %s" % root)
+		return ""
+	var shipped := DirAccess.open(_root.path_join("library"))
+	if shipped == null:
+		_failures.append("the checkout's library could not be read")
+		return ""
+	for file in shipped.get_files():
+		if DirAccess.copy_absolute(_root.path_join("library").path_join(file), library.path_join(file)) != OK:
+			_failures.append("%s could not be copied into %s" % [file, library])
+			return ""
+	if DirAccess.make_dir_recursive_absolute(library.path_join("a_folder.jsonc")) != OK:
+		_failures.append("the directory named like a template could not be made")
+		return ""
+	var big := FileAccess.open(library.path_join("big.jsonc"), FileAccess.WRITE)
+	var not_text := FileAccess.open(library.path_join("not_text.jsonc"), FileAccess.WRITE)
+	var not_json := FileAccess.open(library.path_join("not_json.jsonc"), FileAccess.WRITE)
+	if big == null or not_text == null or not_json == null:
+		_failures.append("the refused files could not be written into %s" % library)
+		return ""
+	var spaces := PackedByteArray()
+	spaces.resize(BIG_FILE_BYTES)
+	spaces.fill(32)
+	big.store_buffer(spaces)
+	big.close()
+	not_text.store_buffer(PackedByteArray([0xff, 0xfe, 0x00]))
+	not_text.close()
+	not_json.store_string("{ this is not a playbook")
+	not_json.close()
+	return root
 
 
 ## The carried draft is opened (through `get_draft`, the editor's one way to open it), with

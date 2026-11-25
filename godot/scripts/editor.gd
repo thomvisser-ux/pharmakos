@@ -978,7 +978,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_drafts(state.get("drafts", []))
 	_draw_route(state.get("route", {}), state.get("has_text", false), unchecked_text(state, "route"))
 	_draw_ghost(state.get("ghost", {}))
-	_draw_templates(state.get("templates", []), state.get("templates_known", false), state.get("templates_read", {}), state.get("templates_unchecked", {}))
+	_draw_templates(state.get("templates", []), state.get("templates_known", false), state.get("templates_read", {}), state.get("templates_unchecked", {}), state.get("templates_refused", []))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
 	_draw_rules(state, unchecked_text(state, "prose"))
 	_draw_number_field(state.get("field", {}))
@@ -1221,12 +1221,12 @@ func size_rect() -> Rect2:
 
 
 ## Redrawn only when the list, its state or its why changed (`fill_templates`).
-func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked: Dictionary) -> void:
-	var drawn := var_to_str([templates, known, read, unchecked])
+func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked: Dictionary, refused: Array) -> void:
+	var drawn := var_to_str([templates, known, read, unchecked, refused])
 	if drawn == _templates_drawn:
 		return
 	_templates_drawn = drawn
-	fill_templates(_templates_box, templates, known, read, unchecked, open_template)
+	fill_templates(_templates_box, templates, known, read, unchecked, open_template, refused)
 
 
 ## The template list as the gateway sent it this Lull (the bridge re-asks at every Lull's
@@ -1236,14 +1236,26 @@ func _draw_templates(templates: Array, known: bool, read: Dictionary, unchecked:
 ## client adds no words to the mark. Which template is marked, and why, are the gateway's;
 ## nothing here names one. `known` false is a list not read yet this Lull; `read` says why it did
 ## not come, when it did not (`failed`, `detail`); `unchecked` why it will not come, the door
-## being shut (`key`, in the checks' own words), so no "Reading..." waits on a shut door. Static,
-## so the hostless template-list shot draws the panel's own picture.
-static func fill_templates(box: Container, templates: Array, known: bool, read: Dictionary, unchecked: Dictionary, open: Callable) -> void:
+## being shut (`key`, in the checks' own words), so no "Reading..." waits on a shut door.
+## `refused` is the library files the same answer said it refused (S3's `leftout`): one line per
+## entry, first, in the gateway's order, each in its reason's words with the count as sent; the
+## client counts and sums nothing. Static, so the hostless template-list shot draws the panel's
+## own picture.
+static func fill_templates(box: Container, templates: Array, known: bool, read: Dictionary, unchecked: Dictionary, open: Callable, refused: Array = []) -> void:
 	var failed := String(read.get("failed", ""))
 	var shut := String(unchecked.get("key", ""))
 	for child in box.get_children():
 		box.remove_child(child)
 		child.queue_free()
+	for entry in refused:
+		var line := Label.new()
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		var reason := String(entry.get("reason", ""))
+		line.text = Strings.text("library_refused_" + reason, {"count": str(entry.get("count", 0))})
+		line.accessibility_name = line.text
+		line.name = "RefusedLine"
+		line.set_meta("reason", reason)
+		box.add_child(line)
 	if templates.is_empty():
 		var none := Label.new()
 		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1281,6 +1293,20 @@ static func fill_templates(box: Container, templates: Array, known: bool, read: 
 			why.accessibility_name = why.text
 			why.name = "GuidedReason"
 			box.add_child(why)
+
+
+## The refused-file lines as drawn in `box`, for a check to read: each line's text, in order.
+static func refused_in(box: Container) -> Array[String]:
+	var lines: Array[String] = []
+	for child in box.get_children():
+		if child is Label and child.has_meta("reason"):
+			lines.append((child as Label).text)
+	return lines
+
+
+## The refused-file lines as drawn in the panel's template list, for a check to read.
+func refused_drawn() -> Array[String]:
+	return refused_in(_templates_box)
 
 
 ## The guided first pick as drawn in `box`, for a check to read: the id of the template button
