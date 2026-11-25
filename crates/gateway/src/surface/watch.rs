@@ -226,7 +226,7 @@ struct Listing {
 }
 
 /// The entity list a page is cut from: the list, where the page starts in
-/// it, and the digest it is held by when it is a held one.
+/// it, and the serial it is held by when it is a held one.
 struct Entities {
     list: std::sync::Arc<[Json]>,
     offset: u32,
@@ -282,8 +282,8 @@ fn entity_page(
     if end == list.len() {
         // The listing's end: a held list is let go, and the cursor is the
         // listing's end, as a page with no entities to page leaves it.
-        if let Some(digest) = held {
-            views.release_entities(viewer, digest);
+        if let Some(serial) = held {
+            views.release_entities(viewer, serial);
         }
         return Ok(render(at_ms, &page.chunks, shown, page.next, true));
     }
@@ -291,8 +291,8 @@ fn entity_page(
         .map_err(|_| Error::internal(said!("an entity list of {} entities", list.len())))?;
     let shown = shown.to_vec();
     let place = match held {
-        Some(digest) => crate::feed::EntityPlace {
-            list: digest,
+        Some(serial) => crate::feed::EntityPlace {
+            list: serial,
             offset: next_offset,
         },
         None => views.hold_entities(viewer, listing.from_seq, listing.to_seq, list, next_offset),

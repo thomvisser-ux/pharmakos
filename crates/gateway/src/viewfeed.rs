@@ -135,10 +135,28 @@ const _: () = assert!(MAX_CHUNK_LISTED_BYTES < VIEW_PAGE_BYTES);
 /// PLACEHOLDER: four held entity lists a viewer — owner, at hardening, with the rest of the view's bounds.
 pub const HELD_ENTITY_LISTS_PER_VIEWER: usize = 4;
 
-/// The viewers one feed serves at most: the match's seats (three in v1) and
-/// the two spectator readings (with and without `spectate.nofog`); `admin`
-/// watches nothing ([`crate::fog::Viewer`]).
-pub const MAX_VIEWERS: usize = 5;
+/// The viewers one feed serves at most: a seat for each of the match's
+/// seats ([`crate::host::MAX_SEATS`]), and two spectator readings, because a
+/// spectator is one viewer with `spectate.nofog` and one without
+/// ([`crate::fog::Viewer::Spectator`]); `admin` watches nothing.
+pub const MAX_VIEWERS: usize = count_of(crate::host::MAX_SEATS).saturating_add(SPECTATOR_READINGS);
+
+/// `n` as a `usize`, counted, since a `const` cannot call `usize::try_from`
+/// and a cast is a determinism lint's.
+const fn count_of(n: u32) -> usize {
+    let mut counted: usize = 0;
+    let mut left = n;
+    while left > 0 {
+        counted = counted.saturating_add(1);
+        left = left.saturating_sub(1);
+    }
+    counted
+}
+
+const _: () = assert!(MAX_VIEWERS == 5, "three seats and two spectator readings");
+
+/// The spectator readings a feed serves: with `spectate.nofog` and without.
+const SPECTATOR_READINGS: usize = 2;
 
 /// The most entity lists the feed holds at once: [`MAX_VIEWERS`] times
 /// [`HELD_ENTITY_LISTS_PER_VIEWER`].
