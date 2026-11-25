@@ -1466,12 +1466,12 @@ pub struct IntegerShape {
     #[prost(string, tag="4")]
     pub display_unit: ::prost::alloc::string::String,
     /// What a 0 does in this setting, in the player's words, from plan-core's
-    /// string table: "retreat off", "never repair". Present only where the sim
-    /// reads a 0 as turning what the setting governs off, and the bounds admit
-    /// a 0; empty where a 0 is just a number. A Chip's or a BeaconSettingRow's
-    /// `value_title` carries it when the value now is that 0, so the client
-    /// draws it and tests no value. Static words, the same for every seat.
-    /// (S3's `zerotitle`.)
+    /// string table: "retreat off", "structures never repaired". Present only
+    /// where the sim reads a 0 as turning what the setting governs off, and the
+    /// bounds admit a 0; empty where a 0 is just a number. A Chip's or a
+    /// BeaconSettingRow's `value_title` carries it when the value now is that
+    /// 0, so the client draws it and tests no value. Static words, the same for
+    /// every seat. (S3's `zerotitle`.)
     #[prost(string, tag="5")]
     pub zero_title: ::prost::alloc::string::String,
     /// `min` and `max` as they are shown and typed, in `display_unit`, written
