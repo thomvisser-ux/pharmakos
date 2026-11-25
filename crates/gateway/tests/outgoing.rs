@@ -1568,3 +1568,47 @@ fn server_frames(output: &[u8]) -> Vec<(Opcode, Vec<u8>)> {
     }
     out
 }
+
+/// **A library file past the text cap is said as such** (S3's `outcap`, fix
+/// pass 1): `instantiate_template` of a template whose file is past the cap is
+/// refused with words naming the cap, never as a template that is not there;
+/// a template that is not there is still `NOT_FOUND`; no path is named.
+#[test]
+fn a_library_file_past_the_cap_is_refused_in_words() {
+    let folder = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("outcap-library");
+    std::fs::create_dir_all(&folder).expect("a folder");
+    std::fs::write(
+        folder.join("big.jsonc"),
+        vec![b' '; pharmakos_plan_core::library::MAX_FILE_BYTES + 1],
+    )
+    .expect("written");
+    let mut surface = support::hosted_with(
+        support::MATCH,
+        pharmakos_gateway::fog::FogPolicy::fogged(),
+        2,
+        support::SEGMENT_MS,
+        3,
+        Some(folder.clone()),
+    );
+    unlimited(&mut surface);
+    let seat = seat_token(&mut surface, 0);
+    let ask = |id: &str| {
+        request_text(
+            "1",
+            "instantiate_template",
+            &Json::Object(vec![(
+                String::from("template_id"),
+                Json::String(id.to_owned()),
+            )]),
+        )
+    };
+    let big = answer_text(&mut surface, &seat, &ask("big"));
+    assert_eq!(code_of(&big), "INTERNAL", "{big}");
+    assert!(big.contains("past the"), "{big}");
+    assert!(
+        !big.contains(&folder.display().to_string()),
+        "no path is named: {big}"
+    );
+    let missing = answer_text(&mut surface, &seat, &ask("missing"));
+    assert_eq!(code_of(&missing), "NOT_FOUND", "{missing}");
+}

@@ -454,12 +454,8 @@ impl Surface {
         // the library lives is the host's business, and a refusal that spelled
         // out an absolute directory would hand every seat the layout of the
         // machine it is playing on for the price of one bad id.
-        let text = pharmakos_plan_core::library::read(folder, template_id).map_err(|_| {
-            Error::not_found(said!(
-                "no template `{}` in this gateway's library",
-                pharmakos_proto::json::grammar::quoted(template_id)
-            ))
-        })?;
+        let text = pharmakos_plan_core::library::read(folder, template_id)
+            .map_err(|refused| library_refusal(template_id, &refused))?;
 
         let mut parameters: Vec<pharmakos_plan_core::library::Parameter> = Vec::new();
         if let Some(value) = request.param("parameters") {
@@ -1435,6 +1431,26 @@ fn depth_of(request: &Request) -> Result<Depth, Error> {
             pharmakos_proto::json::grammar::quoted(other)
         ))),
     }
+}
+
+/// The refusal of a library read, naming the template and never the path
+/// (S3's `outcap`): a file past the playbook's text cap is the host's library
+/// at fault, said as such (`INTERNAL`: nothing the caller did caused it, and
+/// the words name the cap); any other read refusal is that the template is not
+/// there (`NOT_FOUND`).
+pub(crate) fn library_refusal(template_id: &str, refused: &pharmakos_plan_core::Error) -> Error {
+    if refused.bound() == Some(pharmakos_plan_core::error::Bound::LibraryFile) {
+        return Error::internal(said!(
+            "the template `{}` in this gateway's library is past the {} characters a library \
+             file may hold, so it is not read",
+            pharmakos_proto::json::grammar::quoted(template_id),
+            pharmakos_verifier::MAX_PLAYBOOK_CHARS
+        ));
+    }
+    Error::not_found(said!(
+        "no template `{}` in this gateway's library",
+        pharmakos_proto::json::grammar::quoted(template_id)
+    ))
 }
 
 /// True for a template id this gateway will look up.

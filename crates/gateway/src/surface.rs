@@ -3086,12 +3086,8 @@ impl Surface {
         let template_id = suggestion.template_id.as_str();
         // The refusal names the template and never the path, as
         // `instantiate_template`'s does.
-        let text = pharmakos_plan_core::library::read(folder, template_id).map_err(|_| {
-            Error::not_found(said!(
-                "no template `{}` in this gateway's library",
-                pharmakos_proto::json::grammar::quoted(template_id)
-            ))
-        })?;
+        let text = pharmakos_plan_core::library::read(folder, template_id)
+            .map_err(|refused| planning::library_refusal(template_id, &refused))?;
         let offered: Vec<pharmakos_plan_core::library::Parameter> = suggestion
             .parameters
             .iter()
