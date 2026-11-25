@@ -951,11 +951,13 @@ pub enum StepFailure {
     /// decision, and no row ever commits a lost target.
     FeatureLost,
     /// A settings or target row could not write the whole of what it names:
-    /// the beacons' list-settings table had no room for every entry, part-way
-    /// through. The row writes **nothing**, so the beacon keeps its old lists
-    /// exactly as they were, and the step fails rather than leave a list half
-    /// written (ruling 10 of S1's stage demo, decisions-log item 139 (1); item
-    /// 136 (5)).
+    /// the table that holds one of its lists had no room for every entry --
+    /// the beacons' list-settings table for Build targets, protected areas
+    /// and probe areas, or the Attack table for avoid areas (lane `simroom`).
+    /// The row writes **nothing**, so the beacon keeps its old lists and
+    /// settings exactly as they were, and the step fails rather than leave a
+    /// list half written (ruling 10 of S1's stage demo, decisions-log item
+    /// 139 (1); item 136 (5)).
     TargetsUnwritten,
     /// A `wall` target's box does not reach the ground: its `min.z` lies above
     /// the ground's top in some column, so the wall would hang in the air
