@@ -1153,6 +1153,32 @@ fn a_push_left_is_timed_to_its_matchs_last_frame() {
     );
 }
 
+/// Review 2's P5: frames stop at 3 s (the host gave up), focus readings keep coming at 10 s and
+/// 11 s, then a new match. The left Push is kept as it stood at its last frame, and its line is
+/// stamped with that frame's time.
+#[test]
+fn a_left_match_ends_at_its_last_frame() {
+    let mut recorder = Recorder::new();
+    recorder.switch(true, 0, true, Phase::Unknown, 0);
+    recorder.phase(0, Phase::Push, 1, None);
+    frames(&mut recorder, 0, 1_000_000);
+    recorder.focus(1_000_000, false);
+    frames(&mut recorder, 1_000_000, 3_000_000);
+    recorder.focus(10_000_000, true);
+    recorder.focus(11_000_000, false);
+    assert_eq!(recorder.match_begun(), Recorded::Taken);
+    let files = files_of(&recorder.bundle(&Survey::default()).expect("on"));
+    let metrics = json_of(file(&files, "metrics.json"));
+    let [push] = array_at(&metrics, "push_time") else {
+        panic!("one Push");
+    };
+    assert_eq!(number_at(push, "focused_us"), 1_000_000);
+    assert_eq!(number_at(push, "unfocused_us"), 2_000_000);
+    assert_eq!(number_at(push, "gap_us"), 0);
+    let log = file(&files, "diagnostics.log");
+    assert!(log.contains(" match_left t=3000\n"), "{log}");
+}
+
 /// Review 1's second probe: round 3's Lull left 2 s in, the new match's Lull at 300 s.
 #[test]
 fn a_lull_left_is_timed_to_its_matchs_last_frame() {

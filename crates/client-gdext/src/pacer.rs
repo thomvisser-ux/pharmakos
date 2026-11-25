@@ -783,6 +783,12 @@ fn grow(share: &mut u64, step_us: u64) -> Result<(), ClockFault> {
 /// time, and a Push's time is split at each focus change by the focus it had before it. A step
 /// between two readings longer than [`MAX_ATTENTION_STEP_US`] is a frame gap: summed apart and
 /// counted, never attention.
+///
+/// **No reading that is not a frame of a live match adds time to a left span.** A focus change,
+/// a Ready or a Skip is read whenever it comes, but once the match's frames stop (its host gave
+/// up or stopped) such readings keep arriving with nothing being played; so a left match keeps
+/// its open Push and Lull exactly as they stood at its last frame, and its line is stamped with
+/// that frame's reading.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PlaytestClock {
     /// The reading Playtest mode was switched on at: the zero of [`PlaytestClock::stamp_ms`].
@@ -794,6 +800,17 @@ pub struct PlaytestClock {
     /// The open Push's split so far.
     push: Option<PushTime>,
     /// The open Lull.
+    lull: Option<LullSpan>,
+    /// The open spans as they stood at the last frame drawn, and that frame's reading: what a
+    /// left match keeps ([`PlaytestClock::push_left`], [`PlaytestClock::lull_left`]).
+    at_frame: Frame,
+}
+
+/// The open spans as they stood at one frame, and its reading.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Frame {
+    at_us: u64,
+    push: Option<PushTime>,
     lull: Option<LullSpan>,
 }
 
@@ -807,6 +824,11 @@ impl PlaytestClock {
             focused,
             push: None,
             lull: None,
+            at_frame: Frame {
+                at_us: now_us,
+                push: None,
+                lull: None,
+            },
         }
     }
 
@@ -828,7 +850,13 @@ impl PlaytestClock {
     ///
     /// A [`ClockFault`].
     pub fn seen(&mut self, now_us: u64) -> Result<(), ClockFault> {
-        self.take(now_us)
+        self.take(now_us)?;
+        self.at_frame = Frame {
+            at_us: now_us,
+            push: self.push,
+            lull: self.lull,
+        };
+        Ok(())
     }
 
     /// Takes the reading `now_us`: the time since the last one goes to the open Push's share for
@@ -882,6 +910,8 @@ impl PlaytestClock {
     pub fn push_began(&mut self, now_us: u64) -> Result<(), ClockFault> {
         let taken = self.take(now_us);
         self.push = Some(PushTime::default());
+        // Begun after the last frame: as that frame left it, the Push holds nothing yet.
+        self.at_frame.push = Some(PushTime::default());
         taken
     }
 
@@ -904,6 +934,7 @@ impl PlaytestClock {
     pub fn lull_began(&mut self, now_us: u64) -> Result<(), ClockFault> {
         let taken = self.take(now_us);
         self.lull = Some(LullSpan::default());
+        self.at_frame.lull = Some(LullSpan::default());
         taken
     }
 
@@ -942,16 +973,23 @@ impl PlaytestClock {
         }))
     }
 
-    /// The match was left with a Push open: its split up to the last reading taken (the last
-    /// frame the client drew in that match), never to a later one, and the Push closed.
+    /// The match was left with a Push open: its split as it stood at the last frame the client
+    /// drew in that match, never a reading after it, and the Push closed.
     pub const fn push_left(&mut self) -> Option<PushTime> {
-        self.push.take()
+        let open = self.push.take();
+        let at_frame = self.at_frame.push.take();
+        match open {
+            Some(_) => at_frame,
+            None => None,
+        }
     }
 
-    /// The match was left with a Lull open: its time up to the last reading taken (or to Ready),
-    /// ended by [`LullEnd::MatchLeft`], and the Lull closed.
+    /// The match was left with a Lull open: its time as it stood at the last frame drawn in that
+    /// match (or at Ready before it), ended by [`LullEnd::MatchLeft`], and the Lull closed.
     pub fn lull_left(&mut self) -> Option<LullTime> {
-        self.lull.take().map(|lull| LullTime {
+        let open = self.lull.take();
+        let at_frame = self.at_frame.lull.take();
+        open.and(at_frame).map(|lull| LullTime {
             used_us: lull.used_us,
             gap_us: lull.gap_us,
             gaps: lull.gaps,
@@ -959,10 +997,10 @@ impl PlaytestClock {
         })
     }
 
-    /// The last reading taken.
+    /// The reading of the last frame drawn: a left match's line is stamped with it.
     #[must_use]
-    pub const fn last_us(&self) -> u64 {
-        self.last_us
+    pub const fn last_frame_us(&self) -> u64 {
+        self.at_frame.at_us
     }
 
     /// Whether a Push is open.
@@ -1325,6 +1363,41 @@ mod tests {
                 gaps: 1
             }))
         );
+    }
+
+    /// No reading that is not a frame adds time to a left span (fix pass 2, review 2's P5): a
+    /// focus change with no frame since, and a Ready after the last frame, leave the left Push
+    /// and Lull as they stood at that frame.
+    #[test]
+    fn a_reading_after_the_last_frame_adds_no_time_to_a_left_span() {
+        let mut clock = PlaytestClock::start(0, true);
+        clock.push_began(0).expect("forward");
+        clock.seen(1_000_000).expect("forward");
+        clock.focus(1_000_000, false).expect("forward");
+        clock.seen(2_000_000).expect("forward");
+        clock.seen(3_000_000).expect("the last frame");
+        clock.focus(10_000_000, true).expect("no frame since");
+        clock.focus(11_000_000, false).expect("no frame since");
+        assert_eq!(clock.push_left(), Some(split(1_000_000, 2_000_000)));
+        assert_eq!(clock.last_frame_us(), 3_000_000);
+        clock.lull_began(20_000_000).expect("forward");
+        clock.seen(20_016_000).expect("forward");
+        clock.seen(21_000_000).expect("the last frame");
+        clock.lull_ready(25_000_000).expect("after the last frame");
+        assert_eq!(
+            clock.lull_left(),
+            Some(LullTime {
+                used_us: 1_000_000,
+                gap_us: 0,
+                gaps: 0,
+                ended_by: LullEnd::MatchLeft
+            })
+        );
+        // A span begun after the last frame holds nothing as that frame left it.
+        clock.push_began(30_000_000).expect("forward");
+        clock.focus(31_000_000, true).expect("no frame since");
+        assert_eq!(clock.push_left(), Some(split(0, 0)));
+        assert_eq!(clock.push_left(), None, "closed");
     }
 
     /// A reading before the last is refused as backwards, and a sum past `u64` as an overflow:

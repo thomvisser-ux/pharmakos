@@ -1000,7 +1000,7 @@ impl Recording {
             self.keep_lull(time);
         }
         let answer = if left {
-            let last_us = self.clock.last_us();
+            let last_us = self.clock.last_frame_us();
             self.line(last_us, Event::MatchLeft, None)
         } else {
             Recorded::Taken
