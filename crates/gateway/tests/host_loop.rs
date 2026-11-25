@@ -2915,3 +2915,37 @@ fn a_refused_resume_writes_nothing() {
         assert_eq!(folders(&folder), dirs, "{what}: no folder was made");
     }
 }
+
+/// The resume lays out every seat's folder (fix pass 4, item 2; review 4:
+/// `make_layout(0)` left every suite green): a `lull` save whose `seats/0` and
+/// `seats/1` are gone (the shape `main` wrote before a seat's first seal) is
+/// resumed, `end_lull` answers "push", and both seats' sealed files are
+/// written.
+#[test]
+fn a_resume_makes_the_seat_folders_an_older_build_left_out() {
+    const MATCH_ID: &str = "m-opsave-resume-layout";
+    let root = data_root(MATCH_ID);
+    host_and_quit(&root, &new_line(durable_config(MATCH_ID, 2)))
+        .expect("a host that opened and was closed");
+    let folder = folder_of(&root, MATCH_ID);
+    for seat in ["0", "1"] {
+        std::fs::remove_dir_all(folder.join("seats").join(seat)).expect("the seat's folder");
+    }
+    let mut host = Stoppable::start(&root, &resume_line(durable_config(MATCH_ID, 2)));
+    let mut lobby = Client::open(host.announce.port, &host.announce.admin_token);
+    let answer = result(&lobby.call("end_lull", "{}"), "end_lull");
+    assert_eq!(phase_of(&answer), "push");
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    host.quit().expect("the resumed host closed cleanly");
+    for seat in ["0", "1"] {
+        assert!(
+            folder
+                .join("seats")
+                .join(seat)
+                .join("sealed")
+                .join("1.jsonc")
+                .is_file(),
+            "seat {seat}'s sealed playbook"
+        );
+    }
+}
