@@ -187,12 +187,7 @@ const ALLOWED_CRATES: &[&str] = &[
 fn the_resolved_graph_is_the_allowed_list() {
     let text = fs::read_to_string(workspace_root().join("Cargo.lock")).expect("Cargo.lock");
     let reachable = closure(&lock_graph(&text), SELF);
-    let allowed: BTreeSet<String> = ALLOWED_CRATES
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
-    let added: Vec<&String> = reachable.difference(&allowed).collect();
-    let gone: Vec<&String> = allowed.difference(&reachable).collect();
+    let (added, gone) = moved_from_allowed(&reachable);
     assert!(
         added.is_empty() && gone.is_empty(),
         "the client's dependency closure moved: added {added:?}, gone {gone:?}; a new crate is \
@@ -207,10 +202,26 @@ fn a_crate_outside_the_allowed_list_is_named() {
 [[package]]\nname = \"pharmakos-client-gdext\"\nversion = \"0.1.0\"\ndependencies = [\n \"godot\",\n]\n\n\
 [[package]]\nname = \"godot\"\nversion = \"1.0.0\"\ndependencies = [\n \"newcomer\",\n]\n\n\
 [[package]]\nname = \"newcomer\"\nversion = \"1.0.0\"\n";
-    let reachable = closure(&lock_graph(sample), SELF);
-    assert!(reachable.contains("newcomer"));
-    assert!(!ALLOWED_CRATES.contains(&"newcomer"));
+    let mut reachable = closure(&lock_graph(sample), SELF);
+    reachable.extend(ALLOWED_CRATES.iter().map(|name| (*name).to_owned()));
+    assert_eq!(
+        moved_from_allowed(&reachable),
+        (vec!["newcomer".to_owned()], Vec::new())
+    );
 }
+
+/// How `reachable` differs from [`ALLOWED_CRATES`]: the crates added, and the ones gone.
+fn moved_from_allowed(reachable: &BTreeSet<String>) -> (Vec<String>, Vec<String>) {
+    let allowed: BTreeSet<String> = ALLOWED_CRATES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    (
+        reachable.difference(&allowed).cloned().collect(),
+        allowed.difference(reachable).cloned().collect(),
+    )
+}
+
 #[test]
 fn the_resolved_graph_holds_no_network_crate() {
     let text = fs::read_to_string(workspace_root().join("Cargo.lock")).expect("Cargo.lock");
