@@ -780,12 +780,26 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     Text {
         code: "I0007",
         message: "{count} more `{code}` not listed: a report lists at most {max} of one code \
-                  one by one, and no `I0003` once the size budget is past. Each counts as \
-                  raised: one left out that is an error still stops the playbook qualifying.",
-        beginner: "Not shown: {count} more `{code}`. Deal with the ones shown, then check \
-                   again to see the rest.",
+                  one by one{budget}.{verdict}",
+        beginner: "Not shown: {count} more `{code}`. {next}",
     },
 ];
+
+// --- The words of `I0007`, by the left-out code's severity -------------------
+//
+// `I0007` closes a report once per code it left diagnostics out of (S3's
+// `vcap`); its words are true for the code it names.
+
+/// `I0007`'s `{verdict}` for an error code: the left-out ones still refuse.
+pub const LEFT_OUT_STILL_REFUSE: &str =
+    " Each left out still stops the playbook qualifying, as the ones listed do.";
+/// `I0007`'s `{budget}` for `I0003` alone: no per-setting note is written once
+/// `E0110` has fired.
+pub const LEFT_OUT_PAST_THE_BUDGET: &str = ", and no `I0003` once the size budget is past";
+/// `I0007`'s `{next}` for an error or a warning.
+pub const LEFT_OUT_NEXT_FIX: &str = "Deal with the ones shown, then check again to see the rest.";
+/// `I0007`'s `{next}` for a note.
+pub const LEFT_OUT_NEXT_NOTE: &str = "They say the same kind of thing as the ones shown.";
 
 // --- Words the templates' arguments use --------------------------------------
 //
@@ -1051,29 +1065,13 @@ mod tests {
         }
     }
 
-    /// A beginner sentence names no argument its message does not, so every
-    /// one is filled from what the call site supplied. Only `I0007`'s names
-    /// any (S3's `vcap`): the client shows the beginner sentence, and "some
-    /// findings are not shown" without which and how many would send the
-    /// player looking for them.
+    /// Only `I0007`'s beginner sentence is templated (S3's `vcap`): the client
+    /// shows the beginner sentence, and "some findings are not shown" without
+    /// which and how many would send the player looking for them. Every other
+    /// reads the same every time.
     #[test]
-    fn a_beginner_sentence_names_only_its_messages_arguments() {
-        let names = |template: &'static str| -> Vec<&'static str> {
-            template
-                .split('{')
-                .skip(1)
-                .filter_map(|tail| tail.split_once('}').map(|(name, _)| name))
-                .collect()
-        };
+    fn only_i0007_s_beginner_sentence_is_templated() {
         for row in VERIFIER_STRINGS {
-            let message = names(row.message);
-            for name in names(row.beginner) {
-                assert!(
-                    message.contains(&name),
-                    "{}'s beginner sentence names `{{{name}}}`, which its message does not",
-                    row.code
-                );
-            }
             assert!(
                 row.code == "I0007" || !row.beginner.contains('{'),
                 "{}'s beginner sentence is templated",

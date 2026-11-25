@@ -899,6 +899,10 @@ fn every_line_that_begins_with_error_is_a_diagnostic() {
                 line.starts_with("  error   "),
                 "{file}: an error line out of shape: {line:?}"
             );
+            assert!(
+                !line.ends_with(' '),
+                "{file}: an error line ends with a space: {line:?}"
+            );
             let code = words.get(1).copied().unwrap_or_default();
             assert!(
                 pharmakos_verifier::catalogue::entry(code).is_some_and(|row| {

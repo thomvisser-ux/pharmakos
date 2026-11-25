@@ -59,34 +59,6 @@
       ]
     },
     {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/3/on_fail",
-      "message": "`on_fail` is omitted and reads as SKIP.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/3/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
       "code": "W0702",
       "severity": "WARNING",
       "path": "/declarative/handlers/1/when",
@@ -127,36 +99,16 @@
       "beginner": "An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule."
     },
     {
-      "code": "W0702",
-      "severity": "WARNING",
-      "path": "/declarative/handlers/5/when",
-      "related_paths": [
-        "/declarative/handlers/0/when"
-      ],
-      "message": "`h05` fires only while `h00` cannot: `h00` comes first, and its condition is true whenever this one's is, so this rule gets a turn only during `h00`'s cooldown or after its last fire.",
-      "beginner": "An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule."
-    },
-    {
-      "code": "W0702",
-      "severity": "WARNING",
-      "path": "/declarative/handlers/6/when",
-      "related_paths": [
-        "/declarative/handlers/0/when"
-      ],
-      "message": "`h06` fires only while `h00` cannot: `h00` comes first, and its condition is true whenever this one's is, so this rule gets a turn only during `h00`'s cooldown or after its last fire.",
-      "beginner": "An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule."
+      "code": "I0007",
+      "severity": "INFO",
+      "message": "172 more `I0003` not listed: a report lists at most 4 of one code one by one, and no `I0003` once the size budget is past.",
+      "beginner": "Not shown: 172 more `I0003`. They say the same kind of thing as the ones shown."
     },
     {
       "code": "I0007",
       "severity": "INFO",
-      "message": "170 more `I0003` not listed: a report lists at most 6 of one code one by one, and no `I0003` once the size budget is past. Each counts as raised: one left out that is an error still stops the playbook qualifying.",
-      "beginner": "Not shown: 170 more `I0003`. Deal with the ones shown, then check again to see the rest."
-    },
-    {
-      "code": "I0007",
-      "severity": "INFO",
-      "message": "9 more `W0702` not listed: a report lists at most 6 of one code one by one, and no `I0003` once the size budget is past. Each counts as raised: one left out that is an error still stops the playbook qualifying.",
-      "beginner": "Not shown: 9 more `W0702`. Deal with the ones shown, then check again to see the rest."
+      "message": "11 more `W0702` not listed: a report lists at most 4 of one code one by one.",
+      "beginner": "Not shown: 11 more `W0702`. Deal with the ones shown, then check again to see the rest."
     }
   ],
   "report_hash": "sJgRhdlIdHM=",

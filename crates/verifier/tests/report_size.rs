@@ -11,16 +11,11 @@
 //! `MAX_PER_CODE` diagnostics of one code and closes with one `I0007` per code
 //! it left out of.
 //!
-//! Three holds:
-//!
-//! * **the derivation**: the worst report the model in `MAX_PER_CODE`'s doc
-//!   allows, every code a stage raises at the cap, fits three quarters of the
-//!   buffer, and at one more per code it would not: the cap is the top of the
-//!   range;
-//! * **the model holds bytes**: a report built to the model's every bound,
-//!   encoded, is no longer than the model says;
-//! * **real files**: the reports for the longest files the text cap admits
-//!   fit the 128 KiB allowance, an eighth of the buffer or less.
+//! The derivation of the cap is `report.rs`'s own: its unit tests build the
+//! worst report through the builder and the serialiser at the cap and at one
+//! more (`the_cap_is_the_top_of_its_range`). This file holds the reports for
+//! the longest real files the text cap admits to the 128 KiB allowance, an
+//! eighth of the buffer or less, and a hostile member name to the bounds.
 
 #![allow(
     clippy::expect_used,
@@ -30,22 +25,16 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use pharmakos_proto::gp::api::v1::diagnostic::Severity;
-use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
-use pharmakos_proto::gp::api::v1::{Diagnostic, PatchSuggestion, VerifyReport};
-use pharmakos_proto::gp::v1::Voxel;
+use pharmakos_proto::gp::api::v1::{Diagnostic, VerifyReport};
 use pharmakos_proto::json;
-use pharmakos_proto::json::grammar::MAX_ENGINE_CHARS;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::quantity::{Kw, Money};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
-use pharmakos_verifier::catalogue::{CATALOGUE, Emitter};
-use pharmakos_verifier::strings::VERIFIER_STRINGS;
 use pharmakos_verifier::{
-    ARGUMENT_BYTES_MAX, DIAGNOSTIC_ROOM_BYTES, Input, MAX_PER_CODE, MAX_PLAYBOOK_CHARS,
-    MAX_POINTER_BYTES, ONCE_PER_REPORT, Scope, is_too_long, verify, verify_counted,
+    Cuts, Input, MAX_PER_CODE, MAX_PLAYBOOK_CHARS, MAX_POINTER_BYTES, Scope, diagnostic_bytes,
+    diagnostic_bytes_max, is_too_long, json_bytes, verify, verify_counted,
 };
 
 fn root() -> PathBuf {
@@ -58,22 +47,6 @@ fn root() -> PathBuf {
 const REPORT_ALLOWANCE_BYTES: usize = 131_072;
 // The ruled 128 KiB, held at compile time: raising it is a ruling, not an edit (fix pass 3).
 const _: () = assert!(REPORT_ALLOWANCE_BYTES == 128 * 1024);
-
-/// What the report around its diagnostics takes at most as JSON: its eight
-/// other fields (three eight-byte hashes as base64, the version, the depth,
-/// two numbers) and the array's framing. The committed reports with no
-/// diagnostic take about 230 bytes.
-const REPORT_FRAMING_BYTES: usize = 512;
-
-/// What one closing `I0007` takes at most beyond its two strings: its framing,
-/// the root pointer, and its three arguments, a code and two numbers of at
-/// most twenty digits each (no pointer, no related path, no Fix, no map).
-const MARKER_ROOM_BYTES: usize = 256 + 5 + 20 + 20;
-
-/// The bytes one argument of `E0001` adds at most: the codec's engine words,
-/// at most `MAX_ENGINE_CHARS` characters, already quoted, so each is at most
-/// four bytes of UTF-8 or a backslash escape the report doubles.
-const ENGINE_ARGUMENT_BYTES_MAX: usize = MAX_ENGINE_CHARS * 4;
 
 /// The client's inbound buffer, read from the client's own source rather
 /// than written here a second time (the verifier may not depend on the
@@ -93,231 +66,8 @@ fn inbound_bytes() -> usize {
         .expect("INBOUND_BUFFER_BYTES is a whole number")
 }
 
-/// Three quarters of the client's buffer: what the worst report may take.
-fn room() -> usize {
-    inbound_bytes()
-        .checked_div(4)
-        .and_then(|quarter| quarter.checked_mul(3))
-        .expect("a buffer of some size")
-}
-
 fn cap() -> usize {
     usize::try_from(MAX_PER_CODE).expect("fits")
-}
-
-/// How many `{name}` arguments a template names.
-fn arguments_in(template: &str) -> usize {
-    template.matches('{').count()
-}
-
-/// A code's two strings, from the table.
-fn strings_of(code: &str) -> (&'static str, &'static str) {
-    let text = VERIFIER_STRINGS
-        .iter()
-        .find(|row| row.code == code)
-        .expect("every catalogue code has its strings");
-    (text.message, text.beginner)
-}
-
-/// The most bytes one diagnostic of `code` takes, by the model.
-fn diagnostic_bound(code: &str) -> usize {
-    let (message, beginner) = strings_of(code);
-    let per_argument = if code == "E0001" {
-        ENGINE_ARGUMENT_BYTES_MAX
-    } else {
-        ARGUMENT_BYTES_MAX
-    };
-    message
-        .len()
-        .saturating_add(beginner.len())
-        .saturating_add(DIAGNOSTIC_ROOM_BYTES)
-        .saturating_add(
-            arguments_in(message)
-                .saturating_add(arguments_in(beginner))
-                .saturating_mul(per_argument),
-        )
-}
-
-/// The most bytes one closing `I0007` takes, by the model.
-fn marker_bound() -> usize {
-    let (message, beginner) = strings_of("I0007");
-    message
-        .len()
-        .saturating_add(beginner.len())
-        .saturating_add(MARKER_ROOM_BYTES)
-}
-
-/// The worst report at a cap of `per_code`, by the model: every code a stage
-/// raises, at the cap unless it is raised once per report, and one `I0007`
-/// for each code that can reach the cap.
-fn worst_report(per_code: usize) -> usize {
-    let mut total = REPORT_FRAMING_BYTES;
-    for row in CATALOGUE {
-        if !matches!(row.emitter, Emitter::Stage(_)) || row.code == "I0007" {
-            continue;
-        }
-        let once = ONCE_PER_REPORT.contains(&row.code);
-        let count = if once { 1 } else { per_code };
-        total = total.saturating_add(count.saturating_mul(diagnostic_bound(row.code)));
-        if !once {
-            total = total.saturating_add(marker_bound());
-        }
-    }
-    total
-}
-
-/// `MAX_PER_CODE` is derived: the worst report the model allows fits three
-/// quarters of the client's inbound buffer at the cap, and would not at one
-/// more, so the cap is the top of the range (decisions-log item 183 (4); the
-/// rulings' item 2). Below two, Easy's probe could not ask in parts (its call
-/// budget is the owner's, `IN_PROCESS_LIMITS`): the compile-time check below.
-const _: () = assert!(
-    MAX_PER_CODE >= 2,
-    "a cap under two leaves Easy's probe no part"
-);
-
-#[test]
-fn the_cap_is_the_largest_whose_worst_report_fits_the_clients_buffer() {
-    let room = room();
-    let at_cap = worst_report(cap());
-    let past = worst_report(cap().checked_add(1).expect("fits"));
-    let codes = CATALOGUE
-        .iter()
-        .filter(|row| matches!(row.emitter, Emitter::Stage(_)) && row.code != "I0007")
-        .count();
-    println!(
-        "{codes} codes a stage raises ({} once a report); at {MAX_PER_CODE} a code the worst \
-         report is {at_cap} bytes, at one more {past}; room {room} of a {}-byte buffer",
-        ONCE_PER_REPORT.len(),
-        inbound_bytes(),
-    );
-    assert!(
-        at_cap <= room,
-        "the worst report at {MAX_PER_CODE} a code is {at_cap} bytes, past {room}"
-    );
-    assert!(
-        past > room,
-        "the worst report at {} a code is {past} bytes, within {room}: the cap is not the top \
-         of its range",
-        cap().saturating_add(1)
-    );
-}
-
-/// The room the model gives a diagnostic covers its parts: a pointer and a
-/// related pointer at the pointer bound, a Fix whose title is one argument
-/// and whose patch repeats a pointer (escaped once more inside the patch's
-/// string) with a value, two map references, and the framing.
-#[test]
-fn the_room_a_diagnostic_is_given_covers_its_parts() {
-    let parts = 256 // framing, code, severity, applicability
-        + MAX_POINTER_BYTES // path
-        + MAX_POINTER_BYTES // one related path
-        + ARGUMENT_BYTES_MAX // a Fix's title
-        + 2 * MAX_POINTER_BYTES + 256 + 64 // the patch: its pointer twice-escaped, a value, the op
-        + 2 * 64; // two map references
-    assert!(
-        parts <= DIAGNOSTIC_ROOM_BYTES,
-        "a diagnostic's parts take {parts} bytes, past DIAGNOSTIC_ROOM_BYTES"
-    );
-}
-
-/// A diagnostic built to the model's every bound for `code`: its strings at
-/// their templates' length with every argument at its bound, a pointer and a
-/// related pointer at the pointer bound, a Fix, two map references.
-fn diagnostic_at_bound(code: &str, severity: i32) -> Diagnostic {
-    let (message, beginner) = strings_of(code);
-    let argument = "x".repeat(ARGUMENT_BYTES_MAX);
-    let filled = |template: &str| {
-        let mut out = String::new();
-        let mut rest = template;
-        while let Some((head, tail)) = rest.split_once('{') {
-            out.push_str(head);
-            out.push_str(&argument);
-            rest = tail.split_once('}').map_or("", |(_, after)| after);
-        }
-        out.push_str(rest);
-        out
-    };
-    // A pointer of the bound's length whose characters each take two bytes
-    // of JSON once inside the patch's string.
-    let pointer = format!("/{}", "a".repeat(MAX_POINTER_BYTES.saturating_sub(1)));
-    let patch = format!(
-        r#"[{{"op":"replace","path":"{pointer}","value":"{}"}}]"#,
-        "v".repeat(200)
-    );
-    Diagnostic {
-        code: code.to_owned(),
-        severity,
-        path: pointer.clone(),
-        related_paths: vec![pointer],
-        message: filled(message),
-        beginner: filled(beginner),
-        suggestions: vec![PatchSuggestion {
-            title: argument.clone(),
-            json_patch: patch,
-            applicability: i32::from(Applicability::MaybeIncorrect),
-        }],
-        map_refs: vec![
-            Voxel {
-                x: i32::MIN,
-                y: i32::MIN,
-                z: i32::MIN,
-            };
-            2
-        ],
-    }
-}
-
-/// The model holds bytes: a report built to it (every code at the cap but
-/// the once-a-report codes, every diagnostic at its bound, `E0001`'s engine
-/// words left at the plain bound and its own term checked separately, one
-/// `I0007` per code) encodes to no more than the model's sum.
-#[test]
-fn a_report_built_to_the_models_bounds_is_within_its_sum() {
-    let mut diagnostics = Vec::new();
-    let mut codes = 0_usize;
-    for row in CATALOGUE {
-        if !matches!(row.emitter, Emitter::Stage(_)) || row.code == "I0007" {
-            continue;
-        }
-        let once = ONCE_PER_REPORT.contains(&row.code);
-        let count = if once { 1 } else { cap() };
-        for _ in 0..count {
-            diagnostics.push(diagnostic_at_bound(row.code, i32::from(row.severity)));
-        }
-        if !once {
-            codes = codes.saturating_add(1);
-        }
-    }
-    let (message, beginner) = strings_of("I0007");
-    for _ in 0..codes {
-        diagnostics.push(Diagnostic {
-            code: "I0007".to_owned(),
-            severity: i32::from(Severity::Info),
-            path: String::new(),
-            message: message.replace("{count}", &u64::MAX.to_string()),
-            beginner: beginner.replace("{count}", &u64::MAX.to_string()),
-            ..Diagnostic::default()
-        });
-    }
-    let report = VerifyReport {
-        qualifies: false,
-        depth: 2,
-        diagnostics,
-        report_hash: vec![0xff; 8],
-        rules_hash: vec![0xff; 8],
-        plan_fingerprint: vec![0xff; 8],
-        verifier_version: pharmakos_verifier::VERIFIER_VERSION.to_owned(),
-        size_units: u32::MAX,
-        size_budget: u32::MAX,
-    };
-    let bytes = json::encode(&report).expect("a report encodes").len();
-    let model = worst_report(cap());
-    println!("built to the model: {bytes} bytes; the model's sum {model}");
-    assert!(
-        bytes <= model,
-        "{bytes} bytes built, past the model's {model}"
-    );
 }
 
 fn report_for(steps: &str) -> VerifyReport {
@@ -475,7 +225,7 @@ fn a_long_member_name_is_reported_within_the_pointer_bound() {
         assert!(!report.diagnostics.is_empty(), "{name}: nothing said");
         for found in &report.diagnostics {
             for pointer in std::iter::once(&found.path).chain(&found.related_paths) {
-                let bytes = json_string_bytes(pointer);
+                let bytes = json_bytes(pointer);
                 assert!(
                     bytes <= MAX_POINTER_BYTES,
                     "{name}: {} points {bytes} bytes deep",
@@ -490,19 +240,6 @@ fn a_long_member_name_is_reported_within_the_pointer_bound() {
             text.len()
         );
     }
-}
-
-/// How many bytes `text` takes inside a JSON string, as the report's
-/// encoder writes it: two for `"` and `\`, six for any other control
-/// character, its UTF-8 length otherwise.
-fn json_string_bytes(text: &str) -> usize {
-    text.chars()
-        .map(|character| match character {
-            '"' | '\\' => 2,
-            other if u32::from(other) < 0x20 => 6,
-            other => other.len_utf8(),
-        })
-        .sum()
 }
 
 /// **The allowance is the test's own constant, not the buffer** (fix pass 4 of `fixq-c`,
@@ -628,5 +365,41 @@ fn past_the_size_budget_no_note_is_listed() {
             .iter()
             .any(|found| found.code == "I0007" && found.message.contains("`I0003`")),
         "the notes left out are counted"
+    );
+}
+
+/// The review's probe (S3's `vcap`, fix pass 1): a member name of a hundred
+/// tag characters, each of which the quoting rule writes as two `\uXXXX`
+/// escapes, fourteen bytes once the report's JSON doubles each backslash.
+/// The `E0002` that names it is within its code's bound, and nothing had to
+/// be cut for it to be: the argument bound is the quoting rule's own worst.
+#[test]
+fn a_member_name_of_tag_characters_is_within_its_bounds() {
+    let rules =
+        RulesTable::load(&root().join("rules").join("rules.v1.json")).expect("the rules table");
+    let scope = Scope::new(
+        SeatId::new(0),
+        SeatEconomy {
+            treasury: Money::ZERO,
+            supply: Kw::ZERO,
+            draw: Kw::ZERO,
+        },
+    );
+    let tags: String = std::iter::repeat_n('\u{e0041}', 100).collect();
+    let text = format!(r#"{{"schema_version":{{"major":1}},"{tags}":1}}"#);
+    let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
+    let counted = verify_counted(&input, Depth::Full);
+    assert!(counted.faults.is_empty(), "{:?}", counted.faults);
+    assert_eq!(counted.cuts, Cuts::default());
+    let named = counted
+        .report
+        .diagnostics
+        .iter()
+        .find(|found| found.code == "E0002")
+        .expect("the member is refused by name");
+    assert!(
+        diagnostic_bytes(named) <= diagnostic_bytes_max("E0002").expect("a bound"),
+        "{} bytes",
+        diagnostic_bytes(named)
     );
 }

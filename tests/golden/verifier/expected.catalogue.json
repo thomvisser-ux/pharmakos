@@ -948,8 +948,8 @@
     "family": "information",
     "severity": "INFO",
     "emitter": "the report builder",
-    "message": "{count} more `{code}` not listed: a report lists at most {max} of one code one by one, and no `I0003` once the size budget is past. Each counts as raised: one left out that is an error still stops the playbook qualifying.",
-    "beginner": "Not shown: {count} more `{code}`. Deal with the ones shown, then check again to see the rest."
+    "message": "{count} more `{code}` not listed: a report lists at most {max} of one code one by one{budget}.{verdict}",
+    "beginner": "Not shown: {count} more `{code}`. {next}"
   }
 ]
 

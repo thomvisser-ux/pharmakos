@@ -312,3 +312,45 @@ fn easy_taps_no_beacon_off_the_build_mandate_past_the_verifiers_cap() {
         "a part's report met the cap: {most_e0503} E0503 listed"
     );
 }
+
+/// **The probe says why it made no tap** (S3's `vcap`, fix pass 1): through
+/// the real gateway, the ring's second probe part is asked with a depth the
+/// gateway refuses, so the probe cannot say which taps are legal: Easy weighs
+/// no tap, and `Played::taps_unread` names the refusal, never a silent "no
+/// tap".
+#[test]
+fn a_refused_probe_part_is_kept_as_the_reason_no_tap_was_made() {
+    let rules = rules_json();
+    let (mut surface, _, _) = ringed_vent(&rules);
+    let token = in_process_token(&mut surface, 0);
+    let mut parts = 0_u32;
+    let played = {
+        let mut bridged = |method: &str, mut params: Json| {
+            let probe = method == "verify_plan"
+                && matches!(params.get("playbook_jsonc"), Some(Json::String(text)) if text.contains("Easy's tap probe"));
+            if probe {
+                parts += 1;
+                if parts == 2
+                    && let Json::Object(members) = &mut params
+                {
+                    for (key, value) in members.iter_mut() {
+                        if key == "depth" {
+                            *value = Json::String(String::from("sideways"));
+                        }
+                    }
+                }
+            }
+            call(&mut surface, &token, method, params)
+        };
+        Easy::new(&rules)
+            .expect("the rules text")
+            .play(0, &mut bridged)
+    };
+    assert_eq!(parts, 2, "the probe stopped at the refused part");
+    match &played.taps_unread {
+        Some(pharmakos_operator::TapsUnread::Refused(refusal)) => {
+            assert_eq!(refusal.method, "verify_plan", "{refusal:?}");
+        }
+        other => panic!("the refusal was not kept: {other:?}"),
+    }
+}

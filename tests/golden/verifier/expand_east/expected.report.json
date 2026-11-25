@@ -52,34 +52,6 @@
       "beginner": "A setting left out takes its named default."
     },
     {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/2/on_fail",
-      "message": "`on_fail` is omitted and reads as SKIP.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
       "code": "I0005",
       "severity": "INFO",
       "path": "/declarative/route/0/move/pace",
@@ -96,8 +68,8 @@
     {
       "code": "I0007",
       "severity": "INFO",
-      "message": "3 more `I0003` not listed: a report lists at most 6 of one code one by one, and no `I0003` once the size budget is past. Each counts as raised: one left out that is an error still stops the playbook qualifying.",
-      "beginner": "Not shown: 3 more `I0003`. Deal with the ones shown, then check again to see the rest."
+      "message": "5 more `I0003` not listed: a report lists at most 4 of one code one by one, and no `I0003` once the size budget is past.",
+      "beginner": "Not shown: 5 more `I0003`. They say the same kind of thing as the ones shown."
     }
   ],
   "report_hash": "te4U+nt/388=",

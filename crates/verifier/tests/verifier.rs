@@ -1235,10 +1235,8 @@ fn the_worked_example_qualifies_and_is_six_units() {
                 "I0003",
                 "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing"
             ),
-            ("I0003", "/declarative/route/2/on_fail"),
-            ("I0003", "/declarative/route/2/move/pace"),
-            // The handler's three notes are past the per-code cap (S3's
-            // `vcap`: six of one code), and counted in the closing `I0007`.
+            // The rest of its nine notes are past the per-code cap (S3's
+            // `vcap`: four of one code), and counted in the closing `I0007`.
             // The semantics stage (S2's plan, decision 12, task `vfy3`): the
             // first move avoids known threats, and the plain fixture holds no
             // sighting of another seat, so it would go as DIRECT does now.
@@ -1258,8 +1256,8 @@ fn the_worked_example_qualifies_and_is_six_units() {
         .map(|diagnostic| diagnostic.message.as_str())
         .unwrap_or_default();
     assert!(
-        left_out.starts_with("3 more `I0003`"),
-        "the three notes past the cap are counted: {left_out}"
+        left_out.starts_with("5 more `I0003`"),
+        "the five notes past the cap are counted: {left_out}"
     );
     assert!(
         report
@@ -1904,12 +1902,17 @@ fn every_half_written_area_is_refused_as_missing_a_corner() {
         let rules = rules();
         let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules)
             .unwrap_or_else(|error| panic!("assembling the input: {error}"));
-        let missing: Vec<String> = verify(&input, Depth::Quick)
-            .diagnostics
-            .into_iter()
-            .filter(|found| found.code == "E0101" && found.path.starts_with("/declarative"))
-            .map(|found| found.path)
-            .collect();
+        // Every `E0101` the stage raises, the per-code cap off: this case
+        // holds which corners are refused, and the one-visit playbook raises
+        // more `E0101` than a report lists (S3's `vcap`).
+        let missing: Vec<String> =
+            pharmakos_verifier::verify_counted_at_cap(&input, Depth::Quick, u32::MAX)
+                .report
+                .diagnostics
+                .into_iter()
+                .filter(|found| found.code == "E0101" && found.path.starts_with("/declarative"))
+                .map(|found| found.path)
+                .collect();
         let at = "/declarative/route/0/interface/rows/0/set_mandate_settings";
         let arm = mandate.split('"').nth(1).expect("the arm's name");
         let mut wanted = vec![format!("{at}/{arm}/{field}/0/max")];
@@ -3039,10 +3042,10 @@ fn every_code_quotes_the_player_text_it_carries() {
 // codes it never needs to cap
 // ---------------------------------------------------------------------------
 
-/// The report for a case's playbook with its route's steps written
-/// `copies` times over (labels made unique), against the case's own view.
-/// `None` for a case that is not a JSON object (the decode's own cases).
-fn report_with_route_copies(case: &str, copies: usize) -> Option<VerifyReport> {
+/// A case's playbook text with its route's steps and its handlers written
+/// `copies` times over (labels and ids made unique). `None` for a case that
+/// is not a JSON object (the decode's own cases).
+fn copied_text(case: &str, copies: usize) -> Option<String> {
     let text = String::from_utf8(case_bytes(case)).ok()?;
     let Ok(json::Json::Object(mut top)) = json::read(&text) else {
         return None;
@@ -3052,40 +3055,53 @@ fn report_with_route_copies(case: &str, copies: usize) -> Option<VerifyReport> {
             continue;
         }
         let json::Json::Object(fields) = declarative else {
-            panic!("{case}: declarative is not an object");
+            continue;
         };
-        for (field, route) in fields.iter_mut() {
-            if field != "route" {
-                continue;
-            }
-            let json::Json::Array(steps) = route else {
-                panic!("{case}: the route is not a list");
+        for (field, list) in fields.iter_mut() {
+            let named = match field.as_str() {
+                "route" => "label",
+                "handlers" => "id",
+                _ => continue,
             };
-            let one = steps.clone();
-            steps.clear();
+            let json::Json::Array(items) = list else {
+                continue;
+            };
+            let one = items.clone();
+            items.clear();
             for copy in 0..copies {
-                for step in &one {
-                    let mut step = step.clone();
-                    if let json::Json::Object(members) = &mut step {
-                        for (name, label) in members.iter_mut() {
-                            if let (true, json::Json::String(label)) = (name == "label", label) {
-                                label.push('_');
-                                label.push_str(&copy.to_string());
+                for item in &one {
+                    let mut item = item.clone();
+                    if let json::Json::Object(members) = &mut item {
+                        for (name, value) in members.iter_mut() {
+                            if let (true, json::Json::String(value)) = (name == named, value) {
+                                value.push('_');
+                                value.push_str(&copy.to_string());
                             }
                         }
                     }
-                    steps.push(step);
+                    items.push(item);
                 }
             }
         }
     }
-    let text = json::write(&json::Json::Object(top));
+    Some(json::write(&json::Json::Object(top)))
+}
+
+/// The counted report for `text` against `case`'s view, at `cap`.
+fn counted_at(case: &str, text: &str, depth: Depth, cap: u32) -> pharmakos_verifier::Counted {
     let rules = rules();
     let scope = scope_for(case);
     let snapshot = snapshot_for(case);
     let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules)
         .unwrap_or_else(|error| panic!("assembling the input: {error}"));
-    Some(verify(&input, Depth::Full))
+    pharmakos_verifier::verify_counted_at_cap(&input, depth, cap)
+}
+
+/// The report for a case's playbook with its route's steps written
+/// `copies` times over, against the case's own view.
+fn report_with_route_copies(case: &str, copies: usize) -> Option<VerifyReport> {
+    let text = copied_text(case, copies)?;
+    Some(counted_at(case, &text, Depth::Full, MAX_PER_CODE).report)
 }
 
 fn count_of(report: &VerifyReport, code: &str) -> usize {
@@ -3096,10 +3112,13 @@ fn count_of(report: &VerifyReport, code: &str) -> usize {
         .count()
 }
 
-/// Every code `ONCE_PER_REPORT` names is raised at one place in the stages'
-/// source (`E0001` at two, the decode's two exits), so a stage that starts
-/// raising one somewhere else fails here before the cap's derivation, which
-/// counts each once, stops holding.
+/// Every code `ONCE_PER_REPORT` names is written at one place in the stages'
+/// shipped source (`E0001` at two, the decode's two exits), counted as the
+/// code's string literal anywhere outside the tables (`catalogue.rs`,
+/// `strings.rs`) and the builder (`report.rs`, which names `E0110` for the
+/// size budget's notes and holds the list itself), so a stage that raises
+/// one somewhere else, by a literal or through a constant, fails here before
+/// the cap's derivation, which counts each once, stops holding.
 #[test]
 fn a_code_raised_once_a_report_has_one_raising_place() {
     const TESTS_MODULE: &str = "\n#[cfg(test)]\nmod tests";
@@ -3113,7 +3132,10 @@ fn a_code_raised_once_a_report_has_one_raising_place() {
     let entries = fs::read_dir(&source_dir).expect("the verifier's sources");
     for entry in entries {
         let path = entry.expect("a source").path();
-        if path.extension().is_some_and(|extension| extension == "rs") {
+        let table = path.file_name().is_some_and(|name| {
+            ["catalogue.rs", "strings.rs", "report.rs"].contains(&name.to_string_lossy().as_ref())
+        });
+        if path.extension().is_some_and(|extension| extension == "rs") && !table {
             let text = fs::read_to_string(&path).expect("a source reads");
             // The shipped code: a file's unit tests sit in its last module.
             let shipped = text
@@ -3123,9 +3145,9 @@ fn a_code_raised_once_a_report_has_one_raising_place() {
         }
     }
     for code in ONCE_PER_REPORT {
-        let places = sources.matches(&format!("Diag::new(\"{code}\"")).count();
+        let places = sources.matches(&format!("\"{code}\"")).count();
         let expected = if *code == "E0001" { 2 } else { 1 };
-        assert_eq!(places, expected, "{code} is raised at {places} places");
+        assert_eq!(places, expected, "{code} is written at {places} places");
     }
 }
 
@@ -3160,52 +3182,63 @@ fn a_code_raised_once_a_report_is_once_however_often_it_is_provoked() {
     }
 }
 
-/// The cap changes what a report lists and never whether it qualifies:
-/// every case's verdict, and every case written five times over, is "no
-/// error raised", and a report never lists more than the cap of one code
-/// nor carries more than one `I0007` for a code.
+/// **The cap never moves a verdict or a total** (the review's comparison):
+/// every committed case, its route's steps and handlers written once, three,
+/// seven and twenty-five times over, at QUICK and at FULL, verified with the
+/// cap and with it off (`u32::MAX`): `qualifies` is the same, and every
+/// code's total, listed plus left out, is the same. And no report lists more
+/// than the cap of a code, nor closes with more than one `I0007` for a code.
 #[test]
-fn the_cap_never_moves_a_verdict() {
+fn the_cap_never_moves_a_verdict_or_a_total() {
+    let totals = |counted: &pharmakos_verifier::Counted| {
+        let mut totals: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+        for found in &counted.report.diagnostics {
+            if found.code != "I0007" {
+                let total = totals.entry(found.code.clone()).or_default();
+                *total = total.checked_add(1).expect("a total");
+            }
+        }
+        for gap in &counted.left_out {
+            let total = totals.entry(gap.code.to_owned()).or_default();
+            *total = total.checked_add(gap.count).expect("a total");
+        }
+        totals
+    };
+    let cap = usize::try_from(MAX_PER_CODE).expect("fits");
+    let mut compared = 0_usize;
     for case in cases() {
-        for report in std::iter::once(report_for(&case, Depth::Full))
-            .chain(report_with_route_copies(&case, 5))
-        {
-            let mut listed: std::collections::BTreeMap<&str, usize> =
-                std::collections::BTreeMap::new();
-            for found in &report.diagnostics {
-                let count = listed.entry(found.code.as_str()).or_default();
-                *count = count.saturating_add(1);
-            }
-            let errors_listed = report
-                .diagnostics
-                .iter()
-                .any(|found| found.severity == i32::from(Severity::Error));
-            assert_eq!(report.qualifies, !errors_listed, "{case}: the verdict");
-            let cap = usize::try_from(MAX_PER_CODE).expect("fits");
-            for (code, count) in &listed {
-                if *code != "I0007" {
-                    assert!(*count <= cap, "{case}: {count} {code}");
+        for copies in [1_usize, 3, 7, 25] {
+            let Some(text) = copied_text(&case, copies) else {
+                continue;
+            };
+            for depth in [Depth::Quick, Depth::Full] {
+                let capped = counted_at(&case, &text, depth, MAX_PER_CODE);
+                let whole = counted_at(&case, &text, depth, u32::MAX);
+                assert_eq!(
+                    capped.report.qualifies, whole.report.qualifies,
+                    "{case} x{copies} {depth:?}: the verdict"
+                );
+                assert_eq!(
+                    totals(&capped),
+                    totals(&whole),
+                    "{case} x{copies} {depth:?}: the totals"
+                );
+                // Uncapped, only `I0003` notes past the size budget are left out.
+                assert!(
+                    whole.left_out.iter().all(|gap| gap.code == "I0003"),
+                    "{case}: {:?} left out uncapped",
+                    whole.left_out
+                );
+                assert!(capped.faults.is_empty() && whole.faults.is_empty());
+                for code in totals(&whole).into_keys() {
+                    let shown = count_of(&capped.report, &code);
+                    assert!(shown <= cap, "{case}: {shown} {code}");
                 }
+                let markers = count_of(&capped.report, "I0007");
+                assert_eq!(markers, capped.left_out.len(), "{case}: one I0007 a code");
+                compared = compared.saturating_add(1);
             }
-            let markers: Vec<&str> = report
-                .diagnostics
-                .iter()
-                .filter(|found| found.code == "I0007")
-                .map(|found| found.message.as_str())
-                .collect();
-            let mut named: Vec<&str> = markers
-                .iter()
-                .filter_map(|message| message.split_once(" more `"))
-                .filter_map(|(_, rest)| rest.split_once('`'))
-                .map(|(code, _)| code)
-                .collect();
-            let all = named.len();
-            named.dedup();
-            assert_eq!(
-                named.len(),
-                all,
-                "{case}: two I0007 for one code: {markers:?}"
-            );
         }
     }
+    assert!(compared > 500, "only {compared} reports compared");
 }

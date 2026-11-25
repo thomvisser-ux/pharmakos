@@ -722,7 +722,7 @@ impl GhostState {
 /// The most diagnostics of one code a verifier report lists one by one (S3's `vcap`): the
 /// verifier's `MAX_PER_CODE`, which this walled crate may not name, so `tests/report_cap.rs`
 /// reads the verifier's own line and holds the two equal.
-pub const REPORT_CAP_PER_CODE: usize = 6;
+pub const REPORT_CAP_PER_CODE: usize = 4;
 
 /// The code that closes a report once for each code it left diagnostics out of.
 pub const LEFT_OUT_CODE: &str = "I0007";

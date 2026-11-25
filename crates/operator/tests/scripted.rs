@@ -34,7 +34,7 @@ use pharmakos_operator::easy::{
     REPORT_CAP_PER_CODE, SAFE_MAX_RAISED, STONE_CALLS, STONE_TARGETS_MAX, SURVEY_PROBE_CALLS,
     TAP_PROBE_PART_MAX, TAP_PROBE_VERIFIES,
 };
-use pharmakos_operator::{Easy, FailedStones, PushUnread, StonesUnread, Submitted};
+use pharmakos_operator::{Easy, FailedStones, PushUnread, StonesUnread, Submitted, TapsUnread};
 use pharmakos_proto::json::{Json, read, write};
 
 // ---------------------------------------------------------------------------
@@ -2248,7 +2248,7 @@ fn probe_verifies(transcript: &[String]) -> usize {
 /// a report lists at most `REPORT_CAP_PER_CODE` `E0503`s, so the probe asks
 /// about at most `TAP_PROBE_PART_MAX` pairs a verify, and a beacon off the
 /// Build mandate is refused at every one of its twelve pairs, never read as
-/// legal past the sixth.
+/// legal past the cap.
 #[test]
 fn the_tap_probe_asks_in_parts_and_reads_every_e0503() {
     assert_eq!(TAP_PROBE_PART_MAX + 1, REPORT_CAP_PER_CODE);
@@ -2256,53 +2256,74 @@ fn the_tap_probe_asks_in_parts_and_reads_every_e0503() {
         TAP_PROBE_VERIFIES,
         EASY_CANDIDATES.div_ceil(TAP_PROBE_PART_MAX)
     );
-    // Off the Build mandate: twelve pairs, three parts, no tap.
-    let (script, _) = play(twelve_taps("b_02", [32, 60]));
-    assert_eq!(probe_verifies(&script.transcript), 3);
+    // Off the Build mandate: twelve pairs, four parts of three, no tap.
+    let (script, played) = play(twelve_taps("b_02", [32, 60]));
+    assert_eq!(probe_verifies(&script.transcript), 4);
+    assert_eq!(played.taps_unread, None, "every part answered");
     assert!(
         !beacon_estimated(&script.transcript),
         "a pair the cap left out was read as legal: {:#?}",
         script.transcript
     );
-    // On it: the same three parts, and the taps are weighed.
+    // On it: the same four parts, and the taps are weighed.
     let (script, _) = play(twelve_taps("b_00", [32, 42]));
-    assert_eq!(probe_verifies(&script.transcript), 3);
+    assert_eq!(probe_verifies(&script.transcript), 4);
     assert!(beacon_estimated(&script.transcript));
 }
 
 /// A refusal of any part leaves no tap, and asks no further part; so does a
 /// part whose report names a step it does not hold, and a part whose report
-/// lists the cap's `E0503`s (one may have been left out).
+/// lists the cap's `E0503`s (one may have been left out); each says why
+/// (`Played::taps_unread`), never a silent "no tap".
 #[test]
-fn a_part_that_cannot_say_leaves_no_tap() {
+fn a_part_that_cannot_say_leaves_no_tap_and_says_why() {
     let legal = twelve_taps("b_00", [32, 42]);
     let mut refused = legal.clone();
     refused.quick_fault = QuickFault::Refuse(2);
-    let (script, _) = play(refused);
+    let (script, played) = play(refused);
     assert_eq!(probe_verifies(&script.transcript), 2);
     assert!(
         !beacon_estimated(&script.transcript),
         "a refused part still tapped"
     );
+    assert!(
+        matches!(&played.taps_unread, Some(TapsUnread::Refused(refusal)) if refusal.method == "verify_plan"),
+        "{:?}",
+        played.taps_unread
+    );
 
     let mut past = legal;
     past.quick_fault = QuickFault::PastThePart;
-    let (script, _) = play(past);
+    let (script, played) = play(past);
     assert_eq!(probe_verifies(&script.transcript), 1);
     assert!(
         !beacon_estimated(&script.transcript),
         "a stray E0503 still tapped"
     );
+    assert_eq!(
+        played.taps_unread,
+        Some(TapsUnread::StepPastThePart {
+            part: 0,
+            path: String::from("/declarative/route/99/interface/rows/0/add_build_target"),
+        })
+    );
 
     let mut twice = twelve_taps("b_02", [32, 60]);
     twice.quick_fault = QuickFault::Twice;
-    let (script, _) = play(twice);
+    let (script, played) = play(twice);
     assert_eq!(
         probe_verifies(&script.transcript),
         1,
         "a part at the cap was read as complete"
     );
     assert!(!beacon_estimated(&script.transcript));
+    assert_eq!(
+        played.taps_unread,
+        Some(TapsUnread::PartAtTheCap {
+            part: 0,
+            listed: usize::try_from(REPORT_CAP_PER_CODE).unwrap(),
+        })
+    );
 }
 
 /// The register's S1-15 (decision 14): a vent the seat covers, inside the

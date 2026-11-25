@@ -234,8 +234,10 @@ pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
 pub use report::{
-    ARGUMENT_BYTES_MAX, CapRead, DIAGNOSTIC_ROOM_BYTES, LeftOut, MAX_PER_CODE, MAX_POINTER_BYTES,
-    ONCE_PER_REPORT,
+    ARGUMENT_BYTES_MAX, ARGUMENT_WORDS_BYTES_MAX, CapRead, Cuts, DIAGNOSTIC_FRAMING_BYTES,
+    ENGINE_ARGUMENT_BYTES_MAX, LeftOut, MAX_FIXES, MAX_MAP_REFS, MAX_PER_CODE, MAX_POINTER_BYTES,
+    MAX_RELATED, ONCE_PER_REPORT, PATCH_BYTES_MAX, QUOTED_CHAR_JSON_BYTES_MAX, ReportFault,
+    argument_bytes_max, bounded, diagnostic_bytes, diagnostic_bytes_max, json_bytes,
 };
 pub use scope::{
     FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError, Sighted, Sighting,
@@ -758,6 +760,10 @@ pub struct Counted {
     pub report: VerifyReport,
     /// What the cap left out, per code; empty when nothing was.
     pub left_out: Vec<LeftOut>,
+    /// What was cut to keep each diagnostic within its bound.
+    pub cuts: Cuts,
+    /// The report builder's own failures; empty, by construction.
+    pub faults: Vec<ReportFault>,
 }
 
 /// [`verify`], with what the cap left out as typed data beside the report.
@@ -766,12 +772,23 @@ pub struct Counted {
 /// 183 (5)); that change fills the field from [`Counted::left_out`].
 #[must_use]
 pub fn verify_counted(input: &Input<'_>, depth: Depth) -> Counted {
+    verify_counted_at_cap(input, depth, MAX_PER_CODE)
+}
+
+/// [`verify_counted`] with a report that lists at most `cap` diagnostics of
+/// one code in place of [`MAX_PER_CODE`]: for a comparison of reports with
+/// the cap and without it (`u32::MAX`), which holds the verdict and every
+/// code's total equal. Every caller that answers a seat uses
+/// [`verify`]; this report's `report_hash` is the same input's, so it is
+/// never one to hand a seat.
+#[must_use]
+pub fn verify_counted_at_cap(input: &Input<'_>, depth: Depth, cap: u32) -> Counted {
     let depth = match depth {
         Depth::Unspecified | Depth::Full => Depth::Full,
         Depth::Quick => Depth::Quick,
     };
     let limits = input.limits();
-    let mut out = report::Builder::default();
+    let mut out = report::Builder::with_cap(cap);
 
     let mut units: u32 = 0;
     let mut fingerprint: Vec<u8> = Vec::new();
@@ -801,7 +818,12 @@ pub fn verify_counted(input: &Input<'_>, depth: Depth) -> Counted {
 
     let report_hash = input.report_hashes.at(depth);
     let qualifies = !out.has_errors();
-    let (diagnostics, left_out) = out.finish();
+    let report::Finished {
+        diagnostics,
+        left_out,
+        cuts,
+        faults,
+    } = out.finish();
 
     let report = VerifyReport {
         qualifies,
@@ -814,5 +836,10 @@ pub fn verify_counted(input: &Input<'_>, depth: Depth) -> Counted {
         size_units: units,
         size_budget: limits.size_budget_units(),
     };
-    Counted { report, left_out }
+    Counted {
+        report,
+        left_out,
+        cuts,
+        faults,
+    }
 }

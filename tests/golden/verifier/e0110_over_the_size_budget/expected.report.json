@@ -11,8 +11,8 @@
     {
       "code": "I0007",
       "severity": "INFO",
-      "message": "1 more `I0003` not listed: a report lists at most 6 of one code one by one, and no `I0003` once the size budget is past. Each counts as raised: one left out that is an error still stops the playbook qualifying.",
-      "beginner": "Not shown: 1 more `I0003`. Deal with the ones shown, then check again to see the rest."
+      "message": "1 more `I0003` not listed: a report lists at most 4 of one code one by one, and no `I0003` once the size budget is past.",
+      "beginner": "Not shown: 1 more `I0003`. They say the same kind of thing as the ones shown."
     }
   ],
   "report_hash": "CkPsPPhne90=",

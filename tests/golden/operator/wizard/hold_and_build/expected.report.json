@@ -61,19 +61,13 @@
       "map_refs": []
     },
     {
-      "code": "I0003",
+      "code": "I0007",
       "severity": "info",
-      "path": "/declarative/handlers/0/body/1/on_fail",
+      "path": "",
       "related_paths": [],
-      "message": "`on_fail` is omitted and reads as SKIP.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-          "applicability": "machine_applicable"
-        }
-      ],
+      "message": "1 more `I0003` not listed: a report lists at most 4 of one code one by one, and no `I0003` once the size budget is past.",
+      "beginner": "Not shown: 1 more `I0003`. They say the same kind of thing as the ones shown.",
+      "suggestions": [],
       "map_refs": []
     }
   ],
