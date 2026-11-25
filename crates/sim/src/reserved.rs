@@ -139,17 +139,46 @@ impl<T> IntoIterator for Reserved<T> {
 mod tests {
     use super::Reserved;
 
+    /// For every length `n` and room `c >= n` in the table, empty with room
+    /// included, and full to its room: a clone has room for at least `c`
+    /// elements and holds the original's elements, in order.
     #[test]
     fn a_clone_keeps_the_room_and_every_element() {
-        let mut original: Reserved<u32> = Reserved::with_capacity(64);
-        original.extend([3, 1, 2]);
-        let copy = original.clone();
-        assert_eq!(copy, original, "a clone equals its original");
-        assert!(
-            copy.capacity() >= original.capacity(),
-            "a clone has room for {} elements, its original for {}",
-            copy.capacity(),
-            original.capacity()
-        );
+        for (n, c) in [
+            (0_u32, 0_usize),
+            (0, 1),
+            (0, 64),
+            (3, 3),
+            (3, 64),
+            (64, 64),
+            (65, 4096),
+        ] {
+            let mut original: Reserved<u32> = Reserved::with_capacity(c);
+            original.extend((0..n).map(|i| i.wrapping_mul(2_654_435_761)));
+            let room = original.capacity();
+            assert!(room >= c, "the original was reserved for {c}");
+            let copy = original.clone();
+            assert_eq!(
+                copy.as_slice(),
+                original.as_slice(),
+                "a clone of {n} in room for {c} holds the same elements"
+            );
+            assert_eq!(copy, original, "a clone equals its original");
+            assert!(
+                copy.capacity() >= room,
+                "a clone of {n} elements in room for {room} has room for {}",
+                copy.capacity()
+            );
+        }
+    }
+
+    /// A clone of a clone keeps the room as well: a fork of a fork.
+    #[test]
+    fn a_clone_of_a_clone_keeps_the_room() {
+        let mut original: Reserved<u8> = Reserved::with_capacity(128);
+        original.push(7);
+        let twice = original.clone().clone();
+        assert!(twice.capacity() >= 128, "room for {}", twice.capacity());
+        assert_eq!(twice.as_slice(), [7]);
     }
 }
