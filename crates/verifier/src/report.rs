@@ -1228,6 +1228,8 @@ mod tests {
     /// many of its largest codes before anyone must act (S3's `outcap`, fix
     /// pass 1).
     const GROWTH_CODES: usize = 8;
+    // The ruled eight, held at compile time: lowering it is a ruling, not an edit.
+    const _: () = assert!(GROWTH_CODES == 8);
 
     /// The report the builder writes when `codes` (rows of the catalogue a
     /// stage raises) are each raised one more time than `cap` (once for a
