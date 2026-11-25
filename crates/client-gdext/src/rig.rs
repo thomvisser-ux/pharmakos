@@ -986,7 +986,12 @@ pub struct Rig {
     due: Due,
     wants: Wants,
     all_ready: bool,
-    last_error: Option<String>,
+    /// The last refused call, by what it was for, in the rig's words: what the lobby says
+    /// (`last_error`). Cleared when a later call for the same purpose is answered, or when
+    /// the phase changes (lane `opsave`, fix pass 3, item 11): a refusal the player can no
+    /// longer act on, such as one rate-limited clock report, does not sit on the line all
+    /// session.
+    last_error: Option<(Purpose, String)>,
     /// The last close on a message itself, for the player's words.
     closed_on: Option<ClosedOnMessage>,
     /// The map view's argument (the cursor; "" for a keyframe) whose answer closed the seat link
@@ -1449,11 +1454,12 @@ impl Rig {
         if self.timing.clock.unreportable() && self.last_error.is_none() {
             // Said once, where the lobby reads the rig's errors: the gateway's clock stops
             // here rather than being reported at a bound it would read as time not passing.
-            self.last_error = Some(
+            self.last_error = Some((
+                Purpose::Clock,
                 "this phase has run longer than report_host_clock can carry (i32::MAX ms), \
                  so the host clock is no longer reported"
                     .to_owned(),
-            );
+            ));
         }
         if self.admin_reread.is_some() || self.timing.keepalive_due(ADMIN) {
             self.admin_reread = None;
@@ -1662,7 +1668,7 @@ impl Rig {
                 return Ok(answer);
             }
             let said = why.said();
-            self.last_error = Some(said.clone());
+            self.last_error = Some((purpose, said.clone()));
             answer.error = Some(said);
             return Ok(answer);
         }
@@ -1694,6 +1700,14 @@ impl Rig {
             }
         }
         settled?;
+        // An answered call clears the refusal of the last call for the same purpose.
+        if self
+            .last_error
+            .as_ref()
+            .is_some_and(|(refused, _)| *refused == purpose)
+        {
+            self.last_error = None;
+        }
         if link == ADMIN
             && let (_, Some(footer)) = split_footer(result)
         {
@@ -2221,6 +2235,8 @@ impl Rig {
             return Ok(false);
         }
         self.phase = phase;
+        // A refusal is the phase's: the next phase starts with none to say.
+        self.last_error = None;
         // The status reads' retries are a round's phase's: a phase spent them, the next asks
         // afresh (fix pass 2).
         self.status_retries = 0;
@@ -2489,7 +2505,7 @@ impl Rig {
     /// The last refusal the gateway answered with, if any.
     #[must_use]
     pub fn last_error(&self) -> Option<&str> {
-        self.last_error.as_deref()
+        self.last_error.as_ref().map(|(_, said)| said.as_str())
     }
 
     /// The last close on a message itself, if any (fix pass 3).
@@ -5138,6 +5154,11 @@ mod tests {
             None,
             "an answered zero is no refusal to say"
         );
+        assert_eq!(
+            rig.last_error(),
+            None,
+            "a later answered clock report clears the refused one's line"
+        );
     }
 
     /// **A zero the gateway keeps refusing is given up after `ZERO_REFUSALS`**: no further
@@ -5159,7 +5180,14 @@ mod tests {
             rig.zero_refusal(),
             Some(("refused", "RATE_LIMITED: too many reports"))
         );
-        assert_eq!(rig.last_error(), Some("RATE_LIMITED: too many reports"));
+        // The Lull ended (`end_lull` answered "push"): its refusal is the Lull's, so the
+        // lobby's refusal line clears with the phase (fix pass 3, item 11), while the zero's
+        // own line above still says it.
+        assert_eq!(
+            rig.last_error(),
+            None,
+            "a new phase clears the refusal's line"
+        );
         // The next Lull starts its count again.
         let next = read_status(
             &json::read(r#"{"phase":"lull","phase_remaining_ms":1000,"round":3}"#).expect("json"),
