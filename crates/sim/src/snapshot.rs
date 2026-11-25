@@ -1034,6 +1034,47 @@ pub enum SnapshotError {
         /// The end-reason byte the file carried.
         end_reason: u8,
     },
+    /// One of the match's seats holds more beacon rows than its share of the
+    /// beacon room allows: its core and its share, which is
+    /// [`crate::world::seat_beacon_limit_of`] of the snapshot's seat count,
+    /// and which play enforces at every deploy
+    /// (`World::place_beacon` refuses `ShareFull`, counting the rows a seat
+    /// holds, dead ones until their deaths settle). The file describes no
+    /// match this sim plays, and the rooms the world derives from the share
+    /// (the Defend protect list's, `world::protect_room_of`) would not hold
+    /// it (lane `simroom`).
+    OverBeaconShare {
+        /// The seat: one of the match's, never `SeatId::NEUTRAL`, whose rows
+        /// (beacons whose deaths have settled) are no seat's share.
+        seat: u8,
+        /// How many beacon rows the snapshot gives it.
+        beacons: u32,
+        /// The most one seat holds at the snapshot's seat count.
+        limit: u32,
+    },
+    /// A planted charge fires when no run's charge would: at or before the
+    /// save's own tick (a charge fires on its tick and leaves the table, so
+    /// no save holds one due then), or later than one fuse after it (a plant
+    /// fires its charge a fuse later, `combat.charge_fuse_ms`). A charge that
+    /// never fired would hold a carrier at a full charge table for ever (lane
+    /// `simroom`).
+    ChargeOutOfPlay {
+        /// The tick the charge fires on.
+        fires_at: u32,
+        /// The save's tick.
+        tick: u32,
+        /// The fuse, in ticks, from this world's rules.
+        fuse: u32,
+    },
+    /// The file holds more planted charges than the charge table's room, one
+    /// a beacon row of its seat count, which a plant never passes
+    /// (`PlantRefused::Full`; lane `simroom`).
+    ChargesOverRoom {
+        /// How many charges the file holds.
+        charges: u32,
+        /// The room.
+        room: u32,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -1089,6 +1130,30 @@ impl core::fmt::Display for SnapshotError {
                 f,
                 "the snapshot's match phase {phase} or end reason {end_reason} is not one this \
                  build defines"
+            ),
+            SnapshotError::OverBeaconShare {
+                seat,
+                beacons,
+                limit,
+            } => write!(
+                f,
+                "the snapshot gives seat {seat} {beacons} beacon rows, past its share: a seat \
+                 of a match of its seat count holds at most {limit}"
+            ),
+            SnapshotError::ChargeOutOfPlay {
+                fires_at,
+                tick,
+                fuse,
+            } => write!(
+                f,
+                "the snapshot holds a planted charge that fires at tick {fires_at}, but a save \
+                 taken at tick {tick} only holds charges that fire after it and within the \
+                 {fuse}-tick fuse"
+            ),
+            SnapshotError::ChargesOverRoom { charges, room } => write!(
+                f,
+                "the snapshot holds {charges} planted charges and a match of its seat count \
+                 holds at most {room}"
             ),
         }
     }
@@ -1652,6 +1717,24 @@ impl Snapshot {
         }) {
             return Err(SnapshotError::Ragged("beacon"));
         }
+        // And each of the match's seats keeps to its share of the rows (lane
+        // `simroom`), counted by the function play's deploy counts with
+        // (`BeaconTable::count_of`, which `World::place_beacon` reads through
+        // `count_of_metered`): the rows a seat holds, dead ones until their
+        // deaths settle. A row whose death has settled is nobody's
+        // (`SeatId::NEUTRAL`), no seat's share, and bounded by the total
+        // ceiling checked above.
+        let share = crate::world::seat_beacon_limit_of(seat_count);
+        for raw in (0..=u8::MAX).take(crate::math::index::row(seat_count)) {
+            let held = beacons.count_of(SeatId::new(raw));
+            if held > share {
+                return Err(SnapshotError::OverBeaconShare {
+                    seat: raw,
+                    beacons: held,
+                    limit: share,
+                });
+            }
+        }
         // Every beacon a seat holds carries an ordinal below the seat's
         // placement counter (S2's plan, E1): a name is taken from the counter
         // when the beacon is placed, so a file holding one at or past it names a
@@ -1721,6 +1804,7 @@ impl Snapshot {
         let shells = self.restore_shells(world)?;
         let defend = self.restore_defend(&beacons)?;
         let explored = self.restore_explored()?;
+        self.check_charges(world.rules(), beacon_limit)?;
         let attack = self.restore_attack(&beacons)?;
         let licences = self.restore_licences(&seats)?;
 
@@ -2582,6 +2666,51 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("defend"));
         }
         Ok(table)
+    }
+
+    /// The planted charges are ones a run plants (lane `simroom`): at most the
+    /// charge table's room, one a beacon row (`beacon_limit`, which
+    /// `World::reserve_table_rooms` gives the table and a plant never passes),
+    /// each firing after the save's tick and no later than one fuse after it,
+    /// as every save of a Push holds them (`tests/charge_room.rs`'s
+    /// `a_save_at_every_tick_around_a_plant_and_a_firing_restores`). Checked
+    /// before anything is written.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::ChargesOverRoom`] and
+    /// [`SnapshotError::ChargeOutOfPlay`].
+    fn check_charges(
+        &self,
+        rules: &crate::rules::RulesTable,
+        beacon_limit: u32,
+    ) -> Result<(), SnapshotError> {
+        let fires = &self.attack.charge_fires;
+        // E7: rule: a column past `u32` rows is past every room, and is refused just below
+        let charges = u32::try_from(fires.len()).unwrap_or(u32::MAX);
+        if charges > beacon_limit {
+            return Err(SnapshotError::ChargesOverRoom {
+                charges,
+                room: beacon_limit,
+            });
+        }
+        let fuse = rules.attack().charge_fuse.to_ticks_ceil();
+        for fires_at in fires {
+            // A save so late that a fuse after it passes `u32` admits every
+            // later tick: no `u32` lies beyond the window.
+            let too_late = self
+                .tick
+                .checked_add(fuse)
+                .is_some_and(|latest| *fires_at > latest);
+            if *fires_at <= self.tick || too_late {
+                return Err(SnapshotError::ChargeOutOfPlay {
+                    fires_at: *fires_at,
+                    tick: self.tick,
+                    fuse,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The Attack table (S2's `atk`), checked before anything is written

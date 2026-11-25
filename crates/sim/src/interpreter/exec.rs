@@ -1343,10 +1343,6 @@ fn run_deploy(
 /// takes the beacon out of the world; it is applied last of its visit because
 /// the rows after it would have nothing to write to, which
 /// [`run_visit`]'s `BeaconGone` test then catches on the next decision.
-#[allow(
-    clippy::too_many_lines,
-    reason = "one arm per interface row, each the whole of what that row writes; the settings arm is the longest because a settings edit replaces three lists at once"
-)]
 fn commit_row(
     world: &mut World,
     row: usize,
@@ -1355,6 +1351,75 @@ fn commit_row(
     bindings: &[Binding],
     slot: usize,
     units: &dyn crate::seams::Meter,
+) -> Result<(), StepFailure> {
+    commit_row_resolved(world, row, seat, spec, bindings, slot, units, None)
+}
+
+/// What a [`Row::Settings`] row resolves when it commits, before it writes
+/// anything: its Attack target as the table holds it, and its protect list,
+/// resolved into the world's protect scratch.
+#[derive(Clone, Copy)]
+struct Resolved {
+    aim: Option<crate::attack::Aim>,
+    guarded: Option<crate::world::ResolvedProtect>,
+}
+
+/// Resolve what a [`Row::Settings`] row names that can fail to resolve: an
+/// Attack target pinned at the seal reads as the beacon it was pinned to (a
+/// handle the seal could not pin fails `no_target`, S2's `atk`), and a
+/// protect list's beacons resolve once, now, and are held from then on
+/// (S2's `dfnd`; one that resolves to nothing fails `no_target`), into the
+/// world's protect scratch, which the world lends and takes back itself, so
+/// nothing here allocates inside a tick (lane `simroom`). Any other row
+/// resolves nothing. Called before the row writes anything: on the switch
+/// path, before the switch (lane `simroom`, S3 of its review).
+///
+/// # Errors
+///
+/// [`StepFailure::NoTarget`], as above.
+fn resolve_settings(
+    world: &mut World,
+    seat: SeatId,
+    spec: &Row,
+    units: &dyn crate::seams::Meter,
+) -> Result<Resolved, StepFailure> {
+    let Row::Settings { defend, attack, .. } = spec else {
+        return Ok(Resolved {
+            aim: None,
+            guarded: None,
+        });
+    };
+    let aim = match attack.as_ref().and_then(|edit| edit.target) {
+        Some(target) => Some(attack_aim(target)?),
+        None => None,
+    };
+    let guarded = match defend.as_ref().and_then(|edit| edit.protect.as_ref()) {
+        Some(list) => Some(world.resolve_into_protect_scratch(|world, into| {
+            resolve_protected(world, seat, list, units, into)
+        })?),
+        None => None,
+    };
+    Ok(Resolved { aim, guarded })
+}
+
+/// [`commit_row`], with what a settings row resolves already resolved when
+/// `resolved` holds it: the switch path resolves its settings before the
+/// switch writes anything, so a target or a protect entry that resolves to
+/// nothing leaves the old writ exactly as it was.
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    reason = "one arm per interface row, each the whole of what that row writes; the settings arm is the longest because a settings edit replaces three lists at once; the eighth argument carries what the switch path resolved before it wrote"
+)]
+fn commit_row_resolved(
+    world: &mut World,
+    row: usize,
+    seat: SeatId,
+    spec: &Row,
+    bindings: &[Binding],
+    slot: usize,
+    units: &dyn crate::seams::Meter,
+    resolved: Option<Resolved>,
 ) -> Result<(), StepFailure> {
     let beacon = world
         .beacons()
@@ -1370,9 +1435,15 @@ fn commit_row(
             // The switch first, which clears the old mandate's settings, then
             // the settings the row carries over the defaults it left: one row,
             // committing at the end of its own duration, all or nothing. The
-            // one way the settings can fail -- a lost `on` target -- is tested
-            // before the switch writes anything, so a failed row leaves the
-            // old writ, its settings and its held seam exactly as they were.
+            // ways the settings can fail -- a lost `on` target, a list past its
+            // room, a wall off the ground, a target or a protect entry that
+            // resolves to nothing -- are all tested before the switch writes
+            // anything, so a failed row leaves the old writ, its settings and
+            // its held seam exactly as they were.
+            let resolved = match settings {
+                Some(settings) => Some(resolve_settings(world, seat, settings, units)?),
+                None => None,
+            };
             if let Some(settings) = settings {
                 if !targets_live(world, settings, bindings, slot, units) {
                     return Err(StepFailure::FeatureLost);
@@ -1389,11 +1460,12 @@ fn commit_row(
                     &TargetKind::ALL,
                     units,
                 )?;
+                avoid_room(world, beacon, settings, units)?;
                 walls_stand(world, beacon, settings, units)?;
             }
             world.set_beacon_mandate_metered(row, *kind, units);
             if let Some(settings) = settings {
-                commit_row(world, row, seat, settings, bindings, slot, units)?;
+                commit_row_resolved(world, row, seat, settings, bindings, slot, units, resolved)?;
             }
         }
         Row::Priority { priority } => world.set_beacon_priority(row, *priority),
@@ -1477,20 +1549,12 @@ fn commit_row(
             attack,
             ..
         } => {
-            // An Attack target pinned at the seal reads as the beacon it was
-            // pinned to; a handle the seal could not pin fails the step
-            // `no_target` before anything is written (S2's `atk`).
-            let aim = match attack.as_ref().and_then(|edit| edit.target) {
-                Some(target) => Some(attack_aim(target)?),
-                None => None,
-            };
-            // A protect list's beacons resolve once, when the row commits,
-            // and are held from then on (S2's `dfnd`), as a step pins its
-            // selector; one that resolves to nothing fails the step
-            // `no_target` before anything is written.
-            let guarded = match defend.as_ref().and_then(|edit| edit.protect.as_ref()) {
-                Some(list) => Some(resolve_protected(world, seat, list, units)?),
-                None => None,
+            // The Attack target and the protect list, resolved before anything
+            // is written ([`resolve_settings`]), here or, on the switch path,
+            // before the switch.
+            let Resolved { aim, guarded } = match resolved {
+                Some(resolved) => resolved,
+                None => resolve_settings(world, seat, spec, units)?,
             };
             // A settings edit **replaces** the lists it names, because spec
             // section 5 makes a multi-field edit all-or-nothing and a list that
@@ -1509,6 +1573,7 @@ fn commit_row(
             }
             let replaced = replaced_kinds(spec);
             settings_room(world, beacon, spec, bindings, slot, &replaced.iter(), units)?;
+            avoid_room(world, beacon, spec, units)?;
             // Every wall the list names is checked against the ground first, so
             // a box that cannot stand writes nothing (decisions-log item 146
             // (4)).
@@ -1591,7 +1656,7 @@ fn commit_row(
             // The Defend settings the row names (S2's `dfnd`), and nothing it
             // is silent about.
             if let Some(edit) = defend {
-                world.set_defend_settings(beacon, edit, guarded.as_ref(), units);
+                world.set_defend_settings(beacon, edit, guarded, units);
             }
             // The Attack settings the row names (S2's `atk`), and nothing it
             // is silent about.
@@ -1620,8 +1685,10 @@ fn attack_aim(target: crate::attack::TargetSpec) -> Result<crate::attack::Aim, S
     })
 }
 
-/// A protect list as the Defend table holds it: whether it names
-/// `my_commander`, and its beacons, each resolved for `seat` now.
+/// A protect list as the Defend table holds it: its beacons, each resolved
+/// for `seat` now, into `beacons` (the world's protect scratch, lent empty
+/// by [`World::resolve_into_protect_scratch`]: at most one seat's beacon
+/// rows, distinct, its room), and whether it names `my_commander`.
 ///
 /// # Errors
 ///
@@ -1631,9 +1698,9 @@ fn resolve_protected(
     seat: SeatId,
     list: &[crate::defend::Protect],
     units: &dyn crate::seams::Meter,
-) -> Result<(bool, Vec<BeaconId>), StepFailure> {
+    beacons: &mut Vec<BeaconId>,
+) -> Result<bool, StepFailure> {
     let mut escort = false;
-    let mut beacons: Vec<BeaconId> = Vec::with_capacity(list.len());
     for entry in list {
         units.rows(1);
         match entry {
@@ -1650,7 +1717,7 @@ fn resolve_protected(
             }
         }
     }
-    Ok((escort, beacons))
+    Ok(escort)
 }
 
 /// The Build entries a settings row's target list writes, in list order, as
@@ -1798,6 +1865,35 @@ where
     world
         .check_list_room(beacon, build, areas, replaces, units)
         .map_err(|_| StepFailure::TargetsUnwritten)
+}
+
+/// Whether the Attack table can hold the avoid list a [`Row::Settings`] row
+/// writes, in place of the beacon's (lane `simroom`): the same all-or-nothing
+/// test [`settings_room`] gives the Build lists, asked before anything is
+/// written, failing the step with the same reason. A row that names no avoid
+/// list, and any other row, passes; a cleared list writes none.
+///
+/// # Errors
+///
+/// [`StepFailure::TargetsUnwritten`] when the list would pass the table's
+/// stated room ([`crate::attack::AttackTable::avoid_fits_metered`]).
+fn avoid_room(
+    world: &World,
+    beacon: BeaconId,
+    spec: &Row,
+    units: &dyn crate::seams::Meter,
+) -> Result<(), StepFailure> {
+    let Row::Settings { attack, .. } = spec else {
+        return Ok(());
+    };
+    let Some(list) = attack.as_ref().and_then(|edit| edit.avoid.as_ref()) else {
+        return Ok(());
+    };
+    if world.attack().avoid_fits_metered(beacon, list.len(), units) {
+        Ok(())
+    } else {
+        Err(StepFailure::TargetsUnwritten)
+    }
 }
 
 /// Whether every `on` target a [`Row::Settings`] row writes is still bound to
@@ -2423,8 +2519,9 @@ mod visits {
         )
         .unwrap_or(0);
         let units = charged(&world, |world, meter| {
-            let (escort, beacons) =
-                resolve_protected(world, seat, &list, meter).unwrap_or_else(|_| panic!("resolved"));
+            let mut beacons = Vec::new();
+            let escort = resolve_protected(world, seat, &list, meter, &mut beacons)
+                .unwrap_or_else(|_| panic!("resolved"));
             assert!(escort);
             assert_eq!(beacons.len(), 1, "the duplicate is held once");
         });
