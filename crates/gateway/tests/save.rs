@@ -1112,6 +1112,14 @@ fn a_saved_notebook_past_its_bound_is_refused() {
 /// `bbddd094`'s round-1 `lull` file, committed as a fixture) still loads and
 /// resumes into its Lull, with no last Push (lane `opsave`): the format's
 /// version-4 member is additive.
+///
+/// The fixture's `verifier_version` line is the one line kept current, not as
+/// main wrote it: `SavedMatch::check` refuses a save stamped by another
+/// verifier (spec section 3), and this test holds the save *format* to
+/// version 3, not the verifier to an old one. Each `VERIFIER_VERSION` bump
+/// re-stamps that line and no other (lane `presence7`, to `0.1.0-s3.7`);
+/// the `report_hash` lines stay as main wrote them, which `check` does not
+/// read.
 #[test]
 fn a_version_3_save_written_by_main_still_resumes() {
     const MATCH_ID: &str = "m-fpstream2-save";
@@ -1293,6 +1301,14 @@ fn each_damage_of_the_draft_rule_is_refused(match_id: &str, saved: &SavedMatch) 
 /// so replaying it is the Push itself. Its next Lull's feed is that replayed
 /// Push's own, `segment_ended` and all, so the Lull reads the Push it follows
 /// (the operator does not read it as `PushUnread::Resumed`).
+///
+/// The fixture's `verifier_version` line is the one line kept current, not as
+/// main wrote it: `SavedMatch::check` refuses a save stamped by another
+/// verifier (spec section 3), and this test holds the save *format* to
+/// version 3, not the verifier to an old one. Each `VERIFIER_VERSION` bump
+/// re-stamps that line and no other (lane `presence7`, to `0.1.0-s3.7`);
+/// the `report_hash` lines stay as main wrote them, which `check` does not
+/// read.
 #[test]
 fn a_version_3_sealed_save_resumes_into_its_push_and_its_next_lull_shows_it() {
     const MATCH_ID: &str = "m-fpstream2-save";
