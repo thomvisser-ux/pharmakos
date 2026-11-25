@@ -989,6 +989,132 @@ fn a_frame_gap_is_summed_apart_in_the_bundle() {
     assert!(file(&files, "manifest.json").contains("gap_us"));
 }
 
+// --- A match that is left -------------------------------------------------------------------
+
+/// Frames from `from_us` to `to_us`, 16 ms apart, as the bridge's `watch_outbox` tells them.
+fn frames(recorder: &mut Recorder, from_us: u64, to_us: u64) {
+    let mut now = from_us;
+    while now < to_us {
+        now = (now + 16_000).min(to_us);
+        recorder.seen(now);
+    }
+}
+
+/// The objects of `metrics.json`'s `key`, each as `(match, round, ended_by)` and its time.
+fn rows(metrics: &Json, key: &str, time: &str) -> Vec<(u64, u64, String, u64)> {
+    array_at(metrics, key)
+        .iter()
+        .map(|row| {
+            let Some(Json::String(ended)) = row.get("ended_by") else {
+                panic!("no ended_by: {row:?}");
+            };
+            (
+                number_at(row, "match"),
+                number_at(row, "round"),
+                ended.clone(),
+                number_at(row, time),
+            )
+        })
+        .collect()
+}
+
+/// Review 1's first probe: a Push left 2 s in, the next match's Lull opening 600 s later. The
+/// left Push is kept as match 1's, ended by `match_left`, with its 2 s and not one microsecond
+/// of the 600 s after its last frame; the new match's Lull is match 2's.
+#[test]
+fn a_push_left_is_timed_to_its_matchs_last_frame() {
+    let mut recorder = Recorder::new();
+    recorder.switch(true, 0, true, Phase::Unknown, 0);
+    recorder.phase(0, Phase::Lull, 1, None);
+    frames(&mut recorder, 0, 1_000_000);
+    recorder.phase(1_000_000, Phase::Push, 1, None);
+    frames(&mut recorder, 1_000_000, 3_000_000);
+    assert_eq!(recorder.match_begun(), Recorded::Taken);
+    recorder.phase(605_000_000, Phase::Lull, 1, None);
+    frames(&mut recorder, 605_000_000, 606_000_000);
+    recorder.phase(606_000_000, Phase::Push, 1, None);
+    let files = files_of(&recorder.bundle().expect("on"));
+    let metrics = json_of(file(&files, "metrics.json"));
+    assert_eq!(
+        rows(&metrics, "push_time", "focused_us"),
+        [(1, 1, "match_left".to_owned(), 2_000_000)]
+    );
+    assert_eq!(
+        rows(&metrics, "lull_time", "used_us"),
+        [
+            (1, 1, "phase_left".to_owned(), 1_000_000),
+            (2, 1, "phase_left".to_owned(), 1_000_000)
+        ]
+    );
+    let manifest = json_of(file(&files, "manifest.json"));
+    let ended: Vec<(u64, String)> = array_at(&manifest, "matches")
+        .iter()
+        .map(|row| {
+            let Some(Json::String(ended)) = row.get("ended") else {
+                panic!("{row:?}");
+            };
+            (number_at(row, "match"), ended.clone())
+        })
+        .collect();
+    assert_eq!(ended, [(1, "left".to_owned()), (2, "under_way".to_owned())]);
+    let log = file(&files, "diagnostics.log");
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.contains(" match_left "))
+            .count(),
+        1,
+        "{log}"
+    );
+    assert!(
+        log.contains(" match_left t=3000\n"),
+        "at the last frame: {log}"
+    );
+}
+
+/// Review 1's second probe: round 3's Lull left 2 s in, the new match's Lull at 300 s.
+#[test]
+fn a_lull_left_is_timed_to_its_matchs_last_frame() {
+    let mut recorder = Recorder::new();
+    recorder.switch(true, 0, true, Phase::Unknown, 0);
+    recorder.phase(0, Phase::Lull, 3, None);
+    frames(&mut recorder, 0, 2_000_000);
+    recorder.match_begun();
+    recorder.phase(300_000_000, Phase::Lull, 1, None);
+    frames(&mut recorder, 300_000_000, 301_000_000);
+    recorder.phase(301_000_000, Phase::Push, 1, None);
+    let files = files_of(&recorder.bundle().expect("on"));
+    let metrics = json_of(file(&files, "metrics.json"));
+    assert_eq!(
+        rows(&metrics, "lull_time", "used_us"),
+        [
+            (1, 3, "match_left".to_owned(), 2_000_000),
+            (2, 1, "phase_left".to_owned(), 1_000_000)
+        ]
+    );
+}
+
+/// A start that failed before any phase was seen is no match: the ordinal does not move, and
+/// nothing is said; a match that reached its end is kept as ended, with no `match_left` line.
+#[test]
+fn a_start_with_no_phase_is_no_match() {
+    let mut recorder = Recorder::new();
+    recorder.switch(true, 0, true, Phase::Unknown, 0);
+    assert_eq!(recorder.match_begun(), Recorded::NotInPhase);
+    assert_eq!(recorder.match_begun(), Recorded::NotInPhase);
+    recorder.phase(10, Phase::Ended, 3, None);
+    recorder.match_begun();
+    recorder.phase(20, Phase::Lull, 1, None);
+    let files = files_of(&recorder.bundle().expect("on"));
+    let manifest = json_of(file(&files, "manifest.json"));
+    let [first, second] = array_at(&manifest, "matches") else {
+        panic!("two matches");
+    };
+    assert_eq!(number_at(first, "match"), 1);
+    assert_eq!(first.get("ended"), Some(&Json::String("ended".to_owned())));
+    assert_eq!(number_at(second, "match"), 2);
+    assert!(!file(&files, "diagnostics.log").contains("match_left"));
+}
+
 // --- Bounded --------------------------------------------------------------------------------
 
 /// Every cap filled and passed, with the longest numbers a reading can make: what was dropped

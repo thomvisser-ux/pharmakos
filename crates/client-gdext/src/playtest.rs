@@ -92,11 +92,13 @@ pub const BUNDLE_ENTRIES: [&str; 4] = [
 /// The caps below are guesses, held to one marker:
 /// PLACEHOLDER: the Playtest bundle's caps (records, log lines, codes, survey text, bundle size) — OWNER, at S7
 ///
-/// They are 512 Push and 512 Lull records, 4096 log lines, 256 codes a tally, 4000 characters of
+/// They are 512 Push, 512 Lull and 64 match records, 4096 log lines, 256 codes a tally, 4000 characters of
 /// survey text and a 1 MiB bundle, settled with the recording S7 brings.
 pub const MAX_PUSH_RECORDS: usize = 512;
 /// The most Lull records kept (the PLACEHOLDER on [`MAX_PUSH_RECORDS`]).
 pub const MAX_LULL_RECORDS: usize = 512;
+/// The most match records kept (the PLACEHOLDER on [`MAX_PUSH_RECORDS`]).
+pub const MAX_MATCH_RECORDS: usize = 64;
 /// The most diagnostics lines kept (the PLACEHOLDER on [`MAX_PUSH_RECORDS`]).
 pub const MAX_LOG_LINES: usize = 4096;
 /// The most distinct codes a tally keeps, verifier rows and refusals each (the PLACEHOLDER on
@@ -241,6 +243,8 @@ pub enum DropReason {
     PushRecordsFull,
     /// A Lull ended with [`MAX_LULL_RECORDS`] kept.
     LullRecordsFull,
+    /// A match ended with [`MAX_MATCH_RECORDS`] kept.
+    MatchRecordsFull,
     /// A diagnostics line with [`MAX_LOG_LINES`] kept.
     LogFull,
     /// A code past [`MAX_CODES`] distinct ones in its tally.
@@ -255,9 +259,10 @@ pub enum DropReason {
 
 impl DropReason {
     /// Every reason, in the manifest's order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::PushRecordsFull,
         Self::LullRecordsFull,
+        Self::MatchRecordsFull,
         Self::LogFull,
         Self::CodesFull,
         Self::CounterFull,
@@ -271,6 +276,7 @@ impl DropReason {
         match self {
             Self::PushRecordsFull => "push_records_full",
             Self::LullRecordsFull => "lull_records_full",
+            Self::MatchRecordsFull => "match_records_full",
             Self::LogFull => "log_full",
             Self::CodesFull => "codes_full",
             Self::CounterFull => "counter_full",
@@ -292,6 +298,7 @@ impl DropReason {
 struct DropCounts {
     push_records_full: u64,
     lull_records_full: u64,
+    match_records_full: u64,
     log_full: u64,
     codes_full: u64,
     counter_full: u64,
@@ -304,6 +311,7 @@ impl DropCounts {
         match reason {
             DropReason::PushRecordsFull => self.push_records_full,
             DropReason::LullRecordsFull => self.lull_records_full,
+            DropReason::MatchRecordsFull => self.match_records_full,
             DropReason::LogFull => self.log_full,
             DropReason::CodesFull => self.codes_full,
             DropReason::CounterFull => self.counter_full,
@@ -316,6 +324,7 @@ impl DropCounts {
         match reason {
             DropReason::PushRecordsFull => &mut self.push_records_full,
             DropReason::LullRecordsFull => &mut self.lull_records_full,
+            DropReason::MatchRecordsFull => &mut self.match_records_full,
             DropReason::LogFull => &mut self.log_full,
             DropReason::CodesFull => &mut self.codes_full,
             DropReason::CounterFull => &mut self.counter_full,
@@ -358,6 +367,9 @@ pub enum Event {
     RecapOpened,
     /// The match ended.
     MatchEnded,
+    /// The client left the match with a span open, or before it ended (a new match, a failed
+    /// host).
+    MatchLeft,
     /// The phase became one the rig cannot name (before the first answer, or the lobby).
     PhaseOther,
     /// This seat pressed Ready.
@@ -382,12 +394,13 @@ pub enum Event {
 
 impl Event {
     /// Every kind.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::PlaytestOn,
         Self::LullOpened,
         Self::PushBegan,
         Self::RecapOpened,
         Self::MatchEnded,
+        Self::MatchLeft,
         Self::PhaseOther,
         Self::Ready,
         Self::Skipped,
@@ -409,6 +422,7 @@ impl Event {
             Self::PushBegan => "push_began",
             Self::RecapOpened => "recap_opened",
             Self::MatchEnded => "match_ended",
+            Self::MatchLeft => "match_left",
             Self::PhaseOther => "phase_other",
             Self::Ready => "ready",
             Self::Skipped => "skipped",
@@ -467,22 +481,86 @@ pub enum PushOutcome {
     Untimed(ClockFault),
 }
 
+/// How a recorded Push ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PushEnd {
+    /// The phase moved on (to the recap, or the match's end).
+    PhaseLeft,
+    /// The client left the match with the Push open: its time runs to the last frame drawn in
+    /// that match.
+    MatchLeft,
+}
+
+impl PushEnd {
+    /// The name the bundle writes.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::PhaseLeft => "phase_left",
+            Self::MatchLeft => "match_left",
+        }
+    }
+}
+
 /// One Push, as recorded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PushRecord {
+    /// Which match it was in, counting from 1 since Playtest mode was switched on: a count,
+    /// never the match's id.
+    pub match_ordinal: u32,
     /// The round it was in.
     pub round: u32,
     /// What it recorded.
     pub outcome: PushOutcome,
+    /// How it ended.
+    pub ended_by: PushEnd,
 }
 
 /// One Lull, as recorded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LullRecord {
+    /// Which match it was in, as [`PushRecord::match_ordinal`].
+    pub match_ordinal: u32,
     /// The round it was in.
     pub round: u32,
     /// Its used time.
     pub time: LullTime,
+}
+
+/// How a recorded match stands.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MatchEnd {
+    /// The match reached its end.
+    Ended,
+    /// The client left it before its end (a new match, a failed host).
+    Left,
+    /// It is under way.
+    UnderWay,
+}
+
+impl MatchEnd {
+    /// The name the bundle writes.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ended => "ended",
+            Self::Left => "left",
+            Self::UnderWay => "under_way",
+        }
+    }
+}
+
+/// One match, as recorded: the preset the gateway last named and the last round seen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MatchRecord {
+    /// Its ordinal, as [`PushRecord::match_ordinal`].
+    pub match_ordinal: u32,
+    /// The preset as last read from `get_status`; `None` when none was read.
+    pub preset: Option<ServedPreset>,
+    /// The last round seen.
+    pub last_round: u32,
+    /// How it stands.
+    pub ended: MatchEnd,
 }
 
 /// The survey's first question, "Play another round?".
@@ -644,6 +722,11 @@ struct Recording {
     phase: Phase,
     round: u32,
     preset: Option<ServedPreset>,
+    /// This match's ordinal, from 1, and whether any phase of it has been seen.
+    match_ordinal: u32,
+    match_seen: bool,
+    /// The matches left or ended before this one.
+    match_records: Vec<MatchRecord>,
     /// The open Push's round and whether it was skipped.
     push_round: u32,
     push_skipped: bool,
@@ -681,6 +764,9 @@ impl Recording {
             phase,
             round,
             preset,
+            match_ordinal: 1,
+            match_seen: !matches!(phase, Phase::Unknown),
+            match_records: Vec::new(),
             push_round: round,
             push_skipped: false,
             lull_round: round,
@@ -772,6 +858,25 @@ impl Recording {
                 PushOutcome::Untimed(fault)
             }
         };
+        self.keep_push(outcome, PushEnd::PhaseLeft);
+    }
+
+    /// The match was left with a Push open: it is kept with its time up to the last frame
+    /// drawn in that match.
+    fn leave_push(&mut self) {
+        let Some(time) = self.clock.push_left() else {
+            return;
+        };
+        let outcome = if self.push_skipped {
+            PushOutcome::Skipped
+        } else {
+            PushOutcome::Timed(time)
+        };
+        self.keep_push(outcome, PushEnd::MatchLeft);
+    }
+
+    /// A closed Push counted and kept.
+    fn keep_push(&mut self, outcome: PushOutcome, ended_by: PushEnd) {
         let counted = bump(&mut self.pushes);
         self.noted(counted);
         if outcome == PushOutcome::Skipped {
@@ -782,8 +887,10 @@ impl Recording {
             self.drop_for(DropReason::PushRecordsFull);
         } else {
             self.push_records.push(PushRecord {
+                match_ordinal: self.match_ordinal,
                 round: self.push_round,
                 outcome,
+                ended_by,
             });
         }
     }
@@ -799,14 +906,71 @@ impl Recording {
                 return;
             }
         };
+        self.keep_lull(time);
+    }
+
+    /// A closed Lull kept.
+    fn keep_lull(&mut self, time: LullTime) {
         if self.lull_records.len() >= MAX_LULL_RECORDS {
             self.drop_for(DropReason::LullRecordsFull);
         } else {
             self.lull_records.push(LullRecord {
+                match_ordinal: self.match_ordinal,
                 round: self.lull_round,
                 time,
             });
         }
+    }
+
+    /// This match as it stands.
+    const fn this_match(&self, ended: MatchEnd) -> MatchRecord {
+        MatchRecord {
+            match_ordinal: self.match_ordinal,
+            preset: self.preset,
+            last_round: self.round,
+            ended,
+        }
+    }
+
+    /// The client left this match (a new match begins, a host failed): an open Push or Lull is
+    /// kept with its time up to the last frame drawn in it, ended by `match_left`; one line says
+    /// so; the match is kept, and the next one counts from nothing. A match none of whose phases
+    /// was seen is no match, and nothing is kept.
+    fn leave_match(&mut self) -> Recorded {
+        if !self.match_seen {
+            return Recorded::NotInPhase;
+        }
+        let ended = if self.phase == Phase::Ended {
+            MatchEnd::Ended
+        } else {
+            MatchEnd::Left
+        };
+        let left = ended == MatchEnd::Left || self.clock.in_push() || self.clock.in_lull();
+        self.leave_push();
+        if let Some(time) = self.clock.lull_left() {
+            self.keep_lull(time);
+        }
+        let answer = if left {
+            let last_us = self.clock.last_us();
+            self.line(last_us, Event::MatchLeft, None)
+        } else {
+            Recorded::Taken
+        };
+        if self.match_records.len() >= MAX_MATCH_RECORDS {
+            self.drop_for(DropReason::MatchRecordsFull);
+        } else {
+            self.match_records.push(self.this_match(ended));
+        }
+        if let Some(next) = self.match_ordinal.checked_add(1) {
+            self.match_ordinal = next;
+        } else {
+            self.drop_for(DropReason::CounterFull);
+        }
+        self.match_seen = false;
+        self.phase = Phase::Unknown;
+        self.round = 0;
+        self.preset = None;
+        answer
     }
 
     /// A clock fault counted, or nothing.
@@ -885,6 +1049,9 @@ impl Recorder {
             recording.preset = preset;
         }
         recording.round = round;
+        if phase != Phase::Unknown {
+            recording.match_seen = true;
+        }
         if phase == recording.phase {
             return Recorded::Taken;
         }
@@ -909,6 +1076,17 @@ impl Recorder {
             Phase::Unknown | Phase::Lobby | Phase::Recap | Phase::Ended => {}
         }
         recording.line(now_us, Event::of_phase(phase), None)
+    }
+
+    /// A new watch rig begins (the bridge's `watch_begin`: a new match, or a new start after a
+    /// failed host): the match before it, if one was seen, was left. An open Push or Lull is
+    /// kept with its time up to the last frame drawn in it and ended by `match_left`, with one
+    /// line; the next match counts from nothing under the next ordinal.
+    pub fn match_begun(&mut self) -> Recorded {
+        let Some(recording) = self.on.as_mut() else {
+            return Recorded::Off;
+        };
+        recording.leave_match()
     }
 
     /// This seat's Ready was taken at `now_us`.
@@ -1237,19 +1415,47 @@ fn tally_json(tally: &BTreeMap<Code, u64>) -> Json {
 
 /// `manifest.json`: what the bundle is, its caps, and every reason something was not kept.
 fn manifest_json(recording: &Recording) -> Json {
-    // No readable `get_status` yet is its own word, not a preset.
-    let preset = match recording.preset {
-        Some(served) => served.name(),
-        None => "not_read",
-    };
+    let under_way = recording.match_seen.then(|| {
+        recording.this_match(if recording.phase == Phase::Ended {
+            MatchEnd::Ended
+        } else {
+            MatchEnd::UnderWay
+        })
+    });
+    let matches = recording
+        .match_records
+        .iter()
+        .chain(under_way.iter())
+        .map(|record| {
+            // No readable `get_status` is its own word, not a preset.
+            let preset = match record.preset {
+                Some(served) => served.name(),
+                None => "not_read",
+            };
+            object([
+                ("match", number(u64::from(record.match_ordinal))),
+                ("preset", string(preset)),
+                ("last_round", number(u64::from(record.last_round))),
+                ("ended", string(record.ended.name())),
+            ])
+        })
+        .collect();
     object([
         ("bundle_format", number(u64::from(BUNDLE_FORMAT))),
         (
             "files",
             Json::Array(BUNDLE_ENTRIES.iter().map(|name| string(name)).collect()),
         ),
-        ("preset", string(preset)),
-        ("last_round", number(u64::from(recording.round))),
+        ("matches", Json::Array(matches)),
+        (
+            "match",
+            string(
+                "a Push's or Lull's match counts the matches played since Playtest mode was \
+                 switched on, from 1, and is never a match's id; ended_by match_left is a Push \
+                 or Lull still open when the client left its match (a new match, or a host that \
+                 stopped), timed to the last frame drawn in that match",
+            ),
+        ),
         (
             "skip_rate",
             string("skipped_pushes / pushes, both in metrics.json; this file does not divide"),
@@ -1277,6 +1483,7 @@ fn manifest_json(recording: &Recording) -> Json {
             object([
                 ("push_records", count_number(MAX_PUSH_RECORDS)),
                 ("lull_records", count_number(MAX_LULL_RECORDS)),
+                ("match_records", count_number(MAX_MATCH_RECORDS)),
                 ("log_lines", count_number(MAX_LOG_LINES)),
                 ("codes_per_tally", count_number(MAX_CODES)),
                 ("survey_text_chars", count_number(MAX_SURVEY_TEXT_CHARS)),
@@ -1320,23 +1527,30 @@ fn metrics_json(recording: &Recording) -> Json {
         .push_records
         .iter()
         .map(|record| {
-            let round = ("round", number(u64::from(record.round)));
+            let mut row = vec![
+                ("match", number(u64::from(record.match_ordinal))),
+                ("round", number(u64::from(record.round))),
+            ];
             match record.outcome {
-                PushOutcome::Timed(time) => object([
-                    round,
+                PushOutcome::Timed(time) => row.extend([
                     ("skipped", Json::Bool(false)),
                     ("focused_us", number(time.focused_us)),
                     ("unfocused_us", number(time.unfocused_us)),
                     ("gap_us", number(time.gap_us)),
                     ("gaps", number(time.gaps)),
                 ]),
-                PushOutcome::Skipped => object([round, ("skipped", Json::Bool(true))]),
-                PushOutcome::Untimed(fault) => object([
-                    round,
+                PushOutcome::Skipped => row.push(("skipped", Json::Bool(true))),
+                PushOutcome::Untimed(fault) => row.extend([
                     ("skipped", Json::Bool(false)),
                     ("untimed", string(fault.name())),
                 ]),
             }
+            row.push(("ended_by", string(record.ended_by.name())));
+            Json::Object(
+                row.into_iter()
+                    .map(|(key, value)| (key.to_owned(), value))
+                    .collect(),
+            )
         })
         .collect();
     let lull_time = recording
@@ -1344,6 +1558,7 @@ fn metrics_json(recording: &Recording) -> Json {
         .iter()
         .map(|record| {
             object([
+                ("match", number(u64::from(record.match_ordinal))),
                 ("round", number(u64::from(record.round))),
                 ("used_us", number(record.time.used_us)),
                 ("gap_us", number(record.time.gap_us)),

@@ -567,6 +567,11 @@ impl PharmakosBridge {
     /// them (a Lull whose row is missing is untimed).
     #[func]
     fn watch_begin(&mut self) {
+        // The rig this replaces is the one teardown of a match in the client: Playtest mode keeps
+        // what was open in it as left, timed to the last frame drawn in it.
+        let _ = self
+            .panics
+            .guard("watch_begin", || self.playtest.match_begun());
         let mut rig = Rig::new();
         rig.set_lull_length(self.lulls);
         self.rig = Some(rig);

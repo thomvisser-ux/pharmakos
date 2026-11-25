@@ -727,6 +727,9 @@ pub enum LullEnd {
     /// The phase moved on with no Ready from this seat (a timed Lull's countdown, or the client
     /// left the Lull some other way).
     PhaseLeft,
+    /// The client left the match with the Lull open (a new match, a failed host): its time runs
+    /// to the last frame drawn in that match.
+    MatchLeft,
 }
 
 impl LullEnd {
@@ -736,6 +739,7 @@ impl LullEnd {
         match self {
             Self::Ready => "ready",
             Self::PhaseLeft => "phase_left",
+            Self::MatchLeft => "match_left",
         }
     }
 }
@@ -936,6 +940,29 @@ impl PlaytestClock {
                 LullEnd::PhaseLeft
             },
         }))
+    }
+
+    /// The match was left with a Push open: its split up to the last reading taken (the last
+    /// frame the client drew in that match), never to a later one, and the Push closed.
+    pub const fn push_left(&mut self) -> Option<PushTime> {
+        self.push.take()
+    }
+
+    /// The match was left with a Lull open: its time up to the last reading taken (or to Ready),
+    /// ended by [`LullEnd::MatchLeft`], and the Lull closed.
+    pub fn lull_left(&mut self) -> Option<LullTime> {
+        self.lull.take().map(|lull| LullTime {
+            used_us: lull.used_us,
+            gap_us: lull.gap_us,
+            gaps: lull.gaps,
+            ended_by: LullEnd::MatchLeft,
+        })
+    }
+
+    /// The last reading taken.
+    #[must_use]
+    pub const fn last_us(&self) -> u64 {
+        self.last_us
     }
 
     /// Whether a Push is open.
