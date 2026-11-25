@@ -1010,7 +1010,7 @@ const BYTES_PER_CHAR: u64 = 6;
 /// The most bytes one encoded voxel of the planning snapshot is taken to
 /// take, base64 included.
 ///
-/// PLACEHOLDER: a snapshot taken at 16 bytes a map voxel, the sim giving no bound of its encoding — owner, at hardening, with the sim's snapshot ceiling.
+/// PLACEHOLDER: a save's size bound that does not bound in practice (781 MB for a 7 KB save, 63.6 GB on the 8-minute ladder): its snapshot term at 16 bytes a map voxel, the sim giving no ceiling of its encoding, and its feed term at what the live feed retains, a tuning question — OWNER, at hardening.
 const SNAPSHOT_BYTES_PER_VOXEL: u64 = 16;
 
 /// The fixed part of a save: its keys, stamp, config line and counts.
