@@ -70,13 +70,14 @@
 
 use pharmakos_proto::chunk_rle;
 use pharmakos_proto::gp::v1::Voxel;
+use pharmakos_proto::json::Json;
 use pharmakos_proto::said;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelStore;
 use std::collections::BTreeSet;
 
 use crate::error::Error;
-use crate::feed::ViewCursor;
+use crate::feed::{EntityPlace, ViewCursor};
 use crate::fog::{Viewer, Vision};
 
 /// The most `e_NN` handles one viewer holds: a bound on a table a save carries
@@ -89,23 +90,119 @@ use crate::fog::{Viewer, Vision};
 /// PLACEHOLDER: 1 024 handles a viewer — owner, at hardening, with the rest of the save's bounds.
 pub const MAX_FOREIGN_HANDLES: usize = 1_024;
 
-/// How many bytes of encoded runs one page of the view carries.
+/// How many bytes of chunks **and entities** one page of the view carries, as
+/// the wire spells them where they sit in the answer ([`listed_bytes`]; S3's
+/// `outcap`).
 ///
-/// The cut is on **bytes** rather than on a chunk count because a chunk's
-/// encoded size is between three bytes and three times raw, and a count would
-/// therefore bound nothing. The first chunk of a page always goes through, so
-/// a chunk larger than the whole budget is delivered rather than being a hole
-/// no page can ever fill.
+/// The cut is on **bytes** rather than on a count because a chunk's encoded
+/// size is between three bytes and three times raw, and an entity list grows
+/// with the world (wrecks build up), so a count would bound nothing. The
+/// chunks go first, then the entities, on as many pages as they need, from
+/// one list held for the listing ([`ViewFeed::hold_entities`]). The first
+/// item of a page always goes through, so nothing is a hole no page can fill;
+/// no item comes near the budget (the largest chunk is [`MAX_CHUNK_LISTED_BYTES`],
+/// held below it at compile time), so a page is at most the budget, and the
+/// answer at most the budget and its envelope, within
+/// `pharmakos_proto::transport::MAX_ANSWER_BYTES` (`tests/outgoing.rs`).
 ///
-/// PLACEHOLDER: a view page's 256 KiB — owner, at hardening, with the rate limits.
-/// 256 KiB is a working number with two technical reasons behind
-/// it and no measurement of its own. Godot's `WebSocketPeer` defaults to an
-/// inbound buffer of about 64 KiB and the client has to raise it either way;
-/// and one page is answered by the single thread that owns the surface, so a
-/// larger page is a longer stretch in which no other connection is answered.
-/// **OWNER**, at hardening, with `MAX_MESSAGE_BYTES`, `READ_TIMEOUT` and the
-/// rate limits.
-pub const VIEW_PAGE_BYTES: usize = 256 * 1024;
+/// PLACEHOLDER: a view page's 512 KiB of chunks and entities — owner, at hardening, with the rate limits.
+/// A working number: it keeps the committed whole-map keyframe (286 411
+/// bytes) on one page, as the 256 KiB of runs it replaces did, and one page
+/// is answered by the single thread that owns the surface, so a larger page
+/// is a longer stretch in which no other connection is answered. **OWNER**,
+/// at hardening, with `MAX_MESSAGE_BYTES`, `MAX_ANSWER_BYTES`,
+/// `READ_TIMEOUT` and the rate limits.
+pub const VIEW_PAGE_BYTES: usize = 512 * 1024;
+
+/// How deep a page's listed items sit in the answer the gateway writes:
+/// `{"result": {"chunks": [item]}}` puts each item three levels in, so each
+/// of its lines carries three indents ([`listed_bytes`]).
+const LISTED_DEPTH: usize = 3;
+
+/// The most bytes one chunk takes listed on a page: the largest run encoding
+/// (three times a chunk's 32 768 voxels, `chunk_rle`'s own worst), as base64,
+/// with its origin at the widest coordinates, measured by
+/// `the_largest_chunk_is_within_its_bound` through [`listed_bytes`].
+pub const MAX_CHUNK_LISTED_BYTES: usize = 131_400;
+
+const _: () = assert!(MAX_CHUNK_LISTED_BYTES < VIEW_PAGE_BYTES);
+
+/// How many entity lists one viewer may hold at once for listings being
+/// paged ([`ViewFeed::hold_entities`]); past it that viewer's oldest goes, and
+/// a cursor into a list no longer held is [`crate::error::Code::StaleSnapshot`].
+/// A quota per viewer, so no viewer's listings evict another's.
+///
+/// PLACEHOLDER: four held entity lists a viewer — owner, at hardening, with the rest of the view's bounds.
+pub const HELD_ENTITY_LISTS_PER_VIEWER: usize = 4;
+
+/// The viewers one feed serves at most: a seat for each of the match's
+/// seats ([`crate::host::MAX_SEATS`]), and two spectator readings, because a
+/// spectator is one viewer with `spectate.nofog` and one without
+/// ([`crate::fog::Viewer::Spectator`]); `admin` watches nothing.
+pub const MAX_VIEWERS: usize = count_of(crate::host::MAX_SEATS).saturating_add(SPECTATOR_READINGS);
+
+/// `n` as a `usize`, counted, since a `const` cannot call `usize::try_from`
+/// and a cast is a determinism lint's.
+const fn count_of(n: u32) -> usize {
+    let mut counted: usize = 0;
+    let mut left = n;
+    while left > 0 {
+        counted = counted.saturating_add(1);
+        left = left.saturating_sub(1);
+    }
+    counted
+}
+
+const _: () = assert!(MAX_VIEWERS == 5, "three seats and two spectator readings");
+
+/// The spectator readings a feed serves: with `spectate.nofog` and without.
+const SPECTATOR_READINGS: usize = 2;
+
+/// The most entity lists the feed holds at once: [`MAX_VIEWERS`] times
+/// [`HELD_ENTITY_LISTS_PER_VIEWER`].
+pub const MAX_HELD_ENTITY_LISTS: usize = MAX_VIEWERS * HELD_ENTITY_LISTS_PER_VIEWER;
+
+/// The bytes `item` takes listed in a page's array, as the gateway's writer
+/// spells it ([`pharmakos_proto::json::write`], two-space indent, one entry a
+/// line): its own text at [`LISTED_DEPTH`], the indent before it and the
+/// comma and newline after it. An upper bound by one byte for the last item,
+/// which takes no comma.
+#[must_use]
+pub fn listed_bytes(item: &Json) -> usize {
+    let alone = pharmakos_proto::json::write(item);
+    // `write` ends with a newline; every other newline begins a line that the
+    // answer indents `LISTED_DEPTH` levels more, two spaces a level.
+    let inner_lines = alone.matches('\n').count().saturating_sub(1);
+    let indent = LISTED_DEPTH.saturating_mul(2);
+    alone
+        .len()
+        .saturating_sub(1)
+        .saturating_add(inner_lines.saturating_mul(indent))
+        .saturating_add(indent)
+        .saturating_add(2)
+}
+
+/// One `gp.api.v1.ViewChunk`: its origin and its runs, which a `bytes` field
+/// carries as standard base64 (the proto3 JSON mapping's own rule, through
+/// the one base64 this workspace has).
+#[must_use]
+pub fn chunk_json(origin: Voxel, bytes: &[u8]) -> Json {
+    let axis = |value: i32| Json::Number(value.to_string());
+    Json::Object(vec![
+        (
+            String::from("origin"),
+            Json::Object(vec![
+                (String::from("x"), axis(origin.x)),
+                (String::from("y"), axis(origin.y)),
+                (String::from("z"), axis(origin.z)),
+            ]),
+        ),
+        (
+            String::from("voxels_rle"),
+            Json::String(pharmakos_proto::json::base64::encode(bytes)),
+        ),
+    ])
+}
 
 /// What decides, for one viewer, which voxels of a modified chunk it may see.
 ///
@@ -199,15 +296,46 @@ impl ViewerState {
     }
 }
 
-/// One page of a view, before it becomes JSON.
+/// One page of a view's chunks, before it becomes JSON.
+///
+/// `complete` and `next` are about the listing's **chunks**: a page whose
+/// chunks are all sent may still have entities to page
+/// (`crate::surface::Surface`'s `get_view` pages them on from `spent`).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ViewPage {
     /// The chunks this page carries, ascending: origin and encoded runs.
     pub chunks: Vec<(Voxel, Vec<u8>)>,
-    /// False while more pages of this listing are waiting.
+    /// False while more chunks of this listing are waiting.
     pub complete: bool,
-    /// Where the next call resumes.
+    /// Where the next call resumes: the next chunk, or, once the chunks are
+    /// all sent, the listing's end (`from_seq == to_seq`, the stamp it was
+    /// started at).
     pub next: ViewCursor,
+    /// The bytes the chunks take listed on the page ([`listed_bytes`]), of
+    /// [`VIEW_PAGE_BYTES`].
+    pub spent: usize,
+}
+
+/// An entity list held for a listing being paged ([`ViewFeed::hold_entities`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct HeldEntities {
+    viewer: Viewer,
+    /// The list's serial: the viewer's own count of the lists it was held
+    /// ([`ViewFeed::hold_entities`]), which an entity cursor names it by. A
+    /// viewer's own count, so a cursor says nothing of another's listings.
+    list: u64,
+    /// The listing's two stamps, which the cursor carries too.
+    from_seq: u64,
+    to_seq: u64,
+    /// Shared, so a page borrows the list rather than copying it.
+    entities: std::sync::Arc<[Json]>,
+}
+
+/// One viewer's count of the entity lists it was held: the next serial.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct HeldSerial {
+    viewer: Viewer,
+    next: u64,
 }
 
 /// The derived view state for one hosted match.
@@ -241,6 +369,11 @@ pub struct ViewFeed {
     /// How many times the world's modified chunks were read for wall voxels:
     /// counted work, for the cost of the view (S3's `probw`).
     wall_scans: u64,
+    /// The entity lists of listings being paged, oldest first, at most
+    /// [`MAX_HELD_ENTITY_LISTS`] (S3's `outcap`).
+    held: Vec<HeldEntities>,
+    /// Each viewer's next held-list serial.
+    held_serials: Vec<HeldSerial>,
 }
 
 /// The standing wall voxels of one world tick of one view.
@@ -278,6 +411,8 @@ impl ViewFeed {
             viewers: Vec::new(),
             standing_walls: None,
             wall_scans: 0,
+            held: Vec::new(),
+            held_serials: Vec::new(),
         }
     }
 
@@ -375,6 +510,9 @@ impl ViewFeed {
         self.modified = Vec::new();
         self.modified_flag = vec![false; slots];
         self.viewers = Vec::new();
+        // Every cursor goes stale with the view, an entity cursor too.
+        self.held = Vec::new();
+        self.held_serials = Vec::new();
         Ok(())
     }
 
@@ -571,6 +709,21 @@ impl ViewFeed {
     ) -> Result<ViewPage, Error> {
         let (from_seq, to_seq, start) = match cursor {
             None => (0, self.seq, 0),
+            // A place in the listing's entities: its chunks are all sent.
+            Some(held) if held.entities.is_some() => {
+                return Ok(ViewPage {
+                    chunks: Vec::new(),
+                    complete: true,
+                    next: ViewCursor {
+                        view_id: self.view_id,
+                        from_seq: held.to_seq,
+                        to_seq: held.to_seq,
+                        index: 0,
+                        entities: None,
+                    },
+                    spent: 0,
+                });
+            }
             Some(held) if held.index == 0 => (held.from_seq, self.seq, 0),
             Some(held) => (held.from_seq, held.to_seq, held.index),
         };
@@ -597,16 +750,19 @@ impl ViewFeed {
         let mut next: Option<u32> = None;
         for chunk in listing {
             let bytes = self.bytes_for(state, chunk)?;
-            // The first chunk of a page always goes through: a chunk whose
-            // encoding is larger than the whole budget would otherwise be a
-            // hole no page could ever fill.
-            if !chunks.is_empty() && spent.saturating_add(bytes.len()) > VIEW_PAGE_BYTES {
+            let [x, y, z] = voxels.chunk_origin(chunk).ok_or_else(|| unmapped(chunk))?;
+            let origin = Voxel { x, y, z };
+            // Measured as the wire spells it, where it sits in the answer.
+            let cost = listed_bytes(&chunk_json(origin, &bytes));
+            // The first chunk of a page always goes through: no chunk comes
+            // near the budget (`MAX_CHUNK_LISTED_BYTES`), so this only says a
+            // page is never empty while chunks are waiting.
+            if !chunks.is_empty() && spent.saturating_add(cost) > VIEW_PAGE_BYTES {
                 next = Some(chunk);
                 break;
             }
-            spent = spent.saturating_add(bytes.len());
-            let [x, y, z] = voxels.chunk_origin(chunk).ok_or_else(|| unmapped(chunk))?;
-            chunks.push((Voxel { x, y, z }, bytes));
+            spent = spent.saturating_add(cost);
+            chunks.push((origin, bytes));
         }
 
         Ok(match next {
@@ -618,7 +774,9 @@ impl ViewFeed {
                     from_seq,
                     to_seq,
                     index,
+                    entities: None,
                 },
+                spent,
             },
             None => ViewPage {
                 chunks,
@@ -632,9 +790,124 @@ impl ViewFeed {
                     from_seq: to_seq,
                     to_seq,
                     index: 0,
+                    entities: None,
                 },
+                spent,
             },
         })
+    }
+
+    /// Hold `entities`, the list a listing's entities are paged from once its
+    /// chunks are all sent and the list does not fit the page (S3's
+    /// `outcap`), and answer the place its next page starts at.
+    ///
+    /// Named by a serial, the viewer's own count of the lists it was held, so
+    /// two readers of one viewer (the client paging, an advisor reading as the
+    /// same seat) each hold their own list and never cancel one another, and a
+    /// cursor says nothing of another viewer's listings. Past
+    /// [`HELD_ENTITY_LISTS_PER_VIEWER`] that viewer's oldest list goes, and a
+    /// cursor into it is stale ([`ViewFeed::held_entities`]); no viewer's
+    /// lists evict another's.
+    pub fn hold_entities(
+        &mut self,
+        viewer: Viewer,
+        from_seq: u64,
+        to_seq: u64,
+        entities: std::sync::Arc<[Json]>,
+        offset: u32,
+    ) -> EntityPlace {
+        let list = if let Some(serial) = self
+            .held_serials
+            .iter_mut()
+            .find(|serial| serial.viewer == viewer)
+        {
+            let list = serial.next;
+            serial.next = serial.next.wrapping_add(1);
+            list
+        } else {
+            self.held_serials.push(HeldSerial { viewer, next: 1 });
+            0
+        };
+        self.held.push(HeldEntities {
+            viewer,
+            list,
+            from_seq,
+            to_seq,
+            entities,
+        });
+        while self
+            .held
+            .iter()
+            .filter(|held| held.viewer == viewer)
+            .count()
+            > HELD_ENTITY_LISTS_PER_VIEWER
+        {
+            if let Some(oldest) = self.held.iter().position(|held| held.viewer == viewer) {
+                self.held.remove(oldest);
+            }
+        }
+        EntityPlace { list, offset }
+    }
+
+    /// The held list an entity cursor pages, for this viewer and this
+    /// listing, shared: the page borrows it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::StaleSnapshot`] when no such list is held: it
+    /// was paged to its end, this viewer has held
+    /// [`HELD_ENTITY_LISTS_PER_VIEWER`] newer ones since, or it is another
+    /// viewer's. The client's answer is a keyframe, as for any cursor the view
+    /// no longer has.
+    pub fn held_entities(
+        &self,
+        viewer: Viewer,
+        cursor: ViewCursor,
+    ) -> Result<std::sync::Arc<[Json]>, Error> {
+        let Some(place) = cursor.entities else {
+            return Err(Error::internal(
+                "an entity page was asked for with a cursor into the listing's chunks",
+            ));
+        };
+        self.held
+            .iter()
+            .find(|held| {
+                held.viewer == viewer
+                    && held.list == place.list
+                    && held.from_seq == cursor.from_seq
+                    && held.to_seq == cursor.to_seq
+            })
+            .map(|held| std::sync::Arc::clone(&held.entities))
+            .ok_or_else(|| {
+                Error::stale_snapshot(
+                    "that cursor pages an entity list this view no longer holds; ask for a \
+                     keyframe",
+                )
+            })
+    }
+
+    /// Let go of a held list once its last page is sent: this viewer's list
+    /// of this serial, and no other.
+    pub fn release_entities(&mut self, viewer: Viewer, list: u64) {
+        self.held
+            .retain(|held| !(held.viewer == viewer && held.list == list));
+    }
+
+    /// Hold what a scratch copy of this feed holds
+    /// (`crate::surface::InProcess::scratch_view`): every other part of the
+    /// feed is put back as it was before the scratch call, and its held
+    /// entity lists and their serials are what the scratch call left, so an
+    /// advisor can page its own listing's entities across calls as a socket
+    /// can, and no serial is minted twice.
+    pub fn keep_held_of(&mut self, scratch: &mut ViewFeed) {
+        self.held = std::mem::take(&mut scratch.held);
+        self.held_serials = std::mem::take(&mut scratch.held_serials);
+    }
+
+    /// How many entity lists the feed holds.
+    #[must_use]
+    pub const fn held_count(&self) -> usize {
+        self.held.len()
     }
 
     /// The bytes one chunk goes on the wire as for this viewer: its entitled
@@ -1345,7 +1618,9 @@ fn unmapped(chunk: u32) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{Sight, VIEW_PAGE_BYTES, ViewFeed};
+    use super::{
+        MAX_CHUNK_LISTED_BYTES, Sight, VIEW_PAGE_BYTES, ViewFeed, chunk_json, listed_bytes,
+    };
     use crate::fog::{Blind, KnownVoxels, Viewer};
     use pharmakos_proto::chunk_rle;
     use pharmakos_proto::gp::v1::Voxel;
@@ -1627,11 +1902,125 @@ mod tests {
     /// two neighbours alike, three bytes a voxel, 96 KiB a chunk -- which is
     /// also the shape the page budget is counted in bytes for.
     #[test]
+    fn the_largest_chunk_is_within_its_bound() {
+        use pharmakos_proto::chunk_rle::{CHUNK_VOXELS, RUN_BYTES};
+        // The run encoding's worst, every voxel its own run, at the widest
+        // origin the wire can spell.
+        let worst = vec![0xff_u8; CHUNK_VOXELS.saturating_mul(RUN_BYTES)];
+        let origin = Voxel {
+            x: i32::MIN,
+            y: i32::MIN,
+            z: i32::MIN,
+        };
+        let bytes = listed_bytes(&chunk_json(origin, &worst));
+        assert!(
+            bytes <= MAX_CHUNK_LISTED_BYTES,
+            "{bytes} past {MAX_CHUNK_LISTED_BYTES}"
+        );
+        assert!(
+            bytes.saturating_add(512) > MAX_CHUNK_LISTED_BYTES,
+            "the bound is the measure, not a guess: {bytes} against {MAX_CHUNK_LISTED_BYTES}"
+        );
+    }
+
+    /// The held entity lists are bounded: past `MAX_HELD_ENTITY_LISTS` the
+    /// oldest goes and its cursor is stale; a list is its viewer's alone; a
+    /// list paged to its end is let go.
+    #[test]
+    fn held_entity_lists_are_bounded_and_their_viewers() {
+        use crate::error::Code;
+        use crate::feed::ViewCursor;
+        use pharmakos_proto::json::Json;
+        let mut feed = ViewFeed::new();
+        let viewer = Viewer::Seat(SeatId::new(0));
+        let other = Viewer::Seat(SeatId::new(1));
+        let cursor = |place| ViewCursor {
+            view_id: 0,
+            from_seq: 0,
+            to_seq: 5,
+            index: 0,
+            entities: Some(place),
+        };
+        let list =
+            |n: usize| -> std::sync::Arc<[Json]> { vec![Json::Number(n.to_string()); 3].into() };
+        let first = feed.hold_entities(viewer, 0, 5, list(0), 1);
+        assert_eq!(
+            feed.held_entities(viewer, cursor(first))
+                .expect("held")
+                .len(),
+            3
+        );
+        assert_eq!(
+            feed.held_entities(other, cursor(first))
+                .expect_err("another viewer's")
+                .code(),
+            Code::StaleSnapshot
+        );
+        // The same list held twice is two lists, each its own serial: two
+        // readers of one viewer never cancel one another.
+        let twin = feed.hold_entities(viewer, 0, 5, list(0), 1);
+        assert_ne!(twin.list, first.list);
+        feed.release_entities(viewer, twin.list);
+        assert!(feed.held_entities(viewer, cursor(first)).is_ok(), "kept");
+
+        // Another viewer filling its quota and more leaves this one's good.
+        for n in 0..=super::HELD_ENTITY_LISTS_PER_VIEWER {
+            let _ = feed.hold_entities(other, 0, 5, list(n), 1);
+        }
+        assert!(
+            feed.held_entities(viewer, cursor(first)).is_ok(),
+            "not evicted"
+        );
+
+        // Past this viewer's own quota, its oldest goes.
+        for n in 1..=super::HELD_ENTITY_LISTS_PER_VIEWER {
+            let _ = feed.hold_entities(viewer, 0, 5, list(n), 1);
+        }
+        assert_eq!(
+            feed.held_entities(viewer, cursor(first))
+                .expect_err("the oldest went")
+                .code(),
+            Code::StaleSnapshot
+        );
+        assert!(feed.held_count() <= super::MAX_HELD_ENTITY_LISTS);
+        assert_eq!(
+            feed.held_count(),
+            super::HELD_ENTITY_LISTS_PER_VIEWER.saturating_mul(2)
+        );
+    }
+
+    /// `listed_bytes` is exactly what an item adds to the answer the gateway
+    /// writes, measured against the writer itself at the depth a page's
+    /// items sit.
+    #[test]
+    fn an_items_listed_bytes_are_what_it_adds_to_the_answer() {
+        use pharmakos_proto::json::{Json, write};
+        let item = chunk_json(
+            Voxel {
+                x: 32,
+                y: -64,
+                z: 0,
+            },
+            &[1, 2, 3, 4, 5],
+        );
+        let answer = |items: Vec<Json>| {
+            write(&Json::Object(vec![(
+                String::from("result"),
+                Json::Object(vec![(String::from("chunks"), Json::Array(items))]),
+            )]))
+            .len()
+        };
+        let one = answer(vec![item.clone()]);
+        let two = answer(vec![item.clone(), item.clone()]);
+        assert_eq!(two.saturating_sub(one), listed_bytes(&item));
+    }
+
+    #[test]
     fn a_keyframe_wider_than_a_page_is_paged_in_ascending_chunk_order() {
-        let mut store = VoxelStore::new([128, 32, 32]).expect("a four-chunk store");
+        let mut store = VoxelStore::new([192, 32, 32]).expect("a six-chunk store");
         for z in 0..32_i32 {
             for y in 0..32_i32 {
-                for x in 0..128_i32 {
+                for x in 0..192_i32 {
                     let alternate = x.saturating_add(y).saturating_add(z) & 1;
                     if alternate == 1 {
                         store.set([x, y, z], Material::STONE);
@@ -1654,11 +2043,15 @@ mod tests {
         loop {
             let page = feed.page(viewer, cursor, &store).expect("a page");
             pages = pages.saturating_add(1);
-            let spent: usize = page.chunks.iter().map(|(_, bytes)| bytes.len()).sum();
+            let spent: usize = page
+                .chunks
+                .iter()
+                .map(|(origin, bytes)| listed_bytes(&chunk_json(*origin, bytes)))
+                .sum();
+            assert_eq!(spent, page.spent, "the page says what its chunks take");
             assert!(
-                spent <= VIEW_PAGE_BYTES || page.chunks.len() == 1,
-                "a page is cut at {VIEW_PAGE_BYTES} bytes of runs, and only a single chunk \
-                 larger than the whole budget goes over"
+                spent <= VIEW_PAGE_BYTES,
+                "a page is cut at {VIEW_PAGE_BYTES} bytes as the wire spells its chunks"
             );
             for (origin, _) in &page.chunks {
                 delivered.push(origin.x);
@@ -1669,10 +2062,10 @@ mod tests {
             }
             assert!(pages < 16, "a keyframe that never completes");
         }
-        assert!(pages > 1, "four worst-case chunks do not fit one page");
+        assert!(pages > 1, "six worst-case chunks do not fit one page");
         assert_eq!(
             delivered,
-            vec![0, 32, 64, 96],
+            vec![0, 32, 64, 96, 128, 160],
             "every chunk, once, in ascending chunk order"
         );
         let last = cursor.expect("a completing cursor");

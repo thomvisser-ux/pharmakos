@@ -30,8 +30,9 @@
 //! entitled to (item 107 (5)) and the full-map unlock at elimination or match end is the
 //! server's policy change, arriving as ordinary deltas under the same token.
 //!
-//! **No entity bookkeeping.** `entities` on a completing page is the complete visible list,
-//! so an id absent from it is gone; the model replaces its list rather than merging.
+//! **No entity bookkeeping.** A listing's entities, joined over its pages (a list past one page
+//! is paged, S3's `outcap`), are the complete visible list once its completing page arrives, so
+//! an id absent from it is gone; the model replaces its list rather than merging.
 //!
 //! # The chunk set and the dirty set
 //!
@@ -318,7 +319,10 @@ pub struct Page {
     pub at_ms: i32,
     /// The page's chunks, in the order the gateway sent them.
     pub chunks: Vec<PageChunk>,
-    /// The complete visible list, on a completing page; empty on any other.
+    /// This page's part of the listing's entity list: a list past one page goes on over the
+    /// listing's later pages, each cut from the one list the gateway took when the chunks
+    /// ended (S3's `outcap`); [`ViewModel`] joins them and takes the whole on the completing
+    /// page.
     pub entities: Vec<Entity>,
     /// Where to read from next.
     pub next_cursor: String,
@@ -591,6 +595,9 @@ pub struct ViewModel {
     changed: BTreeSet<[i32; 3]>,
     map: Option<MapState>,
     entities: Vec<Entity>,
+    /// The entities of the listing being paged, joined page by page until its completing page
+    /// (S3's `outcap`), and dropped when another listing begins ([`ViewModel::begin_listing`]).
+    paging: Vec<Entity>,
     /// Drain calls so far: the drain queue's frame counter.
     drains: u64,
 }
@@ -629,6 +636,7 @@ impl ViewModel {
             changed: BTreeSet::new(),
             map: None,
             entities: Vec::new(),
+            paging: Vec::new(),
             drains: 0,
         })
     }
@@ -649,6 +657,14 @@ impl ViewModel {
     #[must_use]
     pub fn entities(&self) -> &[Entity] {
         &self.entities
+    }
+
+    /// A new listing begins (a keyframe, or the first page after a completing one): the
+    /// entities joined from a listing that did not complete are dropped, so no page of it is
+    /// mistaken for this one's. The rig, which asks every page, says when ([`crate::rig::Answer`]'s
+    /// `view_starts`); the model does not read the gateway's cursor, which is opaque.
+    pub fn begin_listing(&mut self) {
+        self.paging.clear();
     }
 
     /// How many chunks this client holds.
@@ -809,8 +825,9 @@ impl ViewModel {
         }
         let mut queued = 0;
         let mut grid_changed = false;
+        self.paging.extend(page.entities);
         if page.complete {
-            self.entities = page.entities;
+            self.entities = std::mem::take(&mut self.paging);
             let outside = self.map.as_ref().is_some_and(|map| {
                 self.changed
                     .iter()
@@ -1082,17 +1099,22 @@ mod tests {
                     voxels_rle: chunk_rle::encode(sim),
                 })
                 .collect(),
-            entities: vec![ViewEntity {
-                id: "u_1".to_owned(),
-                kind: view_entity::Kind::Unit.into(),
-                subtype: "commander".to_owned(),
-                owner: "seat.0".to_owned(),
-                at: Some(Voxel { x: 3, y: 4, z: 5 }),
-                hp: None,
-                max_hp: None,
-                heading: None,
-                ..ViewEntity::default()
-            }],
+            // The entities follow the chunks: here, on the completing page.
+            entities: if complete {
+                vec![ViewEntity {
+                    id: "u_1".to_owned(),
+                    kind: view_entity::Kind::Unit.into(),
+                    subtype: "commander".to_owned(),
+                    owner: "seat.0".to_owned(),
+                    at: Some(Voxel { x: 3, y: 4, z: 5 }),
+                    hp: None,
+                    max_hp: None,
+                    heading: None,
+                    ..ViewEntity::default()
+                }]
+            } else {
+                Vec::new()
+            },
             next_cursor: "c".to_owned(),
             complete,
         };
@@ -1316,6 +1338,47 @@ mod tests {
         );
         assert_eq!(model.pending(), 4, "every chunk of the grid is queued");
         assert_eq!(model.entities().len(), 1);
+    }
+
+    /// **A paged entity list is joined** (S3's `outcap`): the entities of every page of a
+    /// listing are the list once it completes, in page order; the old list stands until then;
+    /// and a listing that begins again drops what was joined of one that did not complete.
+    #[test]
+    fn a_listings_entities_are_joined_over_its_pages() {
+        let page = |ids: &[&str], complete: bool| {
+            let response = GetViewResponse {
+                at_ms: 0,
+                chunks: Vec::new(),
+                entities: ids
+                    .iter()
+                    .map(|id| entity(id, view_entity::Kind::Unit, "seat.0"))
+                    .collect(),
+                next_cursor: "c".to_owned(),
+                complete,
+            };
+            decode_page(&json::encode_json(&response).expect("encodes")).expect("a page")
+        };
+        let ids = |model: &ViewModel| -> Vec<String> {
+            model.entities().iter().map(|one| one.id.clone()).collect()
+        };
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
+        model
+            .apply(decode_page(&result(&[([0, 0, 0], floor(4, 2))], true)).expect("keyframe"))
+            .expect("applies");
+        assert_eq!(ids(&model), vec!["u_1"]);
+
+        model.begin_listing();
+        model.apply(page(&["u_2", "u_3"], false)).expect("applies");
+        assert_eq!(ids(&model), vec!["u_1"], "the old list stands while paging");
+        model.apply(page(&["u_4"], true)).expect("applies");
+        assert_eq!(ids(&model), vec!["u_2", "u_3", "u_4"], "joined, in order");
+
+        // A listing abandoned after one page, then a keyframe: none of the first is kept.
+        model.begin_listing();
+        model.apply(page(&["u_9"], false)).expect("applies");
+        model.begin_listing();
+        model.apply(page(&["u_5"], true)).expect("applies");
+        assert_eq!(ids(&model), vec!["u_5"]);
     }
 
     #[test]

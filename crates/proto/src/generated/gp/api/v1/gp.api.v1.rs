@@ -190,6 +190,18 @@ pub mod gateway_error {
         /// The gateway failed. Never used to report anything the caller could have
         /// avoided.
         Internal = 15,
+        /// The call was made, and its answer is past the largest answer the
+        /// gateway sends in one message: 12 MiB (12 582 912 bytes of UTF-8 text) in
+        /// v1, `pharmakos_proto::transport::MAX_ANSWER_BYTES` in the code. This
+        /// error is sent in its place: never a cut answer, and the connection stays
+        /// open. Whatever the call did stands (a submission it accepted is
+        /// accepted); only its answer is withheld. The message names the method and
+        /// both sizes. A client acts on it differently from every code above: the
+        /// request was well formed and authorised, and the same request against the
+        /// same state gets the same answer, so it asks for less (a shorter text, a
+        /// narrower read).
+        /// S3's `outcap`.
+        ResponseTooLarge = 16,
     }
     impl Code {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -209,6 +221,7 @@ pub mod gateway_error {
                 Self::InvalidArgument => "INVALID_ARGUMENT",
                 Self::UnsupportedSchemaVersion => "UNSUPPORTED_SCHEMA_VERSION",
                 Self::Internal => "INTERNAL",
+                Self::ResponseTooLarge => "RESPONSE_TOO_LARGE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -225,6 +238,7 @@ pub mod gateway_error {
                 "INVALID_ARGUMENT" => Some(Self::InvalidArgument),
                 "UNSUPPORTED_SCHEMA_VERSION" => Some(Self::UnsupportedSchemaVersion),
                 "INTERNAL" => Some(Self::Internal),
+                "RESPONSE_TOO_LARGE" => Some(Self::ResponseTooLarge),
                 _ => None,
             }
         }
@@ -2739,9 +2753,14 @@ pub struct GetViewResponse {
     /// changed since the cursor.
     #[prost(message, repeated, tag="2")]
     pub chunks: ::prost::alloc::vec::Vec<ViewChunk>,
-    /// The complete visible entity list, on the page where `complete` is true and
-    /// on no other. An id absent from it is an entity that is gone or is no
-    /// longer visible; a client holds no list of its own past that.
+    /// The complete visible entity list, after the chunks: on the page where
+    /// `complete` is true, and, when it does not fit that page, on the pages
+    /// before it as well, each page cut by bytes from the one list the listing
+    /// took when its chunks ended, in order, every entity once (S3's `outcap`).
+    /// A client joins the entities of a listing's pages and takes the whole on
+    /// its completing page; a listing it begins again starts the join afresh.
+    /// An id absent from the whole is an entity that is gone or is no longer
+    /// visible; a client holds no list of its own past that.
     ///
     /// A delta mode for entities is deliberately NOT here. It arrives, if it
     /// arrives, as a new field of GetViewRequest that a client opts into, so that

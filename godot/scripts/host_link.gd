@@ -12,9 +12,10 @@
 #
 # Then two connections, both to 127.0.0.1 at the announced port, each with its own token
 # in an `Authorization: Bearer` handshake header: the ADMIN connection, which controls the
-# match, and the SEAT connection, which watches it. Before connecting, each peer's inbound
-# buffer is raised to 1 MiB, because Godot's default of about 64 KiB is smaller than one
-# page of the view.
+# match, and the SEAT connection, which watches it. Before connecting, each peer's buffers
+# are sized from the bridge's `watch_transport_limits`: inbound, the largest answer the gateway
+# sends and a frame's header (`pharmakos_proto::transport::MAX_ANSWER_FRAME_BYTES`); outbound,
+# the largest message it reads. Godot's default of about 64 KiB holds neither.
 #
 # THE TOKENS LIVE IN THIS SCRIPT'S VARIABLES AND NOWHERE ELSE: never printed, never
 # logged, never written to a file, a scene or a resource, never put on the config line or
@@ -133,6 +134,10 @@ var _peers: Array = [null, null]
 var _open := [false, false]
 ## Whether the bridge has been told of each link's current close: told once per close.
 var _close_told := [false, false]
+## Whether the bridge has been told the host process exited (S3's `outcap`): told once, with the
+## host's last line, so the rig gives every closed link up at once and the lobby leads with the
+## host's words instead of waiting out the reconnect budget.
+var _exit_told := false
 ## Whether each link's peer was aborted (fix pass 7): read as closed from then on.
 var _aborted := [false, false]
 ## Whether the links were attached to a listener with no host process (`attach`, the watch
@@ -369,7 +374,19 @@ func pump() -> void:
 	if _port == 0:
 		_read_announce()
 		return
+	_tell_host_exit()
 	_pump_links()
+
+
+## Tells the bridge, once, that the host process exited, with the last line it wrote on its
+## standard error (S3's `outcap`). What follows is the rig's: it gives every closed link up at
+## once and hands the words back through `watch_give_up`. This only says what the process did.
+func _tell_host_exit() -> void:
+	if _exit_told or _pid < 0 or host_running():
+		return
+	_exit_told = true
+	_drain_stderr()
+	bridge.watch_host_exited(_stderr_tail.strip_edges())
 
 
 ## Test-only (the watch check's silent-host leg, fix pass 7): opens both links to a listener on
@@ -433,6 +450,7 @@ func reset() -> void:
 	_peers = [null, null]
 	_open = [false, false]
 	_close_told = [false, false]
+	_exit_told = false
 	_aborted = [false, false]
 	_attached = false
 	_done = false
@@ -559,12 +577,19 @@ func _pump_link(link: int) -> void:
 			"give_up":
 				_done = true
 				var why: Dictionary = bridge.watch_give_up(link)
-				failed.emit(gave_up_words(link, why) + host_exit_words())
+				failed.emit(gave_up_words(link, why))
 
 
-## The words for a link given up: the last close's code, or, when it carried none (the
-## bridge's -1), that the connection was lost. Never a bare -1 (fix pass 6).
+## The words for a link given up. When the host process exited, its own words lead (S3's
+## `outcap`): the last line it wrote, or that it wrote nothing. Otherwise the last close's code,
+## or, when it carried none (the bridge's -1), that the connection was lost. Never a bare -1
+## (fix pass 6).
 static func gave_up_words(link: int, why: Dictionary) -> String:
+	if bool(why.get("host_exited", false)):
+		var said := String(why.get("host_words", ""))
+		if said == "":
+			return Strings.text("link_host_exited_silent")
+		return Strings.text("link_host_exited", {"words": said})
 	var code: int = why.get("code", -1)
 	var fields := {"link": Strings.text("connection_" + ("admin" if link == 0 else "seat")), "attempts": why.get("attempts", 0), "code": code}
 	return Strings.text("link_gave_up" if code >= 0 else "link_gave_up_lost", fields)
@@ -595,17 +620,3 @@ static func last_line_of(text: String) -> String:
 	while last > 0 and lines[last].strip_edges() == "":
 		last -= 1
 	return "\n".join(lines.slice(last))
-
-
-## What a give-up adds once the host process has exited: the host's last line on its standard
-## error, its own words for why it stopped, or that it wrote nothing. "" while the host still
-## runs, or when no host process was started (`attach`): a give-up is the rig's to decide, and
-## this only says what the host left behind.
-func host_exit_words() -> String:
-	if _pid < 0 or host_running():
-		return ""
-	_drain_stderr()
-	var said := _stderr_tail.strip_edges()
-	if said == "":
-		return " " + Strings.text("link_host_exited_silent")
-	return " " + Strings.text("link_host_exited", {"words": said})

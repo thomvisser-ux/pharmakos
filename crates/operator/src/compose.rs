@@ -142,7 +142,7 @@ pub(crate) struct Spire {
 /// verifier's E0513), and Easy queues one only at its core, so any Spire of
 /// the seat's is the core's.
 pub(crate) fn spire(situation: &Situation, tuning: &Tuning) -> Option<Spire> {
-    if !situation.spire_licensed || !situation.view_complete || situation.own_spire_seen {
+    if !situation.spire_licensed || !situation.view_complete() || situation.own_spire_seen() {
         return None;
     }
     let core = situation.core()?;

@@ -69,12 +69,56 @@ pub struct Summary {
     pub kind: playbook::Kind,
 }
 
+/// Why a library file is not in a [`Listing`] (S3's `outcap`): each is
+/// counted, never dropped unsaid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Refusal {
+    /// It could not be opened or read.
+    Unreadable,
+    /// It is past [`MAX_FILE_BYTES`] or `MAX_PLAYBOOK_CHARS` characters
+    /// ([`crate::error::Bound::LibraryFile`]).
+    TooLarge,
+    /// It is not UTF-8 text, or not a playbook this build reads.
+    NotAPlaybook,
+}
+
+impl Refusal {
+    /// Every reason, in declared order.
+    pub const ALL: [Refusal; 3] = [
+        Refusal::Unreadable,
+        Refusal::TooLarge,
+        Refusal::NotAPlaybook,
+    ];
+}
+
+/// The library as listed: the summaries, in `template_id` order, and each
+/// file it could not list, by id and reason.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Listing {
+    /// What the wizard may offer.
+    pub summaries: Vec<Summary>,
+    /// The files refused, in `template_id` order.
+    pub refused: Vec<(String, Refusal)>,
+}
+
+impl Listing {
+    /// How many files were refused for `reason`.
+    #[must_use]
+    pub fn refused_count(&self, reason: Refusal) -> usize {
+        self.refused
+            .iter()
+            .filter(|(_, held)| *held == reason)
+            .count()
+    }
+}
+
 /// Lists the library, in `template_id` order.
 ///
-/// A file that does not parse or does not verify structurally is **skipped
-/// rather than fatal**: one broken file a player dropped in their own folder
-/// must not stop the wizard from opening. The editor surfaces it when the
-/// player tries to open it, with the verifier's code and pointer.
+/// A file that cannot be read, is past the text cap, or does not parse is
+/// **not fatal**: one broken file a player dropped in their own folder must
+/// not stop the wizard from opening. It is not dropped unsaid either: it is in
+/// the listing's `refused`, by reason (S3's `outcap`). The editor surfaces it
+/// when the player tries to open it, with the verifier's code and pointer.
 ///
 /// # Errors
 ///
@@ -83,7 +127,7 @@ pub struct Summary {
     clippy::disallowed_methods,
     reason = "clippy.toml's own reason string sanctions read_dir for a template list when the listing is collected and sorted before use, which is exactly what happens here"
 )]
-pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
+pub fn listing(folder: &Path) -> Result<Listing, Error> {
     let entries = std::fs::read_dir(folder)
         .map_err(|error| reading(&folder.display().to_string(), &error))?;
     // An entry the folder cannot read is refused with the folder, as an
@@ -110,27 +154,148 @@ pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
     ids.sort();
     ids.dedup();
 
-    let mut found = Vec::new();
+    let mut listed = Listing::default();
     for template_id in ids {
-        let Ok(text) = read(folder, &template_id) else {
-            continue;
+        let text = match read_classified(folder, &template_id) {
+            Ok(text) => text,
+            Err((_, reason)) => {
+                listed.refused.push((template_id, reason));
+                continue;
+            }
         };
-        let Ok(canonical) = canonicalise_text(&text) else {
-            continue;
-        };
-        found.push(summarise(&template_id, &canonical.playbook));
+        match canonicalise_text(&text) {
+            Ok(canonical) => listed
+                .summaries
+                .push(summarise(&template_id, &canonical.playbook)),
+            Err(_) => listed.refused.push((template_id, Refusal::NotAPlaybook)),
+        }
     }
-    Ok(found)
+    Ok(listed)
 }
 
-/// Reads one library file.
+/// [`listing`]'s summaries alone, for the gateway's `list_templates` until
+/// it says the refused files too (its words wait for `surface/planning.rs`,
+/// after S3's `zerotitle`).
 ///
 /// # Errors
 ///
-/// When `template_id` is not a plain name, or the file cannot be read.
+/// As [`listing`].
+pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
+    listing(folder).map(|listed| listed.summaries)
+}
+
+/// The most bytes a library file may hold: a text at the playbook's cap,
+/// `pharmakos_verifier::MAX_PLAYBOOK_CHARS` characters, at UTF-8's four
+/// bytes a character (S3's `outcap`). A file past it is refused at its
+/// length, before anything is read, and nothing past it is ever read.
+pub const MAX_FILE_BYTES: usize = pharmakos_verifier::MAX_PLAYBOOK_CHARS.saturating_mul(4);
+
+/// Reads one library file, within the playbook's text cap (S3's `outcap`):
+/// the library is a local folder anyone can drop a file in, and a file read
+/// whole whatever its size would be memory the gateway spends for it.
+///
+/// # Errors
+///
+/// When `template_id` is not a plain name, or the file cannot be read; and
+/// [`crate::error::Bound::LibraryFile`] for a file past [`MAX_FILE_BYTES`]
+/// or past `MAX_PLAYBOOK_CHARS` characters.
 pub fn read(folder: &Path, template_id: &str) -> Result<String, Error> {
-    let path = resolve(folder, template_id)?;
-    std::fs::read_to_string(&path).map_err(|error| reading(&path.display().to_string(), &error))
+    read_classified(folder, template_id).map_err(|(error, _)| error)
+}
+
+/// [`read`], with the reason a [`Listing`] counts a refusal under.
+fn read_classified(folder: &Path, template_id: &str) -> Result<String, (Error, Refusal)> {
+    let unreadable = |error: Error| (error, Refusal::Unreadable);
+    let path = resolve(folder, template_id).map_err(unreadable)?;
+    let shown = path.display().to_string();
+    let file = std::fs::File::open(&path).map_err(|error| unreadable(reading(&shown, &error)))?;
+    let declared = file
+        .metadata()
+        .map_err(|error| unreadable(reading(&shown, &error)))?
+        .len();
+    read_within_classified(file, declared, template_id, &shown)
+}
+
+/// [`read`]'s bound over any reader: a source that declares `declared`
+/// bytes past [`MAX_FILE_BYTES`] is refused before a byte is asked of it;
+/// otherwise at most one byte past the cap is asked, so a source longer than
+/// it declared is refused too; and a text past `MAX_PLAYBOOK_CHARS`
+/// characters is refused. `shown` names the source in a refusal.
+///
+/// # Errors
+///
+/// As [`read`].
+pub fn read_within(
+    source: impl std::io::Read,
+    declared: u64,
+    template_id: &str,
+    shown: &str,
+) -> Result<String, Error> {
+    read_within_classified(source, declared, template_id, shown).map_err(|(error, _)| error)
+}
+
+/// [`read_within`], with the reason a [`Listing`] counts a refusal under.
+fn read_within_classified(
+    source: impl std::io::Read,
+    declared: u64,
+    template_id: &str,
+    shown: &str,
+) -> Result<String, (Error, Refusal)> {
+    use std::io::Read as _;
+    let too_large = |size: pharmakos_proto::json::grammar::Said| {
+        (
+            Error::bounded(
+                crate::error::Bound::LibraryFile,
+                "",
+                pharmakos_proto::said!(
+                    "the template `{}` is {}, past the {} bytes and {} characters a library file may \
+                 hold",
+                    pharmakos_proto::json::grammar::quoted(template_id),
+                    size,
+                    MAX_FILE_BYTES,
+                    pharmakos_verifier::MAX_PLAYBOOK_CHARS
+                ),
+            ),
+            Refusal::TooLarge,
+        )
+    };
+    let cap = u64::try_from(MAX_FILE_BYTES)
+        .map_err(|_| too_large(pharmakos_proto::said!("{} bytes", declared)))?;
+    if declared > cap {
+        return Err(too_large(pharmakos_proto::said!("{} bytes", declared)));
+    }
+    // The length a file had when it was opened is not a promise: read at
+    // most one byte past the cap, so a file that grew is refused too.
+    let mut bytes: Vec<u8> = Vec::new();
+    source
+        .take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| (reading(shown, &error), Refusal::Unreadable))?;
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(too_large(pharmakos_proto::said!(
+            "longer than it said when it was opened"
+        )));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        (
+            Error::at(
+                "",
+                pharmakos_proto::said!(
+                    "reading {}: the file is not UTF-8 text",
+                    pharmakos_proto::json::grammar::quoted(shown)
+                ),
+            ),
+            Refusal::NotAPlaybook,
+        )
+    })?;
+    let characters = text.chars().count();
+    if characters > pharmakos_verifier::MAX_PLAYBOOK_CHARS {
+        return Err(too_large(pharmakos_proto::said!(
+            "{} characters",
+            characters
+        )));
+    }
+    Ok(text)
 }
 
 /// The Win32 device names. `<dir>\CON.jsonc` resolves to the console device on

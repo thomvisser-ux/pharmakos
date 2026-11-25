@@ -179,6 +179,10 @@ const SIM_FIXTURES: &[(&str, &str)] = &[
         "set_site_funds_directly",
         "site funds are the Quartermaster's",
     ),
+    (
+        "plant_charge_directly",
+        "a charge is planted by its carrier",
+    ),
 ];
 
 /// Wildcard addresses: the half of "localhost only" a type cannot enforce.

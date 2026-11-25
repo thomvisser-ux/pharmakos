@@ -308,24 +308,31 @@ impl Surface {
     /// missing folder is an INTERNAL error, and an empty list means its
     /// templates were removed or no longer parse.
     pub(super) fn list_templates(
-        &self,
+        &mut self,
         subject: crate::token::Subject,
         request: &Request,
     ) -> Result<Json, Error> {
         let tag = request.string_param("tag")?.unwrap_or_default();
-        let guided = self.guided_pick(subject)?;
         let Some(folder) = self.host()?.library() else {
             return Ok(Json::Object(vec![
                 (String::from("templates"), Json::Array(Vec::new())),
                 (String::from("next_cursor"), Json::String(String::new())),
             ]));
         };
-        let found = pharmakos_plan_core::library::list(folder).map_err(|error| {
+        let listed = pharmakos_plan_core::library::listing(folder).map_err(|error| {
             Error::internal(said!(
                 "the template folder could not be read: {}",
                 error.said()
             ))
         })?;
+        // Each file the listing refused is counted by its reason, once per
+        // listing (S3's `outcap`); the answer says nothing of them until the
+        // typed left-out field (the owner's, with `outcap` part 2).
+        for (_, reason) in &listed.refused {
+            self.audit.library_refused(*reason);
+        }
+        let guided = self.guided_pick(subject)?;
+        let found = listed.summaries;
         let templates: Vec<Json> = found
             .iter()
             // A worked playbook in the library is a sample and not a template,
@@ -454,12 +461,8 @@ impl Surface {
         // the library lives is the host's business, and a refusal that spelled
         // out an absolute directory would hand every seat the layout of the
         // machine it is playing on for the price of one bad id.
-        let text = pharmakos_plan_core::library::read(folder, template_id).map_err(|_| {
-            Error::not_found(said!(
-                "no template `{}` in this gateway's library",
-                pharmakos_proto::json::grammar::quoted(template_id)
-            ))
-        })?;
+        let text = pharmakos_plan_core::library::read(folder, template_id)
+            .map_err(|refused| library_refusal(template_id, &refused))?;
 
         let mut parameters: Vec<pharmakos_plan_core::library::Parameter> = Vec::new();
         if let Some(value) = request.param("parameters") {
@@ -1435,6 +1438,26 @@ fn depth_of(request: &Request) -> Result<Depth, Error> {
             pharmakos_proto::json::grammar::quoted(other)
         ))),
     }
+}
+
+/// The refusal of a library read, naming the template and never the path
+/// (S3's `outcap`): a file past the playbook's text cap is the host's library
+/// at fault, said as such (`INTERNAL`: nothing the caller did caused it, and
+/// the words name the cap); any other read refusal is that the template is not
+/// there (`NOT_FOUND`).
+pub(crate) fn library_refusal(template_id: &str, refused: &pharmakos_plan_core::Error) -> Error {
+    if refused.bound() == Some(pharmakos_plan_core::error::Bound::LibraryFile) {
+        return Error::internal(said!(
+            "the template `{}` in this gateway's library is past the {} characters a library \
+             file may hold, so it is not read",
+            pharmakos_proto::json::grammar::quoted(template_id),
+            pharmakos_verifier::MAX_PLAYBOOK_CHARS
+        ));
+    }
+    Error::not_found(said!(
+        "no template `{}` in this gateway's library",
+        pharmakos_proto::json::grammar::quoted(template_id)
+    ))
 }
 
 /// True for a template id this gateway will look up.

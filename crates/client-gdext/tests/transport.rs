@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! **A peer holds the largest message the gateway sends it** (S3's `fixq-c`, fix pass 2, item
-//! 1a). The gateway bounds no outgoing message by a cap of its own; the largest it makes is a
-//! view page, whose chunks' runs it cuts at 256 KiB (`crates/gateway/src/viewfeed.rs`,
-//! `VIEW_PAGE_BYTES`: a page takes a chunk only while its runs stay under the cut, and the first
-//! chunk always). This builds a page at that cut, with every chunk of the committed map (its
-//! extent is the rules table's `map` row: 384 by 384 by 64 voxels, 288 chunks) and 2 000
-//! entities of the committed golden's own shape, and holds it under the inbound buffer
-//! `host_link.gd` gives every peer, with half to spare. It also holds the outbound buffer to
-//! the message cap the rig sends nothing past.
+//! 1a; S3's `outcap`). The gateway sends no answer past
+//! `pharmakos_proto::transport::MAX_ANSWER_BYTES`, and the inbound buffer `host_link.gd` gives
+//! every peer is that cap and a frame's header (`the_inbound_buffer_is_the_gateways_outgoing_cap_and_its_frame`).
+//! The first test builds the page `fixq-c` measured before the gateway paged its entities (every
+//! chunk of the committed map, 288, and 2 000 entities of the committed golden's own shape) and
+//! holds it under the buffer with half to spare: `client_check.gd` receives the same page whole
+//! through `host_link.gd`'s own peer. It also holds the outbound buffer to the message cap the
+//! rig sends nothing past.
 
 #![allow(
     clippy::expect_used,
@@ -92,4 +92,21 @@ fn a_peer_holds_the_largest_view_page_and_the_message_cap() {
         "{bytes} bytes leave less than half of the {INBOUND_BUFFER_BYTES}-byte inbound buffer"
     );
     const { assert!(OUTBOUND_BUFFER_BYTES >= MAX_MESSAGE_BYTES) };
+}
+
+/// **One number, both sides** (S3's `outcap`): the inbound buffer is exactly the gateway's
+/// outgoing cap and a server frame's largest header, not one byte less (an answer at the cap
+/// would then close the link with 1009) and not a number of the client's own.
+#[test]
+fn the_inbound_buffer_is_the_gateways_outgoing_cap_and_its_frame() {
+    use pharmakos_proto::transport::{
+        MAX_ANSWER_BYTES, MAX_ANSWER_FRAME_BYTES, SERVER_FRAME_HEADER_BYTES,
+    };
+    assert_eq!(INBOUND_BUFFER_BYTES, MAX_ANSWER_FRAME_BYTES);
+    assert_eq!(
+        INBOUND_BUFFER_BYTES,
+        MAX_ANSWER_BYTES.saturating_add(SERVER_FRAME_HEADER_BYTES)
+    );
+    // RFC 6455 section 5.2: two bytes, then eight of extended length; a server never masks.
+    assert_eq!(SERVER_FRAME_HEADER_BYTES, 2 + 8);
 }

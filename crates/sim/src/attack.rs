@@ -538,6 +538,24 @@ pub struct AttackTable {
     rows: Reserved<AttackRow>,
     avoid: Reserved<(BeaconId, ColumnBox)>,
     charges: Reserved<Charge>,
+    /// How many avoid areas the table may hold in all: the room the world
+    /// states ([`AttackTable::reserve`]), a number and never the vector's
+    /// capacity. A commit that would pass it is refused
+    /// ([`AttackTable::avoid_fits_metered`]). Not state: derived from the
+    /// world's limits, never hashed or saved.
+    avoid_room: usize,
+    /// How many planted charges the table may hold at once, stated as
+    /// [`AttackTable::avoid_room`] is: a plant past it is refused
+    /// ([`PlantRefused::Full`]). Not state.
+    charge_room: usize,
+}
+
+/// Why a charge could not be planted ([`AttackTable::plant`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlantRefused {
+    /// The table holds as many planted charges as its stated room: the
+    /// carrier keeps the charge in hand and plants it once one fires.
+    Full,
 }
 
 impl AttackTable {
@@ -553,6 +571,8 @@ impl AttackTable {
             rows: Reserved::with_capacity(room),
             avoid: Vec::new().into(),
             charges: Reserved::with_capacity(room),
+            avoid_room: 0,
+            charge_room: room,
         }
     }
 
@@ -562,15 +582,46 @@ impl AttackTable {
         &self.rows
     }
 
-    /// Make room for `beacons` rows and charges, and `areas` avoid areas, so
-    /// opening a row, planting a charge or committing an avoid list inside a
-    /// tick allocates nothing (a restored table holds only its own rows).
-    pub fn reserve(&mut self, beacons: u32, areas: usize) {
+    /// **State the table's rooms**: `beacons` rows, as many planted charges
+    /// (one a beacon row: [`AttackTable::plant`] refuses past it), and
+    /// `areas` avoid areas in all ([`AttackTable::avoid_fits_metered`]
+    /// refuses a commit past it), and reserve each, whatever the table holds
+    /// now, so opening a row, planting a charge or committing an avoid list
+    /// inside a tick allocates nothing (a restored table holds only its own
+    /// rows). What the world's one statement of its tables' rooms
+    /// (`World::reserve_table_rooms`) calls at construction and at every
+    /// restore.
+    pub fn reserve(&mut self, beacons: u32, areas: u32) {
         let room = crate::math::index::row(beacons);
-        self.rows.reserve(room.saturating_sub(self.rows.len()));
-        self.charges
-            .reserve(room.saturating_sub(self.charges.len()));
-        self.avoid.reserve(areas.saturating_sub(self.avoid.len()));
+        self.charge_room = room;
+        self.avoid_room = crate::math::index::row(areas);
+        self.rows.reserve_total(room);
+        self.charges.reserve_total(self.charge_room);
+        self.avoid.reserve_total(self.avoid_room);
+    }
+
+    /// The avoid areas the table may hold in all: its stated room.
+    #[must_use]
+    pub const fn avoid_room(&self) -> usize {
+        self.avoid_room
+    }
+
+    /// Whether replacing `beacon`'s avoid list with a list of `written`
+    /// areas keeps the table inside its stated room: the areas the other
+    /// beacons hold, and `written`, at most [`AttackTable::avoid_room`]. The
+    /// test an Attack commit asks before it writes anything, as the Build
+    /// lists' is (`World::check_list_room`); one unit to `meter` an area it
+    /// reads.
+    pub fn avoid_fits_metered<M: crate::seams::Meter + ?Sized>(
+        &self,
+        beacon: BeaconId,
+        written: usize,
+        meter: &M,
+    ) -> bool {
+        meter.rows(self.avoid.len());
+        let kept = self.avoid.iter().filter(|(by, _)| *by != beacon).count();
+        kept.checked_add(written)
+            .is_some_and(|after| after <= self.avoid_room)
     }
 
     /// The avoid areas, `(attack beacon, area)`, grouped by beacon in
@@ -674,8 +725,18 @@ impl AttackTable {
     }
 
     /// File a planted charge.
-    pub fn plant(&mut self, charge: Charge) {
+    ///
+    /// # Errors
+    ///
+    /// [`PlantRefused::Full`], filing nothing, when the table already holds
+    /// its stated room of charges ([`AttackTable::reserve`]): the planting
+    /// can never grow the column inside a tick.
+    pub fn plant(&mut self, charge: Charge) -> Result<(), PlantRefused> {
+        if self.charges.len() >= self.charge_room {
+            return Err(PlantRefused::Full);
+        }
         self.charges.push(charge);
+        Ok(())
     }
 
     /// Take every charge whose fuse has run out by `tick`, in planting order,
@@ -918,6 +979,9 @@ pub struct AttackCounts {
     pub breach_no_way: u64,
     /// A charge's cut the edit queue could not take.
     pub cut_refused: u64,
+    /// A plant the charge table had no room for ([`PlantRefused::Full`]):
+    /// the carrier kept the charge in hand, to plant once one fires.
+    pub plant_held: u64,
     /// A launch condition that held with nothing to launch at: a hunt with
     /// no fresh sighting of an enemy commander, counted per decision.
     pub launch_without_target: u64,
@@ -1931,12 +1995,19 @@ fn plant_charge(world: &mut World, row: &AttackRow, post: &Post, breach: Breach,
     let tick = world.tick();
     // E7: cannot miss: a fuse of at most `i32::MAX` ms after a tick of a segment is far below `u32::MAX` ticks
     let fires_at = tick.raw().saturating_add(fuse);
-    world.attack_mut().plant(Charge {
+    // A table at its stated room of charges files nothing: the carrier keeps
+    // the charge (still `Loaded`), parked at the wall, and plants on the
+    // first tick a charge has fired and freed the room, counted here under
+    // its reason meanwhile.
+    if let Err(PlantRefused::Full) = world.attack_mut().plant(Charge {
         beacon: row.beacon,
         seat: post.seat,
         centre: [x, y, breach.footing],
         fires_at,
-    });
+    }) {
+        world.count_plant_held();
+        return;
+    }
     if let Some(slot) = world.attack_mut().row_mut(row.beacon)
         && let Some(held) = slot.breach.as_mut()
     {
@@ -2883,5 +2954,69 @@ mod tests {
         table.close_metered(BeaconId::new(1), &tally);
         assert_eq!(read(&tally), 3, "every area held");
         assert_eq!(table.avoid().len(), 1);
+    }
+
+    /// Lane `simroom`: the planted charges' room is stated, one a beacon row,
+    /// and a plant past it is refused with a typed error, filing nothing and
+    /// leaving the column's room as it was, so a plant never grows the column
+    /// inside a tick; a fired charge frees its place.
+    #[test]
+    fn a_plant_past_the_charge_room_is_refused_and_files_nothing() {
+        use super::{AttackTable, Charge, PlantRefused};
+        use crate::tables::{BeaconId, SeatId};
+        let charge = |fires_at: u32| Charge {
+            beacon: BeaconId::new(1),
+            seat: SeatId::new(0),
+            centre: [0, 0, 0],
+            fires_at,
+        };
+        let mut table = AttackTable::with_room(2);
+        table.reserve(2, 0);
+        let room = table.charges.capacity();
+        assert_eq!(table.plant(charge(10)), Ok(()));
+        assert_eq!(table.plant(charge(20)), Ok(()));
+        assert_eq!(table.plant(charge(30)), Err(PlantRefused::Full));
+        assert_eq!(table.charges().len(), 2, "the refused charge is not filed");
+        assert_eq!(table.charges.capacity(), room, "the column never grew");
+        let mut fired = Vec::with_capacity(2);
+        table.take_fired(10, &mut fired);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(
+            table.plant(charge(30)),
+            Ok(()),
+            "a fired charge frees its place"
+        );
+    }
+
+    /// Lane `simroom`: the avoid areas' room is stated, and a list fits when
+    /// the areas the other beacons hold and the list's are at most the room,
+    /// the beacon's own being replaced; one area past it does not fit.
+    #[test]
+    fn an_avoid_list_fits_up_to_the_stated_room() {
+        use super::AttackTable;
+        use crate::tables::BeaconId;
+        let area = |x: i16| {
+            crate::tables::ColumnBox::new([x, 0], [x, 1]).unwrap_or_else(|| panic!("a box"))
+        };
+        let mut table = AttackTable::with_room(4);
+        table.reserve(4, 5);
+        assert_eq!(table.avoid_room(), 5);
+        table.open(BeaconId::new(1));
+        table.open(BeaconId::new(2));
+        table.set_avoid(BeaconId::new(1), &[area(1), area(2), area(3)]);
+        table.set_avoid(BeaconId::new(2), &[area(4)]);
+        assert!(
+            table.avoid_fits_metered(BeaconId::new(2), 2, &()),
+            "3 kept and 2 is the room"
+        );
+        assert!(
+            !table.avoid_fits_metered(BeaconId::new(2), 3, &()),
+            "3 kept and 3 passes it"
+        );
+        assert!(
+            table.avoid_fits_metered(BeaconId::new(1), 4, &()),
+            "beacon 1's own 3 are replaced: 1 kept and 4"
+        );
+        assert!(!table.avoid_fits_metered(BeaconId::new(1), 5, &()));
     }
 }

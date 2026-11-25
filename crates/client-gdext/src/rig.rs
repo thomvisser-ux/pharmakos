@@ -655,6 +655,18 @@ pub enum LinkAction {
     GiveUp,
 }
 
+/// Why a link was given up ([`Rig::give_up`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct GaveUp {
+    /// Closes in a row since the link was last healthy.
+    pub attempts: u8,
+    /// The last close's cause.
+    pub last: Option<Close>,
+    /// The host process's last words when it has exited ("" when it wrote none): the reason
+    /// the link was given up at once, which the lobby leads with (S3's `outcap`).
+    pub host_exited: Option<String>,
+}
+
 /// One link's reconnect policy (S3's `fixq-c`, fix pass 5): every close counts an attempt, a
 /// close on a message included; attempts are spaced by [`RECONNECT_BACKOFF_US`]; and the count
 /// returns to zero only once the link has stayed open for [`KEEPALIVE_US`] with an answer on it.
@@ -870,6 +882,11 @@ pub struct Outgoing {
 pub struct Answer {
     /// A `get_view` result, footer included, for [`crate::view`] to decode and apply.
     pub view: Option<Json>,
+    /// Whether that page begins a listing: a keyframe, or a page asked with any cursor but the
+    /// one the last unfinished page handed back. The model drops what it joined of a listing
+    /// that did not complete ([`crate::view::ViewModel::begin_listing`]). Scheduling: the rig
+    /// knows which cursor it asked with, and the cursor itself is opaque.
+    pub view_starts: bool,
     /// New event-list rows from `get_segment_feed`, in the feed's order.
     pub events: Vec<EventRow>,
     /// The gateway's refusal, as `CODE: message`, when the call was refused.
@@ -999,6 +1016,11 @@ pub struct Rig {
     last_error: Option<(String, String)>,
     /// The last close on a message itself, for the player's words.
     closed_on: Option<ClosedOnMessage>,
+    /// The host process has exited, with the last line it wrote on its standard error (empty when
+    /// it wrote nothing), as `host_link.gd` read it (S3's `outcap`, carried from `opsave`). Every
+    /// closed link is then given up at once rather than after the reconnect budget: a process
+    /// that has exited answers no reconnect, and the lobby leads with its words.
+    host_exited: Option<String>,
     /// The map view's argument (the cursor; "" for a keyframe) whose answer closed the seat link
     /// on the message itself (fix pass 5): not asked again with that argument until the phase
     /// changes it. Only the view can be held: its answer's size follows the world, not the
@@ -1112,6 +1134,7 @@ impl Rig {
             all_ready: false,
             last_error: None,
             closed_on: None,
+            host_exited: None,
             held_view: None,
             view_asking: String::new(),
             held_plans: Vec::new(),
@@ -1735,6 +1758,9 @@ impl Rig {
             Purpose::View => {
                 let complete = matches!(result.get("complete"), Some(Json::Bool(true)));
                 let next = proto3_text(result, "next_cursor")?.to_owned();
+                // A page asked with the cursor the last unfinished page handed back
+                // continues that listing; any other page begins one (S3's `outcap`).
+                answer.view_starts = self.view_paging.as_deref() != Some(self.view_asking.as_str());
                 if complete {
                     self.due.keyframe = false;
                     self.view_paging = None;
@@ -2163,19 +2189,37 @@ impl Rig {
     #[must_use]
     pub fn link_action(&self, link: usize) -> Option<LinkAction> {
         let now = self.timing.now_us();
-        self.links
-            .get(link)
-            .map(|state| state.reconnect.action(now, state.open))
+        self.links.get(link).map(|state| {
+            // A host that has exited answers no reconnect: a closed link is given up at once.
+            if self.host_exited.is_some() && !state.open {
+                LinkAction::GiveUp
+            } else {
+                state.reconnect.action(now, state.open)
+            }
+        })
     }
 
-    /// Why link `link` was given up: how many attempts in a row did not stay up, and the last
-    /// close's cause.
+    /// The host process has exited, and `words` is the last line it wrote on its standard error
+    /// ("" for none), as `host_link.gd` read it (S3's `outcap`): every closed link is given up at
+    /// once ([`Rig::link_action`]) and the give-up carries the host's words ([`Rig::give_up`]).
+    /// Told once; a second telling keeps the first words.
+    pub fn host_exited(&mut self, words: &str) {
+        if self.host_exited.is_none() {
+            self.host_exited = Some(words.to_owned());
+        }
+    }
+
+    /// Why link `link` was given up: the host's own words when it has exited ([`Rig::host_exited`]);
+    /// otherwise how many attempts in a row did not stay up, and the last close's cause.
     #[must_use]
-    pub fn give_up(&self, link: usize) -> Option<(u8, Option<Close>)> {
-        self.links
-            .get(link)
-            .filter(|state| state.reconnect.attempts > RECONNECTS)
-            .map(|state| (state.reconnect.attempts, state.reconnect.last))
+    pub fn give_up(&self, link: usize) -> Option<GaveUp> {
+        let state = self.links.get(link)?;
+        let gave_up = self.host_exited.is_some() || state.reconnect.attempts > RECONNECTS;
+        gave_up.then(|| GaveUp {
+            attempts: state.reconnect.attempts,
+            last: state.reconnect.last,
+            host_exited: self.host_exited.clone(),
+        })
     }
 
     /// Closes on link `link` since it was last healthy ([`Reconnect`]).
@@ -3056,6 +3100,50 @@ mod tests {
         assert!(again.text.contains("\"params\": {}"), "{}", again.text);
     }
 
+    /// **The rig says which page begins a listing** (S3's `outcap`): a page asked with the
+    /// cursor the last unfinished page handed back continues its listing; a keyframe, and the
+    /// first page after a completing one, begin one.
+    #[test]
+    fn a_view_answer_says_whether_it_begins_a_listing() {
+        let mut rig = in_lull();
+        rig.due.view = true;
+        let view_frame = |rig: &mut Rig, now: u64| {
+            rig.poll(now)
+                .into_iter()
+                .find(|frame| frame.link == SEAT && method_of(frame) == "get_view")
+                .expect("a view call")
+        };
+        let page = |id: i64, cursor: &str, complete: bool| {
+            answer(
+                id,
+                &format!(
+                    r#"{{"at_ms":0,"chunks":[],"entities":[],"next_cursor":"{cursor}","complete":{complete}}}"#
+                ),
+                "lull",
+            )
+        };
+        let first = view_frame(&mut rig, 1);
+        let got = rig
+            .receive(SEAT, &page(id_of(&first), "half", false))
+            .expect("reads");
+        assert!(got.view_starts, "the first page of a listing");
+        let second = view_frame(&mut rig, 2);
+        assert!(second.text.contains("half"), "{}", second.text);
+        let got = rig
+            .receive(SEAT, &page(id_of(&second), "end", true))
+            .expect("reads");
+        assert!(
+            !got.view_starts,
+            "a page asked with the unfinished page's cursor"
+        );
+        rig.due.view = true;
+        let third = view_frame(&mut rig, KEEPALIVE_US.saturating_mul(2));
+        let got = rig
+            .receive(SEAT, &page(id_of(&third), "next", true))
+            .expect("reads");
+        assert!(got.view_starts, "the first page after a completing one");
+    }
+
     #[test]
     fn a_quiet_connection_sends_a_keepalive_and_a_drop_is_counted() {
         let mut rig = in_lull();
@@ -3561,6 +3649,36 @@ mod tests {
         asked
     }
 
+    /// **A host that has exited is given up at once, in its own words** (S3's `outcap`,
+    /// carried from `opsave`): once `host_link.gd` says the host process exited, a closed link
+    /// is given up on its first close, with no reconnect waited for, and the give-up carries the
+    /// host's last line; an open link waits for its close. Before it, a first close reconnects.
+    #[test]
+    fn a_host_that_exited_is_given_up_at_once_with_its_words() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        rig.closed(SEAT, Close::Connection);
+        rig.poll(1);
+        assert_eq!(rig.link_action(SEAT), Some(LinkAction::Connect));
+        assert_eq!(rig.give_up(SEAT), None, "one close is no give-up");
+
+        rig.host_exited("the save of round 1 could not be written");
+        rig.host_exited("a later line is not the reason");
+        assert_eq!(
+            rig.link_action(ADMIN),
+            Some(LinkAction::Wait),
+            "open: its close comes"
+        );
+        assert_eq!(rig.link_action(SEAT), Some(LinkAction::GiveUp), "at once");
+        assert_eq!(
+            rig.give_up(SEAT).and_then(|why| why.host_exited),
+            Some(String::from("the save of round 1 could not be written"))
+        );
+        rig.closed(ADMIN, Close::Connection);
+        assert_eq!(rig.link_action(ADMIN), Some(LinkAction::GiveUp));
+    }
+
     /// **One reconnect policy per link** (fix pass 5, item B; review 4's R4-P1 and R4-P2): every
     /// close counts an attempt, a close on a message included; attempts are spaced by
     /// [`RECONNECT_BACKOFF_US`]; past [`RECONNECTS`] in a row the link is given up; and the count
@@ -3606,7 +3724,11 @@ mod tests {
         );
         assert_eq!(
             rig.give_up(SEAT),
-            Some((RECONNECTS.saturating_add(1), Some(Close::Connection)))
+            Some(GaveUp {
+                attempts: RECONNECTS.saturating_add(1),
+                last: Some(Close::Connection),
+                host_exited: None,
+            })
         );
         // A link that stays up for the keep-alive with an answer is healthy again.
         let mut rig = Rig::new();
