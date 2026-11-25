@@ -195,8 +195,9 @@ fn the_host_refuses_to_resume_an_ended_match_and_announces_nothing() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.is_empty(), "nothing is announced: {stdout}");
     assert!(
-        stderr.contains("this match has ended"),
-        "the refusal is said: {stderr}"
+        stderr.contains("this match has ended")
+            && stderr.contains("gamectl host: the match could not be hosted: "),
+        "the refusal is said, before any announce line: {stderr}"
     );
     assert_eq!(
         output.status.code(),
@@ -241,9 +242,11 @@ const LULL_MATCH_ID: &str = "m-opsave-stopped-host";
 /// (lane `opsave`, fix pass 2: a boundary is durable before anyone is told,
 /// and a host that cannot make it durable says why and exits). The match's
 /// audit log, which a resume continues from, is read-only, so the host's
-/// first append to it fails: with its standard input still held open, the
-/// host says on standard error what could not be written and what the disk
-/// holds, and exits with the internal code.
+/// first append to it fails, before it announces (fix pass 3, item 4: a host
+/// that cannot serve does not announce): with its standard input still held
+/// open, it announces nothing, says on standard error that the match could
+/// not be hosted, what could not be written and what the disk holds, and
+/// exits with the internal code.
 #[test]
 fn the_host_exits_at_once_when_a_write_fails_and_says_why() {
     let rules = std::fs::read_to_string(root().join("rules").join("rules.v1.json"))
@@ -331,6 +334,15 @@ fn the_host_exits_at_once_when_a_write_fails_and_says_why() {
             && stderr.contains("; on disk is the `lull` save of round 1; this host stops"),
         "the host says what failed and what the disk holds: {stderr}"
     );
+    assert!(
+        stderr.contains("gamectl host: the match could not be hosted: INTERNAL: the audit log"),
+        "a failure before the announce line: {stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "nothing announced: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     #[allow(
         clippy::permissions_set_readonly_false,
         reason = "the test's own file, made writable again so its folder can be removed"
@@ -358,4 +370,68 @@ fn private_cache(home: &Path) -> (&'static str, PathBuf) {
             home.join(pharmakos_gateway::cache::APP_DIR_LOWER),
         )
     }
+}
+
+/// A match `gamectl host` announced and then stopped is said as stopped
+/// (fix pass 3, item 6): a new match is announced, its save is blocked (the
+/// match's `save.json.partial` made a folder), and the parent closes standard
+/// input in the opening Lull, so the Lull's save cannot be written: the host
+/// says "the match stopped", what could not be written and what the disk
+/// holds, and exits with the internal code.
+#[test]
+fn a_host_that_stops_after_its_announce_says_the_match_stopped() {
+    use std::io::BufRead as _;
+    let match_id = "m-opsave-stopped-after";
+    let config = Config {
+        match_id: match_id.to_owned(),
+        seed: SEED,
+        seats: 2,
+        human_seat: Some(0),
+        segment_lengths_ms: vec![SEGMENT_MS],
+        round_limit: 1,
+        preset: Preset::Custom,
+    };
+    let home = scratch("stopped-after");
+    let (variable, data_root) = private_cache(&home);
+    let line = ConfigLine {
+        config,
+        resume: false,
+    }
+    .render();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gamectl"))
+        .arg("host")
+        .current_dir(root())
+        .env(variable, &home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("gamectl starts");
+    let mut stdin = child.stdin.take().expect("its standard input");
+    stdin
+        .write_all(line.as_bytes())
+        .expect("the config line is written");
+    stdin.flush().expect("the config line is sent");
+    let mut announce = String::new();
+    std::io::BufReader::new(child.stdout.take().expect("its standard output"))
+        .read_line(&mut announce)
+        .expect("the announce line");
+    assert!(!announce.is_empty(), "the match was announced");
+    let folder = data_root.join("matches").join(match_id);
+    std::fs::create_dir_all(folder.join("save.json.partial")).expect("the blocker");
+    drop(stdin);
+    let output = child.wait_with_output().expect("gamectl ends");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(i32::from(Exit::Internal.code())),
+        "the internal exit code: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "gamectl host: the match stopped: INTERNAL: the `lull` save of round 1 could not be written ("
+        ) && stderr.contains("; on disk is no save yet; this host stops"),
+        "a failure after the announce line: {stderr}"
+    );
+    std::fs::remove_dir_all(&home).expect("the scratch folder is removed");
 }

@@ -523,11 +523,26 @@ pub fn run(root: &Path) -> Result<String, Failure> {
         // plays and advises the human's (T18).
         operators: Box::new(operators),
     };
-    let served = serve::run(setup, std::io::stdin(), std::io::stdout().lock());
+    let announced = std::cell::Cell::new(false);
+    let served = serve::run(
+        setup,
+        std::io::stdin(),
+        Recorded {
+            inner: std::io::stdout().lock(),
+            wrote: &announced,
+        },
+    );
     // The host has ended: what its seats could not write is said once, in
-    // the message of the failure it ended on or in a last line of its own.
+    // the message of the failure it ended on or in a last line of its own. A
+    // failure before the announce line is a match that could not be hosted;
+    // one after it, a match that stopped.
     served.map_err(|error| {
-        let message = with_unsaid(strings::host_refused(&error.to_string()), &unsaid);
+        let said = if announced.get() {
+            strings::host_stopped(&error.to_string())
+        } else {
+            strings::host_refused(&error.to_string())
+        };
+        let message = with_unsaid(said, &unsaid);
         if error.code() == Code::InvalidArgument {
             Failure::input(message)
         } else {
@@ -538,6 +553,28 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     // Nothing more goes to standard output: the announce line was the whole of
     // what this command writes there.
     Ok(String::new())
+}
+
+/// Standard output, recording whether anything was written to it: the
+/// announce line is the only thing this command writes there, so a byte
+/// written is the match announced. Plumbing only, no gateway type.
+struct Recorded<'a, W: Write> {
+    inner: W,
+    wrote: &'a std::cell::Cell<bool>,
+}
+
+impl<W: Write> Write for Recorded<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        if written > 0 {
+            self.wrote.set(true);
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 #[cfg(test)]
