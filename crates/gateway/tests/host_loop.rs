@@ -2502,10 +2502,14 @@ fn an_end_whose_audit_lines_cannot_be_written_writes_no_ended_save() {
     );
 }
 
-/// The close in a Lull, its audit lines: no `lull` save is written, and the
-/// round's `sealed` save stands.
+/// The close in a Lull, its closing audit lines (fix pass 4, item 6): the
+/// "save lull" line and the drop counts follow the save, which is complete on
+/// disk when their append fails; the words, read back from the disk, name
+/// that `lull` save, the host exits with the error, and a resume lands in
+/// that Lull. (No audit line is pending before the save at a plain close:
+/// every job's own lines were written with its answer.)
 #[test]
-fn a_close_whose_audit_lines_cannot_be_written_writes_no_lull_save() {
+fn a_close_whose_closing_audit_lines_cannot_be_written_keeps_its_lull_save() {
     const MATCH_ID: &str = "m-opsave-order-close-audit";
     let root = data_root(MATCH_ID);
     let mut host = Stoppable::start(&root, &new_line(durable_config(MATCH_ID, 2)));
@@ -2515,7 +2519,9 @@ fn a_close_whose_audit_lines_cannot_be_written_writes_no_lull_save() {
     let _ = result(&lobby.call("end_recap", "{}"), "end_recap");
     let _ = result(&lobby.call("get_status", "{}"), "get_status");
     audit_read_only(&host.folder, true);
-    let error = host.quit().expect_err("the close could not be written");
+    let error = host
+        .quit()
+        .expect_err("the close's audit lines could not be written");
     assert!(
         error
             .message()
@@ -2526,19 +2532,19 @@ fn a_close_whose_audit_lines_cannot_be_written_writes_no_lull_save() {
     assert!(
         error
             .message()
-            .ends_with("; on disk is the `sealed` save of round 1; this host stops"),
+            .ends_with("; on disk is the `lull` save of round 2; this host stops"),
         "{}",
         error.message()
     );
     assert_eq!(
         save_on_disk(&host.folder),
-        Some((pharmakos_gateway::save::Boundary::Sealed, 1)),
-        "no `lull` save over lost audit lines"
+        Some((pharmakos_gateway::save::Boundary::Lull, 2)),
+        "the `lull` save is complete on disk"
     );
     audit_read_only(&host.folder, false);
     assert_eq!(
         resumed(&root, durable_config(MATCH_ID, 2)).expect("a resume"),
-        (String::from("push"), 1)
+        (String::from("lull"), 2)
     );
 }
 

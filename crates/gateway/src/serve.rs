@@ -1644,9 +1644,13 @@ fn spawn_dispatcher(
 ///   save's but for `lull_offset`, the gateway's clock offset, which a
 ///   resume moves past the dead process's last audited tick (tested); the
 ///   `ended` save itself: the same;
-/// * **the close in a Lull** (end of file): the audit log, or the `lull`
-///   save: the save before it stands (the round's `sealed` one, or none in
-///   round 1), and a resume replays from it.
+/// * **the close in a Lull** (end of file): any audit line still pending, or
+///   the `lull` save: the save before it stands (the round's `sealed` one, or
+///   none in round 1), and a resume replays from it; the close's own audit
+///   lines, which follow the save they record ('save lull' and the drop
+///   counts): the `lull` save is complete on disk, the words name it, the
+///   host exits with the error, and a resume lands in that Lull
+///   ([`Writer::close`]).
 ///
 /// Every write is held to this, because a resume or the private replay
 /// reads each: the save, the sealed playbooks and the chains (a format on
@@ -1875,8 +1879,23 @@ impl Writer {
         }
     }
 
-    /// The control pipe reached end of file: write what is pending, and then
-    /// save a Lull, last, as every boundary's save is.
+    /// The control pipe reached end of file: write what is pending, then save
+    /// a Lull, and then the close's own audit lines.
+    ///
+    /// The order, and what a failure at each place leaves (the type's table,
+    /// the close's row, in full):
+    ///
+    /// 1. **What is pending** ([`Writer::flush`]): nothing at a plain close,
+    ///    since every job's own audit lines were written with its answer. A
+    ///    failure leaves the save before it (no `lull` save is written).
+    /// 2. **The `lull` save.** A failure to build or write it leaves the save
+    ///    before it.
+    /// 3. **The close's audit lines**, the "save lull" line and the dropped
+    ///    connections' counts, which follow the save they record. A failure
+    ///    here leaves the `lull` save complete on disk: the words, read back
+    ///    from the disk, name it, the host exits with the typed error (`gamectl
+    ///    host`: code 4), and a resume lands in that Lull; only those lines
+    ///    are lost.
     ///
     /// Item 84's second boundary. A Push, a recap and an ended match are not
     /// saved here: the save made when the Push began stands, and resuming it
@@ -1889,10 +1908,12 @@ impl Writer {
     /// could not be built or written: a Lull lost on quit is said, never
     /// dropped, in words that say what the disk holds.
     fn close(&self, surface: &mut Surface) -> Result<(), Error> {
-        self.record_drops(surface);
         self.flush(surface)?;
         if surface.time().phase != pharmakos_proto::gp::api::v1::status::Phase::Lull {
-            return Ok(());
+            self.record_drops(surface);
+            let mut failures: Vec<Failure> = Vec::new();
+            self.append(surface, &mut failures);
+            return self.failed(failures);
         }
         let tick = surface.time().tick;
         let round = surface.time().round;
@@ -1928,6 +1949,7 @@ impl Writer {
                 });
             }
         }
+        self.record_drops(surface);
         self.append(surface, &mut failures);
         self.failed(failures)
     }
