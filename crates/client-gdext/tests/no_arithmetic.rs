@@ -51,6 +51,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod shipped;
+
 /// Words that mean money, power or time, matched against the `_`-separated parts of an
 /// identifier (and the identifier itself), never as substrings: `remaining_ms` is a
 /// duration because one of its parts is `ms`, and `submitted` is not money merely because
@@ -556,32 +558,10 @@ const TIME: &[&str] = &[
 /// hiding the rest of the file (`every_test_module_is_the_files_last_item` holds `src/` to
 /// the shape).
 fn scanned_lines(text: &str) -> usize {
-    let lines: Vec<&str> = text.lines().collect();
-    let all = lines.len();
-    let marks: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.trim() == "#[cfg(test)]")
-        .map(|(index, _)| index)
-        .collect();
-    let [start] = marks.as_slice() else {
-        return all;
-    };
-    let opens = lines
-        .get(start.saturating_add(1))
-        .is_some_and(|line| *line == "mod tests {");
-    let last = lines.iter().rposition(|line| !line.trim().is_empty());
-    let closes = lines
-        .iter()
-        .enumerate()
-        .skip(start.saturating_add(2))
-        .find(|(_, line)| **line == "}")
-        .map(|(index, _)| index);
-    if opens && closes.is_some() && closes == last {
-        *start
-    } else {
-        all
-    }
+    // The shared reader (`tests/shipped/mod.rs`, S3's `prob`, part 2, fix pass 1): any
+    // `#[cfg(test)]` in code it cannot place, alone on its line or not, scans the file whole,
+    // and `every_test_module_is_the_files_last_item` names such a file.
+    shipped::scanned_lines(text).unwrap_or_else(|_| text.lines().count())
 }
 
 /// Every offending line, as `path:line: text`.
@@ -845,6 +825,26 @@ mod tests {
     assert!(missed.is_empty(), "the scan stopped early on {missed:?}");
 }
 
+/// The shared reader places a `#[cfg(test)]` only on the trailing `mod tests`: one sharing a
+/// line with its item, or one mid-file, is refused, so neither can end a scan early (S3's
+/// `prob`, part 2, fix pass 1; review 1's M12c).
+#[test]
+fn the_shared_reader_refuses_an_attribute_it_cannot_place() {
+    let trailing = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n";
+    assert_eq!(shipped::scanned_lines(trailing), Ok(1));
+    for text in [
+        "#[cfg(test)] const X: () = ();\nfn a() {}\n",
+        "fn a() {}\n#[cfg(test)] mod tests {\n}\n",
+        "#[cfg(test)]\nfn helper() {}\nfn a() {}\n#[cfg(test)]\nmod tests {\n}\n",
+        "fn a() {}\n#[cfg(test)]\nmod tests {\n}\nfn b() {}\n",
+    ] {
+        assert!(shipped::scanned_lines(text).is_err(), "placed: {text}");
+    }
+    // An attribute named in a comment or a string is not one.
+    let quoted = "// #[cfg(test)]\nfn a() { let s = \"#[cfg(test)]\"; }\n";
+    assert_eq!(shipped::scanned_lines(quoted), Ok(2));
+}
+
 /// Every `#[cfg(test)]` in `src/` is the one shape [`scanned_lines`] skips: the file's
 /// only test attribute, on a `mod tests` that runs to the end of the file. A file that
 /// breaks the shape is scanned whole, and this names it rather than leave the reason to
@@ -858,9 +858,8 @@ fn every_test_module_is_the_files_last_item() {
         }
         let text =
             fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        let marked = text.lines().any(|line| line.trim() == "#[cfg(test)]");
-        if marked && scanned_lines(&text) == text.lines().count() {
-            wrong.push(path.display().to_string());
+        if let Err(why) = shipped::scanned_lines(&text) {
+            wrong.push(format!("{}: {why}", path.display()));
         }
     }
     assert!(

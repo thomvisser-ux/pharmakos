@@ -35,6 +35,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod shipped;
+
+use shipped::{scanned_lines, views};
+
 const SELF: &str = "pharmakos-client-gdext";
 
 fn crate_root() -> PathBuf {
@@ -174,138 +178,6 @@ fn the_lock_reader_finds_a_network_crate_two_hops_out() {
 
 // --- Rust source --------------------------------------------------------------------------------
 
-/// One Rust file read two ways, line for line: `code` with every comment and literal removed,
-/// and `literals` with every comment removed and the literals kept. Both stop at the file's first
-/// `#[cfg(test)]` in code: a unit-test module is the file's last item
-/// (`tests/no_arithmetic.rs`'s `every_test_module_is_the_files_last_item`), and test drivers are
-/// never compiled into the client.
-struct Views {
-    code: Vec<String>,
-    literals: Vec<String>,
-}
-
-fn views(text: &str) -> Views {
-    let chars: Vec<char> = text.chars().collect();
-    let mut code = String::new();
-    let mut literals = String::new();
-    let mut at = 0_usize;
-    while let Some(&c) = chars.get(at) {
-        let next = chars.get(at + 1).copied();
-        let word_before = at
-            .checked_sub(1)
-            .and_then(|before| chars.get(before))
-            .is_some_and(|before| before.is_alphanumeric() || *before == '_');
-        if c == '/' && next == Some('/') {
-            while chars.get(at).is_some_and(|c| *c != '\n') {
-                at += 1;
-            }
-        } else if c == '/' && next == Some('*') {
-            let mut depth = 0_usize;
-            loop {
-                match (chars.get(at), chars.get(at + 1)) {
-                    (None, _) => break,
-                    (Some('/'), Some('*')) => {
-                        depth += 1;
-                        at += 2;
-                    }
-                    (Some('*'), Some('/')) => {
-                        depth -= 1;
-                        at += 2;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    (Some('\n'), _) => {
-                        code.push('\n');
-                        literals.push('\n');
-                        at += 1;
-                    }
-                    _ => at += 1,
-                }
-            }
-        } else if let Some(end) = (!word_before).then(|| literal_end(&chars, at)).flatten() {
-            code.push_str("\"\"");
-            for index in at..end {
-                let c = chars.get(index).copied().unwrap_or(' ');
-                literals.push(c);
-                if c == '\n' {
-                    code.push('\n');
-                }
-            }
-            at = end;
-        } else {
-            code.push(c);
-            literals.push(c);
-            at += 1;
-        }
-    }
-    let code: Vec<String> = code.lines().map(str::to_owned).collect();
-    let literals: Vec<String> = literals.lines().map(str::to_owned).collect();
-    let cut = code
-        .iter()
-        .position(|line| line.contains("#[cfg(test)]"))
-        .unwrap_or(code.len());
-    Views {
-        code: code.into_iter().take(cut).collect(),
-        literals: literals.into_iter().take(cut).collect(),
-    }
-}
-
-/// One past the end of the string, byte string, raw string or character literal at `at`, or
-/// `None` when none starts there (a lifetime is not one).
-fn literal_end(chars: &[char], at: usize) -> Option<usize> {
-    let c = *chars.get(at)?;
-    let next = chars.get(at + 1).copied();
-    let (prefix, raw) = match (c, next) {
-        ('b', Some('r')) => (2, true),
-        ('r', Some('#' | '"')) => (1, true),
-        ('b', Some('"' | '\'')) => (1, false),
-        _ => (0, false),
-    };
-    if raw {
-        let mut hashes = 0_usize;
-        while chars.get(at + prefix + hashes) == Some(&'#') {
-            hashes += 1;
-        }
-        let open = at + prefix + hashes;
-        if chars.get(open) != Some(&'"') {
-            return None;
-        }
-        let mut close = open + 1;
-        while let Some(&c) = chars.get(close) {
-            if c == '"' && (1..=hashes).all(|k| chars.get(close + k) == Some(&'#')) {
-                return Some(close + 1 + hashes);
-            }
-            close += 1;
-        }
-        return Some(close);
-    }
-    let quote = at + prefix;
-    match chars.get(quote) {
-        Some('"') => {
-            let mut close = quote + 1;
-            while let Some(&c) = chars.get(close) {
-                match c {
-                    '\\' => close += 2,
-                    '"' => return Some(close + 1),
-                    _ => close += 1,
-                }
-            }
-            Some(close)
-        }
-        Some('\'') => {
-            if chars.get(quote + 1) == Some(&'\\') {
-                (quote + 3..quote + 12)
-                    .find(|i| chars.get(*i) == Some(&'\''))
-                    .map(|i| i + 1)
-            } else {
-                (chars.get(quote + 2) == Some(&'\'')).then_some(quote + 3)
-            }
-        }
-        _ => None,
-    }
-}
-
 /// Names in Rust code that open a socket or name a network class (gdext spells Godot's classes
 /// in this case).
 const RUST_NETWORK_NAMES: &[&str] = &[
@@ -338,21 +210,63 @@ const SCHEMES: &[&str] = &[
     "http://", "https://", "ws://", "wss://", "ftp://", "file://",
 ];
 
+/// Godot's network classes as their names are spelt in a string (`ClassDB::instantiate`'s
+/// argument, a `call` by name): no Rust file of this crate names one in a literal. The one link
+/// the client opens is `godot/scripts/host_link.gd`'s, in GDScript; no Rust file owns it.
+const RUST_NETWORK_CLASSES: &[&str] = &[
+    "HTTPRequest",
+    "HTTPClient",
+    "StreamPeerTCP",
+    "StreamPeerTLS",
+    "PacketPeerUDP",
+    "UDPServer",
+    "TCPServer",
+    "WebSocketPeer",
+    "WebRTC",
+    "ENet",
+];
+
+/// A process spawned from Rust: the client spawns none (`host_link.gd` spawns `gamectl`).
+/// `std::process::id()`, which names this process in a temporary file's name (`write.rs`), is
+/// the one `std::process` read allowed.
+const RUST_PROCESS_NAMES: &[&str] = &["Command::new", "process::Command", "Command;", "Command}"];
+
+/// Why the Rust source `text` names a network or a process. A `#[cfg(test)]` the shared reader
+/// cannot place is itself a finding: the scan never stops early at one.
 fn rust_offences(text: &str) -> Vec<String> {
     let views = views(text);
     let mut out = Vec::new();
-    for (index, line) in views.code.iter().enumerate() {
-        for name in RUST_NETWORK_NAMES {
+    let shipped = match scanned_lines(text) {
+        Ok(shipped) => shipped,
+        Err(why) => {
+            out.push(why);
+            views.code.len()
+        }
+    };
+    for (index, line) in views.code.iter().enumerate().take(shipped) {
+        let number = index + 1;
+        for name in RUST_NETWORK_NAMES.iter().chain(RUST_PROCESS_NAMES) {
             if line.contains(name) {
-                out.push(format!("line {}: names `{name}`", index + 1));
+                out.push(format!("line {number}: names `{name}`"));
             }
         }
+        if line.contains("std::process") && !line.contains("std::process::id()") {
+            out.push(format!(
+                "line {number}: names `std::process` other than `id()`"
+            ));
+        }
     }
-    for (index, line) in views.literals.iter().enumerate() {
+    for (index, line) in views.literals.iter().enumerate().take(shipped) {
+        let number = index + 1;
         let lower = line.to_ascii_lowercase();
         for scheme in SCHEMES {
             if lower.contains(scheme) {
-                out.push(format!("line {}: holds `{scheme}`", index + 1));
+                out.push(format!("line {number}: holds `{scheme}`"));
+            }
+        }
+        for class in RUST_NETWORK_CLASSES {
+            if line.contains(class) {
+                out.push(format!("line {number}: names `{class}` in a string"));
             }
         }
     }
@@ -383,27 +297,93 @@ fn collect(dir: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The files under `src/` that are a trailing test module's children (`mod faults;` inside
+/// `rig.rs`'s `#[cfg(test)] mod tests`), compiled only under `#[cfg(test)]`: each named, and
+/// each held to its parent's test module by `the_rust_scan_reads_every_shipped_file`.
+const TEST_CHILDREN: &[(&str, &str, &str)] = &[("rig/tests/faults.rs", "rig.rs", "mod faults;")];
+
+/// A path under `src/`, with forward slashes.
+fn src_relative(path: &Path) -> String {
+    path.strip_prefix(crate_root().join("src"))
+        .expect("under src")
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 #[test]
 fn the_rust_source_names_no_socket_and_no_url() {
     let mut files = Vec::new();
     collect(&crate_root().join("src"), &["rs"], &mut files);
-    assert!(files.len() > 20, "the scan found the source: {files:?}");
     let mut found = Vec::new();
+    let mut scanned = Vec::new();
     for path in &files {
-        // A module of tests (`src/rig/tests/`) is compiled only under `#[cfg(test)]`.
-        if path.components().any(|part| part.as_os_str() == "tests") {
+        let relative = src_relative(path);
+        if TEST_CHILDREN.iter().any(|(child, _, _)| *child == relative) {
             continue;
         }
         let text = fs::read_to_string(path).expect("a source file");
         for offence in rust_offences(&text) {
             found.push(format!("{}: {offence}", path.display()));
         }
+        scanned.push(relative);
     }
     assert!(
         found.is_empty(),
         "the client names a network:\n{}",
         found.join("\n")
     );
+    // Every file under `src/` is scanned, but the named test children; and every module
+    // `lib.rs` declares is one of the scanned files.
+    assert_eq!(
+        scanned.len() + TEST_CHILDREN.len(),
+        files.len(),
+        "a file under src/ was neither scanned nor a named test child: {scanned:?}"
+    );
+    let lib = fs::read_to_string(crate_root().join("src").join("lib.rs")).expect("lib.rs");
+    let declared: Vec<String> = lib
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("pub mod ")
+                .or_else(|| line.strip_prefix("mod "))
+                .and_then(|rest| rest.strip_suffix(';'))
+                .map(|name| format!("{name}.rs"))
+        })
+        .collect();
+    assert!(
+        declared.len() > 20,
+        "the reader found lib.rs's modules: {declared:?}"
+    );
+    for module in &declared {
+        assert!(
+            scanned.contains(module),
+            "lib.rs declares `{module}`, and the scan did not read it"
+        );
+    }
+}
+
+/// Each named test child is declared inside its parent's trailing test module, so skipping it
+/// skips only test code.
+#[test]
+fn the_rust_scan_reads_every_shipped_file() {
+    for (child, parent, declaration) in TEST_CHILDREN {
+        let text = fs::read_to_string(crate_root().join("src").join(parent)).expect("the parent");
+        let shipped = scanned_lines(&text).expect("the parent ends in its test module");
+        let module: Vec<&str> = text.lines().skip(shipped).collect();
+        assert!(
+            module.iter().any(|line| line.trim() == *declaration),
+            "{child} is not declared in {parent}'s trailing test module"
+        );
+        assert!(
+            !text
+                .lines()
+                .take(shipped)
+                .any(|line| line.trim() == *declaration),
+            "{parent} declares {child} in its shipped code"
+        );
+    }
 }
 
 #[test]
@@ -422,6 +402,19 @@ fn the_rust_scanner_catches_what_it_is_for() {
         "let r = r#\"wss://x\"#;",
         "let b = b\"ftp://x\";",
         "/* a */ let s = std::net::TcpStream::connect(a);",
+        // Review 1, M12c: an attribute on one item hides nothing after it.
+        "#[cfg(test)] const _PROBE: () = ();
+fn _probe() { let _ = std::net::TcpStream::connect(\"127.0.0.1:1\"); }",
+        "fn a() {}
+#[cfg(test)]
+fn helper() {}
+fn b() { let _ = std::net::UdpSocket::bind(x); }",
+        "let child = std::process::Command::new(\"gamectl\");",
+        "use std::process::{self, Command};",
+        "let c = Command::new(path);",
+        "let node = ClassDB::singleton().instantiate(\"HTTPRequest\");",
+        "let peer = object.call(\"x\", &[\"WebSocketPeer\".to_variant()]);",
+        "let name = \"PacketPeerUDP\";",
     ] {
         assert!(
             !rust_offences(snippet).is_empty(),
@@ -435,7 +428,9 @@ fn the_rust_scanner_catches_what_it_is_for() {
         "let words = \"the TcpStream is the host's\";",
         "fn f<'a>(x: &'a str) -> &'a str { x }",
         "let quote = '\"'; let net = 1;",
-        "#[cfg(test)]\nmod tests { use std::net::TcpStream; }",
+        "fn a() {}\n#[cfg(test)]\nmod tests {\n    use std::net::TcpStream;\n}\n",
+        "let id = std::process::id();",
+        "let words = \"the generated engine\";",
     ] {
         assert!(
             rust_offences(snippet).is_empty(),
@@ -503,7 +498,22 @@ fn calls_with(line: &str, method: &str, wanted: &str) -> bool {
     })
 }
 
-/// Why the file `name`, holding `text`, breaks the no-network rule.
+/// Methods whose names, said as a string, call a network or a process by name (`call`,
+/// `callv`, `call_deferred`, a `Callable`): no file under `godot/` says one in a string.
+const NAMED_CALLS: &[&str] = &[
+    "\"connect_to_",
+    "\"listen\"",
+    "\"execute\"",
+    "\"execute_with_pipe\"",
+    "\"shell_open\"",
+    "\"create_process\"",
+    "\"instantiate\"",
+    "\"put_packet\"",
+];
+
+/// Why the file `name`, holding `text`, breaks the no-network rule. Each line is read with its
+/// comment removed and with every space and tab removed, so no spacing before a parenthesis or
+/// around a dot hides a call.
 fn godot_offences(name: &str, text: &str) -> Vec<String> {
     let script = Path::new(name)
         .extension()
@@ -513,45 +523,52 @@ fn godot_offences(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for (index, line) in gd_code(text, comment).iter().enumerate() {
         let number = index + 1;
-        let lower = line.to_ascii_lowercase();
-        for banned in GODOT_BANNED {
-            if line.contains(banned) {
+        let squeezed: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        let lower = squeezed.to_ascii_lowercase();
+        for banned in GODOT_BANNED.iter().chain(["ClassDB.instantiate"].iter()) {
+            if squeezed.contains(banned) {
                 out.push(format!("line {number}: names `{banned}`"));
             }
         }
+        for named in NAMED_CALLS {
+            if squeezed.contains(named) {
+                out.push(format!("line {number}: calls `{named}` by name"));
+            }
+        }
         for scheme in SCHEMES {
-            if lower.contains(scheme) && !(line.contains("connect_to_url(\"ws://127.0.0.1:")) {
+            if lower.contains(scheme) && !squeezed.contains("connect_to_url(\"ws://127.0.0.1:") {
                 out.push(format!("line {number}: holds `{scheme}`"));
             }
         }
-        if line.contains("WebSocketPeer") && !(name == "host_link.gd" || check) {
+        if squeezed.contains("WebSocketPeer") && !(name == "host_link.gd" || check) {
             out.push(format!(
                 "line {number}: a WebSocketPeer outside host_link.gd and the checks"
             ));
         }
-        if line.contains("connect_to_url(")
-            && !calls_with(line, "connect_to_url(", "\"ws://127.0.0.1:")
+        if squeezed.contains("connect_to_url")
+            && !(squeezed.contains("connect_to_url(")
+                && calls_with(&squeezed, "connect_to_url(", "\"ws://127.0.0.1:"))
         {
             out.push(format!(
                 "line {number}: connect_to_url to anything but a literal ws://127.0.0.1:"
             ));
         }
         for tcp in ["TCPServer", "StreamPeerTCP"] {
-            if line.contains(tcp) && !check {
+            if squeezed.contains(tcp) && !check {
                 out.push(format!("line {number}: a {tcp} outside the checks"));
             }
         }
-        for method in [".listen(", "connect_to_host("] {
-            if line.contains(method) && !lower.contains("\"127.0.0.1\"") {
+        for method in [".listen(", "connect_to_host"] {
+            if squeezed.contains(method) && !lower.contains("\"127.0.0.1\"") {
                 out.push(format!("line {number}: `{method}` off 127.0.0.1"));
             }
         }
-        if line.contains("execute_with_pipe(") && name != "host_link.gd" {
+        if squeezed.contains("execute_with_pipe") && name != "host_link.gd" {
             out.push(format!(
                 "line {number}: a process spawned outside host_link.gd"
             ));
         }
-        if line.contains("OS.execute(") && name != "watch_check.gd" {
+        if squeezed.contains("OS.execute(") && name != "watch_check.gd" {
             out.push(format!(
                 "line {number}: a process run outside watch_check.gd"
             ));
@@ -626,6 +643,28 @@ fn the_godot_scanner_catches_what_it_is_for() {
             "lobby.tscn",
             "[node name=\"Http\" type=\"HTTPRequest\" parent=\".\"]",
         ),
+        // Review 1's follow-up: spacing, a name built in a string, a call by name.
+        ("lobby.gd", "OS.execute (path, [])"),
+        ("lobby.gd", "OS . shell_open (\"x\")"),
+        ("lobby.gd", "OS.create_process\t(p, [])"),
+        (
+            "lobby.gd",
+            "var r: Node = ClassDB.instantiate(\"HTTP\" + \"Request\")",
+        ),
+        ("lobby.gd", "var r: Variant = ClassDB . instantiate (kind)"),
+        ("host_link.gd", "peer.call(\"connect_to_url\", url)"),
+        (
+            "host_link.gd",
+            "peer.callv(\"connect_to_host\", [host, port])",
+        ),
+        (
+            "host_link.gd",
+            "var go := Callable(peer, \"connect_to_url\")",
+        ),
+        ("host_link.gd", "peer.connect_to_url (\"ws://10.0.0.1:1/\")"),
+        ("host_link.gd", "var go := peer.connect_to_url"),
+        ("watch_check.gd", "server.listen (0, \"0.0.0.0\")"),
+        ("lobby.gd", "node.call_deferred(\"execute\", path)"),
     ] {
         assert!(
             !godot_offences(name, snippet).is_empty(),
@@ -639,6 +678,14 @@ fn the_godot_scanner_catches_what_it_is_for() {
         ),
         ("host_link.gd", "var peer := WebSocketPeer.new()"),
         ("host_link.gd", "OS.execute_with_pipe(gamectl, args, false)"),
+        (
+            "host_link.gd",
+            "var error := peer.connect_to_url (\"ws://127.0.0.1:%d/\" % _port)",
+        ),
+        (
+            "client_check.gd",
+            "if not ClassDB.class_exists(\"PharmakosBridge\"):",
+        ),
         (
             "watch_check.gd",
             "if server.listen(0, \"127.0.0.1\") != OK:",
