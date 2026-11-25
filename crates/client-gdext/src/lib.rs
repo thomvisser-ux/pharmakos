@@ -51,6 +51,7 @@
 //! | a `get_recap` answer, or its refusal | the recap's prose, or the refusal, as it came | [`rig`] |
 //! | `get_map_summary`, `resolve_refs` and `get_briefing` answers | the vents to click, the chips and the "this round" line | [`targeting`], [`editor`] |
 //! | the wall clock | game milliseconds asked for, the host clock reported | [`pacer`] |
+//! | phase changes, Ready, Skip, speeds, focus, camera moves, error rows and refusal codes, while Playtest mode is on | counts and the client's own diagnostics log in memory; on Export, one zip at the path the tester picked | [`playtest`] |
 //!
 //! Each of those is a copy or a lookup. The places where something is *decided* are all
 //! presentation or connection plumbing that the sim must never see: which frame a chunk is
@@ -124,6 +125,7 @@ pub mod enums;
 pub mod error;
 pub mod pacer;
 pub mod panics;
+pub mod playtest;
 pub mod rig;
 pub mod rule_list;
 pub mod rules;

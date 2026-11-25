@@ -2391,7 +2391,7 @@ mod visits {
         // with its own.
         let state = PlanState {
             bound_feature: u32::try_from(vent).unwrap_or(0),
-            bindings: bindings.clone(),
+            bindings: bindings.clone().into(),
             ..PlanState::default()
         };
         assert_eq!(

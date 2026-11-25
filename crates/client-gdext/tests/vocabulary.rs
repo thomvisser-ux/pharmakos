@@ -52,7 +52,20 @@ const OTHER_MEANINGS: &[(&str, &str, usize, &str)] = &[
         "S2's `attack_targets`, the lax reader of the Attack beacon's targets (AGENTS.md \
          section 3 rule 4 names it)",
     ),
-    ("bridge.rs", "wall", 3, "the bridge's wall clock"),
+    (
+        "bridge.rs",
+        "wall",
+        8,
+        "the bridge's wall clock, read by the watch rig and by Playtest mode's calls (S3's \
+         `prob`, part 2)",
+    ),
+    (
+        "playtest.rs",
+        "survey",
+        16,
+        "Playtest mode's end-of-match survey and its `survey.json` (S3's plan, decision 11), not \
+         the Survey mandate",
+    ),
     (
         "editor.rs",
         "move",
@@ -85,7 +98,12 @@ const OTHER_MEANINGS: &[(&str, &str, usize, &str)] = &[
         1,
         "the RFC 6902 `move` op a drag composes",
     ),
-    ("camera_rig.gd", "move", 12, "the camera's own movement"),
+    (
+        "camera_rig.gd",
+        "move",
+        14,
+        "the camera's own movement, and the start of a free-look move it says to Playtest mode (`moved`)",
+    ),
     (
         "view.rs",
         "build",

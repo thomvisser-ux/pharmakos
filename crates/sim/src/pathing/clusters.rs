@@ -95,6 +95,7 @@
 
 use crate::pathing::search::{Bound, Scratch, dijkstra_bounded};
 use crate::pathing::surface::{DEFAULT_ORDER, Node, Surface};
+use crate::reserved::Reserved;
 
 /// `local_comp` of a column that cannot be stood on.
 pub const NO_COMP: u16 = u16::MAX;
@@ -239,8 +240,8 @@ pub struct Clusters {
     comp_label: Vec<u32>,
     union_find: Vec<u32>,
 
-    stack: Vec<Node>,
-    gather: Vec<Node>,
+    stack: Reserved<Node>,
+    gather: Reserved<Node>,
 }
 
 /// A column that is not one of the graph's ([`Clusters::touch`]).
@@ -308,10 +309,10 @@ impl Clusters {
             comp_label: vec![0; nodes],
             union_find: vec![0; nodes],
             // `size` is a positive edge at most `MAX_CLUSTER_EDGE` (checked above).
-            stack: Vec::with_capacity(crate::math::index::row(
+            stack: Reserved::with_capacity(crate::math::index::row(
                 size.unsigned_abs().saturating_mul(size.unsigned_abs()),
             )),
-            gather: Vec::with_capacity(max_trans),
+            gather: Reserved::with_capacity(max_trans),
         };
 
         let mut y = 0;

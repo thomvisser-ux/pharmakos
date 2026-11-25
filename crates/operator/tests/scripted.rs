@@ -137,8 +137,9 @@ enum Push {
     /// Its digest counts the Push's `segment_ended`, as every Lull's after
     /// the first does.
     Shown,
-    /// It counts nothing: a Lull resumed from a save, whose feed is empty,
-    /// or a first round, which had no Push.
+    /// It counts nothing: a Lull resumed from a save made before the save
+    /// carried the last Push (format version 3), whose feed shows none, or a
+    /// first round, which had no Push.
     NotShown,
 }
 
