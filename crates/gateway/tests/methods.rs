@@ -4044,3 +4044,140 @@ fn a_submission_past_the_cap_lists_the_cap_s_errors_and_counts_the_rest() {
         "the rest are counted: {rows:?}"
     );
 }
+
+/// One case of [`a_settings_row_carries_its_zeros_title_and_only_then`]: the
+/// writ the core is switched to (none: it stays Build), its retreat threshold,
+/// and the rows expected to carry a title, with the title.
+type ZeroCase = (
+    Option<pharmakos_sim::seams::MandateKind>,
+    u8,
+    Vec<(&'static str, &'static str)>,
+);
+
+/// S3's `zerotitle`, fix pass 1 (review item A): a settings row carries
+/// `value_title` exactly when its value is a titled 0 -- the core's
+/// `retreat_hp_pct` at 0 says "retreat off" and at 30 carries none, its
+/// repair threshold of 0 says what is never repaired, and a Survey beacon
+/// holding 0 scouts says "no scouts" -- and no other row carries one.
+#[test]
+fn a_settings_row_carries_its_zeros_title_and_only_then() {
+    use pharmakos_plan_core::strings as s;
+    let cases: [ZeroCase; 3] = [
+        // The core is a Build beacon whose repair threshold starts at 0.
+        (
+            None,
+            0,
+            vec![
+                ("/retreat_hp_pct", s::RETREAT_OFF),
+                ("/build/repair_threshold_pct", s::REPAIR_NEVER),
+            ],
+        ),
+        (
+            None,
+            30,
+            vec![("/build/repair_threshold_pct", s::REPAIR_NEVER)],
+        ),
+        (
+            Some(pharmakos_sim::seams::MandateKind::Survey),
+            30,
+            vec![("/survey/scout_count", s::SCOUTS_NONE)],
+        ),
+    ];
+    for (writ, retreat, titled) in cases {
+        let mut surface = resumed_with(|snapshot, world| {
+            let mut world = world.clone();
+            let row = (0..world.beacons().ids().len())
+                .find(|row| world.beacons().seats().get(*row) == Some(&0))
+                .expect("seat 0's core");
+            if let Some(writ) = writ {
+                world.switch_mandate_directly(row, writ);
+            }
+            let core = pharmakos_sim::tables::BeaconId::new(
+                *world.beacons().ids().get(row).expect("the core's id"),
+            );
+            world.set_common(
+                core,
+                pharmakos_sim::tables::Common {
+                    roe: 0,
+                    retreat_hp_pct: retreat,
+                },
+            );
+            *snapshot =
+                pharmakos_sim::snapshot::Snapshot::capture(&world).expect("a world between ticks");
+        });
+        let token = seat_token(&mut surface, 0);
+        let mut left = FIRST_LULL_MS;
+        let core = result(
+            &call(
+                &mut surface,
+                &token,
+                &mut left,
+                "get_beacon",
+                r#"{"beacon_id":"b_00"}"#,
+            ),
+            "get_beacon b_00",
+        );
+        let carried: Vec<(String, String)> = array_of(&core, "settings")
+            .iter()
+            .filter(|row| row.get("value_title").is_some())
+            .map(|row| (text_of(row, "pointer"), text_of(row, "value_title")))
+            .collect();
+        let expected: Vec<(String, String)> = titled
+            .iter()
+            .map(|(pointer, title)| ((*pointer).to_owned(), (*title).to_owned()))
+            .collect();
+        assert_eq!(carried, expected, "{writ:?}, retreat {retreat}: {core:?}");
+    }
+}
+
+/// S3's `zerotitle`, fix pass 1 (review item B): `render_plan`'s wire chips
+/// carry `value_title` exactly at the titled zeros -- a written
+/// `retreat_hp_pct` and `picket_scouts` of 0 -- and not beside the same
+/// settings written non-zero.
+#[test]
+fn render_plans_wire_chips_carry_a_title_only_at_a_zero() {
+    use pharmakos_plan_core::strings as s;
+    let text = r#"{"schema_version":{"major":1},"kind":"PLAYBOOK",
+        "meta":{"title":"zero","author_kind":"HUMAN"},
+        "declarative":{"route":[
+          {"label":"a","place_beacon":{"at":{"voxel":{"x":1,"y":1,"z":0}},
+            "initial":{"mandate":{"retreat_hp_pct":0,"defend":{"picket_scouts":0}}}}},
+          {"label":"b","place_beacon":{"at":{"voxel":{"x":2,"y":2,"z":0}},
+            "initial":{"mandate":{"retreat_hp_pct":30,"defend":{"picket_scouts":2}}}}}
+        ]},
+        "on_death":{"on_respawn":"CONTINUE","max_deaths_before_fallback":3},
+        "fallback":{"hold":{"at":{"safest":{}}}}}"#;
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let rendered = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "render_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(text)),
+        ),
+        "render_plan",
+    );
+    let titled: Vec<(String, String)> = array_of(&rendered, "rules")
+        .iter()
+        .flat_map(|rule| array_of(rule, "chips"))
+        .filter(|chip| chip.get("value_title").is_some())
+        .map(|chip| (text_of(&chip, "pointer"), text_of(&chip, "value_title")))
+        .collect();
+    assert_eq!(
+        titled,
+        [
+            (
+                "/declarative/route/0/place_beacon/initial/mandate/retreat_hp_pct".to_owned(),
+                s::RETREAT_OFF.to_owned()
+            ),
+            (
+                "/declarative/route/0/place_beacon/initial/mandate/defend/picket_scouts".to_owned(),
+                s::PICKET_NONE.to_owned()
+            ),
+        ],
+        "{rendered:?}"
+    );
+}
