@@ -530,3 +530,111 @@ fn presence_in_is_presence_out_through_the_codec_the_canonical_form_and_the_comp
         "the generator draws refused clears: {refusals}"
     );
 }
+
+/// One rendering case: the arm's JSON, the words it must say, and the
+/// chips (pointer under the row, value) it must carry.
+type Said = (String, Vec<&'static str>, Vec<(&'static str, &'static str)>);
+
+/// Every field a Build, Survey or Mine arm writes is said, each value with a
+/// chip holding it, and a field the row leaves out is not said and has no
+/// chip, as the Defend and Attack arms say only what they write
+/// (decisions-log item 184 (10), fix pass 1).
+#[test]
+fn render_plan_says_every_written_setting_of_the_build_survey_and_mine_arms() {
+    let area = r#"{"min":{"x":1,"y":1,"z":1},"max":{"x":2,"y":2,"z":2}}"#;
+    let target = r#"{"blueprint_id":"generator","anchor":{"voxel":{"x":3,"y":3,"z":3}},"order":0,"rotation_quarter_turns":0}"#;
+    let cases: Vec<Said> = vec![
+        (
+            r#""survey": {"scout_count": 3}"#.to_owned(),
+            vec!["fielding 3 scouts"],
+            vec![("survey/scout_count", "3")],
+        ),
+        (
+            format!(r#""survey": {{"probe_areas": [{area}, {area}]}}"#),
+            vec!["probing 2 areas"],
+            vec![],
+        ),
+        (
+            r#""mine": {"dig_max_depth": 4, "flee_on_threat": false, "seam_choice": "RICHEST", "pillar_spacing": 2}"#.to_owned(),
+            vec![
+                "digging down to 4 voxels below the seam's top",
+                "not fleeing threats",
+                "choosing the richest seam",
+                "leaving a pillar every 2 columns",
+            ],
+            vec![
+                ("mine/dig_max_depth", "4"),
+                ("mine/flee_on_threat", "false"),
+                ("mine/seam_choice", "\"RICHEST\""),
+                ("mine/pillar_spacing", "2"),
+            ],
+        ),
+        (
+            format!(
+                r#""build": {{"targets": [{target}], "repair_threshold_pct": 40, "rebuild_destroyed": true, "terraform": "FILL", "protected_areas": [{area}]}}"#
+            ),
+            vec![
+                "building toward 1 target",
+                "repairing structures below 40% of their hit points",
+                "rebuilding destroyed targets",
+                "filling ground to build",
+                "keeping clear of 1 area",
+            ],
+            vec![
+                ("build/repair_threshold_pct", "40"),
+                ("build/rebuild_destroyed", "true"),
+                ("build/terraform", "\"FILL\""),
+            ],
+        ),
+        (
+            r#""build": {"repair_threshold_pct": 0}"#.to_owned(),
+            vec!["never repairing (0%)"],
+            vec![("build/repair_threshold_pct", "0")],
+        ),
+    ];
+    for (arm, words, chips) in &cases {
+        let said = rendered(&playbook(arm));
+        for expected in words {
+            assert!(said.prose.contains(expected), "{arm}: {}", said.prose);
+        }
+        for (pointer, value) in chips {
+            let pointer = format!("{ROW}/{pointer}");
+            let chip = said
+                .rules
+                .iter()
+                .flat_map(|rule| &rule.chips)
+                .find(|chip| chip.pointer == pointer)
+                .unwrap_or_else(|| panic!("{arm}: a chip at {pointer}"));
+            assert_eq!(chip.value_json, *value, "{arm}");
+        }
+    }
+    // A row that leaves every field out says none and has no chip under the
+    // arm.
+    for arm in ["build", "survey", "mine"] {
+        let said = rendered(&playbook(&format!(r#""{arm}": {{}}"#)));
+        let under = format!("{ROW}/{arm}/");
+        assert!(
+            said.rules
+                .iter()
+                .flat_map(|rule| &rule.chips)
+                .all(|chip| !chip.pointer.starts_with(&under)),
+            "{arm}: an omitted field is not said as the player's choice"
+        );
+        for words in [
+            "fielding",
+            "no scouts",
+            "digging",
+            "pillar",
+            "fleeing",
+            "choosing",
+            "repairing",
+            "rebuilding",
+            "ground",
+            "probing",
+            "building toward",
+            "keeping clear",
+        ] {
+            assert!(!said.prose.contains(words), "{arm}: {}", said.prose);
+        }
+    }
+}

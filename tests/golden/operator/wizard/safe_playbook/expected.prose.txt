@@ -4,7 +4,7 @@ Move to the safest beacon, raise the priority of any beacon about to brown out, 
 
 Route
   1. to_safety: walk to the safest own beacon, avoiding known threats.
-  2. deepen_core: interface with beacon "b_00" and change its mandate settings (3.5 s on site).
+  2. deepen_core: interface with beacon "b_00" and change its mandate settings: digging down to 4 voxels below the seam's top (3.5 s on site).
     On failure, move on to the next step.
 
 Rules

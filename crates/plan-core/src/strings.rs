@@ -356,6 +356,60 @@ pub const SCOUTS_NONE: &str = "no scouts";
 pub const DIG_RIM_ONLY: &str = "digging the exposed rim only";
 /// A written `pillar_spacing` of 0, before its chip.
 pub const PILLARS_NONE: &str = "leaving no pillars";
+/// A written `scout_count` past 0, before its chip.
+pub const SCOUTS_FIELDING: &str = "fielding";
+/// After a written `scout_count`'s chip.
+pub const SCOUTS_UNIT: &str = "scouts";
+/// A written `dig_max_depth` past 0, before its chip.
+pub const DIG_DOWN_TO: &str = "digging down to";
+/// After a written `dig_max_depth`'s chip.
+pub const DIG_DOWN_TO_UNIT: &str = "voxels below the seam's top";
+/// A written `pillar_spacing` past 0, before its chip.
+pub const PILLARS_EVERY: &str = "leaving a pillar every";
+/// After a written `pillar_spacing`'s chip.
+pub const PILLARS_EVERY_UNIT: &str = "columns";
+/// A written `flee_on_threat` of true.
+pub const FLEE_ON: &str = "fleeing known threats";
+/// A written `flee_on_threat` of false.
+pub const FLEE_OFF: &str = "not fleeing threats";
+/// A written `seam_choice` of RICHEST.
+pub const SEAM_RICHEST: &str = "choosing the richest seam";
+/// A written `seam_choice` of NEAREST.
+pub const SEAM_NEAREST: &str = "choosing the nearest seam";
+/// A written `seam_choice` of SAFEST.
+pub const SEAM_SAFEST: &str = "choosing the safest seam";
+/// A `seam_choice` this build does not name (`E0018`).
+pub const SEAM_UNSET: &str = "choosing a seam as the file does not say";
+/// Before a Survey arm's probe-area count.
+pub const SURVEY_PROBING: &str = "probing";
+/// Before a Build arm's target count.
+pub const BUILD_TARGETS: &str = "building toward";
+/// One Build target.
+pub const TARGET_ONE: &str = "target";
+/// Several Build targets.
+pub const TARGET_MANY: &str = "targets";
+/// Before a Build arm's protected-area count.
+pub const BUILD_PROTECTING: &str = "keeping clear of";
+/// A written `repair_threshold_pct` past 0, before its chip.
+pub const REPAIR_BELOW: &str = "repairing structures below";
+/// After a written `repair_threshold_pct`'s percentage.
+pub const REPAIR_BELOW_UNIT: &str = "of their hit points";
+/// A written `repair_threshold_pct` of 0, before its chip.
+pub const REPAIR_NEVER: &str = "never repairing";
+/// A written `rebuild_destroyed` of true.
+pub const REBUILD_ON: &str = "rebuilding destroyed targets";
+/// A written `rebuild_destroyed` of false.
+pub const REBUILD_OFF: &str = "not rebuilding destroyed targets";
+/// A written `terraform` of NONE.
+pub const TERRAFORM_NONE: &str = "reshaping no ground";
+/// A written `terraform` of FILL.
+pub const TERRAFORM_FILL: &str = "filling ground to build";
+/// A written `terraform` of DIG.
+pub const TERRAFORM_DIG: &str = "digging ground to build";
+/// A written `terraform` of BOTH.
+pub const TERRAFORM_BOTH: &str = "filling and digging ground to build";
+/// A `terraform` this build does not name (`E0018`).
+pub const TERRAFORM_UNSET: &str = "reshaping ground as the file does not say";
 /// A set `clear_protected_areas`.
 pub const CLEAR_PROTECTED: &str = "emptying its protected areas";
 /// A set `clear_probe_areas`.
