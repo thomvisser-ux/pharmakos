@@ -159,8 +159,12 @@ func camera_moved(kind: String) -> void:
 		bridge.playtest_camera(kind)
 
 
+## Off, Playtest mode costs nothing: no bridge call, its line and survey hidden. On, it draws the
+## bridge's `playtest_state` each frame.
 func _process(_delta: float) -> void:
-	if bridge == null:
+	if bridge == null or _toggle == null or not _toggle.button_pressed:
+		_note.visible = false
+		_survey.visible = false
 		return
 	show_state(bridge.playtest_state())
 

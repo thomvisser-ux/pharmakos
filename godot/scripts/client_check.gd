@@ -339,6 +339,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_remembered_line(failures)
 	_check_the_logs(failures)
 	await _check_the_playtest_lobby(failures)
+	await _check_playtest_off_costs_nothing(failures)
 
 
 ## **The wheel reaches a readable structure** (item 155 (3) 4). From the whole map's framing,
@@ -2115,3 +2116,57 @@ func _check_the_playtest_lobby(failures: Array[String]) -> void:
 	lobby.queue_free()
 	await get_tree().process_frame
 	print("[client-check] Playtest mode: off at launch, on by its button, focus and a camera move forwarded, one bundle written and read back, a missing folder said, off and cleared")
+
+
+## A stand-in for the bridge that counts every Playtest call made to it.
+class CountingBridge extends Node:
+	var calls := 0
+	var on := false
+
+	func playtest_set(wanted: bool, _focused: bool) -> bool:
+		calls += 1
+		on = wanted
+		return on
+
+	func playtest_state() -> Dictionary:
+		calls += 1
+		return {"on": on, "phase": "", "survey_limit": 4000}
+
+	func playtest_focus(_focused: bool) -> void:
+		calls += 1
+
+	func playtest_camera(_kind: String) -> bool:
+		calls += 1
+		return true
+
+
+## **Playtest mode off costs nothing** (fix pass 1, item 5): with the check button off, frames,
+## focus changes and camera moves make no bridge call at all; switched on, they do.
+func _check_playtest_off_costs_nothing(failures: Array[String]) -> void:
+	var counting := CountingBridge.new()
+	add_child(counting)
+	var chooser := HBoxContainer.new()
+	var column := VBoxContainer.new()
+	add_child(chooser)
+	add_child(column)
+	var playtest: Node = preload("res://scripts/playtest.gd").new()
+	add_child(playtest)
+	playtest.setup(counting, null, chooser, column)
+	for i in SETTLE_FRAMES:
+		await get_tree().process_frame
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	get_tree().root.propagate_notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+	playtest.camera_moved("zoom")
+	if counting.calls != 0:
+		failures.append("Playtest mode off made %d bridge call(s)" % counting.calls)
+	playtest._toggle.button_pressed = true
+	for i in SETTLE_FRAMES:
+		await get_tree().process_frame
+	if counting.calls < SETTLE_FRAMES:
+		failures.append("Playtest mode on made %d bridge call(s) in %d frames" % [counting.calls, SETTLE_FRAMES])
+	playtest.queue_free()
+	counting.queue_free()
+	chooser.queue_free()
+	column.queue_free()
+	await get_tree().process_frame
+	print("[client-check] Playtest mode off: no bridge call in %d frames, a focus change and a camera move" % SETTLE_FRAMES)
