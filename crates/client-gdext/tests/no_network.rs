@@ -409,6 +409,8 @@ fn _probe() { let _ = std::net::TcpStream::connect(\"127.0.0.1:1\"); }",
 #[cfg(test)]
 fn helper() {}
 fn b() { let _ = std::net::UdpSocket::bind(x); }",
+        // Review 2's R7: a test module ending at an indented brace hides nothing after it.
+        "fn a() {}\n#[cfg(test)]\nmod tests {\n    #![rustfmt::skip]\n    }\nfn evil() {\n    let _ = std::net::TcpStream::connect(\"x\");\n}\n",
         "let child = std::process::Command::new(\"gamectl\");",
         "use std::process::{self, Command};",
         "let c = Command::new(path);",

@@ -837,9 +837,19 @@ fn the_shared_reader_refuses_an_attribute_it_cannot_place() {
         "fn a() {}\n#[cfg(test)] mod tests {\n}\n",
         "#[cfg(test)]\nfn helper() {}\nfn a() {}\n#[cfg(test)]\nmod tests {\n}\n",
         "fn a() {}\n#[cfg(test)]\nmod tests {\n}\nfn b() {}\n",
+        // Review 2's Y6b: an attribute that shares its line, then a real test module.
+        "fn a() {}\n#[cfg(test)] const X: () = ();\nmod tests {\n}\n",
+        // Review 2's R7: a skipped module whose closing brace is indented, then shipped code.
+        "fn a() {}\n#[cfg(test)]\nmod tests {\n    #![rustfmt::skip]\n    }\nfn evil() {\n    let _ = 1;\n}\n",
+        // A module that never closes.
+        "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() {}\n",
     ] {
         assert!(shipped::scanned_lines(text).is_err(), "placed: {text}");
     }
+    // A brace in a string or a comment of the test module does not end it.
+    let braced =
+        "fn a() {}\n#[cfg(test)]\nmod tests {\n    // }\n    fn t() { let _ = \"}\"; }\n}\n\n";
+    assert_eq!(shipped::scanned_lines(braced), Ok(1));
     // An attribute named in a comment or a string is not one.
     let quoted = "// #[cfg(test)]\nfn a() { let s = \"#[cfg(test)]\"; }\n";
     assert_eq!(shipped::scanned_lines(quoted), Ok(2));

@@ -149,9 +149,12 @@ fn literal_end(chars: &[char], at: usize) -> Option<usize> {
 
 /// How many leading lines of `text` ship: all of them, or, when the file ends in its unit-test
 /// module, every line before that module's `#[cfg(test)]`. The module is recognised in exactly
-/// one shape, the one rustfmt gives every test module in this crate: a line that is only
-/// `#[cfg(test)]`, then `mod tests {`, and that module's closing `}` in column 0 as the file's
-/// last non-blank line, with no other `#[cfg(test)]` in code.
+/// one shape: a line that is only `#[cfg(test)]`, then the line `mod tests {`, and that module's
+/// end found by matching its braces in the code (comments and literals removed, so no brace in
+/// either counts), with nothing but blank lines after it and no other `#[cfg(test)]` in code.
+/// A closing brace in column 0 is not taken for the end: a module whose closing brace is
+/// indented and is followed by an item ends where its braces do, and the item after it is code
+/// that ships (review 2's R7).
 ///
 /// # Errors
 ///
@@ -176,25 +179,50 @@ pub(crate) fn scanned_lines(text: &str) -> Result<usize, String> {
             ))
         };
     };
-    let alone = code
-        .get(*start)
-        .is_some_and(|line| line.trim() == "#[cfg(test)]");
-    let opens = raw
-        .get(start + 1)
-        .is_some_and(|line| *line == "mod tests {");
-    let last = raw.iter().rposition(|line| !line.trim().is_empty());
-    let closes = raw
-        .iter()
-        .enumerate()
-        .skip(start + 2)
-        .find(|(_, line)| **line == "}")
-        .map(|(index, _)| index);
-    if alone && opens && closes.is_some() && closes == last {
-        Ok(*start)
-    } else {
+    let refused = || {
         Err(format!(
             "`#[cfg(test)]` on line {} is not the file's trailing `mod tests`",
             start + 1
         ))
+    };
+    let alone = code
+        .get(*start)
+        .is_some_and(|line| line.trim() == "#[cfg(test)]");
+    let opens = code
+        .get(start + 1)
+        .is_some_and(|line| line.trim_end() == "mod tests {");
+    if !(alone && opens) {
+        return refused();
+    }
+    // The module's end: the line where its braces, counted in the code view, come back to zero.
+    let mut depth = 0_usize;
+    let mut end = None;
+    'lines: for (index, line) in code.iter().enumerate().skip(start + 1) {
+        for c in line.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    let Some(next) = depth.checked_sub(1) else {
+                        return refused();
+                    };
+                    depth = next;
+                    if depth == 0 {
+                        end = Some(index);
+                        break 'lines;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let Some(end) = end else {
+        return refused();
+    };
+    let closing_alone = code.get(end).is_some_and(|line| line.trim() == "}");
+    let only_blank_after = code.iter().skip(end + 1).all(|line| line.trim().is_empty());
+    if closing_alone && only_blank_after {
+        Ok(*start)
+    } else {
+        refused()
     }
 }
