@@ -1364,6 +1364,14 @@ impl BeaconList {
 /// covers, both ends inclusive, as the sim holds it: "the ground from column
 /// 30, 40 to column 38, 44". The sim tests an area on the column whatever the
 /// height, and holds no height for it, so the line says none.
+///
+/// **Two facts, not one box said two ways** (S3's `edlists`, fix pass 1, W3):
+/// a wall's box ([`box_words`], "filling the box from voxel 30, 40, 0 to voxel
+/// 38, 40, 7") is the three-dimensional box the author wrote, its heights
+/// part of what is built; an area in a list is ground, which the sim holds as
+/// columns only. Saying an area by voxel corners would claim a height the sim
+/// neither holds nor reads, and saying a wall by columns would drop the
+/// heights it is built to. So each has its own words.
 #[must_use]
 pub fn area_line(min: [i16; 2], max: [i16; 2]) -> String {
     let [lx, ly] = min;
