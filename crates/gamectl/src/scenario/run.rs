@@ -972,10 +972,8 @@ fn codes_of(result: Option<&Json>) -> Result<String, Failure> {
     // tool; the codes and their pointers say what is wrong on their own, and
     // this line is read by somebody who has just watched a build go red.
     let mut codes: Vec<String> = Vec::new();
-    if let Some(Json::Array(items)) = result
-        .and_then(|result| result.get("report"))
-        .and_then(|report| report.get("diagnostics"))
-    {
+    let report = result.and_then(|result| result.get("report"));
+    if let Some(Json::Array(items)) = report.and_then(|report| report.get("diagnostics")) {
         for item in items {
             // A diagnostic always carries its code, so one without is the
             // wire's shape having moved, refused rather than shown as `?`.
@@ -997,17 +995,28 @@ fn codes_of(result: Option<&Json>) -> Result<String, Failure> {
                     )));
                 }
             };
-            // An `I0007` closes the report for a code it listed only the
-            // first of (S3's `vcap`): said as that, so a reader of this line
-            // does not take the listed codes for all there were.
-            if code == "I0007" {
-                codes.push(format!(
-                    "I0007: more of one code than the {} a report lists",
-                    pharmakos_verifier::MAX_PER_CODE
-                ));
-            } else {
+            // An `I0007` is the player's words for one `left_out` entry (S3's
+            // `leftout`), which is said below from the field itself.
+            if code != "I0007" {
                 codes.push(format!("{code} at {path}"));
             }
+        }
+    }
+    // What the report counted and did not list, from its typed field, so a
+    // reader of this line does not take the listed codes for all there were.
+    if let Some(Json::Array(gaps)) = report.and_then(|report| report.get("left_out")) {
+        for gap in gaps {
+            let (Some(Json::String(code)), Some(Json::Number(count)), Some(Json::Number(max))) =
+                (gap.get("code"), gap.get("count"), gap.get("max"))
+            else {
+                return Err(Failure::internal(format!(
+                    "`submit_plan` answered with a left-out entry that is not a code, a count \
+                     and a most ({gap:?})"
+                )));
+            };
+            codes.push(format!(
+                "{count} more {code} not listed: a report lists at most {max} of one code"
+            ));
         }
     }
     Ok(codes.join("; "))

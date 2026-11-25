@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
-use pharmakos_proto::gp::api::v1::{Diagnostic, PatchSuggestion, VerifyReport};
+use pharmakos_proto::gp::api::v1::{Diagnostic, LeftOut, PatchSuggestion};
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
 use pharmakos_proto::json::grammar::Said;
@@ -129,8 +129,9 @@ impl Diag {
 
 /// The most diagnostics of one code a report lists one by one (S3's `vcap`;
 /// decisions-log item 183 (4), "Cap all codes"). Past it the rest of that
-/// code are counted, not built, and the report closes with one `I0007` for
-/// the code saying how many were left out ([`LeftOut`]).
+/// code are counted, not built: the report's `left_out` field carries one
+/// `gp.api.v1.LeftOut` for the code, and the report closes with one `I0007`
+/// for it, rendered from the same fact, saying how many were left out.
 ///
 /// # Why 4, and what it must fit
 ///
@@ -358,8 +359,14 @@ pub struct Cuts {
 /// test holds every report to none.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReportFault {
-    /// A count past `u64`: the diagnostic counted no further.
+    /// A cut's count past `u64`: the cut counted no further.
     CountPastU64 {
+        /// The code counted.
+        code: &'static str,
+    },
+    /// A code's listed or left-out count past `u32`, the width
+    /// `gp.api.v1.LeftOut.count` carries: the diagnostic counted no further.
+    CountPastU32 {
         /// The code counted.
         code: &'static str,
     },
@@ -401,95 +408,17 @@ const DEFAULT_NOTE: &str = "I0003";
 /// The code that closes a report, once per code with diagnostics left out.
 pub(crate) const LEFT_OUT: &str = "I0007";
 
-/// What a finished report's **rows** say about the cap, for a reader that has
-/// only the report (`gp.api.v1.VerifyReport` carries no left-out field until
-/// the contract change after S3's `vcap`): read from codes and counts, never
-/// from a sentence.
-///
-/// The rule, exact by construction of [`Builder`]: a code is left out of only
-/// once [`MAX_PER_CODE`] of it are listed, so a code with fewer rows listed
-/// is complete, and a report with no `I0007` is complete for every code. The
-/// one other way a row is left out, an `I0003` note past `E0110`, is a note
-/// no reader infers from.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct CapRead {
-    /// How many `I0007` rows close the report: how many codes were left out
-    /// of.
-    pub left_out_codes: usize,
-    /// The codes listed [`MAX_PER_CODE`] times or more, in code order: the
-    /// only codes anything can have been left out of.
-    pub at_cap: Vec<String>,
-}
-
-impl CapRead {
-    /// Reads `report`'s rows. Counted by grouping, with no arithmetic that
-    /// could overflow: a count is a group's length.
-    #[must_use]
-    pub fn of(report: &VerifyReport) -> CapRead {
-        let mut codes: Vec<&str> = report
-            .diagnostics
-            .iter()
-            .map(|found| found.code.as_str())
-            .filter(|code| *code != LEFT_OUT)
-            .collect();
-        codes.sort_unstable();
-        // A group too long for a `u32` is past the cap as surely as any.
-        let mut at_cap: Vec<String> = codes
-            .chunk_by(|a, b| a == b)
-            .filter(|group| match u32::try_from(group.len()) {
-                Ok(len) => len >= MAX_PER_CODE,
-                Err(_) => true,
-            })
-            .filter_map(|group| group.first().map(|code| (*code).to_owned()))
-            .collect();
-        at_cap.dedup();
-        CapRead {
-            left_out_codes: report
-                .diagnostics
-                .iter()
-                .filter(|found| found.code == LEFT_OUT)
-                .count(),
-            at_cap,
-        }
-    }
-
-    /// Whether every diagnostic of `code` the verifier raised is listed.
-    #[must_use]
-    pub fn complete(&self, code: &str) -> bool {
-        self.left_out_codes == 0 || !self.at_cap.iter().any(|at| at == code)
-    }
-
-    /// Whether any code at the cap may have been left out of: some `I0007`
-    /// closes the report.
-    #[must_use]
-    pub fn any_left_out(&self) -> bool {
-        self.left_out_codes > 0
-    }
-}
-
-/// One code's diagnostics that a report counted and did not list, as typed
-/// data: the `I0007` that closes the report for that code is rendered from
-/// it, and nothing reads the sentence back.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct LeftOut {
-    /// The code left out.
-    pub code: &'static str,
-    /// How many of that code the report counted and did not list.
-    pub count: u64,
-    /// The cap: how many of the code the report could list.
-    pub max: u32,
-}
-
 /// How many diagnostics of one code a report has listed and left out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 struct Tally {
     /// Whether the code is an error, read from the catalogue once per code.
     error: bool,
     /// Listed one by one, at most the cap.
-    listed: u64,
+    listed: u32,
     /// Counted and not built: past the cap, or (for `I0003`) after `E0110`.
-    /// A count past `u64` is a [`ReportFault::CountPastU64`].
-    left_out: u64,
+    /// A count past `u32`, the width `gp.api.v1.LeftOut.count` carries, is a
+    /// [`ReportFault::CountPastU32`].
+    left_out: u32,
 }
 
 /// What [`Builder::admit`] is asked: whether a diagnostic would be listed
@@ -531,11 +460,19 @@ impl Default for Builder {
     }
 }
 
-/// One more of a count, or the fault that it cannot be.
+/// One more of a cut's count, or the fault that it cannot be.
 fn bump(count: &mut u64, code: &'static str, faults: &mut Vec<ReportFault>) {
     match count.checked_add(1) {
         Some(next) => *count = next,
         None => faults.push(ReportFault::CountPastU64 { code }),
+    }
+}
+
+/// One more of a code's tally, or the fault that it cannot be.
+fn tally_one(count: &mut u32, code: &'static str, faults: &mut Vec<ReportFault>) {
+    match count.checked_add(1) {
+        Some(next) => *count = next,
+        None => faults.push(ReportFault::CountPastU32 { code }),
     }
 }
 
@@ -588,12 +525,12 @@ impl Builder {
             ..Tally::default()
         });
         self.errors |= tally.error;
-        if over_budget || tally.listed >= u64::from(cap) {
-            bump(&mut tally.left_out, code, &mut self.faults);
+        if over_budget || tally.listed >= cap {
+            tally_one(&mut tally.left_out, code, &mut self.faults);
             return false;
         }
         if admit == Admit::List {
-            bump(&mut tally.listed, code, &mut self.faults);
+            tally_one(&mut tally.listed, code, &mut self.faults);
         }
         true
     }
@@ -710,7 +647,7 @@ impl Builder {
             self.faults
                 .push(ReportFault::DiagnosticPastItsBound { code, bytes, max });
             if let Some(tally) = self.tallies.get_mut(code) {
-                bump(&mut tally.left_out, code, &mut self.faults);
+                tally_one(&mut tally.left_out, code, &mut self.faults);
             }
             return;
         }
@@ -728,13 +665,14 @@ impl Builder {
         self.errors
     }
 
-    /// What the cap left out, per code in code order: the typed data each
-    /// closing `I0007` is rendered from.
-    pub(crate) fn left_out(&self) -> Vec<LeftOut> {
+    /// What the cap left out, per code in code order (the tallies are an
+    /// ordered map): the facts `gp.api.v1.VerifyReport.left_out` carries and
+    /// each closing `I0007` is rendered from.
+    fn gaps(&self) -> Vec<Gap> {
         self.tallies
             .iter()
             .filter(|(_, tally)| tally.left_out > 0)
-            .map(|(code, tally)| LeftOut {
+            .map(|(code, tally)| Gap {
                 code,
                 count: tally.left_out,
                 max: self.cap,
@@ -743,13 +681,14 @@ impl Builder {
     }
 
     /// The diagnostics, in the order they were emitted, then, in code order,
-    /// one `I0007` for each code with diagnostics left out, rendered from its
-    /// [`LeftOut`] and worded by the left-out code's severity; and the
-    /// report's typed facts. An `I0007` never passes through the cap and is
-    /// never counted against one: there is at most one per code.
+    /// one `I0007` for each code with diagnostics left out, rendered from the
+    /// same fact as its `gp.api.v1.LeftOut` entry and worded by the left-out
+    /// code's severity; and the report's typed facts. An `I0007` never passes
+    /// through the cap and is never counted against one: there is at most one
+    /// per code.
     pub(crate) fn finish(mut self) -> Finished {
-        let left_out = self.left_out();
-        for gap in &left_out {
+        let gaps = self.gaps();
+        for gap in &gaps {
             let verdict = match severity_of(gap.code) {
                 Severity::Error | Severity::Unspecified => strings::LEFT_OUT_STILL_REFUSE,
                 Severity::Warning | Severity::Info => "",
@@ -777,18 +716,38 @@ impl Builder {
         }
         Finished {
             diagnostics: self.diagnostics,
-            left_out,
+            left_out: gaps
+                .into_iter()
+                .map(|gap| LeftOut {
+                    code: gap.code.to_owned(),
+                    count: gap.count,
+                    max: gap.max,
+                })
+                .collect(),
             cuts: self.cuts,
             faults: self.faults,
         }
     }
 }
 
+/// One code's diagnostics the report counted and did not list, while the
+/// report is built: the code still the catalogue's own `&'static str`, so the
+/// `I0007` can name it without a copy.
+struct Gap {
+    /// The code left out.
+    code: &'static str,
+    /// How many of that code the report counted and did not list.
+    count: u32,
+    /// The cap: how many of the code the report could list.
+    max: u32,
+}
+
 /// A finished report's diagnostics and its typed facts.
 pub(crate) struct Finished {
     /// The diagnostics, the closing `I0007`s last.
     pub(crate) diagnostics: Vec<Diagnostic>,
-    /// What the cap left out, per code.
+    /// What the cap left out, per code in code order:
+    /// `gp.api.v1.VerifyReport.left_out`.
     pub(crate) left_out: Vec<LeftOut>,
     /// What was cut to keep each diagnostic within its bound.
     pub(crate) cuts: Cuts,
@@ -1258,7 +1217,9 @@ mod tests {
             verifier_version: crate::VERIFIER_VERSION.to_owned(),
             size_units: u32::MAX,
             size_budget: u32::MAX,
-            left_out: Vec::new(),
+            // The typed entries are sent too, one per code left out of, so
+            // the answer's bytes count them.
+            left_out: finished.left_out,
         }
     }
 
@@ -1525,5 +1486,71 @@ mod tests {
         super::bump(&mut count, "E0303", &mut faults);
         assert_eq!(count, u64::MAX);
         assert_eq!(faults, vec![ReportFault::CountPastU64 { code: "E0303" }]);
+    }
+
+    /// A code's tally past `u32`, the width `LeftOut.count` carries, is a
+    /// fault, not a wrap or a silent stop.
+    #[test]
+    fn a_tally_past_u32_is_a_fault() {
+        let mut count = u32::MAX;
+        let mut faults = Vec::new();
+        super::tally_one(&mut count, "E0303", &mut faults);
+        assert_eq!(count, u32::MAX);
+        assert_eq!(faults, vec![ReportFault::CountPastU32 { code: "E0303" }]);
+    }
+
+    /// The typed entries and the closing `I0007`s are one fact: one entry per
+    /// code left out of, in code order, each with its count and the cap, and
+    /// one `I0007` for each, in the same order, naming the same count.
+    #[test]
+    fn each_i0007_is_its_left_out_entry() {
+        let mut builder = Builder::default();
+        // Emitted out of code order: the entries come in code order anyway.
+        for (code, times) in [("W0702", 6_u32), ("E0303", 5), ("E0301", 9)] {
+            for _ in 0..times {
+                builder.emit(Diag::new(code, "/declarative/route/0"));
+            }
+        }
+        builder.emit(Diag::new("E0302", "/declarative/route/0"));
+        let finished = builder.finish();
+        let entries: Vec<(&str, u32, u32)> = finished
+            .left_out
+            .iter()
+            .map(|gap| (gap.code.as_str(), gap.count, gap.max))
+            .collect();
+        assert_eq!(
+            entries,
+            vec![
+                ("E0301", 5, MAX_PER_CODE),
+                ("E0303", 1, MAX_PER_CODE),
+                ("W0702", 2, MAX_PER_CODE),
+            ]
+        );
+        let markers: Vec<&str> = finished
+            .diagnostics
+            .iter()
+            .filter(|found| found.code == "I0007")
+            .map(|found| found.message.as_str())
+            .collect();
+        assert_eq!(markers.len(), entries.len());
+        for (marker, (code, count, _)) in markers.iter().zip(&entries) {
+            assert!(
+                marker.starts_with(&format!("{count} more `{code}`")),
+                "{marker}"
+            );
+        }
+        // Past the size budget an `I0003` is left out with none listed.
+        let mut builder = Builder::default();
+        builder.emit(Diag::new("E0110", "/declarative"));
+        builder.emit(Diag::new("I0003", "/declarative/route/0/on_fail"));
+        let finished = builder.finish();
+        assert_eq!(
+            finished
+                .left_out
+                .iter()
+                .map(|gap| (gap.code.as_str(), gap.count))
+                .collect::<Vec<_>>(),
+            vec![("I0003", 1)]
+        );
     }
 }

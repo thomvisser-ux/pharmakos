@@ -231,7 +231,7 @@ fn check_verifier(
                  {} codes past the report's {} of one code), so a seat that let its Lull run \
                  out would have nothing to play",
                 report.diagnostics.len(),
-                pharmakos_verifier::CapRead::of(&report).left_out_codes,
+                report.left_out.len(),
                 pharmakos_verifier::MAX_PER_CODE,
             ),
         ),

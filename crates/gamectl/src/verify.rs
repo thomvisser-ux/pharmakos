@@ -407,16 +407,20 @@ fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> Result
     Ok(text)
 }
 
-/// The report's per-code cap when an error code is at it and the report
-/// closes with an `I0007`: then more errors may have been raised than are
-/// listed (`pharmakos_verifier::CapRead`, read from the rows, never from a
-/// sentence).
+/// The report's per-code cap, as its `left_out` field says it, when the field
+/// names an error code: then more errors were raised than are listed (S3's
+/// `leftout`; never read from the rows or a sentence). An error code is left
+/// out of only at the cap, so its listed rows give its severity.
 fn errors_left_out(report: &VerifyReport) -> Option<u32> {
-    let read = pharmakos_verifier::CapRead::of(report);
-    let error_at_cap = report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.severity == i32::from(Severity::Error) && !read.complete(&diagnostic.code)
-    });
-    error_at_cap.then_some(pharmakos_verifier::MAX_PER_CODE)
+    report
+        .left_out
+        .iter()
+        .find(|gap| {
+            report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == gap.code && diagnostic.severity == i32::from(Severity::Error)
+            })
+        })
+        .map(|gap| gap.max)
 }
 
 /// `report_hash` and `rules_hash` are bytes on the wire; a person reads hex.

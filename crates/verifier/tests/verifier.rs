@@ -3301,14 +3301,15 @@ fn the_cap_never_moves_a_verdict_or_a_total() {
                 *total = total.checked_add(1).expect("a total");
             }
         }
-        for gap in &counted.left_out {
-            let total = totals.entry(gap.code.to_owned()).or_default();
-            *total = total.checked_add(gap.count).expect("a total");
+        for gap in &counted.report.left_out {
+            let total = totals.entry(gap.code.clone()).or_default();
+            *total = total.checked_add(u64::from(gap.count)).expect("a total");
         }
         totals
     };
     let cap = usize::try_from(MAX_PER_CODE).expect("fits");
     let mut compared = 0_usize;
+    let mut capped_seen = 0_usize;
     for case in cases() {
         for copies in [1_usize, 3, 7, 25] {
             let Some(text) = copied_text(&case, copies) else {
@@ -3328,20 +3329,96 @@ fn the_cap_never_moves_a_verdict_or_a_total() {
                 );
                 // Uncapped, only `I0003` notes past the size budget are left out.
                 assert!(
-                    whole.left_out.iter().all(|gap| gap.code == "I0003"),
+                    whole.report.left_out.iter().all(|gap| gap.code == "I0003"),
                     "{case}: {:?} left out uncapped",
-                    whole.left_out
+                    whole.report.left_out
                 );
                 assert!(capped.faults.is_empty() && whole.faults.is_empty());
                 for code in totals(&whole).into_keys() {
                     let shown = count_of(&capped.report, &code);
                     assert!(shown <= cap, "{case}: {shown} {code}");
                 }
-                let markers = count_of(&capped.report, "I0007");
-                assert_eq!(markers, capped.left_out.len(), "{case}: one I0007 a code");
+                the_field_is_the_rows(&capped.report, MAX_PER_CODE, &format!("{case} x{copies}"));
+                the_field_is_the_rows(&whole.report, u32::MAX, &format!("{case} x{copies} whole"));
+                if count_of(&capped.report, "I0007") > 0 {
+                    capped_seen = capped_seen.saturating_add(1);
+                }
                 compared = compared.saturating_add(1);
             }
         }
     }
     assert!(compared > 500, "only {compared} reports compared");
+    assert!(
+        capped_seen > 50,
+        "only {capped_seen} reports left something out"
+    );
+}
+
+/// **`VerifyReport.left_out` and the closing `I0007` rows say the same thing**
+/// (S3's `leftout`): one `I0007` per entry, in the same order, each rendered
+/// from its entry (its count, its code and its `max`); the entries in code
+/// order, one per code, each counting at least one, each `max` the cap the
+/// report was built at; and a code with nothing left out has no entry. The
+/// `I0007` rows are the report's last, after every listed diagnostic.
+fn the_field_is_the_rows(report: &VerifyReport, cap: u32, case: &str) {
+    let markers: Vec<&pharmakos_proto::gp::api::v1::Diagnostic> = report
+        .diagnostics
+        .iter()
+        .filter(|found| found.code == "I0007")
+        .collect();
+    assert_eq!(
+        markers.len(),
+        report.left_out.len(),
+        "{case}: one I0007 an entry: {:?}",
+        report.left_out
+    );
+    let first_marker = report
+        .diagnostics
+        .iter()
+        .position(|found| found.code == "I0007")
+        .unwrap_or(report.diagnostics.len());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .skip(first_marker)
+            .all(|found| found.code == "I0007"),
+        "{case}: the I0007s close the report"
+    );
+    for (marker, gap) in markers.iter().zip(&report.left_out) {
+        let words = format!(
+            "{} more `{}` not listed: a report lists at most {} of one code",
+            gap.count, gap.code, gap.max
+        );
+        assert!(
+            marker.message.starts_with(&words),
+            "{case}: the I0007 `{}` is not rendered from {gap:?}",
+            marker.message
+        );
+        assert!(gap.count >= 1, "{case}: {gap:?} counts nothing");
+        assert_eq!(gap.max, cap, "{case}: {gap:?}'s max is not the cap");
+    }
+    let codes: Vec<&str> = report
+        .left_out
+        .iter()
+        .map(|gap| gap.code.as_str())
+        .collect();
+    let mut ordered = codes.clone();
+    ordered.sort_unstable();
+    ordered.dedup();
+    assert_eq!(
+        codes, ordered,
+        "{case}: the entries are in code order, one a code"
+    );
+    for gap in &report.left_out {
+        // A code is left out of only at the cap, except `I0003` past the size
+        // budget, which is never listed once `E0110` has fired.
+        let listed = count_of(report, &gap.code);
+        let at_cap = u32::try_from(listed).is_ok_and(|listed| listed == cap);
+        let past_budget = gap.code == "I0003" && count_of(report, "E0110") == 1;
+        assert!(
+            at_cap || past_budget,
+            "{case}: {gap:?} left out with {listed} listed"
+        );
+    }
 }

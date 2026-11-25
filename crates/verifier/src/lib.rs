@@ -234,8 +234,8 @@ pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
 pub use report::{
-    ARGUMENT_BYTES_MAX, ARGUMENT_WORDS_BYTES_MAX, CapRead, Cuts, DIAGNOSTIC_FRAMING_BYTES,
-    ENGINE_ARGUMENT_BYTES_MAX, LeftOut, MAP_REF_BYTES, MAX_FIXES, MAX_MAP_REFS, MAX_PER_CODE,
+    ARGUMENT_BYTES_MAX, ARGUMENT_WORDS_BYTES_MAX, Cuts, DIAGNOSTIC_FRAMING_BYTES,
+    ENGINE_ARGUMENT_BYTES_MAX, MAP_REF_BYTES, MAX_FIXES, MAX_MAP_REFS, MAX_PER_CODE,
     MAX_POINTER_BYTES, MAX_RELATED, ONCE_PER_REPORT, PATCH_BYTES_MAX, QUOTED_CHAR_JSON_BYTES_MAX,
     ReportFault, argument_bytes_max, bounded, diagnostic_bytes, diagnostic_bytes_max, json_bytes,
 };
@@ -410,8 +410,12 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// and `pillar_spacing` carry presence and four lists gain a `clear_*` flag,
 /// so this build prices a written 0 and a set clear as one field each, raises
 /// `E0515` for a misplaced clear, and gives `pillar_spacing`'s `I0003` its
-/// Fix; its reports are not comparable with `0.1.0-s3.7`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.8";
+/// Fix; its reports are not comparable with `0.1.0-s3.7`'s. `0.1.0-s3.9`
+/// from S3's `leftout` (decisions-log item 183 (5)): a report says what its
+/// per-code cap left out as typed data, `VerifyReport.left_out`, beside the
+/// closing `I0007`s, so the same five inputs give different report bytes and
+/// its reports are not comparable with `0.1.0-s3.8`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.9";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
@@ -757,25 +761,22 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
     verify_counted(input, depth).report
 }
 
-/// A report, and what its per-code cap ([`MAX_PER_CODE`]) left out as typed
-/// data: one [`LeftOut`] per code, in code order, each the data the report's
-/// closing `I0007` for that code is rendered from.
+/// A report, and the builder's own facts beside it. What the per-code cap
+/// ([`MAX_PER_CODE`]) left out is the report's own `left_out` field (S3's
+/// `leftout`; decisions-log item 183 (5)): one `gp.api.v1.LeftOut` per code,
+/// in code order, each the fact the report's closing `I0007` for that code is
+/// rendered from.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Counted {
     /// The report, exactly as [`verify`] returns it.
     pub report: VerifyReport,
-    /// What the cap left out, per code; empty when nothing was.
-    pub left_out: Vec<LeftOut>,
     /// What was cut to keep each diagnostic within its bound.
     pub cuts: Cuts,
     /// The report builder's own failures; empty, by construction.
     pub faults: Vec<ReportFault>,
 }
 
-/// [`verify`], with what the cap left out as typed data beside the report.
-/// `gp.api.v1.VerifyReport` carries it only as the closing `I0007`s until the
-/// contract change after S3's `vcap` adds a field for it (decisions-log item
-/// 183 (5)); that change fills the field from [`Counted::left_out`].
+/// [`verify`], with the builder's cuts and faults beside the report.
 #[must_use]
 pub fn verify_counted(input: &Input<'_>, depth: Depth) -> Counted {
     verify_counted_at_cap(input, depth, MAX_PER_CODE)
@@ -841,11 +842,10 @@ pub fn verify_counted_at_cap(input: &Input<'_>, depth: Depth, cap: u32) -> Count
         verifier_version: VERIFIER_VERSION.to_owned(),
         size_units: units,
         size_budget: limits.size_budget_units(),
-        left_out: Vec::new(),
+        left_out,
     };
     Counted {
         report,
-        left_out,
         cuts,
         faults,
     }

@@ -259,10 +259,8 @@ fn the_allowance_is_within_the_clients_buffer() {
 }
 
 /// For every count of one code from none to three times the cap, the report
-/// lists `min(count, cap)`, and its `I0007` and its typed [`LeftOut`] say
+/// lists `min(count, cap)`, and its `I0007` and its `left_out` field say
 /// `count - cap` past the cap and nothing at or under it.
-///
-/// [`LeftOut`]: pharmakos_verifier::LeftOut
 #[test]
 fn a_code_lists_to_the_cap_and_counts_the_rest() {
     let rules =
@@ -297,14 +295,14 @@ fn a_code_lists_to_the_cap_and_counts_the_rest() {
             .filter(|found| found.code == "E0305")
             .count();
         assert_eq!(listed, count.min(cap()), "{count} jumps to nowhere");
-        let gap = counted.left_out.iter().find(|gap| gap.code == "E0305");
+        let gap = report.left_out.iter().find(|gap| gap.code == "E0305");
         let markers: Vec<&Diagnostic> = report
             .diagnostics
             .iter()
             .filter(|found| found.code == "I0007" && found.message.contains("`E0305`"))
             .collect();
         if count > cap() {
-            let more = u64::try_from(count.saturating_sub(cap())).expect("fits");
+            let more = u32::try_from(count.saturating_sub(cap())).expect("fits");
             let gap = gap.expect("a count past the cap is left out");
             assert_eq!((gap.count, gap.max), (more, MAX_PER_CODE));
             assert_eq!(markers.len(), 1, "{count}: one I0007 for E0305");
@@ -334,9 +332,24 @@ fn the_notes_stop_at_the_cap_and_one_more_says_how_many_were_left_out() {
     let steps: Vec<String> = (0..cap().checked_add(20).expect("fits"))
         .map(|index| format!(r#"{{"label":"s{index}","hold":{{"ms":1}}}}"#))
         .collect();
-    let report = encoded(&report_for(&steps.join(",")));
-    assert_eq!(report.matches("\"I0003\"").count(), cap(), "{report}");
+    let typed = report_for(&steps.join(","));
+    let report = encoded(&typed);
+    // The cap's rows, and the one `left_out` entry that names the code.
+    assert_eq!(
+        report.matches("\"I0003\"").count(),
+        cap().saturating_add(1),
+        "{report}"
+    );
     assert_eq!(report.matches("\"I0007\"").count(), 1, "{report}");
+    assert_eq!(
+        typed
+            .left_out
+            .iter()
+            .map(|gap| (gap.code.as_str(), gap.count))
+            .collect::<Vec<_>>(),
+        vec![("I0003", 20)],
+        "{report}"
+    );
 }
 
 /// Past the size budget no `I0003` note is written at all; they are counted.
