@@ -1475,8 +1475,11 @@ impl AreaKind {
     }
 }
 
-/// Why a row could not go into the [`TargetTable`]: it already holds as many
-/// rows as it was built for, and it never grows a column inside a tick.
+/// Why a row could not go into the [`TargetTable`]: its seat's lists already
+/// hold as many rows as their room (`World::check_list_room`, the test a
+/// settings commit asks first), or the table as many as it was built for
+/// (a direct [`TargetTable::add`], which a fixture makes), and the table never
+/// grows a column inside a tick.
 ///
 /// A typed answer rather than a `false` (decisions-log item 136 (5)), so a
 /// settings row that meets it fails its step with
@@ -1484,7 +1487,8 @@ impl AreaKind {
 /// the entry it could not write.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TargetsFull {
-    /// How many rows the table holds, which is all it was built for.
+    /// The room that is full: the seat's list room for a commit's test, the
+    /// table's own for a direct add.
     pub capacity: u32,
 }
 
@@ -1492,7 +1496,7 @@ impl core::fmt::Display for TargetsFull {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "the list-settings table is full at {} rows",
+            "the list settings have no room past {} rows",
             self.capacity
         )
     }

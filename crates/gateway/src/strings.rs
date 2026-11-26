@@ -447,7 +447,7 @@ const fn failure_reason(failure: pharmakos_sim::interpreter::StepFailure) -> &'s
         StepFailure::FeatureLost => "the vent or seam it was bound to is gone",
         StepFailure::Unaffordable => "the treasury could not cover it",
         StepFailure::TargetsUnwritten => {
-            "the beacon's list settings had no room for the whole list, so nothing was written"
+            "the seat's lists had no room for the whole list, so nothing was written"
         }
         StepFailure::WallOffTheGround => {
             "a wall's box does not reach the ground, so nothing was written"
