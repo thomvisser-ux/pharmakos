@@ -197,9 +197,12 @@ pub const REPRICE_DECISIONS: u32 = 8;
 // PLACEHOLDER: Survey's coarse cell, 16 columns square, which a scout of vision 24 sees whole from its centre — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run
 pub const CELL_VOXELS: i32 = 16;
 
-/// Survey's refresh interval: a sighting this old is due a re-check, and a
-/// Push's last this-long is the refresh pass for every scout, and for a scout
-/// with a longer walk to make it starts sooner (decisions-log item 13).
+/// Survey's refresh interval: a sighting this old is due a re-check, and
+/// stays due for as long as the seat holds it (decisions-log item 13). Which
+/// due sighting a scout sets off for, and when, is the seat's lists'
+/// ([`decide_seat`]): a sighting that would leave the reach window before
+/// the Lull with no re-check is needed first, and a scout with a longer walk
+/// sets off sooner ([`list_leaves_time`]).
 // PLACEHOLDER: Survey's refresh interval, 60 s of game time, a third of reach memory's 180 s — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run
 pub const REFRESH_INTERVAL: Ms = Ms::new(60_000);
 

@@ -2000,9 +2000,10 @@ fn render_survey(out: &mut String, table: &RulesTable) {
             .saturating_mul(4);
     let _ = writeln!(
         out,
-        "\nSurvey: a sighting is due a refresh at {} s and forgotten at `verifier.reach_memory_ms` \
-         {} s, so reach memory holds {} refresh intervals; the explored cell is {cell} \
-         columns square, and a scout of vision {scout} on its centre {} all of it",
+        "\nSurvey: a sighting is due a refresh at {} s and leaves the reach window \
+         (`verifier.reach_memory_ms`) at {} s, kept and still due past it, so the window holds {} \
+         refresh intervals; the explored cell is {cell} columns square, and a scout of vision \
+         {scout} on its centre {} all of it",
         refresh_s,
         reach.checked_div(1_000).expect("a divisor"),
         reach

@@ -750,13 +750,13 @@ pub enum Action {
         durations: Vec<i32>,
         /// How many author tags the step carries.
         ///
-        /// PLACEHOLDER: a beacon's tags are not stored — owner, at S3, with the full selector work.
+        /// PLACEHOLDER: a beacon's tags are not stored — owner, at S6, with the catalogue's tag filters (S3's plan, decision 2, ruled by decisions-log item 154 (4); register S3-07).
         /// The tags themselves are not stored, because a beacon
         /// has no tag column and a `Vec<String>` per beacon is neither
         /// fixed-width hashed state nor allocation-free inside a tick. Writing
         /// tags is legal and round-trips; *reading* them — a selector's tag
         /// filter — is refused loudly by [`Plan::compile`], so nothing answers
-        /// a tag question wrongly (owner, at S3, with the full selector work).
+        /// a tag question wrongly.
         tags: u32,
     },
     /// Wait for a condition. The timeout is required.
@@ -1324,14 +1324,15 @@ fn compile_step(
 
 /// The default when a step names no `on_fail`.
 ///
-/// PLACEHOLDER: an absent `on_fail` reads as `SKIP` — owner, at S3, with the rest of the guard vocabulary.
-/// The spec says "a step that times out fails, and `on_fail`
-/// decides what happens next" and does not say what an absent `on_fail` means —
-/// and proto3 has no presence on an enum, so an absent block and
-/// `ON_FAIL_UNSPECIFIED` are the same bytes. `SKIP` is taken because spec
+/// **An absent `on_fail` reads as `SKIP`: ruled** (S3's plan, decision 8, by
+/// decisions-log item 154 (4); register S3-08), and the verifier says so on
+/// the step with an `I0003` note. The spec says "a step that times out fails,
+/// and `on_fail` decides what happens next" and does not say what an absent
+/// `on_fail` means — and proto3 has no presence on an enum, so an absent block
+/// and `ON_FAIL_UNSPECIFIED` are the same bytes. `SKIP` is taken because spec
 /// section 10's own reason for guards is that "steps degrade instead of
 /// blocking", and a route that stops at its first failed step degrades into
-/// nothing. Owner, at S3, with the rest of the guard vocabulary.
+/// nothing.
 const DEFAULT_ON_FAIL: FailAction = FailAction::Skip;
 
 fn compile_on_fail(

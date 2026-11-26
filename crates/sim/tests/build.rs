@@ -918,6 +918,125 @@ fn every_paid_target_survives_a_settings_edit() {
     );
 }
 
+/// Seat 0's one structure each tick of `route`'s Push: `(hit points, going
+/// up)`, from the tick it is paid for.
+fn one_structure_by_tick(route: &str, ticks: u32) -> Vec<(i32, bool)> {
+    let mut fixture = world();
+    fixture.set_treasury(SEAT, Money::new(RICH));
+    let plan = Plan::compile(&playbook(route), &rules()).expect("compiles");
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
+    runner
+        .seal_playbook(SEAT, plan)
+        .expect("a Lull takes a seal");
+    assert!(runner.begin_push().unwrap());
+    let mut seen = Vec::new();
+    for _ in 0..ticks {
+        if runner.step().unwrap().is_none() {
+            break;
+        }
+        runner.clear_events();
+        let structures = runner.world().structures();
+        let mine: Vec<(i32, bool)> = structures
+            .seats()
+            .iter()
+            .zip(structures.hit_points())
+            .zip(structures.building())
+            .zip(structures.frees())
+            .filter(|(((owner, _), _), free)| **owner == SEAT.raw() && !**free)
+            .map(|(((_, hp), building), _)| (hp.raw(), *building))
+            .collect();
+        assert!(mine.len() <= 1, "one target, one structure: {mine:?}");
+        seen.extend(mine);
+    }
+    seen
+}
+
+/// The longest run of ticks over which a structure going up gained nothing.
+fn longest_wait(seen: &[(i32, bool)]) -> usize {
+    let mut longest = 0_usize;
+    let mut run = 0_usize;
+    for pair in seen.windows(2) {
+        let [(before, _), (after, going_up)] = *pair else {
+            continue;
+        };
+        run = if going_up && after == before {
+            run.saturating_add(1)
+        } else {
+            0
+        };
+        longest = longest.max(run);
+    }
+    longest
+}
+
+/// S3's plan, decision 8 (decisions-log item 154 (4); register S3-22): a
+/// structure already paid for and still going up when a later edit protects
+/// its ground is left as it stands for as long as the area holds, nothing
+/// finishing, refunding or ruining it, and it goes up again once the area is
+/// lifted. The second visit protects the paid target's column, the route
+/// holds for forty seconds, and the third visit lifts the area
+/// (`clear_protected_areas`: an absent list leaves the list as it is). The
+/// control is the same route whose second visit protects nothing: its
+/// structure never waits that long.
+#[test]
+fn a_paid_structure_under_a_later_protected_area_waits_and_goes_up_once_it_is_lifted() {
+    let [x, y, z] = core_voxel(&world());
+    let site = [x + 8, y, z];
+    let targets_only = format!(r#"{{"targets":[{}]}}"#, target(site, 1, 0));
+    let protecting = format!(
+        r#"{{"targets":[{}],"protected_areas":[{{"min":{{"x":{},"y":{},"z":{z}}},"max":{{"x":{},"y":{},"z":{z}}}}}]}}"#,
+        target(site, 1, 0),
+        x + 7,
+        y - 1,
+        x + 9,
+        y + 1,
+    );
+    let lifting = format!(
+        r#"{{"targets":[{}],"clear_protected_areas":true}}"#,
+        target(site, 1, 0)
+    );
+    let route = |second: &str| {
+        format!(
+            r#"{},{},{{"label":"wait","hold":{{"ms":40000}}}},{}"#,
+            visit_writing(&targets_only),
+            visit_writing(second).replacen("\"build\"", "\"protect\"", 1),
+            visit_writing(&lifting).replacen("\"build\"", "\"lift\"", 1),
+        )
+    };
+    let held = 40 * 20;
+    let full = rules()
+        .message()
+        .structures
+        .as_ref()
+        .and_then(|block| block.generator)
+        .map(|row| i32::try_from(row.hp).expect("a hit-point count"))
+        .expect("a Generator row");
+
+    let waited = one_structure_by_tick(&route(&protecting), 3_600);
+    assert!(
+        longest_wait(&waited) >= held,
+        "under the area the structure gains nothing for the whole hold: longest wait {} ticks",
+        longest_wait(&waited)
+    );
+    assert_eq!(
+        waited.last().copied(),
+        Some((full, false)),
+        "and once the area is lifted it is finished at full"
+    );
+    assert!(
+        waited.iter().all(|(hp, _)| *hp > 0),
+        "nothing ruins it meanwhile"
+    );
+
+    let control = one_structure_by_tick(&route(&targets_only), 3_600);
+    assert!(
+        longest_wait(&control) < held,
+        "with no area written the structure never waits that long: {} ticks",
+        longest_wait(&control)
+    );
+    assert_eq!(control.last().copied(), Some((full, false)));
+}
+
 /// A voxel as a point, the shape a target's anchor is stored in.
 fn point(at: [i32; 3]) -> [Fx; 3] {
     let [x, y, z] = at;

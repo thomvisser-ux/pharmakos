@@ -150,13 +150,13 @@ pub(crate) fn decide(
 /// Whether the commander has died more often this segment than the playbook's
 /// `on_death` block allows.
 ///
-/// PLACEHOLDER: a `max_deaths_before_fallback` of zero reads as no limit — owner, at S3, with the rest of the guard vocabulary.
-/// `max_deaths_before_fallback` is a `uint32` and proto3 has no
-/// presence on one, so zero and unset are the same bytes. Zero reads as **no
-/// limit** here, because the alternative — the fallback taking over before the
-/// commander has died at all — makes the required `on_death` block impossible
-/// to write without a number. Owner, at S3, with the rest of the guard
-/// vocabulary.
+/// **A `max_deaths_before_fallback` of zero reads as no limit: ruled** (S3's
+/// plan, decision 8, by decisions-log item 154 (4); register S3-09), and the
+/// verifier says so with an `I0003` note. `max_deaths_before_fallback` is a
+/// `uint32` and proto3 has no presence on one, so zero and unset are the same
+/// bytes. Zero reads as **no limit** here, because the alternative — the
+/// fallback taking over before the commander has died at all — makes the
+/// required `on_death` block impossible to write without a number.
 fn out_of_deaths(world: &World, seat_index: usize, plan: &Plan) -> bool {
     let limit = plan.max_deaths_before_fallback();
     if limit == 0 {

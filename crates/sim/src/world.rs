@@ -267,10 +267,11 @@ pub const fn room_per_seat(total: u32, seats: u32) -> u32 {
     }
 }
 
-/// PLACEHOLDER: the list-settings room, how many list rows one beacon row may carry on average — owner, at S3's demo, with `tune3`'s rooms (E17).
-///
-/// Build targets, protected areas and Survey probe areas together: the rows
-/// of the list-settings table.
+/// The list-settings room: how many list rows one beacon row may carry on
+/// average. Build targets, protected areas and Survey probe areas together:
+/// the rows of the list-settings table. Settled with the size budget (S3's
+/// `tune3`; S3's plan, E17; register S3-12): no tuning value, a table's
+/// ceiling held to the budget by a test, as the text below says.
 ///
 /// **The room is a seat's, as every fielding limit is** (S3's `tune3`; S3's
 /// plan, E17): a seat's lists may hold [`seat_list_room_of`] rows in all, its
@@ -306,7 +307,9 @@ const TARGETS_PER_BEACON: u32 = 16;
 /// detail budget (owner, at S3).
 pub(crate) const SIGHTINGS_PER_SEAT: u32 = 64;
 
-/// PLACEHOLDER: the avoid-area room, how many Attack avoid areas one beacon row may carry on average — owner, at S3's demo, with `tune3`'s rooms (E17).
+/// The avoid-area room: how many Attack avoid areas one beacon row may carry
+/// on average. Settled with the size budget (S3's `tune3`; S3's plan, E17;
+/// register S3-30), as [`TARGETS_PER_BEACON`] is.
 ///
 /// **A seat's room, as the list settings' is** ([`TARGETS_PER_BEACON`]): a
 /// seat's Attack beacons may hold [`seat_avoid_room_of`] avoid areas in all,
