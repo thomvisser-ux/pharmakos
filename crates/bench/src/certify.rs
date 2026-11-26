@@ -12,7 +12,10 @@
 //! lines `tests/perf_alarm.rs`'s `p1_certify` prints, each stamped with how
 //! it was sampled ([`provenance::stamped`]): a line copied alone into a record
 //! carries its call count, and a cut run's carries
-//! [`provenance::CUT_BANNER`]. The pieces, in order: the commit; QUICK's and
+//! [`provenance::CUT_BANNER`]. It measures first ([`P1Measured::take`]) and
+//! words the lines after ([`P1Measured::lines`]), because the role a line
+//! speaks in is the run's own verdict ([`run_role`]): how it was sampled, read
+//! from the samples, and whether it kept a refusal. The pieces, in order: the commit; QUICK's and
 //! FULL's notices over the committed cases and their verdict; every shape at
 //! every size of the curve; a verdict for each shape at the committed budget;
 //! E12's seed rule on the hosted FULL ([`seed_rule_notice`]); and QUICK's
@@ -253,79 +256,137 @@ fn shapes_on(
     Ok(figures)
 }
 
-/// Every line P1's certifying run prints, stamped with how it was sampled:
-/// whether it was asked to certify (`certify`) and the calls that actually
-/// ran a figure, read back from the measurements, never from `plan`.
+/// The role a P1 run's notices speak in: the sampling's own
+/// ([`Sampling::role`]), unless the run kept a refusal. A run that failed
+/// certifies nothing ([`P1Run::stamp`]), so its notices speak as a published
+/// run's and never claim to be evidence for a gate.
+#[must_use]
+pub fn run_role(sampling: &Sampling, failure: Option<&Error>) -> provenance::Role {
+    match failure {
+        Some(_) => provenance::Role::Published,
+        None => sampling.role(),
+    }
+}
+
+/// Everything P1's certifying run measured, before a line is worded.
+#[derive(Debug)]
+pub struct P1Measured {
+    /// The commit the run was built from.
+    pub commit: provenance::Commit,
+    /// QUICK over the committed cases.
+    pub quick: quick::QuickTiming,
+    /// FULL over the committed cases.
+    pub full: quick::QuickTiming,
+    /// Every shape at every size.
+    pub curve: full::Curve,
+    /// The hosted FULL at the committed budget on `BENCH_SEED`.
+    pub first: SeedFull,
+    /// The same on the determinism seed.
+    pub second: SeedFull,
+    /// QUICK's and FULL's cost at the transport cap.
+    pub cap: Vec<full::CapFigure>,
+}
+
+impl P1Measured {
+    /// Take every measurement of the run, in the order the lines print them.
+    ///
+    /// # Errors
+    ///
+    /// As the measurements; the commit must be named ([`provenance::commit`]);
+    /// [`Error::Empty`] when the curve holds no point at the committed budget.
+    pub fn take(root: &Path, plan: QuickPlan) -> Result<P1Measured, Error> {
+        let commit = provenance::commit(root)?;
+        let fixture = Fixture::committed(root)?;
+        let cases = quick::committed_cases(root)?;
+        let quick = quick::measure(&fixture, &cases, plan)?;
+        let full = quick::measure_at(&fixture, &cases, plan, Depth::Full)?;
+        let curve = full::measure_curve(root, &SIZES, plan)?;
+        let at_budget: Vec<(Shape, EndToEnd)> = curve
+            .points
+            .iter()
+            .find(|point| point.units == curve.budget_units)
+            .map(|point| {
+                point
+                    .shapes
+                    .iter()
+                    .map(|figure| (figure.shape, figure.end_to_end.clone()))
+                    .collect()
+            })
+            .ok_or_else(|| Error::Empty("the curve holds no point at the budget".to_owned()))?;
+        let second = shapes_on(
+            fixture.rules(),
+            plan,
+            pharmakos_sim::DETERMINISM_MATCH_SEED,
+            curve.budget_units,
+        )?;
+        let cap = full::measure_cap(root, plan)?;
+        Ok(P1Measured {
+            commit,
+            first: seed_full(crate::decision::BENCH_SEED, &at_budget),
+            second: seed_full(pharmakos_sim::DETERMINISM_MATCH_SEED, &second),
+            quick,
+            full,
+            curve,
+            cap,
+        })
+    }
+
+    /// Every line of the run, worded in the run's own role ([`run_role`]) and
+    /// stamped with how it was sampled: the calls its figures actually took
+    /// ([`p1_sampling`]), never `plan`'s, and whether it was asked to certify.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Drift`] when the measurements ran different call counts; as
+    /// [`full::budget_verdicts`].
+    pub fn lines(
+        &self,
+        plan: QuickPlan,
+        certify: provenance::Certify,
+        os: &str,
+    ) -> Result<P1Run, Error> {
+        let sampling = p1_sampling(&self.quick, &self.full, &self.curve, plan, certify)?;
+        let (seed_line, failure) = seed_rule(&self.first, &self.second, os);
+        let role = run_role(&sampling, failure.as_ref());
+        let mut lines: Vec<String> = vec![provenance::notice(
+            "P1",
+            &self.commit,
+            &provenance::plan_words(plan),
+            os,
+        )];
+        lines.extend(quick::notices(&self.quick, role, os));
+        lines.push(full::cases_notice(&self.full, role, os));
+        lines.push(full::cases_verdict(&self.quick, &self.full, Bars::P1, os));
+        lines.push(full::provenance_notice(&self.curve, os));
+        lines.extend(
+            Shape::ALL
+                .into_iter()
+                .map(|shape| full::shape_notice(&self.curve, shape, role, os)),
+        );
+        lines.extend(full::budget_verdicts(&self.curve, Bars::P1, os)?);
+        lines.push(seed_line);
+        lines.extend(
+            self.cap
+                .iter()
+                .map(|figure| full::cap_notice(figure, plan, os)),
+        );
+        Ok(P1Run::stamp(&lines, &sampling, failure))
+    }
+}
+
+/// Every line P1's certifying run prints: the run measured
+/// ([`P1Measured::take`]), then worded and stamped ([`P1Measured::lines`]).
 ///
 /// # Errors
 ///
-/// As the measurements; the commit must be named ([`provenance::commit`]);
-/// [`Error::Drift`] when the measurements ran different call counts.
+/// As the two.
 pub fn p1_lines(
     root: &Path,
     plan: QuickPlan,
     certify: provenance::Certify,
     os: &str,
 ) -> Result<P1Run, Error> {
-    let planned = Sampling::calls(plan, certify);
-    let role = planned.role();
-    let mut lines: Vec<String> = vec![provenance::notice(
-        "P1",
-        &provenance::commit(root)?,
-        &provenance::plan_words(plan),
-        os,
-    )];
-    let fixture = Fixture::committed(root)?;
-    let cases = quick::committed_cases(root)?;
-    let quick_timing = quick::measure(&fixture, &cases, plan)?;
-    let full_timing = quick::measure_at(&fixture, &cases, plan, Depth::Full)?;
-    lines.extend(quick::notices(&quick_timing, role, os));
-    lines.push(full::cases_notice(&full_timing, role, os));
-    lines.push(full::cases_verdict(
-        &quick_timing,
-        &full_timing,
-        Bars::P1,
-        os,
-    ));
-    let curve = full::measure_curve(root, &SIZES, plan)?;
-    lines.push(full::provenance_notice(&curve, os));
-    lines.extend(
-        Shape::ALL
-            .into_iter()
-            .map(|shape| full::shape_notice(&curve, shape, role, os)),
-    );
-    lines.extend(full::budget_verdicts(&curve, Bars::P1, os)?);
-    let at_budget: Vec<(Shape, EndToEnd)> = curve
-        .points
-        .iter()
-        .find(|point| point.units == curve.budget_units)
-        .map(|point| {
-            point
-                .shapes
-                .iter()
-                .map(|figure| (figure.shape, figure.end_to_end.clone()))
-                .collect()
-        })
-        .ok_or_else(|| Error::Empty("the curve holds no point at the budget".to_owned()))?;
-    let second = shapes_on(
-        fixture.rules(),
-        plan,
-        pharmakos_sim::DETERMINISM_MATCH_SEED,
-        curve.budget_units,
-    )?;
-    let (line, failure) = seed_rule(
-        &seed_full(crate::decision::BENCH_SEED, &at_budget),
-        &seed_full(pharmakos_sim::DETERMINISM_MATCH_SEED, &second),
-        os,
-    );
-    lines.push(line);
-    lines.extend(
-        full::measure_cap(root, plan)?
-            .iter()
-            .map(|figure| full::cap_notice(figure, plan, os)),
-    );
-    let sampling = p1_sampling(&quick_timing, &full_timing, &curve, plan, certify)?;
-    Ok(P1Run::stamp(&lines, &sampling, failure))
+    P1Measured::take(root, plan)?.lines(plan, certify, os)
 }
 
 /// The calls one figure's summaries were taken at: each summary's own
@@ -704,6 +765,103 @@ mod tests {
         assert!(failed.failure.is_some());
         let passed = P1Run::stamp(&lines, &whole, None);
         assert!(passed.lines.iter().all(|line| is_certifying(line)));
+    }
+
+    /// A whole certifying run's measurements, with nothing measured: every
+    /// figure took the certifying plan's calls, and the two seeds sent
+    /// `second`'s shape or not.
+    fn whole_run(second: EndToEnd) -> P1Measured {
+        let calls = crate::full::CERT_PLAN.calls;
+        let mut curve = curve(calls, calls);
+        let model = curve
+            .points
+            .first()
+            .and_then(|point| point.shapes.first())
+            .cloned()
+            .expect("the helper's one figure");
+        for point in &mut curve.points {
+            point.shapes = Shape::ALL
+                .into_iter()
+                .map(|shape| full::ShapeFigure {
+                    shape,
+                    ..model.clone()
+                })
+                .collect();
+        }
+        P1Measured {
+            commit: provenance::Commit {
+                sha: "0".repeat(40),
+                dirty: false,
+            },
+            quick: timing(7, calls, calls),
+            full: timing(7, calls, calls),
+            curve,
+            first: seed_full(1, &[(Shape::Handlers24, measured(10_000_000))]),
+            second: seed_full(2, &[(Shape::Handlers24, second)]),
+            cap: Vec::new(),
+        }
+    }
+
+    /// A run that kept a refusal speaks in no certifying voice: asked to
+    /// certify, with every count whole, its lines are worded as a published
+    /// run's (no line holds the certifying phrase beside its banner), and the
+    /// same measurements without the refusal are worded and stamped as
+    /// certifying. The role is the run's verdict, not the plan's.
+    #[test]
+    fn a_failed_runs_lines_never_speak_as_evidence() {
+        use crate::provenance::{
+            CERTIFYING_PHRASE, CUT_BANNER, Certify, PUBLISHED_PHRASE, Role, is_certifying,
+        };
+        let plan = crate::full::CERT_PLAN;
+        let failed = whole_run(EndToEnd::OverCap { bytes: 1 })
+            .lines(plan, Certify::On, "linux")
+            .expect("the lines");
+        assert!(matches!(failed.failure, Some(Error::Empty(_))));
+        assert!(
+            failed
+                .lines
+                .iter()
+                .any(|line| line.contains(PUBLISHED_PHRASE))
+        );
+        for line in &failed.lines {
+            assert!(!is_certifying(line), "{line}");
+            assert!(line.contains(CUT_BANNER), "{line}");
+            for foreign in Role::Published.foreign_phrases() {
+                assert!(!line.contains(foreign), "{line}");
+            }
+        }
+        let passed = whole_run(measured(10_000_000))
+            .lines(plan, Certify::On, "linux")
+            .expect("the lines");
+        assert!(passed.failure.is_none());
+        assert_eq!(passed.lines.len(), failed.lines.len());
+        assert!(
+            passed
+                .lines
+                .iter()
+                .any(|line| line.contains(CERTIFYING_PHRASE))
+        );
+        for line in &passed.lines {
+            assert!(is_certifying(line), "{line}");
+            for foreign in Role::Certifying.foreign_phrases() {
+                assert!(!line.contains(foreign), "{line}");
+            }
+        }
+        // Not asked, the same whole run is a published one.
+        let unasked = whole_run(measured(10_000_000))
+            .lines(plan, Certify::Off, "linux")
+            .expect("the lines");
+        for line in &unasked.lines {
+            assert!(!is_certifying(line), "{line}");
+            assert!(!line.contains(CERTIFYING_PHRASE), "{line}");
+        }
+        // The role itself: a refusal outranks a whole, asked sampling.
+        let whole = Sampling::calls(plan, Certify::On);
+        assert_eq!(run_role(&whole, None), Role::Certifying);
+        assert_eq!(
+            run_role(&whole, Some(&Error::Empty(String::new()))),
+            Role::Published
+        );
     }
 
     /// B2: a shape one seed sent and the other could not leaves the
