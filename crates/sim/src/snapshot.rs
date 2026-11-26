@@ -1075,6 +1075,33 @@ pub enum SnapshotError {
         /// The room.
         room: u32,
     },
+    /// One of the match's seats holds more list-settings rows (Build
+    /// targets, protected areas and Survey probe areas together) than its
+    /// room, [`crate::world::seat_list_room_of`] of the snapshot's seat
+    /// count, which play enforces at every settings commit
+    /// (`World::check_list_room` fails the step `targets_unwritten`). The
+    /// file describes no match this sim plays (S3's `tune3`, E17).
+    OverListRoom {
+        /// The seat: one of the match's.
+        seat: u8,
+        /// How many list rows the snapshot gives its beacons.
+        rows: u32,
+        /// The most one seat's lists hold at the snapshot's seat count.
+        room: u32,
+    },
+    /// One of the match's seats holds more Attack avoid areas than its room,
+    /// [`crate::world::seat_avoid_room_of`] of the snapshot's seat count,
+    /// which play enforces at every Attack commit (`World::avoid_fits`; S3's
+    /// `tune3`, E17).
+    OverAvoidRoom {
+        /// The seat: one of the match's.
+        seat: u8,
+        /// How many avoid areas the snapshot gives its Attack beacons.
+        areas: u32,
+        /// The most one seat's Attack beacons hold at the snapshot's seat
+        /// count.
+        room: u32,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -1154,6 +1181,14 @@ impl core::fmt::Display for SnapshotError {
                 f,
                 "the snapshot holds {charges} planted charges and a match of its seat count \
                  holds at most {room}"
+            ),
+            SnapshotError::OverListRoom { seat, rows, room } => write!(
+                f,
+                "the snapshot gives seat {seat}'s beacons {rows} list rows (build targets,                  protected areas and probe areas), past its room: a seat of a match of its                  seat count holds at most {room}"
+            ),
+            SnapshotError::OverAvoidRoom { seat, areas, room } => write!(
+                f,
+                "the snapshot gives seat {seat}'s Attack beacons {areas} avoid areas, past its                  room: a seat of a match of its seat count holds at most {room}"
             ),
         }
     }
@@ -1809,6 +1844,7 @@ impl Snapshot {
         let licences = self.restore_licences(&seats)?;
 
         let targets = self.restore_targets(world)?;
+        Self::check_list_rooms(&beacons, &targets, &attack, seat_count)?;
         let sightings = self.restore_sightings(world)?;
         let credit = self.restore_credit(world)?;
 
@@ -1867,6 +1903,59 @@ impl Snapshot {
             return Err(SnapshotError::Unindexable { units: unit_count });
         }
         Ok(Closed(world))
+    }
+
+    /// Each of the match's seats keeps to its own rooms for the lists its
+    /// beacons hold (S3's `tune3`, E17), counted as play counts them
+    /// (`World::check_list_room`, `World::avoid_fits`): a row is its beacon's
+    /// seat's. A row whose beacon the file does not hold is no seat's, and
+    /// the tables' own cross-checks refuse it.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::OverListRoom`] and [`SnapshotError::OverAvoidRoom`].
+    fn check_list_rooms(
+        beacons: &BeaconTable,
+        targets: &TargetTable,
+        attack: &crate::attack::AttackTable,
+        seat_count: u32,
+    ) -> Result<(), SnapshotError> {
+        let seat_of = |beacon: BeaconId| {
+            beacons
+                .row_of(beacon)
+                .ok()
+                .and_then(|row| beacons.seats().get(row.index()).copied())
+        };
+        let held = |seat: u8, holders: &mut dyn Iterator<Item = BeaconId>| {
+            holders.fold(0_u32, |sum, beacon| {
+                if seat_of(beacon) == Some(seat) {
+                    sum.saturating_add(1)
+                } else {
+                    sum
+                }
+            })
+        };
+        let list_room = crate::world::seat_list_room_of(seat_count);
+        let avoid_room = crate::world::seat_avoid_room_of(seat_count);
+        for seat in (0..=u8::MAX).take(crate::math::index::row(seat_count)) {
+            let rows = held(seat, &mut targets.beacons().iter().copied());
+            if rows > list_room {
+                return Err(SnapshotError::OverListRoom {
+                    seat,
+                    rows,
+                    room: list_room,
+                });
+            }
+            let areas = held(seat, &mut attack.avoid().iter().map(|(by, _)| *by));
+            if areas > avoid_room {
+                return Err(SnapshotError::OverAvoidRoom {
+                    seat,
+                    areas,
+                    room: avoid_room,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Every beacon's list settings, checked before anything is written.

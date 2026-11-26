@@ -1478,28 +1478,43 @@ mod tick {
     }
 
     /// The avoid areas the Attack table can hold in a [`PROTECT_SEATS`]-seat
-    /// match: the beacon limit (42) times the per-beacon figure (16), the
-    /// stated room `World::reserve_table_rooms` gives it.
-    const AVOID_ROOM: usize = 42 * 16;
+    /// match: every seat's room together, the stated room
+    /// `World::reserve_table_rooms` gives it.
+    const AVOID_ROOM: usize = 2 * SEAT_AVOID_ROOM;
+
+    /// The avoid areas one seat's Attack beacons can hold in all in a
+    /// [`PROTECT_SEATS`]-seat match (`world::seat_avoid_room_of(2)`: its
+    /// [`SEAT_BEACONS`] beacon rows times the per-beacon figure, 16). The
+    /// room a commit is tested against is its own seat's (S3's `tune3`, E17).
+    const SEAT_AVOID_ROOM: usize = SEAT_BEACONS * 16;
 
     /// The avoid areas seat 0's playbook writes on its core, `b_00`.
     const AVOID_WRITTEN: usize = 4;
 
-    // The save [`avoid_runner`] starts from holds more than half the room, so
-    // a restored column's capacity passes the room (P3 of the review).
+    // The save [`avoid_runner`] starts from holds more than half the table's
+    // room, so a restored column's capacity passes the room (P3 of the
+    // review).
     const _: () = assert!(2 * (AVOID_ROOM - AVOID_WRITTEN) > AVOID_ROOM);
 
-    /// A [`PROTECT_SEATS`]-seat match whose Attack table holds its room of
-    /// avoid areas less [`AVOID_WRITTEN`]: seat 1's core on the Attack writ
-    /// with the rest, seat 0's core and a second beacon of its, `b_01`, on
-    /// the Attack writ with none. Seat 0's playbook visits `b_00` and writes
-    /// [`AVOID_WRITTEN`] areas, which fills the room exactly, then `b_01` and
-    /// writes one, which would pass it.
+    /// A [`PROTECT_SEATS`]-seat match in which **seat 1 holds its whole
+    /// avoid-area room** (its core on the Attack writ with
+    /// [`SEAT_AVOID_ROOM`] areas) and seat 0 holds its own less
+    /// [`AVOID_WRITTEN`]: a third beacon of its, `b_02`, on the Attack writ
+    /// with them, its core and `b_01` on the Attack writ with none. Seat 0's
+    /// playbook visits `b_00` and writes [`AVOID_WRITTEN`] areas, which fills
+    /// seat 0's room exactly (seat 1's full room is no part of it), then
+    /// `b_01` and writes one, which would pass it.
     fn avoid_runner() -> Runner {
         use pharmakos_sim::attack::AttackSettings;
         use pharmakos_sim::seams::MandateKind;
         use pharmakos_sim::tables::{ColumnBox, PRIORITY_NORMAL, SeatId};
         let rules = committed_rules();
+        assert_eq!(
+            usize::try_from(pharmakos_sim::world::seat_avoid_room_of(PROTECT_SEATS))
+                .expect("a count"),
+            SEAT_AVOID_ROOM,
+            "the test's room is the world's"
+        );
         let mut world = list_world(&rules);
         let (core, [cx, cy]) = core_of(&world, 0);
         world.set_writ(core, MandateKind::Attack);
@@ -1507,18 +1522,33 @@ mod tick {
         world
             .place_beacon_directly(SeatId::new(0), at, MandateKind::Attack, PRIORITY_NORMAL)
             .expect("a second Attack beacon");
+        let at = world.standing_point([cx - 6, cy + 6, 0]);
+        let third = world
+            .place_beacon_directly(SeatId::new(0), at, MandateKind::Attack, PRIORITY_NORMAL)
+            .expect("a third Attack beacon");
         let (other, [ox, oy]) = core_of(&world, 1);
         world.set_writ(other, MandateKind::Attack);
-        let boxes: Vec<ColumnBox> = (0..AVOID_ROOM - AVOID_WRITTEN)
-            .map(|index| {
-                let x = i16::try_from(ox).expect("a column")
-                    + i16::try_from(index % 32).expect("a column");
-                let y = i16::try_from(oy).expect("a column")
-                    + i16::try_from(index.div_euclid(32)).expect("a column");
-                ColumnBox::new([x, y], [x, y]).expect("a box")
-            })
-            .collect();
-        assert!(world.set_attack(other, AttackSettings::default(), &boxes));
+        let boxes = |origin: [i32; 2], count: usize| -> Vec<ColumnBox> {
+            (0..count)
+                .map(|index| {
+                    let x = i16::try_from(origin[0]).expect("a column")
+                        + i16::try_from(index % 32).expect("a column");
+                    let y = i16::try_from(origin[1]).expect("a column")
+                        + i16::try_from(index.div_euclid(32)).expect("a column");
+                    ColumnBox::new([x, y], [x, y]).expect("a box")
+                })
+                .collect()
+        };
+        assert!(world.set_attack(
+            other,
+            AttackSettings::default(),
+            &boxes([ox, oy], SEAT_AVOID_ROOM)
+        ));
+        assert!(world.set_attack(
+            third,
+            AttackSettings::default(),
+            &boxes([cx, cy + 40], SEAT_AVOID_ROOM - AVOID_WRITTEN)
+        ));
         assert_eq!(world.attack().avoid().len(), AVOID_ROOM - AVOID_WRITTEN);
         let z = 0;
         let area = |dx: i32| {
@@ -1550,10 +1580,12 @@ mod tick {
     }
 
     /// **An avoid list committed inside a tick allocates nothing, and one that
-    /// would pass the Attack table's stated room writes nothing and fails its
+    /// would pass its seat's stated room writes nothing and fails its
     /// step** `targets_unwritten`, as a Build list past its room does (lane
-    /// `simroom`): [`avoid_runner`]'s first visit fills the room exactly and
-    /// commits; its second would pass it by one area, and fails: nothing of
+    /// `simroom`; the room a seat's own since S3's `tune3`): [`avoid_runner`]'s
+    /// first visit fills seat 0's room exactly and commits, though seat 1
+    /// holds its whole room beside it; its second would pass it by one area,
+    /// and fails: nothing of
     /// its row is written, the `roe` it carries beside the list included
     /// (P2 of the review: every check before the first write); and neither
     /// allocates. A room one area short fails the first commit instead.

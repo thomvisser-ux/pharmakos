@@ -771,9 +771,11 @@ fn the_build_rate_is_the_rows_and_a_rate_with_a_remainder_is_refused() {
 
 /// Ruling 10 of S1's stage demo (decisions-log item 139 (1)): a settings row
 /// that cannot write its whole Build list writes **nothing**, and fails its
-/// step with `targets_unwritten`. The list-settings table is filled to its
-/// capacity, and a row that frees the core's one row and names two would need
-/// one more.
+/// step with `targets_unwritten`. The seat's own list room is filled (S3's
+/// `tune3`: the room is each seat's, `world::seat_list_room_of`), the rest of
+/// it on a second beacon of the seat's, and a row that frees the core's one
+/// row and names two would need one more. The other seats hold no row, which
+/// gives this seat nothing.
 #[test]
 fn a_build_list_that_cannot_be_written_whole_writes_nothing() {
     let mut fixture = world();
@@ -787,21 +789,26 @@ fn a_build_list_that_cannot_be_written_whole_writes_nothing() {
             .add_target(core, StructureKind::Generator.id(), point(old))
             .is_ok()
     );
-    // Fill the rest of the table on another seat's core: the edit frees the
-    // core's one old row and names two, one more than the table holds.
-    let other = fixture
-        .beacons()
-        .row_of_ordinal(SeatId::new(1), 0)
-        .map(|row| BeaconId::new(u32::try_from(row).expect("a beacon row")))
-        .expect("seat 1 has a core");
-    let capacity = fixture.targets().capacity();
+    // Fill the rest of the seat's room on a second beacon of its own: the
+    // edit frees the core's one old row and names two, one more than the
+    // seat's room holds.
+    let beside = fixture.standing_point([x + 8, y + 8, 0]);
+    let second = fixture
+        .place_beacon_directly(
+            SEAT,
+            beside,
+            MandateKind::Build,
+            pharmakos_sim::tables::PRIORITY_NORMAL,
+        )
+        .expect("a second beacon of the seat's");
+    let capacity = pharmakos_sim::world::seat_list_room_of(SEATS);
     let mut filled = fixture.targets().len();
     let mut step: i16 = 0;
     while filled < capacity {
         let at = [Fx::from_voxels(step), Fx::ZERO, Fx::ZERO];
         assert!(
             fixture
-                .add_target(other, StructureKind::Generator.id(), at)
+                .add_target(second, StructureKind::Generator.id(), at)
                 .is_ok()
         );
         filled = fixture.targets().len();

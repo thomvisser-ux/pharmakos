@@ -541,7 +541,7 @@ pub struct AttackTable {
     /// How many avoid areas the table may hold in all: the room the world
     /// states ([`AttackTable::reserve`]), a number and never the vector's
     /// capacity. A commit that would pass it is refused
-    /// ([`AttackTable::avoid_fits_metered`]). Not state: derived from the
+    /// by its seat's share of it (`World::avoid_fits`). Not state: derived from the
     /// world's limits, never hashed or saved.
     avoid_room: usize,
     /// How many planted charges the table may hold at once, stated as
@@ -584,8 +584,8 @@ impl AttackTable {
 
     /// **State the table's rooms**: `beacons` rows, as many planted charges
     /// (one a beacon row: [`AttackTable::plant`] refuses past it), and
-    /// `areas` avoid areas in all ([`AttackTable::avoid_fits_metered`]
-    /// refuses a commit past it), and reserve each, whatever the table holds
+    /// `areas` avoid areas in all (every seat's room together: `World::avoid_fits`
+    /// refuses a commit past its seat's), and reserve each, whatever the table holds
     /// now, so opening a row, planting a charge or committing an avoid list
     /// inside a tick allocates nothing (a restored table holds only its own
     /// rows). What the world's one statement of its tables' rooms
@@ -604,24 +604,6 @@ impl AttackTable {
     #[must_use]
     pub const fn avoid_room(&self) -> usize {
         self.avoid_room
-    }
-
-    /// Whether replacing `beacon`'s avoid list with a list of `written`
-    /// areas keeps the table inside its stated room: the areas the other
-    /// beacons hold, and `written`, at most [`AttackTable::avoid_room`]. The
-    /// test an Attack commit asks before it writes anything, as the Build
-    /// lists' is (`World::check_list_room`); one unit to `meter` an area it
-    /// reads.
-    pub fn avoid_fits_metered<M: crate::seams::Meter + ?Sized>(
-        &self,
-        beacon: BeaconId,
-        written: usize,
-        meter: &M,
-    ) -> bool {
-        meter.rows(self.avoid.len());
-        let kept = self.avoid.iter().filter(|(by, _)| *by != beacon).count();
-        kept.checked_add(written)
-            .is_some_and(|after| after <= self.avoid_room)
     }
 
     /// The avoid areas, `(attack beacon, area)`, grouped by beacon in
@@ -2986,37 +2968,5 @@ mod tests {
             Ok(()),
             "a fired charge frees its place"
         );
-    }
-
-    /// Lane `simroom`: the avoid areas' room is stated, and a list fits when
-    /// the areas the other beacons hold and the list's are at most the room,
-    /// the beacon's own being replaced; one area past it does not fit.
-    #[test]
-    fn an_avoid_list_fits_up_to_the_stated_room() {
-        use super::AttackTable;
-        use crate::tables::BeaconId;
-        let area = |x: i16| {
-            crate::tables::ColumnBox::new([x, 0], [x, 1]).unwrap_or_else(|| panic!("a box"))
-        };
-        let mut table = AttackTable::with_room(4);
-        table.reserve(4, 5);
-        assert_eq!(table.avoid_room(), 5);
-        table.open(BeaconId::new(1));
-        table.open(BeaconId::new(2));
-        table.set_avoid(BeaconId::new(1), &[area(1), area(2), area(3)]);
-        table.set_avoid(BeaconId::new(2), &[area(4)]);
-        assert!(
-            table.avoid_fits_metered(BeaconId::new(2), 2, &()),
-            "3 kept and 2 is the room"
-        );
-        assert!(
-            !table.avoid_fits_metered(BeaconId::new(2), 3, &()),
-            "3 kept and 3 passes it"
-        );
-        assert!(
-            table.avoid_fits_metered(BeaconId::new(1), 4, &()),
-            "beacon 1's own 3 are replaced: 1 kept and 4"
-        );
-        assert!(!table.avoid_fits_metered(BeaconId::new(1), 5, &()));
     }
 }

@@ -1876,7 +1876,7 @@ where
 /// # Errors
 ///
 /// [`StepFailure::TargetsUnwritten`] when the list would pass the table's
-/// stated room ([`crate::attack::AttackTable::avoid_fits_metered`]).
+/// seat's stated room ([`World::avoid_fits`]).
 fn avoid_room(
     world: &World,
     beacon: BeaconId,
@@ -1889,7 +1889,7 @@ fn avoid_room(
     let Some(list) = attack.as_ref().and_then(|edit| edit.avoid.as_ref()) else {
         return Ok(());
     };
-    if world.attack().avoid_fits_metered(beacon, list.len(), units) {
+    if world.avoid_fits(beacon, list.len(), units) {
         Ok(())
     } else {
         Err(StepFailure::TargetsUnwritten)

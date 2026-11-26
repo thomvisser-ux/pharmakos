@@ -122,20 +122,33 @@ pub const MAX_CONDITION_DEPTH: u32 = 4;
 /// The most nodes one condition tree may hold (spec section 10: ≤ 24 nodes).
 pub const MAX_CONDITION_NODES: u32 = 24;
 
-/// PLACEHOLDER: harness scaffolding, how many route steps one plan may hold — owner, at S3, with P1's real size budget.
+/// How many route steps one plan may hold: the interpreter's own ceiling.
 ///
 /// A route step is one unit of the playbook size budget
-/// (`verifier.size_budget_units`, item 94), so a plan can never hold more steps
-/// than that budget — 128 today. This constant is the *interpreter's* own
+/// (`verifier.size_budget_units`, item 94), so a plan inside the budget never
+/// holds more steps than the budget. This constant is the *interpreter's*
 /// ceiling, written down so that the state's route cursor has a bound
-/// independent of a rules row the owner may raise; the compiler refuses a
-/// longer route with [`PlanError::TooManySteps`]. Owner, at S3, with P1's real
-/// size budget.
+/// independent of a rules row: the compiler refuses a longer route with
+/// [`PlanError::TooManySteps`], and the verifier says so with `E0114`.
+///
+/// **Settled with the size budget** (S3's `tune3`; S3's plan, E17): the
+/// ceiling is at least the committed rules table's budget, which
+/// `tests/list_rooms.rs` holds, so the budget is the limit a player meets and
+/// this one is met only by a rules table that raises the budget past it, in
+/// the pull request that raises it. 256 is twice the budget S3 certifies.
 pub const MAX_ROUTE_STEPS: usize = 256;
 
-/// PLACEHOLDER: harness scaffolding, how many handlers one plan may hold — owner, at S3.
+/// How many handlers one plan may hold: the interpreter's own ceiling, for
+/// the reason [`MAX_ROUTE_STEPS`] is one; the compiler refuses more with
+/// [`PlanError::TooManyHandlers`], and the verifier says so with `E0113`.
 ///
-/// Bounded for the reason [`MAX_ROUTE_STEPS`] is.
+/// **Settled with the size budget** (S3's `tune3`; S3's plan, E17): a handler
+/// costs one unit and each step of its body one more, so a handler that does
+/// anything costs two, and a whole budget spent on such handlers is half the
+/// budget of them. `tests/list_rooms.rs` holds this ceiling to at least that
+/// half. Only handlers with empty bodies, which do nothing, can pass it
+/// inside the budget, and `E0113` names the first one past it. The decision
+/// tick's cost at the budget is certified at this many handlers.
 pub const MAX_HANDLERS: usize = 64;
 
 /// Game milliseconds to whole ticks, rounding **up**.

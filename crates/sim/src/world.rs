@@ -267,27 +267,33 @@ pub const fn room_per_seat(total: u32, seats: u32) -> u32 {
     }
 }
 
-/// PLACEHOLDER: harness scaffolding, how many list settings one beacon may carry — owner, at S3's exit.
+/// PLACEHOLDER: the list-settings room, how many list rows one beacon row may carry on average — owner, at S3's demo, with `tune3`'s rooms (E17).
 ///
-/// Build targets, protected areas and Survey probe areas together.
+/// Build targets, protected areas and Survey probe areas together: the rows
+/// of the list-settings table.
 ///
-/// Eight, which is roomy against the worked example's one target and well
-/// inside `verifier.size_budget_units` (128 units, of which a target costs
-/// one). The verifier's budget is the real limit and it is a rules-table row;
-/// this is the table's own ceiling, and a row that finds no room fails its
-/// interface row rather than growing a column inside a tick. The owner settles
-/// the two together at **S3's exit**, where P1 sets the size budget from a
-/// measurement (owner, at S3).
-const TARGETS_PER_BEACON: u32 = 8;
-
-/// [`TARGETS_PER_BEACON`] as an array length.
+/// **The room is a seat's, as every fielding limit is** (S3's `tune3`; S3's
+/// plan, E17): a seat's lists may hold [`seat_list_room_of`] rows in all, its
+/// beacon rows times this, pooled over its beacons, and a settings row that
+/// would pass its **own seat's** room writes nothing and fails its step
+/// `targets_unwritten` ([`World::check_list_room`]). So one seat's lists
+/// never refuse another seat's commit for a reason that seat cannot see, the
+/// leak per-seat room exists to close ([`STRUCTURE_TABLE_ROOM`]); the table
+/// reserves every seat's room at once ([`World::reserve_table_rooms`]), so a
+/// commit inside a tick allocates nothing.
 ///
-/// A second constant rather than a cast, because a cast is a decision
-/// (AGENTS.md section 4.3) and `const` context has no `try_from`. The
-/// assertion below is what keeps the two the same number: move one and the
-/// crate stops compiling.
-const TARGETS_PER_BEACON_SLOTS: usize = 8;
-const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
+/// **Sixteen, from the size budget.** One playbook writes at most
+/// `verifier.size_budget_units` list rows (a target, an area and a probe area
+/// each cost one unit), all of which it may put on one beacon, so the room
+/// has to hold a whole budget of rows on a seat that holds none:
+/// `tests/list_rooms.rs` holds [`seat_list_room_of`] to at least the
+/// committed rules table's budget at every seat count the host seats (at
+/// three seats 14 beacon rows, so 224 against 128). A list is kept from round
+/// to round, so the budget bounds one Push's commits and not the table: the
+/// room is the table's own ceiling, technically necessary because a row
+/// written inside a tick may not grow a column, and a seat that fills its own
+/// is told so by the failed step.
+const TARGETS_PER_BEACON: u32 = 16;
 
 /// PLACEHOLDER: harness scaffolding, how many sightings one seat remembers at once — owner, at S3.
 ///
@@ -300,18 +306,20 @@ const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
 /// detail budget (owner, at S3).
 pub(crate) const SIGHTINGS_PER_SEAT: u32 = 64;
 
-/// PLACEHOLDER: the avoid-area room, how many Attack avoid areas one beacon row may carry on average — owner, at S3, with P1's size budget.
+/// PLACEHOLDER: the avoid-area room, how many Attack avoid areas one beacon row may carry on average — owner, at S3's demo, with `tune3`'s rooms (E17).
 ///
-/// The Attack table's avoid-area room is the beacon limit times this, stated
-/// in the form [`TARGETS_PER_BEACON`] gives the Build lists: the table's own
-/// ceiling, reserved with every other table's room
-/// (`World::reserve_table_rooms`), and a commit that would pass it writes
-/// nothing and fails its step `targets_unwritten`, as a Build list past its
-/// room does. Neither the rules nor the proto bound an avoid list in the
-/// sim: `verifier.size_budget_units` bounds what one playbook writes, but a
-/// list is kept from round to round, so the budget bounds no table. Sixteen
-/// an Attack beacon is more than the 512 areas a three-seat match reserved
-/// before (42 beacon rows, 672 areas).
+/// **A seat's room, as the list settings' is** ([`TARGETS_PER_BEACON`]): a
+/// seat's Attack beacons may hold [`seat_avoid_room_of`] avoid areas in all,
+/// its beacon rows times this, and a commit that would pass its own seat's
+/// room writes nothing and fails its step `targets_unwritten`
+/// ([`World::avoid_fits`]), so no seat's avoid lists refuse another's. The
+/// Attack table reserves every seat's room at once
+/// (`World::reserve_table_rooms`). Neither the rules nor the proto bound an
+/// avoid list in the sim: `verifier.size_budget_units` bounds what one
+/// playbook writes, but a list is kept from round to round, so the budget
+/// bounds no table. Sixteen, for the reason and by the test
+/// [`TARGETS_PER_BEACON`] is sixteen: a playbook that spends its whole
+/// budget on one beacon's avoid areas fits a seat that holds none.
 const AVOID_AREAS_PER_BEACON: u32 = 16;
 
 /// How many beacon rows one seat may hold at once in a match of `seats`
@@ -321,6 +329,25 @@ const AVOID_AREAS_PER_BEACON: u32 = 16;
 /// it is never passed. [`beacon_limit_of`] is this times the seat count.
 pub(crate) const fn seat_beacon_limit_of(seats: u32) -> u32 {
     room_per_seat(BEACON_TABLE_ROOM, seats).saturating_add(1)
+}
+
+/// How many list-settings rows (Build targets, protected areas and Survey
+/// probe areas together) one seat's beacons may hold in all in a match of
+/// `seats` seats: [`seat_beacon_limit_of`] times [`TARGETS_PER_BEACON`]. The
+/// seats' rooms add up to the table's, the beacon limit times the same
+/// figure ([`World::reserve_table_rooms`]).
+#[must_use]
+pub const fn seat_list_room_of(seats: u32) -> u32 {
+    seat_beacon_limit_of(seats).saturating_mul(TARGETS_PER_BEACON)
+}
+
+/// How many Attack avoid areas one seat's beacons may hold in all in a match
+/// of `seats` seats: [`seat_beacon_limit_of`] times
+/// [`AVOID_AREAS_PER_BEACON`]. The seats' rooms add up to the table's, the
+/// beacon limit times the same figure ([`World::reserve_table_rooms`]).
+#[must_use]
+pub const fn seat_avoid_room_of(seats: u32) -> u32 {
+    seat_beacon_limit_of(seats).saturating_mul(AVOID_AREAS_PER_BEACON)
 }
 
 /// A protect list a commit resolved into the world's protect scratch
@@ -4167,10 +4194,15 @@ impl World {
         Ok(())
     }
 
-    /// Whether the list-settings table has room for everything a settings
-    /// row would write to `beacon`, once the lists the row replaces are gone:
-    /// the Build entries `build` would actually write, plus `areas` area rows,
-    /// after the beacon's rows of every kind in `replaces` are cleared.
+    /// Whether `beacon`'s **seat** has room for everything a settings row
+    /// would write to `beacon`, once the lists the row replaces are gone: the
+    /// Build entries `build` would actually write, plus `areas` area rows,
+    /// after the beacon's rows of every kind in `replaces` are cleared, on top
+    /// of the rows the seat's other lists hold, against the seat's own room
+    /// ([`seat_list_room_of`]; S3's `tune3`, E17). Another seat's rows count
+    /// for nothing, so no seat's lists refuse another's commit, and the seats'
+    /// rooms add up to the table's, so a commit that fits its seat's room
+    /// fits the table.
     ///
     /// **The test ruling 10 needs before anything is written** (decisions-log
     /// item 139 (1), ruling 10): a row either writes the whole of what it
@@ -4189,7 +4221,7 @@ impl World {
     ///
     /// # Errors
     ///
-    /// [`TargetsFull`] when the rows would not fit.
+    /// [`TargetsFull`] when the rows would not fit the seat's room.
     ///
     /// What it reads is reported to `meter`, one unit a row
     /// ([`crate::seams::Meter`]; dunit part 2): a decision passes its seat's
@@ -4207,7 +4239,7 @@ impl World {
         K: IntoIterator<Item = TargetKind> + Clone,
     {
         let full = TargetsFull {
-            capacity: self.targets.capacity(),
+            capacity: seat_list_room_of(self.seats.len()),
         };
         let seat = self.seat_of_beacon(beacon);
         let mut needed = areas;
@@ -4230,29 +4262,60 @@ impl World {
                 needed = needed.checked_add(1).ok_or(full)?;
             }
         }
+        // The seat's own rows, less the ones this row clears.
         let count = self.targets.row_count();
-        let mut freed: usize = 0;
+        let mut kept: usize = 0;
         for row in 0..count {
             read += 1;
-            let of_beacon = self.targets.beacons().get(row).copied() == Some(beacon);
+            let Some(holder) = self.targets.beacons().get(row).copied() else {
+                continue;
+            };
             let cleared = self.targets.kinds().get(row).is_some_and(|kind| {
                 replaces.clone().into_iter().any(|gone| {
                     read += 1;
                     gone.id() == *kind
                 })
             });
-            if of_beacon && cleared {
-                freed = freed.checked_add(1).ok_or(full)?;
+            if holder == beacon && cleared {
+                continue;
+            }
+            if holder == beacon || self.seat_of_beacon(holder) == seat {
+                kept = kept.checked_add(1).ok_or(full)?;
             }
         }
         meter.rows(read);
-        let capacity = usize::try_from(self.targets.capacity()).map_err(|_| full)?;
-        let kept = count.checked_sub(freed).ok_or(full)?;
+        let room = usize::try_from(full.capacity).map_err(|_| full)?;
         let after = kept.checked_add(needed).ok_or(full)?;
-        if after > capacity {
+        if after > room {
             return Err(full);
         }
         Ok(())
+    }
+
+    /// Whether replacing `beacon`'s avoid list with a list of `written` areas
+    /// keeps `beacon`'s **seat** inside its avoid-area room
+    /// ([`seat_avoid_room_of`]; S3's `tune3`, E17): the areas the seat's other
+    /// Attack beacons hold, and `written`, at most the room. Another seat's
+    /// areas count for nothing. The test an Attack commit asks before it
+    /// writes anything, as the Build lists' is ([`World::check_list_room`]);
+    /// one unit to `meter` an area it reads.
+    pub(crate) fn avoid_fits(
+        &self,
+        beacon: BeaconId,
+        written: usize,
+        meter: &dyn crate::seams::Meter,
+    ) -> bool {
+        let seat = self.seat_of_beacon(beacon);
+        let areas = self.attack.avoid();
+        meter.rows(areas.len());
+        let kept = areas
+            .iter()
+            .filter(|(by, _)| *by != beacon && self.seat_of_beacon(*by) == seat)
+            .count();
+        let Ok(room) = usize::try_from(seat_avoid_room_of(self.seats.len())) else {
+            return false;
+        };
+        kept.checked_add(written).is_some_and(|after| after <= room)
     }
 
     /// The seat that owns `beacon`, or [`SeatId::NEUTRAL`] for a row the table
