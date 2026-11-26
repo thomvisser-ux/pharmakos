@@ -666,9 +666,7 @@ fn start_step(
                     Place::Covering(spec) => {
                         let found = {
                             let (ground, scratch) = world.ground_and_scratch_metered(units);
-                            crate::targeting::cover_counted(
-                                &ground, scratch, seat, commander, *spec,
-                            )?
+                            crate::targeting::cover_in(&ground, scratch, seat, commander, *spec)?
                         };
                         let [x, y] = found.site;
                         let point = world
@@ -691,7 +689,7 @@ fn start_step(
                         let mut candidates = world.take_stone_scratch();
                         let found = {
                             let (ground, scratch) = world.ground_and_scratch_metered(units);
-                            crate::targeting::toward_counted(
+                            crate::targeting::toward_in(
                                 &ground,
                                 scratch,
                                 &mut candidates,
@@ -819,7 +817,7 @@ fn bind_one(
 ) -> Result<Binding, StepFailed> {
     let site = {
         let (ground, scratch) = world.ground_and_scratch_metered(units);
-        crate::targeting::on_vent_counted(&ground, scratch, seat, centre, except, covered, spec)?
+        crate::targeting::on_vent_in(&ground, scratch, (seat, centre), except, covered, spec)?
     };
     let [x, y] = site.column;
     // The resolver chose a column of the surface, so it has a node; a column

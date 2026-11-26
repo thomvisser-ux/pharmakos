@@ -64,7 +64,7 @@ use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::{Damage, Hp, Money, Ms, Tick};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::repair::{RepairReport, Repairer, repair};
+use crate::pathing::repair::{RepairReport, Repairer, repair_served};
 use crate::pathing::router::{Router, ServeReport, WalkState};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{StepCosts, Surface};
@@ -1020,6 +1020,14 @@ pub enum TickError {
     MidTick,
     /// No tick is open, so there is no phase to run and no tick to end.
     NotOpen,
+    /// The world's search scratch does not serve its graph
+    /// ([`Scratch::serves`]): it was replaced through [`World::scratch_mut`]
+    /// by one sized for another map or cluster edge. Refused as the tick
+    /// opens, with the clock unmoved, and before each of its phases, with the
+    /// phase not run, and nothing changed either way, because a tick's
+    /// repair, routes and resolvers search in that scratch unchecked; put a
+    /// scratch that serves back and the same call runs.
+    MisfitScratch,
     /// The phase asked for is not the open tick's next one: the phases run in
     /// [`PHASE_ORDER`] and no other order.
     OutOfOrder {
@@ -1111,6 +1119,10 @@ impl core::fmt::Display for TickError {
             TickError::PastTheLast => write!(f, "the tick counter has no tick after this one"),
             TickError::MidTick => write!(f, "a tick is open between two of its phases"),
             TickError::NotOpen => write!(f, "no tick is open"),
+            TickError::MisfitScratch => write!(
+                f,
+                "the world's search scratch was replaced by one that does not serve its graph"
+            ),
             TickError::OutOfOrder { asked, next } => {
                 write!(f, "the open tick's next phase is {next:?}, not {asked:?}")
             }
@@ -1999,8 +2011,22 @@ impl World {
     ///
     /// Nothing in it is state: a query leaves the scratch different and the
     /// world identical, which `a_query_leaves_the_graph_alone` asserts.
+    ///
+    /// A caller that replaces it with a scratch that does not serve the
+    /// world's graph ([`Scratch::serves`]) is refused by the next tick, or by
+    /// the open tick's next phase ([`TickError::MisfitScratch`]), and by a
+    /// restore ([`crate::snapshot::SnapshotError::MisfitScratch`]), each
+    /// before it changes anything.
     pub const fn scratch_mut(&mut self) -> &mut Scratch {
         &mut self.scratch
+    }
+
+    /// Whether the world's search scratch serves its graph
+    /// ([`Scratch::serves`]): true of the scratch the world made, and of any
+    /// a caller put in its place that is as large. What the tick and a
+    /// restore, which search in it unchecked, hold it to first.
+    pub(crate) fn scratch_serves(&self) -> bool {
+        self.scratch.serves(&self.surface, &self.clusters)
     }
 
     /// What the last tick's graph repair did, in its Voxels phase.
@@ -3999,11 +4025,10 @@ impl World {
                 if let (Some(centre), Some(seat)) = (centre, seat) {
                     let found = {
                         let (ground, scratch) = self.ground_and_scratch();
-                        crate::targeting::on_vent(
+                        crate::targeting::on_vent_in(
                             &ground,
                             scratch,
-                            seat,
-                            centre,
+                            (seat, centre),
                             Some(beacon),
                             None,
                             crate::targeting::FeatureSpec::Nearest {
@@ -4980,12 +5005,20 @@ impl World {
     ///
     /// # Errors
     ///
-    /// [`TickError::MidTick`] while a tick is already open, and
-    /// [`TickError::PastTheLast`] when the clock has no tick after this one:
-    /// a clock that stood still would say a tick ran that did not (E7).
+    /// [`TickError::MidTick`] while a tick is already open,
+    /// [`TickError::MisfitScratch`] when the search scratch no longer serves
+    /// the graph, and [`TickError::PastTheLast`] when the clock has no tick
+    /// after this one: a clock that stood still would say a tick ran that did
+    /// not (E7).
     pub fn begin_tick(&mut self) -> Result<(), TickError> {
         if self.open_phase.is_some() {
             return Err(TickError::MidTick);
+        }
+        // The tick's own searches run unchecked in this scratch
+        // (`repair_served`, `Router::serve_in`, the resolvers): held to the
+        // graph here, once a tick, a handful of length compares.
+        if !self.scratch_serves() {
+            return Err(TickError::MisfitScratch);
         }
         self.tick = self.tick.next().ok_or(TickError::PastTheLast)?;
         self.work.reset();
@@ -5010,13 +5043,22 @@ impl World {
     ///
     /// # Errors
     ///
-    /// [`TickError::NotOpen`] between ticks, and [`TickError::OutOfOrder`]
+    /// [`TickError::NotOpen`] between ticks, [`TickError::OutOfOrder`]
     /// for a phase that is not the next one -- the hash among them, which is
-    /// [`World::end_tick`]'s.
+    /// [`World::end_tick`]'s -- and [`TickError::MisfitScratch`], with the
+    /// phase not run, when the search scratch was replaced since the tick
+    /// opened by one that does not serve the graph.
     pub fn run_phase(&mut self, phase: Phase) -> Result<(), TickError> {
         let next = self.next_phase().ok_or(TickError::NotOpen)?;
         if phase != next || phase == Phase::Hash {
             return Err(TickError::OutOfOrder { asked: phase, next });
+        }
+        // As `begin_tick` holds it: a caller stepping phase by phase can
+        // replace the scratch between two of them (`World::scratch_mut`).
+        // Refused, the phase has not run and the tick stays open at it; a
+        // scratch that serves put back, the same call runs it.
+        if !self.scratch_serves() {
+            return Err(TickError::MisfitScratch);
         }
         match phase {
             Phase::Broadphase => self.phase_broadphase(),
@@ -5431,7 +5473,7 @@ impl World {
         let zones = &self.route_zones;
         let spans = &self.route_spans;
         let multiplier = self.rules.attack().step_multiplier;
-        self.serve_report = self.router.serve_costed(
+        self.serve_report = self.router.serve_in(
             &self.surface,
             &self.clusters,
             &mut self.scratch,
@@ -5468,7 +5510,7 @@ impl World {
     /// ([`World::graph_settled`]), which is what lets a snapshot carry no
     /// pending set. The repair is the same work it was, one phase earlier.
     fn settle_graph(&mut self) {
-        let report = repair(
+        let report = repair_served(
             &self.surface,
             &mut self.clusters,
             &mut self.scratch,
@@ -7518,7 +7560,8 @@ impl World {
         // `a_restored_world_rebuilds_the_graph_it_was_saved_with` is what makes
         // "derived" a checked claim rather than a convenient one.
         self.surface.refresh_all(&self.voxels);
-        self.clusters.rebuild_all(&self.surface, &mut self.scratch);
+        self.clusters
+            .rebuild_all_served(&self.surface, &mut self.scratch);
         self.repairer = Repairer::new(self.clusters.cluster_count());
         self.repair_report = RepairReport::default();
         self.serve_report = ServeReport::default();
@@ -9948,7 +9991,7 @@ mod decision_visits {
         let mut scratch =
             crate::pathing::search::Scratch::for_map(world.surface(), world.clusters().size())
                 .unwrap_or_else(|| panic!("a scratch for the map"));
-        let _ = crate::targeting::cover_counted(
+        let read = crate::targeting::cover_counted(
             &ground,
             &mut scratch,
             seat,
@@ -9957,6 +10000,11 @@ mod decision_visits {
                 kind: crate::features::FeatureKind::Vent,
                 uncovered: true,
             },
+        );
+        assert_ne!(
+            read,
+            Err(crate::pathing::search::Unanswered::Misfit),
+            "the read ran"
         );
         assert_eq!(
             figures(runner.world()),
@@ -9999,7 +10047,7 @@ mod decision_visits {
                 )
                 .unwrap_or_else(|| panic!("a scratch for the map"));
                 for seat in [SeatId::new(0), SeatId::new(1)] {
-                    let _ = crate::targeting::cover_counted(
+                    let read = crate::targeting::cover_counted(
                         &ground,
                         &mut scratch,
                         seat,
@@ -10008,6 +10056,11 @@ mod decision_visits {
                             kind: crate::features::FeatureKind::Vent,
                             uncovered: true,
                         },
+                    );
+                    assert_ne!(
+                        read,
+                        Err(crate::pathing::search::Unanswered::Misfit),
+                        "the read ran"
                     );
                     let _ = world.spire_on(BeaconId::new(0));
                 }

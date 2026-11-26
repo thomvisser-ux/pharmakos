@@ -1071,12 +1071,47 @@ fn resolve_refs_in_a_push_is_phase_closed() {
     assert_eq!(support::code(&in_push), "PHASE_CLOSED", "{in_push:?}");
 }
 
+/// The sim's own `on` read of the vent named `far`, from `centre`, in a
+/// scratch made for the hosted world: the step's failure, which this read is
+/// expected to be.
+fn sim_on_miss(
+    world: &pharmakos_sim::world::World,
+    centre: [pharmakos_sim::math::fixed::Fx; 3],
+    far: &str,
+) -> pharmakos_sim::interpreter::StepFailed {
+    use pharmakos_gateway::targeting::{Site, lend, scratch_for, spec_of};
+    use pharmakos_sim::targeting::on_vent_counted;
+    let tally = pharmakos_sim::seams::UnitTally::new();
+    let ground = lend(world, &tally);
+    let mut scratch = scratch_for(world).expect("a search scratch");
+    let reference: pharmakos_proto::gp::v1::FeatureRef = pharmakos_proto::json::decode_json(
+        &pharmakos_proto::json::read(&format!(r#"{{"feature_id": "{far}"}}"#)).expect("JSON"),
+    )
+    .expect("a FeatureRef");
+    let spec = spec_of(&reference, Site::On { covering: true }).expect("a legal `on`");
+    let read = on_vent_counted(
+        &ground,
+        &mut scratch,
+        SeatId::new(0),
+        centre,
+        None,
+        None,
+        spec,
+    );
+    match read.expect_err("the sim reads no vent outside the sphere") {
+        pharmakos_sim::pathing::search::Unanswered::Ran(failed) => failed,
+        pharmakos_sim::pathing::search::Unanswered::Misfit => {
+            panic!("a scratch made for the hosted world serves it")
+        }
+    }
+}
+
 #[test]
 fn a_named_vent_outside_the_sphere_matches_nothing_as_the_sim_reports() {
     use pharmakos_gateway::targeting::{Site, commander_point, lend, scratch_for, spec_of};
     use pharmakos_sim::features::FeatureKind;
     use pharmakos_sim::interpreter::StepFailure;
-    use pharmakos_sim::targeting::{anchor_in_sphere, cover, on_vent_counted};
+    use pharmakos_sim::targeting::{anchor_in_sphere, cover};
 
     let (mut surface, token) = opening();
     let mut left = FIRST_LULL_MS;
@@ -1132,24 +1167,7 @@ fn a_named_vent_outside_the_sphere_matches_nothing_as_the_sim_reports() {
 
     // The sim's own reading of the same name, from the same centre.
     let world = surface.host().expect("hosted").world();
-    let tally = pharmakos_sim::seams::UnitTally::new();
-    let ground = lend(world, &tally);
-    let mut scratch = scratch_for(world).expect("a search scratch");
-    let reference: pharmakos_proto::gp::v1::FeatureRef = pharmakos_proto::json::decode_json(
-        &pharmakos_proto::json::read(&format!(r#"{{"feature_id": "{far}"}}"#)).expect("JSON"),
-    )
-    .expect("a FeatureRef");
-    let spec = spec_of(&reference, Site::On { covering: true }).expect("a legal `on`");
-    let missed = on_vent_counted(
-        &ground,
-        &mut scratch,
-        SeatId::new(0),
-        centre,
-        None,
-        None,
-        spec,
-    )
-    .expect_err("the sim reads no vent outside the sphere");
+    let missed = sim_on_miss(world, centre, &far);
     assert_eq!(missed.reason, StepFailure::NoTarget);
     assert_eq!(
         missed.matched,

@@ -46,12 +46,14 @@ use pharmakos_sim::knowledge::{AssetId, Position};
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::TICK_HZ;
 use pharmakos_sim::pathing::MAX_ROUTE_NODES;
-use pharmakos_sim::pathing::clusters::Clusters;
+use pharmakos_sim::pathing::clusters::{Clusters, FIELDS_PER_CLUSTER};
 use pharmakos_sim::pathing::estimate::{Fog, Speed, ticks_for_cost};
-use pharmakos_sim::pathing::repair::{Repairer, conservative_affected, repair};
-use pharmakos_sim::pathing::route::{abstract_search, route};
+use pharmakos_sim::pathing::repair::{Repairer, Repairs, conservative_affected, repair};
+use pharmakos_sim::pathing::route::{NoPath, Surcharge, abstract_search, route, route_with};
 use pharmakos_sim::pathing::router::WalkState;
-use pharmakos_sim::pathing::search::{Bound, Scratch, astar, astar_with_order, dijkstra_bounded};
+use pharmakos_sim::pathing::search::{
+    Bound, Misfit, Scratch, Unanswered, astar, astar_costed, astar_with_order, dijkstra_bounded,
+};
 use pharmakos_sim::pathing::surface::{DEFAULT_ORDER, Node, StepCosts, Surface};
 use pharmakos_sim::tables::{SeatId, UnitId, UnitKind};
 use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
@@ -199,7 +201,8 @@ impl Fixture {
             &mut self.clusters,
             &mut self.scratch,
             &mut self.repairer,
-        );
+        )
+        .expect("the scratch made with the graph serves it");
     }
 
     fn rebuilt(&mut self) -> Clusters {
@@ -278,6 +281,12 @@ impl Rng {
         }
         i32::try_from(self.next() % u64::try_from(limit).expect("positive")).expect("below limit")
     }
+}
+
+/// Everything a repair must leave as a fresh build makes it: the abstract
+/// graph and the transition fields (S3's `walk3`).
+fn whole(clusters: &Clusters) -> (u64, u64) {
+    (clusters.fingerprint(), clusters.field_fingerprint())
 }
 
 /// `count` connected pairs of walkable columns, deterministic in `seed`.
@@ -510,8 +519,8 @@ fn repair_equals_a_from_scratch_build() {
         fixture.repair();
         let fresh = fixture.rebuilt();
         assert_eq!(
-            fixture.clusters.fingerprint(),
-            fresh.fingerprint(),
+            whole(&fixture.clusters),
+            whole(&fresh),
             "after crater {n} at ({x}, {y}) the repaired graph is not the graph a from-scratch \
              build produces"
         );
@@ -566,14 +575,15 @@ fn repair_matches_the_conservative_set() {
         }
         for cluster in &affected {
             wide.clusters
-                .rebuild_intra(&wide.surface, &mut wide.scratch, usize::from(*cluster));
+                .rebuild_intra(&wide.surface, &mut wide.scratch, usize::from(*cluster))
+                .expect("the scratch made with the graph serves it");
             wide.clusters.rebuild_inter(usize::from(*cluster));
         }
         wide.clusters.rebuild_components();
 
         assert_eq!(
-            precise.clusters.fingerprint(),
-            wide.clusters.fingerprint(),
+            whole(&precise.clusters),
+            whole(&wide.clusters),
             "the precise repair and the conservative superset disagree after crater {n}"
         );
         n += 1;
@@ -644,8 +654,8 @@ fn a_border_holds_every_run_it_finds() {
     // crater's.
     let fresh = fixture.rebuilt();
     assert_eq!(
-        fixture.clusters.fingerprint(),
-        fresh.fingerprint(),
+        whole(&fixture.clusters),
+        whole(&fresh),
         "the repaired graph disagrees with a from-scratch build over a combed border"
     );
 }
@@ -662,8 +672,8 @@ fn repair_holds_at_every_cluster_size() {
             fixture.repair();
             let fresh = fixture.rebuilt();
             assert_eq!(
-                fixture.clusters.fingerprint(),
-                fresh.fingerprint(),
+                whole(&fixture.clusters),
+                whole(&fresh),
                 "cluster size {cluster}: repair and from-scratch disagree after crater {n}"
             );
             n += 1;
@@ -806,6 +816,7 @@ fn fog_never_makes_a_route_look_cheaper() {
             Fog::Clear,
             speed,
         )
+        .expect("the scratch serves")
         .expect("an abstract answer");
         let served = route(
             &fixture.surface,
@@ -967,7 +978,7 @@ fn no_path_is_answered_by_the_oracle() {
             outside,
             &mut buffer,
         ),
-        Err(pharmakos_sim::pathing::route::NoPath::Unreachable),
+        Err(Unanswered::Ran(NoPath::Unreachable)),
         "a sealed-in walker has no route either, and says why"
     );
 }
@@ -994,7 +1005,8 @@ fn the_oracle_agrees_with_an_exhaustive_search() {
         &mut fixture.scratch,
         source,
         false,
-    );
+    )
+    .expect("the scratch serves");
     let mut checked = 0;
     let mut node: Node = 0;
     while node < fixture.surface.node_count() {
@@ -1043,7 +1055,8 @@ fn the_tiebreak_survives_a_neighbour_permutation() {
             *start,
             *goal,
             &mut first,
-        );
+        )
+        .expect("the scratch serves");
         for order in permutations {
             let other = astar_with_order(
                 &fixture.surface,
@@ -1053,7 +1066,8 @@ fn the_tiebreak_survives_a_neighbour_permutation() {
                 *goal,
                 order,
                 &mut second,
-            );
+            )
+            .expect("the scratch serves");
             assert_eq!(base, other, "the cost moved with the expansion order");
             assert_eq!(first, second, "the route moved with the expansion order");
         }
@@ -1086,7 +1100,8 @@ fn an_intra_edge_is_the_cost_of_the_path_it_stands_for() {
                     *from,
                     to,
                     &mut path,
-                );
+                )
+                .expect("the scratch serves");
                 assert_eq!(
                     found,
                     Some(*cost),
@@ -1099,6 +1114,1072 @@ fn an_intra_edge_is_the_cost_of_the_path_it_stands_for() {
         cluster += 7;
     }
     assert!(checked > 20, "only {checked} intra edges were checked");
+}
+
+/// Hold the transition fields to the sweeps they stand for, over one column
+/// in `stride` of the whole map: a sweep bounded to the column's cluster,
+/// from the column, and every slot's entry read at the column against the
+/// sweep's cost to that slot's transition cell. Answers how many entries it
+/// compared.
+fn fields_are_sweeps(fixture: &mut Fixture, stride: u32, label: &str) -> usize {
+    let mut compared = 0;
+    let mut node: Node = 0;
+    while node < fixture.surface.node_count() {
+        let tag = fixture.clusters.cluster_of(node);
+        let cells: Vec<Node> = fixture.clusters.trans_cells(usize::from(tag)).to_vec();
+        let field = fixture.clusters.field(&fixture.surface, node);
+        assert_eq!(
+            field.is_some(),
+            cells.len() <= fixture.clusters.shape().fields,
+            "{label}: cluster {tag} holds {} transition cells",
+            cells.len()
+        );
+        if let Some(field) = field {
+            dijkstra_bounded(
+                &fixture.surface,
+                Bound::Cluster(fixture.clusters.of_node(), tag),
+                &mut fixture.scratch,
+                node,
+                false,
+            )
+            .expect("the scratch serves");
+            for (slot, cell) in cells.iter().enumerate() {
+                // A column nobody can stand on is swept from nowhere, and the
+                // scratch still holds the sweep before it.
+                let swept = fixture
+                    .surface
+                    .walkable(node)
+                    .then(|| fixture.scratch.cost_of(*cell))
+                    .flatten();
+                assert_eq!(
+                    field.cost(slot),
+                    swept,
+                    "{label}: the field of cluster {tag}'s slot {slot} (column {cell}) read at \
+                     column {node} is not the sweep's cost"
+                );
+                compared += 1;
+            }
+            assert_eq!(
+                field.cost(cells.len()),
+                None,
+                "{label}: cluster {tag} keeps a field past its {} slots",
+                cells.len()
+            );
+        }
+        node += stride;
+    }
+    compared
+}
+
+/// S3's `walk3`: a transition field is the bounded sweep from the column it
+/// is read at, entry for entry, on fresh ground and on ground craters have
+/// cut -- so an endpoint inserted by lookup gets the edges a sweep gave it.
+/// The walk between two columns costs the same from either end, which is
+/// what lets a sweep from the transition cell stand for one from the column;
+/// this is the test of that, not the argument for it.
+#[test]
+fn a_transition_field_is_the_sweep_from_the_column_it_is_read_at() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    assert_eq!(
+        fixture.clusters.fielded_count(),
+        fixture.clusters.cluster_count(),
+        "a fresh map's clusters all keep their fields"
+    );
+    let fresh = fields_are_sweeps(&mut fixture, 37, "fresh ground");
+    let mut n: u32 = 0;
+    while n < 24 {
+        let x = i32::try_from((n.wrapping_mul(61) + 30) % 340).expect("fits") + 20;
+        let y = i32::try_from((n.wrapping_mul(37) + 50) % 340).expect("fits") + 20;
+        fixture.crater(x, y, 3 + i32::try_from(n % 3).expect("fits"));
+        n += 1;
+    }
+    fixture.repair();
+    let cratered = fields_are_sweeps(&mut fixture, 37, "after 24 craters");
+    assert!(
+        fresh > 10_000 && cratered > 10_000,
+        "only {fresh} and {cratered} entries were compared"
+    );
+}
+
+/// How many fields the decomposition of the comb's case keeps a cluster:
+/// under the shipped [`FIELDS_PER_CLUSTER`], which a comb on one border
+/// cannot pass, so that the comb's two clusters keep none and are swept.
+const NARROW_FIELDS: usize = 16;
+
+// The narrow bound is narrower than the shipped one, or the case tests nothing.
+const _: () = assert!(NARROW_FIELDS < FIELDS_PER_CLUSTER);
+
+/// Raise the comb of `a_border_holds_every_run_it_finds` on the border
+/// between clusters (2, 2) and (3, 2): 32 one-cell runs, so both clusters
+/// hold more transition cells than [`NARROW_FIELDS`].
+fn comb(fixture: &mut Fixture) {
+    let xa = 3 * CLUSTER - 1;
+    let xb = xa + 1;
+    let y0 = 2 * CLUSTER;
+    let mut base = 0;
+    for y in y0..y0 + CLUSTER {
+        base = base
+            .max(fixture.store.top_solid_z(xa, y).unwrap_or(0))
+            .max(fixture.store.top_solid_z(xb, y).unwrap_or(0));
+    }
+    base += 3;
+    for y in y0..y0 + CLUSTER {
+        let target = base + if y % 2 == 0 { 0 } else { 2 };
+        for x in [xa, xb] {
+            let mut z = fixture.store.top_solid_z(x, y).unwrap_or(-1) + 1;
+            while z <= target {
+                fixture.store.set([x, y, z], Material::STONE);
+                z += 1;
+            }
+        }
+    }
+    fixture.settle_and_mark();
+    fixture.repair();
+}
+
+/// `count` connected pairs with at least one end in the cluster `(cx, cy)`,
+/// every third pair with both ends in it.
+fn pairs_about(
+    fixture: &Fixture,
+    (cx, cy): (i32, i32),
+    count: u32,
+    seed: u64,
+) -> Vec<(Node, Node)> {
+    pairs_about_in(fixture, CLUSTER, (cx, cy), count, seed)
+}
+
+/// [`pairs_about`] on a decomposition at a cluster edge of `edge`.
+fn pairs_about_in(
+    fixture: &Fixture,
+    edge: i32,
+    (cx, cy): (i32, i32),
+    count: u32,
+    seed: u64,
+) -> Vec<(Node, Node)> {
+    let mut rng = Rng::new(seed);
+    let extent = fixture.surface.size();
+    let mut out: Vec<(Node, Node)> = Vec::new();
+    let mut attempts = 0;
+    while u32::try_from(out.len()).expect("fits") < count && attempts < count * 400 {
+        attempts += 1;
+        let inside = |rng: &mut Rng| {
+            fixture
+                .surface
+                .node_of(cx * edge + rng.below(edge), cy * edge + rng.below(edge))
+        };
+        let a = inside(&mut rng);
+        let b = if out.len().is_multiple_of(3) {
+            inside(&mut rng)
+        } else {
+            fixture
+                .surface
+                .node_of(rng.below(extent[0]), rng.below(extent[1]))
+        };
+        let (Some(a), Some(b)) = (a, b) else {
+            continue;
+        };
+        if a == b || !fixture.clusters.connected(&fixture.surface, a, b) {
+            continue;
+        }
+        // Either way round: an endpoint is inserted as a start and as a goal.
+        out.push(if out.len().is_multiple_of(2) {
+            (a, b)
+        } else {
+            (b, a)
+        });
+    }
+    assert_eq!(
+        u32::try_from(out.len()).expect("fits"),
+        count,
+        "the map did not yield {count} connected pairs about cluster ({cx}, {cy})"
+    );
+    out
+}
+
+/// Hold every answer of the decomposition `fixture` holds to the answers of
+/// one over the same ground that keeps **no** field, so that every endpoint
+/// is swept as all were before S3's `walk3`: the abstract search's cost, legs
+/// and fog, and the served route node for node with its cost.
+fn the_fields_change_nothing(fixture: &mut Fixture, set: &[(Node, Node)], label: &str) {
+    let shape = fixture.clusters.shape().with_fields(0);
+    let mut swept_scratch = Scratch::for_map(&fixture.surface, shape.size).expect("a scratch");
+    let swept =
+        Clusters::new(&fixture.surface, shape, &mut swept_scratch).expect("a decomposition");
+    assert_eq!(
+        swept.fielded_count(),
+        0,
+        "{label}: a shape of no fields kept some"
+    );
+    assert_eq!(
+        swept.fingerprint(),
+        fixture.clusters.fingerprint(),
+        "{label}: the two decompositions are not one abstract graph"
+    );
+    let speed = fixture.commander_speed();
+    let mut with: Vec<Node> = Vec::new();
+    let mut without: Vec<Node> = Vec::new();
+    for (start, goal) in set {
+        let looked = abstract_search(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            *start,
+            *goal,
+            Fog::Clear,
+            speed,
+        )
+        .expect("the scratch serves");
+        let swept_search = abstract_search(
+            &fixture.surface,
+            &swept,
+            &mut swept_scratch,
+            *start,
+            *goal,
+            Fog::Clear,
+            speed,
+        )
+        .expect("the scratch serves");
+        assert_eq!(
+            looked, swept_search,
+            "{label}: the abstract search from {start} to {goal} answers otherwise by lookup"
+        );
+        let served = route(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            *start,
+            *goal,
+            &mut with,
+        );
+        let swept_route = route(
+            &fixture.surface,
+            &swept,
+            &mut swept_scratch,
+            *start,
+            *goal,
+            &mut without,
+        );
+        assert_eq!(
+            served, swept_route,
+            "{label}: the route from {start} to {goal} is priced otherwise by lookup"
+        );
+        assert_eq!(
+            with, without,
+            "{label}: the route from {start} to {goal} is another walk by lookup"
+        );
+    }
+}
+
+/// S3's `walk3`: inserting an endpoint by lookup moves no answer. On fresh
+/// ground, after craters, and with a combed border whose two clusters hold
+/// more transition cells than fields (so their endpoints are swept while
+/// every other cluster's are looked up), every abstract answer and every
+/// served route is the one a decomposition with no fields at all gives.
+#[test]
+fn an_endpoint_inserted_by_lookup_gets_the_route_a_sweep_gives() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let mut set = pairs(&fixture, 96, 0x5EED_00F1);
+    set.extend(pairs_about(&fixture, (5, 5), 48, 0x5EED_00F2));
+    the_fields_change_nothing(&mut fixture, &set, "fresh ground");
+
+    let mut n: u32 = 0;
+    while n < 24 {
+        let x = i32::try_from((n.wrapping_mul(61) + 30) % 340).expect("fits") + 20;
+        let y = i32::try_from((n.wrapping_mul(37) + 50) % 340).expect("fits") + 20;
+        fixture.crater(x, y, 3 + i32::try_from(n % 3).expect("fits"));
+        n += 1;
+    }
+    fixture.repair();
+    let mut set = pairs(&fixture, 96, 0x5EED_00F3);
+    set.extend(pairs_about(&fixture, (1, 1), 48, 0x5EED_00F4));
+    the_fields_change_nothing(&mut fixture, &set, "after 24 craters");
+
+    // The sweep's turn: the same ground under a decomposition that keeps a
+    // cluster fewer fields than the comb's two clusters hold transition
+    // cells, made here and repaired through the comb like any other.
+    let narrow = fixture.clusters.shape().with_fields(NARROW_FIELDS);
+    fixture.clusters =
+        Clusters::new(&fixture.surface, narrow, &mut fixture.scratch).expect("a decomposition");
+    comb(&mut fixture);
+    for cluster in [(2, 2), (3, 2)] {
+        let index = fixture
+            .clusters
+            .cluster_index(cluster.0, cluster.1)
+            .expect("a cluster of the map");
+        let held = fixture.clusters.trans_cells(index).len();
+        assert!(
+            held > NARROW_FIELDS,
+            "the comb left cluster {cluster:?} only {held} transition cells"
+        );
+    }
+    assert_eq!(
+        fixture.clusters.fielded_count(),
+        fixture.clusters.cluster_count() - 2,
+        "exactly the comb's two clusters keep no field"
+    );
+    let mut set = pairs(&fixture, 48, 0x5EED_00F5);
+    set.extend(pairs_about(&fixture, (2, 2), 48, 0x5EED_00F6));
+    set.extend(pairs_about(&fixture, (3, 2), 48, 0x5EED_00F7));
+    the_fields_change_nothing(&mut fixture, &set, "a combed border");
+    let compared = fields_are_sweeps(&mut fixture, 37, "a combed border");
+    assert!(compared > 10_000, "only {compared} entries were compared");
+}
+
+/// What a scratch counted since its last reset: the grid pops, the endpoint
+/// sweeps' share of them, the abstract pops, and the visits that pop nothing.
+fn counted(scratch: &Scratch) -> [u64; 4] {
+    [
+        scratch.expansions().expect("a count"),
+        scratch.endpoint_expansions().expect("a count"),
+        scratch.abstract_expansions().expect("a count"),
+        scratch.visits().expect("a count"),
+    ]
+}
+
+/// A scratch short of abstract slots for `fixture`'s graph (sized for a
+/// cluster edge twice the graph's: every column has a slot, half the abstract
+/// nodes have none), and one short of a column.
+fn misfits(fixture: &Fixture) -> (Scratch, Scratch) {
+    let coarse = Scratch::for_map(&fixture.surface, CLUSTER * 2).expect("a scratch");
+    let short = Scratch::new(
+        fixture.surface.node_count() - 1,
+        fixture.clusters.abstract_capacity(),
+        u32::try_from(CLUSTER * CLUSTER).expect("fits"),
+        fixture.surface.costs().max_step(),
+    )
+    .expect("a scratch");
+    (coarse, short)
+}
+
+/// A scratch serves the graph it was sized for ([`Scratch::serves`]), and
+/// one sized for another cluster edge, for fewer columns, for a smaller
+/// cluster or for a cheaper dearest step does not; the decomposition refuses
+/// to be built in one that does not.
+#[test]
+fn a_scratch_serves_the_graph_it_was_sized_for_and_no_larger_one() {
+    let fixture = Fixture::build(SEED, CLUSTER);
+    assert!(
+        fixture.scratch.serves(&fixture.surface, &fixture.clusters),
+        "the scratch the decomposition was built in serves it"
+    );
+    let (mut coarse, short) = misfits(&fixture);
+    assert!(
+        !coarse.serves(&fixture.surface, &fixture.clusters),
+        "a scratch for clusters of {} has no slot for half of what clusters of {CLUSTER} number",
+        CLUSTER * 2
+    );
+    assert!(
+        coarse.serves_surface(&fixture.surface),
+        "and a slot for every column"
+    );
+    assert!(
+        !short.serves_surface(&fixture.surface),
+        "one column short of the map"
+    );
+    // Sized as this graph asks but for one of `Scratch::new`'s inputs, each
+    // in turn one short: a column, a cluster's column (a search bounded to a
+    // cluster would grow its buffers), a step of the dearest step (the grid
+    // optimum's ring is too small).
+    let cells = u32::try_from(CLUSTER * CLUSTER).expect("fits");
+    let (columns, step) = (
+        fixture.surface.node_count(),
+        fixture.surface.costs().max_step(),
+    );
+    for (what, columns, cells, step) in [
+        ("one column short of the map", columns - 1, cells, step),
+        ("reserved for a smaller cluster", columns, cells - 1, step),
+        (
+            "ringed for a cheaper dearest step",
+            columns,
+            cells,
+            step - 1,
+        ),
+    ] {
+        let one_short = Scratch::new(columns, fixture.clusters.abstract_capacity(), cells, step)
+            .expect("a scratch");
+        assert!(
+            !one_short.serves(&fixture.surface, &fixture.clusters),
+            "a scratch {what}"
+        );
+    }
+    assert!(
+        Clusters::new(
+            &fixture.surface,
+            fixture.rules.cluster_shape().with_size(CLUSTER),
+            &mut coarse,
+        )
+        .is_none(),
+        "the decomposition is not built in a scratch that does not serve it"
+    );
+}
+
+/// Hold that every door that reads the decomposition refuses `coarse` for
+/// the pair, typed.
+fn the_graph_doors_refuse(fixture: &Fixture, coarse: &mut Scratch, pair: (Node, Node)) {
+    use pharmakos_sim::pathing::estimate::{EstimateError, estimate, walk_cost};
+    let (surface, clusters) = (&fixture.surface, &fixture.clusters);
+    let speed = fixture.commander_speed();
+    let (start, goal) = pair;
+    let mut walk: Vec<Node> = Vec::new();
+    // The doors that read the decomposition, in the scratch short of
+    // abstract slots.
+    assert_eq!(
+        estimate(surface, clusters, coarse, start, goal, Fog::Clear, speed),
+        Err(EstimateError::Misfit),
+        "{start} -> {goal}: the estimate"
+    );
+    assert_eq!(
+        abstract_search(surface, clusters, coarse, start, goal, Fog::Clear, speed),
+        Err(Misfit),
+        "{start} -> {goal}: the abstract search"
+    );
+    assert_eq!(
+        route(surface, clusters, coarse, start, goal, &mut walk),
+        Err(Unanswered::Misfit),
+        "{start} -> {goal}: the route"
+    );
+    assert_eq!(
+        route_with(surface, clusters, coarse, pair, Surcharge::NONE, &mut walk),
+        Err(Unanswered::Misfit),
+        "{start} -> {goal}: the route under a surcharge"
+    );
+    assert_eq!(
+        walk_cost(surface, clusters, coarse, pair),
+        Err(Unanswered::Misfit),
+        "{start} -> {goal}: the served walk's cost"
+    );
+}
+
+/// Hold that every door that reads the columns alone refuses `short` for the
+/// pair, typed.
+fn the_column_doors_refuse(surface: &Surface, short: &mut Scratch, pair: (Node, Node)) {
+    let (start, goal) = pair;
+    let mut walk: Vec<Node> = Vec::new();
+    // The doors that read the columns alone, in the scratch one column
+    // short.
+    assert_eq!(
+        astar(surface, Bound::Whole, short, start, goal, &mut walk),
+        Err(Misfit),
+        "{start} -> {goal}: A*"
+    );
+    assert_eq!(
+        astar_with_order(
+            surface,
+            Bound::Whole,
+            short,
+            start,
+            goal,
+            DEFAULT_ORDER,
+            &mut walk,
+        ),
+        Err(Misfit),
+        "{start} -> {goal}: A* in a given order"
+    );
+    assert_eq!(
+        astar_costed(
+            surface,
+            Bound::Whole,
+            short,
+            pair,
+            Surcharge::NONE,
+            &mut walk
+        ),
+        Err(Misfit),
+        "{start} -> {goal}: A* under a surcharge"
+    );
+    assert_eq!(
+        dijkstra_bounded(surface, Bound::Whole, short, start, false),
+        Err(Misfit),
+        "{start}: the sweep"
+    );
+}
+
+/// **Every public search refuses a scratch that does not serve its graph,
+/// typed, before it searches** (S3's `walk3`, its fix pass): the estimate,
+/// the abstract search, the route, the route under a surcharge and the served
+/// walk's cost, which read the decomposition; and A\* in its three forms and
+/// the sweep, which read the columns alone. The router's door has its own
+/// test below.
+///
+/// The regression is twofold. First (S3's `p3est`): a search wrote a node's
+/// record through `get_mut` and read it through `get`, so a node the scratch
+/// had no slot for was queued with no record, never read as seen or closed,
+/// and was queued again by each neighbour it relaxed; the abstract search of
+/// a scratch sized for a cluster edge twice the graph's never ended, and its
+/// heap grew until the machine had no memory left. A node now enters a heap
+/// only with its record (`Scratch::queue`, held by the search module's own
+/// test). Second (this lane's review): such a search then ended, and answered
+/// "no route" from slots it did not have, at every door but the estimate's.
+#[test]
+fn a_search_in_a_scratch_that_does_not_fit_is_refused_at_every_door() {
+    let fixture = Fixture::build(SEED, CLUSTER);
+    let surface = &fixture.surface;
+    let (mut coarse, mut short) = misfits(&fixture);
+    let set = pairs(&fixture, 24, 0x5EED_0F17);
+    assert!(set.len() >= 16, "pairs to ask: {}", set.len());
+    let mut walk: Vec<Node> = Vec::new();
+    for pair in &set {
+        the_graph_doors_refuse(&fixture, &mut coarse, *pair);
+        the_column_doors_refuse(surface, &mut short, *pair);
+    }
+    for (what, scratch) in [("coarse", &coarse), ("short", &short)] {
+        assert_eq!(
+            (
+                scratch.expansions(),
+                scratch.abstract_expansions(),
+                scratch.visits()
+            ),
+            (Ok(0), Ok(0), Ok(0)),
+            "the {what} scratch was refused before any search"
+        );
+    }
+    // A search over the columns alone asks for the columns alone: the coarse
+    // scratch has them, and is served.
+    let (start, goal) = set[0];
+    assert!(
+        astar(surface, Bound::Whole, &mut coarse, start, goal, &mut walk)
+            .expect("every column has a slot")
+            .is_some(),
+        "a connected pair has a walk"
+    );
+}
+
+/// **The router refuses a scratch that does not serve its graph before it
+/// touches anything** ([`Router::serve`]'s door): every waiting unit still
+/// waits, where a route refused unit by unit would have parked it as sealed
+/// in; nothing is counted, no route as missing, no repath as served and no
+/// backlog as a peak; what the last serve left, its served and sealed lists,
+/// is as that serve left it; and the cursor stays, so the next serve reaches
+/// the units the refused one would have. The refusal follows a serve that
+/// filled both lists, so a door that emptied them first is caught (a review
+/// mutant of S3's `walk3` was not, while the refusal was tried on a router
+/// that had never served).
+#[test]
+fn the_router_refuses_a_misfit_scratch_and_keeps_what_its_last_serve_left() {
+    use pharmakos_sim::pathing::router::Router;
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let (surface, clusters) = (&fixture.surface, &fixture.clusters);
+    let (mut coarse, _) = misfits(&fixture);
+    let (start, goal) = pairs(&fixture, 1, 0x5EED_0F18)[0];
+    let on = |c: i32| Fx::from_voxels(i16::try_from(c).expect("fits"));
+    let point = |node: Node| {
+        let (x, y) = surface.coord_of(node);
+        [on(x), on(y), on(surface.standing_z(node))]
+    };
+    // Units 0, 2 and 3 stand on the pair's start; unit 1 stands off the map,
+    // so a serve parks it as sealed in.
+    let from = [
+        point(start),
+        [on(-1), on(-1), on(0)],
+        point(start),
+        point(start),
+    ];
+    let to = [point(goal); 4];
+    let mut router = Router::new(4, &fixture.rules);
+    router.request(0);
+    router.request(1);
+    // Two a serve: the first reaches units 0 and 1 and leaves the cursor at
+    // unit 2.
+    let report = router
+        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 2)
+        .expect("the scratch made with the graph serves it");
+    assert_eq!((report.served, report.sealed), (2, 1));
+    assert_eq!(
+        (router.served_this_tick(), router.sealed_this_tick()),
+        (&[0_u32, 1][..], &[1_u32][..]),
+        "the recipe: the first serve reached two units and sealed one in"
+    );
+
+    // All four units wait, so where the cursor stands decides which two the
+    // next serve reaches, and a backlog of four would be a new peak.
+    for unit in 0..4 {
+        router.request(unit);
+    }
+    let left = |router: &Router| {
+        (
+            router.served_this_tick().to_vec(),
+            router.sealed_this_tick().to_vec(),
+            (router.served_total(), router.sealed_total()),
+            NoPath::ALL.map(|reason| router.no_path().of(reason)),
+            router.backlog_peak(),
+            [0, 1, 2, 3].map(|unit| router.state(unit)),
+        )
+    };
+    let before = left(&router);
+    assert_eq!(
+        (before.2, before.4, before.5),
+        ((2, 1), 0, [WalkState::Waiting; 4]),
+        "the recipe: two served and one sealed in so far, no backlog yet, four units waiting"
+    );
+    assert_eq!(
+        router.serve(surface, clusters, &mut coarse, &from, &to, 2),
+        Err(Misfit),
+        "the router"
+    );
+    assert_eq!(left(&router), before, "the refusal moved nothing");
+
+    let report = router
+        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 2)
+        .expect("the scratch made with the graph serves it");
+    assert_eq!((report.served, report.sealed), (2, 0));
+    assert_eq!(
+        router.served_this_tick(),
+        [2, 3],
+        "the cursor stayed at unit 2: from unit 0 the serve reaches 0 and 1, from 1 it reaches 1 and 2, from 3 it reaches 3 and 0"
+    );
+    assert_eq!(
+        [2, 3].map(|unit| router.state(unit)),
+        [WalkState::Walking; 2],
+        "and the two are routed"
+    );
+}
+
+/// The graph's own doors refuse a scratch that does not serve it, and **a
+/// refused repair or rebuild changes nothing**: the graph is as it was, the
+/// repair's marks stay, and the call is not counted as the tick's repair, so
+/// the same repair in a scratch that serves does its whole work. Run in a
+/// misfit scratch, a rebuild's sweeps reached nothing, and a cluster was left
+/// with no inner edges and empty fields marked whole (S3's `walk3`, its fix
+/// pass).
+#[test]
+fn a_repair_in_a_scratch_that_does_not_fit_is_refused_and_changes_nothing() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let (mut coarse, _) = misfits(&fixture);
+    fixture.crater(100, 100, 4);
+    assert!(fixture.repairer.is_dirty(), "the crater marked a cluster");
+    let before = fixture.clusters.clone();
+    assert_eq!(
+        repair(
+            &fixture.surface,
+            &mut fixture.clusters,
+            &mut coarse,
+            &mut fixture.repairer,
+        ),
+        Err(Misfit),
+        "the repair"
+    );
+    assert_eq!(
+        fixture.clusters.rebuild_all(&fixture.surface, &mut coarse),
+        Err(Misfit),
+        "the whole rebuild"
+    );
+    assert_eq!(
+        fixture
+            .clusters
+            .rebuild_intra(&fixture.surface, &mut coarse, 0),
+        Err(Misfit),
+        "one cluster's inner edges"
+    );
+    assert!(
+        fixture.clusters == before,
+        "a refused repair or rebuild changed the graph"
+    );
+    assert!(
+        fixture.repairer.is_dirty(),
+        "a refused repair keeps its marks"
+    );
+    assert_eq!(
+        fixture.repairer.calls(),
+        Repairs::None,
+        "and is not counted as the tick's repair"
+    );
+    // The same repair in the scratch that serves does its work, and the
+    // rebuilds in it are what a fresh build makes.
+    fixture.repair();
+    assert_eq!(fixture.repairer.calls(), Repairs::Once);
+    let fresh = fixture.rebuilt();
+    assert_eq!(
+        whole(&fixture.clusters),
+        whole(&fresh),
+        "the repair after a refused one leaves what a fresh build makes"
+    );
+    fixture
+        .clusters
+        .rebuild_all(&fixture.surface, &mut fixture.scratch)
+        .expect("the scratch made with the graph serves it");
+    assert_eq!(
+        whole(&fixture.clusters),
+        whole(&fresh),
+        "a whole rebuild is a fresh build"
+    );
+}
+
+/// A cluster keeps its fields exactly while it holds no more transition
+/// cells than the shape's bound ([`ClusterShape::fields`]): at one field
+/// fewer than its transitions it keeps none and is swept; at as many, and at
+/// one more, it keeps them. And the bound is a bound: a shape that allows
+/// more fields than a cluster can have transitions keeps room for no more
+/// than those, however large the number.
+///
+/// [`ClusterShape::fields`]: pharmakos_sim::pathing::ClusterShape
+#[test]
+fn a_cluster_keeps_its_fields_up_to_the_bound_exactly() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    // A cluster with a few transition cells, and one of them.
+    let (index, held) = (0..fixture.clusters.cluster_count())
+        .map(|index| (index, fixture.clusters.trans_cells(index).len()))
+        .find(|(_, held)| *held >= 3)
+        .expect("a cluster with three transition cells");
+    let cell = fixture.clusters.trans_cells(index)[0];
+    let shape = fixture.clusters.shape();
+    for (fields, keeps) in [(held - 1, false), (held, true), (held + 1, true)] {
+        let bounded = Clusters::new(
+            &fixture.surface,
+            shape.with_fields(fields),
+            &mut fixture.scratch,
+        )
+        .expect("a decomposition");
+        assert_eq!(
+            bounded.field(&fixture.surface, cell).is_some(),
+            keeps,
+            "a cluster of {held} transition cells under a bound of {fields} fields"
+        );
+        assert_eq!(bounded.shape().fields, fields, "the bound it keeps");
+    }
+
+    let most = usize::try_from(4 * CLUSTER).expect("fits");
+    for allowed in [most + 1, 1_000_000, usize::MAX] {
+        let wide = Clusters::new(
+            &fixture.surface,
+            shape.with_fields(allowed),
+            &mut fixture.scratch,
+        )
+        .expect("a bound past a cluster's transitions is still a bound");
+        assert_eq!(
+            wide.shape().fields,
+            most,
+            "a shape allowing {allowed} fields keeps room for a cluster's most transitions"
+        );
+        assert_eq!(
+            (wide.fingerprint(), wide.fielded_count()),
+            (
+                fixture.clusters.fingerprint(),
+                fixture.clusters.fielded_count()
+            ),
+            "and is the shipped bound's graph with the same clusters fielded: no cluster \
+             here passes either bound"
+        );
+    }
+}
+
+/// Flat ground of `edge` by `edge` columns under step costs of `step` a
+/// cardinal and a diagonal step alike, decomposed at clusters of 16: every
+/// border is one open run with a transition at each end, so the dearest walk
+/// inside a cluster from a transition cell is fifteen steps.
+fn flat(edge: i32, step: i32) -> Fixture {
+    let rules = rules();
+    let size = u32::try_from(edge).expect("a small edge");
+    let mut store = VoxelStore::new([size, size, 32]).expect("a whole number of chunks");
+    for y in 0..edge {
+        for x in 0..edge {
+            assert!(store.set([x, y, 0], Material::STONE), "the floor");
+        }
+    }
+    let mut digests = ChunkDigests::new(store.chunk_count());
+    store.settle_all(&mut digests);
+    let costs = StepCosts::new(
+        core::num::NonZeroI32::new(step).expect("a step"),
+        step,
+        fixture_climb(&rules),
+        StepCosts::from_rules(&rules).headroom(),
+    );
+    let surface = Surface::new(&store, costs).expect("a surface");
+    let mut scratch = Scratch::for_map(&surface, 16).expect("a scratch");
+    let clusters = Clusters::new(&surface, rules.cluster_shape().with_size(16), &mut scratch)
+        .expect("a decomposition");
+    let repairer = Repairer::new(clusters.cluster_count());
+    Fixture {
+        rules,
+        store,
+        digests,
+        surface,
+        clusters,
+        scratch,
+        repairer,
+    }
+}
+
+/// The committed climb surcharge: flat ground never pays it.
+fn fixture_climb(rules: &RulesTable) -> i32 {
+    StepCosts::from_rules(rules).climb()
+}
+
+/// A field entry is a `u16` whose last value says "no walk", so a cluster
+/// keeps its fields only while every cost in them is below that value, and
+/// one cost at it or past it leaves the whole cluster swept, never a wrong
+/// entry (the module docs' "Transition fields"). The committed table's step
+/// costs come nowhere near; a loadable table's can (`RulesTable`'s path-cost
+/// bound admits a dearest step in the thousands).
+///
+/// On flat ground at clusters of 16 the dearest walk from a transition cell
+/// is fifteen steps: at 4 368 a step it costs 65 520 and fits; at 4 369 it
+/// costs 65 535, the entry that says "no walk"; at 4 370 it costs 65 550,
+/// past a `u16`. In each case every answer is the one a decomposition with no
+/// fields gives.
+#[test]
+fn a_cost_past_a_field_entry_leaves_its_cluster_swept() {
+    for (step, keeps, what) in [
+        (4_368, true, "the dearest cost fits an entry"),
+        (
+            4_369,
+            false,
+            "the dearest cost is the entry that says no walk",
+        ),
+        (4_370, false, "the dearest cost passes an entry"),
+    ] {
+        let mut fixture = flat(64, step);
+        let clusters = fixture.clusters.cluster_count();
+        assert_eq!(clusters, 16, "the recipe: sixteen clusters of 16");
+        for index in 0..clusters {
+            let cells = fixture.clusters.trans_cells(index);
+            assert!(
+                cells.len() >= 3,
+                "the recipe: a transition at each end of each border (a corner cluster's two \
+                 borders share one cell), cluster {index} holds {}",
+                cells.len()
+            );
+            let cell = cells[0];
+            assert_eq!(
+                fixture.clusters.field(&fixture.surface, cell).is_some(),
+                keeps,
+                "{step} a step, cluster {index}: {what}"
+            );
+        }
+        assert_eq!(
+            fixture.clusters.fielded_count(),
+            if keeps { clusters } else { 0 },
+            "{step} a step: {what}"
+        );
+        let mut set = pairs(&fixture, 96, 0x5EED_0F1E);
+        set.extend(pairs_about_in(&fixture, 16, (1, 1), 48, 0x5EED_0F1F));
+        the_fields_change_nothing(&mut fixture, &set, what);
+        if keeps {
+            let compared = fields_are_sweeps(&mut fixture, 5, what);
+            assert!(compared > 1_000, "only {compared} entries were compared");
+        }
+    }
+}
+
+/// S3's `walk3`: a query's counted work is its pops and every visit of its
+/// loops that pops nothing, so an endpoint inserted by lookup, which pops
+/// nothing, is still counted, by the slots it reads. Held against the same
+/// queries on a decomposition with no fields: the abstract search is the
+/// same search, the lookup pops no grid node at all, and what the swept
+/// queries count beyond the looked-up ones is their sweeps' own loops, eight
+/// neighbour slots a pop and at most seven stale entries a pop skipped (a
+/// pop pushes at most eight entries and closes one).
+#[test]
+fn a_lookup_is_counted_by_its_slots_and_a_sweep_by_its_neighbours() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let shape = fixture.clusters.shape().with_fields(0);
+    let mut swept_scratch = Scratch::for_map(&fixture.surface, shape.size).expect("a scratch");
+    let swept =
+        Clusters::new(&fixture.surface, shape, &mut swept_scratch).expect("a decomposition");
+    let speed = fixture.commander_speed();
+    let mut far = 0_u32;
+    for (start, goal) in pairs(&fixture, 96, 0x5EED_00F8) {
+        let (from, to) = (
+            fixture.clusters.cluster_of(start),
+            fixture.clusters.cluster_of(goal),
+        );
+        if from == to {
+            continue;
+        }
+        far += 1;
+        fixture.scratch.reset_counters();
+        swept_scratch.reset_counters();
+        let looked = abstract_search(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            start,
+            goal,
+            Fog::Clear,
+            speed,
+        )
+        .expect("the scratch serves");
+        let by_sweep = abstract_search(
+            &fixture.surface,
+            &swept,
+            &mut swept_scratch,
+            start,
+            goal,
+            Fog::Clear,
+            speed,
+        )
+        .expect("the scratch serves");
+        assert_eq!(looked, by_sweep, "{start} to {goal}");
+        let [grid, endpoint, abstract_pops, visits] = counted(&fixture.scratch);
+        let [swept_grid, swept_endpoint, swept_abstract, swept_visits] = counted(&swept_scratch);
+        assert_eq!(
+            (grid, endpoint),
+            (0, 0),
+            "{start} to {goal}: a lookup popped a grid node"
+        );
+        assert_eq!(
+            abstract_pops, swept_abstract,
+            "{start} to {goal}: the abstract search is not the same search"
+        );
+        assert_eq!(
+            swept_grid, swept_endpoint,
+            "{start} to {goal}: a swept query's grid pops are its two sweeps'"
+        );
+        let slots = fixture.clusters.trans_cells(usize::from(from)).len()
+            + fixture.clusters.trans_cells(usize::from(to)).len();
+        let slots = u64::try_from(slots).expect("fits");
+        assert!(
+            visits >= slots + abstract_pops,
+            "{start} to {goal}: {visits} visits do not hold the {slots} slots two insertions read \
+             and an edge for each of the {abstract_pops} abstract pops but the start's"
+        );
+        let beyond = swept_visits
+            .checked_sub(visits)
+            .expect("a sweep visits no less than a lookup");
+        assert!(
+            beyond >= 8 * swept_endpoint && beyond < 16 * swept_endpoint,
+            "{start} to {goal}: the sweeps popped {swept_endpoint} nodes and counted {beyond} \
+             visits of their own, outside eight to sixteen a pop"
+        );
+    }
+    assert!(far >= 48, "only {far} pairs span two clusters");
+}
+
+/// A block of two by two columns of floor at the map's corner and one column
+/// of floor at (10, 10), which no walk from the block reaches, under the
+/// given step costs; with a scratch for it.
+fn block_and_island(cardinal: i32, diagonal: i32) -> (Surface, Scratch) {
+    let rules = rules();
+    let mut store = VoxelStore::new([32, 32, 32]).expect("a whole number of chunks");
+    for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1), (10, 10)] {
+        assert!(store.set([x, y, 0], Material::STONE), "the floor");
+    }
+    let mut digests = ChunkDigests::new(store.chunk_count());
+    store.settle_all(&mut digests);
+    let costs = StepCosts::new(
+        core::num::NonZeroI32::new(cardinal).expect("a step"),
+        diagonal,
+        fixture_climb(&rules),
+        StepCosts::from_rules(&rules).headroom(),
+    );
+    let surface = Surface::new(&store, costs).expect("a surface");
+    let scratch = Scratch::for_map(&surface, 16).expect("a scratch");
+    (surface, scratch)
+}
+
+/// **A stale heap entry a search skips is one counted visit**, in the sweep
+/// and in A\* alike (S3's `walk3`, "every loop counted"; the abstract
+/// search's is held by the search module's own test of
+/// `Scratch::pop_open_abstract`). Held exactly, on ground small enough to
+/// count by hand, where a range of visits a pop cannot tell a lost stale
+/// entry from none.
+///
+/// The ground is a block of two by two columns, searched from its corner to
+/// exhaustion (the A\*'s goal stands apart and is never reached, so it pops
+/// every entry too). The corner's pop queues its three neighbours. At a
+/// diagonal of 14 to a cardinal step of 10 nothing is queued twice: four
+/// pops of eight neighbour slots each, 32 visits. At a diagonal of 25 the
+/// far column is queued at 25 by the corner and again at 20 by whichever
+/// side column pops first; it closes at 20, and its entry at 25 surfaces
+/// stale: 33 visits. Which side column pops first changes neither count.
+#[test]
+fn a_stale_entry_a_search_skips_is_one_counted_visit() {
+    for (diagonal, stale) in [(14, 0_u64), (25, 1)] {
+        let (surface, mut scratch) = block_and_island(10, diagonal);
+        let corner = surface.node_of(0, 0).expect("on the map");
+        let island = surface.node_of(10, 10).expect("on the map");
+        assert!(
+            surface.walkable(island),
+            "the recipe: the goal can be stood on"
+        );
+
+        dijkstra_bounded(&surface, Bound::Whole, &mut scratch, corner, false)
+            .expect("the scratch serves the surface");
+        assert_eq!(
+            (scratch.expansions(), scratch.visits()),
+            (Ok(4), Ok(32 + stale)),
+            "a diagonal of {diagonal}: the sweep"
+        );
+
+        scratch.reset_counters();
+        let mut walk: Vec<Node> = Vec::new();
+        assert_eq!(
+            astar(
+                &surface,
+                Bound::Whole,
+                &mut scratch,
+                corner,
+                island,
+                &mut walk
+            ),
+            Ok(None),
+            "a diagonal of {diagonal}: no walk reaches the island"
+        );
+        assert_eq!(
+            (scratch.expansions(), scratch.visits()),
+            (Ok(4), Ok(32 + stale)),
+            "a diagonal of {diagonal}: A*"
+        );
+    }
+}
+
+/// **A query between two columns of one cluster that keeps its fields
+/// searches the cluster once** (S3's `walk3`, its fix pass): the direct cost
+/// is found with the start's insertion, by one A\* bounded to the cluster,
+/// and the goal's insertion asks for none, since the walk costs the same
+/// from either end. Held by the grid pops the query counts, which are that
+/// one search's, where asking again with the goal counted them twice and no
+/// answer moved.
+#[test]
+fn a_query_inside_one_cluster_searches_it_once() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let speed = fixture.commander_speed();
+    let mut alone = Scratch::for_map(&fixture.surface, CLUSTER).expect("a scratch");
+    let mut walk: Vec<Node> = Vec::new();
+    let mut inside = 0_u32;
+    for (start, goal) in pairs_about(&fixture, (2, 2), 96, 0x5EED_0F19) {
+        let tag = fixture.clusters.cluster_of(start);
+        if tag != fixture.clusters.cluster_of(goal) {
+            continue;
+        }
+        assert!(
+            fixture.clusters.field(&fixture.surface, start).is_some(),
+            "the recipe: the cluster keeps its fields"
+        );
+        inside += 1;
+        fixture.scratch.reset_counters();
+        alone.reset_counters();
+        let _ = abstract_search(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            start,
+            goal,
+            Fog::Clear,
+            speed,
+        )
+        .expect("the scratch serves");
+        let _ = astar(
+            &fixture.surface,
+            Bound::Cluster(fixture.clusters.of_node(), tag),
+            &mut alone,
+            start,
+            goal,
+            &mut walk,
+        )
+        .expect("the scratch serves");
+        let [grid, endpoint, _, _] = counted(&fixture.scratch);
+        let [once, _, _, _] = counted(&alone);
+        assert!(
+            once > 0,
+            "{start} to {goal}: the bounded search popped nothing"
+        );
+        assert_eq!(
+            (grid, endpoint),
+            (once, 0),
+            "{start} to {goal}: the query's grid pops are not one bounded search's"
+        );
+    }
+    assert!(inside >= 24, "only {inside} pairs share the cluster");
 }
 
 #[test]
@@ -1460,14 +2541,16 @@ fn a_sealed_in_walker_is_re_armed_by_a_repair_nowhere_near_it() {
     fixture.repair();
 
     router.request(0);
-    let report = router.serve(
-        &fixture.surface,
-        &fixture.clusters,
-        &mut fixture.scratch,
-        &positions,
-        &destinations,
-        1,
-    );
+    let report = router
+        .serve(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            &positions,
+            &destinations,
+            1,
+        )
+        .expect("the scratch serves");
     assert_eq!(report.sealed, 1, "the walled-in walker did not seal");
     assert_eq!(router.state(0), WalkState::Sealed);
 
@@ -1529,7 +2612,7 @@ fn a_restored_world_rebuilds_the_graph_it_was_saved_with() {
         let _ = world.step(&mut enc).unwrap();
         tick += 1;
     }
-    let fingerprint = world.clusters().fingerprint();
+    let fingerprint = whole(world.clusters());
     let snapshot = pharmakos_sim::Snapshot::capture(&world).expect("a world between ticks");
     let bytes = snapshot.to_bytes().expect("a snapshot encodes");
 
@@ -1539,7 +2622,7 @@ fn a_restored_world_rebuilds_the_graph_it_was_saved_with() {
         .restore_into(&mut restored)
         .expect("the snapshot restores");
     assert_eq!(
-        restored.clusters().fingerprint(),
+        whole(restored.clusters()),
         fingerprint,
         "the rebuilt graph is not the graph the snapshot was taken over"
     );
@@ -1560,6 +2643,89 @@ fn a_restored_world_rebuilds_the_graph_it_was_saved_with() {
         );
         n += 1;
     }
+}
+
+/// The world searches in its own scratch unchecked, so it holds that scratch
+/// to its graph where a caller could have replaced it ([`World::scratch_mut`]):
+/// as each tick opens, and before a restore writes anything. Each refuses a
+/// scratch that does not serve, typed, and changes nothing; with a scratch
+/// that serves put back, the world steps as one never touched.
+#[test]
+fn a_world_whose_scratch_no_longer_fits_is_refused_by_its_tick_and_by_a_restore() {
+    use pharmakos_sim::world::{PHASE_ORDER, Phase, TickError};
+    let mut world = harness_world(4);
+    let mut twin = harness_world(4);
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let mut twin_enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    assert_eq!(
+        world.step(&mut enc).unwrap(),
+        twin.step(&mut twin_enc).unwrap()
+    );
+    let bytes = pharmakos_sim::Snapshot::capture(&world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("a snapshot encodes");
+    let before = (world.tick(), world.state_hash(), whole(world.clusters()));
+
+    // Sized for a cluster edge twice the world's: it does not serve.
+    let coarse = Scratch::for_map(world.surface(), world.clusters().size() * 2).expect("a scratch");
+    assert!(!coarse.serves(world.surface(), world.clusters()));
+    let own = core::mem::replace(world.scratch_mut(), coarse);
+
+    assert_eq!(world.step(&mut enc), Err(TickError::MisfitScratch));
+    assert_eq!(world.begin_tick(), Err(TickError::MisfitScratch));
+    assert!(!world.tick_is_open(), "no tick was opened");
+    assert_eq!(
+        pharmakos_sim::Snapshot::from_bytes(&bytes)
+            .expect("the bytes decode")
+            .restore_into(&mut world),
+        Err(pharmakos_sim::snapshot::SnapshotError::MisfitScratch),
+        "a restore rebuilds the graph in the world's scratch, and refuses this one"
+    );
+    assert_eq!(
+        (world.tick(), world.state_hash(), whole(world.clusters())),
+        before,
+        "the refusals moved neither the clock, the state nor the graph"
+    );
+
+    *world.scratch_mut() = own;
+    pharmakos_sim::Snapshot::from_bytes(&bytes)
+        .expect("the bytes decode")
+        .restore_into(&mut world)
+        .expect("the snapshot restores in a scratch that serves");
+    let mut n = 0;
+    while n < 5 {
+        assert_eq!(
+            world.step(&mut enc).unwrap(),
+            twin.step(&mut twin_enc).unwrap(),
+            "tick {n} after the scratch was put back"
+        );
+        n += 1;
+    }
+
+    // Replaced between two phases of an open tick, the next phase is refused
+    // and has not run; put back, the same call runs it and the tick ends on
+    // the twin's hash.
+    world.begin_tick().expect("a tick opens");
+    let coarse = Scratch::for_map(world.surface(), world.clusters().size() * 2).expect("a scratch");
+    let mut held = Some(coarse);
+    for phase in PHASE_ORDER {
+        if phase == Phase::Hash {
+            continue;
+        }
+        if phase == Phase::Decision {
+            let own = core::mem::replace(world.scratch_mut(), held.take().expect("once"));
+            assert_eq!(world.run_phase(phase), Err(TickError::MisfitScratch));
+            assert!(world.tick_is_open(), "the tick stays open at the phase");
+            *world.scratch_mut() = own;
+        }
+        world.run_phase(phase).expect("the phase runs");
+    }
+    assert_eq!(
+        world.end_tick(&mut enc).unwrap(),
+        twin.step(&mut twin_enc).unwrap(),
+        "the tick a refused phase interrupted"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2726,6 +3892,7 @@ fn a_clear_pair_is_priced_at_the_route_the_router_serves() {
                 Fog::Clear,
                 speed,
             )
+            .expect("the scratch serves")
             .unwrap_or_else(|| panic!("{label}: a connected pair has an abstract answer"));
             let served = route(
                 &fixture.surface,
@@ -3053,6 +4220,7 @@ fn a_partial_route_chain_spends_its_abstract_cost() {
                 Fog::Clear,
                 speed,
             )
+            .expect("the scratch serves")
             .expect("the serpentine joins the pair");
             let now = i64::from(priced.cost);
             if left.is_none() {
@@ -3695,8 +4863,8 @@ fn the_tick_after_a_crater_reads_the_repaired_graph() {
         "the nearest read in the window is not the settled one"
     );
     assert_eq!(
-        world.clusters().fingerprint(),
-        fresh.fingerprint(),
+        whole(world.clusters()),
+        whole(&fresh),
         "the graph after the editing tick is not the graph the terrain makes"
     );
 }

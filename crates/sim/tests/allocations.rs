@@ -3613,6 +3613,12 @@ const PER_MAP: &str = "sized once to the map (one a chunk, column or voxel of th
 const PER_NODE: &str = "`vec![..; n]` in its constructor, `n` the surface graph's node count \
                         (or the abstract node count plus two), and written by index";
 
+/// The cluster decomposition's transition fields (S3's `walk3`), `vec![..]`
+/// in `Clusters::new`.
+const PER_FIELD: &str = "`vec![..]` in `Clusters::new`, sized from the cluster count, the \
+                         fields a cluster keeps (`ClusterShape::fields`) and the columns a \
+                         cluster holds; written by index";
+
 /// A field of the cluster decomposition, `vec![..]` in `Clusters::new`.
 const PER_CLUSTER: &str = "`vec![..]` in `Clusters::new`, sized from the cluster count, the \
                            transitions a border holds (`max_trans`), the intra edges \
@@ -3907,6 +3913,13 @@ const PLAIN_VECTORS: &[(&str, &str, &str, &str)] = &[
         "inter_cost",
         PER_CLUSTER,
     ),
+    (
+        "src/pathing/clusters.rs",
+        "Clusters",
+        "fielded",
+        PER_CLUSTER,
+    ),
+    ("src/pathing/clusters.rs", "Clusters", "field", PER_FIELD),
     (
         "src/pathing/clusters.rs",
         "Clusters",

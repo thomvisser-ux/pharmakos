@@ -580,7 +580,7 @@ const GROWS: &[&str] = &[
     "sim:targeting.rs::in_sphere_of",
     "sim:targeting.rs::inside_own_sphere",
     "sim:targeting.rs::anchor_in_sphere_of",
-    "sim:targeting.rs::on_vent_counted",
+    "sim:targeting.rs::on_vent_in",
     "sim:targeting.rs::on_candidate",
     "sim:interpreter/exec.rs::site_is_legal",
     // The sphere's place in the sensor seam's sphere output.
@@ -635,7 +635,7 @@ const KEEPS_THE_BASE: &[&str] = &[
     "sim:targeting.rs::radius_of",
     "sim:targeting.rs::covering_site",
     "sim:targeting.rs::anchor_in_sphere",
-    "sim:targeting.rs::cover_counted",
+    "sim:targeting.rs::cover_in",
     // A wall's owner: a beacon a Spire ever grew keeps the grown radius for
     // its walls, decision 6's "works stand", and every other the one function.
     "sim:world/combat.rs::wall_owner",
