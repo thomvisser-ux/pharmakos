@@ -2161,6 +2161,8 @@ pub struct BreachScratch {
     g: Vec<i32>,
     came: Vec<u32>,
     heap: crate::pathing::search::Heap,
+    /// The states the last search expanded ([`BreachScratch::expansions`]).
+    expansions: u32,
 }
 
 impl BreachScratch {
@@ -2175,10 +2177,21 @@ impl BreachScratch {
             g: vec![0; n],
             came: vec![0; n],
             heap: crate::pathing::search::Heap::with_capacity(BREACH_HEAP),
+            expansions: 0,
         }
     }
 
+    /// The states the last search expanded: what [`BREACH_EXPANSIONS`]
+    /// bounds, so a search that answers [`BreachRefused::Exhausted`] by the
+    /// bound reads one past it. A measurement for the bench's breach figures
+    /// (S3's `cert3`); nothing in the sim reads it.
+    #[must_use]
+    pub const fn expansions(&self) -> u32 {
+        self.expansions
+    }
+
     fn begin(&mut self) {
+        self.expansions = 0;
         // The epoch lives in the mark's upper 31 bits: past them, every mark
         // is cleared and the count starts again.
         if self.epoch >= u32::MAX >> 1 {
@@ -2344,7 +2357,6 @@ pub fn breach_search(
         h: h0,
         n: start,
     });
-    let mut expansions: u32 = 0;
     let mut found = false;
     while let Some(item) = scratch.heap.pop() {
         if scratch.is_closed(item.n) {
@@ -2355,8 +2367,8 @@ pub fn breach_search(
             found = true;
             break;
         }
-        expansions = expansions.saturating_add(1);
-        if expansions > BREACH_EXPANSIONS {
+        scratch.expansions = scratch.expansions.saturating_add(1);
+        if scratch.expansions > BREACH_EXPANSIONS {
             return Err(BreachRefused::Exhausted);
         }
         // E7: cannot miss: a popped state was reached when it was pushed

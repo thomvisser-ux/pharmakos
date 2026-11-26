@@ -33,9 +33,16 @@
 //! endpoint-sweep share, the one number the plan says nobody else produces, is
 //! exact either way: it is a ratio of expansions.
 //!
+//! Since S3's `walk3` an endpoint is inserted by lookup in a cluster that keeps
+//! its transition fields ([`pharmakos_sim::pathing::clusters`]), which on a
+//! fresh map is every cluster, so the share reads 0 % where G2 measured 91 %:
+//! the sweep was the lever, and it is pulled. The share is still reported,
+//! because a query on ground that has cut a cluster past its fields sweeps
+//! again, and that is what a share above zero now means.
+//!
 //! Nothing here gates. Every line is a `::notice::`, and the two assertions are
-//! structural alarms with wide bands: an endpoint share that collapsed, or a
-//! graph that lost its giant component, means something changed shape.
+//! structural alarms: an endpoint swept on a fresh map, or a graph that lost
+//! its giant component, means something changed shape.
 
 #![allow(
     clippy::expect_used,
@@ -182,11 +189,12 @@ fn the_pathing_bench_reports_its_numbers() {
         steps_before.saturating_sub(steps_after)
     );
 
-    // Two structural alarms, wide on purpose. Neither is a gate.
-    assert!(
-        share >= 50,
-        "the endpoint sweep is only {share} % of a query; at cluster 32 G2 measured 91 %, so a \
-         collapse means the abstract graph or the endpoint insertion changed shape"
+    // Two structural alarms. Neither is a gate.
+    assert_eq!(
+        share, 0,
+        "the endpoint sweep is {share} % of a query on a fresh map, where every cluster keeps \
+         its transition fields and an endpoint is inserted by lookup (S3's `walk3`); a sweep \
+         here means a cluster lost its fields or the insertion stopped reading them"
     );
     assert!(
         largest_after.saturating_mul(2) >= u64::from(bench.surface.walkable_count()),
@@ -265,7 +273,8 @@ fn bench_estimates(bench: &mut Bench) -> u64 {
         percentile(&legs, 50)
     );
     println!(
-        "::notice::endpoint-sweep share of an estimate query: {share} % (G2 measured 91 % at \
+        "::notice::endpoint-sweep share of an estimate query: {share} % since S3's walk3 inserts \
+         an endpoint by lookup (G2 measured 91 % at \
          cluster 32, which is why the lever on the estimate budget is the sweep and not a second \
          abstract level)"
     );
@@ -349,7 +358,8 @@ fn bench_repairs(bench: &mut Bench) {
             &mut bench.clusters,
             &mut bench.scratch,
             &mut bench.repairer,
-        );
+        )
+        .expect("the scratch made with the graph serves it");
         repairs.push(bench.scratch.expansions().expect("the count fits a u64"));
         dirty_total += u64::from(report.dirty);
         n += 1;

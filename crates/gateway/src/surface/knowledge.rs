@@ -702,7 +702,7 @@ impl Surface {
                             scratch,
                             pharmakos_sim::targeting::column_of(commander),
                             |_| true,
-                        )
+                        )?
                     }
                     None => Vec::new(),
                 },
@@ -1325,15 +1325,16 @@ impl Surface {
             Some(held) => held,
             None => scratch.insert(crate::targeting::scratch_for(world)?),
         };
-        let found = pharmakos_sim::targeting::cover(&ground, scratch, seat, origin, spec).map_err(
-            |failure| {
-                Error::not_found(said!(
-                    "{} covers nothing: its step would fail `{}`",
-                    pharmakos_proto::json::grammar::quoted_pointer(at),
-                    pharmakos_proto::json::grammar::quoted(failure.name())
-                ))
-            },
-        )?;
+        let found = crate::targeting::ran(pharmakos_sim::targeting::cover(
+            &ground, scratch, seat, origin, spec,
+        ))?
+        .map_err(|failure| {
+            Error::not_found(said!(
+                "{} covers nothing: its step would fail `{}`",
+                pharmakos_proto::json::grammar::quoted_pointer(at),
+                pharmakos_proto::json::grammar::quoted(failure.name())
+            ))
+        })?;
         let [x, y] = found.site;
         let point = ground.standing(x, y).ok_or_else(|| {
             Error::internal(said!(
@@ -1396,14 +1397,14 @@ impl Surface {
             None => scratch.insert(crate::targeting::scratch_for(world)?),
         };
         let mut stones: Vec<pharmakos_sim::targeting::StoneCandidate> = Vec::new();
-        let found = pharmakos_sim::targeting::toward_counted(
+        let found = crate::targeting::ran(pharmakos_sim::targeting::toward_counted(
             &ground,
             scratch,
             &mut stones,
             seat,
             origin,
             spec,
-        )
+        ))?
         .map_err(|failed| {
             Error::not_found(said!(
                 "{} finds no stepping stone: its step would fail `{}`",
