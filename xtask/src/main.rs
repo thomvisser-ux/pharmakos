@@ -134,7 +134,7 @@
 //! cargo xtask perf-alarms g3        # one alarm (mesher, p1, p1-cap, p1-decision, p1-kinds, p3, g3, allocations)
 //! cargo xtask g3-budget             # G3′'s CI alarm: fails at the gate's numbers doubled
 //! cargo xtask p3-budget             # P3's CI alarm: a repath p99 over 10 ms, an estimate over 2 ms
-//! cargo xtask p1-budget             # P1's CI alarm: QUICK over 10 ms, FULL over 100 ms at the budget
+//! cargo xtask p1-budget             # P1's CI alarm: QUICK over 10 ms, FULL or end to end over 100 ms at the budget
 //! cargo xtask package               # the unsigned zip for this platform (T21)
 //! cargo xtask placeholders          # the PLACEHOLDER register; --check fails off-grammar
 //! ```
@@ -7448,6 +7448,90 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             ALARMS.len() + 1,
             "every alarm and the allocations notice"
         );
+        assert!(
+            sum < job_timeout,
+            "the steps' timeouts sum to {sum} minutes, not below the job's {job_timeout}"
+        );
+    }
+
+    /// The `authoring budgets` job (S3's plan, E12): each authoring alarm in
+    /// [`budget::BUDGETS`] runs in a step of its own, exactly once, and none
+    /// continues on error, so the job can go red; every measuring step skips
+    /// on the docs-only fast path, the second runs after a red first
+    /// (`!cancelled()`), each has a timeout, and the job's timeout is above
+    /// their sum with the scope step's.
+    #[test]
+    fn the_authoring_budgets_job_runs_both_alarms_and_can_go_red() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let start = ci
+            .find("\n  authoring-budgets:\n")
+            .expect("the authoring-budgets job");
+        let body: Vec<&str> = ci
+            .get(start + 1..)
+            .expect("the job's text")
+            .lines()
+            .skip(1)
+            // The job's body is indented past its key; the next job, or the
+            // comment block before it, starts at two spaces.
+            .take_while(|line| line.is_empty() || line.starts_with("   "))
+            .collect();
+        let job = body.join("\n");
+        assert!(
+            job.contains("    name: authoring budgets (ubuntu-24.04)\n"),
+            "{job}"
+        );
+        assert!(job.contains("    runs-on: ubuntu-24.04\n"), "{job}");
+        let minutes = |text: &str| -> u32 {
+            text.trim()
+                .strip_prefix("timeout-minutes: ")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_else(|| panic!("`{text}` is not a timeout"))
+        };
+        let job_timeout = job
+            .lines()
+            .find(|line| line.starts_with("    timeout-minutes: "))
+            .map(minutes)
+            .expect("the job's timeout");
+        let steps: Vec<&str> = job.split("\n      - name: ").skip(1).collect();
+        let mut sum = 0;
+        for step in &steps {
+            if let Some(line) = step
+                .lines()
+                .find(|line| line.trim_start().starts_with("timeout-minutes: "))
+            {
+                sum += minutes(line);
+            }
+        }
+        for (at, alarm) in budget::BUDGETS.iter().enumerate() {
+            let runs: Vec<&&str> = steps
+                .iter()
+                .filter(|step| step.contains(&format!("run: cargo xtask {}\n", alarm.command)))
+                .collect();
+            assert_eq!(
+                runs.len(),
+                1,
+                "one step runs `cargo xtask {}`",
+                alarm.command
+            );
+            let step = runs.first().expect("the step");
+            assert!(
+                !step.contains("continue-on-error"),
+                "`{}` must be able to turn the job red: {step}",
+                alarm.command
+            );
+            assert!(
+                step.lines()
+                    .any(|line| line.trim_start().starts_with("timeout-minutes: ")),
+                "`{}` has no timeout: {step}",
+                alarm.command
+            );
+            let guard = if at == 0 {
+                "\n        if: steps.scope.outputs.prose_only != 'true'\n"
+            } else {
+                "\n        if: ${{ !cancelled() && steps.scope.outputs.prose_only != 'true' }}\n"
+            };
+            assert!(step.contains(guard), "`{}`: {step}", alarm.command);
+        }
         assert!(
             sum < job_timeout,
             "the steps' timeouts sum to {sum} minutes, not below the job's {job_timeout}"
