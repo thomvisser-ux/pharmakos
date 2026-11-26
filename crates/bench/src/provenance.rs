@@ -13,10 +13,29 @@
 //! WSL2 leg's mirror (`wsl-ci.sh`) is a git clone at the mirrored commit, so
 //! it names its commit as the Windows leg does.
 //!
-//! A certifying run takes [`crate::full::CERT_PLAN`]'s calls. A run on a
-//! machine that cannot spare the time may cut them through
-//! [`CERT_CALLS_VAR`], read by [`cert_plan_from`]; the same code path runs,
-//! and every line it prints carries the count, so a cut run reads as one.
+//! # Certification is opted into, once, for every command
+//!
+//! Each certifying command (`p1_certify`, `p3_pathing_timings`,
+//! `p1_decision_kinds`, `g3_raids_segments`, `g3_watch_sightings_and_breach`)
+//! is also, all but the first, a `perf-alarms` step on every CI runner, whose
+//! figures are notices (AGENTS.md section 9 item 11; S3's plan, section 5.1
+//! item 4). So a run certifies only when the person running it says so, with
+//! **one** variable for every command, [`CERTIFY_VAR`], read strictly by
+//! [`certify_from`]:
+//!
+//! * unset: not a certifying run. Every line carries [`CUT_BANNER`],
+//!   whatever its counts, and the notices speak as published figures;
+//! * exactly `1`: a certifying run. A line is certifying only when every count
+//!   that could be cut came from what ran and meets its plan; otherwise it
+//!   carries the banner too;
+//! * anything else: refused, [`Error::Plan`].
+//!
+//! [`CERT_CALLS_VAR`] is the other half, and only cuts: unset, P1 takes
+//! [`crate::full::CERT_PLAN`]'s calls; a whole number above zero takes that
+//! many, and below the plan's count every line of the run says it is cut. No
+//! workflow sets either (xtask's `no_workflow_asks_a_bench_run_to_certify`
+//! holds it); the owner's recorded
+//! runs set [`CERTIFY_VAR`].
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -26,9 +45,96 @@ use crate::error::Error;
 use crate::full::CERT_PLAN;
 use crate::quick::QuickPlan;
 
-/// The environment variable that cuts a certifying run's timed calls a
-/// figure: a whole number above zero. Unset, the run takes [`CERT_PLAN`].
+/// The environment variable that cuts P1's timed calls a figure: a whole
+/// number above zero. Unset, the run takes [`CERT_PLAN`].
 pub const CERT_CALLS_VAR: &str = "PHARMAKOS_BENCH_CERT_CALLS";
+
+/// The environment variable that makes a run a certifying one: exactly `1`.
+/// Named for what it asks, beside [`CERT_CALLS_VAR`]; unset is not certifying.
+pub const CERTIFY_VAR: &str = "PHARMAKOS_BENCH_CERTIFY";
+
+/// Whether a run was asked to certify.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Certify {
+    /// Not asked: an alarm's or a hand run's figures, never certifying.
+    Off,
+    /// Asked, with [`CERTIFY_VAR`] set to `1`.
+    On,
+}
+
+/// [`CERTIFY_VAR`]'s value read strictly: unset is [`Certify::Off`], exactly
+/// `1` is [`Certify::On`].
+///
+/// # Errors
+///
+/// [`Error::Plan`] for any other value, so a typo never runs as one or the
+/// other.
+pub fn certify_from(value: Option<&OsStr>) -> Result<Certify, Error> {
+    match value {
+        None => Ok(Certify::Off),
+        Some(value) if value == "1" => Ok(Certify::On),
+        Some(value) => Err(Error::Plan(format!(
+            "{CERTIFY_VAR} is `{}`; it is exactly 1 to certify, or unset",
+            value.display()
+        ))),
+    }
+}
+
+/// [`certify_from`] on the process's environment.
+///
+/// # Errors
+///
+/// As [`certify_from`].
+pub fn certify_from_env() -> Result<Certify, Error> {
+    certify_from(std::env::var_os(CERTIFY_VAR).as_deref())
+}
+
+/// What a line's closing sentence says about the gate, by who prints it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Role {
+    /// A `perf-alarms` step or a hand run that is not certifying: published,
+    /// gated nowhere.
+    Published,
+    /// A budget command (`cargo xtask p1-budget`, `p3-budget`): gated at its
+    /// bars doubled.
+    Alarm,
+    /// A certifying run: evidence for its gate, certified on the owner's
+    /// machine.
+    Certifying,
+}
+
+/// The phrase each role, and only it, prints.
+pub const PUBLISHED_PHRASE: &str = "published here and gated nowhere";
+/// The alarm's phrase.
+pub const ALARM_PHRASE: &str = "read by its alarm, which fails at the bars doubled";
+/// The certifying run's phrase, before the gate it names.
+pub const CERTIFYING_PHRASE: &str = "recorded as evidence for";
+
+impl Role {
+    /// The closing words for a figure whose gate is `gate`.
+    #[must_use]
+    pub fn words(self, gate: &str) -> String {
+        match self {
+            Role::Published => format!(
+                "{PUBLISHED_PHRASE} (the gate, {gate}, is certified on the owner's machine)"
+            ),
+            Role::Alarm => {
+                format!("{ALARM_PHRASE} (the gate, {gate}, is certified on the owner's machine)")
+            }
+            Role::Certifying => format!("{CERTIFYING_PHRASE} {gate}, on the owner's machine"),
+        }
+    }
+
+    /// The phrases this role must never print: the other roles'.
+    #[must_use]
+    pub fn foreign_phrases(self) -> [&'static str; 2] {
+        match self {
+            Role::Published => [ALARM_PHRASE, CERTIFYING_PHRASE],
+            Role::Alarm => [PUBLISHED_PHRASE, CERTIFYING_PHRASE],
+            Role::Certifying => [PUBLISHED_PHRASE, ALARM_PHRASE],
+        }
+    }
+}
 
 /// The commit a run was built from.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -147,49 +253,87 @@ pub const CUT_BANNER: &str = "NOT A CERTIFYING FIGURE";
 /// The mark every line of a run at its certifying count carries.
 pub const CERTIFYING_MARK: &str = "[certifying: ";
 
-/// How a certifying command's figures were sampled: how many of what, against
-/// how many its plan certifies at. A run below its plan is cut.
+/// One count a certifying figure rests on: how many of what ran, against how
+/// many its plan certifies at.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Sampling {
-    /// What was taken.
-    pub count: usize,
+pub struct Count {
+    /// What ran.
+    pub ran: usize,
     /// What the certifying plan takes.
     pub planned: usize,
     /// What `count` counts, as a line prints it.
     pub unit: &'static str,
 }
 
+impl Count {
+    /// Whether what ran is short of the plan.
+    #[must_use]
+    pub const fn is_cut(&self) -> bool {
+        self.ran < self.planned
+    }
+
+    /// The count's words.
+    fn words(&self) -> String {
+        format!(
+            "{} {} of the certifying {}",
+            self.ran, self.unit, self.planned
+        )
+    }
+}
+
+/// How a command's figures were sampled: whether it was asked to certify,
+/// and every count its figures rest on, each as it ran.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Sampling {
+    /// Whether the run was asked to certify.
+    pub certify: Certify,
+    /// Every count that could be cut.
+    pub counts: Vec<Count>,
+}
+
 impl Sampling {
     /// A P1 plan's sampling: its timed calls a figure against
     /// [`CERT_PLAN`]'s.
     #[must_use]
-    pub const fn calls(plan: QuickPlan) -> Sampling {
+    pub fn calls(plan: QuickPlan, certify: Certify) -> Sampling {
         Sampling {
-            count: plan.calls,
-            planned: CERT_PLAN.calls,
-            unit: "timed calls a figure",
+            certify,
+            counts: vec![Count {
+                ran: plan.calls,
+                planned: CERT_PLAN.calls,
+                unit: "timed calls a figure",
+            }],
         }
     }
 
-    /// Whether the run took fewer than its plan certifies at.
+    /// Whether the run's lines certify: asked to, and no count cut.
     #[must_use]
-    pub const fn is_cut(&self) -> bool {
-        self.count < self.planned
+    pub fn certifies(&self) -> bool {
+        self.certify == Certify::On && !self.counts.iter().any(Count::is_cut)
+    }
+
+    /// The role the run's notices speak in: [`Role::Certifying`] only when
+    /// the run certifies.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        if self.certifies() {
+            Role::Certifying
+        } else {
+            Role::Published
+        }
     }
 
     /// The stamp a line of this run carries at its end.
     #[must_use]
     pub fn stamp(&self) -> String {
-        if self.is_cut() {
-            format!(
-                "[{CUT_BANNER}: {} {}, cut from the certifying {}]",
-                self.count, self.unit, self.planned
-            )
+        let counts: Vec<String> = self.counts.iter().map(Count::words).collect();
+        let counts = counts.join(", ");
+        if self.certify == Certify::Off {
+            format!("[{CUT_BANNER}: not a certifying run ({CERTIFY_VAR} unset); {counts}]")
+        } else if self.certifies() {
+            format!("{CERTIFYING_MARK}{counts}]")
         } else {
-            format!(
-                "{CERTIFYING_MARK}{} {}, the certifying plan's {}]",
-                self.count, self.unit, self.planned
-            )
+            format!("[{CUT_BANNER}: a count is cut from its plan; {counts}]")
         }
     }
 }
@@ -286,22 +430,81 @@ mod tests {
 
     #[test]
     fn a_stamp_says_whether_a_line_certifies() {
-        let cut = Sampling::calls(QuickPlan {
+        let cut_plan = QuickPlan {
             warmup: 100,
             calls: 50,
-        });
-        let line = stamped("::notice title=x::a figure", &cut);
+        };
+        let line = stamped(
+            "::notice title=x::a figure",
+            &Sampling::calls(cut_plan, Certify::On),
+        );
         assert_eq!(
             line,
-            "::notice title=x::a figure [NOT A CERTIFYING FIGURE: 50 timed calls a figure, cut \
-             from the certifying 2000]"
+            "::notice title=x::a figure [NOT A CERTIFYING FIGURE: a count is cut from its plan; \
+             50 timed calls a figure of the certifying 2000]"
         );
         assert!(!is_certifying(&line));
-        let whole = stamped("::notice title=x::a figure", &Sampling::calls(CERT_PLAN));
+        let whole = stamped(
+            "::notice title=x::a figure",
+            &Sampling::calls(CERT_PLAN, Certify::On),
+        );
         assert!(is_certifying(&whole), "{whole}");
+        // Opted out, a full count is still no certifying line.
+        let off = stamped(
+            "::notice title=x::a figure",
+            &Sampling::calls(CERT_PLAN, Certify::Off),
+        );
+        assert_eq!(
+            off,
+            "::notice title=x::a figure [NOT A CERTIFYING FIGURE: not a certifying run \
+             (PHARMAKOS_BENCH_CERTIFY unset); 2000 timed calls a figure of the certifying 2000]"
+        );
+        assert!(!is_certifying(&off));
         assert!(!is_certifying("::notice title=x::a figure"), "no stamp");
         // A cut line that also carried the mark is still not one.
         assert!(!is_certifying(&format!("{whole} {line}")));
+        // Every count must meet its plan: one cut of two is cut.
+        let two = Sampling {
+            certify: Certify::On,
+            counts: vec![
+                Count {
+                    ran: 3,
+                    planned: 3,
+                    unit: "seeds",
+                },
+                Count {
+                    ran: 8,
+                    planned: 2_000,
+                    unit: "pairs a seed",
+                },
+            ],
+        };
+        assert!(!two.certifies());
+        assert_eq!(two.role(), Role::Published);
+    }
+
+    #[test]
+    fn certification_is_opted_into_strictly() {
+        assert_eq!(certify_from(None), Ok(Certify::Off));
+        assert_eq!(certify_from(Some(OsStr::new("1"))), Ok(Certify::On));
+        for bad in ["0", "true", "yes", "", " 1", "1 "] {
+            assert!(
+                matches!(certify_from(Some(OsStr::new(bad))), Err(Error::Plan(_))),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// No role prints another's phrase.
+    #[test]
+    fn each_role_says_only_its_own_words() {
+        for role in [Role::Published, Role::Alarm, Role::Certifying] {
+            let words = role.words("P1");
+            for foreign in role.foreign_phrases() {
+                assert!(!words.contains(foreign), "{role:?}: {words}");
+            }
+            assert!(!words.contains("never gated"), "{role:?}: {words}");
+        }
     }
 
     /// The dirty flag reads tracked changes: a temporary repository, made

@@ -20,8 +20,9 @@
 //! | [`Kind`] | The match | The decision ticks it is read on |
 //! |---|---|---|
 //! | [`Kind::Condition`] | every seat seals [`Shape::ConditionHolds`] at the committed budget | every one |
-//! | [`Kind::Ranker`] | [`Shape::RankerHolds`]: `nearest` leaves, ranked by the served walk, the commander beside its core | every one |
-//! | [`Kind::LongWalk`] | [`Shape::RankerFar`]: the same leaves, the commander walked out to the map's centre, so each ranking serves a long walk | every one |
+//! | [`Kind::OctileRanker`] | [`Shape::RankerHolds`]: `nearest` leaves, each ranking the seat's beacon rows by octile distance from the commander in one scan (`cond.rs`'s `rank`): no walk is served | every one |
+//! | [`Kind::Covering`] | [`Shape::Covering`] at [`COVER_STEPS`]: `place_beacon` steps `covering` the nearest uncovered vent, each resolve ranking the vents by the walk the router serves from the commander beside its core | those that started or failed a step and placed no beacon |
+//! | [`Kind::CoveringFar`] | [`Shape::CoveringFar`]: the same after the commander walks out toward the map's centre, so its resolves rank the vents by walks from farther out (a vent nearer the centre can still be near) | the same |
 //! | [`Kind::Threat`] | [`Shape::ThreatHolds`]: `safest` leaves, through the threat scan | every one |
 //! | [`Kind::SeamUpkeep`] | [`Shape::Idle`], and the gate layout's Mine beacons and their drones placed in the lobby, under the G3′ variant | every one |
 //! | [`Kind::Commit`] | [`Shape::BuildTargets`] at the committed budget at each seat's own core, on the spread layout (below) | those that committed a row and started no step |
@@ -126,6 +127,50 @@ impl KindPlan {
     };
 }
 
+/// How a kinds run was sampled, from what it played: the fewest runs any
+/// kind's match or baseline played against [`RUNS`], and the fewest ticks a
+/// run played against [`KIND_SEGMENT_MS`]'s. The ticks a kind reads have no
+/// plan (they follow from the match), so each kind's figure prints its own.
+///
+/// # Errors
+///
+/// [`Error::Empty`] for no figure; [`Error::Overflow`] for a segment's ticks
+/// past a `usize`.
+pub fn sampling(
+    figures: &[KindFigure],
+    certify: crate::provenance::Certify,
+) -> Result<crate::provenance::Sampling, Error> {
+    let fewest = |of: fn(&KindFigure) -> usize| {
+        figures
+            .iter()
+            .map(of)
+            .min()
+            .ok_or_else(|| Error::Empty("a kinds run of no figure".to_owned()))
+    };
+    let planned_ticks = KIND_SEGMENT_MS
+        .checked_div(pharmakos_sim::math::quantity::MS_PER_TICK)
+        .and_then(|ticks| usize::try_from(ticks).ok())
+        .ok_or(Error::Overflow("a kind's segment"))?;
+    Ok(crate::provenance::Sampling {
+        certify,
+        counts: vec![
+            crate::provenance::Count {
+                ran: fewest(|figure| figure.runs)?,
+                planned: RUNS,
+                unit: "runs a match",
+            },
+            crate::provenance::Count {
+                ran: fewest(|figure| figure.match_ticks)?,
+                planned: planned_ticks,
+                unit: "ticks a match",
+            },
+        ],
+    })
+}
+
+/// The `covering` steps [`Kind::Covering`]'s seats each seal.
+pub const COVER_STEPS: u32 = 4;
+
 /// The stepping stones [`Kind::Toward`]'s seats each seal.
 pub const TOWARD_STEPS: u32 = 4;
 
@@ -133,11 +178,12 @@ pub const TOWARD_STEPS: u32 = 4;
 /// median, in per cent of the median, and the kinds still read as uniform. A
 /// judgement, not a gate and no plan figure: a unit is a visit, and a node
 /// popped from a heap carries its sift, which is not counted
-/// (`pathing::search::Scratch::visits`), so it is a longer visit than a
-/// condition node read; the kinds can differ by a small factor and still be
-/// a count of work; a kind
-/// past half again or half the median is where a loop is charged at the
-/// wrong level, which is what the check is for.
+/// (`pathing::search::Heap`: bounded by what is already counted, every
+/// counted push and pop sifting at most the base-two logarithm of the heap's
+/// length), so it is a longer visit than a condition node read; the kinds can
+/// differ by a small factor and still be a count of work; a kind past half
+/// again or half the median is where a loop is charged at the wrong level,
+/// which is what the check is for.
 pub const TOLERANCE_PERCENT: u128 = 50;
 
 /// The measurement floor's multiple of the clock's quantisation: at its
@@ -157,10 +203,13 @@ const CALIBRATION_READS: usize = 200_000;
 pub enum Kind {
     /// Handlers whose conditions are evaluated in full.
     Condition,
-    /// A served-walk ranker: `nearest` selector leaves, short walks.
-    Ranker,
-    /// The same ranker with the commander far from every beacon it ranks.
-    LongWalk,
+    /// A ranker by octile distance over the beacon rows: `nearest` selector
+    /// leaves. It serves no walk.
+    OctileRanker,
+    /// A `covering` resolve, its walks served from beside the core.
+    Covering,
+    /// A `covering` resolve, its walks served from far out.
+    CoveringFar,
     /// A threat-ranking selector: `safest` selector leaves.
     Threat,
     /// The Mine beacons' seam upkeep.
@@ -175,10 +224,11 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in the order the notices print them.
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::Condition,
-        Kind::Ranker,
-        Kind::LongWalk,
+        Kind::OctileRanker,
+        Kind::Covering,
+        Kind::CoveringFar,
         Kind::Threat,
         Kind::SeamUpkeep,
         Kind::Commit,
@@ -191,8 +241,9 @@ impl Kind {
     pub const fn name(self) -> &'static str {
         match self {
             Kind::Condition => "condition",
-            Kind::Ranker => "served-walk ranker",
-            Kind::LongWalk => "served-walk ranker, long walks",
+            Kind::OctileRanker => "octile ranker",
+            Kind::Covering => "covering, near walks",
+            Kind::CoveringFar => "covering, far walks",
             Kind::Threat => "threat-ranking selector",
             Kind::SeamUpkeep => "seam upkeep",
             Kind::Commit => "commit",
@@ -201,12 +252,21 @@ impl Kind {
         }
     }
 
+    /// Whether the kind's decisions serve walks through the router: the
+    /// covering resolves (each candidate ranked by the walk the router serves)
+    /// and the stepping stone's (its grid optimum's pops).
+    #[must_use]
+    pub const fn serves_walks(self) -> bool {
+        matches!(self, Kind::Covering | Kind::CoveringFar | Kind::Toward)
+    }
+
     /// Whether a decision tick of the kind's match is one the kind is read on.
     #[must_use]
     pub const fn reads(self, marks: TickMarks) -> bool {
         match self {
-            Kind::Condition | Kind::Ranker | Kind::LongWalk | Kind::Threat | Kind::SeamUpkeep => {
-                true
+            Kind::Condition | Kind::OctileRanker | Kind::Threat | Kind::SeamUpkeep => true,
+            Kind::Covering | Kind::CoveringFar => {
+                (marks.started > 0 || marks.failed > 0) && marks.placed == 0
             }
             Kind::Commit => marks.committed > 0 && marks.started == 0,
             Kind::Toward => marks.started > 0 && marks.placed == 0,
@@ -278,8 +338,19 @@ impl Spec {
         };
         match kind {
             Kind::Condition => at_budget(Shape::ConditionHolds),
-            Kind::Ranker => at_budget(Shape::RankerHolds),
-            Kind::LongWalk => at_budget(Shape::RankerFar),
+            Kind::OctileRanker => at_budget(Shape::RankerHolds),
+            Kind::Covering => Spec {
+                shape: Shape::Covering,
+                units: Some(COVER_STEPS),
+                table: Table::Committed,
+                ground: Ground::Bare,
+            },
+            Kind::CoveringFar => Spec {
+                shape: Shape::CoveringFar,
+                units: Some(COVER_STEPS + 1),
+                table: Table::Committed,
+                ground: Ground::Bare,
+            },
             Kind::Threat => at_budget(Shape::ThreatHolds),
             Kind::Commit => Spec {
                 shape: Shape::BuildTargets,
@@ -315,8 +386,8 @@ pub struct DecisionSample {
     /// Allocations in the tick's opening and phases, when counted.
     pub allocations: Option<u64>,
     /// The farthest any seat's commander stood from its own core, in whole
-    /// voxels, as the crow flies: what a ranking from it walks across.
-    pub reach: u32,
+    /// voxels, as the crow flies: where it stood, not what a walk cost.
+    pub offset: u32,
 }
 
 /// One match, played [`RUNS`] times.
@@ -330,6 +401,10 @@ pub struct Played {
     pub layout: Option<u64>,
     /// Every decision tick but the segment's last, in order.
     pub samples: Vec<DecisionSample>,
+    /// The runs of the match that were played, each agreeing with the first.
+    pub runs: usize,
+    /// The ticks one run played, every tick its chain holds.
+    pub match_ticks: usize,
 }
 
 /// The tables a kind's match and its baseline are played under.
@@ -447,8 +522,13 @@ fn seat_units(world: &World, seats: u32) -> Result<u64, Error> {
 }
 
 /// The farthest any seat's live commander stands from its own core, in whole
-/// voxels across the ground.
-fn reach(world: &World, seats: u32, rules: &RulesTable) -> Result<u32, Error> {
+/// voxels as the crow flies: where the commander is, not what any walk cost.
+///
+/// # Errors
+///
+/// [`Error::Drift`] for a seat with no live commander, which a kind's match
+/// never holds (as [`seat_units`] refuses an eliminated seat).
+fn commander_offset(world: &World, seats: u32, rules: &RulesTable) -> Result<u32, Error> {
     let units = world.units();
     let commander = UnitKind::Commander.id();
     let mut farthest: u32 = 0;
@@ -464,9 +544,12 @@ fn reach(world: &World, seats: u32, rules: &RulesTable) -> Result<u32, Error> {
                 **owner == seat.raw() && **kind == commander && hp.is_alive()
             })
             .map(|(((_, _), at), _)| [at[0].floor_voxels(), at[1].floor_voxels()]);
-        let Some([x, y]) = at else {
-            continue;
-        };
+        let [x, y] = at.ok_or_else(|| {
+            Error::Drift(format!(
+                "seat {} has no live commander inside a kind's two-minute match",
+                seat.raw()
+            ))
+        })?;
         let dx = i64::from(x) - i64::from(core[0]);
         let dy = i64::from(y) - i64::from(core[1]);
         let squared = u64::try_from(dx * dx + dy * dy)
@@ -518,15 +601,17 @@ fn run_once(
     // each seat's view, and a different place on the map.
     let mut playbooks: Vec<String> = Vec::new();
     for seat in hosted::seat_ids(BENCH_SEATS)? {
-        playbooks.push(if spec.shape == Shape::BuildTargets {
-            let core = hosted::seat_core(host.world(), seat, rules)?;
-            crate::shapes::compact(&crate::shapes::canonical(
-                &spec.shape.playbook_at(units, &core)?,
-                spec.shape.name(),
-            )?)
-        } else {
-            playbook.clone()
-        });
+        playbooks.push(
+            if matches!(spec.shape, Shape::BuildTargets | Shape::CoveringFar) {
+                let core = hosted::seat_core(host.world(), seat, rules)?;
+                crate::shapes::compact(&crate::shapes::canonical(
+                    &spec.shape.playbook_at(units, &core)?,
+                    spec.shape.name(),
+                )?)
+            } else {
+                playbook.clone()
+            },
+        );
     }
     let placed = layout_of(host.world(), spec.ground)?;
     let digest = placed.as_ref().map(layout::digest);
@@ -548,7 +633,7 @@ fn run_once(
                 units: seat_units(world, BENCH_SEATS)?,
                 marks: timed.marks(),
                 allocations: timed.allocations.map(|(phases, _)| phases),
-                reach: reach(world, BENCH_SEATS, rules)?,
+                offset: commander_offset(world, BENCH_SEATS, rules)?,
             });
         }
     }
@@ -581,7 +666,9 @@ fn play(
     };
     let sized = crate::full::sized_rules(base, units)?;
     let mut kept: Option<Run> = None;
+    let mut runs: usize = 0;
     for run in 0..plan.runs {
+        runs = runs.checked_add(1).ok_or(Error::Overflow("the runs"))?;
         let now = run_once(spec, seed, plan.segment_ms, &sized.rules, heap)?;
         let Some(best) = kept.as_mut() else {
             kept = Some(now);
@@ -590,7 +677,7 @@ fn play(
         if best.chain != now.chain
             || best.samples.len() != now.samples.len()
             || best.samples.iter().zip(&now.samples).any(|(was, this)| {
-                was.units != this.units || was.marks != this.marks || was.reach != this.reach
+                was.units != this.units || was.marks != this.marks || was.offset != this.offset
             })
         {
             return Err(Error::Drift(format!(
@@ -612,7 +699,9 @@ fn play(
         rules_hash: sized.hash,
         units_per_seat: kept.units_per_seat,
         layout: kept.layout,
+        match_ticks: kept.chain.len(),
         samples: kept.samples,
+        runs,
     })
 }
 
@@ -683,8 +772,16 @@ pub struct KindFigure {
     /// phases, when counted.
     pub most_allocations: Option<u64>,
     /// The nearest and farthest a commander stood from its core on those
-    /// ticks, in whole voxels.
-    pub reach: (u32, u32),
+    /// ticks, in whole voxels as the crow flies.
+    pub offset: (u32, u32),
+    /// The fewest and most counted units one of those ticks spent over the
+    /// baseline's: for a kind that serves walks, the walks' work as the sim
+    /// counted it, a tick at a time.
+    pub per_tick: (i128, i128),
+    /// The fewer runs the kind's match and its baseline played.
+    pub runs: usize,
+    /// The fewer ticks a run of the kind's match and of its baseline played.
+    pub match_ticks: usize,
 }
 
 impl KindFigure {
@@ -724,16 +821,23 @@ pub fn figure(
     let mut units: i128 = 0;
     let mut ns: i128 = 0;
     let mut most: Option<u64> = Some(0);
-    let mut reach: Option<(u32, u32)> = None;
+    let mut offset: Option<(u32, u32)> = None;
+    let mut per_tick: Option<(i128, i128)> = None;
     for (sample, base) in played.samples.iter().zip(&baseline.samples) {
         if !kind.reads(sample.marks) {
             continue;
         }
         ticks = ticks.checked_add(1).ok_or(Error::Overflow("the ticks"))?;
+        let tick_units = i128::from(sample.units)
+            .checked_sub(i128::from(base.units))
+            .ok_or(Error::Overflow("a tick's units"))?;
         units = units
-            .checked_add(i128::from(sample.units))
-            .and_then(|sum| sum.checked_sub(i128::from(base.units)))
+            .checked_add(tick_units)
             .ok_or(Error::Overflow("the kind's units"))?;
+        per_tick = Some(match per_tick {
+            Some((fewest, most)) => (fewest.min(tick_units), most.max(tick_units)),
+            None => (tick_units, tick_units),
+        });
         let (now, then) = (signed(sample.ns)?, signed(base.ns)?);
         ns = ns
             .checked_add(now)
@@ -743,17 +847,17 @@ pub fn figure(
             (Some(kept), Some(now)) => Some(kept.max(now)),
             _ => None,
         };
-        reach = Some(match reach {
-            Some((near, far)) => (near.min(sample.reach), far.max(sample.reach)),
-            None => (sample.reach, sample.reach),
+        offset = Some(match offset {
+            Some((near, far)) => (near.min(sample.offset), far.max(sample.offset)),
+            None => (sample.offset, sample.offset),
         });
     }
-    let reach = reach.ok_or_else(|| {
-        Error::Empty(format!(
+    let (Some(offset), Some(per_tick)) = (offset, per_tick) else {
+        return Err(Error::Empty(format!(
             "the {} match held no decision tick the kind is read on",
             kind.name()
-        ))
-    })?;
+        )));
+    };
     if units <= 0 {
         return Err(Error::Empty(format!(
             "the {} kind's {ticks} decision ticks spent {units} counted units over the \
@@ -776,7 +880,10 @@ pub fn figure(
         milli_ns_per_unit,
         floor_ns: floor_ns(resolution_ns, ticks)?,
         most_allocations: most,
-        reach,
+        offset,
+        per_tick,
+        runs: played.runs.min(baseline.runs),
+        match_ticks: played.match_ticks.min(baseline.match_ticks),
     })
 }
 
@@ -891,17 +998,22 @@ pub struct Agreement {
 impl Agreement {
     /// Whether every kind sits within `tolerance` per cent of the median,
     /// compared exactly in integers: `distance * 100 <= tolerance * median`.
-    #[must_use]
-    pub fn within(&self, tolerance: u128) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Overflow`] when either product passes a `u128`, which has no
+    /// exact answer.
+    pub fn within(&self, tolerance: u128) -> Result<bool, Error> {
         let median = self.median_milli.unsigned_abs();
-        match (
-            self.outlier.1.checked_mul(100),
-            tolerance.checked_mul(median),
-        ) {
-            (Some(distance), Some(room)) => distance <= room,
-            // A product past a `u128` is a distance no tolerance holds.
-            _ => false,
-        }
+        let distance = self
+            .outlier
+            .1
+            .checked_mul(100)
+            .ok_or(Error::Overflow("the outlier's distance in per cent"))?;
+        let room = tolerance
+            .checked_mul(median)
+            .ok_or(Error::Overflow("the tolerance's room"))?;
+        Ok(distance <= room)
     }
 
     /// A distance in per mille of the median, for printing to one place.
@@ -995,10 +1107,18 @@ pub fn kinds_notice(
                     figure.ns, figure.floor_ns
                 )
             };
+            let walks = if figure.kind.serves_walks() {
+                format!(
+                    "; the walks' work as the sim counted it, {} to {} units a tick",
+                    figure.per_tick.0, figure.per_tick.1
+                )
+            } else {
+                String::new()
+            };
             format!(
                 "{} {} ns a unit ({} units over {} ns on {} decision ticks, {floor}; {} units a \
-                 seat, rules_hash {}{layout}{allocations}; a commander {} to {} voxels from \
-                 its core)",
+                 seat, rules_hash {}{layout}{allocations}; a commander stood {} to {} voxels \
+                 from its core, as the crow flies{walks})",
                 figure.kind.name(),
                 thousandths(figure.milli_ns_per_unit),
                 figure.units,
@@ -1006,8 +1126,8 @@ pub fn kinds_notice(
                 figure.ticks,
                 figure.units_per_seat,
                 pharmakos_sim::hex(figure.rules_hash),
-                figure.reach.0,
-                figure.reach.1,
+                figure.offset.0,
+                figure.offset.1,
             )
         })
         .collect();
@@ -1016,18 +1136,26 @@ pub fn kinds_notice(
          each kind's Decision phase and counted units less its baseline's (the same ground, \
          every seat sealing the idle shape) on the same ticks, fastest of {} runs a tick over \
          a {} s segment; the clock reads to {resolution_ns} ns, and a kind's floor is that \
-         times {READS_PER_TICK} reads a tick times its ticks times {FLOOR_MULTIPLE}: {}. A \
-         served walk is charged every loop visit it makes, a pop and every visit that pops \
-         nothing, but not a heap's sift, which a pop's own count bounds",
+         times {READS_PER_TICK} reads a tick times its ticks times {FLOOR_MULTIPLE}: {}{}",
         plan.runs,
         plan.segment_ms.div_euclid(1_000),
         kinds.join("; "),
+        if figures.iter().any(|figure| figure.kind.serves_walks()) {
+            ". The covering and toward kinds serve walks, and a served walk is charged every \
+             loop visit it makes, a pop and every visit that pops nothing; a heap's sift is not \
+             counted, bounded by the counted pushes and pops"
+        } else {
+            ""
+        },
     )
 }
 
 /// One seed's agreement verdict. Pure.
-#[must_use]
-pub fn agreement_notice(agreement: &Agreement, seed: u64, os: &str) -> String {
+///
+/// # Errors
+///
+/// As [`Agreement::within`].
+pub fn agreement_notice(agreement: &Agreement, seed: u64, os: &str) -> Result<String, Error> {
     let distances: Vec<String> = agreement
         .distances
         .iter()
@@ -1036,7 +1164,7 @@ pub fn agreement_notice(agreement: &Agreement, seed: u64, os: &str) -> String {
             None => format!("{} past a u128's per cent", kind.name()),
         })
         .collect();
-    let verdict = if agreement.within(TOLERANCE_PERCENT) {
+    let verdict = if agreement.within(TOLERANCE_PERCENT)? {
         "the kinds AGREE"
     } else {
         "the kinds DO NOT AGREE"
@@ -1054,7 +1182,7 @@ pub fn agreement_notice(agreement: &Agreement, seed: u64, os: &str) -> String {
             names.join(", ")
         )
     };
-    format!(
+    Ok(format!(
         "::notice title=decision tick kinds agree (0x{seed:016x})::on {os}, {verdict} within \
          this lane's own tolerance, {TOLERANCE_PERCENT}% of their median (a judgement, not a \
          gate), of {} ns a unit; the outlier is {} at {outlier}; {left_out}; each kind's \
@@ -1062,7 +1190,7 @@ pub fn agreement_notice(agreement: &Agreement, seed: u64, os: &str) -> String {
         thousandths(agreement.median_milli),
         agreement.outlier.0.name(),
         distances.join(", "),
-    )
+    ))
 }
 
 /// The second seed against the first, kind by kind and pooled over the kinds
@@ -1168,7 +1296,10 @@ mod tests {
             milli_ns_per_unit: milli,
             floor_ns: 0,
             most_allocations: Some(0),
-            reach: (0, 0),
+            offset: (0, 0),
+            per_tick: (0, 0),
+            runs: RUNS,
+            match_ticks: 2_400,
         }
     }
 
@@ -1178,7 +1309,7 @@ mod tests {
             units,
             marks,
             allocations: Some(0),
-            reach: 3,
+            offset: 3,
         }
     }
 
@@ -1193,6 +1324,8 @@ mod tests {
             rules_hash: 7,
             units_per_seat: 4,
             layout: None,
+            runs: 3,
+            match_ticks: 15,
             samples: vec![
                 sample(5_000, 10, quiet),
                 sample(105_000, 1_010, deployed),
@@ -1230,6 +1363,40 @@ mod tests {
         ));
     }
 
+    /// M2: the kinds certify only when asked and at their plan; a cut run or
+    /// an unasked one stamps the banner on every line.
+    #[test]
+    fn a_kinds_run_certifies_only_when_asked_and_whole() {
+        use crate::provenance::{Certify, is_certifying, stamped};
+        let line = "::notice title=x::a figure";
+        let figures: Vec<KindFigure> = Kind::ALL
+            .iter()
+            .map(|kind| figure_of(*kind, 100_000))
+            .collect();
+        let whole = sampling(&figures, Certify::On).expect("a sampling");
+        assert!(is_certifying(&stamped(line, &whole)));
+        let unasked = sampling(&figures, Certify::Off).expect("a sampling");
+        assert!(!is_certifying(&stamped(line, &unasked)));
+        // One kind's match that played fewer runs or ticks than planned cuts
+        // the whole run: the counts are read from what played.
+        for cut in [
+            KindFigure {
+                runs: 1,
+                ..figure_of(Kind::Deploy, 100_000)
+            },
+            KindFigure {
+                match_ticks: 200,
+                ..figure_of(Kind::Toward, 100_000)
+            },
+        ] {
+            let mut figures = figures.clone();
+            figures.push(cut);
+            let cut = sampling(&figures, Certify::On).expect("a sampling");
+            assert!(!is_certifying(&stamped(line, &cut)), "{cut:?}");
+        }
+        assert!(sampling(&[], Certify::On).is_err());
+    }
+
     #[test]
     fn the_floor_is_the_clocks_reads_times_the_multiple() {
         assert_eq!(floor_ns(100, 8), Ok(16_000));
@@ -1261,7 +1428,7 @@ mod tests {
                 agreed.within(TOLERANCE_PERCENT),
                 base.within(TOLERANCE_PERCENT)
             );
-            let line = agreement_notice(&agreed, 1, "linux");
+            let line = agreement_notice(&agreed, 1, "linux").expect("a notice");
             assert!(
                 line.contains("left out, under their measurement floors: deploy;"),
                 "{line}"
@@ -1280,37 +1447,48 @@ mod tests {
         let near: Vec<KindFigure> = Kind::ALL
             .iter()
             .zip([
-                100_000, 110_000, 100_000, 90_000, 100_000, 120_000, 95_000, 105_000,
+                100_000, 110_000, 100_000, 100_000, 90_000, 100_000, 120_000, 95_000, 105_000,
             ])
             .map(|(kind, milli)| figure_of(*kind, milli))
             .collect();
         let agreed = agreement(&near).expect("an agreement");
         assert_eq!(agreed.median_milli, 100_000);
         assert_eq!(agreed.outlier, (Kind::Commit, 20_000));
-        assert!(agreed.within(TOLERANCE_PERCENT));
+        assert_eq!(agreed.within(TOLERANCE_PERCENT), Ok(true));
         // The must-trip: a tolerance below the outlier's distance turns it.
-        assert!(!agreed.within(19));
+        assert_eq!(agreed.within(19), Ok(false));
+        // F4: a room past a `u128` has no exact answer, and says so.
+        assert!(matches!(agreed.within(u128::MAX), Err(Error::Overflow(_))));
         // C7: compared exactly, 50.9 % is not within 50 %.
         let mut edge = near.clone();
         if let Some(toward) = edge.iter_mut().find(|figure| figure.kind == Kind::Toward) {
-            toward.milli_ns_per_unit = 158_445;
+            toward.milli_ns_per_unit = 150_900;
         }
         let split = agreement(&edge).expect("an agreement");
-        assert_eq!(split.median_milli, 105_000);
-        assert_eq!(split.outlier, (Kind::Toward, 53_445));
-        assert!(!split.within(TOLERANCE_PERCENT));
+        assert_eq!(split.median_milli, 100_000);
+        assert_eq!(split.outlier, (Kind::Toward, 50_900));
+        assert_eq!(split.within(TOLERANCE_PERCENT), Ok(false));
+        let expected = [
+            "::notice title=decision tick kinds agree (0x0000000000000001)::on linux, the kinds ",
+            "DO NOT AGREE within this lane's own tolerance, 50% of their median (a judgement, ",
+            "not a gate), of 100.000 ns a unit; the outlier is toward at 50.9%; no kind left ",
+            "out; each kind's distance: condition 0.0%, octile ranker 10.0%, covering, near ",
+            "walks 0.0%, covering, far walks 0.0%, threat-ranking selector 10.0%, seam upkeep ",
+            "0.0%, commit 20.0%, toward 50.9%, deploy 5.0%",
+        ]
+        .concat();
         assert_eq!(
-            agreement_notice(&split, 1, "linux"),
-            "::notice title=decision tick kinds agree (0x0000000000000001)::on linux, the kinds \
-             DO NOT AGREE within this lane's own tolerance, 50% of their median (a judgement, not a gate), of 105.000 ns a unit; the outlier is toward at 50.9%; no kind left out; each kind's distance: condition 4.7%, served-walk ranker 4.7%, served-walk ranker, long walks 4.7%, threat-ranking selector 14.2%, seam upkeep 4.7%, commit 14.2%, toward 50.9%, deploy 0.0%"
+            agreement_notice(&split, 1, "linux").expect("a notice"),
+            expected
         );
         if let Some(toward) = edge.iter_mut().find(|figure| figure.kind == Kind::Toward) {
-            toward.milli_ns_per_unit = 157_500;
+            toward.milli_ns_per_unit = 150_000;
         }
-        assert!(
+        assert_eq!(
             agreement(&edge)
                 .expect("an agreement")
-                .within(TOLERANCE_PERCENT)
+                .within(TOLERANCE_PERCENT),
+            Ok(true)
         );
         assert!(agreement(&[]).is_err());
     }
@@ -1350,6 +1528,40 @@ mod tests {
         assert!(line.contains("+23.4%; by kind"), "{line}");
     }
 
+    /// F1: a kinds line names E12 only to say it gives no verdict, since
+    /// E12's seed rule reads P1 FULL's hosted figure and not these.
+    #[test]
+    fn no_kinds_line_names_e12_but_to_give_no_verdict() {
+        let first: Vec<KindFigure> = Kind::ALL
+            .iter()
+            .map(|kind| figure_of(*kind, 100_000))
+            .collect();
+        let far: Vec<KindFigure> = Kind::ALL
+            .iter()
+            .map(|kind| figure_of(*kind, 190_000))
+            .collect();
+        let lines = [
+            kinds_notice(&first, 100, 1, KindPlan::MEASURED, "linux"),
+            agreement_notice(&agreement(&far).expect("an agreement"), 1, "linux")
+                .expect("a notice"),
+            seed_gap_notice(&first, &far, "linux").expect("a notice"),
+        ];
+        let form = "no verdict: E12's seed rule reads P1 FULL's hosted figure";
+        for line in &lines {
+            let named = line.matches("E12").count();
+            let allowed = line.matches(form).count();
+            assert_eq!(named, allowed, "{line}");
+        }
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.matches(form).count())
+                .sum::<usize>(),
+            1,
+            "the seed gap's one sentence"
+        );
+    }
+
     #[test]
     fn each_kind_reads_its_own_ticks() {
         let committed = TickMarks {
@@ -1364,6 +1576,7 @@ mod tests {
             started: 1,
             placed: 1,
             committed: 0,
+            failed: 0,
         };
         assert!(Kind::Commit.reads(committed));
         assert!(!Kind::Commit.reads(started));
@@ -1374,6 +1587,14 @@ mod tests {
         );
         assert!(!Kind::Deploy.reads(both));
         assert!(Kind::Condition.reads(TickMarks::default()));
-        assert!(Kind::LongWalk.reads(TickMarks::default()));
+        assert!(Kind::OctileRanker.reads(TickMarks::default()));
+        // A covering resolve that finds no site fails its step as it starts.
+        let failed = TickMarks {
+            failed: 1,
+            ..TickMarks::default()
+        };
+        assert!(Kind::Covering.reads(failed));
+        assert!(Kind::CoveringFar.reads(started));
+        assert!(!Kind::Covering.reads(TickMarks::default()));
     }
 }

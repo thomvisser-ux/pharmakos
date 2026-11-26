@@ -4333,9 +4333,9 @@ struct Alarm {
 ///   the peak events per tick, the queues' bytes, live heap and the tick p99
 ///   per minute, allocations per tick, and `seen_by` at the gate's load; the
 ///   support search's adversarial tick with Mine's footing check at its
-///   worst; and a fourth, unplaced seat's decision-tick cost. Published,
-///   never gated (item 148's CI ruling); `g3r` certifies them on the owner's
-///   machine, and the CI budget job is `g3r`'s.
+///   worst; and a fourth, unplaced seat's decision-tick cost. Published and
+///   gated nowhere here (item 148's CI ruling); `g3r` certifies them on the
+///   owner's machine, and the CI budget job is `g3r`'s.
 /// * **P1 FULL** (S3's plan, section 5.2 and task `bench3`) shares the `p1`
 ///   alarm's target and step: FULL over the committed cases, and QUICK and
 ///   FULL over the generated shapes at each size of E24's curve with the
@@ -4348,15 +4348,17 @@ struct Alarm {
 /// * **The decision tick by kind** (S3's plan, section 5.2 item 4; items
 ///   175 (8) and 196; `cert3`): `crates/bench/tests/g3_real.rs`'s
 ///   `p1_decision_kinds` — ns per counted unit for each kind of decision work
-///   (condition, served-walk ranker, threat-ranking selector, seam upkeep,
-///   commit, `toward`, deploy) on both seeds, whether the kinds agree within
-///   a stated tolerance, and the seeds' gap against E12's rule; in the G3′
-///   binary for its counting allocator, `p1-kinds`.
+///   (condition, octile ranker, covering near and far walks, threat-ranking
+///   selector, seam upkeep, commit, `toward`, deploy) on both seeds, whether
+///   the kinds agree within the lane's own stated tolerance, and the seeds'
+///   gap as a figure with no verdict (E12's rule reads P1 FULL's hosted
+///   figure); in the G3′ binary for its counting allocator, `p1-kinds`.
 /// * **What the gate's load costs besides the tick** (S3's plan, E15 and
 ///   E17; `cert3`): `crates/bench/tests/g3_real.rs`'s
 ///   `g3_watch_sightings_and_breach` — on the gate's load with raids, the
-///   whole entity list's bytes per `get_view` poll and the recompute's time
-///   per sensor move, each seat's peak sighting rows against the table's
+///   whole entity list's bytes per `get_view` poll and the recompute's
+///   listings after a sensor move against those after none (a difference of
+///   means, not a cost per move), each seat's peak sighting rows against the table's
 ///   room, and the breach search's time at that load, `g3-watch`.
 /// * **P3** (S3's plan, section 5.1): `crates/bench/tests/p3_alarm.rs` — the
 ///   repath on the sim's own graph, cold and under the crater stream with the
@@ -7517,6 +7519,49 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
     }
 
+    /// The `g3 budget` job (S2's plan, E18) can go red as the authoring job
+    /// can (`cert3` fix pass 2, F6): no job-level `continue-on-error`,
+    /// `needs:` or `if:` (a skipped job is not red), and its one measuring
+    /// step runs `cargo xtask g3-budget` without `continue-on-error`.
+    #[test]
+    fn the_g3_budget_job_can_go_red() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let start = ci.find("\n  g3-budget:\n").expect("the g3-budget job");
+        let job = ci
+            .get(start + 1..)
+            .and_then(|rest| {
+                rest.find("\n  authoring-budgets:\n")
+                    .and_then(|end| rest.get(..end))
+            })
+            .expect("the job ends where authoring-budgets begins");
+        assert!(
+            job.contains("    name: g3 budget (ubuntu-24.04)\n"),
+            "{job}"
+        );
+        for key in ["continue-on-error:", "needs:", "permissions:", "if:"] {
+            assert!(
+                !job.lines()
+                    .any(|line| line.starts_with(&format!("    {key}"))),
+                "the g3-budget job sets a job-level `{key}`: {job}"
+            );
+        }
+        let steps: Vec<&str> = job.split("\n      - name: ").skip(1).collect();
+        let runs: Vec<&&str> = steps
+            .iter()
+            .filter(|step| step.contains("run: cargo xtask g3-budget\n"))
+            .collect();
+        assert_eq!(runs.len(), 1, "one step runs `cargo xtask g3-budget`");
+        let step = runs.first().expect("the step");
+        assert!(
+            !step.contains("continue-on-error"),
+            "`g3-budget` must be able to turn the job red: {step}"
+        );
+        assert!(
+            step.contains("\n        if: steps.scope.outputs.prose_only != 'true'\n"),
+            "the measuring step skips only on the docs-only fast path: {step}"
+        );
+    }
+
     /// The `authoring budgets` job (S3's plan, E12): each authoring alarm in
     /// [`budget::BUDGETS`] runs in a step of its own, exactly once, and none
     /// continues on error, so the job can go red; every measuring step skips
@@ -7545,9 +7590,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
         assert!(job.contains("    runs-on: ubuntu-24.04\n"), "{job}");
         // The job itself can go red and stands alone: no job-level
-        // `continue-on-error`, no `needs:` that could skip it, and no
-        // permissions of its own past the workflow's `contents: read`.
-        for key in ["continue-on-error:", "needs:", "permissions:"] {
+        // `continue-on-error`, no `needs:` that could skip it, no job-level
+        // `if:` (a skipped job is not red), and no permissions of its own
+        // past the workflow's `contents: read`.
+        for key in ["continue-on-error:", "needs:", "permissions:", "if:"] {
             assert!(
                 !job.lines()
                     .any(|line| line.starts_with(&format!("    {key}"))),
@@ -7609,6 +7655,37 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             sum < job_timeout,
             "the steps' timeouts sum to {sum} minutes, not below the job's {job_timeout}"
         );
+    }
+
+    /// No workflow asks a bench run to certify (S3's plan, section 5.1 item 4:
+    /// the CI runners' figures are notices): neither of the bench's two
+    /// certifying variables appears in any file under `.github/workflows`,
+    /// and the names this test looks for are the bench's own.
+    #[test]
+    fn no_workflow_asks_a_bench_run_to_certify() {
+        let root = workspace_root().expect("the workspace root");
+        let provenance = fs::read_to_string(root.join("crates/bench/src/provenance.rs"))
+            .expect("the bench's provenance");
+        let names = ["PHARMAKOS_BENCH_CERTIFY", "PHARMAKOS_BENCH_CERT_CALLS"];
+        for name in names {
+            assert!(
+                provenance.contains(&format!("_VAR: &str = \"{name}\";")),
+                "the bench no longer names `{name}`"
+            );
+        }
+        let mut files = Vec::new();
+        walk(&root.join(".github").join("workflows"), &mut files).expect(".github/workflows");
+        assert!(files.len() >= 2, "{files:?}");
+        for path in files {
+            let text = fs::read_to_string(&path).expect("a workflow");
+            for name in names {
+                assert!(
+                    !text.contains(name),
+                    "{} sets `{name}`: a CI runner's figures are notices, never certifying",
+                    path.display()
+                );
+            }
+        }
     }
 
     /// The cross-OS guard compares the verifier's reports (S3's plan, section

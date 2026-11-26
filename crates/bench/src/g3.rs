@@ -10,7 +10,9 @@
 //! units and 40 beacons as world totals (item 63) with decision 2's three
 //! seats, over a full 8-minute segment of real play. This module takes every
 //! figure section 5 item 2 names; `g3r` certifies them on the owner's
-//! machine, and here they are published, never gated (item 148's CI ruling).
+//! machine; on a CI runner they are published and gated nowhere (item 148's
+//! CI ruling), and a certifying run's lines say what they are evidence for
+//! ([`crate::provenance::Role`]).
 //!
 //! | Module | What |
 //! |---|---|
@@ -74,7 +76,7 @@ use sweep::Sweep;
 /// The prefix and format version of the one line `cargo xtask g3-budget`
 /// reads (`xtask/src/g3.rs`, whose unit test holds the two spellings
 /// together).
-pub const BUDGET_REPORT_PREFIX: &str = "g3-budget-report v1";
+pub const BUDGET_REPORT_PREFIX: &str = "g3-budget-report v2";
 
 /// The seed G3′ is measured and certified on: the seed every committed
 /// scenario plays, so the map is one the project already pins. One seed,
@@ -170,13 +172,16 @@ fn raids(report: &SegmentReport) -> String {
 /// # Errors
 ///
 /// [`Error::Empty`] for a tick mean of zero, which has no speed.
-pub fn tick_notice(report: &SegmentReport, os: &str) -> Result<String, Error> {
+pub fn tick_notice(
+    report: &SegmentReport,
+    role: crate::provenance::Role,
+    os: &str,
+) -> Result<String, Error> {
     let (per_second, real_time) = segment::speed_milli(report.tick.mean_ns)?;
     Ok(format!(
         "::notice title=G3' tick::tick p99 {}, p50 {}, mean {}, max {} on {os} over {} ticks of \
          one segment; {} ticks a second, {}x real time. G3'-a's bar is a p99 of at most {} and \
-         G3'-b's a mean of at most {} (4x); published, never gated here, and certified by g3r \
-         on the owner's machine",
+         G3'-b's a mean of at most {} (4x); {}",
         ms(report.tick.p99_ns),
         ms(report.tick.p50_ns),
         ms(report.tick.mean_ns),
@@ -186,6 +191,7 @@ pub fn tick_notice(report: &SegmentReport, os: &str) -> Result<String, Error> {
         thousandths(u64::try_from(real_time).map_err(|_| Error::Overflow("the speed"))?),
         ms(P99_BAR_NS),
         ms(MEAN_BAR_NS),
+        role.words("G3'"),
     ))
 }
 
@@ -227,8 +233,11 @@ pub fn tick_verdict(
 /// # Errors
 ///
 /// [`Error::Overflow`] for a tick count past a `usize`.
-pub fn sampling(report: &SegmentReport) -> Result<crate::provenance::Sampling, Error> {
-    ticks_sampling(report.ticks)
+pub fn sampling(
+    report: &SegmentReport,
+    certify: crate::provenance::Certify,
+) -> Result<crate::provenance::Sampling, Error> {
+    ticks_sampling(report.ticks, certify)
 }
 
 /// [`sampling`] for a segment of `ticks` played ticks, whatever measured it.
@@ -236,17 +245,23 @@ pub fn sampling(report: &SegmentReport) -> Result<crate::provenance::Sampling, E
 /// # Errors
 ///
 /// As [`sampling`].
-pub fn ticks_sampling(ticks: u64) -> Result<crate::provenance::Sampling, Error> {
+pub fn ticks_sampling(
+    ticks: u64,
+    certify: crate::provenance::Certify,
+) -> Result<crate::provenance::Sampling, Error> {
     let count = |ticks: u64| usize::try_from(ticks).map_err(|_| Error::Overflow("the ticks"));
     Ok(crate::provenance::Sampling {
-        count: count(ticks)?,
-        planned: count(
-            G3_SEGMENT_MS
-                .checked_div(pharmakos_sim::math::quantity::MS_PER_TICK)
-                .and_then(|ticks| u64::try_from(ticks).ok())
-                .ok_or(Error::Overflow("the segment's ticks"))?,
-        )?,
-        unit: "ticks of the 8-minute segment",
+        certify,
+        counts: vec![crate::provenance::Count {
+            ran: count(ticks)?,
+            planned: count(
+                G3_SEGMENT_MS
+                    .checked_div(pharmakos_sim::math::quantity::MS_PER_TICK)
+                    .and_then(|ticks| u64::try_from(ticks).ok())
+                    .ok_or(Error::Overflow("the segment's ticks"))?,
+            )?,
+            unit: "ticks of the 8-minute segment",
+        }],
     })
 }
 
@@ -528,13 +543,16 @@ pub fn footing_query_notice(
 }
 
 /// The line `cargo xtask g3-budget` reads: the ticks played and the ticks the
-/// segment holds (so a short run is refused), and the tick's figures in whole
-/// nanoseconds, `key=value`, after [`BUDGET_REPORT_PREFIX`].
+/// segment holds (so a short run is refused), the tick's figures in whole
+/// nanoseconds, and G3′'s two bars as this crate holds them ([`P99_BAR_NS`],
+/// [`MEAN_BAR_NS`]), which xtask refuses unless they equal its own: the one
+/// fact, checked from both sides. `key=value`, after
+/// [`BUDGET_REPORT_PREFIX`].
 #[must_use]
 pub fn budget_report_line(report: &SegmentReport) -> String {
     format!(
         "{BUDGET_REPORT_PREFIX} ticks={} segment_ticks={} p50_ns={} p99_ns={} mean_ns={} \
-         max_ns={}",
+         max_ns={} p99_bar_ns={P99_BAR_NS} mean_bar_ns={MEAN_BAR_NS}",
         report.ticks,
         report.segment_ticks,
         report.tick.p50_ns,
@@ -635,6 +653,20 @@ fn per_call_milli_ns(total_ns: u128) -> Result<u64, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M2: G3's lines certify only when asked and when the segment played
+    /// whole.
+    #[test]
+    fn a_segment_certifies_only_when_asked_and_whole() {
+        use crate::provenance::{Certify, is_certifying, stamped};
+        let line = "::notice title=x::a figure";
+        let stamp = |ticks: u64, certify: Certify| {
+            stamped(line, &ticks_sampling(ticks, certify).expect("a sampling"))
+        };
+        assert!(is_certifying(&stamp(9_600, Certify::On)));
+        assert!(!is_certifying(&stamp(9_600, Certify::Off)));
+        assert!(!is_certifying(&stamp(9_599, Certify::On)));
+    }
 
     #[test]
     fn the_small_formatters_keep_their_places() {

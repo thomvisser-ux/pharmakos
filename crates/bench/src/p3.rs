@@ -966,29 +966,51 @@ pub fn seed_notice(report: &P3Report, seed: &SeedReport, os: &str) -> String {
     )
 }
 
-/// Where a P3 summary is printed, which its last sentence says.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Role {
-    /// The `p3` perf alarm and the certifying run: published, never gated.
-    Published,
-    /// The `authoring budgets` job's `p3-budget`: gated at the bars doubled.
-    Alarm,
-}
+/// Where a P3 summary is printed: the one set of roles every certifying
+/// command's notices speak in ([`crate::provenance::Role`]).
+pub use crate::provenance::Role;
 
-impl Role {
-    /// The summary's last sentence.
-    #[must_use]
-    pub const fn words(self) -> &'static str {
-        match self {
-            Role::Published => {
-                "published here and never gated; the gate is certified on the owner's machine"
-            }
-            Role::Alarm => {
-                "the `p3-budget` alarm reading this run fails at these bars doubled; the gate \
-                 is certified on the owner's machine"
-            }
-        }
-    }
+/// How a P3 run was sampled, from what it ran: the seeds measured against
+/// [`P3_SEEDS`], and the fewest samples any figure of any seed took against
+/// [`PAIRS`].
+///
+/// # Errors
+///
+/// [`Error::Empty`] for a report of no seed, which sampled no pair.
+pub fn sampling(
+    report: &P3Report,
+    certify: crate::provenance::Certify,
+) -> Result<crate::provenance::Sampling, Error> {
+    let pairs = report
+        .seeds
+        .iter()
+        .flat_map(|seed| {
+            [
+                seed.cold.samples,
+                seed.stream.samples,
+                seed.repair.samples,
+                seed.one_leg.samples,
+                seed.five_leg.samples,
+                seed.estimator.samples,
+            ]
+        })
+        .min()
+        .ok_or_else(|| Error::Empty("a P3 report of no seed sampled no pair".to_owned()))?;
+    Ok(crate::provenance::Sampling {
+        certify,
+        counts: vec![
+            crate::provenance::Count {
+                ran: report.seeds.len(),
+                planned: P3_SEEDS.len(),
+                unit: "seeds",
+            },
+            crate::provenance::Count {
+                ran: pairs,
+                planned: PAIRS,
+                unit: "pairs a seed",
+            },
+        ],
+    })
 }
 
 /// The summary notice: the worst figures over the seeds against the bars,
@@ -1032,7 +1054,7 @@ pub fn summary_against(
         millis(estimate),
         millis(estimate_bar_ns),
         side(estimate, estimate_bar_ns),
-        role.words(),
+        role.words("G2 + P3"),
     ))
 }
 
@@ -1139,13 +1161,13 @@ mod tests {
             summary_against(&report, 2_500_000, 500_000, Role::Alarm, "linux").expect("a notice");
         assert!(
             halved.ends_with(
-                "fails at these bars doubled; the gate is certified on the owner's machine"
+                "read by its alarm, which fails at the bars doubled (the gate, G2 + P3, is certified on the owner's machine)"
             ),
             "{halved}"
         );
         assert!(
             line.ends_with(
-                "published here and never gated; the gate is certified on the owner's machine"
+                "published here and gated nowhere (the gate, G2 + P3, is certified on the owner's machine)"
             ),
             "{line}"
         );
@@ -1155,11 +1177,60 @@ mod tests {
             ),
             "{halved}"
         );
+        certifies_only_whole(&report, &seed);
         let none = P3Report {
             seeds: Vec::new(),
             ..report
         };
         assert!(budget_report_line(&none).contains(" repath_p99_ns=none estimate_p99_ns=none "));
         assert!(summary_notice(&none, Role::Published, "linux").is_err());
+        assert!(sampling(&none, crate::provenance::Certify::On).is_err());
+    }
+
+    /// M2: a run certifies only when asked, with every seed and every pair a
+    /// seed; `report`'s two seeds of 2 pairs are cut.
+    fn certifies_only_whole(report: &P3Report, seed: &SeedReport) {
+        use crate::provenance::{Certify, is_certifying, stamped};
+        let line = "::notice title=x::a figure";
+        assert!(!is_certifying(&stamped(
+            line,
+            &sampling(report, Certify::On).expect("a sampling")
+        )));
+        let full = |summary: Summary| Summary {
+            samples: PAIRS,
+            ..summary
+        };
+        let whole_seed = SeedReport {
+            cold: full(seed.cold),
+            stream: full(seed.stream),
+            repair: full(seed.repair),
+            one_leg: full(seed.one_leg),
+            five_leg: full(seed.five_leg),
+            estimator: full(seed.estimator),
+            ..seed.clone()
+        };
+        let whole = P3Report {
+            pairs: PAIRS,
+            seeds: vec![whole_seed.clone(), whole_seed.clone(), whole_seed.clone()],
+            ..report.clone()
+        };
+        // B8 with M2: the pairs are read from what each figure sampled,
+        // so one figure of one seed short of its pairs cuts the run.
+        let mut short = whole.clone();
+        if let Some(last) = short.seeds.last_mut() {
+            last.estimator.samples = PAIRS - 1;
+        }
+        assert!(!is_certifying(&stamped(
+            line,
+            &sampling(&short, Certify::On).expect("a sampling")
+        )));
+        assert!(is_certifying(&stamped(
+            line,
+            &sampling(&whole, Certify::On).expect("a sampling")
+        )));
+        assert!(!is_certifying(&stamped(
+            line,
+            &sampling(&whole, Certify::Off).expect("a sampling")
+        )));
     }
 }

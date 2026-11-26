@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! G3′-real's figures, published as notices and never gated (S2's plan,
-//! section 5 and task `g3h`; item 148's CI ruling).
+//! G3′-real's figures, published as notices and gated nowhere on a CI
+//! runner (S2's plan, section 5 and task `g3h`; item 148's CI ruling), and
+//! recorded as evidence for G3′ in a certifying run.
 //!
 //! The 8-minute segment at the gate's load, the support search's adversarial
 //! tick, and a fourth seat's decision-tick cost, each a `::notice::` per
@@ -61,7 +62,7 @@ use pharmakos_bench::g3::layout::Quarters;
 use pharmakos_bench::g3::segment::{self, GateLoad, SegmentPlan};
 use pharmakos_bench::g3::{self, G3_SEED, G3_SEGMENT_MS, fourth, stream, support, sweep, variant};
 use pharmakos_bench::heap::HeapCounter;
-use pharmakos_bench::{Error, kinds, provenance, workspace_root};
+use pharmakos_bench::{Error, certify, kinds, provenance, workspace_root};
 
 /// Bytes allocated and not yet freed, process-wide.
 static LIVE: AtomicU64 = AtomicU64::new(0);
@@ -212,7 +213,7 @@ fn segment_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
     let full = support::footing_at_room(root, G3_SEED)?;
     Ok(vec![
         g3::provenance_notice(&report, os),
-        g3::tick_notice(&report, os)?,
+        g3::tick_notice(&report, provenance::Role::Published, os)?,
         g3::phases_notice(&report, os)?,
         g3::repaths_notice(&report, os)?,
         g3::drift_notice(&report, os),
@@ -231,7 +232,7 @@ fn g3_budget_segment() {
     match gate_segment(&root) {
         Ok(report) => {
             println!("{}", g3::provenance_notice(&report, os));
-            match g3::tick_notice(&report, os) {
+            match g3::tick_notice(&report, provenance::Role::Alarm, os) {
                 Ok(line) => println!("{line}"),
                 Err(error) => panic!("the tick notice: {error}"),
             }
@@ -274,79 +275,25 @@ fn p1_decision_kinds() {
     let root = workspace_root();
     let os = std::env::consts::OS;
     println!();
-    let mut failed: Vec<Error> = Vec::new();
-    // Every line carries its sampling: each kind's segment against the plan's.
-    let ms = |value: i32| match usize::try_from(value) {
-        Ok(ms) => ms,
-        Err(error) => panic!("a segment's length: {error}"),
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
+        Err(error) => panic!("{error}"),
     };
-    let sampling = provenance::Sampling {
-        count: ms(kinds::KindPlan::MEASURED.segment_ms),
-        planned: ms(kinds::KIND_SEGMENT_MS),
-        unit: "ms of each kind's segment",
-    };
-    let mut report = |title: &str, lines: Result<Vec<String>, Error>| match lines {
-        Ok(lines) => lines
-            .iter()
-            .for_each(|line| println!("{}", provenance::stamped(line, &sampling))),
-        Err(error) => {
-            println!("::warning title={title}::not measured on {os}: {error}");
-            failed.push(error);
-        }
-    };
-    report(
-        "provenance",
-        provenance::commit(&root).map(|commit| {
-            vec![provenance::notice(
-                "decision tick by kind",
-                &commit,
-                &format!(
-                    "every kind's match {} times over a {} s segment",
-                    kinds::KindPlan::MEASURED.runs,
-                    kinds::KindPlan::MEASURED.segment_ms.div_euclid(1_000)
-                ),
-                os,
-            )]
-        }),
-    );
-    let measured = kinds::Tables::load(&root).and_then(|tables| {
+    let plan = kinds::KindPlan::MEASURED;
+    let lines = kinds::Tables::load(&root).and_then(|tables| {
         let mut seeds = Vec::with_capacity(2);
         for seed in [BENCH_SEED, pharmakos_sim::DETERMINISM_MATCH_SEED] {
-            seeds.push((
-                seed,
-                kinds::measure(seed, kinds::KindPlan::MEASURED, &tables, Some(&Counter))?,
-            ));
+            seeds.push((seed, kinds::measure(seed, plan, &tables, Some(&Counter))?));
         }
-        Ok(seeds)
+        certify::kinds_lines(&root, &seeds, plan, certify, os)
     });
-    report(
-        "decision tick by kind",
-        measured.and_then(|seeds| {
-            let mut lines = Vec::new();
-            for (seed, (figures, resolution)) in &seeds {
-                lines.push(kinds::kinds_notice(
-                    figures,
-                    *resolution,
-                    *seed,
-                    kinds::KindPlan::MEASURED,
-                    os,
-                ));
-                lines.push(kinds::agreement_notice(
-                    &kinds::agreement(figures)?,
-                    *seed,
-                    os,
-                ));
-            }
-            match seeds.as_slice() {
-                [(_, (first, _)), (_, (second, _))] => {
-                    lines.push(kinds::seed_gap_notice(first, second, os)?);
-                }
-                _ => return Err(Error::Empty("not two seeds".to_owned())),
-            }
-            Ok(lines)
-        }),
-    );
-    assert!(failed.is_empty(), "{failed:?}");
+    match lines {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Err(error) => {
+            println!("::warning title=decision tick by kind::not measured on {os}: {error}");
+            panic!("the decision tick by kind was not measured on {os}: {error}");
+        }
+    }
 }
 
 /// What the gate's load with raids costs a watcher, a seat's sightings and
@@ -360,27 +307,14 @@ fn g3_watch_sightings_and_breach() {
     let root = workspace_root();
     let os = std::env::consts::OS;
     println!();
-    let commit = match provenance::commit(&root) {
-        Ok(commit) => commit,
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
         Err(error) => panic!("{error}"),
     };
-    match g3::watch::measure(&root, G3_SEED, G3_SEGMENT_MS) {
-        Ok(report) => {
-            let sampling = match g3::ticks_sampling(report.ticks) {
-                Ok(sampling) => sampling,
-                Err(error) => panic!("{error}"),
-            };
-            for line in [
-                provenance::notice("G3' watch", &commit, "one segment", os),
-                g3::watch::provenance_notice(&report, os),
-                g3::watch::view_notice(&report, os),
-                g3::watch::recompute_notice(&report, os),
-                g3::watch::sightings_notice(&report, os),
-                g3::watch::breach_notice(&report, os),
-            ] {
-                println!("{}", provenance::stamped(&line, &sampling));
-            }
-        }
+    match g3::watch::measure(&root, G3_SEED, G3_SEGMENT_MS)
+        .and_then(|report| certify::watch_lines(&root, &report, certify, os))
+    {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
         Err(error) => panic!("the gate's watch segment was not measured on {os}: {error}"),
     }
 }
@@ -391,21 +325,13 @@ fn g3_raids_segments() {
     let root = workspace_root();
     let os = std::env::consts::OS;
     println!();
-    match provenance::commit(&root) {
-        Ok(commit) => println!(
-            "{}",
-            provenance::stamped(
-                &provenance::notice("G3' with raids", &commit, "one segment a load", os),
-                &match g3::ticks_sampling(9_600) {
-                    Ok(sampling) => sampling,
-                    Err(error) => panic!("{error}"),
-                },
-            )
-        ),
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
         Err(error) => panic!("{error}"),
-    }
+    };
+    let mut reports = Vec::with_capacity(2);
     for load in [GateLoad::RAIDS, GateLoad::RAIDS_AT_B] {
-        let measured = segment::measure(
+        match segment::measure(
             &root,
             SegmentPlan {
                 seed: G3_SEED,
@@ -416,26 +342,17 @@ fn g3_raids_segments() {
                 load,
             },
             Some(&Counter),
-        );
-        let lines = measured.and_then(|report| {
-            let sampling = g3::sampling(&report)?;
-            Ok([
-                g3::provenance_notice(&report, os),
-                g3::tick_notice(&report, os)?,
-                g3::tick_verdict(&report, g3::P99_BAR_NS, g3::MEAN_BAR_NS, os),
-                g3::phases_notice(&report, os)?,
-                g3::repaths_notice(&report, os)?,
-                g3::combat_notice(&report, os)?,
-            ]
-            .iter()
-            .map(|line| provenance::stamped(line, &sampling))
-            .collect::<Vec<String>>())
-        });
-        match lines {
-            Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        ) {
+            Ok(report) => reports.push(report),
             Err(error) => {
                 panic!("the G3' segment under {load:?} was not measured on {os}: {error}")
             }
         }
+    }
+    // The commit's line is stamped from the segments as they played: the
+    // fewer ticks of the two, never a literal (`certify::raids_lines`).
+    match certify::raids_lines(&root, &reports, certify, os) {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Err(error) => panic!("the G3' segments' lines on {os}: {error}"),
     }
 }

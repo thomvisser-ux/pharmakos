@@ -40,6 +40,7 @@ use std::fs;
 
 use pharmakos_bench::decision::{self, BENCH_SEATS, BENCH_SEED, DecisionPlan};
 use pharmakos_bench::full;
+use pharmakos_bench::provenance::{self, Certify};
 use pharmakos_bench::quick::{self, BUDGET_CASE, Fixture, QuickPlan};
 use pharmakos_bench::shapes::{SIZES, Shape};
 use pharmakos_bench::workspace_root;
@@ -52,6 +53,22 @@ use pharmakos_proto::json;
 /// `crates/verifier/tests/verifier.rs`'s fixture (any row of the module docs'
 /// table that names that file), restate the change in `quick`'s namesakes;
 /// the QUICK figure is only P1's if it is taken on the goldens' inputs.
+/// `cert3` fix pass 2, M2 and B7: every line a certifying command assembles
+/// for a cut run, asked to certify or not, carries the banner and fails the
+/// one predicate, and none speaks in the certifying role.
+fn no_line_certifies(lines: &[String], what: &str) {
+    use pharmakos_bench::provenance::{self, Role};
+    assert!(!lines.is_empty(), "{what}: no line");
+    for line in lines {
+        assert!(!provenance::is_certifying(line), "{what}: {line}");
+        assert!(line.contains(provenance::CUT_BANNER), "{what}: {line}");
+        for foreign in Role::Published.foreign_phrases() {
+            assert!(!line.contains(foreign), "{what}: {line}");
+        }
+        assert!(!line.contains("never gated"), "{what}: {line}");
+    }
+}
+
 #[test]
 fn every_case_under_the_bench_fixture_is_its_committed_report() {
     let root = workspace_root();
@@ -358,6 +375,30 @@ fn the_gate_load_with_raids_launches() {
         within.contains(": within; mean ") && within.ends_with(": within"),
         "{within}"
     );
+    // B5: a figure exactly at its bar is within it, a nanosecond past over.
+    let (p99, mean) = (report.tick.p99_ns, report.tick.mean_ns);
+    let at = pharmakos_bench::g3::tick_verdict(&report, p99, mean, "linux");
+    assert!(
+        at.contains(": within; mean ") && at.ends_with(": within"),
+        "{at}"
+    );
+    let past = pharmakos_bench::g3::tick_verdict(&report, p99 - 1, mean - 1, "linux");
+    assert!(
+        past.contains(": OVER; mean ") && past.ends_with(": OVER"),
+        "{past}"
+    );
+    for certify in [Certify::On, Certify::Off] {
+        let lines = pharmakos_bench::certify::raids_lines(
+            &root,
+            std::slice::from_ref(&report),
+            certify,
+            "linux",
+        )
+        .expect("the raids' lines");
+        assert_eq!(lines.len(), 7, "the commit and one segment's six");
+        no_line_certifies(&lines, "the raids");
+    }
+    assert!(pharmakos_bench::certify::raids_lines(&root, &[], Certify::On, "linux").is_err());
 }
 
 /// E24's test (c)'s load: every seat seals the handler shape at the size
@@ -422,6 +463,19 @@ fn a_short_p3_run_measures_every_figure_on_the_worlds_own_graph() {
         line.contains(" seeds=1 planned_seeds=3 pairs=8 planned_pairs=2000 "),
         "{line}"
     );
+    for certify in [Certify::On, Certify::Off] {
+        let lines = pharmakos_bench::certify::p3_lines(&root, &report, certify, "linux")
+            .expect("P3's lines");
+        assert_eq!(lines.len(), 3, "the commit, one seed and the summary");
+        no_line_certifies(&lines, "P3");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.contains(" 1 seeds of the certifying 3")
+                    && line.contains(" 8 pairs a seed of the certifying 2000")),
+            "{lines:?}"
+        );
+    }
 }
 
 /// The bench's restatement of the sim's cluster marking: after the crater
@@ -579,12 +633,31 @@ fn the_decision_kinds_read_their_own_ticks() {
         toward.units > 0,
         "a stepping stone's resolve is counted: {toward:?}"
     );
-    let line = kinds::kinds_notice(&[condition, toward], 100, BENCH_SEED, plan, "linux");
+    // What ran, read back: one run of two hundred ticks.
+    assert_eq!((condition.runs, condition.match_ticks), (1, 200));
+    let figures = vec![condition, toward];
+    let line = kinds::kinds_notice(&figures, 100, BENCH_SEED, plan, "linux");
     assert!(
         line.starts_with("::notice title=decision tick by kind (0x00000000ca5caded)::on linux, "),
         "{line}"
     );
     assert!(line.contains("; toward "), "{line}");
+    let seeds = [
+        (BENCH_SEED, (figures.clone(), 100)),
+        (pharmakos_sim::DETERMINISM_MATCH_SEED, (figures, 100)),
+    ];
+    for certify in [Certify::On, Certify::Off] {
+        let lines = pharmakos_bench::certify::kinds_lines(&root, &seeds, plan, certify, "linux")
+            .expect("the kinds' lines");
+        assert_eq!(lines.len(), 6, "{lines:?}");
+        no_line_certifies(&lines, "the kinds");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.contains(" 1 runs a match of the certifying 3")),
+            "{lines:?}"
+        );
+    }
 }
 
 /// The watch segment reads what it names (`cert3`'s B5): every seat's
@@ -625,37 +698,50 @@ fn the_watch_segment_polls_counts_and_probes() {
         line.starts_with("::notice title=G3' view feed bytes::on linux, "),
         "{line}"
     );
+    for certify in [Certify::On, Certify::Off] {
+        let lines = pharmakos_bench::certify::watch_lines(&root, &report, certify, "linux")
+            .expect("the watch's lines");
+        assert_eq!(lines.len(), 6, "{lines:?}");
+        no_line_certifies(&lines, "the watch");
+    }
 }
 
-/// A cut certifying run says so on every line (`cert3` fix pass 1, item 1):
-/// P1's whole certifying output at one call a figure, every line run through
-/// the one predicate, and none passes as certifying. A debug build, so
-/// nothing is timed worth reading.
+/// A run that is not a certifying one says so on every line (`cert3` fix
+/// passes 1 and 2, items A1 and M2): P1's whole certifying output at one call
+/// a figure, asked to certify and not asked, every line run through the one
+/// predicate, and none passes as certifying; and the notices speak in the
+/// published role, never claiming to be evidence for a gate. A debug build,
+/// so nothing is timed worth reading.
 #[test]
-fn no_line_of_a_cut_p1_run_passes_as_certifying() {
-    use pharmakos_bench::provenance;
+fn no_line_of_a_cut_or_unasked_p1_run_passes_as_certifying() {
     let root = workspace_root();
-    let lines = pharmakos_bench::certify::p1_lines(
-        &root,
-        QuickPlan {
-            warmup: 0,
-            calls: 1,
-        },
-        "linux",
-    )
-    .expect("a cut run");
-    assert!(lines.len() > 10, "{lines:?}");
-    for line in &lines {
-        assert!(!provenance::is_certifying(line), "{line}");
-        assert!(line.contains(provenance::CUT_BANNER), "{line}");
-        assert!(line.contains(" 1 timed calls a figure, cut from"), "{line}");
+    let plan = QuickPlan {
+        warmup: 0,
+        calls: 1,
+    };
+    for certify in [Certify::On, Certify::Off] {
+        let lines =
+            pharmakos_bench::certify::p1_lines(&root, plan, certify, "linux").expect("a cut run");
+        assert!(lines.len() > 10, "{lines:?}");
+        for line in &lines {
+            assert!(!provenance::is_certifying(line), "{certify:?}: {line}");
+            assert!(line.contains(provenance::CUT_BANNER), "{certify:?}: {line}");
+            assert!(
+                line.contains(" 1 timed calls a figure of the certifying 2000"),
+                "{certify:?}: {line}"
+            );
+            for foreign in provenance::Role::Published.foreign_phrases() {
+                assert!(!line.contains(foreign), "{certify:?}: {line}");
+            }
+            assert!(!line.contains("never gated"), "{certify:?}: {line}");
+        }
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("::notice title=P1 E12 seed rule::")),
+            "{lines:?}"
+        );
     }
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with("::notice title=P1 E12 seed rule::")),
-        "{lines:?}"
-    );
 }
 
 /// A watched segment plays the bare segment's chain (`cert3` fix pass 1,
@@ -684,6 +770,90 @@ fn a_watched_segment_ends_on_the_bare_segments_chain() {
     .expect("a bare segment");
     assert_eq!(watched.ticks, bare.ticks);
     assert_eq!(watched.chain_digest, bare.chain_digest);
+}
+
+/// The covering kinds serve walks whose counted work grows with the walk
+/// (`cert3` fix pass 2, M1 and B6): on one map, from seat 0's core, a
+/// `covering` resolve of the vent nearest the core and one of the vent
+/// farthest from it, each in a fresh scratch with a tally of its own, and the
+/// far one counts strictly more units. A resolver that ranked by straight-line
+/// distance in one row scan, or read a route the router had served before,
+/// would count the same for both, and this would be red.
+#[test]
+fn a_covering_resolve_counts_more_for_a_longer_walk() {
+    use pharmakos_bench::hosted::{self, Opening};
+    use pharmakos_sim::features::FeatureKind;
+    use pharmakos_sim::pathing::Scratch;
+    use pharmakos_sim::seams::UnitTally;
+    use pharmakos_sim::tables::SeatId;
+    use pharmakos_sim::targeting::{FeatureSpec, Ground, cover_counted};
+    let root = workspace_root();
+    let rules = quick::committed_rules(&root).expect("the committed rules");
+    let host = hosted::open_host(&Opening {
+        seed: BENCH_SEED,
+        seats: BENCH_SEATS,
+        segment_ms: 1_000,
+        rules: &rules,
+        playbook: "",
+    })
+    .expect("a host");
+    let world = host.world();
+    let seat = SeatId::new(0);
+    let core = hosted::seat_core(world, seat, &rules).expect("seat 0's core");
+    let beacons = world.beacons();
+    let commander = beacons
+        .seats()
+        .iter()
+        .zip(beacons.positions())
+        .find(|(owner, _)| **owner == seat.raw())
+        .map(|(_, at)| *at)
+        .expect("seat 0's core position");
+    let squared = |anchor: [i32; 2]| {
+        let dx = i64::from(anchor[0] - core.at[0]);
+        let dy = i64::from(anchor[1] - core.at[1]);
+        dx * dx + dy * dy
+    };
+    let mut vents: Vec<[i32; 2]> = world
+        .features()
+        .features()
+        .iter()
+        .filter(|feature| feature.kind == FeatureKind::Vent)
+        .map(|feature| feature.anchor)
+        .collect();
+    vents.sort_by_key(|anchor| squared(*anchor));
+    let (near, far) = (
+        *vents.first().expect("a vent"),
+        *vents.last().expect("a vent"),
+    );
+    assert_ne!(near, far, "two vents to walk to");
+    let units = |anchor: [i32; 2]| {
+        let tally = UnitTally::new();
+        let ground = Ground {
+            work: &tally,
+            ..world.ground()
+        };
+        let mut scratch = Scratch::for_map(world.surface(), world.clusters().size())
+            .expect("a scratch for the map");
+        // A far vent is outside the seat's spheres and its resolve finds no
+        // site; the walks it served are counted either way.
+        let resolved = cover_counted(
+            &ground,
+            &mut scratch,
+            seat,
+            commander,
+            FeatureSpec::Name {
+                kind: FeatureKind::Vent,
+                anchor,
+            },
+        );
+        std::hint::black_box(&resolved);
+        tally.read().expect("a count")
+    };
+    let (near_units, far_units) = (units(near), units(far));
+    assert!(
+        far_units > near_units,
+        "the far vent's resolve counts {far_units} units and the near one's {near_units}"
+    );
 }
 
 /// The selector variant at the size budget is submittable through the hosted

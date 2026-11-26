@@ -303,7 +303,8 @@ struct Counters {
 
 /// The decision events one tick emitted that say which kind of decision work
 /// it ran (`crate::kinds`): steps started (where a placement resolves its
-/// site), rows committed, and beacons placed (a deploy's end).
+/// site), steps failed (a resolve that found none), rows committed, and
+/// beacons placed (a deploy's end).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TickMarks {
     /// `StepStarted` events.
@@ -312,6 +313,9 @@ pub struct TickMarks {
     pub committed: u64,
     /// `BeaconPlaced` events.
     pub placed: u64,
+    /// `StepFailed` events: a placement whose resolve found no site fails
+    /// its step as it starts.
+    pub failed: u64,
 }
 
 fn counters(world: &World) -> Result<Counters, Error> {
@@ -365,6 +369,7 @@ fn counters(world: &World) -> Result<Counters, Error> {
             started: count(&[EventKind::StepStarted])?,
             committed: count(&[EventKind::RowCommitted])?,
             placed: count(&[EventKind::BeaconPlaced])?,
+            failed: count(&[EventKind::StepFailed])?,
         },
     })
 }

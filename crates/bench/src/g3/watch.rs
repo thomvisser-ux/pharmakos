@@ -20,8 +20,8 @@
 //!   (`World::sight`), the input the gateway's recompute key digests
 //!   (`crates/gateway/src/surface/watch.rs`, `sight_key`), so the listings
 //!   that recomputed every modified chunk and the ones that did not are told
-//!   apart, and the recompute's cost per sensor move is the difference of
-//!   their mean times.
+//!   apart, and the recompute notice compares the two groups' mean times,
+//!   page count by page count: a difference of means, not a cost per move.
 //! * **Sightings** (E17): each seat's rows of the sim's sighting table after
 //!   every tick, `SightingTable::len_of`, and the peak against the table's
 //!   room per seat, `SightingTable::per_seat`.
@@ -39,8 +39,10 @@
 //!   keeps them in a local and returns none, so the figure needs a sim API
 //!   this lane may not add.
 //!
-//! Published, never gated. The polls and the probes run between ticks, so
-//! no tick here is timed: this segment is not G3′'s.
+//! No gate reads these figures: an alarm's lines are published and gated
+//! nowhere, and a certifying run's are recorded as evidence for E15 and E17
+//! ([`crate::provenance::Role`]). The polls and the probes run between
+//! ticks, so no tick here is timed: this segment is not G3′'s.
 
 use std::time::Instant;
 
@@ -84,7 +86,7 @@ pub struct Listing {
     pub moved: bool,
     /// The pages it took.
     pub pages: u32,
-    /// The entities its completing page's whole list held.
+    /// The entities its pages held, summed over every page of the listing.
     pub entities: u64,
     /// The entity list's bytes, each entity as the wire spells it.
     pub entity_bytes: u64,

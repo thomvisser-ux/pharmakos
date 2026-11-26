@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! P1's wall-clock figures, published as notices and never gated, the one
-//! report line `cargo xtask p1-budget` reads, and the certifying run.
+//! P1's wall-clock figures, published as notices and gated nowhere on a CI
+//! runner, the one report line `cargo xtask p1-budget` reads, and the
+//! certifying run, whose lines are recorded as evidence for P1.
 //!
 //! S1's plan section 5 and task `p1`: QUICK's p50 and p99 over the committed
 //! verifier cases and `budget_128`, and a decision tick's cost in ns per size
@@ -82,9 +83,9 @@ const RUNS: usize = 3;
 /// ticks at the committed 250 ms cadence, the fourth seat's line's length.
 const CURVE_SEGMENT_MS: i32 = 30_000;
 
-/// The second seed the decision tick is measured on at the budget, so E12's
-/// seed rule (`BENCH_SEED` stays unless another seed reads more than 20 %
-/// above it) has a figure to compare.
+/// The second seed the decision tick is measured on at the budget, its
+/// figure published beside the first's with no verdict: E12's seed rule
+/// reads P1 FULL's hosted figure (`pharmakos_bench::certify`), not this.
 const SECOND_SEED: u64 = pharmakos_sim::DETERMINISM_MATCH_SEED;
 
 /// GitHub annotates the first ten notices of a step.
@@ -251,8 +252,12 @@ fn p1_certify() {
             Ok(plan) => plan,
             Err(error) => panic!("{error}"),
         };
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
+        Err(error) => panic!("{error}"),
+    };
     println!();
-    match pharmakos_bench::certify::p1_lines(&root, plan, os) {
+    match pharmakos_bench::certify::p1_lines(&root, plan, certify, os) {
         Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
         Err(error) => panic!("P1 was not certified on {os}: {error}"),
     }
@@ -270,7 +275,7 @@ fn quick_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
             cases.len() * ALARM_PLAN.calls
         )));
     }
-    Ok(quick::notices(&timing, os))
+    Ok(quick::notices(&timing, provenance::Role::Published, os))
 }
 
 /// FULL's p50 and p99 over the committed cases, as a notice.
@@ -278,7 +283,11 @@ fn full_cases_notice(root: &Path, plan: QuickPlan, os: &str) -> Result<Vec<Strin
     let fixture = Fixture::committed(root)?;
     let cases = quick::committed_cases(root)?;
     let timing = quick::measure_at(&fixture, &cases, plan, Depth::Full)?;
-    Ok(vec![full::cases_notice(&timing, os)])
+    Ok(vec![full::cases_notice(
+        &timing,
+        provenance::Role::Published,
+        os,
+    )])
 }
 
 /// Every shape at every size of the curve: the provenance, then a notice a
@@ -293,7 +302,7 @@ fn curve_lines(curve: &full::Curve, os: &str) -> Vec<String> {
     lines.extend(
         Shape::ALL
             .into_iter()
-            .map(|shape| full::shape_notice(curve, shape, os)),
+            .map(|shape| full::shape_notice(curve, shape, provenance::Role::Published, os)),
     );
     lines
 }

@@ -1378,7 +1378,8 @@ jobs:
     # tick-minus-pathing mean of item 116 (6)(b) among them, the support search's
     # adversarial tick and a fourth seat's cost; S2's plan, tasks `g3h` and `g3r`); and from
     # `cert3`, on the gate's load with raids, the entity list's bytes per `get_view` poll,
-    # the recompute's time per sensor move, the peak sightings per seat and the breach
+    # the recompute's listings after a sensor move against those after none (a difference
+    # of means, not a cost per move), the peak sightings per seat and the breach
     # search's time (S3's plan, E15 and E17), in the `g3-watch` step. Each
     # alarm is its own step, `cargo xtask perf-alarms <name>`, because GitHub annotates only
     # the first ten notices of a step and the nine together print more (item 149 (4)). The

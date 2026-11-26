@@ -115,8 +115,26 @@ const LEAVES_PER_CONDITION: usize = 21;
 
 /// The committed map's centre column, `[x, y]`: the one place as far from
 /// every seat's spawn as from every other (`scenarios/nightly/README.md`'s
-/// staging point), which [`Shape::RankerFar`] walks its commander to.
+/// staging point), which [`Shape::CoveringFar`]'s commander walks toward.
 pub const MAP_CENTRE: [i32; 2] = [192, 192];
+
+/// How far [`Shape::CoveringFar`]'s commander walks out from its core toward
+/// [`MAP_CENTRE`], along each axis: about 64 voxels on the diagonal.
+pub const FAR_OFFSET: i32 = 45;
+
+/// The column [`Shape::CoveringFar`]'s commander walks to: [`FAR_OFFSET`]
+/// voxels a side from `core` toward [`MAP_CENTRE`].
+#[must_use]
+pub fn walk_out(core: &Core) -> [i32; 2] {
+    let toward = |from: i32, to: i32| match from.cmp(&to) {
+        std::cmp::Ordering::Less => (from + FAR_OFFSET).min(to),
+        std::cmp::Ordering::Greater => (from - FAR_OFFSET).max(to),
+        std::cmp::Ordering::Equal => from,
+    };
+    let [cx, cy, _] = core.at;
+    let [mx, my] = MAP_CENTRE;
+    [toward(cx, mx), toward(cy, my)]
+}
 
 /// The map's extent the fixture's anchors are kept inside: the committed
 /// rules' `map.size_x` and `map.size_y`, which `tests/harness.rs` holds to the
@@ -183,19 +201,25 @@ pub enum Shape {
     /// The condition kind's: [`Shape::FullEval`]'s handlers over a route of
     /// holds, so the commander stands still. Not in [`Shape::ALL`].
     ConditionHolds,
-    /// The served-walk ranker's: the same with `nearest` leaves, each ranking
-    /// the seat's beacons by the walk the router serves. Not in
-    /// [`Shape::ALL`].
+    /// The octile ranker's: the same with `nearest` leaves, each ranking the
+    /// seat's beacon rows by their octile distance from the commander in one
+    /// scan (the sim's `cond.rs` `rank`, `Rank::Nearest`): no walk is served.
+    /// Not in [`Shape::ALL`].
     RankerHolds,
     /// The threat-ranking selector's: the same with `safest` leaves, each
     /// ranking the seat's beacons through the threat scan. Not in
     /// [`Shape::ALL`].
     ThreatHolds,
-    /// The long served walks' kind: [`Shape::RankerHolds`]' `nearest`
-    /// leaves with a first route step that walks the commander to the map's
-    /// centre, far from every beacon its seat holds, so each ranking serves
-    /// a long walk. Not in [`Shape::ALL`].
-    RankerFar,
+    /// `place_beacon` steps each `covering` the nearest vent the seat does not
+    /// cover: each resolve ranks the vents by the walk the router serves from
+    /// the commander (`targeting.rs`'s `cover_counted`, `Ground::travel`), from
+    /// beside the core. Not in [`Shape::ALL`].
+    Covering,
+    /// [`Shape::Covering`] after a first step that walks the commander
+    /// [`FAR_OFFSET`] voxels a side out from its core toward the map's centre,
+    /// so every resolve serves its walks from far from the vents near home.
+    /// Not in [`Shape::ALL`].
+    CoveringFar,
     /// A route of `place_beacon` steps, each `toward` the nearest vent the
     /// seat does not cover: a stepping stone a unit, each resolved when its
     /// step starts and deployed where the commander walks (S3's `pred`, E23).
@@ -230,7 +254,8 @@ impl Shape {
             Shape::ConditionHolds => "condition_holds",
             Shape::RankerHolds => "ranker_holds",
             Shape::ThreatHolds => "threat_holds",
-            Shape::RankerFar => "ranker_far",
+            Shape::Covering => "covering",
+            Shape::CoveringFar => "covering_far",
             Shape::Toward => "toward",
         }
     }
@@ -300,9 +325,8 @@ impl Shape {
             Shape::ThreatHolds => {
                 handlers(size, Group::FullAny(LeafKind::Safest), Bodies::One).map_err(refuse)?
             }
-            Shape::RankerFar => {
-                handlers(size, Group::FullAny(LeafKind::Selector), Bodies::Far).map_err(refuse)?
-            }
+            Shape::Covering => covering(size, None).map_err(refuse)?,
+            Shape::CoveringFar => covering(size, Some(walk_out(core))).map_err(refuse)?,
             Shape::Toward => stepping_stones(size).map_err(refuse)?,
         };
         Ok(Playbook {
@@ -566,9 +590,6 @@ enum Bodies {
     Fill,
     /// One each, and the units left over go to `move` route steps.
     Moves,
-    /// One each; the first route step walks to the map's centre and the rest
-    /// hold.
-    Far,
 }
 
 /// A 24-node condition: `any(any(any(21)))` when `any`, else `all(all(all(21)))`.
@@ -628,7 +649,7 @@ fn handlers(size: usize, group: Group, bodies: Bodies) -> Result<Declarative, St
         .and_then(|in_handlers| size.checked_sub(in_handlers))
         .ok_or_else(|| "the handlers' units".to_owned())?;
     let (route_steps, extra_bodies) = match bodies {
-        Bodies::One | Bodies::Moves | Bodies::Far => (left, 0),
+        Bodies::One | Bodies::Moves => (left, 0),
         Bodies::Fill => (
             1,
             left.checked_sub(1)
@@ -673,27 +694,6 @@ fn handlers(size: usize, group: Group, bodies: Bodies) -> Result<Declarative, St
     let route = match bodies {
         Bodies::Moves => moves(route_steps)?,
         Bodies::One | Bodies::Fill => holds(route_steps),
-        Bodies::Far => {
-            let mut route = holds(route_steps);
-            let [x, y] = MAP_CENTRE;
-            if let Some(first) = route.first_mut() {
-                *first =
-                    Step {
-                        label: "r000".to_owned(),
-                        timeout_ms: 300_000,
-                        kind: Some(step::Kind::Move(MoveStep {
-                            to: Some(Location {
-                                place: Some(location::Place::Voxel(
-                                    pharmakos_proto::gp::v1::Voxel { x, y, z: 30 },
-                                )),
-                            }),
-                            pace: i32::from(Pace::Direct),
-                        })),
-                        ..Step::default()
-                    };
-            }
-            route
-        }
     };
     Ok(Declarative {
         route,
@@ -730,6 +730,60 @@ fn idle(size: usize) -> Result<Declarative, String> {
 /// How long each of [`Shape::Idle`]'s holds lasts: an hour of game time,
 /// past the longest segment the bench plays (G3′'s eight minutes).
 const IDLE_HOLD_MS: i32 = 3_600_000;
+
+/// `size` steps, `r000` on: when `far` is given, a first step that walks to
+/// that column, then `place_beacon` steps each `covering` the nearest vent the
+/// seat does not cover, skipped when it fails so the next one resolves again.
+fn covering(size: usize, far: Option<[i32; 2]>) -> Result<Declarative, String> {
+    if size == 0 || size > MAX_ROUTE_STEPS {
+        return Err(format!(
+            "a route of {size} steps, outside the interpreter's 1 to {MAX_ROUTE_STEPS}"
+        ));
+    }
+    let place = |at: usize| Step {
+        label: format!("r{at:03}"),
+        timeout_ms: 120_000,
+        on_fail: Some(OnFail {
+            action: i32::from(on_fail::Action::Skip),
+            jump_to_label: String::new(),
+        }),
+        kind: Some(step::Kind::PlaceBeacon(PlaceBeaconStep {
+            at: Some(Location {
+                place: Some(location::Place::Covering(FeatureRef {
+                    r#ref: Some(feature_ref::Ref::Vent(VentPick {
+                        rank: i32::from(feature_ref::Rank::Nearest),
+                        coverage: i32::from(feature_ref::Coverage::Uncovered),
+                    })),
+                })),
+            }),
+            ..PlaceBeaconStep::default()
+        })),
+        ..Step::default()
+    };
+    let mut route: Vec<Step> = (0..size).map(place).collect();
+    if let (Some([x, y]), Some(first)) = (far, route.first_mut()) {
+        *first = Step {
+            label: "r000".to_owned(),
+            timeout_ms: 300_000,
+            kind: Some(step::Kind::Move(MoveStep {
+                to: Some(Location {
+                    place: Some(location::Place::Voxel(pharmakos_proto::gp::v1::Voxel {
+                        x,
+                        y,
+                        z: 30,
+                    })),
+                }),
+                pace: i32::from(Pace::Direct),
+            })),
+            ..Step::default()
+        };
+    }
+    Ok(Declarative {
+        route,
+        handlers: Vec::new(),
+        options: None,
+    })
+}
 
 /// `size` `place_beacon` steps, `r000` on, each `toward` the nearest vent the
 /// seat does not cover, skipped when it fails so the next one starts.
@@ -959,7 +1013,8 @@ mod tests {
             Shape::ConditionHolds,
             Shape::RankerHolds,
             Shape::ThreatHolds,
-            Shape::RankerFar,
+            Shape::Covering,
+            Shape::CoveringFar,
             Shape::Toward,
         ]) {
             for units in SIZES.into_iter().chain([127, 129, 3]) {

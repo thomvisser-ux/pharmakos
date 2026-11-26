@@ -47,6 +47,18 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         "the raise is how far the gate's draw passes the shipped surplus, and zero when the \n         surplus already covers it: the floor is the rule",
     ),
     (
+        "src/g3/watch.rs",
+        "let Some(way) = SealedWay::of(world, from, to) else {",
+        "a way the oracle does not call sealed has no breach search to run; it is counted in the \
+         probe's `ways` and not its `sealed`, and the notice prints both",
+    ),
+    (
+        "src/p3.rs",
+        "let Some(z) = self.voxels.top_solid_z(x, y) else {",
+        "a column with no solid voxel holds no ground to crater, so the draw is redrawn, at most \
+         `REDRAWS` times, and running out is a typed `Error::Layout`",
+    ),
+    (
         "tests/g3_real.rs",
         "let _ = ALLOCATIONS.try_with(",
         "a `const` thread-local with no destructor is always accessible, so the error arm is \
@@ -124,8 +136,11 @@ fn code_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The fallback lines of one file, trimmed: every line holding a needle, and
-/// every `let Ok(..) .. else {` whose body returns anything but an `Err`.
+/// The fallback lines of one file, trimmed: every line holding a needle;
+/// every `let Ok(..) .. else {` whose body returns anything but an `Err`; and
+/// every `let Some(..)` or `let Ok(..)` whose `else` goes on to the next
+/// round (`continue`), which drops the case it could not read without a word
+/// (`cert3` fix pass 2, F4).
 fn fallback_lines(text: &str) -> Vec<String> {
     let lines = code_lines(text);
     let mut found: Vec<String> = Vec::new();
@@ -138,9 +153,17 @@ fn fallback_lines(text: &str) -> Vec<String> {
             found.push(line.trim().to_owned());
             continue;
         }
-        if line.contains("let Ok(") && line.trim_end().ends_with("else {") {
+        let binds = line.contains("let Ok(") || line.contains("let Some(");
+        if binds && line.contains("else {") && line.contains("continue") {
+            found.push(line.trim().to_owned());
+            continue;
+        }
+        if binds && line.trim_end().ends_with("else {") {
             let body = lines.get(index + 1).map_or("", |next| next.trim());
-            if body.starts_with("return") && !body.starts_with("return Err(") {
+            let returns = line.contains("let Ok(")
+                && body.starts_with("return")
+                && !body.starts_with("return Err(");
+            if returns || body.starts_with("continue") {
                 found.push(line.trim().to_owned());
             }
         }
@@ -171,7 +194,10 @@ fn the_fallback_scan_sees_every_form_it_names() {
                    y.ok().and_then(f);\n    let x = y.clamp(1, 9);\n    let x = y.max(0);\n    \
                    let x = y.saturating_add(1);\n    let x = y.ok().filter(f);\n    \
                    let _ = y;\n    match y { Err(_) => 0, Ok(v) => v };\n    let x = y\n        .ok()\n        .zip(z);\n    let Ok(x) = y else {\n        return 0;\n    };\n    let Ok(x) = y else {\n        \
-                   return Err(e);\n    };\n    // y.unwrap_or(0) in prose\n}\n#[cfg(test)]\n\
+                   return Err(e);\n    };\n    let Some(x) = y else {\n        continue;\n    };\n    \
+                   let Ok(x) = y else {\n        continue;\n    };\n    let Some(x) = y else { continue };\n    \
+                   let Some(x) = y else {\n        return Err(e);\n    };\n    \
+                   // y.unwrap_or(0) in prose\n}\n#[cfg(test)]\n\
                    fn b() { y.unwrap_or(0); }\n";
     assert_eq!(
         fallback_lines(planted),
@@ -191,6 +217,9 @@ fn the_fallback_scan_sees_every_form_it_names() {
             "match y { Err(_) => 0, Ok(v) => v };",
             ".ok()",
             "let Ok(x) = y else {",
+            "let Some(x) = y else {",
+            "let Ok(x) = y else {",
+            "let Some(x) = y else { continue };",
         ],
         "every form the scan names, once, and nothing else"
     );

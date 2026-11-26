@@ -53,8 +53,10 @@
 //!
 //! # The alarm and the budget line
 //!
-//! The notices are published per runner and never gated
-//! (`tests/perf_alarm.rs`, `cargo xtask perf-alarms p1`). `cargo xtask
+//! The notices are published per runner and gated nowhere
+//! (`tests/perf_alarm.rs`, `cargo xtask perf-alarms p1`), and say so; a
+//! certifying run's say what gate they are evidence for
+//! ([`crate::provenance::Role`]). `cargo xtask
 //! p1-budget` (E12) reads the one [`budget_report_line`] the bench's
 //! `p1_budget` test prints, the worst p99 of each depth over the shapes at the
 //! committed budget and `budget_128`, and the worst end-to-end p99 over the
@@ -658,7 +660,8 @@ pub fn cap_notice(figure: &CapFigure, plan: QuickPlan, os: &str) -> String {
         "::notice title=P1 at the transport cap ({})::on {os}, {}'s structure at {} units, its \
          labels and title padded with {} characters to {} compact characters ({} bytes; {} \
          canonical bytes), {} calls after {} untimed: QUICK {} / {}, FULL {} / {} p50 / p99 on \
-         the canonical bytes; {}. Published, never a budget failure",
+         the canonical bytes; {}. No gate reads this figure: whether 5 ms must hold at the cap \
+         is the owner's",
         figure.pad.name(),
         Shape::RouteGuards24.name(),
         figure.units,
@@ -678,12 +681,12 @@ pub fn cap_notice(figure: &CapFigure, plan: QuickPlan, os: &str) -> String {
 
 /// FULL over the committed cases, as notices word for word. Pure.
 #[must_use]
-pub fn cases_notice(full: &QuickTiming, os: &str) -> String {
+pub fn cases_notice(full: &QuickTiming, role: crate::provenance::Role, os: &str) -> String {
     format!(
         "::notice title=FULL p99::{} p99, {} p50 on {os}, over {} committed verifier cases x {} \
          calls each, timed singly (Input::new then verify at FULL); {BUDGET_CASE}: {} p99, {} \
          p50; slowest case by p99: {} at {}. Spec section 16's P1 bar is 50 ms p99 at the size \
-         budget, published here and never gated",
+         budget; {}",
         micros(full.pooled.p99_ns),
         micros(full.pooled.p50_ns),
         full.cases,
@@ -692,6 +695,7 @@ pub fn cases_notice(full: &QuickTiming, os: &str) -> String {
         micros(full.budget.p50_ns),
         full.slowest.0,
         micros(full.slowest.1),
+        role.words("P1's FULL bar"),
     )
 }
 
@@ -720,7 +724,12 @@ pub fn provenance_notice(curve: &Curve, os: &str) -> String {
 
 /// One shape's curve, as a notice. Pure.
 #[must_use]
-pub fn shape_notice(curve: &Curve, shape: Shape, os: &str) -> String {
+pub fn shape_notice(
+    curve: &Curve,
+    shape: Shape,
+    role: crate::provenance::Role,
+    os: &str,
+) -> String {
     let sizes: Vec<String> = curve
         .points
         .iter()
@@ -744,8 +753,8 @@ pub fn shape_notice(curve: &Curve, shape: Shape, os: &str) -> String {
     format!(
         "::notice title=P1 shape {}::p50 / p99 on {os} by size, {} calls a figure after {} \
          untimed, QUICK and FULL on the canonical bytes (the gate figure): {}. The committed \
-         budget is {} units; spec section 16's P1 bars there are QUICK {} and FULL {} p99, \
-         published here and never gated",
+         budget is {} units; spec section 16's P1 bars there are QUICK {} and FULL {} p99; \
+         {}",
         shape.name(),
         curve.plan.calls,
         curve.plan.warmup,
@@ -753,6 +762,7 @@ pub fn shape_notice(curve: &Curve, shape: Shape, os: &str) -> String {
         curve.budget_units,
         millis(QUICK_BAR_NS),
         millis(FULL_BAR_NS),
+        role.words("P1's QUICK and FULL bars"),
     )
 }
 
@@ -1108,6 +1118,15 @@ pub fn budget_report_line(figures: &BudgetFigures) -> String {
 mod tests {
     use super::*;
 
+    /// B5: exactly at the bar is within it; a nanosecond past it is over.
+    #[test]
+    fn at_the_bar_is_within_and_a_nanosecond_past_is_over() {
+        assert_eq!(Side::of(5_000_000, 5_000_000), Side::Within);
+        assert_eq!(Side::of(5_000_001, 5_000_000), Side::Over);
+        assert_eq!(Side::of(4_999_999, 5_000_000), Side::Within);
+        assert_eq!((Side::Within.word(), Side::Over.word()), ("within", "OVER"));
+    }
+
     fn summary(p50_ns: u128, p99_ns: u128) -> Summary {
         Summary {
             p50_ns,
@@ -1380,14 +1399,20 @@ mod tests {
             }],
         };
         assert_eq!(
-            shape_notice(&curve, Shape::LongestRoute, "macos"),
+            shape_notice(
+                &curve,
+                Shape::LongestRoute,
+                crate::provenance::Role::Published,
+                "macos"
+            ),
             "::notice title=P1 shape longest_route::p50 / p99 on macos by size, 200 calls a \
              figure after 20 untimed, QUICK and FULL on the canonical bytes (the gate figure): 64 \
              units (0 handlers; 9000 canonical bytes, 3000 compact) QUICK 1.500 ms / 2.250 ms, \
              FULL 3.000 ms / 4.000 ms; OVER THE TRANSPORT CAP: a 600000-byte request, past the \
              262144 one message carries, so not sent end to end. The committed budget is 128 \
-             units; spec section 16's P1 bars there are QUICK 5.000 ms and FULL 50.000 ms p99, \
-             published here and never gated"
+             units; spec section 16's P1 bars there are QUICK 5.000 ms and FULL 50.000 ms p99; \
+             published here and gated nowhere (the gate, P1's QUICK and FULL bars, is certified \
+             on the owner's machine)"
         );
     }
 }
