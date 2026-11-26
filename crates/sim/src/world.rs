@@ -7655,8 +7655,12 @@ impl World {
         // restored table holds rows for has a count to file a forgotten
         // memory under.
         self.sighting_drops = SightingDrops::for_seats(self.sightings.seat_count());
-        // And Survey's drop memory, for the seats and the room the restored
-        // table has (`survey::Memory::size_for`): never inside a tick.
+        // And Survey's drop memory: begun again, since it remembers a Push
+        // the restored world has not played (never snapshotted, so empty
+        // after a restore, into a fresh world or one that had played on),
+        // and sized for the seats and the room the restored table has
+        // (`survey::Memory::size_for`): never inside a tick.
+        self.scratch.survey.clear();
         self.scratch.survey.size_for(
             self.sightings.seat_count(),
             self.sightings.per_seat(),

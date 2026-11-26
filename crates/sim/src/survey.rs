@@ -1209,7 +1209,8 @@ pub enum Drop {
 }
 
 impl Drop {
-    /// Every reason, in the order they are tested.
+    /// Every reason, each at its [`Drop::index`]. The drop log's room is
+    /// this many a sighting ([`Memory::size_for`]).
     pub const ALL: [Drop; 5] = [
         Drop::UnderThreat,
         Drop::ScoutLost,
@@ -1217,6 +1218,20 @@ impl Drop {
         Drop::CrowdedOut,
         Drop::Unweighed,
     ];
+
+    /// The reason's place in [`Drop::ALL`]. The match names every arm, so a
+    /// new reason does not compile until it is given a place here, and a
+    /// test holds [`Drop::ALL`] to these places.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Drop::UnderThreat => 0,
+            Drop::ScoutLost => 1,
+            Drop::OutOfReach => 2,
+            Drop::CrowdedOut => 3,
+            Drop::Unweighed => 4,
+        }
+    }
 }
 
 /// A [`Memory`] with no room left for what it was asked to keep.
@@ -1497,19 +1512,21 @@ impl Memory {
 /// scout while the seat is short of the scouts its beacons field; out of
 /// reach when it was never listed this Push and no scout alone reaches it
 /// (`alone_reaches` false); crowded out otherwise.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the drop's seat, members and sighting and the reach its decision already holds, read at the one place a drop is named"
-)]
-fn drop_reason<M: crate::seams::Meter + ?Sized>(
+///
+/// A measurement, as the memory it reads is: its reads report nothing to a
+/// decision's meter. Whether a reason is named at all turns on what the
+/// memory holds ([`Memory::missed`]), which no snapshot carries, so work
+/// counted here would make a decision's counted work differ between an
+/// unbroken run and a resumed one.
+fn drop_reason(
     world: &mut World,
     seat: SeatId,
     members: Members,
     asset: u32,
     place: [Fx; 3],
     alone_reaches: bool,
-    meter: &M,
 ) -> Drop {
+    let meter = &();
     let gun = gun_over(world, seat, place, meter);
     let sight = Sq::of_radius(Fx::from_voxels(
         world.rules().unit(UnitKind::Scout).vision_radius_voxels,
@@ -1590,9 +1607,13 @@ fn note_scouts<M: crate::seams::Meter + ?Sized>(
     // Every scout of the seat the memory keeps that no longer lives is
     // found dead: one kept scout at a time, read out of the scratch so the
     // unit table can be read beside it. A death takes its scout out of the
-    // kept list, so the next one has moved into its place.
+    // kept list, so the next one has moved into its place. One look a
+    // scout kept at the start, so the walk ends whatever a look does.
     let mut at: usize = 0;
-    while let Some((who, unit, _)) = world.scratch_mut().survey.scouts.get(at).copied() {
+    for _ in 0..world.scratch_mut().survey.scouts.len() {
+        let Some((who, unit, _)) = world.scratch_mut().survey.scouts.get(at).copied() else {
+            break;
+        };
         let alive = who != seat.raw() || {
             let units = world.units();
             units
@@ -1756,10 +1777,10 @@ fn note_listed(world: &mut World, seat: SeatId, lists: &Lists) {
 /// a scout's served legs up to its last needed sighting, at most `n`, on a
 /// pricing decision only, and none on any other. No replacement's leg is
 /// priced: the death margin that priced one was not kept
-/// ([`list_leaves_time`]). Naming a drop reads the sighting table for the
-/// sighting's gun and the unit and beacon tables for the seat's scouts,
-/// once a drop; the [`Memory`] it consults is a measurement and reports
-/// nothing.
+/// ([`list_leaves_time`]). Naming a drop the insertion leaves
+/// ([`drop_reason`]) reads the sighting table for the sighting's gun and the
+/// unit and beacon tables for the seat's scouts, once a drop; it and the
+/// [`Memory`] it consults are a measurement and report nothing.
 fn decide_seat<M: crate::seams::Meter + ?Sized>(
     world: &mut World,
     seat: SeatId,
@@ -2236,15 +2257,7 @@ fn insert<M: crate::seams::Meter + ?Sized>(
                 world.scratch_mut().survey_drops_unlogged.bump();
             }
             None if due.needed => {
-                let reason = drop_reason(
-                    world,
-                    seat,
-                    members,
-                    due.asset,
-                    due.place,
-                    alone_reaches,
-                    meter,
-                );
+                let reason = drop_reason(world, seat, members, due.asset, due.place, alone_reaches);
                 log_drop(world, seat, due.asset, reason);
             }
             // An un-needed sighting no list takes waits: nothing in it would
@@ -3430,6 +3443,41 @@ mod tests {
             past > 100,
             "the recipe: many needed sightings past the list"
         );
+        // The same count a second way: sort every due sighting by rank, skip
+        // the lists' room, keep the needed.
+        let mut ranked: Vec<(Rank, bool)> = world
+            .sightings()
+            .rows_of(seat)
+            .filter_map(|slot| due_in(world, seat, slot, &[], &()))
+            .map(|due| (due.rank, due.needed))
+            .collect();
+        ranked.sort_unstable();
+        let modelled = ranked
+            .iter()
+            .skip(LIST_ROOM)
+            .filter(|(_, needed)| *needed)
+            .count();
+        assert_eq!(
+            u64::try_from(modelled).unwrap_or_else(|error| panic!("{error}")),
+            past,
+            "the two counts of what ranks past the lists agree"
+        );
+        // And a whole decision counts at least the rank walk and that walk.
+        let rank_walk = Counted::default();
+        let mut again = Lists {
+            entries: [None; LIST_ROOM],
+            n: 0,
+        };
+        most_due(world, seat, Members::Survey, &[], &mut again, &rank_walk);
+        let whole = Counted::default();
+        let mut decided = arranged(1, 0);
+        crowd(&mut decided, 200);
+        decide_seat(decided.world_mut(), seat, Members::Survey, &whole);
+        assert!(
+            whole.rows.get() >= rank_walk.rows.get() + mine + past * units,
+            "a decision at two hundred sightings counts {} rows",
+            whole.rows.get()
+        );
         let counted = Counted::default();
         super::drop_unweighed(
             runner.world_mut(),
@@ -3624,6 +3672,321 @@ mod tests {
             world.scratch_mut().survey.rooms(),
             sized,
             "sized again at the restore"
+        );
+    }
+
+    /// [`Drop::ALL`] holds every reason at its own index, so the drop log's
+    /// room counts each (review 3's F4): a reason added to the enum does not
+    /// compile until [`Drop::index`] names it, and this holds the list to
+    /// the indices.
+    #[test]
+    fn every_drop_reason_stands_at_its_index() {
+        for (place, reason) in super::Drop::ALL.iter().enumerate() {
+            assert_eq!(reason.index(), place, "{reason:?}");
+        }
+    }
+
+    /// A kept scout of the memory's: its seat, its unit id, where it stood.
+    type Kept = (u8, u32, [Fx; 3]);
+
+    /// A scout's death as the memory keeps it: its seat, the tick it was
+    /// found dead on, where it stood, its unit id.
+    type Death = (u8, u32, [Fx; 3], u32);
+
+    /// The scout bookkeeping as it was before it walked the memory in place:
+    /// the seat's kept scouts in order, the dead among them in order, each
+    /// found dead in turn. What is kept after, and the deaths.
+    fn two_list_bookkeeping(
+        scouts: &[Kept],
+        seat: u8,
+        dead: &dyn Fn(u32) -> bool,
+        tick: u32,
+    ) -> (Vec<Kept>, Vec<Death>) {
+        let gone: Vec<u32> = scouts
+            .iter()
+            .filter(|(who, unit, _)| *who == seat && dead(*unit))
+            .map(|(_, unit, _)| *unit)
+            .collect();
+        let mut kept = scouts.to_vec();
+        let mut deaths = Vec::new();
+        for unit in gone {
+            let place = kept
+                .iter()
+                .find(|(who, what, _)| (*who, *what) == (seat, unit))
+                .map(|(_, _, place)| *place);
+            kept.retain(|(who, what, _)| (*who, *what) != (seat, unit));
+            if let Some(place) = place {
+                deaths.push((seat, tick, place, unit));
+            }
+        }
+        (kept, deaths)
+    }
+
+    /// A Push with seat 0's two live scouts, and a memory whose kept scouts
+    /// are planted: the two live ones, three of seat 0's that no unit
+    /// answers to, and two of seat 1's that none answers to either, so a
+    /// walk that forgot the seat would find those dead. The runner, the live
+    /// scouts' ids and the planted list.
+    fn planted_scouts() -> (Runner, Vec<u32>, Vec<Kept>) {
+        let mut runner = arranged(2, 0);
+        let live: Vec<u32> = scout_rows(&runner)
+            .into_iter()
+            .filter_map(|row| runner.world().units().ids().get(row).copied())
+            .collect();
+        let [first, second] = live[..] else {
+            panic!("the recipe: two live scouts, {live:?}");
+        };
+        let at = |x: i16| [Fx::from_voxels(x), Fx::ZERO, Fx::ZERO];
+        let planted = vec![
+            (0, first, at(1)),
+            (1, 4_000, at(2)),
+            (0, 4_001, at(3)),
+            (0, 4_002, at(4)),
+            (0, second, at(5)),
+            (1, 4_003, at(6)),
+            (0, 4_004, at(7)),
+        ];
+        let push = runner.world().match_state().segment_started().raw();
+        let memory = &mut runner.world_mut().scratch_mut().survey;
+        memory.begin(push);
+        // The Push's own decisions kept the live scouts already: the kept
+        // list and the deaths start from the planted scene alone.
+        memory.scouts.clear();
+        memory.deaths.clear();
+        for entry in &planted {
+            memory.scouts.push(*entry);
+        }
+        (runner, live, planted)
+    }
+
+    /// **The scout bookkeeping finds each dead scout of its seat once, in
+    /// order, and leaves every other kept scout** (review 3's probe,
+    /// adopted): against the two-list version it replaced, the same kept
+    /// scouts and the same deaths, with nothing unlogged. A walk that
+    /// stepped on after a death would pass the scout that moved into the
+    /// dead one's place.
+    #[test]
+    fn the_scout_bookkeeping_matches_the_two_lists_it_replaced() {
+        let (mut runner, live, planted) = planted_scouts();
+        let tick = runner.world().tick().raw();
+        let (mut kept, deaths) =
+            two_list_bookkeeping(&planted, 0, &|unit| !live.contains(&unit), tick);
+        let before = runner.world_mut().scratch_mut().survey_drops_unlogged();
+        assert!(
+            super::note_scouts(runner.world_mut(), SeatId::new(0), Members::Survey, &()),
+            "the seat's scouts decide"
+        );
+        // The member walk then moves each live scout's place to where it
+        // stands.
+        let world = runner.world();
+        for entry in kept.iter_mut().filter(|entry| entry.0 == 0) {
+            entry.2 = world
+                .units()
+                .row_of(crate::tables::UnitId::new(entry.1))
+                .ok()
+                .and_then(|row| world.units().positions().get(row.index()).copied())
+                .unwrap_or_else(|| panic!("a live scout's place"));
+        }
+        let scratch = runner.world_mut().scratch_mut();
+        assert_eq!(scratch.survey.scouts.to_vec(), kept, "the kept scouts");
+        assert_eq!(
+            scratch.survey.deaths.to_vec(),
+            deaths,
+            "the deaths, in order"
+        );
+        assert_eq!(
+            deaths.len(),
+            3,
+            "the recipe: three dead scouts of the seat's"
+        );
+        assert!(!scratch.survey.missed());
+        assert_eq!(scratch.survey_drops_unlogged(), before, "nothing unlogged");
+    }
+
+    /// **The scout bookkeeping at a full deaths list** (review 3's probe,
+    /// adopted): every dead scout still leaves the kept list, the walk ends,
+    /// each death past the room is counted and the memory is marked.
+    #[test]
+    fn the_scout_bookkeeping_ends_at_a_full_deaths_list() {
+        let (mut runner, live, _) = planted_scouts();
+        let scratch = runner.world_mut().scratch_mut();
+        scratch.survey.scout_room = 8;
+        for _ in 0..7 {
+            scratch.survey.deaths.push((0, 0, [Fx::ZERO; 3], 9_999));
+        }
+        let before = scratch
+            .survey_drops_unlogged()
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        super::note_scouts(runner.world_mut(), SeatId::new(0), Members::Survey, &());
+        let scratch = runner.world_mut().scratch_mut();
+        let mine: Vec<u32> = scratch
+            .survey
+            .scouts
+            .iter()
+            .filter(|(who, _, _)| *who == 0)
+            .map(|(_, unit, _)| *unit)
+            .collect();
+        assert_eq!(mine, live, "only the seat's live scouts stay");
+        assert_eq!(
+            (
+                scratch.survey.scouts.len(),
+                scratch.survey.deaths.len(),
+                scratch.survey.missed()
+            ),
+            (4, 8, true),
+            "the other seat's two stay, one death took the last place, and the memory missed"
+        );
+        assert_eq!(
+            scratch.survey_drops_unlogged(),
+            Ok(before + 2),
+            "the two deaths past the room are counted"
+        );
+    }
+
+    /// **A restore begins Survey's drop memory again** (review 3's F1, its
+    /// probe adopted): the memory is in no snapshot, so after a restore it
+    /// is empty and whole, also in a world that had played on in the same
+    /// Push and whose memory had missed.
+    #[test]
+    fn a_restore_begins_the_drop_memory_again() {
+        let mut runner = arranged(1, 0);
+        let save = crate::Snapshot::capture(runner.world())
+            .unwrap_or_else(|error| panic!("a save: {error}"));
+        let memory = &mut runner.world_mut().scratch_mut().survey;
+        let (_, listed_room, _) = memory.rooms();
+        let mut refused = 0_u32;
+        for asset in 0..=u32::try_from(listed_room).unwrap_or_else(|error| panic!("{error}")) {
+            refused += u32::from(memory.listed(1, 5_000 + asset, 1, 1).is_err());
+        }
+        assert_eq!(
+            memory.log_drop(1, 77, super::Drop::OutOfReach, 1),
+            Ok(true),
+            "a drop is logged"
+        );
+        assert_eq!(
+            (refused, memory.missed()),
+            (1, true),
+            "the recipe: the memory missed"
+        );
+        save.restore_into(runner.world_mut())
+            .unwrap_or_else(|error| panic!("a restore: {error}"));
+        let memory = &runner.world_mut().scratch_mut().survey;
+        assert_eq!(
+            (
+                memory.missed(),
+                memory.log().len(),
+                memory.listed.len(),
+                memory.scouts.len(),
+                memory.deaths.len(),
+                memory.push
+            ),
+            (false, 0, 0, 0, 0, None)
+        );
+    }
+
+    /// **A restore across seat counts leaves the sighting table, its counts
+    /// and the drop memory agreeing** (review 3's probe, adopted): two seats
+    /// into a world built for three, and three into one built for two. The
+    /// table holds rows for the save's seats, each of them has a count, the
+    /// memory has room for them, and a sighting for each is kept, none
+    /// refused.
+    #[test]
+    fn a_restore_across_seat_counts_leaves_the_sighting_state_agreeing() {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let make = |seats: u32| {
+            let rules =
+                RulesTable::load(&path).unwrap_or_else(|error| panic!("the rules load: {error}"));
+            World::new(&WorldConfig {
+                match_seed: SEED,
+                seats,
+                rules,
+                match_settings: MatchSettings::default(),
+            })
+            .unwrap_or_else(|error| panic!("a world: {error}"))
+        };
+        let id = AssetId::of_unit(crate::tables::UnitId::new(9))
+            .unwrap_or_else(|error| panic!("an id: {error:?}"));
+        let row = crate::math::index::row;
+        for (from, into) in [(2_u32, 3_u32), (3, 2)] {
+            let save = crate::Snapshot::capture(&make(from))
+                .unwrap_or_else(|error| panic!("a save: {error}"));
+            let mut world = make(into);
+            save.restore_into(&mut world)
+                .unwrap_or_else(|error| panic!("{from} seats into {into}: {error}"));
+            let (seats, per_seat) = (world.sightings().seat_count(), world.sightings().per_seat());
+            assert_eq!(seats, from, "the table holds rows for the save's seats");
+            let counted: Vec<bool> = (0..4)
+                .map(|raw| world.sightings_forgotten_by(SeatId::new(raw)).is_some())
+                .collect();
+            let seated: Vec<bool> = (0..4_u32).map(|raw| raw < from).collect();
+            assert_eq!(counted, seated, "a count for each seat the save seats");
+            let rooms = world.scratch_mut().survey.rooms();
+            let listed = row(seats * per_seat);
+            assert!(
+                rooms.0 >= listed * super::Drop::ALL.len()
+                    && rooms.1 >= listed
+                    && rooms.2 >= row(world.unit_limit()),
+                "{from} seats into {into}: the memory's rooms {rooms:?}"
+            );
+            for raw in 0..u8::try_from(from).unwrap_or_else(|error| panic!("{error}")) {
+                world.see(
+                    SeatId::new(raw),
+                    id,
+                    SeatId::new(0),
+                    AssetKind::Unit.id(),
+                    NO_BLUEPRINT,
+                    [Fx::ZERO; 3],
+                    0,
+                );
+                assert_eq!(world.sightings().len_of(SeatId::new(raw)), 1);
+            }
+            assert_eq!(world.sightings_refused(), 0);
+        }
+    }
+
+    /// **A decision counts the same work whatever the drop memory holds**
+    /// (review 3's F3). One scout, 30 s left, and a needed sighting no scout
+    /// reaches: with a whole memory the drop is named out of reach, and with
+    /// a memory that missed a listing it is counted unnamed. Naming a reason
+    /// is a measurement and reports nothing, so the two decisions count the
+    /// same rows, as a resumed match's and an unbroken one's must.
+    #[test]
+    fn a_decision_counts_the_same_whatever_the_drop_memory_holds() {
+        let seat = SeatId::new(0);
+        let target = beacon_id(901);
+        let counted = |missed: bool| {
+            let (mut runner, cx, cy) = late_in_the_push(1, 30);
+            sighted(&mut runner, AssetKind::Beacon, target, [cx + 150, cy], 160);
+            if missed {
+                let push = runner.world().match_state().segment_started().raw();
+                let memory = &mut runner.world_mut().scratch_mut().survey;
+                memory.begin(push);
+                let (_, listed_room, _) = memory.rooms();
+                for asset in
+                    0..=u32::try_from(listed_room).unwrap_or_else(|error| panic!("{error}"))
+                {
+                    // Every one but the last is kept; the last finds no room.
+                    let _ = memory.listed(2, 5_000 + asset, 1, 1).is_err();
+                }
+                assert!(memory.missed(), "the recipe: the memory missed");
+            }
+            let meter = Counted::default();
+            decide_seat(runner.world_mut(), seat, Members::Survey, &meter);
+            let named = drops_of(&mut runner, target);
+            (meter.rows.get(), meter.measured.get(), named)
+        };
+        let (whole_rows, whole_measured, whole_named) = counted(false);
+        let (missed_rows, missed_measured, missed_named) = counted(true);
+        assert_eq!(
+            whole_named,
+            vec![super::Drop::OutOfReach],
+            "named, with a whole memory"
+        );
+        assert_eq!(missed_named, vec![], "and not, once the memory missed");
+        assert_eq!(
+            (whole_rows, whole_measured),
+            (missed_rows, missed_measured),
+            "the same counted work either way"
         );
     }
 
