@@ -873,9 +873,16 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // nothing reads yet (`pathing.*`, `combat.charge_damage_hp`,
     // `structures.resonance_spire_sphere_bonus_voxels` and
     // `licences.resonance_vents`) and the note, so the chain did not move.
+    // It moved from 1b26c525068bff61 with revision 8 (S3's `tune3`): the new
+    // `structures.resonance_spire_build_ms` row, at the value of the constant
+    // it replaces, and `units.scout.vision_radius_voxels` 24 -> 28, with the
+    // note. A scout's sight gates what its seat sights, so every chain of a
+    // match that fields a scout within 28 voxels of something it did not see
+    // at 24 moved with it (the pull request lists them); this file's golden
+    // match fields none, so the chain in tests/golden/determinism did not.
     assert_eq!(
         hex(rules().rules_hash()),
-        "1b26c525068bff61",
+        "641055eb0d38815a",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }

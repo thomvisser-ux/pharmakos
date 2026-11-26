@@ -514,12 +514,13 @@ pub(crate) fn protected_metered(
 /// protected area written after its structure was paid for keeps the ground
 /// clear of construction, so the drones leave the structure as it stands.
 ///
-/// PLACEHOLDER: a paid structure under a later protected area stays unfinished — owner, S3
-///
+/// **A paid structure under a later protected area stays unfinished: ruled**
+/// (S3's plan, decision 8, by decisions-log item 154 (4); register S3-22).
 /// That is: a structure already paid for and still going up when a later edit
 /// protects its ground is left as it stands, for as long as the area holds --
-/// nothing finishes, refunds or ruins it, and the spec does not say which
-/// (S1's `build` lane, from its review).
+/// nothing finishes, refunds or ruins it -- and it is a target going up again
+/// once the area is lifted. The spec does not say which (S1's `build` lane,
+/// from its review), so the ruling does.
 ///
 /// The `built` link is a reference into the structure table, checked by
 /// generation where it is read (S2's plan, E1): a link to a structure since

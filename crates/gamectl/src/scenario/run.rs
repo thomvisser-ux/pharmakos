@@ -338,6 +338,25 @@ pub struct Ending {
     pub end_tick: u32,
     /// The rounds played, the last one included.
     pub rounds: u32,
+    /// The final audit's line for every seat it decided between, ascending by
+    /// seat: what each held and what it destroyed, so a result says by how
+    /// much a match was won and on which term, not only by whom.
+    pub audit: Vec<Audited>,
+}
+
+/// One seat's line of the final audit ([`pharmakos_sim::audit::AuditLine`]),
+/// as whole `$`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Audited {
+    /// Whose line it is.
+    pub seat: u8,
+    /// Value held: `$` plus the seat's own assets at build cost by current
+    /// hit points.
+    pub held: i64,
+    /// The build cost of the enemy assets the seat destroyed.
+    pub destroyed: i64,
+    /// How many of the seat's beacons died this match.
+    pub beacons_lost: u32,
 }
 
 /// Play one scenario **to the match's end** and say how it ended, asserting
@@ -615,19 +634,27 @@ fn ending_of(surface: &Surface) -> Result<Ending, Failure> {
         .runner()
         .outcome()
         .ok_or_else(|| Failure::internal("the match ended with no outcome"))?;
+    let final_audit = pharmakos_sim::audit::final_audit(host.world());
     let winners = match outcome.winner {
         Some(seat) => vec![seat.raw()],
-        None => pharmakos_sim::audit::final_audit(host.world())
-            .winners
-            .iter()
-            .map(|seat| seat.raw())
-            .collect(),
+        None => final_audit.winners.iter().map(|seat| seat.raw()).collect(),
     };
+    let audit = final_audit
+        .lines
+        .iter()
+        .map(|line| Audited {
+            seat: line.seat.raw(),
+            held: line.held.raw(),
+            destroyed: line.destroyed.raw(),
+            beacons_lost: line.beacons_lost,
+        })
+        .collect();
     Ok(Ending {
         winners,
         reason: outcome.reason.name(),
         end_tick: outcome.at.raw(),
         rounds: host.runner().round(),
+        audit,
     })
 }
 

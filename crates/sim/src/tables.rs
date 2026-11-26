@@ -1475,8 +1475,11 @@ impl AreaKind {
     }
 }
 
-/// Why a row could not go into the [`TargetTable`]: it already holds as many
-/// rows as it was built for, and it never grows a column inside a tick.
+/// Why a row could not go into the [`TargetTable`]: its seat's lists already
+/// hold as many rows as their room (`World::check_list_room`, the test a
+/// settings commit asks first), or the table as many as it was built for
+/// (a direct [`TargetTable::add`], which a fixture makes), and the table never
+/// grows a column inside a tick.
 ///
 /// A typed answer rather than a `false` (decisions-log item 136 (5)), so a
 /// settings row that meets it fails its step with
@@ -1484,7 +1487,8 @@ impl AreaKind {
 /// the entry it could not write.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TargetsFull {
-    /// How many rows the table holds, which is all it was built for.
+    /// The room that is full: the seat's list room for a commit's test, the
+    /// table's own for a direct add.
     pub capacity: u32,
 }
 
@@ -1492,7 +1496,7 @@ impl core::fmt::Display for TargetsFull {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "the list-settings table is full at {} rows",
+            "the list settings have no room past {} rows",
             self.capacity
         )
     }
@@ -2053,6 +2057,46 @@ pub struct TargetColumns {
     pub wall_done: Vec<bool>,
 }
 
+/// What [`SightingTable::see`] did with one sighting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sighted {
+    /// The seat already remembered the asset: that memory was replaced.
+    Again,
+    /// A new memory, in room the seat had.
+    New,
+    /// A new memory, after the seat forgot its own stalest for room.
+    NewOverStalest,
+    /// Nothing was recorded: the seat's allowance is nothing, or the table
+    /// holds no rows for the seat ([`SightingTable::seat_count`]). The table
+    /// is never full while a seat it holds rows for is under its allowance:
+    /// its room is the seats' allowances together
+    /// ([`SightingTable::with_room`]), and no seat is ever past its own, by
+    /// [`SightingTable::see`] and by [`SightingTable::restore`].
+    Refused,
+}
+
+/// Why [`SightingTable::restore`] refused a set of columns.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SightingsRefused {
+    /// The columns are not all one length, or the `(seat, asset)` key is not
+    /// strictly ascending.
+    Ragged,
+    /// A row is held by a seat the table holds no rows for.
+    Unseated {
+        /// The seat.
+        seat: u8,
+    },
+    /// A seat holds more rows than its allowance.
+    OverRoom {
+        /// The seat.
+        seat: u8,
+        /// How many rows the columns give it.
+        rows: u32,
+        /// The allowance ([`SightingTable::per_seat`]).
+        room: u32,
+    },
+}
+
 /// What one seat remembers seeing, with the tick it was seen at (spec section
 /// 6, "Vision and sightings").
 ///
@@ -2075,6 +2119,8 @@ pub struct SightingTable {
     seen_at: Reserved<u32>,
     capacity: u32,
     per_seat: u32,
+    /// How many seats the table holds rows for: seat ids below this.
+    seats: u32,
 }
 
 /// What a sighting of anything but a structure carries in its blueprint
@@ -2124,6 +2170,7 @@ impl SightingTable {
             seen_at: Reserved::with_capacity(n),
             capacity,
             per_seat,
+            seats,
         }
     }
 
@@ -2133,16 +2180,28 @@ impl SightingTable {
         self.per_seat
     }
 
+    /// How many seats the table holds rows for: a sighting for a seat id at
+    /// or past this is refused ([`Sighted::Refused`]).
+    #[must_use]
+    pub const fn seat_count(&self) -> u32 {
+        self.seats
+    }
+
+    /// The rows holding `seat`'s sightings: one run, because the table is
+    /// sorted by seat and then by asset ([`SightingTable::see`]). Two binary
+    /// searches, so a reader of one seat's memory never walks another's.
+    #[must_use]
+    pub fn rows_of(&self, seat: SeatId) -> core::ops::Range<usize> {
+        let start = self.seat.partition_point(|who| *who < seat.raw());
+        let end = self.seat.partition_point(|who| *who <= seat.raw());
+        start..end
+    }
+
     /// How many sightings `seat` is holding.
     #[must_use]
     pub fn len_of(&self, seat: SeatId) -> u32 {
-        let mut total: u32 = 0;
-        for who in &self.seat {
-            if *who == seat.raw() {
-                total = total.saturating_add(1);
-            }
-        }
-        total
+        // E7: cannot miss: a seat's rows are among the table's, whose count is a `u32`
+        u32::try_from(self.rows_of(seat).len()).unwrap_or(u32::MAX)
     }
 
     /// How many sightings are remembered.
@@ -2244,8 +2303,11 @@ impl SightingTable {
     /// was about to leave the window anyway. The allowance is per seat rather
     /// than per table, so a seat that sees a great deal cannot starve a seat
     /// that has seen nothing; the shared ceiling is the sum of the allowances
-    /// and cannot be reached before one of them is. `false` when nothing was
-    /// recorded.
+    /// and cannot be reached before one of them is. What was done is said
+    /// ([`Sighted`]), so a memory forgotten for room is never forgotten
+    /// unseen. A sighting for a seat the table holds no rows for
+    /// ([`SightingTable::seat_count`]) is refused before anything is forgotten:
+    /// the table's room is the seats' allowances and nobody else's.
     #[allow(
         clippy::too_many_arguments,
         reason = "one argument per column of the row being written, as the SoA `push`es above"
@@ -2259,7 +2321,10 @@ impl SightingTable {
         blueprint: u8,
         at: [Fx; 3],
         tick: u32,
-    ) -> bool {
+    ) -> Sighted {
+        if u32::from(seat.raw()) >= self.seats {
+            return Sighted::Refused;
+        }
         match self.seek(seat.raw(), asset) {
             Ok(slot) => {
                 if let Some(place) = self.at.get_mut(slot) {
@@ -2277,19 +2342,30 @@ impl SightingTable {
                 if let Some(what) = self.blueprint.get_mut(slot) {
                     *what = blueprint;
                 }
-                true
+                Sighted::Again
             }
-            Err(slot) => {
-                if self.len_of(seat) >= self.per_seat {
+            Err(found) => {
+                // No seat is past its allowance and the table's room is the
+                // allowances together, so a seat under its own has a row
+                // free in the table.
+                let full = self.len_of(seat) >= self.per_seat;
+                let (slot, outcome) = if full {
                     let Some(stalest) = self.stalest_of(seat) else {
-                        return false;
+                        return Sighted::Refused;
                     };
                     self.forget(stalest);
-                    return self.see(seat, asset, owner, kind, blueprint, at, tick);
-                }
-                if self.count >= self.capacity {
-                    return false;
-                }
+                    // The forgotten row stood before this one's place or
+                    // after it, never on it: `found` is where a key the
+                    // table does not hold goes, and a row taken out before
+                    // it moves that place down by one.
+                    let slot = match found.checked_sub(1) {
+                        Some(below) if stalest < found => below,
+                        _ => found,
+                    };
+                    (slot, Sighted::NewOverStalest)
+                } else {
+                    (found, Sighted::New)
+                };
                 self.seat.insert(slot, seat.raw());
                 self.asset.insert(slot, asset);
                 self.owner.insert(slot, owner.raw());
@@ -2298,7 +2374,7 @@ impl SightingTable {
                 self.at.insert(slot, at);
                 self.seen_at.insert(slot, tick);
                 self.count = self.count.saturating_add(1);
-                true
+                outcome
             }
         }
     }
@@ -2312,11 +2388,10 @@ impl SightingTable {
     #[must_use]
     pub fn stalest_of(&self, seat: SeatId) -> Option<usize> {
         let mut best: Option<(u32, u32, usize)> = None;
-        let rows = self.seat.iter().zip(&self.seen_at).zip(&self.asset);
-        for (slot, ((who, when), asset)) in rows.enumerate() {
-            if *who != seat.raw() {
+        for slot in self.rows_of(seat) {
+            let (Some(when), Some(asset)) = (self.seen_at.get(slot), self.asset.get(slot)) else {
                 continue;
-            }
+            };
             if best.is_none_or(|(bw, ba, _)| (*when, *asset) < (bw, ba)) {
                 best = Some((*when, *asset, slot));
             }
@@ -2339,10 +2414,17 @@ impl SightingTable {
         self.count = self.count.saturating_sub(1);
     }
 
-    /// Replace the whole table from a restored snapshot. Same contract as
-    /// [`UnitTable::restore`], plus: the `(seat, asset)` key must be strictly
-    /// ascending, which is what the table's own search assumes.
-    pub fn restore(&mut self, capacity: u32, columns: SightingColumns) -> bool {
+    /// Replace the whole table from a restored snapshot, keeping its seats
+    /// and its allowance. The columns must be one length; the `(seat, asset)`
+    /// key strictly ascending, which is what the table's own search assumes;
+    /// every row a seat's the table holds rows for; and no seat past its
+    /// allowance, which is what [`SightingTable::see`] holds every seat to in
+    /// play, and what makes the table's room enough for every seat.
+    ///
+    /// # Errors
+    ///
+    /// [`SightingsRefused`], and the table is as it was.
+    pub fn restore(&mut self, columns: SightingColumns) -> Result<(), SightingsRefused> {
         let n = columns.seat.len();
         if columns.asset.len() != n
             || columns.owner.len() != n
@@ -2351,24 +2433,48 @@ impl SightingTable {
             || columns.at.len() != n
             || columns.seen_at.len() != n
         {
-            return false;
+            return Err(SightingsRefused::Ragged);
         }
+        let Ok(count) = u32::try_from(n) else {
+            return Err(SightingsRefused::Ragged);
+        };
         let mut keys = columns.seat.iter().zip(&columns.asset);
         let mut before = keys.next();
         for here in keys {
             if before.is_some_and(|previous| previous >= here) {
-                return false;
+                return Err(SightingsRefused::Ragged);
             }
             before = Some(here);
         }
-        let Ok(count) = u32::try_from(n) else {
-            return false;
+        // The key is ascending, so a seat's rows are one run, counted whole
+        // before it is judged.
+        let room = self.per_seat;
+        let within = |run: Option<(u8, u32)>| match run {
+            Some((seat, rows)) if rows > room => {
+                Err(SightingsRefused::OverRoom { seat, rows, room })
+            }
+            _ => Ok(()),
         };
-        if count > capacity {
-            return false;
+        let mut run: Option<(u8, u32)> = None;
+        for seat in &columns.seat {
+            if u32::from(*seat) >= self.seats {
+                return Err(SightingsRefused::Unseated { seat: *seat });
+            }
+            run = match run {
+                // At most `count` rows, which fits a `u32` (checked above).
+                Some((of, rows)) if of == *seat => {
+                    Some((of, rows.checked_add(1).ok_or(SightingsRefused::Ragged)?))
+                }
+                ended => {
+                    within(ended)?;
+                    Some((*seat, 1))
+                }
+            };
         }
+        within(run)?;
+        // Every seat is within its allowance, so the rows are within the
+        // table's room, the allowances together.
         self.count = count;
-        self.capacity = capacity;
         self.seat = columns.seat.into();
         self.asset = columns.asset.into();
         self.owner = columns.owner.into();
@@ -2376,7 +2482,7 @@ impl SightingTable {
         self.blueprint = columns.blueprint.into();
         self.at = columns.at.into();
         self.seen_at = columns.seen_at.into();
-        true
+        Ok(())
     }
 }
 

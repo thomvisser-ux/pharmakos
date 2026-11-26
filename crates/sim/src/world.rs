@@ -267,51 +267,82 @@ pub const fn room_per_seat(total: u32, seats: u32) -> u32 {
     }
 }
 
-/// PLACEHOLDER: harness scaffolding, how many list settings one beacon may carry — owner, at S3's exit.
+/// The list-settings room: how many list rows one beacon row may carry on
+/// average. Build targets, protected areas and Survey probe areas together:
+/// the rows of the list-settings table. Settled with the size budget (S3's
+/// `tune3`; S3's plan, E17; register S3-12): no tuning value, a table's
+/// ceiling held to the budget by a test, as the text below says.
 ///
-/// Build targets, protected areas and Survey probe areas together.
+/// **The room is a seat's, as every fielding limit is** (S3's `tune3`; S3's
+/// plan, E17): a seat's lists may hold [`seat_list_room_of`] rows in all, its
+/// beacon rows times this, pooled over its beacons, and a settings row that
+/// would pass its **own seat's** room writes nothing and fails its step
+/// `targets_unwritten` ([`World::check_list_room`]). So one seat's lists
+/// never refuse another seat's commit for a reason that seat cannot see, the
+/// leak per-seat room exists to close ([`STRUCTURE_TABLE_ROOM`]); the table
+/// reserves every seat's room at once ([`World::reserve_table_rooms`]), so a
+/// commit inside a tick allocates nothing.
 ///
-/// Eight, which is roomy against the worked example's one target and well
-/// inside `verifier.size_budget_units` (128 units, of which a target costs
-/// one). The verifier's budget is the real limit and it is a rules-table row;
-/// this is the table's own ceiling, and a row that finds no room fails its
-/// interface row rather than growing a column inside a tick. The owner settles
-/// the two together at **S3's exit**, where P1 sets the size budget from a
-/// measurement (owner, at S3).
-const TARGETS_PER_BEACON: u32 = 8;
+/// **Sixteen, from the size budget.** One playbook writes at most
+/// `verifier.size_budget_units` list rows (a target, an area and a probe area
+/// each cost one unit), all of which it may put on one beacon, so the room
+/// has to hold a whole budget of rows on a seat that holds none:
+/// `tests/list_rooms.rs` holds [`seat_list_room_of`] to at least the
+/// committed rules table's budget at every seat count the host seats (at
+/// three seats 14 beacon rows, so 224 against 128). A list is kept from round
+/// to round, so the budget bounds one Push's commits and not the table: the
+/// room is the table's own ceiling, technically necessary because a row
+/// written inside a tick may not grow a column, and a seat that fills its own
+/// is told so by the failed step.
+const TARGETS_PER_BEACON: u32 = 16;
 
-/// [`TARGETS_PER_BEACON`] as an array length.
+/// How many sightings one seat remembers at once: **every asset the world
+/// can hold alive at once**, the unit ceiling, the structure rows and the
+/// beacon limit together (S3's `tune3`; S3's plan, E17; register S3-13). No
+/// tuning value and no balance cap: a table's ceiling, technically necessary
+/// because a row written inside a tick may not grow a column.
 ///
-/// A second constant rather than a cast, because a cast is a decision
-/// (AGENTS.md section 4.3) and `const` context has no `try_from`. The
-/// assertion below is what keeps the two the same number: move one and the
-/// crate stops compiling.
-const TARGETS_PER_BEACON_SLOTS: usize = 8;
-const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
+/// A seat forgets its own stalest sighting for room
+/// ([`SightingTable::see`]), and what a seat sees this tick is the newest it
+/// holds. So with room for every live asset, a seat never forgets something
+/// it is looking at: what falls out is the memory it has not renewed for
+/// longest, the order Survey refreshes in, whether the thing remembered
+/// still stands or not (a seat does not know which, and the eviction reads
+/// nothing a seat does not know). An asset's id carries its row's
+/// generation, so the memories of assets since destroyed are rows of their
+/// own, which this room does not count: they are what can bring a seat to
+/// its room, and each ages out of being seen, so it is among the stalest
+/// in time. The world counts every memory forgotten for room, by seat
+/// ([`World::sightings_forgotten_by`]).
+///
+/// It was 64 a seat until the gate's load was measured with room to spare
+/// (S3's `cert3` watch, re-run by `tune3` at a room of 4 096): the seats
+/// peaked at 263, 245 and 226 remembered sightings, with up to 118 entities
+/// in one view listing, so at 64 a seat kept an arbitrary part of what it
+/// was looking at and forgot the rest on every tick.
+#[must_use]
+pub(crate) const fn sighting_room_of(unit_ceiling: u32, beacon_limit: u32) -> u32 {
+    unit_ceiling
+        .saturating_add(STRUCTURE_ROWS)
+        .saturating_add(beacon_limit)
+}
 
-/// PLACEHOLDER: harness scaffolding, how many sightings one seat remembers at once — owner, at S3.
+/// The avoid-area room: how many Attack avoid areas one beacon row may carry
+/// on average. Settled with the size budget (S3's `tune3`; S3's plan, E17;
+/// register S3-30), as [`TARGETS_PER_BEACON`] is.
 ///
-/// Sixty-four, **each**: the table holds this many rows for every seat and
-/// evicts against a seat's own count, so a seat that sees more forgets its own
-/// stalest first and never crowds a seat that has seen nothing
-/// ([`SightingTable::see`]). That is the same order Survey refreshes in, so
-/// what falls out is what was about to leave `verifier.reach_memory_ms`
-/// anyway. The owner settles it with the reach window and the briefing's
-/// detail budget (owner, at S3).
-pub(crate) const SIGHTINGS_PER_SEAT: u32 = 64;
-
-/// PLACEHOLDER: the avoid-area room, how many Attack avoid areas one beacon row may carry on average — owner, at S3, with P1's size budget.
-///
-/// The Attack table's avoid-area room is the beacon limit times this, stated
-/// in the form [`TARGETS_PER_BEACON`] gives the Build lists: the table's own
-/// ceiling, reserved with every other table's room
-/// (`World::reserve_table_rooms`), and a commit that would pass it writes
-/// nothing and fails its step `targets_unwritten`, as a Build list past its
-/// room does. Neither the rules nor the proto bound an avoid list in the
-/// sim: `verifier.size_budget_units` bounds what one playbook writes, but a
-/// list is kept from round to round, so the budget bounds no table. Sixteen
-/// an Attack beacon is more than the 512 areas a three-seat match reserved
-/// before (42 beacon rows, 672 areas).
+/// **A seat's room, as the list settings' is** ([`TARGETS_PER_BEACON`]): a
+/// seat's Attack beacons may hold [`seat_avoid_room_of`] avoid areas in all,
+/// its beacon rows times this, and a commit that would pass its own seat's
+/// room writes nothing and fails its step `targets_unwritten`
+/// ([`World::avoid_fits`]), so no seat's avoid lists refuse another's. The
+/// Attack table reserves every seat's room at once
+/// (`World::reserve_table_rooms`). Neither the rules nor the proto bound an
+/// avoid list in the sim: `verifier.size_budget_units` bounds what one
+/// playbook writes, but a list is kept from round to round, so the budget
+/// bounds no table. Sixteen, for the reason and by the test
+/// [`TARGETS_PER_BEACON`] is sixteen: a playbook that spends its whole
+/// budget on one beacon's avoid areas fits a seat that holds none.
 const AVOID_AREAS_PER_BEACON: u32 = 16;
 
 /// How many beacon rows one seat may hold at once in a match of `seats`
@@ -321,6 +352,25 @@ const AVOID_AREAS_PER_BEACON: u32 = 16;
 /// it is never passed. [`beacon_limit_of`] is this times the seat count.
 pub(crate) const fn seat_beacon_limit_of(seats: u32) -> u32 {
     room_per_seat(BEACON_TABLE_ROOM, seats).saturating_add(1)
+}
+
+/// How many list-settings rows (Build targets, protected areas and Survey
+/// probe areas together) one seat's beacons may hold in all in a match of
+/// `seats` seats: [`seat_beacon_limit_of`] times [`TARGETS_PER_BEACON`]. The
+/// seats' rooms add up to the table's, the beacon limit times the same
+/// figure ([`World::reserve_table_rooms`]).
+#[must_use]
+pub const fn seat_list_room_of(seats: u32) -> u32 {
+    seat_beacon_limit_of(seats).saturating_mul(TARGETS_PER_BEACON)
+}
+
+/// How many Attack avoid areas one seat's beacons may hold in all in a match
+/// of `seats` seats: [`seat_beacon_limit_of`] times
+/// [`AVOID_AREAS_PER_BEACON`]. The seats' rooms add up to the table's, the
+/// beacon limit times the same figure ([`World::reserve_table_rooms`]).
+#[must_use]
+pub const fn seat_avoid_room_of(seats: u32) -> u32 {
+    seat_beacon_limit_of(seats).saturating_mul(AVOID_AREAS_PER_BEACON)
 }
 
 /// A protect list a commit resolved into the world's protect scratch
@@ -543,6 +593,9 @@ pub struct World {
     rooms: QueueRooms,
     /// What [`DamageDrop`] counted. Diagnostic; never hashed.
     damage_drops: DamageDrops,
+    /// The memories each seat forgot for room, and the sightings refused
+    /// ([`SightingDrops`]). Diagnostic; never hashed.
+    sighting_drops: SightingDrops,
     /// What S2's `site` dropped, by reason ([`crate::site::SiteDrops`]).
     /// Diagnostic; never hashed.
     site_drops: crate::site::SiteDrops,
@@ -820,6 +873,62 @@ impl DamageDrop {
             DamageDrop::StaleGeneration => "stale_generation",
             DamageDrop::AlreadyDead => "already_dead",
         }
+    }
+}
+
+/// What the sighting table could not keep since the world was built or last
+/// restored: the memories each seat forgot for room, and the sightings
+/// refused outright. Diagnostic, never hashed, never snapshotted, and begun
+/// again at a restore with a count for each seat the snapshot seats.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SightingDrops {
+    /// One count a seat, by seat id.
+    forgotten: Vec<u64>,
+    refused: u64,
+}
+
+impl SightingDrops {
+    /// No drop yet, in a match of `seats` seats.
+    fn for_seats(seats: u32) -> SightingDrops {
+        SightingDrops {
+            forgotten: vec![0; crate::math::index::row(seats)],
+            refused: 0,
+        }
+    }
+
+    /// Count what the table did with one of `seat`'s sightings.
+    fn count(&mut self, seat: SeatId, outcome: crate::tables::Sighted) {
+        use crate::tables::Sighted;
+        match outcome {
+            Sighted::Again | Sighted::New => {}
+            Sighted::NewOverStalest => {
+                match self.forgotten.get_mut(usize::from(seat.raw())) {
+                    Some(count) => *count = count.saturating_add(1),
+                    // The table refuses a sighting for a seat it holds no
+                    // rows for before it forgets anything
+                    // (`SightingTable::see`), and the counts are sized for
+                    // the seats the table holds rows for, at construction
+                    // and at every restore, so no memory is forgotten for a
+                    // seat with no count here. Were one, it is counted with
+                    // the refusals, never left uncounted.
+                    None => self.refused = self.refused.saturating_add(1),
+                }
+            }
+            Sighted::Refused => self.refused = self.refused.saturating_add(1),
+        }
+    }
+
+    /// How many memories `seat` forgot for room, or `None` for a seat the
+    /// world does not seat.
+    #[must_use]
+    pub fn forgotten_by(&self, seat: SeatId) -> Option<u64> {
+        self.forgotten.get(usize::from(seat.raw())).copied()
+    }
+
+    /// How many sightings were refused outright.
+    #[must_use]
+    pub const fn refused(&self) -> u64 {
+        self.refused
     }
 }
 
@@ -1346,12 +1455,20 @@ impl World {
                 size: voxels.size(),
             });
         };
-        let Some((clusters, scratch)) = crate::pathing::graph_for(
+        let Some((clusters, mut scratch)) = crate::pathing::graph_for(
             &surface,
             config.rules.cluster_shape().with_size(cluster_voxels),
         ) else {
             return Err(MapError::Unclusterable { cluster_voxels });
         };
+        // Survey's drop memory lives in the search scratch, and a scratch
+        // made for a map knows no seat: the world sizes it for its own
+        // (`survey::Memory::size_for`), as a restore does again.
+        scratch.survey.size_for(
+            config.seats,
+            sighting_room_of(unit_ceiling, beacon_limit_of(config.seats)),
+            unit_ceiling,
+        );
         let mut router = Router::new(unit_count, &config.rules);
         router.reserve(unit_ceiling.saturating_sub(unit_count));
         let mut unit = 0;
@@ -1426,7 +1543,10 @@ impl World {
             structures,
             wrecks,
             targets: TargetTable::with_capacity(beacon_limit.saturating_mul(TARGETS_PER_BEACON)),
-            sightings: SightingTable::with_room(config.seats, SIGHTINGS_PER_SEAT),
+            sightings: SightingTable::with_room(
+                config.seats,
+                sighting_room_of(unit_ceiling, beacon_limit),
+            ),
             credit: CreditTable::with_capacity(
                 unit_ceiling
                     .saturating_add(beacon_limit)
@@ -1464,6 +1584,7 @@ impl World {
             edits: Reserved::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
             rooms,
             damage_drops: DamageDrops::default(),
+            sighting_drops: SightingDrops::for_seats(config.seats),
             site_drops: crate::site::SiteDrops::default(),
             footing_refusals: crate::footing::FootingRefusals::default(),
             bore: generated.bore,
@@ -1738,8 +1859,8 @@ impl World {
             .reserve(self.wreck_limit.saturating_sub(self.wrecks.len()));
         self.targets
             .reserve_rows(self.beacon_limit.saturating_mul(TARGETS_PER_BEACON));
-        self.sightings
-            .reserve_rows(self.seats.len().saturating_mul(SIGHTINGS_PER_SEAT));
+        let sighting_rows = self.seats.len().saturating_mul(self.sightings.per_seat());
+        self.sightings.reserve_rows(sighting_rows);
         self.credit.reserve_rows(
             self.unit_limit
                 .saturating_add(self.beacon_limit)
@@ -2774,8 +2895,28 @@ impl World {
         at: [Fx; 3],
         tick: u32,
     ) {
-        self.sightings
+        let outcome = self
+            .sightings
             .see(seat, asset.raw(), owner, kind, blueprint, at, tick);
+        self.sighting_drops.count(seat, outcome);
+    }
+
+    /// How many memories `seat` has forgotten for room since the world was
+    /// built or last restored: each a sighting of its own, its stalest, dropped so that a new
+    /// one could be kept ([`sighting_room_of`]); `None` for a seat the world
+    /// does not seat. Diagnostic.
+    #[must_use]
+    pub fn sightings_forgotten_by(&self, seat: SeatId) -> Option<u64> {
+        self.sighting_drops.forgotten_by(seat)
+    }
+
+    /// How many sightings the table refused outright since the world was
+    /// built or last restored, which its sizing rules out
+    /// ([`crate::tables::Sighted::Refused`]).
+    /// Diagnostic.
+    #[must_use]
+    pub const fn sightings_refused(&self) -> u64 {
+        self.sighting_drops.refused()
     }
 
     /// Forget sighting row `slot`. Crate-internal: [`crate::survey`]'s
@@ -4192,10 +4333,15 @@ impl World {
         Ok(())
     }
 
-    /// Whether the list-settings table has room for everything a settings
-    /// row would write to `beacon`, once the lists the row replaces are gone:
-    /// the Build entries `build` would actually write, plus `areas` area rows,
-    /// after the beacon's rows of every kind in `replaces` are cleared.
+    /// Whether `beacon`'s **seat** has room for everything a settings row
+    /// would write to `beacon`, once the lists the row replaces are gone: the
+    /// Build entries `build` would actually write, plus `areas` area rows,
+    /// after the beacon's rows of every kind in `replaces` are cleared, on top
+    /// of the rows the seat's other lists hold, against the seat's own room
+    /// ([`seat_list_room_of`]; S3's `tune3`, E17). Another seat's rows count
+    /// for nothing, so no seat's lists refuse another's commit, and the seats'
+    /// rooms add up to the table's, so a commit that fits its seat's room
+    /// fits the table.
     ///
     /// **The test ruling 10 needs before anything is written** (decisions-log
     /// item 139 (1), ruling 10): a row either writes the whole of what it
@@ -4214,7 +4360,7 @@ impl World {
     ///
     /// # Errors
     ///
-    /// [`TargetsFull`] when the rows would not fit.
+    /// [`TargetsFull`] when the rows would not fit the seat's room.
     ///
     /// What it reads is reported to `meter`, one unit a row
     /// ([`crate::seams::Meter`]; dunit part 2): a decision passes its seat's
@@ -4232,7 +4378,7 @@ impl World {
         K: IntoIterator<Item = TargetKind> + Clone,
     {
         let full = TargetsFull {
-            capacity: self.targets.capacity(),
+            capacity: seat_list_room_of(self.seats.len()),
         };
         let seat = self.seat_of_beacon(beacon);
         let mut needed = areas;
@@ -4255,29 +4401,60 @@ impl World {
                 needed = needed.checked_add(1).ok_or(full)?;
             }
         }
+        // The seat's own rows, less the ones this row clears.
         let count = self.targets.row_count();
-        let mut freed: usize = 0;
+        let mut kept: usize = 0;
         for row in 0..count {
             read += 1;
-            let of_beacon = self.targets.beacons().get(row).copied() == Some(beacon);
+            let Some(holder) = self.targets.beacons().get(row).copied() else {
+                continue;
+            };
             let cleared = self.targets.kinds().get(row).is_some_and(|kind| {
                 replaces.clone().into_iter().any(|gone| {
                     read += 1;
                     gone.id() == *kind
                 })
             });
-            if of_beacon && cleared {
-                freed = freed.checked_add(1).ok_or(full)?;
+            if holder == beacon && cleared {
+                continue;
+            }
+            if holder == beacon || self.seat_of_beacon(holder) == seat {
+                kept = kept.checked_add(1).ok_or(full)?;
             }
         }
         meter.rows(read);
-        let capacity = usize::try_from(self.targets.capacity()).map_err(|_| full)?;
-        let kept = count.checked_sub(freed).ok_or(full)?;
+        let room = usize::try_from(full.capacity).map_err(|_| full)?;
         let after = kept.checked_add(needed).ok_or(full)?;
-        if after > capacity {
+        if after > room {
             return Err(full);
         }
         Ok(())
+    }
+
+    /// Whether replacing `beacon`'s avoid list with a list of `written` areas
+    /// keeps `beacon`'s **seat** inside its avoid-area room
+    /// ([`seat_avoid_room_of`]; S3's `tune3`, E17): the areas the seat's other
+    /// Attack beacons hold, and `written`, at most the room. Another seat's
+    /// areas count for nothing. The test an Attack commit asks before it
+    /// writes anything, as the Build lists' is ([`World::check_list_room`]);
+    /// one unit to `meter` an area it reads.
+    pub(crate) fn avoid_fits(
+        &self,
+        beacon: BeaconId,
+        written: usize,
+        meter: &dyn crate::seams::Meter,
+    ) -> bool {
+        let seat = self.seat_of_beacon(beacon);
+        let areas = self.attack.avoid();
+        meter.rows(areas.len());
+        let kept = areas
+            .iter()
+            .filter(|(by, _)| *by != beacon && self.seat_of_beacon(*by) == seat)
+            .count();
+        let Ok(room) = usize::try_from(seat_avoid_room_of(self.seats.len())) else {
+            return false;
+        };
+        kept.checked_add(written).is_some_and(|after| after <= room)
     }
 
     /// The seat that owns `beacon`, or [`SeatId::NEUTRAL`] for a row the table
@@ -7473,6 +7650,22 @@ impl World {
         self.wrecks = restored.wrecks;
         self.targets = restored.targets;
         self.sightings = restored.sightings;
+        // A count a seat of the restored match, none yet: as the decision
+        // figures above, sized from the seats the file seats, so a seat the
+        // restored table holds rows for has a count to file a forgotten
+        // memory under.
+        self.sighting_drops = SightingDrops::for_seats(self.sightings.seat_count());
+        // And Survey's drop memory: begun again, since it remembers a Push
+        // the restored world has not played (never snapshotted, so empty
+        // after a restore, into a fresh world or one that had played on),
+        // and sized for the seats and the room the restored table has
+        // (`survey::Memory::size_for`): never inside a tick.
+        self.scratch.survey.clear();
+        self.scratch.survey.size_for(
+            self.sightings.seat_count(),
+            self.sightings.per_seat(),
+            self.unit_limit,
+        );
         self.credit = restored.credit;
         self.shells = restored.shells;
         self.defend = restored.defend;
@@ -9770,7 +9963,7 @@ mod ids_tests {
         assert_eq!(reloaded.rules_hash(), committed.rules_hash());
         assert_eq!(
             format!("{:016x}", committed.rules_hash()),
-            "1b26c525068bff61",
+            "641055eb0d38815a",
             "the committed table's rules hash is the one every golden names"
         );
     }
@@ -10104,6 +10297,61 @@ mod decision_visits {
             figures(runner.world()),
             vec![Some(Err(NoFigure::NoDecisionYet)); 2],
             "no decision since the restore"
+        );
+    }
+
+    /// The sighting table and the counts of what it forgot are sized from
+    /// the restored seats as the figures are (S3's `tune3`, review 2): a
+    /// two-seat match restored into a world built for three holds rows and a
+    /// count for two seats, and a sighting for the third is refused and
+    /// counted so, never forgotten uncounted.
+    #[test]
+    fn a_restore_sizes_the_sighting_counts_from_its_seats() {
+        let source = crate::runner::Runner::new(world()).unwrap_or_else(|error| panic!("{error}"));
+        let snapshot = source
+            .capture()
+            .unwrap_or_else(|error| panic!("a snapshot: {error:?}"));
+        let mut wider = World::new(&WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 3,
+            rules: source.world().rules().clone(),
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"));
+        let seat = |raw: u8| crate::tables::SeatId::new(raw);
+        assert_eq!(
+            (0..4)
+                .map(|raw| wider.sightings_forgotten_by(seat(raw)))
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(0), None]
+        );
+        snapshot
+            .restore_into(&mut wider)
+            .unwrap_or_else(|error| panic!("a restore: {error:?}"));
+        assert_eq!(
+            (
+                wider.sightings().seat_count(),
+                (0..4)
+                    .map(|raw| wider.sightings_forgotten_by(seat(raw)))
+                    .collect::<Vec<_>>()
+            ),
+            (2, vec![Some(0), Some(0), None, None])
+        );
+        let id = crate::knowledge::AssetId::of_unit(crate::tables::UnitId::new(7))
+            .unwrap_or_else(|error| panic!("an id: {error:?}"));
+        wider.see(
+            seat(2),
+            id,
+            seat(0),
+            crate::knowledge::AssetKind::Unit.id(),
+            crate::tables::NO_BLUEPRINT,
+            [Fx::ZERO; 3],
+            1,
+        );
+        assert_eq!(
+            (wider.sightings().len_of(seat(2)), wider.sightings_refused()),
+            (0, 1),
+            "a seat the restored match does not seat: refused, and counted"
         );
     }
 

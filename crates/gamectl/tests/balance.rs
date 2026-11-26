@@ -143,7 +143,7 @@ use pharmakos_sim::tables::{SeatId, UnitKind};
 /// the scenario files'), then eighteen spread by the 64-bit golden ratio so
 /// that neighbouring entries share no bits.
 ///
-/// PLACEHOLDER: the balance check's seed set — owner, at S3's demo, with `tune3`'s balance re-run (item 152 (1) 2; before it, item 139 (1) ruling 5: it stands for S1, after `tune`'s report).
+/// PLACEHOLDER: the balance check's seed set — owner, at S3's demo, kept by `tune3` with no balance re-run under item 213's answer 22 (item 152 (1) 2; before it, item 139 (1) ruling 5: it stands for S1, after `tune`'s report).
 /// No decision names one: item 90's "tuning seed set" is the rules rows, not
 /// map seeds, and item 127 (3) says only "about twenty seeded matches".
 fn seeds() -> Vec<u64> {
@@ -1333,7 +1333,7 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
 
 /// Item 127 (3)'s three conditions, for one seat of one match.
 ///
-/// PLACEHOLDER: the flags' readings of item 127 (3) — owner, at S3's demo, with `tune3`'s balance re-run (item 152 (1) 2; before it, item 139 (1) ruling 5: they stand for S1, after `tune`'s report).
+/// PLACEHOLDER: the flags' readings of item 127 (3) — owner, at S3's demo, kept by `tune3` with no balance re-run under item 213's answer 22 (item 152 (1) 2; before it, item 139 (1) ruling 5: they stand for S1, after `tune`'s report).
 /// No decision fixes them, and each is a guess: a flat
 /// treasury counts as ONLY-GROWS (`<=`); any `beacon_placed` counts as a new
 /// asset for STALLED, so a free stacked beacon hides a stall until X-12's
@@ -2000,9 +2000,10 @@ fn render_survey(out: &mut String, table: &RulesTable) {
             .saturating_mul(4);
     let _ = writeln!(
         out,
-        "\nSurvey: a sighting is due a refresh at {} s and forgotten at `verifier.reach_memory_ms` \
-         {} s, so reach memory holds {} refresh intervals; the explored cell is {cell} \
-         columns square, and a scout of vision {scout} on its centre {} all of it",
+        "\nSurvey: a sighting is due a refresh at {} s and leaves the reach window \
+         (`verifier.reach_memory_ms`) at {} s, kept and still due past it, so the window holds {} \
+         refresh intervals; the explored cell is {cell} columns square, and a scout of vision \
+         {scout} on its centre {} all of it",
         refresh_s,
         reach.checked_div(1_000).expect("a divisor"),
         reach

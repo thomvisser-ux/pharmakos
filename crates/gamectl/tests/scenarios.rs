@@ -71,7 +71,7 @@ const SCENARIOS: &[&str] = &[
     "scenarios/s3/enemy-known-rule.scenario.jsonc",
     "scenarios/s3/breach-at-a-corner.scenario.jsonc",
     "scenarios/s3/breach-at-a-slant.scenario.jsonc",
-    "scenarios/s3/survey-keeps-a-core-fresh.scenario.jsonc",
+    SURVEY_KEEPS_A_CORE_FRESH,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -752,6 +752,10 @@ const S3_BEATS: &[Beats] = &[
     },
 ];
 
+/// S3's `srvy`: a Survey post keeps an enemy core's sighting fresh over three
+/// Pushes, the last two longer than reach memory.
+const SURVEY_KEEPS_A_CORE_FRESH: &str = "scenarios/s3/survey-keeps-a-core-fresh.scenario.jsonc";
+
 /// The error codes a harness note lists, in the order it lists them.
 fn error_codes(note: &str) -> Vec<String> {
     note.split(|c: char| !(c.is_ascii_alphanumeric()))
@@ -766,51 +770,61 @@ fn error_codes(note: &str) -> Vec<String> {
         .collect()
 }
 
+/// Play `source`, write its events log as the scenario `name`'s fresh
+/// `actual.events.txt`, hold it to the committed `expected.events.txt`, and
+/// hold each of `exact` to be on the log at its tick.
+fn played_on_its_beats(
+    name: &str,
+    source: &str,
+    exact: &[(u32, &str, Option<u8>)],
+) -> scenario::run::Played {
+    let loaded = scenario::load(&root(), Path::new(source))
+        .unwrap_or_else(|failure| panic!("{source}: {failure:?}"));
+    let played = scenario::run::play(&root(), &loaded)
+        .unwrap_or_else(|failure| panic!("{source}: {failure:?}"));
+    let mut log = String::from("# tick\tkind\tseat\n");
+    for event in &played.events {
+        let seat = event
+            .seat
+            .map_or_else(|| "-".to_owned(), |seat| seat.to_string());
+        writeln!(log, "{}\t{}\t{seat}", event.tick, event.kind).expect("a String takes a line");
+    }
+    let dir = pharmakos_gamectl::target_dir()
+        .expect("an integration test runs from a cargo target directory")
+        .join("golden")
+        .join("scenarios")
+        .join(name);
+    std::fs::create_dir_all(&dir).expect("the fresh output's directory");
+    std::fs::write(dir.join("actual.events.txt"), &log).expect("the fresh events log");
+    let committed = root()
+        .join("tests")
+        .join("golden")
+        .join("scenarios")
+        .join(name)
+        .join("expected.events.txt");
+    let expected = std::fs::read_to_string(&committed)
+        .unwrap_or_else(|error| panic!("{}: {error}", committed.display()));
+    assert_eq!(
+        expected.replace("\r\n", "\n"),
+        log,
+        "{name}'s events log moved; say which rule moved it"
+    );
+    for (tick, kind, seat) in exact {
+        assert!(
+            played
+                .events
+                .iter()
+                .any(|event| event.tick == *tick && event.kind == *kind && event.seat == *seat),
+            "{name}: no `{kind}` for {seat:?} at tick {tick}"
+        );
+    }
+    played
+}
+
 #[test]
 fn the_s3_scenarios_pin_their_beats() {
     for beats in S3_BEATS {
-        let loaded = scenario::load(&root(), Path::new(beats.source))
-            .unwrap_or_else(|failure| panic!("{}: {failure:?}", beats.source));
-        let played = scenario::run::play(&root(), &loaded)
-            .unwrap_or_else(|failure| panic!("{}: {failure:?}", beats.source));
-        let mut log = String::from("# tick\tkind\tseat\n");
-        for event in &played.events {
-            let seat = event
-                .seat
-                .map_or_else(|| "-".to_owned(), |seat| seat.to_string());
-            writeln!(log, "{}\t{}\t{seat}", event.tick, event.kind).expect("a String takes a line");
-        }
-        let dir = pharmakos_gamectl::target_dir()
-            .expect("an integration test runs from a cargo target directory")
-            .join("golden")
-            .join("scenarios")
-            .join(beats.name);
-        std::fs::create_dir_all(&dir).expect("the fresh output's directory");
-        std::fs::write(dir.join("actual.events.txt"), &log).expect("the fresh events log");
-        let committed = root()
-            .join("tests")
-            .join("golden")
-            .join("scenarios")
-            .join(beats.name)
-            .join("expected.events.txt");
-        let expected = std::fs::read_to_string(&committed)
-            .unwrap_or_else(|error| panic!("{}: {error}", committed.display()));
-        assert_eq!(
-            expected.replace("\r\n", "\n"),
-            log,
-            "{}'s events log moved; say which rule moved it",
-            beats.name
-        );
-        for (tick, kind, seat) in beats.exact {
-            assert!(
-                played
-                    .events
-                    .iter()
-                    .any(|event| event.tick == *tick && event.kind == *kind && event.seat == *seat),
-                "{}: no `{kind}` for {seat:?} at tick {tick}",
-                beats.name
-            );
-        }
+        let played = played_on_its_beats(beats.name, beats.source, beats.exact);
         let awards: Vec<u32> = played
             .events
             .iter()
@@ -835,4 +849,78 @@ fn the_s3_scenarios_pin_their_beats() {
             beats.name
         );
     }
+}
+
+/// `survey-keeps-a-core-fresh` on its beats (S3's `tune3`): the events log
+/// committed beside its chain, and every figure its header comment gives,
+/// each held here, so that the comment reads a pinned log and not one traced
+/// run. `event_fired` holds only an event's first occurrence (the register's
+/// M-05), so what the scenario is for, a refresh in each of the two Pushes
+/// longer than reach memory, is asserted here and not in the scenario file.
+#[test]
+fn the_survey_scenario_pins_its_beats() {
+    /// Rounds 2 and 3 open on these ticks; the match ends on 25,200.
+    const ROUND_2: u32 = 6_000;
+    const ROUND_3: u32 = 15_600;
+    let played = played_on_its_beats(
+        "survey-keeps-a-core-fresh",
+        SURVEY_KEEPS_A_CORE_FRESH,
+        &[
+            // A scout comes within sight of seat 1's core, in round 1.
+            (3_986, "enemy_beacon_found", Some(0)),
+            // The first refresh and the last.
+            (6_131, "sighting_refreshed", Some(0)),
+            (24_206, "sighting_refreshed", Some(0)),
+        ],
+    );
+    let ticks_of = |kind: &str, seat: u8| -> Vec<u32> {
+        played
+            .events
+            .iter()
+            .filter(|event| event.kind == kind && event.seat == Some(seat))
+            .map(|event| event.tick)
+            .collect()
+    };
+    assert_eq!(
+        ticks_of("enemy_beacon_found", 0),
+        vec![3_986],
+        "the core is found once"
+    );
+    assert_eq!(
+        ticks_of("area_surveyed", 0),
+        Vec::<u32>::new(),
+        "the area is never reported surveyed in the match"
+    );
+    let refreshed = ticks_of("sighting_refreshed", 0);
+    let within = |from: u32, to: u32| {
+        refreshed
+            .iter()
+            .filter(|tick| (from..to).contains(*tick))
+            .count()
+    };
+    assert_eq!(
+        (
+            within(0, ROUND_2),
+            within(ROUND_2, ROUND_3),
+            within(ROUND_3, u32::MAX)
+        ),
+        (0, 9, 10),
+        "no refresh is due in round 1, and each longer Push has its own: {refreshed:?}"
+    );
+    let lost = vec![10_489, 11_032, 14_334, 17_635, 20_933, 24_247];
+    assert_eq!(
+        ticks_of("unit_destroyed", 0),
+        lost,
+        "six of seat 0's units are destroyed"
+    );
+    assert_eq!(
+        ticks_of("kill_credited", 1),
+        lost,
+        "each credited to seat 1 on its tick, and seat 1 is credited with nothing else"
+    );
+    assert_eq!(
+        ticks_of("unit_destroyed", 1),
+        Vec::<u32>::new(),
+        "seat 1 loses no unit"
+    );
 }

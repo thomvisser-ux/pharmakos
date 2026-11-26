@@ -33,7 +33,7 @@
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::knowledge::{AssetId, AssetKind};
-use pharmakos_sim::math::fixed::Fx;
+use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::runner::{MatchPhase, Runner};
 use pharmakos_sim::seams::MandateKind;
@@ -85,10 +85,21 @@ fn seat(raw: u8) -> SeatId {
 }
 
 fn world(seed: u64, seats: u32, segment_lengths_ms: Vec<i32>, round_limit: u32) -> World {
+    world_on(rules(), seed, seats, segment_lengths_ms, round_limit)
+}
+
+/// [`world`] on a table of the caller's.
+fn world_on(
+    rules: RulesTable,
+    seed: u64,
+    seats: u32,
+    segment_lengths_ms: Vec<i32>,
+    round_limit: u32,
+) -> World {
     World::new(&WorldConfig {
         match_seed: seed,
         seats,
-        rules: rules(),
+        rules,
         match_settings: MatchSettings {
             segment_lengths_ms,
             round_limit,
@@ -99,6 +110,11 @@ fn world(seed: u64, seats: u32, segment_lengths_ms: Vec<i32>, round_limit: u32) 
 
 /// A world whose scout sees `vision` voxels, the committed table otherwise.
 fn sighted_world(vision: u32, segment_lengths_ms: Vec<i32>) -> World {
+    world_on(sighted_rules(vision), SEED, 2, segment_lengths_ms, 1)
+}
+
+/// The committed table with a scout that sees `vision` voxels.
+fn sighted_rules(vision: u32) -> RulesTable {
     let mut message = rules().message().clone();
     message
         .units
@@ -106,17 +122,7 @@ fn sighted_world(vision: u32, segment_lengths_ms: Vec<i32>) -> World {
         .and_then(|units| units.scout.as_mut())
         .expect("a scout row")
         .vision_radius_voxels = vision;
-    World::new(&WorldConfig {
-        match_seed: SEED,
-        seats: 2,
-        rules: RulesTable::from_message(&message)
-            .unwrap_or_else(|error| panic!("the edited table: {error}")),
-        match_settings: MatchSettings {
-            segment_lengths_ms,
-            round_limit: 1,
-        },
-    })
-    .unwrap_or_else(|error| panic!("generating the world: {error}"))
+    RulesTable::from_message(&message).unwrap_or_else(|error| panic!("the edited table: {error}"))
 }
 
 fn core(world: &World, of: SeatId) -> BeaconId {
@@ -383,8 +389,8 @@ fn live_scouts(world: &World, of: SeatId) -> usize {
 
 /// [`surveyed`]'s world: seat 0's Survey post twelve columns from its core
 /// toward seat 1's, two scouts, and the far half of the map its probe area.
-fn surveyed_world(seed: u64, seats: u32) -> World {
-    let mut world = world(seed, seats, vec![180_000, 300_000, 480_000], ROUNDS);
+fn surveyed_world(rules: RulesTable, seed: u64, seats: u32) -> World {
+    let mut world = world_on(rules, seed, seats, vec![180_000, 300_000, 480_000], ROUNDS);
     let mine = beacon_at(&world, core(&world, seat(0)));
     let theirs = beacon_at(&world, core(&world, seat(1)));
     let [mx, my] = column(mine);
@@ -432,8 +438,13 @@ fn surveyed_world(seed: u64, seats: u32) -> World {
 /// it lost, its stale sightings with whether each is [`excused`], and the
 /// Push before's drops, scout deaths and fielded scouts.
 fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
+    surveyed_on(rules(), seed, seats)
+}
+
+/// [`surveyed`] on a table of the caller's.
+fn surveyed_on(rules: RulesTable, seed: u64, seats: u32) -> Vec<Lull> {
     let mut runner =
-        Runner::new(surveyed_world(seed, seats)).unwrap_or_else(|error| panic!("{error}"));
+        Runner::new(surveyed_world(rules, seed, seats)).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     let mut lulls = Vec::new();
     let mut track = Track::default();
@@ -473,7 +484,13 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
                         table.kinds()[row],
                         table.assets()[row],
                         now - table.seen_at()[row],
-                        excused(world, &watched, table.assets()[row], table.places()[row]),
+                        excused(
+                            world,
+                            &watched,
+                            table.kinds()[row],
+                            table.assets()[row],
+                            table.places()[row],
+                        ),
                     )
                 })
                 .collect();
@@ -503,10 +520,22 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
     lulls
 }
 
-/// Whether a stale sighting of `asset`, remembered at `place`, is excused,
-/// and how (`Ok`), or why not (`Err`), from what its Push `watched`. Excused
-/// only:
+/// Whether a stale sighting of `asset`, of asset kind `kind`, remembered at
+/// `place`, is excused, and how (`Ok`), or why not (`Err`), from what its
+/// Push `watched`. Excused only:
 ///
+/// * when it is no enemy beacon's, its last drop is not a scout lost, and
+///   its Push dropped it as under threat (`Drop::UnderThreat`): a gun the
+///   seat's scouts saw covered its place, so
+///   it was no destination (decision 12). From rules revision 8 a scout
+///   sights a core from outside the core's gun, so it turns back at the gun's
+///   edge, having renewed the core and whatever else it saw from there, and
+///   a sighting it cannot see from there is not renewed. An enemy beacon's
+///   sighting is never excused this way: a scout that sees the gun over a
+///   beacon sees the beacon. **This excuse stands on a question held for
+///   the owner** (S3's `tune3`, Q1a: whether a unit or structure sighting
+///   under a seen gun should go stale): it states the rules as they stand,
+///   and it goes if the owner rules that such a sighting must be renewed; or
 /// * when its Push dropped it as out of reach and for no other reason
 ///   (`Drop::OutOfReach` alone: never listed, and no scout alone could reach
 ///   it before the Lull); or
@@ -522,6 +551,7 @@ fn surveyed(seed: u64, seats: u32) -> Vec<Lull> {
 fn excused(
     world: &World,
     watched: &Watched<'_>,
+    kind: u8,
     asset: u32,
     place: [Fx; 3],
 ) -> Result<String, String> {
@@ -535,7 +565,18 @@ fn excused(
         return Ok("out of reach alone".to_owned());
     }
     let Some((Drop::ScoutLost, at)) = mine.iter().max_by_key(|(_, at)| *at).copied() else {
-        return Err(format!("dropped as {mine:?}"));
+        // Not lost with a scout: under a gun the seat saw, if it was dropped
+        // so on this Push and is no beacon.
+        return match mine
+            .iter()
+            .filter(|(why, _)| *why == Drop::UnderThreat)
+            .max_by_key(|(_, at)| *at)
+        {
+            Some((_, at)) if kind != AssetKind::Beacon.id() => {
+                Ok(format!("under a gun the seat saw on {at}"))
+            }
+            _ => Err(format!("dropped as {mine:?}")),
+        };
     };
     let Some(death) = watched
         .deaths
@@ -576,9 +617,21 @@ fn excused(
 /// The property: on the committed seeds, at every Lull after seat 0 first
 /// holds an enemy beacon's sighting, while one of its Survey scouts is alive,
 /// every sighting of any kind it holds is inside reach memory, but for one
-/// [`excused`] names: dropped as out of reach alone, or a scout lost with its
+/// [`excused`] names: a sighting other than an enemy beacon's under a gun
+/// the seat saw, one dropped as out of reach alone, or a scout lost with its
 /// replacement's departure shown or the death too late for any replacement.
-/// Any other stale sighting fails.
+/// Any other stale sighting fails, and a stale enemy beacon always does
+/// unless a death or the distance excuses it.
+///
+/// Until rules revision 8 the first excuse was not needed on these seeds: a
+/// scout that sighted a core stood inside its gun, renewed what stood about
+/// the core and often died there (decisions-log item 173 (2)). At the
+/// committed sight no scout is lost on any of them, every enemy beacon is
+/// renewed from the gun's edge, and what stands under the gun out of sight
+/// from there (a commander behind its core) goes stale, dropped as under
+/// threat and never silently. Whether a scout should walk under a gun it
+/// sees for such a sighting is the owner's to rule; the code follows
+/// decision 12 as it stands.
 #[test]
 fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
     let mut fresh: Vec<String> = Vec::new();
@@ -633,18 +686,29 @@ stale: {stale:#?}"
     );
 }
 
+/// The scout's sight until rules revision 8, in voxels: the core gun's own
+/// range, so a scout that sighted a core stood inside the gun.
+const SIGHT_BEFORE_REVISION_8: u32 = 24;
+
 /// Review 3's and 4's seed 29 with two seats, scripted (fix pass 4, item
-/// 3): seat 1's commander, sighted at column (359, 22) behind seat 1's core,
-/// in round 2's Push of five minutes. Its outcome on this head, exactly: the
-/// three scouts seat 0 loses at the core (54 s, 271 s and 286 s into the
-/// Push), a replacement after each, sent off on the first decision it is
-/// decided on, and the commander's sighting 245 s old at round 3's Lull, last
-/// dropped as a scout lost: on the decision after the third death, 13 s
-/// before the Lull, neither living scout could reach it on the walk the
-/// router serves (159 s and 174 s). Rounds 2 and 4 hold it fresh.
+/// 3), on the table it was found on: a scout that sees
+/// [`SIGHT_BEFORE_REVISION_8`] voxels, the committed table otherwise. Seat
+/// 1's commander, sighted at column (359, 22) behind seat 1's core, in round
+/// 2's Push of five minutes. Its outcome, exactly: the three scouts seat 0
+/// loses at the core (54 s, 271 s and 286 s into the Push), a replacement
+/// after each, sent off on the first decision it is decided on, and the
+/// commander's sighting 245 s old at round 3's Lull, last dropped as a scout
+/// lost: on the decision after the third death, 13 s before the Lull, neither
+/// living scout could reach it on the walk the router serves (159 s and
+/// 174 s). Rounds 2 and 4 hold it fresh.
+///
+/// The committed table's scout sees 28 from revision 8, and the same seed
+/// plays otherwise there ([`seed_29_at_the_committed_sight`]); the case
+/// stays scripted at 24 because it is the one that runs the replacement and
+/// the too-late excuse end to end.
 #[test]
 fn seed_29_loses_the_commander_behind_the_core_to_its_third_scout() {
-    let lulls = surveyed(29, 2);
+    let lulls = surveyed_on(sighted_rules(SIGHT_BEFORE_REVISION_8), 29, 2);
     let at = |round: u32| {
         lulls
             .iter()
@@ -690,6 +754,80 @@ fn seed_29_loses_the_commander_behind_the_core_to_its_third_scout() {
     assert!(
         at(2).stale.is_empty() && at(4).stale.is_empty(),
         "rounds 2 and 4 fresh"
+    );
+}
+
+/// Seed 29 with two seats on the committed table, whose scout sights a core
+/// from outside the core gun (rules revision 8). Its outcome, exactly: seat
+/// 0 holds every enemy beacon's sighting fresh at every Lull; it loses no
+/// scout in rounds 2 and 3 and one in round 4 (on tick 14203, replaced on
+/// 14211 and sent off on its first decision); and one sighting is stale at
+/// round 3's Lull and one at round 4's, each dropped as under threat: seat
+/// 1's commander, two columns behind its core, and then a unit of seat 1's.
+/// A scout turns back from a core at the edge of its gun (decision 12), so a
+/// sighting it cannot renew from there goes stale: the question held for the
+/// owner as `tune3`'s Q1a. At the sight before, the same seed loses three
+/// scouts in round 2's Push
+/// ([`seed_29_loses_the_commander_behind_the_core_to_its_third_scout`]).
+#[test]
+fn seed_29_at_the_committed_sight() {
+    let scout = rules().unit(UnitKind::Scout).vision_radius_voxels;
+    let gun = rules().core_weapon().range_voxels;
+    assert!(
+        scout > gun,
+        "the committed scout ({scout}) sights a core from outside its gun ({gun})"
+    );
+    let lulls = surveyed(29, 2);
+    assert_eq!(lulls.len(), 3, "the Lulls of rounds 2, 3 and 4");
+    for lull in &lulls {
+        eprintln!(
+            "round {}: stale {:?}, deaths {:?}, fielded {:?}, drops {:?}",
+            lull.round, lull.stale, lull.deaths, lull.fielded, lull.drops
+        );
+        assert!(
+            lull.beacon.is_none_or(|age| age <= window()),
+            "round {}: every enemy beacon fresh: {:?}",
+            lull.round,
+            lull.beacon
+        );
+        for (_, _, _, verdict) in &lull.stale {
+            assert!(
+                verdict
+                    .as_ref()
+                    .is_ok_and(|how| how.starts_with("under a gun the seat saw on ")),
+                "round {}: a stale sighting was dropped as under threat: {verdict:?}",
+                lull.round
+            );
+        }
+    }
+    assert_eq!(
+        lulls
+            .iter()
+            .map(|lull| (lull.deaths.clone(), lull.fielded.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (vec![], vec![]),
+            (vec![], vec![]),
+            (vec![14203], vec![(14211, 4105, true)]),
+        ],
+        "no scout lost in rounds 2 and 3, and one in round 4, replaced and sent off at once"
+    );
+    assert_eq!(
+        lulls
+            .iter()
+            .map(|lull| {
+                lull.stale
+                    .iter()
+                    .map(|(kind, asset, _, _)| (*kind, *asset))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            vec![],
+            vec![(AssetKind::Commander.id(), 4)],
+            vec![(AssetKind::Unit.id(), 5)],
+        ],
+        "fresh at round 2's Lull, the commander stale at round 3's, a unit at round 4's"
     );
 }
 
@@ -1329,5 +1467,214 @@ fn a_star_of_four_is_toured_round() {
     assert!(
         ages.iter().all(|age| *age <= window()),
         "every sighting fresh at the Lull: ages {ages:?} ticks"
+    );
+}
+
+/// Each tick's walking scouts of seat 0's: unit id and column.
+type Walked = Vec<Vec<(u32, [i32; 2])>>;
+
+/// The runner after `rounds` Pushes, each tick's walking scouts of seat 0's
+/// over them, and the feed the Pushes wrote.
+fn walked_over(world: World, rounds: u32) -> (Runner, Walked, Vec<Event>) {
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
+    let mut feed: Vec<Event> = Vec::new();
+    let mut walked: Walked = Vec::new();
+    for round in 1..=rounds {
+        assert_eq!(runner.begin_push(), Ok(true), "round {round}'s Push");
+        while runner.phase() == MatchPhase::Push {
+            play(&mut runner, 1, &mut feed);
+            let world = runner.world();
+            let walking = scouts_sent(world)
+                .into_iter()
+                .filter(|(id, _, _)| {
+                    world
+                        .units()
+                        .ids()
+                        .iter()
+                        .position(|unit| unit == id)
+                        .and_then(|row| u32::try_from(row).ok())
+                        .is_some_and(|row| {
+                            world.router().state(row)
+                                == pharmakos_sim::pathing::router::WalkState::Walking
+                        })
+                })
+                .map(|(id, at, _)| (id, column(at)))
+                .collect();
+            walked.push(walking);
+        }
+        if runner.phase() == MatchPhase::Recap && round < rounds {
+            runner.end_recap().expect("the recap closes");
+        }
+    }
+    (runner, walked, feed)
+}
+
+/// Hold that no scout walked for a minute inside a box of eight columns, over
+/// windows a hundred ticks apart, and say how many scout-minutes were held.
+fn never_turned_on_the_spot(walked: &[Vec<(u32, [i32; 2])>]) -> usize {
+    /// A minute of ticks: a scout walks over a hundred columns in them.
+    const SPAN: usize = 1_200;
+    /// The windows are a hundred ticks apart.
+    const EVERY: usize = 100;
+    let mut compared: usize = 0;
+    for window in walked.windows(SPAN).step_by(EVERY) {
+        let Some(first) = window.first() else {
+            continue;
+        };
+        for (id, _) in first {
+            // Its column on every tick of the window, if it walked throughout.
+            let columns: Option<Vec<[i32; 2]>> = window
+                .iter()
+                .map(|tick| {
+                    tick.iter()
+                        .find(|(other, _)| other == id)
+                        .map(|(_, at)| *at)
+                })
+                .collect();
+            let Some(columns) = columns else {
+                continue;
+            };
+            let span = |axis: usize| {
+                let on = columns.iter().map(|at| at[axis]);
+                on.clone().max().unwrap_or(0) - on.min().unwrap_or(0)
+            };
+            compared += 1;
+            assert!(
+                span(0).max(span(1)) > 8,
+                "scout {id} walked for {SPAN} ticks inside a box of {} by {} columns about {:?}",
+                span(0),
+                span(1),
+                columns.first()
+            );
+        }
+    }
+    compared
+}
+
+/// No scout turns on the spot at the edge of its sight of a gun, on the
+/// committed table, whose scout sights a core from outside the core's gun
+/// (rules revision 8): the match `scenarios/s3/survey-keeps-a-core-fresh`
+/// played when the defect was found (its probe area then reached north to
+/// row 240), played by the sim alone. Seat 0's post stands beside its core
+/// with two scouts and seat 1's corner of the map as its probe area, on the
+/// golden seed, for a Push of 300 s and one of 480 s.
+///
+/// A known threat is what a seat sees on the tick, so the cells under seat
+/// 1's core gun are closed to a scout only while it sees the core. A scout
+/// that picked its nearest open cell afresh on every decision stood on the
+/// edge of its sight of the core from the tick it found it (4226) to the end
+/// of the match, turning toward a cell under the gun, away from it and back,
+/// over the same two columns, because the cell stayed unexplored and was open
+/// again whenever the gun left its sight. A scout walking to a cell whose
+/// scan column a seen gun covers has now looked at it
+/// (`survey::seen_under_a_gun`), so the cell draws it back only once, a
+/// reach memory later. Held here: no scout walks for a minute inside a box
+/// of eight columns. (A scout that sights a gun over the cell it set off for
+/// does turn round, once, and walks back the way it came: that is the rule,
+/// and a box of eight columns over a minute lets it.)
+#[test]
+fn a_walking_scout_is_never_turned_on_the_spot_at_the_edge_of_its_sight() {
+    let mut world = world(0x0000_0000_CA5C_ADED, 2, vec![300_000, 480_000], 2);
+    let theirs = beacon_at(&world, core(&world, seat(1)));
+    let post_at = world.standing_point([360, 30, 0]);
+    let post = survey_post(&mut world, post_at);
+    world.set_scouts(post, 2);
+    world
+        .add_area(post, AreaKind::Probe, theirs, boxed(200, 240, 383, 383))
+        .expect("the probe area fits");
+    let (_, walked, feed) = walked_over(world, 2);
+    assert!(
+        feed.iter()
+            .any(|event| event.kind == EventKind::EnemyBeaconFound && event.seat == Some(seat(0))),
+        "the recipe: a scout comes within sight of seat 1's core"
+    );
+    let compared = never_turned_on_the_spot(&walked);
+    assert!(
+        compared >= 50,
+        "the scouts walked whole minutes of both Pushes, or this compares nothing: {compared}"
+    );
+}
+
+/// A scout that sees a gun over the scan column it is walking to has looked
+/// at that cell: the cell is marked on that tick, as a scan from its column
+/// marks it, and is due a look again only once the mark is older than reach
+/// memory (S3's plan, decision 7). The same match as
+/// [`a_walking_scout_is_never_turned_on_the_spot_at_the_edge_of_its_sight`],
+/// with one scout and one cell, whose scan column lies under seat 1's core
+/// gun.
+///
+/// Without the mark the cell stayed unexplored for ever, and open again on
+/// every tick the seat did not see the gun (a known threat is what a seat
+/// sees on the tick): the scout walked up to the edge of its sight of the
+/// core, turned for home, and turned back as soon as the core left its
+/// sight, for the rest of the match. With several cells to scan it left for
+/// the next one and came back to this one after each, as often as it had
+/// nothing nearer.
+///
+/// Held: the cell is marked from outside the gun on the tick the core is
+/// found, the area is reported surveyed, the scout never stands inside the
+/// gun and lives, it never turns on the spot, and in the second Push, longer
+/// than reach memory, it looks again and the mark is renewed.
+#[test]
+fn a_scout_that_sees_a_gun_over_its_scan_cell_has_looked_at_it() {
+    let mut world = world(0x0000_0000_CA5C_ADED, 2, vec![300_000, 480_000], 2);
+    let theirs = beacon_at(&world, core(&world, seat(1)));
+    let post_at = world.standing_point([360, 30, 0]);
+    let post = survey_post(&mut world, post_at);
+    world.set_scouts(post, 1);
+    // One coarse cell: columns 336 to 351 both ways, scanned from (344, 344).
+    world
+        .add_area(post, AreaKind::Probe, theirs, boxed(336, 336, 351, 351))
+        .expect("the probe area fits");
+    let scan_from = world.standing_point([344, 344, 0]);
+    let gun = Sq::of_radius(Fx::from_voxels(world.rules().core_weapon().range_voxels));
+    assert!(
+        Sq::between(scan_from, theirs) <= gun,
+        "the recipe: the cell's scan column lies under seat 1's core gun"
+    );
+    let cell = pharmakos_sim::survey::cell_of([344, 344]).expect("a cell");
+    let (runner, walked, feed) = walked_over(world, 2);
+    let world = runner.world();
+
+    let found = feed
+        .iter()
+        .find(|event| event.kind == EventKind::EnemyBeaconFound && event.seat == Some(seat(0)))
+        .map(|event| event.tick.raw())
+        .expect("the scout comes within sight of seat 1's core");
+    assert!(found < 6_000, "found in the first Push: {found}");
+    let surveyed: Vec<u32> = feed
+        .iter()
+        .filter(|event| event.kind == EventKind::AreaSurveyed && event.seat == Some(seat(0)))
+        .map(|event| event.tick.raw())
+        .collect();
+    assert_eq!(
+        surveyed,
+        vec![found],
+        "the area is reported surveyed once, on the tick the scout saw the gun over its one cell"
+    );
+    let marked = world
+        .explored()
+        .explored_on(seat(0), cell)
+        .expect("the cell is marked");
+    assert!(
+        marked > found + window(),
+        "the second Push is longer than reach memory, so the scout looked again: marked on {marked}, first on {found}"
+    );
+
+    assert_eq!(live_scouts(world, seat(0)), 1, "the scout lives");
+    let nearest = walked
+        .iter()
+        .flatten()
+        .map(|(_, [x, y])| {
+            let on = |c: i32| Fx::from_voxels(i16::try_from(c).expect("a column"));
+            Sq::between([on(*x), on(*y), theirs[2]], theirs)
+        })
+        .min()
+        .expect("the scout walked");
+    assert!(nearest > gun, "the scout never walked under the gun");
+    let compared = never_turned_on_the_spot(&walked);
+    assert!(
+        compared >= 50,
+        "the scout walked whole minutes of both Pushes, or this compares nothing: {compared}"
     );
 }

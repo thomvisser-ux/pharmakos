@@ -1081,6 +1081,46 @@ pub enum SnapshotError {
         /// The room.
         room: u32,
     },
+    /// One of the match's seats holds more list-settings rows (Build
+    /// targets, protected areas and Survey probe areas together) than its
+    /// room, [`crate::world::seat_list_room_of`] of the snapshot's seat
+    /// count, which play enforces at every settings commit
+    /// (`World::check_list_room` fails the step `targets_unwritten`). The
+    /// file describes no match this sim plays (S3's `tune3`, E17).
+    OverListRoom {
+        /// The seat: one of the match's.
+        seat: u8,
+        /// How many list rows the snapshot gives its beacons.
+        rows: u32,
+        /// The most one seat's lists hold at the snapshot's seat count.
+        room: u32,
+    },
+    /// One of the match's seats holds more Attack avoid areas than its room,
+    /// [`crate::world::seat_avoid_room_of`] of the snapshot's seat count,
+    /// which play enforces at every Attack commit (`World::avoid_fits`; S3's
+    /// `tune3`, E17).
+    OverAvoidRoom {
+        /// The seat: one of the match's.
+        seat: u8,
+        /// How many avoid areas the snapshot gives its Attack beacons.
+        areas: u32,
+        /// The most one seat's Attack beacons hold at the snapshot's seat
+        /// count.
+        room: u32,
+    },
+    /// One of the match's seats holds more sightings than its room
+    /// ([`crate::tables::SightingTable::per_seat`]), which play never passes:
+    /// a seat at its room forgets its stalest for each new sighting
+    /// (`SightingTable::see`). Restored, that seat's rows would take the
+    /// room another seat's sightings are owed (S3's `tune3`, E17).
+    OverSightingRoom {
+        /// The seat: one of the match's.
+        seat: u8,
+        /// How many sightings the snapshot gives it.
+        rows: u32,
+        /// The most one seat remembers in this world.
+        room: u32,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -1165,6 +1205,22 @@ impl core::fmt::Display for SnapshotError {
                 f,
                 "the snapshot holds {charges} planted charges and a match of its seat count \
                  holds at most {room}"
+            ),
+            SnapshotError::OverListRoom { seat, rows, room } => write!(
+                f,
+                "the snapshot gives seat {seat}'s beacons {rows} list rows (build targets, \
+                 protected areas and probe areas), past its room: a seat of a match of its \
+                 seat count holds at most {room}"
+            ),
+            SnapshotError::OverAvoidRoom { seat, areas, room } => write!(
+                f,
+                "the snapshot gives seat {seat}'s Attack beacons {areas} avoid areas, past its \
+                 room: a seat of a match of its seat count holds at most {room}"
+            ),
+            SnapshotError::OverSightingRoom { seat, rows, room } => write!(
+                f,
+                "the snapshot gives seat {seat} {rows} sightings, past its room: a seat of this \
+                 world remembers at most {room}"
             ),
         }
     }
@@ -1570,7 +1626,11 @@ impl Snapshot {
     /// is refused ([`SnapshotError::OverCeiling`]); one with fewer restores,
     /// and its derived indexes are rebuilt for the restored tables before
     /// anything is written, but a world built under another configuration
-    /// resumes with that configuration's ceiling, not the saved match's.
+    /// resumes with that configuration's ceiling, not the saved match's. What
+    /// the world keeps a seat (the decision figures, the sighting table's
+    /// runs, the counts of sightings forgotten) is counted again from the
+    /// snapshot's seats, while how many sightings one seat remembers stays
+    /// the receiving world's, with its unit ceiling.
     ///
     /// The map is regenerated from [`Snapshot::match_seed`] under the receiving
     /// world's rules and the snapshot's own seat count, and the modified chunks
@@ -1826,7 +1886,8 @@ impl Snapshot {
         let licences = self.restore_licences(&seats)?;
 
         let targets = self.restore_targets(world)?;
-        let sightings = self.restore_sightings(world)?;
+        Self::check_list_rooms(&beacons, &targets, &attack, seat_count)?;
+        let sightings = self.restore_sightings(world, seat_count)?;
         let credit = self.restore_credit(world)?;
 
         let (voxels, chunks, features, bore, generated) = self.restore_store(world, seat_count)?;
@@ -1886,6 +1947,59 @@ impl Snapshot {
         Ok(Closed(world))
     }
 
+    /// Each of the match's seats keeps to its own rooms for the lists its
+    /// beacons hold (S3's `tune3`, E17), counted as play counts them
+    /// (`World::check_list_room`, `World::avoid_fits`): a row is its beacon's
+    /// seat's. A row whose beacon the file does not hold is no seat's, and
+    /// the tables' own cross-checks refuse it.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::OverListRoom`] and [`SnapshotError::OverAvoidRoom`].
+    fn check_list_rooms(
+        beacons: &BeaconTable,
+        targets: &TargetTable,
+        attack: &crate::attack::AttackTable,
+        seat_count: u32,
+    ) -> Result<(), SnapshotError> {
+        let seat_of = |beacon: BeaconId| {
+            beacons
+                .row_of(beacon)
+                .ok()
+                .and_then(|row| beacons.seats().get(row.index()).copied())
+        };
+        let held = |seat: u8, holders: &mut dyn Iterator<Item = BeaconId>| {
+            holders.fold(0_u32, |sum, beacon| {
+                if seat_of(beacon) == Some(seat) {
+                    sum.saturating_add(1)
+                } else {
+                    sum
+                }
+            })
+        };
+        let list_room = crate::world::seat_list_room_of(seat_count);
+        let avoid_room = crate::world::seat_avoid_room_of(seat_count);
+        for seat in (0..=u8::MAX).take(crate::math::index::row(seat_count)) {
+            let rows = held(seat, &mut targets.beacons().iter().copied());
+            if rows > list_room {
+                return Err(SnapshotError::OverListRoom {
+                    seat,
+                    rows,
+                    room: list_room,
+                });
+            }
+            let areas = held(seat, &mut attack.avoid().iter().map(|(by, _)| *by));
+            if areas > avoid_room {
+                return Err(SnapshotError::OverAvoidRoom {
+                    seat,
+                    areas,
+                    room: avoid_room,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Every beacon's list settings, checked before anything is written.
     ///
     /// # Errors
@@ -1937,19 +2051,25 @@ impl Snapshot {
     /// Returns [`SnapshotError::Ragged`], including when the `(seat, asset)`
     /// key is not strictly ascending — which is the order the table's own
     /// search assumes, so a file that broke it would restore into a table whose
-    /// lookups silently missed.
-    fn restore_sightings(&self, world: &World) -> Result<SightingTable, SnapshotError> {
+    /// lookups silently missed; [`SnapshotError::OutOfRange`] for a row of a
+    /// seat the snapshot does not seat; and
+    /// [`SnapshotError::OverSightingRoom`] for a seat holding more than its
+    /// room. The table itself refuses each
+    /// ([`SightingTable::restore`]), so no table is ever built that its own
+    /// rules do not allow.
+    fn restore_sightings(
+        &self,
+        world: &World,
+        seat_count: u32,
+    ) -> Result<SightingTable, SnapshotError> {
         // A sighting is taken on a tick already played (S3's `pred`, fix pass
         // 1): freshness reads its age as the snapshot's tick less it.
         if self.sighting_seen_at.iter().any(|seen| *seen > self.tick) {
             return Err(SnapshotError::OutOfRange("sighting_seen_at"));
         }
-        let capacity = world.sightings().capacity();
-        let mut sightings =
-            SightingTable::with_room(world.seats().len(), world.sightings().per_seat());
-        if !sightings.restore(
-            capacity,
-            SightingColumns {
+        let mut sightings = SightingTable::with_room(seat_count, world.sightings().per_seat());
+        sightings
+            .restore(SightingColumns {
                 seat: self.sighting_seat.clone(),
                 asset: self.sighting_asset.clone(),
                 owner: self.sighting_owner.clone(),
@@ -1958,10 +2078,16 @@ impl Snapshot {
                 at: points_from_axes(&self.sighting_at)
                     .ok_or(SnapshotError::Ragged("sighting_at"))?,
                 seen_at: self.sighting_seen_at.clone(),
-            },
-        ) {
-            return Err(SnapshotError::Ragged("sighting"));
-        }
+            })
+            .map_err(|refused| match refused {
+                crate::tables::SightingsRefused::Ragged => SnapshotError::Ragged("sighting"),
+                crate::tables::SightingsRefused::Unseated { .. } => {
+                    SnapshotError::OutOfRange("sighting_seat")
+                }
+                crate::tables::SightingsRefused::OverRoom { seat, rows, room } => {
+                    SnapshotError::OverSightingRoom { seat, rows, room }
+                }
+            })?;
         Ok(sightings)
     }
 

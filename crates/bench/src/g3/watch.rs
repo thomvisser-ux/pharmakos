@@ -24,7 +24,11 @@
 //!   page count by page count: a difference of means, not a cost per move.
 //! * **Sightings** (E17): each seat's rows of the sim's sighting table after
 //!   every tick, `SightingTable::len_of`, and the peak against the table's
-//!   room per seat, `SightingTable::per_seat`.
+//!   room per seat, `SightingTable::per_seat`; and what the sim itself
+//!   counted over the segment, the memories each seat forgot for room
+//!   (`World::sightings_forgotten_by`) and the sightings the table refused
+//!   (`World::sightings_refused`). A seat that forgot nothing held its true
+//!   peak; one that forgot any held a peak the room cut short.
 //! * **The breach search** (`attack.rs`'s `breach_search`, ~133 and ~140), as
 //!   a probe of its cost on the gate's world: once a minute, from every live
 //!   Attack beacon's column to every enemy core's own column (a goal no walker
@@ -442,6 +446,12 @@ pub struct WatchReport {
     pub sightings: Vec<(u32, u64)>,
     /// The sighting table's room per seat.
     pub sighting_room: u32,
+    /// The memories each seat forgot for room over the segment, in seat order
+    /// (the sim's own count, `World::sightings_forgotten_by`).
+    pub forgotten: Vec<u64>,
+    /// The sightings the table refused outright over the segment, which its
+    /// sizing rules out (`World::sightings_refused`).
+    pub sightings_refused: u64,
     /// Each minute's breach probe.
     pub breach: Vec<BreachProbe>,
     /// The sim's own refused-search counts at the end: spent its expansions,
@@ -451,6 +461,71 @@ pub struct WatchReport {
     /// own (`pharmakos_sim::digest` over each tick's hash, little-endian), so
     /// it reads beside `g3_raids_segments`' RAIDS line.
     pub chain_digest: u64,
+}
+
+/// The sim's own counts of the sightings it dropped, read at one moment.
+struct Dropped {
+    /// The memories each seat forgot for room, in the order the seats were
+    /// asked for.
+    forgotten: Vec<u64>,
+    /// The sightings the table refused outright.
+    refused: u64,
+}
+
+impl Dropped {
+    /// The world's counts for `seats`. A seat the world does not seat is
+    /// drift, never a count of nothing.
+    fn read(world: &World, seats: &[SeatId]) -> Result<Dropped, Error> {
+        Dropped::of(
+            seats,
+            |seat| world.sightings_forgotten_by(seat),
+            world.sightings_refused(),
+        )
+    }
+
+    /// The counts for `seats` as `forgotten_by` gives each, with `refused`
+    /// beside them. A seat with no count is drift, never zero. Pure.
+    fn of(
+        seats: &[SeatId],
+        forgotten_by: impl Fn(SeatId) -> Option<u64>,
+        refused: u64,
+    ) -> Result<Dropped, Error> {
+        let mut forgotten = Vec::with_capacity(seats.len());
+        for seat in seats {
+            forgotten.push(forgotten_by(*seat).ok_or_else(|| {
+                Error::Drift(format!(
+                    "the world keeps no forgotten-sightings count for seat {}, which the gate \
+                     seats",
+                    seat.raw()
+                ))
+            })?);
+        }
+        Ok(Dropped { forgotten, refused })
+    }
+
+    /// What was dropped since `before`, count by count. A count that ran
+    /// backwards, or a second read that names other seats, is drift.
+    fn since(&self, before: &Dropped) -> Result<Dropped, Error> {
+        let backwards = || {
+            Error::Drift("a count of dropped sightings ran backwards over the segment".to_owned())
+        };
+        if self.forgotten.len() != before.forgotten.len() {
+            return Err(Error::Drift(
+                "the two reads of the forgotten sightings name different seats".to_owned(),
+            ));
+        }
+        let mut forgotten = Vec::with_capacity(self.forgotten.len());
+        for (now, then) in self.forgotten.iter().zip(&before.forgotten) {
+            forgotten.push(now.checked_sub(*then).ok_or_else(backwards)?);
+        }
+        Ok(Dropped {
+            forgotten,
+            refused: self
+                .refused
+                .checked_sub(before.refused)
+                .ok_or_else(backwards)?,
+        })
+    }
 }
 
 /// Play the gate's segment with raids on `seed`, polling, counting and
@@ -484,6 +559,8 @@ pub fn measure(root: &std::path::Path, seed: u64, segment_ms: i32) -> Result<Wat
         });
     }
     let per_seat = hosted::world(&surface)?.sightings().per_seat();
+    let seats: Vec<SeatId> = pollers.iter().map(|poller| poller.seat).collect();
+    let dropped_before = Dropped::read(hosted::world(&surface)?, &seats)?;
     let mut peaks: Vec<(u32, u64)> = vec![(0, 0); pollers.len()];
     let mut probes: Vec<BreachProbe> = Vec::new();
     let mut played: u64 = 0;
@@ -525,6 +602,7 @@ pub fn measure(root: &std::path::Path, seed: u64, segment_ms: i32) -> Result<Wat
         }
     }
     let counts = hosted::world(&surface)?.attack_counts();
+    let dropped = Dropped::read(hosted::world(&surface)?, &seats)?.since(&dropped_before)?;
     Ok(WatchReport {
         seed,
         rules_hash: gate.provenance.bench_rules_hash,
@@ -534,6 +612,8 @@ pub fn measure(root: &std::path::Path, seed: u64, segment_ms: i32) -> Result<Wat
         listings: pollers.into_iter().map(|poller| poller.done).collect(),
         sightings: peaks,
         sighting_room: per_seat,
+        forgotten: dropped.forgotten,
+        sightings_refused: dropped.refused,
         breach: probes,
         sim_refused: (counts.breach_exhausted, counts.breach_no_way),
         chain_digest: pharmakos_sim::digest(&chain),
@@ -701,31 +781,41 @@ pub fn recompute_notice(report: &WatchReport, os: &str) -> String {
     )
 }
 
-/// E17's sightings notice: each seat's own peak, and when a seat's peak is
-/// the table's room, that its true peak is not known from this figure (the
-/// table keeps no more and counts nothing it drops). Pure.
+/// E17's sightings notice: each seat's own peak beside the memories the sim
+/// counted it forgetting for room. A seat that forgot none held its true
+/// peak, provided the table refused no sighting over the segment (refusals
+/// are counted for all the seats together, so one refusal leaves every
+/// seat's peak unproven); a seat that forgot any held a peak the room cut
+/// short, and the notice says so in capitals; a seat with no count is said to
+/// have none, never read as zero. Pure.
 #[must_use]
 pub fn sightings_notice(report: &WatchReport, os: &str) -> String {
     let seats: Vec<String> = report
         .sightings
         .iter()
         .enumerate()
-        .map(|(seat, (rows, tick))| {
-            if *rows >= report.sighting_room {
-                format!(
-                    "seat {seat} {rows} at tick {tick}, AT THE ROOM: its true peak is not known \
-                     from this figure"
-                )
-            } else {
-                format!("seat {seat} {rows} at tick {tick}")
+        .map(|(seat, (rows, tick))| match report.forgotten.get(seat) {
+            Some(0) if report.sightings_refused == 0 => {
+                format!("seat {seat} {rows} at tick {tick}, none forgotten for room: its true peak")
             }
+            Some(0) => format!(
+                "seat {seat} {rows} at tick {tick}, none forgotten for room, but SIGHTINGS WERE \
+                 REFUSED: its true peak is not known"
+            ),
+            Some(forgotten) => format!(
+                "seat {seat} {rows} at tick {tick}, {forgotten} FORGOTTEN FOR ROOM: the room cut \
+                 its peak short"
+            ),
+            None => format!("seat {seat} {rows} at tick {tick}, NO COUNT of what it forgot"),
         })
         .collect();
     format!(
         "::notice title=G3' sightings::on {os}, the most sighting rows each seat held after a \
-         tick over the gate's segment (E17): {}, against the table's {} a seat",
+         tick over the gate's segment (E17), and the memories the sim counted it forgetting for \
+         room: {}, against the table's {} a seat; {} sightings refused outright",
         seats.join(", "),
         report.sighting_room,
+        report.sightings_refused,
     )
 }
 
@@ -823,6 +913,7 @@ mod tests {
     }
 
     fn report(listings: Vec<Vec<Listing>>, sightings: Vec<(u32, u64)>) -> WatchReport {
+        let forgotten = vec![0; sightings.len()];
         WatchReport {
             seed: 1,
             rules_hash: 2,
@@ -832,6 +923,8 @@ mod tests {
             listings,
             sightings,
             sighting_room: 64,
+            forgotten,
+            sightings_refused: 0,
             breach: Vec::new(),
             sim_refused: (0, 0),
             chain_digest: 4,
@@ -867,20 +960,93 @@ mod tests {
         );
     }
 
-    /// C6: each seat's own peak is printed, and a peak at the room says the
-    /// true peak is unknown, per seat (O9's mutant read seat 0's alone).
+    /// C6: each seat's own peak is printed beside its own forgotten count
+    /// (O9's mutant read seat 0's alone): a seat that forgot none held its
+    /// true peak whatever the room, a seat that forgot any is said to have
+    /// been cut short, and the refused count closes the line.
     #[test]
-    fn each_seats_peak_is_its_own() {
-        let line = sightings_notice(
-            &report(Vec::new(), vec![(64, 1), (10, 5), (63, 7)]),
-            "linux",
-        );
+    fn each_seats_peak_and_forgotten_count_are_its_own() {
+        let mut held = report(Vec::new(), vec![(64, 1), (10, 5), (63, 7)]);
+        held.forgotten = vec![0, 3, 0];
         assert_eq!(
-            line,
+            sightings_notice(&held, "linux"),
             "::notice title=G3' sightings::on linux, the most sighting rows each seat held after \
-             a tick over the gate's segment (E17): seat 0 64 at tick 1, AT THE ROOM: its true \
-             peak is not known from this figure, seat 1 10 at tick 5, seat 2 63 at tick 7, \
-             against the table's 64 a seat"
+             a tick over the gate's segment (E17), and the memories the sim counted it forgetting \
+             for room: seat 0 64 at tick 1, none forgotten for room: its true peak, seat 1 10 at \
+             tick 5, 3 FORGOTTEN FOR ROOM: the room cut its peak short, seat 2 63 at tick 7, none \
+             forgotten for room: its true peak, against the table's 64 a seat; 0 sightings \
+             refused outright"
         );
+        // A refusal is counted for all the seats together, so with one no
+        // seat's peak is called its true peak, whatever it forgot.
+        held.sightings_refused = 2;
+        assert_eq!(
+            sightings_notice(&held, "linux"),
+            "::notice title=G3' sightings::on linux, the most sighting rows each seat held after \
+             a tick over the gate's segment (E17), and the memories the sim counted it forgetting \
+             for room: seat 0 64 at tick 1, none forgotten for room, but SIGHTINGS WERE REFUSED: \
+             its true peak is not known, seat 1 10 at tick 5, 3 FORGOTTEN FOR ROOM: the room cut \
+             its peak short, seat 2 63 at tick 7, none forgotten for room, but SIGHTINGS WERE \
+             REFUSED: its true peak is not known, against the table's 64 a seat; 2 sightings \
+             refused outright"
+        );
+    }
+
+    /// A seat with a peak and no forgotten count is never read as having
+    /// forgotten nothing.
+    #[test]
+    fn a_seat_with_no_forgotten_count_is_not_read_as_zero() {
+        let mut held = report(Vec::new(), vec![(5, 1), (6, 2)]);
+        held.forgotten = vec![0];
+        let line = sightings_notice(&held, "linux");
+        assert!(
+            line.contains("seat 1 6 at tick 2, NO COUNT of what it forgot"),
+            "{line}"
+        );
+    }
+
+    /// A seat the world keeps no count for is drift naming the seat, never a
+    /// count of nothing (review 2's mutant B3b).
+    #[test]
+    fn a_seat_with_no_count_in_the_world_is_drift_not_zero() {
+        let counts = |seat: SeatId| (seat.raw() < 2).then_some(u64::from(seat.raw()) + 3);
+        let read = Dropped::of(&[SeatId::new(0), SeatId::new(1)], counts, 4)
+            .expect("both seats have a count");
+        assert_eq!((read.forgotten, read.refused), (vec![3, 4], 4));
+        match Dropped::of(&[SeatId::new(0), SeatId::new(5)], counts, 4) {
+            Err(Error::Drift(words)) => assert!(words.contains("seat 5"), "{words}"),
+            other => panic!(
+                "a seat with no count: {:?}",
+                other.map(|read| read.forgotten)
+            ),
+        }
+    }
+
+    /// The drops over a segment are the end's counts less the start's, seat
+    /// by seat, and a count that ran backwards or a seat list that changed is
+    /// drift, never a wrapped or clamped figure.
+    #[test]
+    fn the_drops_over_a_segment_are_a_checked_difference() {
+        let before = Dropped {
+            forgotten: vec![1, 0, 7],
+            refused: 2,
+        };
+        let after = Dropped {
+            forgotten: vec![4, 0, 7],
+            refused: 5,
+        };
+        let over = after.since(&before).expect("counts that only grew");
+        assert_eq!((over.forgotten, over.refused), (vec![3, 0, 0], 3));
+        assert!(matches!(before.since(&after), Err(Error::Drift(_))));
+        let fewer = Dropped {
+            forgotten: vec![1, 0],
+            refused: 2,
+        };
+        assert!(matches!(after.since(&fewer), Err(Error::Drift(_))));
+        let refused_back = Dropped {
+            forgotten: vec![4, 0, 7],
+            refused: 1,
+        };
+        assert!(matches!(refused_back.since(&before), Err(Error::Drift(_))));
     }
 }

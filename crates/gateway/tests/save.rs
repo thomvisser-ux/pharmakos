@@ -1116,18 +1116,24 @@ fn a_saved_notebook_past_its_bound_is_refused() {
 }
 
 /// A committed version-3 save fixture's text, its stamp's `verifier_version`
-/// written as this build's (`pharmakos_verifier::VERIFIER_VERSION`).
+/// and `rules_hash` written as this build's
+/// (`pharmakos_verifier::VERIFIER_VERSION` and the committed table's hash).
 ///
 /// The fixtures pin the save FORMAT, version 3, as main wrote it; the
-/// verifier stamp is not what they test, and `SavedMatch::check` refuses a
-/// save stamped by another verifier (spec section 3), so without this every
-/// `VERIFIER_VERSION` bump would have to edit them. `check` reads no seal's
-/// `report_hash` (its stamp half compares the rules hash, the verifier
-/// version and the snapshot version), so those lines are left as written.
-/// The member must stand exactly once, or the fixture is not the file this
-/// reads, and the test fails saying so.
+/// stamp's verifier and rules table are not what they test, and
+/// `SavedMatch::check` refuses a save stamped by another verifier or made
+/// under another rules table (spec section 3), so without this every
+/// `VERIFIER_VERSION` bump and every rules revision would have to edit them.
+/// The saved state itself is left as main wrote it: a revision whose rows the
+/// state does not carry (rules revision 8's scout sight and Spire build time,
+/// S3's `tune3`, the first since the fixtures were written) restores it as it
+/// stands, and one that changed what a snapshot holds would raise the
+/// snapshot version, which this does not rewrite, and be refused by `check`.
+/// `check` reads no seal's `report_hash` (its stamp half compares the rules
+/// hash, the verifier version and the snapshot version), so those lines are
+/// left as written. Each member must stand exactly once, or the fixture is
+/// not the file this reads, and the test fails saying so.
 fn version_3_fixture(name: &str) -> String {
-    const MEMBER: &str = "\"verifier_version\": \"";
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
@@ -1135,19 +1141,33 @@ fn version_3_fixture(name: &str) -> String {
             .join(name),
     )
     .unwrap_or_else(|error| panic!("the version-3 fixture {name}: {error}"));
-    assert_eq!(
-        text.matches(MEMBER).count(),
-        1,
-        "{name} carries its stamp's `verifier_version` exactly once"
+    let text = restamped(
+        name,
+        &text,
+        "verifier_version",
+        pharmakos_verifier::VERIFIER_VERSION,
     );
-    let (before, after) = text.split_once(MEMBER).expect("counted once above");
+    restamped(
+        name,
+        &text,
+        "rules_hash",
+        &pharmakos_sim::hex(rules().rules_hash()),
+    )
+}
+
+/// `text` with the string value of its one `member` replaced by `value`.
+fn restamped(name: &str, text: &str, member: &str, value: &str) -> String {
+    let lead = format!("\"{member}\": \"");
+    assert_eq!(
+        text.matches(&lead).count(),
+        1,
+        "{name} carries its stamp's `{member}` exactly once"
+    );
+    let (before, after) = text.split_once(&lead).expect("counted once above");
     let (_, rest) = after
         .split_once('"')
-        .unwrap_or_else(|| panic!("{name}: the `verifier_version` value is unterminated"));
-    format!(
-        "{before}{MEMBER}{}\"{rest}",
-        pharmakos_verifier::VERIFIER_VERSION
-    )
+        .unwrap_or_else(|| panic!("{name}: the `{member}` value is unterminated"));
+    format!("{before}{lead}{value}\"{rest}")
 }
 
 /// A save main wrote before the save carried the last Push (format version 3,

@@ -450,6 +450,23 @@ pub fn render_json(result: &NightlyResult) -> Result<String, Failure> {
                 String::from("hunts_unlaunched"),
                 Json::Array(seed.hunts_unlaunched.iter().map(|n| number(n)).collect()),
             ),
+            (
+                String::from("audit"),
+                Json::Array(
+                    seed.ending
+                        .audit
+                        .iter()
+                        .map(|line| {
+                            Json::Object(vec![
+                                (String::from("seat"), number(&line.seat)),
+                                (String::from("held"), number(&line.held)),
+                                (String::from("destroyed"), number(&line.destroyed)),
+                                (String::from("beacons_lost"), number(&line.beacons_lost)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
         ]);
         lines.push(format!("    {}", write(&entry)));
     }
@@ -503,10 +520,21 @@ pub fn render_text(result: &NightlyResult) -> String {
                 format!("seat {seat} {}", rounds.join("/"))
             })
             .collect();
+        let audited: Vec<String> = seed
+            .ending
+            .audit
+            .iter()
+            .map(|line| {
+                format!(
+                    "seat {} held {} destroyed {} lost {} beacon(s)",
+                    line.seat, line.held, line.destroyed, line.beacons_lost
+                )
+            })
+            .collect();
         let _ = writeln!(
             out,
             "  {}  arm on seat {}: {} after {} round(s), tick {}, won by {}: {}; launches by \
-             round {}; hunts never launched seat 0 {}, seat 1 {}",
+             round {}; hunts never launched seat 0 {}, seat 1 {}; the audit: {}",
             seeds::spell(seed.seed),
             seed.arm_seat,
             seed.ending.reason,
@@ -520,7 +548,12 @@ pub fn render_text(result: &NightlyResult) -> String {
             seed.outcome.name(),
             launched.join(", "),
             seed.hunts_unlaunched[0],
-            seed.hunts_unlaunched[1]
+            seed.hunts_unlaunched[1],
+            if audited.is_empty() {
+                String::from("no seat")
+            } else {
+                audited.join(", ")
+            }
         );
     }
     let _ = write!(
@@ -560,7 +593,7 @@ mod tests {
     };
     use crate::cli::Operator;
     use crate::exit::Exit;
-    use crate::scenario::run::{Ending, Fired};
+    use crate::scenario::run::{Audited, Ending, Fired};
 
     fn seed(outcome: ArmOutcome) -> SeedResult {
         SeedResult {
@@ -571,6 +604,20 @@ mod tests {
                 reason: "round_limit",
                 end_tick: 1,
                 rounds: 1,
+                audit: vec![
+                    Audited {
+                        seat: 0,
+                        held: 1_200,
+                        destroyed: 300,
+                        beacons_lost: 0,
+                    },
+                    Audited {
+                        seat: 1,
+                        held: 900,
+                        destroyed: 0,
+                        beacons_lost: 2,
+                    },
+                ],
             },
             outcome,
             launches: [vec![0], vec![0]],
@@ -641,7 +688,8 @@ mod tests {
             .expect("the first seed's line");
         assert!(
             first.ends_with(
-                "\"arm\": \"win\", \"launches\": [[0, 1, 0], [0, 0, 0]], \"hunts_unlaunched\": [0, 0]},"
+                "\"arm\": \"win\", \"launches\": [[0, 1, 0], [0, 0, 0]], \"hunts_unlaunched\": [0, 0], \
+                 \"audit\": [{\"seat\": 0, \"held\": 1200, \"destroyed\": 300, \"beacons_lost\": 0}, {\"seat\": 1, \"held\": 900, \"destroyed\": 0, \"beacons_lost\": 2}]},"
             ),
             "{first}"
         );
@@ -651,7 +699,8 @@ mod tests {
             .expect("the second seed's line");
         assert!(
             second.ends_with(
-                "\"arm\": \"loss\", \"launches\": [[0, 0, 2], [0, 0, 0]], \"hunts_unlaunched\": [0, 1]}"
+                "\"arm\": \"loss\", \"launches\": [[0, 0, 2], [0, 0, 0]], \"hunts_unlaunched\": [0, 1], \
+                 \"audit\": [{\"seat\": 0, \"held\": 1200, \"destroyed\": 300, \"beacons_lost\": 0}, {\"seat\": 1, \"held\": 900, \"destroyed\": 0, \"beacons_lost\": 2}]}"
             ),
             "{second}"
         );
@@ -685,13 +734,15 @@ mod tests {
         );
         assert!(
             lines.get(1).is_some_and(|line| line.ends_with(
-                "win; launches by round seat 0 0/1/0, seat 1 0/0/0; hunts never launched seat 0 0, seat 1 0"
+                "win; launches by round seat 0 0/1/0, seat 1 0/0/0; hunts never launched seat 0 0, seat 1 0\
+                 ; the audit: seat 0 held 1200 destroyed 300 lost 0 beacon(s), seat 1 held 900 destroyed 0 lost 2 beacon(s)"
             )),
             "{text}"
         );
         assert!(
             lines.get(2).is_some_and(|line| line.ends_with(
-                "loss; launches by round seat 0 0/0/2, seat 1 0/0/0; hunts never launched seat 0 0, seat 1 1"
+                "loss; launches by round seat 0 0/0/2, seat 1 0/0/0; hunts never launched seat 0 0, seat 1 1\
+                 ; the audit: seat 0 held 1200 destroyed 300 lost 0 beacon(s), seat 1 held 900 destroyed 0 lost 2 beacon(s)"
             )),
             "{text}"
         );

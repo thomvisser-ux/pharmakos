@@ -80,6 +80,7 @@
 //! | [`resonance_vents`](RulesTable::resonance_vents) | `licences.resonance_vents` (S3's `lic`) |
 //! | [`cluster_shape`](RulesTable::cluster_shape) | `locomotion.hpa_cluster_voxels`, `pathing.long_run` and `pathing.smooth_lookahead` (S3's `lic`) |
 //! | [`grown_sphere_radius_voxels`](RulesTable::grown_sphere_radius_voxels) | `beacon.sphere_radius_voxels` plus `structures.resonance_spire_sphere_bonus_voxels` (S3's `lic`) |
+//! | [`spire_build_ticks`](RulesTable::spire_build_ticks) | `structures.resonance_spire_build_ms` (S3's `tune3`) |
 //!
 //! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
 //! `map`, `beacon`, `power`, `economy` and `units` — and reads them from
@@ -95,7 +96,7 @@
 //! `rules_hash`, because the hash already covered the row.
 
 use crate::encoding::Enc;
-use crate::math::quantity::{Hp, Kw, Money, TICK_HZ};
+use crate::math::quantity::{Hp, Kw, MS_PER_TICK, Money, TICK_HZ};
 use crate::power::{PowerRules, PowerRulesError};
 use crate::tables::{StructureKind, UnitKind};
 use pharmakos_proto::gp;
@@ -160,7 +161,7 @@ pub struct RulesTable {
     /// Surcharge for a one-voxel climb. `4` (item 59). From
     /// `locomotion.climb_surcharge`.
     ///
-    /// PLACEHOLDER: `no gameplay evidence behind it` (item 59) — owner, at S3.
+    /// PLACEHOLDER: `no gameplay evidence behind it` (item 59), kept at its value by `tune3` (revision 8) — owner, at S3's demo.
     climb_surcharge: i32,
     /// Clear air a walker needs above its column, `locomotion.headroom_voxels`
     /// (E26: the sim's old `HEADROOM_VOXELS` given a row at its value).
@@ -278,6 +279,13 @@ pub struct RulesTable {
     /// length, so the radius function ([`crate::spire::radius_voxels`]) does no
     /// arithmetic inside a tick (decisions-log item 156).
     grown_sphere_radius_voxels: i16,
+    /// How many ticks a Resonance Spire takes to go up:
+    /// `structures.resonance_spire_build_ms` over the tick's length (S3's
+    /// `tune3`, the row of `lic`'s old `SPIRE_BUILD` constant). Refused at
+    /// load unless the row is a positive whole number of ticks, so the
+    /// fabricator's share of a tick ([`crate::spire`]) divides by a count that
+    /// is never nought and the build time needs no rounding rule.
+    spire_build_ticks: NonZeroU32,
     /// `pathing.long_run` and `pathing.smooth_lookahead`, the HPA* decomposition's
     /// and the smoother's shape values (the register's S3-10; S3's `lic` reads
     /// them in place of the old `LONG_RUN` and `SMOOTH_LOOKAHEAD` constants),
@@ -835,6 +843,16 @@ impl RulesTable {
         self.grown_sphere_radius_voxels
     }
 
+    /// How many ticks a Resonance Spire takes to go up, from its queue to its
+    /// last hit point, while its beacon's fabricator works on it
+    /// (`structures.resonance_spire_build_ms` over the tick's length; spec
+    /// section 8's "about 60 s" is 1 200). Never nought, and exact: a row that
+    /// is not a positive whole number of ticks does not load.
+    #[must_use]
+    pub const fn spire_build_ticks(&self) -> NonZeroU32 {
+        self.spire_build_ticks
+    }
+
     /// The HPA* decomposition's shape: the cluster edge
     /// (`locomotion.hpa_cluster_voxels`), `pathing.long_run` and
     /// `pathing.smooth_lookahead`, refused at load as
@@ -982,6 +1000,7 @@ impl RulesTable {
         let attack = crate::attack::AttackRows::read(message)?;
         let grown_sphere_radius_voxels = grown_sphere_radius_of(message, sphere_radius_voxels)?;
         let picket_radius_voxels = picket_radius_of(message, grown_sphere_radius_voxels)?;
+        let spire_build_ticks = spire_build_ticks_of(message)?;
         let resonance_vents = resonance_vents_of(message)?;
         let hpa_cluster_voxels = signed(
             "locomotion.hpa_cluster_voxels",
@@ -1070,6 +1089,7 @@ impl RulesTable {
             picket_radius_voxels,
             resonance_vents,
             grown_sphere_radius_voxels,
+            spire_build_ticks,
             cluster_shape,
         };
         longest_row_fits(&table)?;
@@ -1317,6 +1337,33 @@ fn grown_sphere_radius_of(
                 i16::MAX
             ),
         })
+}
+
+/// `structures.resonance_spire_build_ms` as the ticks a Spire takes to go up
+/// (S3's `tune3`): present, positive, and a whole number of ticks, so the
+/// fabricator spreads the Spire's hit points over a count that is never nought
+/// and no rounding rule decides how long "about 60 s" is.
+fn spire_build_ticks_of(message: &gp::v1::RulesTable) -> Result<NonZeroU32, RulesError> {
+    let structures = message
+        .structures
+        .as_ref()
+        .ok_or(RulesError::MissingBlock("structures"))?;
+    let build_ms = structures.resonance_spire_build_ms;
+    let refused = |why: &str| RulesError::OutOfRange {
+        field: "structures.resonance_spire_build_ms".to_owned(),
+        value: format!("{build_ms}; {why}"),
+    };
+    let tick_ms = MS_PER_TICK.unsigned_abs();
+    if build_ms.checked_rem(tick_ms) != Some(0) {
+        return Err(refused(
+            "the build time must be a whole number of ticks, or how long a Spire takes would \
+             need a rounding rule",
+        ));
+    }
+    build_ms
+        .checked_div(tick_ms)
+        .and_then(NonZeroU32::new)
+        .ok_or_else(|| refused("a Spire that takes no time has no tick to go up in"))
 }
 
 /// `defend.picket_radius_voxels` as the Defend mandate reads it (S2's

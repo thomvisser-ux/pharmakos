@@ -2162,7 +2162,7 @@ fn foreigner_in(world: &World, at: [i32; 3], seat: Option<SeatId>) -> bool {
 
 /// How much work a top-up pays for: five seconds of it, at the drones' rates.
 ///
-/// PLACEHOLDER: a site top-up's horizon, five seconds of drone work — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run.
+/// PLACEHOLDER: a site top-up's horizon, five seconds of drone work — owner, at S3's demo (item 152 (1) 2), kept by `tune3` with no balance re-run under item 213's answer 22.
 /// A beacon files one request a decision tick, so a short horizon would
 /// spend most of its requests on top-ups and leave its fabricator and its
 /// targets waiting; a long one moves more `$` onto the beacon ahead of the

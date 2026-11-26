@@ -687,6 +687,7 @@ fn the_watch_segment_polls_counts_and_probes() {
         );
     }
     assert!(report.sighting_room > 0);
+    assert_eq!(report.forgotten.len(), 3, "a forgotten count a seat");
     assert_eq!(report.breach.len(), 1, "the segment's end probes once");
     assert!(
         report.breach.iter().all(|probe| probe.ways > 0),
