@@ -964,6 +964,12 @@ pub enum SnapshotError {
     /// The map could not be regenerated from the snapshot's seed under the
     /// receiving world's rules table.
     Map(MapError),
+    /// The receiving world's search scratch does not serve its graph
+    /// ([`crate::pathing::search::Scratch::serves`]): it was replaced through
+    /// [`World::scratch_mut`] by one sized for another map or cluster edge.
+    /// A restore rebuilds the graph in that scratch, so it is refused before
+    /// anything is written; nothing about the file is wrong.
+    MisfitScratch,
     /// The restored tables describe a world the receiving world's derived
     /// indexes cannot cover — a snapshot with more units than the broadphase
     /// grid can hold. Refused rather than restored into a world whose every
@@ -1095,6 +1101,10 @@ impl core::fmt::Display for SnapshotError {
             SnapshotError::Map(error) => {
                 write!(f, "regenerating the map from the snapshot's seed: {error}")
             }
+            SnapshotError::MisfitScratch => write!(
+                f,
+                "the receiving world's search scratch was replaced by one that does not serve                  its graph"
+            ),
             SnapshotError::Unindexable { units } => write!(
                 f,
                 "the snapshot's {units} units cannot be indexed by a broadphase grid built from \
@@ -1596,6 +1606,12 @@ impl Snapshot {
         &self,
         world: &'w mut World,
     ) -> Result<Closed<'w>, SnapshotError> {
+        // The graph is rebuilt at the end in the world's own scratch,
+        // unchecked: a scratch a caller replaced with one that does not serve
+        // it is refused here, before anything is read or written.
+        if !world.scratch_serves() {
+            return Err(SnapshotError::MisfitScratch);
+        }
         // E7: rule: a capacity only; the seat table's restore checks the columns it is handed
         let seat_count = u32::try_from(self.seat_id.len()).unwrap_or(0);
         let mut seats = SeatTable::with_capacity(seat_count);

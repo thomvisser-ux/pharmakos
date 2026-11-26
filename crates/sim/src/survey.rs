@@ -166,8 +166,7 @@ use crate::ids::Row;
 use crate::knowledge::{AssetId, AssetKind, Position};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::Ms;
-use crate::pathing::estimate::{PastTicks, WalkError, ticks_of, walk_cost};
-use crate::pathing::route::NoPath;
+use crate::pathing::estimate::{PastTicks, WalkError, ticks_of, walk_cost_in};
 use crate::pathing::surface::Node;
 use crate::pathing::{Speed, ticks_for_cost};
 use crate::reserved::Reserved;
@@ -2233,7 +2232,7 @@ fn served_walk_ticks<M: crate::seams::Meter + ?Sized>(
     // A served walk is charged the nodes its searches pop, the change in the
     // scratch's own counters over the call (decisions-log item 175 (1)).
     let before = crate::targeting::popped(scratch);
-    let walked = walk_cost(ground.surface, ground.clusters, scratch, (start, goal));
+    let walked = walk_cost_in(ground.surface, ground.clusters, scratch, (start, goal));
     meter.measured(crate::targeting::popped(scratch).and_then(|after| {
         after
             .checked_sub(before?)
@@ -2241,16 +2240,7 @@ fn served_walk_ticks<M: crate::seams::Meter + ?Sized>(
     }));
     let walk = match walked {
         Ok(walk) => walk,
-        // Nothing was searched, so this is no word on the walk: counted
-        // under its own reason (`Scratch::misfits`), not as unserved. The
-        // scratch here is the world's own, made with its graph.
-        Err(WalkError::NoPath(NoPath::Misfit)) => {
-            scratch.misfits.bump();
-            return None;
-        }
-        Err(WalkError::NoPath(
-            NoPath::Unplaced | NoPath::Unreachable | NoPath::Unrefinable | NoPath::Unpriced,
-        )) => {
+        Err(WalkError::NoPath(_)) => {
             scratch.survey_unserved.bump();
             return None;
         }

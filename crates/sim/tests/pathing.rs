@@ -52,7 +52,7 @@ use pharmakos_sim::pathing::repair::{Repairer, Repairs, conservative_affected, r
 use pharmakos_sim::pathing::route::{NoPath, Surcharge, abstract_search, route, route_with};
 use pharmakos_sim::pathing::router::WalkState;
 use pharmakos_sim::pathing::search::{
-    Bound, Misfit, Scratch, astar, astar_costed, astar_with_order, dijkstra_bounded,
+    Bound, Misfit, Scratch, Unanswered, astar, astar_costed, astar_with_order, dijkstra_bounded,
 };
 use pharmakos_sim::pathing::surface::{DEFAULT_ORDER, Node, StepCosts, Surface};
 use pharmakos_sim::tables::{SeatId, UnitId, UnitKind};
@@ -978,7 +978,7 @@ fn no_path_is_answered_by_the_oracle() {
             outside,
             &mut buffer,
         ),
-        Err(pharmakos_sim::pathing::route::NoPath::Unreachable),
+        Err(Unanswered::Ran(NoPath::Unreachable)),
         "a sealed-in walker has no route either, and says why"
     );
 }
@@ -1516,7 +1516,7 @@ fn a_scratch_serves_the_graph_it_was_sized_for_and_no_larger_one() {
 /// Hold that every door that reads the decomposition refuses `coarse` for
 /// the pair, typed.
 fn the_graph_doors_refuse(fixture: &Fixture, coarse: &mut Scratch, pair: (Node, Node)) {
-    use pharmakos_sim::pathing::estimate::{EstimateError, WalkError, estimate, walk_cost};
+    use pharmakos_sim::pathing::estimate::{EstimateError, estimate, walk_cost};
     let (surface, clusters) = (&fixture.surface, &fixture.clusters);
     let speed = fixture.commander_speed();
     let (start, goal) = pair;
@@ -1535,17 +1535,17 @@ fn the_graph_doors_refuse(fixture: &Fixture, coarse: &mut Scratch, pair: (Node, 
     );
     assert_eq!(
         route(surface, clusters, coarse, start, goal, &mut walk),
-        Err(NoPath::Misfit),
+        Err(Unanswered::Misfit),
         "{start} -> {goal}: the route"
     );
     assert_eq!(
         route_with(surface, clusters, coarse, pair, Surcharge::NONE, &mut walk),
-        Err(NoPath::Misfit),
+        Err(Unanswered::Misfit),
         "{start} -> {goal}: the route under a surcharge"
     );
     assert_eq!(
         walk_cost(surface, clusters, coarse, pair),
-        Err(WalkError::NoPath(NoPath::Misfit)),
+        Err(Unanswered::Misfit),
         "{start} -> {goal}: the served walk's cost"
     );
 }
@@ -1612,7 +1612,7 @@ fn the_column_doors_refuse(surface: &Surface, short: &mut Scratch, pair: (Node, 
 /// "no route" from slots it did not have, at every door but the estimate's.
 #[test]
 fn a_search_in_a_scratch_that_does_not_fit_is_refused_at_every_door() {
-    let fixture = Fixture::build(SEED, CLUSTER);
+    let mut fixture = Fixture::build(SEED, CLUSTER);
     let (surface, clusters) = (&fixture.surface, &fixture.clusters);
     let (mut coarse, mut short) = misfits(&fixture);
     let set = pairs(&fixture, 24, 0x5EED_0F17);
@@ -1643,7 +1643,9 @@ fn a_search_in_a_scratch_that_does_not_fit_is_refused_at_every_door() {
         "a connected pair has a walk"
     );
 
-    // The router counts a refused route under its own reason.
+    // The router refuses before it serves a unit: the waiting unit still
+    // waits, and nothing is counted, where a route refused unit by unit would
+    // have parked it as sealed in.
     let mut router = pharmakos_sim::pathing::router::Router::new(1, &fixture.rules);
     let point = |node: Node| {
         let (x, y) = surface.coord_of(node);
@@ -1651,19 +1653,23 @@ fn a_search_in_a_scratch_that_does_not_fit_is_refused_at_every_door() {
         [on(x), on(y), on(surface.standing_z(node))]
     };
     router.request(0);
-    router.serve(
-        surface,
-        clusters,
-        &mut coarse,
-        &[point(start)],
-        &[point(goal)],
-        1,
+    let (from, to) = ([point(start)], [point(goal)]);
+    assert_eq!(
+        router.serve(surface, clusters, &mut coarse, &from, &to, 1),
+        Err(Misfit),
+        "the router"
     );
+    assert_eq!(router.state(0), WalkState::Waiting, "the unit still waits");
     assert_eq!(
         NoPath::ALL.map(|reason| router.no_path().of(reason)),
-        [0, 0, 0, 0, 1],
-        "one route refused as a misfit, and counted as nothing else"
+        [0, 0, 0, 0],
+        "no route was counted as missing"
     );
+    let report = router
+        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 1)
+        .expect("the scratch made with the graph serves it");
+    assert_eq!((report.served, report.sealed), (1, 0));
+    assert_eq!(router.state(0), WalkState::Walking, "and is then routed");
 }
 
 /// The graph's own doors refuse a scratch that does not serve it, and **a
@@ -2333,14 +2339,16 @@ fn a_sealed_in_walker_is_re_armed_by_a_repair_nowhere_near_it() {
     fixture.repair();
 
     router.request(0);
-    let report = router.serve(
-        &fixture.surface,
-        &fixture.clusters,
-        &mut fixture.scratch,
-        &positions,
-        &destinations,
-        1,
-    );
+    let report = router
+        .serve(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            &positions,
+            &destinations,
+            1,
+        )
+        .expect("the scratch serves");
     assert_eq!(report.sealed, 1, "the walled-in walker did not seal");
     assert_eq!(router.state(0), WalkState::Sealed);
 
@@ -2430,6 +2438,65 @@ fn a_restored_world_rebuilds_the_graph_it_was_saved_with() {
             world.step(&mut a).unwrap(),
             restored.step(&mut b).unwrap(),
             "the chain diverged {n} ticks after the restore"
+        );
+        n += 1;
+    }
+}
+
+/// The world searches in its own scratch unchecked, so it holds that scratch
+/// to its graph where a caller could have replaced it ([`World::scratch_mut`]):
+/// as each tick opens, and before a restore writes anything. Each refuses a
+/// scratch that does not serve, typed, and changes nothing; with a scratch
+/// that serves put back, the world steps as one never touched.
+#[test]
+fn a_world_whose_scratch_no_longer_fits_is_refused_by_its_tick_and_by_a_restore() {
+    use pharmakos_sim::world::TickError;
+    let mut world = harness_world(4);
+    let mut twin = harness_world(4);
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let mut twin_enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    assert_eq!(
+        world.step(&mut enc).unwrap(),
+        twin.step(&mut twin_enc).unwrap()
+    );
+    let bytes = pharmakos_sim::Snapshot::capture(&world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("a snapshot encodes");
+    let before = (world.tick(), world.state_hash(), whole(world.clusters()));
+
+    // Sized for a cluster edge twice the world's: it does not serve.
+    let coarse = Scratch::for_map(world.surface(), world.clusters().size() * 2).expect("a scratch");
+    assert!(!coarse.serves(world.surface(), world.clusters()));
+    let own = core::mem::replace(world.scratch_mut(), coarse);
+
+    assert_eq!(world.step(&mut enc), Err(TickError::MisfitScratch));
+    assert_eq!(world.begin_tick(), Err(TickError::MisfitScratch));
+    assert!(!world.tick_is_open(), "no tick was opened");
+    assert_eq!(
+        pharmakos_sim::Snapshot::from_bytes(&bytes)
+            .expect("the bytes decode")
+            .restore_into(&mut world),
+        Err(pharmakos_sim::snapshot::SnapshotError::MisfitScratch),
+        "a restore rebuilds the graph in the world's scratch, and refuses this one"
+    );
+    assert_eq!(
+        (world.tick(), world.state_hash(), whole(world.clusters())),
+        before,
+        "the refusals moved neither the clock, the state nor the graph"
+    );
+
+    *world.scratch_mut() = own;
+    pharmakos_sim::Snapshot::from_bytes(&bytes)
+        .expect("the bytes decode")
+        .restore_into(&mut world)
+        .expect("the snapshot restores in a scratch that serves");
+    let mut n = 0;
+    while n < 5 {
+        assert_eq!(
+            world.step(&mut enc).unwrap(),
+            twin.step(&mut twin_enc).unwrap(),
+            "tick {n} after the scratch was put back"
         );
         n += 1;
     }

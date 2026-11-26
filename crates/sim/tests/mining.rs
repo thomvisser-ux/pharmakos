@@ -638,7 +638,10 @@ fn starting_walk_pops(fixture: &World) -> u64 {
     .expect("the map takes a search");
     let mut ranker = pharmakos_sim::targeting::Ranker::new(&ground, origin, |at| at == seam);
     assert!(
-        ranker.next(&ground, &mut scratch).is_some(),
+        ranker
+            .next(&ground, &mut scratch)
+            .expect("the scratch serves")
+            .is_some(),
         "the seam is reached"
     );
     assert_eq!(scratch.walks().expect("a count"), 1, "by one served walk");

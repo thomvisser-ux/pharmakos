@@ -219,7 +219,6 @@ pub struct Scratch {
     pub(crate) served_estimates: Tally,
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
-    pub(crate) misfits: Tally,
     pub(crate) reach_faults: Tally,
     pub(crate) survey_unserved: Tally,
     pub(crate) survey_out_of_reach: Tally,
@@ -299,19 +298,30 @@ impl std::error::Error for TallyOverflow {}
 /// ([`Scratch::serves`], or [`Scratch::serves_surface`] for a search over the
 /// columns alone): one sized for another map or another cluster edge.
 ///
-/// **Every public search refuses it before it searches**, each in its own
-/// result: [`astar`], [`astar_with_order`], [`astar_costed`] and
-/// [`dijkstra_bounded`] here,
-/// [`abstract_search`](crate::pathing::route::abstract_search),
-/// [`route`](crate::pathing::route::route) and
-/// [`walk_cost`](crate::pathing::estimate::walk_cost) (as
-/// [`NoPath::Misfit`](crate::pathing::route::NoPath::Misfit)),
-/// [`estimate`](crate::pathing::estimate::estimate) (as
-/// [`EstimateError::Misfit`](crate::pathing::estimate::EstimateError::Misfit)),
+/// **Every public function that searches in a scratch refuses it before it
+/// searches**, each in its own result. Over the columns alone
+/// ([`Scratch::serves_surface`]): [`astar`], [`astar_with_order`],
+/// [`astar_costed`] and [`dijkstra_bounded`]. Over the decomposition
+/// ([`Scratch::serves`]):
+/// [`abstract_search`](crate::pathing::route::abstract_search);
+/// [`route`](crate::pathing::route::route),
+/// [`route_with`](crate::pathing::route::route_with) and
+/// [`walk_cost`](crate::pathing::estimate::walk_cost), as
+/// [`Unanswered::Misfit`]; [`estimate`](crate::pathing::estimate::estimate),
+/// as [`EstimateError::Misfit`](crate::pathing::estimate::EstimateError::Misfit);
 /// [`repair`](crate::pathing::repair::repair) and the decomposition's
-/// rebuilds. A search in such a scratch would end (a node with no slot is
-/// never queued, [`Scratch::queue`]) and answer "no route" from slots it does
-/// not have, which reads as an answer and is none.
+/// rebuilds; the router's [`serve`](crate::pathing::router::Router::serve);
+/// and the resolvers ([`crate::targeting`]'s `cover`, `on_vent`, `toward` and
+/// its ranker), as [`Unanswered::Misfit`]. A refused call changes nothing and
+/// counts nothing.
+///
+/// The world searches in its own scratch through the crate's unchecked
+/// twins of these, and holds that scratch to its graph once as each tick
+/// opens and before a restore ([`crate::world::TickError::MisfitScratch`]).
+///
+/// A search in a scratch that does not serve would end (a node with no slot
+/// is never queued, [`Scratch::queue`]) and answer "no route" from slots it
+/// does not have, which reads as an answer and is none.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Misfit;
 
@@ -324,6 +334,46 @@ impl core::fmt::Display for Misfit {
 }
 
 impl std::error::Error for Misfit {}
+
+/// Why a public search that has reasons of its own gave no result: it never
+/// ran, because the scratch does not serve the graph ([`Misfit`]); or it ran,
+/// and gave its own reason `E`. Two cases and never one, so that a reason
+/// about the ground (no route, a step that finds no target) is always a
+/// statement about the ground, and a caller's wrong scratch is never read as
+/// one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Unanswered<E> {
+    /// The scratch handed in does not serve the graph
+    /// ([`Scratch::serves`]): nothing was searched.
+    Misfit,
+    /// The search ran, and this is its reason.
+    Ran(E),
+}
+
+impl<E> Unanswered<E> {
+    /// The same refusal with the search's reason mapped.
+    pub fn map<F>(self, with: impl FnOnce(E) -> F) -> Unanswered<F> {
+        match self {
+            Unanswered::Misfit => Unanswered::Misfit,
+            Unanswered::Ran(reason) => Unanswered::Ran(with(reason)),
+        }
+    }
+}
+
+impl<E> From<Misfit> for Unanswered<E> {
+    fn from(_: Misfit) -> Unanswered<E> {
+        Unanswered::Misfit
+    }
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for Unanswered<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Unanswered::Misfit => Misfit.fmt(f),
+            Unanswered::Ran(reason) => reason.fmt(f),
+        }
+    }
+}
 
 impl Scratch {
     /// Room for a graph of `nodes` columns and `abstract_nodes` abstract nodes.
@@ -391,7 +441,6 @@ impl Scratch {
             served_estimates: Tally::ZERO,
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
-            misfits: Tally::ZERO,
             reach_faults: Tally::ZERO,
             survey_unserved: Tally::ZERO,
             survey_out_of_reach: Tally::ZERO,
@@ -600,24 +649,6 @@ impl Scratch {
         self.stalled.read()
     }
 
-    /// Walks a ranker or a Survey pricing met that the router refused as
-    /// [`NoPath::Misfit`](crate::pathing::route::NoPath::Misfit) since the
-    /// last reset: the scratch it was handed does not serve the graph it
-    /// ranks over. The candidate is dropped, as a stalled one is, and counted
-    /// here under its own reason, never read as unreachable: a step's failure
-    /// reasons are the event vocabulary's and name what a seat's playbook met,
-    /// which a caller's wrong scratch is not. Nothing in the sim pairs a
-    /// graph with any scratch but the one made with it, and the gateway asks
-    /// [`Scratch::serves`] before it lends its own; `tests/nearest.rs` holds
-    /// the count at zero.
-    ///
-    /// # Errors
-    ///
-    /// [`TallyOverflow`] once the count passed `u64::MAX`.
-    pub const fn misfits(&self) -> Result<u64, TallyOverflow> {
-        self.misfits.read()
-    }
-
     /// Survey re-checks the router served no walk to since the last reset
     /// ([`crate::pathing::estimate::WalkError::NoPath`] met while a scout's
     /// walk to a due sighting was priced, `crate::survey`): a scout dropped
@@ -742,7 +773,6 @@ impl Scratch {
         self.served_estimates = Tally::ZERO;
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
-        self.misfits = Tally::ZERO;
         self.reach_faults = Tally::ZERO;
         self.survey_unserved = Tally::ZERO;
         self.survey_out_of_reach = Tally::ZERO;

@@ -974,7 +974,7 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings, meter: &dy
         work.get(index).copied().unwrap_or(false)
     });
     let mut best: Option<(usize, i64)> = None;
-    while let Some((index, _)) = ranker.next(&ground, scratch) {
+    while let Some((index, _)) = ranker.next_in(&ground, scratch) {
         // The ranker admits only indexes the work table marked, which are
         // the wealth table's too.
         let Some(yield_left) = wealth.get(index).copied() else {
@@ -1556,7 +1556,7 @@ mod visits {
                 work.get(at).copied().unwrap_or(false)
             });
             assert!(
-                ranker.next(&ground, &mut scratch).is_some(),
+                ranker.next_in(&ground, &mut scratch).is_some(),
                 "a seam is reached"
             );
         });

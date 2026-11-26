@@ -168,7 +168,7 @@ use crate::pathing::clusters::Clusters;
 use crate::pathing::route::{
     AbstractResult, NoPath, RouteOutcome, Surcharge, abstract_search, route_and_abstract,
 };
-use crate::pathing::search::{Misfit, Scratch};
+use crate::pathing::search::{Misfit, Scratch, Unanswered};
 use crate::pathing::surface::{Node, Surface};
 
 /// What the query knows about the terrain it is pricing.
@@ -382,13 +382,8 @@ fn served(
     scratch.served_estimates.bump();
     let walked = match served_walk(world, clusters, scratch, pair) {
         Ok(walked) => walked,
-        // Nothing was searched: no answer about the route at all.
-        Err(WalkError::NoPath(NoPath::Misfit)) => return Err(EstimateError::Misfit),
-        // Any other `NoPath` is no route: the walker would be sealed in as
-        // well.
-        Err(WalkError::NoPath(
-            NoPath::Unplaced | NoPath::Unreachable | NoPath::Unrefinable | NoPath::Unpriced,
-        )) => return Ok(None),
+        // Any `NoPath` is no route: the walker would be sealed in as well.
+        Err(WalkError::NoPath(_)) => return Ok(None),
         Err(WalkError::Stalled { partials }) => {
             return Err(EstimateError::Stalled { partials });
         }
@@ -583,13 +578,32 @@ impl std::error::Error for EstimateError {}
 ///
 /// # Errors
 ///
-/// [`WalkError::NoPath`], the router's reason, when it serves no route from
-/// where the walk stands, [`NoPath::Misfit`] among them for a scratch that
-/// does not serve this surface and decomposition ([`Scratch::serves`]),
-/// refused before any search and not a missing route;
+/// [`Unanswered::Misfit`], before any search and with nothing counted, for a
+/// scratch that does not serve this surface and decomposition
+/// ([`Scratch::serves`]); otherwise [`WalkError::NoPath`], the router's
+/// reason, when it serves no route from where the walk stands, and
 /// [`WalkError::Stalled`] when a partial route's next query does not fall as
 /// the argument above says it must.
 pub fn walk_cost(
+    world: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    pair: (Node, Node),
+) -> Result<ServedWalk, Unanswered<WalkError>> {
+    if !scratch.serves(world, clusters) {
+        return Err(Unanswered::Misfit);
+    }
+    walk_cost_in(world, clusters, scratch, pair).map_err(Unanswered::Ran)
+}
+
+/// [`walk_cost`] in a scratch already held to [`Scratch::serves`]: behind
+/// that door or a resolver's, or the world's own inside a tick, which holds
+/// it to the graph as it opens (`World::begin_tick`).
+///
+/// # Errors
+///
+/// [`WalkError`], as [`walk_cost`] answers it.
+pub(crate) fn walk_cost_in(
     world: &Surface,
     clusters: &Clusters,
     scratch: &mut Scratch,
@@ -622,7 +636,8 @@ impl Walked {
 }
 
 /// [`walk_cost`] and a clear [`estimate`]'s one walk: [`walk_chain`] over the
-/// router's own function, in the scratch's own buffer, under no surcharge.
+/// router's own function, in the scratch's own buffer, under no surcharge. In
+/// a scratch its caller has already held to [`Scratch::serves`].
 fn served_walk(
     world: &Surface,
     clusters: &Clusters,
@@ -641,7 +656,8 @@ fn served_walk(
 /// Why [`walk_cost`] priced no walk.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WalkError {
-    /// The router serves no route from where the walk stands: its reason.
+    /// The router serves no route from where the walk stands: its reason,
+    /// always one about the ground.
     NoPath(NoPath),
     /// A partial route's next query did not fall by [`PARTIAL_PROGRESS`]
     /// cardinal steps (`walk_cost`'s "The chain ends"): a router that broke

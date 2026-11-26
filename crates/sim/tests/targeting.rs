@@ -32,7 +32,7 @@ use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::state::{StepFailed, StepFailedError, StepFailure};
 use pharmakos_sim::interpreter::{BeaconSpec, Plan, PlanError, resolve_beacon_in};
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::pathing::search::Scratch;
+use pharmakos_sim::pathing::search::{Scratch, Unanswered};
 use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::snapshot::Snapshot;
@@ -1961,6 +1961,10 @@ fn on_read(
         covered,
         spec,
     )
+    .map_err(|unanswered| match unanswered {
+        Unanswered::Ran(failed) => failed,
+        Unanswered::Misfit => panic!("a scratch made for the map serves it"),
+    })
 }
 
 /// The standing point of seat 0's core: 35 voxels from `vent_324_16`, so the
@@ -2216,7 +2220,11 @@ fn a_description_counts_what_it_matched_before_reachability() {
     );
     let mut scratch = Scratch::for_map(world.surface(), world.rules().hpa_cluster_voxels())
         .expect("a scratch for the map");
-    assert_eq!(ranker.next(&ground, &mut scratch), None, "none reachable");
+    assert_eq!(
+        ranker.next(&ground, &mut scratch),
+        Ok(None),
+        "none reachable"
+    );
 }
 
 #[test]

@@ -534,6 +534,10 @@ fn repath(
         1,
     );
     let ns = started.elapsed().as_nanos();
+    let served = served.map_err(|misfit| Error::Sim {
+        during: "repathing in P3's own scratch",
+        reason: misfit.to_string(),
+    })?;
     if served.served != 1 {
         return Err(Error::Drift(format!(
             "the router served {} units of the one waiting",

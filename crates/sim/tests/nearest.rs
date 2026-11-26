@@ -33,7 +33,7 @@ use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::pathing::estimate::{Speed, max_partials, walk_cost};
 use pharmakos_sim::pathing::reach::Reach;
 use pharmakos_sim::pathing::route::{Surcharge, route_with};
-use pharmakos_sim::pathing::search::{Scratch, Tally};
+use pharmakos_sim::pathing::search::{Scratch, Tally, Unanswered};
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::runner::{MatchSettings, Runner};
 use pharmakos_sim::tables::{BeaconId, SeatId};
@@ -259,7 +259,6 @@ fn origin(world: &World, rng: &mut Rng) -> ([i32; 2], Node) {
 fn nearest_is_the_least_served_walk() {
     let (mut ranks, mut wrong, mut over) = (0_u32, Vec::new(), Vec::new());
     let mut stalled = 0_u64;
-    let mut misfits = 0_u64;
     for (seed, scarred) in [(SEED, false), (7, false), (SEED, true), (0x5eed_0003, true)] {
         let mut world = world_of(seed, 2);
         if scarred {
@@ -291,16 +290,17 @@ fn nearest_is_the_least_served_walk() {
                 ranks += 1;
                 let got = ranker
                     .next(&ground, &mut scratch)
+                    .expect("the scratch serves")
                     .map(|(index, walk)| (index, walk.cost));
                 if got != Some((expected.3, expected.0)) {
                     wrong.push((seed, scarred, [ox, oy], got, (expected.3, expected.0)));
                 }
             }
             stalled += scratch.stalled().unwrap();
-            misfits += scratch.misfits().unwrap();
             scratch.reset_counters();
             let extra = ranker
                 .next(&ground, &mut scratch)
+                .expect("the scratch serves")
                 .map(|(index, walk)| (index, walk.cost));
             if extra.is_some() {
                 wrong.push((seed, scarred, [ox, oy], extra, (usize::MAX, 0)));
@@ -309,10 +309,6 @@ fn nearest_is_the_least_served_walk() {
     }
     assert!(ranks >= 2_000, "the test ranks enough: {ranks}");
     assert_eq!(stalled, 0, "no candidate's chain of partial routes stalled");
-    assert_eq!(
-        misfits, 0,
-        "no candidate was dropped for a scratch that does not serve the graph"
-    );
     assert!(
         over.is_empty(),
         "{} octile bounds above a walk; first {:?}",
@@ -1127,7 +1123,10 @@ fn a_toward_that_finds_no_stone_searches_nothing() {
         );
         assert_eq!(
             found,
-            Err(StepFailed::counted(StepFailure::IllegalSite, 0)),
+            Err(Unanswered::Ran(StepFailed::counted(
+                StepFailure::IllegalSite,
+                0
+            ))),
             "{spec:?}"
         );
         assert_eq!(popped(&scratch), 0, "{spec:?}: no node popped");
@@ -1156,7 +1155,10 @@ fn a_toward_that_finds_no_stone_searches_nothing() {
     assert!(weighed > 0, "the seat has sites");
     assert_eq!(
         found,
-        Err(StepFailed::counted(StepFailure::IllegalSite, weighed))
+        Err(Unanswered::Ran(StepFailed::counted(
+            StepFailure::IllegalSite,
+            weighed
+        )))
     );
     assert_eq!(
         popped(&scratch),
@@ -1923,7 +1925,10 @@ fn one_walk(world: &World, origin: [i32; 2], index: usize) -> (u64, u64) {
     };
     let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
     let mut ranker = Ranker::new(&ground, origin, |at| at == index);
-    let emitted = ranker.next(&ground, &mut scratch).map(|(at, _)| at);
+    let emitted = ranker
+        .next(&ground, &mut scratch)
+        .expect("the scratch serves")
+        .map(|(at, _)| at);
     assert_eq!(emitted, Some(index), "the one candidate is emitted");
     assert_eq!(scratch.walks().unwrap(), 1, "and priced by one walk");
     (tally.read().expect("measured"), popped(&scratch))
@@ -2068,7 +2073,13 @@ fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64)
     let steps = match resolve {
         Resolve::Walk(index) => {
             let mut ranker = Ranker::new(&ground, origin, |at| at == index);
-            assert!(ranker.next(&ground, &mut scratch).is_some(), "{label}");
+            assert!(
+                ranker
+                    .next(&ground, &mut scratch)
+                    .expect("the scratch serves")
+                    .is_some(),
+                "{label}"
+            );
             let (entries, rows) = model.ranker_new(origin, |at| (at == index, 0));
             rows + Steps::ranker_draws(entries, scratch.walks().unwrap(), 1)
         }
@@ -2165,7 +2176,11 @@ fn decision_units_equal_the_primitive_steps_counted() {
         let mut ranker = Ranker::new(&ground, origin, |index| {
             pharmakos_sim::targeting::matches_pick(&ground, seat, index, FeatureKind::Vent, true)
         });
-        ranker.next(&ground, &mut scratch).expect("a vent").0
+        ranker
+            .next(&ground, &mut scratch)
+            .expect("the scratch serves")
+            .expect("a vent")
+            .0
     };
     let first_anchor = world.features().features()[first_vent].anchor;
     let cases = [

@@ -74,7 +74,7 @@ use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::StepFailure;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::pathing::estimate::{Speed, walk_cost};
-use pharmakos_sim::pathing::search::Scratch;
+use pharmakos_sim::pathing::search::{Scratch, Unanswered};
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{PRIORITY_NORMAL, SeatId};
@@ -396,8 +396,8 @@ fn a_build_target_can_name_the_vent_from_the_third_placement() {
             assert_eq!(site.feature, feature);
         } else {
             assert_eq!(
-                found.map_err(|failed| failed.reason),
-                Err(StepFailure::NoTarget),
+                found.map_err(|unanswered| unanswered.map(|failed| failed.reason)),
+                Err(Unanswered::Ran(StepFailure::NoTarget)),
                 "placement {placement} is a stone and does not reach the vent"
             );
         }
@@ -443,10 +443,10 @@ fn a_toward_says_why_it_found_no_site() {
             start,
             named([1, 1])
         ),
-        Err(StepFailed {
+        Err(Unanswered::Ran(StepFailed {
             reason: StepFailure::NoTarget,
             matched: Some(0),
-        })
+        }))
     );
     let nowhere = [Fx::from_voxels(-8), Fx::from_voxels(-8), Fx::from_voxels(0)];
     assert_eq!(
@@ -458,10 +458,10 @@ fn a_toward_says_why_it_found_no_site() {
             nowhere,
             named(PINNED_VENT)
         ),
-        Err(StepFailed {
+        Err(Unanswered::Ran(StepFailed {
             reason: StepFailure::IllegalSite,
             matched: Some(0),
-        })
+        }))
     );
     let found = toward_counted(
         &ground,

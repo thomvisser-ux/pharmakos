@@ -49,7 +49,9 @@
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
 use crate::pathing::estimate::{Fog, Speed, fog_price};
-use crate::pathing::search::{Bound, Misfit, Scratch, Tally, astar_served, sweep_served};
+use crate::pathing::search::{
+    Bound, Misfit, Scratch, Tally, Unanswered, astar_served, sweep_served,
+};
 use crate::pathing::surface::{Node, Surface};
 
 /// One stretch of ground a route pays a surcharge to cross (S2's `atk`): a
@@ -535,24 +537,15 @@ pub enum NoPath {
     Unrefinable,
     /// The smoothed walk could not be priced.
     Unpriced,
-    /// The scratch handed in does not serve this surface and decomposition
-    /// ([`Misfit`]): nothing was searched, so this says nothing about the
-    /// terrain. **Not a missing route**, and no reader takes it for one: the
-    /// router counts it under its own name, an estimate raises it
-    /// ([`crate::pathing::estimate::EstimateError::Misfit`]), and a ranker
-    /// counts it ([`Scratch::misfits`]). The world's own scratch is made with
-    /// its graph, so no tick meets it.
-    Misfit,
 }
 
 impl NoPath {
     /// Every reason.
-    pub const ALL: [NoPath; 5] = [
+    pub const ALL: [NoPath; 4] = [
         NoPath::Unplaced,
         NoPath::Unreachable,
         NoPath::Unrefinable,
         NoPath::Unpriced,
-        NoPath::Misfit,
     ];
 
     /// The reason's name.
@@ -563,14 +556,7 @@ impl NoPath {
             NoPath::Unreachable => "unreachable",
             NoPath::Unrefinable => "unrefinable",
             NoPath::Unpriced => "unpriced",
-            NoPath::Misfit => "misfit",
         }
-    }
-}
-
-impl From<Misfit> for NoPath {
-    fn from(_: Misfit) -> NoPath {
-        NoPath::Misfit
     }
 }
 
@@ -581,9 +567,10 @@ impl From<Misfit> for NoPath {
 ///
 /// # Errors
 ///
-/// A typed [`NoPath`], which the router counts under its reason (S2's plan,
-/// E27): [`NoPath::Misfit`], before any search, for a scratch that does not
-/// serve this surface and decomposition ([`Scratch::serves`]).
+/// [`Unanswered::Misfit`], before any search, for a scratch that does not
+/// serve this surface and decomposition ([`Scratch::serves`]); otherwise a
+/// typed [`NoPath`], which the router counts under its reason (S2's plan,
+/// E27), and which is always a statement about the ground.
 pub fn route(
     surface: &Surface,
     clusters: &Clusters,
@@ -591,7 +578,7 @@ pub fn route(
     start: Node,
     goal: Node,
     out: &mut Vec<Node>,
-) -> Result<RouteOutcome, NoPath> {
+) -> Result<RouteOutcome, Unanswered<NoPath>> {
     route_with(
         surface,
         clusters,
@@ -618,19 +605,43 @@ pub fn route_with(
     (start, goal): (Node, Node),
     surcharge: Surcharge<'_>,
     out: &mut Vec<Node>,
+) -> Result<RouteOutcome, Unanswered<NoPath>> {
+    if !scratch.serves(surface, clusters) {
+        return Err(Unanswered::Misfit);
+    }
+    route_served(surface, clusters, scratch, (start, goal), surcharge, out).map_err(Unanswered::Ran)
+}
+
+/// [`route_with`] in a scratch its caller has already held to
+/// [`Scratch::serves`]: the router's, behind [`Router::serve`]'s door or in
+/// the world's own scratch, where the only way to no route is the ground's.
+///
+/// [`Router::serve`]: crate::pathing::router::Router::serve
+///
+/// # Errors
+///
+/// A typed [`NoPath`].
+pub(crate) fn route_served(
+    surface: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    surcharge: Surcharge<'_>,
+    out: &mut Vec<Node>,
 ) -> Result<RouteOutcome, NoPath> {
     route_and_abstract(surface, clusters, scratch, (start, goal), surcharge, out)
         .map(|(_, outcome)| outcome)
 }
 
-/// [`route_with`], and the abstract search's answer the route was refined
-/// from: the one function both the router ([`route_with`]) and a clear
+/// [`route_served`], and the abstract search's answer the route was refined
+/// from: the one function both the router ([`route_served`]) and a clear
 /// estimate ([`crate::pathing::estimate::walk_cost`]) run, so that what the estimate
 /// prices is what the router serves by construction rather than by agreement.
+/// In a scratch its caller has already held to [`Scratch::serves`].
 ///
 /// # Errors
 ///
-/// As [`route`].
+/// A typed [`NoPath`].
 #[allow(
     clippy::too_many_lines,
     reason = "route's body under a surcharge: the abstract search, the leg refinement and the smoother in the order they run"
@@ -644,12 +655,6 @@ pub(crate) fn route_and_abstract(
     out: &mut Vec<Node>,
 ) -> Result<(AbstractResult, RouteOutcome), NoPath> {
     out.clear();
-    // The door of every route and of every walk priced by one (`route`,
-    // `route_with`, `walk_cost`, a clear estimate): one check a query, a
-    // handful of length compares.
-    if !scratch.serves(surface, clusters) {
-        return Err(NoPath::Misfit);
-    }
     // A route is walked over terrain the sim can see in full, so nothing on it
     // is priced through fog and the multiplier is never reached. Fog belongs to
     // the *estimate*, which is a seat's question about a route it cannot see.
