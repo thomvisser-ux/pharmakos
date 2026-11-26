@@ -31,6 +31,7 @@ use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::{World, WorldConfig};
 
 use crate::error::Error;
+use crate::shapes::Core;
 
 /// The match id every bench match is hosted under. Lower-case letters and
 /// hyphens only, as `MatchCache::valid_match_id` asks; it reaches nothing
@@ -114,10 +115,31 @@ pub fn attach(host: Host, layout: Option<&Layout>, opening: &Opening<'_>) -> Res
 ///
 /// As [`attach`].
 pub fn attach_with(
+    host: Host,
+    layout: Option<&Layout>,
+    settings: &[LayoutSettings],
+    opening: &Opening<'_>,
+) -> Result<Opened, Error> {
+    let seats = usize::try_from(opening.seats).map_err(|_| Error::Overflow("the seat count"))?;
+    let playbooks = vec![opening.playbook.to_owned(); seats];
+    attach_each(host, layout, settings, opening, &playbooks)
+}
+
+/// [`attach_with`], with a playbook of its own for each seat, in seat order:
+/// a playbook that names places round a seat's own core
+/// ([`seat_core`]) is a different text for each seat. `opening.playbook` is
+/// not read.
+///
+/// # Errors
+///
+/// As [`attach`], and [`Error::Submission`] when the playbooks are not one a
+/// seat.
+pub fn attach_each(
     mut host: Host,
     layout: Option<&Layout>,
     settings: &[LayoutSettings],
     opening: &Opening<'_>,
+    playbooks: &[String],
 ) -> Result<Opened, Error> {
     if let Some(layout) = layout {
         host.seed_layout_with_settings(layout, settings)
@@ -130,10 +152,17 @@ pub fn attach_with(
     }
     let mut surface = open_lull(host, opening, Some(Ms::new(lull_ms(opening.rules)?)))?;
     let seats = seat_ids(opening.seats)?;
+    if playbooks.len() != seats.len() {
+        return Err(Error::Submission(format!(
+            "{} playbooks for {} seats",
+            playbooks.len(),
+            seats.len()
+        )));
+    }
     let mut units_per_seat = None;
-    for seat in &seats {
+    for (seat, playbook) in seats.iter().zip(playbooks) {
         let token = mint(&mut surface, *seat)?;
-        let units = submit(&mut surface, &token, *seat, opening.playbook)?;
+        let units = submit(&mut surface, &token, *seat, playbook)?;
         if units_per_seat.is_some_and(|kept| kept != units) {
             return Err(Error::Submission(format!(
                 "seat {} sealed {units} size units and an earlier seat a different count, from \
@@ -214,6 +243,129 @@ pub fn open_lull(
     Ok(surface)
 }
 
+/// `seat`'s core on `world`, as the seat's own view names it: `b_00`, the
+/// seat's lowest-id beacon row (the gateway's per-seat beacon names,
+/// `crates/gateway/src/surface.rs`, "`b_00`, its core, first"), at its row's
+/// position, with the map's extent from `rules`.
+///
+/// # Errors
+///
+/// [`Error::Layout`] when the seat holds no beacon, [`Error::Rules`] for a
+/// table with no `map` block, and [`Error::Overflow`] for an extent past an
+/// `i32`.
+pub fn seat_core(world: &World, seat: SeatId, rules: &RulesTable) -> Result<Core, Error> {
+    let beacons = world.beacons();
+    let at = beacons
+        .ids()
+        .iter()
+        .zip(beacons.seats())
+        .zip(beacons.positions())
+        .filter(|((_, owner), _)| **owner == seat.raw())
+        .min_by_key(|((id, _), _)| **id)
+        .map(|(_, at)| at)
+        .ok_or_else(|| Error::Layout(format!("seat {} has no core on the map", seat.raw())))?;
+    let map = rules
+        .message()
+        .map
+        .as_ref()
+        .ok_or_else(|| Error::Rules("no `map` block".to_owned()))?;
+    let extent = |size: u32| i32::try_from(size).map_err(|_| Error::Overflow("the map's extent"));
+    let column = [
+        at[0].floor_voxels(),
+        at[1].floor_voxels(),
+        at[2].floor_voxels(),
+    ];
+    Ok(Core {
+        id: "b_00".to_owned(),
+        at: column,
+        extent: [extent(map.size_x)?, extent(map.size_y)?],
+        far: far_point(world, column)?,
+    })
+}
+
+/// How far, along each axis, [`far_point`] looks from a core: what a
+/// commander walks well inside a kind's segment before its first
+/// placement resolves.
+pub const FAR_REACH: i32 = 45;
+
+/// The column within [`FAR_REACH`] of `core` along each axis, standable and
+/// connected to the core's own column, whose nearest vent (by squared
+/// column distance to its anchor) is farthest; ties go to the first in
+/// `(y, x)` order. A pure function of the map, so the far covering kind
+/// walks to the same column on every run (`cert3` fix pass 3, N2 (c)).
+/// Columns no one can stand on, or that the core's component does not
+/// reach, are no candidates: a walk there could not be served.
+///
+/// # Errors
+///
+/// [`Error::Layout`] when the core stands on no node, the map holds no
+/// vent, or no column qualifies.
+pub fn far_point(world: &World, core: [i32; 3]) -> Result<[i32; 2], Error> {
+    let surface = world.surface();
+    let clusters = world.clusters();
+    let home = surface
+        .node_of(core[0], core[1])
+        .ok_or_else(|| Error::Layout(format!("a core stands on no node at {core:?}")))?;
+    let vents: Vec<[i32; 2]> = world
+        .features()
+        .features()
+        .iter()
+        .filter(|feature| feature.kind == pharmakos_sim::features::FeatureKind::Vent)
+        .map(|feature| feature.anchor)
+        .collect();
+    let span = |at: i32| -> Result<(i32, i32), Error> {
+        Ok((
+            at.checked_sub(FAR_REACH)
+                .ok_or(Error::Overflow("the far point's search span"))?,
+            at.checked_add(FAR_REACH)
+                .ok_or(Error::Overflow("the far point's search span"))?,
+        ))
+    };
+    // A column's squared distance to a vent's anchor, in `i64`: each axis's
+    // difference is widened before it is taken, and every step is checked.
+    let squared = |[vx, vy]: [i32; 2], x: i32, y: i32| -> Result<i64, Error> {
+        let overflow = Error::Overflow("a vent's squared distance");
+        let dx = i64::from(vx)
+            .checked_sub(i64::from(x))
+            .ok_or(overflow.clone())?;
+        let dy = i64::from(vy)
+            .checked_sub(i64::from(y))
+            .ok_or(overflow.clone())?;
+        dx.checked_mul(dx)
+            .and_then(|xx| dy.checked_mul(dy).and_then(|yy| xx.checked_add(yy)))
+            .ok_or(overflow)
+    };
+    let ((x0, x1), (y0, y1)) = (span(core[0])?, span(core[1])?);
+    let mut best: Option<(i64, [i32; 2])> = None;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let reached = surface
+                .node_of(x, y)
+                .is_some_and(|node| clusters.connected(surface, home, node));
+            if !reached {
+                continue;
+            }
+            let mut nearest: Option<i64> = None;
+            for vent in &vents {
+                let distance = squared(*vent, x, y)?;
+                if nearest.is_none_or(|kept| distance < kept) {
+                    nearest = Some(distance);
+                }
+            }
+            let nearest =
+                nearest.ok_or_else(|| Error::Layout("the map holds no vent".to_owned()))?;
+            if best.is_none_or(|(kept, _)| nearest > kept) {
+                best = Some((nearest, [x, y]));
+            }
+        }
+    }
+    best.map(|(_, column)| column).ok_or_else(|| {
+        Error::Layout(format!(
+            "no column within {FAR_REACH} of the core at {core:?} is reached"
+        ))
+    })
+}
+
 /// The hosted world, read only.
 ///
 /// # Errors
@@ -292,6 +444,25 @@ fn number(value: Option<&Json>) -> Option<u32> {
     }
 }
 
+/// `method`'s request with `params` as a client writes it, with the widest
+/// numeric id a client counts to (a `u64`'s twenty digits), as the gateway
+/// measures a request it hands back (`crates/gateway/src/surface/planning.rs`,
+/// `undo_travels`).
+#[must_use]
+pub fn request_text(method: &str, params: Json) -> String {
+    pharmakos_gateway::rpc::request_text(&Json::Number(u64::MAX.to_string()), method, params)
+}
+
+/// Whether `method`'s request with `params` is a text one message carries:
+/// the frame's own rule on its bytes (`pharmakos_gateway::frame::travels`),
+/// as `patch_plan` decides it (decisions-log item 167 (4)). Answers the
+/// request's bytes and the rule's answer.
+#[must_use]
+pub fn travels(method: &str, params: Json) -> (usize, bool) {
+    let bytes = request_text(method, params).len();
+    (bytes, pharmakos_gateway::frame::travels(bytes))
+}
+
 /// A hosted first Lull a planning call is timed in, with nothing submitted:
 /// the door a seat's editor calls through. P3 times `estimate_route` here
 /// and P1 FULL's end-to-end figure times `verify_plan`.
@@ -367,6 +538,46 @@ impl PlanningLull {
         self.surface
             .set_host_clock(Ms::new(self.elapsed_ms), Ms::new(remaining))
             .map_err(|error| Error::gateway("reporting the host clock", &error))
+    }
+
+    /// One call of `method` with `params` as the editor waits on it, as seat
+    /// 0: the request as the text a client writes (`rpc::request_text`), and
+    /// the clock around everything the gateway does with it in process: the
+    /// JSON-RPC parse, the door, the handler and the answer's encode to text.
+    /// The socket stays outside. Answers the time, the request's bytes and
+    /// the call's `result`; an answer with no `result` is the gateway's
+    /// refusal, an error.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Codec`] for a request the gateway's parser refuses,
+    /// [`Error::Gateway`] for a refusal, and as the clock report.
+    pub fn time_text(&mut self, method: &str, params: Json) -> Result<(u128, Json), Error> {
+        self.tick()?;
+        let text = request_text(method, params);
+        let started = std::time::Instant::now();
+        let parsed = pharmakos_gateway::rpc::parse(&text);
+        let answer = parsed
+            .as_ref()
+            .map(|request| self.surface.call(Some(&self.token), request, &Blind));
+        let written = answer.as_ref().map(json::write);
+        let ns = started.elapsed().as_nanos();
+        std::hint::black_box(&written);
+        let answer = answer.map_err(|error| Error::Codec {
+            what: format!("the bench's {method} request"),
+            reason: error.title().to_string(),
+        })?;
+        match answer.get("result") {
+            Some(result) => Ok((ns, result.clone())),
+            None => Err(Error::Gateway {
+                during: "a planning call in the Lull",
+                message: format!(
+                    "{method} at {} ms of host time in the Lull: {}",
+                    self.elapsed_ms,
+                    json::write(&answer)
+                ),
+            }),
+        }
     }
 
     /// One timed call of `method` with `params`, as seat 0: the request is

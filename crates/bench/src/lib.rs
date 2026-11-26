@@ -15,14 +15,17 @@
 //!
 //! | Module | Question |
 //! |---|---|
+//! | [`certify`] | P1's certifying run: every line it prints, stamped with its sampling, and E12's seed rule |
 //! | [`quick`] | QUICK's p50 and p99 over the committed verifier cases and `budget_128` |
 //! | [`full`] | P1 FULL (S3): QUICK and FULL over the committed cases and the generated shapes at each size of E24's curve |
 //! | [`shapes`] | The generated worst-shaped playbooks P1 FULL times, at any size |
 //! | [`decision`] | A decision tick's wall-clock cost per size unit, in a hosted match at the size budget, and in counted evaluation units; and the same at each size of the curve |
 //! | [`p3`] | P3 (S3): a unit's repath on the sim's own graph, cold and under the crater stream, and the travel estimate through the gateway and the sim's estimator |
 //! | [`g3`] | G3′-real: the tick at the gate's load, phase by phase, over an 8-minute segment, and the figures the power budget needs |
+//! | [`kinds`] | A decision tick's ns per counted unit, kind by kind, and whether the kinds agree |
 //! | [`hosted`] | A bench match, hosted as `gamectl scenario run` hosts one, the gate's layout placed in its lobby |
 //! | [`heap`] | What a counting global allocator tells the G3′ segment |
+//! | [`provenance`] | The commit a certifying run was built from, and a cut run's call count |
 //! | [`stats`] | Nearest-rank percentiles, means, and how a duration is written |
 //! | [`error`] | The one error type: every way a measurement can fail to measure |
 //!
@@ -65,13 +68,16 @@
 //! Never shipped: `publish = false`, and `cargo xtask package` builds the
 //! client library and `gamectl` alone.
 
+pub mod certify;
 pub mod decision;
 pub mod error;
 pub mod full;
 pub mod g3;
 pub mod heap;
 pub mod hosted;
+pub mod kinds;
 pub mod p3;
+pub mod provenance;
 pub mod quick;
 pub mod shapes;
 pub mod stats;

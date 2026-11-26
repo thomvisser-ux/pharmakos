@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! G3′-real's figures, published as notices and never gated (S2's plan,
-//! section 5 and task `g3h`; item 148's CI ruling).
+//! G3′-real's figures, published as notices and gated nowhere on a CI
+//! runner (S2's plan, section 5 and task `g3h`; item 148's CI ruling), and
+//! recorded as evidence for G3′ in a certifying run.
 //!
 //! The 8-minute segment at the gate's load, the support search's adversarial
 //! tick, and a fourth seat's decision-tick cost, each a `::notice::` per
@@ -56,11 +57,12 @@ use std::cell::Cell;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use pharmakos_bench::decision::BENCH_SEED;
 use pharmakos_bench::g3::layout::Quarters;
 use pharmakos_bench::g3::segment::{self, GateLoad, SegmentPlan};
 use pharmakos_bench::g3::{self, G3_SEED, G3_SEGMENT_MS, fourth, stream, support, sweep, variant};
 use pharmakos_bench::heap::HeapCounter;
-use pharmakos_bench::{Error, workspace_root};
+use pharmakos_bench::{Error, certify, kinds, provenance, workspace_root};
 
 /// Bytes allocated and not yet freed, process-wide.
 static LIVE: AtomicU64 = AtomicU64::new(0);
@@ -211,7 +213,7 @@ fn segment_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
     let full = support::footing_at_room(root, G3_SEED)?;
     Ok(vec![
         g3::provenance_notice(&report, os),
-        g3::tick_notice(&report, os)?,
+        g3::tick_notice(&report, provenance::Role::Published, os)?,
         g3::phases_notice(&report, os)?,
         g3::repaths_notice(&report, os)?,
         g3::drift_notice(&report, os),
@@ -230,7 +232,7 @@ fn g3_budget_segment() {
     match gate_segment(&root) {
         Ok(report) => {
             println!("{}", g3::provenance_notice(&report, os));
-            match g3::tick_notice(&report, os) {
+            match g3::tick_notice(&report, provenance::Role::Alarm, os) {
                 Ok(line) => println!("{line}"),
                 Err(error) => panic!("the tick notice: {error}"),
             }
@@ -262,14 +264,74 @@ fn fourth_notice(root: &Path, os: &str) -> Result<Vec<String>, Error> {
     Ok(vec![g3::fourth_notice(&line, os)?])
 }
 
+/// The decision tick's nanoseconds per counted unit, kind by kind, on both
+/// seeds, under this binary's counting allocator (`cert3`'s B3 and B4; items
+/// 175 (8) and 196): `cargo xtask perf-alarms p1-kinds` runs it, and the
+/// certifying run is the same command on the owner's machine. Six notices:
+/// the commit, a seed's kinds and their agreement twice, and the seed gap.
+#[test]
+#[ignore = "a performance alarm, not a gate: cargo xtask perf-alarms p1-kinds runs it with --exact"]
+fn p1_decision_kinds() {
+    let root = workspace_root();
+    let os = std::env::consts::OS;
+    println!();
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
+        Err(error) => panic!("{error}"),
+    };
+    let plan = kinds::KindPlan::MEASURED;
+    let lines = kinds::Tables::load(&root).and_then(|tables| {
+        let mut seeds = Vec::with_capacity(2);
+        for seed in [BENCH_SEED, pharmakos_sim::DETERMINISM_MATCH_SEED] {
+            seeds.push((seed, kinds::measure(seed, plan, &tables, Some(&Counter))?));
+        }
+        certify::kinds_lines(&root, &seeds, plan, certify, os)
+    });
+    match lines {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Err(error) => {
+            println!("::warning title=decision tick by kind::not measured on {os}: {error}");
+            panic!("the decision tick by kind was not measured on {os}: {error}");
+        }
+    }
+}
+
+/// What the gate's load with raids costs a watcher, a seat's sightings and
+/// the breach search (`cert3`'s B5; S3's plan, E15 and E17): `cargo xtask
+/// perf-alarms g3-watch` runs it. Six notices: the commit, the segment's
+/// provenance, the view feed's bytes, the recompute, the sightings and the
+/// breach search.
+#[test]
+#[ignore = "a performance alarm, not a gate: cargo xtask perf-alarms g3-watch runs it with --exact"]
+fn g3_watch_sightings_and_breach() {
+    let root = workspace_root();
+    let os = std::env::consts::OS;
+    println!();
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
+        Err(error) => panic!("{error}"),
+    };
+    match g3::watch::measure(&root, G3_SEED, G3_SEGMENT_MS)
+        .and_then(|report| certify::watch_lines(&root, &report, certify, os))
+    {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Err(error) => panic!("the gate's watch segment was not measured on {os}: {error}"),
+    }
+}
+
 #[test]
 #[ignore = "S3's loads with raids, run by hand with the certifying runs (--ignored --exact)"]
 fn g3_raids_segments() {
     let root = workspace_root();
     let os = std::env::consts::OS;
     println!();
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
+        Err(error) => panic!("{error}"),
+    };
+    let mut reports = Vec::with_capacity(2);
     for load in [GateLoad::RAIDS, GateLoad::RAIDS_AT_B] {
-        let measured = segment::measure(
+        match segment::measure(
             &root,
             SegmentPlan {
                 seed: G3_SEED,
@@ -280,21 +342,17 @@ fn g3_raids_segments() {
                 load,
             },
             Some(&Counter),
-        );
-        let lines = measured.and_then(|report| {
-            Ok(vec![
-                g3::provenance_notice(&report, os),
-                g3::tick_notice(&report, os)?,
-                g3::phases_notice(&report, os)?,
-                g3::repaths_notice(&report, os)?,
-                g3::combat_notice(&report, os)?,
-            ])
-        });
-        match lines {
-            Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        ) {
+            Ok(report) => reports.push(report),
             Err(error) => {
                 panic!("the G3' segment under {load:?} was not measured on {os}: {error}")
             }
         }
+    }
+    // The commit's line is stamped from the segments as they played: the
+    // fewer ticks of the two, never a literal (`certify::raids_lines`).
+    match certify::raids_lines(&root, &reports, certify, os) {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Err(error) => panic!("the G3' segments' lines on {os}: {error}"),
     }
 }

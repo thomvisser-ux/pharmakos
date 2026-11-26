@@ -383,8 +383,15 @@ fn summarise(samples: &[Sample], played_on: Match) -> Result<DecisionTiming, Err
             index += 1;
         }
         // A decision tick with no ordinary tick after it has nothing to be
-        // paired with, and is left out of the pairing by its definition.
+        // paired with, and is left out of the pairing by its definition: only
+        // the segment's last, since the cadence puts ordinary ticks between
+        // two decision ticks, and two in a row are a drift, said.
         let Some(mean) = stats::mean(&window) else {
+            if played.get(index).is_some() {
+                return Err(Error::Drift(format!(
+                    "two decision ticks in a row (sample {index}), with no ordinary tick between"
+                )));
+            }
             continue;
         };
         let excess = signed(sample.ns)?
@@ -860,6 +867,10 @@ mod tests {
         samples.insert(6, sample(10_000, true));
         assert_eq!(summarise(&samples, on).expect("still two").windows, 2);
         assert!(summarise(&[sample(5, true)], on).is_err());
+        // F4: two decision ticks in a row leave the first unpaired before
+        // the end, a drift said, never a window dropped without a word.
+        let adjacent = [sample(700, true), sample(800, true), sample(150, false)];
+        assert!(matches!(summarise(&adjacent, on), Err(Error::Drift(_))));
     }
 
     #[test]

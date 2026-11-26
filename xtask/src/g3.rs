@@ -29,7 +29,7 @@ use std::path::Path;
 /// The report line's prefix and format version, as
 /// `crates/bench/src/g3.rs`'s `BUDGET_REPORT_PREFIX` spells it; a unit test
 /// holds the two together.
-pub(crate) const REPORT_PREFIX: &str = "g3-budget-report v1";
+pub(crate) const REPORT_PREFIX: &str = "g3-budget-report v2";
 
 /// The bench's test that plays the segment and prints the report.
 pub(crate) const BUDGET_TEST: &str = "g3_budget_segment";
@@ -40,11 +40,22 @@ pub(crate) const ALARM_P99_NS: u128 = 50_000_000;
 /// The alarm's mean bar: 25 ms, G3′-b's 12.5 ms doubled.
 pub(crate) const ALARM_MEAN_NS: u128 = 25_000_000;
 
-/// G3′-a's bar, quoted beside the figure and never gated here.
+/// G3′-a's bar, quoted beside the figure and never gated here. The bench
+/// prints its own (`crates/bench/src/g3.rs`'s `P99_BAR_NS`) on the report
+/// line, and a line whose bar differs gives no verdict
+/// ([`BudgetError::BarMismatch`]): the one fact, checked from both sides.
 pub(crate) const GATE_P99_NS: u128 = 25_000_000;
 
-/// G3′-b's bar, quoted beside the figure and never gated here.
+/// G3′-b's bar, quoted beside the figure and never gated here; held to the
+/// bench's `MEAN_BAR_NS` as [`GATE_P99_NS`] is to its `P99_BAR_NS`.
 pub(crate) const GATE_MEAN_NS: u128 = 12_500_000;
+
+/// The segment G3′ plays, in ticks, as this alarm holds it: the bench's
+/// `G3_SEGMENT_MS` (8 minutes) over the sim's `MS_PER_TICK`. The bench prints
+/// its own as `segment_ticks`, and a line whose segment differs gives no
+/// verdict ([`BudgetError::PlanMismatch`]): a segment shortened in the bench
+/// alone would otherwise read as complete.
+pub(crate) const PLANNED_SEGMENT_TICKS: u128 = 9_600;
 
 /// Why the alarm gave no verdict. Each one fails the command.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -72,6 +83,18 @@ pub(crate) enum BudgetError {
     ShortSegment { ticks: u128, segment_ticks: u128 },
     /// A report whose figures cannot all be true at once.
     Inconsistent(&'static str),
+    /// The bench printed a bar other than the one this alarm holds.
+    BarMismatch {
+        field: &'static str,
+        bench: u128,
+        alarm: u128,
+    },
+    /// The bench printed a planned count other than the one this alarm holds.
+    PlanMismatch {
+        field: &'static str,
+        bench: u128,
+        alarm: u128,
+    },
 }
 
 impl fmt::Display for BudgetError {
@@ -101,6 +124,24 @@ impl fmt::Display for BudgetError {
                 "the report covers {ticks} ticks of a segment of {segment_ticks}: a short run"
             ),
             Self::Inconsistent(why) => write!(f, "the report's figures disagree: {why}"),
+            Self::BarMismatch {
+                field,
+                bench,
+                alarm,
+            } => write!(
+                f,
+                "the bench prints `{field}` as {bench} and this alarm holds {alarm}: the bar \
+                 moved on one side alone"
+            ),
+            Self::PlanMismatch {
+                field,
+                bench,
+                alarm,
+            } => write!(
+                f,
+                "the bench prints `{field}` as {bench} and this alarm holds {alarm}: the plan \
+                 moved on one side alone"
+            ),
         }
     }
 }
@@ -116,14 +157,16 @@ pub(crate) struct Report {
     pub(crate) max_ns: u128,
 }
 
-/// The fields a v1 report carries, in the order the bench prints them.
-const FIELDS: [&str; 6] = [
+/// The fields a v2 report carries, in the order the bench prints them.
+const FIELDS: [&str; 8] = [
     "ticks",
     "segment_ticks",
     "p50_ns",
     "p99_ns",
     "mean_ns",
     "max_ns",
+    "p99_bar_ns",
+    "mean_bar_ns",
 ];
 
 /// Read the one report line out of the measurement's output.
@@ -141,7 +184,7 @@ pub(crate) fn parse(output: &str) -> Result<Report, BudgetError> {
         [one] => *one,
         many => return Err(BudgetError::SeveralReports(many.len())),
     };
-    let mut values: [(&'static str, Option<u128>); 6] = FIELDS.map(|field| (field, None));
+    let mut values: [(&'static str, Option<u128>); 8] = FIELDS.map(|field| (field, None));
     for token in rest.split_whitespace() {
         let (key, value) = token
             .split_once('=')
@@ -158,8 +201,28 @@ pub(crate) fn parse(output: &str) -> Result<Report, BudgetError> {
             value: value.to_owned(),
         })?);
     }
-    let [ticks, segment_ticks, p50_ns, p99_ns, mean_ns, max_ns] =
-        values.map(|(field, value)| value.ok_or(BudgetError::MissingField(field)));
+    let [
+        ticks,
+        segment_ticks,
+        p50_ns,
+        p99_ns,
+        mean_ns,
+        max_ns,
+        p99_bar_ns,
+        mean_bar_ns,
+    ] = values.map(|(field, value)| value.ok_or(BudgetError::MissingField(field)));
+    for (field, bench, alarm) in [
+        ("p99_bar_ns", p99_bar_ns?, GATE_P99_NS),
+        ("mean_bar_ns", mean_bar_ns?, GATE_MEAN_NS),
+    ] {
+        if bench != alarm {
+            return Err(BudgetError::BarMismatch {
+                field,
+                bench,
+                alarm,
+            });
+        }
+    }
     let report = Report {
         ticks: ticks?,
         segment_ticks: segment_ticks?,
@@ -170,6 +233,13 @@ pub(crate) fn parse(output: &str) -> Result<Report, BudgetError> {
     };
     if report.ticks == 0 {
         return Err(BudgetError::NoTicks);
+    }
+    if report.segment_ticks != PLANNED_SEGMENT_TICKS {
+        return Err(BudgetError::PlanMismatch {
+            field: "segment_ticks",
+            bench: report.segment_ticks,
+            alarm: PLANNED_SEGMENT_TICKS,
+        });
     }
     if report.ticks < report.segment_ticks {
         return Err(BudgetError::ShortSegment {
@@ -279,8 +349,9 @@ pub(crate) fn run(root: &Path, require_tools: bool, locked: bool) -> Result<bool
 mod tests {
     use super::*;
 
-    const GOOD: &str = "g3-budget-report v1 ticks=9600 segment_ticks=9600 p50_ns=3000000 \
-                        p99_ns=9000000 mean_ns=4000000 max_ns=20000000";
+    const GOOD: &str = "g3-budget-report v2 ticks=9600 segment_ticks=9600 p50_ns=3000000 \
+                        p99_ns=9000000 mean_ns=4000000 max_ns=20000000 p99_bar_ns=25000000 \
+                        mean_bar_ns=12500000";
 
     #[test]
     fn a_report_is_read_among_other_output() {
@@ -351,9 +422,94 @@ mod tests {
         ));
         // A longer word that merely starts with the prefix is not a report.
         assert_eq!(
-            parse("g3-budget-report v10 ticks=1"),
+            parse("g3-budget-report v20 ticks=1"),
             Err(BudgetError::NoReport)
         );
+        // F7, the must-trip of the one fact: a bar moved on the bench's side
+        // alone is no verdict, each bar under its own name.
+        assert_eq!(
+            swap("p99_bar_ns=25000000", "p99_bar_ns=20000000"),
+            Err(BudgetError::BarMismatch {
+                field: "p99_bar_ns",
+                bench: 20_000_000,
+                alarm: GATE_P99_NS
+            })
+        );
+        assert_eq!(
+            swap("mean_bar_ns=12500000", "mean_bar_ns=12500001"),
+            Err(BudgetError::BarMismatch {
+                field: "mean_bar_ns",
+                bench: 12_500_001,
+                alarm: GATE_MEAN_NS
+            })
+        );
+        assert_eq!(
+            swap(" mean_bar_ns=12500000", ""),
+            Err(BudgetError::MissingField("mean_bar_ns"))
+        );
+        // F-b, the must-trip of the planned segment: shortened in the bench
+        // alone, with a played count to match, it is no verdict.
+        assert_eq!(
+            swap(
+                "ticks=9600 segment_ticks=9600",
+                "ticks=4800 segment_ticks=4800"
+            ),
+            Err(BudgetError::PlanMismatch {
+                field: "segment_ticks",
+                bench: 4_800,
+                alarm: PLANNED_SEGMENT_TICKS
+            })
+        );
+    }
+
+    /// F-b, the other side: this alarm's planned segment is the bench's
+    /// `G3_SEGMENT_MS` over the sim's `MS_PER_TICK`, read from their sources,
+    /// so a segment moved here alone is red too.
+    #[test]
+    fn the_planned_segment_is_the_benchs_own() {
+        let root = crate::workspace_root().unwrap_or_else(|error| panic!("{error}"));
+        let constant = |file: &str, head: &str| -> u128 {
+            let text = std::fs::read_to_string(root.join(file))
+                .unwrap_or_else(|error| panic!("{file}: {error}"));
+            let line = text
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(head))
+                .unwrap_or_else(|| panic!("{file} defines no `{head}`"));
+            line.trim_end_matches(';')
+                .replace('_', "")
+                .parse()
+                .unwrap_or_else(|error| panic!("`{head}{line}`: {error}"))
+        };
+        let segment_ms = constant("crates/bench/src/g3.rs", "pub const G3_SEGMENT_MS: i32 = ");
+        let per_tick = constant(
+            "crates/sim/src/math/quantity.rs",
+            "pub const MS_PER_TICK: i32 = ",
+        );
+        assert_eq!(segment_ms, PLANNED_SEGMENT_TICKS * per_tick);
+    }
+
+    /// F7, the other side: this alarm's bars are the bench's constants, read
+    /// from its source, so a bar moved here alone is red too.
+    #[test]
+    fn the_gates_bars_are_the_benchs_own() {
+        let root = crate::workspace_root().unwrap_or_else(|error| panic!("{error}"));
+        let lib = std::fs::read_to_string(root.join("crates/bench/src/g3.rs"))
+            .unwrap_or_else(|error| panic!("crates/bench/src/g3.rs: {error}"));
+        let constant = |name: &str| -> u128 {
+            let head = format!("pub const {name}: u128 = ");
+            let line = lib
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(head.as_str()))
+                .unwrap_or_else(|| panic!("crates/bench/src/g3.rs defines no `{name}`"));
+            line.trim_end_matches(';')
+                .replace('_', "")
+                .parse()
+                .unwrap_or_else(|error| panic!("`{name}` is `{line}`: {error}"))
+        };
+        assert_eq!(constant("P99_BAR_NS"), GATE_P99_NS);
+        assert_eq!(constant("MEAN_BAR_NS"), GATE_MEAN_NS);
+        assert_eq!(ALARM_P99_NS, GATE_P99_NS * 2, "the gate doubled");
+        assert_eq!(ALARM_MEAN_NS, GATE_MEAN_NS * 2, "the gate doubled");
     }
 
     #[test]
@@ -383,6 +539,19 @@ mod tests {
             2
         );
         assert_eq!(ms(12_500_000), "12.500 ms");
+        // B5: exactly at a gate's bar is within it, a nanosecond past is over.
+        let (lines, _) = verdict(&at(GATE_P99_NS, GATE_MEAN_NS), "linux");
+        assert!(
+            lines.iter().any(|line| line
+                .contains("this runner is within G3'-a's 25.000 ms and within G3'-b's 12.500 ms")),
+            "{lines:?}"
+        );
+        let (lines, _) = verdict(&at(GATE_P99_NS + 1, GATE_MEAN_NS + 1), "linux");
+        assert!(
+            lines.iter().any(|line| line
+                .contains("this runner is over G3'-a's 25.000 ms and over G3'-b's 12.500 ms")),
+            "{lines:?}"
+        );
     }
 
     #[test]

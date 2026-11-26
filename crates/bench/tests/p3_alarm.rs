@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! P3's wall-clock figures (S3's plan, section 5.1 and task `bench3`),
-//! published as notices and never gated, and the one report line `cargo
+//! published as notices and gated nowhere on a CI runner (recorded as
+//! evidence for G2 + P3 in a certifying run), and the one report line `cargo
 //! xtask p3-budget` reads (E12).
 //!
 //! The repath on the sim's own graph, cold and under the crater stream with
@@ -31,11 +32,11 @@
 //! reason.
 
 use pharmakos_bench::p3::{self, P3_SEEDS, P3Plan};
-use pharmakos_bench::workspace_root;
+use pharmakos_bench::{certify, provenance, workspace_root};
 
 /// `p3`'s notices: one a seed and the summary. GitHub annotates the first
 /// ten notices of a step (item 149 (4)).
-const P3_NOTICES: usize = P3_SEEDS.len() + 1;
+const P3_NOTICES: usize = P3_SEEDS.len() + 2;
 
 const _: () = assert!(P3_NOTICES <= 10);
 
@@ -46,17 +47,16 @@ fn p3_pathing_timings() {
     let os = std::env::consts::OS;
     // A notice must start its line; see the module docs.
     println!();
-    match p3::measure(&root, &P3Plan::gate()) {
-        Ok(report) => {
-            let mut lines: Vec<String> = report
-                .seeds
-                .iter()
-                .map(|seed| p3::seed_notice(&report, seed, os))
-                .collect();
-            match p3::summary_notice(&report, os) {
-                Ok(line) => lines.push(line),
-                Err(error) => panic!("the P3 summary: {error}"),
-            }
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
+        Err(error) => panic!("{error}"),
+    };
+    // Every line carries its counts as they ran: the seeds and the pairs a
+    // seed, against the plan's (`certify::p3_lines`).
+    match p3::measure(&root, &P3Plan::gate())
+        .and_then(|report| certify::p3_lines(&root, &report, certify, os))
+    {
+        Ok(lines) => {
             for line in &lines {
                 println!("{line}");
             }
@@ -77,7 +77,7 @@ fn p3_budget() {
     println!();
     match p3::measure(&root, &P3Plan::gate()) {
         Ok(report) => {
-            match p3::summary_notice(&report, os) {
+            match p3::summary_notice(&report, p3::Role::Alarm, os) {
                 Ok(line) => println!("{line}"),
                 Err(error) => panic!("the P3 summary: {error}"),
             }

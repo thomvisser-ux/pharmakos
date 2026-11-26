@@ -100,9 +100,15 @@ pub fn committed_cases(root: &Path) -> Result<Vec<Case>, Error> {
         if path.extension().is_none_or(|extension| extension != "json") {
             continue;
         }
-        let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| {
+                Error::Drift(format!(
+                    "a case file's name is not UTF-8: {}",
+                    path.display()
+                ))
+            })?;
         let bytes = fs::read(&path).map_err(|error| read_error(&path, &error))?;
         cases.push(Case {
             name: name.to_owned(),
@@ -518,7 +524,7 @@ pub struct QuickPlan {
 pub struct QuickTiming {
     /// How many committed cases were timed.
     pub cases: usize,
-    /// Timed calls per case.
+    /// Timed calls per case, as taken: the fewest any case's own sample holds.
     pub calls_per_case: usize,
     /// Every timed call of every case, pooled.
     pub pooled: Summary,
@@ -561,6 +567,7 @@ pub fn measure_at(
         .checked_mul(plan.calls)
         .ok_or(Error::Overflow("the pooled calls"))?;
     let mut pooled: Vec<u128> = Vec::with_capacity(room);
+    let mut taken: Option<usize> = None;
     let mut budget: Option<Summary> = None;
     let mut slowest: (String, u128) = (String::new(), 0);
     for case in cases {
@@ -571,6 +578,10 @@ pub fn measure_at(
         for _ in 0..plan.calls {
             own.push(fixture.time(case, depth)?);
         }
+        taken = Some(match taken {
+            Some(fewest) => fewest.min(own.len()),
+            None => own.len(),
+        });
         pooled.extend_from_slice(&own);
         let summary = Summary::of(own)?;
         if summary.p99_ns > slowest.1 || slowest.0.is_empty() {
@@ -581,9 +592,10 @@ pub fn measure_at(
         }
     }
     let budget = budget.ok_or_else(|| Error::Empty(format!("the cases hold no {BUDGET_CASE}")))?;
+    let calls_per_case = taken.ok_or_else(|| Error::Empty("no case was timed".to_owned()))?;
     Ok(QuickTiming {
         cases: cases.len(),
-        calls_per_case: plan.calls,
+        calls_per_case,
         pooled: Summary::of(pooled)?,
         budget,
         slowest,
@@ -593,16 +605,17 @@ pub fn measure_at(
 /// The notices for one QUICK measurement, word for word. Pure, so the text is
 /// pinned by a unit test.
 #[must_use]
-pub fn notices(timing: &QuickTiming, os: &str) -> Vec<String> {
+pub fn notices(timing: &QuickTiming, role: crate::provenance::Role, os: &str) -> Vec<String> {
     vec![
         format!(
             "::notice title=QUICK p99::{} p99, {} p50 on {os}, over {} committed verifier cases \
              x {} calls each, timed singly (Input::new then verify at QUICK); spec section 16's \
-             P1 bar is 5 ms p99, published here and never gated",
+             P1 bar is 5 ms p99; {}",
             micros(timing.pooled.p99_ns),
             micros(timing.pooled.p50_ns),
             timing.cases,
             timing.calls_per_case,
+            role.words("P1's QUICK bar"),
         ),
         format!(
             "::notice title=QUICK p99 at the size budget::{BUDGET_CASE}: {} p99, {} p50 on {os} \
@@ -642,11 +655,12 @@ mod tests {
             slowest: ("budget_128".to_owned(), 400_001),
         };
         assert_eq!(
-            notices(&timing, "windows"),
+            notices(&timing, crate::provenance::Role::Published, "windows"),
             vec![
                 "::notice title=QUICK p99::1250.500 us p99, 41.000 us p50 on windows, over 48 \
                  committed verifier cases x 200 calls each, timed singly (Input::new then verify \
-                 at QUICK); spec section 16's P1 bar is 5 ms p99, published here and never gated"
+                 at QUICK); spec section 16's P1 bar is 5 ms p99; published here and gated \
+                 nowhere (the gate, P1's QUICK bar, is certified on the owner's machine)"
                     .to_owned(),
                 "::notice title=QUICK p99 at the size budget::budget_128: 400.001 us p99, \
                  300.000 us p50 on windows over 200 calls; slowest case by p99: budget_128 at \

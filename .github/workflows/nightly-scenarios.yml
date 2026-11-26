@@ -346,9 +346,11 @@ jobs:
           {
             echo "### Nightly adversarial scenarios"
             echo
-            echo "Not enabled yet. The owner sets the repository variable"
-            echo "\`NIGHTLY_SCENARIOS_ENABLED\` to \`true\` once S2's \`arms\` lane has merged"
-            echo "and its forced run is attached (S2's plan, decision 30). Until then the three"
-            echo "arms are placeholders. The verifier fuzz job and G4's ten matches wait behind"
-            echo "the same gate; a manual run with \`force\` runs everything now."
+            echo "Not run: the repository variable \`NIGHTLY_SCENARIOS_ENABLED\` is not \`true\`"
+            echo "for this run, and the run was not forced. The three arms are written and"
+            echo "played against Easy whenever the gate is open: Rusher, Turtle and Hunter, each"
+            echo "a hand-written playbook over the twenty seeds of"
+            echo "\`scenarios/nightly/seeds.txt\` (scenarios/nightly/README.md). The verifier fuzz"
+            echo "job and G4's ten matches wait behind the same gate. Setting the variable is the"
+            echo "owner's (S2's plan, decision 30); a manual run with \`force\` runs everything now."
           } >> "$GITHUB_STEP_SUMMARY"

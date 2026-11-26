@@ -84,6 +84,12 @@ pub enum Error {
         /// Why not.
         reason: String,
     },
+    /// A certifying run could not name what reproduces it: the commit it was
+    /// built from ([`crate::provenance`]).
+    Provenance(String),
+    /// A run was asked for a plan the bench refuses: a call count that is not
+    /// a whole number above zero ([`crate::provenance::cert_plan_from`]).
+    Plan(String),
 }
 
 impl fmt::Display for Error {
@@ -100,6 +106,8 @@ impl fmt::Display for Error {
             | Error::Layout(reason)
             | Error::Drift(reason)
             | Error::Empty(reason) => f.write_str(reason),
+            Error::Provenance(reason) => write!(f, "the run's provenance: {reason}"),
+            Error::Plan(reason) => write!(f, "the run's plan: {reason}"),
             Error::Overflow(what) => write!(f, "{what} does not fit its type"),
             Error::Unmeasured { seat, reason } => {
                 write!(f, "seat {seat}'s decision was not measured: {reason}")
