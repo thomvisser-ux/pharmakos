@@ -54,7 +54,7 @@ fn codes(rows: &[String]) -> Vec<(String, String)> {
         },
     );
     let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
-    pharmakos_verifier::verify_counted_at_cap(&input, Depth::Quick, u32::MAX)
+    pharmakos_verifier::verify_counted_at_cap(&input, Depth::Quick, core::num::NonZeroU32::MAX)
         .report
         .diagnostics
         .into_iter()

@@ -173,17 +173,6 @@ pub fn listing(folder: &Path) -> Result<Listing, Error> {
     Ok(listed)
 }
 
-/// [`listing`]'s summaries alone, for the gateway's `list_templates` until
-/// it says the refused files too (its words wait for `surface/planning.rs`,
-/// after S3's `zerotitle`).
-///
-/// # Errors
-///
-/// As [`listing`].
-pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
-    listing(folder).map(|listed| listed.summaries)
-}
-
 /// The most bytes a library file may hold: a text at the playbook's cap,
 /// `pharmakos_verifier::MAX_PLAYBOOK_CHARS` characters, at UTF-8's four
 /// bytes a character (S3's `outcap`). A file past it is refused at its
@@ -743,7 +732,7 @@ pub fn instantiate(
 
 #[cfg(test)]
 mod tests {
-    use super::{Parameter, instantiate_template, list, read, resolve};
+    use super::{Parameter, instantiate_template, listing, read, resolve};
     use std::path::Path;
 
     const TEMPLATE: &str = concat!(
@@ -956,7 +945,7 @@ mod tests {
 
     #[test]
     fn a_folder_that_is_not_there_is_an_error_and_not_an_empty_library() {
-        assert!(list(Path::new("no/such/folder")).is_err());
+        assert!(listing(Path::new("no/such/folder")).is_err());
         assert!(read(Path::new("no/such/folder"), "nothing").is_err());
     }
 }

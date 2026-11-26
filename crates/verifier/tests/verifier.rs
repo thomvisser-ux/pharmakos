@@ -1383,7 +1383,7 @@ fn every_reserved_name_the_schema_holds_is_refused_by_name() {
     // decisions-log item 183 (4), "Cap all codes"), and the rest counted;
     // the names past the cap are each held to `E0003` one document at a time
     // below.
-    let cap = usize::try_from(MAX_PER_CODE).expect("fits");
+    let cap = usize::try_from(MAX_PER_CODE.get()).expect("fits");
     let listed: Vec<&Diagnostic> = report
         .diagnostics
         .iter()
@@ -1905,14 +1905,17 @@ fn every_half_written_area_is_refused_as_missing_a_corner() {
         // Every `E0101` the stage raises, the per-code cap off: this case
         // holds which corners are refused, and the one-visit playbook raises
         // more `E0101` than a report lists (S3's `vcap`).
-        let missing: Vec<String> =
-            pharmakos_verifier::verify_counted_at_cap(&input, Depth::Quick, u32::MAX)
-                .report
-                .diagnostics
-                .into_iter()
-                .filter(|found| found.code == "E0101" && found.path.starts_with("/declarative"))
-                .map(|found| found.path)
-                .collect();
+        let missing: Vec<String> = pharmakos_verifier::verify_counted_at_cap(
+            &input,
+            Depth::Quick,
+            core::num::NonZeroU32::MAX,
+        )
+        .report
+        .diagnostics
+        .into_iter()
+        .filter(|found| found.code == "E0101" && found.path.starts_with("/declarative"))
+        .map(|found| found.path)
+        .collect();
         let at = "/declarative/route/0/interface/rows/0/set_mandate_settings";
         let arm = mandate.split('"').nth(1).expect("the arm's name");
         let mut wanted = vec![format!("{at}/{arm}/{field}/0/max")];
@@ -3089,7 +3092,12 @@ fn copied_text(case: &str, copies: usize) -> Option<String> {
 }
 
 /// The counted report for `text` against `case`'s view, at `cap`.
-fn counted_at(case: &str, text: &str, depth: Depth, cap: u32) -> pharmakos_verifier::Counted {
+fn counted_at(
+    case: &str,
+    text: &str,
+    depth: Depth,
+    cap: core::num::NonZeroU32,
+) -> pharmakos_verifier::Counted {
     let rules = rules();
     let scope = scope_for(case);
     let snapshot = snapshot_for(case);
@@ -3203,15 +3211,23 @@ fn each_code_raised_once_a_report_is_once_however_often_it_is_provoked() {
         let counted = match provoke {
             Provoke::Case(case, copies) => {
                 let text = copied_text(case, copies).expect("the case is an object");
-                counted_at(case, &text, Depth::Full, u32::MAX)
+                counted_at(case, &text, Depth::Full, core::num::NonZeroU32::MAX)
             }
             Provoke::Text(text) => {
                 let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
-                pharmakos_verifier::verify_counted_at_cap(&input, Depth::Full, u32::MAX)
+                pharmakos_verifier::verify_counted_at_cap(
+                    &input,
+                    Depth::Full,
+                    core::num::NonZeroU32::MAX,
+                )
             }
             Provoke::TooLong => {
                 let input = Input::too_long(&[], &scope, &rules).expect("the input");
-                pharmakos_verifier::verify_counted_at_cap(&input, Depth::Full, u32::MAX)
+                pharmakos_verifier::verify_counted_at_cap(
+                    &input,
+                    Depth::Full,
+                    core::num::NonZeroU32::MAX,
+                )
             }
             Provoke::OwnFault => continue,
         };
@@ -3301,14 +3317,15 @@ fn the_cap_never_moves_a_verdict_or_a_total() {
                 *total = total.checked_add(1).expect("a total");
             }
         }
-        for gap in &counted.left_out {
-            let total = totals.entry(gap.code.to_owned()).or_default();
-            *total = total.checked_add(gap.count).expect("a total");
+        for gap in &counted.report.left_out {
+            let total = totals.entry(gap.code.clone()).or_default();
+            *total = total.checked_add(u64::from(gap.count)).expect("a total");
         }
         totals
     };
-    let cap = usize::try_from(MAX_PER_CODE).expect("fits");
+    let cap = usize::try_from(MAX_PER_CODE.get()).expect("fits");
     let mut compared = 0_usize;
+    let mut capped_seen = 0_usize;
     for case in cases() {
         for copies in [1_usize, 3, 7, 25] {
             let Some(text) = copied_text(&case, copies) else {
@@ -3316,7 +3333,7 @@ fn the_cap_never_moves_a_verdict_or_a_total() {
             };
             for depth in [Depth::Quick, Depth::Full] {
                 let capped = counted_at(&case, &text, depth, MAX_PER_CODE);
-                let whole = counted_at(&case, &text, depth, u32::MAX);
+                let whole = counted_at(&case, &text, depth, core::num::NonZeroU32::MAX);
                 assert_eq!(
                     capped.report.qualifies, whole.report.qualifies,
                     "{case} x{copies} {depth:?}: the verdict"
@@ -3328,20 +3345,105 @@ fn the_cap_never_moves_a_verdict_or_a_total() {
                 );
                 // Uncapped, only `I0003` notes past the size budget are left out.
                 assert!(
-                    whole.left_out.iter().all(|gap| gap.code == "I0003"),
+                    whole.report.left_out.iter().all(|gap| gap.code == "I0003"),
                     "{case}: {:?} left out uncapped",
-                    whole.left_out
+                    whole.report.left_out
                 );
                 assert!(capped.faults.is_empty() && whole.faults.is_empty());
                 for code in totals(&whole).into_keys() {
                     let shown = count_of(&capped.report, &code);
                     assert!(shown <= cap, "{case}: {shown} {code}");
                 }
-                let markers = count_of(&capped.report, "I0007");
-                assert_eq!(markers, capped.left_out.len(), "{case}: one I0007 a code");
+                the_field_is_the_rows(
+                    &capped.report,
+                    MAX_PER_CODE.get(),
+                    &format!("{case} x{copies}"),
+                );
+                the_field_is_the_rows(&whole.report, u32::MAX, &format!("{case} x{copies} whole"));
+                if count_of(&capped.report, "I0007") > 0 {
+                    capped_seen = capped_seen.saturating_add(1);
+                }
                 compared = compared.saturating_add(1);
             }
         }
     }
     assert!(compared > 500, "only {compared} reports compared");
+    assert!(
+        capped_seen > 50,
+        "only {capped_seen} reports left something out"
+    );
+}
+
+/// **`VerifyReport.left_out` and the closing `I0007` rows say the same thing**
+/// (S3's `leftout`): one `I0007` per entry, in the same order, each rendered
+/// from its entry (its count, its code and its `max`); the entries in code
+/// order, one per code, each counting at least one, each `max` the cap the
+/// report was built at; and a code with nothing left out has no entry. The
+/// `I0007` rows are the report's last, after every listed diagnostic.
+fn the_field_is_the_rows(report: &VerifyReport, cap: u32, case: &str) {
+    let markers: Vec<&pharmakos_proto::gp::api::v1::Diagnostic> = report
+        .diagnostics
+        .iter()
+        .filter(|found| found.code == "I0007")
+        .collect();
+    assert_eq!(
+        markers.len(),
+        report.left_out.len(),
+        "{case}: one I0007 an entry: {:?}",
+        report.left_out
+    );
+    let first_marker = report
+        .diagnostics
+        .iter()
+        .position(|found| found.code == "I0007")
+        .unwrap_or(report.diagnostics.len());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .skip(first_marker)
+            .all(|found| found.code == "I0007"),
+        "{case}: the I0007s close the report"
+    );
+    for (marker, gap) in markers.iter().zip(&report.left_out) {
+        let words = format!(
+            "{} more `{}` not listed: a report lists at most {} of one code",
+            gap.count, gap.code, gap.max
+        );
+        assert!(
+            marker.message.starts_with(&words),
+            "{case}: the I0007 `{}` is not rendered from {gap:?}",
+            marker.message
+        );
+        assert!(gap.count >= 1, "{case}: {gap:?} counts nothing");
+        assert_eq!(
+            Some(gap.severity),
+            pharmakos_verifier::catalogue::entry(&gap.code).map(|row| i32::from(row.severity)),
+            "{case}: {gap:?}'s severity is not its catalogue row's"
+        );
+        assert_eq!(gap.max, cap, "{case}: {gap:?}'s max is not the cap");
+    }
+    let codes: Vec<&str> = report
+        .left_out
+        .iter()
+        .map(|gap| gap.code.as_str())
+        .collect();
+    let mut ordered = codes.clone();
+    ordered.sort_unstable();
+    ordered.dedup();
+    assert_eq!(
+        codes, ordered,
+        "{case}: the entries are in code order, one a code"
+    );
+    for gap in &report.left_out {
+        // A code is left out of only at the cap, except `I0003` past the size
+        // budget, which is never listed once `E0110` has fired.
+        let listed = count_of(report, &gap.code);
+        let at_cap = u32::try_from(listed).is_ok_and(|listed| listed == cap);
+        let past_budget = gap.code == "I0003" && count_of(report, "E0110") == 1;
+        assert!(
+            at_cap || past_budget,
+            "{case}: {gap:?} left out with {listed} listed"
+        );
+    }
 }

@@ -23,10 +23,10 @@
       "beginner": "One of the choices here has been left blank."
     }
   ],
-  "report_hash": "RA7r1Ig+O5E=",
+  "report_hash": "07xEHRbEz9s=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "3JuEWqFCwsU=",
-  "verifier_version": "0.1.0-s3.8",
+  "verifier_version": "0.1.0-s3.9",
   "size_units": 2,
   "size_budget": 128
 }
