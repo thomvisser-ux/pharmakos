@@ -1391,6 +1391,26 @@ const OWN_SCRATCH: &[(&str, &str)] = &[
     ),
 ];
 
+/// What makes a planning scratch, or the adapter that searches in one. The
+/// host makes the match's one of each ([`OWN_SCRATCH`]'s words do not see
+/// these: `uses` reads whole words, so `Scratch::new` is not in
+/// `PlanningScratch::new`), and a handler that made its own would search in
+/// megabytes of zeroes a read again, with every answer the same.
+const OWN_PLANNING: &[(&str, &str)] = &[
+    (
+        "PlanningScratch::new",
+        "the host makes the match's one planning scratch, where the match opens",
+    ),
+    (
+        "PlanningScratch::default",
+        "the host makes the match's one planning scratch, where the match opens",
+    ),
+    (
+        "RouteAdapter::over",
+        "the host builds the route adapter over the match's own scratch (`Host::routes`)",
+    ),
+];
+
 /// How near a `.clone()` may stand to a `planning_scratch(` call: a loan
 /// cloned is a second scratch by another name, megabytes a read.
 const CLONE_REACH: usize = 2;
@@ -1441,8 +1461,21 @@ fn every_planning_read_searches_in_the_matchs_one_scratch() {
                 "let graph = Clusters::new(surface, shape, &mut scratch)?;",
                 "Clusters::new"
             )
-            && uses("let graph = graph_for(world)?;", "graph_for"),
-        "the scan finds what it looks for"
+            && uses("let graph = graph_for(world)?;", "graph_for")
+            && uses(
+                "RouteAdapter::over(world, &PlanningScratch::new())",
+                "PlanningScratch::new"
+            )
+            && uses(
+                "RouteAdapter::over(world, &PlanningScratch::new())",
+                "RouteAdapter::over"
+            )
+            && uses(
+                "PlanningScratch::default().lend(surface, clusters)?",
+                "PlanningScratch::default"
+            )
+            && !uses("PlanningScratch::new()", "Scratch::new"),
+        "the scan finds what it looks for, and `Scratch::new` is not in `PlanningScratch::new`"
     );
     assert_eq!(
         clones_beside_a_loan(
@@ -1460,6 +1493,21 @@ fn every_planning_read_searches_in_the_matchs_one_scratch() {
         findings.is_empty(),
         "a search scratch or a graph made outside the match's one:\n{}",
         findings.join("\n")
+    );
+    let makers = scan_except(OWN_PLANNING, &["src/routes.rs", "src/host.rs"]);
+    assert!(
+        makers.is_empty(),
+        "a planning scratch or a route adapter made outside the host:\n{}",
+        makers.join("\n")
+    );
+    assert_eq!(
+        (
+            uses_in("src/host.rs", "PlanningScratch::new"),
+            uses_in("src/host.rs", "PlanningScratch::default"),
+            uses_in("src/host.rs", "RouteAdapter::over"),
+        ),
+        (1, 0, 1),
+        "the host makes one planning scratch, where a match opens, and one adapter over it"
     );
     let cloned: Vec<String> = sources()
         .iter()

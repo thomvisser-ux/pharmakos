@@ -412,7 +412,7 @@ impl Host {
     }
 
     /// How many search scratches the match's planning reads have made: none
-    /// until one searches, and one from then on
+    /// until one borrows the scratch, and one from then on
     /// ([`PlanningScratch::made`]).
     #[must_use]
     pub const fn planning_scratches_made(&self) -> u32 {

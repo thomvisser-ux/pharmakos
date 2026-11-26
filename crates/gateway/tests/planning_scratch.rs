@@ -11,6 +11,9 @@
 //! match to both, over every method that searches:
 //!
 //! * `get_map_summary` (a walk to every feature),
+//! * `get_briefing`, whose "this round" sentence resolves the seat's own seal
+//!   (so seat 0 seals a playbook that ranks vents in each Lull before it
+//!   reads; without a seal the briefing searches nothing),
 //! * `resolve_refs` (rankings and sites),
 //! * `estimate_route`, with a voxel leg, a `covering` leg, a `toward` leg
 //!   and a `beacon_anchor` leg.
@@ -54,22 +57,54 @@ const ROUNDS: u32 = 3;
 /// its parameters.
 type Read = (&'static str, &'static str, String);
 
-/// Every planning read that searches, as seat 0 makes it in the Lull
-/// `surface` stands in, with `vent` the feature the legs and the playbook
-/// name.
-fn reads(surface: &Surface, vent: &str) -> Vec<Read> {
-    let [x, y, z] = support::commander_voxel(surface, 0);
-    let from = format!(r#"{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}}"#);
-    let playbook = std::fs::read_to_string(
+/// The committed playbook the reads resolve and seat 0 seals: its first step
+/// deploys covering the nearest vent, so resolving it ranks vents.
+fn playbook() -> String {
+    std::fs::read_to_string(
         support::workspace_root()
             .join("scenarios")
             .join("s1")
             .join("cover-nearest-vent.playbook.jsonc"),
     )
-    .expect("the committed scenario playbook");
+    .expect("the committed scenario playbook")
+}
+
+/// Seat 0 seals [`playbook`] for the Lull `surface` stands in, so that its
+/// briefing has a seal of this round to resolve. Sealing compiles and
+/// searches nothing.
+fn seal(surface: &mut Surface, left: &mut i32) {
+    let token = support::seat_token(surface, 0);
+    let before = (made(surface), work(surface));
+    let sealed = call_in_lull(
+        surface,
+        &token,
+        left,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&playbook())),
+    );
+    assert_eq!(
+        result(&sealed, "submit_plan").get("accepted"),
+        Some(&Json::Bool(true)),
+        "the seal is accepted"
+    );
+    assert_eq!(
+        (made(surface), work(surface)),
+        before,
+        "sealing borrowed or searched in the planning scratch"
+    );
+}
+
+/// Every planning read that searches, as seat 0 makes it in the Lull
+/// `surface` stands in once it has sealed ([`seal`]), with `vent` the feature
+/// the legs name.
+fn reads(surface: &Surface, vent: &str) -> Vec<Read> {
+    let [x, y, z] = support::commander_voxel(surface, 0);
+    let from = format!(r#"{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}}"#);
+    let playbook = playbook();
     let leg = |to: String| format!(r#"{{"waypoints":[{from},{to}]}}"#);
     vec![
         ("the map summary", "get_map_summary", String::from("{}")),
+        ("the briefing", "get_briefing", String::from("{}")),
         (
             "the references",
             "resolve_refs",
@@ -252,13 +287,14 @@ fn a_match_makes_one_planning_scratch_and_keeps_it_for_every_lull() {
              search still counted: {priced} then, {now:?} now"
         );
         let mut left = LULL_MS;
+        seal(&mut surface, &mut left);
         for read in in_round_order(reads(&surface, &vent), round) {
             let _ = ask(&mut surface, &mut left, &read);
             let after = work(&surface);
             assert!(
-                after.is_some_and(|after| after >= priced),
-                "round {round}, {}: the tally fell from {priced} to {after:?}, so the read \
-                 searched in another scratch",
+                after.is_some_and(|after| after > priced),
+                "round {round}, {}: the work went from {priced} to {after:?} and did not grow, so \
+                 the read searched in another scratch",
                 read.0
             );
             priced = after.unwrap_or(priced);
@@ -288,6 +324,7 @@ fn every_searching_read_searches_in_the_matchs_scratch() {
     let mut surface = support::hosted(2, SEGMENT_MS, ROUNDS);
     let vent = a_reachable_vent(&mut surface);
     let mut left = LULL_MS;
+    seal(&mut surface, &mut left);
     for read in reads(&surface, &vent) {
         let before = work(&surface).expect("made by the map summary");
         let answer = ask(&mut surface, &mut left, &read);
@@ -302,12 +339,15 @@ fn every_searching_read_searches_in_the_matchs_scratch() {
 }
 
 /// A match whose first planning read comes in a Push makes no scratch for
-/// it: outside a Lull the map summary prices no walk and the searching
-/// methods are closed.
+/// it: outside a Lull the map summary prices no walk, the briefing resolves
+/// no seal (the seat holds one of this round), and the searching methods are
+/// closed.
 #[test]
 fn a_read_outside_a_lull_makes_no_scratch() {
     let mut surface = support::hosted(2, SEGMENT_MS, ROUNDS);
     let all = reads(&surface, "vent_0_0");
+    let mut left = FIRST_LULL_MS;
+    seal(&mut surface, &mut left);
     surface.begin_push().expect("the Push begins");
     assert_eq!(support::step(&mut surface, 1), 1, "a tick of the Push");
     let token = support::seat_token(&mut surface, 0);
@@ -327,8 +367,9 @@ fn a_read_answers_from_the_matchs_scratch_as_from_one_made_for_it_alone() {
     let mut surface = support::hosted(2, SEGMENT_MS, ROUNDS);
     let vent = a_reachable_vent(&mut surface);
     for round in 1..=ROUNDS {
-        let saved = surface.lull_save().expect("a Lull saves");
         let mut left = LULL_MS;
+        seal(&mut surface, &mut left);
+        let saved = surface.lull_save().expect("a Lull saves");
         for read in in_round_order(reads(&surface, &vent), round) {
             let used = ask(&mut surface, &mut left, &read);
             let mut fresh = resumed_from(&saved);

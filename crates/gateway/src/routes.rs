@@ -123,7 +123,7 @@ use crate::error::Error;
 /// typed, never a second scratch made on the quiet.
 ///
 /// It counts the scratches it has made ([`PlanningScratch::made`]): none
-/// before the first read that searches and one for the rest of the match,
+/// before the first read that borrows it and one for the rest of the match,
 /// which is the whole of the lane's claim and what its tests hold it to.
 ///
 /// `Debug` by hand: [`Scratch`] is a dense arena and printing it would be
@@ -213,9 +213,12 @@ impl PlanningScratch {
         Ok(scratch)
     }
 
-    /// How many scratches this has made: none until a read searches, and one
-    /// from then on. More than one would be a scratch made per read again,
-    /// which is the cost the lane removed.
+    /// How many scratches this has made: none until a read borrows it, and
+    /// one from then on. A read borrows before it searches, and a read that
+    /// resolves a seal borrows before it knows whether any step reads the
+    /// map, so the scratch can be made by a read that then searches nothing.
+    /// More than one would be a scratch made per read again, which is the
+    /// cost the lane removed.
     #[must_use]
     pub const fn made(&self) -> u32 {
         self.made.get()
@@ -724,8 +727,8 @@ mod tests {
     }
 
     /// A scratch that does not fit the graph it is lent for is refused typed
-    /// on that loan and every later one, and a route query over it is a fault
-    /// the caller raises: never a search, and never "no route". The match's
+    /// on that loan and every later one, and nothing is searched in it. The
+    /// match's
     /// scratch is made for the hosted world's own graph, so the misfit here
     /// is made by lending it for a decomposition at half the cluster edge,
     /// which numbers twice the abstract slots the scratch has (the sim's
