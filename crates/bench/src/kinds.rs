@@ -132,8 +132,10 @@ pub const TOWARD_STEPS: u32 = 4;
 /// This lane's own tolerance: how far a kind's figure may sit from the kinds'
 /// median, in per cent of the median, and the kinds still read as uniform. A
 /// judgement, not a gate and no plan figure: a unit is a visit, and a node
-/// popped from a heap is a longer visit than a condition node read, so the
-/// kinds can differ by a small factor and still be a count of work; a kind
+/// popped from a heap carries its sift, which is not counted
+/// (`pathing::search::Scratch::visits`), so it is a longer visit than a
+/// condition node read; the kinds can differ by a small factor and still be
+/// a count of work; a kind
 /// past half again or half the median is where a loop is charged at the
 /// wrong level, which is what the check is for.
 pub const TOLERANCE_PERCENT: u128 = 50;
@@ -1014,9 +1016,9 @@ pub fn kinds_notice(
          each kind's Decision phase and counted units less its baseline's (the same ground, \
          every seat sealing the idle shape) on the same ticks, fastest of {} runs a tick over \
          a {} s segment; the clock reads to {resolution_ns} ns, and a kind's floor is that \
-         times {READS_PER_TICK} reads a tick times its ticks times {FLOOR_MULTIPLE}: {}. The \
-         served-walk kinds are charged their pops only, so their ns per unit stands for more \
-         work than a visit elsewhere until the sim counts the rest",
+         times {READS_PER_TICK} reads a tick times its ticks times {FLOOR_MULTIPLE}: {}. A \
+         served walk is charged every loop visit it makes, a pop and every visit that pops \
+         nothing, but not a heap's sift, which a pop's own count bounds",
         plan.runs,
         plan.segment_ms.div_euclid(1_000),
         kinds.join("; "),
