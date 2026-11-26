@@ -130,11 +130,9 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    that work on a playbook's text (`verify_plan`, `render_plan`, `patch_plan`,
    `instantiate_template`, `resolve_refs`) answer from the frozen snapshot and the rules table —
    `resolve_refs` ranks "nearest" through the sim's own
-   resolver (`targeting::cover`, `targeting::on_vent_counted`, the `Ranker`) in the hosted match's
-   one planning scratch, lent for one search at a time (`routes::PlanningScratch`, kept by the
-   `Host`, which asks the sim's `Scratch::serves` on every loan; a scratch the sim refuses is its
-   typed `Unanswered::Misfit`, which the gateway answers as `INTERNAL` and never as nothing found:
-   S3's `walk3` and `p3est`, decisions-log items 215 and 216), over `World::ground`, whose meter counts nothing (the world holds no decision tally: `dunit`
+   resolver (`targeting::cover`, `targeting::on_vent_counted`, the `Ranker`) in the match's one lent
+   planning scratch (`routes::PlanningScratch`, kept by the `Host`, whose `lend` asks the sim's
+   `Scratch::serves` on every loan), over `World::ground`, whose meter counts nothing (the world holds no decision tally: `dunit`
    part 2, decisions-log item 196; `get_map_summary`'s and `estimate_route`'s reads still lend a tally
    nothing reads, which item 196 (7) carries), over the hosted world (the frozen world in a Lull; whenever the phase is not
    a Lull — a Push, a recap, the lobby, an ended match — the dispatcher's planning door answers
@@ -1083,7 +1081,11 @@ most of them have a reserved proto seam waiting — filling the seam early is th
   the report's typed `left_out` field (`VerifyReport.left_out`, one `LeftOut` a code with its
   `code`, `count`, `max` and `severity`) and said by its closing `I0007`, rather than each given its
   own pointer; a report lists the first `max` of a code in the order the verifier raises them
-  (`crates/verifier/tests/report_size.rs`'s `a_report_lists_the_first_max_of_a_code_in_raise_order`).
+  (`crates/verifier/tests/report_size.rs`'s `a_report_lists_the_first_max_of_a_code_in_raise_order`);
+  the gateway sends the field as the verifier wrote it (`crates/gateway/tests/left_out.rs`), and the
+  built-in operator's tap-probe budget is held to the cap at compile time
+  (`crates/gamectl/tests/report_cap.rs`'s two checks of `MAX_PER_CODE` against
+  `TAP_PROBE_LISTED_FLOOR` and `TAP_PROBE_VERIFIES`).
   A member name of the player's own too long for a pointer (`MAX_POINTER_BYTES`) is pointed at by
   the object that holds it (decisions-log items 183 (4), "Cap all codes", 203 and 214).
 - **No player Dispatches** or seat-to-seat text. v1 has one-way engine chatter only; no seat reads
