@@ -259,6 +259,7 @@ fn origin(world: &World, rng: &mut Rng) -> ([i32; 2], Node) {
 fn nearest_is_the_least_served_walk() {
     let (mut ranks, mut wrong, mut over) = (0_u32, Vec::new(), Vec::new());
     let mut stalled = 0_u64;
+    let mut misfits = 0_u64;
     for (seed, scarred) in [(SEED, false), (7, false), (SEED, true), (0x5eed_0003, true)] {
         let mut world = world_of(seed, 2);
         if scarred {
@@ -296,6 +297,7 @@ fn nearest_is_the_least_served_walk() {
                 }
             }
             stalled += scratch.stalled().unwrap();
+            misfits += scratch.misfits().unwrap();
             scratch.reset_counters();
             let extra = ranker
                 .next(&ground, &mut scratch)
@@ -307,6 +309,10 @@ fn nearest_is_the_least_served_walk() {
     }
     assert!(ranks >= 2_000, "the test ranks enough: {ranks}");
     assert_eq!(stalled, 0, "no candidate's chain of partial routes stalled");
+    assert_eq!(
+        misfits, 0,
+        "no candidate was dropped for a scratch that does not serve the graph"
+    );
     assert!(
         over.is_empty(),
         "{} octile bounds above a walk; first {:?}",

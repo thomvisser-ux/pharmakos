@@ -49,7 +49,7 @@
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
 use crate::pathing::estimate::{Fog, Speed, fog_price};
-use crate::pathing::search::{Bound, Item, Scratch, Tally, astar_costed, dijkstra_bounded};
+use crate::pathing::search::{Bound, Misfit, Scratch, Tally, astar_served, sweep_served};
 use crate::pathing::surface::{Node, Surface};
 
 /// One stretch of ground a route pays a surcharge to cross (S2's `atk`): a
@@ -177,6 +177,12 @@ impl RouteOutcome {
 /// fork. [`crate::pathing::estimate::estimate`] is a contractual wrapper
 /// around it under a fog mask, and prices a clear query at the walk the
 /// router serves instead (its module docs' "A clear query").
+///
+/// # Errors
+///
+/// [`Misfit`] for a scratch that does not serve this surface and
+/// decomposition ([`Scratch::serves`]), before any search. `Ok(None)` is no
+/// route.
 pub fn abstract_search(
     surface: &Surface,
     clusters: &Clusters,
@@ -185,8 +191,11 @@ pub fn abstract_search(
     goal: Node,
     fog: Fog<'_>,
     speed: Speed,
-) -> Option<AbstractResult> {
-    abstract_search_with(
+) -> Result<Option<AbstractResult>, Misfit> {
+    if !scratch.serves(surface, clusters) {
+        return Err(Misfit);
+    }
+    Ok(abstract_search_with(
         surface,
         clusters,
         scratch,
@@ -194,12 +203,12 @@ pub fn abstract_search(
         fog,
         speed,
         Surcharge::NONE,
-    )
+    ))
 }
 
 /// [`abstract_search`] under a route surcharge (S2's `atk`): an abstract
 /// edge either end of which is surcharged costs the multiplier times its
-/// price.
+/// price. In a scratch its caller has already held to [`Scratch::serves`].
 fn abstract_search_with(
     surface: &Surface,
     clusters: &Clusters,
@@ -232,8 +241,17 @@ fn abstract_search_with(
 
     let mut start_edges = core::mem::take(&mut scratch.start_edges);
     let mut goal_edges = core::mem::take(&mut scratch.goal_edges);
-    let direct = insert_endpoint(surface, clusters, scratch, start, goal, &mut start_edges);
-    insert_endpoint(surface, clusters, scratch, goal, start, &mut goal_edges);
+    // The direct cost between two endpoints of one cluster is found once,
+    // with the start's insertion: the goal's asks for none.
+    let direct = insert_endpoint(
+        surface,
+        clusters,
+        scratch,
+        start,
+        Some(goal),
+        &mut start_edges,
+    );
+    insert_endpoint(surface, clusters, scratch, goal, None, &mut goal_edges);
     if let Some(cost) = direct {
         start_edges.push((temp_goal, cost));
     }
@@ -256,14 +274,9 @@ fn abstract_search_with(
 
     abstract_begin(scratch);
     let h0 = surface.heuristic(start, goal);
-    if !abstract_reach(scratch, temp_start, 0, temp_start) {
+    if !scratch.queue_abstract(temp_start, 0, temp_start, h0) {
         return None;
     }
-    scratch.abstract_heap.push(Item {
-        f: h0,
-        h: h0,
-        n: temp_start,
-    });
 
     let mut found = false;
     while let Some(item) = scratch.abstract_heap.pop() {
@@ -522,15 +535,24 @@ pub enum NoPath {
     Unrefinable,
     /// The smoothed walk could not be priced.
     Unpriced,
+    /// The scratch handed in does not serve this surface and decomposition
+    /// ([`Misfit`]): nothing was searched, so this says nothing about the
+    /// terrain. **Not a missing route**, and no reader takes it for one: the
+    /// router counts it under its own name, an estimate raises it
+    /// ([`crate::pathing::estimate::EstimateError::Misfit`]), and a ranker
+    /// counts it ([`Scratch::misfits`]). The world's own scratch is made with
+    /// its graph, so no tick meets it.
+    Misfit,
 }
 
 impl NoPath {
     /// Every reason.
-    pub const ALL: [NoPath; 4] = [
+    pub const ALL: [NoPath; 5] = [
         NoPath::Unplaced,
         NoPath::Unreachable,
         NoPath::Unrefinable,
         NoPath::Unpriced,
+        NoPath::Misfit,
     ];
 
     /// The reason's name.
@@ -541,7 +563,14 @@ impl NoPath {
             NoPath::Unreachable => "unreachable",
             NoPath::Unrefinable => "unrefinable",
             NoPath::Unpriced => "unpriced",
+            NoPath::Misfit => "misfit",
         }
+    }
+}
+
+impl From<Misfit> for NoPath {
+    fn from(_: Misfit) -> NoPath {
+        NoPath::Misfit
     }
 }
 
@@ -553,7 +582,8 @@ impl NoPath {
 /// # Errors
 ///
 /// A typed [`NoPath`], which the router counts under its reason (S2's plan,
-/// E27).
+/// E27): [`NoPath::Misfit`], before any search, for a scratch that does not
+/// serve this surface and decomposition ([`Scratch::serves`]).
 pub fn route(
     surface: &Surface,
     clusters: &Clusters,
@@ -614,6 +644,12 @@ pub(crate) fn route_and_abstract(
     out: &mut Vec<Node>,
 ) -> Result<(AbstractResult, RouteOutcome), NoPath> {
     out.clear();
+    // The door of every route and of every walk priced by one (`route`,
+    // `route_with`, `walk_cost`, a clear estimate): one check a query, a
+    // handful of length compares.
+    if !scratch.serves(surface, clusters) {
+        return Err(NoPath::Misfit);
+    }
     // A route is walked over terrain the sim can see in full, so nothing on it
     // is priced through fog and the multiplier is never reached. Fog belongs to
     // the *estimate*, which is a seat's question about a route it cannot see.
@@ -673,7 +709,7 @@ pub(crate) fn route_and_abstract(
         let ca = clusters.cluster_of(a);
         let cb = clusters.cluster_of(b);
         if ca == cb {
-            if astar_costed(
+            if astar_served(
                 surface,
                 Bound::Cluster(clusters.of_node(), ca),
                 scratch,
@@ -746,7 +782,9 @@ pub(crate) fn route_and_abstract(
 
 /// Insert one endpoint: its edges to its own cluster's transition nodes, each
 /// at the cost of the walk inside the cluster. Returns the direct cost to
-/// `other` when the two share a cluster.
+/// `direct_to`, the query's other endpoint, when one is asked for and the two
+/// share a cluster. A query asks for it once, with its start's insertion, and
+/// inserts its goal with `None`: the walk costs the same from either end.
 ///
 /// The costs are read from the cluster's transition fields
 /// ([`Clusters::field`]), one entry a slot, and the direct cost is one A\*
@@ -760,7 +798,7 @@ fn insert_endpoint(
     clusters: &Clusters,
     scratch: &mut Scratch,
     cell: Node,
-    other: Node,
+    direct_to: Option<Node>,
     out: &mut Vec<(u32, i32)>,
 ) -> Option<i32> {
     out.clear();
@@ -768,9 +806,9 @@ fn insert_endpoint(
     let cluster = usize::from(tag);
     let stride = clusters.max_trans();
     let slots = clusters.trans_cells(cluster).len();
-    let shared = clusters.cluster_of(other) == tag;
+    let shared = direct_to.filter(|other| clusters.cluster_of(*other) == tag);
     let Some(field) = clusters.field(surface, cell) else {
-        dijkstra_bounded(
+        sweep_served(
             surface,
             Bound::Cluster(clusters.of_node(), tag),
             scratch,
@@ -791,7 +829,7 @@ fn insert_endpoint(
             }
             slot = slot.saturating_add(1);
         }
-        return if shared { scratch.cost_of(other) } else { None };
+        return shared.and_then(|other| scratch.cost_of(other));
     };
     // One a slot read: the whole of an insertion's counted work where the
     // endpoints share no cluster, since a lookup pops nothing.
@@ -805,13 +843,11 @@ fn insert_endpoint(
         }
         slot = slot.saturating_add(1);
     }
-    if !shared {
-        return None;
-    }
+    let other = shared?;
     // The walk inside the cluster between the two endpoints: the cost a
     // sweep from `cell` reads at `other`, found by the directed search.
     let mut leg = core::mem::take(&mut scratch.leg);
-    let direct = astar_costed(
+    let direct = astar_served(
         surface,
         Bound::Cluster(clusters.of_node(), tag),
         scratch,
@@ -904,31 +940,6 @@ fn abstract_came(scratch: &Scratch, node: u32) -> u32 {
         .unwrap_or(node)
 }
 
-/// Record the abstract node `node` as reached at `cost` from `from`, and
-/// whether it was recorded: `false` for a node the scratch has no slot for,
-/// which the search then never queues (`Scratch::set_reached`'s reason: a
-/// node queued without a record never reads as seen or closed, and its
-/// search never ends). A scratch that serves the decomposition
-/// ([`Scratch::serves`]) has a slot for every node.
-#[must_use]
-fn abstract_reach(scratch: &mut Scratch, node: u32, cost: i32, from: u32) -> bool {
-    let epoch = scratch.abstract_epoch;
-    let Ok(index) = usize::try_from(node) else {
-        return false;
-    };
-    let (Some(stamp), Some(g), Some(came)) = (
-        scratch.abstract_stamp.get_mut(index),
-        scratch.abstract_g.get_mut(index),
-        scratch.abstract_came.get_mut(index),
-    ) else {
-        return false;
-    };
-    *stamp = epoch;
-    *g = cost;
-    *came = from;
-    true
-}
-
 fn abstract_relax(
     surface: &Surface,
     scratch: &mut Scratch,
@@ -944,15 +955,8 @@ fn abstract_relax(
     if abstract_seen(scratch, target) && abstract_cost(scratch, target) <= cost {
         return;
     }
-    if !abstract_reach(scratch, target, cost, from) {
-        return;
-    }
-    let h = surface.heuristic(target_cell, goal);
-    scratch.abstract_heap.push(Item {
-        f: cost.saturating_add(h),
-        h,
-        n: target,
-    });
+    // Recorded and queued, both or neither (`Scratch::queue_abstract`).
+    scratch.queue_abstract(target, cost, from, surface.heuristic(target_cell, goal));
 }
 
 /// The greedy octile walk from `from` to `to`: diagonal while both axes need

@@ -383,7 +383,11 @@ impl Graph {
             &mut self.clusters,
             &mut self.scratch,
             &mut self.repairer,
-        );
+        )
+        .map_err(|misfit| Error::Sim {
+            during: "repairing P3's graph",
+            reason: misfit.to_string(),
+        })?;
         Ok(())
     }
 

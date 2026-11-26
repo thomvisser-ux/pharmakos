@@ -166,7 +166,8 @@ use crate::ids::Row;
 use crate::knowledge::{AssetId, AssetKind, Position};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::Ms;
-use crate::pathing::estimate::{EstimateError, WalkError, walk_cost, walk_ticks};
+use crate::pathing::estimate::{PastTicks, WalkError, ticks_of, walk_cost};
+use crate::pathing::route::NoPath;
 use crate::pathing::surface::Node;
 use crate::pathing::{Speed, ticks_for_cost};
 use crate::reserved::Reserved;
@@ -2108,10 +2109,10 @@ fn depart_or_scan<M: crate::seams::Meter + ?Sized>(
 /// Lull on the review's thirty seeds; the figures are in PR #210.
 ///
 /// What the code does. On a [`pricing_decision`] it prices the served legs in
-/// order ([`walk_ticks`] at the scout's speed). On any other decision it
+/// order ([`ticks_of`] at the scout's speed). On any other decision it
 /// reads the octile bounds only: if they leave time the scout scans on, and
 /// if they do not it sets off at once, unpriced. A scout's arrival is never
-/// later than [`walk_ticks`] from the tick the router serves the route, plus
+/// later than [`ticks_of`] from the tick the router serves the route, plus
 /// one re-ask a leg ([`World::link_ticks`]); a scout sets off up to
 /// [`REPRICE_DECISIONS`] decision intervals after its list first needed the
 /// rest, and meanwhile it walks on with its scan, which lengthens its first
@@ -2215,7 +2216,7 @@ fn has_scan(world: &World, seat: SeatId, row: usize, threats: &[([Fx; 3], Sq)]) 
 }
 
 /// The ticks a scout takes, at the latest, on the walk the router serves from
-/// `start` to `goal` at `speed` ([`walk_ticks`]), or `None` when it serves
+/// `start` to `goal` at `speed` ([`ticks_of`]), or `None` when it serves
 /// none: `NoPath` (counted, [`Scratch::survey_unserved`](crate::pathing::search::Scratch)),
 /// or a chain whose queries stop falling (counted,
 /// [`Scratch::stalled`](crate::pathing::search::Scratch)), or a walker with no
@@ -2240,7 +2241,16 @@ fn served_walk_ticks<M: crate::seams::Meter + ?Sized>(
     }));
     let walk = match walked {
         Ok(walk) => walk,
-        Err(WalkError::NoPath(_)) => {
+        // Nothing was searched, so this is no word on the walk: counted
+        // under its own reason (`Scratch::misfits`), not as unserved. The
+        // scratch here is the world's own, made with its graph.
+        Err(WalkError::NoPath(NoPath::Misfit)) => {
+            scratch.misfits.bump();
+            return None;
+        }
+        Err(WalkError::NoPath(
+            NoPath::Unplaced | NoPath::Unreachable | NoPath::Unrefinable | NoPath::Unpriced,
+        )) => {
             scratch.survey_unserved.bump();
             return None;
         }
@@ -2249,16 +2259,9 @@ fn served_walk_ticks<M: crate::seams::Meter + ?Sized>(
             return None;
         }
     };
-    match walk_ticks(walk, speed) {
+    match ticks_of(walk, speed) {
         Ok(ticks) => ticks.map(i64::from),
-        Err(EstimateError::PastCost { .. } | EstimateError::PastTicks { .. }) => Some(i64::MAX),
-        // `walk_ticks` prices a served walk: it searches in no scratch and
-        // meets no chain. Were it to raise either, the walk is unpriced, as a
-        // chain whose queries stopped falling is above.
-        Err(EstimateError::Misfit | EstimateError::Stalled { .. }) => {
-            scratch.stalled.bump();
-            None
-        }
+        Err(PastTicks::Cost { .. } | PastTicks::Ticks { .. }) => Some(i64::MAX),
     }
 }
 

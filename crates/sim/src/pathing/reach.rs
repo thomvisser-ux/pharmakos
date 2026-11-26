@@ -142,7 +142,11 @@ pub enum ReachError {
     },
     /// A dearest step the bucket ring cannot be sized for: not positive, or
     /// so dear that `2 × step + 1` buckets pass a `u32` (the rules' path-cost
-    /// bound keeps every loaded table far inside both).
+    /// bound keeps every loaded table far inside both). Or, met by a search:
+    /// the surface's dearest step is dearer than the one this ring was sized
+    /// for (a search handed the surface of another table's step costs), where
+    /// two keys a ring apart would share a bucket and columns would settle
+    /// out of order. Refused before a column is settled.
     Ring {
         /// The dearest step.
         max_step: i32,
@@ -236,13 +240,32 @@ impl Reach {
     /// large here. Part of [`crate::pathing::search::Scratch::serves`].
     #[must_use]
     pub(crate) fn serves(&self, nodes: u32, max_step: i32) -> bool {
-        let ring = u32::try_from(max_step)
+        self.stamp.len() >= crate::math::index::row(nodes) && self.ring_holds(max_step)
+    }
+
+    /// Whether the ring holds every key a frontier holds at once on a
+    /// surface whose dearest step is `max_step`: `2 × step + 1` buckets
+    /// ([`Reach::new`]).
+    fn ring_holds(&self, max_step: i32) -> bool {
+        u32::try_from(max_step)
             .ok()
             .filter(|step| *step > 0)
             .and_then(|step| step.checked_mul(2))
-            .and_then(|double| double.checked_add(1));
-        self.stamp.len() >= crate::math::index::row(nodes)
-            && ring.is_some_and(|ring| self.ring.get() >= ring)
+            .and_then(|double| double.checked_add(1))
+            .is_some_and(|ring| self.ring.get() >= ring)
+    }
+
+    /// Refuse a search over `surface` when the ring was sized for a cheaper
+    /// dearest step than the surface's ([`ReachError::Ring`]). A column the
+    /// search has no room for is refused where it is met
+    /// ([`ReachError::OffMap`]).
+    fn held_to(&self, surface: &Surface) -> Result<(), ReachError> {
+        let max_step = surface.costs().max_step();
+        if self.ring_holds(max_step) {
+            Ok(())
+        } else {
+            Err(ReachError::Ring { max_step })
+        }
     }
 
     fn sized(nodes: u32, max_step: i32) -> Result<Reach, ReachError> {
@@ -435,8 +458,11 @@ impl Reach {
     ///
     /// # Errors
     ///
-    /// [`ReachError::OffMap`] for a start that is not a column of the map.
+    /// [`ReachError::OffMap`] for a start that is not a column of the map,
+    /// and [`ReachError::Ring`] for a surface whose dearest step the ring was
+    /// not sized for.
     pub fn begin_toward(&mut self, surface: &Surface, from: Node) -> Result<(), ReachError> {
+        self.held_to(surface)?;
         self.directed = !self.spheres.is_empty();
         self.start(from, 0)?;
         let first = self.cached_heuristic(surface, from)?;
@@ -560,12 +586,15 @@ impl Reach {
     /// # Errors
     ///
     /// [`ReachError::OffMap`] for a queued column that is not one of the
-    /// map's, never read as "no more columns".
+    /// map's, never read as "no more columns"; and [`ReachError::Ring`],
+    /// before a column is settled, for a surface whose dearest step the ring
+    /// was not sized for, never read as an order.
     pub fn next(
         &mut self,
         surface: &Surface,
         popped: &mut Tally,
     ) -> Result<Option<(Node, i64)>, ReachError> {
+        self.held_to(surface)?;
         let node = loop {
             if let Some(node) = self.sorted.get(self.cursor).copied() {
                 self.cursor += 1;
@@ -757,6 +786,44 @@ mod tests {
 
     fn count(tally: Result<u64, crate::pathing::search::TallyOverflow>) -> u64 {
         tally.unwrap_or_else(|_| panic!("a count"))
+    }
+
+    /// A search over a surface whose dearest step the ring was not sized for
+    /// is refused before a column is settled, directed or not: two keys a
+    /// ring apart would share a bucket, and columns would settle out of
+    /// order. A ring sized for the surface's own step, or a dearer one,
+    /// serves it.
+    #[test]
+    fn a_ring_sized_for_a_cheaper_step_is_refused() {
+        use super::ReachError;
+        let world = world();
+        let surface = world.surface();
+        let (nodes, step) = (surface.node_count(), surface.costs().max_step());
+        let from = surface
+            .node_of(64, 64)
+            .unwrap_or_else(|| panic!("a column of the map"));
+        let refused = ReachError::Ring { max_step: step };
+        let mut popped = Tally::ZERO;
+
+        let mut short = Reach::new(nodes, step - 1).unwrap_or_else(|_| panic!("a ring"));
+        assert!(!short.serves(nodes, step));
+        assert_eq!(short.begin_toward(surface, from), Err(refused));
+        assert_eq!(short.begin(from), Ok(()), "a start reads no surface");
+        assert_eq!(short.next(surface, &mut popped), Err(refused));
+        assert_eq!(popped.read(), Ok(0), "refused before a column is settled");
+
+        for step in [step, step + 1] {
+            let mut reach = Reach::new(nodes, step).unwrap_or_else(|_| panic!("a ring"));
+            assert!(reach.serves(nodes, surface.costs().max_step()));
+            assert_eq!(reach.begin_toward(surface, from), Ok(()));
+            assert_eq!(
+                reach
+                    .next(surface, &mut popped)
+                    .map(|next| next.map(|(node, _)| node)),
+                Ok(Some(from)),
+                "the start settles first"
+            );
+        }
     }
 
     /// Search from `from` to exhaustion and hold the counters to the pops

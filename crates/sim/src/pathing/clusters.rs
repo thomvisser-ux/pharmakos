@@ -129,11 +129,19 @@
 //!   seeds); walls and craters cut runs and add some, and the bound is set
 //!   from where they add the most that was measured (the constant's own
 //!   docs). A cluster past the bound keeps none and is swept.
-//! * an entry is a `u16`. A cost that does not fit (no cluster of the loaded
-//!   rules' step costs has one: the dearest walk inside a cluster of 32 is
-//!   under 1 024 steps of at most 18) leaves its cluster with no fields.
+//! * an entry is a `u16`, and its last value says "no walk". A cost at that
+//!   value or past it leaves its cluster with no fields. Under the committed
+//!   table's step costs no cluster has one (the dearest walk inside a cluster
+//!   of 32 is under 1 024 steps of at most 18); a loadable table's can, since
+//!   the rules' path-cost bound admits a dearest step in the thousands, and
+//!   `tests/pathing.rs`'s `a_cost_past_a_field_entry_leaves_its_cluster_swept`
+//!   holds the three cases either side of the bound to the sweep's answers.
+//!
+//! The bound on fields is exact (`a_cluster_keeps_its_fields_up_to_the_bound_exactly`):
+//! a cluster with as many transition cells as the bound keeps its fields, and
+//! one more leaves it swept.
 
-use crate::pathing::search::{Bound, Scratch, dijkstra_bounded};
+use crate::pathing::search::{Bound, Misfit, Scratch, sweep_served};
 use crate::pathing::surface::{DEFAULT_ORDER, Node, Surface};
 use crate::reserved::Reserved;
 
@@ -186,6 +194,12 @@ pub struct ClusterShape {
     /// [`ClusterShape::with_fields`] is for: a test's decomposition that
     /// keeps none answers every query by the sweep, and is held equal to one
     /// that keeps them.
+    ///
+    /// A bound, so a decomposition keeps the lesser of it and the most
+    /// transitions a cluster of its edge can have, `4 * edge` (the module
+    /// docs): a cluster never has more transitions than that, so room for
+    /// more fields would never be read, and [`Clusters::shape`] reports the
+    /// bound the decomposition keeps.
     pub fields: usize,
     /// The cluster edge in voxels, `locomotion.hpa_cluster_voxels`.
     pub size: i32,
@@ -391,13 +405,18 @@ impl Clusters {
         let max_trans = per_border.checked_mul(4)?;
         let max_intra = max_trans.checked_mul(max_trans.saturating_sub(1))?;
         let cells = per_border.checked_mul(per_border)?;
-        let fields = clusters.checked_mul(shape.fields)?.checked_mul(cells)?;
+        // No cluster has more than `max_trans` transitions, so no more
+        // fields than that are ever kept, whatever the shape allows
+        // (`ClusterShape::fields`): the fields' room is bounded by the map
+        // and the cluster edge, never by the number a caller passed.
+        let kept = shape.fields.min(max_trans);
+        let fields = clusters.checked_mul(kept)?.checked_mul(cells)?;
         let vborders = usize::try_from(nx.saturating_sub(1).max(0).checked_mul(ny)?).ok()?;
         let hborders = usize::try_from(nx.checked_mul(ny.saturating_sub(1).max(0))?).ok()?;
 
         let mut built = Clusters {
             size,
-            fields: shape.fields,
+            fields: kept,
             long_run: shape.long_run,
             smooth_lookahead: shape.smooth_lookahead,
             nx,
@@ -455,13 +474,31 @@ impl Clusters {
         if !scratch.serves(surface, &built) {
             return None;
         }
-        built.rebuild_all(surface, scratch);
+        built.rebuild_all_served(surface, scratch);
         Some(built)
     }
 
-    /// Rebuild everything from the surface. Construction, restore, and the
-    /// from-scratch side of the repair-equivalence tests.
-    pub fn rebuild_all(&mut self, surface: &Surface, scratch: &mut Scratch) {
+    /// Rebuild everything from the surface. Restore, and the from-scratch
+    /// side of the repair-equivalence tests.
+    ///
+    /// # Errors
+    ///
+    /// [`Misfit`] for a scratch that does not serve `surface` and this
+    /// decomposition ([`Scratch::serves`]), before anything is rebuilt: the
+    /// inner edges are found by searches, and searches in such a scratch
+    /// would leave clusters with no inner edges and empty fields.
+    pub fn rebuild_all(&mut self, surface: &Surface, scratch: &mut Scratch) -> Result<(), Misfit> {
+        if !scratch.serves(surface, self) {
+            return Err(Misfit);
+        }
+        self.rebuild_all_served(surface, scratch);
+        Ok(())
+    }
+
+    /// [`Clusters::rebuild_all`] in a scratch already held to
+    /// [`Scratch::serves`]: construction's, and a restore's in the world's own
+    /// scratch, which was made with this graph.
+    pub(crate) fn rebuild_all_served(&mut self, surface: &Surface, scratch: &mut Scratch) {
         let clusters = self.cluster_count();
         let mut c = 0;
         while c < clusters {
@@ -489,7 +526,7 @@ impl Clusters {
         }
         let mut c = 0;
         while c < clusters {
-            self.rebuild_intra(surface, scratch, c);
+            self.rebuild_intra_served(surface, scratch, c);
             self.rebuild_inter(c);
             c = c.saturating_add(1);
         }
@@ -1014,7 +1051,34 @@ impl Clusters {
     /// every seventh cluster, each re-walked with a bounded A\* inside the
     /// cluster. Nothing compares the edge *sets* exhaustively; that is the half
     /// of the claim the argument still carries.
-    pub fn rebuild_intra(&mut self, surface: &Surface, scratch: &mut Scratch, cluster: usize) {
+    ///
+    /// # Errors
+    ///
+    /// [`Misfit`] for a scratch that does not serve `surface` and this
+    /// decomposition ([`Scratch::serves`]), before anything is rebuilt.
+    pub fn rebuild_intra(
+        &mut self,
+        surface: &Surface,
+        scratch: &mut Scratch,
+        cluster: usize,
+    ) -> Result<(), Misfit> {
+        if !scratch.serves(surface, self) {
+            return Err(Misfit);
+        }
+        self.rebuild_intra_served(surface, scratch, cluster);
+        Ok(())
+    }
+
+    /// [`Clusters::rebuild_intra`] in a scratch already held to
+    /// [`Scratch::serves`]: a whole rebuild's and a repair's, each behind its
+    /// own door.
+    pub(crate) fn rebuild_intra_served(
+        &mut self,
+        surface: &Surface,
+        scratch: &mut Scratch,
+        cluster: usize,
+    ) {
+        // E7: cannot miss: a decomposition names its clusters with `u16` tags (`Clusters::new` refuses more), and every caller passes one of them
         let Ok(tag) = u16::try_from(cluster) else {
             return;
         };
@@ -1033,7 +1097,7 @@ impl Clusters {
             if let Some(from_cell) = from_cell
                 && swept
             {
-                dijkstra_bounded(
+                sweep_served(
                     surface,
                     Bound::Cluster(&self.of_node, tag),
                     scratch,
@@ -1088,6 +1152,7 @@ impl Clusters {
         // slots are empty either way, so a repaired decomposition holds what
         // a fresh build does, entry for entry.
         self.clear_fields(cluster, if whole { count } else { 0 });
+        // E7: cannot miss: one flag a cluster, sized at construction (`Clusters::new`)
         if let Some(flag) = self.fielded.get_mut(cluster) {
             *flag = whole;
         }
@@ -1104,6 +1169,9 @@ impl Clusters {
     /// Where a cluster's field for `slot` starts in [`Clusters::field`]'s
     /// table.
     fn field_base(&self, cluster: usize, slot: usize) -> usize {
+        // E7: cannot miss: the table's whole length, `clusters * fields * cells`, was computed
+        // checked at construction (`Clusters::new`), and every caller passes a cluster of the
+        // decomposition and a slot no greater than `fields`, so no product here passes it
         cluster
             .saturating_mul(self.fields)
             .saturating_add(slot)
@@ -1114,6 +1182,9 @@ impl Clusters {
     /// cluster's corner.
     fn field_entry(&self, surface: &Surface, cell: Node) -> usize {
         let (x, y) = surface.coord_of(cell);
+        // E7: cannot miss: the cluster edge is positive (`Clusters::new` refuses any other), so
+        // the floor is never taken; it keeps the remainders below total without a panic path,
+        // and the products below are of two numbers under `MAX_CLUSTER_EDGE`
         let size = self.size.max(1);
         crate::math::index::row(
             y.rem_euclid(size)
@@ -1162,6 +1233,8 @@ impl Clusters {
                         NO_FIELD_COST
                     }
                 };
+                // E7: cannot miss: `base` is a field of this cluster and `entry` a column of
+                // it, inside the table sized for every cluster's fields (`Clusters::new`)
                 if let Some(target) = self.field.get_mut(base.saturating_add(entry)) {
                     *target = kept;
                 }
@@ -1175,8 +1248,12 @@ impl Clusters {
 
     /// Empty a cluster's field blocks from slot `from` on.
     fn clear_fields(&mut self, cluster: usize, from: usize) {
+        // A slot past the bound has no block: the cluster's blocks end at
+        // `fields`, and from there on there is nothing to empty.
         let start = self.field_base(cluster, from.min(self.fields));
         let end = self.field_base(cluster, self.fields);
+        // E7: cannot miss: both ends are block starts of this cluster, in order, inside the
+        // table sized for every cluster's fields (`Clusters::new`)
         if let Some(stale) = self.field.get_mut(start..end) {
             stale.fill(NO_FIELD_COST);
         }

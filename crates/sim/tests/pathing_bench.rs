@@ -358,7 +358,8 @@ fn bench_repairs(bench: &mut Bench) {
             &mut bench.clusters,
             &mut bench.scratch,
             &mut bench.repairer,
-        );
+        )
+        .expect("the scratch made with the graph serves it");
         repairs.push(bench.scratch.expansions().expect("the count fits a u64"));
         dirty_total += u64::from(report.dirty);
         n += 1;

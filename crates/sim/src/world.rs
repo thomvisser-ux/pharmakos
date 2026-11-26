@@ -64,7 +64,7 @@ use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::{Damage, Hp, Money, Ms, Tick};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::repair::{RepairReport, Repairer, repair};
+use crate::pathing::repair::{RepairReport, Repairer, repair_served};
 use crate::pathing::router::{Router, ServeReport, WalkState};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{StepCosts, Surface};
@@ -5402,7 +5402,7 @@ impl World {
     /// ([`World::graph_settled`]), which is what lets a snapshot carry no
     /// pending set. The repair is the same work it was, one phase earlier.
     fn settle_graph(&mut self) {
-        let report = repair(
+        let report = repair_served(
             &self.surface,
             &mut self.clusters,
             &mut self.scratch,
@@ -7452,7 +7452,8 @@ impl World {
         // `a_restored_world_rebuilds_the_graph_it_was_saved_with` is what makes
         // "derived" a checked claim rather than a convenient one.
         self.surface.refresh_all(&self.voxels);
-        self.clusters.rebuild_all(&self.surface, &mut self.scratch);
+        self.clusters
+            .rebuild_all_served(&self.surface, &mut self.scratch);
         self.repairer = Repairer::new(self.clusters.cluster_count());
         self.repair_report = RepairReport::default();
         self.serve_report = ServeReport::default();

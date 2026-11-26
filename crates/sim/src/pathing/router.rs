@@ -120,6 +120,7 @@ pub struct NoPathCounts {
     unreachable: u64,
     unrefinable: u64,
     unpriced: u64,
+    misfit: u64,
 }
 
 impl NoPathCounts {
@@ -131,6 +132,7 @@ impl NoPathCounts {
             NoPath::Unreachable => self.unreachable,
             NoPath::Unrefinable => self.unrefinable,
             NoPath::Unpriced => self.unpriced,
+            NoPath::Misfit => self.misfit,
         }
     }
 
@@ -142,6 +144,7 @@ impl NoPathCounts {
             NoPath::Unreachable => &mut self.unreachable,
             NoPath::Unrefinable => &mut self.unrefinable,
             NoPath::Unpriced => &mut self.unpriced,
+            NoPath::Misfit => &mut self.misfit,
         };
         *slot = slot.saturating_add(1);
     }

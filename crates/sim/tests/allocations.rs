@@ -3583,7 +3583,9 @@ const PER_NODE: &str = "`vec![..; n]` in its constructor, `n` the surface graph'
 
 /// The cluster decomposition's transition fields (S3's `walk3`), `vec![..]`
 /// in `Clusters::new`.
-const PER_FIELD: &str = "`vec![..]` in `Clusters::new`, sized from the cluster count, the                          fields a cluster keeps (`ClusterShape::fields`) and the columns a                          cluster holds; written by index";
+const PER_FIELD: &str = "`vec![..]` in `Clusters::new`, sized from the cluster count, the \
+                         fields a cluster keeps (`ClusterShape::fields`) and the columns a \
+                         cluster holds; written by index";
 
 /// A field of the cluster decomposition, `vec![..]` in `Clusters::new`.
 const PER_CLUSTER: &str = "`vec![..]` in `Clusters::new`, sized from the cluster count, the \

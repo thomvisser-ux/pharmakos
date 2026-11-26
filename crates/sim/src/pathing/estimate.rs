@@ -168,7 +168,7 @@ use crate::pathing::clusters::Clusters;
 use crate::pathing::route::{
     AbstractResult, NoPath, RouteOutcome, Surcharge, abstract_search, route_and_abstract,
 };
-use crate::pathing::search::Scratch;
+use crate::pathing::search::{Misfit, Scratch};
 use crate::pathing::surface::{Node, Surface};
 
 /// What the query knows about the terrain it is pricing.
@@ -329,8 +329,9 @@ pub fn estimate(
     fog: Fog<'_>,
     speed: Speed,
 ) -> Result<Option<Estimate>, EstimateError> {
-    // The precondition, checked at the planning door because this is the one
-    // search a reader outside the sim calls with a scratch of its own.
+    // The precondition, checked first, as every public search checks it
+    // (`Misfit`): a query refused here has searched nothing and counted
+    // nothing.
     if !scratch.serves(world, clusters) {
         return Err(EstimateError::Misfit);
     }
@@ -342,7 +343,9 @@ pub fn estimate(
     if fog.is_clear() {
         return served(world, clusters, scratch, (start, goal), speed);
     }
-    let Some(result) = abstract_search(world, clusters, scratch, start, goal, fog, speed) else {
+    let Some(result) = abstract_search(world, clusters, scratch, start, goal, fog, speed)
+        .map_err(|Misfit| EstimateError::Misfit)?
+    else {
         return Ok(None);
     };
     // The partial routes the walk can chain, bounded by its cost as
@@ -356,7 +359,7 @@ pub fn estimate(
         partials: u32::try_from(links).map_err(|_| EstimateError::PastTicks { ticks: links })?,
     };
     // A walker with no speed walks nowhere: no estimate.
-    let Some(ticks) = walk_ticks(walk, speed)? else {
+    let Some(ticks) = ticks_of(walk, speed)? else {
         return Ok(None);
     };
     Ok(Some(Estimate {
@@ -379,8 +382,13 @@ fn served(
     scratch.served_estimates.bump();
     let walked = match served_walk(world, clusters, scratch, pair) {
         Ok(walked) => walked,
-        // Any `NoPath` is no route: the walker would be sealed in as well.
-        Err(WalkError::NoPath(_)) => return Ok(None),
+        // Nothing was searched: no answer about the route at all.
+        Err(WalkError::NoPath(NoPath::Misfit)) => return Err(EstimateError::Misfit),
+        // Any other `NoPath` is no route: the walker would be sealed in as
+        // well.
+        Err(WalkError::NoPath(
+            NoPath::Unplaced | NoPath::Unreachable | NoPath::Unrefinable | NoPath::Unpriced,
+        )) => return Ok(None),
         Err(WalkError::Stalled { partials }) => {
             return Err(EstimateError::Stalled { partials });
         }
@@ -388,7 +396,7 @@ fn served(
     let cost =
         i32::try_from(walked.cost).map_err(|_| EstimateError::PastCost { cost: walked.cost })?;
     // A walker with no speed walks nowhere: no estimate.
-    let Some(ticks) = walk_ticks(walked.walk(), speed)? else {
+    let Some(ticks) = ticks_of(walked.walk(), speed)? else {
         return Ok(None);
     };
     Ok(Some(Estimate {
@@ -429,8 +437,21 @@ pub struct ServedWalk {
 /// [`EstimateError::PastCost`] for a cost past an `i32`, and
 /// [`EstimateError::PastTicks`] for a tick count past one: the walk's
 /// argument says neither occurs, and each is said rather than truncated.
+/// Never another [`EstimateError`]: the conversion searches nothing, and
+/// [`ticks_of`] is the same conversion under the error that says so.
 pub fn walk_ticks(walk: ServedWalk, speed: Speed) -> Result<Option<i32>, EstimateError> {
-    let cost = i32::try_from(walk.cost).map_err(|_| EstimateError::PastCost { cost: walk.cost })?;
+    ticks_of(walk, speed).map_err(EstimateError::from)
+}
+
+/// [`walk_ticks`] under its own error: the two ways a served walk has no
+/// signed 32-bit tick count, and no other.
+///
+/// # Errors
+///
+/// [`PastTicks::Cost`] for a cost past an `i32`, and [`PastTicks::Ticks`]
+/// for a tick count past one.
+pub fn ticks_of(walk: ServedWalk, speed: Speed) -> Result<Option<i32>, PastTicks> {
+    let cost = i32::try_from(walk.cost).map_err(|_| PastTicks::Cost { cost: walk.cost })?;
     let Some(ticks) = ticks_for_cost(cost, speed.cost_per_second) else {
         return Ok(None);
     };
@@ -438,7 +459,34 @@ pub fn walk_ticks(walk: ServedWalk, speed: Speed) -> Result<Option<i32>, Estimat
     let total = i64::from(ticks) + i64::from(walk.partials) * i64::from(speed.link_ticks);
     i32::try_from(total)
         .map(Some)
-        .map_err(|_| EstimateError::PastTicks { ticks: total })
+        .map_err(|_| PastTicks::Ticks { ticks: total })
+}
+
+/// Why a served walk has no tick count ([`ticks_of`]): each is the sim
+/// disagreeing with its own argument about a walk's size, said rather than
+/// truncated ([`EstimateError::PastCost`], [`EstimateError::PastTicks`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PastTicks {
+    /// The walk's summed cost passes a signed 32-bit cost.
+    Cost {
+        /// The walk's summed cost.
+        cost: i64,
+    },
+    /// The walk's ticks, its re-asks' bound included, pass a signed 32-bit
+    /// tick count.
+    Ticks {
+        /// The ticks.
+        ticks: i64,
+    },
+}
+
+impl From<PastTicks> for EstimateError {
+    fn from(past: PastTicks) -> EstimateError {
+        match past {
+            PastTicks::Cost { cost } => EstimateError::PastCost { cost },
+            PastTicks::Ticks { ticks } => EstimateError::PastTicks { ticks },
+        }
+    }
 }
 
 /// Why [`estimate`] priced no walk for a clear query that has a route.
@@ -536,8 +584,11 @@ impl std::error::Error for EstimateError {}
 /// # Errors
 ///
 /// [`WalkError::NoPath`], the router's reason, when it serves no route from
-/// where the walk stands; [`WalkError::Stalled`] when a partial route's next
-/// query does not fall as the argument above says it must.
+/// where the walk stands, [`NoPath::Misfit`] among them for a scratch that
+/// does not serve this surface and decomposition ([`Scratch::serves`]),
+/// refused before any search and not a missing route;
+/// [`WalkError::Stalled`] when a partial route's next query does not fall as
+/// the argument above says it must.
 pub fn walk_cost(
     world: &Surface,
     clusters: &Clusters,

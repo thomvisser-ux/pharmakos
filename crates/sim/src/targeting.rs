@@ -112,6 +112,7 @@ use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
 use crate::pathing::estimate::{ServedWalk, WalkError, walk_cost};
+use crate::pathing::route::NoPath;
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
@@ -216,13 +217,16 @@ pub struct Ground<'a> {
 /// of the route assembly's, that pops nothing ([`Scratch::visits`]; S3's
 /// `walk3`).
 pub(crate) fn popped(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
+    // A tally that passed `u64::MAX` cannot be read; a sum of readable
+    // tallies past one overflowed.
     let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
     scratch
         .expansions()
         .map_err(unreadable)?
         .checked_add(scratch.abstract_expansions().map_err(unreadable)?)
-        .and_then(|pops| pops.checked_add(scratch.visits().ok()?))
-        .ok_or(crate::seams::Unmeasured::SourceUnreadable)
+        .ok_or(crate::seams::Unmeasured::Overflowed)?
+        .checked_add(scratch.visits().map_err(unreadable)?)
+        .ok_or(crate::seams::Unmeasured::Overflowed)
 }
 
 /// The spheres the last grid optimum in `scratch` read for its `h`: each of
@@ -933,10 +937,27 @@ impl Ranker {
                             entry.partials = walk.partials;
                             entry.state = 1;
                         }
+                        // The scratch does not serve this ground's graph,
+                        // so nothing was searched: no candidate, counted
+                        // under its own reason (`Scratch::misfits`) and never
+                        // read as unreachable. A step's failure reasons are
+                        // the event vocabulary's and say what a playbook met,
+                        // which a caller's wrong scratch is not; the world's
+                        // own scratch is made with its graph, and the gateway
+                        // asks `Scratch::serves` before it lends its own.
+                        Err(WalkError::NoPath(NoPath::Misfit)) => {
+                            entry.state = 2;
+                            scratch.misfits.bump();
+                        }
                         // The router serves no walk to it: no candidate
                         // (targeting.md, "Nearest": unreachable candidates
                         // are skipped).
-                        Err(WalkError::NoPath(_)) => entry.state = 2,
+                        Err(WalkError::NoPath(
+                            NoPath::Unplaced
+                            | NoPath::Unreachable
+                            | NoPath::Unrefinable
+                            | NoPath::Unpriced,
+                        )) => entry.state = 2,
                         // A chain whose queries stop falling is a walk no
                         // walker finishes: no candidate, and counted under
                         // its own reason (`Scratch::stalled`), never read as
@@ -1799,6 +1820,41 @@ mod tests {
             out.push((name, cost));
         }
         (out, ranker.matched())
+    }
+
+    /// A ranker handed a scratch that does not serve its ground's graph
+    /// prices nothing, so it ranks nothing; and it says so: each candidate is
+    /// counted under `misfits`, none as unreachable or stalled, where the
+    /// scratch made with the graph ranks them all and counts none.
+    #[test]
+    fn a_ranker_in_a_misfit_scratch_counts_what_it_could_not_price() {
+        let mut map = synthetic(|_, _| false, &[[40, 10], [10, 45], [50, 50]]);
+        let (ranked, matched) = ranked_all(&mut map, [10, 10]);
+        assert_eq!((ranked.len(), matched), (3, 3), "three vents, all reached");
+        assert_eq!(map.scratch.misfits(), Ok(0));
+
+        // Sized for one cluster of 64 where the graph has four of 32: a slot
+        // for every column, and none for most of the abstract nodes.
+        let coarse = Scratch::for_map(&map.surface, 64).unwrap_or_else(|| panic!("a scratch"));
+        assert!(!coarse.serves(&map.surface, &map.clusters));
+        map.scratch = coarse;
+        let (ranked, matched) = ranked_all(&mut map, [10, 10]);
+        assert_eq!(matched, 3, "the filter matched them before any walk");
+        assert_eq!(
+            ranked,
+            Vec::new(),
+            "nothing is ranked by a walk never priced"
+        );
+        assert_eq!(
+            (
+                map.scratch.misfits(),
+                map.scratch.stalled(),
+                map.scratch.expansions(),
+                map.scratch.abstract_expansions(),
+            ),
+            (Ok(3), Ok(0), Ok(0), Ok(0)),
+            "each candidate counted as a misfit, and nothing searched"
+        );
     }
 
     #[test]
