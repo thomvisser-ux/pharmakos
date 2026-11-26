@@ -1356,7 +1356,8 @@ fn spire_build_ticks_of(message: &gp::v1::RulesTable) -> Result<NonZeroU32, Rule
     let tick_ms = MS_PER_TICK.unsigned_abs();
     if build_ms.checked_rem(tick_ms) != Some(0) {
         return Err(refused(
-            "the build time must be a whole number of ticks, or how long a Spire takes would              need a rounding rule",
+            "the build time must be a whole number of ticks, or how long a Spire takes would \
+             need a rounding rule",
         ));
     }
     build_ms

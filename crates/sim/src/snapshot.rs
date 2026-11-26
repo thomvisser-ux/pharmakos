@@ -1184,11 +1184,14 @@ impl core::fmt::Display for SnapshotError {
             ),
             SnapshotError::OverListRoom { seat, rows, room } => write!(
                 f,
-                "the snapshot gives seat {seat}'s beacons {rows} list rows (build targets,                  protected areas and probe areas), past its room: a seat of a match of its                  seat count holds at most {room}"
+                "the snapshot gives seat {seat}'s beacons {rows} list rows (build targets, \
+                 protected areas and probe areas), past its room: a seat of a match of its \
+                 seat count holds at most {room}"
             ),
             SnapshotError::OverAvoidRoom { seat, areas, room } => write!(
                 f,
-                "the snapshot gives seat {seat}'s Attack beacons {areas} avoid areas, past its                  room: a seat of a match of its seat count holds at most {room}"
+                "the snapshot gives seat {seat}'s Attack beacons {areas} avoid areas, past its \
+                 room: a seat of a match of its seat count holds at most {room}"
             ),
         }
     }
