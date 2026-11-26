@@ -22,6 +22,7 @@
 //! | [`support`] | The support search's adversarial tick (item 138 (3)), and the footing query at its worst (item 148 (4)) |
 //! | [`fourth`] | A fourth, unplaced seat's decision-tick cost (decision 2's separate line) |
 //! | [`sweep`] | The power sweep: item 65's arithmetic with every input measured, for `tune2`'s power rows |
+//! | [`watch`] | What the load costs a watcher (E15's view bytes and recompute), a seat's sightings (E17) and the breach search, read between ticks |
 //!
 //! # What the figures are, and what they are not yet
 //!
@@ -59,6 +60,7 @@ pub mod stream;
 pub mod support;
 pub mod sweep;
 pub mod variant;
+pub mod watch;
 
 use pharmakos_sim::hex;
 

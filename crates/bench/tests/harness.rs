@@ -565,6 +565,46 @@ fn the_decision_kinds_read_their_own_ticks() {
     assert!(line.contains("; toward "), "{line}");
 }
 
+/// The watch segment reads what it names (`cert3`'s B5): every seat's
+/// keyframe completes through `get_view` and its deltas follow, the
+/// sightings are counted against the table's room, and the breach probe runs
+/// at the segment's end. A debug build, so nothing is timed worth reading.
+#[test]
+fn the_watch_segment_polls_counts_and_probes() {
+    use pharmakos_bench::g3::watch;
+    let root = workspace_root();
+    // Sixty ticks: room for the keyframe's pages and a few deltas.
+    let report = watch::measure(&root, BENCH_SEED, 3_000).expect("a measurement");
+    assert_eq!(report.ticks, 60);
+    assert_eq!(report.listings.len(), 3);
+    for listings in &report.listings {
+        assert!(
+            listings.first().is_some_and(|first| first.keyframe),
+            "{listings:?}"
+        );
+        assert!(
+            listings.iter().filter(|listing| !listing.keyframe).count() >= 1,
+            "a delta follows the keyframe: {listings:?}"
+        );
+        assert!(
+            listings.iter().all(|listing| listing.entities > 0),
+            "a seat always sees its own core: {listings:?}"
+        );
+    }
+    assert!(report.sighting_room > 0);
+    assert_eq!(report.breach.len(), 1, "the segment's end probes once");
+    assert!(
+        report.breach.iter().all(|probe| probe.ways > 0),
+        "{:?}",
+        report.breach
+    );
+    let line = watch::view_notice(&report, "linux");
+    assert!(
+        line.starts_with("::notice title=G3' view feed bytes::on linux, "),
+        "{line}"
+    );
+}
+
 /// The selector variant at the size budget is submittable through the hosted
 /// door: its pretty canonical text is past the transport cap, so a seat sends
 /// it compact, as `decision::shape_text` writes it.

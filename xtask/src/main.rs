@@ -131,7 +131,7 @@
 //! cargo xtask list                  # list the steps
 //! cargo xtask ci-scope              # CI's docs-only fast path: `full` or `prose`
 //! cargo xtask perf-alarms           # the per-runner perf notices; never fails
-//! cargo xtask perf-alarms g3        # one alarm (mesher, p1, p1-cap, p1-decision, p1-kinds, p3, g3, allocations)
+//! cargo xtask perf-alarms g3        # one alarm (mesher, p1, p1-cap, p1-decision, p1-kinds, p3, g3, g3-watch, allocations)
 //! cargo xtask g3-budget             # G3′'s CI alarm: fails at the gate's numbers doubled
 //! cargo xtask p3-budget             # P3's CI alarm: a repath p99 over 10 ms, an estimate over 2 ms
 //! cargo xtask p1-budget             # P1's CI alarm: QUICK over 10 ms, FULL or end to end over 100 ms at the budget
@@ -832,7 +832,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                     [one] => Some(alarm_selection(one)?),
                     _ => {
                         return Err("`perf-alarms` takes at most one alarm name: mesher, p1, \
-                                    p1-cap, p1-decision, p1-kinds, p3, g3 or allocations"
+                                    p1-cap, p1-decision, p1-kinds, p3, g3, g3-watch or allocations"
                             .to_owned());
                     }
                 };
@@ -4304,6 +4304,12 @@ struct Alarm {
 ///   commit, `toward`, deploy) on both seeds, whether the kinds agree within
 ///   a stated tolerance, and the seeds' gap against E12's rule; in the G3′
 ///   binary for its counting allocator, `p1-kinds`.
+/// * **What the gate's load costs besides the tick** (S3's plan, E15 and
+///   E17; `cert3`): `crates/bench/tests/g3_real.rs`'s
+///   `g3_watch_sightings_and_breach` — on the gate's load with raids, the
+///   whole entity list's bytes per `get_view` poll and the recompute's time
+///   per sensor move, each seat's peak sighting rows against the table's
+///   room, and the breach search's time at that load, `g3-watch`.
 /// * **P3** (S3's plan, section 5.1): `crates/bench/tests/p3_alarm.rs` — the
 ///   repath on the sim's own graph, cold and under the crater stream with the
 ///   repair beside it, and the travel estimate through the gateway's
@@ -4364,10 +4370,18 @@ const ALARMS: &[Alarm] = &[
         package: "pharmakos-bench",
         test: "g3_real",
         // The target also holds `g3_budget_segment` (`cargo xtask g3-budget`'s),
-        // `p1_decision_kinds` (the `p1-kinds` alarm's), and `g3_power_sweep` and
-        // `g3_raids_segments` (both run by hand).
+        // `p1_decision_kinds` (the `p1-kinds` alarm's),
+        // `g3_watch_sightings_and_breach` (the `g3-watch` alarm's), and
+        // `g3_power_sweep` and `g3_raids_segments` (both run by hand).
         exact: Some("g3_real_segment_support_tick_and_fourth_seat"),
         title: "G3' timings",
+    },
+    Alarm {
+        name: "g3-watch",
+        package: "pharmakos-bench",
+        test: "g3_real",
+        exact: Some("g3_watch_sightings_and_breach"),
+        title: "G3' watch, sightings and breach",
     },
 ];
 
@@ -7091,6 +7105,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                 "pharmakos-bench",
                 "pharmakos-bench",
                 "pharmakos-bench",
+                "pharmakos-bench",
                 "pharmakos-bench"
             ]
         );
@@ -7644,7 +7659,8 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                 "p1-decision",
                 "p1-kinds",
                 "p3",
-                "g3"
+                "g3",
+                "g3-watch"
             ]
         );
         for alarm in ALARMS {

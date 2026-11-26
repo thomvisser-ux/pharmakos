@@ -334,6 +334,38 @@ fn p1_decision_kinds() {
     assert!(failed.is_empty(), "{failed:?}");
 }
 
+/// What the gate's load with raids costs a watcher, a seat's sightings and
+/// the breach search (`cert3`'s B5; S3's plan, E15 and E17): `cargo xtask
+/// perf-alarms g3-watch` runs it. Six notices: the commit, the segment's
+/// provenance, the view feed's bytes, the recompute, the sightings and the
+/// breach search.
+#[test]
+#[ignore = "a performance alarm, not a gate: cargo xtask perf-alarms g3-watch runs it with --exact"]
+fn g3_watch_sightings_and_breach() {
+    let root = workspace_root();
+    let os = std::env::consts::OS;
+    println!();
+    let commit = match provenance::commit(&root) {
+        Ok(commit) => commit,
+        Err(error) => panic!("{error}"),
+    };
+    match g3::watch::measure(&root, G3_SEED, G3_SEGMENT_MS) {
+        Ok(report) => {
+            for line in [
+                provenance::notice("G3' watch", &commit, "one segment", os),
+                g3::watch::provenance_notice(&report, os),
+                g3::watch::view_notice(&report, os),
+                g3::watch::recompute_notice(&report, os),
+                g3::watch::sightings_notice(&report, os),
+                g3::watch::breach_notice(&report, os),
+            ] {
+                println!("{line}");
+            }
+        }
+        Err(error) => panic!("the gate's watch segment was not measured on {os}: {error}"),
+    }
+}
+
 #[test]
 #[ignore = "S3's loads with raids, run by hand with the certifying runs (--ignored --exact)"]
 fn g3_raids_segments() {

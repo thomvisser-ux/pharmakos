@@ -1374,9 +1374,12 @@ jobs:
     # `test` step, so it is not run again here; and G3′-real's figures (crates/bench/tests/
     # g3_real.rs: the 8-minute segment at the gate's load phase by phase, the
     # tick-minus-pathing mean of item 116 (6)(b) among them, the support search's
-    # adversarial tick and a fourth seat's cost; S2's plan, tasks `g3h` and `g3r`). Each
+    # adversarial tick and a fourth seat's cost; S2's plan, tasks `g3h` and `g3r`); and from
+    # `cert3`, on the gate's load with raids, the entity list's bytes per `get_view` poll,
+    # the recompute's time per sensor move, the peak sightings per seat and the breach
+    # search's time (S3's plan, E15 and E17), in the `g3-watch` step. Each
     # alarm is its own step, `cargo xtask perf-alarms <name>`, because GitHub annotates only
-    # the first ten notices of a step and the eight together print more (item 149 (4)). The
+    # the first ten notices of a step and the nine together print more (item 149 (4)). The
     # G3′ budget is not gated here: the gate is certified on the owner's machine, and its
     # loose CI alarm is the `g3 budget (ubuntu-24.04)` job below (S2's plan, E18). P3's
     # and P1's loose alarms, `cargo xtask p3-budget` and `cargo xtask p1-budget`, are not
@@ -1391,12 +1394,12 @@ jobs:
     # the job's time. It follows the docs-only fast path like the building jobs: a
     # prose-only pull request skips its steps and prints the notice.
     runs-on: ${{ matrix.os }}
-    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the eight
-    # measuring steps' 160), so a step that times out under continue-on-error never brings
+    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the nine
+    # measuring steps' 190), so a step that times out under continue-on-error never brings
     # the job to its timeout, which would be red. xtask's
     # `the_perf_alarms_job_can_never_go_red` holds the sum, and every measuring step's
     # continue-on-error, prose guard and timeout.
-    timeout-minutes: 185
+    timeout-minutes: 215
     strategy:
       fail-fast: false
       matrix:
@@ -1491,6 +1494,13 @@ jobs:
         timeout-minutes: 30
         shell: bash
         run: cargo xtask perf-alarms g3
+
+      - name: cargo xtask perf-alarms g3-watch
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: bash
+        run: cargo xtask perf-alarms g3-watch
 
       - name: cargo xtask perf-alarms allocations
         if: steps.scope.outputs.prose_only != 'true'
