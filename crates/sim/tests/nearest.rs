@@ -33,7 +33,7 @@ use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::pathing::estimate::{Speed, max_partials, walk_cost};
 use pharmakos_sim::pathing::reach::Reach;
 use pharmakos_sim::pathing::route::{Surcharge, route_with};
-use pharmakos_sim::pathing::search::{Scratch, Tally};
+use pharmakos_sim::pathing::search::{Scratch, Tally, Unanswered};
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::runner::{MatchSettings, Runner};
 use pharmakos_sim::tables::{BeaconId, SeatId};
@@ -226,10 +226,14 @@ fn measured_to(world: &World, index: usize, origin: Node) -> Option<Node> {
         .find_map(|column| reachable(column.x, column.y))
 }
 
-/// Nodes popped since the counters were last reset.
+/// What the searches counted since the counters were last reset: the nodes
+/// they popped, and every visit of their loops that pops nothing
+/// (`Scratch::visits`; S3's `walk3`), whose honesty `tests/pathing.rs` holds
+/// to the pops.
 fn popped(scratch: &Scratch) -> u64 {
     scratch.expansions().expect("the count fits a u64")
         + scratch.abstract_expansions().expect("the count fits a u64")
+        + scratch.visits().expect("the count fits a u64")
 }
 
 /// A walkable origin drawn from `rng`.
@@ -286,6 +290,7 @@ fn nearest_is_the_least_served_walk() {
                 ranks += 1;
                 let got = ranker
                     .next(&ground, &mut scratch)
+                    .expect("the scratch serves")
                     .map(|(index, walk)| (index, walk.cost));
                 if got != Some((expected.3, expected.0)) {
                     wrong.push((seed, scarred, [ox, oy], got, (expected.3, expected.0)));
@@ -295,6 +300,7 @@ fn nearest_is_the_least_served_walk() {
             scratch.reset_counters();
             let extra = ranker
                 .next(&ground, &mut scratch)
+                .expect("the scratch serves")
                 .map(|(index, walk)| (index, walk.cost));
             if extra.is_some() {
                 wrong.push((seed, scarred, [ox, oy], extra, (usize::MAX, 0)));
@@ -1117,7 +1123,10 @@ fn a_toward_that_finds_no_stone_searches_nothing() {
         );
         assert_eq!(
             found,
-            Err(StepFailed::counted(StepFailure::IllegalSite, 0)),
+            Err(Unanswered::Ran(StepFailed::counted(
+                StepFailure::IllegalSite,
+                0
+            ))),
             "{spec:?}"
         );
         assert_eq!(popped(&scratch), 0, "{spec:?}: no node popped");
@@ -1146,7 +1155,10 @@ fn a_toward_that_finds_no_stone_searches_nothing() {
     assert!(weighed > 0, "the seat has sites");
     assert_eq!(
         found,
-        Err(StepFailed::counted(StepFailure::IllegalSite, weighed))
+        Err(Unanswered::Ran(StepFailed::counted(
+            StepFailure::IllegalSite,
+            weighed
+        )))
     );
     assert_eq!(
         popped(&scratch),
@@ -1369,8 +1381,10 @@ fn the_site_listing_at_a_seats_most_beacons() {
     // spheres that listed one, and the nodes the search then pops. Before
     // dunit part 2 the units were the 37,653 columns scanned and the 14 pops
     // alone (37,667): the tests each column asks, the beacon rows, the Spire
-    // tests and the `h` folds were charged nothing.
-    assert_eq!(measured, (Some([232, 94]), Ok(1_685_732), 36_513, 21, 14));
+    // tests and the `h` folds were charged nothing. After it they read
+    // 1,685,732; S3's `walk3` counts the eight neighbour slots each of the 14
+    // pops tries, 112 more.
+    assert_eq!(measured, (Some([232, 94]), Ok(1_685_844), 36_513, 21, 14));
 }
 
 // ---------------------------------------------------------------------------
@@ -1848,10 +1862,14 @@ fn heuristic_reads(scratch: &Scratch) -> u64 {
 /// optimum, read from the queue's own counters (whose honesty
 /// `pathing::reach`'s own tests hold to the search's keys and pops): a
 /// bucket its ring walk turned to, a column moved from a bucket into its
-/// batch, and a cell its start's reset wrote (dunit part 2).
+/// batch, and a cell its start's reset wrote (dunit part 2), and a neighbour
+/// slot a settled column tried (S3's `walk3`).
 fn queue_reads(scratch: &Scratch) -> u64 {
     let reach = scratch.reach();
-    reach.turns().unwrap() + reach.unlinked().unwrap() + reach.filled().unwrap()
+    reach.turns().unwrap()
+        + reach.unlinked().unwrap()
+        + reach.filled().unwrap()
+        + reach.tried().unwrap()
 }
 
 /// The columns a `toward`'s site listing scans for `seat`: the disc of each
@@ -1907,7 +1925,10 @@ fn one_walk(world: &World, origin: [i32; 2], index: usize) -> (u64, u64) {
     };
     let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
     let mut ranker = Ranker::new(&ground, origin, |at| at == index);
-    let emitted = ranker.next(&ground, &mut scratch).map(|(at, _)| at);
+    let emitted = ranker
+        .next(&ground, &mut scratch)
+        .expect("the scratch serves")
+        .map(|(at, _)| at);
     assert_eq!(emitted, Some(index), "the one candidate is emitted");
     assert_eq!(scratch.walks().unwrap(), 1, "and priced by one walk");
     (tally.read().expect("measured"), popped(&scratch))
@@ -2052,7 +2073,13 @@ fn resolve_once(world: &World, label: &str, resolve: Resolve) -> (u64, u64, u64)
     let steps = match resolve {
         Resolve::Walk(index) => {
             let mut ranker = Ranker::new(&ground, origin, |at| at == index);
-            assert!(ranker.next(&ground, &mut scratch).is_some(), "{label}");
+            assert!(
+                ranker
+                    .next(&ground, &mut scratch)
+                    .expect("the scratch serves")
+                    .is_some(),
+                "{label}"
+            );
             let (entries, rows) = model.ranker_new(origin, |at| (at == index, 0));
             rows + Steps::ranker_draws(entries, scratch.walks().unwrap(), 1)
         }
@@ -2149,7 +2176,11 @@ fn decision_units_equal_the_primitive_steps_counted() {
         let mut ranker = Ranker::new(&ground, origin, |index| {
             pharmakos_sim::targeting::matches_pick(&ground, seat, index, FeatureKind::Vent, true)
         });
-        ranker.next(&ground, &mut scratch).expect("a vent").0
+        ranker
+            .next(&ground, &mut scratch)
+            .expect("the scratch serves")
+            .expect("a vent")
+            .0
     };
     let first_anchor = world.features().features()[first_vent].anchor;
     let cases = [

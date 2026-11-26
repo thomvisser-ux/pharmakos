@@ -12,13 +12,15 @@
 //! queries cannot interfere and the graph a repair produced is the graph every
 //! later query sees.
 //!
-//! Insertion is one **bounded sweep per endpoint** over the endpoint's own
-//! cluster: at most one cluster of cells, and it yields the cost from the
-//! endpoint to *every* transition node of that cluster at once. When both
-//! endpoints share a cluster it yields the direct cost between them for free as
-//! well — which matters, because without that edge a short query inside one
-//! cluster would be forced out through an entrance and back, and the estimate
-//! would be wildly pessimistic exactly where the editor shows short routes.
+//! Insertion reads the endpoint's cost to *every* transition node of its own
+//! cluster from the cluster's transition fields, one entry a slot
+//! ([`Clusters::field`]; S3's `walk3`), and sweeps the cluster from the
+//! endpoint only where the cluster keeps none. When both endpoints share a
+//! cluster it finds the direct cost between them as well, by one search
+//! inside the cluster — which matters, because without that edge a short
+//! query inside one cluster would be forced out through an entrance and back,
+//! and the estimate would be wildly pessimistic exactly where the editor shows
+//! short routes.
 //!
 //! # One abstract level
 //!
@@ -27,8 +29,10 @@
 //! level would be a second [`Clusters`] over a coarser grid and a two-stage
 //! search, with nothing here changing shape — and item 58 bounded what it could
 //! save at 9 %, because the endpoint sweeps it cannot touch were 91 % of a
-//! median query in the spike, and are nearly all of it on the sim's own map. `tests/pathing.rs` reports that split so S3 inherits the
-//! number rather than the opinion.
+//! median query in the spike, and were nearly all of it on the sim's own map
+//! until S3's `walk3` replaced them with the lookup above.
+//! `tests/pathing_bench.rs` reports the split, so a sweep that returns is read
+//! as a number rather than an opinion.
 //!
 //! # Smoothing can only remove cost
 //!
@@ -45,7 +49,9 @@
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
 use crate::pathing::estimate::{Fog, Speed, fog_price};
-use crate::pathing::search::{Bound, Item, Scratch, astar_costed, dijkstra_bounded};
+use crate::pathing::search::{
+    Bound, Misfit, Scratch, Tally, Unanswered, astar_served, sweep_served,
+};
 use crate::pathing::surface::{Node, Surface};
 
 /// One stretch of ground a route pays a surcharge to cross (S2's `atk`): a
@@ -173,6 +179,12 @@ impl RouteOutcome {
 /// fork. [`crate::pathing::estimate::estimate`] is a contractual wrapper
 /// around it under a fog mask, and prices a clear query at the walk the
 /// router serves instead (its module docs' "A clear query").
+///
+/// # Errors
+///
+/// [`Misfit`] for a scratch that does not serve this surface and
+/// decomposition ([`Scratch::serves`]), before any search. `Ok(None)` is no
+/// route.
 pub fn abstract_search(
     surface: &Surface,
     clusters: &Clusters,
@@ -181,8 +193,11 @@ pub fn abstract_search(
     goal: Node,
     fog: Fog<'_>,
     speed: Speed,
-) -> Option<AbstractResult> {
-    abstract_search_with(
+) -> Result<Option<AbstractResult>, Misfit> {
+    if !scratch.serves(surface, clusters) {
+        return Err(Misfit);
+    }
+    Ok(abstract_search_with(
         surface,
         clusters,
         scratch,
@@ -190,12 +205,12 @@ pub fn abstract_search(
         fog,
         speed,
         Surcharge::NONE,
-    )
+    ))
 }
 
 /// [`abstract_search`] under a route surcharge (S2's `atk`): an abstract
 /// edge either end of which is surcharged costs the multiplier times its
-/// price.
+/// price. In a scratch its caller has already held to [`Scratch::serves`].
 fn abstract_search_with(
     surface: &Surface,
     clusters: &Clusters,
@@ -228,8 +243,17 @@ fn abstract_search_with(
 
     let mut start_edges = core::mem::take(&mut scratch.start_edges);
     let mut goal_edges = core::mem::take(&mut scratch.goal_edges);
-    let direct = insert_endpoint(surface, clusters, scratch, start, goal, &mut start_edges);
-    insert_endpoint(surface, clusters, scratch, goal, start, &mut goal_edges);
+    // The direct cost between two endpoints of one cluster is found once,
+    // with the start's insertion: the goal's asks for none.
+    let direct = insert_endpoint(
+        surface,
+        clusters,
+        scratch,
+        start,
+        Some(goal),
+        &mut start_edges,
+    );
+    insert_endpoint(surface, clusters, scratch, goal, None, &mut goal_edges);
     if let Some(cost) = direct {
         start_edges.push((temp_goal, cost));
     }
@@ -252,19 +276,13 @@ fn abstract_search_with(
 
     abstract_begin(scratch);
     let h0 = surface.heuristic(start, goal);
-    abstract_reach(scratch, temp_start, 0, temp_start);
-    scratch.abstract_heap.push(Item {
-        f: h0,
-        h: h0,
-        n: temp_start,
-    });
+    if !scratch.queue_abstract(temp_start, 0, temp_start, h0) {
+        return None;
+    }
 
     let mut found = false;
-    while let Some(item) = scratch.abstract_heap.pop() {
-        if abstract_is_closed(scratch, item.n) {
-            continue;
-        }
-        abstract_close(scratch, item.n);
+    while let Some(item) = scratch.pop_open_abstract() {
+        scratch.abstract_close(item.n);
         scratch.abstract_expansions.bump();
         if item.n == temp_goal {
             found = true;
@@ -335,6 +353,7 @@ fn expand(
                 break;
             };
             index = index.saturating_add(1);
+            scratch.visits.bump();
             let edge = Edge {
                 from: node,
                 target,
@@ -358,6 +377,7 @@ fn expand(
             break;
         };
         index = index.saturating_add(1);
+        scratch.visits.bump();
         let Ok(target) = u32::try_from(
             cluster
                 .saturating_mul(stride)
@@ -384,6 +404,7 @@ fn expand(
             break;
         };
         index = index.saturating_add(1);
+        scratch.visits.bump();
         let edge = Edge {
             from: node,
             target,
@@ -482,6 +503,9 @@ fn reconstruct(
         current = abstract_came(scratch, current);
         guard = guard.saturating_add(1);
     }
+    // One a node the walk back read, and one a node the fog scan below reads.
+    scratch.visits.add(path.len());
+    scratch.visits.add(path.len());
     path.reverse();
     // E7: cannot miss: an abstract path holds at most the graph's nodes, a `u32` count
     let legs = u32::try_from(path.len().saturating_sub(1)).unwrap_or(0);
@@ -539,8 +563,10 @@ impl NoPath {
 ///
 /// # Errors
 ///
-/// A typed [`NoPath`], which the router counts under its reason (S2's plan,
-/// E27).
+/// [`Unanswered::Misfit`], before any search, for a scratch that does not
+/// serve this surface and decomposition ([`Scratch::serves`]); otherwise a
+/// typed [`NoPath`], which the router counts under its reason (S2's plan,
+/// E27), and which is always a statement about the ground.
 pub fn route(
     surface: &Surface,
     clusters: &Clusters,
@@ -548,7 +574,7 @@ pub fn route(
     start: Node,
     goal: Node,
     out: &mut Vec<Node>,
-) -> Result<RouteOutcome, NoPath> {
+) -> Result<RouteOutcome, Unanswered<NoPath>> {
     route_with(
         surface,
         clusters,
@@ -575,19 +601,43 @@ pub fn route_with(
     (start, goal): (Node, Node),
     surcharge: Surcharge<'_>,
     out: &mut Vec<Node>,
+) -> Result<RouteOutcome, Unanswered<NoPath>> {
+    if !scratch.serves(surface, clusters) {
+        return Err(Unanswered::Misfit);
+    }
+    route_served(surface, clusters, scratch, (start, goal), surcharge, out).map_err(Unanswered::Ran)
+}
+
+/// [`route_with`] in a scratch its caller has already held to
+/// [`Scratch::serves`]: the router's, behind [`Router::serve`]'s door or in
+/// the world's own scratch, where the only way to no route is the ground's.
+///
+/// [`Router::serve`]: crate::pathing::router::Router::serve
+///
+/// # Errors
+///
+/// A typed [`NoPath`].
+pub(crate) fn route_served(
+    surface: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    surcharge: Surcharge<'_>,
+    out: &mut Vec<Node>,
 ) -> Result<RouteOutcome, NoPath> {
     route_and_abstract(surface, clusters, scratch, (start, goal), surcharge, out)
         .map(|(_, outcome)| outcome)
 }
 
-/// [`route_with`], and the abstract search's answer the route was refined
-/// from: the one function both the router ([`route_with`]) and a clear
+/// [`route_served`], and the abstract search's answer the route was refined
+/// from: the one function both the router ([`route_served`]) and a clear
 /// estimate ([`crate::pathing::estimate::walk_cost`]) run, so that what the estimate
 /// prices is what the router serves by construction rather than by agreement.
+/// In a scratch its caller has already held to [`Scratch::serves`].
 ///
 /// # Errors
 ///
-/// As [`route`].
+/// A typed [`NoPath`].
 #[allow(
     clippy::too_many_lines,
     reason = "route's body under a surcharge: the abstract search, the leg refinement and the smoother in the order they run"
@@ -650,6 +700,7 @@ pub(crate) fn route_and_abstract(
         ));
     }
     for pair in path.windows(2) {
+        scratch.visits.bump();
         let (Some(from), Some(to)) = (pair.first().copied(), pair.get(1).copied()) else {
             ok = false;
             break;
@@ -659,7 +710,7 @@ pub(crate) fn route_and_abstract(
         let ca = clusters.cluster_of(a);
         let cb = clusters.cluster_of(b);
         if ca == cb {
-            if astar_costed(
+            if astar_served(
                 surface,
                 Bound::Cluster(clusters.of_node(), ca),
                 scratch,
@@ -673,6 +724,7 @@ pub(crate) fn route_and_abstract(
                 break;
             }
             for node in leg.iter().skip(1) {
+                scratch.visits.bump();
                 if raw.len() >= limit {
                     partial = true;
                     break;
@@ -710,12 +762,13 @@ pub(crate) fn route_and_abstract(
         out,
         (&mut line, &mut prefix),
         surcharge,
-        clusters.shape().smooth_lookahead,
+        (clusters.shape().smooth_lookahead, &mut scratch.visits),
     );
     scratch.raw = raw;
     scratch.line = line;
     scratch.prefix = prefix;
-    let cost = crate::pathing::search::route_cost(surface, out).ok_or(NoPath::Unpriced)?;
+    let cost = crate::pathing::search::route_cost(surface, out, &mut scratch.visits)
+        .ok_or(NoPath::Unpriced)?;
     // A route that prices has a column: an empty smoothed walk is no walk.
     let end = out.last().copied().ok_or(NoPath::Unpriced)?;
     Ok((
@@ -728,44 +781,84 @@ pub(crate) fn route_and_abstract(
     ))
 }
 
-/// Insert one endpoint: a bounded sweep over its cluster, harvested as edges to
-/// that cluster's transition nodes. Returns the direct cost to `other` when the
-/// two share a cluster.
+/// Insert one endpoint: its edges to its own cluster's transition nodes, each
+/// at the cost of the walk inside the cluster. Returns the direct cost to
+/// `direct_to`, the query's other endpoint, when one is asked for and the two
+/// share a cluster. A query asks for it once, with its start's insertion, and
+/// inserts its goal with `None`: the walk costs the same from either end.
+///
+/// The costs are read from the cluster's transition fields
+/// ([`Clusters::field`]), one entry a slot, and the direct cost is one A\*
+/// inside the cluster. A cluster that keeps no fields is swept from the
+/// endpoint instead, as every cluster was before S3's `walk3`; the two give
+/// the same edges at the same costs, because a field is such a sweep's own
+/// costs, kept, and a walk costs the same from either end
+/// ([`crate::pathing::clusters`], "Transition fields").
 fn insert_endpoint(
     surface: &Surface,
     clusters: &Clusters,
     scratch: &mut Scratch,
     cell: Node,
-    other: Node,
+    direct_to: Option<Node>,
     out: &mut Vec<(u32, i32)>,
 ) -> Option<i32> {
     out.clear();
     let tag = clusters.cluster_of(cell);
-    dijkstra_bounded(
-        surface,
-        Bound::Cluster(clusters.of_node(), tag),
-        scratch,
-        cell,
-        true,
-    );
     let cluster = usize::from(tag);
     let stride = clusters.max_trans();
-    let cells = clusters.trans_cells(cluster);
+    let slots = clusters.trans_cells(cluster).len();
+    let shared = direct_to.filter(|other| clusters.cluster_of(*other) == tag);
+    let Some(field) = clusters.field(surface, cell) else {
+        sweep_served(
+            surface,
+            Bound::Cluster(clusters.of_node(), tag),
+            scratch,
+            cell,
+            true,
+        );
+        let cells = clusters.trans_cells(cluster);
+        // One a slot read, as below.
+        scratch.visits.add(cells.len());
+        let mut slot = 0;
+        while slot < cells.len() {
+            if let Some(target_cell) = cells.get(slot).copied()
+                && let Some(cost) = scratch.cost_of(target_cell)
+                && let Ok(target) =
+                    u32::try_from(cluster.saturating_mul(stride).saturating_add(slot))
+            {
+                out.push((target, cost));
+            }
+            slot = slot.saturating_add(1);
+        }
+        return shared.and_then(|other| scratch.cost_of(other));
+    };
+    // One a slot read: the whole of an insertion's counted work where the
+    // endpoints share no cluster, since a lookup pops nothing.
+    scratch.visits.add(slots);
     let mut slot = 0;
-    while slot < cells.len() {
-        if let Some(target_cell) = cells.get(slot).copied()
-            && let Some(cost) = scratch.cost_of(target_cell)
+    while slot < slots {
+        if let Some(cost) = field.cost(slot)
             && let Ok(target) = u32::try_from(cluster.saturating_mul(stride).saturating_add(slot))
         {
             out.push((target, cost));
         }
         slot = slot.saturating_add(1);
     }
-    if clusters.cluster_of(other) == tag {
-        scratch.cost_of(other)
-    } else {
-        None
-    }
+    let other = shared?;
+    // The walk inside the cluster between the two endpoints: the cost a
+    // sweep from `cell` reads at `other`, found by the directed search.
+    let mut leg = core::mem::take(&mut scratch.leg);
+    let direct = astar_served(
+        surface,
+        Bound::Cluster(clusters.of_node(), tag),
+        scratch,
+        (cell, other),
+        Surcharge::NONE,
+        &mut leg,
+    );
+    leg.clear();
+    scratch.leg = leg;
+    direct
 }
 
 /// The column an abstract node stands on, temporary endpoints included.
@@ -801,26 +894,12 @@ fn abstract_begin(scratch: &mut Scratch) {
     if scratch.abstract_epoch == u32::MAX {
         scratch.abstract_stamp.fill(0);
         scratch.abstract_closed.fill(0);
+        scratch.visits.add(scratch.abstract_stamp.len());
+        scratch.visits.add(scratch.abstract_closed.len());
         scratch.abstract_epoch = 0;
     }
     scratch.abstract_epoch = scratch.abstract_epoch.saturating_add(1);
     scratch.abstract_heap.clear();
-}
-
-fn abstract_is_closed(scratch: &Scratch, node: u32) -> bool {
-    usize::try_from(node)
-        .ok()
-        .and_then(|index| scratch.abstract_closed.get(index).copied())
-        .is_some_and(|stamp| stamp == scratch.abstract_epoch)
-}
-
-fn abstract_close(scratch: &mut Scratch, node: u32) {
-    let epoch = scratch.abstract_epoch;
-    if let Ok(index) = usize::try_from(node)
-        && let Some(slot) = scratch.abstract_closed.get_mut(index)
-    {
-        *slot = epoch;
-    }
 }
 
 fn abstract_seen(scratch: &Scratch, node: u32) -> bool {
@@ -846,22 +925,6 @@ fn abstract_came(scratch: &Scratch, node: u32) -> u32 {
         .unwrap_or(node)
 }
 
-fn abstract_reach(scratch: &mut Scratch, node: u32, cost: i32, from: u32) {
-    let epoch = scratch.abstract_epoch;
-    let Ok(index) = usize::try_from(node) else {
-        return;
-    };
-    if let Some(slot) = scratch.abstract_stamp.get_mut(index) {
-        *slot = epoch;
-    }
-    if let Some(slot) = scratch.abstract_g.get_mut(index) {
-        *slot = cost;
-    }
-    if let Some(slot) = scratch.abstract_came.get_mut(index) {
-        *slot = from;
-    }
-}
-
 fn abstract_relax(
     surface: &Surface,
     scratch: &mut Scratch,
@@ -871,30 +934,25 @@ fn abstract_relax(
     goal: Node,
     target_cell: Node,
 ) {
-    if abstract_is_closed(scratch, target) {
+    if scratch.abstract_is_closed(target) {
         return;
     }
     if abstract_seen(scratch, target) && abstract_cost(scratch, target) <= cost {
         return;
     }
-    abstract_reach(scratch, target, cost, from);
-    let h = surface.heuristic(target_cell, goal);
-    scratch.abstract_heap.push(Item {
-        f: cost.saturating_add(h),
-        h,
-        n: target,
-    });
+    // Recorded and queued, both or neither (`Scratch::queue_abstract`).
+    scratch.queue_abstract(target, cost, from, surface.heuristic(target_cell, goal));
 }
 
 /// The greedy octile walk from `from` to `to`: diagonal while both axes need
 /// covering, then straight. Validated step by step, so it can only ever return
-/// a legal walk.
+/// a legal walk. Each column it stands on is counted in `visits`.
 fn straight_walk(
     surface: &Surface,
-    from: Node,
-    to: Node,
+    (from, to): (Node, Node),
     out: &mut Vec<Node>,
     surcharge: Surcharge<'_>,
+    visits: &mut Tally,
 ) -> Option<i32> {
     out.clear();
     out.push(from);
@@ -903,6 +961,7 @@ fn straight_walk(
     let mut total: i32 = 0;
     let mut guard: u32 = 0;
     loop {
+        visits.bump();
         let (x, y) = surface.coord_of(current);
         if x == tx && y == ty {
             return Some(total);
@@ -929,33 +988,18 @@ fn straight_walk(
 /// smoothed — `out` is left empty — because the alternative is pricing an
 /// illegal step and summing it into the prefix array, which with overflow
 /// checks on in every profile is a panic inside a tick.
-pub fn smooth_into(
-    surface: &Surface,
-    path: &[Node],
-    out: &mut Vec<Node>,
-    (line, prefix): (&mut Vec<Node>, &mut Vec<i32>),
-    lookahead: usize,
-) {
-    smooth_costed(
-        surface,
-        path,
-        out,
-        (line, prefix),
-        Surcharge::NONE,
-        lookahead,
-    );
-}
-
-/// [`smooth_into`] under a route surcharge: a shortcut is priced, and the
-/// sub-path it replaces, at the surcharge, so smoothing never cuts back into
-/// a zone the refinement went round.
+///
+/// Under a route surcharge a shortcut is priced, and the sub-path it
+/// replaces, at the surcharge, so smoothing never cuts back into a zone the
+/// refinement went round. Every visit of its loops is counted in `visits`
+/// ([`Scratch::visits`]).
 fn smooth_costed(
     surface: &Surface,
     path: &[Node],
     out: &mut Vec<Node>,
     (line, prefix): (&mut Vec<Node>, &mut Vec<i32>),
     surcharge: Surcharge<'_>,
-    lookahead: usize,
+    (lookahead, visits): (usize, &mut Tally),
 ) {
     out.clear();
     let Some(first) = path.first().copied() else {
@@ -965,6 +1009,7 @@ fn smooth_costed(
     prefix.push(0);
     let mut total: i32 = 0;
     for pair in path.windows(2) {
+        visits.bump();
         let (Some(from), Some(to)) = (pair.first().copied(), pair.get(1).copied()) else {
             out.clear();
             return;
@@ -979,12 +1024,14 @@ fn smooth_costed(
     out.push(first);
     let mut index = 0_usize;
     while index.saturating_add(1) < path.len() {
+        visits.bump();
         let limit = index
             .saturating_add(lookahead)
             .min(path.len().saturating_sub(1));
         let mut chosen = index.saturating_add(1);
         let mut ahead = limit;
         while ahead > index.saturating_add(1) {
+            visits.bump();
             let (Some(from), Some(to)) = (path.get(index).copied(), path.get(ahead).copied())
             else {
                 break;
@@ -996,10 +1043,11 @@ fn smooth_costed(
                 .unwrap_or(0)
                 // E7: cannot miss: as above
                 .saturating_sub(prefix.get(index).copied().unwrap_or(0));
-            if let Some(cost) = straight_walk(surface, from, to, line, surcharge)
+            if let Some(cost) = straight_walk(surface, (from, to), line, surcharge, visits)
                 && cost <= budget
             {
                 for node in line.iter().skip(1) {
+                    visits.bump();
                     out.push(*node);
                 }
                 chosen = ahead;

@@ -111,8 +111,8 @@ use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
 use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::estimate::{ServedWalk, WalkError, walk_cost};
-use crate::pathing::search::Scratch;
+use crate::pathing::estimate::{ServedWalk, WalkError, walk_cost_in};
+use crate::pathing::search::{Misfit, Scratch, Unanswered};
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
 use crate::tables::{BeaconId, BeaconTable, SeatId, StructureTable, TargetTable};
@@ -209,16 +209,23 @@ pub struct Ground<'a> {
     pub work: &'a dyn crate::seams::Meter,
 }
 
-/// The nodes `scratch`'s searches have popped since its counters were last
-/// reset: the grid and endpoint pops (`expansions`, of which the endpoint
-/// sweeps' are a part, so they are not added again) and the abstract pops.
+/// The counted work `scratch`'s searches have done since its counters were
+/// last reset: the nodes they popped -- the grid and endpoint pops
+/// (`expansions`, of which the endpoint sweeps' are a part, so they are not
+/// added again) and the abstract pops -- and every visit of their loops, and
+/// of the route assembly's, that pops nothing ([`Scratch::visits`]; S3's
+/// `walk3`).
 pub(crate) fn popped(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
+    // A tally that passed `u64::MAX` cannot be read; a sum of readable
+    // tallies past one overflowed.
     let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
     scratch
         .expansions()
         .map_err(unreadable)?
         .checked_add(scratch.abstract_expansions().map_err(unreadable)?)
-        .ok_or(crate::seams::Unmeasured::SourceUnreadable)
+        .ok_or(crate::seams::Unmeasured::Overflowed)?
+        .checked_add(scratch.visits().map_err(unreadable)?)
+        .ok_or(crate::seams::Unmeasured::Overflowed)
 }
 
 /// The spheres the last grid optimum in `scratch` read for its `h`: each of
@@ -237,21 +244,25 @@ fn heuristic_folds(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
         .ok_or(crate::seams::Unmeasured::Overflowed)
 }
 
-/// What the bucket queue of the last grid optimum in `scratch` visited, by
-/// its own counters (dunit part 2): a bucket its ring walk turned to, empty
-/// or not ([`crate::pathing::reach::Reach::turns`]), a column moved from a
-/// bucket into its batch ([`crate::pathing::reach::Reach::unlinked`]), and a
-/// cell its start's reset wrote ([`crate::pathing::reach::Reach::filled`]).
-/// Each counts from the search's own start.
+/// What the last grid optimum in `scratch` visited beside its pops, by its
+/// own counters (dunit part 2): a bucket its ring walk turned to, empty or
+/// not ([`crate::pathing::reach::Reach::turns`]), a column moved from a
+/// bucket into its batch ([`crate::pathing::reach::Reach::unlinked`]), a
+/// cell its start's reset wrote ([`crate::pathing::reach::Reach::filled`]),
+/// and, from S3's `walk3`, a neighbour slot a settled column tried
+/// ([`crate::pathing::reach::Reach::tried`]). Each counts from the search's
+/// own start.
 fn queue_visits(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
     let reach = scratch.reach();
     let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
     let turns = reach.turns().map_err(unreadable)?;
     let unlinked = reach.unlinked().map_err(unreadable)?;
     let filled = reach.filled().map_err(unreadable)?;
+    let tried = reach.tried().map_err(unreadable)?;
     turns
         .checked_add(unlinked)
         .and_then(|sum| sum.checked_add(filled))
+        .and_then(|sum| sum.checked_add(tried))
         .ok_or(crate::seams::Unmeasured::Overflowed)
 }
 
@@ -400,14 +411,14 @@ impl Ground<'_> {
     }
 
     /// The integer cost of the walk the router serves from `from` to `to`
-    /// ([`walk_cost`]): what a choice a unit then walks to ranks by
+    /// ([`walk_cost_in`]): what a choice a unit then walks to ranks by
     /// ([`Ranker`]; the module docs' "Two measures").
     ///
     /// Charged the nodes the walk popped, grid, endpoint and abstract, and
     /// nothing for the call itself: a walk that pops nothing searched nothing.
     fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<ServedWalk, WalkError> {
         let before = popped(scratch);
-        let walk = walk_cost(self.surface, self.clusters, scratch, (from, to));
+        let walk = walk_cost_in(self.surface, self.clusters, scratch, (from, to));
         self.charge_pops(before, scratch);
         walk
     }
@@ -875,9 +886,29 @@ impl Ranker {
     }
 
     /// The next candidate, nearest first, with its served walk (ranked by its
-    /// cost); `None` when every candidate has been emitted or found
+    /// cost); `Ok(None)` when every candidate has been emitted or found
     /// unreachable.
+    ///
+    /// # Errors
+    ///
+    /// [`Misfit`] for a scratch that does not serve the ground's graph
+    /// ([`Scratch::serves`]), before any walk is priced: no candidate's state
+    /// moves, so the same ranker in a scratch that serves ranks them all.
     pub fn next(
+        &mut self,
+        ground: &Ground<'_>,
+        scratch: &mut Scratch,
+    ) -> Result<Option<(usize, ServedWalk)>, Misfit> {
+        if !scratch.serves(ground.surface, ground.clusters) {
+            return Err(Misfit);
+        }
+        Ok(self.next_in(ground, scratch))
+    }
+
+    /// [`Ranker::next`] in a scratch already held to [`Scratch::serves`]:
+    /// behind a resolver's own door, or the world's own, which a tick holds
+    /// to its graph as it opens.
+    pub(crate) fn next_in(
         &mut self,
         ground: &Ground<'_>,
         scratch: &mut Scratch,
@@ -1074,17 +1105,19 @@ pub struct Cover {
 ///
 /// # Errors
 ///
-/// `no_target` when a name is absent or lost, or a description matches
-/// nothing reachable; `illegal_site` when candidates match but none has a
-/// legal site (targeting.md's failure table).
+/// [`Unanswered::Misfit`] for a scratch that does not serve the ground's
+/// graph; otherwise `no_target` when a name is absent or lost, or a
+/// description matches nothing reachable, and `illegal_site` when candidates
+/// match but none has a legal site (targeting.md's failure table).
 pub fn cover(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
     seat: SeatId,
     commander: [Fx; 3],
     spec: FeatureSpec,
-) -> Result<Cover, StepFailure> {
-    cover_counted(ground, scratch, seat, commander, spec).map_err(|failed| failed.reason)
+) -> Result<Cover, Unanswered<StepFailure>> {
+    cover_counted(ground, scratch, seat, commander, spec)
+        .map_err(|unanswered| unanswered.map(|failed| failed.reason))
 }
 
 /// [`cover`], with how many candidates matched on a miss.
@@ -1095,6 +1128,22 @@ pub fn cover(
 /// counts 1 when it names a live feature of its kind and 0 otherwise, and a
 /// description counts what [`matches_pick`] admitted, reachable or not.
 pub fn cover_counted(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    seat: SeatId,
+    commander: [Fx; 3],
+    spec: FeatureSpec,
+) -> Result<Cover, Unanswered<StepFailed>> {
+    if !scratch.serves(ground.surface, ground.clusters) {
+        return Err(Unanswered::Misfit);
+    }
+    cover_in(ground, scratch, seat, commander, spec).map_err(Unanswered::Ran)
+}
+
+/// [`cover_counted`] in a scratch already held to [`Scratch::serves`]:
+/// behind its door, or the world's own inside a tick, which holds it to the
+/// graph as it opens (`World::begin_tick`).
+pub(crate) fn cover_in(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
     seat: SeatId,
@@ -1117,7 +1166,7 @@ pub fn cover_counted(
                 metered::matches_pick(ground, seat, index, (kind, uncovered), ground.work)
             });
             let mut reached = false;
-            while let Some((feature, _)) = ranker.next(ground, scratch) {
+            while let Some((feature, _)) = ranker.next_in(ground, scratch) {
                 reached = true;
                 if let Some(site) = covering_site(ground, seat, commander, feature) {
                     return Ok(Cover { feature, site });
@@ -1381,6 +1430,9 @@ enum Sited {
 ///
 /// # Errors
 ///
+/// [`Unanswered::Misfit`] for a scratch that does not serve the ground's
+/// graph, before a site is listed: its grid optimum, short of a column, would
+/// drop the sites past its room and choose among the rest. Otherwise
 /// `no_target` when a name is absent or lost, or a description matches
 /// nothing reachable, counted as [`cover_counted`] counts it; `illegal_site`
 /// when a feature was found and no legal site reaches it, counted with **how
@@ -1388,6 +1440,22 @@ enum Sited {
 /// finds no site fails its step and says why, with how many sites it
 /// weighed").
 pub fn toward_counted(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    candidates: &mut Vec<StoneCandidate>,
+    seat: SeatId,
+    commander: [Fx; 3],
+    spec: FeatureSpec,
+) -> Result<Stone, Unanswered<StepFailed>> {
+    if !scratch.serves(ground.surface, ground.clusters) {
+        return Err(Unanswered::Misfit);
+    }
+    toward_in(ground, scratch, candidates, seat, commander, spec).map_err(Unanswered::Ran)
+}
+
+/// [`toward_counted`] in a scratch already held to [`Scratch::serves`], as
+/// [`cover_in`] is.
+pub(crate) fn toward_in(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
     candidates: &mut Vec<StoneCandidate>,
@@ -1441,7 +1509,7 @@ pub fn toward_counted(
             // to differs. So the count is that set's size, never a sum over
             // the features tried (fix pass 1, C5).
             let mut weighed: u32 = 0;
-            while let Some((feature, _)) = ranker.next(ground, scratch) {
+            while let Some((feature, _)) = ranker.next_in(ground, scratch) {
                 reached = true;
                 match stone_site(ground, scratch, sites, feature) {
                     Sited::Stone(site, count) => {
@@ -1546,9 +1614,9 @@ pub fn on_vent(
     except: Option<BeaconId>,
     covered: Option<usize>,
     spec: FeatureSpec,
-) -> Result<OnSite, StepFailure> {
+) -> Result<OnSite, Unanswered<StepFailure>> {
     on_vent_counted(ground, scratch, seat, centre, except, covered, spec)
-        .map_err(|failed| failed.reason)
+        .map_err(|unanswered| unanswered.map(|failed| failed.reason))
 }
 
 /// [`on_vent`], with how many candidates matched on a miss.
@@ -1569,15 +1637,33 @@ pub fn on_vent(
 ///
 /// # Errors
 ///
-/// Counted ([`StepFailed::counted`]): `no_target` with 0 when a name is
-/// absent, lost, not a vent, or outside the sphere; `illegal_site` with 1 when
-/// a named vent inside the sphere has no legal `on` column; `no_target` with
-/// what [`on_candidate`] admitted when a description reaches nothing.
+/// [`Unanswered::Misfit`] for a scratch that does not serve the ground's
+/// graph. Otherwise counted ([`StepFailed::counted`]): `no_target` with 0
+/// when a name is absent, lost, not a vent, or outside the sphere;
+/// `illegal_site` with 1 when a named vent inside the sphere has no legal
+/// `on` column; `no_target` with what [`on_candidate`] admitted when a
+/// description reaches nothing.
 pub fn on_vent_counted(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
     seat: SeatId,
     centre: [Fx; 3],
+    except: Option<BeaconId>,
+    covered: Option<usize>,
+    spec: FeatureSpec,
+) -> Result<OnSite, Unanswered<StepFailed>> {
+    if !scratch.serves(ground.surface, ground.clusters) {
+        return Err(Unanswered::Misfit);
+    }
+    on_vent_in(ground, scratch, (seat, centre), except, covered, spec).map_err(Unanswered::Ran)
+}
+
+/// [`on_vent_counted`] in a scratch already held to [`Scratch::serves`], as
+/// [`cover_in`] is.
+pub(crate) fn on_vent_in(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    (seat, centre): (SeatId, [Fx; 3]),
     except: Option<BeaconId>,
     covered: Option<usize>,
     spec: FeatureSpec,
@@ -1619,7 +1705,7 @@ pub fn on_vent_counted(
                 metered::on_candidate(ground, (seat, except), centre, index, ground.work)
             });
             let missed = StepFailed::counted(StepFailure::NoTarget, ranker.matched());
-            let (feature, _) = ranker.next(ground, scratch).ok_or(missed)?;
+            let (feature, _) = ranker.next_in(ground, scratch).ok_or(missed)?;
             // The candidate rule read this column, so a ranked vent has one.
             let column =
                 metered::on_column(ground, feature, (seat, except), ground.work).ok_or(missed)?;
@@ -1647,13 +1733,17 @@ pub fn on_candidate(
 
 #[cfg(test)]
 mod tests {
-    use super::{Ground, Ranker, spiral_offsets};
+    use super::{
+        FeatureSpec, Ground, Ranker, StoneCandidate, cover, cover_counted, on_vent,
+        on_vent_counted, spiral_offsets, toward_counted,
+    };
     use crate::features::{Feature, FeatureKind, FeatureTable, FootprintColumn};
     use crate::pathing::clusters::Clusters;
-    use crate::pathing::search::Scratch;
+    use crate::pathing::search::{Misfit, Scratch, Unanswered};
     use crate::pathing::surface::{StepCosts, Surface};
     use crate::rules::RulesTable;
     use crate::seams::UnitTally;
+    use crate::tables::SeatId;
     use crate::tables::{BeaconTable, StructureTable, TargetTable};
     use crate::voxels::{Material, Richness, VoxelStore};
 
@@ -1722,6 +1812,7 @@ mod tests {
         let clusters = Clusters::new(
             &surface,
             crate::pathing::ClusterShape {
+                fields: crate::pathing::clusters::FIELDS_PER_CLUSTER,
                 size: 32,
                 long_run: 6,
                 smooth_lookahead: 16,
@@ -1780,7 +1871,10 @@ mod tests {
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
         let mut out: Vec<(String, i64)> = Vec::new();
-        while let Some((feature, walk)) = ranker.next(&ground, &mut map.scratch) {
+        while let Some((feature, walk)) = ranker
+            .next(&ground, &mut map.scratch)
+            .unwrap_or_else(|misfit| panic!("{misfit}"))
+        {
             let cost = walk.cost;
             let name = map
                 .features
@@ -1790,6 +1884,87 @@ mod tests {
             out.push((name, cost));
         }
         (out, ranker.matched())
+    }
+
+    /// A ranker refuses a scratch that does not serve its ground's graph,
+    /// typed, before it prices a walk: nothing is searched and no candidate's
+    /// state moves, so the same ranker, handed the scratch made with the
+    /// graph, then ranks them all. It never answers "none reachable" for a
+    /// walk it could not price.
+    #[test]
+    fn a_ranker_refuses_a_scratch_that_does_not_serve_its_ground() {
+        let mut map = synthetic(|_, _| false, &[[40, 10], [10, 45], [50, 50]]);
+        let rules = rules();
+        let beacons = BeaconTable::with_capacity(0);
+        let structures = StructureTable::with_capacity(0);
+        let targets = TargetTable::with_capacity(0);
+        let spiral = spiral_offsets(24);
+        let work = UnitTally::new();
+        let ground = Ground {
+            surface: &map.surface,
+            clusters: &map.clusters,
+            voxels: &map.voxels,
+            features: &map.features,
+            beacons: &beacons,
+            structures: &structures,
+            targets: &targets,
+            rules: &rules,
+            spiral: &spiral,
+            work: &work,
+        };
+        // Sized for one cluster of 64 where the graph has four of 32: a slot
+        // for every column, and none for most of the abstract nodes.
+        let mut coarse = Scratch::for_map(&map.surface, 64).unwrap_or_else(|| panic!("a scratch"));
+        assert!(!coarse.serves(&map.surface, &map.clusters));
+        let mut ranker = Ranker::new(&ground, [10, 10], |_| true);
+        assert_eq!(ranker.matched(), 3, "the filter matched before any walk");
+        for _ in 0..2 {
+            assert_eq!(ranker.next(&ground, &mut coarse), Err(Misfit));
+        }
+        assert_eq!(
+            (
+                coarse.walks(),
+                coarse.expansions(),
+                coarse.abstract_expansions()
+            ),
+            (Ok(0), Ok(0), Ok(0)),
+            "nothing priced, nothing searched"
+        );
+        let mut emitted = 0;
+        while let Ok(Some(_)) = ranker.next(&ground, &mut map.scratch) {
+            emitted += 1;
+        }
+        assert_eq!(emitted, 3, "the refusals dropped no candidate");
+
+        // The resolvers refuse at their own doors, before a site is listed.
+        let seat = SeatId::new(0);
+        let at = ground.standing(10, 10).unwrap_or_else(|| panic!("ground"));
+        let spec = FeatureSpec::Nearest {
+            kind: FeatureKind::Vent,
+            uncovered: false,
+        };
+        let mut stones: Vec<StoneCandidate> = Vec::new();
+        assert_eq!(
+            cover(&ground, &mut coarse, seat, at, spec),
+            Err(Unanswered::Misfit)
+        );
+        assert_eq!(
+            cover_counted(&ground, &mut coarse, seat, at, spec),
+            Err(Unanswered::Misfit)
+        );
+        assert_eq!(
+            toward_counted(&ground, &mut coarse, &mut stones, seat, at, spec),
+            Err(Unanswered::Misfit)
+        );
+        assert_eq!(
+            on_vent(&ground, &mut coarse, seat, at, None, None, spec),
+            Err(Unanswered::Misfit)
+        );
+        assert_eq!(
+            on_vent_counted(&ground, &mut coarse, seat, at, None, None, spec),
+            Err(Unanswered::Misfit)
+        );
+        assert!(stones.is_empty(), "no site was listed");
     }
 
     #[test]

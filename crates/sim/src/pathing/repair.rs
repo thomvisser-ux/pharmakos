@@ -37,7 +37,7 @@
 //! measured.
 
 use crate::pathing::clusters::Clusters;
-use crate::pathing::search::Scratch;
+use crate::pathing::search::{Misfit, Scratch};
 use crate::pathing::surface::Surface;
 use crate::reserved::Reserved;
 
@@ -163,7 +163,32 @@ impl Repairer {
 /// dirty clusters, then transition sets for them and for the neighbours whose
 /// shared border actually changed, then intra edges for those, then border
 /// edges for those and their neighbours, then **one** connectivity rebuild.
+///
+/// # Errors
+///
+/// [`Misfit`] for a scratch that does not serve `surface` and `clusters`
+/// ([`Scratch::serves`]), before anything is repaired: the marks stay, the
+/// graph is as it was, and the call is not counted, so the same repair in a
+/// scratch that serves does what this one would have. Repaired in a misfit
+/// scratch, a cluster would be left with no inner edges and empty fields
+/// marked whole, a graph that answers "no route" for ground that has one.
 pub fn repair(
+    surface: &Surface,
+    clusters: &mut Clusters,
+    scratch: &mut Scratch,
+    repairer: &mut Repairer,
+) -> Result<RepairReport, Misfit> {
+    if !scratch.serves(surface, clusters) {
+        return Err(Misfit);
+    }
+    Ok(repair_served(surface, clusters, scratch, repairer))
+}
+
+/// [`repair`] in a scratch made with the graph it repairs: the world's own
+/// (`crate::pathing::graph_for` makes the two together, and a restore
+/// rebuilds the graph in the same scratch), which is why a tick's one settle
+/// has no refusal to carry.
+pub(crate) fn repair_served(
     surface: &Surface,
     clusters: &mut Clusters,
     scratch: &mut Scratch,
@@ -238,7 +263,7 @@ pub fn repair(
     inter.sort_unstable();
 
     for cluster in &transitions {
-        clusters.rebuild_intra(surface, scratch, usize::from(*cluster));
+        clusters.rebuild_intra_served(surface, scratch, usize::from(*cluster));
     }
     for cluster in &inter {
         clusters.rebuild_inter(usize::from(*cluster));

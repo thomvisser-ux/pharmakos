@@ -4037,7 +4037,7 @@ fn a_submission_past_the_cap_lists_the_cap_s_errors_and_counts_the_rest() {
     let listed = rows.iter().filter(|row| code(row) == "E0104").count();
     assert_eq!(
         listed,
-        usize::try_from(pharmakos_verifier::MAX_PER_CODE).expect("fits")
+        usize::try_from(pharmakos_verifier::MAX_PER_CODE.get()).expect("fits")
     );
     assert!(
         rows.iter().any(|row| code(row) == "I0007"),

@@ -63,6 +63,7 @@ use pharmakos_sim::interpreter::{
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::pathing::estimate::{ServedWalk, walk_ticks};
+use pharmakos_sim::pathing::search::{Misfit, Unanswered};
 use pharmakos_sim::pathing::{Scratch, Speed};
 use pharmakos_sim::seams::UnitTally;
 use pharmakos_sim::snapshot::Snapshot;
@@ -226,25 +227,53 @@ pub fn feature_reads(world: &World, seat: Option<SeatId>) -> Vec<FeatureRead> {
     reads
 }
 
+/// The gateway's fault when a scratch it lent does not serve the hosted
+/// world's graph ([`Scratch::serves`]): the sim refused to search in it, so
+/// there is no read to show, and it is said rather than read as "nothing
+/// found".
+pub(crate) fn unserved(_: Misfit) -> Error {
+    Error::internal("the planning scratch does not serve the hosted world's graph")
+}
+
+/// A resolver's read as the step's own result: what it bound, or the reason
+/// its step would fail.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the sim refused the scratch
+/// ([`unserved`]).
+pub(crate) fn ran<T, F>(read: Result<T, Unanswered<F>>) -> Result<Result<T, F>, Error> {
+    match read {
+        Ok(found) => Ok(Ok(found)),
+        Err(Unanswered::Ran(failed)) => Ok(Err(failed)),
+        Err(Unanswered::Misfit) => Err(unserved(Misfit)),
+    }
+}
+
 /// Every candidate `keep` admits, nearest first by the sim's [`Ranker`] (by
 /// the cost of the walk the router serves, then the anchor's `(y, x)`), with
 /// that walk: `(feature index, walk)`, which [`travel_ms`] turns into the time
 /// shown. An unreachable candidate is not listed (targeting.md, "Nearest").
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the sim refused the scratch
+/// ([`unserved`]).
 pub fn ranked<F>(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
     origin: [i32; 2],
     keep: F,
-) -> Vec<(usize, ServedWalk)>
+) -> Result<Vec<(usize, ServedWalk)>, Error>
 where
     F: FnMut(usize) -> bool,
 {
     let mut ranker = Ranker::new(ground, origin, keep);
     let mut out: Vec<(usize, ServedWalk)> = Vec::new();
-    while let Some(found) = ranker.next(ground, scratch) {
+    while let Some(found) = ranker.next(ground, scratch).map_err(unserved)? {
         out.push(found);
     }
-    out
+    Ok(out)
 }
 
 /// A served walk as the game milliseconds the commander takes to walk it, at
@@ -485,7 +514,7 @@ impl Reader<'_> {
     where
         F: FnMut(usize) -> bool,
     {
-        let found = ranked(&self.ground, &mut self.scratch, column_of(origin), keep);
+        let found = ranked(&self.ground, &mut self.scratch, column_of(origin), keep)?;
         found
             .into_iter()
             .map(|(index, walk)| {
@@ -582,7 +611,7 @@ impl Reader<'_> {
             .iter()
             .map(|(_, candidate)| candidate.clone())
             .collect();
-        match cover(&ground, &mut self.scratch, seat, commander, spec) {
+        match ran(cover(&ground, &mut self.scratch, seat, commander, spec))? {
             Ok(found) => {
                 let [x, y] = found.site;
                 let point = ground
@@ -648,14 +677,14 @@ impl Reader<'_> {
             .map(|(_, candidate)| candidate.clone())
             .collect();
         let mut stones: Vec<pharmakos_sim::targeting::StoneCandidate> = Vec::new();
-        match pharmakos_sim::targeting::toward_counted(
+        match ran(pharmakos_sim::targeting::toward_counted(
             &ground,
             &mut self.scratch,
             &mut stones,
             seat,
             commander,
             spec,
-        ) {
+        ))? {
             Ok(found) => {
                 let [x, y] = found.site;
                 let point = ground
@@ -706,7 +735,7 @@ impl Reader<'_> {
         // `covered {}`, is read sphere first (`on_vent_counted`): a vent
         // outside the sphere is `no_target` with 0 matched whatever stands on
         // it, and one inside counts 1 whether or not it is a legal site.
-        let read = on_vent_counted(
+        let read = ran(on_vent_counted(
             &ground,
             &mut self.scratch,
             seat,
@@ -714,7 +743,7 @@ impl Reader<'_> {
             except,
             covered,
             spec,
-        );
+        ))?;
         let counted = |failed: &StepFailed| {
             failed.matched.ok_or_else(|| {
                 Error::internal("the sim's `on` read missed and counted no candidates")

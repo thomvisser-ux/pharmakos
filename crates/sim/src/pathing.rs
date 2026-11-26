@@ -108,8 +108,10 @@ pub use surface::{NEIGHBOURS, Node, StepCosts, Surface};
 pub const MAX_ROUTE_NODES: u32 = 1024;
 
 /// The decomposition and its search scratch for `surface` at `shape`, the one
-/// place both are built and tied together: the world builds its graph here, and
-/// so does the gateway's route adapter, so their abstract numberings agree.
+/// place both are built and tied together: the world builds its graph here,
+/// and the gateway's route adapter borrows the world's (since lane `p3fix`),
+/// so a hosted match has one abstract numbering. The bench's P3 harness
+/// builds the graph it times here too.
 ///
 /// The scratch has to be sized before the decomposition exists — building the
 /// intra edges is itself a search — so [`Scratch::for_map`] does that
@@ -117,7 +119,7 @@ pub const MAX_ROUTE_NODES: u32 = 1024;
 /// checked against it below.
 ///
 /// `None` when the cluster edge cannot decompose this map, which the caller
-/// reports as the world's `MapError::Unclusterable` and the gateway's route adapter its own internal error.
+/// reports as the world's `MapError::Unclusterable`.
 #[must_use]
 pub fn graph_for(surface: &Surface, shape: ClusterShape) -> Option<(Clusters, Scratch)> {
     let mut scratch = Scratch::for_map(surface, shape.size)?;

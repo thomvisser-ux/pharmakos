@@ -64,6 +64,7 @@
 
 use std::collections::VecDeque;
 
+use pharmakos_proto::gp::api::v1::LeftOut;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::api::v1::{
@@ -82,7 +83,7 @@ use crate::variant::proto3_integer;
 use crate::variant::text_or_empty;
 use crate::view::{Entity, EntityKind, split_footer};
 use crate::vocabulary::{self, BeaconDetail, PickError, Vocabulary};
-use crate::wizard::{self, Instance, TemplateRow, Wizard};
+use crate::wizard::{self, Instance, RefusedRow, TemplateList, TemplateRow, Wizard};
 
 /// The verifier codes on which Load refuses a file rather than opening it.
 ///
@@ -719,21 +720,16 @@ impl GhostState {
     }
 }
 
-/// The most diagnostics of one code a verifier report lists one by one (S3's `vcap`): the
-/// verifier's `MAX_PER_CODE`, which this walled crate may not name, so `tests/report_cap.rs`
-/// reads the verifier's own line and holds the two equal.
-pub const REPORT_CAP_PER_CODE: usize = 4;
-
-/// The code that closes a report once for each code it left diagnostics out of.
+/// The code that closes a report once for each code it left diagnostics out of: the rows whose
+/// sentences [`left_out_words`] shows. Which codes were left out is never read from these rows.
 pub const LEFT_OUT_CODE: &str = "I0007";
 
-/// Whether a report whose diagnostics carry `codes` may have left out a diagnostic of `code`,
-/// read from the codes alone and never from a sentence: only once [`REPORT_CAP_PER_CODE`] of a
-/// code are listed is any of it left out, and only a report closing with an `I0007` left any.
-/// Every diagnostic of a code listed fewer times is in the report.
-pub fn may_have_left_out<'a>(codes: impl Iterator<Item = &'a str> + Clone, code: &str) -> bool {
-    let closed = codes.clone().any(|found| found == LEFT_OUT_CODE);
-    closed && codes.filter(|found| *found == code).count() >= REPORT_CAP_PER_CODE
+/// Whether a report says it left out a diagnostic of `code`, read from its `left_out` field as
+/// the gateway sent it (S3's `leftout`): the client counts no rows and holds no copy of the
+/// verifier's cap. A code the field does not name is listed whole.
+#[must_use]
+pub fn left_out_of(left_out: &[LeftOut], code: &str) -> bool {
+    left_out.iter().any(|gap| gap.code == code)
 }
 
 /// The report's own words for what it left out: every `I0007`'s sentence, in its order.
@@ -1085,6 +1081,8 @@ struct Preview {
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct CheckedPreview {
     rows: Vec<Row>,
+    /// The report's `left_out` field, as sent.
+    left_out: Vec<LeftOut>,
     qualifies: bool,
     dormant: Option<String>,
     size: Option<SizeMeter>,
@@ -1388,6 +1386,8 @@ pub struct Editor {
     owed: Owed,
     full_done: Option<u64>,
     rows: Vec<Row>,
+    /// The `left_out` field of the report the rows came from, as sent (S3's `leftout`).
+    left_out: Vec<LeftOut>,
     verdict: Verdict,
     rows_revision: u64,
     qualifies: bool,
@@ -1416,7 +1416,7 @@ pub struct Editor {
     /// read that returns it answers (fix pass 6).
     lost_pending: Option<&'static str>,
     changes: u64,
-    templates: Vec<TemplateRow>,
+    templates: TemplateList,
     wizard: Option<Wizard>,
     /// Every wizard ask so far, so an answer to an older ask (of any template) is known.
     wizard_asks: u64,
@@ -1650,6 +1650,7 @@ impl Editor {
             self.accept_text(preview.patched);
             if let Some(checked) = preview.checked {
                 self.rows = checked.rows;
+                self.left_out = checked.left_out;
                 self.dormant_patch = checked.dormant;
                 self.size = checked.size;
                 self.verdict = Verdict::Quick;
@@ -2469,17 +2470,16 @@ impl Editor {
             .collect()
     }
 
-    /// The report's own words for the conflicts it left out, when the rows on screen may have
-    /// left out a W0702 past the report's per-code cap ([`may_have_left_out`]): the connector
-    /// joins only the rows listed, and this says that more were found. `None` when every
-    /// conflict is listed, or while the rows or the rule list describe another text.
+    /// The report's own words for the conflicts it left out, when the report on screen says it
+    /// left out a W0702 ([`left_out_of`], its `left_out` field as sent): the connector joins
+    /// only the rows listed, and this says that more were found. `None` when every conflict is
+    /// listed, or while the rows or the rule list describe another text.
     #[must_use]
     pub fn conflicts_left_out(&self) -> Option<String> {
         if !self.rows_current() || !self.prose_current() {
             return None;
         }
-        let codes = self.rows.iter().map(|row| row.code.as_str());
-        may_have_left_out(codes, rule_list::CONFLICT_CODE).then(|| {
+        left_out_of(&self.left_out, rule_list::CONFLICT_CODE).then(|| {
             left_out_words(
                 self.rows
                     .iter()
@@ -3131,7 +3131,7 @@ impl Editor {
         // mark is one Lull's, so a list carried into the next would draw it after the gateway
         // stopped sending it. A new round's Lull draws no list until its own answer comes.
         if new_round {
-            self.templates.clear();
+            self.templates = TemplateList::default();
             self.known.templates = false;
             self.templates_failed = None;
         }
@@ -3685,7 +3685,15 @@ impl Editor {
     /// The templates `list_templates` offered, in its order.
     #[must_use]
     pub fn templates(&self) -> &[TemplateRow] {
-        &self.templates
+        &self.templates.rows
+    }
+
+    /// The library files the same `list_templates` answer said it refused, one entry per
+    /// reason with its count, as sent (S3's `leftout`); empty when it refused none or the list
+    /// has not come.
+    #[must_use]
+    pub fn library_refused(&self) -> &[RefusedRow] {
+        &self.templates.refused
     }
 
     /// Whether this Lull's template list has been read.
@@ -4383,6 +4391,7 @@ impl Editor {
             preview.checked = Some(CheckedPreview {
                 size: size_meter_of(report, &rows),
                 rows,
+                left_out: report.left_out.clone(),
                 qualifies: report.qualifies,
                 dormant: dormant_patch_of(report),
             });
@@ -4403,13 +4412,13 @@ impl Editor {
                 }
             }
             Sent::Templates => match wizard::templates_of(result) {
-                Ok(rows) => {
-                    self.templates = rows;
+                Ok(list) => {
+                    self.templates = list;
                     self.known.templates = true;
                     self.templates_failed = None;
                 }
                 Err(error) => {
-                    self.templates.clear();
+                    self.templates = TemplateList::default();
                     self.templates_failed = Some(ReadFailed::Unreadable(error.to_string()));
                     return Err(error);
                 }
@@ -4605,6 +4614,7 @@ impl Editor {
         if let Some(refusal) = refusal {
             let detail = format!("{} {}", refusal.code, refusal.path);
             self.rows = rows_of(report);
+            self.left_out.clone_from(&report.left_out);
             self.verdict = Verdict::Refused;
             self.say("load_refused", &detail);
         } else {
@@ -4646,7 +4656,8 @@ impl Editor {
         revision: u64,
         response: SubmitPlanResponse,
     ) -> Result<(), BridgeError> {
-        let report = response.report.ok_or_else(|| no_report("submit_plan"))?;
+        let report =
+            with_known_severities(response.report.ok_or_else(|| no_report("submit_plan"))?)?;
         self.submitted = Some(Submitted {
             accepted: response.accepted,
             qualifies: report.qualifies,
@@ -4724,6 +4735,7 @@ impl Editor {
         self.rule_ids.clear();
         self.revision = self.revision.wrapping_add(1);
         self.rows.clear();
+        self.left_out.clear();
         self.verdict = Verdict::None;
         self.qualifies = false;
         self.route = Route::default();
@@ -4774,6 +4786,7 @@ impl Editor {
 
     fn take_rows(&mut self, report: &VerifyReport, verdict: Verdict) {
         self.rows = rows_of(report);
+        self.left_out.clone_from(&report.left_out);
         self.size = size_meter_of(report, &self.rows);
         self.dormant_patch = dormant_patch_of(report);
         self.verdict = verdict;
@@ -4958,7 +4971,7 @@ impl Editor {
                 self.beacon_failed = Some(failed());
             }
             Sent::Templates => {
-                self.templates.clear();
+                self.templates = TemplateList::default();
                 self.templates_failed = Some(failed());
             }
             _ => {}
@@ -5202,10 +5215,11 @@ const fn check_of(sent: &Sent) -> Option<(Check, u64)> {
 }
 
 /// The ghost's verdict from the patched draft's QUICK report: illegal when an error points
-/// into the placed step; not known when none does but an error code is at the report's cap
-/// and the report left some out (the placed step is the route's last, so its own error is the
-/// first a cap leaves out); legal otherwise. `step` is the placed step's index in the route;
-/// when the route could not be read, the report's own `qualifies` is the verdict.
+/// into the placed step; not known when none does but the report's `left_out` field names an
+/// error code (the placed step is the route's last, so its own error is the first a cap leaves
+/// out); legal otherwise. A code's severity is its listed rows': an error code is left out of
+/// only once the cap's number of it are listed. `step` is the placed step's index in the
+/// route; when the route could not be read, the report's own `qualifies` is the verdict.
 fn placement_verdict(report: &VerifyReport, step: Option<usize>) -> (GhostState, String) {
     let inside = |path: &str| match step {
         Some(index) => {
@@ -5229,14 +5243,10 @@ fn placement_verdict(report: &VerifyReport, step: Option<usize>) -> (GhostState,
         }
         None if step.is_none() && !report.qualifies => (GhostState::Illegal, String::new()),
         None => {
-            let codes = report
-                .diagnostics
+            let hidden = report
+                .left_out
                 .iter()
-                .map(|diagnostic| diagnostic.code.as_str());
-            let hidden = report.diagnostics.iter().any(|diagnostic| {
-                diagnostic.severity() == Severity::Error
-                    && may_have_left_out(codes.clone(), &diagnostic.code)
-            });
+                .any(|gap| gap.severity() == Severity::Error);
             if hidden {
                 let words = left_out_words(report.diagnostics.iter().map(|diagnostic| {
                     let sentence = if diagnostic.beginner.is_empty() {
@@ -5511,7 +5521,30 @@ fn dormant_key(text: &str) -> Option<&'static str> {
 fn report_of(result: &Json) -> Result<VerifyReport, BridgeError> {
     let response: VerifyPlanResponse =
         json::decode_json(&body(result, "gp.api.v1.VerifyPlanResponse"))?;
-    response.report.ok_or_else(|| no_report("verify_plan"))
+    with_known_severities(response.report.ok_or_else(|| no_report("verify_plan"))?)
+}
+
+/// `report`, once each of its `left_out` entries names a severity the schema has (S3's
+/// `leftout`, fix pass 1): an entry's severity is the client's only word on whether what was
+/// left out is an error, so one that is unspecified or past the schema's names is a report
+/// this client cannot read, refused rather than read as any severity.
+///
+/// # Errors
+///
+/// [`BridgeError::Schema`] at the entry's `severity`.
+fn with_known_severities(report: VerifyReport) -> Result<VerifyReport, BridgeError> {
+    for (index, gap) in report.left_out.iter().enumerate() {
+        match Severity::try_from(gap.severity) {
+            Ok(Severity::Error | Severity::Warning | Severity::Info) => {}
+            Ok(Severity::Unspecified) | Err(_) => {
+                return Err(BridgeError::Schema {
+                    pointer: format!("/report/left_out/{index}/severity"),
+                    message: String::from("a left-out entry names no severity this client knows"),
+                });
+            }
+        }
+    }
+    Ok(report)
 }
 
 /// An answer that carries no report, which the gateway always writes: refused, never
@@ -6010,8 +6043,24 @@ mod tests {
     }
 
     /// `count` E0403 at the route's first steps and, when `closed`, the `I0007` that says the
-    /// report left more out (S3's `vcap`).
+    /// report left four more out, with the `left_out` entry it is the words of (S3's `vcap`
+    /// and `leftout`).
     fn capped_report(count: usize, closed: bool) -> VerifyReport {
+        let mut report = rows_only_report(count, closed);
+        if closed {
+            report.left_out.push(LeftOut {
+                code: "E0403".to_owned(),
+                count: 4,
+                max: 7,
+                severity: i32::from(Severity::Error),
+            });
+        }
+        report
+    }
+
+    /// [`capped_report`]'s rows alone, with no `left_out` entry: rows the client must not
+    /// read a left-out code from, however many there are.
+    fn rows_only_report(count: usize, closed: bool) -> VerifyReport {
         let mut diagnostics: Vec<pharmakos_proto::gp::api::v1::Diagnostic> = (0..count)
             .map(|index| {
                 diagnostic(
@@ -6043,35 +6092,42 @@ mod tests {
     /// report's own words.
     #[test]
     fn a_ghost_whose_step_the_cap_may_hide_is_not_known() {
-        let report = capped_report(REPORT_CAP_PER_CODE, true);
-        let (state, sentence) = placement_verdict(&report, Some(REPORT_CAP_PER_CODE + 4));
-        assert_eq!(state, GhostState::Unknown);
-        assert_eq!(sentence, "4 more `E0403` findings are not shown.");
+        // Any number of rows: the field, not the row count, says the code was left out of.
+        for listed in [1, 4, 7] {
+            let report = capped_report(listed, true);
+            let (state, sentence) = placement_verdict(&report, Some(20));
+            assert_eq!(state, GhostState::Unknown, "{listed} listed");
+            assert_eq!(sentence, "4 more `E0403` findings are not shown.");
+        }
         assert_eq!(GhostState::Unknown.name(), "unknown");
     }
 
-    /// Under the cap, or with nothing left out, an error elsewhere says nothing about the
-    /// placed step: legal; and the placed step's own listed error is illegal, as before.
+    /// With nothing in the `left_out` field, an error elsewhere says nothing about the placed
+    /// step, however many rows of its code and whatever `I0007` rows are listed: legal; and the
+    /// placed step's own listed error is illegal, as before.
     #[test]
     fn a_ghost_the_cap_cannot_hide_keeps_its_verdict() {
-        for (count, closed) in [
-            (REPORT_CAP_PER_CODE - 1, true),
-            (REPORT_CAP_PER_CODE, false),
-        ] {
-            let report = capped_report(count, closed);
+        for (count, closed) in [(3, true), (4, true), (7, true), (4, false), (7, false)] {
+            let report = rows_only_report(count, closed);
             assert_eq!(
-                placement_verdict(&report, Some(REPORT_CAP_PER_CODE + 4)).0,
+                placement_verdict(&report, Some(20)).0,
                 GhostState::Legal,
                 "{count} listed, closed {closed}"
             );
         }
-        let report = capped_report(REPORT_CAP_PER_CODE, true);
+        let report = capped_report(4, true);
         let (state, sentence) = placement_verdict(&report, Some(2));
         assert_eq!(state, GhostState::Illegal);
         assert_eq!(sentence, "Outside every sphere.");
-        // A warning at the cap hides no error.
-        let mut warnings = capped_report(0, true);
-        for index in 0..REPORT_CAP_PER_CODE {
+        // A warning left out hides no error.
+        let mut warnings = rows_only_report(0, true);
+        warnings.left_out.push(LeftOut {
+            code: "W0702".to_owned(),
+            count: 3,
+            max: 4,
+            severity: i32::from(Severity::Warning),
+        });
+        for index in 0..4 {
             warnings.diagnostics.insert(
                 0,
                 diagnostic(
@@ -6085,15 +6141,19 @@ mod tests {
         assert_eq!(placement_verdict(&warnings, Some(9)).0, GhostState::Legal);
     }
 
+    /// A code is left out of exactly when the report's `left_out` field names it.
     #[test]
-    fn a_code_is_complete_under_the_cap_or_with_nothing_left_out() {
-        let at_cap: Vec<&str> = std::iter::repeat_n("W0702", REPORT_CAP_PER_CODE).collect();
-        assert!(!may_have_left_out(at_cap.iter().copied(), "W0702"));
-        let closed: Vec<&str> = at_cap.iter().copied().chain([LEFT_OUT_CODE]).collect();
-        assert!(may_have_left_out(closed.iter().copied(), "W0702"));
-        assert!(!may_have_left_out(closed.iter().copied(), "E0403"));
-        let under: Vec<&str> = closed.iter().copied().skip(1).collect();
-        assert!(!may_have_left_out(under.iter().copied(), "W0702"));
+    fn a_code_is_left_out_of_only_when_the_field_names_it() {
+        let gap = |code: &str| LeftOut {
+            code: code.to_owned(),
+            count: 1,
+            max: 4,
+            severity: i32::from(Severity::Warning),
+        };
+        assert!(!left_out_of(&[], "W0702"));
+        assert!(left_out_of(&[gap("W0702")], "W0702"));
+        assert!(!left_out_of(&[gap("W0702")], "E0403"));
+        assert!(left_out_of(&[gap("E0403"), gap("W0702")], "W0702"));
     }
 
     /// Answers every call the editor makes with something unremarkable, until it is quiet.
@@ -6791,36 +6851,72 @@ mod tests {
         assert_eq!(conflict.sentence, later);
     }
 
-    /// A report listing the cap's W0702 rows and an `I0007` for the rest (S3's `vcap`): the
-    /// connector joins the rows listed, and the list says, in the report's own words, that more
-    /// were found; with no `I0007`, every conflict is listed and nothing more is said.
+    /// A report listing four W0702 rows, an `I0007` for the rest and the `left_out` entry it is
+    /// the words of (S3's `vcap` and `leftout`): the connector joins the rows listed, and the
+    /// list says, in the report's own words, that more were found. With no entry, every
+    /// conflict is listed and nothing more is said, whatever rows came: the field decides, as
+    /// sent, never the row count.
     #[test]
     fn conflicts_past_the_cap_are_said_and_never_drawn_as_none() {
-        for closed in [true, false] {
+        for (marker, entry) in [(true, true), (false, false), (true, false)] {
             let mut editor = rendered(EXPAND_EAST);
-            let mut rows: Vec<String> = (0..REPORT_CAP_PER_CODE)
+            let mut rows: Vec<String> = (0..4)
                 .map(|_| {
                     r#"{"code":"W0702","severity":"warning","path":"/declarative/handlers/0/when","related_paths":["/declarative/route/1"],"beginner":"beaten"}"#.to_owned()
                 })
                 .collect();
-            if closed {
+            if marker {
                 rows.push(
                     r#"{"code":"I0007","severity":"info","beginner":"9 more `W0702` findings are not shown."}"#
                         .to_owned(),
                 );
             }
+            let left_out = if entry {
+                r#","left_out":[{"code":"W0702","count":9,"max":4,"severity":"warning"}]"#
+            } else {
+                ""
+            };
             editor.owe_checks();
             let _ = editor.next_call(false);
             editor
-                .answered(Ok(&quick_report(&rows.join(","), true)))
+                .answered(Ok(&read(&format!(
+                    r#"{{"report":{{"qualifies":true,"depth":"quick","diagnostics":[{}]{left_out}}},"_status":{{"phase":"lull"}}}}"#,
+                    rows.join(",")
+                ))))
                 .expect("reads");
-            assert_eq!(editor.conflicts().len(), REPORT_CAP_PER_CODE);
+            assert_eq!(editor.conflicts().len(), 4);
             assert_eq!(
                 editor.conflicts_left_out().as_deref(),
-                closed.then_some("9 more `W0702` findings are not shown."),
-                "closed {closed}"
+                entry.then_some("9 more `W0702` findings are not shown."),
+                "marker {marker}, entry {entry}"
             );
         }
+    }
+
+    /// A left-out entry with no severity, or one the schema does not name, is a report the
+    /// client cannot read (S3's `leftout`, fix pass 1): refused at the entry's `severity`, never
+    /// read as an error or as nothing.
+    #[test]
+    fn a_left_out_entry_without_a_known_severity_is_refused() {
+        for entry in [
+            r#"{"code":"W0702","count":9,"max":4}"#,
+            r#"{"code":"W0702","count":9,"max":4,"severity":"severity_unspecified"}"#,
+            r#"{"code":"W0702","count":9,"max":4,"severity":7}"#,
+        ] {
+            let answer = read(&format!(
+                r#"{{"report":{{"qualifies":true,"depth":"quick","left_out":[{entry}]}},"_status":{{"phase":"lull"}}}}"#
+            ));
+            match report_of(&answer) {
+                Err(BridgeError::Schema { pointer, .. }) => {
+                    assert_eq!(pointer, "/report/left_out/0/severity", "{entry}");
+                }
+                other => panic!("{entry}: {other:?}"),
+            }
+        }
+        let known = read(
+            r#"{"report":{"qualifies":true,"depth":"quick","left_out":[{"code":"W0702","count":9,"max":4,"severity":"warning"}]},"_status":{"phase":"lull"}}"#,
+        );
+        assert!(report_of(&known).is_ok());
     }
 
     fn compact_row(a: &str, b: &str) -> String {

@@ -114,10 +114,18 @@ impl WorkCounter {
 /// over -- and **a node a search pops**: the grid and endpoint pops and the
 /// abstract pops of a served walk (`targeting::Ground::travel`) and the grid
 /// optimum's pops of a `toward` (`targeting::stone_site`), each charged as
-/// the change in the search scratch's own counters over the call. A call
+/// the change in the search scratch's own counters over the call. **A
+/// search's own loops are loops like any other** (S3's `walk3`, which
+/// supersedes decisions-log item 196 (1)'s leave for the neighbour loops a
+/// pop runs): a neighbour slot a pop tries, a stale queue entry skipped, a
+/// slot an endpoint's insertion reads, an abstract edge relaxed, and every
+/// visit of the loops that walk a search back, assemble its legs, smooth
+/// them and price the result (`pathing::search::Scratch::visits`,
+/// `pathing::reach::Reach::tried`), charged the same way. A call
 /// that visits nothing charges nothing: there is no flat charge per call. A
 /// read by index (an id's row, a column's node) is no loop and is not
-/// charged, nor are the standard library's sorts and moves. A unit is a
+/// charged, nor are the standard library's sorts and moves, nor a binary
+/// heap's own sift, which is the queue's as a compare is a sort's. A unit is a
 /// count, not a cost model: no step is weighted against another, so what a
 /// unit costs in nanoseconds per kind of step is the bench's to measure.
 ///
