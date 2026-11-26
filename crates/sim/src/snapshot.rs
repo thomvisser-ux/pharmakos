@@ -1103,7 +1103,8 @@ impl core::fmt::Display for SnapshotError {
             }
             SnapshotError::MisfitScratch => write!(
                 f,
-                "the receiving world's search scratch was replaced by one that does not serve                  its graph"
+                "the receiving world's search scratch was replaced by one that does not serve \
+                 its graph"
             ),
             SnapshotError::Unindexable { units } => write!(
                 f,

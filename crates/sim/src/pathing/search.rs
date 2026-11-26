@@ -316,8 +316,12 @@ impl std::error::Error for TallyOverflow {}
 /// counts nothing.
 ///
 /// The world searches in its own scratch through the crate's unchecked
-/// twins of these, and holds that scratch to its graph once as each tick
-/// opens and before a restore ([`crate::world::TickError::MisfitScratch`]).
+/// twins of these, and holds that scratch to its graph as each tick opens,
+/// before each of its phases and before a restore
+/// ([`crate::world::TickError::MisfitScratch`],
+/// [`crate::snapshot::SnapshotError::MisfitScratch`]).
+/// [`Clusters::new`](crate::pathing::clusters::Clusters::new) refuses as
+/// `None`.
 ///
 /// A search in a scratch that does not serve would end (a node with no slot
 /// is never queued, [`Scratch::queue`]) and answer "no route" from slots it

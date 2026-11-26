@@ -993,9 +993,10 @@ pub enum TickError {
     /// The world's search scratch does not serve its graph
     /// ([`Scratch::serves`]): it was replaced through [`World::scratch_mut`]
     /// by one sized for another map or cluster edge. Refused as the tick
-    /// opens, with the clock unmoved and nothing changed, because a tick's
-    /// repair and routes search in that scratch unchecked; put a scratch
-    /// that serves back and the tick runs.
+    /// opens, with the clock unmoved, and before each of its phases, with the
+    /// phase not run, and nothing changed either way, because a tick's
+    /// repair, routes and resolvers search in that scratch unchecked; put a
+    /// scratch that serves back and the same call runs.
     MisfitScratch,
     /// The phase asked for is not the open tick's next one: the phases run in
     /// [`PHASE_ORDER`] and no other order.
@@ -1982,10 +1983,10 @@ impl World {
     /// world identical, which `a_query_leaves_the_graph_alone` asserts.
     ///
     /// A caller that replaces it with a scratch that does not serve the
-    /// world's graph ([`Scratch::serves`]) is refused by the next tick
-    /// ([`TickError::MisfitScratch`]) and by a restore
-    /// ([`crate::snapshot::SnapshotError::MisfitScratch`]), each before it
-    /// changes anything.
+    /// world's graph ([`Scratch::serves`]) is refused by the next tick, or by
+    /// the open tick's next phase ([`TickError::MisfitScratch`]), and by a
+    /// restore ([`crate::snapshot::SnapshotError::MisfitScratch`]), each
+    /// before it changes anything.
     pub const fn scratch_mut(&mut self) -> &mut Scratch {
         &mut self.scratch
     }
@@ -4976,13 +4977,22 @@ impl World {
     ///
     /// # Errors
     ///
-    /// [`TickError::NotOpen`] between ticks, and [`TickError::OutOfOrder`]
+    /// [`TickError::NotOpen`] between ticks, [`TickError::OutOfOrder`]
     /// for a phase that is not the next one -- the hash among them, which is
-    /// [`World::end_tick`]'s.
+    /// [`World::end_tick`]'s -- and [`TickError::MisfitScratch`], with the
+    /// phase not run, when the search scratch was replaced since the tick
+    /// opened by one that does not serve the graph.
     pub fn run_phase(&mut self, phase: Phase) -> Result<(), TickError> {
         let next = self.next_phase().ok_or(TickError::NotOpen)?;
         if phase != next || phase == Phase::Hash {
             return Err(TickError::OutOfOrder { asked: phase, next });
+        }
+        // As `begin_tick` holds it: a caller stepping phase by phase can
+        // replace the scratch between two of them (`World::scratch_mut`).
+        // Refused, the phase has not run and the tick stays open at it; a
+        // scratch that serves put back, the same call runs it.
+        if !self.scratch_serves() {
+            return Err(TickError::MisfitScratch);
         }
         match phase {
             Phase::Broadphase => self.phase_broadphase(),
@@ -9915,7 +9925,7 @@ mod decision_visits {
         let mut scratch =
             crate::pathing::search::Scratch::for_map(world.surface(), world.clusters().size())
                 .unwrap_or_else(|| panic!("a scratch for the map"));
-        let _ = crate::targeting::cover_counted(
+        let read = crate::targeting::cover_counted(
             &ground,
             &mut scratch,
             seat,
@@ -9924,6 +9934,11 @@ mod decision_visits {
                 kind: crate::features::FeatureKind::Vent,
                 uncovered: true,
             },
+        );
+        assert_ne!(
+            read,
+            Err(crate::pathing::search::Unanswered::Misfit),
+            "the read ran"
         );
         assert_eq!(
             figures(runner.world()),
@@ -9966,7 +9981,7 @@ mod decision_visits {
                 )
                 .unwrap_or_else(|| panic!("a scratch for the map"));
                 for seat in [SeatId::new(0), SeatId::new(1)] {
-                    let _ = crate::targeting::cover_counted(
+                    let read = crate::targeting::cover_counted(
                         &ground,
                         &mut scratch,
                         seat,
@@ -9975,6 +9990,11 @@ mod decision_visits {
                             kind: crate::features::FeatureKind::Vent,
                             uncovered: true,
                         },
+                    );
+                    assert_ne!(
+                        read,
+                        Err(crate::pathing::search::Unanswered::Misfit),
+                        "the read ran"
                     );
                     let _ = world.spire_on(BeaconId::new(0));
                 }

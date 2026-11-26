@@ -1794,7 +1794,8 @@ fn a_cluster_keeps_its_fields_up_to_the_bound_exactly() {
                 fixture.clusters.fingerprint(),
                 fixture.clusters.fielded_count()
             ),
-            "and is the shipped bound's graph with the same clusters fielded: no cluster              here passes either bound"
+            "and is the shipped bound's graph with the same clusters fielded: no cluster \
+             here passes either bound"
         );
     }
 }
@@ -1871,7 +1872,8 @@ fn a_cost_past_a_field_entry_leaves_its_cluster_swept() {
             let cells = fixture.clusters.trans_cells(index);
             assert!(
                 cells.len() >= 3,
-                "the recipe: a transition at each end of each border (a corner cluster's two                  borders share one cell), cluster {index} holds {}",
+                "the recipe: a transition at each end of each border (a corner cluster's two \
+                 borders share one cell), cluster {index} holds {}",
                 cells.len()
             );
             let cell = cells[0];
@@ -2450,7 +2452,7 @@ fn a_restored_world_rebuilds_the_graph_it_was_saved_with() {
 /// that serves put back, the world steps as one never touched.
 #[test]
 fn a_world_whose_scratch_no_longer_fits_is_refused_by_its_tick_and_by_a_restore() {
-    use pharmakos_sim::world::TickError;
+    use pharmakos_sim::world::{PHASE_ORDER, Phase, TickError};
     let mut world = harness_world(4);
     let mut twin = harness_world(4);
     let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
@@ -2500,6 +2502,30 @@ fn a_world_whose_scratch_no_longer_fits_is_refused_by_its_tick_and_by_a_restore(
         );
         n += 1;
     }
+
+    // Replaced between two phases of an open tick, the next phase is refused
+    // and has not run; put back, the same call runs it and the tick ends on
+    // the twin's hash.
+    world.begin_tick().expect("a tick opens");
+    let coarse = Scratch::for_map(world.surface(), world.clusters().size() * 2).expect("a scratch");
+    let mut held = Some(coarse);
+    for phase in PHASE_ORDER {
+        if phase == Phase::Hash {
+            continue;
+        }
+        if phase == Phase::Decision {
+            let own = core::mem::replace(world.scratch_mut(), held.take().expect("once"));
+            assert_eq!(world.run_phase(phase), Err(TickError::MisfitScratch));
+            assert!(world.tick_is_open(), "the tick stays open at the phase");
+            *world.scratch_mut() = own;
+        }
+        world.run_phase(phase).expect("the phase runs");
+    }
+    assert_eq!(
+        world.end_tick(&mut enc).unwrap(),
+        twin.step(&mut twin_enc).unwrap(),
+        "the tick a refused phase interrupted"
+    );
 }
 
 // ---------------------------------------------------------------------------
