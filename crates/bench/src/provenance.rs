@@ -346,6 +346,19 @@ pub fn stamped(line: &str, sampling: &Sampling) -> String {
     format!("{line} {}", sampling.stamp())
 }
 
+/// `line` with the stamp of a run that ended in a refusal: whatever it was
+/// asked and however whole its counts, a run that failed certifies nothing,
+/// so the line carries [`CUT_BANNER`], says the run failed in the refusal's
+/// own words, and keeps its counts (`cert3`, L-1).
+#[must_use]
+pub fn stamped_failed(line: &str, sampling: &Sampling, refusal: &str) -> String {
+    let counts: Vec<String> = sampling.counts.iter().map(Count::words).collect();
+    format!(
+        "{line} [{CUT_BANNER}: the run failed ({refusal}); {}]",
+        counts.join(", ")
+    )
+}
+
 /// The one predicate for "this line is a certifying line": it carries the
 /// certifying mark and not the cut banner. A line with neither, which no
 /// certifying command prints, is not one either.

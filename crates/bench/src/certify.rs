@@ -203,6 +203,21 @@ pub struct P1Run {
 }
 
 impl P1Run {
+    /// The run's lines stamped with `sampling`, or, when the run kept a
+    /// refusal, each stamped as a failed run's ([`provenance::stamped_failed`]):
+    /// a run that ends in a refusal certifies nothing, whatever it was asked.
+    #[must_use]
+    pub fn stamp(lines: &[String], sampling: &Sampling, failure: Option<Error>) -> P1Run {
+        let lines = match &failure {
+            Some(error) => lines
+                .iter()
+                .map(|line| provenance::stamped_failed(line, sampling, &error.to_string()))
+                .collect(),
+            None => stamp_all(lines, sampling),
+        };
+        P1Run { lines, failure }
+    }
+
     /// Print every line through `print`, then answer the run's verdict.
     ///
     /// # Errors
@@ -310,13 +325,7 @@ pub fn p1_lines(
             .map(|figure| full::cap_notice(figure, plan, os)),
     );
     let sampling = p1_sampling(&quick_timing, &full_timing, &curve, plan, certify)?;
-    Ok(P1Run {
-        lines: lines
-            .iter()
-            .map(|line| provenance::stamped(line, &sampling))
-            .collect(),
-        failure,
-    })
+    Ok(P1Run::stamp(&lines, &sampling, failure))
 }
 
 /// The calls one figure's summaries were taken at: each summary's own
@@ -660,6 +669,41 @@ mod tests {
         assert!(matches!(verdict, Err(Error::Empty(_))), "{verdict:?}");
         let (_, kept) = seed_rule(&first, &first, "linux");
         assert!(kept.is_none());
+    }
+
+    /// L-1: a run asked to certify, with every count whole, that ends in a
+    /// refusal certifies nothing: every line carries the banner and the
+    /// refusal's own words. Without the refusal, the same lines certify.
+    #[test]
+    fn a_failed_run_certifies_no_line() {
+        use crate::provenance::{CUT_BANNER, Certify, is_certifying};
+        let whole = Sampling::calls(crate::full::CERT_PLAN, Certify::On);
+        assert!(whole.certifies());
+        let lines = vec![
+            "::notice title=a::one".to_owned(),
+            "::notice title=b::two".to_owned(),
+        ];
+        let failed = P1Run::stamp(
+            &lines,
+            &whole,
+            Some(Error::Empty("no shape travelled on both seeds".to_owned())),
+        );
+        for line in &failed.lines {
+            assert!(!is_certifying(line), "{line}");
+            assert!(line.contains(CUT_BANNER), "{line}");
+            assert!(
+                line.contains("the run failed (")
+                    && line.contains("no shape travelled on both seeds"),
+                "{line}"
+            );
+            assert!(
+                line.contains("2000 timed calls a figure of the certifying 2000"),
+                "{line}"
+            );
+        }
+        assert!(failed.failure.is_some());
+        let passed = P1Run::stamp(&lines, &whole, None);
+        assert!(passed.lines.iter().all(|line| is_certifying(line)));
     }
 
     /// B2: a shape one seed sent and the other could not leaves the
