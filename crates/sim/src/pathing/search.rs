@@ -56,6 +56,17 @@ impl Item {
 /// A hand-written binary min-heap over [`Item::key`]. Its items are
 /// [`Reserved`]: a heap is reserved once so a search never allocates, and a
 /// cloned or forked world's first search must not either.
+///
+/// **A sift is not counted work** ([`Scratch::visits`]), where the grid
+/// optimum's bucket queue counts its own loops
+/// ([`crate::pathing::reach::Reach`]). The two differ in what bounds them. A
+/// sift's steps are bounded by what is already counted: a push follows one
+/// counted neighbour slot or abstract edge, a pop is one counted pop or stale
+/// entry, and each sifts at most the heap's depth, the base-two logarithm of
+/// its length. The bucket queue's ring walk and unlinking are bounded by the
+/// ring's length and a bucket's, which no pop or slot counts, so they are
+/// counted themselves. A sort's compares are left uncounted for the same
+/// reason ([`crate::seams::UnitTally`]).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(crate) struct Heap {
     items: Reserved<Item>,
@@ -159,6 +170,12 @@ impl Bound<'_> {
 /// out of the return value.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Scratch {
+    /// How many columns a cluster holds in the decomposition this was sized
+    /// for ([`Scratch::new`]'s `cluster_cells`): the room the cluster-bounded
+    /// buffers (`heap`, `leg`, `line`) were reserved from, kept so that
+    /// [`Scratch::serves`] can answer for them as it does for the indexed
+    /// ones.
+    cluster_cells: u32,
     // --- the low-level half, indexed by column ---
     epoch: u32,
     stamp: Vec<u32>,
@@ -197,6 +214,8 @@ pub struct Scratch {
     pub(crate) expansions: Tally,
     pub(crate) endpoint_expansions: Tally,
     pub(crate) abstract_expansions: Tally,
+    /// The visits of a query's loops that pop nothing ([`Scratch::visits`]).
+    pub(crate) visits: Tally,
     pub(crate) served_estimates: Tally,
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
@@ -275,6 +294,91 @@ impl core::fmt::Display for TallyOverflow {
 
 impl std::error::Error for TallyOverflow {}
 
+/// A search was handed a scratch that does not serve its graph
+/// ([`Scratch::serves`], or [`Scratch::serves_surface`] for a search over the
+/// columns alone): one sized for another map or another cluster edge.
+///
+/// **Every public function that searches in a scratch refuses it before it
+/// searches**, each in its own result. Over the columns alone
+/// ([`Scratch::serves_surface`]): [`astar`], [`astar_with_order`],
+/// [`astar_costed`] and [`dijkstra_bounded`]. Over the decomposition
+/// ([`Scratch::serves`]):
+/// [`abstract_search`](crate::pathing::route::abstract_search);
+/// [`route`](crate::pathing::route::route),
+/// [`route_with`](crate::pathing::route::route_with) and
+/// [`walk_cost`](crate::pathing::estimate::walk_cost), as
+/// [`Unanswered::Misfit`]; [`estimate`](crate::pathing::estimate::estimate),
+/// as [`EstimateError::Misfit`](crate::pathing::estimate::EstimateError::Misfit);
+/// [`repair`](crate::pathing::repair::repair) and the decomposition's
+/// rebuilds; the router's [`serve`](crate::pathing::router::Router::serve);
+/// and the resolvers ([`crate::targeting`]'s `cover`, `on_vent`, `toward` and
+/// its ranker), as [`Unanswered::Misfit`]. A refused call changes nothing and
+/// counts nothing.
+///
+/// The world searches in its own scratch through the crate's unchecked
+/// twins of these, and holds that scratch to its graph as each tick opens,
+/// before each of its phases and before a restore
+/// ([`crate::world::TickError::MisfitScratch`],
+/// [`crate::snapshot::SnapshotError::MisfitScratch`]).
+/// [`Clusters::new`](crate::pathing::clusters::Clusters::new) refuses as
+/// `None`.
+///
+/// A search in a scratch that does not serve would end (a node with no slot
+/// is never queued, [`Scratch::queue`]) and answer "no route" from slots it
+/// does not have, which reads as an answer and is none.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Misfit;
+
+impl core::fmt::Display for Misfit {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(
+            "the search scratch was sized for another map or cluster edge than this graph's",
+        )
+    }
+}
+
+impl std::error::Error for Misfit {}
+
+/// Why a public search that has reasons of its own gave no result: it never
+/// ran, because the scratch does not serve the graph ([`Misfit`]); or it ran,
+/// and gave its own reason `E`. Two cases and never one, so that a reason
+/// about the ground (no route, a step that finds no target) is always a
+/// statement about the ground, and a caller's wrong scratch is never read as
+/// one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Unanswered<E> {
+    /// The scratch handed in does not serve the graph
+    /// ([`Scratch::serves`]): nothing was searched.
+    Misfit,
+    /// The search ran, and this is its reason.
+    Ran(E),
+}
+
+impl<E> Unanswered<E> {
+    /// The same refusal with the search's reason mapped.
+    pub fn map<F>(self, with: impl FnOnce(E) -> F) -> Unanswered<F> {
+        match self {
+            Unanswered::Misfit => Unanswered::Misfit,
+            Unanswered::Ran(reason) => Unanswered::Ran(with(reason)),
+        }
+    }
+}
+
+impl<E> From<Misfit> for Unanswered<E> {
+    fn from(_: Misfit) -> Unanswered<E> {
+        Unanswered::Misfit
+    }
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for Unanswered<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Unanswered::Misfit => Misfit.fmt(f),
+            Unanswered::Ran(reason) => reason.fmt(f),
+        }
+    }
+}
+
 impl Scratch {
     /// Room for a graph of `nodes` columns and `abstract_nodes` abstract nodes.
     ///
@@ -297,6 +401,7 @@ impl Scratch {
         let a = crate::math::index::row(abstract_nodes).saturating_add(2);
         let low_heap = crate::math::index::row(cluster_cells.saturating_mul(8));
         Some(Scratch {
+            cluster_cells,
             epoch: 0,
             stamp: vec![0; n],
             closed: vec![0; n],
@@ -336,6 +441,7 @@ impl Scratch {
             expansions: Tally::ZERO,
             endpoint_expansions: Tally::ZERO,
             abstract_expansions: Tally::ZERO,
+            visits: Tally::ZERO,
             served_estimates: Tally::ZERO,
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
@@ -373,6 +479,51 @@ impl Scratch {
             cells,
             surface.costs().max_step(),
         )
+    }
+
+    /// Whether this scratch has the room every search over `surface` and its
+    /// decomposition `clusters` writes: a slot for every column, a slot for
+    /// every abstract node the decomposition numbers and the two temporary
+    /// endpoints a query adds, the room a search bounded to one cluster was
+    /// reserved for (so that a search over it grows no buffer), and a grid
+    /// optimum sized for the surface's columns and its dearest step:
+    /// [`Scratch::new`]'s four inputs, each at least what this graph asks.
+    ///
+    /// **Every search's precondition, and every public search holds its
+    /// scratch to it** ([`Misfit`] lists them). [`Scratch::for_map`] at the
+    /// decomposition's own cluster edge serves it, and
+    /// [`Clusters::new`](crate::pathing::clusters::Clusters::new) refuses a
+    /// scratch that does not. A reader that keeps a scratch of its own beside
+    /// a graph it borrows (the gateway's planning scratch) asks this before
+    /// it lends one, so that its refusal is its own; a search it called
+    /// anyway would refuse too.
+    #[must_use]
+    pub fn serves(&self, surface: &Surface, clusters: &crate::pathing::clusters::Clusters) -> bool {
+        let slots = crate::math::index::row(clusters.abstract_capacity()).saturating_add(2);
+        crate::math::index::row(self.cluster_cells) >= clusters.cluster_cells()
+            && self.serves_surface(surface)
+            && self.abstract_stamp.len() >= slots
+            && self.abstract_closed.len() >= slots
+            && self.abstract_g.len() >= slots
+            && self.abstract_came.len() >= slots
+            && self
+                .reach
+                .serves(surface.node_count(), surface.costs().max_step())
+    }
+
+    /// Whether this scratch has a slot for every column of `surface`: the
+    /// part of [`Scratch::serves`] a search over the columns alone needs
+    /// ([`astar`], [`dijkstra_bounded`]), which reads no decomposition. Such
+    /// a search bounded to one cluster grows no buffer in a scratch that
+    /// [`Scratch::serves`] the decomposition as well; one over the whole map
+    /// ([`Bound::Whole`]) grows its heap, and is run by no tick.
+    #[must_use]
+    pub fn serves_surface(&self, surface: &Surface) -> bool {
+        let columns = crate::math::index::row(surface.node_count());
+        self.stamp.len() >= columns
+            && self.closed.len() >= columns
+            && self.g.len() >= columns
+            && self.came.len() >= columns
     }
 
     /// How many abstract node slots a decomposition of `surface` at this
@@ -434,6 +585,29 @@ impl Scratch {
     /// [`TallyOverflow`] once the count passed `u64::MAX`.
     pub const fn abstract_expansions(&self) -> Result<u64, TallyOverflow> {
         self.abstract_expansions.read()
+    }
+
+    /// Visits, since the last reset, of the loops a query runs that pop
+    /// nothing (S3's `walk3`), each counted where it happens: a stale heap
+    /// entry a search skips, a neighbour slot a pop tries, a column a walk
+    /// back reads, a slot an endpoint's insertion reads, an abstract edge
+    /// relaxed, an abstract node a reconstruction reads and one its fog scan
+    /// reads, a leg refined and a column of it copied, a step the smoother
+    /// prices, a stretch it starts from, a shortcut it tries with every step
+    /// of the straight walk it tries it by, a step the served route is priced
+    /// at, and a cell an epoch's wrap rewrites.
+    ///
+    /// With the pops this is every loop of a served walk's search, so the
+    /// counted work of a walk no longer rests on its pops bounding the rest:
+    /// an endpoint inserted by lookup pops nothing and is counted by the
+    /// slots it reads. A heap's own sift is not counted, as a sort's
+    /// compares are not ([`crate::seams::UnitTally`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn visits(&self) -> Result<u64, TallyOverflow> {
+        self.visits.read()
     }
 
     /// Estimates priced at the served walk since the last reset (every clear
@@ -599,6 +773,7 @@ impl Scratch {
         self.expansions = Tally::ZERO;
         self.endpoint_expansions = Tally::ZERO;
         self.abstract_expansions = Tally::ZERO;
+        self.visits = Tally::ZERO;
         self.served_estimates = Tally::ZERO;
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
@@ -627,6 +802,8 @@ impl Scratch {
         if self.epoch == u32::MAX {
             self.stamp.fill(0);
             self.closed.fill(0);
+            self.visits.add(self.stamp.len());
+            self.visits.add(self.closed.len());
             self.epoch = 0;
         }
         self.epoch = self.epoch.saturating_add(1);
@@ -655,19 +832,123 @@ impl Scratch {
         }
     }
 
-    fn set_reached(&mut self, node: Node, cost: i32, from: Node) {
+    /// Take the cheapest open column off the low-level heap: its entry, with
+    /// every stale entry met on the way skipped and counted as one visit each
+    /// ([`Scratch::visits`]); `None` once the heap is empty. A stale entry is
+    /// one whose column is already closed: a column reached again at a lower
+    /// cost is queued again, and its dearer entry stays in the heap until it
+    /// surfaces.
+    ///
+    /// **The one way a column leaves the low-level heap**, as
+    /// [`Scratch::queue`] is the one way in, so that a stale entry skipped is
+    /// counted in one place for every search.
+    pub(crate) fn pop_open(&mut self) -> Option<Item> {
+        while let Some(item) = self.heap.pop() {
+            if self.is_closed(item.n) {
+                self.visits.bump();
+                continue;
+            }
+            return Some(item);
+        }
+        None
+    }
+
+    /// Record `node` as reached at `cost` from `from` and queue it at the key
+    /// `(cost + h, h, node)`, both or neither; and whether it was queued:
+    /// `false`, with nothing recorded or queued, for a column this scratch
+    /// has no slot for.
+    ///
+    /// **The one way a column enters the low-level heap**, so that a column
+    /// with no record cannot be queued: it would never read as seen or
+    /// closed, each neighbour would queue it again, and the search would
+    /// never end and its heap would grow until the machine had no memory
+    /// left (found by a review mutant of the gateway's planning scratch, S3's
+    /// `p3est`). A scratch that serves its graph ([`Scratch::serves`]) has a
+    /// slot for every column, and every public search holds its scratch to
+    /// that before it searches ([`Misfit`]), so `false` is met by no search
+    /// the crate runs; what it is for is that a search in any scratch ends.
+    pub(crate) fn queue(&mut self, node: Node, cost: i32, from: Node, h: i32) -> bool {
         let Ok(index) = usize::try_from(node) else {
-            return;
+            return false;
         };
-        if let Some(slot) = self.stamp.get_mut(index) {
-            *slot = self.epoch;
+        let (Some(stamp), Some(g), Some(came)) = (
+            self.stamp.get_mut(index),
+            self.g.get_mut(index),
+            self.came.get_mut(index),
+        ) else {
+            return false;
+        };
+        *stamp = self.epoch;
+        *g = cost;
+        *came = from;
+        self.heap.push(Item {
+            f: cost.saturating_add(h),
+            h,
+            n: node,
+        });
+        true
+    }
+
+    /// [`Scratch::queue`] for the abstract search: record the abstract node
+    /// `node` as reached at `cost` from `from` and queue it at the key
+    /// `(cost + h, h, node)`, both or neither; `false`, with nothing recorded
+    /// or queued, for a node this scratch has no slot for. The one way a node
+    /// enters the abstract heap, for the same reason.
+    pub(crate) fn queue_abstract(&mut self, node: u32, cost: i32, from: u32, h: i32) -> bool {
+        let epoch = self.abstract_epoch;
+        let Ok(index) = usize::try_from(node) else {
+            return false;
+        };
+        let (Some(stamp), Some(g), Some(came)) = (
+            self.abstract_stamp.get_mut(index),
+            self.abstract_g.get_mut(index),
+            self.abstract_came.get_mut(index),
+        ) else {
+            return false;
+        };
+        *stamp = epoch;
+        *g = cost;
+        *came = from;
+        self.abstract_heap.push(Item {
+            f: cost.saturating_add(h),
+            h,
+            n: node,
+        });
+        true
+    }
+
+    /// Whether the abstract search under way has closed the abstract node
+    /// `node`.
+    pub(crate) fn abstract_is_closed(&self, node: u32) -> bool {
+        usize::try_from(node)
+            .ok()
+            .and_then(|index| self.abstract_closed.get(index).copied())
+            .is_some_and(|stamp| stamp == self.abstract_epoch)
+    }
+
+    /// Close the abstract node `node` for the abstract search under way.
+    pub(crate) fn abstract_close(&mut self, node: u32) {
+        let epoch = self.abstract_epoch;
+        if let Ok(index) = usize::try_from(node)
+            && let Some(slot) = self.abstract_closed.get_mut(index)
+        {
+            *slot = epoch;
         }
-        if let Some(slot) = self.g.get_mut(index) {
-            *slot = cost;
+    }
+
+    /// [`Scratch::pop_open`] for the abstract search: the cheapest open
+    /// abstract node's entry, with every stale entry met on the way skipped
+    /// and counted as one visit each. The one way a node leaves the abstract
+    /// heap, for the same reason.
+    pub(crate) fn pop_open_abstract(&mut self) -> Option<Item> {
+        while let Some(item) = self.abstract_heap.pop() {
+            if self.abstract_is_closed(item.n) {
+                self.visits.bump();
+                continue;
+            }
+            return Some(item);
         }
-        if let Some(slot) = self.came.get_mut(index) {
-            *slot = from;
-        }
+        None
     }
 
     fn cost_at(&self, node: Node) -> i32 {
@@ -723,6 +1004,11 @@ impl Scratch {
 /// `order` exists for one reason: `tests/pathing.rs` permutes it and demands a
 /// byte-identical route, which is what makes item 62's total order a checked
 /// property rather than a claim.
+///
+/// # Errors
+///
+/// [`Misfit`] for a scratch with no slot for some column of `surface`
+/// ([`Scratch::serves_surface`]), before any search. `Ok(None)` is no route.
 pub fn astar_with_order(
     surface: &Surface,
     bound: Bound<'_>,
@@ -731,8 +1017,11 @@ pub fn astar_with_order(
     goal: Node,
     order: [u8; 8],
     out: &mut Vec<Node>,
-) -> Option<i32> {
-    astar_inner(
+) -> Result<Option<i32>, Misfit> {
+    if !scratch.serves_surface(surface) {
+        return Err(Misfit);
+    }
+    Ok(astar_inner(
         surface,
         bound,
         scratch,
@@ -740,14 +1029,42 @@ pub fn astar_with_order(
         order,
         crate::pathing::route::Surcharge::NONE,
         out,
-    )
+    ))
 }
 
 /// A\* with the default expansion order under a route surcharge (S2's
 /// `atk`): a step onto a surcharged column costs the multiplier times its
 /// ordinary cost. The heuristic stays octile at the ordinary costs, which a
 /// surcharge of one or more never makes inadmissible.
+///
+/// # Errors
+///
+/// As [`astar_with_order`].
 pub fn astar_costed(
+    surface: &Surface,
+    bound: Bound<'_>,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    surcharge: crate::pathing::route::Surcharge<'_>,
+    out: &mut Vec<Node>,
+) -> Result<Option<i32>, Misfit> {
+    if !scratch.serves_surface(surface) {
+        return Err(Misfit);
+    }
+    Ok(astar_served(
+        surface,
+        bound,
+        scratch,
+        (start, goal),
+        surcharge,
+        out,
+    ))
+}
+
+/// [`astar_costed`] in a scratch its caller has already held to
+/// [`Scratch::serves`]: a route's leg refinement and an endpoint's direct
+/// cost, each inside a query whose own door refused a misfit scratch.
+pub(crate) fn astar_served(
     surface: &Surface,
     bound: Bound<'_>,
     scratch: &mut Scratch,
@@ -784,25 +1101,23 @@ fn astar_inner(
     }
     scratch.begin();
     let h0 = surface.heuristic(start, goal);
-    scratch.set_reached(start, 0, start);
-    scratch.heap.push(Item {
-        f: h0,
-        h: h0,
-        n: start,
-    });
+    if !scratch.queue(start, 0, start, h0) {
+        return None;
+    }
 
-    while let Some(item) = scratch.heap.pop() {
-        if scratch.is_closed(item.n) {
-            continue;
-        }
+    while let Some(item) = scratch.pop_open() {
         scratch.close(item.n);
         scratch.expansions.bump();
         if item.n == goal {
             let cost = scratch.cost_at(goal);
             scratch.reconstruct(start, goal, out);
+            // One a column the walk back read.
+            scratch.visits.add(out.len());
             return Some(cost);
         }
         let here = scratch.cost_at(item.n);
+        // One a neighbour slot tried: the loop below never leaves early.
+        scratch.visits.add(order.len());
         for k in order {
             let Some((next, step)) = surface.neighbour(item.n, usize::from(k)) else {
                 continue;
@@ -816,19 +1131,17 @@ fn astar_inner(
             if scratch.seen(next) && scratch.cost_at(next) <= cost {
                 continue;
             }
-            scratch.set_reached(next, cost, item.n);
-            let h = surface.heuristic(next, goal);
-            scratch.heap.push(Item {
-                f: cost.saturating_add(h),
-                h,
-                n: next,
-            });
+            scratch.queue(next, cost, item.n, surface.heuristic(next, goal));
         }
     }
     None
 }
 
 /// A\* with the default expansion order.
+///
+/// # Errors
+///
+/// As [`astar_with_order`].
 pub fn astar(
     surface: &Surface,
     bound: Bound<'_>,
@@ -836,7 +1149,7 @@ pub fn astar(
     start: Node,
     goal: Node,
     out: &mut Vec<Node>,
-) -> Option<i32> {
+) -> Result<Option<i32>, Misfit> {
     astar_with_order(surface, bound, scratch, start, goal, DEFAULT_ORDER, out)
 }
 
@@ -847,7 +1160,31 @@ pub fn astar(
 /// `endpoint` says whether the sweep's expansions are charged to
 /// [`Scratch::endpoint_expansions`] as well as to the general counter, so the
 /// endpoint-sweep share of a query is a measurement rather than an estimate.
+///
+/// # Errors
+///
+/// [`Misfit`] for a scratch with no slot for some column of `surface`
+/// ([`Scratch::serves_surface`]), before any search: the costs a sweep in it
+/// left would read as "not reached" for columns it could not record.
 pub fn dijkstra_bounded(
+    surface: &Surface,
+    bound: Bound<'_>,
+    scratch: &mut Scratch,
+    source: Node,
+    endpoint: bool,
+) -> Result<(), Misfit> {
+    if !scratch.serves_surface(surface) {
+        return Err(Misfit);
+    }
+    sweep_served(surface, bound, scratch, source, endpoint);
+    Ok(())
+}
+
+/// [`dijkstra_bounded`] in a scratch its caller has already held to
+/// [`Scratch::serves`]: an endpoint's insertion sweep inside a query, and a
+/// cluster's inner edges inside a rebuild, each behind a door that refused a
+/// misfit scratch.
+pub(crate) fn sweep_served(
     surface: &Surface,
     bound: Bound<'_>,
     scratch: &mut Scratch,
@@ -858,22 +1195,18 @@ pub fn dijkstra_bounded(
     if !surface.walkable(source) || !bound.admits(source) {
         return;
     }
-    scratch.set_reached(source, 0, source);
-    scratch.heap.push(Item {
-        f: 0,
-        h: 0,
-        n: source,
-    });
-    while let Some(item) = scratch.heap.pop() {
-        if scratch.is_closed(item.n) {
-            continue;
-        }
+    if !scratch.queue(source, 0, source, 0) {
+        return;
+    }
+    while let Some(item) = scratch.pop_open() {
         scratch.close(item.n);
         scratch.expansions.bump();
         if endpoint {
             scratch.endpoint_expansions.bump();
         }
         let here = scratch.cost_at(item.n);
+        // One a neighbour slot tried: the loop below never leaves early.
+        scratch.visits.add(DEFAULT_ORDER.len());
         for k in DEFAULT_ORDER {
             let Some((next, step)) = surface.neighbour(item.n, usize::from(k)) else {
                 continue;
@@ -887,22 +1220,19 @@ pub fn dijkstra_bounded(
             if scratch.seen(next) && scratch.cost_at(next) <= cost {
                 continue;
             }
-            scratch.set_reached(next, cost, item.n);
-            scratch.heap.push(Item {
-                f: cost,
-                h: 0,
-                n: next,
-            });
+            scratch.queue(next, cost, item.n, 0);
         }
     }
 }
 
 /// The total cost of walking `route`, or `None` when a step on it is illegal —
-/// which is what a stale route looks like after the terrain moved.
+/// which is what a stale route looks like after the terrain moved. Each step
+/// priced is counted in `visits` ([`Scratch::visits`]).
 #[must_use]
-pub fn route_cost(surface: &Surface, route: &[Node]) -> Option<i32> {
+pub fn route_cost(surface: &Surface, route: &[Node], visits: &mut Tally) -> Option<i32> {
     let mut total: i32 = 0;
     for pair in route.windows(2) {
+        visits.bump();
         let from = pair.first().copied()?;
         let to = pair.get(1).copied()?;
         total = total.checked_add(surface.step_cost_between(from, to)?)?;
@@ -937,6 +1267,98 @@ mod tests {
                 scratch.served.capacity()
             );
         }
+    }
+
+    /// A column or an abstract node this scratch has no slot for is never
+    /// queued, and nothing is recorded for it: the rule that ends a search in
+    /// any scratch ([`Scratch::queue`]). One with a slot is recorded and
+    /// queued at its key.
+    #[test]
+    fn a_node_with_no_slot_is_never_queued() {
+        // Four columns and four abstract nodes (and the two temporary ones).
+        let mut scratch = Scratch::new(4, 4, 4, 18).unwrap_or_else(|| panic!("a ring for 18"));
+        scratch.epoch = 1;
+        scratch.abstract_epoch = 1;
+        for node in [4_u32, 5, 1_000, u32::MAX] {
+            assert!(!scratch.queue(node, 7, 0, 3), "column {node} has no slot");
+            assert!(!scratch.seen(node), "column {node} is not recorded");
+        }
+        assert_eq!(scratch.heap.len(), 0, "and nothing is queued");
+        assert!(scratch.queue(3, 7, 0, 3), "column 3 has a slot");
+        assert!(scratch.seen(3));
+        assert_eq!(scratch.cost_of(3), Some(7));
+        assert_eq!(
+            scratch.heap.pop().map(super::Item::key),
+            Some((10, 3, 3)),
+            "queued at cost plus h, then h, then the column"
+        );
+
+        for node in [6_u32, 7, 1_000, u32::MAX] {
+            assert!(
+                !scratch.queue_abstract(node, 7, 0, 3),
+                "abstract node {node} has no slot"
+            );
+        }
+        assert_eq!(scratch.abstract_heap.len(), 0, "and nothing is queued");
+        assert!(
+            scratch.queue_abstract(5, 7, 0, 3),
+            "the second temporary endpoint has a slot"
+        );
+        assert_eq!(
+            scratch.abstract_heap.pop().map(super::Item::key),
+            Some((10, 3, 5))
+        );
+        assert_eq!(scratch.abstract_g.get(5).copied(), Some(7));
+    }
+
+    /// A stale entry, one whose node closed at a lower cost after it was
+    /// queued, is skipped as it surfaces and counted as one visit, in each
+    /// heap's one exit ([`Scratch::pop_open`],
+    /// [`Scratch::pop_open_abstract`]); an open node's entry is returned and
+    /// counts nothing there.
+    #[test]
+    fn a_stale_entry_is_skipped_and_counted_as_it_surfaces() {
+        let mut scratch = Scratch::new(4, 4, 4, 18).unwrap_or_else(|| panic!("a ring for 18"));
+        scratch.epoch = 1;
+        scratch.abstract_epoch = 1;
+        // Column 2 is reached at 9 and again at 5, column 1 at 7: three
+        // entries for two columns.
+        assert!(
+            scratch.queue(2, 9, 0, 0) && scratch.queue(2, 5, 0, 0) && scratch.queue(1, 7, 0, 0)
+        );
+        let first = scratch.pop_open().map(super::Item::key);
+        assert_eq!(first, Some((5, 0, 2)), "the cheaper entry of column 2");
+        scratch.close(2);
+        let second = scratch.pop_open().map(super::Item::key);
+        assert_eq!(second, Some((7, 0, 1)));
+        scratch.close(1);
+        assert_eq!(
+            scratch.visits(),
+            Ok(0),
+            "an open column's entry is no visit"
+        );
+        assert_eq!(scratch.pop_open(), None, "column 2's entry at 9 is stale");
+        assert_eq!(scratch.visits(), Ok(1), "and is counted once");
+        assert_eq!(scratch.pop_open(), None, "an empty heap");
+        assert_eq!(scratch.visits(), Ok(1), "counts nothing");
+
+        // The same three entries in the abstract heap.
+        assert!(
+            scratch.queue_abstract(2, 9, 0, 0)
+                && scratch.queue_abstract(2, 5, 0, 0)
+                && scratch.queue_abstract(1, 7, 0, 0)
+        );
+        let first = scratch.pop_open_abstract().map(super::Item::key);
+        assert_eq!(first, Some((5, 0, 2)));
+        assert!(!scratch.abstract_is_closed(2), "taken, and not yet closed");
+        scratch.abstract_close(2);
+        assert!(scratch.abstract_is_closed(2));
+        let second = scratch.pop_open_abstract().map(super::Item::key);
+        assert_eq!(second, Some((7, 0, 1)));
+        scratch.abstract_close(1);
+        assert_eq!(scratch.visits(), Ok(1), "an open node's entry is no visit");
+        assert_eq!(scratch.pop_open_abstract(), None, "node 2's entry at 9");
+        assert_eq!(scratch.visits(), Ok(2), "is stale, and is counted once");
     }
 
     /// A tally counts by one, and past `u64::MAX` it says it overflowed

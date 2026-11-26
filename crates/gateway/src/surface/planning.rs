@@ -326,11 +326,12 @@ impl Surface {
             ))
         })?;
         // Each file the listing refused is counted by its reason, once per
-        // listing (S3's `outcap`); the answer says nothing of them until the
-        // typed left-out field (the owner's, with `outcap` part 2).
+        // listing (S3's `outcap`), and said in the answer by reason and count,
+        // never by name (S3's `leftout`).
         for (_, reason) in &listed.refused {
             self.audit.library_refused(*reason);
         }
+        let refused = refused_json(&listed)?;
         let guided = self.guided_pick(subject)?;
         let found = listed.summaries;
         let templates: Vec<Json> = found
@@ -373,12 +374,18 @@ impl Surface {
                 Json::Object(entries)
             })
             .collect();
-        Ok(Json::Object(vec![
+        let mut answer = vec![
             (String::from("templates"), Json::Array(templates)),
             // The listing is complete: a folder of templates is a folder, and
-            // paging one would be pagination for its own sake.
+            // paging one would be pagination for its own sake. So `refused`
+            // below is the whole listing's, sent once for it.
             (String::from("next_cursor"), Json::String(String::new())),
-        ]))
+        ];
+        // proto3 JSON leaves an empty repeated field out.
+        if !refused.is_empty() {
+            answer.push((String::from("refused"), Json::Array(refused)));
+        }
+        Ok(Json::Object(answer))
     }
 
     /// The guided first pick for `subject`'s template list: the template its
@@ -1781,6 +1788,56 @@ fn resolved_json(resolved: &crate::targeting::Resolved) -> Result<Json, Error> {
     Ok(Json::Object(entries))
 }
 
+/// The wire's reason for a library refusal: one value per reason, by an
+/// exhaustive match, so a reason `plan-core` adds fails to compile here rather
+/// than being sent as another.
+const fn refused_reason(
+    reason: pharmakos_plan_core::library::Refusal,
+) -> pharmakos_proto::gp::api::v1::refused_templates::Reason {
+    use pharmakos_plan_core::library::Refusal;
+    use pharmakos_proto::gp::api::v1::refused_templates::Reason;
+    match reason {
+        Refusal::Unreadable => Reason::Unreadable,
+        Refusal::TooLarge => Reason::TooLarge,
+        Refusal::NotAPlaybook => Reason::NotAPlaybook,
+    }
+}
+
+/// `ListTemplatesResponse.refused` for `listed`: one entry per reason that
+/// refused a file, in the enum's order (`Refusal::ALL` is declared in it),
+/// each a reason and a count, never a file's name or path (S3's `leftout`).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a count past the field's `uint32`,
+/// never clamped.
+fn refused_json(listed: &pharmakos_plan_core::library::Listing) -> Result<Vec<Json>, Error> {
+    let mut entries = Vec::new();
+    for reason in pharmakos_plan_core::library::Refusal::ALL {
+        let count = listed.refused_count(reason);
+        if count == 0 {
+            continue;
+        }
+        let count = u32::try_from(count).map_err(|_| {
+            Error::internal(said!(
+                "the library refused {} files for one reason, past a uint32",
+                count
+            ))
+        })?;
+        entries.push(Json::Object(vec![
+            (
+                String::from("reason"),
+                Json::String(pharmakos_proto::scope::wire_name(
+                    "gp.api.v1.RefusedTemplates.Reason",
+                    refused_reason(reason).as_str_name(),
+                )),
+            ),
+            (String::from("count"), Json::Number(count.to_string())),
+        ]));
+    }
+    Ok(entries)
+}
+
 /// One `gp.api.v1.VerifyReport` as JSON.
 ///
 /// Field for field from the message, with the two `bytes` fields in the
@@ -1788,7 +1845,7 @@ fn resolved_json(resolved: &crate::targeting::Resolved) -> Result<Json, Error> {
 /// own module, which is the project's one base64 (decisions-log item 100 (10)).
 fn report_json(report: &VerifyReport) -> Json {
     let diagnostics: Vec<Json> = report.diagnostics.iter().map(diagnostic_json).collect();
-    Json::Object(vec![
+    let mut fields = vec![
         (String::from("qualifies"), Json::Bool(report.qualifies)),
         (
             String::from("depth"),
@@ -1824,7 +1881,36 @@ fn report_json(report: &VerifyReport) -> Json {
             String::from("size_budget"),
             Json::Number(report.size_budget.to_string()),
         ),
-    ])
+    ];
+    // What the report counted and did not list, as the verifier wrote it
+    // (S3's `leftout`); proto3 JSON leaves an empty repeated field out, so a
+    // report that left nothing out is the bytes it always was.
+    if !report.left_out.is_empty() {
+        fields.push((
+            String::from("left_out"),
+            Json::Array(
+                report
+                    .left_out
+                    .iter()
+                    .map(|gap| {
+                        Json::Object(vec![
+                            (String::from("code"), Json::String(gap.code.clone())),
+                            (String::from("count"), Json::Number(gap.count.to_string())),
+                            (String::from("max"), Json::Number(gap.max.to_string())),
+                            (
+                                String::from("severity"),
+                                Json::String(pharmakos_proto::scope::wire_name(
+                                    "gp.api.v1.Diagnostic.Severity",
+                                    gap.severity().as_str_name(),
+                                )),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ));
+    }
+    Json::Object(fields)
 }
 
 /// One `gp.api.v1.Diagnostic` as JSON.

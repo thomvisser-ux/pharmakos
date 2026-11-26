@@ -67,7 +67,7 @@ use crate::math::quantity::{Hp, TICK_HZ};
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
 use crate::pathing::route::{NoPath, RouteOutcome};
-use crate::pathing::search::Scratch;
+use crate::pathing::search::{Misfit, Scratch};
 use crate::pathing::surface::{Node, Surface};
 use crate::reserved::Reserved;
 use crate::tables::UnitKind;
@@ -488,6 +488,14 @@ impl Router {
     /// Every route is computed against the graph as it stands *now*: the graph
     /// was settled in the Voxels phase of the tick that last edited the
     /// terrain, so no route is planned over terrain that has moved.
+    ///
+    /// # Errors
+    ///
+    /// [`Misfit`] for a scratch that does not serve `surface` and `clusters`
+    /// ([`Scratch::serves`]), before any unit is served: no unit's state
+    /// moves, nothing is counted, and the cursor stays. Served in such a
+    /// scratch a unit with a route would be parked as sealed in, a hashed
+    /// state it leaves only when a repair touches its cluster.
     pub fn serve(
         &mut self,
         surface: &Surface,
@@ -496,7 +504,7 @@ impl Router {
         positions: &[[Fx; 3]],
         destinations: &[[Fx; 3]],
         cap: u32,
-    ) -> ServeReport {
+    ) -> Result<ServeReport, Misfit> {
         self.serve_costed(
             surface,
             clusters,
@@ -509,7 +517,36 @@ impl Router {
 
     /// [`Router::serve`], each unit's route priced under the surcharge
     /// `costs` gives it (S2's `atk`; register S2-03).
+    ///
+    /// # Errors
+    ///
+    /// As [`Router::serve`].
     pub fn serve_costed<'z>(
+        &mut self,
+        surface: &Surface,
+        clusters: &Clusters,
+        scratch: &mut Scratch,
+        (positions, destinations): (&[[Fx; 3]], &[[Fx; 3]]),
+        cap: u32,
+        costs: impl Fn(u32) -> crate::pathing::route::Surcharge<'z>,
+    ) -> Result<ServeReport, Misfit> {
+        if !scratch.serves(surface, clusters) {
+            return Err(Misfit);
+        }
+        Ok(self.serve_in(
+            surface,
+            clusters,
+            scratch,
+            (positions, destinations),
+            cap,
+            costs,
+        ))
+    }
+
+    /// [`Router::serve_costed`] in a scratch already held to
+    /// [`Scratch::serves`]: behind that door, or the world's own, which a
+    /// tick holds to its graph as it opens (`World::begin_tick`).
+    pub(crate) fn serve_in<'z>(
         &mut self,
         surface: &Surface,
         clusters: &Clusters,
@@ -554,7 +591,7 @@ impl Router {
                 continue;
             };
             let mut buffer = core::mem::take(&mut self.buffer);
-            let outcome = crate::pathing::route::route_with(
+            let outcome = crate::pathing::route::route_served(
                 surface,
                 clusters,
                 scratch,
@@ -1127,14 +1164,16 @@ mod tests {
 
         // A short walk, to its end.
         router.request(0);
-        router.serve(
-            &surface,
-            &clusters,
-            &mut scratch,
-            &positions,
-            &[at(20, 4)],
-            1,
-        );
+        router
+            .serve(
+                &surface,
+                &clusters,
+                &mut scratch,
+                &positions,
+                &[at(20, 4)],
+                1,
+            )
+            .unwrap_or_else(|misfit| panic!("{misfit}"));
         assert_eq!(router.state(0), WalkState::Walking);
         let mut banked = false;
         for _ in 0..2_000 {
@@ -1154,14 +1193,16 @@ mod tests {
 
         // A longer walk, and a wall raised across it after its first tick.
         router.request(0);
-        router.serve(
-            &surface,
-            &clusters,
-            &mut scratch,
-            &positions,
-            &[at(60, 4)],
-            1,
-        );
+        router
+            .serve(
+                &surface,
+                &clusters,
+                &mut scratch,
+                &positions,
+                &[at(60, 4)],
+                1,
+            )
+            .unwrap_or_else(|misfit| panic!("{misfit}"));
         assert_eq!(router.state(0), WalkState::Walking);
         router.advance(&surface, &kinds, &hit_points, &mut positions, &mut headings);
         assert_eq!(router.state(0), WalkState::Walking);

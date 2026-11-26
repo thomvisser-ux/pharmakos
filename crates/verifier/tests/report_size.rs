@@ -58,7 +58,7 @@ fn inbound_bytes() -> usize {
 }
 
 fn cap() -> usize {
-    usize::try_from(MAX_PER_CODE).expect("fits")
+    usize::try_from(MAX_PER_CODE.get()).expect("fits")
 }
 
 fn report_for(steps: &str) -> VerifyReport {
@@ -259,10 +259,8 @@ fn the_allowance_is_within_the_clients_buffer() {
 }
 
 /// For every count of one code from none to three times the cap, the report
-/// lists `min(count, cap)`, and its `I0007` and its typed [`LeftOut`] say
+/// lists `min(count, cap)`, and its `I0007` and its `left_out` field say
 /// `count - cap` past the cap and nothing at or under it.
-///
-/// [`LeftOut`]: pharmakos_verifier::LeftOut
 #[test]
 fn a_code_lists_to_the_cap_and_counts_the_rest() {
     let rules =
@@ -297,16 +295,16 @@ fn a_code_lists_to_the_cap_and_counts_the_rest() {
             .filter(|found| found.code == "E0305")
             .count();
         assert_eq!(listed, count.min(cap()), "{count} jumps to nowhere");
-        let gap = counted.left_out.iter().find(|gap| gap.code == "E0305");
+        let gap = report.left_out.iter().find(|gap| gap.code == "E0305");
         let markers: Vec<&Diagnostic> = report
             .diagnostics
             .iter()
             .filter(|found| found.code == "I0007" && found.message.contains("`E0305`"))
             .collect();
         if count > cap() {
-            let more = u64::try_from(count.saturating_sub(cap())).expect("fits");
+            let more = u32::try_from(count.saturating_sub(cap())).expect("fits");
             let gap = gap.expect("a count past the cap is left out");
-            assert_eq!((gap.count, gap.max), (more, MAX_PER_CODE));
+            assert_eq!((gap.count, gap.max), (more, MAX_PER_CODE.get()));
             assert_eq!(markers.len(), 1, "{count}: one I0007 for E0305");
             assert!(
                 markers
@@ -328,15 +326,89 @@ fn a_code_lists_to_the_cap_and_counts_the_rest() {
     }
 }
 
+/// **A report lists the first `max` of a code in the order they are raised**
+/// (S3's `leftout`, fix pass 1; the contract `gp.api.v1.VerifyReport.left_out`
+/// states): three times the cap of `E0305`, one at each step, each told apart
+/// by its pointer; the rows listed are the first steps' in route order, so
+/// what the report's `left_out` counts is the code's later ones. The built-in
+/// operator's tap probe (`crates/operator/src/candidates.rs`, `probe`) asks
+/// again after the last listed `E0503` and relies on exactly this.
+#[test]
+fn a_report_lists_the_first_max_of_a_code_in_raise_order() {
+    let rules =
+        RulesTable::load(&root().join("rules").join("rules.v1.json")).expect("the rules table");
+    let scope = Scope::new(
+        SeatId::new(0),
+        SeatEconomy {
+            treasury: Money::ZERO,
+            supply: Kw::ZERO,
+            draw: Kw::ZERO,
+        },
+    );
+    let count = cap().saturating_mul(3);
+    let steps: Vec<String> = (0..count)
+        .map(|index| {
+            format!(
+                r#"{{"label":"s{index}","hold":{{"ms":1}},"on_fail":{{"jump_to_label":"nowhere"}}}}"#
+            )
+        })
+        .collect();
+    let text = format!(
+        r#"{{"schema_version":{{"major":1}},"meta":{{"title":"t","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{}]}},"on_death":{{"on_respawn":"CONTINUE","max_deaths_before_fallback":1}},"fallback":{{"hold":{{"at":{{"safest":{{}}}}}}}}}}"#,
+        steps.join(",")
+    );
+    let input = Input::new(text.as_bytes(), &[], &scope, &rules).expect("the input");
+    let report = verify_counted(&input, Depth::Quick).report;
+    let steps_listed: Vec<String> = report
+        .diagnostics
+        .iter()
+        .filter(|found| found.code == "E0305")
+        .map(|found| {
+            found
+                .path
+                .split('/')
+                .nth(3)
+                .expect("a route step's pointer")
+                .to_owned()
+        })
+        .collect();
+    let first: Vec<String> = (0..cap()).map(|index| index.to_string()).collect();
+    assert_eq!(steps_listed, first, "the first steps', in route order");
+    let gap = report
+        .left_out
+        .iter()
+        .find(|gap| gap.code == "E0305")
+        .expect("the rest are left out");
+    assert_eq!(
+        usize::try_from(gap.count).expect("fits"),
+        count.saturating_sub(cap())
+    );
+}
+
 #[test]
 fn the_notes_stop_at_the_cap_and_one_more_says_how_many_were_left_out() {
     // Within the size budget, with more omitted settings than the cap.
     let steps: Vec<String> = (0..cap().checked_add(20).expect("fits"))
         .map(|index| format!(r#"{{"label":"s{index}","hold":{{"ms":1}}}}"#))
         .collect();
-    let report = encoded(&report_for(&steps.join(",")));
-    assert_eq!(report.matches("\"I0003\"").count(), cap(), "{report}");
+    let typed = report_for(&steps.join(","));
+    let report = encoded(&typed);
+    // The cap's rows, and the one `left_out` entry that names the code.
+    assert_eq!(
+        report.matches("\"I0003\"").count(),
+        cap().saturating_add(1),
+        "{report}"
+    );
     assert_eq!(report.matches("\"I0007\"").count(), 1, "{report}");
+    assert_eq!(
+        typed
+            .left_out
+            .iter()
+            .map(|gap| (gap.code.as_str(), gap.count))
+            .collect::<Vec<_>>(),
+        vec![("I0003", 20)],
+        "{report}"
+    );
 }
 
 /// Past the size budget no `I0003` note is written at all; they are counted.

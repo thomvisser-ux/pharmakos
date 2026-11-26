@@ -357,13 +357,14 @@ fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> Result
         .iter()
         .filter(|diagnostic| diagnostic.severity == i32::from(Severity::Error))
         .count();
+    let errors_unlisted = errors_left_out(report)?;
     let _ = writeln!(
         text,
         "{}",
         if report.qualifies {
             strings::verify_qualifies(report.size_units, report.size_budget)
         } else {
-            strings::verify_refuses(errors, errors_left_out(report))
+            strings::verify_refuses(errors, errors_unlisted)
         }
     );
     let _ = writeln!(
@@ -407,16 +408,24 @@ fn render_against(display: &str, report: &VerifyReport, shown: &Shown) -> Result
     Ok(text)
 }
 
-/// The report's per-code cap when an error code is at it and the report
-/// closes with an `I0007`: then more errors may have been raised than are
-/// listed (`pharmakos_verifier::CapRead`, read from the rows, never from a
+/// The report's per-code cap, as its `left_out` field says it, when the field
+/// has an error's entry: then more errors were raised than are listed (S3's
+/// `leftout`; the entry's own severity, never read from the rows or a
 /// sentence).
-fn errors_left_out(report: &VerifyReport) -> Option<u32> {
-    let read = pharmakos_verifier::CapRead::of(report);
-    let error_at_cap = report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.severity == i32::from(Severity::Error) && !read.complete(&diagnostic.code)
-    });
-    error_at_cap.then_some(pharmakos_verifier::MAX_PER_CODE)
+///
+/// # Errors
+///
+/// [`Exit::Internal`] for an entry whose severity the schema does not name,
+/// or left unspecified, as for a diagnostic's.
+fn errors_left_out(report: &VerifyReport) -> Result<Option<u32>, Failure> {
+    let mut found = None;
+    for gap in &report.left_out {
+        severity_name(gap.severity)?;
+        if found.is_none() && gap.severity == i32::from(Severity::Error) {
+            found = Some(gap.max);
+        }
+    }
+    Ok(found)
 }
 
 /// `report_hash` and `rules_hash` are bytes on the wire; a person reads hex.
@@ -501,6 +510,22 @@ mod tests {
         };
         let refused = render("a.jsonc", &report).expect_err("a severity of 99 is refused");
         assert!(refused.message.contains("99"), "{}", refused.message);
+        // A left-out entry's severity is refused the same way (S3's `leftout`,
+        // fix pass 1), never read as an error or as nothing.
+        for severity in [i32::from(Severity::Unspecified), 99] {
+            let report = VerifyReport {
+                depth: i32::from(Depth::Full),
+                left_out: vec![pharmakos_proto::gp::api::v1::LeftOut {
+                    code: String::from("E0303"),
+                    count: 1,
+                    max: 4,
+                    severity,
+                }],
+                ..VerifyReport::default()
+            };
+            let refused = render("a.jsonc", &report).expect_err("an entry's unnamed severity");
+            assert_eq!(refused.code, Exit::Internal);
+        }
         let unspecified = VerifyReport::default();
         assert!(
             render("a.jsonc", &unspecified).is_err(),

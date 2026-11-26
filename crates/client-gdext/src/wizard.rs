@@ -57,6 +57,50 @@ pub struct TemplateRow {
     pub guided: Option<String>,
 }
 
+/// Why the gateway refused some of the library's files, as `list_templates` sent it
+/// (`gp.api.v1.RefusedTemplates.Reason`, S3's `leftout`). Each names the words the panel says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RefusedReason {
+    /// A file the gateway could not open or read.
+    Unreadable,
+    /// A file larger than the gateway reads.
+    TooLarge,
+    /// A file that is not UTF-8 text, or not a playbook.
+    NotAPlaybook,
+}
+
+impl RefusedReason {
+    /// The name GDScript reads, and the key of its words in `strings.gd`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Unreadable => "unreadable",
+            Self::TooLarge => "too_large",
+            Self::NotAPlaybook => "not_a_playbook",
+        }
+    }
+}
+
+/// Library files the listing refused for one reason, with the count as the gateway sent it:
+/// the client counts and sums nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RefusedRow {
+    /// Why.
+    pub reason: RefusedReason,
+    /// How many files, as sent: at least 1.
+    pub count: u32,
+}
+
+/// One `list_templates` answer: the templates offered, and the library files refused, each as
+/// the gateway sent it, in its order.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct TemplateList {
+    /// The templates, in the gateway's order.
+    pub rows: Vec<TemplateRow>,
+    /// The refused files, one entry per reason, in the gateway's order; empty when none.
+    pub refused: Vec<RefusedRow>,
+}
+
 /// One wizard page: one declared parameter, as the gateway filled it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Page {
@@ -213,12 +257,13 @@ pub fn instance_of_text(text: &str) -> Result<Instance, BridgeError> {
     }
 }
 
-/// A `list_templates` result as rows, in the gateway's order.
+/// A `list_templates` result as rows and refused files, in the gateway's order.
 ///
 /// # Errors
 ///
-/// [`BridgeError::Schema`] when the result is not a `gp.api.v1.ListTemplatesResponse`.
-pub fn templates_of(result: &Json) -> Result<Vec<TemplateRow>, BridgeError> {
+/// [`BridgeError::Schema`] when the result is not a `gp.api.v1.ListTemplatesResponse`, or a
+/// refused entry names no reason this client knows or counts no file.
+pub fn templates_of(result: &Json) -> Result<TemplateList, BridgeError> {
     let response: ListTemplatesResponse =
         json::decode_json(&body(result, "gp.api.v1.ListTemplatesResponse"))?;
     // The list is one page: the gateway lists the whole library on it. A cursor would mean
@@ -229,6 +274,7 @@ pub fn templates_of(result: &Json) -> Result<Vec<TemplateRow>, BridgeError> {
             "the template list says more templates follow, and it is read as one page",
         ));
     }
+    let refused = refused_of(&response.refused)?;
     let mut rows = Vec::with_capacity(response.templates.len());
     let mut marked = 0_usize;
     for (index, template) in response.templates.into_iter().enumerate() {
@@ -267,7 +313,43 @@ pub fn templates_of(result: &Json) -> Result<Vec<TemplateRow>, BridgeError> {
             guided,
         });
     }
-    Ok(rows)
+    Ok(TemplateList { rows, refused })
+}
+
+/// The refused entries as sent, each read to a reason this client has words for. A reason it
+/// does not name (a value from a newer schema, or the never-sent `REASON_UNSPECIFIED`) and a
+/// count of none are refusals of the list, never drawn as another reason or dropped.
+fn refused_of(
+    entries: &[pharmakos_proto::gp::api::v1::RefusedTemplates],
+) -> Result<Vec<RefusedRow>, BridgeError> {
+    use pharmakos_proto::gp::api::v1::refused_templates::Reason;
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let reason = match Reason::try_from(entry.reason) {
+                Ok(Reason::Unreadable) => RefusedReason::Unreadable,
+                Ok(Reason::TooLarge) => RefusedReason::TooLarge,
+                Ok(Reason::NotAPlaybook) => RefusedReason::NotAPlaybook,
+                Ok(Reason::Unspecified) | Err(_) => {
+                    return Err(unreadable_list(
+                        &format!("/refused/{index}/reason"),
+                        "a refused library file has no reason this client knows",
+                    ));
+                }
+            };
+            if entry.count == 0 {
+                return Err(unreadable_list(
+                    &format!("/refused/{index}/count"),
+                    "a refused entry counts no file",
+                ));
+            }
+            Ok(RefusedRow {
+                reason,
+                count: entry.count,
+            })
+        })
+        .collect()
 }
 
 /// A template list this client cannot draw as sent: a schema refusal at `pointer`.
@@ -284,7 +366,7 @@ fn unreadable_list(pointer: &str, message: &str) -> BridgeError {
 /// # Errors
 ///
 /// As [`templates_of`], and [`BridgeError::Rpc`] for a refusal in place of an answer.
-pub fn templates_of_text(text: &str) -> Result<Vec<TemplateRow>, BridgeError> {
+pub fn templates_of_text(text: &str) -> Result<TemplateList, BridgeError> {
     let frame = json::read(text)?;
     if frame.get("error").is_some() {
         return Err(BridgeError::Rpc(
@@ -368,7 +450,9 @@ mod tests {
 
     #[test]
     fn the_guided_pick_is_the_one_template_the_gateway_marked_with_its_sentence() {
-        let rows = templates_of(&result_of(GUIDED)).expect("the golden reads");
+        let rows = templates_of(&result_of(GUIDED))
+            .expect("the golden reads")
+            .rows;
         let marked: Vec<(&str, &str)> = rows
             .iter()
             .filter_map(|row| row.guided.as_deref().map(|why| (row.id.as_str(), why)))
@@ -426,6 +510,66 @@ mod tests {
         let none =
             templates_of(&json::read(r#"{"templates":[{"template_id":"a"}]}"#).expect("json"))
                 .expect("an unmarked list reads");
-        assert_eq!(none.first().and_then(|row| row.guided.clone()), None);
+        assert_eq!(none.rows.first().and_then(|row| row.guided.clone()), None);
+        assert!(none.refused.is_empty(), "no refused entry, none drawn");
+    }
+
+    /// The refused library files are read as sent (S3's `leftout`): each reason to its own,
+    /// in the gateway's order, the count as it came, nothing summed; a reason the client does
+    /// not know, the unspecified one, or a count of none refuses the list.
+    #[test]
+    fn the_refused_files_are_read_as_sent_and_an_unknown_reason_is_refused() {
+        let list = templates_of(
+            &json::read(
+                r#"{"templates":[],"refused":[{"reason":"unreadable","count":3},{"reason":"too_large","count":1},{"reason":"not_a_playbook","count":2}]}"#,
+            )
+            .expect("json"),
+        )
+        .expect("reads");
+        assert_eq!(
+            list.refused,
+            vec![
+                RefusedRow {
+                    reason: RefusedReason::Unreadable,
+                    count: 3
+                },
+                RefusedRow {
+                    reason: RefusedReason::TooLarge,
+                    count: 1
+                },
+                RefusedRow {
+                    reason: RefusedReason::NotAPlaybook,
+                    count: 2
+                },
+            ]
+        );
+        for (text, at) in [
+            (
+                r#"{"refused":[{"reason":"reason_unspecified","count":1}]}"#,
+                Some("/refused/0/reason"),
+            ),
+            (r#"{"refused":[{"count":1}]}"#, Some("/refused/0/reason")),
+            (
+                r#"{"refused":[{"reason":"too_large","count":0}]}"#,
+                Some("/refused/0/count"),
+            ),
+            // A name the schema does not have does not decode at all.
+            (r#"{"refused":[{"reason":"sideways","count":1}]}"#, None),
+        ] {
+            match templates_of(&json::read(text).expect("json")) {
+                Err(BridgeError::Schema { pointer, .. }) if at.is_some() => {
+                    assert_eq!(Some(pointer.as_str()), at, "{text}");
+                }
+                Err(_) if at.is_none() => {}
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+        // A numeric value past the schema's names is refused too, never drawn as another.
+        let numeric = r#"{"refused":[{"reason":9,"count":1}]}"#;
+        assert!(
+            templates_of(&json::read(numeric).expect("json")).is_err(),
+            "{numeric}"
+        );
+        assert_eq!(RefusedReason::NotAPlaybook.name(), "not_a_playbook");
     }
 }

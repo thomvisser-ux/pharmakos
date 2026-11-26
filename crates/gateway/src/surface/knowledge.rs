@@ -693,7 +693,7 @@ impl Surface {
                             &mut scratch,
                             pharmakos_sim::targeting::column_of(commander),
                             |_| true,
-                        )
+                        )?
                     }
                     None => Vec::new(),
                 },
@@ -1312,7 +1312,13 @@ impl Surface {
         let ground = crate::targeting::lend(world, &tally);
         let found = {
             let mut scratch = host.planning_scratch()?;
-            pharmakos_sim::targeting::cover(&ground, &mut scratch, seat, origin, spec)
+            crate::targeting::ran(pharmakos_sim::targeting::cover(
+                &ground,
+                &mut scratch,
+                seat,
+                origin,
+                spec,
+            ))?
         }
         .map_err(|failure| {
             Error::not_found(said!(
@@ -1381,14 +1387,14 @@ impl Surface {
         let mut stones: Vec<pharmakos_sim::targeting::StoneCandidate> = Vec::new();
         let found = {
             let mut scratch = host.planning_scratch()?;
-            pharmakos_sim::targeting::toward_counted(
+            crate::targeting::ran(pharmakos_sim::targeting::toward_counted(
                 &ground,
                 &mut scratch,
                 &mut stones,
                 seat,
                 origin,
                 spec,
-            )
+            ))?
         }
         .map_err(|failed| {
             Error::not_found(said!(

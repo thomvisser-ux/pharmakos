@@ -972,10 +972,8 @@ fn codes_of(result: Option<&Json>) -> Result<String, Failure> {
     // tool; the codes and their pointers say what is wrong on their own, and
     // this line is read by somebody who has just watched a build go red.
     let mut codes: Vec<String> = Vec::new();
-    if let Some(Json::Array(items)) = result
-        .and_then(|result| result.get("report"))
-        .and_then(|report| report.get("diagnostics"))
-    {
+    let report = result.and_then(|result| result.get("report"));
+    if let Some(Json::Array(items)) = report.and_then(|report| report.get("diagnostics")) {
         for item in items {
             // A diagnostic always carries its code, so one without is the
             // wire's shape having moved, refused rather than shown as `?`.
@@ -997,20 +995,65 @@ fn codes_of(result: Option<&Json>) -> Result<String, Failure> {
                     )));
                 }
             };
-            // An `I0007` closes the report for a code it listed only the
-            // first of (S3's `vcap`): said as that, so a reader of this line
-            // does not take the listed codes for all there were.
-            if code == "I0007" {
-                codes.push(format!(
-                    "I0007: more of one code than the {} a report lists",
-                    pharmakos_verifier::MAX_PER_CODE
-                ));
-            } else {
+            // An `I0007` is the player's words for one `left_out` entry (S3's
+            // `leftout`), which is said below from the field itself.
+            if code != "I0007" {
                 codes.push(format!("{code} at {path}"));
             }
         }
     }
+    // What the report counted and did not list, from its typed field, so a
+    // reader of this line does not take the listed codes for all there were.
+    // proto3 JSON leaves an empty list out; anything else is the wire's shape
+    // having moved.
+    let gaps = match report.and_then(|report| report.get("left_out")) {
+        None => &[][..],
+        Some(Json::Array(gaps)) => gaps.as_slice(),
+        Some(other) => {
+            return Err(Failure::internal(format!(
+                "`submit_plan` answered with a left_out that is not a list ({other:?})"
+            )));
+        }
+    };
+    for gap in gaps {
+        codes.push(left_out_said(gap, report)?);
+    }
     Ok(codes.join("; "))
+}
+
+/// One `left_out` entry of a refused report, worded from the field
+/// (`strings::scenario_left_out`): its code, count, `max` and severity, and
+/// whether any of the code is listed. An entry missing any of them, or with a
+/// severity the schema does not name, is the wire's shape having moved.
+fn left_out_said(gap: &Json, report: Option<&Json>) -> Result<String, Failure> {
+    let malformed = || {
+        Failure::internal(format!(
+            "`submit_plan` answered with a left-out entry that is not a code, a count, a most \
+             and a severity ({gap:?})"
+        ))
+    };
+    let (Some(Json::String(code)), Some(Json::Number(count)), Some(Json::Number(max))) =
+        (gap.get("code"), gap.get("count"), gap.get("max"))
+    else {
+        return Err(malformed());
+    };
+    let severity = match gap.get("severity") {
+        Some(Json::String(severity))
+            if ["error", "warning", "info"].contains(&severity.as_str()) =>
+        {
+            severity.as_str()
+        }
+        _ => return Err(malformed()),
+    };
+    let listed_any = match report.and_then(|report| report.get("diagnostics")) {
+        Some(Json::Array(items)) => items
+            .iter()
+            .any(|item| matches!(item.get("code"), Some(Json::String(listed)) if listed == code)),
+        _ => false,
+    };
+    Ok(strings::scenario_left_out(
+        code, count, max, severity, listed_any,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1565,6 +1608,52 @@ mod tests {
             written + 2 * submitted,
             "the harness door read or wrote the playbook's text beyond its request, its \
              submission and its one verify"
+        );
+    }
+
+    /// **The refused seal's line words each `left_out` entry from the field**
+    /// (S3's `leftout`, fix pass 1): one entry of a code at the cap names the
+    /// cap as sent; one of a code with none listed (an `I0003` past the size
+    /// budget) names no cap; an `I0007` row is not shown beside them; and an
+    /// entry missing its count, or with a severity the schema does not name,
+    /// is the wire's shape having moved.
+    #[test]
+    fn codes_of_words_each_left_out_entry_from_the_field() {
+        use pharmakos_proto::json::read;
+        let result = |left_out: &str| {
+            read(&format!(
+                r#"{{"report":{{"diagnostics":[{{"code":"E0303","path":"/declarative/route/0"}},{{"code":"E0110","path":"/declarative"}},{{"code":"I0007"}}],"left_out":[{left_out}]}}}}"#
+            ))
+            .expect("json")
+        };
+        let at_cap = result(r#"{"code":"E0303","count":3,"max":7,"severity":"error"}"#);
+        assert_eq!(
+            super::codes_of(Some(&at_cap)).expect("worded"),
+            "E0303 at /declarative/route/0; E0110 at /declarative; 3 more E0303 (error) not \
+             listed: a report lists at most 7 of one code"
+        );
+        let past_budget = result(r#"{"code":"I0003","count":5,"max":7,"severity":"info"}"#);
+        let words = super::codes_of(Some(&past_budget)).expect("worded");
+        assert_eq!(
+            words,
+            "E0303 at /declarative/route/0; E0110 at /declarative; 5 I0003 (info) left out with \
+             none of it listed"
+        );
+        assert!(!words.contains("at most"), "{words}");
+        for malformed in [
+            r#"{"code":"E0303","max":7,"severity":"error"}"#,
+            r#"{"code":"E0303","count":3,"max":7}"#,
+            r#"{"code":"E0303","count":3,"max":7,"severity":"severity_unspecified"}"#,
+        ] {
+            let refused = super::codes_of(Some(&result(malformed))).expect_err(malformed);
+            assert_eq!(refused.code, Exit::Internal, "{malformed}");
+        }
+        let not_a_list = read(r#"{"report":{"diagnostics":[],"left_out":5}}"#).expect("json");
+        assert_eq!(
+            super::codes_of(Some(&not_a_list))
+                .expect_err("a number")
+                .code,
+            Exit::Internal
         );
     }
 }

@@ -32,7 +32,7 @@ use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::state::{StepFailed, StepFailedError, StepFailure};
 use pharmakos_sim::interpreter::{BeaconSpec, Plan, PlanError, resolve_beacon_in};
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::pathing::search::Scratch;
+use pharmakos_sim::pathing::search::{Scratch, Unanswered};
 use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::snapshot::Snapshot;
@@ -1845,12 +1845,15 @@ fn a_covering_decision_counts_its_resolve_binding_and_seam_choice() {
     // popped, and this read 423 (412 for the resolve and 11 for the seam
     // choice); after its part 1, 4,716 (the predicates each column and
     // candidate asks, the binding and the seam's dig searches charged
-    // nothing).
+    // nothing); after its part 2, 10,927, of which 4,096 were the endpoint
+    // sweeps of its two walks, which S3's `walk3` reads from the clusters'
+    // transition fields instead (6,831 without them), and whose second
+    // commit counts the 1,924 visits of the searches' loops that pop nothing.
     println!(
         "covering: {covering} = {resolve} for the resolve + {start} for the start + {bind} for the binding + {look} for the look + {seam} for the seam choice"
     );
     assert_eq!(
-        covering, 10_927,
+        covering, 8_755,
         "a covering resolution ranks every feature, walks and searches a spiral: {covering}"
     );
 }
@@ -1958,6 +1961,10 @@ fn on_read(
         covered,
         spec,
     )
+    .map_err(|unanswered| match unanswered {
+        Unanswered::Ran(failed) => failed,
+        Unanswered::Misfit => panic!("a scratch made for the map serves it"),
+    })
 }
 
 /// The standing point of seat 0's core: 35 voxels from `vent_324_16`, so the
@@ -2213,7 +2220,11 @@ fn a_description_counts_what_it_matched_before_reachability() {
     );
     let mut scratch = Scratch::for_map(world.surface(), world.rules().hpa_cluster_voxels())
         .expect("a scratch for the map");
-    assert_eq!(ranker.next(&ground, &mut scratch), None, "none reachable");
+    assert_eq!(
+        ranker.next(&ground, &mut scratch),
+        Ok(None),
+        "none reachable"
+    );
 }
 
 #[test]
