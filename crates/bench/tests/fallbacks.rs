@@ -248,6 +248,7 @@ fn the_fallback_scan_reads_the_whole_crate() {
             "src/hosted.rs",
             "src/lib.rs",
             "src/p3.rs",
+            "src/provenance.rs",
             "src/quick.rs",
             "src/shapes.rs",
             "src/stats.rs",

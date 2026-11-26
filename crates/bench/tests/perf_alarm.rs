@@ -30,7 +30,9 @@
 //! * `p1_budget`: `cargo xtask p1-budget` (E12), the shapes at the committed
 //!   budget and `budget_128`, and the report line that alarm reads;
 //! * `p1_certify`: run by hand by `cert3` on the owner's machine, every P1
-//!   figure at [`full::CERT_PLAN`]'s 2 000 calls (item 158 (2)); never in CI.
+//!   figure at [`full::CERT_PLAN`]'s 2 000 calls (item 158 (2)) with its
+//!   commit and its verdicts; never in CI. `PHARMAKOS_BENCH_CERT_CALLS` cuts
+//!   the calls, and its lines then say the run certifies nothing.
 //!
 //! ```sh
 //! cargo test --release -p pharmakos-bench --test perf_alarm -- --ignored --nocapture \
@@ -57,6 +59,7 @@ use std::path::Path;
 
 use pharmakos_bench::decision::{self, BENCH_SEATS, BENCH_SEED, DecisionPlan};
 use pharmakos_bench::full;
+use pharmakos_bench::provenance;
 use pharmakos_bench::quick::{self, Fixture, QuickPlan};
 use pharmakos_bench::shapes::{SIZES, Shape};
 use pharmakos_bench::{Error, workspace_root};
@@ -230,43 +233,80 @@ fn p1_budget() {
     }
 }
 
+/// Everything P1 certifies, in one run (S3's plan, section 5.2; items 158 (2)
+/// and 162 (1)): the commit, QUICK's p50 and p99 and FULL's over the
+/// committed cases at the certifying plan's calls, every shape at every size
+/// of the curve with the end-to-end wait beside it, QUICK's cost at the
+/// transport cap, and the verdicts: the committed cases' and one a shape at
+/// the committed budget, against QUICK's, FULL's and the editor's bars.
+/// [`provenance::CERT_CALLS_VAR`] cuts the calls on a machine that cannot
+/// spare the time, and every line then says the run is not a certifying one.
 #[test]
 #[ignore = "the certifying run, by hand on the owner's machine (--ignored --exact)"]
 fn p1_certify() {
     let root = workspace_root();
     let os = std::env::consts::OS;
+    let plan =
+        match provenance::cert_plan_from(std::env::var_os(provenance::CERT_CALLS_VAR).as_deref()) {
+            Ok(plan) => plan,
+            Err(error) => panic!("{error}"),
+        };
     println!();
     let mut failed = Vec::new();
     report(
         os,
-        "FULL p99",
-        full_cases_notice(&root, full::CERT_PLAN, os),
+        "provenance",
+        provenance::commit(&root).map(|commit| {
+            vec![provenance::notice(
+                "P1",
+                &commit,
+                &provenance::plan_words(plan),
+                os,
+            )]
+        }),
+        &mut failed,
+    );
+    report(
+        os,
+        "P1 committed cases",
+        cases_notices(&root, plan, os),
         &mut failed,
     );
     report(
         os,
         "P1 shapes",
-        shape_notices(&root, full::CERT_PLAN, os),
+        full::measure_curve(&root, &SIZES, plan).and_then(|curve| {
+            let mut lines = curve_lines(&curve, os);
+            lines.extend(full::budget_verdicts(&curve, full::Bars::P1, os)?);
+            Ok(lines)
+        }),
         &mut failed,
     );
     report(
         os,
         "P1 at the transport cap",
-        cap_notices(&root, full::CERT_PLAN, os),
-        &mut failed,
-    );
-    report(
-        os,
-        "P1 budget",
-        full::measure_budget(&root, full::CERT_PLAN).and_then(|figures| {
-            Ok(vec![
-                full::budget_notice(&figures, os)?,
-                full::budget_report_line(&figures),
-            ])
-        }),
+        cap_notices(&root, plan, os),
         &mut failed,
     );
     assert!(failed.is_empty(), "{failed:?}");
+}
+
+/// QUICK's and FULL's notices over the committed cases at `plan`, and their
+/// verdict.
+fn cases_notices(root: &Path, plan: QuickPlan, os: &str) -> Result<Vec<String>, Error> {
+    let fixture = Fixture::committed(root)?;
+    let cases = quick::committed_cases(root)?;
+    let quick_timing = quick::measure(&fixture, &cases, plan)?;
+    let full_timing = quick::measure_at(&fixture, &cases, plan, Depth::Full)?;
+    let mut lines = quick::notices(&quick_timing, os);
+    lines.push(full::cases_notice(&full_timing, os));
+    lines.push(full::cases_verdict(
+        &quick_timing,
+        &full_timing,
+        full::Bars::P1,
+        os,
+    ));
+    Ok(lines)
 }
 
 /// QUICK's p50 and p99 over the committed cases, as notices.
@@ -295,14 +335,18 @@ fn full_cases_notice(root: &Path, plan: QuickPlan, os: &str) -> Result<Vec<Strin
 /// Every shape at every size of the curve: the provenance, then a notice a
 /// shape.
 fn shape_notices(root: &Path, plan: QuickPlan, os: &str) -> Result<Vec<String>, Error> {
-    let curve = full::measure_curve(root, &SIZES, plan)?;
-    let mut lines = vec![full::provenance_notice(&curve, os)];
+    Ok(curve_lines(&full::measure_curve(root, &SIZES, plan)?, os))
+}
+
+/// A measured curve's provenance and its notice a shape.
+fn curve_lines(curve: &full::Curve, os: &str) -> Vec<String> {
+    let mut lines = vec![full::provenance_notice(curve, os)];
     lines.extend(
         Shape::ALL
             .into_iter()
-            .map(|shape| full::shape_notice(&curve, shape, os)),
+            .map(|shape| full::shape_notice(curve, shape, os)),
     );
-    Ok(lines)
+    lines
 }
 
 /// The `max_text` shape at the transport cap, a notice a padding.

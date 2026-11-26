@@ -23,6 +23,7 @@
 //! | [`g3`] | G3′-real: the tick at the gate's load, phase by phase, over an 8-minute segment, and the figures the power budget needs |
 //! | [`hosted`] | A bench match, hosted as `gamectl scenario run` hosts one, the gate's layout placed in its lobby |
 //! | [`heap`] | What a counting global allocator tells the G3′ segment |
+//! | [`provenance`] | The commit a certifying run was built from, and a cut run's call count |
 //! | [`stats`] | Nearest-rank percentiles, means, and how a duration is written |
 //! | [`error`] | The one error type: every way a measurement can fail to measure |
 //!
@@ -72,6 +73,7 @@ pub mod g3;
 pub mod heap;
 pub mod hosted;
 pub mod p3;
+pub mod provenance;
 pub mod quick;
 pub mod shapes;
 pub mod stats;
