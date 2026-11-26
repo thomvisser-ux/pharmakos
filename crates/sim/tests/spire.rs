@@ -59,10 +59,15 @@ fn rules() -> RulesTable {
 }
 
 fn world() -> World {
+    world_on(rules())
+}
+
+/// The golden seed's two-seat world on `rules`.
+fn world_on(rules: RulesTable) -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats: 2,
-        rules: rules(),
+        rules,
         match_settings: MatchSettings {
             segment_lengths_ms: vec![180_000],
             round_limit: 1,
@@ -117,7 +122,12 @@ fn set_treasury(world: &mut World, dollars: i64) {
 /// Seal `route` for seat 0 and play up to `ticks` ticks, keeping seat 0's
 /// events.
 fn play(world: World, route: &str, ticks: u32) -> (Runner, Vec<Event>) {
-    let plan = Plan::compile(&playbook(route), &rules()).expect("compiles");
+    play_on(world, route, ticks, &rules())
+}
+
+/// [`play`] with the playbook compiled against `rules`, the world's own.
+fn play_on(world: World, route: &str, ticks: u32, rules: &RulesTable) -> (Runner, Vec<Event>) {
+    let plan = Plan::compile(&playbook(route), rules).expect("compiles");
     let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SEAT, plan)
@@ -239,6 +249,84 @@ fn a_licensed_seat_queues_the_spire_and_the_fabricator_raises_it() {
         (dx, dy) != (0, 0) && dx * dx + dy * dy <= 2,
         "beside the beacon, not on it: ({dx}, {dy})"
     );
+}
+
+/// The committed rules table with the Spire's build time set to `build_ms`.
+fn rules_with_build_ms(build_ms: u32) -> Result<RulesTable, pharmakos_sim::RulesError> {
+    let mut message = rules().message().clone();
+    if let Some(block) = message.structures.as_mut() {
+        block.resonance_spire_build_ms = build_ms;
+    }
+    RulesTable::from_message(&message)
+}
+
+/// `structures.resonance_spire_build_ms` is read from its row (S3's `tune3`:
+/// the row of the old `SPIRE_BUILD` constant) and refused at load unless it
+/// is a positive whole number of ticks.
+#[test]
+fn the_spires_build_time_is_the_rows_and_a_time_off_the_tick_is_refused() {
+    let rules = rules();
+    let build_ms = rules
+        .message()
+        .structures
+        .as_ref()
+        .expect("a structures block")
+        .resonance_spire_build_ms;
+    let tick_ms = pharmakos_sim::math::quantity::MS_PER_TICK.unsigned_abs();
+    assert_eq!(
+        Some(rules.spire_build_ticks().get()),
+        build_ms.checked_div(tick_ms)
+    );
+    assert_eq!(
+        rules.spire_build_ticks().get(),
+        1_200,
+        "spec section 8's about 60 s, at 20 Hz"
+    );
+    for refused in [0, 49, 60_001] {
+        assert!(
+            matches!(
+                rules_with_build_ms(refused),
+                Err(pharmakos_sim::RulesError::OutOfRange { ref field, .. })
+                    if field == "structures.resonance_spire_build_ms"
+            ),
+            "{refused} ms"
+        );
+    }
+}
+
+/// The fabricator works to the row and to no number of its own: on a table
+/// whose Spire takes half the committed time, the Spire is finished in half
+/// the ticks, and on each table the time from the queue to the last hit point
+/// is the row's, less the ticks the one hit point a queued structure starts
+/// with is worth.
+#[test]
+fn a_spire_goes_up_in_the_rows_time() {
+    for build_ms in [60_000_u32, 30_000] {
+        let rules = rules_with_build_ms(build_ms).expect("a whole number of ticks loads");
+        let build_ticks = rules.spire_build_ticks().get();
+        let mut world = world_on(rules.clone());
+        world.award_licence_directly(SEAT, Licence::ResonanceSpire, 1);
+        set_treasury(&mut world, RICH);
+        let (_, feed) = play_on(
+            world,
+            &queue_at_core("spire", "resonance_spire"),
+            2_400,
+            &rules,
+        );
+        let queued = feed
+            .iter()
+            .find(|event| event.kind == EventKind::StructureQueued)
+            .expect("the Spire is queued");
+        let completed = feed
+            .iter()
+            .find(|event| event.kind == EventKind::StructureCompleted)
+            .expect("the core's fabricator finishes it");
+        let took = completed.tick.raw() - queued.tick.raw();
+        assert!(
+            took <= build_ticks && took.saturating_add(3) >= build_ticks,
+            "{build_ms} ms: the Spire took {took} ticks of the row's {build_ticks}"
+        );
+    }
 }
 
 #[test]

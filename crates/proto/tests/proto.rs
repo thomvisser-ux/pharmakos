@@ -1249,13 +1249,14 @@ fn the_rules_table_carries_s3s_rows() {
         60,
         "item 151 (2) (c) (3): proposed at the mortar's splash damage"
     );
+    let structures = table.structures.expect("the structures block");
     assert_eq!(
-        table
-            .structures
-            .expect("the structures block")
-            .resonance_spire_sphere_bonus_voxels,
-        12,
+        structures.resonance_spire_sphere_bonus_voxels, 12,
         "S3's plan, decision 6: 24 to 36"
+    );
+    assert_eq!(
+        structures.resonance_spire_build_ms, 60_000,
+        "spec section 8's about 60 s: the sim's old SPIRE_BUILD, at its own value (S3's `tune3`)"
     );
     assert_eq!(
         table.licences.expect("the licences block").resonance_vents,
@@ -1298,6 +1299,7 @@ fn every_s3_row_has_its_readme_line() {
         "combat.charge_damage_hp` 60",
         "structures.resonance_spire_sphere_bonus_voxels` 12",
         "licences.resonance_vents` 2",
+        "structures.resonance_spire_build_ms` 60000",
     ] {
         let opening = format!("| `{row} |");
         let line = readme

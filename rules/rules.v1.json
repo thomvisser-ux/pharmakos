@@ -214,7 +214,8 @@
     "wall_cost_per_voxel": 1,
     "demolition_charge_cost_dollars": 15,
     "build_hp_per_second": 60,
-    "resonance_spire_sphere_bonus_voxels": 12
+    "resonance_spire_sphere_bonus_voxels": 12,
+    "resonance_spire_build_ms": 60000
   },
   "verifier": {
     "size_budget_units": 128,

@@ -3976,6 +3976,24 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         /// decision 6: 12
         #[prost(uint32, tag="10")]
         pub resonance_spire_sphere_bonus_voxels: u32,
+        /// How long a Resonance Spire takes to go up, from its queue to its last
+        /// hit point, while its beacon's fabricator works on it, in game
+        /// milliseconds (spec section 8: "A crystal lattice grows over about
+        /// 60 s"). No row priced a fabricator's rate, so S3's `lic` held the time
+        /// as a named constant, and this is that constant's row (S3's `tune3`), at
+        /// the constant's own value, so a table that carries it moves no chain. The
+        /// sim reads it at load (`RulesTable::spire_build_ticks`), refused unless
+        /// it is a positive whole number of ticks, so the build time needs no
+        /// rounding rule and moves in steps of 50; the constant is gone. A Spire's
+        /// hit points are spread over the time by the tick, so the row prices
+        /// time and `structures.resonance_spire`'s HP stays what the Spire
+        /// withstands.
+        ///
+        /// PLACEHOLDER: tuning, the spec's "about 60 s" — owner, at S3's demo, with `tune3`'s report (the demo's match finishes its Spire inside one Push at this value).
+        ///
+        /// spec section 8: 60000
+        #[prost(uint32, tag="11")]
+        pub resonance_spire_build_ms: u32,
     }
 impl ::prost::Name for Structures {
 const NAME: &'static str = "Structures";

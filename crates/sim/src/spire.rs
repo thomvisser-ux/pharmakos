@@ -299,15 +299,6 @@ pub mod metered {
     }
 }
 
-/// How long a Resonance Spire takes to go up, from its queue to its last hit
-/// point, while its beacon's fabricator works on it.
-///
-/// PLACEHOLDER: the Spire's build time, spec section 8's "about 60 s" — owner, at S3's `tune3`, which proposes its row.
-/// Spec section 8: "A crystal lattice grows over about 60 s". No row prices
-/// a fabricator's rate, so the time is this constant until `tune3` proposes
-/// one (AGENTS.md section 12: a tuning value whose row does not exist yet).
-pub const SPIRE_BUILD: crate::math::quantity::Ms = crate::math::quantity::Ms::new(60_000);
-
 /// The fabricators' work on the capability structures going up, one tick of
 /// it (spec section 8: "that beacon's built-in fabricator builds it whatever
 /// the mandate"; S3's plan, E4), in the programs phase, in structure row
@@ -324,7 +315,10 @@ pub const SPIRE_BUILD: crate::math::quantity::Ms = crate::math::quantity::Ms::ne
 /// everything else homed to it (item 10), so its structure waits too; a
 /// structure whose beacon died is a ruin and nobody's, and is never finished.
 ///
-/// The hit points are spread over [`SPIRE_BUILD`] by the tick itself, not by
+/// The hit points are spread over the Spire's build time
+/// ([`RulesTable::spire_build_ticks`], the row
+/// `structures.resonance_spire_build_ms`: spec section 8's "A crystal lattice
+/// grows over about 60 s") by the tick itself, not by
 /// a counter: on tick `t` the structure gains `⌊(t + 1)·F / T⌋ − ⌊t·F / T⌋`
 /// of its `F` full hit points, `T` being the build time in ticks, so any run of
 /// `T` working ticks adds exactly `F`, with nothing new to hash or snapshot.
@@ -347,7 +341,8 @@ pub(crate) fn fabricate(world: &mut crate::world::World) {
 
 /// What tick `tick` adds to a structure of `full` hit points built over
 /// `ticks` ticks: `⌊(tick + 1)·full / ticks⌋ − ⌊tick·full / ticks⌋`, exact in
-/// `u64`. `None` for a build time of no ticks, which no constant here is.
+/// `u64`. `None` for a build time of no ticks, which the rules table refuses
+/// at load ([`RulesTable::spire_build_ticks`]).
 fn share_of_tick(tick: u64, full: u64, ticks: u64) -> Option<u64> {
     let after = tick.checked_add(1)?.checked_mul(full)?.checked_div(ticks)?;
     let before = tick.checked_mul(full)?.checked_div(ticks)?;
@@ -396,7 +391,7 @@ fn fabricated(
     }
     let full = world.structure_max_hp(kind)?;
     let id = structures.id_of(crate::ids::Row::of_index(row)?)?;
-    let ticks = u64::from(SPIRE_BUILD.to_ticks_ceil());
+    let ticks = u64::from(world.rules().spire_build_ticks().get());
     let share = share_of_tick(tick, u64::try_from(full.raw()).ok()?, ticks)?;
     // A structure going up holds fewer hit points than its full count, and a
     // tick's work stops at the full count: the build rule, as a drone raises a
@@ -577,14 +572,15 @@ mod tests {
     /// time's ticks add up to the full hit points, whatever tick it starts on.
     #[test]
     fn the_spire_takes_its_build_time() {
-        let ticks = u64::from(SPIRE_BUILD.to_ticks_ceil());
+        let (world, _) = queued();
+        let ticks = u64::from(world.rules().spire_build_ticks().get());
         for start in [0_u64, 1, 7, 1_199, 123_457] {
             let total: u64 = (start..start + ticks)
                 .map(|tick| share_of_tick(tick, 500, ticks).unwrap_or(0))
                 .sum();
             assert_eq!(total, 500, "from tick {start}");
         }
-        assert_eq!(ticks, 1_200, "sixty seconds at 20 Hz");
+        assert_eq!(ticks, 1_200, "the committed row's sixty seconds at 20 Hz");
     }
 
     /// Dunit part 2: a radius charges one unit a kind byte its Spire test
