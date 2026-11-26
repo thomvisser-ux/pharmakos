@@ -258,32 +258,93 @@ pub fn p1_lines(
             .iter()
             .map(|figure| full::cap_notice(figure, plan, os)),
     );
-    // The count each figure rests on, as it ran: every measurement must have
-    // run the same calls, or the stamp would speak for one of them only.
-    let ran = [
-        quick_timing.calls_per_case,
-        full_timing.calls_per_case,
-        curve.plan.calls,
-    ];
-    if ran
-        .iter()
-        .any(|calls| *calls != quick_timing.calls_per_case)
-    {
-        return Err(Error::Drift(format!(
-            "P1's measurements ran {ran:?} calls a figure, not one count"
-        )));
-    }
-    let sampling = Sampling::calls(
-        QuickPlan {
-            warmup: plan.warmup,
-            calls: quick_timing.calls_per_case,
-        },
-        certify,
-    );
+    let sampling = p1_sampling(&quick_timing, &full_timing, &curve, plan, certify)?;
     Ok(lines
         .iter()
         .map(|line| provenance::stamped(line, &sampling))
         .collect())
+}
+
+/// The calls one figure's summaries were taken at: each summary's own
+/// sample count, the same for every one, or a drift.
+fn calls_of<'a>(
+    what: &str,
+    summaries: impl IntoIterator<Item = &'a crate::stats::Summary>,
+) -> Result<usize, Error> {
+    let mut calls: Option<usize> = None;
+    for summary in summaries {
+        match calls {
+            Some(kept) if kept != summary.samples => {
+                return Err(Error::Drift(format!(
+                    "{what} took {kept} and {} calls a figure, not one count",
+                    summary.samples
+                )));
+            }
+            _ => calls = Some(summary.samples),
+        }
+    }
+    calls.ok_or_else(|| Error::Empty(format!("{what} holds no figure")))
+}
+
+/// How P1's certifying run was sampled, read from the samples its figures
+/// actually took, never from the plan (`cert3` fix pass 3, F-a): QUICK's and
+/// FULL's over the committed cases (each case's own sample, which the pooled
+/// one must hold `cases` times over), and every summary of the curve.
+///
+/// # Errors
+///
+/// [`Error::Drift`] when the measurements took different counts;
+/// [`Error::Empty`] for a measurement of no figure.
+pub fn p1_sampling(
+    quick: &quick::QuickTiming,
+    full: &quick::QuickTiming,
+    curve: &full::Curve,
+    plan: QuickPlan,
+    certify: provenance::Certify,
+) -> Result<Sampling, Error> {
+    let cases = |timing: &quick::QuickTiming, what: &str| {
+        let each = timing.budget.samples;
+        let pooled = each
+            .checked_mul(timing.cases)
+            .ok_or(Error::Overflow("the pooled calls"))?;
+        if pooled == timing.pooled.samples {
+            Ok(each)
+        } else {
+            Err(Error::Drift(format!(
+                "{what}'s pooled sample holds {} calls, not {each} for each of {} cases",
+                timing.pooled.samples, timing.cases
+            )))
+        }
+    };
+    let ran = [
+        cases(quick, "QUICK")?,
+        cases(full, "FULL")?,
+        calls_of(
+            "the curve",
+            curve.points.iter().flat_map(|point| {
+                point.shapes.iter().flat_map(|figure| {
+                    let sent: Vec<&crate::stats::Summary> = match &figure.end_to_end {
+                        EndToEnd::Measured { quick, full, .. } => vec![quick, full],
+                        EndToEnd::OverCap { .. } => Vec::new(),
+                    };
+                    [&figure.quick, &figure.full].into_iter().chain(sent)
+                })
+            }),
+        )?,
+    ];
+    if ran.iter().any(|calls| Some(calls) != ran.first()) {
+        return Err(Error::Drift(format!(
+            "P1's measurements took {ran:?} calls a figure, not one count"
+        )));
+    }
+    let [calls, ..] = ran;
+    Ok(Sampling::calls(
+        QuickPlan {
+            warmup: plan.warmup,
+            calls,
+        },
+        certify,
+    ))
 }
 
 /// Every line, stamped with one sampling.
@@ -545,6 +606,125 @@ mod tests {
             ),
             "{line}"
         );
+    }
+
+    fn timing(cases: usize, each: usize, plan_calls: usize) -> quick::QuickTiming {
+        let summary = |samples: usize| Summary {
+            p50_ns: 1,
+            p99_ns: 1,
+            mean_ns: 1,
+            max_ns: 1,
+            samples,
+        };
+        quick::QuickTiming {
+            cases,
+            calls_per_case: plan_calls,
+            pooled: summary(each * cases),
+            budget: summary(each),
+            slowest: (String::new(), 1),
+        }
+    }
+
+    fn curve(each: usize, plan_calls: usize) -> full::Curve {
+        let summary = |samples: usize| Summary {
+            p50_ns: 1,
+            p99_ns: 1,
+            mean_ns: 1,
+            max_ns: 1,
+            samples,
+        };
+        full::Curve {
+            committed_hash: 0,
+            budget_units: 128,
+            plan: QuickPlan {
+                warmup: 0,
+                calls: plan_calls,
+            },
+            points: vec![full::SizePoint {
+                units: 128,
+                rules_hash: 0,
+                shapes: vec![full::ShapeFigure {
+                    shape: Shape::Handlers24,
+                    units: 128,
+                    bytes: 0,
+                    compact_bytes: 0,
+                    compact_chars: 0,
+                    handlers: 0,
+                    quick: summary(each),
+                    full: summary(each),
+                    end_to_end: EndToEnd::Measured {
+                        quick: summary(each),
+                        full: summary(each),
+                        qualifies: true,
+                    },
+                }],
+            }],
+        }
+    }
+
+    /// F-a: P1's stamp is read from the samples the figures took. Every
+    /// field that echoes the plan says 2000 here while every figure took 50,
+    /// so the plan's count printed as the run's, for QUICK, FULL or the
+    /// curve, would read 2000 or a drift, and fail this.
+    #[test]
+    fn p1s_stamp_reads_the_samples_taken() {
+        use crate::provenance::{Certify, is_certifying, stamped};
+        let plan = crate::full::CERT_PLAN;
+        let sampling = p1_sampling(
+            &timing(7, 50, 2_000),
+            &timing(7, 50, 2_000),
+            &curve(50, 2_000),
+            plan,
+            Certify::On,
+        )
+        .expect("a sampling");
+        let line = stamped("::notice title=x::a figure", &sampling);
+        assert!(
+            line.ends_with(
+                "[NOT A CERTIFYING FIGURE: a count is cut from its plan; 50 timed calls a figure \
+                 of the certifying 2000]"
+            ),
+            "{line}"
+        );
+        assert!(!is_certifying(&line));
+        let whole = p1_sampling(
+            &timing(7, 2_000, 2_000),
+            &timing(7, 2_000, 2_000),
+            &curve(2_000, 2_000),
+            plan,
+            Certify::On,
+        )
+        .expect("a sampling");
+        assert!(is_certifying(&stamped(
+            "::notice title=x::a figure",
+            &whole
+        )));
+        // One measurement short of the others is a drift, each named.
+        for (quick_each, full_each, curve_each) in [(49, 50, 50), (50, 49, 50), (50, 50, 49)] {
+            assert!(matches!(
+                p1_sampling(
+                    &timing(7, quick_each, 2_000),
+                    &timing(7, full_each, 2_000),
+                    &curve(curve_each, 2_000),
+                    plan,
+                    Certify::On,
+                ),
+                Err(Error::Drift(_))
+            ));
+        }
+        // A pooled sample that is not every case's is a drift.
+        let mut uneven = timing(7, 50, 2_000);
+        uneven.pooled.samples = 349;
+        assert!(matches!(
+            p1_sampling(
+                &uneven,
+                &timing(7, 50, 2_000),
+                &curve(50, 2_000),
+                plan,
+                Certify::On
+            ),
+            Err(Error::Drift(_))
+        ));
     }
 
     /// F5: the PAST verdict prints E12's own words, as S3's plan has them.

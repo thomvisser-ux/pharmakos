@@ -524,7 +524,7 @@ pub struct QuickPlan {
 pub struct QuickTiming {
     /// How many committed cases were timed.
     pub cases: usize,
-    /// Timed calls per case.
+    /// Timed calls per case, as taken: the fewest any case's own sample holds.
     pub calls_per_case: usize,
     /// Every timed call of every case, pooled.
     pub pooled: Summary,
@@ -567,6 +567,7 @@ pub fn measure_at(
         .checked_mul(plan.calls)
         .ok_or(Error::Overflow("the pooled calls"))?;
     let mut pooled: Vec<u128> = Vec::with_capacity(room);
+    let mut taken: Option<usize> = None;
     let mut budget: Option<Summary> = None;
     let mut slowest: (String, u128) = (String::new(), 0);
     for case in cases {
@@ -577,6 +578,10 @@ pub fn measure_at(
         for _ in 0..plan.calls {
             own.push(fixture.time(case, depth)?);
         }
+        taken = Some(match taken {
+            Some(fewest) => fewest.min(own.len()),
+            None => own.len(),
+        });
         pooled.extend_from_slice(&own);
         let summary = Summary::of(own)?;
         if summary.p99_ns > slowest.1 || slowest.0.is_empty() {
@@ -587,9 +592,10 @@ pub fn measure_at(
         }
     }
     let budget = budget.ok_or_else(|| Error::Empty(format!("the cases hold no {BUDGET_CASE}")))?;
+    let calls_per_case = taken.ok_or_else(|| Error::Empty("no case was timed".to_owned()))?;
     Ok(QuickTiming {
         cases: cases.len(),
-        calls_per_case: plan.calls,
+        calls_per_case,
         pooled: Summary::of(pooled)?,
         budget,
         slowest,
