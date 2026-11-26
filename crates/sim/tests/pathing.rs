@@ -1121,7 +1121,7 @@ fn fields_are_sweeps(fixture: &mut Fixture, stride: u32, label: &str) -> usize {
         let field = fixture.clusters.field(&fixture.surface, node);
         assert_eq!(
             field.is_some(),
-            cells.len() <= FIELDS_PER_CLUSTER,
+            cells.len() <= fixture.clusters.shape().fields,
             "{label}: cluster {tag} holds {} transition cells",
             cells.len()
         );
@@ -1191,9 +1191,17 @@ fn a_transition_field_is_the_sweep_from_the_column_it_is_read_at() {
     );
 }
 
+/// How many fields the decomposition of the comb's case keeps a cluster:
+/// under the shipped [`FIELDS_PER_CLUSTER`], which a comb on one border
+/// cannot pass, so that the comb's two clusters keep none and are swept.
+const NARROW_FIELDS: usize = 16;
+
+// The narrow bound is narrower than the shipped one, or the case tests nothing.
+const _: () = assert!(NARROW_FIELDS < FIELDS_PER_CLUSTER);
+
 /// Raise the comb of `a_border_holds_every_run_it_finds` on the border
 /// between clusters (2, 2) and (3, 2): 32 one-cell runs, so both clusters
-/// hold more transition cells than they keep fields for.
+/// hold more transition cells than [`NARROW_FIELDS`].
 fn comb(fixture: &mut Fixture) {
     let xa = 3 * CLUSTER - 1;
     let xb = xa + 1;
@@ -1364,6 +1372,12 @@ fn an_endpoint_inserted_by_lookup_gets_the_route_a_sweep_gives() {
     set.extend(pairs_about(&fixture, (1, 1), 48, 0x5EED_00F4));
     the_fields_change_nothing(&mut fixture, &set, "after 24 craters");
 
+    // The sweep's turn: the same ground under a decomposition that keeps a
+    // cluster fewer fields than the comb's two clusters hold transition
+    // cells, made here and repaired through the comb like any other.
+    let narrow = fixture.clusters.shape().with_fields(NARROW_FIELDS);
+    fixture.clusters =
+        Clusters::new(&fixture.surface, narrow, &mut fixture.scratch).expect("a decomposition");
     comb(&mut fixture);
     for cluster in [(2, 2), (3, 2)] {
         let index = fixture
@@ -1372,7 +1386,7 @@ fn an_endpoint_inserted_by_lookup_gets_the_route_a_sweep_gives() {
             .expect("a cluster of the map");
         let held = fixture.clusters.trans_cells(index).len();
         assert!(
-            held > FIELDS_PER_CLUSTER,
+            held > NARROW_FIELDS,
             "the comb left cluster {cluster:?} only {held} transition cells"
         );
     }

@@ -126,8 +126,9 @@
 //!   cluster's transitions is `4 * edge` (above), and a field for each at
 //!   cluster 32 would be 38 MB of derived state. A fresh map's clusters hold
 //!   three or four transitions each (all 2 880 clusters of the twenty nightly
-//!   seeds); walls and craters cut runs and add some. A cluster past the
-//!   bound keeps none and is swept.
+//!   seeds); walls and craters cut runs and add some, and the bound is set
+//!   from where they add the most that was measured (the constant's own
+//!   docs). A cluster past the bound keeps none and is swept.
 //! * an entry is a `u16`. A cost that does not fit (no cluster of the loaded
 //!   rules' step costs has one: the dearest walk inside a cluster of 32 is
 //!   under 1 024 steps of at most 18) leaves its cluster with no fields.
@@ -145,8 +146,17 @@ pub const NO_COMP: u16 = u16::MAX;
 ///
 /// A bound on memory, not on the game: nothing a seat can do changes an
 /// answer through it, only how the answer is found. At cluster 32 on the
-/// shipped map it is 4.7 MB (144 clusters, 16 fields, 1 024 `u16` entries).
-pub const FIELDS_PER_CLUSTER: usize = 16;
+/// shipped map it is 18.9 MB (144 clusters, 64 fields, 1 024 `u16` entries).
+///
+/// Sized by the busiest ground measured, not the quietest: over the gate's
+/// 8-minute segment (G3′-real's layout of 40 beacons with its walls and
+/// structures, under the crater stream, with and without raids) the busiest
+/// cluster held 44 transition cells, and 16 clusters of the 144 held more
+/// than 16 from the first minute on, 25 by the last. At 16 fields those
+/// clusters, the built-up ones a match's walks start and end in, would all
+/// be swept; at 64 every cluster of that segment keeps its fields, with the
+/// busiest at two thirds of the room.
+pub const FIELDS_PER_CLUSTER: usize = 64;
 
 /// A field entry for a column its transition cell does not reach.
 const NO_FIELD_COST: u16 = u16::MAX;
