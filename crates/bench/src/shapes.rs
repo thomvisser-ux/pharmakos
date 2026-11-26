@@ -47,11 +47,15 @@
 //!
 //! [`Shape::BuildTargets`] and [`Shape::ProtectedAreas`] put every unit on
 //! **one** beacon: up to 255 rows at 256 units. The verifier takes that (no
-//! check counts a beacon's targets), but the sim holds 8 targets a beacon
-//! (`TARGETS_PER_BEACON` in `crates/sim/src/world.rs`), so in a match every
-//! row past the eighth fails its step. They are timing inputs for the
-//! verifier's walks over targets and areas, never playbooks a seat would seal;
-//! E17's rooms are `tune3`'s.
+//! check counts a beacon's targets). In a match a seat's lists share one
+//! room, its beacon rows times sixteen (`seat_list_room_of` in
+//! `crates/sim/src/world.rs`), which S3's `tune3` settled with the size
+//! budget (E17): a list that spends the whole budget on one beacon fits a
+//! seat that holds none (`crates/sim/tests/list_rooms.rs`), and a commit
+//! past the seat's room writes nothing and fails its step
+//! `targets_unwritten`. Past the size budget they are timing inputs for the
+//! verifier's walks over targets and areas, never playbooks a seat would
+//! seal.
 //!
 //! # The decision tick's shapes
 //!
