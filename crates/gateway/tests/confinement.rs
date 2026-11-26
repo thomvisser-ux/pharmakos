@@ -1359,6 +1359,78 @@ fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
     );
 }
 
+/// S3's `p3est`: what makes a search scratch. A fresh one is megabytes of
+/// zeroes on the shipped map, and making one per planning read put
+/// `estimate_route` several times over P3's bar (`src/routes.rs`, "One
+/// scratch"), so shipped code makes exactly one, the hosted match's, in
+/// `PlanningScratch::lend`.
+const OWN_SCRATCH: &[(&str, &str)] = &[
+    (
+        "Scratch::for_map",
+        "a planning read searches in the match's one scratch (`Host::planning_scratch`)",
+    ),
+    (
+        "Scratch::new",
+        "a planning read searches in the match's one scratch (`Host::planning_scratch`)",
+    ),
+    (
+        "scratch_for",
+        "`targeting::scratch_for` is for a test or a tool that holds a world and no host",
+    ),
+];
+
+/// How many code lines of the source file `name` use `needle`.
+fn uses_in(name: &str, needle: &str) -> usize {
+    sources()
+        .iter()
+        .filter(|path| path.ends_with(name))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .map(|text| {
+            code_lines(&text)
+                .iter()
+                .filter(|(_, line)| uses(line, needle))
+                .count()
+        })
+        .sum()
+}
+
+#[test]
+fn every_planning_read_searches_in_the_matchs_one_scratch() {
+    assert!(
+        uses(
+            "let scratch = Scratch::for_map(surface, edge);",
+            "Scratch::for_map"
+        ) && uses("scratch: scratch_for(world)?,", "scratch_for"),
+        "the scan finds what it looks for"
+    );
+    let findings = scan_except(OWN_SCRATCH, &["src/routes.rs", "src/targeting.rs"]);
+    assert!(
+        findings.is_empty(),
+        "a search scratch made outside the match's one:
+{}",
+        findings.join(
+            "
+"
+        )
+    );
+    assert_eq!(
+        uses_in("src/routes.rs", "Scratch::for_map"),
+        1,
+        "`PlanningScratch::lend` makes the match's scratch, and nothing else in the file makes one"
+    );
+    assert_eq!(uses_in("src/routes.rs", "Scratch::new"), 0);
+    assert_eq!(uses_in("src/routes.rs", "scratch_for"), 0);
+    assert_eq!(
+        (
+            uses_in("src/targeting.rs", "Scratch::for_map"),
+            uses_in("src/targeting.rs", "scratch_for"),
+            uses_in("src/targeting.rs", "Scratch::new"),
+        ),
+        (1, 1, 0),
+        "`scratch_for` is defined in `targeting.rs` and called by nothing shipped"
+    );
+}
+
 #[test]
 fn the_gateway_never_dials_out() {
     let findings = scan(NO_OUTBOUND);

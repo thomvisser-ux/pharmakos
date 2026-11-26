@@ -18,8 +18,8 @@
 //! # One graph, the hosted world's
 //!
 //! [`RouteAdapter`] borrows the hosted world's own [`Surface`] and
-//! [`Clusters`] ([`RouteAdapter::over`]) and holds a [`Scratch`] of its own
-//! for its searches. It used to build a second copy of the graph from the
+//! [`Clusters`] ([`RouteAdapter::over`]) and searches in the match's one
+//! planning scratch ([`PlanningScratch`]). It used to build a second copy of the graph from the
 //! voxel store and rebuild it at every Lull; that copy is gone (S3's `p3fix`,
 //! the gateway step), for three reasons:
 //!
@@ -47,9 +47,23 @@
 //!   (item 100 (3)) and a rebuild per Lull.
 //!
 //! Nothing here is a cache of *estimates*: item 61 says there is no estimate,
-//! route or per-unit path cache, and there is none. The scratch is made at the
-//! adapter's first query and dropped with it, as [`crate::targeting`]'s is
-//! for a read.
+//! route or per-unit path cache, and there is none.
+//!
+//! # One scratch, the hosted match's
+//!
+//! A [`Scratch`] is the searches' working memory: dense arrays, one entry per
+//! column, megabytes on the shipped map, which every search overwrites by an
+//! epoch stamp, so that an answer never depends on what the scratch held
+//! before (that is what lets the sim keep one for a whole match, and what a
+//! restored match's hash chain proves at every resume). Every planning read
+//! used to make its own and drop it, which cost a few megabytes of zeroes per
+//! call: several times P3's 1 ms bar for `estimate_route` on its own (S3's
+//! `p3est`, on `cert3`'s measurement). [`PlanningScratch`] is made once, at
+//! the match's first planning read, kept by the [`crate::host::Host`], and
+//! lent to each read in turn: the route estimate here, and
+//! [`crate::targeting`]'s rankings, sites and previews. It holds no answer and
+//! is no part of the match: never hashed, never saved, and a resumed match
+//! makes its own.
 //!
 //! # Fog
 //!
@@ -86,7 +100,7 @@
 //! bug.
 
 use pharmakos_proto::said;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, RefMut};
 
 use pharmakos_plan_core::travel::{Estimate, TravelEstimator};
 use pharmakos_proto::gp::v1::Voxel;
@@ -95,20 +109,115 @@ use pharmakos_sim::world::World;
 
 use crate::error::Error;
 
-/// The sim's travel estimator over the hosted world's graph, with a scratch of
-/// its own and the commander's speed.
+/// The hosted match's one search scratch for planning reads (the module
+/// docs, "One scratch").
+///
+/// A `RefCell` because every reader holds the host by shared reference and a
+/// search needs `&mut Scratch`; an `Option` because the scratch is made at the
+/// first read that searches, so that opening a match cannot fail on it and a
+/// match nobody plans in never pays for it. Single-threaded, and lent for one
+/// search at a time: a read that finds it already lent is a fault, raised
+/// typed, never a second scratch made on the quiet.
 ///
 /// `Debug` by hand: [`Scratch`] is a dense arena and printing it would be
 /// megabytes of nothing (`missing_debug_implementations` is denied
 /// workspace-wide, so the impl has to exist).
+pub struct PlanningScratch(RefCell<Option<Scratch>>);
+
+impl std::fmt::Debug for PlanningScratch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let made = self.0.try_borrow().map(|held| held.is_some());
+        formatter
+            .debug_struct("PlanningScratch")
+            .field("made", &made)
+            .finish()
+    }
+}
+
+impl Default for PlanningScratch {
+    fn default() -> PlanningScratch {
+        PlanningScratch::new()
+    }
+}
+
+impl PlanningScratch {
+    /// No scratch yet: the first [`PlanningScratch::lend`] makes it.
+    #[must_use]
+    pub const fn new() -> PlanningScratch {
+        PlanningScratch(RefCell::new(None))
+    }
+
+    /// The scratch, for one search over `surface` at `cluster_voxels`, made
+    /// now if this is the match's first.
+    ///
+    /// Every caller hands it the hosted world's own surface and cluster edge,
+    /// which do not change while a match is hosted (a voxel edit moves no
+    /// column, and a resume restores into the map its config line generated),
+    /// so the scratch made for the first read is sized for every later one.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the scratch is already lent (a
+    /// read that searches inside another read's search), and when the map and
+    /// cluster edge do not size one, which the world's own construction would
+    /// already have refused.
+    pub fn lend(
+        &self,
+        surface: &Surface,
+        cluster_voxels: i32,
+    ) -> Result<RefMut<'_, Scratch>, Error> {
+        let mut held = self.0.try_borrow_mut().map_err(|_| {
+            Error::internal(said!(
+                "a planning read found the match's search scratch already in use"
+            ))
+        })?;
+        if held.is_none() {
+            *held = Scratch::for_map(surface, cluster_voxels);
+        }
+        RefMut::filter_map(held, Option::as_mut).map_err(|_| {
+            Error::internal(said!(
+                "this map and cluster edge do not size a search scratch"
+            ))
+        })
+    }
+
+    /// How many walks the scratch has priced since it was made, or `None`
+    /// while no read has needed it: the sim's own tally
+    /// ([`Scratch::walks`]), for a test that holds a read to pricing none.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the scratch is lent, or its
+    /// tally passed what it counts.
+    pub fn walks(&self) -> Result<Option<u64>, Error> {
+        let held = self.0.try_borrow().map_err(|_| {
+            Error::internal(said!(
+                "the match's search scratch is in use and its tally cannot be read"
+            ))
+        })?;
+        held.as_ref()
+            .map(|scratch| {
+                scratch.walks().map_err(|_| {
+                    Error::internal(said!(
+                        "the search scratch's walk tally passed what it counts"
+                    ))
+                })
+            })
+            .transpose()
+    }
+}
+
+/// The sim's travel estimator over the hosted world's graph, searching in the
+/// match's planning scratch, at the commander's speed.
+///
+/// `Debug` by hand: a held fault is an [`Error`] in a `Cell`, which derives
+/// none.
 pub struct RouteAdapter<'a> {
     surface: &'a Surface,
     clusters: &'a Clusters,
-    /// `RefCell` because [`TravelEstimator::estimate`] takes `&self` and the
-    /// search needs `&mut Scratch`; `Option` because the scratch is made at
-    /// the first query ([`RouteAdapter::query`]), so that building an adapter
-    /// cannot fail. Single-threaded, never held across a call.
-    scratch: RefCell<Option<Scratch>>,
+    /// The match's one planning scratch, borrowed for each query
+    /// ([`RouteAdapter::query`]) and never held across one.
+    scratch: &'a PlanningScratch,
     speed: Speed,
     cluster_voxels: i32,
     /// One entry per column, `true` where the asking seat has never seen it.
@@ -130,25 +239,24 @@ impl std::fmt::Debug for RouteAdapter<'_> {
                 "fogged_columns",
                 &self.unknown.iter().filter(|hidden| **hidden).count(),
             )
-            // The scratch is a dense arena: printing it would be megabytes of
-            // nothing.
+            .field("scratch", self.scratch)
             .finish_non_exhaustive()
     }
 }
 
 impl<'a> RouteAdapter<'a> {
-    /// The estimator over `world`'s own graph, at the commander's speed, under
-    /// no fog mask (the module docs, "Fog").
+    /// The estimator over `world`'s own graph, searching in `scratch`, at the
+    /// commander's speed, under no fog mask (the module docs, "Fog").
     ///
     /// `speed` is the walker the editor renders a route at, which is the
     /// commander until a playbook names another (item 57). The adapter keeps
     /// the world's surface and clusters and none of the rest of it.
     #[must_use]
-    pub fn over(world: &'a World) -> RouteAdapter<'a> {
+    pub fn over(world: &'a World, scratch: &'a PlanningScratch) -> RouteAdapter<'a> {
         RouteAdapter {
             surface: world.surface(),
             clusters: world.clusters(),
-            scratch: RefCell::new(None),
+            scratch,
             speed: Speed::commander_of(world),
             cluster_voxels: world.rules().hpa_cluster_voxels(),
             unknown: &[],
@@ -239,25 +347,17 @@ impl<'a> RouteAdapter<'a> {
     fn query(&self, start: Voxel, goal: Voxel) -> Option<pharmakos_sim::pathing::Estimate> {
         let start = self.node_of(start)?;
         let goal = self.node_of(goal)?;
-        let Ok(mut held) = self.scratch.try_borrow_mut() else {
-            self.fault(Error::internal(said!(
-                "a route query found its search scratch already in use"
-            )));
-            return None;
-        };
-        if held.is_none() {
-            *held = Scratch::for_map(self.surface, self.cluster_voxels);
-        }
-        let Some(scratch) = held.as_mut() else {
-            self.fault(Error::internal(said!(
-                "this map and cluster edge do not size a search scratch"
-            )));
-            return None;
+        let mut scratch = match self.scratch.lend(self.surface, self.cluster_voxels) {
+            Ok(scratch) => scratch,
+            Err(error) => {
+                self.fault(error);
+                return None;
+            }
         };
         match estimate(
             self.surface,
             self.clusters,
-            scratch,
+            &mut scratch,
             start,
             goal,
             self.fog(),
@@ -307,7 +407,7 @@ impl TravelEstimator for RouteAdapter<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::RouteAdapter;
+    use super::{PlanningScratch, RouteAdapter};
     use pharmakos_plan_core::travel::TravelEstimator;
     use pharmakos_proto::gp::v1::Voxel;
     use pharmakos_sim::rules::RulesTable;
@@ -337,7 +437,8 @@ mod tests {
     #[test]
     fn a_route_over_the_generated_map_is_estimated_and_is_not_fogged() {
         let world = world();
-        let adapter = RouteAdapter::over(&world);
+        let scratch = PlanningScratch::new();
+        let adapter = RouteAdapter::over(&world, &scratch);
         assert!(adapter.columns() > 0);
         assert_eq!(adapter.cluster_voxels(), world.rules().hpa_cluster_voxels());
 
@@ -388,7 +489,8 @@ mod tests {
     #[test]
     fn a_voxel_off_the_map_has_no_route_rather_than_a_panic() {
         let world = world();
-        let adapter = RouteAdapter::over(&world);
+        let scratch = PlanningScratch::new();
+        let adapter = RouteAdapter::over(&world, &scratch);
         let off = Voxel { x: -1, y: -1, z: 0 };
         let on = Voxel { x: 0, y: 0, z: 0 };
         assert_eq!(adapter.estimate(off, on), None);
@@ -400,21 +502,142 @@ mod tests {
     #[test]
     fn a_fog_mask_of_the_wrong_length_is_refused_rather_than_padded() {
         let world = world();
+        let scratch = PlanningScratch::new();
         assert!(
-            RouteAdapter::over(&world).with_unknown_columns(&[]).is_ok(),
+            RouteAdapter::over(&world, &scratch)
+                .with_unknown_columns(&[])
+                .is_ok(),
             "empty is Clear"
         );
         assert!(
-            RouteAdapter::over(&world)
+            RouteAdapter::over(&world, &scratch)
                 .with_unknown_columns(&[true, false])
                 .is_err(),
             "a short mask would price the tail of the map as seen"
         );
-        let all = vec![false; usize::try_from(RouteAdapter::over(&world).columns()).expect("fits")];
+        let all = vec![
+            false;
+            usize::try_from(RouteAdapter::over(&world, &scratch).columns())
+                .expect("fits")
+        ];
         assert!(
-            RouteAdapter::over(&world)
+            RouteAdapter::over(&world, &scratch)
                 .with_unknown_columns(&all)
                 .is_ok()
         );
+    }
+
+    /// Columns spread over the whole map, corner to corner.
+    fn places() -> Vec<Voxel> {
+        let mut out = Vec::new();
+        for x in (8..384).step_by(92) {
+            for y in (8..384).step_by(92) {
+                out.push(Voxel { x, y, z: 0 });
+            }
+        }
+        out
+    }
+
+    /// S3's `p3est`: the match's planning scratch is working memory and no
+    /// cache. Each leg's answer from a scratch that has served every other
+    /// leg, in either order, is the answer a scratch made for that leg alone
+    /// gives.
+    #[test]
+    fn an_answer_does_not_depend_on_what_the_scratch_held() {
+        let world = world();
+        let places = places();
+        let legs: Vec<(Voxel, Voxel)> = places
+            .iter()
+            .zip(places.iter().rev())
+            .map(|(from, to)| (*from, *to))
+            .collect();
+        assert!(legs.len() >= 16, "a spread of legs: {}", legs.len());
+        let alone: Vec<_> = legs
+            .iter()
+            .map(|(from, to)| {
+                let scratch = PlanningScratch::new();
+                let adapter = RouteAdapter::over(&world, &scratch);
+                let found = adapter.estimate(*from, *to);
+                assert!(adapter.take_fault().is_ok(), "no query faulted");
+                found
+            })
+            .collect();
+        assert!(
+            alone.iter().filter(|found| found.is_some()).count() >= 8,
+            "most of the spread is walkable, or this compares nothing: {alone:?}"
+        );
+        let shared = PlanningScratch::new();
+        let adapter = RouteAdapter::over(&world, &shared);
+        let forward: Vec<_> = legs
+            .iter()
+            .map(|(from, to)| adapter.estimate(*from, *to))
+            .collect();
+        let mut backward: Vec<_> = legs
+            .iter()
+            .rev()
+            .map(|(from, to)| adapter.estimate(*from, *to))
+            .collect();
+        backward.reverse();
+        assert!(adapter.take_fault().is_ok(), "no query faulted");
+        assert_eq!(forward, alone, "after every earlier leg");
+        assert_eq!(backward, alone, "after every leg, in the other order");
+    }
+
+    /// The scratch is made by the first read that searches, and lent for one
+    /// search at a time: a read that finds it lent is a fault raised typed,
+    /// never a second scratch and never "no route".
+    #[test]
+    fn the_scratch_is_made_once_and_lent_one_search_at_a_time() {
+        use crate::error::Code;
+        let world = world();
+        let edge = world.rules().hpa_cluster_voxels();
+        let scratch = PlanningScratch::new();
+        assert_eq!(
+            scratch.walks().expect("not lent"),
+            None,
+            "no read has searched, so there is no scratch"
+        );
+        let lent = scratch.lend(world.surface(), edge).expect("the first loan");
+        assert_eq!(
+            scratch
+                .lend(world.surface(), edge)
+                .err()
+                .map(|error| error.code()),
+            Some(Code::Internal),
+            "a second loan while the first is out"
+        );
+        assert_eq!(
+            scratch.walks().err().map(|error| error.code()),
+            Some(Code::Internal),
+            "its tally is not read while it is lent"
+        );
+        // A route query while the scratch is lent elsewhere is a fault the
+        // caller raises, not an unreachable leg.
+        let adapter = RouteAdapter::over(&world, &scratch);
+        let [from, to] = [
+            Voxel { x: 8, y: 8, z: 0 },
+            Voxel {
+                x: 100,
+                y: 100,
+                z: 0,
+            },
+        ];
+        assert_eq!(adapter.estimate(from, to), None);
+        assert_eq!(
+            adapter.take_fault().err().map(|error| error.code()),
+            Some(Code::Internal)
+        );
+        drop(lent);
+        assert_eq!(
+            scratch.walks().expect("returned"),
+            Some(0),
+            "made, and it has priced no walk"
+        );
+        assert!(scratch.lend(world.surface(), edge).is_ok(), "lent again");
+        assert!(
+            adapter.estimate(from, to).is_some(),
+            "and the query answers"
+        );
+        assert!(adapter.take_fault().is_ok());
     }
 }

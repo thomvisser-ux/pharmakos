@@ -115,13 +115,14 @@ pub fn lend<'a>(world: &'a World, tally: &'a UnitTally) -> Ground<'a> {
     }
 }
 
-/// A search scratch sized for the world's pathing graph, for one read.
+/// A search scratch sized for the world's pathing graph, for a reader that
+/// holds a world and no host: a test, a tool.
 ///
-/// Built per call rather than kept: a scratch is search state the estimator
-/// overwrites from scratch on every query (that is what lets the sim reuse
-/// one across a whole match), and a fresh one is a few megabytes of zeroes on
-/// the shipped map, which the methods that use it -- a preview per edit, a
-/// summary per Lull -- can afford.
+/// A fresh one is a few megabytes of zeroes on the shipped map, which is why
+/// the gateway's own reads make none: they search in the hosted match's one
+/// planning scratch ([`crate::host::Host::planning_scratch`];
+/// `crate::routes`, "One scratch"). A scratch is search state every query
+/// overwrites, so an answer is the same from either.
 ///
 /// # Errors
 ///
@@ -459,7 +460,9 @@ const fn kind_of(spec: FeatureSpec) -> Option<FeatureKind> {
 struct Reader<'a> {
     world: &'a World,
     ground: Ground<'a>,
-    scratch: Scratch,
+    /// The caller's search scratch, the hosted match's planning scratch when
+    /// the gateway resolves ([`resolve_playbook`]).
+    scratch: &'a mut Scratch,
     seat: SeatId,
     commander: Option<[Fx; 3]>,
 }
@@ -485,7 +488,7 @@ impl Reader<'_> {
     where
         F: FnMut(usize) -> bool,
     {
-        let found = ranked(&self.ground, &mut self.scratch, column_of(origin), keep);
+        let found = ranked(&self.ground, self.scratch, column_of(origin), keep);
         found
             .into_iter()
             .map(|(index, walk)| {
@@ -582,7 +585,7 @@ impl Reader<'_> {
             .iter()
             .map(|(_, candidate)| candidate.clone())
             .collect();
-        match cover(&ground, &mut self.scratch, seat, commander, spec) {
+        match cover(&ground, self.scratch, seat, commander, spec) {
             Ok(found) => {
                 let [x, y] = found.site;
                 let point = ground
@@ -650,7 +653,7 @@ impl Reader<'_> {
         let mut stones: Vec<pharmakos_sim::targeting::StoneCandidate> = Vec::new();
         match pharmakos_sim::targeting::toward_counted(
             &ground,
-            &mut self.scratch,
+            self.scratch,
             &mut stones,
             seat,
             commander,
@@ -706,15 +709,7 @@ impl Reader<'_> {
         // `covered {}`, is read sphere first (`on_vent_counted`): a vent
         // outside the sphere is `no_target` with 0 matched whatever stands on
         // it, and one inside counts 1 whether or not it is a legal site.
-        let read = on_vent_counted(
-            &ground,
-            &mut self.scratch,
-            seat,
-            centre,
-            except,
-            covered,
-            spec,
-        );
+        let read = on_vent_counted(&ground, self.scratch, seat, centre, except, covered, spec);
         let counted = |failed: &StepFailed| {
             failed.matched.ok_or_else(|| {
                 Error::internal("the sim's `on` read missed and counted no candidates")
@@ -909,18 +904,23 @@ fn unread(
 /// [`crate::error::Code::Internal`] when the map does not size a search, an
 /// estimate does not convert, or the walk and the compiled plan disagree about
 /// what the playbook binds.
+///
+/// `scratch` is the search scratch every ranking and site of the walk
+/// searches in: the hosted match's planning scratch for the gateway's own
+/// reads ([`crate::host::Host::planning_scratch`]), lent for the whole walk.
 pub fn resolve_playbook(
     world: &World,
     snapshot: &Snapshot,
     seat: SeatId,
     playbook: &Playbook,
     plan: &Plan,
+    scratch: &mut Scratch,
 ) -> Result<Vec<Resolved>, Error> {
     let ground = world.ground();
     let mut reader = Reader {
         world,
         ground,
-        scratch: scratch_for(world)?,
+        scratch,
         seat,
         commander: commander_point(world, seat),
     };

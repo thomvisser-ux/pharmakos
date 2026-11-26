@@ -667,19 +667,13 @@ impl Surface {
     /// see. Outside a Lull both members are left out of every feature
     /// (`gp.api.v1.MapFeature`'s third state, "withheld") and no walk is
     /// priced at all.
-    fn map_features(&self, seat: Option<SeatId>) -> Result<Vec<Json>, Error> {
-        self.map_features_priced(seat, &mut None)
-    }
-
-    /// [`Surface::map_features`], pricing its walks in `scratch`: the search
-    /// scratch is built there on the first walk when the slot is empty, so a
-    /// caller that keeps the slot reads the sim's own walk tally afterwards
+    ///
+    /// The walks are priced in the match's planning scratch
+    /// ([`crate::host::Host::planning_scratch`]), borrowed only when there is
+    /// a walk to price, so the sim's own walk tally there
+    /// ([`crate::host::Host::planning_walks`]) says whether a call priced any
     /// (`surface::tests::outside_a_lull_the_map_summary_prices_no_walk`).
-    pub(super) fn map_features_priced(
-        &self,
-        seat: Option<SeatId>,
-        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
-    ) -> Result<Vec<Json>, Error> {
+    pub(super) fn map_features(&self, seat: Option<SeatId>) -> Result<Vec<Json>, Error> {
         let host = self.host()?;
         let world = host.world();
         let reads = crate::targeting::feature_reads(world, seat);
@@ -693,13 +687,10 @@ impl Surface {
                     Some(commander) => {
                         let tally = pharmakos_sim::seams::UnitTally::new();
                         let ground = crate::targeting::lend(world, &tally);
-                        let scratch = match scratch {
-                            Some(scratch) => scratch,
-                            None => scratch.insert(crate::targeting::scratch_for(world)?),
-                        };
+                        let mut scratch = host.planning_scratch()?;
                         crate::targeting::ranked(
                             &ground,
-                            scratch,
+                            &mut scratch,
                             pharmakos_sim::targeting::column_of(commander),
                             |_| true,
                         )
@@ -1087,12 +1078,9 @@ impl Surface {
             )));
         }
         let mut places: Vec<Voxel> = Vec::with_capacity(waypoints.len());
-        // One search scratch for every `covering` waypoint of the route, made
-        // the first time one needs it.
-        let mut scratch: Option<pharmakos_sim::pathing::Scratch> = None;
         for (index, waypoint) in waypoints.iter().enumerate() {
             let from = places.last().copied();
-            places.push(self.place_of(seat, waypoint, index, from, &mut scratch)?);
+            places.push(self.place_of(seat, waypoint, index, from)?);
         }
 
         let host = self.host()?;
@@ -1168,15 +1156,16 @@ impl Surface {
     /// nothing is `NOT_FOUND` naming the step failure it would be
     /// (`no_target`, `illegal_site`): hidden, absent and someone else's are
     /// one answer. `on` is a Build target's anchor and never a place to walk
-    /// to, so it is refused as any other non-place is. `scratch` is the
-    /// route's one search scratch for its `covering` waypoints.
+    /// to, so it is refused as any other non-place is. A `covering` or
+    /// `toward` waypoint searches in the match's planning scratch
+    /// ([`crate::host::Host::planning_scratch`]), lent for that waypoint
+    /// alone.
     fn place_of(
         &self,
         seat: SeatId,
         waypoint: &Json,
         index: usize,
         from: Option<Voxel>,
-        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use pharmakos_sim::interpreter::{BeaconSpec, resolve_beacon_in};
         let at = format!("waypoint {index}");
@@ -1184,10 +1173,10 @@ impl Surface {
             return read_voxel(voxel, &at);
         }
         if let Some(reference) = waypoint.get("covering") {
-            return self.covering_site(seat, reference, &at, from, scratch);
+            return self.covering_site(seat, reference, &at, from);
         }
         if let Some(toward) = waypoint.get("toward") {
-            return self.toward_site(seat, toward, &at, from, scratch);
+            return self.toward_site(seat, toward, &at, from);
         }
         let host = self.host()?;
         let spec = if let Some(reference) = waypoint.get("beacon_anchor") {
@@ -1291,7 +1280,6 @@ impl Surface {
         reference: &Json,
         at: &str,
         from: Option<Voxel>,
-        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
         let reference: pharmakos_proto::gp::v1::FeatureRef =
@@ -1309,7 +1297,8 @@ impl Surface {
                 why
             ))
         })?;
-        let world = self.host()?.world();
+        let host = self.host()?;
+        let world = host.world();
         let origin = match from {
             Some(voxel) => fx_point(voxel, at)?,
             None => crate::targeting::commander_point(world, seat).ok_or_else(|| {
@@ -1321,19 +1310,17 @@ impl Surface {
         };
         let tally = pharmakos_sim::seams::UnitTally::new();
         let ground = crate::targeting::lend(world, &tally);
-        let scratch = match scratch {
-            Some(held) => held,
-            None => scratch.insert(crate::targeting::scratch_for(world)?),
-        };
-        let found = pharmakos_sim::targeting::cover(&ground, scratch, seat, origin, spec).map_err(
-            |failure| {
-                Error::not_found(said!(
-                    "{} covers nothing: its step would fail `{}`",
-                    pharmakos_proto::json::grammar::quoted_pointer(at),
-                    pharmakos_proto::json::grammar::quoted(failure.name())
-                ))
-            },
-        )?;
+        let found = {
+            let mut scratch = host.planning_scratch()?;
+            pharmakos_sim::targeting::cover(&ground, &mut scratch, seat, origin, spec)
+        }
+        .map_err(|failure| {
+            Error::not_found(said!(
+                "{} covers nothing: its step would fail `{}`",
+                pharmakos_proto::json::grammar::quoted_pointer(at),
+                pharmakos_proto::json::grammar::quoted(failure.name())
+            ))
+        })?;
         let [x, y] = found.site;
         let point = ground.standing(x, y).ok_or_else(|| {
             Error::internal(said!(
@@ -1355,7 +1342,6 @@ impl Surface {
         toward: &Json,
         at: &str,
         from: Option<Voxel>,
-        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
         let toward: pharmakos_proto::gp::v1::Toward = pharmakos_proto::json::decode_json(toward)
@@ -1379,7 +1365,8 @@ impl Surface {
                 why
             ))
         })?;
-        let world = self.host()?.world();
+        let host = self.host()?;
+        let world = host.world();
         let origin = match from {
             Some(voxel) => fx_point(voxel, at)?,
             None => crate::targeting::commander_point(world, seat).ok_or_else(|| {
@@ -1391,19 +1378,18 @@ impl Surface {
         };
         let tally = pharmakos_sim::seams::UnitTally::new();
         let ground = crate::targeting::lend(world, &tally);
-        let scratch = match scratch {
-            Some(held) => held,
-            None => scratch.insert(crate::targeting::scratch_for(world)?),
-        };
         let mut stones: Vec<pharmakos_sim::targeting::StoneCandidate> = Vec::new();
-        let found = pharmakos_sim::targeting::toward_counted(
-            &ground,
-            scratch,
-            &mut stones,
-            seat,
-            origin,
-            spec,
-        )
+        let found = {
+            let mut scratch = host.planning_scratch()?;
+            pharmakos_sim::targeting::toward_counted(
+                &ground,
+                &mut scratch,
+                &mut stones,
+                seat,
+                origin,
+                spec,
+            )
+        }
         .map_err(|failed| {
             Error::not_found(said!(
                 "{} finds no stepping stone: its step would fail `{}`",
