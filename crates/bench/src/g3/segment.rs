@@ -309,6 +309,10 @@ struct Counters {
 pub struct TickMarks {
     /// `StepStarted` events.
     pub started: u64,
+    /// The `StepStarted` events of a route's first step (its `value`, the
+    /// step's index, is zero): for [`crate::kinds`]' far covering kind, the
+    /// `Move` that walks the commander out, which resolves no site.
+    pub opened: u64,
     /// `RowCommitted` events.
     pub committed: u64,
     /// `BeaconPlaced` events.
@@ -367,6 +371,13 @@ fn counters(world: &World) -> Result<Counters, Error> {
         movers,
         marks: TickMarks {
             started: count(&[EventKind::StepStarted])?,
+            opened: u64::try_from(
+                events
+                    .iter()
+                    .filter(|event| event.kind == EventKind::StepStarted && event.value == 0)
+                    .count(),
+            )
+            .map_err(|_| Error::Overflow("a tick's event count"))?,
             committed: count(&[EventKind::RowCommitted])?,
             placed: count(&[EventKind::BeaconPlaced])?,
             failed: count(&[EventKind::StepFailed])?,

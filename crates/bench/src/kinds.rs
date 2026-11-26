@@ -22,7 +22,7 @@
 //! | [`Kind::Condition`] | every seat seals [`Shape::ConditionHolds`] at the committed budget | every one |
 //! | [`Kind::OctileRanker`] | [`Shape::RankerHolds`]: `nearest` leaves, each ranking the seat's beacon rows by octile distance from the commander in one scan (`cond.rs`'s `rank`): no walk is served | every one |
 //! | [`Kind::Covering`] | [`Shape::Covering`] at [`COVER_STEPS`]: `place_beacon` steps `covering` the nearest uncovered vent, each resolve ranking the vents by the walk the router serves from the commander beside its core | those that started or failed a step and placed no beacon |
-//! | [`Kind::CoveringFar`] | [`Shape::CoveringFar`]: the same after the commander walks to its core's far point (`hosted::far_point`: the column within 45 voxels a side, standable and connected, whose nearest vent is farthest), so its first resolve ranks the vents by walks from far from any of them | the same |
+//! | [`Kind::CoveringFar`] | [`Shape::CoveringFar`]: the same after the commander walks to its core's far point (`hosted::far_point`: the column within 45 voxels a side, standable and connected, whose nearest vent is farthest), so its first resolve ranks the vents by walks from far from any of them | those that started a step after the `Move` out (or failed one) and placed no beacon |
 //! | [`Kind::Threat`] | [`Shape::ThreatHolds`]: `safest` leaves, through the threat scan | every one |
 //! | [`Kind::SeamUpkeep`] | [`Shape::Idle`], and the gate layout's Mine beacons and their drones placed in the lobby, under the G3′ variant | every one |
 //! | [`Kind::Commit`] | [`Shape::BuildTargets`] at the committed budget at each seat's own core, on the spread layout (below) | those that committed a row and started no step |
@@ -265,8 +265,11 @@ impl Kind {
     pub const fn reads(self, marks: TickMarks) -> bool {
         match self {
             Kind::Condition | Kind::OctileRanker | Kind::Threat | Kind::SeamUpkeep => true,
-            Kind::Covering | Kind::CoveringFar => {
-                (marks.started > 0 || marks.failed > 0) && marks.placed == 0
+            Kind::Covering => (marks.started > 0 || marks.failed > 0) && marks.placed == 0,
+            // The far kind's first step is the `Move` out, which resolves
+            // nothing: a tick that started only that step is not read.
+            Kind::CoveringFar => {
+                (marks.started > marks.opened || marks.failed > 0) && marks.placed == 0
             }
             Kind::Commit => marks.committed > 0 && marks.started == 0,
             Kind::Toward => marks.started > 0 && marks.placed == 0,
@@ -1575,8 +1578,7 @@ mod tests {
         let both = TickMarks {
             started: 1,
             placed: 1,
-            committed: 0,
-            failed: 0,
+            ..TickMarks::default()
         };
         assert!(Kind::Commit.reads(committed));
         assert!(!Kind::Commit.reads(started));
@@ -1596,5 +1598,15 @@ mod tests {
         assert!(Kind::Covering.reads(failed));
         assert!(Kind::CoveringFar.reads(started));
         assert!(!Kind::Covering.reads(TickMarks::default()));
+        // N2 (a): the far kind's `Move` (its route's step 0) starts a step
+        // and resolves no site; its tick is not the far kind's. The near
+        // kind's step 0 is a placement, and is read.
+        let moved = TickMarks {
+            started: 1,
+            opened: 1,
+            ..TickMarks::default()
+        };
+        assert!(!Kind::CoveringFar.reads(moved));
+        assert!(Kind::Covering.reads(moved));
     }
 }
