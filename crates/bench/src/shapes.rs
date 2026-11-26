@@ -67,6 +67,16 @@
 //! selector catalogue (`resolve_on`) when it is evaluated. Neither is in
 //! [`Shape::ALL`], the verifier's curve.
 //!
+//! The decision tick's kinds (`crate::kinds`, item 196) take five more, none
+//! in [`Shape::ALL`] either: [`Shape::Idle`], a route of holds that is the
+//! baseline every kind is measured against; [`Shape::ConditionHolds`],
+//! [`Shape::RankerHolds`] and [`Shape::ThreatHolds`], the full-evaluation
+//! handlers over `segment_elapsed`, `nearest` and `safest` leaves with a route
+//! of holds, so the commander stands still and every decision runs the kind;
+//! and [`Shape::Toward`], `place_beacon` steps `toward` the nearest vent the
+//! seat does not cover, each resolved when its step starts and deployed where
+//! the commander walks.
+//!
 //! # The transport cap
 //!
 //! [`max_text`] is [`Shape::RouteGuards24`]'s structure at a size, its
@@ -84,10 +94,11 @@ use pharmakos_proto::gp::v1::on_death::OnRespawn;
 use pharmakos_proto::gp::v1::playbook::Kind;
 use pharmakos_proto::gp::v1::{
     AddBuildTargetRow, All, Any, Area, BeaconHpPct, BeaconRef, BuildSettings, BuildTarget,
-    Condition, Declarative, Fallback, FallbackHold, Handler, HoldStep, IntCompare, InterfaceRow,
-    InterfaceStep, Location, MandateSettings, Meta, MoveStep, Nearest, OnDeath, Playbook, Safest,
-    SchemaVersion, SegmentElapsed, Step, beacon_ref, fallback, interface_row, location,
-    mandate_settings, step,
+    Condition, Declarative, Fallback, FallbackHold, FeatureRef, Handler, HoldStep, IntCompare,
+    InterfaceRow, InterfaceStep, Location, MandateSettings, Meta, MoveStep, Nearest, OnDeath,
+    OnFail, PlaceBeaconStep, Playbook, Safest, SchemaVersion, SegmentElapsed, Step, Toward,
+    VentPick, beacon_ref, fallback, feature_ref, interface_row, location, mandate_settings,
+    on_fail, step,
 };
 use pharmakos_proto::json;
 use pharmakos_sim::interpreter::{MAX_HANDLERS, MAX_ROUTE_STEPS};
@@ -160,6 +171,26 @@ pub enum Shape {
     FullEval,
     /// [`Shape::FullEval`] with selector leaves. Not in [`Shape::ALL`].
     FullEvalSelectors,
+    /// A route of one-second holds and nothing else: the decision tick's
+    /// baseline, a playbook that asks a decision for almost nothing
+    /// (`crate::kinds`). Not in [`Shape::ALL`].
+    Idle,
+    /// The condition kind's: [`Shape::FullEval`]'s handlers over a route of
+    /// holds, so the commander stands still. Not in [`Shape::ALL`].
+    ConditionHolds,
+    /// The served-walk ranker's: the same with `nearest` leaves, each ranking
+    /// the seat's beacons by the walk the router serves. Not in
+    /// [`Shape::ALL`].
+    RankerHolds,
+    /// The threat-ranking selector's: the same with `safest` leaves, each
+    /// ranking the seat's beacons through the threat scan. Not in
+    /// [`Shape::ALL`].
+    ThreatHolds,
+    /// A route of `place_beacon` steps, each `toward` the nearest vent the
+    /// seat does not cover: a stepping stone a unit, each resolved when its
+    /// step starts and deployed where the commander walks (S3's `pred`, E23).
+    /// Not in [`Shape::ALL`].
+    Toward,
 }
 
 impl Shape {
@@ -185,6 +216,11 @@ impl Shape {
             Shape::LongestRoute => "longest_route",
             Shape::FullEval => "full_eval",
             Shape::FullEvalSelectors => "full_eval_selectors",
+            Shape::Idle => "idle",
+            Shape::ConditionHolds => "condition_holds",
+            Shape::RankerHolds => "ranker_holds",
+            Shape::ThreatHolds => "threat_holds",
+            Shape::Toward => "toward",
         }
     }
 
@@ -243,6 +279,17 @@ impl Shape {
             Shape::FullEvalSelectors => {
                 handlers(size, Group::FullAny(LeafKind::Selector), Bodies::Moves).map_err(refuse)?
             }
+            Shape::Idle => idle(size).map_err(refuse)?,
+            Shape::ConditionHolds => {
+                handlers(size, Group::FullAny(LeafKind::Elapsed), Bodies::One).map_err(refuse)?
+            }
+            Shape::RankerHolds => {
+                handlers(size, Group::FullAny(LeafKind::Selector), Bodies::One).map_err(refuse)?
+            }
+            Shape::ThreatHolds => {
+                handlers(size, Group::FullAny(LeafKind::Safest), Bodies::One).map_err(refuse)?
+            }
+            Shape::Toward => stepping_stones(size).map_err(refuse)?,
         };
         Ok(Playbook {
             schema_version: Some(SchemaVersion { major: 1, minor: 0 }),
@@ -453,6 +500,8 @@ enum LeafKind {
     Elapsed,
     /// `beacon_hp_pct` of the `nearest` own beacon, below 0 per cent.
     Selector,
+    /// `beacon_hp_pct` of the `safest` own beacon, below 0 per cent.
+    Safest,
 }
 
 /// A leaf of [`Group::FullAny`]: never true, and distinct from every other.
@@ -476,6 +525,15 @@ fn never(kind: LeafKind, leaves: &mut Leaves) -> Result<Condition, String> {
         LeafKind::Selector => node(Node::BeaconHpPct(BeaconHpPct {
             beacon: Some(BeaconRef {
                 r#ref: Some(beacon_ref::Ref::Nearest(Nearest::default())),
+            }),
+            pct: Some(IntCompare {
+                op: i32::from(Op::Lt),
+                value: 0,
+            }),
+        })),
+        LeafKind::Safest => node(Node::BeaconHpPct(BeaconHpPct {
+            beacon: Some(BeaconRef {
+                r#ref: Some(beacon_ref::Ref::Safest(Safest::default())),
             }),
             pct: Some(IntCompare {
                 op: i32::from(Op::Lt),
@@ -602,6 +660,59 @@ fn handlers(size: usize, group: Group, bodies: Bodies) -> Result<Declarative, St
     Ok(Declarative {
         route,
         handlers: list,
+        options: None,
+    })
+}
+
+/// A route of `size` one-second holds, `r000` on, and no handler.
+fn idle(size: usize) -> Result<Declarative, String> {
+    if size == 0 || size > MAX_ROUTE_STEPS {
+        return Err(format!(
+            "a route of {size} steps, outside the interpreter's 1 to {MAX_ROUTE_STEPS}"
+        ));
+    }
+    Ok(Declarative {
+        route: holds(size),
+        handlers: Vec::new(),
+        options: None,
+    })
+}
+
+/// `size` `place_beacon` steps, `r000` on, each `toward` the nearest vent the
+/// seat does not cover, skipped when it fails so the next one starts.
+fn stepping_stones(size: usize) -> Result<Declarative, String> {
+    if size == 0 || size > MAX_ROUTE_STEPS {
+        return Err(format!(
+            "a route of {size} steps, outside the interpreter's 1 to {MAX_ROUTE_STEPS}"
+        ));
+    }
+    let route = (0..size)
+        .map(|at| Step {
+            label: format!("r{at:03}"),
+            timeout_ms: 120_000,
+            on_fail: Some(OnFail {
+                action: i32::from(on_fail::Action::Skip),
+                jump_to_label: String::new(),
+            }),
+            kind: Some(step::Kind::PlaceBeacon(PlaceBeaconStep {
+                at: Some(Location {
+                    place: Some(location::Place::Toward(Toward {
+                        feature: Some(FeatureRef {
+                            r#ref: Some(feature_ref::Ref::Vent(VentPick {
+                                rank: i32::from(feature_ref::Rank::Nearest),
+                                coverage: i32::from(feature_ref::Coverage::Uncovered),
+                            })),
+                        }),
+                    })),
+                }),
+                ..PlaceBeaconStep::default()
+            })),
+            ..Step::default()
+        })
+        .collect();
+    Ok(Declarative {
+        route,
+        handlers: Vec::new(),
         options: None,
     })
 }
@@ -788,10 +899,15 @@ mod tests {
 
     #[test]
     fn every_shape_is_exactly_its_size() {
-        for shape in Shape::ALL
-            .into_iter()
-            .chain([Shape::FullEval, Shape::FullEvalSelectors])
-        {
+        for shape in Shape::ALL.into_iter().chain([
+            Shape::FullEval,
+            Shape::FullEvalSelectors,
+            Shape::Idle,
+            Shape::ConditionHolds,
+            Shape::RankerHolds,
+            Shape::ThreatHolds,
+            Shape::Toward,
+        ]) {
             for units in SIZES.into_iter().chain([127, 129, 3]) {
                 let playbook = shape
                     .playbook(units)

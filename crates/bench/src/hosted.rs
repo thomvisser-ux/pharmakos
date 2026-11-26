@@ -31,6 +31,7 @@ use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::{World, WorldConfig};
 
 use crate::error::Error;
+use crate::shapes::Core;
 
 /// The match id every bench match is hosted under. Lower-case letters and
 /// hyphens only, as `MatchCache::valid_match_id` asks; it reaches nothing
@@ -114,10 +115,31 @@ pub fn attach(host: Host, layout: Option<&Layout>, opening: &Opening<'_>) -> Res
 ///
 /// As [`attach`].
 pub fn attach_with(
+    host: Host,
+    layout: Option<&Layout>,
+    settings: &[LayoutSettings],
+    opening: &Opening<'_>,
+) -> Result<Opened, Error> {
+    let seats = usize::try_from(opening.seats).map_err(|_| Error::Overflow("the seat count"))?;
+    let playbooks = vec![opening.playbook.to_owned(); seats];
+    attach_each(host, layout, settings, opening, &playbooks)
+}
+
+/// [`attach_with`], with a playbook of its own for each seat, in seat order:
+/// a playbook that names places round a seat's own core
+/// ([`seat_core`]) is a different text for each seat. `opening.playbook` is
+/// not read.
+///
+/// # Errors
+///
+/// As [`attach`], and [`Error::Submission`] when the playbooks are not one a
+/// seat.
+pub fn attach_each(
     mut host: Host,
     layout: Option<&Layout>,
     settings: &[LayoutSettings],
     opening: &Opening<'_>,
+    playbooks: &[String],
 ) -> Result<Opened, Error> {
     if let Some(layout) = layout {
         host.seed_layout_with_settings(layout, settings)
@@ -130,10 +152,17 @@ pub fn attach_with(
     }
     let mut surface = open_lull(host, opening, Some(Ms::new(lull_ms(opening.rules)?)))?;
     let seats = seat_ids(opening.seats)?;
+    if playbooks.len() != seats.len() {
+        return Err(Error::Submission(format!(
+            "{} playbooks for {} seats",
+            playbooks.len(),
+            seats.len()
+        )));
+    }
     let mut units_per_seat = None;
-    for seat in &seats {
+    for (seat, playbook) in seats.iter().zip(playbooks) {
         let token = mint(&mut surface, *seat)?;
-        let units = submit(&mut surface, &token, *seat, opening.playbook)?;
+        let units = submit(&mut surface, &token, *seat, playbook)?;
         if units_per_seat.is_some_and(|kept| kept != units) {
             return Err(Error::Submission(format!(
                 "seat {} sealed {units} size units and an earlier seat a different count, from \
@@ -212,6 +241,44 @@ pub fn open_lull(
         .open_lull()
         .map_err(|error| Error::gateway("opening the Lull", &error))?;
     Ok(surface)
+}
+
+/// `seat`'s core on `world`, as the seat's own view names it: `b_00`, the
+/// seat's lowest-id beacon row (the gateway's per-seat beacon names,
+/// `crates/gateway/src/surface.rs`, "`b_00`, its core, first"), at its row's
+/// position, with the map's extent from `rules`.
+///
+/// # Errors
+///
+/// [`Error::Layout`] when the seat holds no beacon, [`Error::Rules`] for a
+/// table with no `map` block, and [`Error::Overflow`] for an extent past an
+/// `i32`.
+pub fn seat_core(world: &World, seat: SeatId, rules: &RulesTable) -> Result<Core, Error> {
+    let beacons = world.beacons();
+    let at = beacons
+        .ids()
+        .iter()
+        .zip(beacons.seats())
+        .zip(beacons.positions())
+        .filter(|((_, owner), _)| **owner == seat.raw())
+        .min_by_key(|((id, _), _)| **id)
+        .map(|(_, at)| at)
+        .ok_or_else(|| Error::Layout(format!("seat {} has no core on the map", seat.raw())))?;
+    let map = rules
+        .message()
+        .map
+        .as_ref()
+        .ok_or_else(|| Error::Rules("no `map` block".to_owned()))?;
+    let extent = |size: u32| i32::try_from(size).map_err(|_| Error::Overflow("the map's extent"));
+    Ok(Core {
+        id: "b_00".to_owned(),
+        at: [
+            at[0].floor_voxels(),
+            at[1].floor_voxels(),
+            at[2].floor_voxels(),
+        ],
+        extent: [extent(map.size_x)?, extent(map.size_y)?],
+    })
 }
 
 /// The hosted world, read only.

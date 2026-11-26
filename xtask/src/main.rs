@@ -131,7 +131,7 @@
 //! cargo xtask list                  # list the steps
 //! cargo xtask ci-scope              # CI's docs-only fast path: `full` or `prose`
 //! cargo xtask perf-alarms           # the per-runner perf notices; never fails
-//! cargo xtask perf-alarms g3        # one alarm (mesher, p1, p1-cap, p1-decision, p3, g3, allocations)
+//! cargo xtask perf-alarms g3        # one alarm (mesher, p1, p1-cap, p1-decision, p1-kinds, p3, g3, allocations)
 //! cargo xtask g3-budget             # G3′'s CI alarm: fails at the gate's numbers doubled
 //! cargo xtask p3-budget             # P3's CI alarm: a repath p99 over 10 ms, an estimate over 2 ms
 //! cargo xtask p1-budget             # P1's CI alarm: QUICK over 10 ms, FULL over 100 ms at the budget
@@ -832,7 +832,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                     [one] => Some(alarm_selection(one)?),
                     _ => {
                         return Err("`perf-alarms` takes at most one alarm name: mesher, p1, \
-                                    p1-cap, p1-decision, p3, g3 or allocations"
+                                    p1-cap, p1-decision, p1-kinds, p3, g3 or allocations"
                             .to_owned());
                     }
                 };
@@ -4297,6 +4297,13 @@ struct Alarm {
 ///   and in counted evaluation units, is `p1-decision`'s: each a step of its
 ///   own for the ten-notice limit, which the bench's tests hold each alarm
 ///   under at compile time.
+/// * **The decision tick by kind** (S3's plan, section 5.2 item 4; items
+///   175 (8) and 196; `cert3`): `crates/bench/tests/g3_real.rs`'s
+///   `p1_decision_kinds` — ns per counted unit for each kind of decision work
+///   (condition, served-walk ranker, threat-ranking selector, seam upkeep,
+///   commit, `toward`, deploy) on both seeds, whether the kinds agree within
+///   a stated tolerance, and the seeds' gap against E12's rule; in the G3′
+///   binary for its counting allocator, `p1-kinds`.
 /// * **P3** (S3's plan, section 5.1): `crates/bench/tests/p3_alarm.rs` — the
 ///   repath on the sim's own graph, cold and under the crater stream with the
 ///   repair beside it, and the travel estimate through the gateway's
@@ -4336,6 +4343,15 @@ const ALARMS: &[Alarm] = &[
         title: "P1 decision tick",
     },
     Alarm {
+        name: "p1-kinds",
+        package: "pharmakos-bench",
+        // The G3' binary, for its counting allocator: each kind reports the
+        // allocations of its ticks (`cert3`'s B4, a `toward` step among them).
+        test: "g3_real",
+        exact: Some("p1_decision_kinds"),
+        title: "P1 decision tick by kind",
+    },
+    Alarm {
         name: "p3",
         package: "pharmakos-bench",
         test: "p3_alarm",
@@ -4348,7 +4364,8 @@ const ALARMS: &[Alarm] = &[
         package: "pharmakos-bench",
         test: "g3_real",
         // The target also holds `g3_budget_segment` (`cargo xtask g3-budget`'s),
-        // and `g3_power_sweep` and `g3_raids_segments` (both run by hand).
+        // `p1_decision_kinds` (the `p1-kinds` alarm's), and `g3_power_sweep` and
+        // `g3_raids_segments` (both run by hand).
         exact: Some("g3_real_segment_support_tick_and_fourth_seat"),
         title: "G3' timings",
     },
@@ -7073,6 +7090,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                 "pharmakos-bench",
                 "pharmakos-bench",
                 "pharmakos-bench",
+                "pharmakos-bench",
                 "pharmakos-bench"
             ]
         );
@@ -7482,7 +7500,18 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     #[test]
     fn each_alarm_is_selected_by_its_own_name_and_a_typo_is_refused() {
         let names: Vec<&str> = ALARMS.iter().map(|alarm| alarm.name).collect();
-        assert_eq!(names, ["mesher", "p1", "p1-cap", "p1-decision", "p3", "g3"]);
+        assert_eq!(
+            names,
+            [
+                "mesher",
+                "p1",
+                "p1-cap",
+                "p1-decision",
+                "p1-kinds",
+                "p3",
+                "g3"
+            ]
+        );
         for alarm in ALARMS {
             assert_eq!(
                 alarm_selection(alarm.name),

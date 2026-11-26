@@ -56,11 +56,12 @@ use std::cell::Cell;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use pharmakos_bench::decision::BENCH_SEED;
 use pharmakos_bench::g3::layout::Quarters;
 use pharmakos_bench::g3::segment::{self, GateLoad, SegmentPlan};
 use pharmakos_bench::g3::{self, G3_SEED, G3_SEGMENT_MS, fourth, stream, support, sweep, variant};
 use pharmakos_bench::heap::HeapCounter;
-use pharmakos_bench::{Error, workspace_root};
+use pharmakos_bench::{Error, kinds, provenance, workspace_root};
 
 /// Bytes allocated and not yet freed, process-wide.
 static LIVE: AtomicU64 = AtomicU64::new(0);
@@ -260,6 +261,77 @@ fn fourth_notice(root: &Path, os: &str) -> Result<Vec<String>, Error> {
     let bench = variant::bench_rules(root, 3, segment::gate_load(Quarters::FULL)?)?;
     let line = fourth::measure(root, &bench.rules, G3_SEED, FOURTH_SEGMENT_MS)?;
     Ok(vec![g3::fourth_notice(&line, os)?])
+}
+
+/// The decision tick's nanoseconds per counted unit, kind by kind, on both
+/// seeds, under this binary's counting allocator (`cert3`'s B3 and B4; items
+/// 175 (8) and 196): `cargo xtask perf-alarms p1-kinds` runs it, and the
+/// certifying run is the same command on the owner's machine. Six notices:
+/// the commit, a seed's kinds and their agreement twice, and the seed gap.
+#[test]
+#[ignore = "a performance alarm, not a gate: cargo xtask perf-alarms p1-kinds runs it with --exact"]
+fn p1_decision_kinds() {
+    let root = workspace_root();
+    let os = std::env::consts::OS;
+    println!();
+    let mut failed: Vec<Error> = Vec::new();
+    let mut report = |title: &str, lines: Result<Vec<String>, Error>| match lines {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Err(error) => {
+            println!("::warning title={title}::not measured on {os}: {error}");
+            failed.push(error);
+        }
+    };
+    report(
+        "provenance",
+        provenance::commit(&root).map(|commit| {
+            vec![provenance::notice(
+                "decision tick by kind",
+                &commit,
+                &format!(
+                    "every kind's match {} times over a {} s segment",
+                    kinds::KindPlan::MEASURED.runs,
+                    kinds::KindPlan::MEASURED.segment_ms.div_euclid(1_000)
+                ),
+                os,
+            )]
+        }),
+    );
+    let measured = kinds::Tables::load(&root).and_then(|tables| {
+        let mut seeds = Vec::with_capacity(2);
+        for seed in [BENCH_SEED, pharmakos_sim::DETERMINISM_MATCH_SEED] {
+            seeds.push((
+                seed,
+                kinds::measure(seed, kinds::KindPlan::MEASURED, &tables, Some(&Counter))?,
+            ));
+        }
+        Ok(seeds)
+    });
+    report(
+        "decision tick by kind",
+        measured.and_then(|seeds| {
+            let mut lines = Vec::new();
+            for (seed, figures) in &seeds {
+                lines.push(kinds::kinds_notice(
+                    figures,
+                    *seed,
+                    kinds::KindPlan::MEASURED,
+                    os,
+                ));
+                lines.push(kinds::agreement_notice(
+                    &kinds::agreement(figures)?,
+                    *seed,
+                    os,
+                ));
+            }
+            match seeds.as_slice() {
+                [(_, first), (_, second)] => lines.push(kinds::seed_gap_notice(first, second, os)?),
+                _ => return Err(Error::Empty("not two seeds".to_owned())),
+            }
+            Ok(lines)
+        }),
+    );
+    assert!(failed.is_empty(), "{failed:?}");
 }
 
 #[test]

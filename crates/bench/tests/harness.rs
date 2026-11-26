@@ -532,6 +532,39 @@ fn the_max_text_shape_qualifies_at_the_cap() {
     );
 }
 
+/// The decision tick's kinds measure what they name (`cert3`'s B3 and B4):
+/// the condition kind on every decision tick, and the `toward` kind on the
+/// ticks a stepping stone's step starts, each spending counted units over its
+/// baseline's; and the notice prints them. A debug build and a short segment,
+/// so the nanoseconds are not asserted.
+#[test]
+fn the_decision_kinds_read_their_own_ticks() {
+    use pharmakos_bench::kinds::{self, Kind, KindPlan, Tables};
+    let root = workspace_root();
+    let tables = Tables::load(&root).expect("the tables");
+    let plan = KindPlan {
+        // Two hundred ticks: forty decision ticks.
+        segment_ms: 10_000,
+        runs: 1,
+    };
+    let condition =
+        kinds::measure_kind(Kind::Condition, BENCH_SEED, plan, &tables).expect("the condition");
+    assert_eq!(condition.ticks, 40, "{condition:?}");
+    assert!(condition.units > 0, "{condition:?}");
+    let toward = kinds::measure_kind(Kind::Toward, BENCH_SEED, plan, &tables).expect("toward");
+    assert!(toward.ticks >= 1, "{toward:?}");
+    assert!(
+        toward.units > 0,
+        "a stepping stone's resolve is counted: {toward:?}"
+    );
+    let line = kinds::kinds_notice(&[condition, toward], BENCH_SEED, plan, "linux");
+    assert!(
+        line.starts_with("::notice title=decision tick by kind (0x00000000ca5caded)::on linux, "),
+        "{line}"
+    );
+    assert!(line.contains("; toward "), "{line}");
+}
+
 /// The selector variant at the size budget is submittable through the hosted
 /// door: its pretty canonical text is past the transport cap, so a seat sends
 /// it compact, as `decision::shape_text` writes it.

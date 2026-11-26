@@ -21,6 +21,7 @@
 //! | [`decision`] | A decision tick's wall-clock cost per size unit, in a hosted match at the size budget, and in counted evaluation units; and the same at each size of the curve |
 //! | [`p3`] | P3 (S3): a unit's repath on the sim's own graph, cold and under the crater stream, and the travel estimate through the gateway and the sim's estimator |
 //! | [`g3`] | G3′-real: the tick at the gate's load, phase by phase, over an 8-minute segment, and the figures the power budget needs |
+//! | [`kinds`] | A decision tick's ns per counted unit, kind by kind, and whether the kinds agree |
 //! | [`hosted`] | A bench match, hosted as `gamectl scenario run` hosts one, the gate's layout placed in its lobby |
 //! | [`heap`] | What a counting global allocator tells the G3′ segment |
 //! | [`provenance`] | The commit a certifying run was built from, and a cut run's call count |
@@ -72,6 +73,7 @@ pub mod full;
 pub mod g3;
 pub mod heap;
 pub mod hosted;
+pub mod kinds;
 pub mod p3;
 pub mod provenance;
 pub mod quick;

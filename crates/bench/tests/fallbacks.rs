@@ -246,6 +246,7 @@ fn the_fallback_scan_reads_the_whole_crate() {
             "src/g3.rs",
             "src/heap.rs",
             "src/hosted.rs",
+            "src/kinds.rs",
             "src/lib.rs",
             "src/p3.rs",
             "src/provenance.rs",

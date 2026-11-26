@@ -1353,7 +1353,9 @@ jobs:
     # beside them, in the `p1` step; QUICK at the transport cap, in the `p1-cap` step; a
     # decision tick's ns per size unit in a hosted match, and from `bench3` its counted
     # evaluation units, a second seed and the same at each size, in the `p1-decision`
-    # step), the walled crate
+    # step; and from `cert3` the decision tick's ns per counted unit kind by kind on both
+    # seeds, whether the kinds agree and the seeds' gap, in the `p1-kinds` step), the
+    # walled crate
     # AGENTS.md section 4.5 sanctions to read a clock while driving the verifier and the
     # sim from outside (decisions-log item 131); P3's timings (crates/bench/tests/
     # p3_alarm.rs, S3's plan section 5.1: the repath on the sim's graph, cold and under
@@ -1365,7 +1367,7 @@ jobs:
     # tick-minus-pathing mean of item 116 (6)(b) among them, the support search's
     # adversarial tick and a fourth seat's cost; S2's plan, tasks `g3h` and `g3r`). Each
     # alarm is its own step, `cargo xtask perf-alarms <name>`, because GitHub annotates only
-    # the first ten notices of a step and the seven together print more (item 149 (4)). The
+    # the first ten notices of a step and the eight together print more (item 149 (4)). The
     # G3′ budget is not gated here: the gate is certified on the owner's machine, and its
     # loose CI alarm is the `g3 budget (ubuntu-24.04)` job below (S2's plan, E18). P3's
     # and P1's loose alarms, `cargo xtask p3-budget` and `cargo xtask p1-budget`, are not
@@ -1380,12 +1382,12 @@ jobs:
     # the job's time. It follows the docs-only fast path like the building jobs: a
     # prose-only pull request skips its steps and prints the notice.
     runs-on: ${{ matrix.os }}
-    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the seven
-    # measuring steps' 140), so a step that times out under continue-on-error never brings
+    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the eight
+    # measuring steps' 160), so a step that times out under continue-on-error never brings
     # the job to its timeout, which would be red. xtask's
     # `the_perf_alarms_job_can_never_go_red` holds the sum, and every measuring step's
     # continue-on-error, prose guard and timeout.
-    timeout-minutes: 165
+    timeout-minutes: 185
     strategy:
       fail-fast: false
       matrix:
@@ -1459,6 +1461,13 @@ jobs:
         timeout-minutes: 20
         shell: bash
         run: cargo xtask perf-alarms p1-decision
+
+      - name: cargo xtask perf-alarms p1-kinds
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: bash
+        run: cargo xtask perf-alarms p1-kinds
 
       - name: cargo xtask perf-alarms p3
         if: steps.scope.outputs.prose_only != 'true'

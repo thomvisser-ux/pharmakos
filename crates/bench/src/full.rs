@@ -453,32 +453,9 @@ fn compact_text(case: &Case) -> Result<String, Error> {
 }
 
 /// Seat 0's core in the hosted match: `b_00`, its column and height, and the
-/// map's extent.
+/// map's extent ([`crate::hosted::seat_core`]).
 fn hosted_core(lull: &PlanningLull, rules: &RulesTable) -> Result<Core, Error> {
-    let world = crate::hosted::world(lull.surface())?;
-    let beacons = world.beacons();
-    let at = beacons
-        .seats()
-        .iter()
-        .zip(beacons.positions())
-        .find(|(seat, _)| **seat == SeatId::new(0).raw())
-        .map(|(_, at)| at)
-        .ok_or_else(|| Error::Layout("seat 0 has no core on the hosted map".to_owned()))?;
-    let map = rules
-        .message()
-        .map
-        .as_ref()
-        .ok_or_else(|| Error::Rules("no `map` block".to_owned()))?;
-    let extent = |size: u32| i32::try_from(size).map_err(|_| Error::Overflow("the map's extent"));
-    Ok(Core {
-        id: "b_00".to_owned(),
-        at: [
-            at[0].floor_voxels(),
-            at[1].floor_voxels(),
-            at[2].floor_voxels(),
-        ],
-        extent: [extent(map.size_x)?, extent(map.size_y)?],
-    })
+    crate::hosted::seat_core(crate::hosted::world(lull.surface())?, SeatId::new(0), rules)
 }
 
 /// The end-to-end figure: a hosted first Lull under `rules`, the canonical
