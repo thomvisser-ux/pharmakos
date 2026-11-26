@@ -313,23 +313,47 @@ pub fn far_point(world: &World, core: [i32; 3]) -> Result<[i32; 2], Error> {
         .filter(|feature| feature.kind == pharmakos_sim::features::FeatureKind::Vent)
         .map(|feature| feature.anchor)
         .collect();
+    let span = |at: i32| -> Result<(i32, i32), Error> {
+        Ok((
+            at.checked_sub(FAR_REACH)
+                .ok_or(Error::Overflow("the far point's search span"))?,
+            at.checked_add(FAR_REACH)
+                .ok_or(Error::Overflow("the far point's search span"))?,
+        ))
+    };
+    // A column's squared distance to a vent's anchor, in `i64`: each axis's
+    // difference is widened before it is taken, and every step is checked.
+    let squared = |[vx, vy]: [i32; 2], x: i32, y: i32| -> Result<i64, Error> {
+        let overflow = Error::Overflow("a vent's squared distance");
+        let dx = i64::from(vx)
+            .checked_sub(i64::from(x))
+            .ok_or(overflow.clone())?;
+        let dy = i64::from(vy)
+            .checked_sub(i64::from(y))
+            .ok_or(overflow.clone())?;
+        dx.checked_mul(dx)
+            .and_then(|xx| dy.checked_mul(dy).and_then(|yy| xx.checked_add(yy)))
+            .ok_or(overflow)
+    };
+    let ((x0, x1), (y0, y1)) = (span(core[0])?, span(core[1])?);
     let mut best: Option<(i64, [i32; 2])> = None;
-    for y in core[1] - FAR_REACH..=core[1] + FAR_REACH {
-        for x in core[0] - FAR_REACH..=core[0] + FAR_REACH {
+    for y in y0..=y1 {
+        for x in x0..=x1 {
             let reached = surface
                 .node_of(x, y)
                 .is_some_and(|node| clusters.connected(surface, home, node));
             if !reached {
                 continue;
             }
-            let nearest = vents
-                .iter()
-                .map(|[vx, vy]| {
-                    let (dx, dy) = (i64::from(vx - x), i64::from(vy - y));
-                    dx * dx + dy * dy
-                })
-                .min()
-                .ok_or_else(|| Error::Layout("the map holds no vent".to_owned()))?;
+            let mut nearest: Option<i64> = None;
+            for vent in &vents {
+                let distance = squared(*vent, x, y)?;
+                if nearest.is_none_or(|kept| distance < kept) {
+                    nearest = Some(distance);
+                }
+            }
+            let nearest =
+                nearest.ok_or_else(|| Error::Layout("the map holds no vent".to_owned()))?;
             if best.is_none_or(|(kept, _)| nearest > kept) {
                 best = Some((nearest, [x, y]));
             }
