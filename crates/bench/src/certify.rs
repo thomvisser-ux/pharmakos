@@ -169,6 +169,56 @@ pub fn seed_rule_notice(first: &SeedFull, second: &SeedFull, os: &str) -> Result
     ))
 }
 
+/// E12's line, whatever E12 can say: [`seed_rule_notice`]'s verdict, or,
+/// when it has none to give (no shape travelled end to end on both seeds, or
+/// no ratio to take), a line that gives no verdict and says why, naming each
+/// seed's unsent shapes, with the refusal kept to fail the run once every
+/// other line is printed (`cert3` fix pass 3, F-c).
+#[must_use]
+pub fn seed_rule(first: &SeedFull, second: &SeedFull, os: &str) -> (String, Option<Error>) {
+    match seed_rule_notice(first, second, os) {
+        Ok(line) => (line, None),
+        Err(error) => (
+            format!(
+                "::notice title=P1 E12 seed rule::on {os}, no verdict: {error}; not sent: \
+                 0x{:016x} {}, 0x{:016x} {}",
+                first.seed,
+                names(&first.not_sent),
+                second.seed,
+                names(&second.not_sent),
+            ),
+            Some(error),
+        ),
+    }
+}
+
+/// What P1's certifying run printed, and whether it failed: a figure that
+/// gives no verdict fails the run only after every line is printed.
+#[derive(Debug)]
+pub struct P1Run {
+    /// Every line, stamped.
+    pub lines: Vec<String>,
+    /// The first refusal the run kept, if any.
+    pub failure: Option<Error>,
+}
+
+impl P1Run {
+    /// Print every line through `print`, then answer the run's verdict.
+    ///
+    /// # Errors
+    ///
+    /// The refusal the run kept, after every line is printed.
+    pub fn print_all(self, mut print: impl FnMut(&str)) -> Result<(), Error> {
+        for line in &self.lines {
+            print(line);
+        }
+        match self.failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
 /// The end-to-end figure of every shape at the committed budget on `seed`.
 fn shapes_on(
     rules: &pharmakos_sim::rules::RulesTable,
@@ -201,7 +251,7 @@ pub fn p1_lines(
     plan: QuickPlan,
     certify: provenance::Certify,
     os: &str,
-) -> Result<Vec<String>, Error> {
+) -> Result<P1Run, Error> {
     let planned = Sampling::calls(plan, certify);
     let role = planned.role();
     let mut lines: Vec<String> = vec![provenance::notice(
@@ -248,21 +298,25 @@ pub fn p1_lines(
         pharmakos_sim::DETERMINISM_MATCH_SEED,
         curve.budget_units,
     )?;
-    lines.push(seed_rule_notice(
+    let (line, failure) = seed_rule(
         &seed_full(crate::decision::BENCH_SEED, &at_budget),
         &seed_full(pharmakos_sim::DETERMINISM_MATCH_SEED, &second),
         os,
-    )?);
+    );
+    lines.push(line);
     lines.extend(
         full::measure_cap(root, plan)?
             .iter()
             .map(|figure| full::cap_notice(figure, plan, os)),
     );
     let sampling = p1_sampling(&quick_timing, &full_timing, &curve, plan, certify)?;
-    Ok(lines
-        .iter()
-        .map(|line| provenance::stamped(line, &sampling))
-        .collect())
+    Ok(P1Run {
+        lines: lines
+            .iter()
+            .map(|line| provenance::stamped(line, &sampling))
+            .collect(),
+        failure,
+    })
 }
 
 /// The calls one figure's summaries were taken at: each summary's own
@@ -568,6 +622,44 @@ mod tests {
         let none = seed_full(3, &[(Shape::Handlers24, EndToEnd::OverCap { bytes: 1 })]);
         assert_eq!(none.not_sent, vec![Shape::Handlers24]);
         assert!(seed_rule_notice(&first, &none, "linux").is_err());
+    }
+
+    /// F-c: when no shape travelled on both seeds, E12's line gives no
+    /// verdict and says why, naming each seed's unsent shapes; the run prints
+    /// every line and then fails with the typed refusal.
+    #[test]
+    fn e12_without_a_shared_shape_prints_its_line_then_fails_the_run() {
+        let first = seed_full(1, &[(Shape::Handlers24, measured(10_000_000))]);
+        let none = seed_full(2, &[(Shape::Handlers24, EndToEnd::OverCap { bytes: 1 })]);
+        let (line, failure) = seed_rule(&first, &none, "linux");
+        assert!(
+            line.starts_with("::notice title=P1 E12 seed rule::on linux, no verdict: "),
+            "{line}"
+        );
+        assert!(
+            line.contains("sent no shape end to end in common"),
+            "{line}"
+        );
+        assert!(
+            line.ends_with(
+                "not sent: 0x0000000000000001 none, 0x0000000000000002 handlers_24_node"
+            ),
+            "{line}"
+        );
+        assert!(
+            !line.contains("within E12") && !line.contains("PAST"),
+            "{line}"
+        );
+        let run = P1Run {
+            lines: vec!["first".to_owned(), line.clone(), "last".to_owned()],
+            failure,
+        };
+        let mut printed: Vec<String> = Vec::new();
+        let verdict = run.print_all(|line| printed.push(line.to_owned()));
+        assert_eq!(printed, vec!["first".to_owned(), line, "last".to_owned()]);
+        assert!(matches!(verdict, Err(Error::Empty(_))), "{verdict:?}");
+        let (_, kept) = seed_rule(&first, &first, "linux");
+        assert!(kept.is_none());
     }
 
     /// B2: a shape one seed sent and the other could not leaves the

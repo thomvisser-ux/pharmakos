@@ -257,8 +257,12 @@ fn p1_certify() {
         Err(error) => panic!("{error}"),
     };
     println!();
-    match pharmakos_bench::certify::p1_lines(&root, plan, certify, os) {
-        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+    // Every line is printed before a figure that gave no verdict fails the
+    // run (`certify::P1Run::print_all`).
+    match pharmakos_bench::certify::p1_lines(&root, plan, certify, os)
+        .and_then(|run| run.print_all(|line| println!("{line}")))
+    {
+        Ok(()) => {}
         Err(error) => panic!("P1 was not certified on {os}: {error}"),
     }
 }

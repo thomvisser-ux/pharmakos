@@ -720,8 +720,10 @@ fn no_line_of_a_cut_or_unasked_p1_run_passes_as_certifying() {
         calls: 1,
     };
     for certify in [Certify::On, Certify::Off] {
-        let lines =
+        let run =
             pharmakos_bench::certify::p1_lines(&root, plan, certify, "linux").expect("a cut run");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+        let lines = run.lines;
         assert!(lines.len() > 10, "{lines:?}");
         for line in &lines {
             assert!(!provenance::is_certifying(line), "{certify:?}: {line}");
