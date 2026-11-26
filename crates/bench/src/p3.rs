@@ -964,18 +964,40 @@ pub fn seed_notice(report: &P3Report, seed: &SeedReport, os: &str) -> String {
 ///
 /// [`Error::Empty`] for a report of no seed.
 pub fn summary_notice(report: &P3Report, os: &str) -> Result<String, Error> {
+    summary_against(report, REPATH_BAR_NS, ESTIMATE_BAR_NS, os)
+}
+
+/// [`summary_notice`] against the bars given, each figure's verdict beside
+/// it: pure, so a bar halved is seen to turn its verdict.
+///
+/// # Errors
+///
+/// As [`summary_notice`].
+pub fn summary_against(
+    report: &P3Report,
+    repath_bar_ns: u128,
+    estimate_bar_ns: u128,
+    os: &str,
+) -> Result<String, Error> {
     let empty = || Error::Empty("a P3 report of no seed".to_owned());
+    let side = |figure: u128, bar: u128| {
+        if figure <= bar { "within" } else { "OVER" }
+    };
+    let repath = report.worst_repath_p99().ok_or_else(empty)?;
+    let estimate = report.worst_estimate_p99().ok_or_else(empty)?;
     Ok(format!(
         "::notice title=P3::on {os}, over {} seeds x {} pairs: the worst repath p99 is {} \
-         (cold or under the crater stream, repair outside it) against G2's {}, and the worst \
-         one-leg estimate_route p99 {} against P3's {}; published here and never gated, \
-         certified on the owner's machine",
+         (cold or under the crater stream, repair outside it) against G2's {}: {}, and the \
+         worst one-leg estimate_route p99 {} against P3's {}: {}; published here and never \
+         gated, certified on the owner's machine",
         report.seeds.len(),
         report.pairs,
-        millis(report.worst_repath_p99().ok_or_else(empty)?),
-        millis(REPATH_BAR_NS),
-        millis(report.worst_estimate_p99().ok_or_else(empty)?),
-        millis(ESTIMATE_BAR_NS),
+        millis(repath),
+        millis(repath_bar_ns),
+        side(repath, repath_bar_ns),
+        millis(estimate),
+        millis(estimate_bar_ns),
+        side(estimate, estimate_bar_ns),
     ))
 }
 
@@ -1066,6 +1088,22 @@ mod tests {
             budget_report_line(&report),
             "p3-budget-report v1 seeds=2 planned_seeds=3 pairs=2 planned_pairs=2000 \
              repath_p99_ns=4000000 estimate_p99_ns=600000"
+        );
+        // The summary's verdicts, and the must-trip: each bar halved below
+        // its figure turns that figure's verdict.
+        let line = summary_notice(&report, "linux").expect("a notice");
+        assert!(
+            line.contains(
+                "against G2's 5.000 ms: within, and the worst one-leg estimate_route p99 0.600 ms against P3's 1.000 ms: within;"
+            ),
+            "{line}"
+        );
+        let halved = summary_against(&report, 2_500_000, 500_000, "linux").expect("a notice");
+        assert!(
+            halved.contains(
+                "against G2's 2.500 ms: OVER, and the worst one-leg estimate_route p99 0.600 ms against P3's 0.500 ms: OVER;"
+            ),
+            "{halved}"
         );
         let none = P3Report {
             seeds: Vec::new(),

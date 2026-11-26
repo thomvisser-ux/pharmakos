@@ -345,6 +345,19 @@ fn the_gate_load_with_raids_launches() {
         "the raids launch on the hosted segment: {} launches",
         report.attack_launches
     );
+    // G3's verdict line names the load and turns with its bars: a debug
+    // build's tick is over a bar of nothing and within a bar of everything.
+    let over = pharmakos_bench::g3::tick_verdict(&report, 0, 0, "linux");
+    assert!(
+        over.contains(": OVER; mean ") && over.ends_with(": OVER"),
+        "{over}"
+    );
+    assert!(over.contains(", the raids launching: tick p99 "), "{over}");
+    let within = pharmakos_bench::g3::tick_verdict(&report, u128::MAX, u128::MAX, "linux");
+    assert!(
+        within.contains(": within; mean ") && within.ends_with(": within"),
+        "{within}"
+    );
 }
 
 /// E24's test (c)'s load: every seat seals the handler shape at the size

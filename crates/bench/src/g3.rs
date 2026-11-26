@@ -189,6 +189,38 @@ pub fn tick_notice(report: &SegmentReport, os: &str) -> Result<String, Error> {
     ))
 }
 
+/// G3′'s verdict on one segment, against the bars given: the tick's p99
+/// against G3′-a's and its mean against G3′-b's, each within or over, with
+/// the load and the seed and `rules_hash` that reproduce it. Pure, so a bar
+/// halved is seen to turn its verdict.
+#[must_use]
+pub fn tick_verdict(
+    report: &SegmentReport,
+    p99_bar_ns: u128,
+    mean_bar_ns: u128,
+    os: &str,
+) -> String {
+    let side = |figure: u128, bar: u128| if figure <= bar { "within" } else { "OVER" };
+    format!(
+        "::notice title=G3' verdict::on {os}, seed 0x{:016x}, bench rules_hash {}, every seat \
+         sealing {}{}: tick p99 {} against G3'-a's {}: {}; mean {} against G3'-b's {}: {}",
+        report.provenance.seed,
+        hex(report.provenance.bench_rules_hash),
+        report.provenance.load.sealed.name(),
+        if report.provenance.load.raids {
+            ", the raids launching"
+        } else {
+            ""
+        },
+        ms(report.tick.p99_ns),
+        ms(p99_bar_ns),
+        side(report.tick.p99_ns, p99_bar_ns),
+        ms(report.tick.mean_ns),
+        ms(mean_bar_ns),
+        side(report.tick.mean_ns, mean_bar_ns),
+    )
+}
+
 /// The per-phase notice.
 ///
 /// # Errors

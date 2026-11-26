@@ -31,11 +31,11 @@
 //! reason.
 
 use pharmakos_bench::p3::{self, P3_SEEDS, P3Plan};
-use pharmakos_bench::workspace_root;
+use pharmakos_bench::{provenance, workspace_root};
 
 /// `p3`'s notices: one a seed and the summary. GitHub annotates the first
 /// ten notices of a step (item 149 (4)).
-const P3_NOTICES: usize = P3_SEEDS.len() + 1;
+const P3_NOTICES: usize = P3_SEEDS.len() + 2;
 
 const _: () = assert!(P3_NOTICES <= 10);
 
@@ -46,13 +46,24 @@ fn p3_pathing_timings() {
     let os = std::env::consts::OS;
     // A notice must start its line; see the module docs.
     println!();
+    let commit = match provenance::commit(&root) {
+        Ok(commit) => commit,
+        Err(error) => panic!("P3's provenance on {os}: {error}"),
+    };
     match p3::measure(&root, &P3Plan::gate()) {
         Ok(report) => {
-            let mut lines: Vec<String> = report
-                .seeds
-                .iter()
-                .map(|seed| p3::seed_notice(&report, seed, os))
-                .collect();
+            let mut lines: Vec<String> = vec![provenance::notice(
+                "P3",
+                &commit,
+                &format!("{} seeds x {} pairs", report.seeds.len(), report.pairs),
+                os,
+            )];
+            lines.extend(
+                report
+                    .seeds
+                    .iter()
+                    .map(|seed| p3::seed_notice(&report, seed, os)),
+            );
             match p3::summary_notice(&report, os) {
                 Ok(line) => lines.push(line),
                 Err(error) => panic!("the P3 summary: {error}"),

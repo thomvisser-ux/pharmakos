@@ -372,6 +372,13 @@ fn g3_raids_segments() {
     let root = workspace_root();
     let os = std::env::consts::OS;
     println!();
+    match provenance::commit(&root) {
+        Ok(commit) => println!(
+            "{}",
+            provenance::notice("G3' with raids", &commit, "one segment a load", os)
+        ),
+        Err(error) => panic!("{error}"),
+    }
     for load in [GateLoad::RAIDS, GateLoad::RAIDS_AT_B] {
         let measured = segment::measure(
             &root,
@@ -389,6 +396,7 @@ fn g3_raids_segments() {
             Ok(vec![
                 g3::provenance_notice(&report, os),
                 g3::tick_notice(&report, os)?,
+                g3::tick_verdict(&report, g3::P99_BAR_NS, g3::MEAN_BAR_NS, os),
                 g3::phases_notice(&report, os)?,
                 g3::repaths_notice(&report, os)?,
                 g3::combat_notice(&report, os)?,
