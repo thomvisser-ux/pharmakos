@@ -3641,6 +3641,7 @@ const PLAIN_VECTORS: &[(&str, &str, &str, &str)] = &[
         "built once in World::new by `targeting::spiral_offsets` of the sphere radius",
     ),
     ("src/world.rs", "World", "decision_work", PER_SEAT),
+    ("src/world.rs", "SightingDrops", "forgotten", PER_SEAT),
     (
         "src/world.rs",
         "World",

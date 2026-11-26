@@ -904,10 +904,17 @@ fn member(world: &World, seat: SeatId, members: Members, row: usize) -> bool {
     }
 }
 
-/// The most due sightings one decision weighs for a seat: the sighting
-/// table's per-seat share ([`crate::world::SIGHTINGS_PER_SEAT`]), so a seat's
-/// lists fit arrays on the stack and the decision allocates nothing.
-const LIST_ROOM: usize = crate::math::index::row(crate::world::SIGHTINGS_PER_SEAT);
+/// The most due sightings one decision weighs for a seat: its sixty-four most
+/// due, in rank order ([`Rank`]). A bound on one decision's work, as the
+/// router's repaths a tick are bounded, and no bound on what a seat
+/// remembers (`crate::world::sighting_room_of`): the lists are re-derived on
+/// every decision, so a due sighting past the sixty-fourth is weighed as
+/// soon as it ranks among them, and a seat's scouts walk far fewer than
+/// sixty-four in a Push. It also lets the lists fit arrays on the stack, so
+/// the decision allocates nothing. Sixty-four is what the sighting table
+/// held a seat until S3's `tune3`, so a seat with no more than that many
+/// sightings decides exactly as it did.
+const LIST_ROOM: usize = 64;
 
 /// A due sighting's rank: **needed** first (it would be out of the reach
 /// window at the Lull with no re-check before it; fixed within a Push, since
@@ -965,11 +972,8 @@ fn gun_over<M: crate::seams::Meter + ?Sized>(
     meter: &M,
 ) -> Option<(u32, [Fx; 3], Sq)> {
     let table = world.sightings();
-    (0..table.seats().len()).find_map(|slot| {
+    table.rows_of(seat).find_map(|slot| {
         meter.rows(1);
-        if table.seats().get(slot).copied() != Some(seat.raw()) {
-            return None;
-        }
         let at = table.places().get(slot).copied()?;
         let reach = armed_reach(world, slot)?;
         (Sq::between(at, place) <= reach)
@@ -1650,9 +1654,11 @@ fn note_listed(world: &mut World, seat: SeatId, lists: &Lists) {
 /// are decided in the Programs phase, outside any seat's decision, as
 /// Attack's breach search is (item 175 (4)).
 ///
-/// Work per decision, at a seat's most due sightings `n` (64, the sighting
-/// table's share), its scouts `m` and the seat's rows in the sighting table
-/// `t`: the rank walk reads `n × t` rows and the armed ranges `n × t`; the
+/// Work per decision, at a seat's most due sightings `n` (at most
+/// [`LIST_ROOM`]), its scouts `m` and the seat's rows in the sighting table
+/// `t`: the rank walk reads each of the `t` rows once and keeps the `n` most
+/// due in rank order, at most `n` list positions a row ([`most_due`]), and
+/// the armed ranges read `n × t` rows; the
 /// insertion walks each of `m` lists, of at most `n` entries, a fixed number
 /// of times a sighting, with the prefix bounds, the fit margins and the span
 /// read from arrays, so `n² × m` octile bounds in all; the departure prices
@@ -1684,30 +1690,21 @@ fn decide_seat<M: crate::seams::Meter + ?Sized>(
         entries: [None; LIST_ROOM],
         n: 0,
     };
-    // The seat's due sightings, in rank order, but for those a scout this
-    // decision does not decide is walking to.
-    let mut after = None;
-    while let Some(due) = next_due(world, seat, after, &threats, meter) {
-        after = Some(due.rank);
-        if walked_by_another(world, seat, members, due.place, meter) {
+    // The seat's most due sightings, in rank order, but for those a scout
+    // this decision does not decide is walking to.
+    most_due(world, seat, members, &threats, &mut lists, meter);
+    for p in 0..lists.n {
+        let Some(entry) = lists.get(p) else {
             continue;
-        }
-        let due = Due {
-            armed: gun_over(world, seat, due.place, meter).map(|(asset, _, _)| asset),
-            ..due
         };
-        // E7: cannot miss: the sighting table holds at most `LIST_ROOM` sightings a seat
-        let Some(slot) = lists.entries.get_mut(lists.n) else {
-            break;
-        };
-        *slot = Some(Entry {
-            due,
-            owner: None,
-            next: None,
-            kept: false,
-            first: false,
-        });
-        lists.n = lists.n.saturating_add(1);
+        let armed = gun_over(world, seat, entry.due.place, meter).map(|(asset, _, _)| asset);
+        lists.set(
+            p,
+            Entry {
+                due: Due { armed, ..entry.due },
+                ..entry
+            },
+        );
     }
     keep(world, seat, members, &mut lists, meter);
     insert(world, seat, members, &mut lists, meter);
@@ -1716,34 +1713,71 @@ fn decide_seat<M: crate::seams::Meter + ?Sized>(
     world.put_threat_scratch(threats);
 }
 
-/// `seat`'s next due sighting after `after` in rank order, whose place lies
-/// inside no known threat's range (decision 12).
-fn next_due<M: crate::seams::Meter + ?Sized>(
+/// `seat`'s [`LIST_ROOM`] most due sightings into `lists`, in rank order:
+/// each one due or needed, its place inside no known threat's range
+/// (decision 12, [`due_in`]), and walked to by no scout this decision does
+/// not decide ([`walked_by_another`]).
+///
+/// One walk of the seat's own rows ([`SightingTable::rows_of`]), each due
+/// sighting put where its rank stands among those kept and the last of a
+/// full list let go. A rank is a total order ([`Rank`]), so what is kept is
+/// what taking the lowest rank again and again would take, whatever order
+/// the rows are met in: a sighting that ranks past a full list's last is
+/// past sixty-four that are not walked, and is asked nothing more.
+///
+/// [`SightingTable::rows_of`]: crate::tables::SightingTable::rows_of
+fn most_due<M: crate::seams::Meter + ?Sized>(
     world: &World,
     seat: SeatId,
-    after: Option<Rank>,
+    members: Members,
     threats: &[([Fx; 3], Sq)],
+    lists: &mut Lists,
     meter: &M,
-) -> Option<Due> {
-    let table = world.sightings();
-    let mut best: Option<Due> = None;
-    for slot in 0..table.seats().len() {
-        // One unit for the row this walk reads; `due_in` counts its own.
-        meter.rows(1);
-        if table.seats().get(slot).copied() != Some(seat.raw()) {
-            continue;
-        }
+) {
+    for slot in world.sightings().rows_of(seat) {
+        // `due_in` counts the row it reads.
         let Some(due) = due_in(world, seat, slot, threats, meter) else {
             continue;
         };
-        if after.is_some_and(|after| due.rank <= after) {
+        // Where its rank stands among those kept: after every lower rank.
+        let mut at = lists.n;
+        while at > 0 {
+            meter.rows(1);
+            let before = at.saturating_sub(1);
+            if lists
+                .get(before)
+                .is_some_and(|held| held.due.rank < due.rank)
+            {
+                break;
+            }
+            at = before;
+        }
+        if at >= LIST_ROOM || walked_by_another(world, seat, members, due.place, meter) {
             continue;
         }
-        if best.is_none_or(|held| due.rank < held.rank) {
-            best = Some(due);
+        // Make room at `at`: every entry from there moves one place on, and
+        // the last of a full list is let go.
+        let mut to = lists.n.min(LIST_ROOM.saturating_sub(1));
+        lists.n = to.saturating_add(1);
+        while to > at {
+            meter.rows(1);
+            let from = to.saturating_sub(1);
+            if let Some(entry) = lists.get(from) {
+                lists.set(to, entry);
+            }
+            to = from;
         }
+        lists.set(
+            at,
+            Entry {
+                due,
+                owner: None,
+                next: None,
+                kept: false,
+                first: false,
+            },
+        );
     }
-    best
 }
 
 /// Step 2: in ascending unit row, every member walking to a due sighting no
@@ -2422,9 +2456,12 @@ mod tests {
     //!
     //! [`Meter`]: crate::seams::Meter
 
-    use super::{Members, decide_seat};
+    use super::{
+        LIST_ROOM, Lists, Members, Rank, decide_seat, due_in, most_due, seen_at, walked_by_another,
+    };
     use crate::knowledge::{AssetId, AssetKind};
     use crate::math::fixed::Fx;
+    use crate::math::fixed::Sq;
     use crate::seams::{MandateKind, UnitTally};
     use crate::tables::{
         AreaKind, BeaconId, ColumnBox, NO_BLUEPRINT, PRIORITY_NORMAL, SeatId, UnitKind,
@@ -2742,6 +2779,201 @@ mod tests {
         }
     }
 
+    /// `count` sightings for seat 0 of things that stand nowhere, a beacon
+    /// every fiftieth and units between, seen on ticks spread over the Push
+    /// so far and at places spread over the map.
+    fn crowd(runner: &mut Runner, count: u32) {
+        for index in 0..count {
+            let (kind, id) = if index.is_multiple_of(50) {
+                (
+                    AssetKind::Beacon,
+                    AssetId::of_beacon(BeaconId::new(900 + index)),
+                )
+            } else {
+                (
+                    AssetKind::Unit,
+                    AssetId::of_unit(crate::tables::UnitId::new(900 + index)),
+                )
+            };
+            let id = id.unwrap_or_else(|error| panic!("an id: {error:?}"));
+            let step = i32::try_from(index).unwrap_or_else(|error| panic!("{error}"));
+            let at = runner.world().standing_point([
+                20 + step.rem_euclid(20) * 17,
+                20 + step.div_euclid(20) * 30,
+                0,
+            ]);
+            runner.world_mut().see(
+                SeatId::new(0),
+                id,
+                SeatId::new(1),
+                kind.id(),
+                NO_BLUEPRINT,
+                at,
+                1 + (index * 37) % 1_200,
+            );
+        }
+    }
+
+    /// **A decision weighs a seat's [`LIST_ROOM`] most due sightings, however
+    /// many the seat holds** (S3's `tune3`): `most_due`'s one walk keeps
+    /// exactly what sorting every due sighting by rank and taking the first
+    /// sixty-four keeps, in the same order, below the bound, at it and far
+    /// past it. Until `tune3` the sighting table held a seat to sixty-four,
+    /// so the lists' room was never the smaller of the two.
+    #[test]
+    fn a_decision_weighs_the_most_due_of_however_many_sightings_a_seat_holds() {
+        let seat = SeatId::new(0);
+        for count in [0_u32, 1, 63, 64, 65, 200] {
+            let mut runner = arranged(1, 0);
+            crowd(&mut runner, count);
+            let world = runner.world();
+            assert_eq!(world.sightings().len_of(seat), count, "all are kept");
+            let mut threats = Vec::new();
+            crate::defend::for_each_known_threat_metered(world, seat, &(), |known| {
+                threats.push((known.at, Sq::of_radius(known.weapon.range())));
+            });
+            let mut expected: Vec<Rank> = world
+                .sightings()
+                .rows_of(seat)
+                .filter_map(|slot| due_in(world, seat, slot, &threats, &()))
+                .filter(|due| !walked_by_another(world, seat, Members::Survey, due.place, &()))
+                .map(|due| due.rank)
+                .collect();
+            expected.sort_unstable();
+            let due = expected.len();
+            expected.truncate(LIST_ROOM);
+            let mut lists = Lists {
+                entries: [None; LIST_ROOM],
+                n: 0,
+            };
+            most_due(world, seat, Members::Survey, &threats, &mut lists, &());
+            let kept: Vec<Rank> = (0..lists.n)
+                .filter_map(|p| lists.get(p))
+                .map(|entry| entry.due.rank)
+                .collect();
+            assert_eq!(kept, expected, "{count} sightings, {due} of them due");
+            assert_eq!(lists.n, due.min(LIST_ROOM), "{count} sightings");
+            if count == 200 {
+                assert!(
+                    due > LIST_ROOM,
+                    "the recipe: more due sightings than a decision weighs, {due}"
+                );
+            }
+        }
+    }
+
+    /// **A seat remembers every asset the world can hold alive, and what it
+    /// forgets past that is counted** (S3's `tune3`; S3's plan, E17). The
+    /// room is far past the sixty-four a seat was held to, a seat that fills
+    /// it forgets its own stalest for each new sighting, the world counts
+    /// each by seat, and nothing is refused.
+    #[test]
+    fn a_seat_past_its_room_forgets_its_stalest_and_the_world_counts_it() {
+        let seat = SeatId::new(0);
+        let mut runner = arranged(0, 0);
+        let room = runner.world().sightings().per_seat();
+        assert!(room > 300, "the recipe: room for every live asset, {room}");
+        let id = |index: u32| {
+            AssetId::of_unit(crate::tables::UnitId::new(100 + index))
+                .unwrap_or_else(|error| panic!("an id: {error:?}"))
+        };
+        for index in 0..room + 3 {
+            runner.world_mut().see(
+                seat,
+                id(index),
+                SeatId::new(1),
+                AssetKind::Unit.id(),
+                NO_BLUEPRINT,
+                [Fx::ZERO; 3],
+                1 + index,
+            );
+        }
+        let world = runner.world();
+        assert_eq!(
+            world.sightings().len_of(seat),
+            room,
+            "the seat is at its room"
+        );
+        assert_eq!(
+            (
+                world.sightings_forgotten_by(seat),
+                world.sightings_forgotten_by(SeatId::new(1)),
+                world.sightings_forgotten_by(SeatId::new(2)),
+                world.sightings_refused(),
+            ),
+            (Some(3), Some(0), None, 0),
+            "three forgotten by the seat that saw them, none by the other, and none refused"
+        );
+        for index in 0..room + 3 {
+            assert_eq!(
+                seen_at(world, seat, id(index)).is_some(),
+                index >= 3,
+                "sighting {index}: the three seen longest ago are the three forgotten"
+            );
+        }
+    }
+
+    /// The sighting table says what it did with each sighting, keeps a
+    /// seat's rows in one run whatever order they came in, and holds a seat
+    /// to its own allowance without touching another seat's rows.
+    #[test]
+    fn the_sighting_table_says_what_it_did_and_keeps_a_seats_rows_together() {
+        use crate::tables::{Sighted, SightingTable};
+        let mut table = SightingTable::with_room(3, 200);
+        let see = |table: &mut SightingTable, seat: u8, asset: u32, tick: u32| {
+            table.see(
+                SeatId::new(seat),
+                asset,
+                SeatId::new(1),
+                AssetKind::Unit.id(),
+                NO_BLUEPRINT,
+                [Fx::ZERO; 3],
+                tick,
+            )
+        };
+        // More than sixty-four in one tick, the seats and the assets out of order.
+        for seat in [2_u8, 0, 1] {
+            for asset in (0..150_u32).rev() {
+                assert_eq!(see(&mut table, seat, asset, 7), Sighted::New);
+            }
+        }
+        for seat in 0..3_u8 {
+            let rows = table.rows_of(SeatId::new(seat));
+            assert_eq!((rows.len(), table.len_of(SeatId::new(seat))), (150, 150));
+            assert!(
+                rows.clone()
+                    .all(|slot| table.seats().get(slot).copied() == Some(seat)),
+                "seat {seat}'s run holds only its rows"
+            );
+        }
+        assert_eq!(see(&mut table, 1, 40, 9), Sighted::Again, "seen again");
+        // Seat 1 fills its allowance, then forgets its stalest for each more:
+        // asset 0 first (seen at 7, the lowest id), never asset 40 (seen at 9).
+        for asset in 150..200_u32 {
+            assert_eq!(see(&mut table, 1, asset, 8), Sighted::New);
+        }
+        assert_eq!(see(&mut table, 1, 500, 10), Sighted::NewOverStalest);
+        assert_eq!(table.len_of(SeatId::new(1)), 200);
+        let assets_of = |table: &SightingTable, seat: u8| -> Vec<u32> {
+            table
+                .rows_of(SeatId::new(seat))
+                .filter_map(|slot| table.assets().get(slot).copied())
+                .collect()
+        };
+        let held = assets_of(&table, 1);
+        assert!(
+            !held.contains(&0) && held.contains(&1) && held.contains(&40) && held.contains(&500)
+        );
+        assert_eq!(
+            (assets_of(&table, 0).len(), assets_of(&table, 2).len()),
+            (150, 150),
+            "the other seats' rows are as they were"
+        );
+        // A seat with no allowance is refused, typed.
+        let mut none = SightingTable::with_room(2, 0);
+        assert_eq!(see(&mut none, 0, 1, 1), Sighted::Refused);
+    }
+
     /// One decision of one scout with one due sighting, its counted work
     /// tallied by hand from the loops it runs (as `dunit`'s
     /// `decision_units_equal_the_primitive_steps_counted` tallies a resolve):
@@ -2758,31 +2990,23 @@ mod tests {
             let world = runner.world();
             let seat = SeatId::new(0);
             let units = u64::from(world.units().len());
-            let table = world.sightings();
-            let rows = u64::try_from(table.seats().len()).unwrap_or_else(|error| panic!("{error}"));
-            let mine = table
-                .seats()
-                .iter()
-                .fold(0_u64, |count, who| count + u64::from(*who == 0));
-            // The sighting is a beacon's, so its own range covers it: the armed
-            // walk reads the table up to it.
-            let armed_at = (0..table.seats().len())
-                .position(|slot| table.seats().get(slot).copied() == Some(0))
-                .unwrap_or_else(|| panic!("the sighting"));
-            let armed_at = u64::try_from(armed_at).unwrap_or_else(|error| panic!("{error}"));
+            let mine = u64::from(world.sightings().len_of(seat));
+            assert_eq!(mine, 1, "the recipe: the seat holds the one sighting");
             let threat = Counted::default();
             crate::defend::for_each_known_threat_metered(world, seat, &threat, |_| {});
             let n: u64 = 1;
             let expected = threat.rows.get()
                 // The member walk (`note_scouts`): every unit row.
                 + units
-                // The rank walk: `n + 1` passes over the table, and a `due_in`
-                // read for each of the seat's rows on each.
-                + (n + 1) * (rows + mine)
+                // The rank walk (`most_due`): one `due_in` read for each of
+                // the seat's rows, and no list position, since the one due
+                // sighting meets an empty list.
+                + mine
                 // `walked_by_another`, the whole unit table, for the sighting.
                 + n * units
-                // The armed walk, up to the sighting itself.
-                + n * (armed_at + 1)
+                // The armed walk over the seat's own rows, up to the sighting
+                // itself: a beacon's, so its own range covers it.
+                + n
                 // `keep`: every unit row, and the member's find over the list.
                 + units + n
                 // `insert`: the sighting; every unit row; the member's head

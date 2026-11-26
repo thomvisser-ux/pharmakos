@@ -2057,6 +2057,21 @@ pub struct TargetColumns {
     pub wall_done: Vec<bool>,
 }
 
+/// What [`SightingTable::see`] did with one sighting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sighted {
+    /// The seat already remembered the asset: that memory was replaced.
+    Again,
+    /// A new memory, in room the seat had.
+    New,
+    /// A new memory, after the seat forgot its own stalest for room.
+    NewOverStalest,
+    /// Nothing was recorded: the seat's allowance is nothing, or the table is
+    /// full though the seat is not, which the table's own sizing rules out
+    /// ([`SightingTable::with_room`]).
+    Refused,
+}
+
 /// What one seat remembers seeing, with the tick it was seen at (spec section
 /// 6, "Vision and sightings").
 ///
@@ -2137,16 +2152,21 @@ impl SightingTable {
         self.per_seat
     }
 
+    /// The rows holding `seat`'s sightings: one run, because the table is
+    /// sorted by seat and then by asset ([`SightingTable::see`]). Two binary
+    /// searches, so a reader of one seat's memory never walks another's.
+    #[must_use]
+    pub fn rows_of(&self, seat: SeatId) -> core::ops::Range<usize> {
+        let start = self.seat.partition_point(|who| *who < seat.raw());
+        let end = self.seat.partition_point(|who| *who <= seat.raw());
+        start..end
+    }
+
     /// How many sightings `seat` is holding.
     #[must_use]
     pub fn len_of(&self, seat: SeatId) -> u32 {
-        let mut total: u32 = 0;
-        for who in &self.seat {
-            if *who == seat.raw() {
-                total = total.saturating_add(1);
-            }
-        }
-        total
+        // E7: cannot miss: a seat's rows are among the table's, whose count is a `u32`
+        u32::try_from(self.rows_of(seat).len()).unwrap_or(u32::MAX)
     }
 
     /// How many sightings are remembered.
@@ -2248,8 +2268,9 @@ impl SightingTable {
     /// was about to leave the window anyway. The allowance is per seat rather
     /// than per table, so a seat that sees a great deal cannot starve a seat
     /// that has seen nothing; the shared ceiling is the sum of the allowances
-    /// and cannot be reached before one of them is. `false` when nothing was
-    /// recorded.
+    /// and cannot be reached before one of them is. What was done is said
+    /// ([`Sighted`]), so a memory forgotten for room is never forgotten
+    /// unseen.
     #[allow(
         clippy::too_many_arguments,
         reason = "one argument per column of the row being written, as the SoA `push`es above"
@@ -2263,7 +2284,7 @@ impl SightingTable {
         blueprint: u8,
         at: [Fx; 3],
         tick: u32,
-    ) -> bool {
+    ) -> Sighted {
         match self.seek(seat.raw(), asset) {
             Ok(slot) => {
                 if let Some(place) = self.at.get_mut(slot) {
@@ -2281,19 +2302,24 @@ impl SightingTable {
                 if let Some(what) = self.blueprint.get_mut(slot) {
                     *what = blueprint;
                 }
-                true
+                Sighted::Again
             }
-            Err(slot) => {
-                if self.len_of(seat) >= self.per_seat {
+            Err(found) => {
+                let full = self.len_of(seat) >= self.per_seat;
+                if !full && self.count >= self.capacity {
+                    return Sighted::Refused;
+                }
+                let (slot, outcome) = if full {
                     let Some(stalest) = self.stalest_of(seat) else {
-                        return false;
+                        return Sighted::Refused;
                     };
                     self.forget(stalest);
-                    return self.see(seat, asset, owner, kind, blueprint, at, tick);
-                }
-                if self.count >= self.capacity {
-                    return false;
-                }
+                    // The forgotten row may have stood before this one's place.
+                    let (Ok(slot) | Err(slot)) = self.seek(seat.raw(), asset);
+                    (slot, Sighted::NewOverStalest)
+                } else {
+                    (found, Sighted::New)
+                };
                 self.seat.insert(slot, seat.raw());
                 self.asset.insert(slot, asset);
                 self.owner.insert(slot, owner.raw());
@@ -2302,7 +2328,7 @@ impl SightingTable {
                 self.at.insert(slot, at);
                 self.seen_at.insert(slot, tick);
                 self.count = self.count.saturating_add(1);
-                true
+                outcome
             }
         }
     }
@@ -2316,11 +2342,10 @@ impl SightingTable {
     #[must_use]
     pub fn stalest_of(&self, seat: SeatId) -> Option<usize> {
         let mut best: Option<(u32, u32, usize)> = None;
-        let rows = self.seat.iter().zip(&self.seen_at).zip(&self.asset);
-        for (slot, ((who, when), asset)) in rows.enumerate() {
-            if *who != seat.raw() {
+        for slot in self.rows_of(seat) {
+            let (Some(when), Some(asset)) = (self.seen_at.get(slot), self.asset.get(slot)) else {
                 continue;
-            }
+            };
             if best.is_none_or(|(bw, ba, _)| (*when, *asset) < (bw, ba)) {
                 best = Some((*when, *asset, slot));
             }

@@ -296,16 +296,33 @@ pub const fn room_per_seat(total: u32, seats: u32) -> u32 {
 /// is told so by the failed step.
 const TARGETS_PER_BEACON: u32 = 16;
 
-/// PLACEHOLDER: harness scaffolding, how many sightings one seat remembers at once — owner, at S3.
+/// How many sightings one seat remembers at once: **every asset the world
+/// can hold alive at once**, the unit ceiling, the structure rows and the
+/// beacon limit together (S3's `tune3`; S3's plan, E17; register S3-13). No
+/// tuning value and no balance cap: a table's ceiling, technically necessary
+/// because a row written inside a tick may not grow a column.
 ///
-/// Sixty-four, **each**: the table holds this many rows for every seat and
-/// evicts against a seat's own count, so a seat that sees more forgets its own
-/// stalest first and never crowds a seat that has seen nothing
-/// ([`SightingTable::see`]). That is the same order Survey refreshes in, so
-/// what falls out is what was about to leave `verifier.reach_memory_ms`
-/// anyway. The owner settles it with the reach window and the briefing's
-/// detail budget (owner, at S3).
-pub(crate) const SIGHTINGS_PER_SEAT: u32 = 64;
+/// A seat forgets its own stalest sighting for room
+/// ([`SightingTable::see`]), and what a seat sees this tick is the newest it
+/// holds. So with room for every live asset, a seat never forgets something
+/// it is looking at: what falls out is a memory of something gone, or one it
+/// has not seen for longest, the order Survey refreshes in. An asset's id
+/// carries its row's generation, so the memories of assets since destroyed
+/// are rows of their own, and they are the ones this room does not count
+/// and the eviction drops first. The world counts every memory forgotten
+/// for room, by seat ([`World::sightings_forgotten_by`]).
+///
+/// It was 64 a seat until the gate's load was measured with room to spare
+/// (S3's `cert3` watch, re-run by `tune3` at a room of 4 096): the seats
+/// peaked at 263, 245 and 226 remembered sightings, with up to 118 entities
+/// in one view listing, so at 64 a seat kept an arbitrary part of what it
+/// was looking at and forgot the rest on every tick.
+#[must_use]
+pub(crate) const fn sighting_room_of(unit_ceiling: u32, beacon_limit: u32) -> u32 {
+    unit_ceiling
+        .saturating_add(STRUCTURE_ROWS)
+        .saturating_add(beacon_limit)
+}
 
 /// The avoid-area room: how many Attack avoid areas one beacon row may carry
 /// on average. Settled with the size budget (S3's `tune3`; S3's plan, E17;
@@ -573,6 +590,9 @@ pub struct World {
     rooms: QueueRooms,
     /// What [`DamageDrop`] counted. Diagnostic; never hashed.
     damage_drops: DamageDrops,
+    /// The memories each seat forgot for room, and the sightings refused
+    /// ([`SightingDrops`]). Diagnostic; never hashed.
+    sighting_drops: SightingDrops,
     /// What S2's `site` dropped, by reason ([`crate::site::SiteDrops`]).
     /// Diagnostic; never hashed.
     site_drops: crate::site::SiteDrops,
@@ -850,6 +870,55 @@ impl DamageDrop {
             DamageDrop::StaleGeneration => "stale_generation",
             DamageDrop::AlreadyDead => "already_dead",
         }
+    }
+}
+
+/// What the sighting table could not keep since the world was built: the
+/// memories each seat forgot for room, and the sightings refused outright.
+/// Diagnostic, never hashed, never snapshotted.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SightingDrops {
+    /// One count a seat, by seat id.
+    forgotten: Vec<u64>,
+    refused: u64,
+}
+
+impl SightingDrops {
+    /// No drop yet, in a match of `seats` seats.
+    fn for_seats(seats: u32) -> SightingDrops {
+        SightingDrops {
+            forgotten: vec![0; crate::math::index::row(seats)],
+            refused: 0,
+        }
+    }
+
+    /// Count what the table did with one of `seat`'s sightings.
+    fn count(&mut self, seat: SeatId, outcome: crate::tables::Sighted) {
+        use crate::tables::Sighted;
+        match outcome {
+            Sighted::Again | Sighted::New => {}
+            Sighted::NewOverStalest => {
+                match self.forgotten.get_mut(usize::from(seat.raw())) {
+                    Some(count) => *count = count.saturating_add(1),
+                    // A seat the world does not seat holds no memory to forget.
+                    None => self.refused = self.refused.saturating_add(1),
+                }
+            }
+            Sighted::Refused => self.refused = self.refused.saturating_add(1),
+        }
+    }
+
+    /// How many memories `seat` forgot for room, or `None` for a seat the
+    /// world does not seat.
+    #[must_use]
+    pub fn forgotten_by(&self, seat: SeatId) -> Option<u64> {
+        self.forgotten.get(usize::from(seat.raw())).copied()
+    }
+
+    /// How many sightings were refused outright.
+    #[must_use]
+    pub const fn refused(&self) -> u64 {
+        self.refused
     }
 }
 
@@ -1456,7 +1525,10 @@ impl World {
             structures,
             wrecks,
             targets: TargetTable::with_capacity(beacon_limit.saturating_mul(TARGETS_PER_BEACON)),
-            sightings: SightingTable::with_room(config.seats, SIGHTINGS_PER_SEAT),
+            sightings: SightingTable::with_room(
+                config.seats,
+                sighting_room_of(unit_ceiling, beacon_limit),
+            ),
             credit: CreditTable::with_capacity(
                 unit_ceiling
                     .saturating_add(beacon_limit)
@@ -1494,6 +1566,7 @@ impl World {
             edits: Reserved::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
             rooms,
             damage_drops: DamageDrops::default(),
+            sighting_drops: SightingDrops::for_seats(config.seats),
             site_drops: crate::site::SiteDrops::default(),
             footing_refusals: crate::footing::FootingRefusals::default(),
             bore: generated.bore,
@@ -1768,8 +1841,8 @@ impl World {
             .reserve(self.wreck_limit.saturating_sub(self.wrecks.len()));
         self.targets
             .reserve_rows(self.beacon_limit.saturating_mul(TARGETS_PER_BEACON));
-        self.sightings
-            .reserve_rows(self.seats.len().saturating_mul(SIGHTINGS_PER_SEAT));
+        let sighting_rows = self.seats.len().saturating_mul(self.sightings.per_seat());
+        self.sightings.reserve_rows(sighting_rows);
         self.credit.reserve_rows(
             self.unit_limit
                 .saturating_add(self.beacon_limit)
@@ -2804,8 +2877,27 @@ impl World {
         at: [Fx; 3],
         tick: u32,
     ) {
-        self.sightings
+        let outcome = self
+            .sightings
             .see(seat, asset.raw(), owner, kind, blueprint, at, tick);
+        self.sighting_drops.count(seat, outcome);
+    }
+
+    /// How many memories `seat` has forgotten for room since the world was
+    /// built: each a sighting of its own, its stalest, dropped so that a new
+    /// one could be kept ([`sighting_room_of`]); `None` for a seat the world
+    /// does not seat. Diagnostic.
+    #[must_use]
+    pub fn sightings_forgotten_by(&self, seat: SeatId) -> Option<u64> {
+        self.sighting_drops.forgotten_by(seat)
+    }
+
+    /// How many sightings the table refused outright since the world was
+    /// built, which its sizing rules out ([`crate::tables::Sighted::Refused`]).
+    /// Diagnostic.
+    #[must_use]
+    pub const fn sightings_refused(&self) -> u64 {
+        self.sighting_drops.refused()
     }
 
     /// Forget sighting row `slot`. Crate-internal: [`crate::survey`]'s
