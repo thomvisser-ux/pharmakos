@@ -257,13 +257,24 @@ fn the_p1_budget_line_covers_every_input() {
     assert_eq!(figures.planned, full::BUDGET_INPUTS);
     assert_eq!(figures.inputs.len(), figures.planned);
     assert!(figures.inputs.iter().any(|input| input.name == BUDGET_CASE));
+    // Every shape at the budget is sent end to end: none is past the cap.
+    assert_eq!(figures.end_to_end.len(), full::BUDGET_END_TO_END_INPUTS);
+    assert_eq!(
+        figures.worst_end_to_end().0,
+        full::BUDGET_END_TO_END_INPUTS,
+        "{:?}",
+        figures.end_to_end
+    );
     let line = full::budget_report_line(&figures);
     assert!(line.starts_with(full::BUDGET_REPORT_PREFIX), "{line}");
     // A cut run says so: one call of the 500 planned, which `cargo xtask
     // p1-budget` refuses as a short run, no verdict (xtask/src/budget.rs's
     // `a_cut_run_is_no_verdict`).
     assert!(
-        line.contains(" inputs=7 planned_inputs=7 calls=1 planned_calls=500 "),
+        line.contains(
+            " inputs=7 planned_inputs=7 e2e_inputs=6 planned_e2e_inputs=6 calls=1 \
+             planned_calls=500 "
+        ),
         "{line}"
     );
 }

@@ -55,7 +55,19 @@
 //! (`tests/perf_alarm.rs`, `cargo xtask perf-alarms p1`). `cargo xtask
 //! p1-budget` (E12) reads the one [`budget_report_line`] the bench's
 //! `p1_budget` test prints, the worst p99 of each depth over the shapes at the
-//! committed budget and `budget_128`, and fails at the bars doubled.
+//! committed budget and `budget_128`, and the worst end-to-end p99 over the
+//! shapes, and fails at the bars doubled.
+//!
+//! # The verdicts
+//!
+//! The certifying run (`p1_certify`) prints a verdict per shape at the
+//! committed budget ([`budget_verdicts`]) and one for the committed cases
+//! ([`cases_verdict`]): QUICK and FULL on the verifier alone against spec
+//! section 16's bars, and the end-to-end wait against the editor's own,
+//! [`END_TO_END_BAR_NS`] (item 162 (1)). A shape over the end-to-end bar
+//! prints where its wait goes: each depth's end-to-end p50 and p99 beside the
+//! verifier's own on the same playbook, and the rest, which is the
+//! canonicalisation, the request's parse and the answer's framing.
 
 use std::path::Path;
 
@@ -88,6 +100,12 @@ pub const BUDGET_PLAN: QuickPlan = QuickPlan {
 /// budget, and `budget_128`. The line prints it as `planned_inputs`.
 pub const BUDGET_INPUTS: usize = Shape::ALL.len() + 1;
 
+/// The budget line's end-to-end inputs: every shape of [`Shape::ALL`] at the
+/// committed budget, sent compact through the hosted gateway. The line prints
+/// it as `planned_e2e_inputs`, so a shape the transport refused is a short
+/// run and no verdict.
+pub const BUDGET_END_TO_END_INPUTS: usize = Shape::ALL.len();
+
 /// Certification's sample: at least 2 000 timed calls a figure (item 158 (2):
 /// the owner's machine is noisy at p99).
 pub const CERT_PLAN: QuickPlan = QuickPlan {
@@ -97,13 +115,70 @@ pub const CERT_PLAN: QuickPlan = QuickPlan {
 
 /// The prefix and format version of the line `cargo xtask p1-budget` reads
 /// (`xtask/src/budget.rs`, whose unit test holds the two spellings together).
-pub const BUDGET_REPORT_PREFIX: &str = "p1-budget-report v1";
+pub const BUDGET_REPORT_PREFIX: &str = "p1-budget-report v2";
 
 /// QUICK's bar at the size budget, spec section 16's P1 row: 5 ms p99.
 pub const QUICK_BAR_NS: u128 = 5_000_000;
 
 /// FULL's bar at the size budget, spec section 16's P1 row: 50 ms p99.
 pub const FULL_BAR_NS: u128 = 50_000_000;
+
+/// The editor's end-to-end bar at the size budget: `verify_plan` through the
+/// hosted gateway, 50 ms p99, on every shape P1 certifies (decisions-log item
+/// 162 (1); S3's plan, section 5.2's amendment). It is held at both depths: a
+/// check the editor asks for is one or the other, and the player waits on
+/// either.
+pub const END_TO_END_BAR_NS: u128 = 50_000_000;
+
+/// The bars a P1 verdict holds a figure to, each in nanoseconds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Bars {
+    /// QUICK's p99 on the verifier alone.
+    pub quick: u128,
+    /// FULL's p99 on the verifier alone.
+    pub full: u128,
+    /// The end-to-end p99 at either depth.
+    pub end_to_end: u128,
+}
+
+impl Bars {
+    /// P1's bars: spec section 16's two and item 162 (1)'s end-to-end one.
+    pub const P1: Bars = Bars {
+        quick: QUICK_BAR_NS,
+        full: FULL_BAR_NS,
+        end_to_end: END_TO_END_BAR_NS,
+    };
+}
+
+/// Where a figure stands against its bar.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Side {
+    /// At or below the bar.
+    Within,
+    /// Above it.
+    Over,
+}
+
+impl Side {
+    /// `figure` against `bar`: at the bar is within it.
+    #[must_use]
+    pub const fn of(figure: u128, bar: u128) -> Side {
+        if figure <= bar {
+            Side::Within
+        } else {
+            Side::Over
+        }
+    }
+
+    /// The verdict's word.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Side::Within => "within",
+            Side::Over => "OVER",
+        }
+    }
+}
 
 /// The committed table with `verifier.size_budget_units` set to a size.
 #[derive(Clone, Debug)]
@@ -174,6 +249,18 @@ pub enum EndToEnd {
         /// Its characters.
         chars: usize,
     },
+}
+
+impl EndToEnd {
+    /// The higher of the two depths' p99, or `None` for a text that was not
+    /// sent, which has no end-to-end figure.
+    #[must_use]
+    pub fn worst_p99_ns(&self) -> Option<u128> {
+        match self {
+            EndToEnd::Measured { quick, full, .. } => Some(quick.p99_ns.max(full.p99_ns)),
+            EndToEnd::OverCap { .. } => None,
+        }
+    }
 }
 
 /// One shape at one size, both depths.
@@ -655,6 +742,172 @@ pub fn shape_notice(curve: &Curve, shape: Shape, os: &str) -> String {
     )
 }
 
+/// A signed nanosecond difference as milliseconds with three places.
+fn signed_millis(ns: i128) -> String {
+    let sign = if ns < 0 { "-" } else { "" };
+    format!("{sign}{}", millis(ns.unsigned_abs()))
+}
+
+/// `end` less `part`, signed: a profile's remainder, which a noisy p99 can
+/// put below zero.
+fn less(end: u128, part: u128) -> Result<i128, Error> {
+    let signed = |ns: u128| i128::try_from(ns).map_err(|_| Error::Overflow("a p99 in ns"));
+    signed(end)?
+        .checked_sub(signed(part)?)
+        .ok_or(Error::Overflow("a profile's remainder"))
+}
+
+/// Where one depth's end-to-end wait goes: the end-to-end p50 and p99, the
+/// verifier's own (the gate figure, the same playbook's canonical bytes), and
+/// the rest at p99 (the canonicalisation, the request's parse and the
+/// answer's framing), each a p99 less a p99, so a profile and not a sum.
+fn depth_profile(depth: &str, end: &Summary, verifier: &Summary) -> Result<String, Error> {
+    Ok(format!(
+        "{depth} end to end {} / {}, of which the verifier alone {} / {}, the rest {} at p99",
+        millis(end.p50_ns),
+        millis(end.p99_ns),
+        millis(verifier.p50_ns),
+        millis(verifier.p99_ns),
+        signed_millis(less(end.p99_ns, verifier.p99_ns)?),
+    ))
+}
+
+/// One shape's P1 verdict at its size, word for word: QUICK and FULL on the
+/// verifier alone against [`Bars::quick`] and [`Bars::full`], and the
+/// end-to-end wait at both depths against [`Bars::end_to_end`]. A shape
+/// over the end-to-end bar carries its profile, where the wait goes; a
+/// shape whose text the transport refuses is over it, since the editor cannot
+/// have it checked at all. Pure.
+///
+/// # Errors
+///
+/// [`Error::Overflow`] for a figure past an `i128`.
+pub fn shape_verdict(figure: &ShapeFigure, bars: Bars, os: &str) -> Result<String, Error> {
+    let quick = Side::of(figure.quick.p99_ns, bars.quick);
+    let full = Side::of(figure.full.p99_ns, bars.full);
+    let end_to_end = match &figure.end_to_end {
+        EndToEnd::Measured {
+            quick: end_quick,
+            full: end_full,
+            qualifies,
+        } => {
+            let worst = end_quick.p99_ns.max(end_full.p99_ns);
+            let side = Side::of(worst, bars.end_to_end);
+            let view = if *qualifies {
+                ""
+            } else {
+                " (the hosted seat's view does not qualify it)"
+            };
+            let profile = if side == Side::Over {
+                format!(
+                    "; where the wait goes: {}; {}",
+                    depth_profile("QUICK", end_quick, &figure.quick)?,
+                    depth_profile("FULL", end_full, &figure.full)?,
+                )
+            } else {
+                String::new()
+            };
+            (
+                side,
+                format!(
+                    "end to end QUICK {} and FULL {} p99, the worse against {}: {}{view}{profile}",
+                    millis(end_quick.p99_ns),
+                    millis(end_full.p99_ns),
+                    millis(bars.end_to_end),
+                    side.word(),
+                ),
+            )
+        }
+        EndToEnd::OverCap { chars } => (
+            Side::Over,
+            format!(
+                "end to end OVER: {chars} compact characters past MAX_PLAYBOOK_CHARS \
+                 {MAX_PLAYBOOK_CHARS}, so the editor cannot have it checked"
+            ),
+        ),
+    };
+    let verdict = if [quick, full, end_to_end.0].contains(&Side::Over) {
+        "OVER A BAR"
+    } else {
+        "within every bar"
+    };
+    Ok(format!(
+        "::notice title=P1 verdict ({})::on {os}, at {} units, {verdict}: QUICK {} p99 against \
+         {}: {}; FULL {} p99 against {}: {}; {}",
+        figure.shape.name(),
+        figure.units,
+        millis(figure.quick.p99_ns),
+        millis(bars.quick),
+        quick.word(),
+        millis(figure.full.p99_ns),
+        millis(bars.full),
+        full.word(),
+        end_to_end.1,
+    ))
+}
+
+/// Every shape's verdict at the committed budget, in [`Shape::ALL`]'s order.
+///
+/// # Errors
+///
+/// [`Error::Empty`] when the curve holds no point at the committed budget, or
+/// a shape is missing from it: no verdict is ever a pass; and as
+/// [`shape_verdict`].
+pub fn budget_verdicts(curve: &Curve, bars: Bars, os: &str) -> Result<Vec<String>, Error> {
+    let point = curve
+        .points
+        .iter()
+        .find(|point| point.units == curve.budget_units)
+        .ok_or_else(|| {
+            Error::Empty(format!(
+                "the curve holds no point at the committed budget of {} units, so it gives no \
+                 verdict",
+                curve.budget_units
+            ))
+        })?;
+    Shape::ALL
+        .into_iter()
+        .map(|shape| {
+            let figure = point
+                .shapes
+                .iter()
+                .find(|figure| figure.shape == shape)
+                .ok_or_else(|| {
+                    Error::Empty(format!(
+                        "the curve's point at {} units holds no {}",
+                        point.units,
+                        shape.name()
+                    ))
+                })?;
+            shape_verdict(figure, bars, os)
+        })
+        .collect()
+}
+
+/// The committed cases' verdict at both depths: the pool and the at-budget
+/// case, on the verifier alone, against QUICK's and FULL's bars. Pure.
+#[must_use]
+pub fn cases_verdict(quick: &QuickTiming, full: &QuickTiming, bars: Bars, os: &str) -> String {
+    let side = |figure: u128, bar: u128| Side::of(figure, bar).word();
+    format!(
+        "::notice title=P1 verdict (committed cases)::on {os}, {} cases x {} calls: QUICK pooled \
+         {} p99 against {}: {}, {BUDGET_CASE} {}: {}; FULL pooled {} p99 against {}: {}, \
+         {BUDGET_CASE} {}: {}",
+        quick.cases,
+        quick.calls_per_case,
+        millis(quick.pooled.p99_ns),
+        millis(bars.quick),
+        side(quick.pooled.p99_ns, bars.quick),
+        millis(quick.budget.p99_ns),
+        side(quick.budget.p99_ns, bars.quick),
+        millis(full.pooled.p99_ns),
+        millis(bars.full),
+        side(full.pooled.p99_ns, bars.full),
+        millis(full.budget.p99_ns),
+        side(full.budget.p99_ns, bars.full),
+    )
+}
+
 /// One input of the budget line: a shape at the committed budget, or
 /// `budget_128`.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -682,9 +935,28 @@ pub struct BudgetFigures {
     pub planned: usize,
     /// The inputs measured, in order.
     pub inputs: Vec<BudgetInput>,
+    /// Each shape's end-to-end figure at the committed budget, in
+    /// [`Shape::ALL`]'s order: the editor's wait (item 162 (1)), of the
+    /// [`BUDGET_END_TO_END_INPUTS`] the line plans.
+    pub end_to_end: Vec<(String, EndToEnd)>,
 }
 
 impl BudgetFigures {
+    /// The shapes whose text was sent end to end, and the worst p99 over them
+    /// at either depth, with its shape; `None` for the worst when none was.
+    #[must_use]
+    pub fn worst_end_to_end(&self) -> (usize, Option<(&str, u128)>) {
+        let measured: Vec<(&str, u128)> = self
+            .end_to_end
+            .iter()
+            .filter_map(|(name, figure)| figure.worst_p99_ns().map(|p99| (name.as_str(), p99)))
+            .collect();
+        (
+            measured.len(),
+            measured.into_iter().max_by_key(|(_, p99)| *p99),
+        )
+    }
+
     /// The input whose p99 at `depth` is the highest, and that p99; `None`
     /// for no input.
     #[must_use]
@@ -734,12 +1006,22 @@ pub fn measure_budget(root: &Path, plan: QuickPlan) -> Result<BudgetFigures, Err
             full: sample(&fixture, case, plan, Depth::Full)?,
         });
     }
+    let mut end_to_end_figures: Vec<(String, EndToEnd)> = Vec::with_capacity(Shape::ALL.len());
+    for shape in Shape::ALL {
+        end_to_end_figures.push((
+            shape.name().to_owned(),
+            end_to_end(fixture.rules(), plan, |core| {
+                shapes::canonical(&shape.playbook_at(budget_units, core)?, shape.name())
+            })?,
+        ));
+    }
     Ok(BudgetFigures {
         budget_units,
         rules_hash: fixture.rules().rules_hash(),
         calls: plan.calls,
         planned,
         inputs,
+        end_to_end: end_to_end_figures,
     })
 }
 
@@ -752,11 +1034,18 @@ pub fn budget_notice(figures: &BudgetFigures, os: &str) -> Result<String, Error>
     let empty = || Error::Empty("budget figures over no input".to_owned());
     let (quick_name, quick) = figures.worst(Depth::Quick).ok_or_else(empty)?;
     let (full_name, full) = figures.worst(Depth::Full).ok_or_else(empty)?;
+    let end_to_end = match figures.worst_end_to_end() {
+        (sent, Some((name, p99))) => format!(
+            "the worst end-to-end verify_plan p99 over the {sent} shapes sent is {} ({name})",
+            millis(p99)
+        ),
+        (_, None) => "no shape was sent end to end".to_owned(),
+    };
     Ok(format!(
         "::notice title=P1 budget::on {os}, at the committed budget of {} units (rules_hash {}), \
          over {} inputs (every generated shape and {BUDGET_CASE}) x {} calls each: the worst \
-         QUICK p99 is {} ({quick_name}) and the worst FULL p99 {} ({full_name}); the bars are \
-         QUICK {} and FULL {}, and the alarm fails at twice them",
+         QUICK p99 is {} ({quick_name}) and the worst FULL p99 {} ({full_name}); {end_to_end}; \
+         the bars are QUICK {}, FULL {} and end to end {}, and the alarm fails at twice them",
         figures.budget_units,
         hex(figures.rules_hash),
         figures.inputs.len(),
@@ -765,24 +1054,33 @@ pub fn budget_notice(figures: &BudgetFigures, os: &str) -> Result<String, Error>
         millis(full),
         millis(QUICK_BAR_NS),
         millis(FULL_BAR_NS),
+        millis(END_TO_END_BAR_NS),
     ))
 }
 
 /// The line `cargo xtask p1-budget` reads, after [`BUDGET_REPORT_PREFIX`]:
-/// the inputs measured against [`BUDGET_INPUTS`] and the calls against
-/// [`BUDGET_CALLS`] (so a cut run is refused as no verdict),
-/// and the worst p99 of each depth in whole nanoseconds. A run over no input
-/// has no worst, and prints `none` for it, which the reader refuses as not a
-/// whole number: no verdict, never a pass.
+/// the inputs measured against [`BUDGET_INPUTS`], the shapes sent end to end
+/// against [`BUDGET_END_TO_END_INPUTS`] and the calls against
+/// [`BUDGET_CALLS`] (so a cut run, or a shape the transport refused, is
+/// refused as no verdict), and the worst p99 of each depth and of the
+/// end-to-end wait in whole nanoseconds. A run over no input has no worst,
+/// and prints `none` for it, which the reader refuses as not a whole number:
+/// no verdict, never a pass.
 #[must_use]
 pub fn budget_report_line(figures: &BudgetFigures) -> String {
     let worst = |depth: Depth| match figures.worst(depth) {
         Some((_, p99)) => p99.to_string(),
         None => "none".to_owned(),
     };
+    let (sent, end_to_end) = figures.worst_end_to_end();
+    let end_to_end = match end_to_end {
+        Some((_, p99)) => p99.to_string(),
+        None => "none".to_owned(),
+    };
     format!(
-        "{BUDGET_REPORT_PREFIX} budget_units={} inputs={} planned_inputs={BUDGET_INPUTS} calls={} \
-         planned_calls={BUDGET_CALLS} quick_p99_ns={} full_p99_ns={}",
+        "{BUDGET_REPORT_PREFIX} budget_units={} inputs={} planned_inputs={BUDGET_INPUTS} \
+         e2e_inputs={sent} planned_e2e_inputs={BUDGET_END_TO_END_INPUTS} calls={} \
+         planned_calls={BUDGET_CALLS} quick_p99_ns={} full_p99_ns={} e2e_p99_ns={end_to_end}",
         figures.budget_units,
         figures.inputs.len(),
         figures.calls,
@@ -846,20 +1144,163 @@ mod tests {
                     full: summary(1_000, 12_000_000),
                 },
             ],
+            end_to_end: vec![
+                (
+                    "a".to_owned(),
+                    EndToEnd::Measured {
+                        quick: summary(1_000, 8_000_000),
+                        full: summary(1_000, 31_000_000),
+                        qualifies: true,
+                    },
+                ),
+                ("b".to_owned(), EndToEnd::OverCap { chars: 600_000 }),
+            ],
         };
         assert_eq!(
             budget_report_line(&figures),
-            "p1-budget-report v1 budget_units=128 inputs=2 planned_inputs=7 calls=500 \
-             planned_calls=500 quick_p99_ns=4000000 full_p99_ns=12000000"
+            "p1-budget-report v2 budget_units=128 inputs=2 planned_inputs=7 e2e_inputs=1 \
+             planned_e2e_inputs=6 calls=500 planned_calls=500 quick_p99_ns=4000000 \
+             full_p99_ns=12000000 e2e_p99_ns=31000000"
         );
         assert_eq!(figures.worst(Depth::Quick), Some(("a", 4_000_000)));
         assert_eq!(figures.worst(Depth::Full), Some(("b", 12_000_000)));
+        assert_eq!(figures.worst_end_to_end(), (1, Some(("a", 31_000_000))));
         let none = BudgetFigures {
             inputs: Vec::new(),
+            end_to_end: Vec::new(),
             ..figures
         };
-        assert!(budget_report_line(&none).ends_with("quick_p99_ns=none full_p99_ns=none"));
+        assert!(budget_report_line(&none).ends_with(
+            "e2e_inputs=0 planned_e2e_inputs=6 calls=500 planned_calls=500 quick_p99_ns=none \
+             full_p99_ns=none e2e_p99_ns=none"
+        ));
         assert!(budget_notice(&none, "linux").is_err());
+    }
+
+    fn figure(end_to_end: EndToEnd) -> ShapeFigure {
+        ShapeFigure {
+            shape: Shape::RouteGuards24,
+            units: 128,
+            bytes: 9_000,
+            compact_bytes: 3_000,
+            compact_chars: 3_000,
+            handlers: 0,
+            quick: summary(1_500_000, 2_000_000),
+            full: summary(3_000_000, 6_000_000),
+            end_to_end,
+        }
+    }
+
+    #[test]
+    fn the_verdict_is_word_for_word() {
+        let within = figure(EndToEnd::Measured {
+            quick: summary(9_000_000, 12_000_000),
+            full: summary(20_000_000, 30_000_000),
+            qualifies: true,
+        });
+        assert_eq!(
+            shape_verdict(&within, Bars::P1, "linux").expect("a verdict"),
+            "::notice title=P1 verdict (route_guards_24_node)::on linux, at 128 units, within \
+             every bar: QUICK 2.000 ms p99 against 5.000 ms: within; FULL 6.000 ms p99 against \
+             50.000 ms: within; end to end QUICK 12.000 ms and FULL 30.000 ms p99, the worse \
+             against 50.000 ms: within"
+        );
+    }
+
+    /// The must-trip: the end-to-end bar halved turns a 30 ms wait from
+    /// within to over, and the verdict then carries where the wait goes.
+    #[test]
+    fn a_halved_end_to_end_bar_turns_the_verdict_and_prints_the_profile() {
+        let at = figure(EndToEnd::Measured {
+            quick: summary(9_000_000, 12_000_000),
+            full: summary(20_000_000, 30_000_000),
+            qualifies: true,
+        });
+        let halved = Bars {
+            end_to_end: 25_000_000,
+            ..Bars::P1
+        };
+        let verdict = shape_verdict(&at, halved, "linux").expect("a verdict");
+        assert_eq!(
+            verdict,
+            "::notice title=P1 verdict (route_guards_24_node)::on linux, at 128 units, OVER A \
+             BAR: QUICK 2.000 ms p99 against 5.000 ms: within; FULL 6.000 ms p99 against 50.000 \
+             ms: within; end to end QUICK 12.000 ms and FULL 30.000 ms p99, the worse against \
+             25.000 ms: OVER; where the wait goes: QUICK end to end 9.000 ms / 12.000 ms, of \
+             which the verifier alone 1.500 ms / 2.000 ms, the rest 10.000 ms at p99; FULL end \
+             to end 20.000 ms / 30.000 ms, of which the verifier alone 3.000 ms / 6.000 ms, the \
+             rest 24.000 ms at p99"
+        );
+        // Each of the other two bars halved below its figure turns it too.
+        let quick = Bars {
+            quick: 1_000_000,
+            ..Bars::P1
+        };
+        assert!(
+            shape_verdict(&at, quick, "linux")
+                .expect("a verdict")
+                .contains("OVER A BAR: QUICK 2.000 ms p99 against 1.000 ms: OVER;")
+        );
+        let full = Bars {
+            full: 3_000_000,
+            ..Bars::P1
+        };
+        assert!(
+            shape_verdict(&at, full, "linux")
+                .expect("a verdict")
+                .contains("FULL 6.000 ms p99 against 3.000 ms: OVER;")
+        );
+        // A text the transport refuses is over the bar: the editor cannot
+        // have it checked.
+        let refused = shape_verdict(
+            &figure(EndToEnd::OverCap { chars: 600_000 }),
+            Bars::P1,
+            "linux",
+        )
+        .expect("a verdict");
+        assert!(refused.contains("OVER A BAR"), "{refused}");
+        assert!(
+            refused.ends_with(
+                "end to end OVER: 600000 compact characters past MAX_PLAYBOOK_CHARS 524288, so \
+                 the editor cannot have it checked"
+            ),
+            "{refused}"
+        );
+    }
+
+    /// No point at the committed budget, or a shape missing from it, gives no
+    /// verdict: never a pass.
+    #[test]
+    fn a_curve_without_the_budget_gives_no_verdict() {
+        let curve = Curve {
+            committed_hash: 1,
+            budget_units: 128,
+            plan: QuickPlan {
+                warmup: 0,
+                calls: 1,
+            },
+            points: vec![SizePoint {
+                units: 64,
+                rules_hash: 2,
+                shapes: Vec::new(),
+            }],
+        };
+        assert!(matches!(
+            budget_verdicts(&curve, Bars::P1, "linux"),
+            Err(Error::Empty(_))
+        ));
+        let at_budget = Curve {
+            points: vec![SizePoint {
+                units: 128,
+                rules_hash: 2,
+                shapes: vec![figure(EndToEnd::OverCap { chars: 1 })],
+            }],
+            ..curve
+        };
+        assert!(matches!(
+            budget_verdicts(&at_budget, Bars::P1, "linux"),
+            Err(Error::Empty(_))
+        ));
     }
 
     #[test]

@@ -12,8 +12,10 @@
 //! 5.1 and 5.2; `cert3`). A wall-clock budget is a property of the machine, so
 //! on a shared runner each alarm fails only at its gate's numbers **doubled**:
 //! a repath p99 over 10 ms or an estimate p99 over 2 ms; a QUICK p99 over 10
-//! ms or a FULL p99 over 100 ms at the size budget. A regression that doubles
-//! a figure reddens it; a shared runner's noise does not.
+//! ms, a FULL p99 over 100 ms, or an end-to-end `verify_plan` p99 over 100 ms
+//! (the editor's own 50 ms bar, decisions-log item 162 (1)), at the size
+//! budget. A regression that doubles a figure reddens it; a shared runner's
+//! noise does not.
 //!
 //! Like `g3-budget` they sit outside the step table: `ci` never runs them, and
 //! `list` does not know them. Every timing is taken inside `crates/bench`, the
@@ -107,7 +109,7 @@ pub(crate) const P3_BUDGET: Budget = Budget {
 pub(crate) const P1_BUDGET: Budget = Budget {
     command: "p1-budget",
     title: "P1 budget",
-    prefix: "p1-budget-report v1",
+    prefix: "p1-budget-report v2",
     source: "crates/bench/src/full.rs",
     target: "perf_alarm",
     test: "p1_budget",
@@ -115,13 +117,20 @@ pub(crate) const P1_BUDGET: Budget = Budget {
         "budget_units",
         "inputs",
         "planned_inputs",
+        "e2e_inputs",
+        "planned_e2e_inputs",
         "calls",
         "planned_calls",
         "quick_p99_ns",
         "full_p99_ns",
+        "e2e_p99_ns",
     ],
-    nonzero: &["budget_units", "inputs", "calls"],
-    complete: &[("inputs", "planned_inputs"), ("calls", "planned_calls")],
+    nonzero: &["budget_units", "inputs", "e2e_inputs", "calls"],
+    complete: &[
+        ("inputs", "planned_inputs"),
+        ("e2e_inputs", "planned_e2e_inputs"),
+        ("calls", "planned_calls"),
+    ],
     bars: &[
         Bar {
             field: "quick_p99_ns",
@@ -132,6 +141,14 @@ pub(crate) const P1_BUDGET: Budget = Budget {
         Bar {
             field: "full_p99_ns",
             what: "FULL p99 at the size budget",
+            gate_ns: 50_000_000,
+            alarm_ns: 100_000_000,
+        },
+        // The editor's wait for a check, its own bar by decisions-log item
+        // 162 (1): `verify_plan` through the hosted gateway, the worse depth.
+        Bar {
+            field: "e2e_p99_ns",
+            what: "end-to-end verify_plan p99 at the size budget",
             gate_ns: 50_000_000,
             alarm_ns: 100_000_000,
         },
@@ -387,8 +404,9 @@ mod tests {
     const P3: &str = "p3-budget-report v1 seeds=3 planned_seeds=3 pairs=2000 \
                       planned_pairs=2000 repath_p99_ns=900000 estimate_p99_ns=400000";
 
-    const P1: &str = "p1-budget-report v1 budget_units=128 inputs=7 planned_inputs=7 \
-                      calls=500 planned_calls=500 quick_p99_ns=3000000 full_p99_ns=30000000";
+    const P1: &str = "p1-budget-report v2 budget_units=128 inputs=7 planned_inputs=7 \
+                      e2e_inputs=6 planned_e2e_inputs=6 calls=500 planned_calls=500 \
+                      quick_p99_ns=3000000 full_p99_ns=30000000 e2e_p99_ns=32000000";
 
     #[test]
     fn a_report_is_read_among_other_output() {
@@ -416,7 +434,7 @@ mod tests {
         // One alarm's line is not the other's.
         assert_eq!(
             parse(&P1_BUDGET, P3),
-            Err(BudgetError::NoReport("p1-budget-report v1"))
+            Err(BudgetError::NoReport("p1-budget-report v2"))
         );
         let swap = |from: &str, to: &str| parse(&P3_BUDGET, &P3.replacen(from, to, 1));
         assert_eq!(
@@ -463,6 +481,30 @@ mod tests {
             parse(&P1_BUDGET, &P1.replacen("calls=500", "calls=0", 1)),
             Err(BudgetError::Zero("calls"))
         );
+        // A line without the end-to-end verdict is no verdict, and so is one
+        // that sent fewer shapes than it planned (one the transport refused).
+        assert_eq!(
+            parse(&P1_BUDGET, &P1.replacen(" e2e_p99_ns=32000000", "", 1)),
+            Err(BudgetError::MissingField("e2e_p99_ns"))
+        );
+        assert_eq!(
+            parse(&P1_BUDGET, &P1.replacen("e2e_inputs=6", "e2e_inputs=5", 1)),
+            Err(BudgetError::Short {
+                field: "e2e_inputs",
+                measured: 5,
+                planned: 6
+            })
+        );
+        assert_eq!(
+            parse(
+                &P1_BUDGET,
+                &P1.replacen("e2e_p99_ns=32000000", "e2e_p99_ns=none", 1)
+            ),
+            Err(BudgetError::BadValue {
+                field: "e2e_p99_ns",
+                value: "none".to_owned()
+            })
+        );
         // A longer word that merely starts with the prefix is not a report.
         assert_eq!(
             parse(&P3_BUDGET, "p3-budget-report v10 seeds=1"),
@@ -478,8 +520,9 @@ mod tests {
         assert_eq!(
             parse(
                 &P1_BUDGET,
-                "p1-budget-report v1 budget_units=128 inputs=7 planned_inputs=7 calls=1 \
-                 planned_calls=500 quick_p99_ns=1 full_p99_ns=1"
+                "p1-budget-report v2 budget_units=128 inputs=7 planned_inputs=7 e2e_inputs=6 \
+                 planned_e2e_inputs=6 calls=1 planned_calls=500 quick_p99_ns=1 full_p99_ns=1 \
+                 e2e_p99_ns=1"
             ),
             Err(BudgetError::Short {
                 field: "calls",
@@ -521,21 +564,31 @@ mod tests {
         assert!(passed);
         assert_eq!(lines.len(), 1);
         assert!(lines.iter().all(|line| line.starts_with("::notice ")));
-        let p1 = |quick: u128, full: u128| {
+        let p1 = |quick: u128, full: u128, e2e: u128| {
             format!(
-                "p1-budget-report v1 budget_units=128 inputs=7 planned_inputs=7 calls=500 \
-                 planned_calls=500 quick_p99_ns={quick} full_p99_ns={full}"
+                "p1-budget-report v2 budget_units=128 inputs=7 planned_inputs=7 e2e_inputs=6 \
+                 planned_e2e_inputs=6 calls=500 planned_calls=500 quick_p99_ns={quick} \
+                 full_p99_ns={full} e2e_p99_ns={e2e}"
             )
         };
-        assert!(at(&P1_BUDGET, &p1(10_000_000, 100_000_000)).1);
-        let (lines, passed) = at(&P1_BUDGET, &p1(10_000_001, 100_000_001));
+        assert!(at(&P1_BUDGET, &p1(10_000_000, 100_000_000, 100_000_000)).1);
+        let (lines, passed) = at(&P1_BUDGET, &p1(10_000_001, 100_000_001, 100_000_001));
         assert!(!passed);
         assert_eq!(
             lines
                 .iter()
                 .filter(|line| line.starts_with("::error "))
                 .count(),
-            2
+            3
+        );
+        // The end-to-end bar alone, doubled and passed, fails the alarm.
+        let (lines, passed) = at(&P1_BUDGET, &p1(0, 0, 100_000_001));
+        assert!(!passed);
+        assert!(
+            lines.iter().any(|line| line.starts_with(
+                "::error title=P1 budget::end-to-end verify_plan p99 at the size budget 100.000 ms"
+            )),
+            "{lines:?}"
         );
     }
 
@@ -550,8 +603,10 @@ mod tests {
                 "::notice title=P1 budget::on linux: QUICK p99 at the size budget 3.000 ms (the \
                  alarm fails over 10.000 ms; for reference only, within the gate's 5.000 ms); \
                  FULL p99 at the size budget 30.000 ms (the alarm fails over 100.000 ms; for \
-                 reference only, within the gate's 50.000 ms). The alarm fails at the gate's \
-                 numbers doubled; the gate is certified on the owner's machine, never here"
+                 reference only, within the gate's 50.000 ms); end-to-end verify_plan p99 at the \
+                 size budget 32.000 ms (the alarm fails over 100.000 ms; for reference only, \
+                 within the gate's 50.000 ms). The alarm fails at the gate's numbers doubled; the \
+                 gate is certified on the owner's machine, never here"
                     .to_owned()
             ]
         );
