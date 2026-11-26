@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! P1's wall-clock figures, published as notices and never gated, the one
-//! report line `cargo xtask p1-budget` reads, and the certifying run.
+//! P1's wall-clock figures, published as notices and gated nowhere on a CI
+//! runner, the one report line `cargo xtask p1-budget` reads, and the
+//! certifying run, whose lines are recorded as evidence for P1.
 //!
 //! S1's plan section 5 and task `p1`: QUICK's p50 and p99 over the committed
 //! verifier cases and `budget_128`, and a decision tick's cost in ns per size
@@ -30,7 +31,9 @@
 //! * `p1_budget`: `cargo xtask p1-budget` (E12), the shapes at the committed
 //!   budget and `budget_128`, and the report line that alarm reads;
 //! * `p1_certify`: run by hand by `cert3` on the owner's machine, every P1
-//!   figure at [`full::CERT_PLAN`]'s 2 000 calls (item 158 (2)); never in CI.
+//!   figure at [`full::CERT_PLAN`]'s 2 000 calls (item 158 (2)) with its
+//!   commit and its verdicts; never in CI. `PHARMAKOS_BENCH_CERT_CALLS` cuts
+//!   the calls, and its lines then say the run certifies nothing.
 //!
 //! ```sh
 //! cargo test --release -p pharmakos-bench --test perf_alarm -- --ignored --nocapture \
@@ -57,6 +60,7 @@ use std::path::Path;
 
 use pharmakos_bench::decision::{self, BENCH_SEATS, BENCH_SEED, DecisionPlan};
 use pharmakos_bench::full;
+use pharmakos_bench::provenance;
 use pharmakos_bench::quick::{self, Fixture, QuickPlan};
 use pharmakos_bench::shapes::{SIZES, Shape};
 use pharmakos_bench::{Error, workspace_root};
@@ -79,9 +83,9 @@ const RUNS: usize = 3;
 /// ticks at the committed 250 ms cadence, the fourth seat's line's length.
 const CURVE_SEGMENT_MS: i32 = 30_000;
 
-/// The second seed the decision tick is measured on at the budget, so E12's
-/// seed rule (`BENCH_SEED` stays unless another seed reads more than 20 %
-/// above it) has a figure to compare.
+/// The second seed the decision tick is measured on at the budget, its
+/// figure published beside the first's with no verdict: E12's seed rule
+/// reads P1 FULL's hosted figure (`pharmakos_bench::certify`), not this.
 const SECOND_SEED: u64 = pharmakos_sim::DETERMINISM_MATCH_SEED;
 
 /// GitHub annotates the first ten notices of a step.
@@ -230,43 +234,37 @@ fn p1_budget() {
     }
 }
 
+/// Everything P1 certifies, in one run (S3's plan, section 5.2; items 158 (2)
+/// and 162 (1)): the commit, QUICK's p50 and p99 and FULL's over the
+/// committed cases at the certifying plan's calls, every shape at every size
+/// of the curve with the end-to-end wait beside it, QUICK's cost at the
+/// transport cap, and the verdicts: the committed cases' and one a shape at
+/// the committed budget, against QUICK's, FULL's and the editor's bars.
+/// [`provenance::CERT_CALLS_VAR`] cuts the calls on a machine that cannot
+/// spare the time, and every line then says the run is not a certifying one.
 #[test]
 #[ignore = "the certifying run, by hand on the owner's machine (--ignored --exact)"]
 fn p1_certify() {
     let root = workspace_root();
     let os = std::env::consts::OS;
+    let plan =
+        match provenance::cert_plan_from(std::env::var_os(provenance::CERT_CALLS_VAR).as_deref()) {
+            Ok(plan) => plan,
+            Err(error) => panic!("{error}"),
+        };
+    let certify = match provenance::certify_from_env() {
+        Ok(certify) => certify,
+        Err(error) => panic!("{error}"),
+    };
     println!();
-    let mut failed = Vec::new();
-    report(
-        os,
-        "FULL p99",
-        full_cases_notice(&root, full::CERT_PLAN, os),
-        &mut failed,
-    );
-    report(
-        os,
-        "P1 shapes",
-        shape_notices(&root, full::CERT_PLAN, os),
-        &mut failed,
-    );
-    report(
-        os,
-        "P1 at the transport cap",
-        cap_notices(&root, full::CERT_PLAN, os),
-        &mut failed,
-    );
-    report(
-        os,
-        "P1 budget",
-        full::measure_budget(&root, full::CERT_PLAN).and_then(|figures| {
-            Ok(vec![
-                full::budget_notice(&figures, os)?,
-                full::budget_report_line(&figures),
-            ])
-        }),
-        &mut failed,
-    );
-    assert!(failed.is_empty(), "{failed:?}");
+    // Every line is printed before a figure that gave no verdict fails the
+    // run (`certify::P1Run::print_all`).
+    match pharmakos_bench::certify::p1_lines(&root, plan, certify, os)
+        .and_then(|run| run.print_all(|line| println!("{line}")))
+    {
+        Ok(()) => {}
+        Err(error) => panic!("P1 was not certified on {os}: {error}"),
+    }
 }
 
 /// QUICK's p50 and p99 over the committed cases, as notices.
@@ -281,7 +279,7 @@ fn quick_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
             cases.len() * ALARM_PLAN.calls
         )));
     }
-    Ok(quick::notices(&timing, os))
+    Ok(quick::notices(&timing, provenance::Role::Published, os))
 }
 
 /// FULL's p50 and p99 over the committed cases, as a notice.
@@ -289,20 +287,28 @@ fn full_cases_notice(root: &Path, plan: QuickPlan, os: &str) -> Result<Vec<Strin
     let fixture = Fixture::committed(root)?;
     let cases = quick::committed_cases(root)?;
     let timing = quick::measure_at(&fixture, &cases, plan, Depth::Full)?;
-    Ok(vec![full::cases_notice(&timing, os)])
+    Ok(vec![full::cases_notice(
+        &timing,
+        provenance::Role::Published,
+        os,
+    )])
 }
 
 /// Every shape at every size of the curve: the provenance, then a notice a
 /// shape.
 fn shape_notices(root: &Path, plan: QuickPlan, os: &str) -> Result<Vec<String>, Error> {
-    let curve = full::measure_curve(root, &SIZES, plan)?;
-    let mut lines = vec![full::provenance_notice(&curve, os)];
+    Ok(curve_lines(&full::measure_curve(root, &SIZES, plan)?, os))
+}
+
+/// A measured curve's provenance and its notice a shape.
+fn curve_lines(curve: &full::Curve, os: &str) -> Vec<String> {
+    let mut lines = vec![full::provenance_notice(curve, os)];
     lines.extend(
         Shape::ALL
             .into_iter()
-            .map(|shape| full::shape_notice(&curve, shape, os)),
+            .map(|shape| full::shape_notice(curve, shape, provenance::Role::Published, os)),
     );
-    Ok(lines)
+    lines
 }
 
 /// The `max_text` shape at the transport cap, a notice a padding.

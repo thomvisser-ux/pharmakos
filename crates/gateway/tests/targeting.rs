@@ -539,7 +539,7 @@ fn round_two_with_a_beacon_on_a_free_vent(initial: &str) -> (Surface, Token) {
 /// `ordinal`: `pharmakos_sim::targeting::on_vent`, lent the world as
 /// `resolve_refs` lends it.
 fn nearest_on_column(surface: &Surface, ordinal: u32) -> [i32; 2] {
-    use pharmakos_gateway::targeting::{Site, lend, scratch_for, spec_of};
+    use pharmakos_gateway::targeting::{Site, lend, spec_of};
     let world = surface.host().expect("hosted").world();
     let beacons = world.beacons();
     let row = (0..beacons.ids().len())
@@ -552,7 +552,9 @@ fn nearest_on_column(surface: &Surface, ordinal: u32) -> [i32; 2] {
     let centre = beacons.positions().get(row).copied().expect("a position");
     let tally = pharmakos_sim::seams::UnitTally::new();
     let ground = lend(world, &tally);
-    let mut scratch = scratch_for(world).expect("a search scratch");
+    let mut scratch =
+        pharmakos_sim::pathing::Scratch::for_map(world.surface(), world.clusters().size())
+            .expect("a search scratch");
     let reference: pharmakos_proto::gp::v1::FeatureRef = pharmakos_proto::json::decode_json(
         &pharmakos_proto::json::read(r#"{"vent": {"rank": "NEAREST"}}"#).expect("JSON"),
     )
@@ -1079,11 +1081,13 @@ fn sim_on_miss(
     centre: [pharmakos_sim::math::fixed::Fx; 3],
     far: &str,
 ) -> pharmakos_sim::interpreter::StepFailed {
-    use pharmakos_gateway::targeting::{Site, lend, scratch_for, spec_of};
+    use pharmakos_gateway::targeting::{Site, lend, spec_of};
     use pharmakos_sim::targeting::on_vent_counted;
     let tally = pharmakos_sim::seams::UnitTally::new();
     let ground = lend(world, &tally);
-    let mut scratch = scratch_for(world).expect("a search scratch");
+    let mut scratch =
+        pharmakos_sim::pathing::Scratch::for_map(world.surface(), world.clusters().size())
+            .expect("a search scratch");
     let reference: pharmakos_proto::gp::v1::FeatureRef = pharmakos_proto::json::decode_json(
         &pharmakos_proto::json::read(&format!(r#"{{"feature_id": "{far}"}}"#)).expect("JSON"),
     )
@@ -1108,7 +1112,7 @@ fn sim_on_miss(
 
 #[test]
 fn a_named_vent_outside_the_sphere_matches_nothing_as_the_sim_reports() {
-    use pharmakos_gateway::targeting::{Site, commander_point, lend, scratch_for, spec_of};
+    use pharmakos_gateway::targeting::{Site, commander_point, lend, spec_of};
     use pharmakos_sim::features::FeatureKind;
     use pharmakos_sim::interpreter::StepFailure;
     use pharmakos_sim::targeting::{anchor_in_sphere, cover};
@@ -1121,7 +1125,9 @@ fn a_named_vent_outside_the_sphere_matches_nothing_as_the_sim_reports() {
         let world = surface.host().expect("hosted").world();
         let tally = pharmakos_sim::seams::UnitTally::new();
         let ground = lend(world, &tally);
-        let mut scratch = scratch_for(world).expect("a search scratch");
+        let mut scratch =
+            pharmakos_sim::pathing::Scratch::for_map(world.surface(), world.clusters().size())
+                .expect("a search scratch");
         let reference: pharmakos_proto::gp::v1::FeatureRef = pharmakos_proto::json::decode_json(
             &pharmakos_proto::json::read(
                 r#"{"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}"#,

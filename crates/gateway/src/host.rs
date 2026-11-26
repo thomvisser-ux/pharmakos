@@ -63,6 +63,7 @@ use std::path::{Path, PathBuf};
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::math::quantity::MS_PER_TICK;
+use pharmakos_sim::pathing::Scratch;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{
     Layout, LayoutRefused, LayoutSettings, MatchPhase, MatchSettings, PhasedTick, Runner,
@@ -76,7 +77,7 @@ use pharmakos_sim::world::{DamageOrder, FileRefused, World, WorldConfig};
 
 use crate::error::Error;
 use crate::fog::Vision;
-use crate::routes::RouteAdapter;
+use crate::routes::{PlanningScratch, RouteAdapter};
 
 /// The gateway's **fallback** safe playbook: the library's Safe Playbook
 /// template (`library/safe_playbook.jsonc`) with nothing raised.
@@ -181,6 +182,10 @@ pub struct Host {
     runner: Runner,
     library: Option<PathBuf>,
     safe_playbook: String,
+    /// The match's one search scratch for planning reads, made at the first
+    /// that searches ([`PlanningScratch`]; `crate::routes`, "One scratch").
+    /// Working memory, no part of the match: never hashed, never saved.
+    planning_scratch: PlanningScratch,
 }
 
 impl Host {
@@ -214,6 +219,7 @@ impl Host {
             runner,
             library,
             safe_playbook: safe_playbook()?,
+            planning_scratch: PlanningScratch::new(),
         })
     }
 
@@ -384,10 +390,53 @@ impl Host {
     }
 
     /// The travel estimator's adapter (item 100 (1)), over the hosted world's
-    /// own graph ([`RouteAdapter::over`]; `crate::routes`, "One graph").
+    /// own graph ([`RouteAdapter::over`]; `crate::routes`, "One graph"),
+    /// searching in the match's planning scratch.
     #[must_use]
     pub fn routes(&self) -> RouteAdapter<'_> {
-        RouteAdapter::over(self.runner.world())
+        RouteAdapter::over(self.runner.world(), &self.planning_scratch)
+    }
+
+    /// The match's planning scratch, lent for one search over the hosted
+    /// world's graph and made now if this is the first (`crate::routes`, "One
+    /// scratch"): what a ranking, a site or a preview searches in.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanningScratch::lend`]'s: the scratch already lent, a map that
+    /// sizes none, or a scratch that does not fit the hosted world's graph.
+    pub fn planning_scratch(&self) -> Result<std::cell::RefMut<'_, Scratch>, Error> {
+        let world = self.runner.world();
+        self.planning_scratch
+            .lend(world.surface(), world.clusters())
+    }
+
+    /// How many search scratches the match's planning reads have made: none
+    /// until one borrows the scratch, and one from then on
+    /// ([`PlanningScratch::made`]).
+    #[must_use]
+    pub const fn planning_scratches_made(&self) -> u32 {
+        self.planning_scratch.made()
+    }
+
+    /// How many walks the match's planning reads have priced, or `None` while
+    /// none has searched ([`PlanningScratch::walks`]).
+    ///
+    /// # Errors
+    ///
+    /// [`PlanningScratch::walks`]'s.
+    pub fn planning_walks(&self) -> Result<Option<u64>, Error> {
+        self.planning_scratch.walks()
+    }
+
+    /// The search work the match's planning reads have done, or `None` while
+    /// none has searched ([`PlanningScratch::work`]).
+    ///
+    /// # Errors
+    ///
+    /// [`PlanningScratch::work`]'s.
+    pub fn planning_work(&self) -> Result<Option<u64>, Error> {
+        self.planning_scratch.work()
     }
 
     /// The template folder, when the host was given one.

@@ -298,6 +298,28 @@ struct Counters {
     visits: usize,
     live_units: u64,
     movers: u64,
+    marks: TickMarks,
+}
+
+/// The decision events one tick emitted that say which kind of decision work
+/// it ran (`crate::kinds`): steps started (where a placement resolves its
+/// site), steps failed (a resolve that found none), rows committed, and
+/// beacons placed (a deploy's end).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct TickMarks {
+    /// `StepStarted` events.
+    pub started: u64,
+    /// The `StepStarted` events of a route's first step (its `value`, the
+    /// step's index, is zero): for [`crate::kinds`]' far covering kind, the
+    /// `Move` that walks the commander out, which resolves no site.
+    pub opened: u64,
+    /// `RowCommitted` events.
+    pub committed: u64,
+    /// `BeaconPlaced` events.
+    pub placed: u64,
+    /// `StepFailed` events: a placement whose resolve found no site fails
+    /// its step as it starts.
+    pub failed: u64,
 }
 
 fn counters(world: &World) -> Result<Counters, Error> {
@@ -347,27 +369,45 @@ fn counters(world: &World) -> Result<Counters, Error> {
         visits: collapse.last_visits,
         live_units,
         movers,
+        marks: TickMarks {
+            started: count(&[EventKind::StepStarted])?,
+            opened: u64::try_from(
+                events
+                    .iter()
+                    .filter(|event| event.kind == EventKind::StepStarted && event.value == 0)
+                    .count(),
+            )
+            .map_err(|_| Error::Overflow("a tick's event count"))?,
+            committed: count(&[EventKind::RowCommitted])?,
+            placed: count(&[EventKind::BeaconPlaced])?,
+            failed: count(&[EventKind::StepFailed])?,
+        },
     })
 }
 
 /// One tick as [`timed_tick`] took it.
 #[derive(Debug)]
-pub(super) struct Timed {
+pub(crate) struct Timed {
     /// Opening the tick.
-    pub(super) begin_ns: u128,
+    pub(crate) begin_ns: u128,
     /// Each phase but the hash: its index in `PHASE_ORDER`, and its time.
-    pub(super) phase_ns: Vec<(usize, u128)>,
+    pub(crate) phase_ns: Vec<(usize, u128)>,
     /// The hash, and the gateway's per-tick bookkeeping.
-    pub(super) finish_ns: u128,
+    pub(crate) finish_ns: u128,
     counters: Counters,
-    pub(super) report: pharmakos_sim::runner::TickReport,
+    pub(crate) report: pharmakos_sim::runner::TickReport,
     /// Allocations in begin and the phases, then in finish.
-    allocations: Option<(u64, u64)>,
+    pub(crate) allocations: Option<(u64, u64)>,
 }
 
 impl Timed {
+    /// The decision events the tick emitted.
+    pub(crate) const fn marks(&self) -> TickMarks {
+        self.counters.marks
+    }
+
     /// The whole tick: begin, the phases and finish.
-    pub(super) fn total_ns(&self) -> Result<u128, Error> {
+    pub(crate) fn total_ns(&self) -> Result<u128, Error> {
         let phases = self
             .phase_ns
             .iter()
@@ -388,7 +428,7 @@ fn between(before: u64, after: u64) -> Result<u64, Error> {
 }
 
 /// Open, run, read and finish one tick, or `None` once the Push is over.
-pub(super) fn timed_tick(
+pub(crate) fn timed_tick(
     surface: &mut pharmakos_gateway::surface::Surface,
     heap: Option<&dyn HeapCounter>,
 ) -> Result<Option<Timed>, Error> {

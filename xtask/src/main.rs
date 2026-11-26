@@ -29,7 +29,7 @@
 //! | `reuse`          | REUSE licence-manifest check, then the library-quotation licence check        |
 //! | `placeholders`   | every `PLACEHOLDER` marker in the tracked tree parses against the grammar     |
 //! | `scenario`     | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
-//! | `screenshot`     | stages the client, renders the three shots under xvfb + lavapipe, compares    |
+//! | `screenshot`     | stages the client, renders every shot under xvfb + lavapipe, compares         |
 //! | `stage-client`   | builds the gdext cdylib, stages it into `godot/bin` and imports the project   |
 //!
 //! The formats of the last three — the scenario file ([`scenario`]), the
@@ -131,10 +131,10 @@
 //! cargo xtask list                  # list the steps
 //! cargo xtask ci-scope              # CI's docs-only fast path: `full` or `prose`
 //! cargo xtask perf-alarms           # the per-runner perf notices; never fails
-//! cargo xtask perf-alarms g3        # one alarm (mesher, p1, p1-cap, p1-decision, p3, g3, allocations)
+//! cargo xtask perf-alarms g3        # one alarm (mesher, p1, p1-cap, p1-decision, p1-kinds, p3, g3, g3-watch, allocations)
 //! cargo xtask g3-budget             # G3′'s CI alarm: fails at the gate's numbers doubled
 //! cargo xtask p3-budget             # P3's CI alarm: a repath p99 over 10 ms, an estimate over 2 ms
-//! cargo xtask p1-budget             # P1's CI alarm: QUICK over 10 ms, FULL over 100 ms at the budget
+//! cargo xtask p1-budget             # P1's CI alarm: QUICK over 10 ms, FULL or end to end over 100 ms at the budget
 //! cargo xtask package               # the unsigned zip for this platform (T21)
 //! cargo xtask placeholders          # the PLACEHOLDER register; --check fails off-grammar
 //! ```
@@ -505,11 +505,17 @@ struct Shot {
     min_variance: u64,
 }
 
-/// Every shot, in the order it is rendered. All three go through the bridge, so
-/// all three need the staged extension. The vista is the geometry alarm (T16);
-/// the rows and the wizard's first page are the editor's pictures of the
-/// verifier's diagnostics and of Easy's suggestion (T19; decisions-log items
-/// 110 (4) and 116 (6)(h)).
+/// Every shot, in the order it is rendered. Every one goes through the bridge
+/// with no host running, so every one needs the staged extension. The vista is
+/// the geometry alarm (T16); the rows and the wizard's first page are the
+/// editor's pictures of the verifier's diagnostics and of Easy's suggestion
+/// (T19; decisions-log items 110 (4) and 116 (6)(h)). S3's client lanes left
+/// six more hostless scenes, each drawn from byte copies of gateway goldens
+/// under `godot/fixtures/`, and `cert3` adds a row for each (decisions-log
+/// items 161 (6), 162 (5), 182 (9) and 200 (5)): the beacon's ring at its base
+/// and grown by a Resonance Spire, the lobby's Probation words, the template
+/// list with its guided pick, Playtest mode and its survey, the rule list with
+/// its chips, and the condition picker with a locked entry.
 const SHOTS: &[Shot] = &[
     Shot {
         name: "vista",
@@ -530,6 +536,48 @@ const SHOTS: &[Shot] = &[
         scene: "res://scenes/wizard_shot.tscn",
         golden: "tests/golden/vista/expected.wizard.png",
         actual: "golden/vista/actual.wizard.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "ring",
+        scene: "res://scenes/ring_shot.tscn",
+        golden: "tests/golden/vista/expected.ring.png",
+        actual: "golden/vista/actual.ring.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "lobby",
+        scene: "res://scenes/lobby_shot.tscn",
+        golden: "tests/golden/vista/expected.lobby.png",
+        actual: "golden/vista/actual.lobby.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "templates",
+        scene: "res://scenes/templates_shot.tscn",
+        golden: "tests/golden/vista/expected.templates.png",
+        actual: "golden/vista/actual.templates.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "playtest",
+        scene: "res://scenes/playtest_shot.tscn",
+        golden: "tests/golden/vista/expected.playtest.png",
+        actual: "golden/vista/actual.playtest.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "rule_list",
+        scene: "res://scenes/rule_list_shot.tscn",
+        golden: "tests/golden/vista/expected.rule_list.png",
+        actual: "golden/vista/actual.rule_list.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "picker",
+        scene: "res://scenes/picker_shot.tscn",
+        golden: "tests/golden/vista/expected.picker.png",
+        actual: "golden/vista/actual.picker.png",
         min_variance: png::MIN_VARIANCE,
     },
 ];
@@ -832,7 +880,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                     [one] => Some(alarm_selection(one)?),
                     _ => {
                         return Err("`perf-alarms` takes at most one alarm name: mesher, p1, \
-                                    p1-cap, p1-decision, p3, g3 or allocations"
+                                    p1-cap, p1-decision, p1-kinds, p3, g3, g3-watch or allocations"
                             .to_owned());
                     }
                 };
@@ -4285,9 +4333,9 @@ struct Alarm {
 ///   the peak events per tick, the queues' bytes, live heap and the tick p99
 ///   per minute, allocations per tick, and `seen_by` at the gate's load; the
 ///   support search's adversarial tick with Mine's footing check at its
-///   worst; and a fourth, unplaced seat's decision-tick cost. Published,
-///   never gated (item 148's CI ruling); `g3r` certifies them on the owner's
-///   machine, and the CI budget job is `g3r`'s.
+///   worst; and a fourth, unplaced seat's decision-tick cost. Published and
+///   gated nowhere here (item 148's CI ruling); `g3r` certifies them on the
+///   owner's machine, and the CI budget job is `g3r`'s.
 /// * **P1 FULL** (S3's plan, section 5.2 and task `bench3`) shares the `p1`
 ///   alarm's target and step: FULL over the committed cases, and QUICK and
 ///   FULL over the generated shapes at each size of E24's curve with the
@@ -4297,6 +4345,21 @@ struct Alarm {
 ///   and in counted evaluation units, is `p1-decision`'s: each a step of its
 ///   own for the ten-notice limit, which the bench's tests hold each alarm
 ///   under at compile time.
+/// * **The decision tick by kind** (S3's plan, section 5.2 item 4; items
+///   175 (8) and 196; `cert3`): `crates/bench/tests/g3_real.rs`'s
+///   `p1_decision_kinds` — ns per counted unit for each kind of decision work
+///   (condition, octile ranker, covering near and far walks, threat-ranking
+///   selector, seam upkeep, commit, `toward`, deploy) on both seeds, whether
+///   the kinds agree within the lane's own stated tolerance, and the seeds'
+///   gap as a figure with no verdict (E12's rule reads P1 FULL's hosted
+///   figure); in the G3′ binary for its counting allocator, `p1-kinds`.
+/// * **What the gate's load costs besides the tick** (S3's plan, E15 and
+///   E17; `cert3`): `crates/bench/tests/g3_real.rs`'s
+///   `g3_watch_sightings_and_breach` — on the gate's load with raids, the
+///   whole entity list's bytes per `get_view` poll and the recompute's
+///   listings after a sensor move against those after none (a difference of
+///   means, not a cost per move), each seat's peak sighting rows against the table's
+///   room, and the breach search's time at that load, `g3-watch`.
 /// * **P3** (S3's plan, section 5.1): `crates/bench/tests/p3_alarm.rs` — the
 ///   repath on the sim's own graph, cold and under the crater stream with the
 ///   repair beside it, and the travel estimate through the gateway's
@@ -4336,6 +4399,15 @@ const ALARMS: &[Alarm] = &[
         title: "P1 decision tick",
     },
     Alarm {
+        name: "p1-kinds",
+        package: "pharmakos-bench",
+        // The G3' binary, for its counting allocator: each kind reports the
+        // allocations of its ticks (`cert3`'s B4, a `toward` step among them).
+        test: "g3_real",
+        exact: Some("p1_decision_kinds"),
+        title: "P1 decision tick by kind",
+    },
+    Alarm {
         name: "p3",
         package: "pharmakos-bench",
         test: "p3_alarm",
@@ -4348,9 +4420,18 @@ const ALARMS: &[Alarm] = &[
         package: "pharmakos-bench",
         test: "g3_real",
         // The target also holds `g3_budget_segment` (`cargo xtask g3-budget`'s),
-        // and `g3_power_sweep` and `g3_raids_segments` (both run by hand).
+        // `p1_decision_kinds` (the `p1-kinds` alarm's),
+        // `g3_watch_sightings_and_breach` (the `g3-watch` alarm's), and
+        // `g3_power_sweep` and `g3_raids_segments` (both run by hand).
         exact: Some("g3_real_segment_support_tick_and_fourth_seat"),
         title: "G3' timings",
+    },
+    Alarm {
+        name: "g3-watch",
+        package: "pharmakos-bench",
+        test: "g3_real",
+        exact: Some("g3_watch_sightings_and_breach"),
+        title: "G3' watch, sightings and breach",
     },
 ];
 
@@ -7073,6 +7154,8 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                 "pharmakos-bench",
                 "pharmakos-bench",
                 "pharmakos-bench",
+                "pharmakos-bench",
+                "pharmakos-bench",
                 "pharmakos-bench"
             ]
         );
@@ -7436,6 +7519,226 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
     }
 
+    /// The `g3 budget` job (S2's plan, E18) can go red as the authoring job
+    /// can (`cert3` fix pass 2, F6): no job-level `continue-on-error`,
+    /// `needs:` or `if:` (a skipped job is not red), and its one measuring
+    /// step runs `cargo xtask g3-budget` without `continue-on-error`.
+    #[test]
+    fn the_g3_budget_job_can_go_red() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let start = ci.find("\n  g3-budget:\n").expect("the g3-budget job");
+        let job = ci
+            .get(start + 1..)
+            .and_then(|rest| {
+                rest.find("\n  authoring-budgets:\n")
+                    .and_then(|end| rest.get(..end))
+            })
+            .expect("the job ends where authoring-budgets begins");
+        assert!(
+            job.contains("    name: g3 budget (ubuntu-24.04)\n"),
+            "{job}"
+        );
+        for key in ["continue-on-error:", "needs:", "permissions:", "if:"] {
+            assert!(
+                !job.lines()
+                    .any(|line| line.starts_with(&format!("    {key}"))),
+                "the g3-budget job sets a job-level `{key}`: {job}"
+            );
+        }
+        let steps: Vec<&str> = job.split("\n      - name: ").skip(1).collect();
+        let runs: Vec<&&str> = steps
+            .iter()
+            .filter(|step| step.contains("run: cargo xtask g3-budget\n"))
+            .collect();
+        assert_eq!(runs.len(), 1, "one step runs `cargo xtask g3-budget`");
+        let step = runs.first().expect("the step");
+        assert!(
+            !step.contains("continue-on-error"),
+            "`g3-budget` must be able to turn the job red: {step}"
+        );
+        assert!(
+            step.contains("\n        if: steps.scope.outputs.prose_only != 'true'\n"),
+            "the measuring step skips only on the docs-only fast path: {step}"
+        );
+    }
+
+    /// The `authoring budgets` job (S3's plan, E12): each authoring alarm in
+    /// [`budget::BUDGETS`] runs in a step of its own, exactly once, and none
+    /// continues on error, so the job can go red; every measuring step skips
+    /// on the docs-only fast path, the second runs after a red first
+    /// (`!cancelled()`), each has a timeout, and the job's timeout is above
+    /// their sum with the scope step's.
+    #[test]
+    fn the_authoring_budgets_job_runs_both_alarms_and_can_go_red() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let start = ci
+            .find("\n  authoring-budgets:\n")
+            .expect("the authoring-budgets job");
+        let body: Vec<&str> = ci
+            .get(start + 1..)
+            .expect("the job's text")
+            .lines()
+            .skip(1)
+            // The job's body is indented past its key; the next job, or the
+            // comment block before it, starts at two spaces.
+            .take_while(|line| line.is_empty() || line.starts_with("   "))
+            .collect();
+        let job = body.join("\n");
+        assert!(
+            job.contains("    name: authoring budgets (ubuntu-24.04)\n"),
+            "{job}"
+        );
+        assert!(job.contains("    runs-on: ubuntu-24.04\n"), "{job}");
+        // The job itself can go red and stands alone: no job-level
+        // `continue-on-error`, no `needs:` that could skip it, no job-level
+        // `if:` (a skipped job is not red), and no permissions of its own
+        // past the workflow's `contents: read`.
+        for key in ["continue-on-error:", "needs:", "permissions:", "if:"] {
+            assert!(
+                !job.lines()
+                    .any(|line| line.starts_with(&format!("    {key}"))),
+                "the authoring-budgets job sets a job-level `{key}`: {job}"
+            );
+        }
+        let minutes = |text: &str| -> u32 {
+            text.trim()
+                .strip_prefix("timeout-minutes: ")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_else(|| panic!("`{text}` is not a timeout"))
+        };
+        let job_timeout = job
+            .lines()
+            .find(|line| line.starts_with("    timeout-minutes: "))
+            .map(minutes)
+            .expect("the job's timeout");
+        let steps: Vec<&str> = job.split("\n      - name: ").skip(1).collect();
+        let mut sum = 0;
+        for step in &steps {
+            if let Some(line) = step
+                .lines()
+                .find(|line| line.trim_start().starts_with("timeout-minutes: "))
+            {
+                sum += minutes(line);
+            }
+        }
+        for (at, alarm) in budget::BUDGETS.iter().enumerate() {
+            let runs: Vec<&&str> = steps
+                .iter()
+                .filter(|step| step.contains(&format!("run: cargo xtask {}\n", alarm.command)))
+                .collect();
+            assert_eq!(
+                runs.len(),
+                1,
+                "one step runs `cargo xtask {}`",
+                alarm.command
+            );
+            let step = runs.first().expect("the step");
+            assert!(
+                !step.contains("continue-on-error"),
+                "`{}` must be able to turn the job red: {step}",
+                alarm.command
+            );
+            assert!(
+                step.lines()
+                    .any(|line| line.trim_start().starts_with("timeout-minutes: ")),
+                "`{}` has no timeout: {step}",
+                alarm.command
+            );
+            let guard = if at == 0 {
+                "\n        if: steps.scope.outputs.prose_only != 'true'\n"
+            } else {
+                "\n        if: ${{ !cancelled() && steps.scope.outputs.prose_only != 'true' }}\n"
+            };
+            assert!(step.contains(guard), "`{}`: {step}", alarm.command);
+        }
+        assert!(
+            sum < job_timeout,
+            "the steps' timeouts sum to {sum} minutes, not below the job's {job_timeout}"
+        );
+    }
+
+    /// No workflow asks a bench run to certify (S3's plan, section 5.1 item 4:
+    /// the CI runners' figures are notices): neither of the bench's two
+    /// certifying variables appears in any file under `.github/workflows`,
+    /// and the names this test looks for are the bench's own.
+    #[test]
+    fn no_workflow_asks_a_bench_run_to_certify() {
+        let root = workspace_root().expect("the workspace root");
+        let provenance = fs::read_to_string(root.join("crates/bench/src/provenance.rs"))
+            .expect("the bench's provenance");
+        let names = ["PHARMAKOS_BENCH_CERTIFY", "PHARMAKOS_BENCH_CERT_CALLS"];
+        for name in names {
+            assert!(
+                provenance.contains(&format!("_VAR: &str = \"{name}\";")),
+                "the bench no longer names `{name}`"
+            );
+        }
+        let mut files = Vec::new();
+        walk(&root.join(".github").join("workflows"), &mut files).expect(".github/workflows");
+        assert!(files.len() >= 2, "{files:?}");
+        for path in files {
+            let text = fs::read_to_string(&path).expect("a workflow");
+            for name in names {
+                assert!(
+                    !text.contains(name),
+                    "{} sets `{name}`: a CI runner's figures are notices, never certifying",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// The cross-OS guard compares the verifier's reports (S3's plan, section
+    /// 5.2 item 2): each leg's upload carries every fresh verifier `actual.*`,
+    /// and the guard's fixed list requires the at-budget case's report on all
+    /// three legs, so a leg that wrote none is red rather than compared over
+    /// nothing. The script itself is run by hand over synthetic folders
+    /// (`CROSS_OS_DIR`), as the pull request that added the kind records.
+    #[test]
+    fn the_guard_compares_the_at_budget_verifier_report() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let upload = ci
+            .find("      - name: Upload what the cross-OS guard compares\n")
+            .and_then(|at| ci.get(at..))
+            .and_then(|rest| {
+                rest.find("if-no-files-found: error")
+                    .and_then(|end| rest.get(..end))
+            })
+            .expect("the leg's upload step");
+        assert!(
+            upload.contains("\n            target/golden/verifier/**/actual.*\n"),
+            "{upload}"
+        );
+        let fixed = ci
+            .find("          fixed=(\n")
+            .and_then(|at| ci.get(at..))
+            .and_then(|rest| rest.find("          )\n").and_then(|end| rest.get(..end)))
+            .expect("the guard's fixed kinds");
+        assert!(
+            fixed.contains("\n            golden/verifier/budget_128/actual.report.json\n"),
+            "{fixed}"
+        );
+        // The at-budget case the fixed list names is the committed one.
+        let root = workspace_root().expect("the workspace root");
+        let golden =
+            fs::read_to_string(root.join("tests/golden/verifier/budget_128/expected.report.json"))
+                .expect("budget_128's committed report");
+        let number = |key: &str| {
+            golden
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(&format!("\"{key}\": ")))
+                .map_or_else(
+                    || panic!("budget_128's report has no {key}"),
+                    |value| value.trim_end_matches(',').to_owned(),
+                )
+        };
+        assert_eq!(
+            number("size_units"),
+            number("size_budget"),
+            "budget_128 sits on the size budget"
+        );
+    }
+
     /// Every alarm has its own step in the `perf alarms` job, which runs on all
     /// three operating systems: an alarm with no step publishes nothing, and
     /// two alarms in one step share its ten notices (item 149 (4)).
@@ -7482,7 +7785,19 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     #[test]
     fn each_alarm_is_selected_by_its_own_name_and_a_typo_is_refused() {
         let names: Vec<&str> = ALARMS.iter().map(|alarm| alarm.name).collect();
-        assert_eq!(names, ["mesher", "p1", "p1-cap", "p1-decision", "p3", "g3"]);
+        assert_eq!(
+            names,
+            [
+                "mesher",
+                "p1",
+                "p1-cap",
+                "p1-decision",
+                "p1-kinds",
+                "p3",
+                "g3",
+                "g3-watch"
+            ]
+        );
         for alarm in ALARMS {
             assert_eq!(
                 alarm_selection(alarm.name),
@@ -7543,7 +7858,47 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             assert!(shot.min_variance > 0, "{}", shot.name);
             names.push(shot.name);
         }
-        assert_eq!(names, ["vista", "rows", "wizard"]);
+        assert_eq!(
+            names,
+            [
+                "vista",
+                "rows",
+                "wizard",
+                "ring",
+                "lobby",
+                "templates",
+                "playtest",
+                "rule_list",
+                "picker"
+            ]
+        );
+        // Each shot's scene is in the project, and the screenshot job uploads
+        // every shot's actual, whatever its check said, so a missing golden's
+        // render can be looked at and committed.
+        let root = workspace_root().expect("the workspace root");
+        for shot in SHOTS {
+            let scene = shot
+                .scene
+                .strip_prefix("res://")
+                .map(|path| root.join(GODOT_PROJECT_DIR).join(path))
+                .expect("a res:// scene");
+            assert!(scene.is_file(), "{} has no scene file", shot.name);
+        }
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let upload = ci
+            .find("      - name: Upload the renders\n")
+            .and_then(|at| ci.get(at..))
+            .and_then(|rest| {
+                // The key's line, not the comment above it that names it.
+                rest.find("\n          if-no-files-found: error")
+                    .and_then(|end| rest.get(..end))
+            })
+            .expect("the screenshot job's upload");
+        assert!(upload.contains("\n        if: always() && "), "{upload}");
+        assert!(
+            upload.contains("\n            target/golden/vista/actual.*.png\n"),
+            "{upload}"
+        );
     }
 
     /// The split over this workspace's own metadata (decisions-log item

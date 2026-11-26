@@ -86,7 +86,7 @@ use crate::stats::{Summary, micros, millis};
 
 /// The prefix and format version of the line `cargo xtask p3-budget` reads
 /// (`xtask/src/budget.rs`, whose unit test holds the two spellings together).
-pub const BUDGET_REPORT_PREFIX: &str = "p3-budget-report v1";
+pub const BUDGET_REPORT_PREFIX: &str = "p3-budget-report v2";
 
 /// The seeds P3 is measured on, the golden seed first (S3's plan, section
 /// 5.1): the seed every committed scenario plays, the determinism harness's
@@ -966,24 +966,95 @@ pub fn seed_notice(report: &P3Report, seed: &SeedReport, os: &str) -> String {
     )
 }
 
-/// The summary notice: the worst figures over the seeds against the bars.
+/// Where a P3 summary is printed: the one set of roles every certifying
+/// command's notices speak in ([`crate::provenance::Role`]).
+pub use crate::provenance::Role;
+
+/// How a P3 run was sampled, from what it ran: the seeds measured against
+/// [`P3_SEEDS`], and the fewest samples any figure of any seed took against
+/// [`PAIRS`].
+///
+/// # Errors
+///
+/// [`Error::Empty`] for a report of no seed, which sampled no pair.
+pub fn sampling(
+    report: &P3Report,
+    certify: crate::provenance::Certify,
+) -> Result<crate::provenance::Sampling, Error> {
+    let pairs = report
+        .seeds
+        .iter()
+        .flat_map(|seed| {
+            [
+                seed.cold.samples,
+                seed.stream.samples,
+                seed.repair.samples,
+                seed.one_leg.samples,
+                seed.five_leg.samples,
+                seed.estimator.samples,
+            ]
+        })
+        .min()
+        .ok_or_else(|| Error::Empty("a P3 report of no seed sampled no pair".to_owned()))?;
+    Ok(crate::provenance::Sampling {
+        certify,
+        counts: vec![
+            crate::provenance::Count {
+                ran: report.seeds.len(),
+                planned: P3_SEEDS.len(),
+                unit: "seeds",
+            },
+            crate::provenance::Count {
+                ran: pairs,
+                planned: PAIRS,
+                unit: "pairs a seed",
+            },
+        ],
+    })
+}
+
+/// The summary notice: the worst figures over the seeds against the bars,
+/// printed where `role` says.
 ///
 /// # Errors
 ///
 /// [`Error::Empty`] for a report of no seed.
-pub fn summary_notice(report: &P3Report, os: &str) -> Result<String, Error> {
+pub fn summary_notice(report: &P3Report, role: Role, os: &str) -> Result<String, Error> {
+    summary_against(report, REPATH_BAR_NS, ESTIMATE_BAR_NS, role, os)
+}
+
+/// [`summary_notice`] against the bars given, each figure's verdict beside
+/// it: pure, so a bar halved is seen to turn its verdict.
+///
+/// # Errors
+///
+/// As [`summary_notice`].
+pub fn summary_against(
+    report: &P3Report,
+    repath_bar_ns: u128,
+    estimate_bar_ns: u128,
+    role: Role,
+    os: &str,
+) -> Result<String, Error> {
     let empty = || Error::Empty("a P3 report of no seed".to_owned());
+    let side = |figure: u128, bar: u128| {
+        if figure <= bar { "within" } else { "OVER" }
+    };
+    let repath = report.worst_repath_p99().ok_or_else(empty)?;
+    let estimate = report.worst_estimate_p99().ok_or_else(empty)?;
     Ok(format!(
         "::notice title=P3::on {os}, over {} seeds x {} pairs: the worst repath p99 is {} \
-         (cold or under the crater stream, repair outside it) against G2's {}, and the worst \
-         one-leg estimate_route p99 {} against P3's {}; published here and never gated, \
-         certified on the owner's machine",
+         (cold or under the crater stream, repair outside it) against G2's {}: {}, and the \
+         worst one-leg estimate_route p99 {} against P3's {}: {}; {}",
         report.seeds.len(),
         report.pairs,
-        millis(report.worst_repath_p99().ok_or_else(empty)?),
-        millis(REPATH_BAR_NS),
-        millis(report.worst_estimate_p99().ok_or_else(empty)?),
-        millis(ESTIMATE_BAR_NS),
+        millis(repath),
+        millis(repath_bar_ns),
+        side(repath, repath_bar_ns),
+        millis(estimate),
+        millis(estimate_bar_ns),
+        side(estimate, estimate_bar_ns),
+        role.words("G2 + P3"),
     ))
 }
 
@@ -999,7 +1070,8 @@ pub fn budget_report_line(report: &P3Report) -> String {
     };
     format!(
         "{BUDGET_REPORT_PREFIX} seeds={} planned_seeds={} pairs={} planned_pairs={PAIRS} \
-         repath_p99_ns={} estimate_p99_ns={}",
+         repath_p99_ns={} estimate_p99_ns={} repath_bar_ns={REPATH_BAR_NS} \
+         estimate_bar_ns={ESTIMATE_BAR_NS}",
         report.seeds.len(),
         P3_SEEDS.len(),
         report.pairs,
@@ -1072,14 +1144,93 @@ mod tests {
         };
         assert_eq!(
             budget_report_line(&report),
-            "p3-budget-report v1 seeds=2 planned_seeds=3 pairs=2 planned_pairs=2000 \
-             repath_p99_ns=4000000 estimate_p99_ns=600000"
+            "p3-budget-report v2 seeds=2 planned_seeds=3 pairs=2 planned_pairs=2000 \
+             repath_p99_ns=4000000 estimate_p99_ns=600000 repath_bar_ns=5000000 \
+             estimate_bar_ns=1000000"
         );
+        // The summary's verdicts, and the must-trip: each bar halved below
+        // its figure turns that figure's verdict.
+        let line = summary_notice(&report, Role::Published, "linux").expect("a notice");
+        assert!(
+            line.contains(
+                "against G2's 5.000 ms: within, and the worst one-leg estimate_route p99 0.600 ms against P3's 1.000 ms: within;"
+            ),
+            "{line}"
+        );
+        let halved =
+            summary_against(&report, 2_500_000, 500_000, Role::Alarm, "linux").expect("a notice");
+        assert!(
+            halved.ends_with(
+                "read by its alarm, which fails at the bars doubled (the gate, G2 + P3, is certified on the owner's machine)"
+            ),
+            "{halved}"
+        );
+        assert!(
+            line.ends_with(
+                "published here and gated nowhere (the gate, G2 + P3, is certified on the owner's machine)"
+            ),
+            "{line}"
+        );
+        assert!(
+            halved.contains(
+                "against G2's 2.500 ms: OVER, and the worst one-leg estimate_route p99 0.600 ms against P3's 0.500 ms: OVER;"
+            ),
+            "{halved}"
+        );
+        certifies_only_whole(&report, &seed);
         let none = P3Report {
             seeds: Vec::new(),
             ..report
         };
-        assert!(budget_report_line(&none).ends_with("repath_p99_ns=none estimate_p99_ns=none"));
-        assert!(summary_notice(&none, "linux").is_err());
+        assert!(budget_report_line(&none).contains(" repath_p99_ns=none estimate_p99_ns=none "));
+        assert!(summary_notice(&none, Role::Published, "linux").is_err());
+        assert!(sampling(&none, crate::provenance::Certify::On).is_err());
+    }
+
+    /// M2: a run certifies only when asked, with every seed and every pair a
+    /// seed; `report`'s two seeds of 2 pairs are cut.
+    fn certifies_only_whole(report: &P3Report, seed: &SeedReport) {
+        use crate::provenance::{Certify, is_certifying, stamped};
+        let line = "::notice title=x::a figure";
+        assert!(!is_certifying(&stamped(
+            line,
+            &sampling(report, Certify::On).expect("a sampling")
+        )));
+        let full = |summary: Summary| Summary {
+            samples: PAIRS,
+            ..summary
+        };
+        let whole_seed = SeedReport {
+            cold: full(seed.cold),
+            stream: full(seed.stream),
+            repair: full(seed.repair),
+            one_leg: full(seed.one_leg),
+            five_leg: full(seed.five_leg),
+            estimator: full(seed.estimator),
+            ..seed.clone()
+        };
+        let whole = P3Report {
+            pairs: PAIRS,
+            seeds: vec![whole_seed.clone(), whole_seed.clone(), whole_seed.clone()],
+            ..report.clone()
+        };
+        // B8 with M2: the pairs are read from what each figure sampled,
+        // so one figure of one seed short of its pairs cuts the run.
+        let mut short = whole.clone();
+        if let Some(last) = short.seeds.last_mut() {
+            last.estimator.samples = PAIRS - 1;
+        }
+        assert!(!is_certifying(&stamped(
+            line,
+            &sampling(&short, Certify::On).expect("a sampling")
+        )));
+        assert!(is_certifying(&stamped(
+            line,
+            &sampling(&whole, Certify::On).expect("a sampling")
+        )));
+        assert!(!is_certifying(&stamped(
+            line,
+            &sampling(&whole, Certify::Off).expect("a sampling")
+        )));
     }
 }

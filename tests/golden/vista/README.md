@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
 the wizard's first page (T19's shots) were committed and compared by T20, when
 the `screenshot` step became required.
 
-Five files, and none of them is compared by the `golden` step
+Eleven files, and none of them is compared by the `golden` step
 (`xtask/src/golden.rs` lists `vista/` in `SELF_COMPARED_AREAS`):
 
 | File | Compared by | Re-baselined with |
@@ -17,6 +17,7 @@ Five files, and none of them is compared by the `golden` step
 | `expected.vista.png` | `cargo xtask screenshot`, with a tolerance, on the Linux leg | a deliberate re-render (below) |
 | `expected.rows.png` | the same | the same |
 | `expected.wizard.png` | the same | the same |
+| `expected.ring.png`, `expected.lobby.png`, `expected.templates.png`, `expected.playtest.png`, `expected.rule_list.png`, `expected.picker.png` | the same | the same |
 | `expected.geometry.txt` | `crates/client-gdext/tests/vista_fixture.rs`, byte for byte, on every leg | `PHARMAKOS_BLESS_VISTA=1 cargo test -p pharmakos-client-gdext` |
 | `expected.events.txt` | `crates/client-gdext/tests/event_list.rs`, byte for byte, on every leg | the same |
 
@@ -103,7 +104,7 @@ north coordinates is nearest the camera).
 
 Decisions-log item 105 (5): every PNG golden here is rendered by CI's Linux
 run, never on a developer's machine. `cargo xtask screenshot` stages the
-extension, renders all three shots and only then checks them, so a shot whose
+extension, renders every shot (nine, from S3's `cert3`) and only then checks them, so a shot whose
 golden is missing is still rendered, its `actual.*.png` is uploaded in the
 `vista screenshot (linux)` job's `vista-screenshot` artefact, and the step fails
 naming it. Each shot's size and red-channel variance goes out first, as a
@@ -213,6 +214,69 @@ same run's notices gave their red-channel variance: **742** for the rows and
 
 Both are flat UI panels on the placeholder theme, so a font, theme or layout
 change in Godot moves them as surely as a change to their input does.
+
+### What S3's six goldens show
+
+`expected.ring.png`, `expected.lobby.png`, `expected.templates.png`,
+`expected.playtest.png`, `expected.rule_list.png` and `expected.picker.png` are
+the shots S3's client lanes added scenes for, compared from S3's `cert3` (pull
+request #246). All six were committed from the `vista screenshot (linux)` job of
+workflow run 45849637882 at `ad3dcb62` (xvfb + lavapipe, Godot 4.7.2), taken
+from its `vista-screenshot` artefact. The job was run twice on that head (the
+run's first attempt and a re-run of the job alone), and the six renders of the
+two attempts are **byte for byte identical**, as are the vista, rows and wizard
+renders beside them; the main session compared them, looked at each, and only
+then committed them. The run's notices gave their red-channel variance against
+`png::MIN_VARIANCE` = 200: ring **3428**, lobby **803**, templates **617**,
+playtest **806**, rule list **782**, picker **1008**. The same two thresholds
+in `xtask/src/png.rs` apply to them as to the other three.
+
+* `expected.ring.png`: `ring_shot.tscn`, with no host, feeding the opening
+  view and then the view once the Resonance Spire stands through the bridge and
+  the vista. The camera is close over seat 0's core near the map's corner: the
+  beacon's glowing yellow pillar with the seat's units beside it, a scrap seam
+  and a heat vent near it, and the core's sphere drawn as a thin flat orange
+  ring at the grown radius the second view sends (36 voxels; the base is 24,
+  and the scene fails unless the first view drew 24 and the second 36). The
+  ring floats at the beacon's own height, so the higher ground toward the
+  map's interior hides two stretches of it and it runs on over the void past
+  the map's edge; that is the placeholder ring of `vista.gd`, an art
+  PLACEHOLDER for S6.
+* `expected.lobby.png`: `lobby_shot.tscn` drawing a finished Probation match's
+  feed and recap: the "New match: Probation" button, "Match: Probation",
+  eleven event rows (`safe_playbook_filed` through `licence_awarded`, and the
+  Ledger's notice of licence as the last), the recap of round 1 in the
+  gateway's sentences, and "The Ledger's memos to you:" with the notice of
+  licence under it.
+* `expected.templates.png`: `templates_shot.tscn` drawing the template list in
+  the editor's panel: Defend the Core, Expand & Mine, Hold & Build (in the
+  accent colour, with "Start with hold_and_build: it is the advisor's pick."
+  under it), Raid an Enemy Beacon and Safe playbook.
+* `expected.playtest.png`: `playtest_shot.tscn` with Playtest mode switched on:
+  the check button, the paragraph that says what the client keeps and that
+  nothing leaves the computer, "Recorded so far: 0 Push(es), 0 of them skipped,
+  0 Lull(s).", the survey's two choice questions unanswered, the free-text
+  answer "The rule list: I wanted to see why my scout turned back." with "56 of
+  4000 characters.", the sentence about reading the four files, and the
+  "Export playtest bundle" button.
+* `expected.rule_list.png`: `rule_list_shot.tscn` drawing Expand & Mine's
+  rendered playbook in the panel: the title, "Written from a built-in
+  template.", the summary, the Route with step 1 (`place_mine`, its values as
+  links) and step 2 (`back_home`), then Rules with rule 1 ("flee"), an orange
+  bracket in the margin joining the step and the rule a lint names, the lint's
+  sentence in orange ("Never fires while the rule joined above it is true:
+  ..."), and the rule's body down to the frame's bottom edge, which cuts the
+  27 drawn lines.
+* `expected.picker.png`: `picker_shot.tscn` drawing the condition picker's
+  tree: Clock opened to "Time into the segment" with its two fields, the
+  locked rows in grey ("The rest of the clock (locked: from S6)", "Commander's
+  position (locked: from S6)", "A beacon's reports since (locked: from S6)",
+  "Aggregates (locked: from S6)"), the Commander and Own beacon groups, and
+  the start of Enemy knowledge at the frame's bottom edge; 83 rows are drawn
+  and the tree scrolls.
+
+All but the ring are flat UI panels on the placeholder theme, so a font, theme
+or layout change in Godot moves them as surely as a change to their input does.
 
 ### What a diff in the PNG means
 

@@ -5,8 +5,9 @@
 #
 # One command runs on three operating systems — `cargo xtask ci` — and a final job,
 # `cross-OS determinism guard`, byte-compares what the three produced: the determinism
-# binary's per-tick hash chain, every scenario's chain, the path-hash file, and the
-# mesher, mapgen and vista geometry digests (decisions-log items 71 and 116 (6)(n)). That
+# binary's per-tick hash chain, every scenario's chain, the path-hash file, the mesher,
+# mapgen and vista geometry digests (decisions-log items 71 and 116 (6)(n)), and every
+# verifier report, the at-budget `budget_128` required (S3's plan, section 5.2 item 2). That
 # comparison is gate G4 in the flesh: "identical hashes on 3 operating systems".
 #
 # Each operating system's leg runs as CI_SHARDS shards (decisions-log item 148 (2)): the
@@ -25,7 +26,7 @@
 #         \n endings, trailing newline, no \r anywhere
 #
 # Each leg's `cargo xtask ci (<os>)` job uploads that file and the fresh `actual.*` files
-# under target/golden/{scenarios/*,pathing,mesher,mapgen}/ and target/golden/vista/
+# under target/golden/{scenarios/*,pathing,mesher,mapgen,verifier}/ and target/golden/vista/
 # actual.geometry.txt, merged from its shards, as ONE artefact, `cross-os-<os>`. The guard downloads all three and
 # requires every file any leg uploaded on all three legs, the fixed kinds named in its
 # script, and at least one scenario chain; it compares each whole, byte for byte. No perf
@@ -74,8 +75,9 @@
 #     job-level `if:`: they run whenever their package job succeeded, which it does on a
 #     prose-only pull request, print the notice, and skip every other step (decisions-log
 #     item 117 (8)). The package jobs compute their own answer like the building jobs;
-#   * the `perf alarms` and `g3 budget` jobs, which are not required, copy the pattern:
-#     each skips its steps and prints the notice on a prose-only pull request;
+#   * the `perf alarms`, `g3 budget` and `authoring budgets` jobs, which are not required,
+#     copy the pattern: each skips its steps and prints the notice on a prose-only pull
+#     request;
 #   * the scope step answers full in bash, before it builds xtask, whenever the commit
 #     changes xtask/, .github/ or .cargo/: a pull request that breaks the decider must not
 #     be judged by the broken copy, whose tests are among the steps it would skip. What
@@ -630,7 +632,9 @@ jobs:
         # One artefact per leg, as before the shards: the determinism step's chain (from
         # shard 1), and every fresh output the shards wrote for the kinds that must agree
         # across operating systems — each scenario's chain (and expand-east-segment's event
-        # log), the path hashes, and the mesher, mapgen and vista geometry digests.
+        # log), the path hashes, the mesher, mapgen and vista geometry digests, and every
+        # verifier report (each case's `actual.report.json`, the at-budget `budget_128`
+        # among them, and the catalogue: S3's plan, section 5.2 item 2, task `cert3`).
         # `always()` hands the guard whatever the shards produced before a later step
         # failed; a leg whose shards produced none of it makes the upload an error, and the
         # guard is red, which is right. Not on the fast path, where nothing was produced.
@@ -644,6 +648,7 @@ jobs:
             target/golden/pathing/**/actual.*
             target/golden/mesher/**/actual.*
             target/golden/mapgen/**/actual.*
+            target/golden/verifier/**/actual.*
             target/golden/vista/actual.geometry.txt
           # Flipped at G4 (decisions-log item 116 (6)(n)): a leg that produced nothing
           # fails here rather than silently reducing the comparison.
@@ -808,13 +813,17 @@ jobs:
           legs_dir="${CROSS_OS_DIR:-legs}"
           legs=(ubuntu-latest windows-latest macos-latest)
           # The kinds every leg must produce whatever else it produces, named once, here.
-          # Scenario chains are not listed: every scenario's files are required on all
-          # three legs through the union below, and at least one scenario chain is.
+          # Scenario chains and the verifier's other reports are not listed: every one of
+          # their files is required on all three legs through the union below, and at least
+          # one scenario chain is. The at-budget verifier report is listed, so a leg that
+          # wrote no verifier report at all is red rather than compared over nothing (S3's
+          # plan, section 5.2 item 2).
           fixed=(
             determinism/hashes.txt
             golden/pathing/actual.path-hashes.txt
             golden/mesher/actual.digests.txt
             golden/mapgen/actual.digests.txt
+            golden/verifier/budget_128/actual.report.json
             golden/vista/actual.geometry.txt
           )
           summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
@@ -927,10 +936,14 @@ jobs:
     # installed here and nowhere else, which is why the `ci-shard-ubuntu` jobs above
     # passes `--skip screenshot`.
     #
-    # Three shots, each drawn through the bridge with NO host running
+    # Nine shots, each drawn through the bridge with NO host running
     # (xtask/src/main.rs, `SHOTS`): the vista (res://scenes/vista_shot.tscn, the
     # committed keyframe fixture, T16), the diagnostic rows (rows_shot.tscn) and
-    # the wizard's first page (wizard_shot.tscn), T19's, compared since T20.
+    # the wizard's first page (wizard_shot.tscn), T19's, compared since T20; and
+    # from S3's `cert3` the beacon's ring (ring_shot.tscn), the lobby's Probation
+    # words (lobby_shot.tscn), the template list (templates_shot.tscn), Playtest
+    # mode (playtest_shot.tscn), the rule list (rule_list_shot.tscn) and the
+    # condition picker (picker_shot.tscn).
     # `cargo xtask screenshot` stages the extension itself, renders every shot
     # and then compares each with its golden; a shot with no golden still renders
     # and its actual is uploaded, and the step fails naming it. That is how a
@@ -1048,7 +1061,7 @@ jobs:
         run: cargo xtask screenshot
 
       - name: Upload the renders
-        # All three shots, whether or not their checks passed: a shot with no golden, or
+        # Every shot's render, whether or not its check passed: a shot with no golden, or
         # one that moved, is looked at from here. Not on the fast path, where nothing was
         # rendered: `if-no-files-found: error` would otherwise turn the skip red.
         if: always() && steps.scope.outputs.prose_only != 'true'
@@ -1056,9 +1069,7 @@ jobs:
         with:
           name: vista-screenshot
           path: |
-            target/golden/vista/actual.vista.png
-            target/golden/vista/actual.rows.png
-            target/golden/vista/actual.wizard.png
+            target/golden/vista/actual.*.png
           # A job that rendered nothing must not read as a pass.
           if-no-files-found: error
           retention-days: 14
@@ -1353,7 +1364,9 @@ jobs:
     # beside them, in the `p1` step; QUICK at the transport cap, in the `p1-cap` step; a
     # decision tick's ns per size unit in a hosted match, and from `bench3` its counted
     # evaluation units, a second seed and the same at each size, in the `p1-decision`
-    # step), the walled crate
+    # step; and from `cert3` the decision tick's ns per counted unit kind by kind on both
+    # seeds, whether the kinds agree and the seeds' gap, in the `p1-kinds` step), the
+    # walled crate
     # AGENTS.md section 4.5 sanctions to read a clock while driving the verifier and the
     # sim from outside (decisions-log item 131); P3's timings (crates/bench/tests/
     # p3_alarm.rs, S3's plan section 5.1: the repath on the sim's graph, cold and under
@@ -1363,13 +1376,17 @@ jobs:
     # `test` step, so it is not run again here; and G3′-real's figures (crates/bench/tests/
     # g3_real.rs: the 8-minute segment at the gate's load phase by phase, the
     # tick-minus-pathing mean of item 116 (6)(b) among them, the support search's
-    # adversarial tick and a fourth seat's cost; S2's plan, tasks `g3h` and `g3r`). Each
+    # adversarial tick and a fourth seat's cost; S2's plan, tasks `g3h` and `g3r`); and from
+    # `cert3`, on the gate's load with raids, the entity list's bytes per `get_view` poll,
+    # the recompute's listings after a sensor move against those after none (a difference
+    # of means, not a cost per move), the peak sightings per seat and the breach
+    # search's time (S3's plan, E15 and E17), in the `g3-watch` step. Each
     # alarm is its own step, `cargo xtask perf-alarms <name>`, because GitHub annotates only
-    # the first ten notices of a step and the seven together print more (item 149 (4)). The
+    # the first ten notices of a step and the nine together print more (item 149 (4)). The
     # G3′ budget is not gated here: the gate is certified on the owner's machine, and its
     # loose CI alarm is the `g3 budget (ubuntu-24.04)` job below (S2's plan, E18). P3's
     # and P1's loose alarms, `cargo xtask p3-budget` and `cargo xtask p1-budget`, are not
-    # run here either: their job, `authoring budgets (ubuntu-24.04)`, is `cert3`'s (S3's
+    # run here either: they are the `authoring budgets (ubuntu-24.04)` job's, below it (S3's
     # plan, E12).
     #
     # No cache step: the repository's cache store is past GitHub's 10 GB cap already. The
@@ -1380,12 +1397,12 @@ jobs:
     # the job's time. It follows the docs-only fast path like the building jobs: a
     # prose-only pull request skips its steps and prints the notice.
     runs-on: ${{ matrix.os }}
-    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the seven
-    # measuring steps' 140), so a step that times out under continue-on-error never brings
+    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the nine
+    # measuring steps' 190), so a step that times out under continue-on-error never brings
     # the job to its timeout, which would be red. xtask's
     # `the_perf_alarms_job_can_never_go_red` holds the sum, and every measuring step's
     # continue-on-error, prose guard and timeout.
-    timeout-minutes: 165
+    timeout-minutes: 215
     strategy:
       fail-fast: false
       matrix:
@@ -1460,6 +1477,13 @@ jobs:
         shell: bash
         run: cargo xtask perf-alarms p1-decision
 
+      - name: cargo xtask perf-alarms p1-kinds
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: bash
+        run: cargo xtask perf-alarms p1-kinds
+
       - name: cargo xtask perf-alarms p3
         if: steps.scope.outputs.prose_only != 'true'
         continue-on-error: true
@@ -1473,6 +1497,13 @@ jobs:
         timeout-minutes: 30
         shell: bash
         run: cargo xtask perf-alarms g3
+
+      - name: cargo xtask perf-alarms g3-watch
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: bash
+        run: cargo xtask perf-alarms g3-watch
 
       - name: cargo xtask perf-alarms allocations
         if: steps.scope.outputs.prose_only != 'true'
@@ -1543,6 +1574,82 @@ jobs:
         timeout-minutes: 30
         shell: bash
         run: cargo xtask g3-budget
+
+  authoring-budgets:
+    name: authoring budgets (ubuntu-24.04)
+    # S3's two authoring alarms (S3's plan, E12, task `cert3`), on the `g3 budget` job's
+    # pattern. The gates themselves, spec §16's G2 + P3 (a repath p99 of at most 5 ms and an
+    # estimate p99 of at most 1 ms) and P1 (QUICK at most 5 ms and FULL at most 50 ms p99 at
+    # the size budget, and the editor's end-to-end wait at most 50 ms p99, decisions-log item
+    # 162 (1)), are certified by recorded runs on the owner's machine under Windows and WSL2
+    # Linux, the slower deciding, because a wall-clock budget is a property of the machine.
+    # This job runs the same measurements on a hosted runner (crates/bench/tests/
+    # p3_alarm.rs's `p3_budget` and crates/bench/tests/perf_alarm.rs's `p1_budget`) and fails
+    # only at the gates' numbers doubled: a repath p99 over 10 ms or an estimate p99 over 2 ms;
+    # a QUICK p99 over 10 ms, a FULL p99 over 100 ms or an end-to-end p99 over 100 ms. It also
+    # fails whenever either gives no verdict (the build or the measurement failed, or the
+    # report line is missing, short or malformed), never green by default. Like `g3 budget`
+    # it is not required, it CAN go red, and scripts/merge-train.sh is to stop on it like any
+    # other check; whether it joins the ruleset's required checks is the owner's (S3's plan,
+    # decision 16: five passes on main first). Every timing is taken in the walled bench;
+    # xtask only runs it and reads the report (xtask/src/budget.rs). The P1 alarm runs even
+    # when the P3 alarm failed, so one red step never hides the other's verdict. It follows
+    # the docs-only fast path.
+    runs-on: ubuntu-24.04
+    # Above the sum of the steps' own timeouts (the scope step's 10 and the two alarms' 30
+    # each); xtask's `the_authoring_budgets_job_runs_both_alarms_and_can_go_red` holds it.
+    timeout-minutes: 80
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
+          fetch-depth: 2
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
+
+      - name: Decide whether anything but prose changed
+        # The docs-only fast path (see this file's header), as in the `ci-shard-<os>` jobs.
+        # Timed, so a hung xtask build cannot bring the job to its own timeout.
+        id: scope
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # A change to the decider itself (xtask/, the workflows, or the `cargo xtask`
+          # alias under .cargo/) is never judged by its own copy: that copy could be the
+          # broken one, and the tests that would catch it are among the steps it skips.
+          # `git diff --quiet` exits 1 on a difference and 128 on an error; both answer full.
+          if ! git diff --quiet --no-renames HEAD^1 HEAD -- xtask .github .cargo; then
+            echo "full: the commit changes xtask/, .github/ or .cargo/ (or git failed), so the decider does not judge its own change"
+            echo "prose_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo xtask ci-scope
+
+      - name: Only prose changed, so nothing is measured
+        if: steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the authoring budgets did not run in this job. They run in full on main's push (decisions-log item 115 (4))."
+
+      - name: cargo xtask p3-budget
+        if: steps.scope.outputs.prose_only != 'true'
+        timeout-minutes: 30
+        shell: bash
+        run: cargo xtask p3-budget
+
+      - name: cargo xtask p1-budget
+        # `!cancelled()` so a red P3 step does not skip this one: each alarm's verdict is its
+        # own. The prose guard is added to it, never replaced by it (this file's header).
+        if: ${{ !cancelled() && steps.scope.outputs.prose_only != 'true' }}
+        timeout-minutes: 30
+        shell: bash
+        run: cargo xtask p1-budget
 
   # ---------------------------------------------------------------------------------------
   # T21: the unsigned zips (skeleton plan T21; decisions-log item 117 (8)). Four plain jobs,
