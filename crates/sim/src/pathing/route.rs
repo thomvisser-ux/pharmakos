@@ -281,12 +281,8 @@ fn abstract_search_with(
     }
 
     let mut found = false;
-    while let Some(item) = scratch.abstract_heap.pop() {
-        if abstract_is_closed(scratch, item.n) {
-            scratch.visits.bump();
-            continue;
-        }
-        abstract_close(scratch, item.n);
+    while let Some(item) = scratch.pop_open_abstract() {
+        scratch.abstract_close(item.n);
         scratch.abstract_expansions.bump();
         if item.n == temp_goal {
             found = true;
@@ -906,22 +902,6 @@ fn abstract_begin(scratch: &mut Scratch) {
     scratch.abstract_heap.clear();
 }
 
-fn abstract_is_closed(scratch: &Scratch, node: u32) -> bool {
-    usize::try_from(node)
-        .ok()
-        .and_then(|index| scratch.abstract_closed.get(index).copied())
-        .is_some_and(|stamp| stamp == scratch.abstract_epoch)
-}
-
-fn abstract_close(scratch: &mut Scratch, node: u32) {
-    let epoch = scratch.abstract_epoch;
-    if let Ok(index) = usize::try_from(node)
-        && let Some(slot) = scratch.abstract_closed.get_mut(index)
-    {
-        *slot = epoch;
-    }
-}
-
 fn abstract_seen(scratch: &Scratch, node: u32) -> bool {
     usize::try_from(node)
         .ok()
@@ -954,7 +934,7 @@ fn abstract_relax(
     goal: Node,
     target_cell: Node,
 ) {
-    if abstract_is_closed(scratch, target) {
+    if scratch.abstract_is_closed(target) {
         return;
     }
     if abstract_seen(scratch, target) && abstract_cost(scratch, target) <= cost {

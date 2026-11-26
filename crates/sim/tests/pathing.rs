@@ -1598,8 +1598,8 @@ fn the_column_doors_refuse(surface: &Surface, short: &mut Scratch, pair: (Node, 
 /// typed, before it searches** (S3's `walk3`, its fix pass): the estimate,
 /// the abstract search, the route, the route under a surcharge and the served
 /// walk's cost, which read the decomposition; and A\* in its three forms and
-/// the sweep, which read the columns alone. The router counts a refused
-/// route under its own reason.
+/// the sweep, which read the columns alone. The router's door has its own
+/// test below.
 ///
 /// The regression is twofold. First (S3's `p3est`): a search wrote a node's
 /// record through `get_mut` and read it through `get`, so a node the scratch
@@ -1612,8 +1612,8 @@ fn the_column_doors_refuse(surface: &Surface, short: &mut Scratch, pair: (Node, 
 /// "no route" from slots it did not have, at every door but the estimate's.
 #[test]
 fn a_search_in_a_scratch_that_does_not_fit_is_refused_at_every_door() {
-    let mut fixture = Fixture::build(SEED, CLUSTER);
-    let (surface, clusters) = (&fixture.surface, &fixture.clusters);
+    let fixture = Fixture::build(SEED, CLUSTER);
+    let surface = &fixture.surface;
     let (mut coarse, mut short) = misfits(&fixture);
     let set = pairs(&fixture, 24, 0x5EED_0F17);
     assert!(set.len() >= 16, "pairs to ask: {}", set.len());
@@ -1642,34 +1642,70 @@ fn a_search_in_a_scratch_that_does_not_fit_is_refused_at_every_door() {
             .is_some(),
         "a connected pair has a walk"
     );
+}
 
-    // The router refuses before it serves a unit: the waiting unit still
-    // waits, and nothing is counted, where a route refused unit by unit would
-    // have parked it as sealed in.
-    let mut router = pharmakos_sim::pathing::router::Router::new(1, &fixture.rules);
+/// **The router refuses a scratch that does not serve its graph before it
+/// touches anything** ([`Router::serve`]'s door): the waiting unit still
+/// waits, where a route refused unit by unit would have parked it as sealed
+/// in; no route is counted as missing; and what the last serve left, its
+/// served and sealed lists and its totals, is as that serve left it. The
+/// refusal follows a serve that filled both lists, so a door that emptied
+/// them first is caught (a review mutant of S3's `walk3` was not, while the
+/// refusal was tried on a router that had never served).
+#[test]
+fn the_router_refuses_a_misfit_scratch_and_keeps_what_its_last_serve_left() {
+    use pharmakos_sim::pathing::router::Router;
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let (surface, clusters) = (&fixture.surface, &fixture.clusters);
+    let (mut coarse, _) = misfits(&fixture);
+    let (start, goal) = pairs(&fixture, 1, 0x5EED_0F18)[0];
+    let on = |c: i32| Fx::from_voxels(i16::try_from(c).expect("fits"));
     let point = |node: Node| {
         let (x, y) = surface.coord_of(node);
-        let on = |c: i32| Fx::from_voxels(i16::try_from(c).expect("fits"));
         [on(x), on(y), on(surface.standing_z(node))]
     };
+    // Units 0 and 2 stand on the pair's start; unit 1 stands off the map, so
+    // a serve parks it as sealed in.
+    let from = [point(start), [on(-1), on(-1), on(0)], point(start)];
+    let to = [point(goal); 3];
+    let mut router = Router::new(3, &fixture.rules);
     router.request(0);
-    let (from, to) = ([point(start)], [point(goal)]);
+    router.request(1);
+    let report = router
+        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 3)
+        .expect("the scratch made with the graph serves it");
+    assert_eq!((report.served, report.sealed), (2, 1));
+    let left = |router: &Router| {
+        (
+            router.served_this_tick().to_vec(),
+            router.sealed_this_tick().to_vec(),
+            router.sealed_total(),
+            NoPath::ALL.map(|reason| router.no_path().of(reason)),
+            [router.state(0), router.state(1)],
+        )
+    };
+    let before = left(&router);
     assert_eq!(
-        router.serve(surface, clusters, &mut coarse, &from, &to, 1),
+        (before.0.as_slice(), before.1.as_slice(), before.2),
+        (&[0_u32, 1][..], &[1_u32][..], 1),
+        "the recipe: the first serve reached two units and sealed one in"
+    );
+
+    router.request(2);
+    assert_eq!(
+        router.serve(surface, clusters, &mut coarse, &from, &to, 3),
         Err(Misfit),
         "the router"
     );
-    assert_eq!(router.state(0), WalkState::Waiting, "the unit still waits");
-    assert_eq!(
-        NoPath::ALL.map(|reason| router.no_path().of(reason)),
-        [0, 0, 0, 0],
-        "no route was counted as missing"
-    );
+    assert_eq!(router.state(2), WalkState::Waiting, "the unit still waits");
+    assert_eq!(left(&router), before, "the refusal moved nothing");
+
     let report = router
-        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 1)
+        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 3)
         .expect("the scratch made with the graph serves it");
     assert_eq!((report.served, report.sealed), (1, 0));
-    assert_eq!(router.state(0), WalkState::Walking, "and is then routed");
+    assert_eq!(router.served_this_tick(), [2], "the unit that waited");
+    assert_eq!(router.state(2), WalkState::Walking, "and is then routed");
 }
 
 /// The graph's own doors refuse a scratch that does not serve it, and **a
@@ -1980,6 +2016,144 @@ fn a_lookup_is_counted_by_its_slots_and_a_sweep_by_its_neighbours() {
         );
     }
     assert!(far >= 48, "only {far} pairs span two clusters");
+}
+
+/// A block of two by two columns of floor at the map's corner and one column
+/// of floor at (10, 10), which no walk from the block reaches, under the
+/// given step costs; with a scratch for it.
+fn block_and_island(cardinal: i32, diagonal: i32) -> (Surface, Scratch) {
+    let rules = rules();
+    let mut store = VoxelStore::new([32, 32, 32]).expect("a whole number of chunks");
+    for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1), (10, 10)] {
+        assert!(store.set([x, y, 0], Material::STONE), "the floor");
+    }
+    let mut digests = ChunkDigests::new(store.chunk_count());
+    store.settle_all(&mut digests);
+    let costs = StepCosts::new(
+        core::num::NonZeroI32::new(cardinal).expect("a step"),
+        diagonal,
+        fixture_climb(&rules),
+        StepCosts::from_rules(&rules).headroom(),
+    );
+    let surface = Surface::new(&store, costs).expect("a surface");
+    let scratch = Scratch::for_map(&surface, 16).expect("a scratch");
+    (surface, scratch)
+}
+
+/// **A stale heap entry a search skips is one counted visit**, in the sweep
+/// and in A\* alike (S3's `walk3`, "every loop counted"; the abstract
+/// search's is held by the search module's own test of
+/// `Scratch::pop_open_abstract`). Held exactly, on ground small enough to
+/// count by hand, where a range of visits a pop cannot tell a lost stale
+/// entry from none.
+///
+/// The ground is a block of two by two columns, searched from its corner to
+/// exhaustion (the A\*'s goal stands apart and is never reached, so it pops
+/// every entry too). The corner's pop queues its three neighbours. At a
+/// diagonal of 14 to a cardinal step of 10 nothing is queued twice: four
+/// pops of eight neighbour slots each, 32 visits. At a diagonal of 25 the
+/// far column is queued at 25 by the corner and again at 20 by whichever
+/// side column pops first; it closes at 20, and its entry at 25 surfaces
+/// stale: 33 visits. Which side column pops first changes neither count.
+#[test]
+fn a_stale_entry_a_search_skips_is_one_counted_visit() {
+    for (diagonal, stale) in [(14, 0_u64), (25, 1)] {
+        let (surface, mut scratch) = block_and_island(10, diagonal);
+        let corner = surface.node_of(0, 0).expect("on the map");
+        let island = surface.node_of(10, 10).expect("on the map");
+        assert!(
+            surface.walkable(island),
+            "the recipe: the goal can be stood on"
+        );
+
+        dijkstra_bounded(&surface, Bound::Whole, &mut scratch, corner, false)
+            .expect("the scratch serves the surface");
+        assert_eq!(
+            (scratch.expansions(), scratch.visits()),
+            (Ok(4), Ok(32 + stale)),
+            "a diagonal of {diagonal}: the sweep"
+        );
+
+        scratch.reset_counters();
+        let mut walk: Vec<Node> = Vec::new();
+        assert_eq!(
+            astar(
+                &surface,
+                Bound::Whole,
+                &mut scratch,
+                corner,
+                island,
+                &mut walk
+            ),
+            Ok(None),
+            "a diagonal of {diagonal}: no walk reaches the island"
+        );
+        assert_eq!(
+            (scratch.expansions(), scratch.visits()),
+            (Ok(4), Ok(32 + stale)),
+            "a diagonal of {diagonal}: A*"
+        );
+    }
+}
+
+/// **A query between two columns of one cluster that keeps its fields
+/// searches the cluster once** (S3's `walk3`, its fix pass): the direct cost
+/// is found with the start's insertion, by one A\* bounded to the cluster,
+/// and the goal's insertion asks for none, since the walk costs the same
+/// from either end. Held by the grid pops the query counts, which are that
+/// one search's, where asking again with the goal counted them twice and no
+/// answer moved.
+#[test]
+fn a_query_inside_one_cluster_searches_it_once() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let speed = fixture.commander_speed();
+    let mut alone = Scratch::for_map(&fixture.surface, CLUSTER).expect("a scratch");
+    let mut walk: Vec<Node> = Vec::new();
+    let mut inside = 0_u32;
+    for (start, goal) in pairs_about(&fixture, (2, 2), 96, 0x5EED_0F19) {
+        let tag = fixture.clusters.cluster_of(start);
+        if tag != fixture.clusters.cluster_of(goal) {
+            continue;
+        }
+        assert!(
+            fixture.clusters.field(&fixture.surface, start).is_some(),
+            "the recipe: the cluster keeps its fields"
+        );
+        inside += 1;
+        fixture.scratch.reset_counters();
+        alone.reset_counters();
+        let _ = abstract_search(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            start,
+            goal,
+            Fog::Clear,
+            speed,
+        )
+        .expect("the scratch serves");
+        let _ = astar(
+            &fixture.surface,
+            Bound::Cluster(fixture.clusters.of_node(), tag),
+            &mut alone,
+            start,
+            goal,
+            &mut walk,
+        )
+        .expect("the scratch serves");
+        let [grid, endpoint, _, _] = counted(&fixture.scratch);
+        let [once, _, _, _] = counted(&alone);
+        assert!(
+            once > 0,
+            "{start} to {goal}: the bounded search popped nothing"
+        );
+        assert_eq!(
+            (grid, endpoint),
+            (once, 0),
+            "{start} to {goal}: the query's grid pops are not one bounded search's"
+        );
+    }
+    assert!(inside >= 24, "only {inside} pairs share the cluster");
 }
 
 #[test]

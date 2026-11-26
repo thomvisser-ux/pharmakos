@@ -832,6 +832,27 @@ impl Scratch {
         }
     }
 
+    /// Take the cheapest open column off the low-level heap: its entry, with
+    /// every stale entry met on the way skipped and counted as one visit each
+    /// ([`Scratch::visits`]); `None` once the heap is empty. A stale entry is
+    /// one whose column is already closed: a column reached again at a lower
+    /// cost is queued again, and its dearer entry stays in the heap until it
+    /// surfaces.
+    ///
+    /// **The one way a column leaves the low-level heap**, as
+    /// [`Scratch::queue`] is the one way in, so that a stale entry skipped is
+    /// counted in one place for every search.
+    pub(crate) fn pop_open(&mut self) -> Option<Item> {
+        while let Some(item) = self.heap.pop() {
+            if self.is_closed(item.n) {
+                self.visits.bump();
+                continue;
+            }
+            return Some(item);
+        }
+        None
+    }
+
     /// Record `node` as reached at `cost` from `from` and queue it at the key
     /// `(cost + h, h, node)`, both or neither; and whether it was queued:
     /// `false`, with nothing recorded or queued, for a column this scratch
@@ -894,6 +915,40 @@ impl Scratch {
             n: node,
         });
         true
+    }
+
+    /// Whether the abstract search under way has closed the abstract node
+    /// `node`.
+    pub(crate) fn abstract_is_closed(&self, node: u32) -> bool {
+        usize::try_from(node)
+            .ok()
+            .and_then(|index| self.abstract_closed.get(index).copied())
+            .is_some_and(|stamp| stamp == self.abstract_epoch)
+    }
+
+    /// Close the abstract node `node` for the abstract search under way.
+    pub(crate) fn abstract_close(&mut self, node: u32) {
+        let epoch = self.abstract_epoch;
+        if let Ok(index) = usize::try_from(node)
+            && let Some(slot) = self.abstract_closed.get_mut(index)
+        {
+            *slot = epoch;
+        }
+    }
+
+    /// [`Scratch::pop_open`] for the abstract search: the cheapest open
+    /// abstract node's entry, with every stale entry met on the way skipped
+    /// and counted as one visit each. The one way a node leaves the abstract
+    /// heap, for the same reason.
+    pub(crate) fn pop_open_abstract(&mut self) -> Option<Item> {
+        while let Some(item) = self.abstract_heap.pop() {
+            if self.abstract_is_closed(item.n) {
+                self.visits.bump();
+                continue;
+            }
+            return Some(item);
+        }
+        None
     }
 
     fn cost_at(&self, node: Node) -> i32 {
@@ -1050,11 +1105,7 @@ fn astar_inner(
         return None;
     }
 
-    while let Some(item) = scratch.heap.pop() {
-        if scratch.is_closed(item.n) {
-            scratch.visits.bump();
-            continue;
-        }
+    while let Some(item) = scratch.pop_open() {
         scratch.close(item.n);
         scratch.expansions.bump();
         if item.n == goal {
@@ -1147,11 +1198,7 @@ pub(crate) fn sweep_served(
     if !scratch.queue(source, 0, source, 0) {
         return;
     }
-    while let Some(item) = scratch.heap.pop() {
-        if scratch.is_closed(item.n) {
-            scratch.visits.bump();
-            continue;
-        }
+    while let Some(item) = scratch.pop_open() {
         scratch.close(item.n);
         scratch.expansions.bump();
         if endpoint {
@@ -1262,6 +1309,56 @@ mod tests {
             Some((10, 3, 5))
         );
         assert_eq!(scratch.abstract_g.get(5).copied(), Some(7));
+    }
+
+    /// A stale entry, one whose node closed at a lower cost after it was
+    /// queued, is skipped as it surfaces and counted as one visit, in each
+    /// heap's one exit ([`Scratch::pop_open`],
+    /// [`Scratch::pop_open_abstract`]); an open node's entry is returned and
+    /// counts nothing there.
+    #[test]
+    fn a_stale_entry_is_skipped_and_counted_as_it_surfaces() {
+        let mut scratch = Scratch::new(4, 4, 4, 18).unwrap_or_else(|| panic!("a ring for 18"));
+        scratch.epoch = 1;
+        scratch.abstract_epoch = 1;
+        // Column 2 is reached at 9 and again at 5, column 1 at 7: three
+        // entries for two columns.
+        assert!(
+            scratch.queue(2, 9, 0, 0) && scratch.queue(2, 5, 0, 0) && scratch.queue(1, 7, 0, 0)
+        );
+        let first = scratch.pop_open().map(super::Item::key);
+        assert_eq!(first, Some((5, 0, 2)), "the cheaper entry of column 2");
+        scratch.close(2);
+        let second = scratch.pop_open().map(super::Item::key);
+        assert_eq!(second, Some((7, 0, 1)));
+        scratch.close(1);
+        assert_eq!(
+            scratch.visits(),
+            Ok(0),
+            "an open column's entry is no visit"
+        );
+        assert_eq!(scratch.pop_open(), None, "column 2's entry at 9 is stale");
+        assert_eq!(scratch.visits(), Ok(1), "and is counted once");
+        assert_eq!(scratch.pop_open(), None, "an empty heap");
+        assert_eq!(scratch.visits(), Ok(1), "counts nothing");
+
+        // The same three entries in the abstract heap.
+        assert!(
+            scratch.queue_abstract(2, 9, 0, 0)
+                && scratch.queue_abstract(2, 5, 0, 0)
+                && scratch.queue_abstract(1, 7, 0, 0)
+        );
+        let first = scratch.pop_open_abstract().map(super::Item::key);
+        assert_eq!(first, Some((5, 0, 2)));
+        assert!(!scratch.abstract_is_closed(2), "taken, and not yet closed");
+        scratch.abstract_close(2);
+        assert!(scratch.abstract_is_closed(2));
+        let second = scratch.pop_open_abstract().map(super::Item::key);
+        assert_eq!(second, Some((7, 0, 1)));
+        scratch.abstract_close(1);
+        assert_eq!(scratch.visits(), Ok(1), "an open node's entry is no visit");
+        assert_eq!(scratch.pop_open_abstract(), None, "node 2's entry at 9");
+        assert_eq!(scratch.visits(), Ok(2), "is stale, and is counted once");
     }
 
     /// A tally counts by one, and past `u64::MAX` it says it overflowed
