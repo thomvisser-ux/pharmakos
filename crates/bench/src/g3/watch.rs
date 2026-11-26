@@ -476,9 +476,23 @@ impl Dropped {
     /// The world's counts for `seats`. A seat the world does not seat is
     /// drift, never a count of nothing.
     fn read(world: &World, seats: &[SeatId]) -> Result<Dropped, Error> {
+        Dropped::of(
+            seats,
+            |seat| world.sightings_forgotten_by(seat),
+            world.sightings_refused(),
+        )
+    }
+
+    /// The counts for `seats` as `forgotten_by` gives each, with `refused`
+    /// beside them. A seat with no count is drift, never zero. Pure.
+    fn of(
+        seats: &[SeatId],
+        forgotten_by: impl Fn(SeatId) -> Option<u64>,
+        refused: u64,
+    ) -> Result<Dropped, Error> {
         let mut forgotten = Vec::with_capacity(seats.len());
         for seat in seats {
-            forgotten.push(world.sightings_forgotten_by(*seat).ok_or_else(|| {
+            forgotten.push(forgotten_by(*seat).ok_or_else(|| {
                 Error::Drift(format!(
                     "the world keeps no forgotten-sightings count for seat {}, which the gate \
                      seats",
@@ -486,10 +500,7 @@ impl Dropped {
                 ))
             })?);
         }
-        Ok(Dropped {
-            forgotten,
-            refused: world.sightings_refused(),
-        })
+        Ok(Dropped { forgotten, refused })
     }
 
     /// What was dropped since `before`, count by count. A count that ran
@@ -992,6 +1003,23 @@ mod tests {
             line.contains("seat 1 6 at tick 2, NO COUNT of what it forgot"),
             "{line}"
         );
+    }
+
+    /// A seat the world keeps no count for is drift naming the seat, never a
+    /// count of nothing (review 2's mutant B3b).
+    #[test]
+    fn a_seat_with_no_count_in_the_world_is_drift_not_zero() {
+        let counts = |seat: SeatId| (seat.raw() < 2).then_some(u64::from(seat.raw()) + 3);
+        let read = Dropped::of(&[SeatId::new(0), SeatId::new(1)], counts, 4)
+            .expect("both seats have a count");
+        assert_eq!((read.forgotten, read.refused), (vec![3, 4], 4));
+        match Dropped::of(&[SeatId::new(0), SeatId::new(5)], counts, 4) {
+            Err(Error::Drift(words)) => assert!(words.contains("seat 5"), "{words}"),
+            other => panic!(
+                "a seat with no count: {:?}",
+                other.map(|read| read.forgotten)
+            ),
+        }
     }
 
     /// The drops over a segment are the end's counts less the start's, seat

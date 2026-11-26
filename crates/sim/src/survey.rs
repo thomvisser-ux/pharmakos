@@ -1208,25 +1208,31 @@ pub enum Drop {
     Unweighed,
 }
 
+impl Drop {
+    /// Every reason, in the order they are tested.
+    pub const ALL: [Drop; 5] = [
+        Drop::UnderThreat,
+        Drop::ScoutLost,
+        Drop::OutOfReach,
+        Drop::CrowdedOut,
+        Drop::Unweighed,
+    ];
+}
+
 /// A [`Memory`] with no room left for what it was asked to keep.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Full;
 
-/// The most Survey drops one Push logs. The measurement's own room, and no
-/// share of the sighting table's: a seat may hold every live asset
-/// (`crate::world::sighting_room_of`), and a Push that drops more than this
-/// counts every drop past it (`Scratch::survey_drops_unlogged`), never
-/// silently. Seven hundred and sixty-eight: what three seats' sixty-four
-/// sightings each and four reasons came to while the table held a seat to
-/// sixty-four, kept as the room since nothing a scout does reads the log.
+/// The drops a memory no world has sized logs in one Push
+/// ([`Memory::new`]): a search scratch made for a map alone, as a test or a
+/// bench makes one. A world sizes its own scratch's memory for its seats
+/// ([`Memory::size_for`]); a scratch a caller puts in a world's place keeps
+/// this room, and every miss past it is counted
+/// (`Scratch::survey_drops_unlogged`).
 const DROP_ROOM: usize = 3 * 64 * 4;
 
-/// The most listed sightings, scouts and scout deaths one Push remembers,
-/// each: the measurement's own room, as [`DROP_ROOM`] is, with every miss
-/// past it counted (`Scratch::survey_drops_unlogged`). A Push lists what its
-/// scouts can walk to, and a decision lists at most [`LIST_ROOM`] sightings a
-/// seat. A Push that passes it has no whole memory to name a drop from, and
-/// names none from it after ([`Memory::missed`]).
+/// The listings, and the scouts and scout deaths, a memory no world has
+/// sized remembers of one Push, each ([`DROP_ROOM`]'s note).
 const SEAT_ROOM: usize = 3 * 64;
 
 /// What naming a Survey drop's reason remembers of the running Push, and the
@@ -1246,9 +1252,16 @@ const SEAT_ROOM: usize = 3 * 64;
 /// * the drops, once each for every seat, asset and reason, with the last
 ///   decision tick each was dropped on.
 ///
-/// Every list is reserved when the scratch is made, so a decision allocates
-/// nothing; past the room, the scratch counts the miss
-/// (`Scratch::survey_drops_unlogged`).
+/// Every list is reserved before a tick runs, so a decision allocates
+/// nothing. **A world sizes the memory for its seats** ([`Memory::size_for`],
+/// at construction and at every restore): a drop for every reason of every
+/// sighting every seat can hold at once, a listing for each such sighting,
+/// and a scout and a death for every unit the world can field. So every
+/// seat can stand at its sighting room with every sighting dropped for
+/// every reason and the log is whole. Past a room (a Push in which a seat
+/// drops more distinct assets than it can remember at once) the scratch
+/// counts each miss (`Scratch::survey_drops_unlogged`), and names no reason
+/// the memory can no longer vouch for ([`Memory::missed`]).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Memory {
     /// The first tick of the Push this memory is for.
@@ -1272,10 +1285,17 @@ pub(crate) struct Memory {
     /// what the memory says of the Push is no longer whole
     /// ([`Memory::missed`]).
     missed: bool,
+    /// The most drops the log holds.
+    drop_room: usize,
+    /// The most listings it holds.
+    listed_room: usize,
+    /// The most scouts, and the most scout deaths, it holds.
+    scout_room: usize,
 }
 
 impl Memory {
-    /// An empty memory with its room reserved.
+    /// An empty memory with the room of one no world has sized
+    /// ([`DROP_ROOM`], [`SEAT_ROOM`]) reserved.
     pub(crate) fn new() -> Self {
         Self {
             push: None,
@@ -1284,7 +1304,35 @@ impl Memory {
             scouts: Reserved::with_capacity(SEAT_ROOM),
             deaths: Reserved::with_capacity(SEAT_ROOM),
             missed: false,
+            drop_room: DROP_ROOM,
+            listed_room: SEAT_ROOM,
+            scout_room: SEAT_ROOM,
         }
+    }
+
+    /// Size the memory for a world of `seats` seats, each remembering
+    /// `sightings` sightings at once, fielding `units` units in all, and
+    /// reserve it: a listing for every sighting every seat can hold, a drop
+    /// for each of them under every reason ([`Drop::ALL`]), and a scout and
+    /// a death for every unit. Never smaller than it was: what it holds
+    /// stays. Called outside a tick (the world's construction and its
+    /// restore), since it may allocate.
+    pub(crate) fn size_for(&mut self, seats: u32, sightings: u32, units: u32) {
+        let listed = crate::math::index::row(seats.saturating_mul(sightings));
+        self.listed_room = self.listed_room.max(listed);
+        self.drop_room = self.drop_room.max(listed.saturating_mul(Drop::ALL.len()));
+        self.scout_room = self.scout_room.max(crate::math::index::row(units));
+        self.log.reserve_total(self.drop_room);
+        self.listed.reserve_total(self.listed_room);
+        self.scouts.reserve_total(self.scout_room);
+        self.deaths.reserve_total(self.scout_room);
+    }
+
+    /// The rooms: the most drops, listings, and scouts or scout deaths the
+    /// memory holds.
+    #[cfg(test)]
+    pub(crate) const fn rooms(&self) -> (usize, usize, usize) {
+        (self.drop_room, self.listed_room, self.scout_room)
     }
 
     /// Forget everything.
@@ -1344,7 +1392,7 @@ impl Memory {
                 }
                 Ok(false)
             }
-            Err(_) if self.log.len() >= DROP_ROOM => Err(Full),
+            Err(_) if self.log.len() >= self.drop_room => Err(Full),
             Err(at) => {
                 self.log.insert(at, (seat, asset, reason, tick));
                 Ok(true)
@@ -1363,7 +1411,7 @@ impl Memory {
                 }
                 Ok(())
             }
-            Err(_) if self.listed.len() >= SEAT_ROOM => {
+            Err(_) if self.listed.len() >= self.listed_room => {
                 self.missed = true;
                 Err(Full)
             }
@@ -1411,7 +1459,7 @@ impl Memory {
             held.2 = place;
             return Ok(());
         }
-        if self.scouts.len() >= SEAT_ROOM {
+        if self.scouts.len() >= self.scout_room {
             self.missed = true;
             return Err(Full);
         }
@@ -1431,7 +1479,7 @@ impl Memory {
         let Some(place) = place else {
             return Ok(());
         };
-        if self.deaths.len() >= SEAT_ROOM {
+        if self.deaths.len() >= self.scout_room {
             self.missed = true;
             return Err(Full);
         }
@@ -1539,43 +1587,34 @@ fn note_scouts<M: crate::seams::Meter + ?Sized>(
     let tick = world.tick().raw();
     let push = world.match_state().segment_started().raw();
     world.scratch_mut().survey.begin(push);
-    // The seat's kept scouts, copied out of the scratch so the unit table
-    // can be read beside them.
-    let mut kept = [0_u32; SEAT_ROOM];
-    let mut count: usize = 0;
-    for (who, unit, _) in &world.scratch_mut().survey.scouts {
-        if *who == seat.raw()
-            && let Some(slot) = kept.get_mut(count)
-        {
-            *slot = *unit;
-            count = count.saturating_add(1);
+    // Every scout of the seat the memory keeps that no longer lives is
+    // found dead: one kept scout at a time, read out of the scratch so the
+    // unit table can be read beside it. A death takes its scout out of the
+    // kept list, so the next one has moved into its place.
+    let mut at: usize = 0;
+    while let Some((who, unit, _)) = world.scratch_mut().survey.scouts.get(at).copied() {
+        let alive = who != seat.raw() || {
+            let units = world.units();
+            units
+                .row_of(UnitId::new(unit))
+                .ok()
+                .and_then(|row| units.hit_points().get(row.index()).copied())
+                .is_some_and(crate::math::quantity::Hp::is_alive)
+        };
+        if alive {
+            at = at.saturating_add(1);
+            continue;
         }
-    }
-    let mut gone = [0_u32; SEAT_ROOM];
-    let mut dead: usize = 0;
-    for unit in kept.iter().take(count) {
-        let units = world.units();
-        let alive = units
-            .row_of(UnitId::new(*unit))
-            .ok()
-            .and_then(|row| units.hit_points().get(row.index()).copied())
-            .is_some_and(crate::math::quantity::Hp::is_alive);
-        if !alive && let Some(slot) = gone.get_mut(dead) {
-            *slot = *unit;
-            dead = dead.saturating_add(1);
-        }
-    }
-    let mut any = false;
-    for unit in gone.iter().take(dead) {
         if world
             .scratch_mut()
             .survey
-            .died(seat.raw(), *unit, tick)
+            .died(seat.raw(), unit, tick)
             .is_err()
         {
             world.scratch_mut().survey_drops_unlogged.bump();
         }
     }
+    let mut any = false;
     for row in 0..crate::math::index::row(world.units().len()) {
         meter.rows(1);
         if !member(world, seat, members, row) {
@@ -3126,6 +3165,468 @@ mod tests {
         }
     }
 
+    /// A fixed-seed xorshift for the randomised tests below: the same
+    /// sequence on every machine.
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, n: u64) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x.checked_rem(n).unwrap_or(0)
+        }
+
+        fn small(&mut self, n: u64) -> u32 {
+            u32::try_from(self.below(n)).unwrap_or_else(|error| panic!("{error}"))
+        }
+
+        fn seat(&mut self, n: u64) -> u8 {
+            u8::try_from(self.below(n)).unwrap_or_else(|error| panic!("{error}"))
+        }
+    }
+
+    /// The drop log and the listings as they were before they were kept in
+    /// key order: found by a walk, pushed at the end.
+    struct LinearMemory {
+        log: Vec<(u8, u32, super::Drop, u32)>,
+        listed: Vec<(u8, u32, u32, u32)>,
+        drop_room: usize,
+        listed_room: usize,
+    }
+
+    impl LinearMemory {
+        fn log_drop(
+            &mut self,
+            key: (u8, u32, super::Drop),
+            tick: u32,
+        ) -> Result<bool, super::Full> {
+            if let Some(held) = self
+                .log
+                .iter_mut()
+                .find(|(who, what, why, _)| (*who, *what, *why) == key)
+            {
+                held.3 = tick;
+                return Ok(false);
+            }
+            if self.log.len() >= self.drop_room {
+                return Err(super::Full);
+            }
+            self.log.push((key.0, key.1, key.2, tick));
+            Ok(true)
+        }
+
+        fn listed(&mut self, key: (u8, u32), tick: u32, owner: u32) -> Result<(), super::Full> {
+            if let Some(held) = self
+                .listed
+                .iter_mut()
+                .find(|(who, what, _, _)| (*who, *what) == key)
+            {
+                held.2 = tick;
+                held.3 = owner;
+                return Ok(());
+            }
+            if self.listed.len() >= self.listed_room {
+                return Err(super::Full);
+            }
+            self.listed.push((key.0, key.1, tick, owner));
+            Ok(())
+        }
+
+        fn listed_at(&self, key: (u8, u32)) -> Option<(u32, u32)> {
+            self.listed
+                .iter()
+                .find(|(who, what, _, _)| (*who, *what) == key)
+                .map(|(_, _, at, owner)| (*at, *owner))
+        }
+    }
+
+    /// **The drop log and the listings, kept in key order and searched,
+    /// answer as the linear ones did** (review 2's probe P-D, adopted):
+    /// random sequences with fixed seeds over small and large key spaces, up
+    /// to the rooms and past them. The same answers at every step (`Ok(true)`,
+    /// `Ok(false)`, `Err(Full)`), the same entries and ticks at the end, each
+    /// list in ascending key order, and no list grown past its reservation,
+    /// so nothing allocates at a room.
+    #[test]
+    fn the_sorted_log_and_listings_answer_as_the_linear_ones_did() {
+        for seed in [1_u64, 7, 42, 0x9E37_79B9, 0xDEAD_BEEF] {
+            for space in [4_u64, 50, 400, 5_000] {
+                let mut rng = Rng(seed.wrapping_mul(2_654_435_761).wrapping_add(space) | 1);
+                let mut sorted = super::Memory::new();
+                let (drop_room, listed_room, _) = sorted.rooms();
+                let mut linear = LinearMemory {
+                    log: Vec::new(),
+                    listed: Vec::new(),
+                    drop_room,
+                    listed_room,
+                };
+                let reserved = (sorted.log.capacity(), sorted.listed.capacity());
+                let mut full = (0_u32, 0_u32);
+                for tick in 0..6_000_u32 {
+                    let key = (rng.seat(3), rng.small(space));
+                    if rng.below(3) < 2 {
+                        let reason = super::Drop::ALL
+                            .get(crate::math::index::row(rng.small(5)))
+                            .copied()
+                            .unwrap_or_else(|| panic!("a reason"));
+                        let answer = sorted.log_drop(key.0, key.1, reason, tick);
+                        assert_eq!(
+                            answer,
+                            linear.log_drop((key.0, key.1, reason), tick),
+                            "seed {seed}, space {space}, step {tick}: a drop"
+                        );
+                        full.0 += u32::from(answer.is_err());
+                    } else {
+                        let owner = rng.small(10);
+                        let answer = sorted.listed(key.0, key.1, tick, owner);
+                        assert_eq!(
+                            answer,
+                            linear.listed(key, tick, owner),
+                            "seed {seed}, space {space}, step {tick}: a listing"
+                        );
+                        full.1 += u32::from(answer.is_err());
+                    }
+                    let asked = (rng.seat(3), rng.small(space));
+                    assert_eq!(
+                        sorted.listed_at(asked.0, asked.1),
+                        linear.listed_at(asked),
+                        "seed {seed}, space {space}, step {tick}: a listing read back"
+                    );
+                }
+                linear.log.sort_unstable();
+                linear.listed.sort_unstable();
+                assert_eq!(sorted.log.to_vec(), linear.log, "the log's entries");
+                assert_eq!(sorted.listed.to_vec(), linear.listed, "the listings");
+                assert_eq!(
+                    (sorted.log.capacity(), sorted.listed.capacity()),
+                    reserved,
+                    "seed {seed}, space {space}: a list grew past its reservation"
+                );
+                if space == 5_000 {
+                    assert!(
+                        full.0 > 0 && full.1 > 0 && sorted.missed(),
+                        "the recipe: both lists are driven past their rooms, {full:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **The sighting table answers as a model does** (review 2's probe P-E,
+    /// adopted): random sightings with fixed seeds over three seats and a
+    /// fourth the table holds no rows for, at allowances from none to five,
+    /// against a map from (seat, asset) to the tick that evicts a full
+    /// seat's stalest by (tick, asset). Every answer and the whole table
+    /// agree at every step, and no seat is ever past its allowance.
+    #[test]
+    fn the_sighting_table_answers_as_a_model_does() {
+        use crate::tables::{Sighted, SightingTable};
+        use std::collections::BTreeMap;
+        for seed in [3_u64, 11, 99, 12_345, 0xFACE] {
+            for per_seat in [0_u32, 1, 2, 3, 5] {
+                let mut rng = Rng(seed.wrapping_mul(31).wrapping_add(u64::from(per_seat)) | 1);
+                let mut table = SightingTable::with_room(3, per_seat);
+                let mut model: BTreeMap<(u8, u32), u32> = BTreeMap::new();
+                for step in 0..3_000_u32 {
+                    let (seat, asset, tick) = (rng.seat(4), rng.small(9), rng.small(40));
+                    let held = model.keys().filter(|(who, _)| *who == seat).count();
+                    let expected = if seat >= 3 || per_seat == 0 {
+                        Sighted::Refused
+                    } else if let Some(seen) = model.get_mut(&(seat, asset)) {
+                        *seen = tick;
+                        Sighted::Again
+                    } else if u32::try_from(held).is_ok_and(|held| held < per_seat) {
+                        model.insert((seat, asset), tick);
+                        Sighted::New
+                    } else {
+                        let stalest = model
+                            .iter()
+                            .filter(|((who, _), _)| *who == seat)
+                            .map(|((_, what), seen)| (*seen, *what))
+                            .min()
+                            .unwrap_or_else(|| panic!("a full seat holds a sighting"));
+                        model.remove(&(seat, stalest.1));
+                        model.insert((seat, asset), tick);
+                        Sighted::NewOverStalest
+                    };
+                    let answer = table.see(
+                        SeatId::new(seat),
+                        asset,
+                        SeatId::new(1),
+                        AssetKind::Unit.id(),
+                        NO_BLUEPRINT,
+                        [Fx::ZERO; 3],
+                        tick,
+                    );
+                    assert_eq!(
+                        answer, expected,
+                        "seed {seed}, room {per_seat}, step {step}"
+                    );
+                    let rows: Vec<(u8, u32, u32)> = table
+                        .seats()
+                        .iter()
+                        .zip(table.assets())
+                        .zip(table.seen_at())
+                        .map(|((who, what), seen)| (*who, *what, *seen))
+                        .collect();
+                    let wanted: Vec<(u8, u32, u32)> = model
+                        .iter()
+                        .map(|((who, what), seen)| (*who, *what, *seen))
+                        .collect();
+                    assert_eq!(rows, wanted, "seed {seed}, room {per_seat}, step {step}");
+                    assert!((0..3).all(|who| table.len_of(SeatId::new(who)) <= per_seat));
+                }
+            }
+        }
+    }
+
+    /// **The two drop walks count their own seat's rows** (review 2's probe
+    /// P-C, adopted). At two hundred sightings of the seat's beside forty of
+    /// another seat's, with a full list: naming what ranks past the lists
+    /// reads each of the seat's rows once and the whole unit table for each
+    /// needed sighting past the list; naming what a threat covers reads each
+    /// of the seat's rows once, names none of the other seat's rows though
+    /// the threat covers them too, and with no threat reads nothing.
+    #[test]
+    fn the_drop_walks_count_their_own_seats_rows() {
+        let seat = SeatId::new(0);
+        let mut runner = arranged(1, 0);
+        crowd(&mut runner, 200);
+        for index in 0..40_u32 {
+            let id = AssetId::of_unit(crate::tables::UnitId::new(7_000 + index))
+                .unwrap_or_else(|error| panic!("an id: {error:?}"));
+            runner.world_mut().see(
+                SeatId::new(1),
+                id,
+                seat,
+                AssetKind::Unit.id(),
+                NO_BLUEPRINT,
+                [Fx::ZERO; 3],
+                1,
+            );
+        }
+        let world = runner.world();
+        let mine = u64::from(world.sightings().len_of(seat));
+        let units = u64::from(world.units().len());
+        let mut lists = Lists {
+            entries: [None; LIST_ROOM],
+            n: 0,
+        };
+        most_due(world, seat, Members::Survey, &[], &mut lists, &());
+        let last = lists
+            .get(LIST_ROOM - 1)
+            .map_or_else(|| panic!("the recipe: a full list"), |entry| entry.due.rank);
+        let past = world
+            .sightings()
+            .rows_of(seat)
+            .filter_map(|slot| due_in(world, seat, slot, &[], &()))
+            .filter(|due| due.needed && due.rank > last)
+            .count();
+        let past = u64::try_from(past).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            past > 100,
+            "the recipe: many needed sightings past the list"
+        );
+        let counted = Counted::default();
+        super::drop_unweighed(
+            runner.world_mut(),
+            seat,
+            Members::Survey,
+            &[],
+            &lists,
+            &counted,
+        );
+        assert_eq!(counted.rows.get(), mine + past * units);
+        // A threat wide enough to cover every sighting of both seats.
+        let threats = [([Fx::ZERO; 3], Sq::of_radius(Fx::from_voxels(i16::MAX)))];
+        let counted = Counted::default();
+        super::drop_threatened(runner.world_mut(), seat, &threats, &counted);
+        assert_eq!(counted.rows.get(), mine, "the seat's rows, once");
+        let scratch = runner.world_mut().scratch_mut();
+        let under: Vec<u8> = scratch
+            .survey_drops()
+            .iter()
+            .filter(|(_, _, why, _)| *why == super::Drop::UnderThreat)
+            .map(|(who, _, _, _)| *who)
+            .collect();
+        assert_eq!(
+            (under.len(), under.iter().all(|who| *who == 0)),
+            (200, true),
+            "every one of the seat's, and none of the other seat's"
+        );
+        let counted = Counted::default();
+        super::drop_threatened(runner.world_mut(), seat, &[], &counted);
+        assert_eq!(counted.rows.get(), 0, "no threat, no walk");
+    }
+
+    /// **A needed sighting past the lists that another scout walks to is no
+    /// drop** (review 2's mutant U4): one scout is decided alone, and the
+    /// seat's other scout is walking to a needed sighting that ranks past
+    /// the full list. Every other one past the list is named `Unweighed`,
+    /// and that one is not: a scout answers for it.
+    #[test]
+    fn a_sighting_past_the_lists_that_another_scout_walks_to_is_no_drop() {
+        let seat = SeatId::new(0);
+        let mut runner = arranged(2, 0);
+        crowd(&mut runner, 200);
+        let scouts: Vec<usize> = (0..crate::math::index::row(runner.world().units().len()))
+            .filter(|row| {
+                let units = runner.world().units();
+                units.kinds().get(*row).copied() == Some(UnitKind::Scout.id())
+                    && units.seats().get(*row).copied() == Some(0)
+            })
+            .collect();
+        let [decided, other] = scouts[..] else {
+            panic!("the recipe: two scouts, {scouts:?}");
+        };
+        let members = Members::One(decided);
+        let world = runner.world();
+        let mut ranked: Vec<(Rank, u32, [Fx; 3], bool)> = world
+            .sightings()
+            .rows_of(seat)
+            .filter_map(|slot| due_in(world, seat, slot, &[], &()))
+            .map(|due| (due.rank, due.asset, due.place, due.needed))
+            .collect();
+        // item 62: a rank ends in the asset id, and a seat holds one
+        // sighting an asset.
+        ranked.sort_unstable_by_key(|(rank, _, _, _)| *rank);
+        let (_, walked, place, needed) = *ranked
+            .get(LIST_ROOM + 10)
+            .unwrap_or_else(|| panic!("the recipe: a sighting past the list"));
+        assert!(needed, "the recipe: it is needed");
+        let other = u32::try_from(other).unwrap_or_else(|error| panic!("{error}"));
+        runner.world_mut().send_unit(other, place);
+        let world = runner.world();
+        let mut lists = Lists {
+            entries: [None; LIST_ROOM],
+            n: 0,
+        };
+        most_due(world, seat, members, &[], &mut lists, &());
+        assert_eq!(lists.n, LIST_ROOM, "the recipe: a full list");
+        super::drop_unweighed(runner.world_mut(), seat, members, &[], &lists, &());
+        let named: Vec<u32> = runner
+            .world_mut()
+            .scratch_mut()
+            .survey_drops()
+            .iter()
+            .filter(|(who, _, why, _)| *who == 0 && *why == super::Drop::Unweighed)
+            .map(|(_, asset, _, _)| *asset)
+            .collect();
+        let mut expected: Vec<u32> = ranked
+            .iter()
+            .skip(LIST_ROOM)
+            .filter(|(_, asset, _, needed)| *needed && *asset != walked)
+            .map(|(_, asset, _, _)| *asset)
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(
+            named, expected,
+            "every needed one past the list but the one walked to"
+        );
+        assert!(!named.contains(&walked));
+    }
+
+    /// **Only a needed sighting under a threat is a drop** (review 2's
+    /// mutant U6). A minute before the Lull, two sightings under one seen
+    /// threat: one 130 s old, which would be out of the window at the Lull,
+    /// and one 100 s old, still inside it then. The first is named
+    /// `UnderThreat`; the second is not, since nothing of it would be lost.
+    #[test]
+    fn a_sighting_still_inside_the_window_under_a_threat_is_no_drop() {
+        let seat = SeatId::new(0);
+        let (mut runner, cx, cy) = late_in_the_push(1, 60);
+        let id = |index: u32| {
+            AssetId::of_unit(crate::tables::UnitId::new(900 + index))
+                .unwrap_or_else(|error| panic!("an id: {error:?}"))
+        };
+        sighted(&mut runner, AssetKind::Unit, id(0), [cx + 60, cy], 130);
+        sighted(&mut runner, AssetKind::Unit, id(1), [cx + 62, cy], 100);
+        let over = runner.world().standing_point([cx + 61, cy, 0]);
+        let threats = [(over, Sq::of_radius(Fx::from_voxels(8)))];
+        super::drop_threatened(runner.world_mut(), seat, &threats, &());
+        let named: Vec<u32> = runner
+            .world_mut()
+            .scratch_mut()
+            .survey_drops()
+            .iter()
+            .filter(|(who, _, why, _)| *who == 0 && *why == super::Drop::UnderThreat)
+            .map(|(_, asset, _, _)| *asset)
+            .collect();
+        assert_eq!(
+            named,
+            vec![id(0).raw()],
+            "the needed one, and not the other"
+        );
+    }
+
+    /// **A world's drop memory holds every seat at its sighting room**
+    /// (review 2's M1). The log takes a drop for every reason of every
+    /// sighting every seat can hold at once, with nothing unlogged and no
+    /// list grown, and the next new key is the first miss; a memory no world
+    /// sized is far smaller; and a restore sizes the memory again, though a
+    /// caller put a map's own scratch in the world's place before it.
+    #[test]
+    fn a_worlds_drop_memory_holds_every_seat_at_its_sighting_room() {
+        let mut runner = arranged(0, 0);
+        let world = runner.world_mut();
+        let (seats, per_seat, units) = (
+            world.sightings().seat_count(),
+            world.sightings().per_seat(),
+            world.unit_limit(),
+        );
+        let row = crate::math::index::row;
+        let listed = row(seats * per_seat);
+        let sized = (listed * super::Drop::ALL.len(), listed, row(units));
+        assert_eq!(world.scratch_mut().survey.rooms(), sized);
+        let made_for_a_map = super::Memory::new().rooms();
+        assert!(
+            made_for_a_map.0 < sized.0 && made_for_a_map.1 < sized.1,
+            "the recipe: a world's room is past a map's, {made_for_a_map:?} against {sized:?}"
+        );
+        let reserved = world.scratch_mut().survey.log.capacity();
+        for seat in 0..u8::try_from(seats).unwrap_or_else(|error| panic!("{error}")) {
+            for asset in 0..per_seat {
+                for reason in super::Drop::ALL {
+                    world.scratch_mut().survey_drop(seat, asset, reason, 1);
+                }
+            }
+        }
+        let scratch = world.scratch_mut();
+        assert_eq!(
+            (
+                scratch.survey_drops().len(),
+                scratch.survey_drops_unlogged(),
+                scratch.survey.log.capacity()
+            ),
+            (sized.0, Ok(0), reserved),
+            "every seat at its room, every sighting dropped for every reason"
+        );
+        scratch.survey_drop(0, per_seat, super::Drop::Unweighed, 1);
+        assert_eq!(
+            scratch.survey_drops_unlogged(),
+            Ok(1),
+            "the first key past the room"
+        );
+        // A scratch made for the map alone, in the world's place, and then
+        // a restore of the world's own save.
+        let save =
+            crate::Snapshot::capture(world).unwrap_or_else(|error| panic!("a save: {error}"));
+        *world.scratch_mut() =
+            crate::pathing::search::Scratch::for_map(world.surface(), world.clusters().size())
+                .unwrap_or_else(|| panic!("a scratch for the map"));
+        assert_eq!(world.scratch_mut().survey.rooms(), made_for_a_map);
+        save.restore_into(world)
+            .unwrap_or_else(|error| panic!("a restore: {error}"));
+        assert_eq!(
+            world.scratch_mut().survey.rooms(),
+            sized,
+            "sized again at the restore"
+        );
+    }
+
     /// **A seat remembers every asset the world can hold alive, and what it
     /// forgets past that is counted** (S3's `tune3`; S3's plan, E17). The
     /// room is far past the sixty-four a seat was held to, a seat that fills
@@ -4226,7 +4727,8 @@ mod tests {
         let memory = &mut runner.world_mut().scratch_mut().survey;
         assert!(!memory.missed());
         let mut refused = 0_u32;
-        for asset in 0..=u32::try_from(super::SEAT_ROOM).unwrap_or_else(|error| panic!("{error}")) {
+        let (_, listed_room, _) = memory.rooms();
+        for asset in 0..=u32::try_from(listed_room).unwrap_or_else(|error| panic!("{error}")) {
             if memory.listed(2, 5_000 + asset, 1, 1).is_err() {
                 refused += 1;
             }

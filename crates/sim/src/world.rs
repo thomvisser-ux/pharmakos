@@ -1455,12 +1455,20 @@ impl World {
                 size: voxels.size(),
             });
         };
-        let Some((clusters, scratch)) = crate::pathing::graph_for(
+        let Some((clusters, mut scratch)) = crate::pathing::graph_for(
             &surface,
             config.rules.cluster_shape().with_size(cluster_voxels),
         ) else {
             return Err(MapError::Unclusterable { cluster_voxels });
         };
+        // Survey's drop memory lives in the search scratch, and a scratch
+        // made for a map knows no seat: the world sizes it for its own
+        // (`survey::Memory::size_for`), as a restore does again.
+        scratch.survey.size_for(
+            config.seats,
+            sighting_room_of(unit_ceiling, beacon_limit_of(config.seats)),
+            unit_ceiling,
+        );
         let mut router = Router::new(unit_count, &config.rules);
         router.reserve(unit_ceiling.saturating_sub(unit_count));
         let mut unit = 0;
@@ -7647,6 +7655,13 @@ impl World {
         // restored table holds rows for has a count to file a forgotten
         // memory under.
         self.sighting_drops = SightingDrops::for_seats(self.sightings.seat_count());
+        // And Survey's drop memory, for the seats and the room the restored
+        // table has (`survey::Memory::size_for`): never inside a tick.
+        self.scratch.survey.size_for(
+            self.sightings.seat_count(),
+            self.sightings.per_seat(),
+            self.unit_limit,
+        );
         self.credit = restored.credit;
         self.shells = restored.shells;
         self.defend = restored.defend;

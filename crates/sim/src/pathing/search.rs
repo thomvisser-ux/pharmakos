@@ -730,10 +730,15 @@ impl Scratch {
         self.survey_unweighed.read()
     }
 
-    /// Survey drops, listings or scouts of a Push past the room
-    /// [`crate::survey::Memory`] reserves: counted here, so a drop whose
-    /// reason the memory could not name is never silent, and the drop is not
-    /// counted again on every decision.
+    /// The times a Survey drop, listing, scout or scout death found no room
+    /// in [`crate::survey::Memory`], or a drop went unnamed because the
+    /// memory had missed something of its Push
+    /// ([`crate::survey::Memory::missed`]): a count of misses, not of
+    /// distinct drops, since a drop the log could not keep is met again, and
+    /// counted again, on every decision it recurs on. Zero says the log is
+    /// whole and every tally beside it exact. A world sizes its scratch's
+    /// memory so that every seat at its sighting room, with every sighting
+    /// dropped for every reason, fits ([`crate::survey::Memory::size_for`]).
     ///
     /// # Errors
     ///
