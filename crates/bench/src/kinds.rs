@@ -824,11 +824,24 @@ pub fn seed_gap_notice(
     let threshold = i128::try_from(SEED_GAP_PERCENT).map_err(|_| Error::Overflow("the rule"))?;
     let mut kinds: Vec<String> = Vec::with_capacity(first.len());
     for (one, two) in first.iter().zip(second) {
-        kinds.push(format!(
-            "{} {:+}%",
-            one.kind.name(),
-            gap(one.milli_ns_per_unit, two.milli_ns_per_unit)?
-        ));
+        // A kind whose first figure is at or below zero spent less time than
+        // its baseline on its ticks: its work is inside the clock's noise
+        // there, and a per cent of it is no figure. Said in words; the
+        // pooled figure, which is the verdict, still needs a positive one.
+        kinds.push(if one.milli_ns_per_unit <= 0 {
+            format!(
+                "{} no gap (the first seed's {} ns a unit is at or below zero: inside the \
+                 clock's noise)",
+                one.kind.name(),
+                thousandths(one.milli_ns_per_unit)
+            )
+        } else {
+            format!(
+                "{} {:+}%",
+                one.kind.name(),
+                gap(one.milli_ns_per_unit, two.milli_ns_per_unit)?
+            )
+        });
     }
     let (one, two) = (pooled(first)?, pooled(second)?);
     let pooled_gap = gap(one, two)?;
@@ -973,6 +986,18 @@ mod tests {
         );
         let cut: Vec<KindFigure> = far.into_iter().take(2).collect();
         assert!(seed_gap_notice(&first, &cut, "linux").is_err());
+        // A kind inside the clock's noise on the first seed says so, and the
+        // pooled verdict still stands.
+        let mut noisy = first.clone();
+        if let Some(deploy) = noisy.iter_mut().find(|figure| figure.kind == Kind::Deploy) {
+            deploy.milli_ns_per_unit = -3_656;
+        }
+        let line = seed_gap_notice(&noisy, &near, "linux").expect("a notice");
+        assert!(
+            line.contains("deploy no gap (the first seed's -3.656 ns a unit is at or below zero"),
+            "{line}"
+        );
+        assert!(line.contains("within E12's rule"), "{line}");
     }
 
     #[test]
