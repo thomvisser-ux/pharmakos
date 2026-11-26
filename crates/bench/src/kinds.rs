@@ -778,8 +778,12 @@ pub struct KindFigure {
     /// ticks, in whole voxels as the crow flies.
     pub offset: (u32, u32),
     /// The fewest and most counted units one of those ticks spent over the
-    /// baseline's: for a kind that serves walks, the walks' work as the sim
-    /// counted it, a tick at a time.
+    /// baseline's: every unit the tick counted, the walks' pops and visits
+    /// together with the rest of the resolve (the vents matched, the sites
+    /// scanned). The hosted world's scratch is not public, so the bench
+    /// cannot split the walks' own work out of a hosted tick; the harness's
+    /// `a_covering_resolve_serves_longer_walks_from_the_far_point` reads it
+    /// from a scratch of its own.
     pub per_tick: (i128, i128),
     /// The fewer runs the kind's match and its baseline played.
     pub runs: usize,
@@ -1112,7 +1116,7 @@ pub fn kinds_notice(
             };
             let walks = if figure.kind.serves_walks() {
                 format!(
-                    "; the walks' work as the sim counted it, {} to {} units a tick",
+                    "; each tick's counted units over the baseline's, {} to {}",
                     figure.per_tick.0, figure.per_tick.1
                 )
             } else {
@@ -1554,6 +1558,9 @@ mod tests {
             let named = line.matches("E12").count();
             let allowed = line.matches(form).count();
             assert_eq!(named, allowed, "{line}");
+            // N2 (b): no figure is called the walks' work; the bench reads
+            // a hosted tick's counted units whole.
+            assert!(!line.contains("walks' work"), "{line}");
         }
         assert_eq!(
             lines
