@@ -47,6 +47,18 @@ pub(crate) struct Bar {
     pub(crate) alarm_ns: u128,
 }
 
+/// One planned count a report prints, and this alarm's own copy of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Planned {
+    /// The report field the bench prints its plan in.
+    pub(crate) field: &'static str,
+    /// The plan as this alarm holds it. The bench's constant is printed back
+    /// on the line, and a line whose plan moved alone gives no verdict
+    /// ([`BudgetError::PlanMismatch`]): a plan lowered in the bench alone
+    /// would otherwise turn a short run into a complete one.
+    pub(crate) count: u128,
+}
+
 /// One authoring alarm: what it runs, the line it reads and its bars.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Budget {
@@ -73,6 +85,8 @@ pub(crate) struct Budget {
     /// `(measured, planned)` pairs that must be equal: a run that measured
     /// more than it planned is no verdict either.
     pub(crate) exact: &'static [(&'static str, &'static str)],
+    /// Every planned count the line prints, as this alarm holds it.
+    pub(crate) plans: &'static [Planned],
     /// The bars.
     pub(crate) bars: &'static [Bar],
 }
@@ -95,9 +109,27 @@ pub(crate) const P3_BUDGET: Budget = Budget {
         "repath_bar_ns",
         "estimate_bar_ns",
     ],
-    nonzero: &["seeds", "pairs", "repath_p99_ns", "estimate_p99_ns"],
+    nonzero: &[
+        "seeds",
+        "planned_seeds",
+        "pairs",
+        "planned_pairs",
+        "repath_p99_ns",
+        "estimate_p99_ns",
+    ],
     complete: &[("seeds", "planned_seeds"), ("pairs", "planned_pairs")],
     exact: &[],
+    // `crates/bench/src/p3.rs`'s `P3_SEEDS.len()` and `PAIRS`.
+    plans: &[
+        Planned {
+            field: "planned_seeds",
+            count: 3,
+        },
+        Planned {
+            field: "planned_pairs",
+            count: 2_000,
+        },
+    ],
     bars: &[
         Bar {
             field: "repath_p99_ns",
@@ -143,8 +175,11 @@ pub(crate) const P1_BUDGET: Budget = Budget {
     nonzero: &[
         "budget_units",
         "inputs",
+        "planned_inputs",
         "e2e_inputs",
+        "planned_e2e_inputs",
         "calls",
+        "planned_calls",
         "quick_p99_ns",
         "full_p99_ns",
         "e2e_p99_ns",
@@ -155,6 +190,22 @@ pub(crate) const P1_BUDGET: Budget = Budget {
         ("calls", "planned_calls"),
     ],
     exact: &[("e2e_inputs", "planned_e2e_inputs")],
+    // `crates/bench/src/full.rs`'s `BUDGET_INPUTS` (the shapes and
+    // `budget_128`), `BUDGET_END_TO_END_INPUTS` (the shapes) and `BUDGET_CALLS`.
+    plans: &[
+        Planned {
+            field: "planned_inputs",
+            count: 7,
+        },
+        Planned {
+            field: "planned_e2e_inputs",
+            count: 6,
+        },
+        Planned {
+            field: "planned_calls",
+            count: 500,
+        },
+    ],
     bars: &[
         Bar {
             field: "quick_p99_ns",
@@ -227,6 +278,12 @@ pub(crate) enum BudgetError {
         bench: u128,
         alarm: u128,
     },
+    /// The bench printed a planned count other than the one this alarm holds.
+    PlanMismatch {
+        field: &'static str,
+        bench: u128,
+        alarm: u128,
+    },
 }
 
 impl fmt::Display for BudgetError {
@@ -274,6 +331,15 @@ impl fmt::Display for BudgetError {
             } => write!(
                 f,
                 "the bench prints `{field}` as {bench} and this alarm holds {alarm}: the bar \
+                 moved on one side alone"
+            ),
+            Self::PlanMismatch {
+                field,
+                bench,
+                alarm,
+            } => write!(
+                f,
+                "the bench prints `{field}` as {bench} and this alarm holds {alarm}: the plan \
                  moved on one side alone"
             ),
         }
@@ -355,6 +421,16 @@ pub(crate) fn parse(budget: &Budget, output: &str) -> Result<Report, BudgetError
     for field in budget.nonzero {
         if report.get(field)? == 0 {
             return Err(BudgetError::Zero(field));
+        }
+    }
+    for plan in budget.plans {
+        let bench = report.get(plan.field)?;
+        if bench != plan.count {
+            return Err(BudgetError::PlanMismatch {
+                field: plan.field,
+                bench,
+                alarm: plan.count,
+            });
         }
     }
     for (measured, planned) in budget.complete {
@@ -466,6 +542,22 @@ pub(crate) fn test_run(budget: &Budget, locked: bool) -> crate::resolved::TestRu
     ])
 }
 
+/// The command's decision on a measurement's output: the one report line
+/// read, then its verdict. Pure, so every way to no verdict is pinned where
+/// the command decides.
+///
+/// # Errors
+///
+/// Every [`parse`] refusal: no line, several, or one that gives no verdict.
+pub(crate) fn judge(
+    budget: &Budget,
+    output: &str,
+    os: &str,
+) -> Result<(Vec<String>, bool), BudgetError> {
+    let report = parse(budget, output)?;
+    verdict(budget, &report, os)
+}
+
 /// Run `budget`'s measurement through the checked call, echoing its output
 /// as it comes, and answer whether the alarm passed.
 pub(crate) fn run(
@@ -476,8 +568,7 @@ pub(crate) fn run(
 ) -> Result<bool, BudgetError> {
     let output = crate::run_measurement(root, require_tools, &test_run(budget, locked))
         .map_err(BudgetError::Run)?;
-    let report = parse(budget, &output)?;
-    let (lines, passed) = verdict(budget, &report, std::env::consts::OS)?;
+    let (lines, passed) = judge(budget, &output, std::env::consts::OS)?;
     for line in lines {
         println!("{line}");
     }
@@ -680,6 +771,122 @@ mod tests {
         );
     }
 
+    /// B1, the must-trip of each planned count: a plan lowered in the bench
+    /// alone (the line prints it, with a measured count to match) is no
+    /// verdict, and so is one moved on this side alone. Zero plans are refused
+    /// as zero.
+    #[test]
+    fn a_plan_moved_on_one_side_alone_is_no_verdict() {
+        let p1 = |from: &str, to: &str| parse(&P1_BUDGET, &P1.replacen(from, to, 1));
+        let p3 = |from: &str, to: &str| parse(&P3_BUDGET, &P3.replacen(from, to, 1));
+        assert_eq!(
+            p1("calls=500 planned_calls=500", "calls=50 planned_calls=50"),
+            Err(BudgetError::PlanMismatch {
+                field: "planned_calls",
+                bench: 50,
+                alarm: 500
+            })
+        );
+        assert_eq!(
+            p1("inputs=7 planned_inputs=7", "inputs=1 planned_inputs=1"),
+            Err(BudgetError::PlanMismatch {
+                field: "planned_inputs",
+                bench: 1,
+                alarm: 7
+            })
+        );
+        assert_eq!(
+            p1(
+                "e2e_inputs=6 planned_e2e_inputs=6",
+                "e2e_inputs=2 planned_e2e_inputs=2"
+            ),
+            Err(BudgetError::PlanMismatch {
+                field: "planned_e2e_inputs",
+                bench: 2,
+                alarm: 6
+            })
+        );
+        assert_eq!(
+            p3("seeds=3 planned_seeds=3", "seeds=1 planned_seeds=1"),
+            Err(BudgetError::PlanMismatch {
+                field: "planned_seeds",
+                bench: 1,
+                alarm: 3
+            })
+        );
+        assert_eq!(
+            p3("pairs=2000 planned_pairs=2000", "pairs=8 planned_pairs=8"),
+            Err(BudgetError::PlanMismatch {
+                field: "planned_pairs",
+                bench: 8,
+                alarm: 2_000
+            })
+        );
+        assert_eq!(
+            p3("planned_seeds=3", "planned_seeds=0"),
+            Err(BudgetError::Zero("planned_seeds"))
+        );
+        // This side's plan moved alone.
+        let moved = Budget {
+            plans: &[Planned {
+                field: "planned_pairs",
+                count: 4_000,
+            }],
+            ..P3_BUDGET
+        };
+        assert_eq!(
+            parse(&moved, P3),
+            Err(BudgetError::PlanMismatch {
+                field: "planned_pairs",
+                bench: 2_000,
+                alarm: 4_000
+            })
+        );
+        // Every planned field is held, and is non-zero.
+        for budget in BUDGETS {
+            for field in budget
+                .fields
+                .iter()
+                .filter(|field| field.starts_with("planned_"))
+            {
+                assert!(
+                    budget.plans.iter().any(|plan| plan.field == *field),
+                    "{}: `{field}` has no copy here",
+                    budget.command
+                );
+                assert!(budget.nonzero.contains(field), "{field}");
+            }
+        }
+    }
+
+    /// B4: where the command decides, no report, two reports, a report past
+    /// the alarm and one within it each give their own answer, and only the
+    /// last is a pass.
+    #[test]
+    fn the_command_passes_only_a_report_within_its_alarm() {
+        assert_eq!(
+            judge(&P3_BUDGET, "", "linux"),
+            Err(BudgetError::NoReport("p3-budget-report v2"))
+        );
+        assert_eq!(
+            judge(&P3_BUDGET, &format!("{P3}\n{P3}"), "linux"),
+            Err(BudgetError::SeveralReports {
+                prefix: "p3-budget-report v2",
+                count: 2
+            })
+        );
+        let past = P3.replacen("repath_p99_ns=900000", "repath_p99_ns=10000001", 1);
+        let (lines, passed) = judge(&P3_BUDGET, &past, "linux").expect("a verdict");
+        assert!(!passed);
+        assert!(
+            lines.iter().any(|line| line.starts_with("::error ")),
+            "{lines:?}"
+        );
+        let (lines, passed) = judge(&P3_BUDGET, P3, "linux").expect("a verdict");
+        assert!(passed);
+        assert_eq!(lines.len(), 1);
+    }
+
     /// A run cut short of its plan gives no verdict, whichever figure was cut:
     /// the lines the bench prints for a cut plan (its harness tests' own
     /// lines) are refused as short, never read as a pass.
@@ -729,6 +936,22 @@ mod tests {
             )
         };
         assert!(at(&P3_BUDGET, &p3(10_000_000, 2_000_000)).1);
+        // B5: exactly at the gate is within it; a nanosecond past is over.
+        let (lines, _) = at(&P3_BUDGET, &p3(5_000_000, 1_000_000));
+        assert!(
+            lines.iter().any(|line| line
+                .contains("for reference only, within the gate's 5.000 ms")
+                && line.contains("for reference only, within the gate's 1.000 ms")),
+            "{lines:?}"
+        );
+        let (lines, _) = at(&P3_BUDGET, &p3(5_000_001, 1_000_001));
+        assert!(
+            lines.iter().any(
+                |line| line.contains("for reference only, over the gate's 5.000 ms")
+                    && line.contains("for reference only, over the gate's 1.000 ms")
+            ),
+            "{lines:?}"
+        );
         assert!(!at(&P3_BUDGET, &p3(10_000_001, 1)).1);
         assert!(!at(&P3_BUDGET, &p3(1, 2_000_001)).1);
         // Over the gate but under the alarm: a notice, never a failure.
