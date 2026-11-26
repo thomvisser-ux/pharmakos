@@ -121,12 +121,14 @@
     {
       "code": "I0003",
       "count": 172,
-      "max": 4
+      "max": 4,
+      "severity": "INFO"
     },
     {
       "code": "W0702",
       "count": 11,
-      "max": 4
+      "max": 4,
+      "severity": "WARNING"
     }
   ]
 }

@@ -1080,6 +1080,31 @@ pub const WALL_BOX_OUTSIDE_SPHERE: &str =
 /// `compose_wall_box`: a corner, or the box's top, past the map's coordinates.
 pub const WALL_BOX_OFF_THE_MAP: &str = "no ground here: the box reaches past the map";
 
+/// One `gp.api.v1.LeftOut` entry in a refusal's words (S3's `leftout`, fix
+/// pass 1), from the field alone: `count` more of `code` past the `max` of
+/// one code a report lists when any of the code is listed; and, when none is
+/// (an `I0003` note left out past the size budget, where no note is listed),
+/// the count with none listed and no cap named, as the verifier's own
+/// `I0007` switches its sentence there.
+#[must_use]
+pub fn left_out_entry(
+    code: &str,
+    count: u32,
+    max: u32,
+    listed_any: bool,
+) -> pharmakos_proto::json::grammar::Said {
+    let code = pharmakos_proto::json::grammar::quoted(code);
+    if listed_any {
+        pharmakos_proto::said!(
+            "{} more {} past the {} of one code a report lists",
+            count,
+            code,
+            max
+        )
+    } else {
+        pharmakos_proto::said!("{} {} left out with none of it listed", count, code)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::{

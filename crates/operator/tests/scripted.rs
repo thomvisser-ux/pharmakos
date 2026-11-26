@@ -130,6 +130,10 @@ enum QuickFault {
     Twice,
     /// One more `E0503` names a step no part holds.
     PastThePart,
+    /// The report's `left_out` is a number, not a list (S3's `leftout`).
+    LeftOutNotAList,
+    /// A `left_out` entry's `code` is a number, not a string.
+    LeftOutCodeNotText,
 }
 
 /// How the scripted map summary writes a feature's travel.
@@ -930,7 +934,10 @@ impl Script {
                 QuickFault::Refuse(at) if at == self.quick_verifies.get() => {
                     return Script::refuse("INTERNAL");
                 }
-                QuickFault::None | QuickFault::Refuse(_) => {}
+                QuickFault::None
+                | QuickFault::Refuse(_)
+                | QuickFault::LeftOutNotAList
+                | QuickFault::LeftOutCodeNotText => {}
                 QuickFault::Twice => {
                     diagnostics = diagnostics
                         .into_iter()
@@ -984,7 +991,18 @@ impl Script {
             obj(vec![
                 ("qualifies", Json::Bool(qualifies)),
                 ("diagnostics", Json::Array(diagnostics)),
-                ("left_out", Json::Array(left_out)),
+                (
+                    "left_out",
+                    match self.quick_fault {
+                        QuickFault::LeftOutNotAList if quick => num(5),
+                        QuickFault::LeftOutCodeNotText if quick => Json::Array(vec![obj(vec![
+                            ("code", num(503)),
+                            ("count", num(1)),
+                            ("max", num(4)),
+                        ])]),
+                        _ => Json::Array(left_out),
+                    },
+                ),
             ]),
         )]))
     }
@@ -2383,6 +2401,22 @@ fn a_probe_that_cannot_say_leaves_no_tap_and_says_why() {
             pairs: 12,
         })
     );
+
+    // A `left_out` that is not a list, or an entry whose code is not text, is
+    // an answer the probe cannot read (S3's `leftout`, fix pass 1): refused
+    // as MALFORMED, no tap.
+    for fault in [QuickFault::LeftOutNotAList, QuickFault::LeftOutCodeNotText] {
+        let mut malformed = twelve_taps("b_02", [32, 60]);
+        malformed.quick_fault = fault;
+        let (script, played) = play(malformed);
+        assert_eq!(probe_verifies(&script.transcript), 1);
+        assert!(!beacon_estimated(&script.transcript));
+        assert!(
+            matches!(&played.taps_unread, Some(TapsUnread::Refused(refusal)) if refusal.method == "verify_plan" && refusal.code == "MALFORMED"),
+            "{:?}",
+            played.taps_unread
+        );
+    }
 
     let mut twice = twelve_taps("b_02", [32, 60]);
     twice.quick_fault = QuickFault::Twice;

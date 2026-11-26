@@ -64,11 +64,11 @@ fn rules_json() -> String {
 /// the floor, which is when Easy's budget must be sized again. Held at
 /// compile time: this test target does not build past a cap under the floor.
 const _: () = assert!(
-    pharmakos_verifier::MAX_PER_CODE >= TAP_PROBE_LISTED_FLOOR,
+    pharmakos_verifier::MAX_PER_CODE.get() >= TAP_PROBE_LISTED_FLOOR,
     "the verifier lists fewer of a code than Easy's probe budget is sized at"
 );
 const _: () = assert!(
-    EASY_CANDIDATES.div_ceil(pharmakos_verifier::MAX_PER_CODE) <= TAP_PROBE_VERIFIES,
+    EASY_CANDIDATES.div_ceil(pharmakos_verifier::MAX_PER_CODE.get()) <= TAP_PROBE_VERIFIES,
     "Easy's probe cannot answer every candidate pair at the verifier's cap"
 );
 
@@ -320,7 +320,7 @@ fn easy_taps_no_beacon_off_the_build_mandate_past_the_verifiers_cap() {
     // The first report left `E0503`s out, on the field's word, and the probe
     // asked again; the last left none out; each that did listed the cap's
     // number, as the real verifier writes it.
-    let cap = usize::try_from(pharmakos_verifier::MAX_PER_CODE).expect("fits");
+    let cap = usize::try_from(pharmakos_verifier::MAX_PER_CODE.get()).expect("fits");
     assert!(
         probes >= 2,
         "the pairs were asked in {probes} verifies: {reads:?}"

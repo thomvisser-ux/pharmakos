@@ -91,7 +91,8 @@
         {
           "code": "I0003",
           "count": 3,
-          "max": 4
+          "max": 4,
+          "severity": "info"
         }
       ]
     },

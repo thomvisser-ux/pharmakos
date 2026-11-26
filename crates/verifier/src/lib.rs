@@ -784,12 +784,16 @@ pub fn verify_counted(input: &Input<'_>, depth: Depth) -> Counted {
 
 /// [`verify_counted`] with a report that lists at most `cap` diagnostics of
 /// one code in place of [`MAX_PER_CODE`]: for a comparison of reports with
-/// the cap and without it (`u32::MAX`), which holds the verdict and every
+/// the cap and without it (`NonZeroU32::MAX`), which holds the verdict and every
 /// code's total equal. Every caller that answers a seat uses
 /// [`verify`]; this report's `report_hash` is the same input's, so it is
 /// never one to hand a seat.
 #[must_use]
-pub fn verify_counted_at_cap(input: &Input<'_>, depth: Depth, cap: u32) -> Counted {
+pub fn verify_counted_at_cap(
+    input: &Input<'_>,
+    depth: Depth,
+    cap: core::num::NonZeroU32,
+) -> Counted {
     let depth = match depth {
         Depth::Unspecified | Depth::Full => Depth::Full,
         Depth::Quick => Depth::Quick,

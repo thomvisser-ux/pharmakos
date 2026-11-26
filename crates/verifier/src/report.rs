@@ -25,6 +25,7 @@
 use core::fmt::Write as _;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
@@ -167,8 +168,11 @@ impl Diag {
 /// grow by eight of its largest codes before anyone must act. When it fails,
 /// the fixes are to raise `MAX_ANSWER_BYTES` (the owner's, at hardening) or
 /// to lower this cap (every golden that lists four of a code moves). Below
-/// 2, Easy's probe has no part to ask in, and a compile-time check fails.
-pub const MAX_PER_CODE: u32 = 4;
+/// 2, a compile-time check fails. A `NonZeroU32`, so no report can be asked
+/// to list none of a code (S3's `leftout`, fix pass 1): written as one more
+/// than [`NonZeroU32::MIN`] three times, which is 4, because a `const`
+/// cannot unwrap.
+pub const MAX_PER_CODE: NonZeroU32 = NonZeroU32::MIN.saturating_add(3);
 
 /// The most bytes one character of a player's text takes in a report once
 /// [`pharmakos_proto::json::grammar::quoted`] has written it and the report's
@@ -397,9 +401,10 @@ pub const ONCE_PER_REPORT: &[&str] = &[
     "E0601", "W0603",
 ];
 
+const _: () = assert!(MAX_PER_CODE.get() == 4, "the cap is four");
 const _: () = assert!(
-    MAX_PER_CODE >= 2,
-    "a cap under two leaves Easy's probe no part"
+    MAX_PER_CODE.get() >= 2,
+    "a cap under two lists a code once and says nothing of its pattern"
 );
 
 /// The code of decision 8's per-setting note.
@@ -421,23 +426,13 @@ struct Tally {
     left_out: u32,
 }
 
-/// What [`Builder::admit`] is asked: whether a diagnostic would be listed
-/// (a writer's question before it builds one), or to list one.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Admit {
-    /// Ask only: nothing is counted as listed.
-    Ask,
-    /// The diagnostic is built and listed when admitted.
-    List,
-}
-
 /// The report under construction, shared by every stage.
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Builder {
     diagnostics: Vec<Diagnostic>,
     /// The cap: [`MAX_PER_CODE`], or another for a comparison
     /// ([`crate::verify_counted_at_cap`]).
-    cap: u32,
+    cap: NonZeroU32,
     /// Per code, what the cap has listed and left out. An ordered map
     /// (AGENTS.md section 4.4), so the closing `I0007`s come in code order.
     tallies: BTreeMap<&'static str, Tally>,
@@ -480,7 +475,7 @@ impl Builder {
     /// A builder listing at most `cap` diagnostics of one code: the
     /// verifier's own is [`MAX_PER_CODE`] ([`Builder::default`]); another is
     /// for a comparison of reports with and without the cap.
-    pub(crate) fn with_cap(cap: u32) -> Builder {
+    pub(crate) fn with_cap(cap: NonZeroU32) -> Builder {
         Builder {
             diagnostics: Vec::new(),
             cap,
@@ -498,7 +493,7 @@ impl Builder {
         if diag.code == "E0110" {
             self.over_budget = true;
         }
-        if self.admit(diag.code, Admit::List) {
+        if self.admit(diag.code) {
             self.push(diag);
         }
     }
@@ -511,13 +506,14 @@ impl Builder {
     /// writer that does not ask is capped all the same. The verdict counts an
     /// error left out as raised.
     pub(crate) fn takes(&mut self, code: &'static str) -> bool {
-        self.admit(code, Admit::Ask)
+        self.admit(code)
     }
 
     /// The one place the cap is applied: whether one more diagnostic of
-    /// `code` is listed, counting it as left out when it is not, and as
-    /// listed when `admit` is [`Admit::List`].
-    fn admit(&mut self, code: &'static str, admit: Admit) -> bool {
+    /// `code` is listed, counting it as left out when it is not. A row is
+    /// counted as listed only where it enters the report ([`Builder::push`]),
+    /// so every row is counted once, listed or left out, on every path.
+    fn admit(&mut self, code: &'static str) -> bool {
         let over_budget = self.over_budget && code == DEFAULT_NOTE;
         let cap = self.cap;
         let tally = self.tallies.entry(code).or_insert_with(|| Tally {
@@ -525,12 +521,9 @@ impl Builder {
             ..Tally::default()
         });
         self.errors |= tally.error;
-        if over_budget || tally.listed >= cap {
+        if over_budget || tally.listed >= cap.get() {
             tally_one(&mut tally.left_out, code, &mut self.faults);
             return false;
-        }
-        if admit == Admit::List {
-            tally_one(&mut tally.listed, code, &mut self.faults);
         }
         true
     }
@@ -644,14 +637,32 @@ impl Builder {
         if let Some(max) = diagnostic_bytes_max(code)
             && bytes > max
         {
-            self.faults
-                .push(ReportFault::DiagnosticPastItsBound { code, bytes, max });
-            if let Some(tally) = self.tallies.get_mut(code) {
-                tally_one(&mut tally.left_out, code, &mut self.faults);
-            }
+            self.past_its_bound(code, bytes, max);
             return;
         }
+        self.listed(code);
         self.diagnostics.push(diagnostic);
+    }
+
+    /// One row of `code` entered the report: counted as listed, here and
+    /// nowhere else. An `I0007`, which is never tallied, is not counted.
+    fn listed(&mut self, code: &'static str) {
+        if let Some(tally) = self.tallies.get_mut(code) {
+            tally_one(&mut tally.listed, code, &mut self.faults);
+        }
+    }
+
+    /// A row of `code` that is past its bound after every part was bounded
+    /// (unreachable by construction): recorded as a
+    /// [`ReportFault::DiagnosticPastItsBound`], and counted as left out of
+    /// its code, never as listed, so it is in the report's `left_out` and
+    /// its `I0007` like any other row not listed.
+    fn past_its_bound(&mut self, code: &'static str, bytes: usize, max: usize) {
+        self.faults
+            .push(ReportFault::DiagnosticPastItsBound { code, bytes, max });
+        if let Some(tally) = self.tallies.get_mut(code) {
+            tally_one(&mut tally.left_out, code, &mut self.faults);
+        }
     }
 
     /// Whether anything so far stops the playbook qualifying.
@@ -675,58 +686,66 @@ impl Builder {
             .map(|(code, tally)| Gap {
                 code,
                 count: tally.left_out,
-                max: self.cap,
+                max: self.cap.get(),
+                severity: severity_of(code),
             })
             .collect()
     }
 
     /// The diagnostics, in the order they were emitted, then, in code order,
-    /// one `I0007` for each code with diagnostics left out, rendered from the
-    /// same fact as its `gp.api.v1.LeftOut` entry and worded by the left-out
-    /// code's severity; and the report's typed facts. An `I0007` never passes
+    /// one `I0007` for each code with diagnostics left out, worded by the
+    /// left-out code's severity; and the report's typed facts. Each
+    /// `gp.api.v1.LeftOut` entry and the `I0007` that says it are made here,
+    /// in one step, from one [`Gap`], so neither exists without the other and
+    /// the two cannot carry different numbers. An `I0007` never passes
     /// through the cap and is never counted against one: there is at most one
     /// per code.
     pub(crate) fn finish(mut self) -> Finished {
-        let gaps = self.gaps();
-        for gap in &gaps {
-            let verdict = match severity_of(gap.code) {
-                Severity::Error | Severity::Unspecified => strings::LEFT_OUT_STILL_REFUSE,
-                Severity::Warning | Severity::Info => "",
-            };
-            let budget = if gap.code == DEFAULT_NOTE && self.over_budget {
-                strings::LEFT_OUT_PAST_THE_BUDGET
-            } else {
-                ""
-            };
-            let next = match severity_of(gap.code) {
-                Severity::Info => strings::LEFT_OUT_NEXT_NOTE,
-                Severity::Error | Severity::Warning | Severity::Unspecified => {
-                    strings::LEFT_OUT_NEXT_FIX
-                }
-            };
-            self.push(
-                Diag::new(LEFT_OUT, crate::pointer::ROOT)
-                    .arg_word("code", gap.code)
-                    .arg("count", gap.count)
-                    .arg("max", gap.max)
-                    .arg_word("verdict", verdict)
-                    .arg_word("budget", budget)
-                    .arg_word("next", next),
-            );
+        let mut left_out = Vec::new();
+        for gap in self.gaps() {
+            let (entry, marker) = self.said(&gap);
+            left_out.push(entry);
+            self.push(marker);
         }
         Finished {
             diagnostics: self.diagnostics,
-            left_out: gaps
-                .into_iter()
-                .map(|gap| LeftOut {
-                    code: gap.code.to_owned(),
-                    count: gap.count,
-                    max: gap.max,
-                })
-                .collect(),
+            left_out,
             cuts: self.cuts,
             faults: self.faults,
         }
+    }
+
+    /// One left-out code's typed entry and its `I0007`, both from `gap`.
+    fn said(&self, gap: &Gap) -> (LeftOut, Diag) {
+        let verdict = match gap.severity {
+            Severity::Error | Severity::Unspecified => strings::LEFT_OUT_STILL_REFUSE,
+            Severity::Warning | Severity::Info => "",
+        };
+        let budget = if gap.code == DEFAULT_NOTE && self.over_budget {
+            strings::LEFT_OUT_PAST_THE_BUDGET
+        } else {
+            ""
+        };
+        let next = match gap.severity {
+            Severity::Info => strings::LEFT_OUT_NEXT_NOTE,
+            Severity::Error | Severity::Warning | Severity::Unspecified => {
+                strings::LEFT_OUT_NEXT_FIX
+            }
+        };
+        let entry = LeftOut {
+            code: gap.code.to_owned(),
+            count: gap.count,
+            max: gap.max,
+            severity: i32::from(gap.severity),
+        };
+        let marker = Diag::new(LEFT_OUT, crate::pointer::ROOT)
+            .arg_word("code", gap.code)
+            .arg("count", gap.count)
+            .arg("max", gap.max)
+            .arg_word("verdict", verdict)
+            .arg_word("budget", budget)
+            .arg_word("next", next);
+        (entry, marker)
     }
 }
 
@@ -740,6 +759,8 @@ struct Gap {
     count: u32,
     /// The cap: how many of the code the report could list.
     max: u32,
+    /// The code's severity, from its catalogue row.
+    severity: Severity,
 }
 
 /// A finished report's diagnostics and its typed facts.
@@ -1058,6 +1079,7 @@ mod tests {
     use pharmakos_proto::gp::v1::Voxel;
     use pharmakos_proto::json::grammar::{MAX_QUOTED_CHARS, quoted};
     use std::borrow::Cow;
+    use std::num::NonZeroU32;
 
     /// Every Unicode scalar value, in runs the tests below take a string of.
     fn scalar_runs() -> Vec<String> {
@@ -1193,13 +1215,13 @@ mod tests {
     /// The report the builder writes when `codes` (rows of the catalogue a
     /// stage raises) are each raised one more time than `cap` (once for a
     /// code raised once a report), every part at its bound.
-    fn report_of(codes: &[&CatalogueRow], cap: u32) -> VerifyReport {
+    fn report_of(codes: &[&CatalogueRow], cap: NonZeroU32) -> VerifyReport {
         let mut builder = Builder::with_cap(cap);
         for row in codes {
             let times = if ONCE_PER_REPORT.contains(&row.code) {
                 1
             } else {
-                cap.saturating_add(1)
+                cap.get().saturating_add(1)
             };
             for _ in 0..times {
                 builder.emit(worst_diag(row.code));
@@ -1261,7 +1283,7 @@ mod tests {
 
     /// The bytes the largest single code adds to a report as it is sent, at
     /// `cap`: its listed diagnostics and its `I0007`.
-    fn largest_share(cap: u32) -> (usize, &'static str) {
+    fn largest_share(cap: NonZeroU32) -> (usize, &'static str) {
         let empty = sent_bytes(&report_of(&[], cap));
         stage_rows()
             .into_iter()
@@ -1405,7 +1427,7 @@ mod tests {
             "E0301", "E0302", "E0303", "E0305", "E0401", "E0403", "W0702",
         ];
         for code in codes {
-            for _ in 0..=MAX_PER_CODE {
+            for _ in 0..=MAX_PER_CODE.get() {
                 builder.emit(Diag::new(code, "/declarative/route/0"));
             }
         }
@@ -1433,7 +1455,7 @@ mod tests {
     fn an_i0007_s_words_are_its_code_s() {
         let words = |code: &'static str| -> Diagnostic {
             let mut builder = Builder::default();
-            for _ in 0..=MAX_PER_CODE {
+            for _ in 0..=MAX_PER_CODE.get() {
                 builder.emit(Diag::new(code, "/declarative/route/0"));
             }
             builder
@@ -1521,9 +1543,9 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                ("E0301", 5, MAX_PER_CODE),
-                ("E0303", 1, MAX_PER_CODE),
-                ("W0702", 2, MAX_PER_CODE),
+                ("E0301", 5, MAX_PER_CODE.get()),
+                ("E0303", 1, MAX_PER_CODE.get()),
+                ("W0702", 2, MAX_PER_CODE.get()),
             ]
         );
         let markers: Vec<&str> = finished
@@ -1551,6 +1573,82 @@ mod tests {
                 .map(|gap| (gap.code.as_str(), gap.count))
                 .collect::<Vec<_>>(),
             vec![("I0003", 1)]
+        );
+    }
+
+    /// Each entry carries its code's severity from the catalogue (S3's
+    /// `leftout`, fix pass 1), whatever rows happen to be listed: an `I0003`
+    /// past the size budget, with none listed, is still a note.
+    #[test]
+    fn each_entry_carries_its_codes_catalogued_severity() {
+        let mut builder = Builder::default();
+        for code in ["E0303", "W0702"] {
+            for _ in 0..=MAX_PER_CODE.get() {
+                builder.emit(Diag::new(code, "/declarative/route/0"));
+            }
+        }
+        builder.emit(Diag::new("E0110", "/declarative"));
+        builder.emit(Diag::new("I0003", "/declarative/route/0/on_fail"));
+        let severities: Vec<(String, i32)> = builder
+            .finish()
+            .left_out
+            .into_iter()
+            .map(|gap| (gap.code, gap.severity))
+            .collect();
+        assert_eq!(
+            severities,
+            vec![
+                (String::from("E0303"), i32::from(Severity::Error)),
+                (String::from("I0003"), i32::from(Severity::Info)),
+                (String::from("W0702"), i32::from(Severity::Warning)),
+            ]
+        );
+    }
+
+    /// **A row is counted once, listed or left out, on every path** (S3's
+    /// `leftout`, fix pass 1): a row admitted and then found past its bound
+    /// is counted as left out and never as listed, so the code's listed and
+    /// left-out counts sum to the rows raised, the report's entry and its
+    /// `I0007` say the one not listed, and the fault is recorded. Through
+    /// the same two steps `push` takes for such a row: the admission, then
+    /// `past_its_bound`.
+    #[test]
+    fn a_row_past_its_bound_is_counted_once_as_left_out() {
+        let mut builder = Builder::default();
+        builder.emit(Diag::new("E0303", "/declarative/route/0"));
+        assert!(builder.admit("E0303"), "under the cap, a row is admitted");
+        builder.past_its_bound("E0303", 9_999, 1);
+        builder.emit(Diag::new("E0303", "/declarative/route/2"));
+        let tally = builder.tallies.get("E0303").copied().expect("tallied");
+        assert_eq!((tally.listed, tally.left_out), (2, 1));
+        let finished = builder.finish();
+        assert_eq!(
+            finished.faults,
+            vec![ReportFault::DiagnosticPastItsBound {
+                code: "E0303",
+                bytes: 9_999,
+                max: 1,
+            }]
+        );
+        assert_eq!(
+            finished
+                .left_out
+                .iter()
+                .map(|gap| (gap.code.as_str(), gap.count))
+                .collect::<Vec<_>>(),
+            vec![("E0303", 1)]
+        );
+        let listed = finished
+            .diagnostics
+            .iter()
+            .filter(|found| found.code == "E0303")
+            .count();
+        assert_eq!(listed, 2);
+        assert!(
+            finished
+                .diagnostics
+                .iter()
+                .any(|found| found.code == "I0007" && found.message.starts_with("1 more `E0303`"))
         );
     }
 }

@@ -1895,6 +1895,13 @@ fn report_json(report: &VerifyReport) -> Json {
                             (String::from("code"), Json::String(gap.code.clone())),
                             (String::from("count"), Json::Number(gap.count.to_string())),
                             (String::from("max"), Json::Number(gap.max.to_string())),
+                            (
+                                String::from("severity"),
+                                Json::String(pharmakos_proto::scope::wire_name(
+                                    "gp.api.v1.Diagnostic.Severity",
+                                    gap.severity().as_str_name(),
+                                )),
+                            ),
                         ])
                     })
                     .collect(),

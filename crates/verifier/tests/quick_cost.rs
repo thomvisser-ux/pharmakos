@@ -331,7 +331,7 @@ fn every_omitted_on_fail_is_noted_within_its_own_bound() {
         // One note a step, to the cap, which the other `I0003` notes share
         // (`tests/report_size.rs` holds the cap itself).
         assert!(
-            notes > 0 && notes <= steps.min(u64::from(MAX_PER_CODE)),
+            notes > 0 && notes <= steps.min(u64::from(MAX_PER_CODE.get())),
             "{name}: {notes} notes for {steps} steps"
         );
         let bound = bound.saturating_add(notes.saturating_mul(NOTE_BOUND));

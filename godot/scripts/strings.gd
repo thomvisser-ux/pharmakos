@@ -142,6 +142,7 @@ const TEXT := {
 	"library_refused_unreadable": "Library files not listed, which the gateway could not read: {count}.",
 	"library_refused_too_large": "Library files not listed, each larger than the gateway reads: {count}.",
 	"library_refused_not_a_playbook": "Library files not listed, which are not playbooks this game reads: {count}.",
+	"library_refused_unread": "The list of library files the gateway refused could not be read, so it is not shown.",
 	"template_button": "{title}",
 	"wizard_heading": "Template: {title}",
 	"wizard_waiting": "Asking the gateway...",

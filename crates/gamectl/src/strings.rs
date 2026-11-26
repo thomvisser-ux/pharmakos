@@ -959,3 +959,26 @@ pub fn result_written(path: &str, seeds: usize, wins: usize) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
     format!("{seeds} seed(s) played, the arm the sole winner of {wins}; the result is in `{path}`.")
 }
+
+/// One `left_out` entry of a refused seal on `gamectl scenario run`'s line
+/// (S3's `leftout`, fix pass 1), from the field alone: `count` more `code`
+/// past the `max` of one code a report lists when any of the code is listed,
+/// and, when none is (an `I0003` note left out past the size budget, where no
+/// note is listed), the count with none listed and no cap named; the
+/// severity as the field says it.
+#[must_use]
+pub fn scenario_left_out(
+    code: &str,
+    count: &str,
+    max: &str,
+    severity: &str,
+    listed_any: bool,
+) -> String {
+    if listed_any {
+        format!(
+            "{count} more {code} ({severity}) not listed: a report lists at most {max} of one code"
+        )
+    } else {
+        format!("{count} {code} ({severity}) left out with none of it listed")
+    }
+}

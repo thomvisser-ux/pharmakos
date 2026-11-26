@@ -863,7 +863,10 @@ func _probation_frame() -> bool:
 ## names a file.
 func _refused_files_said() -> bool:
 	var expected := [{"reason": "unreadable", "count": 1}, {"reason": "too_large", "count": 1}, {"reason": "not_a_playbook", "count": 2}]
-	var sent: Array = _editor().get("templates_refused", [])
+	if not _editor().has("library_refused"):
+		_failures.append("the editor state carries no list of refused library files: %s" % [_editor().keys()])
+		return false
+	var sent: Array = _editor()["library_refused"]
 	if var_to_str(sent) != var_to_str(expected):
 		_failures.append("the template list's refused files are %s, not %s" % [sent, expected])
 		return false

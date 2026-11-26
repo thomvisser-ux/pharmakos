@@ -20,6 +20,7 @@
 mod support;
 
 use pharmakos_gateway::fog::FogPolicy;
+use pharmakos_plan_core::library::Refusal;
 use pharmakos_proto::gp::api::v1::refused_templates::Reason;
 use pharmakos_proto::gp::api::v1::{ListTemplatesResponse, VerifyPlanResponse};
 use pharmakos_proto::json::{self, Json};
@@ -68,7 +69,7 @@ fn verify_plan_sends_the_left_out_field_as_the_verifier_wrote_it() {
         .iter()
         .map(|gap| (gap.code.as_str(), gap.count, gap.max))
         .collect();
-    let cap = pharmakos_verifier::MAX_PER_CODE;
+    let cap = pharmakos_verifier::MAX_PER_CODE.get();
     let notes = report
         .diagnostics
         .iter()
@@ -81,6 +82,11 @@ fn verify_plan_sends_the_left_out_field_as_the_verifier_wrote_it() {
         .expect("the notes past the cap are left out");
     assert_eq!(u32::try_from(notes).expect("fits"), cap, "{entries:?}");
     assert_eq!(left.max, cap);
+    assert_eq!(
+        left.severity(),
+        pharmakos_proto::gp::api::v1::diagnostic::Severity::Info,
+        "the entry carries its code's severity"
+    );
     // Thirty steps' notes and the one for the death limit's absence are all
     // there, listed or counted.
     assert!(left.count >= 30 - cap, "{entries:?}");
@@ -193,14 +199,72 @@ fn list_templates_says_each_refused_kind_by_count_and_never_by_name() {
         assert!(!text.contains(&folder.display().to_string()), "{text}");
         // The wire spells the reason in lower case, as every enum.
         assert!(text.contains("\"not_a_playbook\""), "{text}");
-        // The audit's count still counts every listing.
-        assert_eq!(
-            surface
-                .audit()
-                .library_refused_count(pharmakos_plan_core::library::Refusal::NotAPlaybook),
-            2 * listing
-        );
+        // The audit's counts still count every listing, each what the
+        // listing said, and its lines name no refused file (fix pass 1).
+        for (reason, per_listing) in [
+            (Refusal::Unreadable, 1_u64),
+            (Refusal::TooLarge, 1),
+            (Refusal::NotAPlaybook, 2),
+        ] {
+            assert_eq!(
+                surface.audit().library_refused_count(reason),
+                per_listing * listing,
+                "{reason:?} after listing {listing}"
+            );
+        }
+        let lines = surface.audit().lines();
+        assert!(!lines.is_empty(), "the audit logged the calls");
+        for line in &lines {
+            for named in ["a_folder", "big", "not_text", "not_json"] {
+                assert!(!line.contains(named), "the audit names {named}: {line}");
+            }
+        }
     }
+}
+
+/// **`submit_plan` answers the report `verify_plan` does, `left_out` and all**
+/// (fix pass 1): a capped playbook's FULL `verify_plan` report and its
+/// `submit_plan` report are the same bytes, the field present in both.
+#[test]
+fn submit_plan_sends_the_same_left_out_as_verify_plan() {
+    let mut surface = support::hosted(1, SEGMENT_MS, 2);
+    let token = support::seat_token(&mut surface, 0);
+    let mut left = support::FIRST_LULL_MS;
+    let text = holds(30);
+    let params = |depth: Option<&str>| {
+        let mut members = vec![(String::from("playbook_jsonc"), Json::String(text.clone()))];
+        if let Some(depth) = depth {
+            members.push((String::from("depth"), Json::String(depth.to_owned())));
+        }
+        json::write(&Json::Object(members))
+    };
+    let verify = result(
+        &support::call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "verify_plan",
+            &params(Some("full")),
+        ),
+        "verify_plan",
+    );
+    let submit = result(
+        &support::call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "submit_plan",
+            &params(None),
+        ),
+        "submit_plan",
+    );
+    let verified = verify.get("report").expect("verify_plan's report");
+    let submitted = submit.get("report").expect("submit_plan's report");
+    assert!(
+        submitted.get("left_out").is_some(),
+        "submit_plan's report carries left_out: {submitted:?}"
+    );
+    assert_eq!(json::write(verified), json::write(submitted));
 }
 
 #[test]

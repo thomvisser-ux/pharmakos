@@ -641,8 +641,11 @@ pub(crate) fn route_index(pointer: &str) -> Option<usize> {
 /// no copy of that number: it asks about every pair not yet answered, and
 /// when the report's `left_out` names `E0503` it takes the steps up to the
 /// last `E0503` listed as answered (the report lists a code's first ones in
-/// route order) and asks again from the step after it; when `left_out` does
-/// not name `E0503`, every step asked about is answered. Nothing is read from
+/// route order: `gp.api.v1.VerifyReport.left_out`'s contract, which the
+/// verifier's `a_report_lists_the_first_max_of_a_code_in_raise_order`, in
+/// `crates/verifier/tests/report_size.rs`, pins) and asks again from the step
+/// after it; when `left_out` does not name `E0503`, every step asked about is
+/// answered. Nothing is read from
 /// a sentence or a row count. When the probe cannot say ([`TapsUnread`]),
 /// the operator cannot say a tap would hold, so it composes none, and the
 /// reason is kept ([`crate::Played::taps_unread`]).

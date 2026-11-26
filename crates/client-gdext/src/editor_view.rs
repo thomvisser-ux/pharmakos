@@ -189,8 +189,8 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     );
     put("templates_known", editor.templates_known().to_variant());
     put(
-        "templates_refused",
-        templates_refused_array(editor.templates_refused()).to_variant(),
+        "library_refused",
+        library_refused_array(editor.library_refused()).to_variant(),
     );
     let mut templates_read = VarDictionary::new();
     failed_into(&mut templates_read, editor.templates_failed());
@@ -629,7 +629,7 @@ pub(crate) fn templates_array(templates: &[crate::wizard::TemplateRow]) -> VarAr
 /// The library files a `list_templates` answer refused, one dictionary per entry in the
 /// gateway's order: `reason` (`unreadable`, `too_large` or `not_a_playbook`, the key of its
 /// words) and `count` as sent (S3's `leftout`).
-pub(crate) fn templates_refused_array(refused: &[crate::wizard::RefusedRow]) -> VarArray {
+pub(crate) fn library_refused_array(refused: &[crate::wizard::RefusedRow]) -> VarArray {
     let mut out = VarArray::new();
     for entry in refused {
         let mut one = VarDictionary::new();

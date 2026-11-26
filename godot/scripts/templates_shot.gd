@@ -43,7 +43,7 @@ func _ready() -> void:
 	if templates.is_empty():
 		_fail("the fixture did not decode; the reason is in the log")
 		return
-	EditorPanel.fill_templates(box, templates, true, {}, {}, func(_id: String) -> void: pass)
+	EditorPanel.fill_templates(box, templates, true, {}, {}, func(_id: String) -> void: pass, [])
 	for i in SETTLE_DRAWS:
 		await get_tree().process_frame
 	var buttons := 0

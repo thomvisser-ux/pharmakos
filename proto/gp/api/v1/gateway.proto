@@ -1356,14 +1356,20 @@ message RefusedTemplates {
   enum Reason {
     REASON_UNSPECIFIED = 0;
 
-    // The file could not be opened or read.
+    // The entry could not be read as a file: it could not be opened or read
+    // (a directory carrying a playbook's name is one), or its name is not a
+    // plain file name the gateway will open (a path separator, a device
+    // name, or a name that is not text).
     UNREADABLE = 1;
 
-    // The file is larger than the gateway reads: past the playbook's size
-    // cap in bytes or in characters.
+    // The file is larger than the gateway reads: past the library's byte
+    // cap, as the file declares itself or as it is read, or past the
+    // playbook's cap in characters.
     TOO_LARGE = 2;
 
-    // The file is not UTF-8 text, or not a playbook this build reads.
+    // The file was read and is not one the library lists: it is not UTF-8
+    // text, or its text is not a playbook this build reads (not JSONC, or
+    // refused by the playbook's own reader).
     NOT_A_PLAYBOOK = 3;
   }
 }
@@ -1691,25 +1697,37 @@ message VerifyReport {
   uint32 size_units = 8;
   uint32 size_budget = 9;
 
-  // What this report counted and did not list, as typed data: one entry per
-  // code with at least one diagnostic left out, in code order (the codes'
-  // byte order), and empty when every diagnostic the verifier raised is
-  // listed. Written by the verifier, from the same tally that caps the
-  // listing; nothing reads it back from a sentence. Filled from S3's
-  // `leftout` (decisions-log item 183 (5)).
+  // What this report counted and did not list, as typed data. Written by the
+  // verifier, from the same tally that caps the listing; nothing reads it
+  // back from a sentence. Filled from S3's `leftout` (decisions-log item 183
+  // (5)). Empty when every diagnostic the verifier raised is listed.
   //
-  // A diagnostic is left out, and counted here, in exactly two ways: it is a
-  // code's diagnostic past the most of one code a report lists
-  // (`LeftOut.max`), or it is an `I0003` note raised after `E0110` (past the
-  // size budget no per-setting note is listed, because the file is not one to
-  // fill in), which can leave `I0003` out with fewer than `max` listed. An
-  // error left out still stops the playbook qualifying: `qualifies` counts
-  // every error raised, listed or not.
+  // ORDER, which is part of the contract: one entry per code with at least
+  // one diagnostic left out, in code order (the codes' byte order), one per
+  // code. And a report lists the FIRST `max` diagnostics of a code in the
+  // order the verifier raises them, so what an entry counts is always that
+  // code's later ones: a reader may take every diagnostic of the code up to
+  // the last one listed as complete, and ask again after it. The verifier's
+  // `a_report_lists_the_first_max_of_a_code_in_raise_order` pins this, and
+  // the built-in operator's tap probe relies on it.
   //
-  // The closing `I0007` diagnostics stay, one per entry, in the same order
-  // and rendered from it, as the player's words for the same facts. Like the
-  // rows, this field is a pure function of the five inputs `report_hash`
-  // covers.
+  // A diagnostic is left out, and counted here, in one of these ways: it is
+  // a code's diagnostic past the most of one code a report lists
+  // (`LeftOut.max`); or it is an `I0003` note raised after `E0110` (past the
+  // size budget no per-setting note is listed, because the file is not one
+  // to fill in), which can leave `I0003` out with fewer than `max`, or none,
+  // listed. One more path exists and is unreachable by construction: a
+  // diagnostic still past its byte bound once every part of it is bounded is
+  // counted here as left out, never as listed, and the verifier records it
+  // as a fault of its own, which its tests hold every report to none of.
+  // Every diagnostic is counted once, listed or left out. An error left out
+  // still stops the playbook qualifying: `qualifies` counts every error
+  // raised, listed or not.
+  //
+  // The closing `I0007` diagnostics stay, one per entry, in the same order,
+  // each made with its entry from the same count, as the player's words for
+  // the same facts. Like the rows, this field is a pure function of the five
+  // inputs `report_hash` covers.
   repeated LeftOut left_out = 10;
 }
 
@@ -1724,8 +1742,14 @@ message LeftOut {
   uint32 count = 2;
 
   // The most diagnostics of one code this report lists. The same in every
-  // entry of one report; at least 1.
+  // entry of one report; at least 1. A code left out past the size budget
+  // (`I0003` after `E0110`) may have fewer than this listed, or none.
   uint32 max = 3;
+
+  // The severity of `code`, from the verifier's diagnostic catalogue, so a
+  // reader knows whether what was left out is an error without reading it
+  // off the rows that happen to be listed. Never SEVERITY_UNSPECIFIED.
+  Diagnostic.Severity severity = 4;
 }
 
 // Modelled on rustc's JSON output (spec section 11).

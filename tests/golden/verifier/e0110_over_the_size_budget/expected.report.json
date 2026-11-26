@@ -25,7 +25,8 @@
     {
       "code": "I0003",
       "count": 1,
-      "max": 4
+      "max": 4,
+      "severity": "INFO"
     }
   ]
 }

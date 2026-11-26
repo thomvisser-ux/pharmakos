@@ -3692,7 +3692,7 @@ impl Editor {
     /// reason with its count, as sent (S3's `leftout`); empty when it refused none or the list
     /// has not come.
     #[must_use]
-    pub fn templates_refused(&self) -> &[RefusedRow] {
+    pub fn library_refused(&self) -> &[RefusedRow] {
         &self.templates.refused
     }
 
@@ -4656,7 +4656,8 @@ impl Editor {
         revision: u64,
         response: SubmitPlanResponse,
     ) -> Result<(), BridgeError> {
-        let report = response.report.ok_or_else(|| no_report("submit_plan"))?;
+        let report =
+            with_known_severities(response.report.ok_or_else(|| no_report("submit_plan"))?)?;
         self.submitted = Some(Submitted {
             accepted: response.accepted,
             qualifies: report.qualifies,
@@ -5242,10 +5243,10 @@ fn placement_verdict(report: &VerifyReport, step: Option<usize>) -> (GhostState,
         }
         None if step.is_none() && !report.qualifies => (GhostState::Illegal, String::new()),
         None => {
-            let hidden = report.diagnostics.iter().any(|diagnostic| {
-                diagnostic.severity() == Severity::Error
-                    && left_out_of(&report.left_out, &diagnostic.code)
-            });
+            let hidden = report
+                .left_out
+                .iter()
+                .any(|gap| gap.severity() == Severity::Error);
             if hidden {
                 let words = left_out_words(report.diagnostics.iter().map(|diagnostic| {
                     let sentence = if diagnostic.beginner.is_empty() {
@@ -5520,7 +5521,30 @@ fn dormant_key(text: &str) -> Option<&'static str> {
 fn report_of(result: &Json) -> Result<VerifyReport, BridgeError> {
     let response: VerifyPlanResponse =
         json::decode_json(&body(result, "gp.api.v1.VerifyPlanResponse"))?;
-    response.report.ok_or_else(|| no_report("verify_plan"))
+    with_known_severities(response.report.ok_or_else(|| no_report("verify_plan"))?)
+}
+
+/// `report`, once each of its `left_out` entries names a severity the schema has (S3's
+/// `leftout`, fix pass 1): an entry's severity is the client's only word on whether what was
+/// left out is an error, so one that is unspecified or past the schema's names is a report
+/// this client cannot read, refused rather than read as any severity.
+///
+/// # Errors
+///
+/// [`BridgeError::Schema`] at the entry's `severity`.
+fn with_known_severities(report: VerifyReport) -> Result<VerifyReport, BridgeError> {
+    for (index, gap) in report.left_out.iter().enumerate() {
+        match Severity::try_from(gap.severity) {
+            Ok(Severity::Error | Severity::Warning | Severity::Info) => {}
+            Ok(Severity::Unspecified) | Err(_) => {
+                return Err(BridgeError::Schema {
+                    pointer: format!("/report/left_out/{index}/severity"),
+                    message: String::from("a left-out entry names no severity this client knows"),
+                });
+            }
+        }
+    }
+    Ok(report)
 }
 
 /// An answer that carries no report, which the gateway always writes: refused, never
@@ -6028,6 +6052,7 @@ mod tests {
                 code: "E0403".to_owned(),
                 count: 4,
                 max: 7,
+                severity: i32::from(Severity::Error),
             });
         }
         report
@@ -6100,6 +6125,7 @@ mod tests {
             code: "W0702".to_owned(),
             count: 3,
             max: 4,
+            severity: i32::from(Severity::Warning),
         });
         for index in 0..4 {
             warnings.diagnostics.insert(
@@ -6122,6 +6148,7 @@ mod tests {
             code: code.to_owned(),
             count: 1,
             max: 4,
+            severity: i32::from(Severity::Warning),
         };
         assert!(!left_out_of(&[], "W0702"));
         assert!(left_out_of(&[gap("W0702")], "W0702"));
@@ -6845,7 +6872,7 @@ mod tests {
                 );
             }
             let left_out = if entry {
-                r#","left_out":[{"code":"W0702","count":9,"max":4}]"#
+                r#","left_out":[{"code":"W0702","count":9,"max":4,"severity":"warning"}]"#
             } else {
                 ""
             };
@@ -6864,6 +6891,32 @@ mod tests {
                 "marker {marker}, entry {entry}"
             );
         }
+    }
+
+    /// A left-out entry with no severity, or one the schema does not name, is a report the
+    /// client cannot read (S3's `leftout`, fix pass 1): refused at the entry's `severity`, never
+    /// read as an error or as nothing.
+    #[test]
+    fn a_left_out_entry_without_a_known_severity_is_refused() {
+        for entry in [
+            r#"{"code":"W0702","count":9,"max":4}"#,
+            r#"{"code":"W0702","count":9,"max":4,"severity":"severity_unspecified"}"#,
+            r#"{"code":"W0702","count":9,"max":4,"severity":7}"#,
+        ] {
+            let answer = read(&format!(
+                r#"{{"report":{{"qualifies":true,"depth":"quick","left_out":[{entry}]}},"_status":{{"phase":"lull"}}}}"#
+            ));
+            match report_of(&answer) {
+                Err(BridgeError::Schema { pointer, .. }) => {
+                    assert_eq!(pointer, "/report/left_out/0/severity", "{entry}");
+                }
+                other => panic!("{entry}: {other:?}"),
+            }
+        }
+        let known = read(
+            r#"{"report":{"qualifies":true,"depth":"quick","left_out":[{"code":"W0702","count":9,"max":4,"severity":"warning"}]},"_status":{"phase":"lull"}}"#,
+        );
+        assert!(report_of(&known).is_ok());
     }
 
     fn compact_row(a: &str, b: &str) -> String {
