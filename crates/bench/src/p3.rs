@@ -86,7 +86,7 @@ use crate::stats::{Summary, micros, millis};
 
 /// The prefix and format version of the line `cargo xtask p3-budget` reads
 /// (`xtask/src/budget.rs`, whose unit test holds the two spellings together).
-pub const BUDGET_REPORT_PREFIX: &str = "p3-budget-report v1";
+pub const BUDGET_REPORT_PREFIX: &str = "p3-budget-report v2";
 
 /// The seeds P3 is measured on, the golden seed first (S3's plan, section
 /// 5.1): the seed every committed scenario plays, the determinism harness's
@@ -958,13 +958,39 @@ pub fn seed_notice(report: &P3Report, seed: &SeedReport, os: &str) -> String {
     )
 }
 
-/// The summary notice: the worst figures over the seeds against the bars.
+/// Where a P3 summary is printed, which its last sentence says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Role {
+    /// The `p3` perf alarm and the certifying run: published, never gated.
+    Published,
+    /// The `authoring budgets` job's `p3-budget`: gated at the bars doubled.
+    Alarm,
+}
+
+impl Role {
+    /// The summary's last sentence.
+    #[must_use]
+    pub const fn words(self) -> &'static str {
+        match self {
+            Role::Published => {
+                "published here and never gated; the gate is certified on the owner's machine"
+            }
+            Role::Alarm => {
+                "the `p3-budget` alarm reading this run fails at these bars doubled; the gate \
+                 is certified on the owner's machine"
+            }
+        }
+    }
+}
+
+/// The summary notice: the worst figures over the seeds against the bars,
+/// printed where `role` says.
 ///
 /// # Errors
 ///
 /// [`Error::Empty`] for a report of no seed.
-pub fn summary_notice(report: &P3Report, os: &str) -> Result<String, Error> {
-    summary_against(report, REPATH_BAR_NS, ESTIMATE_BAR_NS, os)
+pub fn summary_notice(report: &P3Report, role: Role, os: &str) -> Result<String, Error> {
+    summary_against(report, REPATH_BAR_NS, ESTIMATE_BAR_NS, role, os)
 }
 
 /// [`summary_notice`] against the bars given, each figure's verdict beside
@@ -977,6 +1003,7 @@ pub fn summary_against(
     report: &P3Report,
     repath_bar_ns: u128,
     estimate_bar_ns: u128,
+    role: Role,
     os: &str,
 ) -> Result<String, Error> {
     let empty = || Error::Empty("a P3 report of no seed".to_owned());
@@ -988,8 +1015,7 @@ pub fn summary_against(
     Ok(format!(
         "::notice title=P3::on {os}, over {} seeds x {} pairs: the worst repath p99 is {} \
          (cold or under the crater stream, repair outside it) against G2's {}: {}, and the \
-         worst one-leg estimate_route p99 {} against P3's {}: {}; published here and never \
-         gated, certified on the owner's machine",
+         worst one-leg estimate_route p99 {} against P3's {}: {}; {}",
         report.seeds.len(),
         report.pairs,
         millis(repath),
@@ -998,6 +1024,7 @@ pub fn summary_against(
         millis(estimate),
         millis(estimate_bar_ns),
         side(estimate, estimate_bar_ns),
+        role.words(),
     ))
 }
 
@@ -1013,7 +1040,8 @@ pub fn budget_report_line(report: &P3Report) -> String {
     };
     format!(
         "{BUDGET_REPORT_PREFIX} seeds={} planned_seeds={} pairs={} planned_pairs={PAIRS} \
-         repath_p99_ns={} estimate_p99_ns={}",
+         repath_p99_ns={} estimate_p99_ns={} repath_bar_ns={REPATH_BAR_NS} \
+         estimate_bar_ns={ESTIMATE_BAR_NS}",
         report.seeds.len(),
         P3_SEEDS.len(),
         report.pairs,
@@ -1086,19 +1114,33 @@ mod tests {
         };
         assert_eq!(
             budget_report_line(&report),
-            "p3-budget-report v1 seeds=2 planned_seeds=3 pairs=2 planned_pairs=2000 \
-             repath_p99_ns=4000000 estimate_p99_ns=600000"
+            "p3-budget-report v2 seeds=2 planned_seeds=3 pairs=2 planned_pairs=2000 \
+             repath_p99_ns=4000000 estimate_p99_ns=600000 repath_bar_ns=5000000 \
+             estimate_bar_ns=1000000"
         );
         // The summary's verdicts, and the must-trip: each bar halved below
         // its figure turns that figure's verdict.
-        let line = summary_notice(&report, "linux").expect("a notice");
+        let line = summary_notice(&report, Role::Published, "linux").expect("a notice");
         assert!(
             line.contains(
                 "against G2's 5.000 ms: within, and the worst one-leg estimate_route p99 0.600 ms against P3's 1.000 ms: within;"
             ),
             "{line}"
         );
-        let halved = summary_against(&report, 2_500_000, 500_000, "linux").expect("a notice");
+        let halved =
+            summary_against(&report, 2_500_000, 500_000, Role::Alarm, "linux").expect("a notice");
+        assert!(
+            halved.ends_with(
+                "fails at these bars doubled; the gate is certified on the owner's machine"
+            ),
+            "{halved}"
+        );
+        assert!(
+            line.ends_with(
+                "published here and never gated; the gate is certified on the owner's machine"
+            ),
+            "{line}"
+        );
         assert!(
             halved.contains(
                 "against G2's 2.500 ms: OVER, and the worst one-leg estimate_route p99 0.600 ms against P3's 0.500 ms: OVER;"
@@ -1109,7 +1151,7 @@ mod tests {
             seeds: Vec::new(),
             ..report
         };
-        assert!(budget_report_line(&none).ends_with("repath_p99_ns=none estimate_p99_ns=none"));
-        assert!(summary_notice(&none, "linux").is_err());
+        assert!(budget_report_line(&none).contains(" repath_p99_ns=none estimate_p99_ns=none "));
+        assert!(summary_notice(&none, Role::Published, "linux").is_err());
     }
 }

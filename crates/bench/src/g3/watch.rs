@@ -204,34 +204,11 @@ impl Poller {
                 json::write(&answer)
             ),
         })?;
-        let entities: &[Json] = match result.get("entities") {
-            Some(Json::Array(items)) => items,
-            None => &[],
-            Some(other) => {
-                return Err(Error::Drift(format!(
-                    "get_view's `entities` is not a list: {}",
-                    json::write(other)
-                )));
-            }
-        };
-        let complete = match result.get("complete") {
-            Some(Json::Bool(complete)) => *complete,
-            None => false,
-            Some(other) => {
-                return Err(Error::Drift(format!(
-                    "get_view's `complete` is not a bool: {}",
-                    json::write(other)
-                )));
-            }
-        };
-        let cursor = match result.get("next_cursor") {
-            Some(Json::String(cursor)) => cursor.clone(),
-            other => {
-                return Err(Error::Drift(format!(
-                    "get_view answered no `next_cursor`: {other:?}"
-                )));
-            }
-        };
+        let Page {
+            entities,
+            complete,
+            cursor,
+        } = read_page(result)?;
         let open = self
             .open
             .as_mut()
@@ -271,6 +248,48 @@ impl Poller {
         }
         Ok(complete)
     }
+}
+
+/// One `get_view` page as the bench reads it.
+#[derive(Debug)]
+struct Page<'a> {
+    entities: &'a [Json],
+    complete: bool,
+    cursor: String,
+}
+
+/// A `get_view` answer's page: its entities, whether it completes its
+/// listing, and the cursor it hands back. Every field is required as the
+/// gateway's answer writes it; a field missing or of another shape is
+/// [`Error::Drift`] naming it, so a listing that never completes, or a page
+/// whose entities went missing, cannot pass unseen.
+fn read_page(result: &Json) -> Result<Page<'_>, Error> {
+    let drift = |field: &str, found: Option<&Json>| {
+        Error::Drift(format!(
+            "get_view's answer has no `{field}` of its shape: {}",
+            match found {
+                Some(value) => json::write(value),
+                None => "it is missing".to_owned(),
+            }
+        ))
+    };
+    let entities = match result.get("entities") {
+        Some(Json::Array(items)) => items.as_slice(),
+        other => return Err(drift("entities", other)),
+    };
+    let complete = match result.get("complete") {
+        Some(Json::Bool(complete)) => *complete,
+        other => return Err(drift("complete", other)),
+    };
+    let cursor = match result.get("next_cursor") {
+        Some(Json::String(cursor)) => cursor.clone(),
+        other => return Err(drift("next_cursor", other)),
+    };
+    Ok(Page {
+        entities,
+        complete,
+        cursor,
+    })
 }
 
 /// One minute's breach probe.
@@ -426,6 +445,10 @@ pub struct WatchReport {
     /// The sim's own refused-search counts at the end: spent its expansions,
     /// and no way across a wall.
     pub sim_refused: (u64, u64),
+    /// The played segment's hash chain, digested as `g3::segment` digests its
+    /// own (`pharmakos_sim::digest` over each tick's hash, little-endian), so
+    /// it reads beside `g3_raids_segments`' RAIDS line.
+    pub chain_digest: u64,
 }
 
 /// Play the gate's segment with raids on `seed`, polling, counting and
@@ -462,6 +485,7 @@ pub fn measure(root: &std::path::Path, seed: u64, segment_ms: i32) -> Result<Wat
     let mut peaks: Vec<(u32, u64)> = vec![(0, 0); pollers.len()];
     let mut probes: Vec<BreachProbe> = Vec::new();
     let mut played: u64 = 0;
+    let mut chain: Vec<u8> = Vec::new();
     loop {
         {
             let host = surface
@@ -478,6 +502,7 @@ pub fn measure(root: &std::path::Path, seed: u64, segment_ms: i32) -> Result<Wat
         played = played
             .checked_add(1)
             .ok_or(Error::Overflow("the ticks played"))?;
+        chain.extend_from_slice(&report.hash.to_le_bytes());
         {
             let world = hosted::world(&surface)?;
             for (poller, peak) in pollers.iter().zip(peaks.iter_mut()) {
@@ -509,6 +534,7 @@ pub fn measure(root: &std::path::Path, seed: u64, segment_ms: i32) -> Result<Wat
         sighting_room: per_seat,
         breach: probes,
         sim_refused: (counts.breach_exhausted, counts.breach_no_way),
+        chain_digest: pharmakos_sim::digest(&chain),
     })
 }
 
@@ -516,13 +542,14 @@ pub fn measure(root: &std::path::Path, seed: u64, segment_ms: i32) -> Result<Wat
 fn summary_words(values: Vec<u128>, unit: impl Fn(u128) -> String) -> String {
     match Summary::of(values) {
         Ok(summary) => format!(
-            "p50 {} / p99 {} / max {} over {}",
+            "p50 {} / p99 {} / max {} over {} listings",
             unit(summary.p50_ns),
             unit(summary.p99_ns),
             unit(summary.max_ns),
             summary.samples
         ),
-        Err(_) => "none".to_owned(),
+        Err(Error::Empty(_)) => "none (no listing)".to_owned(),
+        Err(other) => format!("not summarised ({other})"),
     }
 }
 
@@ -531,9 +558,10 @@ fn summary_words(values: Vec<u128>, unit: impl Fn(u128) -> String) -> String {
 pub fn provenance_notice(report: &WatchReport, os: &str) -> String {
     format!(
         "::notice title=G3' watch provenance::on {os}: seed 0x{:016x}, bench rules_hash {}, \
-         layout {}, load: Attack {}, every seat sealing {}, {} ticks; every seat polls get_view a listing every {POLL_TICKS} \
-         ticks, at most {PAGES_PER_TICK} pages a tick, between ticks (no tick here is timed, so \
-         this segment is not G3''s)",
+         layout {}, load: Attack {}, every seat sealing {}, {} ticks, the played chain's digest \
+         {}; every seat polls get_view a listing every {POLL_TICKS} ticks, at most \
+         {PAGES_PER_TICK} pages a tick, between ticks (no tick here is timed, so this segment \
+         is not G3''s)",
         report.seed,
         pharmakos_sim::hex(report.rules_hash),
         pharmakos_sim::hex(report.layout_digest),
@@ -544,6 +572,7 @@ pub fn provenance_notice(report: &WatchReport, os: &str) -> String {
         },
         report.load.sealed.name(),
         report.ticks,
+        pharmakos_sim::hex(report.chain_digest),
     )
 }
 
@@ -590,8 +619,20 @@ pub fn view_notice(report: &WatchReport, os: &str) -> String {
     )
 }
 
-/// E15's recompute notice: the delta listings after a sensor moved against
-/// the ones after none did, and the difference of their means. Pure.
+/// The mean of `values`, or the words for none.
+fn mean_words(values: &[u128], unit: &str) -> String {
+    match crate::stats::mean(values) {
+        Some(mean) => format!("{mean} {unit}"),
+        None => "none".to_owned(),
+    }
+}
+
+/// E15's recompute notice: the delta listings after the seat's sensors moved
+/// against the ones after none moved, compared page count by page count (a
+/// listing of more pages is a longer listing whatever the recompute did),
+/// with each group's entity count beside its time. What is left is a
+/// difference of means, not a cost per move: a listing can follow several
+/// moves, or span ticks, and its entity list is not the other group's. Pure.
 #[must_use]
 pub fn recompute_notice(report: &WatchReport, os: &str) -> String {
     let deltas: Vec<&Listing> = report
@@ -600,46 +641,87 @@ pub fn recompute_notice(report: &WatchReport, os: &str) -> String {
         .flatten()
         .filter(|listing| !listing.keyframe)
         .collect();
-    let moved: Vec<u128> = deltas.iter().filter(|l| l.moved).map(|l| l.ns).collect();
-    let still: Vec<u128> = deltas.iter().filter(|l| !l.moved).map(|l| l.ns).collect();
-    let cost = match (crate::stats::mean(&moved), crate::stats::mean(&still)) {
-        (Some(moved_mean), Some(still_mean)) => {
-            let difference = i128::try_from(moved_mean)
-                .ok()
-                .zip(i128::try_from(still_mean).ok())
-                .and_then(|(a, b)| a.checked_sub(b));
-            match difference {
-                Some(ns) => format!("the recompute's cost per sensor move is {ns} ns"),
-                None => "the difference does not fit an i128".to_owned(),
-            }
-        }
-        (None, _) => "no listing followed a sensor move".to_owned(),
-        (_, None) => {
-            "no listing found every sensor where it was, so the recompute's cost cannot be told \
-             from a listing's"
-                .to_owned()
-        }
-    };
+    let mut pages: Vec<u32> = deltas.iter().map(|listing| listing.pages).collect();
+    pages.sort_unstable();
+    pages.dedup();
+    let groups: Vec<String> = pages
+        .iter()
+        .map(|count| {
+            let of = |moved: bool| -> Vec<&Listing> {
+                deltas
+                    .iter()
+                    .filter(|listing| listing.pages == *count && listing.moved == moved)
+                    .copied()
+                    .collect()
+            };
+            let (moved, still) = (of(true), of(false));
+            let ns = |group: &[&Listing]| group.iter().map(|l| l.ns).collect::<Vec<u128>>();
+            let entities = |group: &[&Listing]| {
+                group
+                    .iter()
+                    .map(|l| u128::from(l.entities))
+                    .collect::<Vec<u128>>()
+            };
+            let difference = match (
+                crate::stats::mean(&ns(&moved)),
+                crate::stats::mean(&ns(&still)),
+            ) {
+                (Some(after_move), Some(after_none)) => {
+                    match (i128::try_from(after_move), i128::try_from(after_none)) {
+                        (Ok(a), Ok(b)) => match a.checked_sub(b) {
+                            Some(ns) => format!("a difference of means of {ns} ns"),
+                            None => "a difference past an i128".to_owned(),
+                        },
+                        _ => "a mean past an i128".to_owned(),
+                    }
+                }
+                _ => "no difference: one side holds no listing".to_owned(),
+            };
+            format!(
+                "{count} page(s): after a move {} listings, mean {} with mean {} entities; after \
+                 none {} listings, mean {} with mean {} entities; {difference}",
+                moved.len(),
+                mean_words(&ns(&moved), "ns"),
+                mean_words(&entities(&moved), "").trim_end(),
+                still.len(),
+                mean_words(&ns(&still), "ns"),
+                mean_words(&entities(&still), "").trim_end(),
+            )
+        })
+        .collect();
     format!(
-        "::notice title=G3' view recompute::on {os}, S1-34's recompute key at the gate's load: \
-         a delta listing after the seat's sensors moved {} ns, after none moved {} ns; {cost}",
-        summary_words(moved, |n| n.to_string()),
-        summary_words(still, |n| n.to_string()),
+        "::notice title=G3' view recompute::on {os}, S1-34's recompute key at the gate's load, \
+         delta listings after the seat's sensors moved since its last listing against those \
+         after none moved, page count by page count: {}. A difference of means, not a cost per \
+         move: a listing can follow several moves or span ticks, and the two groups' entity \
+         lists differ",
+        groups.join("; "),
     )
 }
 
-/// E17's sightings notice. Pure.
+/// E17's sightings notice: each seat's own peak, and when a seat's peak is
+/// the table's room, that its true peak is not known from this figure (the
+/// table keeps no more and counts nothing it drops). Pure.
 #[must_use]
 pub fn sightings_notice(report: &WatchReport, os: &str) -> String {
     let seats: Vec<String> = report
         .sightings
         .iter()
         .enumerate()
-        .map(|(seat, (rows, tick))| format!("seat {seat} {rows} at tick {tick}"))
+        .map(|(seat, (rows, tick))| {
+            if *rows >= report.sighting_room {
+                format!(
+                    "seat {seat} {rows} at tick {tick}, AT THE ROOM: its true peak is not known \
+                     from this figure"
+                )
+            } else {
+                format!("seat {seat} {rows} at tick {tick}")
+            }
+        })
         .collect();
     format!(
-        "::notice title=G3' sightings::on {os}, the most sighting rows a seat held after a tick \
-         over the gate's segment (E17): {}, against the table's {} a seat",
+        "::notice title=G3' sightings::on {os}, the most sighting rows each seat held after a \
+         tick over the gate's segment (E17): {}, against the table's {} a seat",
         seats.join(", "),
         report.sighting_room,
     )
@@ -681,4 +763,122 @@ pub fn breach_notice(report: &WatchReport, os: &str) -> String {
         report.sim_refused.0,
         report.sim_refused.1,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page(fields: &[(&str, Json)]) -> Json {
+        Json::Object(
+            fields
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                .collect(),
+        )
+    }
+
+    /// C4: a page missing its entities, its `complete` or its cursor is a
+    /// typed drift naming the field, never zero bytes or "not complete".
+    #[test]
+    fn a_page_missing_a_field_is_drift_naming_it() {
+        let whole = [
+            ("entities", Json::Array(vec![Json::Null])),
+            ("complete", Json::Bool(true)),
+            ("next_cursor", Json::String("c".to_owned())),
+        ];
+        let read = page(&whole);
+        let ok = read_page(&read).expect("a whole page");
+        assert_eq!(
+            (ok.entities.len(), ok.complete, ok.cursor.as_str()),
+            (1, true, "c")
+        );
+        for missing in ["entities", "complete", "next_cursor"] {
+            let cut: Vec<(&str, Json)> = whole
+                .iter()
+                .filter(|(key, _)| *key != missing)
+                .cloned()
+                .collect();
+            match read_page(&page(&cut)) {
+                Err(Error::Drift(words)) => {
+                    assert!(words.contains(&format!("`{missing}`")), "{words}");
+                }
+                other => panic!("{missing}: {other:?}"),
+            }
+        }
+    }
+
+    fn listing(pages: u32, moved: bool, ns: u128, entities: u64) -> Listing {
+        Listing {
+            keyframe: false,
+            moved,
+            pages,
+            entities,
+            entity_bytes: 0,
+            answer_bytes: 0,
+            ns,
+        }
+    }
+
+    fn report(listings: Vec<Vec<Listing>>, sightings: Vec<(u32, u64)>) -> WatchReport {
+        WatchReport {
+            seed: 1,
+            rules_hash: 2,
+            layout_digest: 3,
+            load: GateLoad::RAIDS,
+            ticks: 10,
+            listings,
+            sightings,
+            sighting_room: 64,
+            breach: Vec::new(),
+            sim_refused: (0, 0),
+            chain_digest: 4,
+        }
+    }
+
+    /// C5: listings compared page count by page count, the entity count beside
+    /// each mean, and the figure named a difference of means.
+    #[test]
+    fn the_recompute_notice_is_word_for_word() {
+        let line = recompute_notice(
+            &report(
+                vec![vec![
+                    listing(1, true, 3_000, 50),
+                    listing(1, false, 1_000, 40),
+                    listing(2, true, 9_000, 120),
+                ]],
+                Vec::new(),
+            ),
+            "linux",
+        );
+        assert_eq!(
+            line,
+            "::notice title=G3' view recompute::on linux, S1-34's recompute key at the gate's \
+             load, delta listings after the seat's sensors moved since its last listing against \
+             those after none moved, page count by page count: 1 page(s): after a move 1 \
+             listings, mean 3000 ns with mean 50 entities; after none 1 listings, mean 1000 ns \
+             with mean 40 entities; a difference of means of 2000 ns; 2 page(s): after a move 1 \
+             listings, mean 9000 ns with mean 120 entities; after none 0 listings, mean none \
+             with mean none entities; no difference: one side holds no listing. A difference of \
+             means, not a cost per move: a listing can follow several moves or span ticks, and \
+             the two groups' entity lists differ"
+        );
+    }
+
+    /// C6: each seat's own peak is printed, and a peak at the room says the
+    /// true peak is unknown, per seat (O9's mutant read seat 0's alone).
+    #[test]
+    fn each_seats_peak_is_its_own() {
+        let line = sightings_notice(
+            &report(Vec::new(), vec![(64, 1), (10, 5), (63, 7)]),
+            "linux",
+        );
+        assert_eq!(
+            line,
+            "::notice title=G3' sightings::on linux, the most sighting rows each seat held after \
+             a tick over the gate's segment (E17): seat 0 64 at tick 1, AT THE ROOM: its true \
+             peak is not known from this figure, seat 1 10 at tick 5, seat 2 63 at tick 7, \
+             against the table's 64 a seat"
+        );
+    }
 }

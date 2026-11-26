@@ -113,6 +113,11 @@ pub const SIZES: [u32; 5] = [64, 96, 128, 192, 256];
 /// leaves are `CONDITION_MAX_NODES`, the most spec section 10 allows.
 const LEAVES_PER_CONDITION: usize = 21;
 
+/// The committed map's centre column, `[x, y]`: the one place as far from
+/// every seat's spawn as from every other (`scenarios/nightly/README.md`'s
+/// staging point), which [`Shape::RankerFar`] walks its commander to.
+pub const MAP_CENTRE: [i32; 2] = [192, 192];
+
 /// The map's extent the fixture's anchors are kept inside: the committed
 /// rules' `map.size_x` and `map.size_y`, which `tests/harness.rs` holds to the
 /// table.
@@ -171,9 +176,9 @@ pub enum Shape {
     FullEval,
     /// [`Shape::FullEval`] with selector leaves. Not in [`Shape::ALL`].
     FullEvalSelectors,
-    /// A route of one-second holds and nothing else: the decision tick's
-    /// baseline, a playbook that asks a decision for almost nothing
-    /// (`crate::kinds`). Not in [`Shape::ALL`].
+    /// A route of hour-long holds and nothing else: the decision tick's
+    /// baseline, a playbook that asks a decision for almost nothing and never
+    /// reaches its fallback (`crate::kinds`). Not in [`Shape::ALL`].
     Idle,
     /// The condition kind's: [`Shape::FullEval`]'s handlers over a route of
     /// holds, so the commander stands still. Not in [`Shape::ALL`].
@@ -186,6 +191,11 @@ pub enum Shape {
     /// ranking the seat's beacons through the threat scan. Not in
     /// [`Shape::ALL`].
     ThreatHolds,
+    /// The long served walks' kind: [`Shape::RankerHolds`]' `nearest`
+    /// leaves with a first route step that walks the commander to the map's
+    /// centre, far from every beacon its seat holds, so each ranking serves
+    /// a long walk. Not in [`Shape::ALL`].
+    RankerFar,
     /// A route of `place_beacon` steps, each `toward` the nearest vent the
     /// seat does not cover: a stepping stone a unit, each resolved when its
     /// step starts and deployed where the commander walks (S3's `pred`, E23).
@@ -220,6 +230,7 @@ impl Shape {
             Shape::ConditionHolds => "condition_holds",
             Shape::RankerHolds => "ranker_holds",
             Shape::ThreatHolds => "threat_holds",
+            Shape::RankerFar => "ranker_far",
             Shape::Toward => "toward",
         }
     }
@@ -288,6 +299,9 @@ impl Shape {
             }
             Shape::ThreatHolds => {
                 handlers(size, Group::FullAny(LeafKind::Safest), Bodies::One).map_err(refuse)?
+            }
+            Shape::RankerFar => {
+                handlers(size, Group::FullAny(LeafKind::Selector), Bodies::Far).map_err(refuse)?
             }
             Shape::Toward => stepping_stones(size).map_err(refuse)?,
         };
@@ -552,6 +566,9 @@ enum Bodies {
     Fill,
     /// One each, and the units left over go to `move` route steps.
     Moves,
+    /// One each; the first route step walks to the map's centre and the rest
+    /// hold.
+    Far,
 }
 
 /// A 24-node condition: `any(any(any(21)))` when `any`, else `all(all(all(21)))`.
@@ -611,7 +628,7 @@ fn handlers(size: usize, group: Group, bodies: Bodies) -> Result<Declarative, St
         .and_then(|in_handlers| size.checked_sub(in_handlers))
         .ok_or_else(|| "the handlers' units".to_owned())?;
     let (route_steps, extra_bodies) = match bodies {
-        Bodies::One | Bodies::Moves => (left, 0),
+        Bodies::One | Bodies::Moves | Bodies::Far => (left, 0),
         Bodies::Fill => (
             1,
             left.checked_sub(1)
@@ -656,6 +673,27 @@ fn handlers(size: usize, group: Group, bodies: Bodies) -> Result<Declarative, St
     let route = match bodies {
         Bodies::Moves => moves(route_steps)?,
         Bodies::One | Bodies::Fill => holds(route_steps),
+        Bodies::Far => {
+            let mut route = holds(route_steps);
+            let [x, y] = MAP_CENTRE;
+            if let Some(first) = route.first_mut() {
+                *first =
+                    Step {
+                        label: "r000".to_owned(),
+                        timeout_ms: 300_000,
+                        kind: Some(step::Kind::Move(MoveStep {
+                            to: Some(Location {
+                                place: Some(location::Place::Voxel(
+                                    pharmakos_proto::gp::v1::Voxel { x, y, z: 30 },
+                                )),
+                            }),
+                            pace: i32::from(Pace::Direct),
+                        })),
+                        ..Step::default()
+                    };
+            }
+            route
+        }
     };
     Ok(Declarative {
         route,
@@ -671,12 +709,27 @@ fn idle(size: usize) -> Result<Declarative, String> {
             "a route of {size} steps, outside the interpreter's 1 to {MAX_ROUTE_STEPS}"
         ));
     }
+    // Each hold outlasts any segment the bench plays, so the route never
+    // ends and the fallback (a `safest` hold, whose ranking a decision would
+    // pay for) never engages: the baseline asks a decision for almost
+    // nothing, every tick alike.
+    let route = holds(size)
+        .into_iter()
+        .map(|mut entry| {
+            entry.kind = Some(step::Kind::Hold(HoldStep { ms: IDLE_HOLD_MS }));
+            entry
+        })
+        .collect();
     Ok(Declarative {
-        route: holds(size),
+        route,
         handlers: Vec::new(),
         options: None,
     })
 }
+
+/// How long each of [`Shape::Idle`]'s holds lasts: an hour of game time,
+/// past the longest segment the bench plays (G3′'s eight minutes).
+const IDLE_HOLD_MS: i32 = 3_600_000;
 
 /// `size` `place_beacon` steps, `r000` on, each `toward` the nearest vent the
 /// seat does not cover, skipped when it fails so the next one starts.
@@ -906,6 +959,7 @@ mod tests {
             Shape::ConditionHolds,
             Shape::RankerHolds,
             Shape::ThreatHolds,
+            Shape::RankerFar,
             Shape::Toward,
         ]) {
             for units in SIZES.into_iter().chain([127, 129, 3]) {
@@ -1000,6 +1054,15 @@ mod tests {
             Shape::FullEval.handlers_at(256).expect("handlers"),
             64,
             "MAX_HANDLERS"
+        );
+    }
+
+    #[test]
+    fn the_map_centre_is_half_the_extent() {
+        assert_eq!(
+            MAP_CENTRE.map(|axis| axis * 2),
+            FIXTURE_EXTENT,
+            "the centre the far ranker walks to"
         );
     }
 

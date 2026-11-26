@@ -35,6 +35,10 @@ use std::path::Path;
 pub(crate) struct Bar {
     /// The report field, in whole nanoseconds.
     pub(crate) field: &'static str,
+    /// The report field the bench prints its own bar in, which must equal
+    /// [`Bar::gate_ns`]: the bench's constant is the one fact, and a line
+    /// whose bar moved alone gives no verdict ([`BudgetError::BarMismatch`]).
+    pub(crate) printed: &'static str,
     /// What the figure is, as the verdict names it.
     pub(crate) what: &'static str,
     /// The gate's bar, quoted beside the figure and never gated here.
@@ -66,6 +70,9 @@ pub(crate) struct Budget {
     /// `(measured, planned)` pairs: a run that measured fewer than it planned
     /// is a short run, and no verdict.
     pub(crate) complete: &'static [(&'static str, &'static str)],
+    /// `(measured, planned)` pairs that must be equal: a run that measured
+    /// more than it planned is no verdict either.
+    pub(crate) exact: &'static [(&'static str, &'static str)],
     /// The bars.
     pub(crate) bars: &'static [Bar],
 }
@@ -74,7 +81,7 @@ pub(crate) struct Budget {
 pub(crate) const P3_BUDGET: Budget = Budget {
     command: "p3-budget",
     title: "P3 budget",
-    prefix: "p3-budget-report v1",
+    prefix: "p3-budget-report v2",
     source: "crates/bench/src/p3.rs",
     target: "p3_alarm",
     test: "p3_budget",
@@ -85,18 +92,23 @@ pub(crate) const P3_BUDGET: Budget = Budget {
         "planned_pairs",
         "repath_p99_ns",
         "estimate_p99_ns",
+        "repath_bar_ns",
+        "estimate_bar_ns",
     ],
-    nonzero: &["seeds", "pairs"],
+    nonzero: &["seeds", "pairs", "repath_p99_ns", "estimate_p99_ns"],
     complete: &[("seeds", "planned_seeds"), ("pairs", "planned_pairs")],
+    exact: &[],
     bars: &[
         Bar {
             field: "repath_p99_ns",
+            printed: "repath_bar_ns",
             what: "repath p99 (cold or under the crater stream)",
             gate_ns: 5_000_000,
             alarm_ns: 10_000_000,
         },
         Bar {
             field: "estimate_p99_ns",
+            printed: "estimate_bar_ns",
             what: "one-leg estimate_route p99",
             gate_ns: 1_000_000,
             alarm_ns: 2_000_000,
@@ -124,22 +136,36 @@ pub(crate) const P1_BUDGET: Budget = Budget {
         "quick_p99_ns",
         "full_p99_ns",
         "e2e_p99_ns",
+        "quick_bar_ns",
+        "full_bar_ns",
+        "e2e_bar_ns",
     ],
-    nonzero: &["budget_units", "inputs", "e2e_inputs", "calls"],
+    nonzero: &[
+        "budget_units",
+        "inputs",
+        "e2e_inputs",
+        "calls",
+        "quick_p99_ns",
+        "full_p99_ns",
+        "e2e_p99_ns",
+    ],
     complete: &[
         ("inputs", "planned_inputs"),
         ("e2e_inputs", "planned_e2e_inputs"),
         ("calls", "planned_calls"),
     ],
+    exact: &[("e2e_inputs", "planned_e2e_inputs")],
     bars: &[
         Bar {
             field: "quick_p99_ns",
+            printed: "quick_bar_ns",
             what: "QUICK p99 at the size budget",
             gate_ns: 5_000_000,
             alarm_ns: 10_000_000,
         },
         Bar {
             field: "full_p99_ns",
+            printed: "full_bar_ns",
             what: "FULL p99 at the size budget",
             gate_ns: 50_000_000,
             alarm_ns: 100_000_000,
@@ -148,6 +174,7 @@ pub(crate) const P1_BUDGET: Budget = Budget {
         // 162 (1): `verify_plan` through the hosted gateway, the worse depth.
         Bar {
             field: "e2e_p99_ns",
+            printed: "e2e_bar_ns",
             what: "end-to-end verify_plan p99 at the size budget",
             gate_ns: 50_000_000,
             alarm_ns: 100_000_000,
@@ -186,6 +213,20 @@ pub(crate) enum BudgetError {
         measured: u128,
         planned: u128,
     },
+    /// A run that measured more than a count it must meet exactly.
+    Over {
+        field: &'static str,
+        measured: u128,
+        planned: u128,
+    },
+    /// A report field whose value is signed, which no count or time is.
+    Signed { field: &'static str, value: String },
+    /// The bench printed a bar other than the one this alarm holds.
+    BarMismatch {
+        field: &'static str,
+        bench: u128,
+        alarm: u128,
+    },
 }
 
 impl fmt::Display for BudgetError {
@@ -214,6 +255,26 @@ impl fmt::Display for BudgetError {
             } => write!(
                 f,
                 "the report's `{field}` is {measured} of the {planned} planned: a short run"
+            ),
+            Self::Over {
+                field,
+                measured,
+                planned,
+            } => write!(
+                f,
+                "the report's `{field}` is {measured}, past the {planned} planned exactly"
+            ),
+            Self::Signed { field, value } => {
+                write!(f, "report field `{field}` is `{value}`, signed")
+            }
+            Self::BarMismatch {
+                field,
+                bench,
+                alarm,
+            } => write!(
+                f,
+                "the bench prints `{field}` as {bench} and this alarm holds {alarm}: the bar \
+                 moved on one side alone"
             ),
         }
     }
@@ -270,6 +331,12 @@ pub(crate) fn parse(budget: &Budget, output: &str) -> Result<Report, BudgetError
         if slot.is_some() {
             return Err(BudgetError::DuplicateField(field));
         }
+        if value.starts_with('+') || value.starts_with('-') {
+            return Err(BudgetError::Signed {
+                field,
+                value: value.to_owned(),
+            });
+        }
         *slot = Some(value.parse::<u128>().map_err(|_| BudgetError::BadValue {
             field,
             value: value.to_owned(),
@@ -297,6 +364,26 @@ pub(crate) fn parse(budget: &Budget, output: &str) -> Result<Report, BudgetError
                 field: measured,
                 measured: got,
                 planned: wanted,
+            });
+        }
+    }
+    for (measured, planned) in budget.exact {
+        let (got, wanted) = (report.get(measured)?, report.get(planned)?);
+        if got != wanted {
+            return Err(BudgetError::Over {
+                field: measured,
+                measured: got,
+                planned: wanted,
+            });
+        }
+    }
+    for bar in budget.bars {
+        let bench = report.get(bar.printed)?;
+        if bench != bar.gate_ns {
+            return Err(BudgetError::BarMismatch {
+                field: bar.printed,
+                bench,
+                alarm: bar.gate_ns,
             });
         }
     }
@@ -401,12 +488,23 @@ pub(crate) fn run(
 mod tests {
     use super::*;
 
-    const P3: &str = "p3-budget-report v1 seeds=3 planned_seeds=3 pairs=2000 \
-                      planned_pairs=2000 repath_p99_ns=900000 estimate_p99_ns=400000";
+    /// The bars as the bench prints them at the end of each line.
+    const P3_BARS: &str = " repath_bar_ns=5000000 estimate_bar_ns=1000000";
 
-    const P1: &str = "p1-budget-report v2 budget_units=128 inputs=7 planned_inputs=7 \
-                      e2e_inputs=6 planned_e2e_inputs=6 calls=500 planned_calls=500 \
-                      quick_p99_ns=3000000 full_p99_ns=30000000 e2e_p99_ns=32000000";
+    const P1_BARS: &str = " quick_bar_ns=5000000 full_bar_ns=50000000 e2e_bar_ns=50000000";
+
+    const P3: &str = concat!(
+        "p3-budget-report v2 seeds=3 planned_seeds=3 pairs=2000 planned_pairs=2000 ",
+        "repath_p99_ns=900000 estimate_p99_ns=400000",
+        " repath_bar_ns=5000000 estimate_bar_ns=1000000"
+    );
+
+    const P1: &str = concat!(
+        "p1-budget-report v2 budget_units=128 inputs=7 planned_inputs=7 e2e_inputs=6 ",
+        "planned_e2e_inputs=6 calls=500 planned_calls=500 quick_p99_ns=3000000 ",
+        "full_p99_ns=30000000 e2e_p99_ns=32000000",
+        " quick_bar_ns=5000000 full_bar_ns=50000000 e2e_bar_ns=50000000"
+    );
 
     #[test]
     fn a_report_is_read_among_other_output() {
@@ -422,12 +520,12 @@ mod tests {
     fn every_malformed_report_is_its_own_error() {
         assert_eq!(
             parse(&P3_BUDGET, "nothing"),
-            Err(BudgetError::NoReport("p3-budget-report v1"))
+            Err(BudgetError::NoReport("p3-budget-report v2"))
         );
         assert_eq!(
             parse(&P3_BUDGET, &format!("{P3}\n{P3}")),
             Err(BudgetError::SeveralReports {
-                prefix: "p3-budget-report v1",
+                prefix: "p3-budget-report v2",
                 count: 2
             })
         );
@@ -505,10 +603,80 @@ mod tests {
                 value: "none".to_owned()
             })
         );
+        // A count past an exact plan, a zero figure, and a signed value are
+        // each no verdict, each under its own reason.
+        assert_eq!(
+            parse(&P1_BUDGET, &P1.replacen("e2e_inputs=6", "e2e_inputs=7", 1)),
+            Err(BudgetError::Over {
+                field: "e2e_inputs",
+                measured: 7,
+                planned: 6
+            })
+        );
+        for field in ["quick_p99_ns", "full_p99_ns", "e2e_p99_ns"] {
+            let line = P1
+                .split(' ')
+                .map(|token| {
+                    if token.starts_with(&format!("{field}=")) {
+                        format!("{field}=0")
+                    } else {
+                        token.to_owned()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            assert_eq!(parse(&P1_BUDGET, &line), Err(BudgetError::Zero(field)));
+        }
+        assert_eq!(
+            swap("repath_p99_ns=900000", "repath_p99_ns=0"),
+            Err(BudgetError::Zero("repath_p99_ns"))
+        );
+        assert_eq!(
+            swap("estimate_p99_ns=400000", "estimate_p99_ns=0"),
+            Err(BudgetError::Zero("estimate_p99_ns"))
+        );
+        assert_eq!(
+            swap("estimate_p99_ns=400000", "estimate_p99_ns=+400000"),
+            Err(BudgetError::Signed {
+                field: "estimate_p99_ns",
+                value: "+400000".to_owned()
+            })
+        );
+        // The must-trip of the one fact: a bar moved on the bench's side
+        // alone is no verdict, and so is one moved on this side alone.
+        assert_eq!(
+            parse(
+                &P1_BUDGET,
+                &P1.replacen("quick_bar_ns=5000000", "quick_bar_ns=4000000", 1)
+            ),
+            Err(BudgetError::BarMismatch {
+                field: "quick_bar_ns",
+                bench: 4_000_000,
+                alarm: 5_000_000
+            })
+        );
+        let moved = Budget {
+            bars: &[Bar {
+                field: "repath_p99_ns",
+                printed: "repath_bar_ns",
+                what: "repath",
+                gate_ns: 6_000_000,
+                alarm_ns: 12_000_000,
+            }],
+            ..P3_BUDGET
+        };
+        assert_eq!(
+            parse(&moved, P3),
+            Err(BudgetError::BarMismatch {
+                field: "repath_bar_ns",
+                bench: 5_000_000,
+                alarm: 6_000_000
+            })
+        );
         // A longer word that merely starts with the prefix is not a report.
         assert_eq!(
-            parse(&P3_BUDGET, "p3-budget-report v10 seeds=1"),
-            Err(BudgetError::NoReport("p3-budget-report v1"))
+            parse(&P3_BUDGET, "p3-budget-report v20 seeds=1"),
+            Err(BudgetError::NoReport("p3-budget-report v2"))
         );
     }
 
@@ -520,9 +688,11 @@ mod tests {
         assert_eq!(
             parse(
                 &P1_BUDGET,
-                "p1-budget-report v2 budget_units=128 inputs=7 planned_inputs=7 e2e_inputs=6 \
-                 planned_e2e_inputs=6 calls=1 planned_calls=500 quick_p99_ns=1 full_p99_ns=1 \
-                 e2e_p99_ns=1"
+                &format!(
+                    "p1-budget-report v2 budget_units=128 inputs=7 planned_inputs=7 e2e_inputs=6 \
+                     planned_e2e_inputs=6 calls=1 planned_calls=500 quick_p99_ns=1 full_p99_ns=1 \
+                     e2e_p99_ns=1{P1_BARS}"
+                )
             ),
             Err(BudgetError::Short {
                 field: "calls",
@@ -533,8 +703,10 @@ mod tests {
         assert_eq!(
             parse(
                 &P3_BUDGET,
-                "p3-budget-report v1 seeds=1 planned_seeds=3 pairs=8 planned_pairs=2000 \
-                 repath_p99_ns=1 estimate_p99_ns=1"
+                &format!(
+                    "p3-budget-report v2 seeds=1 planned_seeds=3 pairs=8 planned_pairs=2000 \
+                     repath_p99_ns=1 estimate_p99_ns=1{P3_BARS}"
+                )
             ),
             Err(BudgetError::Short {
                 field: "seeds",
@@ -552,13 +724,13 @@ mod tests {
         };
         let p3 = |repath: u128, estimate: u128| {
             format!(
-                "p3-budget-report v1 seeds=3 planned_seeds=3 pairs=2000 planned_pairs=2000 \
-                 repath_p99_ns={repath} estimate_p99_ns={estimate}"
+                "p3-budget-report v2 seeds=3 planned_seeds=3 pairs=2000 planned_pairs=2000 \
+                 repath_p99_ns={repath} estimate_p99_ns={estimate}{P3_BARS}"
             )
         };
         assert!(at(&P3_BUDGET, &p3(10_000_000, 2_000_000)).1);
-        assert!(!at(&P3_BUDGET, &p3(10_000_001, 0)).1);
-        assert!(!at(&P3_BUDGET, &p3(0, 2_000_001)).1);
+        assert!(!at(&P3_BUDGET, &p3(10_000_001, 1)).1);
+        assert!(!at(&P3_BUDGET, &p3(1, 2_000_001)).1);
         // Over the gate but under the alarm: a notice, never a failure.
         let (lines, passed) = at(&P3_BUDGET, &p3(5_000_001, 1_000_001));
         assert!(passed);
@@ -568,7 +740,7 @@ mod tests {
             format!(
                 "p1-budget-report v2 budget_units=128 inputs=7 planned_inputs=7 e2e_inputs=6 \
                  planned_e2e_inputs=6 calls=500 planned_calls=500 quick_p99_ns={quick} \
-                 full_p99_ns={full} e2e_p99_ns={e2e}"
+                 full_p99_ns={full} e2e_p99_ns={e2e}{P1_BARS}"
             )
         };
         assert!(at(&P1_BUDGET, &p1(10_000_000, 100_000_000, 100_000_000)).1);
@@ -582,7 +754,7 @@ mod tests {
             3
         );
         // The end-to-end bar alone, doubled and passed, fails the alarm.
-        let (lines, passed) = at(&P1_BUDGET, &p1(0, 0, 100_000_001));
+        let (lines, passed) = at(&P1_BUDGET, &p1(1, 1, 100_000_001));
         assert!(!passed);
         assert!(
             lines.iter().any(|line| line.starts_with(

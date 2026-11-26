@@ -252,61 +252,10 @@ fn p1_certify() {
             Err(error) => panic!("{error}"),
         };
     println!();
-    let mut failed = Vec::new();
-    report(
-        os,
-        "provenance",
-        provenance::commit(&root).map(|commit| {
-            vec![provenance::notice(
-                "P1",
-                &commit,
-                &provenance::plan_words(plan),
-                os,
-            )]
-        }),
-        &mut failed,
-    );
-    report(
-        os,
-        "P1 committed cases",
-        cases_notices(&root, plan, os),
-        &mut failed,
-    );
-    report(
-        os,
-        "P1 shapes",
-        full::measure_curve(&root, &SIZES, plan).and_then(|curve| {
-            let mut lines = curve_lines(&curve, os);
-            lines.extend(full::budget_verdicts(&curve, full::Bars::P1, os)?);
-            Ok(lines)
-        }),
-        &mut failed,
-    );
-    report(
-        os,
-        "P1 at the transport cap",
-        cap_notices(&root, plan, os),
-        &mut failed,
-    );
-    assert!(failed.is_empty(), "{failed:?}");
-}
-
-/// QUICK's and FULL's notices over the committed cases at `plan`, and their
-/// verdict.
-fn cases_notices(root: &Path, plan: QuickPlan, os: &str) -> Result<Vec<String>, Error> {
-    let fixture = Fixture::committed(root)?;
-    let cases = quick::committed_cases(root)?;
-    let quick_timing = quick::measure(&fixture, &cases, plan)?;
-    let full_timing = quick::measure_at(&fixture, &cases, plan, Depth::Full)?;
-    let mut lines = quick::notices(&quick_timing, os);
-    lines.push(full::cases_notice(&full_timing, os));
-    lines.push(full::cases_verdict(
-        &quick_timing,
-        &full_timing,
-        full::Bars::P1,
-        os,
-    ));
-    Ok(lines)
+    match pharmakos_bench::certify::p1_lines(&root, plan, os) {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Err(error) => panic!("P1 was not certified on {os}: {error}"),
+    }
 }
 
 /// QUICK's p50 and p99 over the committed cases, as notices.

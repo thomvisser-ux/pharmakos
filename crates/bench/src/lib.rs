@@ -15,6 +15,7 @@
 //!
 //! | Module | Question |
 //! |---|---|
+//! | [`certify`] | P1's certifying run: every line it prints, stamped with its sampling, and E12's seed rule |
 //! | [`quick`] | QUICK's p50 and p99 over the committed verifier cases and `budget_128` |
 //! | [`full`] | P1 FULL (S3): QUICK and FULL over the committed cases and the generated shapes at each size of E24's curve |
 //! | [`shapes`] | The generated worst-shaped playbooks P1 FULL times, at any size |
@@ -67,6 +68,7 @@
 //! Never shipped: `publish = false`, and `cargo xtask package` builds the
 //! client library and `gamectl` alone.
 
+pub mod certify;
 pub mod decision;
 pub mod error;
 pub mod full;

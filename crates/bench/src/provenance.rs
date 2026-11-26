@@ -141,6 +141,75 @@ pub fn plan_words(plan: QuickPlan) -> String {
     }
 }
 
+/// The banner every line of a cut run carries.
+pub const CUT_BANNER: &str = "NOT A CERTIFYING FIGURE";
+
+/// The mark every line of a run at its certifying count carries.
+pub const CERTIFYING_MARK: &str = "[certifying: ";
+
+/// How a certifying command's figures were sampled: how many of what, against
+/// how many its plan certifies at. A run below its plan is cut.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sampling {
+    /// What was taken.
+    pub count: usize,
+    /// What the certifying plan takes.
+    pub planned: usize,
+    /// What `count` counts, as a line prints it.
+    pub unit: &'static str,
+}
+
+impl Sampling {
+    /// A P1 plan's sampling: its timed calls a figure against
+    /// [`CERT_PLAN`]'s.
+    #[must_use]
+    pub const fn calls(plan: QuickPlan) -> Sampling {
+        Sampling {
+            count: plan.calls,
+            planned: CERT_PLAN.calls,
+            unit: "timed calls a figure",
+        }
+    }
+
+    /// Whether the run took fewer than its plan certifies at.
+    #[must_use]
+    pub const fn is_cut(&self) -> bool {
+        self.count < self.planned
+    }
+
+    /// The stamp a line of this run carries at its end.
+    #[must_use]
+    pub fn stamp(&self) -> String {
+        if self.is_cut() {
+            format!(
+                "[{CUT_BANNER}: {} {}, cut from the certifying {}]",
+                self.count, self.unit, self.planned
+            )
+        } else {
+            format!(
+                "{CERTIFYING_MARK}{} {}, the certifying plan's {}]",
+                self.count, self.unit, self.planned
+            )
+        }
+    }
+}
+
+/// `line` with `sampling`'s stamp at its end: every line a certifying command
+/// prints goes through here, so a line copied alone into a record carries its
+/// count and, cut, the banner.
+#[must_use]
+pub fn stamped(line: &str, sampling: &Sampling) -> String {
+    format!("{line} {}", sampling.stamp())
+}
+
+/// The one predicate for "this line is a certifying line": it carries the
+/// certifying mark and not the cut banner. A line with neither, which no
+/// certifying command prints, is not one either.
+#[must_use]
+pub fn is_certifying(line: &str) -> bool {
+    line.contains(CERTIFYING_MARK) && !line.contains(CUT_BANNER)
+}
+
 /// The provenance notice a certifying run prints first: what it ran, the
 /// commit, and how it was sampled. Pure.
 #[must_use]
@@ -213,6 +282,72 @@ mod tests {
              CUT from the certifying 2000: NOT A CERTIFYING FIGURE. The seed and rules_hash of \
              each figure are on its own line"
         );
+    }
+
+    #[test]
+    fn a_stamp_says_whether_a_line_certifies() {
+        let cut = Sampling::calls(QuickPlan {
+            warmup: 100,
+            calls: 50,
+        });
+        let line = stamped("::notice title=x::a figure", &cut);
+        assert_eq!(
+            line,
+            "::notice title=x::a figure [NOT A CERTIFYING FIGURE: 50 timed calls a figure, cut \
+             from the certifying 2000]"
+        );
+        assert!(!is_certifying(&line));
+        let whole = stamped("::notice title=x::a figure", &Sampling::calls(CERT_PLAN));
+        assert!(is_certifying(&whole), "{whole}");
+        assert!(!is_certifying("::notice title=x::a figure"), "no stamp");
+        // A cut line that also carried the mark is still not one.
+        assert!(!is_certifying(&format!("{whole} {line}")));
+    }
+
+    /// The dirty flag reads tracked changes: a temporary repository, made
+    /// with the `git` on the machine and no network, is clean at its commit
+    /// and dirty once a tracked file changes.
+    #[test]
+    fn a_tracked_change_reads_as_dirty() {
+        let dir =
+            std::env::temp_dir().join(format!("pharmakos-bench-provenance-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).expect("an old scratch repository");
+        }
+        std::fs::create_dir_all(&dir).expect("a scratch repository");
+        let run = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .expect("git runs");
+            assert!(status.status.success(), "git {args:?}: {status:?}");
+        };
+        run(&["init", "-q"]);
+        std::fs::write(dir.join("a.txt"), "one\n").expect("a file");
+        run(&["add", "a.txt"]);
+        run(&[
+            "-c",
+            "user.name=bench",
+            "-c",
+            "user.email=bench@localhost",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=.git/hooks",
+            "commit",
+            "-q",
+            "-m",
+            "one",
+        ]);
+        let clean = commit(&dir).expect("a commit");
+        assert!(!clean.dirty, "{clean:?}");
+        std::fs::write(dir.join("a.txt"), "two\n").expect("a change");
+        let dirty = commit(&dir).expect("a commit");
+        assert!(dirty.dirty, "{dirty:?}");
+        assert_eq!(dirty.sha, clean.sha);
+        std::fs::remove_dir_all(&dir).expect("the scratch repository");
     }
 
     #[test]

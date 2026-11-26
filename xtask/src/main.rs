@@ -7544,6 +7544,16 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             "{job}"
         );
         assert!(job.contains("    runs-on: ubuntu-24.04\n"), "{job}");
+        // The job itself can go red and stands alone: no job-level
+        // `continue-on-error`, no `needs:` that could skip it, and no
+        // permissions of its own past the workflow's `contents: read`.
+        for key in ["continue-on-error:", "needs:", "permissions:"] {
+            assert!(
+                !job.lines()
+                    .any(|line| line.starts_with(&format!("    {key}"))),
+                "the authoring-budgets job sets a job-level `{key}`: {job}"
+            );
+        }
         let minutes = |text: &str| -> u32 {
             text.trim()
                 .strip_prefix("timeout-minutes: ")

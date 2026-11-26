@@ -275,8 +275,20 @@ fn p1_decision_kinds() {
     let os = std::env::consts::OS;
     println!();
     let mut failed: Vec<Error> = Vec::new();
+    // Every line carries its sampling: each kind's segment against the plan's.
+    let ms = |value: i32| match usize::try_from(value) {
+        Ok(ms) => ms,
+        Err(error) => panic!("a segment's length: {error}"),
+    };
+    let sampling = provenance::Sampling {
+        count: ms(kinds::KindPlan::MEASURED.segment_ms),
+        planned: ms(kinds::KIND_SEGMENT_MS),
+        unit: "ms of each kind's segment",
+    };
     let mut report = |title: &str, lines: Result<Vec<String>, Error>| match lines {
-        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Ok(lines) => lines
+            .iter()
+            .for_each(|line| println!("{}", provenance::stamped(line, &sampling))),
         Err(error) => {
             println!("::warning title={title}::not measured on {os}: {error}");
             failed.push(error);
@@ -311,9 +323,10 @@ fn p1_decision_kinds() {
         "decision tick by kind",
         measured.and_then(|seeds| {
             let mut lines = Vec::new();
-            for (seed, figures) in &seeds {
+            for (seed, (figures, resolution)) in &seeds {
                 lines.push(kinds::kinds_notice(
                     figures,
+                    *resolution,
                     *seed,
                     kinds::KindPlan::MEASURED,
                     os,
@@ -325,7 +338,9 @@ fn p1_decision_kinds() {
                 ));
             }
             match seeds.as_slice() {
-                [(_, first), (_, second)] => lines.push(kinds::seed_gap_notice(first, second, os)?),
+                [(_, (first, _)), (_, (second, _))] => {
+                    lines.push(kinds::seed_gap_notice(first, second, os)?);
+                }
                 _ => return Err(Error::Empty("not two seeds".to_owned())),
             }
             Ok(lines)
@@ -351,6 +366,10 @@ fn g3_watch_sightings_and_breach() {
     };
     match g3::watch::measure(&root, G3_SEED, G3_SEGMENT_MS) {
         Ok(report) => {
+            let sampling = match g3::ticks_sampling(report.ticks) {
+                Ok(sampling) => sampling,
+                Err(error) => panic!("{error}"),
+            };
             for line in [
                 provenance::notice("G3' watch", &commit, "one segment", os),
                 g3::watch::provenance_notice(&report, os),
@@ -359,7 +378,7 @@ fn g3_watch_sightings_and_breach() {
                 g3::watch::sightings_notice(&report, os),
                 g3::watch::breach_notice(&report, os),
             ] {
-                println!("{line}");
+                println!("{}", provenance::stamped(&line, &sampling));
             }
         }
         Err(error) => panic!("the gate's watch segment was not measured on {os}: {error}"),
@@ -375,7 +394,13 @@ fn g3_raids_segments() {
     match provenance::commit(&root) {
         Ok(commit) => println!(
             "{}",
-            provenance::notice("G3' with raids", &commit, "one segment a load", os)
+            provenance::stamped(
+                &provenance::notice("G3' with raids", &commit, "one segment a load", os),
+                &match g3::ticks_sampling(9_600) {
+                    Ok(sampling) => sampling,
+                    Err(error) => panic!("{error}"),
+                },
+            )
         ),
         Err(error) => panic!("{error}"),
     }
@@ -393,14 +418,18 @@ fn g3_raids_segments() {
             Some(&Counter),
         );
         let lines = measured.and_then(|report| {
-            Ok(vec![
+            let sampling = g3::sampling(&report)?;
+            Ok([
                 g3::provenance_notice(&report, os),
                 g3::tick_notice(&report, os)?,
                 g3::tick_verdict(&report, g3::P99_BAR_NS, g3::MEAN_BAR_NS, os),
                 g3::phases_notice(&report, os)?,
                 g3::repaths_notice(&report, os)?,
                 g3::combat_notice(&report, os)?,
-            ])
+            ]
+            .iter()
+            .map(|line| provenance::stamped(line, &sampling))
+            .collect::<Vec<String>>())
         });
         match lines {
             Ok(lines) => lines.iter().for_each(|line| println!("{line}")),

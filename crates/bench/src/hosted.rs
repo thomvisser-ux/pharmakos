@@ -359,6 +359,25 @@ fn number(value: Option<&Json>) -> Option<u32> {
     }
 }
 
+/// `method`'s request with `params` as a client writes it, with the widest
+/// numeric id a client counts to (a `u64`'s twenty digits), as the gateway
+/// measures a request it hands back (`crates/gateway/src/surface/planning.rs`,
+/// `undo_travels`).
+#[must_use]
+pub fn request_text(method: &str, params: Json) -> String {
+    pharmakos_gateway::rpc::request_text(&Json::Number(u64::MAX.to_string()), method, params)
+}
+
+/// Whether `method`'s request with `params` is a text one message carries:
+/// the frame's own rule on its bytes (`pharmakos_gateway::frame::travels`),
+/// as `patch_plan` decides it (decisions-log item 167 (4)). Answers the
+/// request's bytes and the rule's answer.
+#[must_use]
+pub fn travels(method: &str, params: Json) -> (usize, bool) {
+    let bytes = request_text(method, params).len();
+    (bytes, pharmakos_gateway::frame::travels(bytes))
+}
+
 /// A hosted first Lull a planning call is timed in, with nothing submitted:
 /// the door a seat's editor calls through. P3 times `estimate_route` here
 /// and P1 FULL's end-to-end figure times `verify_plan`.
@@ -434,6 +453,46 @@ impl PlanningLull {
         self.surface
             .set_host_clock(Ms::new(self.elapsed_ms), Ms::new(remaining))
             .map_err(|error| Error::gateway("reporting the host clock", &error))
+    }
+
+    /// One call of `method` with `params` as the editor waits on it, as seat
+    /// 0: the request as the text a client writes (`rpc::request_text`), and
+    /// the clock around everything the gateway does with it in process: the
+    /// JSON-RPC parse, the door, the handler and the answer's encode to text.
+    /// The socket stays outside. Answers the time, the request's bytes and
+    /// the call's `result`; an answer with no `result` is the gateway's
+    /// refusal, an error.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Codec`] for a request the gateway's parser refuses,
+    /// [`Error::Gateway`] for a refusal, and as the clock report.
+    pub fn time_text(&mut self, method: &str, params: Json) -> Result<(u128, Json), Error> {
+        self.tick()?;
+        let text = request_text(method, params);
+        let started = std::time::Instant::now();
+        let parsed = pharmakos_gateway::rpc::parse(&text);
+        let answer = parsed
+            .as_ref()
+            .map(|request| self.surface.call(Some(&self.token), request, &Blind));
+        let written = answer.as_ref().map(json::write);
+        let ns = started.elapsed().as_nanos();
+        std::hint::black_box(&written);
+        let answer = answer.map_err(|error| Error::Codec {
+            what: format!("the bench's {method} request"),
+            reason: error.title().to_string(),
+        })?;
+        match answer.get("result") {
+            Some(result) => Ok((ns, result.clone())),
+            None => Err(Error::Gateway {
+                during: "a planning call in the Lull",
+                message: format!(
+                    "{method} at {} ms of host time in the Lull: {}",
+                    self.elapsed_ms,
+                    json::write(&answer)
+                ),
+            }),
+        }
     }
 
     /// One timed call of `method` with `params`, as seat 0: the request is

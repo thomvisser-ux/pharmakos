@@ -64,12 +64,18 @@ fn p3_pathing_timings() {
                     .iter()
                     .map(|seed| p3::seed_notice(&report, seed, os)),
             );
-            match p3::summary_notice(&report, os) {
+            match p3::summary_notice(&report, p3::Role::Published, os) {
                 Ok(line) => lines.push(line),
                 Err(error) => panic!("the P3 summary: {error}"),
             }
+            // Every line carries its count: pairs a seed against the plan's.
+            let sampling = provenance::Sampling {
+                count: report.pairs,
+                planned: p3::PAIRS,
+                unit: "pairs a seed",
+            };
             for line in &lines {
-                println!("{line}");
+                println!("{}", provenance::stamped(line, &sampling));
             }
             assert_eq!(lines.len(), P3_NOTICES, "the notices P3 declares");
         }
@@ -88,7 +94,7 @@ fn p3_budget() {
     println!();
     match p3::measure(&root, &P3Plan::gate()) {
         Ok(report) => {
-            match p3::summary_notice(&report, os) {
+            match p3::summary_notice(&report, p3::Role::Alarm, os) {
                 Ok(line) => println!("{line}"),
                 Err(error) => panic!("the P3 summary: {error}"),
             }

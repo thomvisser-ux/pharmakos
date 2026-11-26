@@ -221,6 +221,35 @@ pub fn tick_verdict(
     )
 }
 
+/// How a segment was sampled, as a certifying line's stamp says it: the
+/// ticks it played against the ticks its segment holds.
+///
+/// # Errors
+///
+/// [`Error::Overflow`] for a tick count past a `usize`.
+pub fn sampling(report: &SegmentReport) -> Result<crate::provenance::Sampling, Error> {
+    ticks_sampling(report.ticks)
+}
+
+/// [`sampling`] for a segment of `ticks` played ticks, whatever measured it.
+///
+/// # Errors
+///
+/// As [`sampling`].
+pub fn ticks_sampling(ticks: u64) -> Result<crate::provenance::Sampling, Error> {
+    let count = |ticks: u64| usize::try_from(ticks).map_err(|_| Error::Overflow("the ticks"));
+    Ok(crate::provenance::Sampling {
+        count: count(ticks)?,
+        planned: count(
+            G3_SEGMENT_MS
+                .checked_div(pharmakos_sim::math::quantity::MS_PER_TICK)
+                .and_then(|ticks| u64::try_from(ticks).ok())
+                .ok_or(Error::Overflow("the segment's ticks"))?,
+        )?,
+        unit: "ticks of the 8-minute segment",
+    })
+}
+
 /// The per-phase notice.
 ///
 /// # Errors

@@ -436,23 +436,30 @@ fn the_crater_streams_repair_is_a_rebuild() {
     assert_eq!(repaired, rebuilt);
 }
 
-/// Every generated shape's compact text, at every size of the curve, fits the
-/// gateway's transport cap: a player could send it. The cap is the gateway's
-/// own constant, read, never restated.
+/// Every generated shape's compact text, at every size of the curve up to
+/// the committed budget, travels: its `verify_plan` request, as a client
+/// writes it, is one message the frame carries (`frame::travels`), so a
+/// player at the budget could send any of them. Past the budget the curve's
+/// end-to-end figure marks a request that does not travel as over the
+/// transport cap (`route_guards_24_node` at 192 units is one), which the
+/// unit test of the curve's words pins. The rule is the gateway's own, read,
+/// never restated.
 #[test]
 fn every_shape_fits_the_transport_cap() {
-    use pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS;
-    for units in SIZES {
+    let rules = quick::committed_rules(&workspace_root()).expect("the committed rules");
+    let budget = full::committed_budget(&rules).expect("a budget");
+    for units in SIZES.into_iter().filter(|units| *units <= budget) {
         for shape in Shape::ALL
             .into_iter()
             .chain([Shape::FullEval, Shape::FullEvalSelectors])
         {
             let canonical =
                 String::from_utf8(shape.bytes(units).expect("the shape")).expect("utf-8");
-            let chars = pharmakos_bench::shapes::compact(&canonical).chars().count();
+            let (bytes, travels) =
+                full::request_travels(&pharmakos_bench::shapes::compact(&canonical));
             assert!(
-                chars <= MAX_PLAYBOOK_CHARS,
-                "{} at {units} units is {chars} characters, past {MAX_PLAYBOOK_CHARS}",
+                travels,
+                "{} at {units} units is a {bytes}-byte request, past what one message carries",
                 shape.name()
             );
         }
@@ -504,12 +511,15 @@ fn the_end_to_end_figure_verifies_the_compact_text_through_the_gateway() {
             assert_eq!(quick.samples, 1);
             assert!(qualifies, "the target shape at the hosted core qualifies");
         }
-        full::EndToEnd::OverCap { chars } => panic!("{chars} characters, past the cap"),
+        full::EndToEnd::OverCap { bytes } => panic!("a {bytes}-byte request, past the cap"),
     }
 }
 
-/// The `max_text` shape sits exactly on the transport cap in both paddings,
-/// qualifies on the budget, and is verified end to end.
+/// The `max_text` shape sits exactly on the text cap, `MAX_PLAYBOOK_CHARS`, in
+/// both paddings and qualifies on the budget; its request is past the 256 KiB
+/// one message carries, so the end-to-end figure reads it OVER the transport
+/// cap and sends nothing: a request over 256 KiB and under 512 K characters is
+/// one the editor cannot have checked (decisions-log item 167 (4)).
 #[test]
 fn the_max_text_shape_qualifies_at_the_cap() {
     let root = workspace_root();
@@ -527,16 +537,15 @@ fn the_max_text_shape_qualifies_at_the_cap() {
             figure.compact_chars,
             pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS
         );
-        assert!(
-            matches!(
-                figure.end_to_end,
-                full::EndToEnd::Measured {
-                    qualifies: true,
-                    ..
-                }
+        match figure.end_to_end {
+            full::EndToEnd::OverCap { bytes } => assert!(
+                bytes > pharmakos_gateway::frame::MAX_MESSAGE_BYTES,
+                "{figure:?}"
             ),
-            "{figure:?}"
-        );
+            full::EndToEnd::Measured { .. } => {
+                panic!("a request past one message was sent: {figure:?}")
+            }
+        }
     }
     let bytes: Vec<usize> = figures.iter().map(|figure| figure.compact_bytes).collect();
     assert!(
@@ -570,7 +579,7 @@ fn the_decision_kinds_read_their_own_ticks() {
         toward.units > 0,
         "a stepping stone's resolve is counted: {toward:?}"
     );
-    let line = kinds::kinds_notice(&[condition, toward], BENCH_SEED, plan, "linux");
+    let line = kinds::kinds_notice(&[condition, toward], 100, BENCH_SEED, plan, "linux");
     assert!(
         line.starts_with("::notice title=decision tick by kind (0x00000000ca5caded)::on linux, "),
         "{line}"
@@ -616,6 +625,65 @@ fn the_watch_segment_polls_counts_and_probes() {
         line.starts_with("::notice title=G3' view feed bytes::on linux, "),
         "{line}"
     );
+}
+
+/// A cut certifying run says so on every line (`cert3` fix pass 1, item 1):
+/// P1's whole certifying output at one call a figure, every line run through
+/// the one predicate, and none passes as certifying. A debug build, so
+/// nothing is timed worth reading.
+#[test]
+fn no_line_of_a_cut_p1_run_passes_as_certifying() {
+    use pharmakos_bench::provenance;
+    let root = workspace_root();
+    let lines = pharmakos_bench::certify::p1_lines(
+        &root,
+        QuickPlan {
+            warmup: 0,
+            calls: 1,
+        },
+        "linux",
+    )
+    .expect("a cut run");
+    assert!(lines.len() > 10, "{lines:?}");
+    for line in &lines {
+        assert!(!provenance::is_certifying(line), "{line}");
+        assert!(line.contains(provenance::CUT_BANNER), "{line}");
+        assert!(line.contains(" 1 timed calls a figure, cut from"), "{line}");
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("::notice title=P1 E12 seed rule::")),
+        "{lines:?}"
+    );
+}
+
+/// A watched segment plays the bare segment's chain (`cert3` fix pass 1,
+/// C6): the polls, the sightings' reads and the breach probes read the world
+/// between ticks and change nothing in it, so the watch's chain digest is the
+/// RAIDS segment's on the same seed. A debug build, so nothing is timed.
+#[test]
+fn a_watched_segment_ends_on_the_bare_segments_chain() {
+    use pharmakos_bench::g3::layout::Quarters;
+    use pharmakos_bench::g3::segment::{self, GateLoad, SegmentPlan};
+    use pharmakos_bench::g3::watch;
+    let root = workspace_root();
+    let watched = watch::measure(&root, BENCH_SEED, 3_000).expect("a watched segment");
+    let bare = segment::measure(
+        &root,
+        SegmentPlan {
+            seed: BENCH_SEED,
+            segment_ms: 3_000,
+            craters_per_second: 20,
+            probe_sight: false,
+            share: Quarters::FULL,
+            load: GateLoad::RAIDS,
+        },
+        None,
+    )
+    .expect("a bare segment");
+    assert_eq!(watched.ticks, bare.ticks);
+    assert_eq!(watched.chain_digest, bare.chain_digest);
 }
 
 /// The selector variant at the size budget is submittable through the hosted

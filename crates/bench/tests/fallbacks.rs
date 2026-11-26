@@ -71,6 +71,7 @@ const FALLBACK_NEEDLES: &[&str] = &[
     "saturating_",
     ".ok().filter(",
     "let _ =",
+    "Err(_) =>",
 ];
 
 fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -129,7 +130,11 @@ fn fallback_lines(text: &str) -> Vec<String> {
     let lines = code_lines(text);
     let mut found: Vec<String> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
-        if FALLBACK_NEEDLES.iter().any(|needle| line.contains(needle)) {
+        // `.ok()` that ends its line is `.ok()` followed by a line break: the
+        // chain goes on, `.ok()?` or `.ok().and_then(` written across lines.
+        if FALLBACK_NEEDLES.iter().any(|needle| line.contains(needle))
+            || line.trim_end().ends_with(".ok()")
+        {
             found.push(line.trim().to_owned());
             continue;
         }
@@ -165,7 +170,7 @@ fn the_fallback_scan_sees_every_form_it_names() {
                    let x = y.map_or_else(g, f);\n    let x = y.ok()?;\n    let x = \
                    y.ok().and_then(f);\n    let x = y.clamp(1, 9);\n    let x = y.max(0);\n    \
                    let x = y.saturating_add(1);\n    let x = y.ok().filter(f);\n    \
-                   let _ = y;\n    let Ok(x) = y else {\n        return 0;\n    };\n    let Ok(x) = y else {\n        \
+                   let _ = y;\n    match y { Err(_) => 0, Ok(v) => v };\n    let x = y\n        .ok()\n        .zip(z);\n    let Ok(x) = y else {\n        return 0;\n    };\n    let Ok(x) = y else {\n        \
                    return Err(e);\n    };\n    // y.unwrap_or(0) in prose\n}\n#[cfg(test)]\n\
                    fn b() { y.unwrap_or(0); }\n";
     assert_eq!(
@@ -183,6 +188,8 @@ fn the_fallback_scan_sees_every_form_it_names() {
             "let x = y.saturating_add(1);",
             "let x = y.ok().filter(f);",
             "let _ = y;",
+            "match y { Err(_) => 0, Ok(v) => v };",
+            ".ok()",
             "let Ok(x) = y else {",
         ],
         "every form the scan names, once, and nothing else"
@@ -232,6 +239,7 @@ fn the_fallback_scan_reads_the_whole_crate() {
     assert_eq!(
         names,
         [
+            "src/certify.rs",
             "src/decision.rs",
             "src/error.rs",
             "src/full.rs",

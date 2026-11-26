@@ -22,14 +22,16 @@
 //! around it are not.
 //!
 //! **The end-to-end figure** beside it ([`EndToEnd`]) is what a player's
-//! editor waits on: `verify_plan` through `Surface::call` in a hosted first
-//! Lull (`hosted::PlanningLull`, the golden seed, three seats, the sized
-//! table), sent the shape's **compact** text ([`crate::shapes::compact`]), so
-//! the canonicalisation, the request's parse and the answer's framing are in
-//! it. The shape's interface steps visit the hosted seat's own core, `b_00`,
-//! and the answer says whether it qualifies there; a compact text past the
-//! gateway's `MAX_PLAYBOOK_CHARS` is marked as over the transport cap and not
-//! sent.
+//! editor waits on: `verify_plan` in a hosted first Lull
+//! (`hosted::PlanningLull`, three seats, the sized table), sent the shape's
+//! **compact** text ([`crate::shapes::compact`]), timed from the request text
+//! a client writes to the answer's text (`PlanningLull::time_text`): the
+//! JSON-RPC parse, the door, the canonicalisation, the verifier and the
+//! answer's encode are inside the clock; the socket is not. The shape's
+//! interface steps visit the hosted seat's own core, `b_00`, and the answer
+//! says whether it qualifies there. A request that one message cannot carry
+//! (`frame::travels` on its bytes, as `patch_plan` decides it, decisions-log
+//! item 167 (4)) is marked as over the transport cap and not sent.
 //!
 //! Each call is timed once, never best-of-N, after untimed warm-up calls of
 //! the same input; every notice says how many calls it took. CI's alarm takes
@@ -66,11 +68,12 @@
 //! section 16's bars, and the end-to-end wait against the editor's own,
 //! [`END_TO_END_BAR_NS`] (item 162 (1)). A shape over the end-to-end bar
 //! prints where its wait goes: each depth's end-to-end p50 and p99 beside the
-//! verifier's own on the same playbook, and the rest, which is the
-//! canonicalisation, the request's parse and the answer's framing.
+//! verifier's own on the same playbook, and the rest, which is the request's
+//! parse, the door, the canonicalisation and the answer's encode.
 
 use std::path::Path;
 
+use pharmakos_gateway::frame::MAX_MESSAGE_BYTES;
 use pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS;
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
@@ -243,11 +246,12 @@ pub enum EndToEnd {
         /// Whether the FULL report qualified on the hosted seat's view.
         qualifies: bool,
     },
-    /// The compact text is past the gateway's `MAX_PLAYBOOK_CHARS`, which
-    /// refuses it before anything is verified: not sent.
+    /// The request carrying the compact text is past what one message
+    /// carries (`frame::travels`), so the socket would close on it before
+    /// anything is verified: not sent.
     OverCap {
-        /// Its characters.
-        chars: usize,
+        /// The request's bytes, as a client writes it.
+        bytes: usize,
     },
 }
 
@@ -458,18 +462,54 @@ fn hosted_core(lull: &PlanningLull, rules: &RulesTable) -> Result<Core, Error> {
     crate::hosted::seat_core(crate::hosted::world(lull.surface())?, SeatId::new(0), rules)
 }
 
-/// The end-to-end figure: a hosted first Lull under `rules`, the canonical
-/// text `text` makes for the hosted seat's core turned compact, and
-/// `verify_plan` timed at both depths, `plan.warmup` untimed calls before
-/// each sample.
+/// `verify_plan`'s parameters for `compact` at `depth`.
+fn verify_params(compact: &str, depth: &str) -> Json {
+    Json::Object(vec![
+        (
+            "playbook_jsonc".to_owned(),
+            Json::String(compact.to_owned()),
+        ),
+        ("depth".to_owned(), Json::String(depth.to_owned())),
+    ])
+}
+
+/// Whether `compact`'s `verify_plan` request is one message carries: its
+/// bytes as a client writes it, and the frame's answer
+/// ([`crate::hosted::travels`]). The deeper depth's name is the longer, so
+/// FULL's request decides.
+#[must_use]
+pub fn request_travels(compact: &str) -> (usize, bool) {
+    crate::hosted::travels("verify_plan", verify_params(compact, "full"))
+}
+
+/// The end-to-end figure on [`BENCH_SEED`]'s map ([`end_to_end_on`]).
 ///
 /// # Errors
 ///
-/// As [`PlanningLull::open`] and [`PlanningLull::time`]; [`Error::Empty`] for
-/// zero calls; [`Error::Drift`] for an answer with no `qualifies`.
+/// As [`end_to_end_on`].
 pub fn end_to_end(
     rules: &RulesTable,
     plan: QuickPlan,
+    text: impl Fn(&Core) -> Result<String, Error>,
+) -> Result<EndToEnd, Error> {
+    end_to_end_on(rules, plan, BENCH_SEED, text)
+}
+
+/// The end-to-end figure: a hosted first Lull under `rules` on `seed`'s map,
+/// the canonical text `text` makes for the hosted seat's core turned compact,
+/// and `verify_plan` timed at both depths from request text to answer text
+/// (`PlanningLull::time_text`), `plan.warmup` untimed calls before each
+/// sample. A request one message cannot carry is not sent.
+///
+/// # Errors
+///
+/// As [`PlanningLull::open`] and [`PlanningLull::time_text`];
+/// [`Error::Empty`] for zero calls; [`Error::Drift`] for an answer with no
+/// `qualifies`.
+pub fn end_to_end_on(
+    rules: &RulesTable,
+    plan: QuickPlan,
+    seed: u64,
     text: impl Fn(&Core) -> Result<String, Error>,
 ) -> Result<EndToEnd, Error> {
     if plan.calls == 0 {
@@ -477,21 +517,15 @@ pub fn end_to_end(
             "an end-to-end sample of zero calls measures nothing".to_owned(),
         ));
     }
-    let mut lull = PlanningLull::open(rules, BENCH_SEED, BENCH_SEATS)?;
+    let mut lull = PlanningLull::open(rules, seed, BENCH_SEATS)?;
     let core = hosted_core(&lull, rules)?;
     let compact = shapes::compact(&text(&core)?);
-    let chars = compact.chars().count();
-    if chars > MAX_PLAYBOOK_CHARS {
-        return Ok(EndToEnd::OverCap { chars });
+    let (bytes, travels) = request_travels(&compact);
+    if !travels {
+        return Ok(EndToEnd::OverCap { bytes });
     }
     let mut call = |depth: &str| -> Result<(u128, Json), Error> {
-        lull.time(
-            "verify_plan",
-            &Json::Object(vec![
-                ("playbook_jsonc".to_owned(), Json::String(compact.clone())),
-                ("depth".to_owned(), Json::String(depth.to_owned())),
-            ]),
-        )
+        lull.time_text("verify_plan", verify_params(&compact, depth))
     };
     let mut summaries: Vec<Summary> = Vec::with_capacity(2);
     let mut qualifies = None;
@@ -549,9 +583,9 @@ fn end_to_end_words(figure: &EndToEnd) -> String {
                 " (does not qualify on the hosted seat's view)"
             }
         ),
-        EndToEnd::OverCap { chars } => format!(
-            "OVER THE TRANSPORT CAP: {chars} compact characters past MAX_PLAYBOOK_CHARS \
-             {MAX_PLAYBOOK_CHARS}, so not sent end to end"
+        EndToEnd::OverCap { bytes } => format!(
+            "OVER THE TRANSPORT CAP: a {bytes}-byte request, past the {MAX_MESSAGE_BYTES} one \
+             message carries, so not sent end to end"
         ),
     }
 }
@@ -559,8 +593,11 @@ fn end_to_end_words(figure: &EndToEnd) -> String {
 /// QUICK's cost at the transport cap, one [`Pad`]: [`shapes::max_text`] at
 /// the committed budget, the gate figure on its canonical bytes and the
 /// end-to-end figure on its compact text, exactly `MAX_PLAYBOOK_CHARS`
-/// characters. Published, never a budget failure: whether 5 ms must hold at
-/// the cap is the owner's (S3's `bench3` fix pass, item 3).
+/// characters, whose request is past the 256 KiB one message carries, so the
+/// end-to-end figure reads it over the transport cap and sends nothing (the
+/// socket's limit against the text cap is settled at hardening, item 162
+/// (1)). Published, never a budget failure: whether 5 ms must hold at the cap
+/// is the owner's (S3's `bench3` fix pass, item 3).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CapFigure {
     /// The padding.
@@ -795,11 +832,11 @@ pub fn shape_verdict(figure: &ShapeFigure, bars: Bars, os: &str) -> Result<Strin
                 ),
             )
         }
-        EndToEnd::OverCap { chars } => (
+        EndToEnd::OverCap { bytes } => (
             Side::Over,
             format!(
-                "end to end OVER: {chars} compact characters past MAX_PLAYBOOK_CHARS \
-                 {MAX_PLAYBOOK_CHARS}, so the editor cannot have it checked"
+                "end to end OVER: a {bytes}-byte request, past the {MAX_MESSAGE_BYTES} one \
+                 message carries, so the editor cannot have it checked"
             ),
         ),
     };
@@ -1057,7 +1094,8 @@ pub fn budget_report_line(figures: &BudgetFigures) -> String {
     format!(
         "{BUDGET_REPORT_PREFIX} budget_units={} inputs={} planned_inputs={BUDGET_INPUTS} \
          e2e_inputs={sent} planned_e2e_inputs={BUDGET_END_TO_END_INPUTS} calls={} \
-         planned_calls={BUDGET_CALLS} quick_p99_ns={} full_p99_ns={} e2e_p99_ns={end_to_end}",
+         planned_calls={BUDGET_CALLS} quick_p99_ns={} full_p99_ns={} e2e_p99_ns={end_to_end} \
+         quick_bar_ns={QUICK_BAR_NS} full_bar_ns={FULL_BAR_NS} e2e_bar_ns={END_TO_END_BAR_NS}",
         figures.budget_units,
         figures.inputs.len(),
         figures.calls,
@@ -1130,14 +1168,15 @@ mod tests {
                         qualifies: true,
                     },
                 ),
-                ("b".to_owned(), EndToEnd::OverCap { chars: 600_000 }),
+                ("b".to_owned(), EndToEnd::OverCap { bytes: 600_000 }),
             ],
         };
         assert_eq!(
             budget_report_line(&figures),
             "p1-budget-report v2 budget_units=128 inputs=2 planned_inputs=7 e2e_inputs=1 \
              planned_e2e_inputs=6 calls=500 planned_calls=500 quick_p99_ns=4000000 \
-             full_p99_ns=12000000 e2e_p99_ns=31000000"
+             full_p99_ns=12000000 e2e_p99_ns=31000000 quick_bar_ns=5000000 \
+             full_bar_ns=50000000 e2e_bar_ns=50000000"
         );
         assert_eq!(figures.worst(Depth::Quick), Some(("a", 4_000_000)));
         assert_eq!(figures.worst(Depth::Full), Some(("b", 12_000_000)));
@@ -1149,7 +1188,8 @@ mod tests {
         };
         assert!(budget_report_line(&none).ends_with(
             "e2e_inputs=0 planned_e2e_inputs=6 calls=500 planned_calls=500 quick_p99_ns=none \
-             full_p99_ns=none e2e_p99_ns=none"
+             full_p99_ns=none e2e_p99_ns=none quick_bar_ns=5000000 full_bar_ns=50000000 \
+             e2e_bar_ns=50000000"
         ));
         assert!(budget_notice(&none, "linux").is_err());
     }
@@ -1230,7 +1270,7 @@ mod tests {
         // A text the transport refuses is over the bar: the editor cannot
         // have it checked.
         let refused = shape_verdict(
-            &figure(EndToEnd::OverCap { chars: 600_000 }),
+            &figure(EndToEnd::OverCap { bytes: 600_000 }),
             Bars::P1,
             "linux",
         )
@@ -1238,11 +1278,45 @@ mod tests {
         assert!(refused.contains("OVER A BAR"), "{refused}");
         assert!(
             refused.ends_with(
-                "end to end OVER: 600000 compact characters past MAX_PLAYBOOK_CHARS 524288, so \
+                "end to end OVER: a 600000-byte request, past the 262144 one message carries, so \
                  the editor cannot have it checked"
             ),
             "{refused}"
         );
+    }
+
+    /// One verdict a shape, every shape of `Shape::ALL`, in its order: a
+    /// dropped shape (the worst one included) is red (P1c's mutant).
+    #[test]
+    fn every_shape_has_its_verdict() {
+        let shapes: Vec<ShapeFigure> = Shape::ALL
+            .into_iter()
+            .map(|shape| ShapeFigure {
+                shape,
+                ..figure(EndToEnd::OverCap { bytes: 1 })
+            })
+            .collect();
+        let curve = Curve {
+            committed_hash: 1,
+            budget_units: 128,
+            plan: QuickPlan {
+                warmup: 0,
+                calls: 1,
+            },
+            points: vec![SizePoint {
+                units: 128,
+                rules_hash: 2,
+                shapes,
+            }],
+        };
+        let lines = budget_verdicts(&curve, Bars::P1, "linux").expect("verdicts");
+        assert_eq!(lines.len(), Shape::ALL.len());
+        for (line, shape) in lines.iter().zip(Shape::ALL) {
+            assert!(
+                line.starts_with(&format!("::notice title=P1 verdict ({})::", shape.name())),
+                "{line}"
+            );
+        }
     }
 
     /// No point at the committed budget, or a shape missing from it, gives no
@@ -1270,7 +1344,7 @@ mod tests {
             points: vec![SizePoint {
                 units: 128,
                 rules_hash: 2,
-                shapes: vec![figure(EndToEnd::OverCap { chars: 1 })],
+                shapes: vec![figure(EndToEnd::OverCap { bytes: 1 })],
             }],
             ..curve
         };
@@ -1301,7 +1375,7 @@ mod tests {
                     handlers: 0,
                     quick: summary(1_500_000, 2_250_000),
                     full: summary(3_000_000, 4_000_000),
-                    end_to_end: EndToEnd::OverCap { chars: 600_000 },
+                    end_to_end: EndToEnd::OverCap { bytes: 600_000 },
                 }],
             }],
         };
@@ -1310,8 +1384,8 @@ mod tests {
             "::notice title=P1 shape longest_route::p50 / p99 on macos by size, 200 calls a \
              figure after 20 untimed, QUICK and FULL on the canonical bytes (the gate figure): 64 \
              units (0 handlers; 9000 canonical bytes, 3000 compact) QUICK 1.500 ms / 2.250 ms, \
-             FULL 3.000 ms / 4.000 ms; OVER THE TRANSPORT CAP: 600000 compact characters past \
-             MAX_PLAYBOOK_CHARS 524288, so not sent end to end. The committed budget is 128 \
+             FULL 3.000 ms / 4.000 ms; OVER THE TRANSPORT CAP: a 600000-byte request, past the \
+             262144 one message carries, so not sent end to end. The committed budget is 128 \
              units; spec section 16's P1 bars there are QUICK 5.000 ms and FULL 50.000 ms p99, \
              published here and never gated"
         );

@@ -7,52 +7,75 @@
 //! `dunit` part 2 made every loop a decision runs charge one unit a visit,
 //! so ns per counted unit should be **uniform in kind** (item 196 (1)). This
 //! module is the check: for each kind of decision work it plays a hosted
-//! match whose seats' playbooks (and, for the seam upkeep, whose layout) run
+//! match whose seats' playbooks (and, where the table says, whose layout) run
 //! that kind, times each decision tick's `Decision` phase alone through the
 //! phase stepper (`g3::segment::timed_tick`), reads the counted units the
 //! sim published for it (`World::decision_work`, summed over the seats), and
 //! answers the kind's nanoseconds per counted unit; then it says whether the
-//! kinds agree within [`TOLERANCE_PERCENT`] of their median and which kind
-//! is the outlier.
+//! kinds agree within this lane's own tolerance, [`TOLERANCE_PERCENT`] of
+//! their median, and which kind is the outlier.
 //!
 //! # The kinds
 //!
 //! | [`Kind`] | The match | The decision ticks it is read on |
 //! |---|---|---|
 //! | [`Kind::Condition`] | every seat seals [`Shape::ConditionHolds`] at the committed budget | every one |
-//! | [`Kind::Ranker`] | [`Shape::RankerHolds`]: `nearest` leaves, ranked by the served walk | every one |
+//! | [`Kind::Ranker`] | [`Shape::RankerHolds`]: `nearest` leaves, ranked by the served walk, the commander beside its core | every one |
+//! | [`Kind::LongWalk`] | [`Shape::RankerFar`]: the same leaves, the commander walked out to the map's centre, so each ranking serves a long walk | every one |
 //! | [`Kind::Threat`] | [`Shape::ThreatHolds`]: `safest` leaves, through the threat scan | every one |
 //! | [`Kind::SeamUpkeep`] | [`Shape::Idle`], and the gate layout's Mine beacons and their drones placed in the lobby, under the G3′ variant | every one |
-//! | [`Kind::Commit`] | [`Shape::BuildTargets`] at the committed budget: one interface step at the core, a Generator target a row | those that committed a row and started no step |
-//! | [`Kind::Toward`] | [`Shape::Toward`] at [`TOWARD_STEPS`]: stepping stones | those that started a step and placed no beacon |
+//! | [`Kind::Commit`] | [`Shape::BuildTargets`] at the committed budget at each seat's own core, on the spread layout (below) | those that committed a row and started no step |
+//! | [`Kind::Toward`] | [`Shape::Toward`] at [`TOWARD_STEPS`]: stepping stones, on the spread layout | those that started a step and placed no beacon |
 //! | [`Kind::Deploy`] | the same match | those that placed a beacon and started no step |
+//!
+//! The **spread layout** is the gate's layout's beacons under the G3′
+//! variant, with none of their units (so nothing on it moves, fights or
+//! digs, and a kind's world parts from its baseline's only by what the
+//! kind's playbook does) and each seat's beacons cut to leave room in its
+//! share for [`TOWARD_STEPS`] stones. A commit and a deploy scan the tables they write against, so on a
+//! world of three cores they spend about a microsecond a tick, at a clock
+//! that reads to 100 ns on Windows; on the spread layout they scan ten times
+//! the rows, and so clear the measurement floor (below).
 //!
 //! # The figure
 //!
-//! Each kind's match is played beside a **baseline**, the same seed and
-//! rules with every seat sealing [`Shape::Idle`] (and no layout), so what a
-//! decision costs whatever it decides (the seat loop, the tally's reset and
-//! read, the interpreter's dispatch) cancels: on each decision tick the kind
-//! read on, the kind's `Decision` phase less the baseline's on the same tick,
-//! and its counted units less the baseline's. The kind's figure is the sum of
-//! the first over the sum of the second, in thousandths of a nanosecond. Both
-//! matches are played [`RUNS`] times and each tick keeps its fastest run, the
-//! runs having agreed on the chain and the counted units (a run that does
-//! not stops the measurement). The two matches' decision ticks fall on the
-//! same ticks, since the cadence is the rules'; a pair that does not is
-//! [`Error::Drift`].
+//! Each kind's match is played beside a **baseline**, the same seed, rules
+//! and layout with every seat sealing [`Shape::Idle`], so what a decision
+//! costs whatever it decides (the seat loop, the tally's reset and read, the
+//! interpreter's dispatch, the seam upkeep of the layout's own beacons)
+//! cancels (the seam upkeep's own baseline stands on bare ground, since its
+//! work is its layout's Mine beacons): on each decision tick the kind is read on, the kind's `Decision`
+//! phase less the baseline's on the same tick, and its counted units less
+//! the baseline's. The kind's figure is the sum of the first over the sum of
+//! the second, in thousandths of a nanosecond. Both matches are played
+//! [`RUNS`] times and each tick keeps its fastest run, the runs having agreed
+//! on the chain and the counted units (a run that does not stops the
+//! measurement). The two matches' decision ticks fall on the same ticks,
+//! since the cadence is the rules'; a pair that does not is [`Error::Drift`].
 //!
 //! Said honestly: the kinds' worlds part from the baseline's (a commander that
 //! walks, a beacon placed), so a difference also carries whatever of that the
-//! decision reads, which is counted, and the noise of two runs, which is not;
-//! the tolerance is the reader's allowance for both.
+//! decision reads, which is counted, and the noise of two runs, which is not.
+//!
+//! # The measurement floor
+//!
+//! A kind whose summed difference is inside what the clock can tell apart
+//! decides nothing. The floor is derived, not picked: the clock's resolution,
+//! read at run time ([`clock_resolution`], the smallest non-zero difference
+//! two reads of it return over a calibration loop), times the timer reads
+//! behind the figure (two a tick: the kind's and the baseline's phase, each a
+//! difference of two reads, so each off by under one resolution), times
+//! [`FLOOR_MULTIPLE`], so a kind at its floor carries a quantisation error of
+//! at most a tenth. A kind under its floor is printed as such with both
+//! numbers, and left out of the median and the agreement verdict, which name
+//! it.
 //!
 //! # The seeds
 //!
 //! Every kind is measured on [`BENCH_SEED`] and on
-//! [`pharmakos_sim::DETERMINISM_MATCH_SEED`], and the second's figure is held
-//! to E12's rule: a figure more than [`SEED_GAP_PERCENT`] above the first's
-//! means P1 reports both seeds (S3's plan, E12; register S1-49).
+//! [`pharmakos_sim::DETERMINISM_MATCH_SEED`], and the second's figure against
+//! the first's is published as this lane's own figure, with no verdict: E12's
+//! seed rule reads P1 FULL's hosted figure (`crate::certify`).
 //!
 //! # Allocations
 //!
@@ -61,15 +84,17 @@
 //! allocator's view of a `toward` step (B4 of `cert3`).
 
 use std::path::Path;
+use std::time::Instant;
 
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::Layout;
 use pharmakos_sim::seams::MandateKind;
-use pharmakos_sim::world::{PHASE_ORDER, Phase};
+use pharmakos_sim::tables::UnitKind;
+use pharmakos_sim::world::{PHASE_ORDER, Phase, World};
 
 use crate::decision::{BENCH_SEATS, BENCH_SEED};
 use crate::error::Error;
-use crate::g3::layout::{self, Quarters};
+use crate::g3::layout::{self, MOST_BEACONS_PER_SEAT, Quarters};
 use crate::g3::segment::{self, TickMarks};
 use crate::heap::HeapCounter;
 use crate::hosted::{self, Opened, Opening};
@@ -104,25 +129,36 @@ impl KindPlan {
 /// The stepping stones [`Kind::Toward`]'s seats each seal.
 pub const TOWARD_STEPS: u32 = 4;
 
-/// How far a kind's figure may sit from the kinds' median, in per cent of the
-/// median, and the kinds still read as uniform. A judgement, stated: a unit
-/// is a visit, and a node popped from a heap is a longer visit than a
-/// condition node read, so the kinds can differ by a small factor and still
-/// be a count of work; a kind past half again or half the median is where a
-/// loop is charged at the wrong level.
+/// This lane's own tolerance: how far a kind's figure may sit from the kinds'
+/// median, in per cent of the median, and the kinds still read as uniform. A
+/// judgement, not a gate and no plan figure: a unit is a visit, and a node
+/// popped from a heap is a longer visit than a condition node read, so the
+/// kinds can differ by a small factor and still be a count of work; a kind
+/// past half again or half the median is where a loop is charged at the
+/// wrong level, which is what the check is for.
 pub const TOLERANCE_PERCENT: u128 = 50;
 
-/// E12's seed rule: the second seed's figure more than this many per cent
-/// above the first's means P1 reports both (S3's plan, E12).
-pub const SEED_GAP_PERCENT: u128 = 20;
+/// The measurement floor's multiple of the clock's quantisation: at its
+/// floor a kind's summed difference carries at most a tenth of quantisation
+/// error (see the module docs).
+pub const FLOOR_MULTIPLE: u128 = 10;
+
+/// The timer reads behind one tick of a kind's figure: the kind's phase and
+/// the baseline's, each the difference of two reads of the clock.
+pub const READS_PER_TICK: u128 = 2;
+
+/// Calibration reads of the clock, for [`clock_resolution`].
+const CALIBRATION_READS: usize = 200_000;
 
 /// One kind of decision work (see the module docs' table).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Kind {
     /// Handlers whose conditions are evaluated in full.
     Condition,
-    /// A served-walk ranker: `nearest` selector leaves.
+    /// A served-walk ranker: `nearest` selector leaves, short walks.
     Ranker,
+    /// The same ranker with the commander far from every beacon it ranks.
+    LongWalk,
     /// A threat-ranking selector: `safest` selector leaves.
     Threat,
     /// The Mine beacons' seam upkeep.
@@ -137,9 +173,10 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in the order the notices print them.
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Condition,
         Kind::Ranker,
+        Kind::LongWalk,
         Kind::Threat,
         Kind::SeamUpkeep,
         Kind::Commit,
@@ -153,6 +190,7 @@ impl Kind {
         match self {
             Kind::Condition => "condition",
             Kind::Ranker => "served-walk ranker",
+            Kind::LongWalk => "served-walk ranker, long walks",
             Kind::Threat => "threat-ranking selector",
             Kind::SeamUpkeep => "seam upkeep",
             Kind::Commit => "commit",
@@ -165,7 +203,9 @@ impl Kind {
     #[must_use]
     pub const fn reads(self, marks: TickMarks) -> bool {
         match self {
-            Kind::Condition | Kind::Ranker | Kind::Threat | Kind::SeamUpkeep => true,
+            Kind::Condition | Kind::Ranker | Kind::LongWalk | Kind::Threat | Kind::SeamUpkeep => {
+                true
+            }
             Kind::Commit => marks.committed > 0 && marks.started == 0,
             Kind::Toward => marks.started > 0 && marks.placed == 0,
             Kind::Deploy => marks.placed > 0 && marks.started == 0,
@@ -178,29 +218,51 @@ impl Kind {
 enum Table {
     /// The committed table.
     Committed,
-    /// The G3′ bench variant, whose power carries the layout.
+    /// The G3′ bench variant, whose power carries a layout.
     Variant,
 }
 
-/// What one match is: who seals what, at which size, under which table, with
-/// or without the Mine layout.
+/// What stands on the map besides the cores, placed in the lobby.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Ground {
+    /// Nothing.
+    Bare,
+    /// The gate layout's Mine beacons and their drones.
+    Mine,
+    /// The gate layout's beacons with none of their units, each seat's cut to
+    /// leave room for its stepping stones.
+    Spread,
+}
+
+/// What one match is: who seals what, at which size, under which table, on
+/// which ground.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Spec {
     shape: Shape,
     /// The size, or `None` for the table's committed budget.
     units: Option<u32>,
     table: Table,
-    mine_layout: bool,
+    ground: Ground,
 }
 
 impl Spec {
-    /// The baseline every match under `table` is compared with.
-    const fn baseline(table: Table) -> Spec {
+    /// The baseline a match under `table` on `ground` is compared with.
+    const fn baseline(table: Table, ground: Ground) -> Spec {
         Spec {
             shape: Shape::Idle,
             units: Some(1),
             table,
-            mine_layout: false,
+            ground,
+        }
+    }
+
+    /// The ground this match's baseline stands on: the same as its own, so
+    /// what the ground costs a decision cancels, except for the seam upkeep,
+    /// whose work is its ground's Mine beacons, so its baseline is bare.
+    const fn baseline_ground(self) -> Ground {
+        match self.ground {
+            Ground::Mine => Ground::Bare,
+            other => other,
         }
     }
 
@@ -210,24 +272,30 @@ impl Spec {
             shape,
             units: None,
             table: Table::Committed,
-            mine_layout: false,
+            ground: Ground::Bare,
         };
         match kind {
             Kind::Condition => at_budget(Shape::ConditionHolds),
             Kind::Ranker => at_budget(Shape::RankerHolds),
+            Kind::LongWalk => at_budget(Shape::RankerFar),
             Kind::Threat => at_budget(Shape::ThreatHolds),
-            Kind::Commit => at_budget(Shape::BuildTargets),
+            Kind::Commit => Spec {
+                shape: Shape::BuildTargets,
+                units: None,
+                table: Table::Variant,
+                ground: Ground::Spread,
+            },
             Kind::SeamUpkeep => Spec {
                 shape: Shape::Idle,
                 units: Some(1),
                 table: Table::Variant,
-                mine_layout: true,
+                ground: Ground::Mine,
             },
             Kind::Toward | Kind::Deploy => Spec {
                 shape: Shape::Toward,
                 units: Some(TOWARD_STEPS),
-                table: Table::Committed,
-                mine_layout: false,
+                table: Table::Variant,
+                ground: Ground::Spread,
             },
         }
     }
@@ -244,6 +312,9 @@ pub struct DecisionSample {
     pub marks: TickMarks,
     /// Allocations in the tick's opening and phases, when counted.
     pub allocations: Option<u64>,
+    /// The farthest any seat's commander stood from its own core, in whole
+    /// voxels, as the crow flies: what a ranking from it walks across.
+    pub reach: u32,
 }
 
 /// One match, played [`RUNS`] times.
@@ -253,7 +324,7 @@ pub struct Played {
     pub rules_hash: u64,
     /// The size every seat sealed.
     pub units_per_seat: u32,
-    /// The Mine layout's digest, when the match placed one.
+    /// The layout's digest, when the match placed one.
     pub layout: Option<u64>,
     /// Every decision tick but the segment's last, in order.
     pub samples: Vec<DecisionSample>,
@@ -295,20 +366,52 @@ impl Tables {
     }
 }
 
-/// The gate's layout cut to its Mine beacons and their drones.
-fn mine_layout(world: &pharmakos_sim::world::World) -> Result<Layout, Error> {
-    let full = layout::layout_at(world, Quarters::FULL)?;
-    let beacons: Vec<_> = full
-        .beacons
-        .into_iter()
-        .filter(|beacon| beacon.mandate == MandateKind::Mine)
-        .collect();
+/// The ground's layout on `world`, or `None` for bare ground.
+fn layout_of(world: &World, ground: Ground) -> Result<Option<Layout>, Error> {
+    let full = match ground {
+        Ground::Bare => return Ok(None),
+        Ground::Mine | Ground::Spread => layout::layout_at(world, Quarters::FULL)?,
+    };
+    let beacons: Vec<_> = match ground {
+        Ground::Mine => full
+            .beacons
+            .into_iter()
+            .filter(|beacon| beacon.mandate == MandateKind::Mine)
+            .collect(),
+        Ground::Spread | Ground::Bare => {
+            // A seat's share holds its core and its laid-out beacons; the
+            // stones need room of their own.
+            let keep = MOST_BEACONS_PER_SEAT
+                .checked_sub(TOWARD_STEPS)
+                .and_then(|left| usize::try_from(left).ok())
+                .ok_or(Error::Overflow("the spread layout's beacons a seat"))?;
+            let mut kept: Vec<_> = Vec::new();
+            for beacon in full.beacons {
+                let held = kept
+                    .iter()
+                    .filter(|other: &&pharmakos_sim::runner::LayoutBeacon| {
+                        other.seat == beacon.seat
+                    })
+                    .count();
+                if held < keep {
+                    // Bare of units: rows to scan, and nothing that moves,
+                    // fights or digs, so the kind's world and its baseline's
+                    // part only by what the kind's playbook does.
+                    kept.push(pharmakos_sim::runner::LayoutBeacon {
+                        units: Vec::new(),
+                        ..beacon
+                    });
+                }
+            }
+            kept
+        }
+    };
     if beacons.is_empty() {
-        return Err(Error::Layout(
-            "the gate's layout holds no Mine beacon".to_owned(),
-        ));
+        return Err(Error::Layout(format!(
+            "the gate's layout cut for {ground:?} holds no beacon"
+        )));
     }
-    Ok(Layout { beacons })
+    Ok(Some(Layout { beacons }))
 }
 
 /// The `Decision` phase's time in one timed tick.
@@ -323,7 +426,7 @@ fn decision_ns(phases: &[(usize, u128)]) -> Result<u128, Error> {
 /// The seats' counted units on the decision just taken, summed; an
 /// eliminated seat is refused, since a kind's match eliminates nobody in its
 /// two minutes and a seat out of it would not be the kind's work.
-fn seat_units(world: &pharmakos_sim::world::World, seats: u32) -> Result<u64, Error> {
+fn seat_units(world: &World, seats: u32) -> Result<u64, Error> {
     let mut sum: u64 = 0;
     for seat in 0..usize::try_from(seats).map_err(|_| Error::Overflow("the seat count"))? {
         let figure = world.decision_work(seat).ok_or_else(|| {
@@ -341,6 +444,38 @@ fn seat_units(world: &pharmakos_sim::world::World, seats: u32) -> Result<u64, Er
     Ok(sum)
 }
 
+/// The farthest any seat's live commander stands from its own core, in whole
+/// voxels across the ground.
+fn reach(world: &World, seats: u32, rules: &RulesTable) -> Result<u32, Error> {
+    let units = world.units();
+    let commander = UnitKind::Commander.id();
+    let mut farthest: u32 = 0;
+    for seat in hosted::seat_ids(seats)? {
+        let core = hosted::seat_core(world, seat, rules)?.at;
+        let at = units
+            .seats()
+            .iter()
+            .zip(units.kinds())
+            .zip(units.positions())
+            .zip(units.hit_points())
+            .find(|(((owner, kind), _), hp)| {
+                **owner == seat.raw() && **kind == commander && hp.is_alive()
+            })
+            .map(|(((_, _), at), _)| [at[0].floor_voxels(), at[1].floor_voxels()]);
+        let Some([x, y]) = at else {
+            continue;
+        };
+        let dx = i64::from(x) - i64::from(core[0]);
+        let dy = i64::from(y) - i64::from(core[1]);
+        let squared = u64::try_from(dx * dx + dy * dy)
+            .map_err(|_| Error::Overflow("a commander's distance"))?;
+        let distance = u32::try_from(squared.isqrt())
+            .map_err(|_| Error::Overflow("a commander's distance"))?;
+        farthest = farthest.max(distance);
+    }
+    Ok(farthest)
+}
+
 /// One run of a match.
 #[derive(Clone, Debug)]
 struct Run {
@@ -350,7 +485,7 @@ struct Run {
     chain: Vec<u64>,
     /// The size every seat sealed.
     units_per_seat: u32,
-    /// The Mine layout's digest, when one was placed.
+    /// The layout's digest, when one was placed.
     layout: Option<u64>,
 }
 
@@ -391,11 +526,7 @@ fn run_once(
             playbook.clone()
         });
     }
-    let placed = if spec.mine_layout {
-        Some(mine_layout(host.world())?)
-    } else {
-        None
-    };
+    let placed = layout_of(host.world(), spec.ground)?;
     let digest = placed.as_ref().map(layout::digest);
     let Opened {
         mut surface,
@@ -415,6 +546,7 @@ fn run_once(
                 units: seat_units(world, BENCH_SEATS)?,
                 marks: timed.marks(),
                 allocations: timed.allocations.map(|(phases, _)| phases),
+                reach: reach(world, BENCH_SEATS, rules)?,
             });
         }
     }
@@ -455,11 +587,9 @@ fn play(
         };
         if best.chain != now.chain
             || best.samples.len() != now.samples.len()
-            || best
-                .samples
-                .iter()
-                .zip(&now.samples)
-                .any(|(was, this)| was.units != this.units || was.marks != this.marks)
+            || best.samples.iter().zip(&now.samples).any(|(was, this)| {
+                was.units != this.units || was.marks != this.marks || was.reach != this.reach
+            })
         {
             return Err(Error::Drift(format!(
                 "run {run} of the {} match played a different chain, counted work or events",
@@ -484,6 +614,48 @@ fn play(
     })
 }
 
+/// The clock's resolution: the smallest non-zero difference two reads of
+/// [`Instant::now`] return over [`CALIBRATION_READS`] reads, in nanoseconds.
+///
+/// # Errors
+///
+/// [`Error::Empty`] when no two reads differed, which leaves no resolution
+/// to derive a floor from.
+pub fn clock_resolution() -> Result<u128, Error> {
+    let mut smallest: Option<u128> = None;
+    let mut last = Instant::now();
+    for _ in 0..CALIBRATION_READS {
+        let now = Instant::now();
+        let step = now.duration_since(last).as_nanos();
+        if step > 0 && smallest.is_none_or(|kept| step < kept) {
+            smallest = Some(step);
+        }
+        last = now;
+    }
+    smallest.ok_or_else(|| {
+        Error::Empty(format!(
+            "{CALIBRATION_READS} reads of the clock never differed, so it has no resolution"
+        ))
+    })
+}
+
+/// The measurement floor for a figure over `ticks` decision ticks at a clock
+/// of `resolution_ns`: the reads behind it times the resolution times
+/// [`FLOOR_MULTIPLE`].
+///
+/// # Errors
+///
+/// [`Error::Overflow`] for a floor past an `i128`.
+pub fn floor_ns(resolution_ns: u128, ticks: usize) -> Result<i128, Error> {
+    let ticks = u128::try_from(ticks).map_err(|_| Error::Overflow("the ticks"))?;
+    resolution_ns
+        .checked_mul(READS_PER_TICK)
+        .and_then(|ns| ns.checked_mul(ticks))
+        .and_then(|ns| ns.checked_mul(FLOOR_MULTIPLE))
+        .and_then(|ns| i128::try_from(ns).ok())
+        .ok_or(Error::Overflow("the measurement floor"))
+}
+
 /// One kind's figure on one seed.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct KindFigure {
@@ -493,7 +665,7 @@ pub struct KindFigure {
     pub rules_hash: u64,
     /// The size its seats sealed.
     pub units_per_seat: u32,
-    /// The Mine layout's digest, for the seam upkeep.
+    /// The layout's digest, when the match placed one.
     pub layout: Option<u64>,
     /// The decision ticks it was read on.
     pub ticks: usize,
@@ -503,12 +675,27 @@ pub struct KindFigure {
     pub ns: i128,
     /// `ns` over `units`, in thousandths of a nanosecond.
     pub milli_ns_per_unit: i128,
+    /// The measurement floor `ns` is held to.
+    pub floor_ns: i128,
     /// The most allocations one of those ticks made in its opening and
     /// phases, when counted.
     pub most_allocations: Option<u64>,
+    /// The nearest and farthest a commander stood from its core on those
+    /// ticks, in whole voxels.
+    pub reach: (u32, u32),
 }
 
-/// `kind`'s figure from its match and the baseline's: pure.
+impl KindFigure {
+    /// Whether the kind's summed difference is at or past its floor, so the
+    /// figure decides anything.
+    #[must_use]
+    pub const fn clears_floor(&self) -> bool {
+        self.ns >= self.floor_ns
+    }
+}
+
+/// `kind`'s figure from its match and the baseline's at a clock of
+/// `resolution_ns`: pure.
 ///
 /// # Errors
 ///
@@ -516,7 +703,12 @@ pub struct KindFigure {
 /// [`Error::Empty`] when the kind was read on no tick, or its ticks spent no
 /// more counted units than the baseline's, which has no figure;
 /// [`Error::Overflow`] for a sum past an `i128`.
-pub fn figure(kind: Kind, played: &Played, baseline: &Played) -> Result<KindFigure, Error> {
+pub fn figure(
+    kind: Kind,
+    played: &Played,
+    baseline: &Played,
+    resolution_ns: u128,
+) -> Result<KindFigure, Error> {
     if played.samples.len() != baseline.samples.len() {
         return Err(Error::Drift(format!(
             "the {} match took {} decision ticks and its baseline {}",
@@ -530,6 +722,7 @@ pub fn figure(kind: Kind, played: &Played, baseline: &Played) -> Result<KindFigu
     let mut units: i128 = 0;
     let mut ns: i128 = 0;
     let mut most: Option<u64> = Some(0);
+    let mut reach: Option<(u32, u32)> = None;
     for (sample, base) in played.samples.iter().zip(&baseline.samples) {
         if !kind.reads(sample.marks) {
             continue;
@@ -548,13 +741,17 @@ pub fn figure(kind: Kind, played: &Played, baseline: &Played) -> Result<KindFigu
             (Some(kept), Some(now)) => Some(kept.max(now)),
             _ => None,
         };
+        reach = Some(match reach {
+            Some((near, far)) => (near.min(sample.reach), far.max(sample.reach)),
+            None => (sample.reach, sample.reach),
+        });
     }
-    if ticks == 0 {
-        return Err(Error::Empty(format!(
+    let reach = reach.ok_or_else(|| {
+        Error::Empty(format!(
             "the {} match held no decision tick the kind is read on",
             kind.name()
-        )));
-    }
+        ))
+    })?;
     if units <= 0 {
         return Err(Error::Empty(format!(
             "the {} kind's {ticks} decision ticks spent {units} counted units over the \
@@ -575,7 +772,9 @@ pub fn figure(kind: Kind, played: &Played, baseline: &Played) -> Result<KindFigu
         units,
         ns,
         milli_ns_per_unit,
+        floor_ns: floor_ns(resolution_ns, ticks)?,
         most_allocations: most,
+        reach,
     })
 }
 
@@ -584,7 +783,7 @@ pub fn figure(kind: Kind, played: &Played, baseline: &Played) -> Result<KindFigu
 ///
 /// # Errors
 ///
-/// As [`play`] and [`figure`].
+/// As [`play`], [`clock_resolution`] and [`figure`].
 pub fn measure_kind(
     kind: Kind,
     seed: u64,
@@ -592,31 +791,55 @@ pub fn measure_kind(
     tables: &Tables,
 ) -> Result<KindFigure, Error> {
     let spec = Spec::of(kind);
-    let baseline = play(Spec::baseline(spec.table), seed, plan, tables, None)?;
-    figure(kind, &play(spec, seed, plan, tables, None)?, &baseline)
+    let baseline = play(
+        Spec::baseline(spec.table, spec.baseline_ground()),
+        seed,
+        plan,
+        tables,
+        None,
+    )?;
+    figure(
+        kind,
+        &play(spec, seed, plan, tables, None)?,
+        &baseline,
+        clock_resolution()?,
+    )
 }
 
-/// Every kind's figure on `seed`, each against its table's baseline.
+/// Every kind's figure on `seed`, each against its baseline, and the clock's
+/// resolution they were held to.
 ///
 /// # Errors
 ///
-/// As [`play`] and [`figure`].
+/// As [`play`], [`clock_resolution`] and [`figure`].
 pub fn measure(
     seed: u64,
     plan: KindPlan,
     tables: &Tables,
     heap: Option<&dyn HeapCounter>,
-) -> Result<Vec<KindFigure>, Error> {
-    let committed = play(Spec::baseline(Table::Committed), seed, plan, tables, heap)?;
-    let variant = play(Spec::baseline(Table::Variant), seed, plan, tables, heap)?;
+) -> Result<(Vec<KindFigure>, u128), Error> {
+    let resolution = clock_resolution()?;
+    let mut baselines: Vec<((Table, Ground), Played)> = Vec::new();
     let mut figures: Vec<KindFigure> = Vec::with_capacity(Kind::ALL.len());
     let mut stones: Option<Played> = None;
     for kind in Kind::ALL {
         let spec = Spec::of(kind);
-        let baseline = match spec.table {
-            Table::Committed => &committed,
-            Table::Variant => &variant,
-        };
+        let key = (spec.table, spec.baseline_ground());
+        if !baselines.iter().any(|(held, _)| *held == key) {
+            let played = play(
+                Spec::baseline(spec.table, spec.baseline_ground()),
+                seed,
+                plan,
+                tables,
+                heap,
+            )?;
+            baselines.push((key, played));
+        }
+        let baseline = baselines
+            .iter()
+            .find(|(held, _)| *held == key)
+            .map(|(_, played)| played)
+            .ok_or_else(|| Error::Drift("a baseline played and not kept".to_owned()))?;
         // The toward and deploy kinds read one match.
         let played = if spec.shape != Shape::Toward {
             play(spec, seed, plan, tables, heap)?
@@ -627,9 +850,9 @@ pub fn measure(
             stones = Some(played.clone());
             played
         };
-        figures.push(figure(kind, &played, baseline)?);
+        figures.push(figure(kind, &played, baseline, resolution)?);
     }
-    Ok(figures)
+    Ok((figures, resolution))
 }
 
 /// A thousandths figure, signed, with three places.
@@ -643,34 +866,68 @@ fn thousandths(milli: i128) -> String {
     )
 }
 
-/// Whether the kinds agree: the median of their figures, and each kind's
-/// distance from it in per cent of it.
+/// A per-mille figure with one place: `509` is `50.9`.
+fn tenths(per_mille: u128) -> String {
+    format!("{}.{}", per_mille.div_euclid(10), per_mille.rem_euclid(10))
+}
+
+/// Whether the kinds agree: the median of the figures that clear their
+/// floors, and each such kind's distance from it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Agreement {
     /// The median figure, in thousandths of a nanosecond a unit.
     pub median_milli: i128,
-    /// Each kind and its distance from the median, in per cent of it.
+    /// Each kind and its distance from the median, in thousandths of a
+    /// nanosecond a unit.
     pub distances: Vec<(Kind, u128)>,
     /// The kind farthest from the median, and its distance.
     pub outlier: (Kind, u128),
+    /// The kinds under their floors, left out of the median and the verdict.
+    pub left_out: Vec<Kind>,
 }
 
 impl Agreement {
-    /// Whether every kind sits within `tolerance` per cent of the median.
+    /// Whether every kind sits within `tolerance` per cent of the median,
+    /// compared exactly in integers: `distance * 100 <= tolerance * median`.
     #[must_use]
     pub fn within(&self, tolerance: u128) -> bool {
-        self.outlier.1 <= tolerance
+        let median = self.median_milli.unsigned_abs();
+        match (
+            self.outlier.1.checked_mul(100),
+            tolerance.checked_mul(median),
+        ) {
+            (Some(distance), Some(room)) => distance <= room,
+            // A product past a `u128` is a distance no tolerance holds.
+            _ => false,
+        }
+    }
+
+    /// A distance in per mille of the median, for printing to one place.
+    fn per_mille(&self, distance: u128) -> Option<u128> {
+        distance
+            .checked_mul(1_000)
+            .and_then(|scaled| scaled.checked_div(self.median_milli.unsigned_abs()))
     }
 }
 
-/// The kinds' agreement over `figures`: pure.
+/// The kinds' agreement over `figures`, the kinds under their floors left
+/// out: pure.
 ///
 /// # Errors
 ///
-/// [`Error::Empty`] for no figure, or a median at or below zero, which no
-/// distance can be measured against.
+/// [`Error::Empty`] for no figure that clears its floor, or a median at or
+/// below zero, which no distance can be measured against.
 pub fn agreement(figures: &[KindFigure]) -> Result<Agreement, Error> {
-    let mut sorted: Vec<i128> = figures
+    let cleared: Vec<&KindFigure> = figures
+        .iter()
+        .filter(|figure| figure.clears_floor())
+        .collect();
+    let left_out: Vec<Kind> = figures
+        .iter()
+        .filter(|figure| !figure.clears_floor())
+        .map(|figure| figure.kind)
+        .collect();
+    let mut sorted: Vec<i128> = cleared
         .iter()
         .map(|figure| figure.milli_ns_per_unit)
         .collect();
@@ -678,58 +935,68 @@ pub fn agreement(figures: &[KindFigure]) -> Result<Agreement, Error> {
     let median_milli = sorted
         .get(sorted.len().div_euclid(2))
         .copied()
-        .ok_or_else(|| Error::Empty("no kind's figure to agree".to_owned()))?;
-    let median = match u128::try_from(median_milli) {
-        Ok(median) if median > 0 => median,
-        _ => {
-            return Err(Error::Empty(format!(
-                "the kinds' median is {} ns a unit, which no distance is measured against",
-                thousandths(median_milli)
-            )));
-        }
-    };
-    let mut distances: Vec<(Kind, u128)> = Vec::with_capacity(figures.len());
-    for figure in figures {
+        .ok_or_else(|| Error::Empty("no kind's figure clears its floor".to_owned()))?;
+    if median_milli <= 0 {
+        return Err(Error::Empty(format!(
+            "the kinds' median is {} ns a unit, which no distance is measured against",
+            thousandths(median_milli)
+        )));
+    }
+    let mut distances: Vec<(Kind, u128)> = Vec::with_capacity(cleared.len());
+    for figure in &cleared {
         let gap = figure
             .milli_ns_per_unit
             .checked_sub(median_milli)
             .ok_or(Error::Overflow("a kind's distance"))?
             .unsigned_abs();
-        let percent = gap
-            .checked_mul(100)
-            .and_then(|scaled| scaled.checked_div(median))
-            .ok_or(Error::Overflow("a kind's distance"))?;
-        distances.push((figure.kind, percent));
+        distances.push((figure.kind, gap));
     }
     let outlier = distances
         .iter()
         .copied()
-        .max_by_key(|(_, percent)| *percent)
-        .ok_or_else(|| Error::Empty("no kind's figure to agree".to_owned()))?;
+        .max_by_key(|(_, gap)| *gap)
+        .ok_or_else(|| Error::Empty("no kind's figure clears its floor".to_owned()))?;
     Ok(Agreement {
         median_milli,
         distances,
         outlier,
+        left_out,
     })
 }
 
-/// One seed's notice: every kind's figure. Pure.
+/// One seed's notice: every kind's figure, each under its floor said so.
+/// Pure.
 #[must_use]
-pub fn kinds_notice(figures: &[KindFigure], seed: u64, plan: KindPlan, os: &str) -> String {
+pub fn kinds_notice(
+    figures: &[KindFigure],
+    resolution_ns: u128,
+    seed: u64,
+    plan: KindPlan,
+    os: &str,
+) -> String {
     let kinds: Vec<String> = figures
         .iter()
         .map(|figure| {
             let layout = match figure.layout {
-                Some(digest) => format!(", Mine layout {}", pharmakos_sim::hex(digest)),
+                Some(digest) => format!(", layout {}", pharmakos_sim::hex(digest)),
                 None => String::new(),
             };
             let allocations = match figure.most_allocations {
                 Some(most) => format!(", at most {most} allocations a tick"),
                 None => String::new(),
             };
+            let floor = if figure.clears_floor() {
+                format!("{} ns of floor", figure.floor_ns)
+            } else {
+                format!(
+                    "BELOW THE MEASUREMENT FLOOR, {} ns against {} ns: decides nothing",
+                    figure.ns, figure.floor_ns
+                )
+            };
             format!(
-                "{} {} ns a unit ({} units over {} ns on {} decision ticks; {} units a seat, \
-                 rules_hash {}{layout}{allocations})",
+                "{} {} ns a unit ({} units over {} ns on {} decision ticks, {floor}; {} units a \
+                 seat, rules_hash {}{layout}{allocations}; a commander {} to {} voxels from \
+                 its core)",
                 figure.kind.name(),
                 thousandths(figure.milli_ns_per_unit),
                 figure.units,
@@ -737,14 +1004,19 @@ pub fn kinds_notice(figures: &[KindFigure], seed: u64, plan: KindPlan, os: &str)
                 figure.ticks,
                 figure.units_per_seat,
                 pharmakos_sim::hex(figure.rules_hash),
+                figure.reach.0,
+                figure.reach.1,
             )
         })
         .collect();
     format!(
         "::notice title=decision tick by kind (0x{seed:016x})::on {os}, {BENCH_SEATS} seats, \
-         each kind's Decision phase and counted units less its baseline's (every seat sealing \
-         the idle shape) on the same ticks, fastest of {} runs a tick over a {} s segment: \
-         {}",
+         each kind's Decision phase and counted units less its baseline's (the same ground, \
+         every seat sealing the idle shape) on the same ticks, fastest of {} runs a tick over \
+         a {} s segment; the clock reads to {resolution_ns} ns, and a kind's floor is that \
+         times {READS_PER_TICK} reads a tick times its ticks times {FLOOR_MULTIPLE}: {}. The \
+         served-walk kinds are charged their pops only, so their ns per unit stands for more \
+         work than a visit elsewhere until the sim counts the rest",
         plan.runs,
         plan.segment_ms.div_euclid(1_000),
         kinds.join("; "),
@@ -757,32 +1029,50 @@ pub fn agreement_notice(agreement: &Agreement, seed: u64, os: &str) -> String {
     let distances: Vec<String> = agreement
         .distances
         .iter()
-        .map(|(kind, percent)| format!("{} {percent}%", kind.name()))
+        .map(|(kind, gap)| match agreement.per_mille(*gap) {
+            Some(per_mille) => format!("{} {}%", kind.name(), tenths(per_mille)),
+            None => format!("{} past a u128's per cent", kind.name()),
+        })
         .collect();
     let verdict = if agreement.within(TOLERANCE_PERCENT) {
         "the kinds AGREE"
     } else {
         "the kinds DO NOT AGREE"
     };
+    let outlier = match agreement.per_mille(agreement.outlier.1) {
+        Some(per_mille) => format!("{}%", tenths(per_mille)),
+        None => "past a u128's per cent".to_owned(),
+    };
+    let left_out = if agreement.left_out.is_empty() {
+        "no kind left out".to_owned()
+    } else {
+        let names: Vec<&str> = agreement.left_out.iter().map(|kind| kind.name()).collect();
+        format!(
+            "left out, under their measurement floors: {}",
+            names.join(", ")
+        )
+    };
     format!(
         "::notice title=decision tick kinds agree (0x{seed:016x})::on {os}, {verdict} within \
-         {TOLERANCE_PERCENT}% of their median of {} ns a unit; the outlier is {} at {}%; each \
-         kind's distance: {}",
+         this lane's own tolerance, {TOLERANCE_PERCENT}% of their median (a judgement, not a \
+         gate), of {} ns a unit; the outlier is {} at {outlier}; {left_out}; each kind's \
+         distance: {}",
         thousandths(agreement.median_milli),
         agreement.outlier.0.name(),
-        agreement.outlier.1,
         distances.join(", "),
     )
 }
 
-/// The second seed against the first, kind by kind and pooled, against E12's
-/// rule. Pure.
+/// The second seed against the first, kind by kind and pooled over the kinds
+/// that clear their floors: this lane's own published figure, with no
+/// verdict (E12's rule reads the hosted FULL, `crate::certify`). Pure.
 ///
 /// # Errors
 ///
 /// [`Error::Drift`] when the two seeds' figures are not the same kinds in
-/// the same order; [`Error::Empty`] for a first figure at or below zero;
-/// [`Error::Overflow`] for a sum past an `i128`.
+/// the same order; [`Error::Empty`] when the kinds pool no unit or a pooled
+/// first figure is at or below zero; [`Error::Overflow`] for a sum past an
+/// `i128`.
 pub fn seed_gap_notice(
     first: &[KindFigure],
     second: &[KindFigure],
@@ -798,19 +1088,19 @@ pub fn seed_gap_notice(
             "the two seeds measured different kinds".to_owned(),
         ));
     }
+    // The gap in per mille of the first, signed: `(two - one) * 1000 / one`.
     let gap = |one: i128, two: i128| -> Result<i128, Error> {
-        if one <= 0 {
-            return Err(Error::Empty(format!(
-                "a first seed's figure of {} ns a unit has no gap",
-                thousandths(one)
-            )));
-        }
         two.checked_sub(one)
-            .and_then(|difference| difference.checked_mul(100))
+            .and_then(|difference| difference.checked_mul(1_000))
             .and_then(|scaled| scaled.checked_div(one))
             .ok_or(Error::Overflow("a seed gap"))
     };
-    let pooled = |figures: &[KindFigure]| -> Result<i128, Error> {
+    let signed_tenths = |per_mille: i128| {
+        let sign = if per_mille < 0 { "-" } else { "+" };
+        format!("{sign}{}", tenths(per_mille.unsigned_abs()))
+    };
+    let both = |one: &KindFigure, two: &KindFigure| one.clears_floor() && two.clears_floor();
+    let pooled = |figures: &[&KindFigure]| -> Result<i128, Error> {
         let (ns, units) = figures
             .iter()
             .try_fold((0_i128, 0_i128), |(ns, units), f| {
@@ -821,42 +1111,41 @@ pub fn seed_gap_notice(
             .and_then(|scaled| scaled.checked_div(units))
             .ok_or_else(|| Error::Empty("the kinds pooled no unit".to_owned()))
     };
-    let threshold = i128::try_from(SEED_GAP_PERCENT).map_err(|_| Error::Overflow("the rule"))?;
     let mut kinds: Vec<String> = Vec::with_capacity(first.len());
+    let mut pool_first: Vec<&KindFigure> = Vec::new();
+    let mut pool_second: Vec<&KindFigure> = Vec::new();
     for (one, two) in first.iter().zip(second) {
-        // A kind whose first figure is at or below zero spent less time than
-        // its baseline on its ticks: its work is inside the clock's noise
-        // there, and a per cent of it is no figure. Said in words; the
-        // pooled figure, which is the verdict, still needs a positive one.
-        kinds.push(if one.milli_ns_per_unit <= 0 {
-            format!(
-                "{} no gap (the first seed's {} ns a unit is at or below zero: inside the \
-                 clock's noise)",
+        if both(one, two) && one.milli_ns_per_unit > 0 {
+            kinds.push(format!(
+                "{} {}%",
                 one.kind.name(),
-                thousandths(one.milli_ns_per_unit)
-            )
+                signed_tenths(gap(one.milli_ns_per_unit, two.milli_ns_per_unit)?)
+            ));
+            pool_first.push(one);
+            pool_second.push(two);
         } else {
-            format!(
-                "{} {:+}%",
-                one.kind.name(),
-                gap(one.milli_ns_per_unit, two.milli_ns_per_unit)?
-            )
-        });
+            kinds.push(format!(
+                "{} left out (under its measurement floor on a seed)",
+                one.kind.name()
+            ));
+        }
     }
-    let (one, two) = (pooled(first)?, pooled(second)?);
-    let pooled_gap = gap(one, two)?;
-    let verdict = if pooled_gap > threshold {
-        "PAST E12's rule: P1 reports both seeds"
-    } else {
-        "within E12's rule"
-    };
+    let (one, two) = (pooled(&pool_first)?, pooled(&pool_second)?);
+    if one <= 0 {
+        return Err(Error::Empty(format!(
+            "a pooled first figure of {} ns a unit has no gap",
+            thousandths(one)
+        )));
+    }
     Ok(format!(
-        "::notice title=decision tick seed gap::on {os}, 0x{:016x} against 0x{BENCH_SEED:016x}: \
-         pooled over the kinds {} against {} ns a unit, {pooled_gap:+}%, {verdict} (more than \
-         {SEED_GAP_PERCENT}% above the first seed); by kind {}",
+        "::notice title=decision tick seed gap (this lane's own figure)::on {os}, 0x{:016x} \
+         against 0x{BENCH_SEED:016x}: pooled over the kinds that clear their floors on both \
+         seeds {} against {} ns a unit, {}%; by kind {}. Published, no verdict: E12's seed \
+         rule reads P1 FULL's hosted figure",
         pharmakos_sim::DETERMINISM_MATCH_SEED,
         thousandths(two),
         thousandths(one),
+        signed_tenths(gap(one, two)?),
         kinds.join(", "),
     ))
 }
@@ -875,7 +1164,9 @@ mod tests {
             units: 1_000,
             ns: milli,
             milli_ns_per_unit: milli,
+            floor_ns: 0,
             most_allocations: Some(0),
+            reach: (0, 0),
         }
     }
 
@@ -885,6 +1176,7 @@ mod tests {
             units,
             marks,
             allocations: Some(0),
+            reach: 3,
         }
     }
 
@@ -914,12 +1206,15 @@ mod tests {
             ..played.clone()
         };
         // Deploy reads the one tick that placed: 100 000 ns over 1 000 units.
-        let deploy = figure(Kind::Deploy, &played, &baseline).expect("a figure");
+        let deploy = figure(Kind::Deploy, &played, &baseline, 100).expect("a figure");
         assert_eq!((deploy.ticks, deploy.units, deploy.ns), (1, 1_000, 100_000));
         assert_eq!(deploy.milli_ns_per_unit, 100_000);
+        // One tick at a 100 ns clock: 2 reads x 1 tick x 100 ns x 10.
+        assert_eq!(deploy.floor_ns, 2_000);
+        assert!(deploy.clears_floor());
         // Toward reads none of them, which is no figure.
         assert!(matches!(
-            figure(Kind::Toward, &played, &baseline),
+            figure(Kind::Toward, &played, &baseline, 100),
             Err(Error::Empty(_))
         ));
         // A baseline of other ticks is refused.
@@ -928,76 +1223,129 @@ mod tests {
             ..played.clone()
         };
         assert!(matches!(
-            figure(Kind::Deploy, &played, &short),
+            figure(Kind::Deploy, &played, &short, 100),
             Err(Error::Drift(_))
         ));
+    }
+
+    #[test]
+    fn the_floor_is_the_clocks_reads_times_the_multiple() {
+        assert_eq!(floor_ns(100, 8), Ok(16_000));
+        assert_eq!(floor_ns(1, 0), Ok(0));
+        assert!(clock_resolution().is_ok_and(|ns| ns > 0));
+    }
+
+    /// C1: a kind under its floor is left out and named, and the verdict over
+    /// the rest is the same whatever that kind's figure is; a figure exactly at
+    /// zero is left out like any under its floor (K4's mutant).
+    #[test]
+    fn a_kind_under_its_floor_is_left_out_and_named() {
+        let mut figures: Vec<KindFigure> = Kind::ALL
+            .iter()
+            .map(|kind| figure_of(*kind, 100_000))
+            .collect();
+        let base = agreement(&figures).expect("an agreement");
+        assert!(base.left_out.is_empty());
+        for noisy in [-3_656_i128, 0, 900_000] {
+            if let Some(deploy) = figures.iter_mut().find(|f| f.kind == Kind::Deploy) {
+                deploy.milli_ns_per_unit = noisy;
+                deploy.ns = noisy;
+                deploy.floor_ns = 1_000_000;
+            }
+            let agreed = agreement(&figures).expect("an agreement");
+            assert_eq!(agreed.left_out, vec![Kind::Deploy], "{noisy}");
+            assert_eq!(agreed.median_milli, base.median_milli, "{noisy}");
+            assert_eq!(
+                agreed.within(TOLERANCE_PERCENT),
+                base.within(TOLERANCE_PERCENT)
+            );
+            let line = agreement_notice(&agreed, 1, "linux");
+            assert!(
+                line.contains("left out, under their measurement floors: deploy;"),
+                "{line}"
+            );
+        }
+        // At exactly its floor a kind counts.
+        let mut at = figure_of(Kind::Commit, 5);
+        at.floor_ns = 5;
+        assert!(at.clears_floor());
+        at.ns = 4;
+        assert!(!at.clears_floor());
     }
 
     #[test]
     fn the_kinds_agree_only_within_the_tolerance() {
         let near: Vec<KindFigure> = Kind::ALL
             .iter()
-            .zip([100_000, 110_000, 90_000, 100_000, 120_000, 95_000, 105_000])
+            .zip([
+                100_000, 110_000, 100_000, 90_000, 100_000, 120_000, 95_000, 105_000,
+            ])
             .map(|(kind, milli)| figure_of(*kind, milli))
             .collect();
         let agreed = agreement(&near).expect("an agreement");
         assert_eq!(agreed.median_milli, 100_000);
-        assert_eq!(agreed.outlier, (Kind::Commit, 20));
+        assert_eq!(agreed.outlier, (Kind::Commit, 20_000));
         assert!(agreed.within(TOLERANCE_PERCENT));
         // The must-trip: a tolerance below the outlier's distance turns it.
         assert!(!agreed.within(19));
-        let mut far = near;
-        if let Some(toward) = far.iter_mut().find(|figure| figure.kind == Kind::Toward) {
-            toward.milli_ns_per_unit = 400_000;
+        // C7: compared exactly, 50.9 % is not within 50 %.
+        let mut edge = near.clone();
+        if let Some(toward) = edge.iter_mut().find(|figure| figure.kind == Kind::Toward) {
+            toward.milli_ns_per_unit = 158_445;
         }
-        let split = agreement(&far).expect("an agreement");
-        assert_eq!(split.outlier, (Kind::Toward, 280));
+        let split = agreement(&edge).expect("an agreement");
+        assert_eq!(split.median_milli, 105_000);
+        assert_eq!(split.outlier, (Kind::Toward, 53_445));
         assert!(!split.within(TOLERANCE_PERCENT));
         assert_eq!(
             agreement_notice(&split, 1, "linux"),
             "::notice title=decision tick kinds agree (0x0000000000000001)::on linux, the kinds \
-             DO NOT AGREE within 50% of their median of 105.000 ns a unit; the outlier is toward \
-             at 280%; each kind's distance: condition 4%, served-walk ranker 4%, \
-             threat-ranking selector 14%, seam upkeep 4%, commit 14%, toward 280%, deploy 0%"
+             DO NOT AGREE within this lane's own tolerance, 50% of their median (a judgement, not a gate), of 105.000 ns a unit; the outlier is toward at 50.9%; no kind left out; each kind's distance: condition 4.7%, served-walk ranker 4.7%, served-walk ranker, long walks 4.7%, threat-ranking selector 14.2%, seam upkeep 4.7%, commit 14.2%, toward 50.9%, deploy 0.0%"
+        );
+        if let Some(toward) = edge.iter_mut().find(|figure| figure.kind == Kind::Toward) {
+            toward.milli_ns_per_unit = 157_500;
+        }
+        assert!(
+            agreement(&edge)
+                .expect("an agreement")
+                .within(TOLERANCE_PERCENT)
         );
         assert!(agreement(&[]).is_err());
     }
 
     #[test]
-    fn the_seed_gap_is_held_to_e12s_rule() {
+    fn the_seed_gap_is_this_lanes_figure_with_no_verdict() {
         let first: Vec<KindFigure> = Kind::ALL
             .iter()
             .map(|kind| figure_of(*kind, 100_000))
             .collect();
-        let near: Vec<KindFigure> = Kind::ALL
-            .iter()
-            .map(|kind| figure_of(*kind, 120_000))
-            .collect();
-        let line = seed_gap_notice(&first, &near, "linux").expect("a notice");
-        assert!(line.contains("+20%, within E12's rule"), "{line}");
         let far: Vec<KindFigure> = Kind::ALL
             .iter()
-            .map(|kind| figure_of(*kind, 123_000))
+            .map(|kind| figure_of(*kind, 123_400))
             .collect();
         let line = seed_gap_notice(&first, &far, "linux").expect("a notice");
         assert!(
-            line.contains("+23%, PAST E12's rule: P1 reports both seeds"),
+            line.contains("100.000 ns a unit, +23.4%; by kind"),
             "{line}"
         );
-        let cut: Vec<KindFigure> = far.into_iter().take(2).collect();
+        assert!(!line.contains("PAST"), "{line}");
+        assert!(!line.contains("within E12"), "{line}");
+        let cut: Vec<KindFigure> = far.iter().take(2).cloned().collect();
         assert!(seed_gap_notice(&first, &cut, "linux").is_err());
-        // A kind inside the clock's noise on the first seed says so, and the
-        // pooled verdict still stands.
+        // A kind under its floor on either seed is left out by name, and
+        // the pool is taken over the rest.
         let mut noisy = first.clone();
         if let Some(deploy) = noisy.iter_mut().find(|figure| figure.kind == Kind::Deploy) {
+            deploy.ns = -3_656;
             deploy.milli_ns_per_unit = -3_656;
+            deploy.floor_ns = 1_000;
         }
-        let line = seed_gap_notice(&noisy, &near, "linux").expect("a notice");
+        let line = seed_gap_notice(&noisy, &far, "linux").expect("a notice");
         assert!(
-            line.contains("deploy no gap (the first seed's -3.656 ns a unit is at or below zero"),
+            line.contains("deploy left out (under its measurement floor on a seed)"),
             "{line}"
         );
-        assert!(line.contains("within E12's rule"), "{line}");
+        assert!(line.contains("+23.4%; by kind"), "{line}");
     }
 
     #[test]
@@ -1024,5 +1372,6 @@ mod tests {
         );
         assert!(!Kind::Deploy.reads(both));
         assert!(Kind::Condition.reads(TickMarks::default()));
+        assert!(Kind::LongWalk.reads(TickMarks::default()));
     }
 }
