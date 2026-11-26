@@ -116,24 +116,6 @@ pub fn lend<'a>(world: &'a World, tally: &'a UnitTally) -> Ground<'a> {
     }
 }
 
-/// A search scratch sized for the world's pathing graph, for one read.
-///
-/// Built per call rather than kept: a scratch is search state the estimator
-/// overwrites from scratch on every query (that is what lets the sim reuse
-/// one across a whole match), and a fresh one is a few megabytes of zeroes on
-/// the shipped map, which the methods that use it -- a preview per edit, a
-/// summary per Lull -- can afford.
-///
-/// # Errors
-///
-/// [`crate::error::Code::Internal`] when the rules table's cluster edge does
-/// not size a scratch for this map, which the world's own construction would
-/// already have refused.
-pub fn scratch_for(world: &World) -> Result<Scratch, Error> {
-    Scratch::for_map(world.surface(), world.rules().hpa_cluster_voxels())
-        .ok_or_else(|| Error::internal("this map and cluster edge do not size a search scratch"))
-}
-
 /// Where `seat`'s commander stands, or `None` when it is dead: the origin a
 /// `covering` description ranks from when its step starts (the sim's
 /// `commander_at`, read the same way).
@@ -488,7 +470,9 @@ const fn kind_of(spec: FeatureSpec) -> Option<FeatureKind> {
 struct Reader<'a> {
     world: &'a World,
     ground: Ground<'a>,
-    scratch: Scratch,
+    /// The caller's search scratch, the hosted match's planning scratch when
+    /// the gateway resolves ([`resolve_playbook`]).
+    scratch: &'a mut Scratch,
     seat: SeatId,
     commander: Option<[Fx; 3]>,
 }
@@ -514,7 +498,7 @@ impl Reader<'_> {
     where
         F: FnMut(usize) -> bool,
     {
-        let found = ranked(&self.ground, &mut self.scratch, column_of(origin), keep)?;
+        let found = ranked(&self.ground, self.scratch, column_of(origin), keep)?;
         found
             .into_iter()
             .map(|(index, walk)| {
@@ -611,7 +595,7 @@ impl Reader<'_> {
             .iter()
             .map(|(_, candidate)| candidate.clone())
             .collect();
-        match ran(cover(&ground, &mut self.scratch, seat, commander, spec))? {
+        match ran(cover(&ground, self.scratch, seat, commander, spec))? {
             Ok(found) => {
                 let [x, y] = found.site;
                 let point = ground
@@ -679,7 +663,7 @@ impl Reader<'_> {
         let mut stones: Vec<pharmakos_sim::targeting::StoneCandidate> = Vec::new();
         match ran(pharmakos_sim::targeting::toward_counted(
             &ground,
-            &mut self.scratch,
+            self.scratch,
             &mut stones,
             seat,
             commander,
@@ -737,7 +721,7 @@ impl Reader<'_> {
         // it, and one inside counts 1 whether or not it is a legal site.
         let read = ran(on_vent_counted(
             &ground,
-            &mut self.scratch,
+            self.scratch,
             seat,
             centre,
             except,
@@ -935,21 +919,28 @@ fn unread(
 ///
 /// [`crate::error::Code::InvalidArgument`] naming the pointer of a reference
 /// this build cannot read where it is written, and
-/// [`crate::error::Code::Internal`] when the map does not size a search, an
-/// estimate does not convert, or the walk and the compiled plan disagree about
-/// what the playbook binds.
+/// [`crate::error::Code::Internal`] when an estimate does not convert, or the
+/// walk and the compiled plan disagree about what the playbook binds. The
+/// scratch is the caller's to lend, so a map that sizes none, or a scratch
+/// that does not fit the graph, is refused where it is lent
+/// ([`crate::routes::PlanningScratch::lend`]) before this is called.
+///
+/// `scratch` is the search scratch every ranking and site of the walk
+/// searches in: the hosted match's planning scratch for the gateway's own
+/// reads ([`crate::host::Host::planning_scratch`]), lent for the whole walk.
 pub fn resolve_playbook(
     world: &World,
     snapshot: &Snapshot,
     seat: SeatId,
     playbook: &Playbook,
     plan: &Plan,
+    scratch: &mut Scratch,
 ) -> Result<Vec<Resolved>, Error> {
     let ground = world.ground();
     let mut reader = Reader {
         world,
         ground,
-        scratch: scratch_for(world)?,
+        scratch,
         seat,
         commander: commander_point(world, seat),
     };

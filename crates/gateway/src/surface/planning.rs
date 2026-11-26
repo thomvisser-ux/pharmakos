@@ -1067,6 +1067,7 @@ impl Surface {
             seat,
             playbook,
             &plan,
+            &mut *host.planning_scratch()?,
         )?;
         Ok(Json::Object(vec![(
             String::from("refs"),
@@ -1141,6 +1142,7 @@ impl Surface {
             seat,
             canonical.decoded().message(),
             sealed.plan(),
+            &mut *host.planning_scratch()?,
         )?;
         let dollars = host
             .rules()
