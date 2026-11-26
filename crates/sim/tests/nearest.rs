@@ -226,10 +226,14 @@ fn measured_to(world: &World, index: usize, origin: Node) -> Option<Node> {
         .find_map(|column| reachable(column.x, column.y))
 }
 
-/// Nodes popped since the counters were last reset.
+/// What the searches counted since the counters were last reset: the nodes
+/// they popped, and every visit of their loops that pops nothing
+/// (`Scratch::visits`; S3's `walk3`), whose honesty `tests/pathing.rs` holds
+/// to the pops.
 fn popped(scratch: &Scratch) -> u64 {
     scratch.expansions().expect("the count fits a u64")
         + scratch.abstract_expansions().expect("the count fits a u64")
+        + scratch.visits().expect("the count fits a u64")
 }
 
 /// A walkable origin drawn from `rng`.
@@ -1369,8 +1373,10 @@ fn the_site_listing_at_a_seats_most_beacons() {
     // spheres that listed one, and the nodes the search then pops. Before
     // dunit part 2 the units were the 37,653 columns scanned and the 14 pops
     // alone (37,667): the tests each column asks, the beacon rows, the Spire
-    // tests and the `h` folds were charged nothing.
-    assert_eq!(measured, (Some([232, 94]), Ok(1_685_732), 36_513, 21, 14));
+    // tests and the `h` folds were charged nothing. After it they read
+    // 1,685,732; S3's `walk3` counts the eight neighbour slots each of the 14
+    // pops tries, 112 more.
+    assert_eq!(measured, (Some([232, 94]), Ok(1_685_844), 36_513, 21, 14));
 }
 
 // ---------------------------------------------------------------------------
@@ -1848,10 +1854,14 @@ fn heuristic_reads(scratch: &Scratch) -> u64 {
 /// optimum, read from the queue's own counters (whose honesty
 /// `pathing::reach`'s own tests hold to the search's keys and pops): a
 /// bucket its ring walk turned to, a column moved from a bucket into its
-/// batch, and a cell its start's reset wrote (dunit part 2).
+/// batch, and a cell its start's reset wrote (dunit part 2), and a neighbour
+/// slot a settled column tried (S3's `walk3`).
 fn queue_reads(scratch: &Scratch) -> u64 {
     let reach = scratch.reach();
-    reach.turns().unwrap() + reach.unlinked().unwrap() + reach.filled().unwrap()
+    reach.turns().unwrap()
+        + reach.unlinked().unwrap()
+        + reach.filled().unwrap()
+        + reach.tried().unwrap()
 }
 
 /// The columns a `toward`'s site listing scans for `seat`: the disc of each

@@ -1389,6 +1389,99 @@ fn an_endpoint_inserted_by_lookup_gets_the_route_a_sweep_gives() {
     assert!(compared > 10_000, "only {compared} entries were compared");
 }
 
+/// What a scratch counted since its last reset: the grid pops, the endpoint
+/// sweeps' share of them, the abstract pops, and the visits that pop nothing.
+fn counted(scratch: &Scratch) -> [u64; 4] {
+    [
+        scratch.expansions().expect("a count"),
+        scratch.endpoint_expansions().expect("a count"),
+        scratch.abstract_expansions().expect("a count"),
+        scratch.visits().expect("a count"),
+    ]
+}
+
+/// S3's `walk3`: a query's counted work is its pops and every visit of its
+/// loops that pops nothing, so an endpoint inserted by lookup, which pops
+/// nothing, is still counted, by the slots it reads. Held against the same
+/// queries on a decomposition with no fields: the abstract search is the
+/// same search, the lookup pops no grid node at all, and what the swept
+/// queries count beyond the looked-up ones is their sweeps' own loops, eight
+/// neighbour slots a pop and at most seven stale entries a pop skipped (a
+/// pop pushes at most eight entries and closes one).
+#[test]
+fn a_lookup_is_counted_by_its_slots_and_a_sweep_by_its_neighbours() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let shape = fixture.clusters.shape().with_fields(0);
+    let mut swept_scratch = Scratch::for_map(&fixture.surface, shape.size).expect("a scratch");
+    let swept =
+        Clusters::new(&fixture.surface, shape, &mut swept_scratch).expect("a decomposition");
+    let speed = fixture.commander_speed();
+    let mut far = 0_u32;
+    for (start, goal) in pairs(&fixture, 96, 0x5EED_00F8) {
+        let (from, to) = (
+            fixture.clusters.cluster_of(start),
+            fixture.clusters.cluster_of(goal),
+        );
+        if from == to {
+            continue;
+        }
+        far += 1;
+        fixture.scratch.reset_counters();
+        swept_scratch.reset_counters();
+        let looked = abstract_search(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            start,
+            goal,
+            Fog::Clear,
+            speed,
+        );
+        let by_sweep = abstract_search(
+            &fixture.surface,
+            &swept,
+            &mut swept_scratch,
+            start,
+            goal,
+            Fog::Clear,
+            speed,
+        );
+        assert_eq!(looked, by_sweep, "{start} to {goal}");
+        let [grid, endpoint, abstract_pops, visits] = counted(&fixture.scratch);
+        let [swept_grid, swept_endpoint, swept_abstract, swept_visits] = counted(&swept_scratch);
+        assert_eq!(
+            (grid, endpoint),
+            (0, 0),
+            "{start} to {goal}: a lookup popped a grid node"
+        );
+        assert_eq!(
+            abstract_pops, swept_abstract,
+            "{start} to {goal}: the abstract search is not the same search"
+        );
+        assert_eq!(
+            swept_grid, swept_endpoint,
+            "{start} to {goal}: a swept query's grid pops are its two sweeps'"
+        );
+        let slots = fixture.clusters.trans_cells(usize::from(from)).len()
+            + fixture.clusters.trans_cells(usize::from(to)).len();
+        let slots = u64::try_from(slots).expect("fits");
+        assert!(
+            visits >= slots + abstract_pops,
+            "{start} to {goal}: {visits} visits do not hold the {slots} slots two insertions read \
+             and an edge for each of the {abstract_pops} abstract pops but the start's"
+        );
+        let beyond = swept_visits
+            .checked_sub(visits)
+            .expect("a sweep visits no less than a lookup");
+        assert!(
+            beyond >= 8 * swept_endpoint && beyond < 16 * swept_endpoint,
+            "{start} to {goal}: the sweeps popped {swept_endpoint} nodes and counted {beyond} \
+             visits of their own, outside eight to sixteen a pop"
+        );
+    }
+    assert!(far >= 48, "only {far} pairs span two clusters");
+}
+
 #[test]
 fn a_query_leaves_the_graph_alone() {
     // A query inserts its endpoints into the *scratch*, never into the graph, so

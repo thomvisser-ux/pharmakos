@@ -12,13 +12,15 @@
 //! queries cannot interfere and the graph a repair produced is the graph every
 //! later query sees.
 //!
-//! Insertion is one **bounded sweep per endpoint** over the endpoint's own
-//! cluster: at most one cluster of cells, and it yields the cost from the
-//! endpoint to *every* transition node of that cluster at once. When both
-//! endpoints share a cluster it yields the direct cost between them for free as
-//! well — which matters, because without that edge a short query inside one
-//! cluster would be forced out through an entrance and back, and the estimate
-//! would be wildly pessimistic exactly where the editor shows short routes.
+//! Insertion reads the endpoint's cost to *every* transition node of its own
+//! cluster from the cluster's transition fields, one entry a slot
+//! ([`Clusters::field`]; S3's `walk3`), and sweeps the cluster from the
+//! endpoint only where the cluster keeps none. When both endpoints share a
+//! cluster it finds the direct cost between them as well, by one search
+//! inside the cluster — which matters, because without that edge a short
+//! query inside one cluster would be forced out through an entrance and back,
+//! and the estimate would be wildly pessimistic exactly where the editor shows
+//! short routes.
 //!
 //! # One abstract level
 //!
@@ -27,8 +29,10 @@
 //! level would be a second [`Clusters`] over a coarser grid and a two-stage
 //! search, with nothing here changing shape — and item 58 bounded what it could
 //! save at 9 %, because the endpoint sweeps it cannot touch were 91 % of a
-//! median query in the spike, and are nearly all of it on the sim's own map. `tests/pathing.rs` reports that split so S3 inherits the
-//! number rather than the opinion.
+//! median query in the spike, and were nearly all of it on the sim's own map
+//! until S3's `walk3` replaced them with the lookup above.
+//! `tests/pathing_bench.rs` reports the split, so a sweep that returns is read
+//! as a number rather than an opinion.
 //!
 //! # Smoothing can only remove cost
 //!
@@ -45,7 +49,7 @@
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
 use crate::pathing::estimate::{Fog, Speed, fog_price};
-use crate::pathing::search::{Bound, Item, Scratch, astar_costed, dijkstra_bounded};
+use crate::pathing::search::{Bound, Item, Scratch, Tally, astar_costed, dijkstra_bounded};
 use crate::pathing::surface::{Node, Surface};
 
 /// One stretch of ground a route pays a surcharge to cross (S2's `atk`): a
@@ -262,6 +266,7 @@ fn abstract_search_with(
     let mut found = false;
     while let Some(item) = scratch.abstract_heap.pop() {
         if abstract_is_closed(scratch, item.n) {
+            scratch.visits.bump();
             continue;
         }
         abstract_close(scratch, item.n);
@@ -335,6 +340,7 @@ fn expand(
                 break;
             };
             index = index.saturating_add(1);
+            scratch.visits.bump();
             let edge = Edge {
                 from: node,
                 target,
@@ -358,6 +364,7 @@ fn expand(
             break;
         };
         index = index.saturating_add(1);
+        scratch.visits.bump();
         let Ok(target) = u32::try_from(
             cluster
                 .saturating_mul(stride)
@@ -384,6 +391,7 @@ fn expand(
             break;
         };
         index = index.saturating_add(1);
+        scratch.visits.bump();
         let edge = Edge {
             from: node,
             target,
@@ -482,6 +490,9 @@ fn reconstruct(
         current = abstract_came(scratch, current);
         guard = guard.saturating_add(1);
     }
+    // One a node the walk back read, and one a node the fog scan below reads.
+    scratch.visits.add(path.len());
+    scratch.visits.add(path.len());
     path.reverse();
     // E7: cannot miss: an abstract path holds at most the graph's nodes, a `u32` count
     let legs = u32::try_from(path.len().saturating_sub(1)).unwrap_or(0);
@@ -650,6 +661,7 @@ pub(crate) fn route_and_abstract(
         ));
     }
     for pair in path.windows(2) {
+        scratch.visits.bump();
         let (Some(from), Some(to)) = (pair.first().copied(), pair.get(1).copied()) else {
             ok = false;
             break;
@@ -673,6 +685,7 @@ pub(crate) fn route_and_abstract(
                 break;
             }
             for node in leg.iter().skip(1) {
+                scratch.visits.bump();
                 if raw.len() >= limit {
                     partial = true;
                     break;
@@ -710,12 +723,13 @@ pub(crate) fn route_and_abstract(
         out,
         (&mut line, &mut prefix),
         surcharge,
-        clusters.shape().smooth_lookahead,
+        (clusters.shape().smooth_lookahead, &mut scratch.visits),
     );
     scratch.raw = raw;
     scratch.line = line;
     scratch.prefix = prefix;
-    let cost = crate::pathing::search::route_cost(surface, out).ok_or(NoPath::Unpriced)?;
+    let cost = crate::pathing::search::route_cost(surface, out, &mut scratch.visits)
+        .ok_or(NoPath::Unpriced)?;
     // A route that prices has a column: an empty smoothed walk is no walk.
     let end = out.last().copied().ok_or(NoPath::Unpriced)?;
     Ok((
@@ -762,6 +776,8 @@ fn insert_endpoint(
             true,
         );
         let cells = clusters.trans_cells(cluster);
+        // One a slot read, as below.
+        scratch.visits.add(cells.len());
         let mut slot = 0;
         while slot < cells.len() {
             if let Some(target_cell) = cells.get(slot).copied()
@@ -775,6 +791,9 @@ fn insert_endpoint(
         }
         return if shared { scratch.cost_of(other) } else { None };
     };
+    // One a slot read: the whole of an insertion's counted work where the
+    // endpoints share no cluster, since a lookup pops nothing.
+    scratch.visits.add(slots);
     let mut slot = 0;
     while slot < slots {
         if let Some(cost) = field.cost(slot)
@@ -836,6 +855,8 @@ fn abstract_begin(scratch: &mut Scratch) {
     if scratch.abstract_epoch == u32::MAX {
         scratch.abstract_stamp.fill(0);
         scratch.abstract_closed.fill(0);
+        scratch.visits.add(scratch.abstract_stamp.len());
+        scratch.visits.add(scratch.abstract_closed.len());
         scratch.abstract_epoch = 0;
     }
     scratch.abstract_epoch = scratch.abstract_epoch.saturating_add(1);
@@ -923,13 +944,13 @@ fn abstract_relax(
 
 /// The greedy octile walk from `from` to `to`: diagonal while both axes need
 /// covering, then straight. Validated step by step, so it can only ever return
-/// a legal walk.
+/// a legal walk. Each column it stands on is counted in `visits`.
 fn straight_walk(
     surface: &Surface,
-    from: Node,
-    to: Node,
+    (from, to): (Node, Node),
     out: &mut Vec<Node>,
     surcharge: Surcharge<'_>,
+    visits: &mut Tally,
 ) -> Option<i32> {
     out.clear();
     out.push(from);
@@ -938,6 +959,7 @@ fn straight_walk(
     let mut total: i32 = 0;
     let mut guard: u32 = 0;
     loop {
+        visits.bump();
         let (x, y) = surface.coord_of(current);
         if x == tx && y == ty {
             return Some(total);
@@ -964,33 +986,18 @@ fn straight_walk(
 /// smoothed — `out` is left empty — because the alternative is pricing an
 /// illegal step and summing it into the prefix array, which with overflow
 /// checks on in every profile is a panic inside a tick.
-pub fn smooth_into(
-    surface: &Surface,
-    path: &[Node],
-    out: &mut Vec<Node>,
-    (line, prefix): (&mut Vec<Node>, &mut Vec<i32>),
-    lookahead: usize,
-) {
-    smooth_costed(
-        surface,
-        path,
-        out,
-        (line, prefix),
-        Surcharge::NONE,
-        lookahead,
-    );
-}
-
-/// [`smooth_into`] under a route surcharge: a shortcut is priced, and the
-/// sub-path it replaces, at the surcharge, so smoothing never cuts back into
-/// a zone the refinement went round.
+///
+/// Under a route surcharge a shortcut is priced, and the sub-path it
+/// replaces, at the surcharge, so smoothing never cuts back into a zone the
+/// refinement went round. Every visit of its loops is counted in `visits`
+/// ([`Scratch::visits`]).
 fn smooth_costed(
     surface: &Surface,
     path: &[Node],
     out: &mut Vec<Node>,
     (line, prefix): (&mut Vec<Node>, &mut Vec<i32>),
     surcharge: Surcharge<'_>,
-    lookahead: usize,
+    (lookahead, visits): (usize, &mut Tally),
 ) {
     out.clear();
     let Some(first) = path.first().copied() else {
@@ -1000,6 +1007,7 @@ fn smooth_costed(
     prefix.push(0);
     let mut total: i32 = 0;
     for pair in path.windows(2) {
+        visits.bump();
         let (Some(from), Some(to)) = (pair.first().copied(), pair.get(1).copied()) else {
             out.clear();
             return;
@@ -1014,12 +1022,14 @@ fn smooth_costed(
     out.push(first);
     let mut index = 0_usize;
     while index.saturating_add(1) < path.len() {
+        visits.bump();
         let limit = index
             .saturating_add(lookahead)
             .min(path.len().saturating_sub(1));
         let mut chosen = index.saturating_add(1);
         let mut ahead = limit;
         while ahead > index.saturating_add(1) {
+            visits.bump();
             let (Some(from), Some(to)) = (path.get(index).copied(), path.get(ahead).copied())
             else {
                 break;
@@ -1031,10 +1041,11 @@ fn smooth_costed(
                 .unwrap_or(0)
                 // E7: cannot miss: as above
                 .saturating_sub(prefix.get(index).copied().unwrap_or(0));
-            if let Some(cost) = straight_walk(surface, from, to, line, surcharge)
+            if let Some(cost) = straight_walk(surface, (from, to), line, surcharge, visits)
                 && cost <= budget
             {
                 for node in line.iter().skip(1) {
+                    visits.bump();
                     out.push(*node);
                 }
                 chosen = ahead;

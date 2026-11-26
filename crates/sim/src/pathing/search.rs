@@ -197,6 +197,8 @@ pub struct Scratch {
     pub(crate) expansions: Tally,
     pub(crate) endpoint_expansions: Tally,
     pub(crate) abstract_expansions: Tally,
+    /// The visits of a query's loops that pop nothing ([`Scratch::visits`]).
+    pub(crate) visits: Tally,
     pub(crate) served_estimates: Tally,
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
@@ -336,6 +338,7 @@ impl Scratch {
             expansions: Tally::ZERO,
             endpoint_expansions: Tally::ZERO,
             abstract_expansions: Tally::ZERO,
+            visits: Tally::ZERO,
             served_estimates: Tally::ZERO,
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
@@ -434,6 +437,29 @@ impl Scratch {
     /// [`TallyOverflow`] once the count passed `u64::MAX`.
     pub const fn abstract_expansions(&self) -> Result<u64, TallyOverflow> {
         self.abstract_expansions.read()
+    }
+
+    /// Visits, since the last reset, of the loops a query runs that pop
+    /// nothing (S3's `walk3`), each counted where it happens: a stale heap
+    /// entry a search skips, a neighbour slot a pop tries, a column a walk
+    /// back reads, a slot an endpoint's insertion reads, an abstract edge
+    /// relaxed, an abstract node a reconstruction reads and one its fog scan
+    /// reads, a leg refined and a column of it copied, a step the smoother
+    /// prices, a stretch it starts from, a shortcut it tries with every step
+    /// of the straight walk it tries it by, a step the served route is priced
+    /// at, and a cell an epoch's wrap rewrites.
+    ///
+    /// With the pops this is every loop of a served walk's search, so the
+    /// counted work of a walk no longer rests on its pops bounding the rest:
+    /// an endpoint inserted by lookup pops nothing and is counted by the
+    /// slots it reads. A heap's own sift is not counted, as a sort's
+    /// compares are not ([`crate::seams::UnitTally`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn visits(&self) -> Result<u64, TallyOverflow> {
+        self.visits.read()
     }
 
     /// Estimates priced at the served walk since the last reset (every clear
@@ -599,6 +625,7 @@ impl Scratch {
         self.expansions = Tally::ZERO;
         self.endpoint_expansions = Tally::ZERO;
         self.abstract_expansions = Tally::ZERO;
+        self.visits = Tally::ZERO;
         self.served_estimates = Tally::ZERO;
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
@@ -627,6 +654,8 @@ impl Scratch {
         if self.epoch == u32::MAX {
             self.stamp.fill(0);
             self.closed.fill(0);
+            self.visits.add(self.stamp.len());
+            self.visits.add(self.closed.len());
             self.epoch = 0;
         }
         self.epoch = self.epoch.saturating_add(1);
@@ -793,6 +822,7 @@ fn astar_inner(
 
     while let Some(item) = scratch.heap.pop() {
         if scratch.is_closed(item.n) {
+            scratch.visits.bump();
             continue;
         }
         scratch.close(item.n);
@@ -800,9 +830,13 @@ fn astar_inner(
         if item.n == goal {
             let cost = scratch.cost_at(goal);
             scratch.reconstruct(start, goal, out);
+            // One a column the walk back read.
+            scratch.visits.add(out.len());
             return Some(cost);
         }
         let here = scratch.cost_at(item.n);
+        // One a neighbour slot tried: the loop below never leaves early.
+        scratch.visits.add(order.len());
         for k in order {
             let Some((next, step)) = surface.neighbour(item.n, usize::from(k)) else {
                 continue;
@@ -866,6 +900,7 @@ pub fn dijkstra_bounded(
     });
     while let Some(item) = scratch.heap.pop() {
         if scratch.is_closed(item.n) {
+            scratch.visits.bump();
             continue;
         }
         scratch.close(item.n);
@@ -874,6 +909,8 @@ pub fn dijkstra_bounded(
             scratch.endpoint_expansions.bump();
         }
         let here = scratch.cost_at(item.n);
+        // One a neighbour slot tried: the loop below never leaves early.
+        scratch.visits.add(DEFAULT_ORDER.len());
         for k in DEFAULT_ORDER {
             let Some((next, step)) = surface.neighbour(item.n, usize::from(k)) else {
                 continue;
@@ -898,11 +935,13 @@ pub fn dijkstra_bounded(
 }
 
 /// The total cost of walking `route`, or `None` when a step on it is illegal —
-/// which is what a stale route looks like after the terrain moved.
+/// which is what a stale route looks like after the terrain moved. Each step
+/// priced is counted in `visits` ([`Scratch::visits`]).
 #[must_use]
-pub fn route_cost(surface: &Surface, route: &[Node]) -> Option<i32> {
+pub fn route_cost(surface: &Surface, route: &[Node], visits: &mut Tally) -> Option<i32> {
     let mut total: i32 = 0;
     for pair in route.windows(2) {
+        visits.bump();
         let from = pair.first().copied()?;
         let to = pair.get(1).copied()?;
         total = total.checked_add(surface.step_cost_between(from, to)?)?;

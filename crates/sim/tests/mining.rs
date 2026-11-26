@@ -607,8 +607,11 @@ fn a_seam_choice_counts_its_ranking_and_a_kept_seam_its_dig_search() {
     // shows here. Before dunit part 2 these read 2,077 (the ranking alone)
     // and 0 (keeping charged nothing); before S3's `walk3` the choice read
     // 3,447, of which 2,048 were its one walk's two endpoint sweeps, each
-    // the whole of a cluster, which a lookup now stands for.
-    assert_eq!((first, kept), (1_399, 1_334));
+    // the whole of a cluster, which a lookup now stands for (1,399 without
+    // them), and its second commit counts the 193 visits of that walk's
+    // loops that pop nothing. Keeping a seam walks nowhere, so it is as it
+    // was.
+    assert_eq!((first, kept), (1_592, 1_334));
 }
 
 /// The nodes the walk from seat 0's core to its starting seam pops, priced
@@ -642,7 +645,8 @@ fn starting_walk_pops(fixture: &World) -> u64 {
     let pops =
         scratch.expansions().expect("a count") + scratch.abstract_expansions().expect("a count");
     assert!(pops > 0, "a served walk pops nodes");
-    pops
+    // And every visit of the walk's loops that pops nothing (S3's `walk3`).
+    pops + scratch.visits().expect("a count")
 }
 
 /// The sensor positions a walk asking whether `seat` sees `point` reads: each

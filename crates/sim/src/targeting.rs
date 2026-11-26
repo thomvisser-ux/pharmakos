@@ -209,15 +209,19 @@ pub struct Ground<'a> {
     pub work: &'a dyn crate::seams::Meter,
 }
 
-/// The nodes `scratch`'s searches have popped since its counters were last
-/// reset: the grid and endpoint pops (`expansions`, of which the endpoint
-/// sweeps' are a part, so they are not added again) and the abstract pops.
+/// The counted work `scratch`'s searches have done since its counters were
+/// last reset: the nodes they popped -- the grid and endpoint pops
+/// (`expansions`, of which the endpoint sweeps' are a part, so they are not
+/// added again) and the abstract pops -- and every visit of their loops, and
+/// of the route assembly's, that pops nothing ([`Scratch::visits`]; S3's
+/// `walk3`).
 pub(crate) fn popped(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
     let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
     scratch
         .expansions()
         .map_err(unreadable)?
         .checked_add(scratch.abstract_expansions().map_err(unreadable)?)
+        .and_then(|pops| pops.checked_add(scratch.visits().ok()?))
         .ok_or(crate::seams::Unmeasured::SourceUnreadable)
 }
 
@@ -237,21 +241,25 @@ fn heuristic_folds(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
         .ok_or(crate::seams::Unmeasured::Overflowed)
 }
 
-/// What the bucket queue of the last grid optimum in `scratch` visited, by
-/// its own counters (dunit part 2): a bucket its ring walk turned to, empty
-/// or not ([`crate::pathing::reach::Reach::turns`]), a column moved from a
-/// bucket into its batch ([`crate::pathing::reach::Reach::unlinked`]), and a
-/// cell its start's reset wrote ([`crate::pathing::reach::Reach::filled`]).
-/// Each counts from the search's own start.
+/// What the last grid optimum in `scratch` visited beside its pops, by its
+/// own counters (dunit part 2): a bucket its ring walk turned to, empty or
+/// not ([`crate::pathing::reach::Reach::turns`]), a column moved from a
+/// bucket into its batch ([`crate::pathing::reach::Reach::unlinked`]), a
+/// cell its start's reset wrote ([`crate::pathing::reach::Reach::filled`]),
+/// and, from S3's `walk3`, a neighbour slot a settled column tried
+/// ([`crate::pathing::reach::Reach::tried`]). Each counts from the search's
+/// own start.
 fn queue_visits(scratch: &Scratch) -> Result<u64, crate::seams::Unmeasured> {
     let reach = scratch.reach();
     let unreadable = |_| crate::seams::Unmeasured::SourceUnreadable;
     let turns = reach.turns().map_err(unreadable)?;
     let unlinked = reach.unlinked().map_err(unreadable)?;
     let filled = reach.filled().map_err(unreadable)?;
+    let tried = reach.tried().map_err(unreadable)?;
     turns
         .checked_add(unlinked)
         .and_then(|sum| sum.checked_add(filled))
+        .and_then(|sum| sum.checked_add(tried))
         .ok_or(crate::seams::Unmeasured::Overflowed)
 }
 

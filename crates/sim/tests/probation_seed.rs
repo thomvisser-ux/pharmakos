@@ -527,7 +527,7 @@ fn toward_costs() {
         let units = tally.read().expect("the decision units are measured");
         match found {
             Ok(stone) => println!(
-                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {units} decision units, {} nodes popped; the queue: {} bucket turns over {} moves ({} to empty buckets), {} columns moved, {} cells reset",
+                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {units} decision units, {} nodes popped; the queue: {} bucket turns over {} moves ({} to empty buckets), {} columns moved, {} cells reset, {} neighbour slots tried",
                 stone.site,
                 stone.weighed,
                 scratch.expansions().expect("the count fits a u64"),
@@ -537,6 +537,7 @@ fn toward_costs() {
                     - scratch.reach().advances().expect("a count"),
                 scratch.reach().unlinked().expect("a count"),
                 scratch.reach().filled().expect("a count"),
+                scratch.reach().tried().expect("a count"),
             ),
             Err(failed) => println!("{label}: no site, {failed:?}, {units} decision units"),
         }

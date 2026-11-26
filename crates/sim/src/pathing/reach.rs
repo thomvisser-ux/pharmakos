@@ -206,6 +206,9 @@ pub struct Reach {
     turns: Tally,
     unlinked: Tally,
     filled: Tally,
+    /// The neighbour slots this search tried, eight a column it settled
+    /// ([`Reach::tried`]; S3's `walk3`). Counted work, never hashed.
+    tried: Tally,
     /// How many times the queue moved to its next bucket, a measurement
     /// beside the turns: each move turns once to the bucket it starts on.
     advances: Tally,
@@ -260,6 +263,7 @@ impl Reach {
             turns: Tally::ZERO,
             unlinked: Tally::ZERO,
             filled: Tally::ZERO,
+            tried: Tally::ZERO,
             advances: Tally::ZERO,
             directed: false,
         })
@@ -374,6 +378,17 @@ impl Reach {
         self.filled.read()
     }
 
+    /// The neighbour slots the last search tried: one a visit of the loop a
+    /// settled column runs over its neighbours, on the map or off it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::pathing::search::TallyOverflow`] once the count passed
+    /// `u64::MAX`.
+    pub const fn tried(&self) -> Result<u64, crate::pathing::search::TallyOverflow> {
+        self.tried.read()
+    }
+
     /// How many times the last search moved to its next bucket.
     ///
     /// # Errors
@@ -420,6 +435,7 @@ impl Reach {
         self.turns = Tally::ZERO;
         self.unlinked = Tally::ZERO;
         self.filled = Tally::ZERO;
+        self.tried = Tally::ZERO;
         self.advances = Tally::ZERO;
         if self.epoch == u32::MAX {
             self.stamp.fill(0);
@@ -548,6 +564,7 @@ impl Reach {
         let here = self.cost.get(index).copied().ok_or(off)?;
         popped.bump();
         for k in 0..NEIGHBOURS.len() {
+            self.tried.bump();
             let Some((other, step)) = surface.neighbour(node, k) else {
                 continue;
             };
