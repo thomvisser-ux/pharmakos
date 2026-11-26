@@ -1845,12 +1845,14 @@ fn a_covering_decision_counts_its_resolve_binding_and_seam_choice() {
     // popped, and this read 423 (412 for the resolve and 11 for the seam
     // choice); after its part 1, 4,716 (the predicates each column and
     // candidate asks, the binding and the seam's dig searches charged
-    // nothing).
+    // nothing); after its part 2, 10,927, of which 4,096 were the endpoint
+    // sweeps of its two walks, which S3's `walk3` reads from the clusters'
+    // transition fields instead.
     println!(
         "covering: {covering} = {resolve} for the resolve + {start} for the start + {bind} for the binding + {look} for the look + {seam} for the seam choice"
     );
     assert_eq!(
-        covering, 10_927,
+        covering, 6_831,
         "a covering resolution ranks every feature, walks and searches a spiral: {covering}"
     );
 }

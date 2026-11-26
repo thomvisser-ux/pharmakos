@@ -46,7 +46,7 @@ use pharmakos_sim::knowledge::{AssetId, Position};
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::TICK_HZ;
 use pharmakos_sim::pathing::MAX_ROUTE_NODES;
-use pharmakos_sim::pathing::clusters::Clusters;
+use pharmakos_sim::pathing::clusters::{Clusters, FIELDS_PER_CLUSTER};
 use pharmakos_sim::pathing::estimate::{Fog, Speed, ticks_for_cost};
 use pharmakos_sim::pathing::repair::{Repairer, conservative_affected, repair};
 use pharmakos_sim::pathing::route::{abstract_search, route};
@@ -280,6 +280,12 @@ impl Rng {
     }
 }
 
+/// Everything a repair must leave as a fresh build makes it: the abstract
+/// graph and the transition fields (S3's `walk3`).
+fn whole(clusters: &Clusters) -> (u64, u64) {
+    (clusters.fingerprint(), clusters.field_fingerprint())
+}
+
 /// `count` connected pairs of walkable columns, deterministic in `seed`.
 fn pairs(fixture: &Fixture, count: u32, seed: u64) -> Vec<(Node, Node)> {
     pairs_on(&fixture.surface, &fixture.clusters, count, seed)
@@ -510,8 +516,8 @@ fn repair_equals_a_from_scratch_build() {
         fixture.repair();
         let fresh = fixture.rebuilt();
         assert_eq!(
-            fixture.clusters.fingerprint(),
-            fresh.fingerprint(),
+            whole(&fixture.clusters),
+            whole(&fresh),
             "after crater {n} at ({x}, {y}) the repaired graph is not the graph a from-scratch \
              build produces"
         );
@@ -572,8 +578,8 @@ fn repair_matches_the_conservative_set() {
         wide.clusters.rebuild_components();
 
         assert_eq!(
-            precise.clusters.fingerprint(),
-            wide.clusters.fingerprint(),
+            whole(&precise.clusters),
+            whole(&wide.clusters),
             "the precise repair and the conservative superset disagree after crater {n}"
         );
         n += 1;
@@ -644,8 +650,8 @@ fn a_border_holds_every_run_it_finds() {
     // crater's.
     let fresh = fixture.rebuilt();
     assert_eq!(
-        fixture.clusters.fingerprint(),
-        fresh.fingerprint(),
+        whole(&fixture.clusters),
+        whole(&fresh),
         "the repaired graph disagrees with a from-scratch build over a combed border"
     );
 }
@@ -662,8 +668,8 @@ fn repair_holds_at_every_cluster_size() {
             fixture.repair();
             let fresh = fixture.rebuilt();
             assert_eq!(
-                fixture.clusters.fingerprint(),
-                fresh.fingerprint(),
+                whole(&fixture.clusters),
+                whole(&fresh),
                 "cluster size {cluster}: repair and from-scratch disagree after crater {n}"
             );
             n += 1;
@@ -1099,6 +1105,288 @@ fn an_intra_edge_is_the_cost_of_the_path_it_stands_for() {
         cluster += 7;
     }
     assert!(checked > 20, "only {checked} intra edges were checked");
+}
+
+/// Hold the transition fields to the sweeps they stand for, over one column
+/// in `stride` of the whole map: a sweep bounded to the column's cluster,
+/// from the column, and every slot's entry read at the column against the
+/// sweep's cost to that slot's transition cell. Answers how many entries it
+/// compared.
+fn fields_are_sweeps(fixture: &mut Fixture, stride: u32, label: &str) -> usize {
+    let mut compared = 0;
+    let mut node: Node = 0;
+    while node < fixture.surface.node_count() {
+        let tag = fixture.clusters.cluster_of(node);
+        let cells: Vec<Node> = fixture.clusters.trans_cells(usize::from(tag)).to_vec();
+        let field = fixture.clusters.field(&fixture.surface, node);
+        assert_eq!(
+            field.is_some(),
+            cells.len() <= FIELDS_PER_CLUSTER,
+            "{label}: cluster {tag} holds {} transition cells",
+            cells.len()
+        );
+        if let Some(field) = field {
+            dijkstra_bounded(
+                &fixture.surface,
+                Bound::Cluster(fixture.clusters.of_node(), tag),
+                &mut fixture.scratch,
+                node,
+                false,
+            );
+            for (slot, cell) in cells.iter().enumerate() {
+                // A column nobody can stand on is swept from nowhere, and the
+                // scratch still holds the sweep before it.
+                let swept = fixture
+                    .surface
+                    .walkable(node)
+                    .then(|| fixture.scratch.cost_of(*cell))
+                    .flatten();
+                assert_eq!(
+                    field.cost(slot),
+                    swept,
+                    "{label}: the field of cluster {tag}'s slot {slot} (column {cell}) read at \
+                     column {node} is not the sweep's cost"
+                );
+                compared += 1;
+            }
+            assert_eq!(
+                field.cost(cells.len()),
+                None,
+                "{label}: cluster {tag} keeps a field past its {} slots",
+                cells.len()
+            );
+        }
+        node += stride;
+    }
+    compared
+}
+
+/// S3's `walk3`: a transition field is the bounded sweep from the column it
+/// is read at, entry for entry, on fresh ground and on ground craters have
+/// cut -- so an endpoint inserted by lookup gets the edges a sweep gave it.
+/// The walk between two columns costs the same from either end, which is
+/// what lets a sweep from the transition cell stand for one from the column;
+/// this is the test of that, not the argument for it.
+#[test]
+fn a_transition_field_is_the_sweep_from_the_column_it_is_read_at() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    assert_eq!(
+        fixture.clusters.fielded_count(),
+        fixture.clusters.cluster_count(),
+        "a fresh map's clusters all keep their fields"
+    );
+    let fresh = fields_are_sweeps(&mut fixture, 37, "fresh ground");
+    let mut n: u32 = 0;
+    while n < 24 {
+        let x = i32::try_from((n.wrapping_mul(61) + 30) % 340).expect("fits") + 20;
+        let y = i32::try_from((n.wrapping_mul(37) + 50) % 340).expect("fits") + 20;
+        fixture.crater(x, y, 3 + i32::try_from(n % 3).expect("fits"));
+        n += 1;
+    }
+    fixture.repair();
+    let cratered = fields_are_sweeps(&mut fixture, 37, "after 24 craters");
+    assert!(
+        fresh > 10_000 && cratered > 10_000,
+        "only {fresh} and {cratered} entries were compared"
+    );
+}
+
+/// Raise the comb of `a_border_holds_every_run_it_finds` on the border
+/// between clusters (2, 2) and (3, 2): 32 one-cell runs, so both clusters
+/// hold more transition cells than they keep fields for.
+fn comb(fixture: &mut Fixture) {
+    let xa = 3 * CLUSTER - 1;
+    let xb = xa + 1;
+    let y0 = 2 * CLUSTER;
+    let mut base = 0;
+    for y in y0..y0 + CLUSTER {
+        base = base
+            .max(fixture.store.top_solid_z(xa, y).unwrap_or(0))
+            .max(fixture.store.top_solid_z(xb, y).unwrap_or(0));
+    }
+    base += 3;
+    for y in y0..y0 + CLUSTER {
+        let target = base + if y % 2 == 0 { 0 } else { 2 };
+        for x in [xa, xb] {
+            let mut z = fixture.store.top_solid_z(x, y).unwrap_or(-1) + 1;
+            while z <= target {
+                fixture.store.set([x, y, z], Material::STONE);
+                z += 1;
+            }
+        }
+    }
+    fixture.settle_and_mark();
+    fixture.repair();
+}
+
+/// `count` connected pairs with at least one end in the cluster `(cx, cy)`,
+/// every third pair with both ends in it.
+fn pairs_about(
+    fixture: &Fixture,
+    (cx, cy): (i32, i32),
+    count: u32,
+    seed: u64,
+) -> Vec<(Node, Node)> {
+    let mut rng = Rng::new(seed);
+    let extent = fixture.surface.size();
+    let mut out: Vec<(Node, Node)> = Vec::new();
+    let mut attempts = 0;
+    while u32::try_from(out.len()).expect("fits") < count && attempts < count * 400 {
+        attempts += 1;
+        let inside = |rng: &mut Rng| {
+            fixture.surface.node_of(
+                cx * CLUSTER + rng.below(CLUSTER),
+                cy * CLUSTER + rng.below(CLUSTER),
+            )
+        };
+        let a = inside(&mut rng);
+        let b = if out.len().is_multiple_of(3) {
+            inside(&mut rng)
+        } else {
+            fixture
+                .surface
+                .node_of(rng.below(extent[0]), rng.below(extent[1]))
+        };
+        let (Some(a), Some(b)) = (a, b) else {
+            continue;
+        };
+        if a == b || !fixture.clusters.connected(&fixture.surface, a, b) {
+            continue;
+        }
+        // Either way round: an endpoint is inserted as a start and as a goal.
+        out.push(if out.len().is_multiple_of(2) {
+            (a, b)
+        } else {
+            (b, a)
+        });
+    }
+    assert_eq!(
+        u32::try_from(out.len()).expect("fits"),
+        count,
+        "the map did not yield {count} connected pairs about cluster ({cx}, {cy})"
+    );
+    out
+}
+
+/// Hold every answer of the decomposition `fixture` holds to the answers of
+/// one over the same ground that keeps **no** field, so that every endpoint
+/// is swept as all were before S3's `walk3`: the abstract search's cost, legs
+/// and fog, and the served route node for node with its cost.
+fn the_fields_change_nothing(fixture: &mut Fixture, set: &[(Node, Node)], label: &str) {
+    let shape = fixture.clusters.shape().with_fields(0);
+    let mut swept_scratch = Scratch::for_map(&fixture.surface, shape.size).expect("a scratch");
+    let swept =
+        Clusters::new(&fixture.surface, shape, &mut swept_scratch).expect("a decomposition");
+    assert_eq!(
+        swept.fielded_count(),
+        0,
+        "{label}: a shape of no fields kept some"
+    );
+    assert_eq!(
+        swept.fingerprint(),
+        fixture.clusters.fingerprint(),
+        "{label}: the two decompositions are not one abstract graph"
+    );
+    let speed = fixture.commander_speed();
+    let mut with: Vec<Node> = Vec::new();
+    let mut without: Vec<Node> = Vec::new();
+    for (start, goal) in set {
+        let looked = abstract_search(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            *start,
+            *goal,
+            Fog::Clear,
+            speed,
+        );
+        let swept_search = abstract_search(
+            &fixture.surface,
+            &swept,
+            &mut swept_scratch,
+            *start,
+            *goal,
+            Fog::Clear,
+            speed,
+        );
+        assert_eq!(
+            looked, swept_search,
+            "{label}: the abstract search from {start} to {goal} answers otherwise by lookup"
+        );
+        let served = route(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            *start,
+            *goal,
+            &mut with,
+        );
+        let swept_route = route(
+            &fixture.surface,
+            &swept,
+            &mut swept_scratch,
+            *start,
+            *goal,
+            &mut without,
+        );
+        assert_eq!(
+            served, swept_route,
+            "{label}: the route from {start} to {goal} is priced otherwise by lookup"
+        );
+        assert_eq!(
+            with, without,
+            "{label}: the route from {start} to {goal} is another walk by lookup"
+        );
+    }
+}
+
+/// S3's `walk3`: inserting an endpoint by lookup moves no answer. On fresh
+/// ground, after craters, and with a combed border whose two clusters hold
+/// more transition cells than fields (so their endpoints are swept while
+/// every other cluster's are looked up), every abstract answer and every
+/// served route is the one a decomposition with no fields at all gives.
+#[test]
+fn an_endpoint_inserted_by_lookup_gets_the_route_a_sweep_gives() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let mut set = pairs(&fixture, 96, 0x5EED_00F1);
+    set.extend(pairs_about(&fixture, (5, 5), 48, 0x5EED_00F2));
+    the_fields_change_nothing(&mut fixture, &set, "fresh ground");
+
+    let mut n: u32 = 0;
+    while n < 24 {
+        let x = i32::try_from((n.wrapping_mul(61) + 30) % 340).expect("fits") + 20;
+        let y = i32::try_from((n.wrapping_mul(37) + 50) % 340).expect("fits") + 20;
+        fixture.crater(x, y, 3 + i32::try_from(n % 3).expect("fits"));
+        n += 1;
+    }
+    fixture.repair();
+    let mut set = pairs(&fixture, 96, 0x5EED_00F3);
+    set.extend(pairs_about(&fixture, (1, 1), 48, 0x5EED_00F4));
+    the_fields_change_nothing(&mut fixture, &set, "after 24 craters");
+
+    comb(&mut fixture);
+    for cluster in [(2, 2), (3, 2)] {
+        let index = fixture
+            .clusters
+            .cluster_index(cluster.0, cluster.1)
+            .expect("a cluster of the map");
+        let held = fixture.clusters.trans_cells(index).len();
+        assert!(
+            held > FIELDS_PER_CLUSTER,
+            "the comb left cluster {cluster:?} only {held} transition cells"
+        );
+    }
+    assert_eq!(
+        fixture.clusters.fielded_count(),
+        fixture.clusters.cluster_count() - 2,
+        "exactly the comb's two clusters keep no field"
+    );
+    let mut set = pairs(&fixture, 48, 0x5EED_00F5);
+    set.extend(pairs_about(&fixture, (2, 2), 48, 0x5EED_00F6));
+    set.extend(pairs_about(&fixture, (3, 2), 48, 0x5EED_00F7));
+    the_fields_change_nothing(&mut fixture, &set, "a combed border");
+    let compared = fields_are_sweeps(&mut fixture, 37, "a combed border");
+    assert!(compared > 10_000, "only {compared} entries were compared");
 }
 
 #[test]
@@ -3695,8 +3983,8 @@ fn the_tick_after_a_crater_reads_the_repaired_graph() {
         "the nearest read in the window is not the settled one"
     );
     assert_eq!(
-        world.clusters().fingerprint(),
-        fresh.fingerprint(),
+        whole(world.clusters()),
+        whole(&fresh),
         "the graph after the editing tick is not the graph the terrain makes"
     );
 }

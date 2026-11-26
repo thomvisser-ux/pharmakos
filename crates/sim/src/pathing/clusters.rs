@@ -92,6 +92,45 @@
 //! a route that exists and cannot be found, and an oracle that says connected
 //! where the search says no. `a_border_holds_every_run_it_finds` builds the
 //! comb and checks that all 32 survive.
+//!
+//! # Transition fields: an endpoint is inserted by lookup
+//!
+//! A query's two endpoints each need the cost to every transition cell of
+//! their own cluster. A bounded sweep from the endpoint gives them, and on the
+//! sim's own map the two sweeps were 2 048 of a served walk's 2 628 grid pops
+//! (S3's `walk3`, measured over 130 walks on the golden seed: each sweep
+//! exhausts its 32 by 32 cluster).
+//!
+//! The same numbers already pass through here. [`Clusters::rebuild_intra`]
+//! sweeps the cluster from each transition cell to price its intra edges, and
+//! **a step costs the same in both directions** ([`Surface::step_over`]: the
+//! step rule reads both ends and a diagonal's two sides against both, and a
+//! climb is charged for any change of height, up or down), so the cost from a
+//! transition cell to a column is the cost from that column to it. The sweep's
+//! whole result is therefore kept, as the cluster's **transition fields**: for
+//! each transition slot, the cost to every column of the cluster. Inserting an
+//! endpoint reads one entry per slot ([`Clusters::field`]), and a cluster's
+//! fields are rebuilt exactly when its intra edges are, by the same sweep, so
+//! a repair leaves them what a fresh build makes.
+//!
+//! The answers are the sweep's, to the unit: the fields are a stored copy of
+//! a Dijkstra's costs, and `tests/pathing.rs` holds every entry of every
+//! field to a sweep from its column, on fresh ground and after craters. No
+//! route, estimate or chain moves.
+//!
+//! Two bounds, each with the sweep as its fallback rather than a wrong answer
+//! ([`Clusters::field`] answers `None`, and the caller sweeps as it always
+//! did):
+//!
+//! * a cluster keeps at most [`FIELDS_PER_CLUSTER`] fields. The bound on a
+//!   cluster's transitions is `4 * edge` (above), and a field for each at
+//!   cluster 32 would be 38 MB of derived state. A fresh map's clusters hold
+//!   three or four transitions each (all 2 880 clusters of the twenty nightly
+//!   seeds); walls and craters cut runs and add some. A cluster past the
+//!   bound keeps none and is swept.
+//! * an entry is a `u16`. A cost that does not fit (no cluster of the loaded
+//!   rules' step costs has one: the dearest walk inside a cluster of 32 is
+//!   under 1 024 steps of at most 18) leaves its cluster with no fields.
 
 use crate::pathing::search::{Bound, Scratch, dijkstra_bounded};
 use crate::pathing::surface::{DEFAULT_ORDER, Node, Surface};
@@ -99,6 +138,18 @@ use crate::reserved::Reserved;
 
 /// `local_comp` of a column that cannot be stood on.
 pub const NO_COMP: u16 = u16::MAX;
+
+/// How many transition fields a cluster keeps (the module docs' "Transition
+/// fields"; [`ClusterShape::fields`]): a cluster with more transition cells
+/// than this keeps none, and its endpoints are inserted by the sweep.
+///
+/// A bound on memory, not on the game: nothing a seat can do changes an
+/// answer through it, only how the answer is found. At cluster 32 on the
+/// shipped map it is 4.7 MB (144 clusters, 16 fields, 1 024 `u16` entries).
+pub const FIELDS_PER_CLUSTER: usize = 16;
+
+/// A field entry for a column its transition cell does not reach.
+const NO_FIELD_COST: u16 = u16::MAX;
 
 /// The largest cluster edge the decomposition indexes.
 ///
@@ -115,9 +166,17 @@ pub const MAX_CLUSTER_EDGE: i32 = 64;
 
 /// The decomposition's shape, read from the rules table (the register's
 /// S3-10; S3's `lic`): the cluster edge, how long a border run is before it
-/// takes two transitions, and how far ahead the smoother looks.
+/// takes two transitions, and how far ahead the smoother looks; and, from no
+/// rules row, how many transition fields a cluster keeps.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ClusterShape {
+    /// How many transition fields a cluster keeps: [`FIELDS_PER_CLUSTER`] for
+    /// every shape read from a rules table. No answer depends on it (the
+    /// module docs' "Transition fields"), which is what
+    /// [`ClusterShape::with_fields`] is for: a test's decomposition that
+    /// keeps none answers every query by the sweep, and is held equal to one
+    /// that keeps them.
+    pub fields: usize,
     /// The cluster edge in voxels, `locomotion.hpa_cluster_voxels`.
     pub size: i32,
     /// A border's open run longer than this many cells takes a transition at
@@ -174,10 +233,18 @@ impl ClusterShape {
                 ),
             })?;
         Ok(ClusterShape {
+            fields: FIELDS_PER_CLUSTER,
             size,
             long_run,
             smooth_lookahead,
         })
+    }
+
+    /// The same shape keeping `fields` transition fields a cluster: none, for
+    /// the decomposition a test holds the fields to.
+    #[must_use]
+    pub const fn with_fields(self, fields: usize) -> ClusterShape {
+        ClusterShape { fields, ..self }
     }
 
     /// The same shape at another cluster edge: a test's decomposition, or the
@@ -208,6 +275,7 @@ pub struct Trans {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Clusters {
     size: i32,
+    fields: usize,
     long_run: i32,
     smooth_lookahead: usize,
     nx: i32,
@@ -236,12 +304,40 @@ pub struct Clusters {
     inter_to: Vec<u32>,
     inter_cost: Vec<i32>,
 
+    /// Whether each cluster's fields are whole ([`Clusters::field`]).
+    fielded: Vec<bool>,
+    /// The transition fields: `fields` blocks a cluster, each one
+    /// entry a column of the cluster in `(y, x)` order.
+    field: Vec<u16>,
+
     comp_offset: Vec<u32>,
     comp_label: Vec<u32>,
     union_find: Vec<u32>,
 
     stack: Reserved<Node>,
     gather: Reserved<Node>,
+}
+
+/// One cluster's transition fields read at one column ([`Clusters::field`]).
+#[derive(Clone, Copy, Debug)]
+pub struct FieldAt<'a> {
+    block: &'a [u16],
+    cells: usize,
+    entry: usize,
+}
+
+impl FieldAt<'_> {
+    /// The cost between the column and the cluster's transition `slot`, or
+    /// `None` when no walk inside the cluster joins them.
+    #[must_use]
+    pub fn cost(&self, slot: usize) -> Option<i32> {
+        let at = slot.checked_mul(self.cells)?.checked_add(self.entry)?;
+        self.block
+            .get(at)
+            .copied()
+            .filter(|cost| *cost != NO_FIELD_COST)
+            .map(i32::from)
+    }
 }
 
 /// A column that is not one of the graph's ([`Clusters::touch`]).
@@ -278,11 +374,14 @@ impl Clusters {
         let per_border = usize::try_from(size).ok()?;
         let max_trans = per_border.checked_mul(4)?;
         let max_intra = max_trans.checked_mul(max_trans.saturating_sub(1))?;
+        let cells = per_border.checked_mul(per_border)?;
+        let fields = clusters.checked_mul(shape.fields)?.checked_mul(cells)?;
         let vborders = usize::try_from(nx.saturating_sub(1).max(0).checked_mul(ny)?).ok()?;
         let hborders = usize::try_from(nx.checked_mul(ny.saturating_sub(1).max(0))?).ok()?;
 
         let mut built = Clusters {
             size,
+            fields: shape.fields,
             long_run: shape.long_run,
             smooth_lookahead: shape.smooth_lookahead,
             nx,
@@ -305,6 +404,8 @@ impl Clusters {
             inter_row: vec![0; clusters.saturating_mul(max_trans.saturating_add(1))],
             inter_to: vec![0; clusters.saturating_mul(max_trans)],
             inter_cost: vec![0; clusters.saturating_mul(max_trans)],
+            fielded: vec![false; clusters],
+            field: vec![NO_FIELD_COST; fields],
             comp_offset: vec![0; clusters.saturating_add(1)],
             comp_label: vec![0; nodes],
             union_find: vec![0; nodes],
@@ -388,6 +489,7 @@ impl Clusters {
     #[must_use]
     pub const fn shape(&self) -> ClusterShape {
         ClusterShape {
+            fields: self.fields,
             size: self.size,
             long_run: self.long_run,
             smooth_lookahead: self.smooth_lookahead,
@@ -900,13 +1002,17 @@ impl Clusters {
         let count = self.trans_cells(cluster).len();
         let row_base = cluster.saturating_mul(self.max_trans.saturating_add(1));
         let edge_base = cluster.saturating_mul(self.max_intra);
+        // The fields are whole only if every slot has one and every cost
+        // fits an entry (the module docs' "Transition fields").
+        let mut whole = count <= self.fields;
         let mut written: usize = 0;
         let mut from_slot = 0;
         while from_slot < count {
             self.set_intra_row(row_base.saturating_add(from_slot), written);
             let from_cell = self.trans_cells(cluster).get(from_slot).copied();
+            let swept = from_cell.is_some_and(|cell| self.local_comp(cell) != NO_COMP);
             if let Some(from_cell) = from_cell
-                && self.local_comp(from_cell) != NO_COMP
+                && swept
             {
                 dijkstra_bounded(
                     surface,
@@ -915,6 +1021,11 @@ impl Clusters {
                     from_cell,
                     false,
                 );
+            }
+            if whole {
+                whole = self.keep_field(surface, scratch, cluster, from_slot, swept);
+            }
+            if swept {
                 let mut to_slot = 0;
                 while to_slot < count {
                     if to_slot != from_slot
@@ -954,6 +1065,125 @@ impl Clusters {
                 usize::from(before),
             );
         }
+        // A cluster's fields are whole or empty, and the blocks past its
+        // slots are empty either way, so a repaired decomposition holds what
+        // a fresh build does, entry for entry.
+        self.clear_fields(cluster, if whole { count } else { 0 });
+        if let Some(flag) = self.fielded.get_mut(cluster) {
+            *flag = whole;
+        }
+    }
+
+    /// How many columns a cluster holds: a field's length.
+    fn cluster_cells(&self) -> usize {
+        self.max_trans_per_border
+            .saturating_mul(self.max_trans_per_border)
+    }
+
+    /// Where a cluster's field for `slot` starts in [`Clusters::field`]'s
+    /// table.
+    fn field_base(&self, cluster: usize, slot: usize) -> usize {
+        cluster
+            .saturating_mul(self.fields)
+            .saturating_add(slot)
+            .saturating_mul(self.cluster_cells())
+    }
+
+    /// A column's place in its cluster's fields: `(y, x)` order from the
+    /// cluster's corner.
+    fn field_entry(&self, surface: &Surface, cell: Node) -> usize {
+        let (x, y) = surface.coord_of(cell);
+        let size = self.size.max(1);
+        crate::math::index::row(
+            y.rem_euclid(size)
+                .saturating_mul(size)
+                .saturating_add(x.rem_euclid(size))
+                .unsigned_abs(),
+        )
+    }
+
+    /// Keep the sweep `scratch` just ran from the cluster's transition `slot`
+    /// as that slot's field, or an empty field when the slot's cell was not
+    /// swept (`swept` false: it stands in no component). `false` when a cost
+    /// does not fit an entry, which leaves the cluster with no fields.
+    fn keep_field(
+        &mut self,
+        surface: &Surface,
+        scratch: &Scratch,
+        cluster: usize,
+        slot: usize,
+        swept: bool,
+    ) -> bool {
+        let (cx, cy) = self.cluster_coord(cluster);
+        let size = self.size;
+        let base = self.field_base(cluster, slot);
+        let mut fits = true;
+        let mut entry = 0_usize;
+        let mut dy = 0;
+        while dy < size {
+            let mut dx = 0;
+            while dx < size {
+                let cost = if swept {
+                    surface
+                        .node_of(
+                            cx.saturating_mul(size).saturating_add(dx),
+                            cy.saturating_mul(size).saturating_add(dy),
+                        )
+                        .and_then(|node| scratch.cost_of(node))
+                } else {
+                    None
+                };
+                let kept = match cost.map(u16::try_from) {
+                    None => NO_FIELD_COST,
+                    Some(Ok(cost)) if cost != NO_FIELD_COST => cost,
+                    Some(_) => {
+                        fits = false;
+                        NO_FIELD_COST
+                    }
+                };
+                if let Some(target) = self.field.get_mut(base.saturating_add(entry)) {
+                    *target = kept;
+                }
+                entry = entry.saturating_add(1);
+                dx = dx.saturating_add(1);
+            }
+            dy = dy.saturating_add(1);
+        }
+        fits
+    }
+
+    /// Empty a cluster's field blocks from slot `from` on.
+    fn clear_fields(&mut self, cluster: usize, from: usize) {
+        let start = self.field_base(cluster, from.min(self.fields));
+        let end = self.field_base(cluster, self.fields);
+        if let Some(stale) = self.field.get_mut(start..end) {
+            stale.fill(NO_FIELD_COST);
+        }
+    }
+
+    /// The transition fields of the cluster `cell` stands in, read at `cell`
+    /// (the module docs' "Transition fields"): the cost of the walk inside
+    /// the cluster between `cell` and each of the cluster's transition cells,
+    /// what a sweep bounded to the cluster gives from either end.
+    ///
+    /// `None` when the cluster keeps no fields (more transition cells than
+    /// [`ClusterShape::fields`], or a cost past an entry), and the caller
+    /// sweeps.
+    #[must_use]
+    pub fn field(&self, surface: &Surface, cell: Node) -> Option<FieldAt<'_>> {
+        let cluster = usize::from(self.cluster_of(cell));
+        if !self.fielded.get(cluster).copied()? {
+            return None;
+        }
+        let cells = self.cluster_cells();
+        let block = self
+            .field
+            .get(self.field_base(cluster, 0)..self.field_base(cluster, self.fields))?;
+        Some(FieldAt {
+            block,
+            cells,
+            entry: self.field_entry(surface, cell),
+        })
     }
 
     /// Reset `values[base + from .. base + to]` to the default a fresh build
@@ -1391,6 +1621,34 @@ impl Clusters {
             c = c.saturating_add(1);
         }
         total
+    }
+
+    /// A digest of the transition fields: which clusters keep them, and
+    /// every entry. What the repair-equivalence tests compare beside
+    /// [`Clusters::fingerprint`], which the path-hash golden pins and which
+    /// therefore stays the abstract graph's alone.
+    #[must_use]
+    pub fn field_fingerprint(&self) -> u64 {
+        let mut enc = crate::encoding::Enc::with_capacity(
+            self.field
+                .len()
+                .saturating_mul(2)
+                .saturating_add(self.fielded.len()),
+        );
+        for whole in &self.fielded {
+            enc.bool(*whole);
+        }
+        for entry in &self.field {
+            enc.u16(*entry);
+        }
+        enc.finish()
+    }
+
+    /// How many clusters keep their transition fields. Diagnostic; never in
+    /// a tick.
+    #[must_use]
+    pub fn fielded_count(&self) -> usize {
+        self.fielded.iter().filter(|whole| **whole).count()
     }
 
     /// A digest of the whole abstract graph: what the repair-equivalence tests

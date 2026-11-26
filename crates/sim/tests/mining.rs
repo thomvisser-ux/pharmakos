@@ -605,8 +605,10 @@ fn a_seam_choice_counts_its_ranking_and_a_kept_seam_its_dig_search() {
     println!("seam upkeep: {first} choosing, {kept} keeping");
     // Pinned on the golden seed, so a change to what the upkeep charges
     // shows here. Before dunit part 2 these read 2,077 (the ranking alone)
-    // and 0 (keeping charged nothing).
-    assert_eq!((first, kept), (3_447, 1_334));
+    // and 0 (keeping charged nothing); before S3's `walk3` the choice read
+    // 3,447, of which 2,048 were its one walk's two endpoint sweeps, each
+    // the whole of a cluster, which a lookup now stands for.
+    assert_eq!((first, kept), (1_399, 1_334));
 }
 
 /// The nodes the walk from seat 0's core to its starting seam pops, priced

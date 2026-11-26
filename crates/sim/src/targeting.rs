@@ -1722,6 +1722,7 @@ mod tests {
         let clusters = Clusters::new(
             &surface,
             crate::pathing::ClusterShape {
+                fields: crate::pathing::clusters::FIELDS_PER_CLUSTER,
                 size: 32,
                 long_run: 6,
                 smooth_lookahead: 16,

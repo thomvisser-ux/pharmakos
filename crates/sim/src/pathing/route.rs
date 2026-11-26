@@ -728,9 +728,17 @@ pub(crate) fn route_and_abstract(
     ))
 }
 
-/// Insert one endpoint: a bounded sweep over its cluster, harvested as edges to
-/// that cluster's transition nodes. Returns the direct cost to `other` when the
-/// two share a cluster.
+/// Insert one endpoint: its edges to its own cluster's transition nodes, each
+/// at the cost of the walk inside the cluster. Returns the direct cost to
+/// `other` when the two share a cluster.
+///
+/// The costs are read from the cluster's transition fields
+/// ([`Clusters::field`]), one entry a slot, and the direct cost is one A\*
+/// inside the cluster. A cluster that keeps no fields is swept from the
+/// endpoint instead, as every cluster was before S3's `walk3`; the two give
+/// the same edges at the same costs, because a field is such a sweep's own
+/// costs, kept, and a walk costs the same from either end
+/// ([`crate::pathing::clusters`], "Transition fields").
 fn insert_endpoint(
     surface: &Surface,
     clusters: &Clusters,
@@ -741,31 +749,58 @@ fn insert_endpoint(
 ) -> Option<i32> {
     out.clear();
     let tag = clusters.cluster_of(cell);
-    dijkstra_bounded(
-        surface,
-        Bound::Cluster(clusters.of_node(), tag),
-        scratch,
-        cell,
-        true,
-    );
     let cluster = usize::from(tag);
     let stride = clusters.max_trans();
-    let cells = clusters.trans_cells(cluster);
+    let slots = clusters.trans_cells(cluster).len();
+    let shared = clusters.cluster_of(other) == tag;
+    let Some(field) = clusters.field(surface, cell) else {
+        dijkstra_bounded(
+            surface,
+            Bound::Cluster(clusters.of_node(), tag),
+            scratch,
+            cell,
+            true,
+        );
+        let cells = clusters.trans_cells(cluster);
+        let mut slot = 0;
+        while slot < cells.len() {
+            if let Some(target_cell) = cells.get(slot).copied()
+                && let Some(cost) = scratch.cost_of(target_cell)
+                && let Ok(target) =
+                    u32::try_from(cluster.saturating_mul(stride).saturating_add(slot))
+            {
+                out.push((target, cost));
+            }
+            slot = slot.saturating_add(1);
+        }
+        return if shared { scratch.cost_of(other) } else { None };
+    };
     let mut slot = 0;
-    while slot < cells.len() {
-        if let Some(target_cell) = cells.get(slot).copied()
-            && let Some(cost) = scratch.cost_of(target_cell)
+    while slot < slots {
+        if let Some(cost) = field.cost(slot)
             && let Ok(target) = u32::try_from(cluster.saturating_mul(stride).saturating_add(slot))
         {
             out.push((target, cost));
         }
         slot = slot.saturating_add(1);
     }
-    if clusters.cluster_of(other) == tag {
-        scratch.cost_of(other)
-    } else {
-        None
+    if !shared {
+        return None;
     }
+    // The walk inside the cluster between the two endpoints: the cost a
+    // sweep from `cell` reads at `other`, found by the directed search.
+    let mut leg = core::mem::take(&mut scratch.leg);
+    let direct = astar_costed(
+        surface,
+        Bound::Cluster(clusters.of_node(), tag),
+        scratch,
+        (cell, other),
+        Surcharge::NONE,
+        &mut leg,
+    );
+    leg.clear();
+    scratch.leg = leg;
+    direct
 }
 
 /// The column an abstract node stands on, temporary endpoints included.
