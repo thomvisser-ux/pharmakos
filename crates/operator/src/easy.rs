@@ -57,7 +57,7 @@
 //! | term | calls |
 //! |---|---|
 //! | the fixed reads ([`FIXED_READS`]) | `get_status`, `get_briefing`, `get_economy_forecast`, `get_map_summary`, and at most [`PAGES_MAX`] pages each of `list_beacons`, `get_view`, `get_segment_feed` and `list_templates` |
-//! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` over every tap Easy could make, when there is one (the register's S1-15), and one QUICK `verify_plan` per part of at most [`TAP_PROBE_PART_MAX`] of them, one fewer than a report's per-code cap (S3's `vcap`) |
+//! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` over every tap Easy could make, when there is one (the register's S1-15), and at most [`TAP_PROBE_VERIFIES`] QUICK `verify_plan`s, each over the pairs not yet answered, read through the report's typed `left_out` field (S3's `vcap` and `leftout`) |
 //! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
 //! | the raid probe ([`RAID_PROBE_CALLS`]) | one `estimate_route` to the nearest own Attack beacon, so a raid post is never placed twice |
 //! | the Survey probe ([`SURVEY_PROBE_CALLS`]) | one `estimate_route` to the nearest own Survey beacon, in a round whose enemy sightings are stale or missing, so a Survey post is never placed twice; a built-in seat's only |
@@ -345,28 +345,30 @@ pub const RAID_POINTS: i64 = 300;
 /// `get_view`, the segment feed and `list_templates`).
 pub const FIXED_READS: u32 = 4 + 4 * PAGES_MAX;
 
-/// The most diagnostics of one code a verifier report lists one by one (S3's
-/// `vcap`): the verifier's `MAX_PER_CODE`, restated because the operator
-/// names nothing of the verifier's (AGENTS.md section 3, rule 3), and held
-/// to the verifier's by `crates/gamectl/tests/report_cap.rs`.
-pub const REPORT_CAP_PER_CODE: u32 = 4;
+/// The most pairs each of the tap probe's QUICK `verify_plan`s after the
+/// first must answer for the probe to finish within [`TAP_PROBE_VERIFIES`]:
+/// the fewest diagnostics of one code a report may list for every one of the
+/// at most [`EASY_CANDIDATES`] pairs to be answered in the budget.
+///
+/// The probe needs no knowledge of the verifier's cap (S3's `leftout`): it
+/// asks about every pair not yet answered and reads the report's typed
+/// `left_out` field. Each verify that leaves an `E0503` out lists at least the
+/// cap's number of them, all answered, so the probe finishes in
+/// `ceil(pairs / cap)` verifies. The budget is in evaluation units, fixed
+/// before the round (spec section 14; decision C6), so it is a number here,
+/// the same ten verifies Easy's budget has always held: enough whenever a
+/// report lists at least this many of a code. A verifier that lists fewer
+/// leaves the probe [`crate::candidates::TapsUnread::Spent`], said and never
+/// a silent guess, and `crates/gamectl/tests/report_cap.rs` holds this floor
+/// to the verifier's own cap, failing the day the cap drops below it.
+pub const TAP_PROBE_LISTED_FLOOR: u32 = 3;
 
-/// The most pairs one of the tap probe's QUICK `verify_plan`s asks about: one
-/// fewer than the cap, since a probe step raises at most one `E0503`, so a
-/// part's report lists every `E0503` it raised and fewer than the cap's.
-pub const TAP_PROBE_PART_MAX: u32 = REPORT_CAP_PER_CODE - 1;
+/// The tap probe's verifies, at most: enough for [`EASY_CANDIDATES`] pairs at
+/// [`TAP_PROBE_LISTED_FLOOR`] answered a verify.
+pub const TAP_PROBE_VERIFIES: u32 = EASY_CANDIDATES.div_ceil(TAP_PROBE_LISTED_FLOOR);
 
-const _: () = assert!(
-    TAP_PROBE_PART_MAX >= 1,
-    "a cap under two leaves the probe no part"
-);
-
-/// The tap probe's verifies: one per part of at most [`TAP_PROBE_PART_MAX`]
-/// of the at most [`EASY_CANDIDATES`] pairs.
-pub const TAP_PROBE_VERIFIES: u32 = EASY_CANDIDATES.div_ceil(TAP_PROBE_PART_MAX);
-
-/// The tap probe: one `resolve_refs` over every pair, and one QUICK
-/// `verify_plan` per part ([`TAP_PROBE_VERIFIES`]).
+/// The tap probe: one `resolve_refs` over every pair, and at most
+/// [`TAP_PROBE_VERIFIES`] QUICK `verify_plan`s.
 pub const TAP_PROBE_CALLS: u32 = 1 + TAP_PROBE_VERIFIES;
 
 /// The guard probe: one `estimate_route` to the nearest own Defend beacon,

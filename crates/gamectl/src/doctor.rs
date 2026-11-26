@@ -227,12 +227,10 @@ fn check_verifier(
             State::Fail,
             "verifier",
             &format!(
-                "the safe playbook does not qualify against this build ({} diagnostics listed, \
-                 {} codes past the report's {} of one code), so a seat that let its Lull run \
-                 out would have nothing to play",
+                "the safe playbook does not qualify against this build ({} diagnostics \
+                 listed{}), so a seat that let its Lull run out would have nothing to play",
                 report.diagnostics.len(),
-                pharmakos_verifier::CapRead::of(&report).left_out_codes,
-                pharmakos_verifier::MAX_PER_CODE,
+                left_out_words(&report),
             ),
         ),
         Err(error) => note(lines, State::Fail, "verifier", &error.to_string()),
@@ -466,9 +464,59 @@ pub fn reference_view() -> Vec<String> {
     seat::described()
 }
 
+/// What a report's `left_out` field says, each entry's count, code and `max`
+/// as the field carries them (S3's `leftout`, fix pass 1): empty when nothing
+/// was left out.
+fn left_out_words(report: &pharmakos_proto::gp::api::v1::VerifyReport) -> String {
+    let entries: Vec<String> = report
+        .left_out
+        .iter()
+        .map(|gap| {
+            format!(
+                "{} more {} past the {} of one code",
+                gap.count, gap.code, gap.max
+            )
+        })
+        .collect();
+    if entries.is_empty() {
+        String::new()
+    } else {
+        format!(", and left out: {}", entries.join("; "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::surface_for;
+
+    /// `seat doctor` says each left-out entry's count and `max` from the
+    /// field (S3's `leftout`, fix pass 1), and nothing when none was.
+    #[test]
+    fn the_doctor_says_each_entrys_count_and_max() {
+        use pharmakos_proto::gp::api::v1::{LeftOut, VerifyReport};
+        assert_eq!(super::left_out_words(&VerifyReport::default()), "");
+        let report = VerifyReport {
+            left_out: vec![
+                LeftOut {
+                    code: String::from("E0303"),
+                    count: 3,
+                    max: 7,
+                    severity: 1,
+                },
+                LeftOut {
+                    code: String::from("W0702"),
+                    count: 1,
+                    max: 7,
+                    severity: 2,
+                },
+            ],
+            ..VerifyReport::default()
+        };
+        assert_eq!(
+            super::left_out_words(&report),
+            ", and left out: 3 more E0303 past the 7 of one code; 1 more W0702 past the 7 of one code"
+        );
+    }
 
     #[test]
     fn the_match_check_opens_round_one_with_the_first_lulls_whole_length() {

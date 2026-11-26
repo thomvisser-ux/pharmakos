@@ -92,11 +92,19 @@
       "beginner": "Not shown: 1 more `I0003`. They say the same kind of thing as the ones shown."
     }
   ],
-  "report_hash": "BPFKWLIXhHc=",
+  "report_hash": "LNWKtnR1G0Q=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "X50vGSyubSg=",
-  "verifier_version": "0.1.0-s3.8",
+  "verifier_version": "0.1.0-s3.9",
   "size_units": 3,
-  "size_budget": 128
+  "size_budget": 128,
+  "left_out": [
+    {
+      "code": "I0003",
+      "count": 1,
+      "max": 4,
+      "severity": "INFO"
+    }
+  ]
 }
 

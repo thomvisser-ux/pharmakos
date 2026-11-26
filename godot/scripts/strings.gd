@@ -137,6 +137,12 @@ const TEXT := {
 	"templates_waiting": "Reading the templates...",
 	"templates_refused": "The gateway refused the template list: {detail}",
 	"templates_unreadable": "The template list could not be read: {detail}",
+	# The library files `list_templates` said it refused (S3's `leftout`): one line per reason,
+	# the count as the gateway sent it, never a file's name.
+	"library_refused_unreadable": "Library files not listed, which the gateway could not read: {count}.",
+	"library_refused_too_large": "Library files not listed, each larger than the gateway reads: {count}.",
+	"library_refused_not_a_playbook": "Library files not listed, which are not playbooks this game reads: {count}.",
+	"library_refused_unread": "The list of library files the gateway refused could not be read, so it is not shown.",
 	"template_button": "{title}",
 	"wizard_heading": "Template: {title}",
 	"wizard_waiting": "Asking the gateway...",

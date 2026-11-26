@@ -466,7 +466,7 @@ raised. As with every bump, a save written under `0.1.0-s3.6` does not resume un
 one of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.7` to `0.1.0-s3.8`
 (input 4), because `SurveySettings.scout_count`, `MineSettings.dig_max_depth` and
 `MineSettings.pillar_spacing` carry presence and four lists gain a `clear_*` flag
-(decisions-log item 184 (10)): this build prices a written 0 and a set clear as one
+(decisions-log item 184 (3)): this build prices a written 0 and a set clear as one
 field each and raises `E0515` for a clear beside entries of its own list or in
 settings that start from nothing. Beside the version, the lane's earlier commits moved
 three things, each named: the catalogue gains `E0515`; two new cases,
@@ -478,4 +478,19 @@ and `expand_east` here, and the gateway's `demo_deploy_and_visit_verify` and
 version lines. No committed case writes any of the seven at 0, and only the two
 `E0515` cases set a clear. As with every bump, a save written under `0.1.0-s3.7` does
 not resume under `0.1.0-s3.8`: `SavedMatch::check` refuses a save stamped by another
+verifier (`crates/gateway/src/save.rs`, spec section 3).
+
+**S3's `leftout` (`VERIFIER_VERSION` 0.1.0-s3.9).** Every `report_hash` moved, for one
+of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.8` to `0.1.0-s3.9` (input 4),
+because a report now says what its per-code cap left out as typed data,
+`VerifyReport.left_out` (decisions-log item 183 (5)), so the same five inputs give
+different report bytes. Beside the version lines, the five reports that leave something
+out gain the field, one entry per closing `I0007`, in the same order and naming the same
+count and cap: `budget_128`, `e0110_over_the_size_budget`,
+`e0114_more_route_steps_than_this_build_compiles`, `e0601_found_before_an_unpriced_blueprint`
+and `expand_east`. No row moved, and a report that leaves nothing out gains no field (an
+empty repeated field is not written). The gateway's `demo_*_verify`, `sighting_verify` and
+`save_round_one` goldens and the wizard's five reports moved by the version and the hash
+alone in the verifier's commit. As with every bump, a save written under `0.1.0-s3.8`
+does not resume under `0.1.0-s3.9`: `SavedMatch::check` refuses a save stamped by another
 verifier (`crates/gateway/src/save.rs`, spec section 3).

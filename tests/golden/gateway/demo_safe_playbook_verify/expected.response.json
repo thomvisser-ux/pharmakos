@@ -85,12 +85,20 @@
           "map_refs": []
         }
       ],
-      "report_hash": "7okha6FAhNg=",
+      "report_hash": "kWkGUjvvO6w=",
       "rules_hash": "GybFJQaL/2E=",
       "plan_fingerprint": "NykoZsTcoXY=",
-      "verifier_version": "0.1.0-s3.8",
+      "verifier_version": "0.1.0-s3.9",
       "size_units": 4,
-      "size_budget": 128
+      "size_budget": 128,
+      "left_out": [
+        {
+          "code": "I0003",
+          "count": 1,
+          "max": 4,
+          "severity": "info"
+        }
+      ]
     },
     "_status": {
       "phase": "lull",

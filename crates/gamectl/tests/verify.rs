@@ -829,7 +829,7 @@ const TEN_UNLABELLED: &str = "crates/gamectl/tests/fixtures/ten_unlabelled_holds
 fn a_capped_report_says_its_errors_are_listed_and_counts_the_rest() {
     let outcome = gamectl(&["verify", TEN_UNLABELLED]);
     assert_eq!(outcome.code, Exit::Failed, "{}", said(&outcome));
-    let cap = pharmakos_verifier::MAX_PER_CODE;
+    let cap = pharmakos_verifier::MAX_PER_CODE.get();
     let lines = report_lines(&outcome);
     let verdict = lines
         .iter()
