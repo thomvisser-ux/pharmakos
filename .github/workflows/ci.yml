@@ -936,10 +936,14 @@ jobs:
     # installed here and nowhere else, which is why the `ci-shard-ubuntu` jobs above
     # passes `--skip screenshot`.
     #
-    # Three shots, each drawn through the bridge with NO host running
+    # Nine shots, each drawn through the bridge with NO host running
     # (xtask/src/main.rs, `SHOTS`): the vista (res://scenes/vista_shot.tscn, the
     # committed keyframe fixture, T16), the diagnostic rows (rows_shot.tscn) and
-    # the wizard's first page (wizard_shot.tscn), T19's, compared since T20.
+    # the wizard's first page (wizard_shot.tscn), T19's, compared since T20; and
+    # from S3's `cert3` the beacon's ring (ring_shot.tscn), the lobby's Probation
+    # words (lobby_shot.tscn), the template list (templates_shot.tscn), Playtest
+    # mode (playtest_shot.tscn), the rule list (rule_list_shot.tscn) and the
+    # condition picker (picker_shot.tscn).
     # `cargo xtask screenshot` stages the extension itself, renders every shot
     # and then compares each with its golden; a shot with no golden still renders
     # and its actual is uploaded, and the step fails naming it. That is how a
@@ -1057,7 +1061,7 @@ jobs:
         run: cargo xtask screenshot
 
       - name: Upload the renders
-        # All three shots, whether or not their checks passed: a shot with no golden, or
+        # Every shot's render, whether or not its check passed: a shot with no golden, or
         # one that moved, is looked at from here. Not on the fast path, where nothing was
         # rendered: `if-no-files-found: error` would otherwise turn the skip red.
         if: always() && steps.scope.outputs.prose_only != 'true'
@@ -1065,9 +1069,7 @@ jobs:
         with:
           name: vista-screenshot
           path: |
-            target/golden/vista/actual.vista.png
-            target/golden/vista/actual.rows.png
-            target/golden/vista/actual.wizard.png
+            target/golden/vista/actual.*.png
           # A job that rendered nothing must not read as a pass.
           if-no-files-found: error
           retention-days: 14

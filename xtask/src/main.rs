@@ -29,7 +29,7 @@
 //! | `reuse`          | REUSE licence-manifest check, then the library-quotation licence check        |
 //! | `placeholders`   | every `PLACEHOLDER` marker in the tracked tree parses against the grammar     |
 //! | `scenario`     | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
-//! | `screenshot`     | stages the client, renders the three shots under xvfb + lavapipe, compares    |
+//! | `screenshot`     | stages the client, renders every shot under xvfb + lavapipe, compares         |
 //! | `stage-client`   | builds the gdext cdylib, stages it into `godot/bin` and imports the project   |
 //!
 //! The formats of the last three — the scenario file ([`scenario`]), the
@@ -505,11 +505,17 @@ struct Shot {
     min_variance: u64,
 }
 
-/// Every shot, in the order it is rendered. All three go through the bridge, so
-/// all three need the staged extension. The vista is the geometry alarm (T16);
-/// the rows and the wizard's first page are the editor's pictures of the
-/// verifier's diagnostics and of Easy's suggestion (T19; decisions-log items
-/// 110 (4) and 116 (6)(h)).
+/// Every shot, in the order it is rendered. Every one goes through the bridge
+/// with no host running, so every one needs the staged extension. The vista is
+/// the geometry alarm (T16); the rows and the wizard's first page are the
+/// editor's pictures of the verifier's diagnostics and of Easy's suggestion
+/// (T19; decisions-log items 110 (4) and 116 (6)(h)). S3's client lanes left
+/// six more hostless scenes, each drawn from byte copies of gateway goldens
+/// under `godot/fixtures/`, and `cert3` adds a row for each (decisions-log
+/// items 161 (6), 162 (5), 182 (9) and 200 (5)): the beacon's ring at its base
+/// and grown by a Resonance Spire, the lobby's Probation words, the template
+/// list with its guided pick, Playtest mode and its survey, the rule list with
+/// its chips, and the condition picker with a locked entry.
 const SHOTS: &[Shot] = &[
     Shot {
         name: "vista",
@@ -530,6 +536,48 @@ const SHOTS: &[Shot] = &[
         scene: "res://scenes/wizard_shot.tscn",
         golden: "tests/golden/vista/expected.wizard.png",
         actual: "golden/vista/actual.wizard.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "ring",
+        scene: "res://scenes/ring_shot.tscn",
+        golden: "tests/golden/vista/expected.ring.png",
+        actual: "golden/vista/actual.ring.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "lobby",
+        scene: "res://scenes/lobby_shot.tscn",
+        golden: "tests/golden/vista/expected.lobby.png",
+        actual: "golden/vista/actual.lobby.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "templates",
+        scene: "res://scenes/templates_shot.tscn",
+        golden: "tests/golden/vista/expected.templates.png",
+        actual: "golden/vista/actual.templates.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "playtest",
+        scene: "res://scenes/playtest_shot.tscn",
+        golden: "tests/golden/vista/expected.playtest.png",
+        actual: "golden/vista/actual.playtest.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "rule_list",
+        scene: "res://scenes/rule_list_shot.tscn",
+        golden: "tests/golden/vista/expected.rule_list.png",
+        actual: "golden/vista/actual.rule_list.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "picker",
+        scene: "res://scenes/picker_shot.tscn",
+        golden: "tests/golden/vista/expected.picker.png",
+        actual: "golden/vista/actual.picker.png",
         min_variance: png::MIN_VARIANCE,
     },
 ];
@@ -7723,7 +7771,47 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             assert!(shot.min_variance > 0, "{}", shot.name);
             names.push(shot.name);
         }
-        assert_eq!(names, ["vista", "rows", "wizard"]);
+        assert_eq!(
+            names,
+            [
+                "vista",
+                "rows",
+                "wizard",
+                "ring",
+                "lobby",
+                "templates",
+                "playtest",
+                "rule_list",
+                "picker"
+            ]
+        );
+        // Each shot's scene is in the project, and the screenshot job uploads
+        // every shot's actual, whatever its check said, so a missing golden's
+        // render can be looked at and committed.
+        let root = workspace_root().expect("the workspace root");
+        for shot in SHOTS {
+            let scene = shot
+                .scene
+                .strip_prefix("res://")
+                .map(|path| root.join(GODOT_PROJECT_DIR).join(path))
+                .expect("a res:// scene");
+            assert!(scene.is_file(), "{} has no scene file", shot.name);
+        }
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let upload = ci
+            .find("      - name: Upload the renders\n")
+            .and_then(|at| ci.get(at..))
+            .and_then(|rest| {
+                // The key's line, not the comment above it that names it.
+                rest.find("\n          if-no-files-found: error")
+                    .and_then(|end| rest.get(..end))
+            })
+            .expect("the screenshot job's upload");
+        assert!(upload.contains("\n        if: always() && "), "{upload}");
+        assert!(
+            upload.contains("\n            target/golden/vista/actual.*.png\n"),
+            "{upload}"
+        );
     }
 
     /// The split over this workspace's own metadata (decisions-log item
