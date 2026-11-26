@@ -7538,6 +7538,57 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
     }
 
+    /// The cross-OS guard compares the verifier's reports (S3's plan, section
+    /// 5.2 item 2): each leg's upload carries every fresh verifier `actual.*`,
+    /// and the guard's fixed list requires the at-budget case's report on all
+    /// three legs, so a leg that wrote none is red rather than compared over
+    /// nothing. The script itself is run by hand over synthetic folders
+    /// (`CROSS_OS_DIR`), as the pull request that added the kind records.
+    #[test]
+    fn the_guard_compares_the_at_budget_verifier_report() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let upload = ci
+            .find("      - name: Upload what the cross-OS guard compares\n")
+            .and_then(|at| ci.get(at..))
+            .and_then(|rest| {
+                rest.find("if-no-files-found: error")
+                    .and_then(|end| rest.get(..end))
+            })
+            .expect("the leg's upload step");
+        assert!(
+            upload.contains("\n            target/golden/verifier/**/actual.*\n"),
+            "{upload}"
+        );
+        let fixed = ci
+            .find("          fixed=(\n")
+            .and_then(|at| ci.get(at..))
+            .and_then(|rest| rest.find("          )\n").and_then(|end| rest.get(..end)))
+            .expect("the guard's fixed kinds");
+        assert!(
+            fixed.contains("\n            golden/verifier/budget_128/actual.report.json\n"),
+            "{fixed}"
+        );
+        // The at-budget case the fixed list names is the committed one.
+        let root = workspace_root().expect("the workspace root");
+        let golden =
+            fs::read_to_string(root.join("tests/golden/verifier/budget_128/expected.report.json"))
+                .expect("budget_128's committed report");
+        let number = |key: &str| {
+            golden
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(&format!("\"{key}\": ")))
+                .map_or_else(
+                    || panic!("budget_128's report has no {key}"),
+                    |value| value.trim_end_matches(',').to_owned(),
+                )
+        };
+        assert_eq!(
+            number("size_units"),
+            number("size_budget"),
+            "budget_128 sits on the size budget"
+        );
+    }
+
     /// Every alarm has its own step in the `perf alarms` job, which runs on all
     /// three operating systems: an alarm with no step publishes nothing, and
     /// two alarms in one step share its ten notices (item 149 (4)).
