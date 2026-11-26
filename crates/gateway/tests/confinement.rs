@@ -1363,7 +1363,10 @@ fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
 /// zeroes on the shipped map, and making one per planning read put
 /// `estimate_route` several times over P3's bar (`src/routes.rs`, "One
 /// scratch"), so shipped code makes exactly one, the hosted match's, in
-/// `PlanningScratch::lend`.
+/// `PlanningScratch::lend`. The same goes for the graph the scratch searches:
+/// the gateway reads the hosted world's own and builds no second
+/// decomposition (`graph_for` was the copy `routes.rs` built before S1's
+/// `oper`).
 const OWN_SCRATCH: &[(&str, &str)] = &[
     (
         "Scratch::for_map",
@@ -1375,9 +1378,42 @@ const OWN_SCRATCH: &[(&str, &str)] = &[
     ),
     (
         "scratch_for",
-        "`targeting::scratch_for` is for a test or a tool that holds a world and no host",
+        "there is no scratch-making helper: a planning read searches in the match's one scratch, \
+         and a test makes its own with `Scratch::for_map`",
+    ),
+    (
+        "graph_for",
+        "the gateway searches the hosted world's own graph and builds no copy of it",
+    ),
+    (
+        "Clusters::new",
+        "the gateway searches the hosted world's own graph and builds no copy of it",
     ),
 ];
+
+/// How near a `.clone()` may stand to a `planning_scratch(` call: a loan
+/// cloned is a second scratch by another name, megabytes a read.
+const CLONE_REACH: usize = 2;
+
+/// Every code line within [`CLONE_REACH`] code lines of one that calls
+/// `planning_scratch(`, the call's own line included, that clones something.
+fn clones_beside_a_loan(text: &str) -> Vec<(usize, String)> {
+    let lines = code_lines(text);
+    let loans: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, line))| line.contains("planning_scratch("))
+        .map(|(at, _)| at)
+        .collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(at, (_, line))| {
+            line.contains(".clone()") && loans.iter().any(|loan| loan.abs_diff(*at) <= CLONE_REACH)
+        })
+        .map(|(_, (number, line))| (*number, line.clone()))
+        .collect()
+}
 
 /// How many code lines of the source file `name` use `needle`.
 fn uses_in(name: &str, needle: &str) -> usize {
@@ -1400,18 +1436,49 @@ fn every_planning_read_searches_in_the_matchs_one_scratch() {
         uses(
             "let scratch = Scratch::for_map(surface, edge);",
             "Scratch::for_map"
-        ) && uses("scratch: scratch_for(world)?,", "scratch_for"),
+        ) && uses("scratch: scratch_for(world)?,", "scratch_for")
+            && uses(
+                "let graph = Clusters::new(surface, shape, &mut scratch)?;",
+                "Clusters::new"
+            )
+            && uses("let graph = graph_for(world)?;", "graph_for"),
         "the scan finds what it looks for"
     );
-    let findings = scan_except(OWN_SCRATCH, &["src/routes.rs", "src/targeting.rs"]);
+    assert_eq!(
+        clones_beside_a_loan(
+            "fn read(host: &Host) {\n    let lent = host.planning_scratch()?;\n    let own = \
+             lent.clone();\n    let far = 1;\n    let further = 2;\n    let fine = name.clone();\n}\n"
+        )
+        .iter()
+        .map(|(number, _)| *number)
+        .collect::<Vec<_>>(),
+        vec![3],
+        "the clone scan finds a clone beside a loan and not one further off"
+    );
+    let findings = scan_except(OWN_SCRATCH, &["src/routes.rs"]);
     assert!(
         findings.is_empty(),
-        "a search scratch made outside the match's one:
-{}",
-        findings.join(
-            "
-"
-        )
+        "a search scratch or a graph made outside the match's one:\n{}",
+        findings.join("\n")
+    );
+    let cloned: Vec<String> = sources()
+        .iter()
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(path).ok()?;
+            Some(
+                clones_beside_a_loan(&text)
+                    .into_iter()
+                    .map(|(number, line)| format!("{}:{number}: {}", path.display(), line.trim()))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect();
+    assert!(
+        cloned.is_empty(),
+        "a `.clone()` within {CLONE_REACH} code lines of a `planning_scratch(` call: a loan is \
+         searched in and returned, never copied:\n{}",
+        cloned.join("\n")
     );
     assert_eq!(
         uses_in("src/routes.rs", "Scratch::for_map"),
@@ -1422,12 +1489,11 @@ fn every_planning_read_searches_in_the_matchs_one_scratch() {
     assert_eq!(uses_in("src/routes.rs", "scratch_for"), 0);
     assert_eq!(
         (
-            uses_in("src/targeting.rs", "Scratch::for_map"),
-            uses_in("src/targeting.rs", "scratch_for"),
-            uses_in("src/targeting.rs", "Scratch::new"),
+            uses_in("src/routes.rs", "graph_for"),
+            uses_in("src/routes.rs", "Clusters::new"),
         ),
-        (1, 1, 0),
-        "`scratch_for` is defined in `targeting.rs` and called by nothing shipped"
+        (0, 0),
+        "`routes.rs` reads the hosted world's graph and builds none"
     );
 }
 

@@ -116,25 +116,6 @@ pub fn lend<'a>(world: &'a World, tally: &'a UnitTally) -> Ground<'a> {
     }
 }
 
-/// A search scratch sized for the world's pathing graph, for a reader that
-/// holds a world and no host: a test, a tool.
-///
-/// A fresh one is a few megabytes of zeroes on the shipped map, which is why
-/// the gateway's own reads make none: they search in the hosted match's one
-/// planning scratch ([`crate::host::Host::planning_scratch`];
-/// `crate::routes`, "One scratch"). A scratch is search state every query
-/// overwrites, so an answer is the same from either.
-///
-/// # Errors
-///
-/// [`crate::error::Code::Internal`] when the rules table's cluster edge does
-/// not size a scratch for this map, which the world's own construction would
-/// already have refused.
-pub fn scratch_for(world: &World) -> Result<Scratch, Error> {
-    Scratch::for_map(world.surface(), world.rules().hpa_cluster_voxels())
-        .ok_or_else(|| Error::internal("this map and cluster edge do not size a search scratch"))
-}
-
 /// Where `seat`'s commander stands, or `None` when it is dead: the origin a
 /// `covering` description ranks from when its step starts (the sim's
 /// `commander_at`, read the same way).
@@ -938,9 +919,11 @@ fn unread(
 ///
 /// [`crate::error::Code::InvalidArgument`] naming the pointer of a reference
 /// this build cannot read where it is written, and
-/// [`crate::error::Code::Internal`] when the map does not size a search, an
-/// estimate does not convert, or the walk and the compiled plan disagree about
-/// what the playbook binds.
+/// [`crate::error::Code::Internal`] when an estimate does not convert, or the
+/// walk and the compiled plan disagree about what the playbook binds. The
+/// scratch is the caller's to lend, so a map that sizes none, or a scratch
+/// that does not fit the graph, is refused where it is lent
+/// ([`crate::routes::PlanningScratch::lend`]) before this is called.
 ///
 /// `scratch` is the search scratch every ranking and site of the walk
 /// searches in: the hosted match's planning scratch for the gateway's own

@@ -403,12 +403,20 @@ impl Host {
     ///
     /// # Errors
     ///
-    /// [`PlanningScratch::lend`]'s: the scratch already lent, or a map that
-    /// sizes none.
+    /// [`PlanningScratch::lend`]'s: the scratch already lent, a map that
+    /// sizes none, or a scratch that does not fit the hosted world's graph.
     pub fn planning_scratch(&self) -> Result<std::cell::RefMut<'_, Scratch>, Error> {
         let world = self.runner.world();
         self.planning_scratch
-            .lend(world.surface(), world.rules().hpa_cluster_voxels())
+            .lend(world.surface(), world.clusters())
+    }
+
+    /// How many search scratches the match's planning reads have made: none
+    /// until one searches, and one from then on
+    /// ([`PlanningScratch::made`]).
+    #[must_use]
+    pub const fn planning_scratches_made(&self) -> u32 {
+        self.planning_scratch.made()
     }
 
     /// How many walks the match's planning reads have priced, or `None` while
@@ -419,6 +427,16 @@ impl Host {
     /// [`PlanningScratch::walks`]'s.
     pub fn planning_walks(&self) -> Result<Option<u64>, Error> {
         self.planning_scratch.walks()
+    }
+
+    /// The search work the match's planning reads have done, or `None` while
+    /// none has searched ([`PlanningScratch::work`]).
+    ///
+    /// # Errors
+    ///
+    /// [`PlanningScratch::work`]'s.
+    pub fn planning_work(&self) -> Result<Option<u64>, Error> {
+        self.planning_scratch.work()
     }
 
     /// The template folder, when the host was given one.

@@ -63,7 +63,9 @@
 //! lent to each read in turn: the route estimate here, and
 //! [`crate::targeting`]'s rankings, sites and previews. It holds no answer and
 //! is no part of the match: never hashed, never saved, and a resumed match
-//! makes its own.
+//! makes its own. Every loan asks the sim whether the scratch fits the graph
+//! it is lent for ([`Scratch::serves`]) and refuses one that does not: a
+//! search over a scratch sized for another graph answers nothing true.
 //!
 //! # Fog
 //!
@@ -91,7 +93,8 @@
 //!
 //! plan-core's [`TravelEstimator`] answers `Option`: `None` is the
 //! connectivity oracle's "no route", a normal answer. A fault in the query
-//! itself -- no scratch for the map, the scratch already borrowed, a walk the
+//! itself -- no scratch for the map, a scratch that does not fit the graph,
+//! the scratch already borrowed, a walk the
 //! sim could not price ([`pharmakos_sim::pathing::estimate::EstimateError`]),
 //! a negative tick count -- is not "no route", and the trait has no way to say
 //! so; changing it is plan-core's (carried). So the adapter keeps the first
@@ -119,18 +122,25 @@ use crate::error::Error;
 /// search at a time: a read that finds it already lent is a fault, raised
 /// typed, never a second scratch made on the quiet.
 ///
+/// It counts the scratches it has made ([`PlanningScratch::made`]): none
+/// before the first read that searches and one for the rest of the match,
+/// which is the whole of the lane's claim and what its tests hold it to.
+///
 /// `Debug` by hand: [`Scratch`] is a dense arena and printing it would be
 /// megabytes of nothing (`missing_debug_implementations` is denied
 /// workspace-wide, so the impl has to exist).
-pub struct PlanningScratch(RefCell<Option<Scratch>>);
+pub struct PlanningScratch {
+    scratch: RefCell<Option<Scratch>>,
+    /// How many scratches [`PlanningScratch::lend`] has made.
+    made: Cell<u32>,
+}
 
 impl std::fmt::Debug for PlanningScratch {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let made = self.0.try_borrow().map(|held| held.is_some());
         formatter
             .debug_struct("PlanningScratch")
-            .field("made", &made)
-            .finish()
+            .field("made", &self.made.get())
+            .finish_non_exhaustive()
     }
 }
 
@@ -144,41 +154,71 @@ impl PlanningScratch {
     /// No scratch yet: the first [`PlanningScratch::lend`] makes it.
     #[must_use]
     pub const fn new() -> PlanningScratch {
-        PlanningScratch(RefCell::new(None))
+        PlanningScratch {
+            scratch: RefCell::new(None),
+            made: Cell::new(0),
+        }
     }
 
-    /// The scratch, for one search over `surface` at `cluster_voxels`, made
-    /// now if this is the match's first.
+    /// The scratch, for one search over `surface` and its decomposition
+    /// `clusters`, made now if this is the match's first.
     ///
-    /// Every caller hands it the hosted world's own surface and cluster edge,
-    /// which do not change while a match is hosted (a voxel edit moves no
-    /// column, and a resume restores into the map its config line generated),
-    /// so the scratch made for the first read is sized for every later one.
+    /// Every caller hands it the hosted world's own surface and
+    /// decomposition, whose shape does not change while a match is hosted (a
+    /// voxel edit moves no column and no cluster's edge, and a resume
+    /// restores into the map its config line generated), so the scratch made
+    /// for the first read fits every later one. That is checked and not
+    /// assumed: every loan asks [`Scratch::serves`], because a search over a
+    /// scratch sized for another graph ends with a non-answer the caller
+    /// could not tell from "no route".
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::Internal`] when the scratch is already lent (a
-    /// read that searches inside another read's search), and when the map and
+    /// read that searches inside another read's search); when the map and
     /// cluster edge do not size one, which the world's own construction would
-    /// already have refused.
+    /// already have refused; and when the scratch the match holds does not
+    /// fit the graph it is asked for.
     pub fn lend(
         &self,
         surface: &Surface,
-        cluster_voxels: i32,
+        clusters: &Clusters,
     ) -> Result<RefMut<'_, Scratch>, Error> {
-        let mut held = self.0.try_borrow_mut().map_err(|_| {
+        let mut held = self.scratch.try_borrow_mut().map_err(|_| {
             Error::internal(said!(
                 "a planning read found the match's search scratch already in use"
             ))
         })?;
         if held.is_none() {
-            *held = Scratch::for_map(surface, cluster_voxels);
+            let made = self.made.get().checked_add(1).ok_or_else(|| {
+                Error::internal(said!(
+                    "the count of search scratches a match has made passed what it counts"
+                ))
+            })?;
+            *held = Scratch::for_map(surface, clusters.size());
+            if held.is_some() {
+                self.made.set(made);
+            }
         }
-        RefMut::filter_map(held, Option::as_mut).map_err(|_| {
+        let scratch = RefMut::filter_map(held, Option::as_mut).map_err(|_| {
             Error::internal(said!(
                 "this map and cluster edge do not size a search scratch"
             ))
-        })
+        })?;
+        if !scratch.serves(surface, clusters) {
+            return Err(Error::internal(said!(
+                "the match's search scratch does not fit the graph a planning read searches"
+            )));
+        }
+        Ok(scratch)
+    }
+
+    /// How many scratches this has made: none until a read searches, and one
+    /// from then on. More than one would be a scratch made per read again,
+    /// which is the cost the lane removed.
+    #[must_use]
+    pub const fn made(&self) -> u32 {
+        self.made.get()
     }
 
     /// How many walks the scratch has priced since it was made, or `None`
@@ -190,7 +230,7 @@ impl PlanningScratch {
     /// [`crate::error::Code::Internal`] when the scratch is lent, or its
     /// tally passed what it counts.
     pub fn walks(&self) -> Result<Option<u64>, Error> {
-        let held = self.0.try_borrow().map_err(|_| {
+        let held = self.scratch.try_borrow().map_err(|_| {
             Error::internal(said!(
                 "the match's search scratch is in use and its tally cannot be read"
             ))
@@ -202,6 +242,38 @@ impl PlanningScratch {
                         "the search scratch's walk tally passed what it counts"
                     ))
                 })
+            })
+            .transpose()
+    }
+
+    /// The search work done in the scratch since it was made, or `None`
+    /// while no read has needed it: the sim's own counts of what its
+    /// searches popped and visited ([`Scratch::expansions`],
+    /// [`Scratch::abstract_expansions`], [`Scratch::visits`]), summed.
+    /// Nothing resets them, so the sum only grows, and every read that
+    /// searches moves it: a ranking, a clear estimate and a fogged one
+    /// alike, where [`PlanningScratch::walks`] counts a ranker's walks alone.
+    /// For a test that holds every read to the one scratch.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the scratch is lent, or a count
+    /// or their sum passed what it counts.
+    pub fn work(&self) -> Result<Option<u64>, Error> {
+        let held = self.scratch.try_borrow().map_err(|_| {
+            Error::internal(said!(
+                "the match's search scratch is in use and its work cannot be read"
+            ))
+        })?;
+        let past = || Error::internal(said!("the search scratch's work passed what it counts"));
+        held.as_ref()
+            .map(|scratch| {
+                let pops = scratch.expansions().map_err(|_| past())?;
+                let abstract_pops = scratch.abstract_expansions().map_err(|_| past())?;
+                let visits = scratch.visits().map_err(|_| past())?;
+                pops.checked_add(abstract_pops)
+                    .and_then(|sum| sum.checked_add(visits))
+                    .ok_or_else(past)
             })
             .transpose()
     }
@@ -219,7 +291,6 @@ pub struct RouteAdapter<'a> {
     /// ([`RouteAdapter::query`]) and never held across one.
     scratch: &'a PlanningScratch,
     speed: Speed,
-    cluster_voxels: i32,
     /// One entry per column, `true` where the asking seat has never seen it.
     /// Empty means [`Fog::Clear`] -- see the module docs.
     unknown: &'a [bool],
@@ -233,7 +304,7 @@ impl std::fmt::Debug for RouteAdapter<'_> {
         formatter
             .debug_struct("RouteAdapter")
             .field("nodes", &self.surface.node_count())
-            .field("cluster_voxels", &self.cluster_voxels)
+            .field("cluster_voxels", &self.clusters.size())
             .field("speed", &self.speed)
             .field(
                 "fogged_columns",
@@ -258,7 +329,6 @@ impl<'a> RouteAdapter<'a> {
             clusters: world.clusters(),
             scratch,
             speed: Speed::commander_of(world),
-            cluster_voxels: world.rules().hpa_cluster_voxels(),
             unknown: &[],
             fault: Cell::new(None),
         }
@@ -300,7 +370,7 @@ impl<'a> RouteAdapter<'a> {
     /// The cluster edge the graph was decomposed at, in voxels.
     #[must_use]
     pub const fn cluster_voxels(&self) -> i32 {
-        self.cluster_voxels
+        self.clusters.size()
     }
 
     /// The node a voxel's column is, or `None` when the voxel is off the map.
@@ -342,12 +412,13 @@ impl<'a> RouteAdapter<'a> {
 
     /// One query, straight through to item 61's function. A voxel off the map
     /// has no route, which is an answer; no scratch for the map, a scratch
-    /// already borrowed and a walk the sim could not price are faults
+    /// that does not fit the graph, a scratch already borrowed and a walk the
+    /// sim could not price are faults
     /// ([`RouteAdapter::take_fault`]).
     fn query(&self, start: Voxel, goal: Voxel) -> Option<pharmakos_sim::pathing::Estimate> {
         let start = self.node_of(start)?;
         let goal = self.node_of(goal)?;
-        let mut scratch = match self.scratch.lend(self.surface, self.cluster_voxels) {
+        let mut scratch = match self.scratch.lend(self.surface, self.clusters) {
             Ok(scratch) => scratch,
             Err(error) => {
                 self.fault(error);
@@ -590,17 +661,20 @@ mod tests {
     fn the_scratch_is_made_once_and_lent_one_search_at_a_time() {
         use crate::error::Code;
         let world = world();
-        let edge = world.rules().hpa_cluster_voxels();
         let scratch = PlanningScratch::new();
         assert_eq!(
             scratch.walks().expect("not lent"),
             None,
             "no read has searched, so there is no scratch"
         );
-        let lent = scratch.lend(world.surface(), edge).expect("the first loan");
+        assert_eq!(scratch.made(), 0, "and none has been made");
+        let lent = scratch
+            .lend(world.surface(), world.clusters())
+            .expect("the first loan");
+        assert_eq!(scratch.made(), 1, "the first loan makes the scratch");
         assert_eq!(
             scratch
-                .lend(world.surface(), edge)
+                .lend(world.surface(), world.clusters())
                 .err()
                 .map(|error| error.code()),
             Some(Code::Internal),
@@ -633,11 +707,73 @@ mod tests {
             Some(0),
             "made, and it has priced no walk"
         );
-        assert!(scratch.lend(world.surface(), edge).is_ok(), "lent again");
+        assert!(
+            scratch.lend(world.surface(), world.clusters()).is_ok(),
+            "lent again"
+        );
         assert!(
             adapter.estimate(from, to).is_some(),
             "and the query answers"
         );
         assert!(adapter.take_fault().is_ok());
+        assert_eq!(
+            scratch.made(),
+            1,
+            "every loan after the first is the same scratch"
+        );
+    }
+
+    /// A scratch that does not fit the graph it is lent for is refused typed
+    /// on that loan and every later one, and a route query over it is a fault
+    /// the caller raises: never a search, and never "no route". The match's
+    /// scratch is made for the hosted world's own graph, so the misfit here
+    /// is made by lending it for a decomposition at half the cluster edge,
+    /// which numbers twice the abstract slots the scratch has (the sim's
+    /// searches end over such a scratch, S3's `walk3`, but what they answer
+    /// is no answer).
+    #[test]
+    fn a_scratch_that_does_not_fit_the_graph_is_refused_on_every_loan() {
+        use crate::error::Code;
+        use pharmakos_sim::pathing::{Clusters, Scratch};
+        let world = world();
+        let half = world
+            .clusters()
+            .size()
+            .checked_div(2)
+            .expect("two divides a cluster edge");
+        let mut own =
+            Scratch::for_map(world.surface(), half).expect("a scratch for the finer graph");
+        let other = Clusters::new(
+            world.surface(),
+            world.clusters().shape().with_size(half),
+            &mut own,
+        )
+        .expect("the finer graph");
+        let scratch = PlanningScratch::new();
+        drop(
+            scratch
+                .lend(world.surface(), world.clusters())
+                .expect("made for the world's graph"),
+        );
+        for attempt in 1..=2 {
+            assert_eq!(
+                scratch
+                    .lend(world.surface(), &other)
+                    .err()
+                    .map(|error| error.code()),
+                Some(Code::Internal),
+                "attempt {attempt}: lent for a graph it was not made for"
+            );
+        }
+        assert_eq!(scratch.made(), 1, "a refused loan makes no second scratch");
+        assert_eq!(
+            scratch.walks().expect("returned"),
+            Some(0),
+            "and searches nothing"
+        );
+        assert!(
+            scratch.lend(world.surface(), world.clusters()).is_ok(),
+            "and the graph it was made for is still served"
+        );
     }
 }
