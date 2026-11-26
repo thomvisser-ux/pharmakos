@@ -4360,27 +4360,29 @@ fn tallies_of(
         .collect()
 }
 
-/// A refusal's words for what a report lists: its rows, and how many codes it
-/// left diagnostics out of past the per-code cap (S3's `vcap`), read from the
-/// rows and never from a sentence ([`pharmakos_verifier::CapRead`]).
+/// A refusal's words for what a report lists: its rows, and each entry of the
+/// report's own `left_out` field (S3's `vcap` and `leftout`), worded from the
+/// field (`crate::strings::left_out_entry`) and never from a sentence.
 fn listed_words(report: &VerifyReport) -> pharmakos_proto::json::grammar::Said {
-    let read = pharmakos_verifier::CapRead::of(report);
     let rows = report.diagnostics.len();
     let listed = if rows == 1 {
         "diagnostic"
     } else {
         "diagnostics"
     };
-    match read.left_out_codes {
-        0 => said!("{} {}", rows, listed),
-        codes => said!(
-            "{} {} listed, and more of {} {} past the {} of one code a report lists",
-            rows,
-            listed,
-            codes,
-            if codes == 1 { "code" } else { "codes" },
-            pharmakos_verifier::MAX_PER_CODE
-        ),
+    let mut gaps = report.left_out.iter().map(|gap| {
+        let listed_any = report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == gap.code);
+        crate::strings::left_out_entry(&gap.code, gap.count, gap.max, listed_any)
+    });
+    match gaps.next() {
+        None => said!("{} {}", rows, listed),
+        Some(first) => {
+            let rest = gaps.fold(first, |words, next| said!("{}; {}", &words, &next));
+            said!("{} {} listed, and {}", rows, listed, &rest)
+        }
     }
 }
 
@@ -7259,43 +7261,80 @@ mod tests {
     }
 
     /// The words of a refused advised safe playbook (S3's `vcap`): the rows a
-    /// report lists, singular and plural, and how many codes it left out of.
+    /// report lists, singular and plural, and each entry of the report's
+    /// `left_out` field (S3's `leftout`), its count and `max` as sent: rows
+    /// alone, an `I0007` among them, say nothing was left out; and an entry
+    /// of a code with none listed (an `I0003` past the size budget) names no
+    /// cap (fix pass 1).
     #[test]
     fn a_refusal_says_what_a_capped_report_lists() {
-        use pharmakos_proto::gp::api::v1::{Diagnostic, VerifyReport};
+        use pharmakos_proto::gp::api::v1::{Diagnostic, LeftOut, VerifyReport};
         let row = |code: &str| Diagnostic {
             code: code.to_owned(),
             ..Diagnostic::default()
         };
-        let report = |codes: &[&str]| VerifyReport {
+        let gap = |code: &str| LeftOut {
+            code: code.to_owned(),
+            count: 2,
+            max: 7,
+            severity: 1,
+        };
+        let report = |codes: &[&str], gaps: &[&str]| VerifyReport {
             diagnostics: codes.iter().map(|code| row(code)).collect(),
+            left_out: gaps.iter().map(|code| gap(code)).collect(),
             ..VerifyReport::default()
         };
-        let cap = pharmakos_verifier::MAX_PER_CODE;
+        let q = |code: &str| {
+            pharmakos_proto::json::grammar::quoted(code)
+                .as_str()
+                .to_owned()
+        };
         assert_eq!(
-            super::listed_words(&report(&["E0109"])).as_str(),
+            super::listed_words(&report(&["E0109"], &[])).as_str(),
             "1 diagnostic"
         );
         assert_eq!(
-            super::listed_words(&report(&["E0109", "E0110"])).as_str(),
+            super::listed_words(&report(&["E0109", "E0110"], &[])).as_str(),
             "2 diagnostics"
         );
-        let mut one: Vec<&str> = vec!["E0303"; usize::try_from(cap).unwrap_or(0)];
+        let mut one: Vec<&str> = vec!["E0303"; 7];
         one.push("I0007");
         assert_eq!(
-            super::listed_words(&report(&one)).as_str(),
+            super::listed_words(&report(&one, &[])).as_str(),
+            "8 diagnostics",
+            "rows alone say nothing was left out"
+        );
+        assert_eq!(
+            super::listed_words(&report(&one, &["E0303"])).as_str(),
             format!(
-                "{} diagnostics listed, and more of 1 code past the {cap} of one code a report lists",
-                one.len()
+                "8 diagnostics listed, and 2 more {} past the 7 of one code a report lists",
+                q("E0303")
             )
         );
         one.push("I0007");
         assert_eq!(
-            super::listed_words(&report(&one)).as_str(),
+            super::listed_words(&report(&one, &["E0303", "W0702"])).as_str(),
             format!(
-                "{} diagnostics listed, and more of 2 codes past the {cap} of one code a report lists",
-                one.len()
+                "9 diagnostics listed, and 2 more {} past the 7 of one code a report lists; 2 {} \
+                 left out with none of it listed",
+                q("E0303"),
+                q("W0702")
             )
+        );
+        // Past the size budget: `E0110` listed, every `I0003` left out.
+        let past = report(&["E0110", "I0007"], &["I0003"]);
+        let words = super::listed_words(&past);
+        assert_eq!(
+            words.as_str(),
+            format!(
+                "2 diagnostics listed, and 2 {} left out with none of it listed",
+                q("I0003")
+            )
+        );
+        assert!(
+            !words.as_str().contains("of one code"),
+            "{}",
+            words.as_str()
         );
     }
 }

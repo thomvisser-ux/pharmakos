@@ -243,8 +243,8 @@ pub fn report_of(answer: &Json) -> Result<VerifyReport, Failure> {
 }
 
 /// The enum-valued fields of a report on the wire, by where they sit: the
-/// report's `depth`, each diagnostic's `severity` and each suggestion's
-/// `applicability`.
+/// report's `depth`, each diagnostic's `severity`, each suggestion's
+/// `applicability` and each `left_out` entry's `severity`.
 const DEPTH: &str = "gp.api.v1.VerifyPlan.Depth";
 const SEVERITY: &str = "gp.api.v1.Diagnostic.Severity";
 const APPLICABILITY: &str = "gp.api.v1.PatchSuggestion.Applicability";
@@ -260,6 +260,7 @@ fn canonical_report(report: &Json) -> Result<Json, Failure> {
         let value = match key.as_str() {
             "depth" => enum_value(DEPTH, value)?,
             "diagnostics" => each(value, canonical_diagnostic)?,
+            "left_out" => each(value, canonical_left_out)?,
             _ => value.clone(),
         };
         out.push((key.clone(), value));
@@ -278,6 +279,24 @@ fn canonical_diagnostic(diagnostic: &Json) -> Result<Json, Failure> {
         let value = match key.as_str() {
             "severity" => enum_value(SEVERITY, value)?,
             "suggestions" => each(value, canonical_suggestion)?,
+            _ => value.clone(),
+        };
+        out.push((key.clone(), value));
+    }
+    Ok(Json::Object(out))
+}
+
+/// A `left_out` entry (S3's `leftout`): its `severity` spelt as the schema spells it.
+fn canonical_left_out(entry: &Json) -> Result<Json, Failure> {
+    let Json::Object(members) = entry else {
+        return Err(Failure::internal(strings::lobby_answer_unread(
+            "a left-out entry is not an object",
+        )));
+    };
+    let mut out = Vec::with_capacity(members.len());
+    for (key, value) in members {
+        let value = match key.as_str() {
+            "severity" => enum_value(SEVERITY, value)?,
             _ => value.clone(),
         };
         out.push((key.clone(), value));

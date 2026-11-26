@@ -628,20 +628,27 @@ pub(crate) fn route_index(pointer: &str) -> Option<usize> {
 }
 
 /// The taps the gateway says are legal: one `resolve_refs` over a probe
-/// playbook holding every candidate pair, then one QUICK `verify_plan` per
-/// part of at most [`crate::easy::TAP_PROBE_PART_MAX`] pairs, and none when
-/// there is no pair; and, when the probe could not say, why.
+/// playbook holding every candidate pair, then QUICK `verify_plan`s over the
+/// pairs not yet answered, at most [`crate::easy::TAP_PROBE_VERIFIES`] of
+/// them, and none when there is no pair; and, when the probe could not say,
+/// why.
 ///
 /// A pair is legal when its `on` reads the vent it names from that beacon
 /// (`resolve_refs`: the sim's own `on_vent` rules) and the verifier raises no
 /// `E0503` at its step (the beacon is on the Build mandate). A report lists
-/// at most [`crate::easy::REPORT_CAP_PER_CODE`] diagnostics of one code (S3's
-/// `vcap`), and a probe step raises at most one `E0503`, so a part one
-/// smaller than the cap lists every `E0503` it raised: none is read as
-/// absent because the cap left it out, and nothing is read from a sentence.
-/// When the probe cannot say ([`TapsUnread`]), the operator cannot say a tap
-/// would hold, so it composes none, and the reason is kept
-/// ([`crate::Played::taps_unread`]).
+/// only so many diagnostics of one code (S3's `vcap`) and says, in its typed
+/// `left_out` field (S3's `leftout`), when it left one out. The probe holds
+/// no copy of that number: it asks about every pair not yet answered, and
+/// when the report's `left_out` names `E0503` it takes the steps up to the
+/// last `E0503` listed as answered (the report lists a code's first ones in
+/// route order: `gp.api.v1.VerifyReport.left_out`'s contract, which the
+/// verifier's `a_report_lists_the_first_max_of_a_code_in_raise_order`, in
+/// `crates/verifier/tests/report_size.rs`, pins) and asks again from the step
+/// after it; when `left_out` does not name `E0503`, every step asked about is
+/// answered. Nothing is read from
+/// a sentence or a row count. When the probe cannot say ([`TapsUnread`]),
+/// the operator cannot say a tap would hold, so it composes none, and the
+/// reason is kept ([`crate::Played::taps_unread`]).
 pub(crate) fn legal_taps(
     wire: &mut Wire<'_, '_>,
     situation: &Situation,
@@ -671,13 +678,20 @@ pub enum TapsUnread {
     /// A call was refused, or its answer did not read (`MALFORMED`), or
     /// `verify_plan` answered with no report.
     Refused(Refused),
-    /// A part's report lists as many `E0503`s as a report lists of one code,
-    /// so the cap may have left one out: the part (from 0) and how many.
-    PartAtTheCap {
+    /// The probe asked its [`crate::easy::TAP_PROBE_VERIFIES`] verifies and
+    /// the last one's report still left an `E0503` out: the pairs answered,
+    /// of how many.
+    Spent {
+        /// The pairs answered, from the first.
+        answered: usize,
+        /// The pairs asked about.
+        pairs: usize,
+    },
+    /// A part's report says it left an `E0503` out and lists none, so no step
+    /// of the part is answered and asking again would ask the same.
+    LeftOutWithNoneListed {
         /// The part, from 0.
         part: usize,
-        /// The `E0503`s it listed.
-        listed: usize,
     },
     /// A part's report names an `E0503` at a step the part does not hold.
     StepPastThePart {
@@ -720,40 +734,67 @@ fn probe(wire: &mut Wire<'_, '_>, pairs: &[(String, Feature)]) -> Result<Vec<boo
             *slot = !reads.is_empty() && reads == vent.id && failure.is_empty();
         }
     }
-    // At least one by `crate::easy`'s compile-time check, so `chunks` has a
-    // length to cut at.
-    let part_len =
-        usize::try_from(crate::easy::TAP_PROBE_PART_MAX).map_err(|_| TapsUnread::PastTheTarget)?;
+    let verifies =
+        usize::try_from(crate::easy::TAP_PROBE_VERIFIES).map_err(|_| TapsUnread::PastTheTarget)?;
     let mut start = 0_usize;
-    for (number, part) in pairs.chunks(part_len).enumerate() {
-        for index in off_the_build_mandate(wire, number, part)? {
-            let at = start.checked_add(index).ok_or(TapsUnread::PastTheTarget)?;
+    for number in 0..verifies {
+        let Some(part) = pairs.get(start..).filter(|part| !part.is_empty()) else {
+            return Ok(legal);
+        };
+        let read = off_the_build_mandate(wire, number, part)?;
+        for index in &read.off {
+            let at = start.checked_add(*index).ok_or(TapsUnread::PastTheTarget)?;
             if let Some(slot) = legal.get_mut(at) {
                 *slot = false;
             }
         }
+        if !read.e0503_left_out {
+            return Ok(legal);
+        }
+        // The report listed `E0503`s up to its last listed one, in route
+        // order, and left the rest out: every step after it is unanswered.
+        let last = read
+            .off
+            .iter()
+            .max()
+            .copied()
+            .ok_or(TapsUnread::LeftOutWithNoneListed { part: number })?;
         start = start
-            .checked_add(part.len())
+            .checked_add(last)
+            .and_then(|at| at.checked_add(1))
             .ok_or(TapsUnread::PastTheTarget)?;
     }
-    Ok(legal)
+    if start >= pairs.len() {
+        return Ok(legal);
+    }
+    Err(TapsUnread::Spent {
+        answered: start,
+        pairs: pairs.len(),
+    })
+}
+
+/// What one probe verify's report says: the steps it lists an `E0503` at,
+/// and whether its `left_out` field says it left an `E0503` out.
+struct PartRead {
+    /// Indices into the part of the steps the report lists an `E0503` at.
+    off: Vec<usize>,
+    /// Whether the report's `left_out` names `E0503`.
+    e0503_left_out: bool,
 }
 
 /// One part's QUICK `verify_plan`: the steps of `part` (indices into it)
-/// whose beacon is not on the Build mandate, every one of them, or why the
-/// answer cannot say so.
+/// whose beacon the report lists as not on the Build mandate, and whether
+/// the report left an `E0503` out; or why the answer cannot say so.
 ///
 /// # Errors
 ///
 /// [`TapsUnread`]: the call's refusal, an answer that does not read or
-/// carries no `report`, a report that lists
-/// [`crate::easy::REPORT_CAP_PER_CODE`] `E0503`s or more (the cap could have
-/// left one out), or one that names a step the part does not hold.
+/// carries no `report`, or one that names a step the part does not hold.
 fn off_the_build_mandate(
     wire: &mut Wire<'_, '_>,
     number: usize,
     part: &[(String, Feature)],
-) -> Result<Vec<usize>, TapsUnread> {
+) -> Result<PartRead, TapsUnread> {
     let verified = wire.call(
         "verify_plan",
         object(vec![
@@ -779,15 +820,18 @@ fn off_the_build_mandate(
             })?;
         off.push(index);
     }
-    let cap =
-        usize::try_from(crate::easy::REPORT_CAP_PER_CODE).map_err(|_| TapsUnread::PastTheTarget)?;
-    if off.len() >= cap {
-        return Err(TapsUnread::PartAtTheCap {
-            part: number,
-            listed: off.len(),
-        });
+    // The report's own word for what it left out (S3's `leftout`); proto3
+    // JSON leaves an empty list out.
+    let mut e0503_left_out = false;
+    for gap in array_of(report, "left_out").map_err(diagnostics)? {
+        if text_of(gap, "code").map_err(diagnostics)? == "E0503" {
+            e0503_left_out = true;
+        }
     }
-    Ok(off)
+    Ok(PartRead {
+        off,
+        e0503_left_out,
+    })
 }
 
 /// The goals the map offers this seat, before any estimate: live, affordable,

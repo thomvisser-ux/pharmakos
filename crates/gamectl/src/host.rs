@@ -421,8 +421,9 @@ fn taps_unread(unread: &TapsUnread) -> String {
         TapsUnread::Refused(refused) => {
             strings::operator_taps_refused(&refused.method, &refused.code, &refused.message)
         }
-        TapsUnread::PartAtTheCap { part, listed } => {
-            strings::operator_taps_part_at_the_cap(*part, *listed)
+        TapsUnread::Spent { answered, pairs } => strings::operator_taps_spent(*answered, *pairs),
+        TapsUnread::LeftOutWithNoneListed { part } => {
+            strings::operator_taps_left_out_with_none_listed(*part)
         }
         TapsUnread::StepPastThePart { part, path } => {
             strings::operator_taps_step_past_the_part(*part, path)
@@ -655,9 +656,15 @@ mod tests {
     #[test]
     fn a_tap_probe_that_could_not_say_is_said() {
         let mut round = played(None, Vec::new());
-        round.taps_unread = Some(TapsUnread::PartAtTheCap { part: 1, listed: 4 });
+        round.taps_unread = Some(TapsUnread::Spent {
+            answered: 20,
+            pairs: 30,
+        });
         let said = refusals_said(0, &round).expect("said");
-        assert!(said.contains("part 1 listed 4 E0503"), "{said}");
+        assert!(said.contains("20 of its 30 pairs"), "{said}");
+        round.taps_unread = Some(TapsUnread::LeftOutWithNoneListed { part: 2 });
+        let said = refusals_said(0, &round).expect("said");
+        assert!(said.contains("part 2"), "{said}");
         round.taps_unread = Some(TapsUnread::Refused(refused(
             "verify_plan",
             "INVALID_ARGUMENT",

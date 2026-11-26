@@ -1012,8 +1012,12 @@ fn save_golden(file: &str, text: &str) {
 /// `tests/fixtures/save-v3-round-one-lull.json`, and still resumes
 /// (`a_version_3_save_written_by_main_still_resumes`). Re-blessed a fourth
 /// time by lane `presence7`, which moved `VERIFIER_VERSION` from `0.1.0-s3.7`
-/// to `0.1.0-s3.8` (decisions-log item 184 (10)): the stamp's
+/// to `0.1.0-s3.8` (decisions-log item 184 (3)): the stamp's
 /// `verifier_version` and the `report_hash` lines, and no other line.
+/// Re-blessed a fifth time by lane `leftout`, which moved `VERIFIER_VERSION`
+/// from `0.1.0-s3.8` to `0.1.0-s3.9` (decisions-log item 183 (5)): the
+/// stamp's `verifier_version` and the two `report_hash` lines, and no other
+/// line.
 #[test]
 fn a_save_is_written_byte_for_byte_and_a_committed_save_resumes() {
     const MATCH_ID: &str = "m-fpstream2-save";
