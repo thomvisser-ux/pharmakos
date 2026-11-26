@@ -54,7 +54,7 @@ fn world() -> World {
 
 /// The world with the scout's vision put back to 8: the two refresh-order
 /// tests below stage two sightings 16 voxels either side of the post, and a
-/// scout of the committed vision 24 (decision 17, rules revision 6) sees both
+/// scout of the committed vision 28 (rules revision 8) sees both
 /// from the post at once, so it could not show which it re-checks first.
 fn short_sighted_world() -> World {
     let mut message = rules().message().clone();
@@ -376,10 +376,14 @@ fn a_cell_older_than_reach_memory_is_scanned_again_nearest_first() {
 
 /// The tick a Survey scout first renews a due cell in
 /// `a_cell_older_than_reach_memory_is_scanned_again_nearest_first`.
-const RENEWAL_TICK: u32 = 3_961;
+///
+/// It was 3 961 until S3's `tune3`: a scout keeps the cell it set off for
+/// (`survey::scan_walk`), so it no longer turns aside for the nearer cell
+/// that falls due while it walks, and reaches this one fifteen ticks sooner.
+const RENEWAL_TICK: u32 = 3_946;
 
 /// The chain's hash on [`RENEWAL_TICK`].
-const RENEWAL_HASH: u64 = 0xf795_cf68_97a4_d21c;
+const RENEWAL_HASH: u64 = 0x4a56_0120_0749_a5eb;
 
 /// Fix pass 1, C1 (AGENTS.md section 4.8, the second place): a save and a
 /// restore with both of snapshot 16's columns filled. A Survey scout has

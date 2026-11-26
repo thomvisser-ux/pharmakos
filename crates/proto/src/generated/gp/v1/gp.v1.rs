@@ -3015,7 +3015,7 @@ pub mod rules_table {
         /// 90). 250 ms is exactly five sim ticks at 20 Hz, so it divides the tick
         /// rate and no decision lands between ticks.
         ///
-        /// PLACEHOLDER: tuning — owner, S3.
+        /// PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
         #[prost(int32, tag="3")]
         pub decision_tick_ms: i32,
         /// The first Lull's planning timer, in game milliseconds: spec section 3's
@@ -3736,8 +3736,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
     /// `locomotion.drone_cost_per_second`.
     ///
     /// PLACEHOLDER: unit vision, decision 17's proposals — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
-    /// Every kind's `vision_radius_voxels`: scout 24, raider 12 and the three
-    /// drones 8 (S1-34; S2's plan, decision 22).
+    /// Every kind's `vision_radius_voxels`: scout 28 (24 until revision 8, which
+    /// lets it sight a core from outside the core gun's range), raider 12 and
+    /// the three drones 8 (S1-34; S2's plan, decision 22).
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Units {
         /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
@@ -3923,7 +3924,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         /// item 90: 30 / 200 / 1
         #[prost(message, optional, tag="5")]
         pub survey_post: ::core::option::Option<StructureKind>,
-        /// PLACEHOLDER: tuning — owner, S3.
+        /// PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
         ///
         /// item 90: 120 / 500 / 3
         #[prost(message, optional, tag="6")]
@@ -4012,8 +4013,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Structures"
         /// The worked example (`expand_east`) is 6 units and the three templates
         /// are of that order, so 128 is roomy on purpose.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3's exit: P1 sets the real number from
-        /// the measured per-rule cost per decision tick (item 94).
+        /// PLACEHOLDER: tuning, 128 by E24's mechanics and decision 9 — owner, at S3's demo, with `cert3`'s P1 curve (item 94).
         ///
         /// item 94: 128
         #[prost(uint32, tag="1")]
@@ -4021,21 +4021,21 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Structures"
         /// The floor under a handler's cooldown: a playbook asking for less is
         /// rejected.
         ///
-        /// PLACEHOLDER: tuning — owner, S3.
+        /// PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
         ///
         /// item 90: 5000
         #[prost(int32, tag="2")]
         pub handler_cooldown_min_ms: i32,
         /// The ceiling on a handler's `max_fires`.
         ///
-        /// PLACEHOLDER: tuning — owner, S3.
+        /// PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
         ///
         /// item 90: 8
         #[prost(uint32, tag="3")]
         pub max_fires_max: u32,
         /// The seat notebook's size, in characters.
         ///
-        /// PLACEHOLDER: tuning — owner, S3.
+        /// PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
         ///
         /// item 90: 4000
         #[prost(uint32, tag="4")]
@@ -4043,7 +4043,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Structures"
         /// How long a seat remembers a reached place or a seen thing, in game
         /// milliseconds.
         ///
-        /// PLACEHOLDER: tuning — owner, S3 (item 90 marks this one S2/S3).
+        /// PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo (item 90 marked this one S2/S3).
         ///
         /// item 90: 180000
         #[prost(int32, tag="5")]

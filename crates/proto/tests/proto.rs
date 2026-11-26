@@ -1089,15 +1089,17 @@ fn the_rules_table_carries_s2s_rows() {
 
     let units = table.units.expect("the units block");
     let structures = table.structures.expect("the structures block");
-    // Decision 17's vision proposals (revision 6); a beacon, which sees by
-    // its sphere, and the resonance spire, for which it proposes nothing, keep
-    // the scouts' old constant of 8 (S1-34).
+    // Decision 17's vision proposals (revision 6), with the scout's moved
+    // from 24 to 28 by revision 8 so that it sights a core from outside the
+    // core gun's range; a beacon, which sees by its sphere, and the resonance
+    // spire, for which decision 17 proposes nothing, keep the scouts' old
+    // constant of 8 (S1-34).
     let unit_kinds = [
         ("build_drone", units.build_drone, 8),
         ("mining_drone", units.mining_drone, 8),
         ("repair_drone", units.repair_drone, 8),
         ("raider", units.raider, 12),
-        ("scout", units.scout, 24),
+        ("scout", units.scout, 28),
     ];
     let structure_kinds = [
         ("beacon", structures.beacon, 8),
@@ -1234,8 +1236,8 @@ fn the_rules_table_carries_s2s_new_blocks() {
 fn the_rules_table_carries_s3s_rows() {
     let table = committed_rules_table();
     assert_eq!(
-        table.revision, 7,
-        "rules.proto: `revision` is bumped whenever a value changes; revision 7 added S3's rows"
+        table.revision, 8,
+        "rules.proto: `revision` is bumped whenever a value changes; revision 7 added S3's rows and revision 8 the Spire's build time, and moved the scout's vision"
     );
 
     let pathing = table.pathing.expect("the pathing block");

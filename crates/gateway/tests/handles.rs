@@ -64,10 +64,31 @@ const SEATS: [SeatId; 2] = [SeatId::new(0), SeatId::new(1)];
 /// The most handles a seat is asked about: far more than this match mints.
 const MOST_HANDLES: u32 = 32;
 
-/// Round 1, seat 0: a Survey beacon whose probe area sits beside seat 1's
-/// outpost and just outside the reach of seat 1's core
-/// (`survey-finds-the-enemy`'s).
-const ROUND_1_SEAT_0: &str = "scenarios/s2/survey-finds-the-enemy.playbook.jsonc";
+/// Round 1, seat 0: a Survey beacon whose probe area sits west of seat 1's
+/// outpost (at x 337, y 350), within a scout's sight of it and out of its
+/// sight of seat 1's core (near x 357, y 357): 20 voxels from the one and
+/// over 40 from the other.
+///
+/// `survey-finds-the-enemy`'s own playbook served here until rules revision
+/// 8: its strip, at x 337, is 24 voxels from the core, out of a scout's
+/// sight at 24 and inside it at 28, so its scout now finds both beacons in
+/// round 1 and the recipe's order (the outpost first, the core, of the lower
+/// id, a round later) would be lost.
+const ROUND_1_SEAT_0: &str = r#"// Watch the outpost from the west.
+{"schema_version": {"major": 1, "minor": 0},
+ "meta": {"title": "Watch", "author_kind": "HUMAN"},
+ "kind": "PLAYBOOK",
+ "declarative": {"route": [
+   {"label": "watch_post", "timeout_ms": 30000,
+    "place_beacon": {"at": {"voxel": {"x": 360, "y": 30, "z": 36}},
+      "initial": {"priority": "NORMAL", "mandate": {"survey": {
+        "probe_areas": [{"min": {"x": 317, "y": 343, "z": 0}, "max": {"x": 317, "y": 345, "z": 63}}],
+        "scout_count": 1}}}},
+    "on_fail": {"action": "ABORT_ROUTE"}}
+ ], "handlers": []},
+ "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+ "fallback": {"hold": {"at": {"safest": {}}}}}
+"#;
 
 /// Round 1, seat 1: an outpost beacon inside its core's sphere.
 const ROUND_1_SEAT_1: &str = "scenarios/s2/survey-finds-the-enemy-seat1.playbook.jsonc";
@@ -323,7 +344,7 @@ fn a_resumed_lull_names_every_handle_as_the_match_that_never_stopped() {
     let mut refreshed = 0_usize;
 
     // Round 1: seat 0's scout finds seat 1's outpost, and only it.
-    submit(&mut surface, 0, &committed(ROUND_1_SEAT_0));
+    submit(&mut surface, 0, ROUND_1_SEAT_0);
     submit(&mut surface, 1, &committed(ROUND_1_SEAT_1));
     refreshed = refreshed.saturating_add(play_round(&mut surface));
 

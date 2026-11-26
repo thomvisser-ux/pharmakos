@@ -10,27 +10,46 @@
 //
 //   seat 0  seals scenarios/s3/survey-keeps-a-core-fresh.playbook.jsonc every
 //           round: a Survey beacon beside its core with two scouts and one
-//           probe area over seat 1's corner of the map, far more ground than
-//           two scouts scan in three Pushes;
+//           probe area over seat 1's corner of the map, sixty coarse cells,
+//           which the two scouts scan once in the first two Pushes
+//           (`area_surveyed`, tick 14466) and again as each falls due;
 //   seat 1  seals nothing, so the gateway files the safe playbook for it.
 //
-// A scout scanning the corner finds seat 1's core (`enemy_beacon_found`,
-// tick 4666 in round 1). From then on the seat holds that sighting, and in
-// each Push a scout leaves the scan for it: the first refresh is tick 7691 in
-// round 2, and the chain carries every later one (ticks 8916 and 15001 in
-// round 2, 18636, 21986 and 23206 in round 3), so the sighting's age at round
-// 2's Lull is 66.7 s, at round 3's 30.0 s and at the match's end 99.7 s, each
-// inside the window although each Push after the first is longer than it.
-// The core's autocannon reaches as far as a scout sees (24), so a refresh
-// costs scouts, which the beacon fields again (decisions-log item 173 (2),
+// A scout scanning the corner comes within sight of seat 1's core
+// (`enemy_beacon_found`, tick 3981 in round 1) from outside its gun: a scout
+// sees 28 columns and the core's autocannon reaches 24 (rules revision 8).
+// From then on the seat holds that sighting, and in each Push a scout leaves
+// the scan for it: the first `sighting_refreshed` is tick 6121 in round 2,
+// and the events log carries every later one (thirteen in all: eight in
+// round 2, five in round 3, the last on tick 22856), so the seat holds the
+// sighting inside the window at every Lull although each Push after the
+// first is longer than it.
+//
+// A cell under the gun is no destination while the seat sees the gun
+// (S3's plan, decision 12), so a scout walking to one looks at it from the
+// edge of its sight, and the cell is marked looked at
+// (`survey::seen_under_a_gun`). The walk itself is the router's and prices
+// no threat for a scout, so a scout sent on to a cell beyond the gun walks
+// through it: four scouts are lost that way (ticks 9848, 10098, 14537 and
+// 20177), and the beacon fields each again (decisions-log item 173 (2),
 // "Refresh wins, accept losses").
+//
+// Until S3's `tune3` the probe area reached north to row 240. At a sight of
+// 28 the two scouts scan that larger area west along its northern rows
+// first, and come within sight of the core only in round 2 (tick 10631), so
+// the area was drawn in to row 304 to keep the find in round 1 and a
+// refresh in each of the two longer Pushes.
 //
 // What a scenario cannot assert, said here so nobody reads it into the file:
 // `event_fired` holds from an event's first occurrence on and has no value
-// predicate (the register's M-05), so a refresh in each Push and the age at
-// each Lull are pinned by the chain, which hashes the sighting table every
-// tick, and by crates/sim/tests/survey_refresh.rs, which asserts the age at
-// every Lull on the committed seeds.
+// predicate (the register's M-05). So every tick this comment gives is held
+// by the events log committed beside the chain
+// (tests/golden/scenarios/survey-keeps-a-core-fresh/expected.events.txt) and
+// by `the_survey_scenario_pins_its_beats` in crates/gamectl/tests/scenarios.rs,
+// which counts the refreshes of each Push; the age at each Lull is pinned by
+// the chain, which hashes the sighting table every tick, and by
+// crates/sim/tests/survey_refresh.rs, which asserts the age at every Lull on
+// the committed seeds.
 {
   "format": "pharmakos.scenario.v1",
   "name": "survey-keeps-a-core-fresh",
@@ -60,9 +79,9 @@
       "note": "The Survey beacon is placed with its probe area." },
     { "assert": "event_fired", "event": "unit_fabricated", "seat": 0, "by_tick": 1200,
       "note": "The Survey beacon fields its scouts." },
-    { "assert": "event_fired", "event": "enemy_beacon_found", "seat": 0, "by_tick": 4700,
+    { "assert": "event_fired", "event": "enemy_beacon_found", "seat": 0, "by_tick": 4000,
       "note": "A scout scanning the corner sees seat 1's core, a beacon seat 0 had never seen." },
-    { "assert": "event_fired", "event": "sighting_refreshed", "seat": 0, "by_tick": 7700,
+    { "assert": "event_fired", "event": "sighting_refreshed", "seat": 0, "by_tick": 6200,
       "note": "In round 2 a scout leaves the scan and renews the core's sighting; the later refreshes are the chain's." },
     { "assert": "hash_chain_equals",
       "golden": "tests/golden/scenarios/survey-keeps-a-core-fresh/expected.hashes.txt",

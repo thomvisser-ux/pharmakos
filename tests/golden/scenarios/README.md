@@ -26,7 +26,9 @@ One directory per scenario, named after its `name` key:
 tests/golden/scenarios/<name>/expected.hashes.txt   the per-tick chain
 tests/golden/scenarios/<name>/expected.events.txt   the event log its producing
                                                     test writes (expand-east-
-                                                    segment only)
+                                                    segment, resonance-spire,
+                                                    spire-lost and survey-
+                                                    keeps-a-core-fresh)
 tests/golden/scenarios/nightly-result/expected.result.json
                                                     the nightly result's shape
                                                     (S2's `night`; below)
@@ -450,7 +452,48 @@ across the two scouts, both of which set off for the core, where fix pass 2
 chained them on one. `event_fired` holds from an event's first occurrence, so
 the refresh in each Push and each Lull's age are the chain's, and
 `crates/sim/tests/survey_refresh.rs` asserts the age at every Lull on the
-committed seeds.
+committed seeds. (The ticks and ages in this paragraph are `srvy`'s; the next
+paragraph gives the scenario as it stands.)
+
+**S3's `tune3` moved `survey-finds-the-enemy` (from line 3531) and
+`survey-keeps-a-core-fresh` (from line 391), redrew the second's probe area,
+and committed its events log.** No other scenario chain moved, and the
+determinism chain did not move. Three things moved them:
+
+* **Rules revision 8: a scout sees 28 columns** (`units.scout.vision_voxels`,
+  24 before; the core's autocannon still reaches 24). A scout now sees a core
+  from outside its gun. `survey-finds-the-enemy` moves from the first tick the
+  wider sight reaches what the narrower did not; its event assertions hold
+  unchanged.
+* **Two Survey rules in `crates/sim/src/survey.rs`**, which that sight made
+  reachable. A known threat is what a seat sees on the tick, so the cells
+  under a gun are closed to a scout only while it sees the gun. (1) A scout
+  keeps the scan cell it set off for while that cell stays open
+  (`scan_walk`); picking afresh on every decision, a scout turned on the edge
+  of its sight of the core for the rest of the match. (2) A scout walking to a
+  scan column when its seat sees a gun over that column has looked at the
+  cell (`seen_under_a_gun`): the cell is marked on that tick, as a scan marks
+  it, counts for `area_surveyed`, and is due again once the mark is older than
+  reach memory; unmarked, it drew a scout back whenever the gun left its
+  sight. `crates/sim/tests/survey_refresh.rs` holds both
+  (`a_walking_scout_is_never_turned_on_the_spot_at_the_edge_of_its_sight`,
+  `a_scout_that_sees_a_gun_over_its_scan_cell_has_looked_at_it`).
+* **`survey-keeps-a-core-fresh`'s probe area**, drawn in from row 240 to row
+  304 in its playbook (the chain moves from line 391, where the post is placed
+  with it). At a sight of 28 the two scouts scan the larger area west along
+  its northern rows first and come within sight of the core only in round 2
+  (tick 10631), which left the scenario's find and first refresh a round late.
+  Over the smaller area, sixty coarse cells, the core is found at tick 3981 in
+  round 1; the first `sighting_refreshed` is tick 6121; there are thirteen
+  (none in round 1, eight in round 2, five in round 3, the last at tick
+  22856); the area is reported surveyed at tick 14466; and four scouts are
+  lost walking through the core's gun to a cell beyond it (ticks 9848, 10098,
+  14537 and 20177: decision 12 closes a place under a seen gun as a
+  destination, and the walk is the router's, which prices no threat for a
+  scout), each fielded again. Each of those figures is held by
+  `expected.events.txt` and by `the_survey_scenario_pins_its_beats` in
+  `crates/gamectl/tests/scenarios.rs`, which counts the refreshes of each
+  Push, since `event_fired` cannot.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen

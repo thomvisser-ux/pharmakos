@@ -145,6 +145,38 @@ S3's `lic`: `combat.charge_damage_hp` 60,
 `licences.resonance_vents` 2. `rules_hash` moves, so every `report_hash` golden
 and the nightly result's do; no chain does.
 
+Revision 8 (S3's numbers, S3's plan task `tune3`) adds one row and moves one
+value. `structures.resonance_spire_build_ms` 60000 is the sim's Spire build
+time given a row at its own value (the owner's approval of 2026-11-25).
+`units.scout.vision_radius_voxels` goes from 24 to 28 (the owner's ruling of
+2026-11-25): at 24 a scout saw a core only from inside the core gun's range of
+24, a Survey post rarely held a sighting long enough for a raid, and Easy
+launched a raid in 2 of 60 nightly matches, so S3's decision 3 ("Yes, Easy
+raids") was unmet in play; at 28 a scout sights a core from outside the gun.
+Every other row is kept at revision 7's value. `rules_hash` moves, and vision
+gates every sighting and every weapon's choice, so every chain a scout plays in
+moves with it.
+
+On `tune3`'s final tree (this revision and the lane's two Survey fixes,
+`crates/sim/src/survey.rs`'s `scan_walk` and `seen_under_a_gun`), over the
+twenty nightly seeds: the Rusher is the sole winner of 18 of 20 (Hunter 9,
+Turtle 0), over the 65 % band, and Easy launches a raid in 7 of the 60
+matches, where it launched in 2 at a sight of 24. All seven are against the
+Turtle; against the Rusher and the Hunter it launches none. The band is **open
+and acknowledged** by the owner's word of 2026-11-25, which relaxed balance
+detail until further notice; no row is moved to close it. What was measured,
+for when tuning resumes: against the Rusher Easy loses 5.4 beacons a match and
+the arm none; the arm destroys $565 of Easy's value a match and Easy $294 of
+the arm's; Easy's guard stands only beside its core.
+
+Earlier figures, read before the lane's Survey fixes, are not this tree's and
+are kept only as a pointer for tuning: with a scout stuck at the edge of its
+sight of a core (the defect `scan_walk` fixes) standing as an accidental
+sentinel, the Rusher read 16 of 20; a raider priced at 40 or 45 left it there;
+and a scratch build in which Easy re-took the ground a beacon fell on with a
+Defend post read Rusher 12, Hunter 9 and Turtle 0. None of those builds is in
+the tree, and each would be measured again before a row moved.
+
 Revision 3 fills the table out: decisions-log **items 90, 91 and 94** fix every
 value the walking skeleton's three lanes need, in one sitting, so that no task
 writes a number of its own. Almost every row below is therefore a **labelled
@@ -204,7 +236,7 @@ so it is the first place the omission is visible.
 | `match.segment_lengths_ms` 3 / 5 / 8 min | item 68 | yes |
 | `match.lull_ms` 300 000 | item 127 (2), spec §3 | **PLACEHOLDER** — Tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1). Every Lull after the first: the spec's five minutes, re-ruling D-01's 180 000 for S1. Round 1 is timed by `first_lull_ms` and every later Lull by this row (S1's `econ`, #92) |
 | `match.first_lull_ms` 600 000 | item 127 (2), spec §3 | **PLACEHOLDER** — Tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1). The first Lull: the spec's ten minutes (revision 4) |
-| `match.decision_tick_ms` 250 | item 90, spec §11 | **PLACEHOLDER** — tuning, owner, S3. Five sim ticks at 20 Hz |
+| `match.decision_tick_ms` 250 | item 90, spec §11 | **PLACEHOLDER** — tuning, owner, at S3's demo; kept by `tune3` (revision 8). Five sim ticks at 20 Hz |
 | `locomotion.step_cost_*`, `climb_surcharge`, `move_cost_per_tick` | item 59 | 10 / 14 / 3 yes; `climb_surcharge = 4` has **no gameplay evidence behind it** (item 59) — owner, S3. `move_cost_per_tick` is **superseded** by the per-kind rows below (item 90) and nothing reads it; it stays because deleting a field is a `buf breaking` failure |
 | `locomotion.commander_cost_per_second` 10 | item 90, spec §4 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1); the balance report's spawn travel line reads this speed. 1.0 voxels/s, the low end of the spec's range. Decision 16's `expand_east` column of `tune`'s balance report found the spec's `expand_east` cannot reach its first site in its 120 s at any speed inside the range: on the `expand-east-segment` scenario's seed the walk from either seat's core is 290 s or more at this speed, so it would need 2.5 voxels/s or faster, and item 139 (1) ruling 3 kept the speed: `expand-east-segment` gets its own playbook with a nearer first site and `examples/playbooks/expand_east.jsonc` is unchanged (item 103 (3); S2's plan, E22 as amended by the main session; decisions-log item 145, to come) |
 | `locomotion.drone_cost_per_second` 10 | item 90 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1), after `tune`'s balance check report kept it at item 90's seed, because no flag of the check implicates it (S1's plan, decision 16). The three drone kinds' `cost_per_second` restate this row and each pair moves together: if `tune3` moves one, this row and the other two drones' speeds move with it (`crates/proto/tests/proto.rs`'s `the_restated_rows_agree`) |
@@ -237,12 +269,12 @@ so it is the first place the omission is visible.
 | `structures.generator` 80/600/0, `structures.survey_post` 30/200/1 | item 90 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1), after `tune`'s balance check report kept it at item 90's seed, because no flag of the check implicates it (S1's plan, decision 16). The generator's `draw_kw` of 0 is omitted from the canonical JSON; see above |
 | `structures.autocannon` 60/500/2, `structures.mortar` 90/400/3, `wall_cost_per_voxel` 1, `demolition_charge_cost_dollars` 15 | item 90 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1) |
 | `structures.build_hp_per_second` 60 | S1-24, item 105 (1), S1's plan decisions 10 and 13 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1), after `tune`'s balance check report kept it at revision 4's value, the sim's named constant it replaced, because no flag of the check implicates it (S1's plan, decision 16). Hit points a build drone adds per second, read by the sim at load (`RulesTable::build_hp_per_tick`, S1's `build`, #97). The table loads only when it is a positive multiple of the tick rate, so it moves in steps of 20 (item 136 (3) (b)) |
-| `structures.resonance_spire` 120/500/3 | item 90 | **PLACEHOLDER** — tuning, owner, S3 |
-| `verifier.size_budget_units` 128 | item 94 | **PLACEHOLDER** — tuning, owner, at **S3's exit**; P1 sets the real number from the measured per-rule cost per decision tick. A unit is one route step, one handler, one step in a handler body, one build target, one protected area or one patrol waypoint; conditions and settings count nothing |
-| `verifier.handler_cooldown_min_ms` 5000, `max_fires_max` 8, `notebook_max_chars` 4000 | item 90, spec §§10, 11 | **PLACEHOLDER** — tuning, owner, S3 |
-| `verifier.reach_memory_ms` 180000 | item 90 | **PLACEHOLDER** — tuning, owner, S3 (item 90 marks it S2/S3) |
+| `structures.resonance_spire` 120/500/3 | item 90 | **PLACEHOLDER** — tuning, owner, at S3's demo; kept by `tune3` (revision 8) |
+| `verifier.size_budget_units` 128 | item 94 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `cert3`'s P1 curve; kept at 128 by `tune3` (revision 8), E24's mechanical result and decision 9's ceiling. A unit is one route step, one handler, one step in a handler body, one build target, one protected area or one patrol waypoint; conditions and settings count nothing |
+| `verifier.handler_cooldown_min_ms` 5000, `max_fires_max` 8, `notebook_max_chars` 4000 | item 90, spec §§10, 11 | **PLACEHOLDER** — tuning, owner, at S3's demo; kept by `tune3` (revision 8) |
+| `verifier.reach_memory_ms` 180000 | item 90 | **PLACEHOLDER** — tuning, owner, at S3's demo; kept by `tune3` (revision 8) (item 90 marked it S2/S3) |
 | `locomotion.headroom_voxels` 2 | S2-05, S2's plan E26 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1). The sim's `HEADROOM_VOXELS` given a row at its own value (revision 5); S2's `ids` #123 reads the row and deleted the constant (decisions-log item 146). E26 keeps today's 2; decision 17 proposes nothing for it |
-| `units.*.vision_radius_voxels`, `structures.*.vision_radius_voxels`, `commander.vision_radius_voxels`: scout 24, raider 12, commander 10, the drones 8, autocannon 20, mortar 12, Generator, survey post, beacon and resonance spire 8 | S1-34, item 144 (4), S2's plan decisions 17 and 22 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1). Revision 6 (`tune2`) applies decision 17's proposals; a beacon, which sees by its sphere, and the resonance spire, for which decision 17 proposes nothing, keep 8. At scout vision 24 a scout on an explored cell's centre sees the whole 16-column cell (its half-diagonal is about 11.3) |
+| `units.*.vision_radius_voxels`, `structures.*.vision_radius_voxels`, `commander.vision_radius_voxels`: scout 24, raider 12, commander 10, the drones 8, autocannon 20, mortar 12, Generator, survey post, beacon and resonance spire 8; **scout 28 from revision 8** | S1-34, item 144 (4), S2's plan decisions 17 and 22 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1). Revision 6 (`tune2`) applies decision 17's proposals; a beacon, which sees by its sphere, and the resonance spire, for which decision 17 proposes nothing, keep 8. Revision 8 (`tune3`) moves the scout from 24 to 28, so that it sights a core from outside the core gun's 24 (the owner's ruling of 2026-11-25). At scout vision 28 a scout on an explored cell's centre sees the whole 16-column cell (its half-diagonal is about 11.3) |
 | `units.raider.weapon` 4 / 8 / 500, `structures.autocannon.weapon` 20 / 12 / 250, `beacon.core_weapon` 24 / 12 / 250 (range voxels, HP, cooldown ms) | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1). Direct fire: no `projectile`, so the damage lands in the tick it is dealt (E2). Read from S2's `fire`. Kept by revision 6 on the duel report (`crates/sim/tests/duels.rs`): the autocannon kills a raider in 2.2 s by the rows (4.0 s staged), one raider kills it in 31 s, four in 10 s and eight in 4 s, and a raider walks the 16 voxels from the autocannon's range to its own in 13.3 s under fire, so a dive needs several raiders, as spec §9's table has it. The core's autocannon has no duel line of its own: no staged fight separates its 24 from the autocannon's 20 |
 | `structures.mortar.weapon` 40 / 60 / 4000, projectile 8 voxels/s, splash 3, crater 2 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1). The `projectile` (the shell) is what makes it indirect (E13); the splash has no falloff. Read from S2's `fire`. Kept by revision 6 on the duel report: with a scout of its seat in sight of the target the mortar kills an autocannon 30 voxels off in 40 s untouched (9 shells), and without one it never fires; raiders that dive it kill it (one in 25 s, four in 6.5 s) and it kills none of them; a clump of five raiders 12 voxels off is gone in 21.6 s (5 shells). Its effective range under seat sight (item 148 (2)) is 11 voxels on its own vision of 12, 23 with its home beacon's sphere at it, and 39 with a scout 16 voxels out (with gaps): its 40 reaches its length only where another sensor sees |
 | `combat.under_attack_window_ms` 10000, `threat_step_cost_multiplier` 4, `charge_radius_voxels` 4, `charge_fuse_ms` 5000, `repair_hp_per_second` 20, `terraform_ms_per_voxel` 1000 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1). Read by S2's `dfnd`, `atk` and `site`. Kept at decision 17's proposals by revision 6 with no evidence for or against: no duel stages them, and the balance check's matches never fought. The charge damages voxels only, as built, until `lic` reads `combat.charge_damage_hp` below |

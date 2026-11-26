@@ -145,7 +145,7 @@ message RulesTable {
     // 90). 250 ms is exactly five sim ticks at 20 Hz, so it divides the tick
     // rate and no decision lands between ticks.
     //
-    // PLACEHOLDER: tuning — owner, S3.
+    // PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
     int32 decision_tick_ms = 3;
 
     // The first Lull's planning timer, in game milliseconds: spec section 3's
@@ -670,8 +670,9 @@ message RulesTable {
   // `locomotion.drone_cost_per_second`.
   //
   // PLACEHOLDER: unit vision, decision 17's proposals — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
-  // Every kind's `vision_radius_voxels`: scout 24, raider 12 and the three
-  // drones 8 (S1-34; S2's plan, decision 22).
+  // Every kind's `vision_radius_voxels`: scout 28 (24 until revision 8, which
+  // lets it sight a core from outside the core gun's range), raider 12 and
+  // the three drones 8 (S1-34; S2's plan, decision 22).
   message Units {
     // PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
     UnitKind build_drone = 1;    // item 90: 20 / 100 / 1 / 10
@@ -803,7 +804,7 @@ message RulesTable {
     StructureKind mortar = 4;           // item 90: 90 / 400 / 3; 40 / 60 / 4000
     // PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
     StructureKind survey_post = 5;      // item 90: 30 / 200 / 1
-    // PLACEHOLDER: tuning — owner, S3.
+    // PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
     StructureKind resonance_spire = 6;  // item 90: 120 / 500 / 3
 
     // Wall, priced per voxel; HP is by material rather than by structure,
@@ -875,30 +876,29 @@ message RulesTable {
     // The worked example (`expand_east`) is 6 units and the three templates
     // are of that order, so 128 is roomy on purpose.
     //
-    // PLACEHOLDER: tuning — owner, at S3's exit: P1 sets the real number from
-    // the measured per-rule cost per decision tick (item 94).
+    // PLACEHOLDER: tuning, 128 by E24's mechanics and decision 9 — owner, at S3's demo, with `cert3`'s P1 curve (item 94).
     uint32 size_budget_units = 1;                  // item 94: 128
 
     // The floor under a handler's cooldown: a playbook asking for less is
     // rejected.
     //
-    // PLACEHOLDER: tuning — owner, S3.
+    // PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
     int32 handler_cooldown_min_ms = 2;             // item 90: 5000
 
     // The ceiling on a handler's `max_fires`.
     //
-    // PLACEHOLDER: tuning — owner, S3.
+    // PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
     uint32 max_fires_max = 3;                      // item 90: 8
 
     // The seat notebook's size, in characters.
     //
-    // PLACEHOLDER: tuning — owner, S3.
+    // PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo.
     uint32 notebook_max_chars = 4;                 // item 90: 4000
 
     // How long a seat remembers a reached place or a seen thing, in game
     // milliseconds.
     //
-    // PLACEHOLDER: tuning — owner, S3 (item 90 marks this one S2/S3).
+    // PLACEHOLDER: tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo (item 90 marked this one S2/S3).
     int32 reach_memory_ms = 5;                     // item 90: 180000
   }
 

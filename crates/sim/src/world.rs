@@ -9793,7 +9793,7 @@ mod ids_tests {
         assert_eq!(reloaded.rules_hash(), committed.rules_hash());
         assert_eq!(
             format!("{:016x}", committed.rules_hash()),
-            "1b26c525068bff61",
+            "f5f7d5132e45e4e8",
             "the committed table's rules hash is the one every golden names"
         );
     }

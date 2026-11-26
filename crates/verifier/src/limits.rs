@@ -181,7 +181,7 @@ impl Limits {
 
     /// The playbook size budget, in size units (`verifier.size_budget_units`).
     ///
-    /// PLACEHOLDER: the size budget's tuning — owner, S3's exit.
+    /// PLACEHOLDER: the size budget's tuning, 128 by E24's mechanics and decision 9 — owner, at S3's demo, with `cert3`'s P1 curve.
     ///
     /// P1 sets the real number from the measured per-rule cost per decision
     /// tick (item 94). The
@@ -226,7 +226,7 @@ impl Limits {
     /// reference to an enemy beacon, retired with S3's `vfy6`: no other slot
     /// takes one, `E0421`.)
     ///
-    /// PLACEHOLDER: the reach window's tuning — owner, S3 (item 90).
+    /// PLACEHOLDER: the reach window's tuning, kept at its value by `tune3` (revision 8) — owner, at S3's demo (item 90).
     #[must_use]
     pub const fn reach_memory_ms(&self) -> i32 {
         self.reach_memory_ms

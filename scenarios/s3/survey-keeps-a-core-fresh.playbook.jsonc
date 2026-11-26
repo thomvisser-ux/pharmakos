@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Lane `srvy`, seat 0: deploy a Survey beacon beside the core, two scouts,
-// one probe area over the enemy's corner of the map, far more ground than two
-// scouts scan in three Pushes. See survey-keeps-a-core-fresh.scenario.jsonc.
+// one probe area over the enemy's corner of the map: sixty coarse cells, which
+// the scouts scan once in the first two Pushes and again as each falls due.
+// See survey-keeps-a-core-fresh.scenario.jsonc (S3's `tune3` drew the area in
+// from row 240 to row 304, and says why there).
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {"title": "Keep watch", "author_kind": "HUMAN"},
@@ -13,7 +15,7 @@
       {"label": "watch_post", "timeout_ms": 30000,
         "place_beacon": {"at": {"voxel": {"x": 360, "y": 30, "z": 36}},
           "initial": {"priority": "NORMAL", "mandate": {"survey": {
-            "probe_areas": [{"min": {"x": 200, "y": 240, "z": 0}, "max": {"x": 383, "y": 383, "z": 63}}],
+            "probe_areas": [{"min": {"x": 200, "y": 304, "z": 0}, "max": {"x": 383, "y": 383, "z": 63}}],
             "scout_count": 2}}}},
         "on_fail": {"action": "ABORT_ROUTE"}}
     ],

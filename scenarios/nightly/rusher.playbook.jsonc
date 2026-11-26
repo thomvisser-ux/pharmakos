@@ -52,7 +52,7 @@
       // The scouts, placed first so that the seat comes to know an enemy
       // beacon early: two scouts sent to the generator's eight spawn
       // points, each coordinate of 24 or 359 moved 16 voxels towards the
-      // centre, which keeps a core there inside a scout's 24-voxel sight. Skipped once the seat
+      // centre, which keeps a core there inside a scout's 28-voxel sight. Skipped once the seat
       // has a Survey beacon.
       {"label": "look",
         "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "SURVEY"}}}, "pct": {"op": "GE", "value": 0}}},

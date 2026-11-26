@@ -160,7 +160,7 @@ pub const BREACH_COLUMN_COST: i32 = 100;
 /// [`AttackCounts::breach_exhausted`]: the bound that keeps a search inside a
 /// tick's budget (E5's rule for every bounded queue).
 ///
-/// PLACEHOLDER: the breach search's budget, sixteen clusters' worth of columns — owner, at S3, with the pathing certification.
+/// PLACEHOLDER: the breach search's budget, sixteen clusters' worth of columns — owner, at S3's demo, with `cert3`'s breach-search cost at the gate load.
 pub const BREACH_EXPANSIONS: u32 = 16_384;
 
 /// The moves out of one closed state of the breach search, a slot each: a

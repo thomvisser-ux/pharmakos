@@ -640,6 +640,7 @@ gp.v1.RulesTable.Structures
   demolition_charge_cost_dollars 8   uint32
   build_hp_per_second          9   uint32
   resonance_spire_sphere_bonus_voxels 10  uint32
+  resonance_spire_build_ms     11  uint32
 
 gp.v1.RulesTable.UnitKind
   cost_dollars                 1   uint32

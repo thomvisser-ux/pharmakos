@@ -515,7 +515,7 @@ enum Sight {
     OwnVision,
     /// Its home beacon's sphere at the mortar.
     HomeSphere,
-    /// A scout of its seat 16 voxels out (vision 24, so it sees to 40).
+    /// A scout of its seat 16 voxels out (vision 28, so it sees to 44).
     ForwardScout,
 }
 

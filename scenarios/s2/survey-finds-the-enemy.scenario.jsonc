@@ -9,7 +9,9 @@
 //           strip of ground beside seat 1's outpost and just outside the reach
 //           of seat 1's core, and one scout. The scout walks the length of the
 //           map to the strip's unexplored cell, marks it, and from there sees
-//           the outpost;
+//           the outpost (and, from rules revision 8, whose scout sees 28
+//           voxels, seat 1's core 24 voxels off as well: the strip is outside
+//           the core's gun and inside a scout's sight);
 //   seat 1  seals scenarios/s2/survey-finds-the-enemy-seat1.playbook.jsonc: it
 //           deploys an outpost beacon inside its core's sphere.
 //

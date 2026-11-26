@@ -147,6 +147,13 @@
 //!   a sighting inside the weapon range of an armed enemy asset the seat sees
 //!   now is no destination. The walk itself is the router's: a route that
 //!   prices a known threat's range is `AVOID_KNOWN_THREATS`, S2's `atk`'s.
+//!   A scout walking to a cell's scan column when its seat sees a gun over
+//!   that column has looked at the cell: the cell is marked on that tick as a
+//!   scan marks it ([`seen_under_a_gun`]), so it is due again only once the
+//!   mark is older than reach memory, and until then it draws no scout back.
+//!   And a scout keeps the cell it set off for while that cell stays open
+//!   ([`scan_walk`]). Both hold a scout's walk steady although which cells
+//!   are open moves with what its seat sees on the tick.
 //! * **Several scouts** share the work: a sighting is in one scout's list (the
 //!   refresh pass above), and a cell a scout of the same beacon in
 //!   a lower row is already walking to is not scanned again.
@@ -154,7 +161,9 @@
 //!   there, so the wandering a unit at the end of its route is given
 //!   ([`World`]'s arrival draw) does not carry it off before it looks.
 //! * **Reporting back** is three private feed lines: `area_surveyed` when a
-//!   scout's mark takes its beacon's last scannable cell, `enemy_beacon_found`
+//!   scout's mark takes its beacon's last scannable cell (a mark from the
+//!   cell's scan column, or the mark of a cell seen to lie under a gun),
+//!   `enemy_beacon_found`
 //!   for an enemy beacon its seat holds no sighting of, and
 //!   `sighting_refreshed` for a sighting older than [`REFRESH_INTERVAL`] a
 //!   Survey scout renewed.
@@ -191,10 +200,10 @@ pub const REPRICE_DECISIONS: u32 = 8;
 ///
 /// A scout standing on a cell's centre sees all of it while its vision radius
 /// is at least the cell's half-diagonal, about 11.3 columns here: true at
-/// decision 17's scout vision of 24, which the rules table holds since its
-/// revision 6 (`tune2`); at the 8 it held before, a cell's corners could be
-/// marked unseen.
-// PLACEHOLDER: Survey's coarse cell, 16 columns square, which a scout of vision 24 sees whole from its centre — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run
+/// the scout's vision of 28 (24 from the rules table's revision 6, `tune2`,
+/// to its revision 8, `tune3`); at the 8 it held before, a cell's corners
+/// could be marked unseen.
+// PLACEHOLDER: Survey's coarse cell, 16 columns square, which a scout of vision 28 sees whole from its centre — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run
 pub const CELL_VOXELS: i32 = 16;
 
 /// Survey's refresh interval: a sighting this old is due a re-check, and
@@ -526,24 +535,23 @@ fn explore(world: &mut World, sensor: &Sensor, home: BeaconId) {
             }
         }
     }
-    if !surveyed
-        || nearest_cell(
-            world,
-            sensor.seat,
-            home,
-            sensor.centre,
-            Pick::Unexplored,
-            &|_| true,
-        )
-        .is_some()
-    {
+    if surveyed {
+        report_surveyed(world, sensor.seat, home, sensor.centre);
+    }
+}
+
+/// Report `area_surveyed` for `home` when a mark just made was the last: no
+/// cell of its probe areas that a scout at `here` can reach is left
+/// unexplored for `seat`.
+fn report_surveyed(world: &mut World, seat: SeatId, home: BeaconId, here: [Fx; 3]) {
+    if nearest_cell(world, seat, home, here, Pick::Unexplored, &|_| true).is_some() {
         return;
     }
     let now = world.tick();
     world.emit(
         now,
         Emission::of(EventKind::AreaSurveyed)
-            .seat(sensor.seat)
+            .seat(seat)
             .subject_of(AssetId::of_beacon(home)),
     );
 }
@@ -731,6 +739,77 @@ fn nearest_cell(
         }
     }
     best.map(|(_, cell, point)| (cell, point))
+}
+
+/// The scan a scout of `home` standing at `here` is already walking to
+/// (`to`), as its cell and the point it scans from, while it is still one
+/// [`nearest_cell`] could pick for it, whatever is open: the scan column of a
+/// cell of `home`'s probe areas that `seat` has not explored, or explored
+/// longer ago than reach memory, which the scout can reach.
+///
+/// A scout keeps it while it is open, and picks the nearest cell again only
+/// once it has none to keep ([`depart_or_scan`]). Which cells are open moves
+/// with what the seat sees on the tick (a known threat is what a seat sees
+/// this tick, not what it remembers: decisions-log item 149 (4) (g), and item
+/// 173 (2) kept it so), and a scout that picked afresh on every decision
+/// turned on the edge of its own sight for ever: toward a cell under a gun
+/// while it did not see the gun, away to the next cell once it did, and back
+/// as soon as the gun left its sight again. Rules revision 8 showed it, with
+/// a scout that sights a core from outside the core's gun: on the golden seed
+/// a scout walked the same two columns from the tick it found seat 1's core
+/// to the end of the match. Kept, every walk a scout sets off on ends on a
+/// cell it marks, from its scan column or as [`seen_under_a_gun`], unless
+/// another scout claims the cell or its seat's list calls it away.
+fn scan_walk(
+    world: &World,
+    seat: SeatId,
+    home: BeaconId,
+    here: [Fx; 3],
+    to: [Fx; 3],
+) -> Option<(u32, [Fx; 3])> {
+    let cell = cell_of(column_of(to))?;
+    if !in_probe_areas(world, home, cell) {
+        return None;
+    }
+    let [x, y] = scan_column(world, home, cell)?;
+    let point = world.standing_point([x, y, 0]);
+    if point != to {
+        return None;
+    }
+    let now = world.tick().raw();
+    let wanted = world
+        .explored()
+        .explored_on(seat, cell)
+        .is_none_or(|explored| cell_due(world, explored, now));
+    let surface = world.surface();
+    let [hx, hy] = column_of(here);
+    let reachable = surface
+        .node_of(hx, hy)
+        .zip(surface.node_of(x, y))
+        .is_some_and(|(start, node)| world.clusters().connected(surface, start, node));
+    (wanted && reachable).then_some((cell, point))
+}
+
+/// Mark `cell` looked at for `seat` on this tick, by a scout of `home` at
+/// `here` that was walking to the cell's scan column when its seat saw a gun
+/// over that column; and report `area_surveyed` when the mark took the last
+/// unexplored cell of `home`'s probe areas, as [`explore`] does.
+///
+/// The seat has learnt what the scan was for: an armed enemy asset stands
+/// over the cell. Marked, the cell is due a look again once the mark is older
+/// than reach memory (decision 7), and the scout that comes for it then looks
+/// from the edge of its sight again. Unmarked, the cell stayed unexplored for
+/// ever and was open again on every tick the seat did not see the gun, so it
+/// drew a scout back as often as the scout had nothing nearer: with other
+/// cells to scan, a walk to the edge of the gun after each of them; with
+/// none, a turn for home and a turn back, on the spot, for the rest of the
+/// match. No cell is opened or closed by this: a cell under a seen gun is no
+/// destination (decision 12) before and after it.
+fn seen_under_a_gun(world: &mut World, seat: SeatId, home: BeaconId, here: [Fx; 3], cell: u32) {
+    let tick = world.tick().raw();
+    if world.explored_mut().mark(seat, cell, tick) {
+        report_surveyed(world, seat, home, here);
+    }
 }
 
 /// Every Survey scout's decision on a decision tick, seat by seat in
@@ -2024,6 +2103,12 @@ fn index_legs(index: usize) -> i64 {
 /// Step 4: in ascending unit row, every member with a list walks to its head
 /// when it must, and every other member scans, re-scans or idles; a member
 /// that arrived parks.
+///
+/// A member walking to a scan column a known threat covers has looked at
+/// that cell ([`seen_under_a_gun`]), whether it then leaves for its list or
+/// scans on. A member that scans on keeps the cell it set off for while the
+/// cell is open ([`scan_walk`]), and otherwise takes the nearest open cell:
+/// an unexplored one first, then one due a re-scan.
 fn depart_or_scan<M: crate::seams::Meter + ?Sized>(
     world: &mut World,
     seat: SeatId,
@@ -2063,18 +2148,31 @@ fn depart_or_scan<M: crate::seams::Meter + ?Sized>(
                 || (first.ripe && (last_minute || !has_scan(world, seat, row, threats)))
                 || !list_leaves_time(world, lists, row, &order, len, meter)
         });
+        let threatened = |point: [Fx; 3]| {
+            threats
+                .iter()
+                .any(|(at, reach)| Sq::between(*at, point) <= *reach)
+        };
+        let walking_to = scan_walk(world, seat, home, here, to);
+        let walking_to = match walking_to {
+            Some((cell, point)) if threatened(point) => {
+                seen_under_a_gun(world, seat, home, here, cell);
+                None
+            }
+            other => other,
+        };
         let target = if leaves {
             head
         } else {
-            let open = |point: [Fx; 3]| {
-                !threats
-                    .iter()
-                    .any(|(at, reach)| Sq::between(*at, point) <= *reach)
-                    && !claimed(world, home, row, point)
-            };
-            nearest_cell(world, seat, home, here, Pick::Unexplored, &open)
-                .or_else(|| nearest_cell(world, seat, home, here, Pick::Due, &open))
+            let open = |point: [Fx; 3]| !threatened(point) && !claimed(world, home, row, point);
+            walking_to
                 .map(|(_, point)| point)
+                .filter(|point| open(*point))
+                .or_else(|| {
+                    nearest_cell(world, seat, home, here, Pick::Unexplored, &open)
+                        .or_else(|| nearest_cell(world, seat, home, here, Pick::Due, &open))
+                        .map(|(_, point)| point)
+                })
         };
         match target {
             // Arrived (on the map, whatever the heights): park, so the end of

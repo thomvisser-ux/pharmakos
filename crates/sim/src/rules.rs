@@ -161,7 +161,7 @@ pub struct RulesTable {
     /// Surcharge for a one-voxel climb. `4` (item 59). From
     /// `locomotion.climb_surcharge`.
     ///
-    /// PLACEHOLDER: `no gameplay evidence behind it` (item 59) — owner, at S3.
+    /// PLACEHOLDER: `no gameplay evidence behind it` (item 59), kept at its value by `tune3` (revision 8) — owner, at S3's demo.
     climb_surcharge: i32,
     /// Clear air a walker needs above its column, `locomotion.headroom_voxels`
     /// (E26: the sim's old `HEADROOM_VOXELS` given a row at its value).
