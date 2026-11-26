@@ -270,14 +270,75 @@ pub fn seat_core(world: &World, seat: SeatId, rules: &RulesTable) -> Result<Core
         .as_ref()
         .ok_or_else(|| Error::Rules("no `map` block".to_owned()))?;
     let extent = |size: u32| i32::try_from(size).map_err(|_| Error::Overflow("the map's extent"));
+    let column = [
+        at[0].floor_voxels(),
+        at[1].floor_voxels(),
+        at[2].floor_voxels(),
+    ];
     Ok(Core {
         id: "b_00".to_owned(),
-        at: [
-            at[0].floor_voxels(),
-            at[1].floor_voxels(),
-            at[2].floor_voxels(),
-        ],
+        at: column,
         extent: [extent(map.size_x)?, extent(map.size_y)?],
+        far: far_point(world, column)?,
+    })
+}
+
+/// How far, along each axis, [`far_point`] looks from a core: what a
+/// commander walks well inside a kind's segment before its first
+/// placement resolves.
+pub const FAR_REACH: i32 = 45;
+
+/// The column within [`FAR_REACH`] of `core` along each axis, standable and
+/// connected to the core's own column, whose nearest vent (by squared
+/// column distance to its anchor) is farthest; ties go to the first in
+/// `(y, x)` order. A pure function of the map, so the far covering kind
+/// walks to the same column on every run (`cert3` fix pass 3, N2 (c)).
+/// Columns no one can stand on, or that the core's component does not
+/// reach, are no candidates: a walk there could not be served.
+///
+/// # Errors
+///
+/// [`Error::Layout`] when the core stands on no node, the map holds no
+/// vent, or no column qualifies.
+pub fn far_point(world: &World, core: [i32; 3]) -> Result<[i32; 2], Error> {
+    let surface = world.surface();
+    let clusters = world.clusters();
+    let home = surface
+        .node_of(core[0], core[1])
+        .ok_or_else(|| Error::Layout(format!("a core stands on no node at {core:?}")))?;
+    let vents: Vec<[i32; 2]> = world
+        .features()
+        .features()
+        .iter()
+        .filter(|feature| feature.kind == pharmakos_sim::features::FeatureKind::Vent)
+        .map(|feature| feature.anchor)
+        .collect();
+    let mut best: Option<(i64, [i32; 2])> = None;
+    for y in core[1] - FAR_REACH..=core[1] + FAR_REACH {
+        for x in core[0] - FAR_REACH..=core[0] + FAR_REACH {
+            let reached = surface
+                .node_of(x, y)
+                .is_some_and(|node| clusters.connected(surface, home, node));
+            if !reached {
+                continue;
+            }
+            let nearest = vents
+                .iter()
+                .map(|[vx, vy]| {
+                    let (dx, dy) = (i64::from(vx - x), i64::from(vy - y));
+                    dx * dx + dy * dy
+                })
+                .min()
+                .ok_or_else(|| Error::Layout("the map holds no vent".to_owned()))?;
+            if best.is_none_or(|(kept, _)| nearest > kept) {
+                best = Some((nearest, [x, y]));
+            }
+        }
+    }
+    best.map(|(_, column)| column).ok_or_else(|| {
+        Error::Layout(format!(
+            "no column within {FAR_REACH} of the core at {core:?} is reached"
+        ))
     })
 }
 

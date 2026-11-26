@@ -22,7 +22,7 @@
 //! | [`Kind::Condition`] | every seat seals [`Shape::ConditionHolds`] at the committed budget | every one |
 //! | [`Kind::OctileRanker`] | [`Shape::RankerHolds`]: `nearest` leaves, each ranking the seat's beacon rows by octile distance from the commander in one scan (`cond.rs`'s `rank`): no walk is served | every one |
 //! | [`Kind::Covering`] | [`Shape::Covering`] at [`COVER_STEPS`]: `place_beacon` steps `covering` the nearest uncovered vent, each resolve ranking the vents by the walk the router serves from the commander beside its core | those that started or failed a step and placed no beacon |
-//! | [`Kind::CoveringFar`] | [`Shape::CoveringFar`]: the same after the commander walks out toward the map's centre, so its resolves rank the vents by walks from farther out (a vent nearer the centre can still be near) | the same |
+//! | [`Kind::CoveringFar`] | [`Shape::CoveringFar`]: the same after the commander walks to its core's far point (`hosted::far_point`: the column within 45 voxels a side, standable and connected, whose nearest vent is farthest), so its first resolve ranks the vents by walks from far from any of them | the same |
 //! | [`Kind::Threat`] | [`Shape::ThreatHolds`]: `safest` leaves, through the threat scan | every one |
 //! | [`Kind::SeamUpkeep`] | [`Shape::Idle`], and the gate layout's Mine beacons and their drones placed in the lobby, under the G3′ variant | every one |
 //! | [`Kind::Commit`] | [`Shape::BuildTargets`] at the committed budget at each seat's own core, on the spread layout (below) | those that committed a row and started no step |

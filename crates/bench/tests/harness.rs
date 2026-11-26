@@ -772,88 +772,87 @@ fn a_watched_segment_ends_on_the_bare_segments_chain() {
     assert_eq!(watched.chain_digest, bare.chain_digest);
 }
 
-/// The covering kinds serve walks whose counted work grows with the walk
-/// (`cert3` fix pass 2, M1 and B6): on one map, from seat 0's core, a
-/// `covering` resolve of the vent nearest the core and one of the vent
-/// farthest from it, each in a fresh scratch with a tally of its own, and the
-/// far one counts strictly more units. A resolver that ranked by straight-line
-/// distance in one row scan, or read a route the router had served before,
-/// would count the same for both, and this would be red.
+/// The covering kinds' resolve serves walks, and the far kind's serves
+/// longer ones (`cert3` fix pass 3, N1 and N2 (c)). On each bench seed, from
+/// seat 0's core column and from its far point (`hosted::far_point`), a
+/// `covering` resolve of the nearest uncovered vent: the arm the kinds'
+/// steps take (`FeatureSpec::Nearest`, `Ranker::next_in`, `Ground::travel`,
+/// `walk_cost_in`). The walks' own work is read from the scratch's public
+/// counts (`expansions`, `abstract_expansions` and `visits`, the sum the
+/// sim's `targeting::popped` charges), and the far resolve's is strictly
+/// more. A second identical resolve in the same scratch counts exactly what
+/// the first counted: the walks are served again, never read back from an
+/// earlier one, so a resolver that reused a served route, or ranked by a row
+/// scan with no walk, would fail here.
 #[test]
-fn a_covering_resolve_counts_more_for_a_longer_walk() {
+fn a_covering_resolve_serves_longer_walks_from_the_far_point() {
     use pharmakos_bench::hosted::{self, Opening};
     use pharmakos_sim::features::FeatureKind;
+    use pharmakos_sim::math::fixed::Fx;
     use pharmakos_sim::pathing::Scratch;
-    use pharmakos_sim::seams::UnitTally;
     use pharmakos_sim::tables::SeatId;
-    use pharmakos_sim::targeting::{FeatureSpec, Ground, cover_counted};
+    use pharmakos_sim::targeting::{FeatureSpec, cover_counted};
     let root = workspace_root();
     let rules = quick::committed_rules(&root).expect("the committed rules");
-    let host = hosted::open_host(&Opening {
-        seed: BENCH_SEED,
-        seats: BENCH_SEATS,
-        segment_ms: 1_000,
-        rules: &rules,
-        playbook: "",
-    })
-    .expect("a host");
-    let world = host.world();
-    let seat = SeatId::new(0);
-    let core = hosted::seat_core(world, seat, &rules).expect("seat 0's core");
-    let beacons = world.beacons();
-    let commander = beacons
-        .seats()
-        .iter()
-        .zip(beacons.positions())
-        .find(|(owner, _)| **owner == seat.raw())
-        .map(|(_, at)| *at)
-        .expect("seat 0's core position");
-    let squared = |anchor: [i32; 2]| {
-        let dx = i64::from(anchor[0] - core.at[0]);
-        let dy = i64::from(anchor[1] - core.at[1]);
-        dx * dx + dy * dy
-    };
-    let mut vents: Vec<[i32; 2]> = world
-        .features()
-        .features()
-        .iter()
-        .filter(|feature| feature.kind == FeatureKind::Vent)
-        .map(|feature| feature.anchor)
-        .collect();
-    vents.sort_by_key(|anchor| squared(*anchor));
-    let (near, far) = (
-        *vents.first().expect("a vent"),
-        *vents.last().expect("a vent"),
-    );
-    assert_ne!(near, far, "two vents to walk to");
-    let units = |anchor: [i32; 2]| {
-        let tally = UnitTally::new();
-        let ground = Ground {
-            work: &tally,
-            ..world.ground()
+    for seed in [BENCH_SEED, pharmakos_sim::DETERMINISM_MATCH_SEED] {
+        let host = hosted::open_host(&Opening {
+            seed,
+            seats: BENCH_SEATS,
+            segment_ms: 1_000,
+            rules: &rules,
+            playbook: "",
+        })
+        .expect("a host");
+        let world = host.world();
+        let seat = SeatId::new(0);
+        let core = hosted::seat_core(world, seat, &rules).expect("seat 0's core");
+        let surface = world.surface();
+        let at = |[x, y]: [i32; 2]| {
+            let node = surface.node_of(x, y).expect("a standable column");
+            let voxels = |value: i32| Fx::from_voxels(i16::try_from(value).expect("on the map"));
+            [voxels(x), voxels(y), voxels(surface.top(node))]
         };
-        let mut scratch = Scratch::for_map(world.surface(), world.clusters().size())
-            .expect("a scratch for the map");
-        // A far vent is outside the seat's spheres and its resolve finds no
-        // site; the walks it served are counted either way.
-        let resolved = cover_counted(
-            &ground,
-            &mut scratch,
-            seat,
-            commander,
-            FeatureSpec::Name {
-                kind: FeatureKind::Vent,
-                anchor,
-            },
+        let walked = |scratch: &Scratch| {
+            scratch.expansions().expect("a count")
+                + scratch.abstract_expansions().expect("a count")
+                + scratch.visits().expect("a count")
+        };
+        let resolve = |scratch: &mut Scratch, from: [i32; 2]| {
+            let before = walked(scratch);
+            let resolved = cover_counted(
+                &world.ground(),
+                scratch,
+                seat,
+                at(from),
+                FeatureSpec::Nearest {
+                    kind: FeatureKind::Vent,
+                    uncovered: true,
+                },
+            );
+            assert!(
+                resolved.is_ok(),
+                "seed {seed:#x} from {from:?}: {resolved:?}"
+            );
+            walked(scratch) - before
+        };
+        let fresh =
+            || Scratch::for_map(surface, world.clusters().size()).expect("a scratch for the map");
+        let home = [core.at[0], core.at[1]];
+        let near = resolve(&mut fresh(), home);
+        let mut scratch = fresh();
+        let far = resolve(&mut scratch, core.far);
+        let again = resolve(&mut scratch, core.far);
+        assert!(
+            far > near,
+            "seed {seed:#x}: the far point {:?} serves {far} pops and visits, the core {home:?} {near}",
+            core.far
         );
-        std::hint::black_box(&resolved);
-        tally.read().expect("a count")
-    };
-    let (near_units, far_units) = (units(near), units(far));
-    assert!(
-        far_units > near_units,
-        "the far vent's resolve counts {far_units} units and the near one's {near_units}"
-    );
+        assert!(near > 0, "seed {seed:#x}: the near resolve served a walk");
+        assert_eq!(
+            again, far,
+            "seed {seed:#x}: a second resolve serves its walks again"
+        );
+    }
 }
 
 /// The selector variant at the size budget is submittable through the hosted

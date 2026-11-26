@@ -113,29 +113,6 @@ pub const SIZES: [u32; 5] = [64, 96, 128, 192, 256];
 /// leaves are `CONDITION_MAX_NODES`, the most spec section 10 allows.
 const LEAVES_PER_CONDITION: usize = 21;
 
-/// The committed map's centre column, `[x, y]`: the one place as far from
-/// every seat's spawn as from every other (`scenarios/nightly/README.md`'s
-/// staging point), which [`Shape::CoveringFar`]'s commander walks toward.
-pub const MAP_CENTRE: [i32; 2] = [192, 192];
-
-/// How far [`Shape::CoveringFar`]'s commander walks out from its core toward
-/// [`MAP_CENTRE`], along each axis: about 64 voxels on the diagonal.
-pub const FAR_OFFSET: i32 = 45;
-
-/// The column [`Shape::CoveringFar`]'s commander walks to: [`FAR_OFFSET`]
-/// voxels a side from `core` toward [`MAP_CENTRE`].
-#[must_use]
-pub fn walk_out(core: &Core) -> [i32; 2] {
-    let toward = |from: i32, to: i32| match from.cmp(&to) {
-        std::cmp::Ordering::Less => (from + FAR_OFFSET).min(to),
-        std::cmp::Ordering::Greater => (from - FAR_OFFSET).max(to),
-        std::cmp::Ordering::Equal => from,
-    };
-    let [cx, cy, _] = core.at;
-    let [mx, my] = MAP_CENTRE;
-    [toward(cx, mx), toward(cy, my)]
-}
-
 /// The map's extent the fixture's anchors are kept inside: the committed
 /// rules' `map.size_x` and `map.size_y`, which `tests/harness.rs` holds to the
 /// table.
@@ -150,6 +127,12 @@ pub struct Core {
     pub at: [i32; 3],
     /// The map's extent, `[x, y]`: no anchor is laid off it.
     pub extent: [i32; 2],
+    /// The column [`Shape::CoveringFar`]'s commander walks to before it
+    /// places: on a hosted map, the standable column connected to the core,
+    /// within [`crate::hosted::FAR_REACH`] of it along each axis, whose
+    /// nearest vent is farthest (`crate::hosted::far_point`); on the fixture,
+    /// the core's own column, since the fixture places nothing.
+    pub far: [i32; 2],
 }
 
 impl Core {
@@ -162,6 +145,10 @@ impl Core {
             id: "b_01".to_owned(),
             at: crate::quick::FIXTURE_CORE_AT,
             extent: FIXTURE_EXTENT,
+            far: [
+                crate::quick::FIXTURE_CORE_AT[0],
+                crate::quick::FIXTURE_CORE_AT[1],
+            ],
         }
     }
 }
@@ -215,10 +202,10 @@ pub enum Shape {
     /// the commander (`targeting.rs`'s `cover_counted`, `Ground::travel`), from
     /// beside the core. Not in [`Shape::ALL`].
     Covering,
-    /// [`Shape::Covering`] after a first step that walks the commander
-    /// [`FAR_OFFSET`] voxels a side out from its core toward the map's centre,
-    /// so every resolve serves its walks from far from the vents near home.
-    /// Not in [`Shape::ALL`].
+    /// [`Shape::Covering`] after a first step that walks the commander to
+    /// its core's [`Core::far`] point, the column near home farthest from
+    /// every vent, so the first resolve serves its walks from far from any
+    /// vent. Not in [`Shape::ALL`].
     CoveringFar,
     /// A route of `place_beacon` steps, each `toward` the nearest vent the
     /// seat does not cover: a stepping stone a unit, each resolved when its
@@ -326,7 +313,7 @@ impl Shape {
                 handlers(size, Group::FullAny(LeafKind::Safest), Bodies::One).map_err(refuse)?
             }
             Shape::Covering => covering(size, None).map_err(refuse)?,
-            Shape::CoveringFar => covering(size, Some(walk_out(core))).map_err(refuse)?,
+            Shape::CoveringFar => covering(size, Some(core.far)).map_err(refuse)?,
             Shape::Toward => stepping_stones(size).map_err(refuse)?,
         };
         Ok(Playbook {
@@ -1109,15 +1096,6 @@ mod tests {
             Shape::FullEval.handlers_at(256).expect("handlers"),
             64,
             "MAX_HANDLERS"
-        );
-    }
-
-    #[test]
-    fn the_map_centre_is_half_the_extent() {
-        assert_eq!(
-            MAP_CENTRE.map(|axis| axis * 2),
-            FIXTURE_EXTENT,
-            "the centre the far ranker walks to"
         );
     }
 
