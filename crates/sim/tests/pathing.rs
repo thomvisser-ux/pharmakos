@@ -1645,13 +1645,15 @@ fn a_search_in_a_scratch_that_does_not_fit_is_refused_at_every_door() {
 }
 
 /// **The router refuses a scratch that does not serve its graph before it
-/// touches anything** ([`Router::serve`]'s door): the waiting unit still
+/// touches anything** ([`Router::serve`]'s door): every waiting unit still
 /// waits, where a route refused unit by unit would have parked it as sealed
-/// in; no route is counted as missing; and what the last serve left, its
-/// served and sealed lists and its totals, is as that serve left it. The
-/// refusal follows a serve that filled both lists, so a door that emptied
-/// them first is caught (a review mutant of S3's `walk3` was not, while the
-/// refusal was tried on a router that had never served).
+/// in; nothing is counted, no route as missing, no repath as served and no
+/// backlog as a peak; what the last serve left, its served and sealed lists,
+/// is as that serve left it; and the cursor stays, so the next serve reaches
+/// the units the refused one would have. The refusal follows a serve that
+/// filled both lists, so a door that emptied them first is caught (a review
+/// mutant of S3's `walk3` was not, while the refusal was tried on a router
+/// that had never served).
 #[test]
 fn the_router_refuses_a_misfit_scratch_and_keeps_what_its_last_serve_left() {
     use pharmakos_sim::pathing::router::Router;
@@ -1664,48 +1666,72 @@ fn the_router_refuses_a_misfit_scratch_and_keeps_what_its_last_serve_left() {
         let (x, y) = surface.coord_of(node);
         [on(x), on(y), on(surface.standing_z(node))]
     };
-    // Units 0 and 2 stand on the pair's start; unit 1 stands off the map, so
-    // a serve parks it as sealed in.
-    let from = [point(start), [on(-1), on(-1), on(0)], point(start)];
-    let to = [point(goal); 3];
-    let mut router = Router::new(3, &fixture.rules);
+    // Units 0, 2 and 3 stand on the pair's start; unit 1 stands off the map,
+    // so a serve parks it as sealed in.
+    let from = [
+        point(start),
+        [on(-1), on(-1), on(0)],
+        point(start),
+        point(start),
+    ];
+    let to = [point(goal); 4];
+    let mut router = Router::new(4, &fixture.rules);
     router.request(0);
     router.request(1);
+    // Two a serve: the first reaches units 0 and 1 and leaves the cursor at
+    // unit 2.
     let report = router
-        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 3)
+        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 2)
         .expect("the scratch made with the graph serves it");
     assert_eq!((report.served, report.sealed), (2, 1));
+    assert_eq!(
+        (router.served_this_tick(), router.sealed_this_tick()),
+        (&[0_u32, 1][..], &[1_u32][..]),
+        "the recipe: the first serve reached two units and sealed one in"
+    );
+
+    // All four units wait, so where the cursor stands decides which two the
+    // next serve reaches, and a backlog of four would be a new peak.
+    for unit in 0..4 {
+        router.request(unit);
+    }
     let left = |router: &Router| {
         (
             router.served_this_tick().to_vec(),
             router.sealed_this_tick().to_vec(),
-            router.sealed_total(),
+            (router.served_total(), router.sealed_total()),
             NoPath::ALL.map(|reason| router.no_path().of(reason)),
-            [router.state(0), router.state(1)],
+            router.backlog_peak(),
+            [0, 1, 2, 3].map(|unit| router.state(unit)),
         )
     };
     let before = left(&router);
     assert_eq!(
-        (before.0.as_slice(), before.1.as_slice(), before.2),
-        (&[0_u32, 1][..], &[1_u32][..], 1),
-        "the recipe: the first serve reached two units and sealed one in"
+        (before.2, before.4, before.5),
+        ((2, 1), 0, [WalkState::Waiting; 4]),
+        "the recipe: two served and one sealed in so far, no backlog yet, four units waiting"
     );
-
-    router.request(2);
     assert_eq!(
-        router.serve(surface, clusters, &mut coarse, &from, &to, 3),
+        router.serve(surface, clusters, &mut coarse, &from, &to, 2),
         Err(Misfit),
         "the router"
     );
-    assert_eq!(router.state(2), WalkState::Waiting, "the unit still waits");
     assert_eq!(left(&router), before, "the refusal moved nothing");
 
     let report = router
-        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 3)
+        .serve(surface, clusters, &mut fixture.scratch, &from, &to, 2)
         .expect("the scratch made with the graph serves it");
-    assert_eq!((report.served, report.sealed), (1, 0));
-    assert_eq!(router.served_this_tick(), [2], "the unit that waited");
-    assert_eq!(router.state(2), WalkState::Walking, "and is then routed");
+    assert_eq!((report.served, report.sealed), (2, 0));
+    assert_eq!(
+        router.served_this_tick(),
+        [2, 3],
+        "the cursor stayed at unit 2: from unit 0 the serve reaches 0 and 1, from 1 it reaches 1 and 2, from 3 it reaches 3 and 0"
+    );
+    assert_eq!(
+        [2, 3].map(|unit| router.state(unit)),
+        [WalkState::Walking; 2],
+        "and the two are routed"
+    );
 }
 
 /// The graph's own doors refuse a scratch that does not serve it, and **a
